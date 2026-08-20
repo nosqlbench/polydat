@@ -1,0 +1,108 @@
+# Copyright 2024-2026 Jonathan Shook
+# SPDX-License-Identifier: Apache-2.0
+#
+# Multi-platform test matrix for the polydat workspace, in the
+# same spirit as the nbrs build workflow this project came from:
+# native runners only (no QEMU emulation), pinned runner images,
+# pinned action majors, fail-fast disabled so every platform
+# reports its own signal.
+#
+#   test — 4-way matrix, each leg running the workspace test
+#     suite twice:
+#       default features   — exercises the cranelift JIT, which
+#                            emits different machine code per
+#                            target arch; this is the reason the
+#                            matrix exists at all
+#       no-default-features — the interpreter-only path, so a
+#                            JIT-less build never silently rots
+#
+#   all-features — single fast leg on linux/amd64 covering the
+#     optional `vectordata` feature (pulls network-stack deps;
+#     one platform is enough since the feature is pure Rust and
+#     arch-independent, unlike the JIT).
+#
+# Platform notes (deltas from the nbrs matrix):
+#
+# - Windows (`x86_64-pc-windows-msvc`) IS included here. nbrs
+#   omits it only because upstream `cassandra-cpp-sys` has no
+#   Windows support; polydat is pure Rust (cranelift included),
+#   and Windows is a primary dev platform for this project.
+#
+# - Intel macOS (`x86_64-apple-darwin` / macos-13) is omitted
+#   for the same reason as nbrs: GHA's last Intel mac runner
+#   pool is heavily contended and queue times routinely exceed
+#   an hour. Apple Silicon dominates the macOS install base;
+#   Intel users build from source.
+#
+# Every JS-based action below is pinned to a major version that
+# natively targets Node 24. If a bump regresses, pin back to the
+# previous major and reopen the upgrade as its own change.
+
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # One platform failing should not stop the others — the
+      # per-arch JIT signal is the point of the matrix.
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+          - target: aarch64-apple-darwin
+            runner: macos-14            # Apple Silicon (M-series)
+          - target: x86_64-pc-windows-msvc
+            runner: windows-2025
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: polydat-${{ matrix.target }}
+
+      # Default features = `jit`. This is the run that validates
+      # cranelift codegen on each target architecture.
+      - name: Test (default features, JIT)
+        run: cargo test --workspace
+
+      # Interpreter-only path. Shares the same cache key — the
+      # feature split changes which deps compile, and rust-cache
+      # handles mixed-feature target dirs fine.
+      - name: Test (no default features, interpreter only)
+        run: cargo test --workspace --no-default-features
+
+  # The optional `vectordata` feature is pure Rust and
+  # arch-independent, so one platform covers it. Kept out of the
+  # matrix to avoid multiplying its heavier dependency build
+  # (reqwest/rustls stack) across four runners.
+  all-features:
+    name: all features (linux/amd64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: polydat-all-features
+
+      - name: Test (all features)
+        run: cargo test --workspace --all-features
