@@ -805,8 +805,9 @@ pub enum JitOp {
     FairCoin,
     /// Float blend with constant mix: output[0] = (fa * (1 - mix) + fb * mix).round() as u64
     BlendConst(u64),
-    /// LFSR advance step: output[0] = (input[0] >> 1) ^ (if input[0] & 1 != 0 { feedback } else { 0 })
-    LfsrStep,
+    /// LFSR advance step with constant feedback polynomial:
+    /// output[0] = (input[0] >> 1) ^ (if input[0] & 1 != 0 { feedback } else { 0 })
+    LfsrStepConst(u64),
     /// PCG random with constant seed and stream: (seed, stream)
     PcgConst(u64, u64),
     /// PCG random with wire stream and constant seed: (seed)
@@ -1118,7 +1119,13 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
                 JitOp::Fallback
             }
         }
-        "lfsr_step" => JitOp::LfsrStep,
+        "lfsr_step" => {
+            if let Some(&fb) = consts.first() {
+                JitOp::LfsrStepConst(fb)
+            } else {
+                JitOp::Fallback
+            }
+        }
         "pcg" => {
             if consts.len() >= 2 {
                 JitOp::PcgConst(consts[0], consts[1])
@@ -2946,9 +2953,9 @@ fn compile_jit_impl(
                     let result = builder.ins().fcvt_to_uint(types::I64, rounded);
                     store_slot(&mut builder, buffer_ptr, output_slots[0], result);
                 }
-                JitOp::LfsrStep => {
+                JitOp::LfsrStepConst(feedback) => {
                     let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let feedback = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                    let feedback = builder.ins().iconst(types::I64, *feedback as i64);
                     let one = builder.ins().iconst(types::I64, 1);
                     let zero = builder.ins().iconst(types::I64, 0);
                     let shifted = builder.ins().ushr(val, one);
