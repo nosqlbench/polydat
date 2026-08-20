@@ -51,18 +51,18 @@ and a consistent set of precedence and referencing rules.
 
 This repository contains two crates:
 
-- [`polydat`](polydat) — the public engine, DSL, standard library, and runtime.
-- [`polydat-derive`](polydat-derive) — the procedural macro implementation for
+- [`polydat`](crates/polydat) — the public engine, DSL, standard library, and runtime.
+- [`polydat-derive`](crates/polydat-derive) — the procedural macro implementation for
   `#[polydat_node]`, re-exported by `polydat`.
 
 ## Documentation
 
-- [Illustrations](polydat/docs/illustrations.md) — runnable examples through the
+- [Illustrations](crates/polydat/docs/illustrations.md) — runnable examples through the
   Polydat DSL and the programmatic Assembler API.
-- [Compilation](polydat/docs/compilation.md) — Phase 1 / 2 / 3 levels, Hybrid
+- [Compilation](crates/polydat/docs/compilation.md) — Phase 1 / 2 / 3 levels, Hybrid
   mode, throughput numbers, and the `jit` / `vectordata` Cargo features.
-- [Nodes](polydat/docs/nodes.md) — the 250+ built-in function nodes.
-- [License](polydat/docs/license.md) — Apache-2.0; full text at
+- [Nodes](crates/polydat/docs/nodes.md) — the 250+ built-in function nodes.
+- [License](crates/polydat/docs/license.md) — Apache-2.0; full text at
   [LICENSE](LICENSE).
 
 Polydat was extracted from the
