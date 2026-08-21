@@ -195,7 +195,7 @@ iteration scalar, wrap as a singleton.
 |---|---|
 | `VecF32` / `VecF64` / `VecF16` / `VecI16` / `VecI32` / `VecI64` (native vectors) | the element values (numeric) |
 | `Json` that is an array | the element values (each carried as `Json`) |
-| `Ext` exposing a `PartitionList` (SRD-71) | the partition entries |
+| `Ext` exposing a `PartitionList` ([SRD-71](cursor_partitions.md)) | the partition entries |
 | `Str` | its **string-comprehension tokens** (§3.1.3) |
 | `U64` / `F64` / `Bool` / `Bytes` / `Handle` / `None` / non-array `Json` / opaque `Ext` | none (scalar) |
 
@@ -3505,7 +3505,7 @@ names each SRD's role relative to this document.
   scenario nodes dispatch and find-by-comprehension lookup);
   this document owns the comprehension type SRD-18b wraps.
 
-- **SRD-71 (Cursor Partitions)** — owns the cursor-partition
+- **[SRD-71 (Cursor Partitions)](cursor_partitions.md)** — owns the cursor-partition
   surface (partition-spec language, `cursor.partitions`
   projection wire, cursor-declaration `over <iter-var>` syntax,
   CLI workload-param surface). The comprehension iteration

@@ -1,11 +1,11 @@
 # Node Library
 
-A **node** in polydat is a pure function from typed inputs to a typed
-output, registered under a string name. Once compiled into a function
-graph, a node becomes a vertex the runtime evaluates against the
-current coordinates and any upstream node outputs. Determinism is the
-contract: the same inputs always produce the same output, with no
-shared mutable state.
+A **node** in Polydat is a typed function registered under a string name.
+Once compiled into a function graph, a node becomes a vertex the runtime
+evaluates against the current coordinates and upstream outputs. Most nodes are
+pure and deterministic. Nodes that intentionally observe runtime context,
+publish a side effect, or produce nondeterministic values declare that behavior
+in their metadata so the compiler can preserve their semantics.
 
 Workload authors rarely reach for nodes by name. The Polydat DSL and the
 op-template binding cascade compose them on the author's behalf — you
@@ -13,8 +13,8 @@ write `mod(hash(cycle), 1000)` and the resolver wires `hash` and `mod`
 nodes into the graph. The catalog below is the menu the resolver picks
 from, not a usage manual.
 
-**Inventory:** 230 registered names across 30 source files (live in
-[`src/nodes/`](../src/nodes/)). This file is a hand-curated snapshot;
+**Inventory:** Built-in nodes live in
+[`src/library/`](../src/library/). This file is a hand-curated snapshot;
 when the runtime diverges, the source files are authoritative.
 
 ---
@@ -91,7 +91,7 @@ single-letter `a`/`b`/`c` are positional outputs of multi-output nodes
 "pick one with these weights" pattern; lower-level nodes do the actual
 work.
 
-### `partition` — partition-typed indexing (SRD 71)
+### `partition` — partition-typed indexing ([SRD 71](design/cursor_partitions.md))
 `partitions`, `at`, `start_of`, `end_of`, `cardinality`, `idx_of`,
 `mod_in`, `clamp_in`. The `Partition` type wraps a closed-open `u64`
 range and the partition nodes give type-checked access to its bounds
@@ -236,38 +236,38 @@ const-constraint contracts at wire boundaries.
 
 | File | Nodes |
 |------|------:|
-| [`vectors.rs`](../src/nodes/vectors.rs) | 35 |
-| [`math.rs`](../src/nodes/math.rs) | 17 |
-| [`compare.rs`](../src/nodes/compare.rs) | 17 |
-| [`probability.rs`](../src/nodes/probability.rs) | 12 |
-| [`bitwise.rs`](../src/nodes/bitwise.rs) | 14 |
-| [`arithmetic.rs`](../src/nodes/arithmetic.rs) | 12 |
-| [`convert.rs`](../src/nodes/convert.rs) | 11 |
-| [`json.rs`](../src/nodes/json.rs) | 10 |
-| [`runtime_context.rs`](../src/nodes/runtime_context.rs) | 9 |
-| [`context.rs`](../src/nodes/context.rs) | 9 |
-| [`partition.rs`](../src/nodes/partition.rs) | 8 |
-| [`string.rs`](../src/nodes/string.rs) | 8 |
+| [`vectors.rs`](../src/library/vectors.rs) | 35 |
+| [`math.rs`](../src/library/math.rs) | 17 |
+| [`compare.rs`](../src/library/compare.rs) | 17 |
+| [`probability.rs`](../src/library/probability.rs) | 12 |
+| [`bitwise.rs`](../src/library/bitwise.rs) | 14 |
+| [`arithmetic.rs`](../src/library/arithmetic.rs) | 12 |
+| [`convert.rs`](../src/library/convert.rs) | 11 |
+| [`json.rs`](../src/library/json.rs) | 10 |
+| Runtime-control nodes (externally registered) | 9 |
+| [`context.rs`](../src/library/context.rs) | 9 |
+| [`partition.rs`](../src/library/partition.rs) | 8 |
+| [`string.rs`](../src/library/string.rs) | 8 |
 | `nbrs-metrics::polydat_nodes` (externally registered) | 8 |
-| [`param_helpers.rs`](../src/nodes/param_helpers.rs) | 6 |
-| [`datafile.rs`](../src/nodes/datafile.rs) | 6 |
-| [`noise.rs`](../src/nodes/noise.rs) | 5 |
-| [`weighted.rs`](../src/nodes/weighted.rs) | 4 |
-| [`log_levels.rs`](../src/nodes/log_levels.rs) | 4 |
-| [`digest.rs`](../src/nodes/digest.rs) | 4 |
-| [`encoding.rs`](../src/nodes/encoding.rs) | 4 |
-| [`pcg.rs`](../src/nodes/pcg.rs) | 4 |
-| [`bytebuf.rs`](../src/nodes/bytebuf.rs) | 4 |
-| [`realer.rs`](../src/nodes/realer.rs) | 4 |
-| [`datetime.rs`](../src/nodes/datetime.rs) | 4 |
-| [`diagnostic.rs`](../src/nodes/diagnostic.rs) | 4 |
-| [`lerp.rs`](../src/nodes/lerp.rs) | 3 |
-| [`regex.rs`](../src/nodes/regex.rs) | 2 |
-| [`hash.rs`](../src/nodes/hash.rs) | 1 |
-| [`format.rs`](../src/nodes/format.rs) | 1 |
-| [`exactly_one.rs`](../src/nodes/exactly_one.rs) | 1 |
-| [`assertions.rs`](../src/nodes/assertions.rs) | (typed family — not name-registered) |
-| [`pick.rs`](../src/nodes/pick.rs) | (op-template dispatch primitive) |
-| [`random.rs`](../src/nodes/random.rs) | (non-deterministic prototyping) |
-| [`fixed.rs`](../src/nodes/fixed.rs) | (const / fixed-value family) |
-| [`identity.rs`](../src/nodes/identity.rs) | (identity / constant) |
+| [`param_helpers.rs`](../src/library/param_helpers.rs) | 6 |
+| [`datafile.rs`](../src/library/datafile.rs) | 6 |
+| [`noise.rs`](../src/library/noise.rs) | 5 |
+| [`weighted.rs`](../src/library/weighted.rs) | 4 |
+| [`log_levels.rs`](../src/library/log_levels.rs) | 4 |
+| [`digest.rs`](../src/library/digest.rs) | 4 |
+| [`encoding.rs`](../src/library/encoding.rs) | 4 |
+| [`pcg.rs`](../src/library/pcg.rs) | 4 |
+| [`bytebuf.rs`](../src/library/bytebuf.rs) | 4 |
+| [`realer.rs`](../src/library/realer.rs) | 4 |
+| [`datetime.rs`](../src/library/datetime.rs) | 4 |
+| [`diagnostic.rs`](../src/library/diagnostic.rs) | 4 |
+| [`lerp.rs`](../src/library/lerp.rs) | 3 |
+| [`regex.rs`](../src/library/regex.rs) | 2 |
+| [`hash.rs`](../src/library/hash.rs) | 1 |
+| [`format.rs`](../src/library/format.rs) | 1 |
+| [`exactly_one.rs`](../src/library/exactly_one.rs) | 1 |
+| [`assertions.rs`](../src/library/assertions.rs) | (typed family — not name-registered) |
+| [`pick.rs`](../src/library/pick.rs) | (op-template dispatch primitive) |
+| [`random.rs`](../src/library/random.rs) | (non-deterministic prototyping) |
+| [`fixed.rs`](../src/library/fixed.rs) | (const / fixed-value family) |
+| [`identity.rs`](../src/library/identity.rs) | (identity / constant) |

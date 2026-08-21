@@ -333,7 +333,7 @@ closure, P3 JIT); the JIT path reaches that same observable
 behavior through a setjmp/longjmp shim documented in
 [JIT Boundary](../design/jit_boundary.md).
 
-### Cursor Partitions (SRD 71)
+### [Cursor Partitions (SRD 71)](cursor_partitions.md)
 
 Partition-typed nodes (`library/partition.rs`). `Partition` /
 `PartitionList` ride wires as `Value::Ext` reflected values
@@ -354,7 +354,7 @@ eval reduces to constant arithmetic.
 | `clamp_in` | `u64, Partition → u64` | Saturating projection into the partition (`max(start, min(n, end-1))`); no wrap. |
 | `random_in` | `Partition, u64 → u64` | `start + xxh3(seed) mod cardinality` — deterministic per seed, same entropy source as `hash`. Cardinality 0 returns the start. |
 | `subdivide` | `Partition, u64 → PartitionList` | `n` near-equal sub-partitions (sizes differ by ≤ 1 ordinal; boundary math identical to the `*/N` spec token). Indices restart at 0 with `count = n`; `base_extent` propagates; pcts interpolate the parent's span. Panics when `n` is 0 or exceeds the cardinality. Also a kernel-aware comprehension source: `for: "inner in subdivide(outer, n)"`. |
-| `partitions` | `Str[, Const<u64>] → PartitionList` | Parse a partition spec string and resolve it against `[0, extent)` (extent defaults to 100). The canonical comprehension source for `for: "p in partitions(...)"`. Full spec grammar — forms, tail tokens, `xN`/`~` modifiers, `in` windows, order keywords — in SRD 71. |
+| `partitions` | `Str[, Const<u64>] → PartitionList` | Parse a partition spec string and resolve it against `[0, extent)` (extent defaults to 100). The canonical comprehension source for `for: "p in partitions(...)"`. The full grammar — forms, tail tokens, `xN`/`~` modifiers, `in` windows, and order keywords — is defined by [SRD 71](cursor_partitions.md). |
 
 The numeric comprehension generator formerly named `subdivide`
 (evenly spaced *values* over an interval) is `linear_starts`;

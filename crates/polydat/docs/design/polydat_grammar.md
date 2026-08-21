@@ -598,8 +598,8 @@ A **cursor** is a named `u64` ordinal position tracker driving data
 access. Its declaration uses `=` (not `:=`):
 `cursor <name> = <constructor> [over <expr>]`. A cursor has no fields or
 schema of its own; data is read via accessor functions that take the
-cursor's ordinal. The optional `over <expr>` clause (SRD-71) supplies a
-partition source.
+cursor's ordinal. The optional `over <expr>` clause ([SRD-71](cursor_partitions.md))
+supplies a partition source.
 
 ```polydat
 cursor users = range(0, 1000000)
