@@ -17,9 +17,10 @@ eligible graph cones to be lowered through Cranelift to host-native machine code
 The default mixed engine targets native performance where the graph permits it
 and keeps the complete typed interpreter as the semantic host and fallback.
 
-Polydat is currently version 0.2.0 and is under active development. The source
-and tests are authoritative; design documents describe both implemented
-behavior and explicitly marked staged work.
+Polydat is currently version 0.2.0 and is under active development. The source,
+tests, and system design specifications define the implemented contract;
+unsupported behavior is identified as an explicit boundary rather than staged
+work.
 
 ## Quick start
 
@@ -211,13 +212,13 @@ The JIT uses the effective host ISA reported by Cranelift. Polydat's native
 register type plane is currently 128 bits even on AVX2- or AVX-512-capable
 hosts; it does not invent wider values that the installed backend cannot lower.
 
-SIMD scalar-flow promotion is an explicit, opt-in Tier-1 path today. It can
+SIMD scalar-flow promotion is an explicit, opt-in Tier-1 path. It can
 discover and compile a sealed `u64` flow into `RegI64x2`, reserve an owned
 perfect-ordinal input range, and drain results in scalar order across arbitrary
 bursts with forward-only recovery. Normal `compile_polydat`/`pull` execution
 does not silently enable this path. Broader lane types and automatic cost-based
-selection remain gated by the [SIMD ISA and auto-promotion
-SRD](crates/polydat/docs/design/simd_isa_autopromotion.md).
+selection are outside the current [SIMD ISA and auto-promotion
+specification](crates/polydat/docs/design/simd_isa_autopromotion.md).
 
 See [Engines](crates/polydat/docs/design/engines.md) and the [JIT boundary
 design](crates/polydat/docs/design/jit_boundary.md) for the detailed execution

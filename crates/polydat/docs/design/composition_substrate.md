@@ -34,7 +34,7 @@ touching SRD's role under this declaration.
   classification, const-binding contract. Owns the lifecycle
   mechanism that Pillar 3 (State Layering) builds on.
 - [SRD-13c: Polydat Scope Model](scope_model.md)
-  — `bind_outer_scope`, `scope_values`, auto-extern, manifest
+  — parent-gated materialization, `scope_values`, auto-extern, manifest
   extraction. Owns the synthesis mechanisms Pillar 1 (Context
   Synthesis) builds on.
 - [SRD-13f: Cross-Scope Wire Materialization](wire_materialization.md)
@@ -190,8 +190,8 @@ references the outer iter-var, and the slot appears.
 
 ### Axiom S2 — Binding-time materialisation as the synthesis fill rule
 
-**At scope-init time, `bind_outer_scope(outer: &PolydatKernel)`
-(driving `materialize_wiring_from_outer`) iterates the kernel's
+**At scope-init time, parent-gated subcontext construction
+(driving the private `materialize_wiring_from_outer`) iterates the kernel's
 extern slots and for each looks up the corresponding binding
 in the outer chain. Per SRD-13f's gradient, the binding is
 classified as inlined-constant, value-only-cell, or
@@ -354,7 +354,7 @@ Every slot in the kernel — input, output, externally-written
 — has a declared `PortType`. The chain guarantees a value of that
 type at every read; the compiler catches mismatches at
 construction or heals them with auto-inserted edge adapters.
-The type contract is *enforceable*, not aspirational.
+The type contract is enforced at construction and write boundaries.
 
 ### Axiom T1 — Every slot is typed
 
@@ -649,8 +649,9 @@ substrate's perspective: the node's *returned value* is still
 a function of its inputs (T1, T2 preserved); the side effect
 is *observable* but not *typed* — it does not flow through a
 slot. These nodes are explicitly marked as having observable
-side effects and are not JIT-compiled. See §11.3 for the open
-question on how to formalise this within the substrate.
+  side effects through `PolydatNode::purity()` and are not
+  JIT-compiled. Side-channel ordering follows
+  [runtime_model.md](runtime_model.md) D2.
 
 ---
 
@@ -660,7 +661,7 @@ question on how to formalise this within the substrate.
 |---|---|
 | [SRD-10](language_spec.md) | Syntactic substrate. Defines `PolydatNode`, `Value`, `PortType`. The axioms reference types SRD-10 defines. |
 | [SRD-11](evaluation_model.md) | Two-lifecycle classification — Pillar 3 (L2). Const-binding contract — boundary handler §8.3. |
-| [SRD-13c](scope_model.md) | Auto-extern (S1), `bind_outer_scope` (S2), manifest extraction. The synthesis-mechanism layer. |
+| [SRD-13c](scope_model.md) | Auto-extern (S1), parent-gated materialization (S2), manifest extraction. The synthesis-mechanism layer. |
 | [SRD-13f](wire_materialization.md) | Cross-scope read/write semantics. Read-invariant (Pillar 3, L1); write-through routing (S5, §8.2). |
 | [Cross-Fiber Cell Invalidation](cross_fiber_invalidation.md) | Validity-tracking mechanism for S5 — per-cell revision, per-scope intent vectors, per-fiber `last_seen`. Implements §12.1's cross-fiber visibility guarantee. |
 | [SRD-16](engines.md) | Engine variants. T3 applies across every engine (P1 interpreted, P2 closures, P3 JIT). |
@@ -709,17 +710,19 @@ proof.
 
 ## 11. What this document does NOT specify
 
-- **The grammar productions.** SRD-10 owns syntax. Focal-point
-  D (the grammar) will formalize the productions; this doc
+- **The grammar productions.** [grammar.md](grammar.md) owns
+  the formal productions; this doc
   relies on the grammar exposing typed input ports.
-- **The compilation pipeline mechanics.** Focal-point A (the
-  graph compiler + kernel hoisting + Graph Fusion two-phase
-  pipeline) will formalize the compiler's scope-aware passes.
+- **The compilation pipeline mechanics.**
+  [graph_compiler.md](graph_compiler.md)
+  owns the graph compiler, kernel hoisting, and Graph Fusion
+  passes.
   This doc relies on the compiler enforcing S1 (auto-extern),
   T1+T2 (typed slot construction), L2 (lifecycle
   classification).
-- **The expression system as host utility.** Focal-point C
-  will formalize the host-facing expression engine. This doc
+- **The expression system as host utility.**
+  [expression_engine.md](expression_engine.md) owns the
+  host-facing expression engine. This doc
   relies on expression evaluation being a special case of
   node evaluation — same slot contract, same chain mediation.
 - **The kernel-composition algebra in full.** SRDs 13c-f
@@ -798,42 +801,36 @@ from that mechanism.
    across fibers do not share a global modification order
    — only per-cell modification order is defined.
 
-**A latent invariant worth naming.** The
+**Coordinate/cell exclusion invariant.** The
 `set_inputs(&[u64])` fast path writes coordinate values
-directly into the inputs array, bypassing any cell that
-might be attached to a coordinate slot. Today coordinates
-are never cell-bound — coordinate slots and shared cells
-are mutually exclusive at construction time — but nothing
-in the type system enforces it; the invariant is preserved
-by convention. A future hardening would reify the
-distinction in the slot taxonomy so the combination becomes
-ill-typed.
+directly into the inputs array and does not consult attached
+cells. Coordinate slots and
+shared cells are therefore mutually exclusive. All internal
+construction paths MUST preserve this invariant; attaching a
+cell to a coordinate-prefix slot is an invalid program shape.
 
-### 12.2 JIT escape-hatch enumeration
+### 12.2 JIT escape-hatch rule
 
-T3 promises JIT preserves the typed slot contract with
-fall-back to interpreted for non-JIT-eligible nodes. The
-enumeration of "what makes a node non-JIT-eligible" is
-partially documented in node implementations
-(`GkNode::supports_jit`) and SRD-16b but not consolidated. A
-future revision should consolidate the escape-hatch list
-under §8.4.
+T3 preserves the typed slot contract by making eligibility
+constructive: a node or segment is P3-eligible only when
+`classify_node` produces a non-`Fallback` operation and
+codegen can lower its full typed signature for the selected
+effective ISA. A node with a compiled closure but no P3
+lowering may execute at P2. Every other node remains P1.
+Mixed production kernels keep unsupported nodes at P1 while
+embedding eligible P3 cones; whole-kernel builders reject a
+request whose complete graph cannot satisfy that level.
 
-### 12.3 Diagnostic side effects — substrate amendment or port refactor
+### 12.3 Diagnostic side effects
 
-§8.5 describes diagnostic nodes as preserving the *typed
-return value* but having observable side effects (log output)
-that don't flow through a slot. This is a known substrate
-asymmetry. Two possible resolutions, both deferred:
-
-- **Amendment**: extend T1 to allow "observable side
-  channels" as an explicit category, with declared rules
-  about JIT eligibility and parallel safety.
-- **Port refactor**: replace diagnostic side effects with a
-  structured event-emission port (typed output port → host
-  sink), bringing them inside the slot contract.
-
-A future revision should pick one and execute.
+§8.5's side effects are an explicit substrate category.
+`Purity::SideChannel { sink }` declares an observable that
+does not travel through a typed slot; `Purity::Nondeterministic`
+declares externally or historically varying return behavior.
+These nodes do not join P3 pure segments. Typed output ports
+remain governed by T1/T2, while ordering and cross-fiber
+observability are governed by Runtime Model D2. No implicit
+event-output port is synthesized.
 
 ---
 

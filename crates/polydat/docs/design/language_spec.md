@@ -26,7 +26,7 @@ host-side.
 
 ## DSL Syntax
 
-GK programs are written in `.polydat` files or inline in workload
+Polydat programs are written in `.polydat` files or inline in workload
 `bindings:` blocks.
 
 ### Input Declaration
@@ -152,7 +152,7 @@ temporarily disabling sections.
 
 ### Infix Operators
 
-GK supports arithmetic, bitwise, comparison, and power
+Polydat supports arithmetic, bitwise, comparison, and power
 operators with standard precedence. Operators desugar to
 function calls in the DAG — `a + b` becomes `f64_add(a, b)`,
 `a & b` becomes `u64_and(a, b)`, `a < b` becomes `u64_lt(a, b)`
@@ -368,7 +368,7 @@ nbrs bench Polydat mymodule.gk --explain
 
 ## Bitwise Operations
 
-GK provides six u64 bitwise node functions. Applying bitwise
+Polydat provides six u64 bitwise node functions. Applying bitwise
 operators to f64 operands is a compile-time error.
 
 | Node | Signature | Description |
@@ -411,7 +411,7 @@ dim := {:=vector_dim("..."):=}            // explicit-bracketed
 ```
 
 Resolution: named-binding lookup first, then const-eval
-fallback (per [GK Evaluation Model](evaluation_model.md)'s
+fallback (per [Evaluation Model](evaluation_model.md)'s
 compile-const lifecycle), then error. The explicit `{:=...}`
 forms bypass the binding lookup and force const evaluation.
 
@@ -479,10 +479,10 @@ Output Selection ▶ Mark which nodes are outputs (referenced by
 Constant Folding ▶ Evaluate compile-const nodes (no
   │               extern / cycle-input dependency), replace
   │               with leaf const nodes — see
-  │               [GK Evaluation Model](evaluation_model.md)
+  │               [Evaluation Model](evaluation_model.md)
   │
   ▼
-GkProgram ──────▶ Immutable compiled DAG (shared via Arc)
+PolydatProgram ─▶ Immutable compiled DAG (shared via Arc)
 ```
 
 The Output Selection step's host-facing details — which op
@@ -493,23 +493,22 @@ are a host concern, documented by the application that embeds polydat.
 
 ## Type System
 
-GK values are dynamically typed via the `Value` enum:
+Runtime values use the `Value` enum. Its carrier families are:
 
-```rust
-pub enum Value {
-    None,
-    U64(u64),
-    F64(f64),
-    Bool(bool),
-    Str(String),
-    Bytes(Vec<u8>),
-    Json(serde_json::Value),
-    Ext(Box<dyn ReflectedValue>),
-    Handle(Arc<dyn Any + Send + Sync>),
-    VecF32(Arc<[f32]>),
-    VecI32(Arc<[i32]>),
-}
-```
+- `U64`, `I64`, and `F64` for scalar machine values and the
+  bit-stuffed narrow scalar representations;
+- two-limb `U128` and `I128` values;
+- `Reg128(Bits128, RegLanes)` for raw and homogeneous 128-bit
+  register views;
+- `Bool`, shared `Str`, shared `Bytes`, and shared `Json` values;
+- reflected `Ext` values and type-erased shared `Handle` resources;
+- `VecF16`, `VecF32`, `VecF64`, `VecI8`, `VecI16`, `VecI32`, and
+  `VecI64` typed slice carriers; and
+- `None`, the absent or uninitialized sentinel.
+
+The exact static-to-runtime representation is specified in
+[type_system.md](type_system.md) and
+[type_system_alignment.md](type_system_alignment.md).
 
 Nodes declare their port types via `NodeMeta`. The compiler
 inserts type adapter nodes where wiring crosses types (e.g.,
@@ -530,7 +529,7 @@ zero allocations) — the design that lets resolved resources
 flow on wires between scope-stable resolvers (compile-const or
 scope-init) and per-cycle readers without re-doing the
 resolution work. See
-[GK Evaluation Model](evaluation_model.md) §"Three
+[Evaluation Model](evaluation_model.md) §"Three
 Evaluation Lifecycles" for the lifecycle taxonomy; the host's
 dataset-handle surface is the canonical use case.
 
@@ -550,17 +549,21 @@ host concern.)
 
 ## Node Contract
 
-Every node implements `PolydatNode` (defined in `polydat/src/ast.rs`):
+Every node implements `PolydatNode` (defined in `src/ast.rs`).
+The trait's behavioral surface is:
 
 ```rust
-pub trait GkNode: Send + Sync {
+pub trait PolydatNode: Send + Sync {
     fn meta(&self) -> &NodeMeta;
     fn eval(&self, inputs: &[Value], outputs: &mut [Value]);
     fn commutativity(&self) -> Commutativity { Commutativity::Positional }
     fn accepts_none_inputs(&self) -> bool { false }
     fn compiled_u64(&self) -> Option<CompiledU64Op> { None }
+    fn compiled_slot(&self) -> Option<CompiledSlotKit> { None }
     fn jit_constants(&self) -> Vec<u64> { Vec::new() }
     fn purity(&self) -> Purity { Purity::Pure }
+    fn simd_variant(&self) -> Option<SimdVariant> { None }
+    fn fusion_subgraph(&self) -> Option<FusionSubgraph<'_>> { None }
 }
 ```
 
@@ -579,23 +582,28 @@ in
 
 ## Wiring Model
 
-The DAG is stored as parallel vectors:
+Conceptually, the immutable program stores the DAG as parallel
+vectors plus typed input and ordered-output metadata:
 
 ```rust
-pub struct GkProgram {
-    nodes: Vec<Box<dyn GkNode>>,      // node instances
+pub struct PolydatProgram {
+    nodes: Vec<Box<dyn PolydatNode>>, // node instances
     wiring: Vec<Vec<WireSource>>,     // per-node input sources
-    input_names: Vec<String>,          // input dimensions
+    input_defs: Vec<InputDef>,         // typed inputs and lifecycle classes
+    coord_count: usize,                // leading coordinate-input prefix
     output_map: HashMap<String, (usize, usize)>,  // name → (node, port)
+    output_list: Vec<(String, usize, usize)>,     // declaration order
 }
 
 pub enum WireSource {
-    Input(usize),               // input from graph input dimension
+    Input(usize),               // coordinate, iteration, or external input
     NodeOutput(usize, usize),   // input from (node_index, port_index)
-    VolatilePort(usize),        // external input (resets per cycle)
-    StickyPort(usize),          // external input (persists across cycles)
 }
 ```
+
+Input lifecycle is carried separately by `InputDef::kind` as
+`Coordinate`, `IterationExtern`, or `ExternalWrite`; it is not a
+third `WireSource` variant.
 
 Evaluation proceeds in topological order. Each node reads inputs
 from upstream node output buffers or graph input values, and writes
@@ -605,41 +613,25 @@ to its own output buffer slots in `PolydatState`.
 
 ## Incremental Invalidation
 
-**Design topic for Memo:** The current implementation resets all
-GK state on input mutation. This is correct but wasteful —
-nodes that don't transitively depend on the changed input don't
-need re-evaluation.
+Input mutation uses provenance-based invalidation. The compiled
+program records the transitive dependent set for each input.
+`set_input` and `set_inputs` dirty that set unconditionally,
+including on same-value writes. Pull evaluation then recomputes
+only dirty nodes in the requested output cone; clean shared
+intermediates remain cached.
 
-The target model: **provenance-based invalidation**. When an
-input (graph input or externally-written port value) changes,
-only nodes downstream of that input are invalidated. This requires:
-
-1. Organizing buffers so downstream nodes can be invalidated
-   efficiently (contiguous ranges or bitmask per input)
-2. Tracking which input each node transitively depends on
-3. On input change: invalidate only the affected subset
-4. Diamond-shaped flows: a node at the bottom of a diamond
-   re-evaluates only when its actual inputs change, not when
-   unrelated siblings change
-
-For simple linear chains, this is straightforward. For complex
-DAGs with shared intermediates, the trade-off is tracking cost
-vs re-evaluation cost. A memo should explore the specific
-mechanisms and when the optimization pays for itself.
-
-The shipped runtime implementation lives in
-[polydat runtime_model.md §3-§4 (R1, R2)](../design/runtime_model.md);
-the `node_clean` + `input_dependents` mechanism is the
-hybrid push/pull realisation of the design above. The
-"design topic for Memo" framing predates the implementation
-and is preserved here as historical context — reconciliation
-should collapse this section into runtime_model R2.
+This hybrid push/pull rule applies equally to linear chains,
+diamonds, and general acyclic graphs. A diamond join is dirtied
+when the changed input is in its provenance and remains clean for
+changes confined to an unrelated cone. The normative runtime
+contract and its invariants are in
+[The Runtime Model §3–§4](runtime_model.md).
 
 ---
 
 ## Polydat Scope Model
 
-GK programs exist within a scope hierarchy formed by the
+Polydat programs exist within a scope hierarchy formed by the
 scenario tree (workload root, phases, `for_each` iterations,
 scope groups). Each scope is a self-contained kernel that
 sees its outer scopes' values via auto-generated `extern`

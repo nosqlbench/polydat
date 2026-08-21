@@ -268,15 +268,15 @@ integration.
 ## Extern-helper table
 
 Each predicate has one dedicated fail helper. The helpers live
-in `polydat/src/jit/codegen.rs` and are registered with
+in `polydat/src/compile/jit/codegen.rs` and are registered with
 Cranelift's JIT symbol table so the emitted native code can
 call them.
 
 | Extern | Arity | Called from |
 |---|---|---|
-| `jit_is_positive_fail` | `(u64) -> u64` | `JitOp::IsPositiveCheck` |
+| `jit_is_positive_fail` | `(u64, ptr, len) -> u64` (value, control name) | `JitOp::IsPositiveCheck` |
 | `jit_in_range_fail` | `(u64, u64, u64) -> u64` (value, lo, hi) | `JitOp::InRangeCheck` |
-| `jit_is_one_of_fail` | `(u64) -> u64` | `JitOp::IsOneOfCheck` |
+| `jit_is_one_of_fail` | `(u64, ptr, len) -> u64` (value, allowed set) | `JitOp::IsOneOfCheck` |
 
 The `u64` return type matches the extern-function ABI the JIT
 uses; since each helper ends in `_longjmp` (which is `-> !`),
@@ -309,20 +309,17 @@ behaves exactly like a predicate violation in Phase-1 or Phase-2:
   the per-cycle buffer is left partially written for the
   failing step but subsequent evals overwrite cleanly.
 
-The only observable difference between the JIT path and the
-interpreter/closure paths is the message body. The
-interpreter/closure paths carry the control-name
-identifier (e.g. `"is_positive(rate)"`) because they have the
-full node state at panic time; the JIT path drops the
-identifier because threading it through the extern ABI would
-bloat the call. Workloads that need maximum diagnostic detail
-can run at Phase-2 during troubleshooting.
+The helper ABI preserves the `is_positive` control name and the
+`is_one_of` allowed set through stable pointers into node metadata.
+`in_range` carries its numeric bounds directly. These values remain
+valid for the compiled kernel lifetime because the JIT core retains
+the originating nodes.
 
 ---
 
 ## Tests
 
-`polydat/src/jit/codegen.rs` carries unit coverage:
+`polydat/src/compile/jit/codegen.rs` carries unit coverage:
 
 - Per-predicate happy path: value passes through.
 - Per-predicate catchable-panic path: violation fires and
@@ -339,22 +336,15 @@ can run at Phase-2 during troubleshooting.
 
 ---
 
-## When to replace this with Cranelift unwind personality
+## Unwind boundary constraint
 
-The setjmp/longjmp approach is a working compromise, not the
-long-term architecture. The cleaner answer is for Cranelift to
-emit `.gcc_except_table` sections referencing Rust's
-`rust_eh_personality` and register them alongside the `.eh_frame`
-FDEs. At that point:
-
-- The extern helpers become `extern "C-unwind"` and `panic!`
-  directly; no TLS buffer, no longjmp.
-- Every `eval` method drops the wrapper and calls the JIT
-  code directly.
-- `catch_unwind` works without the Rust-side trampoline.
-
-Moving to that model requires upstream Cranelift work (or a
-fork-and-patch). Until that lands this module stays as-is.
+JIT predicate violations cross generated frames through the
+documented setjmp/longjmp trampoline. Generated code MUST NOT
+allow a Rust panic to unwind through a Cranelift frame because
+the emitted object does not register a compatible Rust unwind
+personality for that path. The TLS jump-buffer guard and
+Rust-side catch boundary are therefore part of the ABI, not an
+optional implementation detail.
 
 ---
 
@@ -369,10 +359,12 @@ scalar tail loop, and reducing kernels finish with an
 `extractlane` horizontal sum. Consumers are the `vec_*` nodes in
 `library/vector_math.rs`, which fall back to scalar Rust loops
 when the `jit` feature is off or host-ISA construction fails.
-This is the extern-call integration pattern (like hash/trig):
-vector *values* do not yet cross the `fn(coords, buffer)` ABI —
-the (ptr, len) slot-pair design for that is
-`type_system_alignment.md` §8.3 phases 5–6.
+This is also usable through the slot ABI. Typed slice values
+cross compiled steps as `(ptr, len)` slot pairs and
+`CompiledSlotOp` publishes vector results through kernel-owned
+scratch. Scalar-only P3 segments retain the compact
+`fn(coords, buffer)` shape; slice-bearing steps use the wider
+compiled-op contract described by the slot-state axioms below.
 
 SIMD accumulation reassociates float addition, so reduced results
 may differ from the scalar reference in the final ulps; the
@@ -510,8 +502,6 @@ construction (slice-bearing nodes classify `Fallback`, and
 this defensively. Hybrid kernels carry Ref slots only in closure
 steps.
 
-**Forwarding caveat.** The §8.4 "pass-through forwards its input
-pair verbatim" optimization is NOT yet implemented; when it is,
-forwarded ports must be exempted from S9(a)'s validator mapping
-explicitly — the validator currently assumes every Ref output is
-scratch-backed.
+**Forwarding boundary.** Ref-pair pass-through is not a P3
+optimization. Every Ref output is scratch-backed and S9(a)'s
+validator mapping applies to every Ref output without exemption.

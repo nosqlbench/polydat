@@ -16,8 +16,8 @@ polydat's role as an embedded expression engine for host
 crates. It owns the embedding contract (E-axioms), the
 catalog of evaluation surfaces, the composition pattern
 (interpolation → evaluation), and the host-design
-implications. Where SRD-14 (Config Expressions) and SRD-10
-(GK Language) describe specific surfaces, this doc names the
+implications. Where host configuration and language documents
+describe specific surfaces, this doc names the
 unifying capability the surfaces collectively provide.
 
 ## Companion documents
@@ -116,7 +116,7 @@ host text input            polydat compile pipeline
 ──────────────────         ──────────────────────────────────────
 "k * 2 + 1"                Parse → Bind → Node Fusion → Topological
                            Sort → Hoisting analysis → Engine select
-                           → Emit GkProgram (3 ops, 1 output)
+                           → Emit PolydatProgram (3 ops, 1 output)
 
                                             │
                                             ▼
@@ -419,8 +419,8 @@ just a value.
 
 Use case: host crates that pre-compile expressions for
 repeated evaluation. The kernel can be cached via
-`Arc<GkProgram>` and re-instanced per fiber via SRD-67's
-`from_program`.
+`Arc<PolydatProgram>` and re-instanced per fiber via
+`PolydatKernel::from_program`.
 
 Cost: one full compile (~ms scale for small expressions).
 Subsequent re-instances are fast (the program is shared,
@@ -480,7 +480,7 @@ H-axioms.
 
 ### Axiom E4 — Library inheritance
 
-**Every node registered in `polydat::dsl::factories::GkRuntime`
+**Every node registered in `polydat::dsl::factories::PolydatRuntime`
 (the default registry plus host-extension factories) is
 available to embedded expressions. The host inherits the
 full node catalog — hash, arithmetic, string, math,
@@ -533,17 +533,12 @@ naturally; the pipeline is the canonical host pattern.
 **Every failure mode the embedding surface produces is
 classified into a typed `EmbeddingError` variant per the
 error ontology in §6. The host pattern-matches on the
-error to drive UX, recovery, or logging — there is no
-stringly-typed escape hatch as part of the standard. The
-current implementation returns `Result<_, String>` and the
-ontology is being progressively retrofitted as a typed
-enum at the surface; until that migration completes, hosts
-may parse the string forms, but the contract reads from §6.**
+error to drive UX, recovery, or logging. `From<EmbeddingError> for String`
+is a display compatibility conversion, not a second
+error ontology.**
 
-Enforcement: §6 enumerates the variants exhaustively;
-implementations of the surfaces are mandated to produce
-errors that map to one variant. Migration to the typed
-enum at the surface is tracked in §12.1.
+Enforcement: §6 enumerates the variants exhaustively and all
+standard embedding surfaces return `EmbeddingError`.
 
 ---
 
@@ -612,8 +607,8 @@ pattern match, or even string-display rendering. The host
 takes responsibility for any type expectations it imposes
 on the result (accessor panics, mismatch handling).
 
-Two host crates in the workspace operate at this level
-today: nbrs-runtime's predicate evaluation reaches for
+Two host crates in the workspace operate at this level:
+nbrs-runtime's predicate evaluation reaches for
 `.as_bool()` post-hoc; nbrs-workload's parameter
 evaluation reaches for `.as_u64()` post-hoc. Both work
 correctly because the host has out-of-band knowledge of
@@ -624,7 +619,7 @@ the expected type.
 A host that wants polydat to enforce type alignment at
 *kernel compile time* engages additional obligations in
 exchange for additional guarantees. The opt-in surface
-is the typed embedding API (§5.3, planned):
+  is the typed embedding API (§5.3):
 
 | Opt-in obligation | What polydat guarantees in return |
 |---|---|
@@ -722,25 +717,19 @@ implementable without per-call negotiation.
 
 ### 5.3 L-value type inference
 
-The current embedding surfaces are *result-typed*: polydat
-returns a `Value`, and the host applies a typed accessor
-post-hoc:
+The embedding surface supports both result-typed and
+l-value-typed evaluation. The result-typed surface returns a
+`Value`, and the host applies a typed accessor post-hoc:
 
 ```rust
 let result_value = eval_const_expr("k > 5")?;
 let truth = result_value.as_bool();  // post-hoc accessor
 ```
 
-The host's *expected* type (`bool` in the example) is not
-visible to polydat at compile time. Polydat compiles the
-expression, returns whatever `Value` variant the
-expression produces, and the host coerces via accessor.
+On this surface the host's expected type (`bool` in the
+example) is not visible to polydat at compile time.
 
-**The contract's planned extension — l-value-driven
-inference:**
-
-A future revision of the embedding surfaces adds a typed
-entry point:
+The l-value-typed surface makes that type part of compilation:
 
 ```rust
 let truth: bool = eval_const_expr_typed::<bool>("k > 5")?;
@@ -766,11 +755,11 @@ The mechanism for inference:
   §5.4): apply the adapter, return.
 - Otherwise: typed error.
 
-L-value type inference moves the type contract from
-*runtime accessor panic risk* to *compile-time check at
-embedding*. The current accessor pattern remains supported
-(for hosts that want the `Value` for other reasons), but
-the typed surface becomes the recommended path.
+The corresponding kernel-bound entry point is
+`eval_kernel_bound_typed::<T>`. The `_strict` variants reject
+catalog conversions classified as lossy. The raw-`Value`
+surfaces remain supported for generic hosts and exhaustive
+value handling.
 
 ### 5.4 Type-matching adapter polyfills at the boundary
 
@@ -786,9 +775,9 @@ adapter-insertion rule inserts the appropriate adapter
 node when a wire's source type differs from its
 consumer's expectation in a way the catalog can heal.
 
-#### 5.4.1 The current catalog — intra-graph only
+#### 5.4.1 Catalog application sites
 
-The catalog operates at exactly one site today:
+The catalog operates at three typed boundaries. The first is
 **intra-graph wire validation during assembly**. The
 assembler (`compile::assembly::resolve`) walks each wire,
 checks the source's output `PortType` against the
@@ -801,20 +790,7 @@ consumer's input `PortType`, and:
 - If they mismatch and no catalog adapter exists → fail
   with `AssemblyError::TypeMismatch`.
 
-This site is the *only* one the catalog currently
-supplies. Every other tier of polydat operation (Context
-Fusion, embedding boundary, return-path coercion) either
-doesn't exist as a tier yet or operates without
-adapter-catalog support, surfacing type mismatches as
-errors rather than healing them.
-
-#### 5.4.2 Planned extension — two additional polyfill sites
-
-The substrate-consistent move: extend the same catalog to
-operate at two additional sites that match Context
-Fusion's structural boundaries.
-
-**Input-binding adapters (planned).** When the host's
+The second is **input binding**. When the host's
 context kernel has a binding `k: F64` and the expression's
 extern slot declares `k: U64`, the boundary should insert
 the catalog's `F64ToU64` adapter at the synthesis site.
@@ -823,34 +799,20 @@ type-coercion**: instead of failing on type mismatch, the
 chain consults the catalog and applies the same rule the
 intra-graph case uses.
 
-Current state: Context Fusion's `materialize_wiring_from_outer`
-does not invoke the catalog. A binding-type mismatch
-either silently coerces via the value's bitwise
-representation (for u64/f64 cases) or surfaces as a wire
-error at first read. The planned change: at the synthesis
-boundary, the chain consults the catalog and either
-applies the adapter or surfaces a typed `TypeMismatch`
-error before the kernel is fully bound.
+`materialize_wiring_from_outer` and typed host writes use
+`boundary_adapter` through `adapt_boundary_value`; an
+unhealable residual mismatch is rejected by the typed write
+surface.
 
-**Return-path adapters (planned, pairs with §5.3's
-l-value-typed surface).** When the host calls
+The third is **typed return conversion**. When the host calls
 `eval_const_expr_typed::<bool>` and the expression
 produces `U64`, the boundary applies the catalog's
 `U64ToBool` rule. The host's contract receives `bool`
 without an accessor panic risk.
 
-Current state: no return-path adapters exist. The host
-calls `.as_bool()` post-hoc and accepts panic risk on
-mismatch (or pattern-matches the `Value` directly). The
-planned change: when the typed embedding surface is added
-(§5.3), the boundary consults the catalog at return time
-and applies the adapter that brings the expression's
-output type to the host's target type.
-
 #### 5.4.3 The contract's rules for boundary polyfills
 
-Across both planned sites and the existing intra-graph
-site, the rules are uniform:
+Across all three sites, the rules are uniform:
 
 - **Only catalog adapters apply.** No silent generic
   coercion. `U64` → `Str` uses `U64ToString` (in the
@@ -862,89 +824,45 @@ site, the rules are uniform:
   value identity (e.g., `U64` → `Str` is lossless;
   display-round-trippable) or is lossy (e.g., `F64` →
   `U64` truncates). Hosts can opt out of lossy
-  conversions via a strict-mode embedding flag (planned,
-  paired with the typed surface).
+  conversions via the `_strict` typed embedding surfaces.
 - **Polyfill insertion is observable.** The compiled
   program records which adapters were inserted and at
   which sites. Hosts that want to diagnose unexpected
-  coercion can query the program's adapter-insertion log
-  (currently exposed by the assembler; not yet wired to
-  boundary sites).
+  coercion can inspect the assembler's insertion log for
+  graph conversions and use the typed boundary APIs for
+  boundary errors.
 - **The catalog is the single source of truth.** New
   conversion needs are added to the catalog *once*. After
-  registration, the new conversion is available at every
-  adapter site uniformly — intra-graph today, plus the
-  two planned boundary sites.
+  registration, the conversion is available wherever that
+  catalog is the applicable boundary. `auto_adapter` governs
+  graph and return-path conversions; `boundary_adapter` is
+  its scope/host-boundary superset.
 
-#### 5.4.4 What this means for the spec
+### 5.5 Virtual nodes — linked registry contributions
 
-The §5.4 contract is the spec's normative position. The
-current implementation supports the intra-graph site
-only; the two boundary sites are planned. Treating the
-boundary extension as the spec means:
+Compiler-visible node extensions use the same link-time
+`NodeRegistration` inventory as Polydat's built-in library.
+Host crates contribute registrations with `register_nodes!` or
+the `#[polydat_node]` derive. Each registration supplies static
+`FuncSig` metadata, a builder, and an optional constant validator.
+The standard compiler's `registry()` and `build_node()` paths
+consult that inventory directly.
 
-- New host code can assume the boundary will heal type
-  mismatches via the catalog and write against that
-  expectation; until the boundary sites land, hosts hit
-  `TypeMismatch` errors and treat them as
-  not-yet-implemented.
-- Catalog additions should serve all three sites by
-  construction (input-binding, intra-graph, return-path).
-  A new adapter that's only valid at one site is a
-  catalog-design smell.
-- §12.4 ("Embedded compilation of host source text") and
-  §12.7 ("L-value-typed embedding surface") are
-  prerequisites; the boundary-adapter extension can land
-  alongside them.
+Once linked, contributed nodes are indistinguishable from built-ins:
+they declare typed ports, compile levels, purity, commutativity, and
+optional compiled or SIMD hooks through the ordinary node contract.
+The slot, lifecycle, and runtime axioms apply uniformly.
 
-### 5.5 Virtual nodes — host-registered factory contributions
+`PolydatRuntime::register_factory` is a separate object-local
+factory catalog. Its `registry()` and `build_from_factory()` methods
+support explicit host orchestration, but the standard
+`eval_const_expr` and `compile_polydat` entry points do not accept a
+`PolydatRuntime` and therefore do not consult object-local factories.
+A node that must be visible to those standard embedding surfaces
+must use the linked inventory channel.
 
-**Status: shipped.** Host crates contribute `PolydatNode`
-implementations to the runtime registry; from the
-substrate's perspective these are indistinguishable from
-built-in nodes and obey the full slot contract.
-
-The host registers a factory contribution with
-[`PolydatRuntime`](../../src/dsl/factories.rs) before
-embedding evaluation begins. Each contribution declares
-one or more `PolydatNode` implementations whose `eval`
-delegates to host code:
-
-```rust
-pub trait HostFactory {
-    fn nodes(&self) -> Vec<(NodeName, Box<dyn GkNode>)>;
-}
-
-// At process start:
-runtime.register_factory(MyHostFactory { … });
-```
-
-From the substrate's perspective, host-contributed nodes
-are *indistinguishable* from built-ins — they have
-declared `PortType`s, declared `commutativity`, declared
-JIT eligibility, and their `eval` is invoked through the
-ordinary trait surface. The slot contract (T1+T2) and the
-runtime model (R-axioms) hold uniformly.
-
-Examples of current host contributions:
-
-| Host crate | Virtual node | Purpose |
-|---|---|---|
-| nbrs-runtime | `runtime_context` family | Surfaces per-cycle activity state (current op name, scope path, etc.) as typed input values to Polydat expressions. |
-| nbrs-metrics | Polydat metric nodes | Surfaces metric values (counters, gauges) to Polydat predicates without leaking metric infrastructure into polydat. |
-| Adapters | Driver-aware nodes | A CQL adapter might register a `cql_table_exists` predicate node usable in workload expressions. |
-
-The host's only obligation: register the factory before
-the first evaluation. After that, the contributed nodes
-are part of the substrate's vocabulary uniformly. The
-runtime model's R-axioms apply to host-contributed nodes
-exactly as they do to built-ins — same per-generation
-memoization, same forward-only flow, same determinism
-classification per the node's declared metadata.
-
-This is the host's *shallow* integration point — extending
-the node vocabulary. Virtual wires (§5.6) are the *deeper*
-integration point, extending the synthesis vocabulary.
+This is the host's node-vocabulary integration point. Virtual wires
+(§5.6) extend the synthesis vocabulary instead.
 
 ### 5.6 Virtual wires — context-fusion-conditioned bindings
 
@@ -967,13 +885,12 @@ register_extern_resolver(Box::new(|slot_name, slot_type| {
 }));
 ```
 
-Use case: the host might want `{cluster_metadata.region}`
-references in workload expressions to resolve via a
-host-side configuration lookup, not via the kernel chain.
-A virtual-wire resolver does this — at scope-init, polydat
-sees the extern slot, the resolver fires, the slot is
-filled with the host-computed value, the expression
-evaluates as ordinary.
+A resolver can bind a name such as `cluster_metadata.region`
+from host configuration when the outer kernel chain has no
+matching value. At scope-init, polydat sees the extern slot,
+consults registered resolvers in registration order, and uses
+the first returned value. If all resolvers return `None`, normal
+unresolved-slot handling applies.
 
 #### 5.6.1 Why this is a distinct integration tier
 
@@ -986,7 +903,7 @@ that matter for the substrate:
   scope-init, the result is frozen for the scope's
   lifetime per S3).
 - **Surface.** Virtual nodes appear in the expression
-  *text* (the workload author writes `runtime_context()`
+  *text* (the workload author writes the registered function call
   somewhere). Virtual wires appear as *bindings* the
   expression text references via `{...}` — the resolution
   is invisible to the expression author.
@@ -998,12 +915,10 @@ that matter for the substrate:
 This is why virtual wires are a deeper integration point
 — the host becomes a *participant* in S2 (binding-time
 materialisation), not just a consumer of S1 (auto-extern
-discovery). The substrate's S1 axiom currently assumes
-the synthesis source is the outer kernel's chain alone;
-virtual wires extend this to "outer chain *or*
-host-resolver."
+discovery). S1's binding source is the outer kernel chain or a
+registered host resolver.
 
-#### 5.6.2 The planned contract for virtual-wire resolvers
+#### 5.6.2 Virtual-wire resolver contract
 
 The resolver's contract must preserve every substrate
 axiom for the slot it fills:
@@ -1041,8 +956,7 @@ contract is the abstraction barrier.
 
 The host's deepest integration point: the host becomes a
 *participant* in the substrate's synthesis surface, not
-just a consumer of its output. Concrete capabilities the
-planned mechanism would enable:
+  just a consumer of its output. Concrete capabilities include:
 
 - **Host configuration injection.** Workload expressions
   reference `{config.region}` or `{config.dataset_path}`;
@@ -1057,10 +971,8 @@ planned mechanism would enable:
   by the expression (Context Fusion only invokes the
   resolver for slots auto-extern discovered).
 
-These are use cases that *currently* require workload
-authors to thread configuration through workload params
-explicitly — the planned mechanism lets the host
-inject them at the substrate boundary instead.
+The resolver is the substrate boundary for these bindings;
+workload parameters remain the explicit alternative.
 
 ### 5.7 The runtime model applied to embedded expressions
 
@@ -1081,15 +993,14 @@ Per the Runtime Model's L1 realisation (per-fiber `PolydatState`),
 an embedded expression's kernel is its own scope tier
 owned by the host call. The kernel's `PolydatState` is not
 shared with the host's other state; the kernel's program
-is `Arc<GkProgram>`, sharable across fibers if the host
+is `Arc<PolydatProgram>`, sharable across fibers if the host
 caches it.
 
 The host context (passed as `&PolydatKernel`) is the **outer
 scope** for the embedded expression. Context Fusion (per
 the Graph Compiler) populates the expression kernel's
 extern slots from the context kernel's bindings at
-scope-init — including any virtual-wire resolutions per
-§5.6 (planned).
+  scope-init — including virtual-wire resolutions per §5.6.
 
 #### 5.7.2 Cone size is small — cost stays small
 
@@ -1111,8 +1022,8 @@ must be evaluated *after* the host has written the value
 into the slot. The host pattern:
 
 ```rust
-// host writes the value into the slot
-state.set_port_value("recall_at_k", recall_value);
+// host writes the value through the typed dataflow boundary
+kernel.set_wire("recall_at_k", recall_value)?;
 
 // NOW the expression sees the written value
 let value = eval_const_expr_against(&kernel, "{recall_at_k} >= 0.8")?;
@@ -1157,13 +1068,13 @@ see [Runtime Model §6 (D-axioms)](runtime_model.md).
 
 ## 6. The Error Ontology
 
-The embedding surface produces errors in eight distinct
-classes. Each carries enough context for the host to render
-a meaningful diagnostic and (where applicable) suggest
-remediation. The ontology is normative for the standard;
-the current `Result<_, String>` surface uses descriptive
-prefixes that map to these variants until the typed enum
-lands.
+`EmbeddingError` defines ten representable classes. The standard
+embedding entry points emit the classes reachable from parsing,
+compilation, lifecycle validation, evaluation, and typed result
+conversion. `ResultMissing`, `Timeout`, and
+`RegistryNotInitialised` are compatibility variants and are not
+emitted by the standard entry points. Each variant carries the
+context shown below; the enum shape is normative.
 
 ```rust
 pub enum EmbeddingError {
@@ -1245,19 +1156,15 @@ pub enum EmbeddingError {
         source: String,
     },
 
-    /// Evaluation exceeded a host-specified time budget.
-    /// Currently produced only by deadline-accepting
-    /// surfaces (none of the existing surfaces accept one;
-    /// reserved for the bulk-evaluation surface §12.3 and
-    /// for adapter-specific embedding paths that wrap
-    /// the standard surfaces with their own deadline).
+      /// Compatibility variant for a host-specified time budget.
+      /// Standard embedding entry points do not emit it.
     Timeout {
         source: String,
         elapsed_ms: u64,
         deadline_ms: u64,
     },
 
-    /// The runtime node registry (`GkRuntime`) is in a state
+    /// The runtime node registry (`PolydatRuntime`) is in a state
     /// where required factories were not registered before
     /// the embedding call. Indicates a host-side
     /// initialisation-order bug (a factory that should have
@@ -1281,10 +1188,10 @@ pub enum EmbeddingError {
 | `UnknownNode` | A node call uses a name not in the registry. | If `suggestion` is `Some`, render it; otherwise tell the user to check the available node catalog. Host crates that register custom nodes should ensure registration happens before evaluation. |
 | `TypeMismatch` | Wire types incompatible and no auto-adapter exists. | Surface the from/to node and types; suggest inserting an explicit conversion (e.g., `u64_to_str(x)`) or using a different node. |
 | `NodeEvalPanic` | A node panicked during scope-init. | Surface the panic message; this is typically a node-internal contract violation (invalid argument range, etc.). Forwarded to the user with provenance. |
-| `ResultMissing` | The compiler completed but the wrapper output isn't reachable. | Internal — report as a bug. Should not occur under correct surface usage. |
+| `ResultMissing` | Compatibility variant; standard entry points do not emit it. | Treat receipt from a nonstandard wrapper as an internal result-selection error. |
 | `NonePropagated` | Host called a strict accessor on `Value::None`. | Either use a non-strict accessor (`try_as_*`) or surface the None to the user with context about which input was missing. See SRD-74. |
-| `Timeout` | Evaluation exceeded host-specified deadline. | Surface the elapsed/deadline to the user. Either widen the deadline or refactor the expression to reduce work; investigate whether the embedded expression's complexity is unexpectedly large. |
-| `RegistryNotInitialised` | Expression references nodes not present in the runtime registry. | Internal — usually indicates a host initialisation-order bug. Ensure the relevant factory is registered before evaluation; if the missing nodes are surprising, audit the registry construction sequence at process start. |
+| `Timeout` | Compatibility variant; standard entry points accept no deadline and do not emit it. | A nonstandard deadline wrapper owns timeout policy and recovery. |
+| `RegistryNotInitialised` | Compatibility variant; unknown functions from standard entry points are `UnknownNode`. | A custom runtime wrapper that emits it owns factory-initialization recovery. |
 
 ### 6.2 Provenance
 
@@ -1441,38 +1348,17 @@ hosts that don't care reach for `eval_const_expr` per call.
 
 ---
 
-## 12. Open questions
+## 12. Surface boundaries
 
-### 12.1 Bulk-evaluation surface
-
-When a host has N expressions over the same kernel context,
-it currently issues N compile + eval cycles. A bulk
-surface — `evaluate_many(&[&str], &PolydatKernel) ->
-Vec<Result<Value, EmbeddingError>>` — could amortise some
-compilation work (shared parser state, shared node lookups,
-etc.). Profile-driven: only worth specifying if bulk
-patterns dominate a measurable cost.
-
-### 12.2 Embedded compilation of host source text
-
-Several host consumers parse host-side data (YAML, JSON,
-TOML) into strings that get passed through polydat
-evaluation. The boundary between "host data parser" and
-"polydat compiler" is informal. A future revision could
-specify a typed `HostText` wrapper that records the
-provenance of submitted text (source file, line number,
-host parsing context) for better cross-crate error
-reporting; this dovetails with §6.2's provenance
-discussion.
-
-### 12.3 Lazy / suspended compilation
-
-The current surfaces compile eagerly. A "compile when first
-evaluated" surface would let hosts cache compiled programs
-for expressions that may or may not be evaluated. Specific
-patterns where this would help: lazily-evaluated assertion
-expressions, validation rules that fire only on specific
-result shapes.
+- Evaluation APIs compile eagerly. Callers that need reuse
+  compile with `compile_polydat` and cache the resulting
+  program or kernel.
+- Each embedding call accepts one expression. Hosts batch by
+  compiling a graph with multiple named outputs or by managing
+  a collection of cached programs.
+- Source provenance is carried by the existing source and
+  `EmbeddingError` fields. There is no separate `HostText`
+  wrapper in the embedding contract.
 
 ---
 
@@ -1480,6 +1366,6 @@ result shapes.
 [`crate::kernel`]: ../../src/kernel/mod.rs
 [`crate::dsl::compile::eval_const_expr`]: ../../src/dsl/compile.rs
 [`crate::dsl::compile::compile_polydat`]: ../../src/dsl/compile.rs
-[`crate::dsl::factories::GkRuntime`]: ../../src/dsl/factories.rs
+[`crate::dsl::factories::PolydatRuntime`]: ../../src/dsl/factories.rs
 [`crate::kernel::interp::interpolate_via_kernel`]: ../../src/kernel/interp.rs
 [`crate::iteration::comprehension::eval::evaluate_spec`]: ../../src/iteration/comprehension/eval.rs

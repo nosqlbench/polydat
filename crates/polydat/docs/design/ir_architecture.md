@@ -1,7 +1,7 @@
 # IR Architecture — Stack-Machine with Stream Operands
 
 Reference for developers working on or against polydat's
-comprehension IR (`polydat::comprehension::ir`).
+comprehension IR (`polydat::iteration::comprehension::ir`).
 Companion to the algebra spec
 (`polydat/docs/design/comprehension_forms.md`) — focuses on
 the **how** of the runtime model rather than the **what** of
@@ -31,7 +31,7 @@ behavior.
 
 ## How interpretation works
 
-The [`interpret`](../../src/comprehension/algebra/ir/interpreter.rs)
+The [`interpret`](../../src/iteration/comprehension/ir/interpreter.rs)
 function walks the IR opcode sequence **once**, manipulating
 the stream stack:
 
@@ -146,8 +146,8 @@ rewrite for them.
 
 ## Trait object choice
 
-`Box<dyn TupleStream>` was the chosen representation for the
-stack. Alternatives considered:
+`Box<dyn TupleStream>` is the required representation for the
+stack. The rejected alternatives are:
 
 - **Generic enums** — one enum variant per stream type.
   Would avoid trait-object indirection but inflate the enum
@@ -155,16 +155,11 @@ stack. Alternatives considered:
   extend (adding a new strategy means a new enum arm
   everywhere).
 - **Stream-fusion via closures** — a "compile to a single
-  nested generator" pass (spec §9.1 option (b)). More work
-  to implement; potential perf win on hot loops but unclear
-  benefit when most consumers pull fewer than 100k tuples.
-  Tracked as a possible future enhancement; current trait-
-  object impl is the spec's option (a).
+  nested generator" representation. It is not part of this IR
+  and cannot be selected by the compiler.
 
 Trait-object overhead is one vtable dispatch per `advance()`.
-For workloads pulling ≤10⁶ tuples this is negligible. Hot-
-path workloads can revisit if profiling shows it's the
-bottleneck.
+This cost is part of the specified interpreter representation.
 
 ## File layout
 
@@ -209,21 +204,19 @@ ever reached during interpretation, which bounds spec §9.3's
   evaluation (subset covering §10.9.5 catalog).
 - Resource-bound checking.
 
-**Out of scope (deferred to higher layers):**
+**IR interpreter boundaries:**
 
-- Predicate evaluation beyond the §10.9.5 catalog. A
-  production wiring would consult polydat's Polydat expression
-  evaluator. The current evaluator is sufficient for
-  algebra-layer tests; "unknown" predicates evaluate to
-  `true` (conservative pass-through).
+- Predicate evaluation beyond the §10.9.5 catalog. The static
+  IR interpreter treats unknown predicates as `true`
+  (conservative pass-through); production iteration uses the
+  runtime evaluator and Polydat kernel scope.
 - Source evaluation for `Generator` / `WorkloadParamList` /
-  continuous sources. The interpreter exhausts these to
-  `None` (silent no-tuple) — they require runtime evaluator
-  wiring that Phase 9 (nb-rs migration) provides.
-- The stream-fusion compiler interpretation strategy
-  (spec §9.1 option (b)). The current stack-machine
-  interpreter is option (a); both must produce identical
-  dispense sequences per §9.2's correctness contract.
+  continuous sources. The static interpreter exhausts these
+  to `None` (no tuple); `runtime::evaluate_for_iteration`
+  owns evaluated-source behavior.
+- Stream-fusion compilation is not part of this IR. The
+  specified executor is the stack-machine interpreter, and
+  its dispense sequence is governed by §9.2.
 
 ## Adding a new opcode
 

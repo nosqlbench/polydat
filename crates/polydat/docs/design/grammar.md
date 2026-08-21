@@ -157,10 +157,12 @@ Inputs are per-cycle kernel input slots (driven by
 chain (manifest values from outer scopes) or written by
 external producers (per composition_substrate S4).
 
-The distinction is structural: an `input` declares a slot
-that *advances* per cycle (the cycle clock S3 of the
-substrate); an `extern` declares a slot that is *fixed*
-per scope-init via Context Fusion (S1+S2).
+The distinction is structural: an `input` declares a
+coordinate slot advanced through the leading `set_inputs`
+prefix. An `extern` declares a typed non-coordinate slot. A
+parent-bound iteration extern is fixed for its scope activation;
+an external-write extern may be updated through `set_wire` and
+persists until its owning host resets or replaces the state.
 
 ### 2.3 Bindings
 
@@ -647,7 +649,7 @@ the substrate doesn't have to repeat.
 | [Expression Engine](expression_engine.md) | E-axioms. G3+G6 underwrite E1+E4; G4 underwrites E2; G6 underwrites the expression-as-kernel correspondence. |
 | [SRD-10](language_spec.md) | DSL syntax. This doc's productions (§2) formalise the syntax SRD-10 describes prosaically. |
 | [SRD-11](evaluation_model.md) | Two-lifecycle classification. G2+G5 are the grammar-level commitments SRD-11's lifecycle taxonomy rests on. |
-| [SRD-13c](scope_model.md) | Scope-composition mechanism. G1+G3 are the grammar-level commitments SRD-13c's auto-extern + `bind_outer_scope` rest on. |
+| [SRD-13c](scope_model.md) | Scope-composition mechanism. G1+G3 are the grammar-level commitments for auto-extern discovery and parent-gated materialization. |
 | [SRD-13f](wire_materialization.md) | Cross-scope read/write. G1's auto-extern discovery is what SRD-13f's gradient classification operates over. |
 
 ---
@@ -674,47 +676,48 @@ the substrate doesn't have to repeat.
 
 ---
 
-## 8. Open questions
+## 8. Resolved grammar contracts
 
-### 8.1 Formal type-inference soundness statement
+### 8.1 Type soundness
 
-The type-inference rules (§3) are presented as derivation
-rules but no formal soundness theorem is stated (e.g.,
-"every well-typed expression evaluates to a value of its
-declared type"). A future revision should either state
-the soundness theorem explicitly or note that it follows
-trivially from G4 + the per-node implementation's
-correctness.
+A successfully compiled expression has one inferred output
+`PortType`, and every runtime value written to that output
+must satisfy it. Node metadata establishes local port types;
+the assembler either connects equal types, inserts a catalog
+adapter, or rejects the graph. Typed runtime writes perform
+the corresponding boundary check. Subject to each node
+honouring its declared metadata, a well-typed expression
+therefore evaluates only to a value satisfying its inferred
+type (or to `Value::None`, the absence sentinel governed by
+[none_semantics.md](none_semantics.md)).
 
-### 8.2 String interpolation as expression form
+### 8.2 String interpolation
 
-The grammar treats `{name}` in string literals as a
-substitution at parse-time-or-eval-time (depending on
-context). This is currently described prosaically in
-SRD-10 and used uniformly in expression embedding (E6).
-A future revision could elevate interpolation to a
-first-class expression form (`Interp(template, vars)`)
-with its own type-inference rule. The current treatment
-works but loses some compositional clarity.
+Interpolation is parser desugaring, not a first-class AST
+form. Every interpolated string, including a sole placeholder
+such as `"{name}"`, lowers to `printf(format, ...)` and has
+type `Str` when present. A typed passthrough is written as the
+expression `name`, without string quotes.
 
-### 8.3 Cross-statement type inference
+### 8.3 Cross-statement inference
 
-The current type-inference rules (§3) operate on single
-expressions. Cross-statement inference (e.g., a binding's
-RHS type informs the binding's declared type for
-downstream uses) happens during compilation but is not
-formalised here. A future revision should add an §3.7
-covering the cross-statement flow.
+Statements are compiled in dependency order. A binding's RHS
+is inferred from literals, references, and node signatures;
+its resulting port type is entered into the environment used
+by downstream statements. Explicit declarations constrain
+that result. Unresolved references, incompatible constraints,
+and dependency cycles are compile errors.
 
 ### 8.4 Type-erased extension points
 
-`PortType::Ext` is the catch-all for types beyond the
-built-in set (Partition, Json, dataset handles, etc.).
-The grammar treats `Ext` as opaque; the per-extension
-type implements its own field-projection rules. A future
-revision should specify the contract `Ext` types must
-satisfy to participate in G4 (port-typed expressions)
-and G5 (lifecycle classification).
+`PortType::Ext` is opaque to the grammar. Runtime values use
+`Value::Ext` and implement the reflected-value contract for
+type identity, display, JSON projection, and supported field
+access. No structural type inference or implicit conversion
+is performed inside an extension value. Extension-producing
+nodes still declare ordinary metadata, so lifecycle and
+purity classification operate on the node and its wires, not
+on extension internals.
 
 ---
 

@@ -12,12 +12,11 @@ This doc extends axiom-level statements:
 - [cross_fiber_invalidation.md (canonical validity-tracking mechanism for shared cells — revision counter + intent vectors + per-fiber `last_seen`)](cross_fiber_invalidation.md)
 - [graph_compiler.md CF1-CF4 (Context Fusion) + CF3 (gradient honoring)](graph_compiler.md)
 - [runtime_model.md R1 (clean-flag memoization) + R2 (hybrid push/pull invalidation)](runtime_model.md)
-- [scope_model.md (visibility rules — the "Default: Immutable Propagation" clause this doc updates)](scope_model.md)
+- [scope_model.md (visibility, parent materialization, and shared-cell ownership)](scope_model.md)
 - [subcontext_construction.md (parent-walking lookup; SharedCell write-through)](subcontext_construction.md)
 
-The host-side wire-reference classification synthesizer rule,
-implementation status, plan-to-true-up, and open questions are
-documented by the host. Related polydat docs:
+Host-side synthesis policy is outside this specification. Related
+Polydat specifications are:
 [engines.md (per-scope canonical kernel cache)](engines.md),
 [module_system.md](module_system.md).
 
@@ -40,24 +39,11 @@ optionally writable) from an inner scope's kernel. Specifically:
 - How the `shared` modifier relates to all of this (write
   permission, *not* read-mediation).
 
-This SRD updates two earlier clauses that have become misaligned
-with how the runtime needs to work:
-
-1. **[scope_model.md §"Default: Immutable Propagation"](scope_model.md)** —
-   the snapshot-at-scope-creation default does not match the
-   invariant that inner reads of an outer-defined wire return
-   the *current* outer value. This SRD reframes the default
-   around uniform read-live wiring; "snapshot" is one
-   *materialization* choice the matter interpreter makes for
-   strictly-constant wires, not a general visibility rule.
-2. **`bind_outer_scope` as the name of the construction-time
-   wiring step** — the name implies a narrow value-copy +
-   cell-attach operation, but the actual responsibility is
-   general matter-AST interpretation that installs whatever
-   wiring each visible wire's matter classification prescribes.
-   This SRD specifies the operation; the name has been retired
-   in favor of `materialize_wiring_from_outer` (see the nbrs-side
-   §"Plan to true-up").
+The construction-time wiring operation is general matter-AST
+interpretation, not a public post-hoc bind. Parent-gated
+construction drives the private `materialize_wiring_from_outer`
+chokepoint, which installs the value, broadcast, shared-cell, and
+transit wiring prescribed by each visible binding's classification.
 
 ---
 
@@ -223,7 +209,7 @@ This is the materialization for:
 
 - `shared X := <literal>` declarations.
 - For_each iteration variables (treated as shared internally
-  today by polydat's comprehension synthesis path — the same
+  by polydat's comprehension synthesis path — the same
   surface that backs polydat spec §9.5's `scope_once`).
 - Any other matter that explicitly opts into cross-scope
   write-back.

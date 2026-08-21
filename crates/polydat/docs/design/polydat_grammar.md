@@ -3,12 +3,10 @@
 **Subtitle:** The complete, verified reference for the Polydat surface
 language.
 
-> **Planned (SRD-84):** the `&&` / `||` boolean operators (eager
-> truthiness combinators; short-circuit deferred) and the uniform
-> `<expr> as <type>` cast described below have shipped. They occupy the
-> lowest precedence band (`&&`/`||`) and the tightest postfix position
-> (`as`) respectively. See the host's **SRD-84** Parts 1 + 1b for the
-> original framing.
+> **Operator contract:** `&&` and `||` are eager truthiness combinators;
+> they do not short-circuit. They occupy the lowest precedence band.
+> The uniform `<expr> as <type>` cast occupies the tightest postfix
+> position.
 
 <a id="sec-authority"></a>
 ## 0. Authority and supersession
@@ -704,7 +702,7 @@ pragma strict_types
 
 The complete set of type keywords usable in `input x: T`, `extern x: T`,
 `<expr> as T`, and module signatures is fixed by `PortType::from_keyword`
-(`polydat/src/ast.rs`):
+(`src/ast.rs`):
 
 ```text
 u64 f64  u32 i32  i64 f32  u8 i8  u16 i16  f16  u128 i128

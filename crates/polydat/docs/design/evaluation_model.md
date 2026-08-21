@@ -19,26 +19,29 @@ The host-side FiberBuilder and cursor-driven evaluation
 
 The Polydat evaluation model separates the immutable program
 (shared) from mutable per-fiber state (private). This
-enables lock-free concurrent evaluation across hundreds of
-fibers.
+allows ordinary per-fiber evaluation without shared cache locks.
+Explicit `SharedCell` inputs retain their own synchronization
+contract.
 
 ---
 
 ## Program / State Split
 
 ```
-GkProgram (Arc, immutable, shared)
+PolydatProgram (Arc, immutable, shared)
   ├── nodes[]          — node instances
   ├── wiring[]         — input source tables
-  ├── input_names[]    — input dimension names
+  ├── input_defs[]     — typed names, defaults, and lifecycle kinds
   ├── output_map       — name → (node_idx, port_idx)
-  └── ports             — external-write port definitions
+  └── provenance/dependents — exact multi-word masks and reverse lists
 
-GkState (per-fiber, mutable, private)
+PolydatState (per-fiber, mutable, private)
   ├── buffers[][]        — per-node output value slots
   ├── node_clean[]       — per-node cache validity (bool)
-  ├── inputs[]           — current input values
-  └── port_values[]      — external ports (persist across set_inputs)
+  ├── inputs[]           — non-cell input registers
+  ├── input_defaults[]   — reset values
+  ├── shared_cells[]     — optional cell register per input
+  └── cell-cone/revision state
 ```
 
 `PolydatProgram` is created once at compilation time and shared via
@@ -49,16 +52,16 @@ GkState (per-fiber, mutable, private)
 
 ## Provenance-Based Invalidation
 
-Each node has a compile-time **provenance bitmask**: bit i is set
+Each node has a compile-time exact multi-word **provenance mask**: bit i is set
 if the node transitively depends on graph input i. On input
 change, only nodes whose provenance overlaps the changed inputs
 are invalidated. Nodes depending on unchanged inputs stay cached.
 
 ```
 1. fiber.set_inputs(&[cycle])
-   → compare each input old vs new
-   → build changed_mask (only inputs that actually changed)
-   → for each node: if (provenance & changed_mask) != 0 → dirty
+   → write each coordinate input in the leading coordinate prefix
+   → dirty every transitive dependent of each written coordinate
+   → dirty every non-deterministic node
 
 2. state.pull(program, "user_id")
    → if node_clean[node] → return cached buffer
@@ -67,23 +70,18 @@ are invalidated. Nodes depending on unchanged inputs stay cached.
    → return &buffers[node_idx][port_idx]
 ```
 
-This replaces the previous generation counter model. Nodes that
-don't depend on the changed input skip evaluation entirely —
-no generation comparison, just a boolean check.
+Nodes that do not depend on a written input stay clean. P1 treats
+the write itself as the invalidation signal and does not compare
+rich `Value` instances for equality.
 
 **Diamond optimization:** In a diamond-shaped DAG where only one
-input branch changed, the unchanged branch stays cached. The
-generation counter model re-evaluated everything.
+input branch is written, the unchanged branch stays cached.
 
 **Memoization granularity:** Every node's output buffer is cached.
-For diamond-shaped flows where intermediate nodes are never
-directly referenced as outputs, this memoization
-has no consumer — the intermediate values are computed, cached,
-and then recomputed from scratch on the next input change
-anyway. A more targeted approach would memoize only at output
-nodes and nodes with multiple downstream consumers. See
-[GK Language §Incremental Invalidation](language_spec.md#incremental-invalidation)
-for the broader discussion of provenance-based invalidation.
+This uniform rule permits a later pull of any downstream cone to
+reuse every still-clean intermediate, including shared branches in
+a diamond. See [Language Spec §Incremental
+Invalidation](language_spec.md#incremental-invalidation).
 
 ---
 
@@ -94,17 +92,14 @@ re-evaluated. Two are recognised:
 
 | Lifecycle | When evaluated | Re-evaluated when… |
 |-----------|----------------|---------------------|
-| **effectively-const** | Once, for the duration of a scope activation. Two implementation paths: (a) **compile-fold** — evaluated during Polydat compilation and replaced with a leaf const node; (b) **scope-init pull** — evaluated once after `bind_outer_scope` populates iteration-variable externs, then frozen for the activation. The choice between (a) and (b) is decided by the compiler based on the wire chain; the author writes `const NAME := <expr>` in both cases. | Never within an activation. The enclosing comprehension advancing to its next iteration (polydat comprehension dispense per `polydat/docs/design/comprehension_forms.md` §9.5) triggers a fresh activation, which re-runs scope-init pull (compile-folded leaves are immutable across activations). |
+| **effectively-const** | Once, for the duration of a scope activation. Two implementation paths: (a) **compile-fold** — evaluated during Polydat compilation and replaced with a leaf const node; (b) **scope-init pull** — evaluated once after parent materialization populates iteration-variable externs, then frozen for the activation. The choice between (a) and (b) is decided by the compiler based on the wire chain; the author writes `const NAME := <expr>` in both cases. | Never within an activation. The enclosing comprehension advancing to its next iteration (polydat comprehension dispense per `polydat/docs/design/comprehension_forms.md` §9.5) triggers a fresh activation, which re-runs scope-init pull (compile-folded leaves are immutable across activations). |
 | **dynamic** | Once per pull, on demand at execution time | Whenever a transitively dependent input changes (provenance-based invalidation). Includes per-cycle pulls *and* intra-stanza recomputation when external-write ports or `do_while`/`do_until` counters tick. |
 
 The `const` modifier is the single author-facing surface for
-effectively-const bindings. The previous `init` / `final`
-keyword pair split the surface artificially: `final` advertised
-"please compile-fold," `init` advertised "please scope-init
-pull," but both meant the same thing semantically — materialise
-once, freeze for the scope's lifetime. Authors don't need to
-know which implementation path the compiler picked; the
-guarantee is the same either way.
+effectively-const bindings. Compile-fold and scope-init pull are
+implementation paths for the same semantic contract: materialize
+once and freeze for the scope activation. Authors do not select
+between the paths.
 
 ### Effectively-Const Nodes
 
@@ -119,7 +114,7 @@ is itself effectively-const.
 | Literal in source | Yes | Resolved at parse / compile. |
 | Compile-const fold result | Yes | Already a leaf const node. |
 | Workload param (`const` binding) | Yes | Bound once at workload-kernel init, never reassigned. |
-| `for_each` / `for_combinations` iteration extern | Yes — *for the duration of one activation* | Rebound by `bind_outer_scope` on each iteration; held constant for every cycle within that iteration (iteration variables are scope outputs the host rebinds per iteration). |
+| `for_each` / `for_combinations` iteration extern | Yes — *for the duration of one activation* | Injected during each child construction; held constant for every cycle within that iteration. |
 | `do_while` / `do_until` counter | **No** | Dynamic — ticks within the scope's own evaluation; not stable for the activation. |
 | Graph input (e.g. `cycle`) | **No** | Dynamic — changes every cycle. |
 | External-write port | **No** | Dynamic — mutated by external writes between pulls. |
@@ -174,7 +169,7 @@ metadata).
 
 The scope-init pull is the scope-init-pull implementation path
 for the effectively-const lifecycle. It runs once per scope
-activation, *after* `bind_outer_scope` has populated the
+activation, *after* parent materialization has populated the
 kernel's iteration-extern input slots and *before* any fiber
 is created.
 
@@ -202,12 +197,12 @@ eval per scope activation, full stop, regardless of fiber
 count.
 
 Reference points in the code:
-- `polydat::kernel::engines::GkState::seed_node_buffer` —
+- `polydat::kernel::engines::PolydatState::seed_node_buffer` —
   primitive that writes a value into a node's buffer slot and
   marks it clean.
 - `nbrs_runtime::synthesis::OpBuilder::init_overrides` — the
   per-activation snapshot that fiber state inherits.
-- `polydat::kernel::polydatkernel::PolydatKernel::materialize_wiring_from_outer`
+- `polydat::kernel::PolydatKernel::materialize_wiring_from_outer`
   Step 3 — the per-const-output pull + non-None verification,
   immediately after the extern-slot bind step.
 
@@ -348,46 +343,41 @@ row := mixed_radix(cycle, 1000, 0)     // cycle / 1000
 col := mixed_radix(cycle, 1000, 1)     // cycle % 1000
 ```
 
-The input space is defined inside GK, not in the activity
+The input space is defined inside Polydat, not in the activity
 layer. This enables composition with other nodes and keeps the
 executor simple (it just passes `[cycle]`).
 
 ---
 
-## External-Write Ports
+## External-Write Inputs
 
-External values may be injected into a `PolydatState` via
-port-typed input slots. Two persistence variants:
-
-- **Volatile ports**: reset to defaults on `set_inputs()`.
-  Used for slots whose value is meaningful only within a
-  single per-pull evaluation.
-- **Sticky ports**: persist across `set_inputs()` calls
-  until explicitly reset. Used for slots whose value should
-  remain visible across multiple cycles within a stanza.
-
-Both variants share the same write API: an external producer
-writes a typed value into a named slot; subsequent pulls
-that traverse the slot observe the written value through the
-standard port-read mechanism.
+An `extern name: type = default` declaration produces an
+`InputDef` with `InputKind::ExternalWrite`. External producers
+write these inputs through the typed `Dataflow::set_wire` API.
+The boundary accepts `Value::None`, accepts a value that
+satisfies the declared slot type, applies a registered boundary
+adapter when one exists, and otherwise returns `WriteError`.
 
 ```
 Producer writes to slot "user_name"
-  → state.set_port_value("user_name", value)
-  → port slot in GkState holds the value
+  → kernel.set_wire("user_name", value)?
+  → input slot in PolydatState holds the value
 
 Consumer pulls a binding that reads {user_name}
   → standard port-read from state → returns the value
 ```
 
-Sticky ports persist across `set_inputs()` calls.
-`reset_ports()` is called at well-defined boundaries (host-
-determined; typically when a stanza or other host-level
-scope ends) to prevent stale values from leaking into a new
-context.
+External-write inputs persist across `set_inputs()` calls,
+which update only the leading coordinate-input prefix. A host
+resets non-coordinate inputs to their declared defaults at a
+scope boundary with `PolydatState::reset_inputs_from`, normally
+passing `program.coord_count()`. Cell-bound inputs are skipped
+because their lifecycle belongs to the shared cell's owning
+scope. Rebuilding or invalidating the whole state also restores
+ordinary input defaults.
 
 Hosts give external writes their own application-level
-names (nbrs's *capture* uses sticky ports to flow op-result
+names (nbrs's *capture* uses external-write inputs to flow op-result
 values into subsequent ops, for example); the polydat
 mechanism is generic external-port population.
 

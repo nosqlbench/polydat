@@ -142,9 +142,9 @@ core's `scope_intent_words`.
 Built lazily by `EngineCore::build_cell_cone` on the
 first `check_cell_clean` invocation per node:
 
-1. Read `program.input_provenance[node_idx]` — a u64
-   bitmask of every input slot that flows into the
-   node transitively.
+1. Read `program.input_provenance[node_idx]` — an exact
+   multi-word `ProvMask` of every input slot that flows into
+   the node transitively.
 2. Iterate set bits. For each input slot, look up
    `shared_cells[slot]`; if `Some(cell)`, the cell
    joins the cone.
@@ -155,7 +155,7 @@ first `check_cell_clean` invocation per node:
 
 Built cones are cached in `EngineCore::cell_cones[node_idx]`.
 `EngineCore::invalidate_cell_cones` (called by
-`GkState::attach_shared_cell`) clears every cached
+`PolydatState::attach_shared_cell`) clears every cached
 entry to `None`, forcing rebuild on next access.
 
 ### 3.3 Per-fiber state
@@ -196,7 +196,7 @@ impl SharedCellInner {
 
 Every cell-write path calls `publish`:
 
-- `GkState::set_input` on a cell-bound slot
+- `PolydatState::set_input` on a cell-bound slot
   (`engines.rs`).
 - `EngineCore::pull` on an output whose `output_cell`
   is attached (the SRD-13f Push B.2 broadcast).
@@ -212,7 +212,7 @@ fan-out, no consumer enumeration.
 ```rust
 fn check_cell_clean(
     &mut self,
-    program: &GkProgram,
+    program: &PolydatProgram,
     node_idx: usize,
 ) -> bool {
     // Lazy-build the cone metadata.
@@ -707,11 +707,9 @@ cone adds ≈ 1.5 ns.
   unconditionally; that path is independent of cell
   validity tracking. Shared and volatile are
   orthogonal.
-- **Cell value-read atomicity primitive.** The
-  `Mutex<Value>` (or `ArcSwap<Value>`) provides
-  single-value atomicity. The choice of value-
-  publication primitive is orthogonal to validity
-  tracking.
+- **Cell value-read atomicity primitive.** The implemented
+  `Mutex<Value>` provides single-value atomicity. Validity
+  tracking is layered on that primitive.
 - **Intent-bit clearing.** Bits are sticky; the
   per-cell revision compare handles the
   consequence (§7 "Sticky-bit semantics").
@@ -730,10 +728,11 @@ cone adds ≈ 1.5 ns.
 - `last_seen` per fiber is unbounded by type; in
   practice bounded by the distinct cell handles the
   fiber has read.
-- Cell handles (`*const SharedCellInner` =
-  `Arc::as_ptr`) are stable for the cell's Arc
-  lifetime; a freed cell's pointer is never
-  reissued (Arc allocation is unique).
+- Cell handles (`*const SharedCellInner` = `Arc::as_ptr`) are
+  stable for the cell's `Arc` lifetime. Attaching a cell is a
+  construction-time operation; replacing an attached cell with
+  a different allocation in the same `EngineCore` is outside the
+  runtime contract because `last_seen` keys are identity tokens.
 - Per-write cost is O(1); per-clean-read cost is
   O(scopes_in_cone); per-dirty-read cost is
   O(dirty_cells_in_cone).

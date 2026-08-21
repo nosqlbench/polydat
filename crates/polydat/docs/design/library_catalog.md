@@ -21,25 +21,19 @@ lookup table for weighted selection). Other inputs are
 **data wires** — cheap per-cycle values that drive the
 node's primary computation.
 
-Node metadata should declare the cost class of each input port:
+Node metadata declares the cost class of each input port through
+`WireCost`:
 
 | Class | Semantics | Example |
 |-------|-----------|---------|
-| `config` | Expensive to change. Initializes internal state (LUT, distribution table). Expected to be wired to effectively-const sources (per [GK Evaluation Model](evaluation_model.md): compile-const, scope-init, or iteration externs). | `weighted_strings` weights parameter |
+| `config` | Expensive to change. Initializes internal state (LUT, distribution table). Expected to be wired to effectively-const sources (per [Evaluation Model](evaluation_model.md): compile-const, scope-init, or iteration externs). | `weighted_strings` weights parameter |
 | `data` | Cheap dynamic input. The node's primary computation path. | `hash` input value, `mod` dividend |
 
-The compiler can use this information to:
-- **Warn** when a `config` wire is connected to a dynamic
-  binding (the LUT would be rebuilt on every pull)
-- **Error** when the cost would be catastrophic (e.g., O(n)
-  rebuild per pull on a million-entry distribution)
-- **Allow** explicit override when the user intentionally wants
-  dynamic reconfiguration (functional testing of the node)
-
-This is a metadata annotation on `PortMeta`, not a runtime
-enforcement — the node always works correctly regardless of
-wiring, but the compiler protects users from accidental
-performance traps.
+The compiler warns when a `config` wire is connected to a
+cycle-time source. Strict mode promotes that diagnostic to a
+compile error. `WireCost` is a `PortMeta` annotation rather than a
+runtime type rule; a data wire and a configuration wire carry
+values through the same typed slot ABI.
 
 ---
 
@@ -333,6 +327,7 @@ closure, P3 JIT); the JIT path reaches that same observable
 behavior through a setjmp/longjmp shim documented in
 [JIT Boundary](../design/jit_boundary.md).
 
+<a id="cursor-partitions-srd-71"></a>
 ### [Cursor Partitions (SRD 71)](cursor_partitions.md)
 
 Partition-typed nodes (`library/partition.rs`). `Partition` /
@@ -385,7 +380,7 @@ diagnostic display / debug printing.
 | `vector_dim` | `String → u64` | dataset dimension count (const-folded at init) |
 | `vector_count` | `String → u64` | training-set size (const-folded at init) |
 | `query_count` | `String → u64` | query-set size (const-folded at init) |
-| `metadata_value_at` | `u64, String → String` | per-vector metadata value (string for now — metadata types are dataset-conditional and dynamically dispatched) |
+| `metadata_value_at` | `u64, String → String` | per-vector metadata value; the string return is the stable boundary for dataset-conditional, dynamically dispatched metadata types |
 | `dataset_distance_function` | `String → String` | similarity metric name |
 
 **Typed-vector accessors:**

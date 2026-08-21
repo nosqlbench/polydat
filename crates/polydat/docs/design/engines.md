@@ -1,248 +1,150 @@
-# Engines
+# Polydat Execution Engines
 
-The Polydat evaluation engine has multiple compilation levels and
-optimization strategies that compose independently. The
-compiler selects the optimal combination at graph construction
-time and produces a **monomorphic kernel** — a distinct type
-with the selected optimizations baked into the eval path, no
-runtime branching for strategy selection.
+This specification defines the P1/P2/P3 execution lattice, provenance modes,
+automatic selection for whole-kernel compiled engines, and the production
+mixed-kernel path. The Cranelift call and failure boundary is specified in
+[jit_boundary.md](jit_boundary.md); graph qualification and fusion order are
+specified in [graph_compiler.md](graph_compiler.md).
 
-This doc covers *which* level gets picked and why. The
-*how a Phase-3 kernel plugs into the runtime* — Cranelift ↔
-Rust call boundary and the setjmp/longjmp shim that lets
-predicate violations surface as catchable panics — lives in
-[jit_boundary.md](jit_boundary.md).
+## 1. Execution lattice
 
-Related axioms:
-[graph_compiler.md §2 pipeline overview + §6 ordered composition](graph_compiler.md),
-[runtime_model.md R1 clean-flag memoization + R2 invalidation + D-axioms](runtime_model.md),
-[grammar.md §3 type system](grammar.md).
+| Level | Representation | Semantic coverage | Construction |
+| --- | --- | --- | --- |
+| P1 | `PolydatKernel` over `Box<dyn PolydatNode>` and typed `Value` buffers | Complete node, type, scope, and lifecycle model | Normal DSL and assembler compile paths |
+| P2 | Direct closures over a flat `u64` slot buffer | Nodes that provide `compiled_u64` or `compiled_slot` kits | Explicit `try_compile*` and `auto_compile_p2` paths |
+| P3 | Cranelift-generated native code over a flat slot buffer | Nodes and complete signatures accepted by JIT classification and lowering | Explicit `try_compile_jit*` and `auto_compile_p3` paths; embedded cones in normal compilation |
 
-## Production status (SRD-105, 2026-07-09)
+P1 is the semantic host and fallback. P2 and P3 are constructive: a compiled
+builder succeeds only when every required operation and slot shape is supported.
+Failure leaves or returns the P1 kernel rather than weakening its semantics.
 
-The production execution form is the **interpreter-hosted mixed
-kernel**: P1 owns the graph, and Dynamic-lifecycle cones of
-JIT-classifiable nodes run as embedded P3 native segments
-(host SRD-105 — `jit: auto` is the default).
-The whole-kernel selection heuristics below are exercised by
-`nbrs bench` and the equivalence suites rather than the production
-compile path.
+The lattice is monotonic in optimization, not in feature coverage. A node can
+be valid at P1 without a P2 closure or P3 lowering. P2 also remains an
+equivalence oracle for the compiled slot ABI.
 
-The incremental-compilation lattice (P1 ⊂ P2 ⊂ P3) is a core
-feature, not a historical artifact: P2 is the executable middle
-rung — the cross-tier equivalence oracle, the ref-slot axioms'
-host (slot_state_axioms.rs), and the mechanism for the lattice's
-next production step (P2 closures for u64-capable nodes that the
-P3 classifier can't lower, at cone boundaries — parked in SRD-105
-pending measurement).
+## 2. Production mixed kernel
 
----
+Normal compilation produces an interpreter-hosted mixed kernel when the `jit`
+feature is enabled. `JitMode` controls cone extraction:
 
-## Compilation Levels
+- `Off` leaves the typed P1 graph unchanged;
+- `Auto`, the process default, extracts eligible connected cones containing at
+  least two nodes; and
+- `Force` permits a one-node eligible cone.
 
-| Level | Mechanism | Per-Node Cost | When Best |
-|-------|-----------|--------------|-----------|
-| P1 | Interpreter: `Box<dyn GkNode>`, `Value` enum | ~20ns | Small graphs, high stability |
-| P2 | Closures: flat u64 buffer, compiled step closures | ~10ns | Medium graphs, all-u64 |
-| P3 | Cranelift JIT: native machine code | ~2-5ns | Large all-dirty graphs |
+An extracted cone is replaced by a synthetic fusion node whose `eval` invokes
+the compiled native segment. Unsupported nodes, boundary types, lifecycle
+classes, and purity shapes remain in P1. The graph's canonical identity walks
+through fusion nodes to their scalar subgraph, so changing JIT mode does not
+change program identity.
 
-### Per-Node Overhead
+P2 closures are not inserted as an intermediate production cone tier. They are
+available through explicit whole-kernel builders and tests.
 
-Raw per-node costs (no provenance optimization, identity-chain benchmark):
+## 3. Whole-kernel provenance modes
 
-| Level | Mechanism | Per-Node Cost |
-|-------|-----------|---------------|
-| P1 | Value enum + trait dispatch | ~20-70ns |
-| P2 | u64 closures + flat buffer | ~4-10ns |
-| P3 | Cranelift native code | ~0.2-5ns |
+The explicit P2 and P3 builders expose monomorphic kernel variants. Each
+variant has its provenance behavior fixed in its type, so the inner evaluation
+loop does not branch on a selected strategy.
 
-P2 eliminates: Value enum allocation, trait object dispatch,
-HashMap output lookup. P3 eliminates: closure call overhead,
-gather/scatter copies.
+| Mode | Push-side invalidation | Pull-side guard | Explicit builder suffix |
+| --- | --- | --- | --- |
+| `Raw` | No | No | `_raw` |
+| `Push` | Yes | No | `_push` |
+| `Pull` | No | Yes | `_pull` |
+| `PushPull` | Yes | Yes | default `try_compile` / `try_compile_jit` |
 
-Hybrid (P2+P3 mix) was benchmarked and found to be strictly
-dominated by P3 in all scenarios. It remains in the codebase
-but is not selected by the automatic heuristic.
+`Push` exists as an explicit measurement and equivalence surface. Automatic
+selection returns only `Raw`, `Pull`, or `PushPull`.
 
-## Provenance Optimization
+### 3.1 Push-side invalidation
 
-Provenance tracks which graph inputs each node depends on.
-Two independent optimizations exploit this information:
-**push-side invalidation** (skip clean nodes within an eval)
-and **pull-side cone guard** (skip the entire eval call).
+Compiled push kernels store a dependent-step list for each graph input and a
+clean flag for each compiled step. `set_inputs` compares the new coordinate
+values with the previous ones and marks the dependent steps of changed inputs
+dirty. Evaluation skips clean steps inside an otherwise-entered cone.
 
-### Monomorphic Kernel Principle
+P1 uses the same dependency relation but treats the act of `set_input` as the
+invalidation signal; it does not require value equality before dirtying
+dependents. That distinction preserves side-channel and explicit-write
+semantics in the complete runtime.
 
-Each optimization combination is a **separate kernel type**
-produced by a distinct compiler path. The hot eval loop contains
-no `if let Some(prov)` branching — each kernel type has exactly
-the fields and code it needs, nothing more.
+### 3.2 Pull-side guard
 
-| Kernel Variant | Push-Side | Pull-Side | Compiler Method |
-|---------------|-----------|-----------|-----------------|
-| Raw | — | — | `try_compile_raw()` |
-| Push | per-node dirty skip | — | `try_compile_push()` |
-| Pull | — | cone guard | `try_compile_pull()` |
-| PushPull | per-node dirty skip | cone guard | `try_compile()` |
+Compiled pull kernels store an exact `ProvMask` for every output slot and a
+multi-word changed-input mask. Before entering evaluation for a slot, the
+kernel tests whether the slot provenance intersects the changed-input mask. A
+disjoint mask returns the cached slot without executing the compiled body.
 
-Each variant has distinct:
-- **`set_inputs()`** — Raw: plain copy. Push: marks dependents
-  dirty. Pull: tracks changed_mask only. PushPull: both.
-- **`eval()`** / **`eval_for_slot()`** — Raw: runs all steps.
-  Push: skips clean steps. Pull: cone guard then runs all steps
-  in cone. PushPull: cone guard then skips clean steps.
+The P2 and P3 kernels therefore support more than 64 coordinate inputs. The
+older hybrid test engine retains a single-word internal mask and is not the
+normative production provenance representation.
 
-The compiler selects the variant at construction time based on
-graph analysis. The bench tool can request all four variants
-independently via `--compare-modes`.
+### 3.3 Composition
 
-### Push-Side Invalidation
+For `PushPull`, the pull guard decides whether to enter the requested output's
+cone. If entered, the push clean flags suppress unaffected steps within that
+cone. The two checks preserve the same result as `Raw`; they change only the
+amount of work performed.
 
-On `set_inputs()`, compare each input to its previous value.
-For each changed input, dirty only the nodes in its dependent
-list. Nodes not in any changed input's list stay clean.
+## 4. Automatic whole-kernel selector
 
-Data structures:
-- `node_clean: Vec<bool>` (P2) / `Vec<u8>` (P3) — per-step
-- `input_dependents: Vec<Vec<usize>>` — per-input → step indices
+`analyze_graph` records total node count, input count, output count, and exact
+per-output upstream-cone sizes. `select_prov_mode` applies this fixed rule:
 
-Cost: O(changed_inputs × dependent_nodes_per_input).
-Benefit: O(stable_nodes) evaluations skipped per cycle.
-Overhead on all-dirty: ~35% (per-node clean check in eval loop).
-
-### Pull-Side Cone Guard
-
-Before evaluating, check if the requested output's upstream
-cone was affected by any input change. If not, return the
-cached value without entering the eval loop at all.
-
-Data structures:
-- `slot_provenance: Vec<u64>` — per-output-slot bitmask
-- `changed_mask: u64` — set by `set_inputs()`
-
-```rust
-// Pull-side guard: one AND + branch
-if slot_provenance[slot] & changed_mask == 0 {
-    return self.buffer[slot];  // entire eval skipped
-}
-```
-
-Cost: one AND + branch per pull.
-Benefit: skips entire eval when the output's cone is clean.
-Overhead when cone IS dirty: ~2ns (the AND + branch that
-falls through).
-
-### Composition
-
-Push-side and pull-side compose independently:
-
-| Pull hits... | Push says... | Result |
-|-------------|-------------|--------|
-| Dirty cone | All nodes dirty | Full eval (no savings) |
-| Dirty cone | Some nodes cached | Partial eval (push savings) |
-| Clean cone | Any | Skip eval entirely (pull savings) |
-
-The best case is a graph with stable input subgraphs AND
-selective output access — both optimizations compound.
-
-The pull guard provides the dominant speedup (3-14×) by
-skipping the entire eval call. Push alone gives 1.5-2.3×.
-Combined: 3-30× on stable graphs with selective outputs.
-
----
-
-## Automatic Selection Heuristic
-
-The compiler has all information needed at construction time.
-Pull has zero overhead on all-dirty graphs, so it is the safe
-default. Push adds ~40% overhead and is only selected when it
-provides demonstrated benefit within dirty cones.
-
-```
-output_cone_ratio = max_output_cone / total_nodes
-stable_ratio = stable_nodes / total_nodes
-
-if total_nodes < 15 and stable_ratio == 0:
-    P3/Raw                    // tiny all-dirty, skip provenance data
-
-elif output_cone_ratio < 0.5:
-    P3/Pull                   // cone guard: 7-12ns for 100+ nodes
-
-elif stable_ratio >= 0.3:
-    P3/PushPull               // push skip within dirty cones
-
+```text
+if total_nodes < 15 and num_inputs <= 1:
+    Raw
+else if num_inputs >= 2:
+    PushPull
 else:
-    P3/Pull                   // free insurance — acts like Raw on all-dirty
+    Pull
 ```
 
-Decision inputs (all known at compile time):
+`auto_compile_p2` and `auto_compile_p3` return both the selected engine and the
+`GraphAnalysis` used to select it. Cone ratios remain diagnostic metadata; the
+selector does not use a `stable_ratio` threshold.
 
-- **total_nodes** — from the compiled DAG
-- **output_cone_ratio** — for each output, the transitive dependency
-  set ("cone") size vs total nodes. The primary decision variable.
-- **stable_ratio** — nodes reachable only from constant or config
-  inputs. Only matters when cones are large.
+This selector applies only to explicit whole-kernel compiled construction. The
+production mixed path uses `JitMode` and cone qualification instead.
 
-Pull is the dominant kernel variant because:
-- Zero overhead on all-dirty (cone check falls through in ~2ns)
-- 7-12ns for 100+ node graphs when output cones are selective
-- No dependent iteration in `set_inputs` (only tracks changed_mask)
+## 5. Slot representation
 
-Push is only added (as PushPull) when the output cone is large
-AND there are stable subgraphs within it (stable_ratio ≥ 0.3).
-Push-only is never selected — it is dominated by both Pull and
-PushPull in all measured scenarios.
+Compiled buffers are arrays of `u64` slots, not arrays of logical values. A
+static `SlotColor` maps each port type to one of three layouts:
 
----
+- `Imm1` — one immediate slot for ordinary scalar bit patterns;
+- `Imm2` — two immediate slots for 128-bit integers and register words; and
+- `Ref2` — a `(ptr, len)` pair referencing kernel-owned typed-slice scratch.
 
-## Type System
+Narrow integers and `f16`/`f32` use defined bit-stuffing rules inside `Imm1`.
+Signedness and exact width remain properties of `PortType`; the common physical
+slot does not permit untyped wiring. Ref-bearing nodes remain subject to the
+ownership, lifetime, and no-forwarding rules in [jit_boundary.md](jit_boundary.md)
+and [type_system_alignment.md](type_system_alignment.md).
 
-The buffer stores all values as u64. The PortType enum tracks
-types statically:
+## 6. Engine equivalence
 
-| PortType | Width | Storage |
-|----------|-------|---------|
-| U64 | 64-bit | native |
-| F64 | 64-bit | bit-packed (to_bits/from_bits) |
-| U32 | 32-bit | zero-extended in u64 |
-| I32 | 32-bit | sign-extended in u64 |
-| I64 | 64-bit | bit-reinterpret |
-| F32 | 32-bit | f32 bits in low 32 of u64 |
+For any graph accepted by two engine forms and for the same ordered input and
+pull sequence:
 
-The assembler auto-inserts widening adapters when types mismatch
-(e.g., U32→U64, I32→F64, F32→F64). Narrowing requires explicit
-cast functions — no implicit precision loss.
+1. output `Value` semantics are identical;
+2. `None` propagation is identical;
+3. typed assertion failures identify the same violated contract;
+4. side-channel and nondeterministic nodes are not moved into an engine form
+   whose caching rules would suppress required observations; and
+5. provenance modes may reuse cached slots only when their exact dependency
+   masks prove the requested result unaffected.
 
-Adapters are the *type-coercion* half of the assembler's
-input-validity model. The *value-validity* half is handled by
-opt-in assertion nodes under strict wire mode — the assembler
-skips every assertion whose redundancy it can prove statically
-(matched types after adapter insertion, constant sources
-validated at assembly time, fusion-derived value bounds). The
-host's input-validity / strict-wire-mode model defines the
-assertion family; the const constraint metadata on `ParamSpec`
-and the `AssertionInserted` / `AssertionSkipped` diagnostic events
-the assembler emits alongside
-`TypeAdapterInserted`.
+The engine ladder, slot-state axioms, cone tests, and equivalence harnesses are
+the regression contract for these properties.
 
----
+## 7. Unsupported combinations
 
-## Benchmarking
-
-```bash
-# Default: provenance-enabled for each level
-nbrs bench Polydat graph.gk iters=5
-
-# Compare raw vs provenance per level
-nbrs bench Polydat graph.gk --compare iters=5
-
-# Full 3-way decomposition: raw / push / push+pull
-nbrs bench Polydat graph.gk --compare-modes iters=5
-
-# Full test suite
-nbrs bench Polydat "polydat/tests/perf_tests/*.polydat" --compare-modes iters=5
-```
-
-The `--compare-modes` flag shows all three variants (raw, push,
-push+pull) for each compilation level. Driver overhead is measured
-and subtracted automatically.
+- A node without the required compiled closure or lowering remains P1.
+- A Ref-bearing value cannot cross a P3 cone boundary or be forwarded by an
+  identity-style compiled step.
+- SIMD scalar-flow promotion is not selected by ordinary engine choice; it has
+  its own explicit qualification and execution contract in
+  [simd_isa_autopromotion.md](simd_isa_autopromotion.md).
+- Engine selection never changes a graph's public port types or named outputs.

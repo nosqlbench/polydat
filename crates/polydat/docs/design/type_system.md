@@ -4,10 +4,10 @@ The static `PortType` contract on wires, its runtime
 `Value` representation, and the adapter catalog that
 moves values between types.
 
-Implementation: `polydat/src/ast.rs` (`PortType`,
-`Value`), `polydat/src/library/convert.rs` (adapter
-nodes), `polydat/src/compile/assembly.rs::auto_adapter`
-(catalog dispatch), `polydat/src/kernel/state.rs::adapt_boundary_value`
+Implementation: `src/ast.rs` (`PortType`,
+`Value`), `src/library/convert.rs` (adapter
+nodes), `src/compile/assembly.rs::auto_adapter`
+(catalog dispatch), `src/kernel/state.rs::adapt_boundary_value`
 (boundary application).
 
 ---
@@ -57,7 +57,8 @@ carries them:
   narrow widths are *bit-stuffed* into it (the `PortType` says how
   to read the bits). JIT-eligible at P3.
 - **Two-limb 128-bit** (`U128`, `I128`) — `Bits128([u64; 2])`;
-  interpreter-only until the two-slot JIT ABI lands.
+  interpreter-only; the compiled layout reserves their two
+  slots as immediate limbs but exposes no production lowering.
 - **128-bit SIMD register plane** (`Reg128` + 7 lane-views) — a
   16-byte word with a `RegLanes` view tag; reg→reg retags are free
   bitcasts and the arithmetic ops JIT to native SIMD.
@@ -104,8 +105,8 @@ each carrying a [`Bits128`] — two little-endian `u64` limbs
 `Value`'s alignment at 8 and its footprint inside the 40-byte
 buffer-slot envelope (the `value_size_probe` test guards this).
 
-- **Interpreter-only** — the JIT path needs a two-slot ABI that
-  does not exist yet, so 128-bit ops run in the interpreter. The
+- **Interpreter-only** — 128-bit integer operations have no
+  production JIT lowering, so they run in the interpreter. The
   carrier reassembles to a native `u128`/`i128` in two register
   moves for the arithmetic, then re-splits.
 - **JSON** — projects as a **decimal string**, not a JSON Number
@@ -278,7 +279,7 @@ evaluation and as the "no value yet" marker for
 optional ports. Per SRD-74 it propagates through node
 evaluation: any node whose inputs include `None`
 emits `None` on every output unless it explicitly
-opts in via `GkNode::accepts_none_inputs()`.
+opts in via `PolydatNode::accepts_none_inputs()`.
 
 `Value::port_type()` reports the *runtime variant's*
 PortType, which collapses the narrow widths into their
@@ -325,8 +326,8 @@ Two catalogs live in
 `polydat/src/compile/assembly.rs`:
 
 ```rust
-pub fn auto_adapter(from: PortType, to: PortType) -> Option<Box<dyn GkNode>>;
-pub fn boundary_adapter(from: PortType, to: PortType) -> Option<Box<dyn GkNode>>;
+pub fn auto_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>>;
+pub fn boundary_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>>;
 ```
 
 - **`auto_adapter`** — intra-graph wire validation.
@@ -624,8 +625,8 @@ useful diagnostic" matches user expectation.
 `Value::satisfies_slot(slot_type)` is the bit-
 stuffing equivalence helper the residual check
 uses post-adapter: `Value::U64` storage is accepted
-for the unsigned widths, `F16`, and (legacy, during
-the honest-I64 migration) the signed widths;
+for the unsigned widths, `F16`, and compatibility producers
+for the signed widths;
 `Value::I64` for `I64`/`I32`/`I16`/`I8` slots;
 `Value::F64` for `F64`/`F32`/`F16`; and any
 register-view word for any reg-view slot (the
@@ -716,12 +717,9 @@ crossing into inner kernels via the `set:` /
 
 ---
 
-## 7. Wire-type fusion (open question)
+## 7. Interpolation type boundary
 
-A separate design question — orthogonal to the
-catalog gap — that the `eh` case surfaces.
-
-Today the DSL parser
+The DSL parser
 (`polydat/src/dsl/parser.rs::parse_interpolated_string`)
 turns every interpolated string literal into a
 `printf` call:
@@ -733,46 +731,19 @@ turns every interpolated string literal into a
 | `"{a}-{b}"`         | `printf("{}-{}", a, b)` |
 | `"{eh}"`            | `printf("{}", eh)`  ← **always Str** |
 
-The sole-placeholder case `"{eh}"` is
-syntactically a string template, but semantically
-the author's intent is "pass `eh` through" — they
-want the typed value of `eh`, not a string-formatted
-copy. The current behavior wraps it in `printf`,
-which always produces `Str`, losing whatever type
-`eh` had.
+The string quotes are semantically decisive: `"{eh}"`
+requests textual formatting and therefore produces `Str`.
+A typed passthrough is written as the bare expression `eh`.
+This uniform lowering keeps interpolation's result type
+independent of template shape; a sole placeholder is not a
+special type-preserving form.
 
-If the parser detected sole-placeholder templates
-and desugared `"{X}"` (whole literal = one
-placeholder) to `X` directly (preserving type), the
-`eh` case would route a Bool through to the
-`enable_hierarchy: Bool` slot with no adapter
-needed.
-
-**Fusion vs polyfill are complementary, not
-alternatives**:
-
-- Fusion fixes the sole-placeholder case at parse
-  time (no Str ever produced; no adapter needed).
-- The Str→X polyfill adapters fix the genuinely-Str
-  case — comma-split iter-values, multi-placeholder
-  templates, host-supplied strings — where the
-  source is intrinsically textual.
-
-Even with fusion, comma-split iter-values like
-`eh_values: "false, true"` would still produce
-`Str("false")` iter-values; the polyfill is what
-heals them at the slot boundary. Fusion would
-prevent the *unnecessary* Str detour when the source
-is already typed.
-
-Fusion is not implemented; the parser comment at
-lines 655-664 of `dsl/parser.rs` documents the
-current "every placeholder → printf" rule. Adding
-fusion is one branch in `parse_interpolated_string`:
-if `segments.len() == 1 && matches!(segments[0],
-Segment::Placeholder(_))`, return the placeholder
-expression directly instead of building the printf
-call.
+When textual values cross into typed inputs, the boundary
+adapter catalog supplies the supported Str→X parses. If no
+adapter exists, compilation or the typed write rejects the
+mismatch. `Value::None` follows
+[none_semantics.md](none_semantics.md) and is never converted
+to an empty string implicitly.
 
 ---
 
@@ -804,8 +775,7 @@ call.
   `WriteError::TypeMismatch` when the catalog can't
   heal.
 - [`polydat/src/dsl/parser.rs::parse_interpolated_string`]
-  — current "every placeholder → printf" desugar
-  (the wire-type-fusion question's locus).
+  — the normative "every placeholder → printf" desugar.
 - [SRD-74](none_semantics.md) — `Value::None`
   propagation, the absent-sentinel rule.
 

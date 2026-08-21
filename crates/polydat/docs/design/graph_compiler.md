@@ -50,7 +50,7 @@ this document is authoritative.
   Hoisting eligibility (§3.3) is a direct function of SRD-11's
   classification.
 - [SRD-13c: Polydat Scope Model](scope_model.md)
-  — auto-extern, `bind_outer_scope`, manifest extraction.
+  — auto-extern, parent-gated materialization, manifest extraction.
   Context Fusion (§4) is the runtime fulfilment of SRD-13c's
   scope-init mechanism.
 - [SRD-13f: Cross-Scope Wire Materialization](wire_materialization.md)
@@ -107,7 +107,7 @@ construction work is three coordinated mechanisms:
                          ▼
                 ┌──────────────────┐
                 │   compiled       │   the program is now
-                │   GkProgram      │   ready to instantiate
+                │ PolydatProgram   │   ready to instantiate
                 └────────┬─────────┘
                          │
                          │   (per scope-init)
@@ -179,10 +179,9 @@ meaning:
 > that runs each `set_inputs` advance.**
 
 It is within-kernel partitioning, not cross-kernel code
-motion. The classical CS sense — moving a computation from
-an inner kernel to an outer kernel so the work happens once
-across all inner iterations — is not currently a polydat
-optimisation; it surfaces as the open question in §10.2.
+motion. Kernels are optimization boundaries: computations
+are not moved between parent and child kernels. Values that
+cross that boundary use the scope materialization protocol.
 
 This narrower meaning is what makes the pipeline ordering
 unambiguous: hoisting's classification is a property of the
@@ -309,7 +308,7 @@ applies the lifecycle's promise.
 ### 3.5 Caching: `from_program` and `instance_program`
 
 Per SRD-67, the typed construction surface exposes
-`from_program(Arc<GkProgram>) -> PolydatKernel` as the
+`from_program(Arc<PolydatProgram>) -> PolydatKernel` as the
 cache-and-rebind primitive: the same compiled program is
 instanced freshly per execution context, with new
 `PolydatState` per fiber.
@@ -345,13 +344,14 @@ the precise set of slot names + types that the chain must
 fill from outer state at scope-init.
 
 The synthesis surface is encoded in the kernel's
-`input_defs`: each entry whose `InputKind` is `Extern` /
-`IterationExtern` is a slot to be filled by Context Fusion.
+`input_defs`: `IterationExtern` and relevant `ExternalWrite`
+entries are the non-coordinate slots filled by the applicable
+construction or external-write boundary.
 
 ### 4.2 The synthesis act
 
-Per S2, `bind_outer_scope(outer: &PolydatKernel)` walks the
-synthesis surface (driving the internal
+Per S2, parent-gated construction walks the synthesis surface
+(driving the internal
 `materialize_wiring_from_outer` pass). For each declared
 slot in `self`, the synthesis act:
 
@@ -431,7 +431,7 @@ is being instantiated as a fresh scope. It does not fire
 per cycle. Per-cycle state advance is the cycle clock (S3),
 which is narrow and named.**
 
-Enforcement: `bind_outer_scope` is called once per
+Enforcement: the private materializer runs once per child
 construction; `set_inputs` is the per-cycle surface and
 mutates only coordinate slots. There is no "re-fuse the
 context mid-scope" surface.
@@ -641,11 +641,11 @@ both source and consumer typed correctly; the substrate's T1
                                 │ DAG + engine choice
                                 ▼
                   ┌─────────────────────────────┐
-                  │   Emit GkProgram            │   scope-init path
+                   │   Emit PolydatProgram       │   scope-init path
                   │   - Effectively-const buf   │   + per-cycle path
                   │   - Per-cycle dispatch      │   compiled in
                   └─────────────┬───────────────┘
-                                │ Arc<GkProgram>
+                                 │ Arc<PolydatProgram>
                                 ▼
                        --- compile end ---
 
@@ -679,7 +679,7 @@ axioms (H, CF, NF) guarantee each pass preserves the contract.
 | [Composition Substrate](composition_substrate.md) | The slot contract (S/T/L) this doc's mechanisms preserve. |
 | [SRD-10](language_spec.md) | Parse + Bind passes. This doc's pipeline starts with SRD-10's output (assembly DAG). |
 | [SRD-11](evaluation_model.md) | Two-lifecycle classification. Hoisting (§3) is SRD-11's classification rule applied compositionally over the wire chain. |
-| [SRD-13c](scope_model.md) | Auto-extern + `bind_outer_scope`. The synthesis-surface discovery (S1) and the synthesis act (S2) — Context Fusion's foundations. |
+| [SRD-13c](scope_model.md) | Auto-extern + parent-gated materialization. The synthesis-surface discovery (S1) and the synthesis act (S2) — Context Fusion's foundations. |
 | [SRD-13f](wire_materialization.md) | Gradient classification for outer bindings. CF3 honours SRD-13f's classification; CF cannot rewrite. |
 | [SRD-16](engines.md) | Engine selection (P1/P2/P3/hybrid). The pipeline's engine-selection pass (§6) is owned by SRD-16; this doc references it. |
 | [SRD-16b](jit_boundary.md) | JIT boundary. Node Fusion (§5.3 polyfills) interacts with JIT eligibility; SRD-16b owns the boundary semantics. |
@@ -748,54 +748,33 @@ guarantees + the per-pattern equivalence test.
 
 ---
 
-## 10. Open questions
+## 10. Compiler boundaries and deterministic ordering
 
-### 10.1 Polyfill catalog formalisation
+### 10.1 Polyfill catalog
 
-§5.3 names polyfills as Node Fusion rewrites that substitute
-engine-supported equivalents for non-supported nodes. The
-catalog of polyfills is implementation-distributed (each
-non-supported node declares its polyfill substitution). A
-future revision should formalise the polyfill catalog as a
-registry parallel to the fusion catalog, with NF1–NF4
-axiomatised over polyfills explicitly.
+Supported polyfills are exactly the substitutions registered
+with the compiler. Each substitution is subject to NF1–NF4
+and its equivalence tests. There is no separate implicit or
+host-discovered polyfill namespace; an unregistered operation
+remains on its supported lower execution tier.
 
-### 10.2 Cross-scope hoisting (classical sense)
+### 10.2 Kernel boundary
 
-Per §3.0, polydat's current "hoisting" is within-kernel
-lifecycle partitioning, not classical cross-scope code
-motion. The classical optimisation — moving a computation
-from an inner kernel to an outer kernel so the work happens
-once across all inner iterations instead of once per inner
-materialisation — is currently absent.
+Hoisting does not move work across scope kernels. Each child
+is compiled and classified independently, and parent values
+enter through explicit scope inputs. This preserves kernel
+ownership, invalidation, and per-fiber state boundaries.
 
-Concrete example: in `for_each(k in {k_values}) { ... }`,
-if the inner kernel contains a wire whose upstream cone
-reaches *only* scenario-level (or workload-level) bindings
-— not the for_each iter-var `k` — that wire could in
-principle be evaluated once in the *outer* kernel and
-re-presented to every inner materialisation as a
-pre-filled slot. Today, each inner materialisation
-re-evaluates it independently.
+### 10.3 Node Fusion order
 
-Cross-scope hoisting would require: (a) a cross-kernel
-classification analysis (which wires in an inner program
-reach only outer-scope bindings); (b) a synthesis-time
-optimisation where outer evaluates the wire once and
-materialise-into-self caches it for each child; (c) cache
-invalidation when outer state advances. A future revision
-should specify this as an explicit optimisation tier with
-its own H-axioms.
-
-### 10.3 Node Fusion ordering — when does the catalog matter?
-
-NF4 establishes fusion as fixpoint-iterating until no further
-patterns apply. The *order* in which catalog entries are
-applied within an iteration is currently a registration-
-order property of the catalog. Some fusion entries' soundness
-might depend on a specific application order. A future
-revision should either prove order-independence or formally
-specify the ordering as part of NF4.
+Fusion is deterministic for a fixed graph and rule catalog.
+Each fixed-point round examines rules in registration order
+and nodes in ascending graph index, applies the first valid
+match, then recomputes consumer counts and restarts. Interior
+nodes with external consumers or named-output references are
+not consumed. Rule registration order is therefore part of
+the compiler contract; new rules must be equivalence-correct
+under every earlier registered rule.
 
 ---
 
