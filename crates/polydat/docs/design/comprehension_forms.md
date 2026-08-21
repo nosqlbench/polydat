@@ -1,8 +1,8 @@
 # Comprehension Forms — Polydat Design
 
-**Status:** DRAFT — design for the comprehension algebra. Pins
-down the constructors, the closure properties under composition,
-the validity axioms, and the compilation model.
+**Status:** Implemented, authoritative specification for the
+comprehension algebra, including constructors, closure properties,
+validity axioms, optimization, IR, and execution.
 
 ## Authoritative ownership declaration
 
@@ -123,7 +123,7 @@ Produces a **stream** of single-name tuples
   stream producer** (yielding one `Value` per `advance()`) or
   a **continuous measure** (a bounded or unbounded real
   interval with a defined measure, sampled rather than
-  enumerated). Discrete sources cover literal comma lists, GK
+  enumerated). Discrete sources cover literal comma lists, Polydat
   integer/string ranges, generator functions, stdlib helpers,
   workload-param references, set operators, etc. (SRD-18c
   Layers 1-6.) Continuous sources cover bounded real intervals
@@ -199,10 +199,8 @@ iteration scalar, wrap as a singleton.
 | `Str` | its **string-comprehension tokens** (§3.1.3) |
 | `U64` / `F64` / `Bool` / `Bytes` / `Handle` / `None` / non-array `Json` / opaque `Ext` | none (scalar) |
 
-**Implementation note — string position is resolved at parse, not
-in the predicate.** SRD-18f's draft gave `iteration_interior` a
-positional argument so a single-quoted *atomic* string would
-report `None`. The implementation instead resolves quote-kind at
+**String position is resolved at parse, not in the predicate.**
+The parser resolves quote-kind at
 the **source-text layer**: the parser turns a single-quoted source
 into a one-element literal, so by the time a bare `Value::Str`
 reaches `iteration_interior` the intent is always "iterate it" and
@@ -258,11 +256,11 @@ bare word to a string.
 A single bare-identifier source that resolves to no
 wire/const/param/outer-iter-var is a **hard error** with a quoting
 hint (`… did not resolve … if you meant the literal string "X",
-quote it: "X"`), not a silent self-name binding. The broader
-cutover — e.g. an unbracketed bare *label list* `a, b, c`, which
-still falls back to string-token striping for backward
-compatibility — is staged behind the
-[comprehension migration gate](comprehension_migration_gate.md).
+quote it: "X"`), not a silent self-name binding. The compatibility
+rule for an unbracketed bare *label list* `a, b, c` retains
+string-token striping. The exact parser acceptance boundary is
+protected by the
+[comprehension regression contract](comprehension_migration_gate.md).
 
 **Where the work happens (parse vs. eval).** `source_parser`
 splits the `[…]` form into two compilation paths:
@@ -602,7 +600,7 @@ mechanism, not rejected.
 
 **V4 enforcement timing (per §10.7.8).** V4 fires at
 strategy-invocation time against the
-[`EvaluatedSource`](##10.7.6) the strategy receives. For
+[`EvaluatedSource`](#1076-the-evaluatedsource-contract) the strategy receives. For
 comprehensions whose sources are all statically evaluable
 (per §10.7.0's eval-class partitioning — `Literal` /
 `IntRange` / `ContinuousInterval` / registry-recognized
@@ -777,7 +775,7 @@ Two validation modes:
   runs. Warnings surface through the validator's structured
   output; consumers (workload loader, REPL, tooling) decide
   whether to print or filter them.
-- **Strict (`polydat::validate::Mode::Strict`).** Promotes
+- **Strict (`polydat::iteration::comprehension::validate::Mode::Strict`).** Promotes
   every `ValidationWarning` to a hard error. Used by
   workload-loading paths that want a clean bill of health.
 
@@ -1140,15 +1138,14 @@ sampled  := base order halton/50
 fast_corner := boundary order extrema/1
 ```
 
-`base`, `boundary`, `sampled`, `fast_corner` are four distinct
-ASTs; the compiler is free to share `base`'s evaluation across
-the three derivatives or to recompute per-`PolyStreamer`
-instantiation. SRD-78's "one streamer per Arc" semantic means
-each wire-bound comprehension has its own dispense cursor.
+`base`, `boundary`, `sampled`, and `fast_corner` are four distinct
+ASTs. Each `PolyStreamer` instance builds independent evaluation
+state and owns its own dispense cursor; derived comprehensions do
+not share a mutable evaluation cursor.
 
 ### 8.4 Inferred union (special case)
 
-Today's parser supports `for k in 10, limit in ..., k in 100,
+The parser supports `for k in 10, limit in ..., k in 100,
 limit in ...` with repeated names inferring `union`. Under the
 regular algebra this is a parser convenience — the disambiguation
 runs after clause-list parsing and lifts to `union(cartesian(...),
@@ -1253,7 +1250,7 @@ then its own operator(s). `cartesian`, `zip`, `union` use
 N-arity opcodes; `filter`, `order` use unary wrappers.
 
 **IR as immutable public API.** The compiled IR sequence is
-exposed via `polydat::comprehension::ir::Program` as a
+exposed via `polydat::iteration::comprehension::ir::Program` as a
 `#[non_exhaustive]` `Vec<Op>` accessible by value. Consumers
 may inspect the sequence (e.g. for cost estimation, tracing,
 or alternative backends) but cannot mutate it post-compile —
@@ -1536,11 +1533,13 @@ satisfies it. Filter does not (the bijection from index to
 surviving tuple requires evaluating the predicate against
 candidates). Union satisfies it (concatenation arithmetic).
 
-### 10.2 Required rewrites
+### 10.2 Required rewrites and compilation eligibilities
 
-The optimizer fires the following rules unconditionally. Each
-rule preserves the dispense sequence per §7's equivalences and
-shrinks the worst-case barrier working set. The guards are
+The optimizer applies the following catalog. R0a, R0b, and
+R3–R7 are AST rewrites; R1 and R2 are metadata-driven IR
+compilation eligibilities and do not emit a replacement AST.
+Each rule preserves the dispense sequence per §7's
+equivalences. The guards are
 predicates over the **metadata algebra** specified in §10.7;
 each rule's "when does it fire?" reduces to a pattern match on
 the node's metadata bundle plus its operator and a small fixed
@@ -1956,7 +1955,7 @@ enum NaturalOrder {
 enum Materialization {
   Streaming,
   BoundedBarrier { working_set_size: usize },
-  UnboundedBarrier,                // currently always V6-rejected
+  UnboundedBarrier,                // invalid by V6
 }
 ```
 
@@ -1977,7 +1976,7 @@ fail or be partial.
   - `Some(Lattice { axis_sizes: [n] })` if source is `Bounded(n)`;
   - `Some(Continuous { intervals: [source.interval], measure: source.measure })` if source is `Continuous`;
   - `None` for `BoundedAtMost`, `Unbounded`, or `ContinuousAtMost` (filter destroys addressability uniformly)
-- natural_order: `Lex` for discrete; `Strategy(<pending sampling>)` for continuous (V8 requires an enclosing sampling order before dispense)
+- natural_order: `Lex` for discrete; `PendingSampling` for continuous (V8 requires an enclosing non-`Lex` sampling order with a finite truncation before dispense)
 - materialization: `Streaming`
 
 `cartesian(c1, ..., cN)`:
@@ -1994,7 +1993,7 @@ fail or be partial.
   - all continuous + non-dependent: `Some(Continuous { intervals: ..., measure: Product([c1.measure, ..., cN.measure]) })`
   - mixed discrete + continuous + non-dependent: `Some(Hybrid { discrete_axes, continuous_axes, measure })`
   - any child not addressable: `None`
-- natural_order: `Lex` for fully-discrete; otherwise inherited as `Strategy(<pending sampling>)`
+- natural_order: `Lex` for fully-discrete; `PendingSampling` when the combined cardinality is continuous or hybrid
 - materialization: `Streaming`
 
 Dependency detection happens at parse: the cartesian builder
@@ -2105,12 +2104,12 @@ V4) uses to read a source's enumerated form. Produced by
 struct EvaluatedSource {
   /// Concrete typed values the source dispenses, in
   /// declaration / enumeration order.
-  values: Vec<polydat::node::Value>,
+  values: Vec<polydat::ast::Value>,
 
   /// Cardinality — same enum as §6.1's CardinalityClass, but
   /// `Bounded(values.len())` for any successfully-evaluated
-  /// discrete source. `Continuous` retained for distribution-
-  /// like sources awaiting an enclosing sampler (V8).
+  /// discrete source. `Continuous` marks a distribution-like
+  /// source that requires an enclosing sampler under V8.
   cardinality: CardinalityClass,
 
   /// Closed-form addressing scheme — same enum as §10.7.1's
@@ -2181,9 +2180,8 @@ Mixed cases (`concat({workload_param}, fib(8))`) are
 piece.
 
 Workload authors do not interact with the registry directly;
-it's polydat-internal. Registry completeness is a polydat
-quality target — every built-in generator polydat ships should
-have a registry entry. Generators *outside* the registry
+it is Polydat-internal. Every built-in generator has a registry
+entry. Generators *outside* the registry
 (notably the activity-side or adapter-defined ones) remain
 context-required.
 
@@ -2265,8 +2263,7 @@ the planner didn't know yet.
 
 ### 10.9 Predicate analyzer
 
-R5 (per-axis filter pushdown) and any future rule that depends
-on predicate shape need a structured view of the Polydat expression
+R5 (per-axis filter pushdown) needs a structured view of the Polydat expression
 that `filter`'s predicate carries. The **predicate analyzer**
 is the single component that provides that view. It is
 specified separately from the metadata algebra (§10.7) because
@@ -2274,17 +2271,15 @@ predicates are Polydat expressions, not comprehension AST nodes —
 they live in a different value space and deserve their own
 analysis surface.
 
-The analyzer takes `(GkExpr, CoordSet) → PredicateInfo` and
-operates on one predicate at a time. Its output feeds R5 and
-the predicate-aware rules in the deferred R8–R10 set. The
+The analyzer takes `(&str, &CoordSet) -> PredicateInfo` and
+operates on one predicate at a time. Its output feeds R5. The
 whole-AST reducibility component that drives the optimizer's
 rewrite loop is a separate analyzer specified in §10.10; the
 two analyzers share the predicate-shape information but have
 distinct inputs, outputs, and scopes.
 
-This section pins down what the predicate analyzer accepts,
-what it produces, and which properties it asserts. Everything
-here is the planned design; the analyzer ships alongside R5.
+This section pins down what the implemented predicate analyzer
+accepts, what it produces, and which properties it asserts.
 
 #### 10.9.1 Scope
 
@@ -2300,24 +2295,18 @@ here is the planned design; the analyzer ships alongside R5.
 
 **Out of scope:**
 
-- Non-deterministic Polydat expressions (e.g. PRNG draws inside the
-  predicate). Detected by inspecting the expression's GK
-  kernel for `requires_seed` flags; if present, the analyzer
-  returns `Opaque` and no R-rule that needs structured info
-  fires. The predicate is still evaluated correctly per-tuple
-  at runtime — only the *optimizer* skips push-down.
-- Cross-tuple state. Predicates that depend on
-  previously-emitted tuples (none exist today, but the
-  analyzer should reject them rather than silently accept).
-- Side-effecting expressions. Same rejection path as
-  non-deterministic.
+- Non-deterministic function spellings. A fixed conservative name
+  scan marks `Determinism::Opaque`; no R-rule that requires
+  determinism fires. The predicate still evaluates per tuple at
+  runtime.
+- Cross-tuple state and side-effecting expression shapes. They are
+  outside the recognizer catalog and therefore receive an opaque
+  factorization.
 - **Continuous-coord predicates.** Any predicate whose `coords`
   set includes one or more continuous-cardinality axes is
-  marked `Opaque` with a dedicated `OpaqueReason::Continuous`
-  tag (see §10.9.3). Continuous-space predicate analysis is a
-  separate problem (interval arithmetic, measure-preserving
-  factorization) that the initial cut deliberately defers.
-  The predicate still runs correctly per-sample at runtime —
+  marked `Opaque` with `OpaqueReason::Continuous` (see §10.9.3).
+  Continuous-space predicate analysis is outside the analyzer
+  contract. The predicate still runs correctly per sample at runtime;
   only the optimizer skips push-down rules whose correctness
   would depend on continuous-aware factorization.
 
@@ -2326,7 +2315,7 @@ here is the planned design; the analyzer ships alongside R5.
 The analyzer is invoked as a function:
 
 ```text
-analyze(predicate: &GkExpr, coords: &CoordSet) -> PredicateInfo
+analyze(predicate: &str, coords: &CoordSet) -> PredicateInfo
 ```
 
 `coords` is the coordinate name set of the comprehension the
@@ -2337,8 +2326,7 @@ analyzer's job is "what does this expression say *about these
 names*?", not "what does this expression do in context?"
 
 `PredicateInfo` is a pure data record with the assertions
-below. It is the only artifact R5 (and any future predicate-
-shape-aware rule) reads.
+below. It is the only predicate-shape artifact R5 reads.
 
 #### 10.9.3 Assertable properties
 
@@ -2350,21 +2338,21 @@ PredicateInfo {
   monotonicity:       PerAxisMap<Monotonicity>,
   range_constraint:   PerAxisMap<RangeConstraint>,
   determinism:        Determinism,
-  coords_referenced:  CoordSet,
+  coords_referenced:  Vec<String>,
 }
 
 enum Factorization {
-  PerAxis(PerAxisMap<GkExpr>),       // p ≡ p1({a}) && p2({b}) && ...
-  Conjunctive(Vec<GkExpr>),          // p ≡ q1 && q2 && ... where each qi may still cross-cut
-  Disjunctive(Vec<GkExpr>),          // p ≡ q1 || q2 || ...
+  PerAxis(PerAxisMap<String>),       // p ≡ p1({a}) && p2({b}) && ...
+  Conjunctive(Vec<String>),          // p ≡ q1 && q2 && ... where each qi may still cross-cut
+  Disjunctive(Vec<String>),          // p ≡ q1 || q2 || ...
   Opaque(OpaqueReason),              // analyzer can't structurally decompose
 }
 
 enum OpaqueReason {
   UnknownPattern,                    // shape not in §10.9.5 recognizer catalog
-  NonDeterministic,                  // requires_seed flag, PRNG draws, etc.
-  CrossTupleState,                   // depends on previously-emitted tuples
-  SideEffecting,                     // side-effecting Polydat expression
+  NonDeterministic,                  // compatibility enum value; not emitted
+  CrossTupleState,                   // compatibility enum value; not emitted
+  SideEffecting,                     // compatibility enum value; not emitted
   Continuous,                        // predicate references continuous-cardinality coord(s)
 }
 
@@ -2375,8 +2363,13 @@ enum Monotonicity {
 }
 
 enum RangeConstraint {
-  Bounded { lo: Option<Value>, hi: Option<Value>, inclusive: (bool, bool) },
-  Discrete(Vec<Value>),              // p ≡ {a} ∈ {1, 7, 42}
+    Bounded {
+      lo: Option<ConstValue>,
+      hi: Option<ConstValue>,
+      lo_inclusive: bool,
+      hi_inclusive: bool,
+    },
+    Discrete(Vec<ConstValue>),          // p ≡ {a} ∈ {1, 7, 42}
   None,
 }
 
@@ -2393,7 +2386,7 @@ strong monotonicity on each axis but be `Opaque` overall (e.g.
 
 #### 10.9.4 Goals and correctness contract
 
-The analyzer is a function `(GkExpr, CoordSet) → PredicateInfo`
+The analyzer is a function `(&str, &CoordSet) -> PredicateInfo`
 with these properties:
 
 1. **Sound.** Every assertion in `PredicateInfo` is *true* of
@@ -2414,18 +2407,16 @@ with these properties:
 4. **Deterministic.** Same `(predicate, coords)` always
    produces the same `PredicateInfo`. The analyzer is itself
    referentially transparent.
-5. **Constant-time per node.** The analyzer walks the GK
-   expression tree once, with constant work per node. No
-   fixed-point iteration, no SMT solver, no expression
-   rewriting.
+5. **Bounded syntactic analysis.** The analyzer applies its fixed
+   recognizer catalog to predicate text. It performs no fixed-point
+   iteration, SMT solving, compilation, evaluation, or rewriting.
 
-Property 1 (soundness) is verified by property-based tests in
-the analyzer's own crate: for every `PredicateInfo` field
-assertion, generate random tuples in the coord space, evaluate
-both the original predicate and the asserted decomposition,
-require equality. The test corpus covers each `Factorization`
-variant, each `Monotonicity` direction, and each
-`RangeConstraint` shape.
+Property 1 (soundness) is verified by
+`tests/predicate_analyzer_soundness.rs`. It uses deterministic
+random tuples to compare recognized equality, inequality, range,
+set-membership, and disjoint-axis conjunction claims with direct
+Rust evaluation. Cross-axis and unknown shapes verify conservative
+non-factorization.
 
 Property 2 (conservative incompleteness) is the design
 principle that keeps the analyzer simple and the metadata
@@ -2435,10 +2426,9 @@ to see what happens."
 
 #### 10.9.5 Recognized patterns (initial set)
 
-The analyzer ships with recognizers for a small, fixed pattern
-catalog. The catalog grows by coordinated extension (new
-recognizer = one new function + property tests); workload-
-shape pressure drives which patterns get added.
+The analyzer recognizes the fixed catalog below. Any addition
+is a specification and implementation change with soundness
+tests; there is no runtime registration surface.
 
 | Pattern | Factorization | Monotonicity | Range |
 |---|---|---|---|
@@ -2448,9 +2438,9 @@ shape pressure drives which patterns get added.
 | `p1 \|\| p2` recursively | `Disjunctive(children)` if each is `Conjunctive`/`PerAxis`; else `Opaque` | None | per-axis union |
 | `!p` | inverted factorization where invertible; else `Opaque` | inverted monotonicity | inverted range |
 | `K1 <= {a} && {a} <= K2` | `PerAxis({a}: K1..=K2)` (folded) | None | `Bounded { lo: K1, hi: K2, inclusive: (true, true) }` |
-| `{a} in [K1, K2, K3]` (GK `in` builtin) | `PerAxis({a}: in)` | None | `Discrete([K1, K2, K3])` |
+| `{a} in [K1, K2, K3]` (Polydat `in` form) | `PerAxis({a}: in)` | None | `Discrete([K1, K2, K3])` |
 
-Patterns NOT in the initial set return `Opaque` (or partial
+Patterns not in the catalog return `Opaque` (or partial
 factorization where safe). Examples: predicates that call
 user-defined Polydat kernels, predicates over computed coordinates
 that haven't been simplified, predicates with `if(...)`
@@ -2488,36 +2478,13 @@ predicate stays at the outer filter and runs per-tuple as
 before. This is the "conservatively incomplete" path: correct,
 but no working-set shrinkage.
 
-#### 10.9.7 Future rules built on this surface
+#### 10.9.7 Analyzer boundary
 
-The same `PredicateInfo` enables additional optimizer rules
-without re-analyzing predicates. Each ships as a coordinated
-addition (new R-rule + property tests + recognizer extensions
-if needed):
-
-- **R8 (range-narrowing into cartesian).** When a per-axis
-  predicate is a `RangeConstraint::Bounded`, rewrite the child
-  cartesian's clause-source to the narrowed range directly.
-  `filter(cartesian(clause(a, 1..1000)), {a} >= 500)` →
-  `cartesian(clause(a, 500..1000))`. The filter disappears
-  entirely; the source's `BoundedInt` clause-source narrows
-  to the constrained range. Working set shrinks at the
-  source, not just at the cartesian.
-- **R9 (discrete-set substitution).** When a per-axis
-  predicate is `RangeConstraint::Discrete`, rewrite the child
-  clause-source to a literal list of the discrete values.
-  `filter(cartesian(clause(a, 1..1_000_000)), {a} in [7, 42])`
-  → `cartesian(clause(a, [7, 42]))`. Same shape as R8.
-- **R10 (monotonic-cutoff truncation).** When a per-axis
-  predicate is `Monotonicity::Increasing` and the cartesian
-  enumerates in Lex order, the predicate's first false value
-  on that axis can short-circuit the axis's enumeration.
-  Useful for `where {a} < K` patterns that today require
-  evaluating the predicate against every later value.
-
-These rules are deliberately deferred. They land when workload
-pressure justifies them; the analyzer's `PredicateInfo` is
-already shaped to carry the assertions they need.
+`RangeConstraint` and `Monotonicity` are facts exposed for
+diagnostics and the implemented optimizer rules. They do not
+authorize source-range narrowing, literal-set substitution, or
+monotonic short-circuit rewrites. Those transformations are not
+members of the optimizer catalog.
 
 #### 10.9.8 What the predicate analyzer is NOT (per-predicate scope)
 
@@ -2526,12 +2493,12 @@ already shaped to carry the assertions they need.
   patterns. Workloads needing that complexity should restate
   the comprehension explicitly (split into per-sub-space
   unions).
-- **Not a constant folder.** Polydat's expression layer already
-  folds constant subexpressions before the analyzer sees the
-  predicate. The analyzer assumes folded input.
+- **Not a constant folder.** The analyzer sees predicate text and
+  recognizes literal operands only. It does not invoke Polydat
+  compilation or evaluation.
 - **Not coupled to the comprehension AST** at the per-
-  predicate layer. The §10.9.1 – §10.9.7 surface operates on
-  `(GkExpr, CoordSet)` only; the comprehension's structure is
+  predicate layer. The §10.9.1–§10.9.7 surface operates on
+  `(&str, &CoordSet)` only; the comprehension's structure is
   the reducibility analyzer's concern (§10.10).
 - **Not extensible by callback.** Recognizer patterns live in
   a closed Rust enum, mirroring §10.7's design discipline for
@@ -2618,7 +2585,7 @@ better in at least one dimension and non-worse in the other.
 Findings where both dimensions are `Equal` (no asymptotic
 change) are not produced — the optimizer would loop on them.
 
-The `witness` field carries the proposed replacement AST. The
+The `witness` field carries the replacement AST. The
 optimizer applies it directly; there is no separate "compile
 the finding" step. This is what lets the analyzer run **before
 stack-machine materialization** — its output is itself an AST,
@@ -2626,12 +2593,12 @@ not an IR fragment.
 
 #### 10.10.3 The reducibility catalog
 
-The R-rules in §10.2 are the **enumerated reducibility
-catalog**. Each rule, when its guard fires, is the analyzer
+The R-rules in §10.2 are the **closed reducibility catalog**.
+Each rule, when its guard fires, is the analyzer
 producing a `ReducibilityFinding` whose `Reduction::Rewrite`
 points to the rule's identity and whose `witness` is the
-rewritten AST. The catalog grows by adding R-rules; the
-analyzer's structure does not change.
+rewritten AST. Identifiers R8–R10 have no rewrite semantics and
+MUST NOT be emitted as findings.
 
 The improvement vector per rule:
 
@@ -2714,15 +2681,15 @@ For every `ReducibilityFinding` the analyzer returns:
 The analyzer is invoked at every AST node during a bottom-up
 walk; it emits findings local to that node (with the rest of
 the AST as context via metadata). The optimizer applies
-findings in fixed priority order: **R0a → R0b → R1 → R2 → R3 →
-R4 → R5 → R6 → R7**, then the deferred rules (R8, R9, R10) in
-their landing order. R0a and R0b run first and to a fixed point
+AST findings in fixed priority order: **R0a → R0b → R3 → R4 →
+R5 → R6 → R7**. R0a and R0b run first and to a fixed point
 before any other rule fires — this puts the AST into canonical
 form so the structural guards on R1 – R7 don't have to
 enumerate identity-equivalent variants. After applying any
 finding, the optimizer re-propagates metadata (or, equivalently,
 recomputes `m` for the affected subtree) and re-asks the
-analyzer until the empty finding comes back.
+analyzer until the empty finding comes back. IR compilation
+then applies R1/R2 from the final metadata.
 
 The order matters for confluence but not for correctness: each
 individual finding is dispense-sequence-preserving, so any
@@ -2749,9 +2716,8 @@ optimize(C)`.
   whole cloth. Every witness is the application of a catalog
   rule whose rewrite shape is published in §10.2. If a
   reduction is possible but not in the catalog, the analyzer
-  returns the empty finding; the reduction lands as a new
-  R-rule entry in a future spec push, not as an ad-hoc
-  synthesis at runtime.
+  returns the empty finding. No ad-hoc synthesis occurs at
+  runtime.
 - **Not a recipient of runtime feedback.** It does not adapt
   based on observed dispense behavior, source values, or
   predicate selectivity. The findings are static facts about
@@ -2985,15 +2951,11 @@ ASTs:
 - `boundary`: `filter(<base>, "{k} == 1 || {k} == 100 || {limit} == 1 || {limit} == 100")`
 - `hot_corner`: `order(<boundary>, Extrema, Some(1))`
 
-Each becomes a distinct `PolyStreamer` per SRD-78. The
-compiler MAY share evaluation of `<base>` across the three
-derivatives — `<base>` itself streams (sources don't
-materialize per §3.1; the cartesian holds two cursors). If a
-downstream consumer pulls from multiple derived streamers
-simultaneously, the runtime may cache `<base>`'s emitted tuples
-or recompute per-streamer; see §14 for the open question on
-cross-streamer sharing as a polydat-internal or SRD-78-runtime
-concern.
+Each becomes a distinct streamer with independent dispense
+state. The compiler does not share mutable evaluation of
+`<base>` across derivatives. Sharing the immutable AST or IR is
+permitted; each consumer owns its cursors, barrier buffers, and
+strategy state.
 
 ### 11.10 Continuous parameter sweep
 
@@ -3165,7 +3127,7 @@ Properties illustrated:
 
 ## 12. What this design lets us claim
 
-After this document is law:
+Under this specification:
 
 1. **Composition is the only special case.** There are six
    constructors. Anything else is composition. No "this form
@@ -3197,237 +3159,69 @@ After this document is law:
 
 ---
 
-## 13. Migration relative to current code
+## 13. Implementation correspondence
 
-Today's `polydat::comprehension::ast::Comprehension` carries
-`{mode, filter, order}` flat on one struct. The shift to this
-algebra:
-
-- `Comprehension` becomes an enum: `Clause`, `Cartesian`, `Zip`,
-  `Union`, `Filter`, `Order`. Each variant carries its operands
-  and constructor-specific scalars.
-- The current `ComprehensionMode::Cartesian(Vec<Clause>)` is
-  the `Cartesian` variant; `ComprehensionMode::Union(Vec<Vec<Clause>>)`
-  is the `Union` variant with `Cartesian` children.
-- The current `filter: Option<String>` and `order: Option<TraversalOrder>`
-  fields on `Comprehension` retire — they become `Filter` and
-  `Order` AST nodes wrapping the comprehension they apply to.
-- `coordinate_names()` becomes a method on every variant,
-  computed recursively.
-
-The parser changes scope to recursive: wherever it currently
-parses a clause list, it now parses a comprehension expression.
-The bracketed-string union form parses each string as a
-comprehension recursively.
-
-The evaluator's existing `enumerate_tuples` becomes a per-
-variant `evaluate` method on the new enum, with each variant
-calling its children's `evaluate` and combining results per its
-operator's semantics. The pipeline (enumerate → filter → order
-→ materialize) collapses into the operator tree's bottom-up
-evaluation.
-
-Two new layers ship as part of the migration:
-
-- A **post-parse optimizer** (§10) that rewrites the parsed AST
-  before compilation. This is mandatory, not optional — without
-  it, perfectly valid user expressions allocate catastrophic
-  working sets.
-- An **immutable IR surface** (§9.1) exposed as
-  `polydat::comprehension::ir::Program` so external tooling can
-  inspect compiled programs without recompiling them.
-
-The current `TraversalOrder` enum loses its user-callback escape
-hatch (§3.6); existing callers must select a named strategy.
-The migration includes an audit of in-tree call sites; out-of-
-tree consumers (there are none today, but the public crate is
-shipping) get a deprecation note in CHANGELOG.
-
-The migration is a single push (no incremental valid-but-
-partial state — the operator tree replaces the flat struct
-atomically), but the changes are mechanical given the
-correspondence above. PolyStreamer (SRD-78) consumes the new
-operator-tree comprehension type via its compiled IR.
+- `iteration::comprehension::ast::Comprehension` is the
+  canonical six-variant operator tree.
+- `spec::ComprehensionSpec` and `spec::parse_text` normalize
+  author-facing forms into that tree.
+- Legacy flat structs exist only inside the compatibility parse
+  pipeline and are converted before validation or retention.
+- `validate` enforces V1–V9; `metadata` performs bottom-up
+  propagation; `optimize` applies §10; `ir` owns the immutable
+  stack program.
+- `surfaces` owns static algebra consumers, while
+  `runtime::evaluate_for_iteration` owns scope-dependent tuple
+  evaluation.
+- Strategy selection uses the closed `StrategyName` enum. There
+  is no user-callback ordering escape hatch.
 
 ---
 
-## 14. Planned deferrals
+## 14. Explicit boundaries
 
-This section is the **deferral roster** — items the spec
-deliberately does not address in its current form. Each entry
-names what's deferred, the rationale (why deferring is the
-correct call now, not just convenient), the workaround until
-the item lands, and the condition for revisiting. The roster is
-a plan, not an open-questions list — every entry below has been
-considered and explicitly punted, not left unresolved.
+The following behaviors are outside the comprehension contract.
+Their absence is defined behavior and reserves no semantics.
 
-### 14.1 Deferred R-rules (R8 – R10)
+### 14.1 Optimizer catalog ends at R7
 
-**Status:** PLANNED — predicate analyzer infrastructure ready;
-rules land when workload pressure justifies.
+R8, R9, and R10 are reserved identifiers with no rewrite
+semantics. The optimizer does not narrow a source range from a
+predicate, replace a range with a discrete literal set, or
+short-circuit an axis from monotonicity. Authors express those
+source restrictions directly. The unrewritten filter remains
+semantically correct.
 
-§10.9.7 enumerates three predicate-aware optimizer rules
-already designed against the `PredicateInfo` surface
-(§10.9.3):
+### 14.2 Continuous-coordinate predicates are opaque
 
-- **R8 — range-narrowing into cartesian.** Rewrites
-  `filter(cartesian(clause(a, 1..1000)), {a} >= 500)` →
-  `cartesian(clause(a, 500..1000))`. The filter disappears;
-  the clause-source narrows. Shrinks the cartesian's input
-  space at the source.
-- **R9 — discrete-set substitution.** Rewrites
-  `filter(cartesian(clause(a, 1..1_000_000)), {a} in [7, 42])`
-  → `cartesian(clause(a, [7, 42]))`. Same shape as R8.
-- **R10 — monotonic-cutoff truncation.** When a per-axis
-  predicate is `Monotonicity::Increasing` and the cartesian
-  enumerates in Lex order, short-circuit the axis at the first
-  false value.
+Any predicate that references a continuous-cardinality
+coordinate receives `OpaqueReason::Continuous`. R5 does not
+push it down; the predicate executes per sampled tuple. Authors
+who intend a smaller continuous domain declare the narrower
+interval in the source.
 
-**Rationale for deferral:** Each rule requires a corresponding
-source-side rewrite (BoundedInt narrowing, literal-list
-substitution, axis-short-circuit). The plumbing isn't free.
-R5 alone covers the most common filter-pushdown cases;
-R8/R9/R10 are refinements whose benefit depends on workload-
-specific predicate shapes. Until R5 lands and workload usage
-patterns surface, ranking these three by expected payoff is
-guesswork.
+### 14.3 Consumers do not share evaluation state
 
-**Workaround:** None needed — the un-optimized form is
-correct, just less efficient. R5 still pushes the filter into
-each cartesian child; the filter then runs per-tuple against
-the un-narrowed source. Authors who need the narrowing today
-can manually restate as `cartesian(clause(a, 500..1000))`.
+Related or identical comprehensions may share immutable AST
+and IR values only. They do not share source cursors, emitted
+tuple caches, barriers, or strategy state. Derived consumers
+evaluate their base independently.
 
-**Revisit when:** R5 has landed and at least one workload
-shows measurable benefit from R8/R9/R10 in its hot path.
+### 14.4 Strategy set is closed
 
-### 14.2 Continuous-coord predicate analysis
+Strategies are the variants of `StrategyName`; there is no
+out-of-tree callback or registration hook. Adding a strategy is
+a coordinated source change across parsing, metadata,
+validation, execution, optimization eligibility, serde, and
+tests.
 
-**Status:** PLANNED — `OpaqueReason::Continuous` explicitly
-marks the dead-end; analyzer extension is a separate design
-problem.
+### 14.5 Predicate recognition is conservative
 
-§10.9.1's out-of-scope list and §10.9.3's `OpaqueReason`
-enum document that any predicate touching a continuous-
-cardinality coord is `Opaque`. R5 doesn't fire on
-continuous-axis filters; the filter still runs per-sample at
-the sampled output.
-
-**Rationale for deferral:** Continuous-space predicate analysis
-is a distinct problem class — interval arithmetic, measure-
-preserving factorization, density-aware push-down. The
-techniques don't transfer from the discrete recognizer
-catalog. Designing the continuous-coord analyzer is a
-significant additional surface that doesn't share infrastructure
-with the discrete case beyond the `PredicateInfo` carrier type.
-
-**Workaround:** Author-side restatement. A filter over a
-continuous coord that factorizes per-axis can be expressed by
-narrowing the source's interval directly. For
-`order(cartesian(clause(theta, 0.0..2π), clause(r, 0.0..1.0)),
-Halton, Some(100)) where {theta} < pi`, restate as
-`order(cartesian(clause(theta, 0.0..pi), clause(r, 0.0..1.0)),
-Halton, Some(100))` — the interval narrowing is purely
-syntactic.
-
-**Revisit when:** At least one workload has continuous-coord
-filtering whose author-side restatement is awkward and whose
-predicate shape fits a small recognizable pattern (e.g.
-"polynomial constraint", "ellipsoidal region").
-
-### 14.3 Cross-streamer shared sub-evaluation
-
-**Status:** PLANNED — leaning toward SRD-78 (runtime) as
-owning concern, not polydat.
-
-§8.3's derived-streamers case (`base`, `sampled`, `boundary`,
-`hot_corner`) — and now §11.13's two-surfaces case — raise
-the question of whether multiple streamers from related or
-identical comprehensions should share evaluation work. The
-optimizer (§10) intentionally compiles per-AST; SRD-78 may or
-may not cache cross-streamer.
-
-**Rationale for deferral:** Sharing is a runtime memoization
-concern, not a comprehension-algebra concern. The metadata
-algebra (§10.7) and the reducibility analyzer (§10.10) operate
-on single ASTs in isolation; folding cross-AST analysis into
-either layer would break the closure-over-one-AST discipline
-that makes them clean. The decision space is "where in the
-stack does cross-streamer caching live?" — polydat-internal
-(optimizer recognizes shared sub-ASTs, emits a shared IR
-fragment) or SRD-78-runtime (streamers consult a sub-evaluation
-cache keyed by IR hash). The current lean is SRD-78 because
-caching policy depends on runtime memory pressure and
-workload-shape information that polydat doesn't have at
-compile time.
-
-**Workaround:** Acceptable — derived streamers re-evaluate
-their `base` per instantiation. For small `base` cardinalities
-this is cheap; for large `base` the user can manually
-materialize the base into a discrete literal source and bind
-that as a name.
-
-**Revisit when:** SRD-78 surfaces a concrete cross-streamer
-caching design or measurement shows derived-streamer
-re-evaluation is a hot-path concern.
-
-### 14.4 Strategy extensibility surface
-
-**Status:** PLANNED — leaning toward internal-only (closed
-enum extension), no out-of-tree hook.
-
-§3.6's strategy taxonomy is a closed enum. Adding a new named
-strategy (e.g. `Sobol2D`, `Latin/k`, `LowDiscrepancyCustom`)
-requires coordinated changes: parser keyword, §3.6 table entry,
-§10.2 R2 push-down rule, per-strategy `IndexFn` requirement.
-
-**Rationale for deferral:** The lean is internal-only because
-(a) strategies are small in number — adding one is a focused
-PR, not a heavy ceremony — and (b) each strategy's push-down
-rule is non-trivial Rust code (lattice-index arithmetic,
-PRNG state management, measure mapping for continuous cases).
-A registration hook for out-of-tree strategies would expose
-internal optimizer surfaces and constrain refactoring. The
-deferral is "no escape hatch" rather than "we'll add an
-escape hatch later."
-
-**Workaround:** New strategies land as PRs against this spec
-+ the polydat crate. The crate's `StrategyName` enum is
-`#[non_exhaustive]` (per the §9.1 immutability discipline), so
-adding variants is a minor-version change that doesn't break
-downstream consumers' match arms.
-
-**Revisit when:** A workload need genuinely cannot be expressed
-by the existing strategy set AND the new strategy is not
-generally useful enough to upstream. Both conditions must hold;
-satisfying only one means the strategy upstreams.
-
-### 14.5 Filter-cost-aware optimizer (R5 catalog depth)
-
-**Status:** PLANNED — wait for R5 to land + workload pressure.
-
-R5's guard depends on the predicate analyzer recognizing
-factorization. §10.9.5's initial recognizer catalog covers
-simple patterns (`{a} OP K`, conjunction with coord-disjointness,
-range constraints, discrete-set membership). Deeper patterns
-(polynomial factorization, conditional expressions, Polydat kernel
-calls with known semantics) are not in the initial catalog.
-
-**Rationale for deferral:** Recognizer development is
-"speculative without measurement." Each pattern added to the
-catalog is dead code unless real workloads exercise it. The
-analyzer's "conservatively incomplete" property (§10.9.4
-property 2) means missing optimizations are acceptable; the
-catalog can grow as workload patterns appear in practice.
-
-**Workaround:** Workloads with predicates the analyzer doesn't
-recognize get correct execution but no push-down — the filter
-runs per-tuple at the outer level. Authors can restructure to
-hit a recognized pattern (e.g. split a complex predicate into
-a per-axis conjunction).
-
-**Revisit when:** A specific predicate pattern shows up in
-≥3 workloads and the per-tuple cost is measurable.
+R5 recognizes exactly the catalog in §10.9.5. Polynomial
+factorization, conditional-expression reasoning, and semantic
+analysis of arbitrary Polydat calls are opaque. An opaque
+predicate remains at its authored filter position and executes
+per tuple.
 
 ---
 
@@ -3443,12 +3237,10 @@ names each SRD's role relative to this document.
   defines how source text becomes `clause` source values
   (literal lists, integer/string ranges, generators, SI
   suffixes, etc.). It does **not** own comprehension semantics;
-  semantics are this document. SRD-18c also needs an extension
-  push to define continuous-source grammar (`0.0..2π` real
-  intervals, distribution-object sources per §3.1); until that
-  push lands, this document is the reference for continuous-
-  source text representation and SRD-18c is the parser
-  reference only for discrete sources.
+  semantics are this document. The parser surface is discrete.
+  Continuous intervals and measures are represented by the
+  canonical AST/API contract in §3.1 rather than by additional
+  source syntax.
 
 - **SRD-18f (Comprehension Source Forms)** — **owns the parser-/
   resolver-layer surface for a clause's source position** (the
@@ -3457,13 +3249,10 @@ names each SRD's role relative to this document.
   form, the `…` spread operator, and the bare-word→reference rule.
   It does **not** own the resolution semantics — §3.1.1–§3.1.4 own
   the bound-sequence model, the `iteration_interior` predicate, and
-  peel-exactly-one-level. SRD-18f is to the source position what
-  SRD-18c is to the rest of the parse surface; its draft predates
-  the implementation, which moved the single-quoted/atomic decision
-  to the parse layer (so `iteration_interior` is value-only) and
-  staged the breaking bare-word cutover behind
-  [`comprehension_migration_gate.md`](comprehension_migration_gate.md)
-  — §3.1.2 and §3.1.4 record those deltas.
+  peel-exactly-one-level. Single-quoted atomic strings are resolved
+  by the parser, so `iteration_interior` is value-only. The
+  bare-word resolution rule is normative in §3.1.4 and guarded by
+  the [regression contract](comprehension_migration_gate.md).
 
 - **SRD-18d (Traversal Order)** — **owns per-strategy
   algorithmic detail** (Halton recurrence, Sobol direction
@@ -3473,9 +3262,9 @@ names each SRD's role relative to this document.
   no `Custom(fn)` escape hatch and includes `Shuffle` alongside
   the other named strategies.
 
-- **SRD-18e (Canonical Reference)** — **superseded by this
-  document.** Retired to a redirect stub; cross-references to
-  SRD-18e should target this document.
+- **SRD-18e (Canonical Reference)** — superseded by this document.
+  This document is the target for canonical comprehension
+  cross-references.
 
 - **SRD-78 (PolyStreamer)** — **owns the runtime that hosts
   this document's consumption surfaces.** SRD-78 implements
@@ -3500,7 +3289,7 @@ names each SRD's role relative to this document.
 - **SRD-18b (Scenario Tree and Scheduler)** — defines the
   scenario tree's `ScenarioNode::Comprehension { comprehension,
   children }` wrapper variant, where `comprehension` is a
-  reference to a `polydat::comprehension::Comprehension`
+  reference to a `polydat::iteration::comprehension::Comprehension`
   value. SRD-18b owns the scenario-tree integration (how
   scenario nodes dispatch and find-by-comprehension lookup);
   this document owns the comprehension type SRD-18b wraps.
@@ -3528,7 +3317,7 @@ names each SRD's role relative to this document.
   boundaries. References polydat's public synthesis surface
   (this document §9.5) rather than internals paths.
 
-- **SRD-67 (GK Subcontext Construction)** — describes
+- **SRD-67 (Polydat Subcontext Construction)** — describes
   comprehension scope synthesis as one of the subcontext-
   construction paths, via polydat's public synthesis surface.
 
@@ -3549,11 +3338,11 @@ to this document on first mention:
 - **SRD-00 (Index)** — table-of-contents entries.
 - **SRD-02 (Concurrency Model)** — comprehension iter-steps in
   the concurrency context.
-- **SRD-11 (GK Evaluation)** — enclosing-comprehension
+- **SRD-11 (Polydat Evaluation)** — enclosing-comprehension
   advancing in the scope-init pull context.
 - **SRD-17 (Diagnostic Modes)** — comprehension iteration
   logging.
-- **SRD-40b (Synthetic Metrics from GK)** — example syntax
+- **SRD-40b (Synthetic Metrics from Polydat)** — example syntax
   using a `comprehension_var`.
 - **SRD-44 (Workload Checkpointing)** — comprehensions
   enumerate distinct tuples for checkpoint ordering.
