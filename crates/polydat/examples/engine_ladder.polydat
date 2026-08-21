@@ -1,0 +1,24 @@
+// A small workload-binding graph used to compare P1, P2, and P3.
+//
+// Three request coordinates feed shared identity, routing, payload, and token
+// paths. Every node is deterministic, u64-typed, and supported by all three
+// execution levels, so the benchmark changes the engine rather than the graph.
+
+input cycle: u64
+input tenant_seed: u64
+input operation_seed: u64
+
+seeded_cycle := u64_add(cycle, tenant_seed)
+identity_entropy := hash(seeded_cycle)
+account_id := mod(identity_entropy, 10000000)
+
+route_seed := u64_xor(account_id, operation_seed)
+route_entropy := hash(route_seed)
+shard := mod(route_entropy, 64)
+
+payload_seed := u64_add(identity_entropy, operation_seed)
+payload_entropy := hash(payload_seed)
+payload_class := mod(payload_entropy, 8)
+
+token_seed := u64_add(route_entropy, payload_entropy)
+event_token := hash(token_seed)

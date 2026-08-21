@@ -97,3 +97,7 @@ harness = false
 [[bench]]
 name = "simd_autopromotion"
 harness = false
+
+[[bench]]
+name = "engine_ladder"
+harness = false
