@@ -55,7 +55,7 @@ cranelift-jit = { version = "0.116", optional = true }
 cranelift-module = { version = "0.116", optional = true }
 cranelift-codegen = { version = "0.116", optional = true }
 cranelift-frontend = { version = "0.116", optional = true }
-target-lexicon = { version = "0.13", optional = true }
+cranelift-native = { version = "0.116", optional = true }
 inventory = "0.3.24"
 # Needed for runtime-context nodes' task-local FiberContext
 # (`task_local!` lives in `rt`) and for `block_in_place` at the
@@ -75,7 +75,7 @@ half = "2"
 [features]
 default = ["jit"]
 vectordata = ["dep:vectordata"]
-jit = ["dep:cranelift-jit", "dep:cranelift-module", "dep:cranelift-codegen", "dep:cranelift-frontend", "dep:target-lexicon"]
+jit = ["dep:cranelift-jit", "dep:cranelift-module", "dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-native"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -92,4 +92,8 @@ harness = false
 
 [[bench]]
 name = "cell_throughput"
+harness = false
+
+[[bench]]
+name = "simd_autopromotion"
 harness = false

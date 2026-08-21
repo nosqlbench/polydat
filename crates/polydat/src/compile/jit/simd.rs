@@ -76,15 +76,10 @@ enum KernelKind {
 fn compile_kernels() -> Result<SimdKernels, String> {
     let mut flag_builder = settings::builder();
     flag_builder.set("opt_level", "speed").unwrap();
-    // SIMD types (F32X4 et al.) are unconditional in cranelift
-    // 0.116 — the former `enable_simd` flag is gone; per-ISA
-    // capability comes from the host feature detection in
-    // `isa::lookup(host)`.
-    let isa_builder = cranelift_codegen::isa::lookup(target_lexicon::Triple::host())
-        .map_err(|e| format!("ISA lookup failed: {e}"))?;
-    let isa = isa_builder
-        .finish(settings::Flags::new(flag_builder))
-        .map_err(|e| format!("ISA build failed: {e}"))?;
+    // Use the same native feature inference and ISA fingerprint as the graph
+    // JIT. SIMD types are unconditional in Cranelift IR, but their concrete
+    // lowering and instruction selection are target-feature dependent.
+    let isa = super::host_isa::build_host_isa(flag_builder)?;
 
     let jit_builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
     let mut module = JITModule::new(jit_builder);

@@ -1551,10 +1551,7 @@ fn compile_jit_impl(
     // the libstd unwinder aborts on panic.
     flag_builder.set("unwind_info", "true").unwrap();
     flag_builder.set("preserve_frame_pointers", "true").unwrap();
-    let isa_builder = cranelift_codegen::isa::lookup(target_lexicon::Triple::host())
-        .map_err(|e| format!("ISA lookup failed: {e}"))?;
-    let isa = isa_builder.finish(settings::Flags::new(flag_builder))
-        .map_err(|e| format!("ISA build failed: {e}"))?;
+    let isa = super::host_isa::build_host_isa(flag_builder)?;
 
     let mut jit_builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
 

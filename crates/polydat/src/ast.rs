@@ -1876,6 +1876,51 @@ pub enum SideChannelSink {
     Other,
 }
 
+/// Semantic contract for a scalar node's explicitly registered SIMD variant.
+///
+/// This metadata is deliberately attached to the scalar node rather than
+/// inferred from function names. A promotion pass may use it only after it
+/// also validates the scalar/register port shapes and proves that the complete
+/// vector cone lowers for the effective host ISA.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SimdVariant {
+    /// DSL name of the register-typed, lane-wise equivalent node.
+    pub vector_node: &'static str,
+    /// Whether every lane is exactly equivalent to one scalar invocation.
+    pub exact: bool,
+    /// Whether evaluation is total for every bit pattern admitted by the
+    /// scalar input types. Tier-1 padded execution requires this flag.
+    pub total: bool,
+    /// Whether one lane can be evaluated without reading or changing another
+    /// lane. Scalar-flow auto-promotion requires this flag.
+    pub lane_independent: bool,
+}
+
+impl SimdVariant {
+    /// Exact, total, element-wise variant used by the first promotion tier.
+    pub const fn exact_total(vector_node: &'static str) -> Self {
+        Self {
+            vector_node,
+            exact: true,
+            total: true,
+            lane_independent: true,
+        }
+    }
+
+    /// Exact element-wise variant which may fault for some lane values.
+    ///
+    /// Such a variant can be used only when the planner proves the admitted
+    /// value range or implements ordered lane-error attribution.
+    pub const fn exact_fallible(vector_node: &'static str) -> Self {
+        Self {
+            vector_node,
+            exact: true,
+            total: false,
+            lane_independent: true,
+        }
+    }
+}
+
 /// Runtime evaluation interface for a Polydat node.
 ///
 /// Phase 1: called via `dyn PolydatNode` (dynamic dispatch with `Value` enum).
@@ -1984,6 +2029,16 @@ pub trait PolydatNode: Send + Sync {
     /// [spec]: ../docs/design/runtime_model.md
     fn purity(&self) -> Purity {
         Purity::Pure
+    }
+
+    /// Explicit SIMD-native implementation of this scalar node, if one has
+    /// been registered with a semantic contract.
+    ///
+    /// Returning metadata does not itself make a node promotable. The planner
+    /// must still validate types, purity, source replay, packet ownership, and
+    /// successful lowering by the same Cranelift ISA used for code generation.
+    fn simd_variant(&self) -> Option<SimdVariant> {
+        None
     }
 
     /// A synthetic fusion node's view of the subgraph it stands in

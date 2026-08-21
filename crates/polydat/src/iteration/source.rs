@@ -28,6 +28,75 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::ast::{PortType, Value};
 
+/// Whether a source item can be reconstructed from its ordinal without
+/// consulting or advancing mutable source state.
+///
+/// The default is deliberately conservative. A forward-only cursor is not
+/// sufficient evidence that an earlier item is safe to render again.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SourceReplayStability {
+    /// Rendering is destructive, stateful, externally mutable, or otherwise
+    /// not proven stable for repeated calls at one ordinal.
+    #[default]
+    Consumptive,
+    /// `render_item(ordinal)` is pure, total, and byte-identical for the
+    /// lifetime of the advertised source generation.
+    StableByOrdinal,
+}
+
+/// A compact description of values which can be generated without rendering
+/// an opaque source item first.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SourceValueForm {
+    /// The source may be replayable, but the item must still be rendered.
+    #[default]
+    Opaque,
+    /// The yielded scalar value is the ordinal itself. A typed consumer may
+    /// apply its declared narrowing or wrapping conversion while vectorizing.
+    Ordinal,
+}
+
+/// Runtime source capability used by offset-stamped batch plans.
+///
+/// `generation` must change whenever rendering the same ordinal may produce a
+/// different value. Activation identity remains executor-owned because a
+/// phase rewind can intentionally replay one unchanged source generation as a
+/// new logical evaluation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SourceReplayContract {
+    pub stability: SourceReplayStability,
+    pub generation: u64,
+    pub value_form: SourceValueForm,
+}
+
+impl SourceReplayContract {
+    pub const fn consumptive() -> Self {
+        Self {
+            stability: SourceReplayStability::Consumptive,
+            generation: 0,
+            value_form: SourceValueForm::Opaque,
+        }
+    }
+
+    pub const fn stable_ordinal(generation: u64) -> Self {
+        Self {
+            stability: SourceReplayStability::StableByOrdinal,
+            generation,
+            value_form: SourceValueForm::Ordinal,
+        }
+    }
+
+    pub const fn is_stable_by_ordinal(self) -> bool {
+        matches!(self.stability, SourceReplayStability::StableByOrdinal)
+    }
+
+    /// True when the source ordinal is simultaneously a replay key, scalar
+    /// value, packet number, and low-order lane clock.
+    pub const fn is_perfect_ordinal(self) -> bool {
+        self.is_stable_by_ordinal() && matches!(self.value_form, SourceValueForm::Ordinal)
+    }
+}
+
 /// A single item yielded by a source.
 #[derive(Clone, Debug)]
 pub struct SourceItem {
@@ -41,7 +110,10 @@ pub struct SourceItem {
 impl SourceItem {
     /// Create a range item (ordinal only, no fields).
     pub fn ordinal(ordinal: u64) -> Self {
-        Self { ordinal, fields: Vec::new() }
+        Self {
+            ordinal,
+            fields: Vec::new(),
+        }
     }
 
     /// Create an item with ordinal and named fields.
@@ -219,6 +291,13 @@ pub trait DataSource: Send {
 
     /// The schema of items this source yields.
     fn schema(&self) -> &SourceSchema;
+
+    /// Replay/addressability capability for offset-stamped batch execution.
+    /// External source implementations inherit the safe consumptive default
+    /// until they explicitly prove the stronger contract.
+    fn replay_contract(&self) -> SourceReplayContract {
+        SourceReplayContract::consumptive()
+    }
 }
 
 /// Factory that creates per-fiber `DataSource` readers.
@@ -257,6 +336,11 @@ pub trait DataSourceFactory: Send + Sync {
     /// Known extent, if finite. Same as schema().extent but avoids clone.
     fn global_extent(&self) -> Option<u64> {
         self.schema().extent
+    }
+
+    /// Replay/addressability capability shared by readers from this factory.
+    fn replay_contract(&self) -> SourceReplayContract {
+        SourceReplayContract::consumptive()
     }
 
     /// Rewind the factory's shared cursor to the start so a
@@ -335,7 +419,12 @@ impl DataSourceFactory for RangeSourceFactory {
     fn global_consumed(&self) -> u64 {
         let pos = self.cursor.load(Ordering::Relaxed);
         let start = self.end.saturating_sub(self.schema.extent.unwrap_or(0));
-        pos.saturating_sub(start).min(self.schema.extent.unwrap_or(u64::MAX))
+        pos.saturating_sub(start)
+            .min(self.schema.extent.unwrap_or(u64::MAX))
+    }
+
+    fn replay_contract(&self) -> SourceReplayContract {
+        SourceReplayContract::stable_ordinal(0)
     }
 
     fn rewind_for_poll(&self) -> bool {
@@ -387,6 +476,10 @@ impl DataSource for RangeSource {
     fn schema(&self) -> &SourceSchema {
         &self.schema
     }
+
+    fn replay_contract(&self) -> SourceReplayContract {
+        SourceReplayContract::stable_ordinal(0)
+    }
 }
 
 // =========================================================================
@@ -414,7 +507,11 @@ impl ExtensionContext {
     /// Convenience: integer pass count (consumed / base).
     /// Returns 0 when `base == 0` (degenerate cursor).
     pub fn passes(&self) -> u64 {
-        if self.base == 0 { 0 } else { self.consumed / self.base }
+        if self.base == 0 {
+            0
+        } else {
+            self.consumed / self.base
+        }
     }
 }
 
@@ -534,8 +631,11 @@ impl DataSourceFactory for ExtendingRangeSourceFactory {
 
     fn global_extent(&self) -> Option<u64> {
         // Live extent — readers / status displays see growth.
-        Some(self.end.load(Ordering::Acquire)
-            .saturating_sub(self.start))
+        Some(self.end.load(Ordering::Acquire).saturating_sub(self.start))
+    }
+
+    fn replay_contract(&self) -> SourceReplayContract {
+        SourceReplayContract::stable_ordinal(0)
     }
 }
 
@@ -567,10 +667,10 @@ impl DataSource for ExtendingRangeSource {
             if cur < end {
                 // Try to claim [cur, min(cur+stride, end)).
                 let target = (cur.saturating_add(stride as u64)).min(end);
-                match self.cursor.compare_exchange(
-                    cur, target,
-                    Ordering::AcqRel, Ordering::Acquire,
-                ) {
+                match self
+                    .cursor
+                    .compare_exchange(cur, target, Ordering::AcqRel, Ordering::Acquire)
+                {
                     Ok(_) => {
                         let count = target - cur;
                         self.consumed += count;
@@ -584,9 +684,10 @@ impl DataSource for ExtendingRangeSource {
             // the policy's time / pass / count target was
             // reached — no policy consultation past the cap.
             if let Some(max) = self.max_end
-                && end >= max {
-                    return None;
-                }
+                && end >= max
+            {
+                return None;
+            }
             // Cursor has caught up to end. Consult policy with
             // a snapshot of the current state. Each fiber that
             // races to this point gets its own context read;
@@ -613,8 +714,10 @@ impl DataSource for ExtendingRangeSource {
                         return None;
                     }
                     let _ = self.end.compare_exchange(
-                        end, new_end,
-                        Ordering::AcqRel, Ordering::Acquire,
+                        end,
+                        new_end,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
                     );
                     continue;
                 }
@@ -631,8 +734,7 @@ impl DataSource for ExtendingRangeSource {
         // Live extent — same convention as the factory's
         // `global_extent`: subscribers see the current ceiling
         // even after it grows.
-        Some(self.end.load(Ordering::Acquire)
-            .saturating_sub(self.start))
+        Some(self.end.load(Ordering::Acquire).saturating_sub(self.start))
     }
 
     fn consumed(&self) -> u64 {
@@ -641,6 +743,10 @@ impl DataSource for ExtendingRangeSource {
 
     fn schema(&self) -> &SourceSchema {
         &self.schema
+    }
+
+    fn replay_contract(&self) -> SourceReplayContract {
+        SourceReplayContract::stable_ordinal(0)
     }
 }
 
@@ -655,9 +761,86 @@ struct CursorTarget {
     /// The Polydat input index where the cursor's ordinal is injected.
     input_index: usize,
     /// Source name (for diagnostics).
-    #[allow(dead_code)]
     source_name: String,
+    /// Stable process-independent identity used in ordinal packet stamps.
+    stream_id: u64,
 }
+
+/// Ownership token for one range reserved from a perfect ordinal source.
+///
+/// The token contains no reader borrow or rendered payload because the source
+/// contract proves that the scalar value is the ordinal itself. Moving this
+/// value transfers responsibility for every ordinal in `range`; the batch
+/// executor must drain all of them or process the remainder through its scalar
+/// recovery path. The shared source cursor is never rewound.
+#[derive(Debug)]
+pub struct OrdinalBatchLease {
+    source_name: String,
+    stream_id: u64,
+    source_generation: u64,
+    input_index: usize,
+    sequence: u64,
+    range: std::ops::Range<u64>,
+}
+
+impl OrdinalBatchLease {
+    pub fn source_name(&self) -> &str {
+        &self.source_name
+    }
+
+    pub const fn stream_id(&self) -> u64 {
+        self.stream_id
+    }
+
+    pub const fn source_generation(&self) -> u64 {
+        self.source_generation
+    }
+
+    pub const fn input_index(&self) -> usize {
+        self.input_index
+    }
+
+    pub const fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    pub fn range(&self) -> std::ops::Range<u64> {
+        self.range.clone()
+    }
+
+    pub const fn len_u64(&self) -> u64 {
+        self.range.end - self.range.start
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.range.start == self.range.end
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CursorBatchError {
+    ZeroDemand,
+    RequiresSingleTarget { targets: usize },
+    SourceNotPerfectOrdinal { source: String },
+}
+
+impl std::fmt::Display for CursorBatchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ZeroDemand => f.write_str("ordinal batch demand must be greater than zero"),
+            Self::RequiresSingleTarget { targets } => write!(
+                f,
+                "Tier-1 ordinal batching requires exactly one cursor target, found {targets}"
+            ),
+            Self::SourceNotPerfectOrdinal { source } => write!(
+                f,
+                "source '{source}' does not declare the perfect ordinal replay contract"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for CursorBatchError {}
 
 /// Provenance-driven advancer that targets only the cursor nodes
 /// relevant to a specific set of output fields.
@@ -671,6 +854,8 @@ pub struct Cursors {
     last_items: Vec<Option<SourceItem>>,
     /// Total advances performed.
     advances: u64,
+    /// Reservation order for owned ordinal leases from this cursor set.
+    next_batch_sequence: u64,
 }
 
 impl Cursors {
@@ -704,18 +889,25 @@ impl Cursors {
         let mut seen_sources = std::collections::HashSet::new();
 
         for (idx, input_name) in input_names.iter().enumerate() {
-            if !combined_provenance.contains(idx) { continue; }
+            if !combined_provenance.contains(idx) {
+                continue;
+            }
 
             // Check if this input is a source projection ({source}__ordinal)
             if let Some(source_name) = input_name.strip_suffix("__ordinal") {
-                if seen_sources.contains(source_name) { continue; }
+                if seen_sources.contains(source_name) {
+                    continue;
+                }
                 seen_sources.insert(source_name.to_string());
 
                 if let Some(factory) = source_factories.get(source_name) {
+                    let stream_id =
+                        xxhash_rust::xxh3::xxh3_64(format!("{source_name}@{idx}").as_bytes());
                     targets.push(CursorTarget {
                         reader: factory.create_reader(),
                         input_index: idx,
                         source_name: source_name.to_string(),
+                        stream_id,
                     });
                 }
             }
@@ -726,7 +918,51 @@ impl Cursors {
             targets,
             last_items: vec![None; target_count],
             advances: 0,
+            next_batch_sequence: 0,
         }
+    }
+
+    /// Reserve one owned batch from a single perfect ordinal cursor.
+    ///
+    /// This is the source-side entry point for Tier-1 SIMD execution. It is
+    /// intentionally unavailable for multiple cursor targets or sources that
+    /// merely happen to be monotonic: only the explicit perfect-ordinal
+    /// contract permits payload-free replay from the returned range.
+    pub fn reserve_ordinal_batch(
+        &mut self,
+        demand: usize,
+    ) -> Result<Option<OrdinalBatchLease>, CursorBatchError> {
+        if demand == 0 {
+            return Err(CursorBatchError::ZeroDemand);
+        }
+        if self.targets.len() != 1 {
+            return Err(CursorBatchError::RequiresSingleTarget {
+                targets: self.targets.len(),
+            });
+        }
+
+        let target = &mut self.targets[0];
+        let contract = target.reader.replay_contract();
+        if !contract.is_perfect_ordinal() {
+            return Err(CursorBatchError::SourceNotPerfectOrdinal {
+                source: target.source_name.clone(),
+            });
+        }
+        let Some(range) = target.reader.reserve(demand) else {
+            return Ok(None);
+        };
+        let claimed = range.end - range.start;
+        let lease = OrdinalBatchLease {
+            source_name: target.source_name.clone(),
+            stream_id: target.stream_id,
+            source_generation: contract.generation,
+            input_index: target.input_index,
+            sequence: self.next_batch_sequence,
+            range,
+        };
+        self.next_batch_sequence = self.next_batch_sequence.wrapping_add(1);
+        self.advances = self.advances.saturating_add(claimed);
+        Ok(Some(lease))
     }
 
     /// Advance all targeted cursors. Returns `false` if any targeted
@@ -769,9 +1005,7 @@ impl Cursors {
     /// Known extent of the driving cursor (smallest among targeted
     /// cursors with known extent). Used for progress reporting.
     pub fn extent(&self) -> Option<u64> {
-        self.targets.iter()
-            .filter_map(|t| t.reader.extent())
-            .min()
+        self.targets.iter().filter_map(|t| t.reader.extent()).min()
     }
 
     /// Total advances performed so far.
@@ -817,11 +1051,16 @@ impl Cursors {
 /// land within 0.01% of the time budget. The first call (no
 /// rate signal yet — `elapsed_ms == 0` or `consumed == 0`)
 /// falls back to one base chunk via the `delta` field.
-pub struct UntilElapsedPolicy { pub min_ms: u64, pub delta: u64 }
+pub struct UntilElapsedPolicy {
+    pub min_ms: u64,
+    pub delta: u64,
+}
 
 impl ExtensionPolicy for UntilElapsedPolicy {
     fn next_extension(&self, ctx: &ExtensionContext) -> Option<u64> {
-        if ctx.elapsed_ms >= self.min_ms { return None; }
+        if ctx.elapsed_ms >= self.min_ms {
+            return None;
+        }
         // No rate signal yet — first end-reach with elapsed time
         // below the clock resolution, or a degenerate empty
         // cursor. Step by the declared `delta` (which the
@@ -835,13 +1074,14 @@ impl ExtensionPolicy for UntilElapsedPolicy {
         // u128 saturating math: consumed * remaining_ms can
         // overflow u64 for long-running phases with high
         // throughput (e.g. 10^9 ops over 10^4 ms).
-        let est_remaining = (ctx.consumed as u128)
-            .saturating_mul(remaining_ms as u128)
-            / (ctx.elapsed_ms as u128);
+        let est_remaining =
+            (ctx.consumed as u128).saturating_mul(remaining_ms as u128) / (ctx.elapsed_ms as u128);
         let biased = est_remaining.saturating_mul(95) / 100;
         let base = ctx.base.max(1) as u128;
         let repeats = biased / base;
-        if repeats == 0 { return None; }
+        if repeats == 0 {
+            return None;
+        }
         let delta = repeats.saturating_mul(base);
         Some(u64::try_from(delta).unwrap_or(u64::MAX))
     }
@@ -849,20 +1089,34 @@ impl ExtensionPolicy for UntilElapsedPolicy {
 
 /// Extend by `delta` while `ctx.passes() < min_passes`. Passes
 /// are whole multiples of `ctx.base`.
-pub struct UntilPassesPolicy { pub min_passes: u64, pub delta: u64 }
+pub struct UntilPassesPolicy {
+    pub min_passes: u64,
+    pub delta: u64,
+}
 
 impl ExtensionPolicy for UntilPassesPolicy {
     fn next_extension(&self, ctx: &ExtensionContext) -> Option<u64> {
-        if ctx.passes() < self.min_passes { Some(self.delta) } else { None }
+        if ctx.passes() < self.min_passes {
+            Some(self.delta)
+        } else {
+            None
+        }
     }
 }
 
 /// Extend by `delta` while `ctx.consumed < min_count`.
-pub struct UntilCountPolicy { pub min_count: u64, pub delta: u64 }
+pub struct UntilCountPolicy {
+    pub min_count: u64,
+    pub delta: u64,
+}
 
 impl ExtensionPolicy for UntilCountPolicy {
     fn next_extension(&self, ctx: &ExtensionContext) -> Option<u64> {
-        if ctx.consumed < self.min_count { Some(self.delta) } else { None }
+        if ctx.consumed < self.min_count {
+            Some(self.delta)
+        } else {
+            None
+        }
     }
 }
 
@@ -871,7 +1125,9 @@ impl ExtensionPolicy for UntilCountPolicy {
 /// delta is the minimum of the children's deltas — conservative
 /// step size keeps any single condition from over-shooting its
 /// stop point.
-pub struct AndPolicy { pub policies: Vec<Arc<dyn ExtensionPolicy>> }
+pub struct AndPolicy {
+    pub policies: Vec<Arc<dyn ExtensionPolicy>>,
+}
 
 impl ExtensionPolicy for AndPolicy {
     fn next_extension(&self, ctx: &ExtensionContext) -> Option<u64> {
@@ -882,7 +1138,11 @@ impl ExtensionPolicy for AndPolicy {
                 None => return None,
             }
         }
-        if min_delta == u64::MAX || min_delta == 0 { None } else { Some(min_delta) }
+        if min_delta == u64::MAX || min_delta == 0 {
+            None
+        } else {
+            Some(min_delta)
+        }
     }
 }
 
@@ -890,7 +1150,9 @@ impl ExtensionPolicy for AndPolicy {
 /// Stops only when every child policy returns `None`. The
 /// delta is the maximum of the policies that said continue —
 /// matches the most aggressive child still pushing forward.
-pub struct OrPolicy { pub policies: Vec<Arc<dyn ExtensionPolicy>> }
+pub struct OrPolicy {
+    pub policies: Vec<Arc<dyn ExtensionPolicy>>,
+}
 
 impl ExtensionPolicy for OrPolicy {
     fn next_extension(&self, ctx: &ExtensionContext) -> Option<u64> {
@@ -906,11 +1168,18 @@ impl ExtensionPolicy for OrPolicy {
 
 /// Back-compat alias for the original time-only policy.
 /// Constructs an [`UntilElapsedPolicy`] with delta = base.
-pub struct TimeElapsedPolicy { inner: UntilElapsedPolicy }
+pub struct TimeElapsedPolicy {
+    inner: UntilElapsedPolicy,
+}
 
 impl TimeElapsedPolicy {
     pub fn new(base: u64, min_ms: u64) -> Self {
-        Self { inner: UntilElapsedPolicy { min_ms, delta: base } }
+        Self {
+            inner: UntilElapsedPolicy {
+                min_ms,
+                delta: base,
+            },
+        }
     }
 }
 
@@ -923,6 +1192,17 @@ impl ExtensionPolicy for TimeElapsedPolicy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn range_sources_declare_the_perfect_ordinal_replay_contract() {
+        let factory = RangeSourceFactory::new(10, 20);
+        assert!(factory.replay_contract().is_perfect_ordinal());
+        let reader = factory.create_reader();
+        assert!(reader.replay_contract().is_perfect_ordinal());
+        let item = reader.render_item(13);
+        assert_eq!(item.ordinal, 13);
+        assert!(item.fields.is_empty());
+    }
 
     /// Policy that always extends by `base` — stands in for a
     /// time/pass policy whose target is far away, so the
@@ -940,9 +1220,8 @@ mod tests {
         // walk within the partition; the cap stops growth even
         // though the policy would keep extending. Partition
         // [100, 125) with base 10 → 10 + 10 + 5, then exhausted.
-        let factory = ExtendingRangeSourceFactory::new(
-            "q", 100, 10, Arc::new(AlwaysExtend),
-        ).bounded(125);
+        let factory =
+            ExtendingRangeSourceFactory::new("q", 100, 10, Arc::new(AlwaysExtend)).bounded(125);
         let mut reader = factory.create_reader();
         let mut total = 0u64;
         let mut last_end = 100;
@@ -960,9 +1239,8 @@ mod tests {
     fn extending_source_bounded_clamps_oversized_base() {
         // A base chunk larger than the partition never reserves
         // past it.
-        let factory = ExtendingRangeSourceFactory::new(
-            "q", 0, 1000, Arc::new(AlwaysExtend),
-        ).bounded(30);
+        let factory =
+            ExtendingRangeSourceFactory::new("q", 0, 1000, Arc::new(AlwaysExtend)).bounded(30);
         let mut reader = factory.create_reader();
         let r = reader.reserve(usize::MAX).unwrap();
         assert_eq!(r, 0..30);
@@ -984,7 +1262,10 @@ mod tests {
             }
         }
         let factory = ExtendingRangeSourceFactory::new(
-            "q", 0, 10, Arc::new(NTimes(std::sync::atomic::AtomicU64::new(0))),
+            "q",
+            0,
+            10,
+            Arc::new(NTimes(std::sync::atomic::AtomicU64::new(0))),
         );
         let mut reader = factory.create_reader();
         let mut total = 0u64;
@@ -1041,17 +1322,24 @@ mod tests {
 
         // Drain both readers
         let mut total = 2;
-        while r1.next().is_some() { total += 1; }
-        while r2.next().is_some() { total += 1; }
+        while r1.next().is_some() {
+            total += 1;
+        }
+        while r2.next().is_some() {
+            total += 1;
+        }
         assert_eq!(total, 100);
     }
 
     #[test]
     fn source_item_field_access() {
-        let item = SourceItem::with_fields(42, vec![
-            ("name".into(), Value::Str("test".into())),
-            ("score".into(), Value::F64(0.95)),
-        ]);
+        let item = SourceItem::with_fields(
+            42,
+            vec![
+                ("name".into(), Value::Str("test".into())),
+                ("score".into(), Value::F64(0.95)),
+            ],
+        );
         assert_eq!(item.ordinal, 42);
         assert_eq!(item.field("name"), Some(&Value::Str("test".into())));
         assert_eq!(item.field("score"), Some(&Value::F64(0.95)));
@@ -1106,7 +1394,9 @@ mod tests {
         let mut got: Vec<u64> = Vec::new();
         while let Some(item) = reader.next() {
             got.push(item.ordinal);
-            if got.len() > 50 { panic!("runaway extension"); }
+            if got.len() > 50 {
+                panic!("runaway extension");
+            }
         }
         assert_eq!(got, (0..10).collect::<Vec<u64>>());
         assert_eq!(reader.consumed(), 10);
@@ -1133,11 +1423,16 @@ mod tests {
         assert_eq!(factory.global_extent(), Some(5));
         let mut reader = factory.create_reader();
         // Drain the first 5 to force an extension.
-        for _ in 0..5 { reader.next().unwrap(); }
+        for _ in 0..5 {
+            reader.next().unwrap();
+        }
         // Trigger the extension by attempting one more pull.
         let _ = reader.next().unwrap();
-        assert_eq!(factory.global_extent(), Some(15),
-            "extent should grow by the extension delta");
+        assert_eq!(
+            factory.global_extent(),
+            Some(15),
+            "extent should grow by the extension delta"
+        );
     }
 
     #[test]
@@ -1159,7 +1454,11 @@ mod tests {
     }
 
     fn ctx_at(elapsed_ms: u64, consumed: u64, base: u64) -> ExtensionContext {
-        ExtensionContext { elapsed_ms, consumed, base }
+        ExtensionContext {
+            elapsed_ms,
+            consumed,
+            base,
+        }
     }
 
     #[test]
@@ -1167,7 +1466,10 @@ mod tests {
         // First end-reach: consumed or elapsed effectively zero —
         // no rate to project from. Policy returns `delta` exactly
         // so the next call has a measurement to work with.
-        let policy = UntilElapsedPolicy { min_ms: 50, delta: 7 };
+        let policy = UntilElapsedPolicy {
+            min_ms: 50,
+            delta: 7,
+        };
         assert_eq!(policy.next_extension(&ctx_at(0, 0, 0)), Some(7));
         assert_eq!(policy.next_extension(&ctx_at(49, 0, 0)), Some(7));
         assert_eq!(policy.next_extension(&ctx_at(0, 0, 100)), Some(7));
@@ -1175,7 +1477,10 @@ mod tests {
 
     #[test]
     fn until_elapsed_policy_stops_at_or_past_min_ms() {
-        let policy = UntilElapsedPolicy { min_ms: 50, delta: 7 };
+        let policy = UntilElapsedPolicy {
+            min_ms: 50,
+            delta: 7,
+        };
         assert_eq!(policy.next_extension(&ctx_at(50, 100, 100)), None);
         assert_eq!(policy.next_extension(&ctx_at(1000, 100, 100)), None);
     }
@@ -1187,7 +1492,10 @@ mod tests {
         // cycles/ms; project 0.5 * 800 = 400 cycles. Under-bias
         // 5% → 380. Round to multiples of base (100) → 3 repeats
         // → 300 cycles.
-        let policy = UntilElapsedPolicy { min_ms: 1000, delta: 100 };
+        let policy = UntilElapsedPolicy {
+            min_ms: 1000,
+            delta: 100,
+        };
         assert_eq!(
             policy.next_extension(&ctx_at(200, 100, 100)),
             Some(300),
@@ -1202,7 +1510,10 @@ mod tests {
         // Under-bias → 95. Rounded to base multiples → 0 repeats.
         // Policy terminates rather than under-shooting the budget
         // with a wasted partial pass.
-        let policy = UntilElapsedPolicy { min_ms: 1000, delta: 100 };
+        let policy = UntilElapsedPolicy {
+            min_ms: 1000,
+            delta: 100,
+        };
         assert_eq!(policy.next_extension(&ctx_at(990, 10000, 100)), None);
     }
 
@@ -1213,7 +1524,10 @@ mod tests {
         // residual is bounded below by the base-pass rounding,
         // so convergence is one-base-coarse rather than
         // arbitrarily tight.
-        let policy = UntilElapsedPolicy { min_ms: 1000, delta: 10 };
+        let policy = UntilElapsedPolicy {
+            min_ms: 1000,
+            delta: 10,
+        };
         // Pretend the first pass took 10ms (rate = 1 cycle/ms).
         let mut elapsed = 10u64;
         let mut consumed = 10u64;
@@ -1227,12 +1541,18 @@ mod tests {
         }
         assert!(elapsed <= 1000, "must under-shoot, got elapsed={elapsed}");
         // Residual ≤ ~5% (under-bias) + 1 base pass (rounding) ≈ 6% of target.
-        assert!(elapsed >= 940, "must come within ~6% of target, got {elapsed}");
+        assert!(
+            elapsed >= 940,
+            "must come within ~6% of target, got {elapsed}"
+        );
     }
 
     #[test]
     fn until_passes_policy_counts_in_base_multiples() {
-        let policy = UntilPassesPolicy { min_passes: 3, delta: 100 };
+        let policy = UntilPassesPolicy {
+            min_passes: 3,
+            delta: 100,
+        };
         // 0 passes done — extend.
         assert_eq!(policy.next_extension(&ctx_at(0, 0, 100)), Some(100));
         // 2 passes done (200 consumed @ base=100) — extend.
@@ -1245,7 +1565,10 @@ mod tests {
 
     #[test]
     fn until_count_policy_uses_raw_consumed() {
-        let policy = UntilCountPolicy { min_count: 250, delta: 50 };
+        let policy = UntilCountPolicy {
+            min_count: 250,
+            delta: 50,
+        };
         assert_eq!(policy.next_extension(&ctx_at(0, 0, 100)), Some(50));
         assert_eq!(policy.next_extension(&ctx_at(0, 249, 100)), Some(50));
         assert_eq!(policy.next_extension(&ctx_at(0, 250, 100)), None);
@@ -1254,9 +1577,17 @@ mod tests {
     #[test]
     fn and_policy_stops_when_any_child_stops() {
         // time<5000 AND passes<3.
-        let time = Arc::new(UntilElapsedPolicy { min_ms: 5000, delta: 10 });
-        let passes = Arc::new(UntilPassesPolicy { min_passes: 3, delta: 20 });
-        let and = AndPolicy { policies: vec![time, passes] };
+        let time = Arc::new(UntilElapsedPolicy {
+            min_ms: 5000,
+            delta: 10,
+        });
+        let passes = Arc::new(UntilPassesPolicy {
+            min_passes: 3,
+            delta: 20,
+        });
+        let and = AndPolicy {
+            policies: vec![time, passes],
+        };
         // Both still want to continue: delta = min(10, 20) = 10.
         assert_eq!(and.next_extension(&ctx_at(0, 0, 100)), Some(10));
         // Time done — stop.
@@ -1267,9 +1598,17 @@ mod tests {
 
     #[test]
     fn or_policy_continues_if_any_child_continues() {
-        let time = Arc::new(UntilElapsedPolicy { min_ms: 5000, delta: 10 });
-        let passes = Arc::new(UntilPassesPolicy { min_passes: 3, delta: 20 });
-        let or = OrPolicy { policies: vec![time, passes] };
+        let time = Arc::new(UntilElapsedPolicy {
+            min_ms: 5000,
+            delta: 10,
+        });
+        let passes = Arc::new(UntilPassesPolicy {
+            min_passes: 3,
+            delta: 20,
+        });
+        let or = OrPolicy {
+            policies: vec![time, passes],
+        };
         // Both want to continue → delta = max(10, 20) = 20.
         assert_eq!(or.next_extension(&ctx_at(0, 0, 100)), Some(20));
         // Time done, passes still wants → delta = 20.

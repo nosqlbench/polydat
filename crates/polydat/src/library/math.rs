@@ -43,13 +43,13 @@ fn ln(input: f64) -> f64 { input.ln() }
 #[crate::polydat_node(category = Math)]
 fn exp(input: f64) -> f64 { input.exp() }
 
-#[crate::polydat_node(category = Math)]
+#[crate::polydat_node(category = Math, simd = "reg_add_f64", simd_total)]
 fn f64_add(a: f64, b: f64) -> f64 { a + b }
 
-#[crate::polydat_node(category = Math)]
+#[crate::polydat_node(category = Math, simd = "reg_sub_f64", simd_total)]
 fn f64_sub(a: f64, b: f64) -> f64 { a - b }
 
-#[crate::polydat_node(category = Math)]
+#[crate::polydat_node(category = Math, simd = "reg_mul_f64", simd_total)]
 fn f64_mul(a: f64, b: f64) -> f64 { a * b }
 
 #[crate::polydat_node(category = Math)]

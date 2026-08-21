@@ -24,6 +24,8 @@ mod kernels;
 #[cfg(feature = "jit")]
 mod codegen;
 #[cfg(feature = "jit")]
+pub mod host_isa;
+#[cfg(feature = "jit")]
 pub mod simd;
 
 #[cfg(feature = "jit")]

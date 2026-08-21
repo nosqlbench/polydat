@@ -21,13 +21,13 @@
 // follow the macro's snake_case → PascalCase rule
 // (`u64_add` → `U64Add`, no more `2` suffix).
 
-#[crate::polydat_node(category = Arithmetic)]
+#[crate::polydat_node(category = Arithmetic, simd = "reg_add_i64", simd_total)]
 fn u64_add(a: u64, b: u64) -> u64 { a.wrapping_add(b) }
 
-#[crate::polydat_node(category = Arithmetic)]
+#[crate::polydat_node(category = Arithmetic, simd = "reg_sub_i64", simd_total)]
 fn u64_sub(a: u64, b: u64) -> u64 { a.wrapping_sub(b) }
 
-#[crate::polydat_node(category = Arithmetic)]
+#[crate::polydat_node(category = Arithmetic, simd = "reg_mul_i64", simd_total)]
 fn u64_mul(a: u64, b: u64) -> u64 { a.wrapping_mul(b) }
 
 #[crate::polydat_node(category = Arithmetic)]

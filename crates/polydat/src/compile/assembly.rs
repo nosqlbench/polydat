@@ -877,6 +877,26 @@ impl PolydatAssembler {
         crate::compile::jit::compile_jit_raw(coord_count, total_slots, jit_steps, output_map, resolved.nodes)
     }
 
+    /// Compile the conservative perfect-ordinal Tier-1 SIMD execution plan.
+    ///
+    /// Ordinary `compile()` semantics are unchanged. This explicit surface
+    /// retains the selected scalar DAG as a fallback and synthesizes a second,
+    /// register-typed DAG for one named output and driving cursor input.
+    #[cfg(feature = "jit")]
+    pub fn try_compile_tier1_simd_ordinal(
+        self,
+        driving_input: &str,
+        output: &str,
+    ) -> Result<
+        crate::compile::simd_tier1::Tier1SimdExecutor,
+        crate::compile::simd_tier1::Tier1SimdError,
+    > {
+        let resolved = self.resolve().map_err(|error| {
+            crate::compile::simd_tier1::Tier1SimdError::VectorGraphBuild(error.to_string())
+        })?;
+        crate::compile::simd_tier1::compile_tier1_ordinal(resolved, driving_input, output)
+    }
+
     /// Phase 3 JIT: push-only (per-node dirty tracking, no cone guard).
     #[cfg(feature = "jit")]
     pub fn try_compile_jit_push(self) -> Result<crate::compile::jit::JitKernelPush, String> {

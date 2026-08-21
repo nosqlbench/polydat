@@ -109,6 +109,10 @@ use syn::{
 /// - `category = <ident>` — the polydat `FuncCategory` variant
 ///   the node belongs to (`Comparison`, `Math`, `String`, etc.).
 ///   Defaults to `Misc` when unspecified.
+/// - `simd = "<node-name>"` declares an exact, lane-independent
+///   register-typed implementation of the scalar function.
+/// - `simd_total` certifies that the declared SIMD implementation is defined
+///   for the complete scalar input domain. It requires `simd`.
 #[proc_macro_attribute]
 pub fn polydat_node(attr: TokenStream, item: TokenStream) -> TokenStream {
     let func = parse_macro_input!(item as ItemFn);
@@ -314,6 +318,11 @@ struct NodeAttrs {
     ///   (Rust attribute grammar doesn't accept inline `{ ... }`
     ///   struct literals as attribute values).
     purity: Option<syn::Expr>,
+    /// DSL name of an exact, lane-wise register implementation.
+    simd: Option<syn::LitStr>,
+    /// Declares the SIMD variant total over the scalar input domain. Without
+    /// this flag the variant remains usable only after range/error proof.
+    simd_total: bool,
     /// SRD-80 PR B.9 — variadic node identity value (the result
     /// when called with zero inputs). Emitted into
     /// `FuncSig.identity: Option<u64>`. Required for variadic
@@ -372,6 +381,8 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
     let mut jit_constants_override: Option<syn::ExprPath> = None;
     let mut decompose: Option<syn::ExprPath> = None;
     let mut purity: Option<syn::Expr> = None;
+    let mut simd: Option<syn::LitStr> = None;
+    let mut simd_total = false;
     let mut identity: Option<syn::Expr> = None;
     let mut commutativity: Option<Ident> = None;
     let mut variadic_min: Option<syn::LitInt> = None;
@@ -390,12 +401,13 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                     .clone();
                 match key.to_string().as_str() {
                     "no_jit" => { no_jit = true; }
+                    "simd_total" => { simd_total = true; }
                     other => {
                         return Err(syn::Error::new_spanned(
                             &key,
                             format!(
                                 "#[polydat_node] does not recognize flag `{other}`. \
-                                 PR B.7 flags: `no_jit`.",
+                                 Flags: `no_jit`, `simd_total`.",
                             ),
                         ));
                     }
@@ -475,6 +487,17 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                             }
                         }
                     }
+                    "simd" => {
+                        let syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(name), ..
+                        }) = &nv.value else {
+                            return Err(syn::Error::new_spanned(
+                                &nv.value,
+                                "`simd` value must be the string name of a register-typed node.",
+                            ));
+                        };
+                        simd = Some(name.clone());
+                    }
                     "identity" => {
                         // SRD-80 PR B.9 — variadic identity element.
                         // Any constant-evaluable expression is fine.
@@ -526,7 +549,8 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                                 "#[polydat_node] does not recognize parameter `{other}`. \
                                  PR B.2 keys: `category = ...`. PR B.7 keys: \
                                  `no_jit`, `compiled_u64 = ...`, \
-                                 `jit_constants = ...`, `purity = ...`. \
+                                 `jit_constants = ...`, `purity = ...`, \
+                                 `simd = \"...\"`. \
                                  PR B.9 keys: `identity = ...`, \
                                  `commutativity = ...`, `variadic_min = ...`. \
                                  Namespacing: `adapter = \"...\"`.",
@@ -586,6 +610,13 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
         "#[polydat_node] requires `category = <FuncCategory variant>`.",
     ))?;
 
+    if simd_total && simd.is_none() {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "`simd_total` requires `simd = \"<register node>\"`.",
+        ));
+    }
+
     Ok(NodeAttrs {
         category,
         no_jit,
@@ -593,6 +624,8 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
         jit_constants_override,
         decompose,
         purity,
+        simd,
+        simd_total,
         identity,
         commutativity,
         variadic_min,
@@ -3283,6 +3316,20 @@ fn generate(
         }
     };
 
+    let simd_variant_impl: TokenStream2 = match &attrs.simd {
+        None => quote!(),
+        Some(vector_node) if attrs.simd_total => quote! {
+            fn simd_variant(&self) -> Option<polydat::ast::SimdVariant> {
+                Some(polydat::ast::SimdVariant::exact_total(#vector_node))
+            }
+        },
+        Some(vector_node) => quote! {
+            fn simd_variant(&self) -> Option<polydat::ast::SimdVariant> {
+                Some(polydat::ast::SimdVariant::exact_fallible(#vector_node))
+            }
+        },
+    };
+
     let _ = emit_compiled_u64; // referenced via the conditionals above
 
     // SRD-80 PR B.9: conditional FuncSig fields.
@@ -3518,6 +3565,7 @@ fn generate(
             #compiled_slot_impl
             #jit_constants_impl
             #purity_impl
+            #simd_variant_impl
             #accepts_none_impl
         }
 

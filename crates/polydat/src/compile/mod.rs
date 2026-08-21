@@ -40,6 +40,9 @@ pub mod hybrid;
 pub mod jit;
 pub mod cone;
 pub mod lattice;
+pub mod simd_plan;
+#[cfg(feature = "jit")]
+pub mod simd_tier1;
 #[cfg(all(test, feature = "jit"))]
 mod cone_tests;
 

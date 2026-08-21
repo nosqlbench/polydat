@@ -254,6 +254,24 @@ pub fn compile_polydat_to_assembler(source: &str) -> Result<PolydatAssembler, St
     Ok(asm)
 }
 
+/// Compile one selected scalar output into the conservative perfect-ordinal
+/// Tier-1 SIMD executor.
+///
+/// This is an explicit execution surface: ordinary [`compile_polydat`] and
+/// `PolydatKernel::pull` remain scalar-cycle APIs. `driving_input` is normally
+/// a cursor projection such as `base__ordinal`; `output` names the only result
+/// drained by the batch executor.
+#[cfg(feature = "jit")]
+pub fn compile_polydat_tier1_simd_ordinal(
+    source: &str,
+    driving_input: &str,
+    output: &str,
+) -> Result<crate::compile::simd_tier1::Tier1SimdExecutor, String> {
+    compile_polydat_to_assembler(source)?
+        .try_compile_tier1_simd_ordinal(driving_input, output)
+        .map_err(|error| error.to_string())
+}
+
 /// Compile with a source directory for module resolution.
 ///
 /// When the compiler encounters an unknown function name, it searches

@@ -17,7 +17,10 @@
 //! - [`cursor_partition`]: SRD-71 cursor partition specs —
 //!   how the operator slices a source's index range across
 //!   concurrent fibers.
+//! - [`simd_ordinal`]: offset-stamped SIMD batching for stable ordinal
+//!   streams, with burst-resumable ordered scalar drain.
 
 pub mod comprehension;
 pub mod source;
 pub mod cursor_partition;
+pub mod simd_ordinal;
