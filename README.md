@@ -1,26 +1,12 @@
 # Polydat
 
-Polydat is a type-safe, native-code JIT compiler and function-graph runtime for
-deterministic procedural data generation, parameter-space traversal, and
-workload simulation in Rust. It compiles named inputs and composable functions
-into a reusable kernel whose named outputs are evaluated on demand.
+Polydat is a compiler and runtime for deterministic procedural data in Rust.
+You declare typed inputs and a graph of named functions; Polydat compiles the
+graph into a reusable kernel whose named outputs are pulled on demand, as
+native machine code where the graph permits it.
 
-Graphs can be authored in the Polydat DSL or assembled directly from Rust.
-The compiler resolves and checks every wire, inserts safe type adapters,
-classifies value lifecycles, tracks provenance, and selects an execution form.
-An immutable `PolydatProgram` can be shared across threads while each execution
-context owns its own `PolydatState`.
-
-Polydat is not a string evaluator wrapped around a collection of generators.
-Its port types and node signatures are reified through compilation, allowing
-eligible graph cones to be lowered through Cranelift to host-native machine code.
-The default mixed engine targets native performance where the graph permits it
-and keeps the complete typed interpreter as the semantic host and fallback.
-
-Polydat is currently version 0.2.0 and is under active development. The source,
-tests, and system design specifications define the implemented contract;
-unsupported behavior is identified as an explicit boundary rather than staged
-work.
+Polydat powers the variates subsystem for [nmbrs](https://github.com/nosqlbench/nmbrs), the
+successor to NoSQLBench.
 
 ## Quick start
 
@@ -45,54 +31,139 @@ fn main() -> Result<(), String> {
         bucket := mod(hashed, 64)
     "#)?;
 
-    for cycle in 0..10 {
+    println!("cycle  user_id  bucket");
+    for cycle in 0..5 {
         kernel.set_inputs(&[cycle]);
         let user_id = kernel.pull("user_id").as_u64();
         let bucket = kernel.pull("bucket").as_u64();
-        println!("{cycle}: user={user_id}, bucket={bucket}");
+        println!("{cycle:>5}  {user_id:>7}  {bucket:>6}");
     }
 
     Ok(())
 }
 ```
 
-From this repository:
-
 ```text
-cargo run -p polydat --example basic
+cycle  user_id  bucket
+    0   607535      47
+    1   822465       1
+    2   348110      14
+    3   139053      45
+    4   603978      10
 ```
 
-The [examples directory](crates/polydat/examples) also demonstrates the
-programmatic assembler, expression syntax, module loading, context layering,
-parameter-space projection, type safety, and sharing programs across threads.
+The same cycle always yields the same values, on any thread and any host,
+with no state carried between cycles. Run this from the repository with
+`cargo run -p polydat --example basic`. The
+[examples directory](crates/polydat/examples) also covers the programmatic
+assembler, expression syntax, module loading, context layering, parameter-space
+projection, type safety, and sharing programs across threads.
 
 ## A function graph at a glance
 
-A Polydat program is a directed graph of typed inputs, function nodes, and named
-outputs. This conceptual graph derives three related values from four inputs:
+The DSL is a literal notation for a directed graph. Each `name := expr` line
+declares a named wire, and each function call in the expression declares a
+node that feeds it. This program derives three related values from four typed
+inputs:
+
+```text
+input cycle: u64
+input tenant_seed: u64
+input amplitude: f64
+input baseline: f64
+
+hashed  := hash(u64_add(cycle, tenant_seed))
+user_id := mod(hashed, 1000000)
+shard   := mod(u64_xor(hashed, tenant_seed), 32)
+score   := f64_add(f64_mul(unit_interval(hashed), amplitude), baseline)
+```
 
 ![Program graph: four inputs feed hash, mod, xor, and float nodes producing user_id, shard, and score](docs/diagrams/program-graph.svg)
 
-The graph is more than a sequence of calls. `hash` fans out into three result
+The graph is more than a sequence of calls. `hashed` fans out into three result
 paths, `tenant_seed` participates in two different stages, and the floating-point
 path joins derived and external values. Polydat type-checks each arrow, evaluates
 shared intermediates once per input state, and tracks which input can invalidate
-which output. Pulling `score` does not require evaluating the `user_id` or `shard`
-suffixes; pulling them later can reuse the cached `hash` value.
+which output. Pulling `score` does not evaluate `user_id` or `shard`; pulling
+them later reuses the cached `hashed` value.
+
+## Why it is built this way
+
+Three limits shape the design.
+
+**Data complexity lives in the graph, not in the data.** A record is a pure
+function of its input coordinate. However rich the record, the work to produce
+it is bounded by the size of the graph cone that its outputs reach, and each
+node in that cone is evaluated at most once per input state. Adding a million
+records adds nothing to the program; adding a field adds one node.
+
+**Scale is the size of the coordinate space, not of anything stored.** A
+kernel with a `u64` cycle addresses 2^64 records that never need to exist at
+once. Any record can be regenerated from its coordinate in isolation. A PRNG
+stream must be advanced through records 1 to N-1 to reach record N; a Polydat
+kernel reaches it directly. Because nothing mutable is shared, a domain can be
+split across fibers, threads, or hosts with interval arithmetic alone, and the
+partitions can be traversed in any order and verified by regeneration.
+
+**Efficiency has a floor set by the arithmetic itself.** Once the graph is
+typed and its purity known, the remaining costs are interpretation, dispatch,
+and repeated work. Polydat removes repeated work through memoization and
+selective invalidation, removes dispatch by fusing nodes, and removes
+interpretation by lowering eligible cones to native code. What is left is the
+cost of the hashes and arithmetic, which is the same cost a hand-written
+generator would pay.
+
+These limits are why Polydat is a compiler and a runtime rather than a library
+of generators. Determinism, cost bounds, and cross-fiber equivalence are stated
+as named axioms in the
+[Runtime Model](crates/polydat/docs/design/runtime_model.md), and every engine
+must satisfy them.
 
 ## The model
 
 ![Polydat model: DSL and Rust assembler flow through resolve/classify/fuse into an immutable program, then per-thread state pulls named outputs](docs/diagrams/model.svg)
 
-The important separation is between the graph and its mutable evaluation
-state. Nodes and wiring belong to the shared program. Input values, cached
-outputs, invalidation state, scope bindings, and buffered iteration state
-belong to an individual state or fiber.
+The compiler resolves and checks every wire, inserts safe type adapters,
+classifies value lifecycles, tracks provenance, and selects an execution form.
+The result is an immutable `PolydatProgram` that can be shared across threads,
+while each execution context owns its own `PolydatState`.
+
+That separation is the important one. Nodes and wiring belong to the shared
+program. Input values, cached outputs, invalidation state, scope bindings, and
+buffered iteration state belong to an individual state or fiber.
 
 For pure deterministic graphs, the same input coordinate and scope produce the
 same result. Nodes with side effects or nondeterministic behavior must declare
 that behavior in their metadata so the compiler does not apply invalid
 optimizations.
+
+## Engines at a glance
+
+Three engines share one semantic model:
+
+- **P1** is the typed interpreter. It supports the complete value and node
+  model and is the semantic host and fallback for everything else.
+- **P2** compiles nodes to closures over flat slots. It is used for testing,
+  equivalence work, and specialized callers.
+- **P3** lowers eligible graph cones through Cranelift to host-native machine
+  code.
+
+With the default `jit` feature, the production kernel is mixed: P1 hosts the
+graph and embeds P3 cones where wire types, purity, and lifecycle allow.
+Unsupported nodes and boundary types stay in the interpreter, so JIT
+eligibility is an optimization, not a requirement for a valid graph.
+
+One eleven-node graph with three inputs and four outputs, measured through all
+three engines on one core:
+
+| Engine | Time per cycle | Throughput | Relative to P1 |
+| --- | ---: | ---: | ---: |
+| P1 interpreter | 399 ns | 2.5 M cycles/s | 1.0x |
+| P2 closures | 94 ns | 10.7 M cycles/s | 4.3x |
+| P3 native | 46 ns | 21.8 M cycles/s | 8.7x |
+
+The graph, measurement contract, correctness gate, and benchmark command are in
+[Engine-ladder performance](crates/polydat/docs/performance.md).
 
 ## Why one graph?
 
@@ -107,9 +178,9 @@ converted, and which outputs must be invalidated. That unified model is the
 reason the project includes a language, compiler, runtime, iteration algebra,
 and node library rather than being only a collection of random generators.
 
-## What is implemented
+## Capabilities
 
-| Area | Current capability |
+| Area | Capability |
 | --- | --- |
 | Graph construction | A typed DSL, nested expressions, modules, an assembler API, named multi-output nodes, constants, externs, and output selection. |
 | Compilation | Wire resolution, type checking, safe adapter insertion, constant and scope-init handling, node fusion, lifecycle analysis, provenance, dead-code elimination, strict-wire validation, JIT-cone extraction, and Cranelift native code generation. |
@@ -300,6 +371,7 @@ Published API documentation is configured for
 Polydat originated as a reduction of the variate-generation and parameter
 machinery used by NoSQLBench and was extracted from the
 [nb-rs](https://github.com/nosqlbench/nb-rs) workspace. It now evolves as an
-independent crate and repository.
+independent crate and repository, and powers the variates subsystem for
+[nmbrs](https://github.com/nosqlbench/nmbrs), the successor to NoSQLBench.
 
 Licensed under Apache-2.0. See [LICENSE](LICENSE).
