@@ -71,40 +71,7 @@ parameter-space projection, type safety, and sharing programs across threads.
 A Polydat program is a directed graph of typed inputs, function nodes, and named
 outputs. This conceptual graph derives three related values from four inputs:
 
-```mermaid
-flowchart LR
-    subgraph Inputs
-        C["cycle: u64"]
-        T["tenant_seed: u64"]
-        A["amplitude: f64"]
-        B["baseline: f64"]
-    end
-
-    subgraph Outputs
-        USER(["user_id"])
-        SHARD(["shard"])
-        SCORE(["score"])
-    end
-
-    C --> MIX["u64_add"]
-    T --> MIX
-    MIX --> H["hash"]
-
-    H --> UID["mod · 1,000,000"]
-    UID --> USER
-
-    H --> ROUTE["u64_xor"]
-    T --> ROUTE
-    ROUTE --> SMOD["mod · 32"]
-    SMOD --> SHARD
-
-    H --> Q["unit_interval"]
-    Q --> SCALE["f64_mul"]
-    A --> SCALE
-    SCALE --> OFFSET["f64_add"]
-    B --> OFFSET
-    OFFSET --> SCORE
-```
+![Program graph: four inputs feed hash, mod, xor, and float nodes producing user_id, shard, and score](docs/diagrams/program-graph.svg)
 
 The graph is more than a sequence of calls. `hash` fans out into three result
 paths, `tenant_seed` participates in two different stages, and the floating-point
@@ -115,18 +82,7 @@ suffixes; pulling them later can reuse the cached `hash` value.
 
 ## The model
 
-```mermaid
-flowchart LR
-    D[Polydat DSL and modules] --> C[Resolve, type-check,<br/>classify, fuse, and select]
-    A[Rust assembler and<br/>registered nodes] --> C
-    C --> J[Cranelift native<br/>code for eligible cones]
-    C --> P[Immutable PolydatProgram<br/>with mixed execution plan]
-    J --> P
-    S[Sources and<br/>comprehensions] --> I[Coordinates and externs]
-    P --> E[Per-thread or<br/>per-fiber PolydatState]
-    I --> E
-    E --> O[Pull named outputs]
-```
+![Polydat model: DSL and Rust assembler flow through resolve/classify/fuse into an immutable program, then per-thread state pulls named outputs](docs/diagrams/model.svg)
 
 The important separation is between the graph and its mutable evaluation
 state. Nodes and wiring belong to the shared program. Input values, cached

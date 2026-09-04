@@ -1,0 +1,32 @@
+flowchart LR
+    subgraph Inputs
+        C["cycle: u64"]
+        T["tenant_seed: u64"]
+        A["amplitude: f64"]
+        B["baseline: f64"]
+    end
+
+    subgraph Outputs
+        USER(["user_id"])
+        SHARD(["shard"])
+        SCORE(["score"])
+    end
+
+    C --> MIX["u64_add"]
+    T --> MIX
+    MIX --> H["hash"]
+
+    H --> UID["mod · 1,000,000"]
+    UID --> USER
+
+    H --> ROUTE["u64_xor"]
+    T --> ROUTE
+    ROUTE --> SMOD["mod · 32"]
+    SMOD --> SHARD
+
+    H --> Q["unit_interval"]
+    Q --> SCALE["f64_mul"]
+    A --> SCALE
+    SCALE --> OFFSET["f64_add"]
+    B --> OFFSET
+    OFFSET --> SCORE
