@@ -1,7 +1,7 @@
 # Polytile — Compiled Variate Templates
 
-**Status:** Proposed SRD 114, second revision. Steps 1 through 5 of
-§12 are implemented and step 6 in most part: the grammar in
+**Status:** Proposed SRD 114, second revision. Steps 1 through 6 of
+§12 are implemented: the grammar in
 every body form with options; the structural JSON form; tiles handed
 in by a host as template text, JSON text, a parsed JSON value, or a
 `polytile` binding; and tiles that compile to wires and render at P1
@@ -550,10 +550,13 @@ fixed.
 per cycle instead of a formatted row. Under the transform rule, this
 appends an `emit_row("text", "<name>", <name>)` binding, so nothing new
 happens at runtime. `--tile-delims OPEN CLOSE` and `--tile-sigil S` set
-process defaults for tiles the binary compiles. `explain` gains a
-`tiles` phase that prints each tile's skeleton: static ranges with their
-byte counts, holes with their expressions, types, and encoders per §4.4,
-and projections with their programs.
+the defaults for tiles the binary compiles, again as a transform: every
+tile that declares no options of its own is re-read under them before
+the program compiles, so the program that runs is the program `explain`
+narrates. `explain` gains a `tiles` phase that prints each tile's
+skeleton: static runs with their byte total, holes with their
+expressions, types, and encoders per §4.4, and projections with their
+body programs.
 
 ## 11. Worked example
 
@@ -682,15 +685,31 @@ a handful of integer and float encodes, and a four-tuple loop.
    like any outer wire. Tests in `tests/tile_projections.rs`. Still
    owed: a nested projection inside a string position, and stream-valued
    generators, whose values cannot cross the node's text-typed inputs.
-6. **Host surfaces.** Mostly done. In source, `name := polytile(enc,
-   body, options...)` and `name := polytile_json(body, options...)` are
+6. **Host surfaces.** Done. In source, `name := polytile(enc, body,
+   options...)` and `name := polytile_json(body, options...)` are
    parsed into `tile` statements before compilation; the body is a
-   string literal or a `<<< >>>` heredoc, which the lexer now accepts
-   as a string literal anywhere. In Rust, `polydat::tile` exposes
-   `tile_from_text`, `tile_from_json_text`, `tile_from_json_value`
-   (a `serde_json::Value`), and `compile_polydat_with_tiles`. Still
-   owed: process defaults for delimiters and sigil, `--emit
-   tile:<name>`, `--tile-delims`, and tiles inside module bodies.
+   string literal or a `<<< >>>` heredoc, which the lexer accepts as a
+   string literal anywhere. In Rust, `polydat::tile` exposes
+   `tile_from_text`, `tile_from_json_text`, `tile_from_json_value` (a
+   `serde_json::Value`), and `compile_polydat_with_tiles`. Host
+   defaults for delimiters and sigil are the transform
+   `transform::apply_tile_defaults`: tiles that declare no options of
+   their own are re-read under the host's, tiles that declare any keep
+   all of theirs; the binary applies it from `--tile-delims OPEN CLOSE`
+   and `--tile-sigil S` before compiling, so `explain` narrates the
+   program as it compiled. `--emit tile:<name>` selects the tile and
+   the `text` emit format, so the appended `emit_row` binding writes
+   the rendered document per cycle and nothing new happens at runtime.
+   Tiles inside module bodies inline with the call: the tile takes the
+   module prefix, hole and branch expressions and generator expressions
+   are rewritten against the caller's arguments, `{name}` placeholders
+   in projection sources are renamed when they name a module input
+   bound to a caller's wire or a module-internal binding, and
+   projection elements shadow module names inside their bodies. Each
+   tile records a `TileCompiled` event with its static runs and bytes,
+   holes, branches, projections, and body programs, which `explain
+   tiles` prints ahead of the hole typing. Tests in
+   `tests/tile_host_surfaces.rs`, including the binary end to end.
 7. **P2 and P3.** Monomorphic closure and Cranelift lowering over the
    SRD 111 helper ABI. Differential tests against P1 across the fuzz
    corpus.

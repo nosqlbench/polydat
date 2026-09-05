@@ -44,6 +44,18 @@ impl Compiler {
         let pieces = self.splice_tiles(&tile.pieces, &tile.name, &tile.encoding, 0)?;
         let ops = lowering.lower_pieces(self, asm, &pieces, None)?;
         let spec = TileSpec { name: tile.name.clone(), encoding, ops, children: lowering.children };
+        let mut shape = SkeletonShape::default();
+        shape.count(&spec.ops);
+        self.tile_events.push(super::events::CompileEvent::TileCompiled {
+            tile: tile.name.clone(),
+            encoding: spec.encoding.clone(),
+            statics: shape.statics,
+            static_bytes: shape.static_bytes,
+            holes: shape.holes,
+            branches: shape.branches,
+            projections: shape.projections,
+            bodies: spec.children.iter().map(|c| c.source.clone()).collect(),
+        });
         let mut args = vec![Arg::Positional(Expr::StringLit(spec.to_json(), tile.span))];
         for name in &lowering.inputs {
             args.push(Arg::Positional(Expr::Ident(name.clone(), tile.span)));
@@ -709,6 +721,39 @@ impl TileLowering {
                 }
             } else if c == '"' {
                 self.in_string = true;
+            }
+        }
+    }
+}
+
+/// Counts over a skeleton for `explain tiles`.
+#[derive(Default)]
+struct SkeletonShape {
+    statics: usize,
+    static_bytes: usize,
+    holes: usize,
+    branches: usize,
+    projections: usize,
+}
+
+impl SkeletonShape {
+    fn count(&mut self, ops: &[TileOp]) {
+        for op in ops {
+            match op {
+                TileOp::Static(s) => {
+                    self.statics += 1;
+                    self.static_bytes += s.len();
+                }
+                TileOp::Hole(_) => self.holes += 1,
+                TileOp::Branch { then, otherwise, .. } => {
+                    self.branches += 1;
+                    self.count(then);
+                    self.count(otherwise);
+                }
+                TileOp::Repeat { body, .. } => {
+                    self.projections += 1;
+                    self.count(body);
+                }
             }
         }
     }

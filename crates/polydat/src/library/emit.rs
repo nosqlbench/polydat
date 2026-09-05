@@ -34,6 +34,9 @@ pub enum EmitFormat {
     Csv,
     /// One JSON object per row.
     Jsonl,
+    /// The values' text as it is, one per line. This is how a tile is
+    /// emitted: `--emit tile:<name>` selects the tile and this format.
+    Text,
 }
 
 impl EmitFormat {
@@ -42,6 +45,7 @@ impl EmitFormat {
             "map" => Some(Self::Map),
             "csv" => Some(Self::Csv),
             "json" | "jsonl" => Some(Self::Jsonl),
+            "text" => Some(Self::Text),
             _ => None,
         }
     }
@@ -51,13 +55,14 @@ impl EmitFormat {
 pub fn header(format: EmitFormat, names: &[&str]) -> Option<String> {
     match format {
         EmitFormat::Csv => Some(names.join(",")),
-        EmitFormat::Map | EmitFormat::Jsonl => None,
+        EmitFormat::Map | EmitFormat::Jsonl | EmitFormat::Text => None,
     }
 }
 
 /// Render one row without touching the buffer.
 pub fn render_row(format: EmitFormat, names: &[&str], values: &[Value]) -> String {
     match format {
+        EmitFormat::Text => values.iter().map(|v| v.to_display_string()).collect::<Vec<_>>().join("\n"),
         EmitFormat::Map => names
             .iter()
             .zip(values)

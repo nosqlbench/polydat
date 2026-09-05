@@ -10,7 +10,38 @@
 //! engine selection then apply to the host's additions exactly as they
 //! apply to the author's.
 
-use super::ast::{Expr, ExternPort, PolydatFile, Statement};
+use super::ast::{Expr, ExternPort, PolydatFile, Statement, TileOptions};
+
+/// Give every tile that declares no delimiters or sigil of its own the
+/// host's defaults (SRD 114 §5.6, §10), re-reading its body under them.
+///
+/// A tile that names any option keeps all of them; the transform only
+/// fills in what the author left to the default. Tiles inside module
+/// bodies are rewritten too, since they compile in this program.
+pub fn apply_tile_defaults(file: &mut PolydatFile, defaults: &TileOptions) -> Result<(), String> {
+    fn visit(statements: &mut [Statement], defaults: &TileOptions) -> Result<(), String> {
+        let stock = TileOptions::default();
+        for stmt in statements.iter_mut() {
+            match stmt {
+                Statement::Tile(t) => {
+                    let untouched = t.options.open == stock.open && t.options.close == stock.close && t.options.sigil == stock.sigil;
+                    if !untouched {
+                        continue;
+                    }
+                    let strict = t.options.strict;
+                    t.options = defaults.clone();
+                    t.options.strict = strict || defaults.strict;
+                    t.pieces = super::tile::parse_template(&t.body, &t.options, t.span)
+                        .map_err(|e| format!("tile '{}' under host delimiters: {e}", t.name))?;
+                }
+                Statement::ModuleDef(m) => visit(&mut m.body, defaults)?,
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+    visit(&mut file.statements, defaults)
+}
 
 /// Assign `name=value` text to externs and inputs by rewriting their
 /// declarations.

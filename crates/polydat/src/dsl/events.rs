@@ -95,6 +95,19 @@ pub enum CompileEvent {
         encoder: String,
         adapter: Option<String>,
     },
+    /// A tile's skeleton (SRD 114 §6, §10): how many static runs it
+    /// copies and their byte total, its holes, branches, and
+    /// projections, and the source of each projection body program.
+    TileCompiled {
+        tile: String,
+        encoding: String,
+        statics: usize,
+        static_bytes: usize,
+        holes: usize,
+        branches: usize,
+        projections: usize,
+        bodies: Vec<String>,
+    },
 }
 
 impl CompileEvent {
@@ -112,6 +125,7 @@ impl CompileEvent {
             CompileEvent::FusionApplied { .. } => EventLevel::Info,
             CompileEvent::Summary { .. } => EventLevel::Info,
             CompileEvent::TileHoleTyped { adapter: None, .. } => EventLevel::Info,
+            CompileEvent::TileCompiled { .. } => EventLevel::Info,
 
             // Advisory: implicit conversions the user should review
             CompileEvent::TileHoleTyped { adapter: Some(_), .. } => EventLevel::Advisory,
@@ -215,6 +229,10 @@ impl CompileEventLog {
                     "tile '{tile}' hole `{hole}`: wire {wire_type}{} expects {expectation}, encoder {encoder}{}",
                     declared.as_ref().map(|d| format!(", declared {d},")).unwrap_or_else(|| ",".to_string()),
                     adapter.as_ref().map(|a| format!(", adapter {a}")).unwrap_or_default()
+                ),
+            CompileEvent::TileCompiled { tile, encoding, statics, static_bytes, holes, branches, projections, .. } =>
+                format!(
+                    "tile '{tile}' ({encoding}): {statics} static run(s), {static_bytes} bytes; {holes} hole(s), {branches} branch(es), {projections} projection(s)"
                 ),
             };
             format!("polydat[{tag}]: {msg}")

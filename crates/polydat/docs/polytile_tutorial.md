@@ -490,6 +490,32 @@ the document as a string field, and `polydat check --stats` reports the
 tile's nodes alongside everything else in the program. The tile is not
 special to the harness; it is a string output.
 
+To write the document itself, one per cycle with nothing around it,
+name the tile in the emit format:
+
+```sh
+polydat run examples/polytile_demo.polydat --cycles 3 --emit tile:doc -q
+```
+
+This is the same transform as every other `--emit`: the binary appends
+a binding that emits the selected wire in the `text` format, so the
+output is the rendered tile byte for byte.
+
+When a file's tiles are written in another system's delimiters and
+declare none of their own, `--tile-delims '<%' '%>'` and
+`--tile-sigil '#'` supply the defaults. They too are a transform: each
+tile that left its options to the default is re-read under the host's
+before the program compiles, and a tile that declared any option keeps
+all of its own. `polydat explain <file> tiles` then shows the program
+as it compiled, with each tile's skeleton summary above the hole
+typing.
+
+A tile may also be declared inside a module body. It inlines with the
+call like any binding: the tile is named with the module's prefix, its
+holes and branch conditions read the caller's arguments, and its
+projections' generator expressions are rewritten the same way. Two
+calls to the module give two tiles.
+
 ## What a tile compiles to
 
 Knowing the lowering makes the rules above predictable:

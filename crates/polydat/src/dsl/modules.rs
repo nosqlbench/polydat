@@ -345,10 +345,15 @@ impl Compiler {
                     ));
                 }
                 Statement::Tile(t) => {
-                    return Err(format!(
-                        "tile '{}' inside module '{}': tiles are not supported inside module bodies yet; declare the tile at top level and pass its wire in (SRD 114); see docs/design/polytile.md",
-                        t.name, func_name
-                    ));
+                    // A tile inlines like a binding: its name takes the
+                    // module prefix and every expression in its pieces
+                    // is rewritten against the caller's arguments.
+                    let mut tile = t.clone();
+                    tile.name = format!("{prefix}{}", t.name);
+                    tile.pieces = self
+                        .rewrite_module_pieces(&t.pieces, &prefix, &module_inputs, &arg_map, &module_stmts)
+                        .map_err(|e| format!("tile '{}' inside module '{}': {e}", t.name, func_name))?;
+                    self.compile_tile(asm, &tile)?;
                 }
             }
         }
@@ -382,12 +387,180 @@ impl Compiler {
         Ok(true)
     }
 
+}
+
+/// `{name}` placeholders in comprehension text.
+fn placeholder_names(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '{' {
+            let start = i + 1;
+            let mut j = start;
+            while j < chars.len() && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
+                j += 1;
+            }
+            if j > start && chars.get(j) == Some(&'}') {
+                out.push(chars[start..j].iter().collect());
+                i = j;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+impl Compiler {
     /// Query the output type of a named node in the assembler.
     /// Returns `None` when the named node is absent or has no
     /// output ports; the caller surfaces the absence as a loud
     /// diagnostic.
     fn output_type_of(&self, asm: &PolydatAssembler, name: &str) -> Option<crate::ast::PortType> {
         asm.node_output_type(name)
+    }
+
+    /// Rewrite a tile's pieces from a module (SRD 114 §5.6): hole and
+    /// branch expressions go through [`Self::rewrite_module_expr`];
+    /// `{name}` placeholders in projection sources are renamed the same
+    /// way when they name a module input bound to a caller's wire or a
+    /// module-internal binding, and left alone otherwise, since they
+    /// then name the comprehension's own elements.
+    fn rewrite_module_pieces(
+        &self,
+        pieces: &[crate::dsl::ast::TilePiece],
+        prefix: &str,
+        module_inputs: &[String],
+        arg_map: &std::collections::HashMap<String, Arg>,
+        module_stmts: &[Statement],
+    ) -> Result<Vec<crate::dsl::ast::TilePiece>, String> {
+        use crate::dsl::ast::{ForSourceKind, TilePiece};
+        let internal: Vec<String> = module_stmts
+            .iter()
+            .flat_map(|s| match s {
+                Statement::Binding(b) => b.targets.clone(),
+                Statement::Tile(t) => vec![t.name.clone()],
+                _ => Vec::new(),
+            })
+            .collect();
+        let mut out = Vec::with_capacity(pieces.len());
+        for piece in pieces {
+            out.push(match piece {
+                TilePiece::Static(s) => TilePiece::Static(s.clone()),
+                TilePiece::Hole(h) => {
+                    let mut h = h.clone();
+                    h.expr = self.rewrite_module_expr(&h.expr, prefix, module_inputs, arg_map);
+                    TilePiece::Hole(h)
+                }
+                TilePiece::Branch { cond, then, otherwise, span } => TilePiece::Branch {
+                    cond: self.rewrite_module_expr(cond, prefix, module_inputs, arg_map),
+                    then: self.rewrite_module_pieces(then, prefix, module_inputs, arg_map, module_stmts)?,
+                    otherwise: match otherwise {
+                        Some(o) => Some(self.rewrite_module_pieces(o, prefix, module_inputs, arg_map, module_stmts)?),
+                        None => None,
+                    },
+                    span: *span,
+                },
+                TilePiece::Projection { source, sep, body, span } => {
+                    if !matches!(source.kind, ForSourceKind::Comprehension(_)) {
+                        return Err(format!(
+                            "projection `for {}` names a producer; producers are not bound inside module bodies",
+                            source.text
+                        ));
+                    }
+                    let mut text = source.text.clone();
+                    for name in placeholder_names(&text) {
+                        let replacement = if module_inputs.contains(&name) {
+                            match arg_map.get(&name) {
+                                Some(Arg::Positional(Expr::Ident(w, _)) | Arg::Named(_, Expr::Ident(w, _))) => Some(w.clone()),
+                                Some(_) => {
+                                    return Err(format!(
+                                        "projection `for {}` reads module input `{name}` through a placeholder, so the caller must pass a wire for it",
+                                        source.text
+                                    ))
+                                }
+                                None => None,
+                            }
+                        } else if internal.contains(&name) {
+                            Some(format!("{prefix}{name}"))
+                        } else {
+                            None
+                        };
+                        if let Some(r) = replacement {
+                            text = text.replace(&format!("{{{name}}}"), &format!("{{{r}}}"));
+                        }
+                    }
+                    let mut rewritten = super::parser::for_source_from_text(&text, *span, true)?;
+                    // Generator expressions read the module's names too.
+                    let mut elements = Vec::new();
+                    if let ForSourceKind::Comprehension(c) = &rewritten.kind {
+                        let c = self.rewrite_generators(c, prefix, module_inputs, arg_map)?;
+                        elements = c.coordinate_names();
+                        rewritten.kind = ForSourceKind::Comprehension(c);
+                    }
+                    // Inside the body the elements shadow module names:
+                    // they map to themselves so the rewriter leaves them.
+                    let mut body_inputs = module_inputs.to_vec();
+                    let mut body_args = arg_map.clone();
+                    for e in &elements {
+                        body_inputs.push(e.clone());
+                        body_args.insert(e.clone(), Arg::Positional(Expr::Ident(e.clone(), *span)));
+                    }
+                    TilePiece::Projection {
+                        source: rewritten,
+                        sep: sep.clone(),
+                        body: self.rewrite_module_pieces(body, prefix, &body_inputs, &body_args, module_stmts)?,
+                        span: *span,
+                    }
+                }
+            });
+        }
+        Ok(out)
+    }
+
+    /// Rewrite the generator-call expressions of a comprehension against
+    /// the caller's arguments, as [`Self::rewrite_module_expr`] does for
+    /// a binding.
+    fn rewrite_generators(
+        &self,
+        c: &crate::iteration::comprehension::Comprehension,
+        prefix: &str,
+        module_inputs: &[String],
+        arg_map: &std::collections::HashMap<String, Arg>,
+    ) -> Result<crate::iteration::comprehension::Comprehension, String> {
+        use crate::iteration::comprehension::source::Source;
+        use crate::iteration::comprehension::Comprehension as K;
+        Ok(match c {
+            K::Clause { name, source: Source::Generator { expr, cardinality_hint } } => {
+                let parsed = super::tile::parse_hole_expr(expr)
+                    .map_err(|e| format!("generator `{expr}` in projection element '{name}': {e}"))?;
+                let rewritten = self.rewrite_module_expr(&parsed, prefix, module_inputs, arg_map);
+                K::Clause {
+                    name: name.clone(),
+                    source: Source::Generator { expr: super::pprint::pp_expr(&rewritten), cardinality_hint: *cardinality_hint },
+                }
+            }
+            K::Clause { .. } => c.clone(),
+            K::Cartesian { children } => K::Cartesian {
+                children: children.iter().map(|ch| self.rewrite_generators(ch, prefix, module_inputs, arg_map)).collect::<Result<_, _>>()?,
+            },
+            K::Zip { children, mode } => K::Zip {
+                children: children.iter().map(|ch| self.rewrite_generators(ch, prefix, module_inputs, arg_map)).collect::<Result<_, _>>()?,
+                mode: *mode,
+            },
+            K::Union { children } => K::Union {
+                children: children.iter().map(|ch| self.rewrite_generators(ch, prefix, module_inputs, arg_map)).collect::<Result<_, _>>()?,
+            },
+            K::Filter { child, predicate } => K::Filter {
+                child: Box::new(self.rewrite_generators(child, prefix, module_inputs, arg_map)?),
+                predicate: predicate.clone(),
+            },
+            K::Order { child, strategy, truncation } => K::Order {
+                child: Box::new(self.rewrite_generators(child, prefix, module_inputs, arg_map)?),
+                strategy: *strategy,
+                truncation: *truncation,
+            },
+        })
     }
 
     /// Rewrite an expression from a module, substituting input references

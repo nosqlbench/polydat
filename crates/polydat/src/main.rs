@@ -22,7 +22,8 @@ use polydat::ast::Slot;
 use polydat::dsl::ast::{Statement, WireModifier};
 use polydat::dsl::events::{CompileEvent, CompileEventLog};
 use polydat::dsl::ast::PolydatFile;
-use polydat::dsl::transform::{assign_values, parse_assignment};
+use polydat::dsl::ast::TileOptions;
+use polydat::dsl::transform::{apply_tile_defaults, assign_values, parse_assignment};
 use polydat::dsl::{compile_ast_with_options, CompileOptions};
 use polydat::kernel::{extract_manifest, PolydatProgram, WireSource};
 use polydat::iteration::cursor_partition::{cursor_over_partitions, narrow_cursor, Partition};
@@ -66,6 +67,51 @@ struct CompileArgs {
     /// Keep only these outputs and what they depend on. Repeatable.
     #[arg(long = "output", value_name = "NAME")]
     required: Vec<String>,
+    /// Default hole delimiters for tiles that declare none of their own:
+    /// `--tile-delims '<%' '%>'`. Applied as a program transform.
+    #[arg(long = "tile-delims", num_args = 2, value_names = ["OPEN", "CLOSE"])]
+    tile_delims: Vec<String>,
+    /// Default directive sigil for tiles that declare none of their own.
+    #[arg(long = "tile-sigil", value_name = "SIGIL")]
+    tile_sigil: Option<String>,
+}
+
+impl CompileArgs {
+    /// The host's tile defaults, when any were given.
+    fn tile_defaults(&self) -> Option<TileOptions> {
+        if self.tile_delims.is_empty() && self.tile_sigil.is_none() {
+            return None;
+        }
+        let mut opts = TileOptions::default();
+        if let [open, close] = self.tile_delims.as_slice() {
+            opts.open = open.clone();
+            opts.close = close.clone();
+        }
+        if let Some(s) = &self.tile_sigil {
+            opts.sigil = s.clone();
+        }
+        Some(opts)
+    }
+}
+
+/// What `--emit` asked for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum EmitSpec {
+    Format(EmitFormat),
+    Tile(String),
+}
+
+fn parse_emit_spec(s: &str) -> Result<EmitSpec, String> {
+    if let Some(name) = s.strip_prefix("tile:") {
+        if name.is_empty() {
+            return Err("`--emit tile:<name>` needs a tile name".to_string());
+        }
+        return Ok(EmitSpec::Tile(name.to_string()));
+    }
+    EmitFormat::parse(s)
+        .filter(|f| *f != EmitFormat::Text)
+        .map(EmitSpec::Format)
+        .ok_or_else(|| format!("unknown emit format '{s}'; use map, csv, jsonl, or tile:<name>"))
 }
 
 #[derive(Args)]
@@ -90,9 +136,10 @@ struct RunArgs {
     /// Emit rows as they complete rather than in cycle order.
     #[arg(long)]
     unordered: bool,
-    /// Emit the selected outputs each cycle in this format.
-    #[arg(long, value_enum)]
-    emit: Option<Emit>,
+    /// Emit the selected outputs each cycle: `map`, `csv`, `jsonl`, or
+    /// `tile:<name>` to emit one tile's rendered text per cycle.
+    #[arg(long, value_name = "FORMAT", value_parser = parse_emit_spec)]
+    emit: Option<EmitSpec>,
     /// Comma-separated wires to emit. Defaults to every declared output.
     #[arg(long, value_name = "NAMES")]
     outputs: Option<String>,
@@ -165,13 +212,6 @@ enum Engine {
     Off,
     Auto,
     Force,
-}
-
-#[derive(Clone, Copy, ValueEnum, PartialEq, Eq)]
-enum Emit {
-    Map,
-    Csv,
-    Jsonl,
 }
 
 #[derive(Clone, Copy, ValueEnum, PartialEq, Eq)]
@@ -275,8 +315,18 @@ fn parse_source(source: &str) -> Result<PolydatFile, String> {
     polydat::dsl::parser::parse(tokens)
 }
 
+/// Parse a program and apply the host's tile defaults, if any, as the
+/// transform they are (SRD 114 §10).
+fn parse_program(source: &str, args: &CompileArgs) -> Result<PolydatFile, String> {
+    let mut ast = parse_source(source)?;
+    if let Some(defaults) = args.tile_defaults() {
+        apply_tile_defaults(&mut ast, &defaults)?;
+    }
+    Ok(ast)
+}
+
 fn compile_source(source: &str, args: &CompileArgs) -> Result<Compiled, String> {
-    let ast = parse_source(source)?;
+    let ast = parse_program(source, args)?;
     compile_ast(&ast, source, args)
 }
 
@@ -320,7 +370,7 @@ fn run(args: RunArgs) -> Result<(), String> {
         .chain(args.sets.iter())
         .map(|a| parse_assignment(a))
         .collect::<Result<_, _>>()?;
-    let mut ast = parse_source(&source)?;
+    let mut ast = parse_program(&source, &args.compile)?;
     assign_values(&mut ast, &assignments)?;
 
     // Probe compile: discovers the declared outputs the emit transform names.
@@ -362,11 +412,18 @@ fn run(args: RunArgs) -> Result<(), String> {
 
     // The emit transform: one appended binding that names the selected
     // wires. Everything else about emission is the node's business.
-    let emit_format = args.emit.map(|e| match e {
-        Emit::Map => EmitFormat::Map,
-        Emit::Csv => EmitFormat::Csv,
-        Emit::Jsonl => EmitFormat::Jsonl,
-    });
+    // `--emit tile:<name>` selects the tile and the text format: the
+    // tile's rendered text is the row.
+    let (emit_format, selected) = match &args.emit {
+        Some(EmitSpec::Tile(name)) => {
+            if probe.program.output_index(name).is_none() {
+                return Err(format!("no tile or output named '{name}'; declared outputs: {}", probe.program.output_names().join(", ")));
+            }
+            (Some(EmitFormat::Text), vec![name.clone()])
+        }
+        Some(EmitSpec::Format(f)) => (Some(*f), selected),
+        None => (None, selected),
+    };
     // A program with top-level traversals runs in traversal mode: the
     // emit transform goes inside each for body, where it sees the
     // body's scope, and the run activates the traversals.
@@ -377,6 +434,7 @@ fn run(args: RunArgs) -> Result<(), String> {
             Some(EmitFormat::Map) => "map",
             Some(EmitFormat::Csv) => "csv",
             Some(EmitFormat::Jsonl) => "jsonl",
+            Some(EmitFormat::Text) => "text",
             None => unreachable!(),
         };
         let binding = format!(
@@ -968,7 +1026,7 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
     // Lex and parse are narrated from their own results so a program
     // that fails later still explains its front end.
     let tokens = polydat::dsl::lexer::lex(&source)?;
-    let ast = polydat::dsl::parser::parse(tokens.clone())?;
+    let ast = parse_program(&source, &args.compile)?;
     let compiled = compile_source(&source, &args.compile)?;
     let program = &compiled.program;
     let events = compiled.events.events();
@@ -1178,10 +1236,23 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
                 println!("Deterministic: {}", program.is_deterministic());
             }
             Phase::Tiles => {
+                let tiles: Vec<_> = events.iter().filter(|e| matches!(e, CompileEvent::TileCompiled { .. })).collect();
                 let holes: Vec<_> = events.iter().filter(|e| matches!(e, CompileEvent::TileHoleTyped { .. })).collect();
-                if holes.is_empty() {
+                if tiles.is_empty() {
                     println!("No tiles in this program.");
                 } else {
+                    println!("Each tile compiled to a skeleton: static runs copied whole, encoded holes, branches, and projections whose bodies are programs of their own.");
+                    for e in &tiles {
+                        if let CompileEvent::TileCompiled { tile, encoding, statics, static_bytes, holes, branches, projections, bodies } = e {
+                            println!("  {tile:<12} {encoding}: {statics} static run(s) totalling {static_bytes} bytes, {holes} hole(s), {branches} branch(es), {projections} projection(s)");
+                            for (i, body) in bodies.iter().enumerate() {
+                                println!("               projection body {i}:");
+                                for line in body.lines() {
+                                    println!("                 {line}");
+                                }
+                            }
+                        }
+                    }
                     println!("Every hole was typed before the tile compiled: a declared type wins, otherwise the wire's type; the hole's position says what the encoding expects there, and the two pick the encoder.");
                     for e in holes {
                         if let CompileEvent::TileHoleTyped { tile, hole, wire_type, declared, expectation, encoder, adapter } = e {
