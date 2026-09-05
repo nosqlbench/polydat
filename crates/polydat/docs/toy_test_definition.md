@@ -27,7 +27,8 @@ cargo run -p polydat -- run crates/polydat/examples/toy_test_definition.polydat 
 // Traversal:  a comprehension over phases, intervals, and partitions of
 //             the row domain, bound as a producer and traversed below.
 // Flow:       schema, load, read, and verify statements derived from
-//             the same coordinate, so any row can be regenerated.
+//             the same coordinate, so any row can be regenerated. The
+//             load statement carries a JSON document rendered by a tile.
 
 // ---- Coordinates and parameters ---------------------------------------
 
@@ -45,7 +46,7 @@ extern rows_total: u64 = 1000000
 const dataset := "iot-readings-toy"
 const keyspace := "toy"
 const table := "readings"
-const schema_stmt := "CREATE TABLE {keyspace}.{table} (tenant_id bigint, device_id text, ts bigint, temp_c double, humidity double, status text, PRIMARY KEY ((tenant_id, device_id), ts))"
+const schema_stmt := "CREATE TABLE {keyspace}.{table} (tenant_id bigint, device_id text, ts bigint, doc text, PRIMARY KEY ((tenant_id, device_id), ts))"
 const shape := "tenants=20 devices_per_tenant=50 readings=unbounded"
 
 // ---- Reusable model ---------------------------------------------------
@@ -86,18 +87,39 @@ for flow {
     (temp_c, humidity, status) := reading_model(reading_seed)
     ts := base_epoch_ms + reading * interval_ms
 
-    // ---- Test flow ----------------------------------------------------
-
-    load_stmt   := "INSERT INTO {keyspace}.{table} (tenant_id, device_id, ts, temp_c, humidity, status) VALUES ({tenant_id}, '{device_id}', {ts}, {temp_c}, {humidity}, '{status}')"
-    read_stmt   := "SELECT temp_c, humidity, status FROM {keyspace}.{table} WHERE tenant_id = {tenant_id} AND device_id = '{device_id}' AND ts = {ts}"
-    verify_stmt := "expect temp_c = {temp_c}, humidity = {humidity}, status = '{status}'"
-
-    // The statement this activation executes is selected by its phase.
-    stmt := select_str(str_eq(phase, "load"), load_stmt, verify_stmt)
-
     // A coarse health signal derived from the same coordinate: nonzero
     // when the reading should be flagged by a verifier.
     flagged := if temp_c > 26.0 { 1 } else { 0 }
+
+    // ---- Document -----------------------------------------------------
+
+    // The reading as a JSON document. A tile is a template whose holes
+    // are wires: numbers render bare and strings quoted by their types,
+    // the `meta` arm is one static copy, and `samples` repeats its body
+    // over a comprehension. The tile is a wire like any other.
+    tile doc : json {
+        "meta": { "schema": 3, "source": "polydat", "units": { "temp": "C", "rh": "%" } },
+        "tenant": ${tenant_id},
+        "device": ${device_id},
+        "kind": ${device_kind},
+        "ts": ${ts},
+        "reading": { "temp": ${temp_c | .2}, "rh": ${humidity | .1}, "status": ${status} },
+        "samples": [ @for s in 0..4 { { "n": ${s}, "temp": ${temp_c + s | .2} } } ],
+        "flagged": ${flagged: bool}
+    }
+
+    // ---- Test flow ----------------------------------------------------
+
+    // The load statement carries the document raw: it is already JSON.
+    tile load : text <<<
+INSERT INTO ${keyspace}.${table} (tenant_id, device_id, ts, doc) VALUES (${tenant_id}, '${device_id}', ${ts}, '${doc!}')
+>>>
+    read_stmt   := "SELECT doc FROM {keyspace}.{table} WHERE tenant_id = {tenant_id} AND device_id = '{device_id}' AND ts = {ts}"
+    verify_stmt := "expect temp_c = {temp_c}, humidity = {humidity}, status = '{status}'"
+
+    // The statement this activation executes is selected by its phase.
+    stmt := select_str(str_eq(phase, "load"), load, verify_stmt)
+
 }
 ```
 
@@ -115,7 +137,9 @@ for flow {
 | `mod_in(cycle, rows.cursor)` | Slice projection | Maps the activation's local cycle onto an absolute row ordinal inside its slice. |
 | `mixed_radix(row, 20, 50, 0)` | Hierarchy | Unwinds one ordinal into tenant, device, and reading. The trailing `0` leaves readings unbounded. |
 | `hashed_id`, `normal_sample`, `uniform_sample` | Standard library | Modules from the embedded `.polydat` library, called with named arguments. |
-| `"... {expr} ..."` | String interpolation | The schema, load, read, and verify statements are ordinary bindings that embed typed wires. |
+| `"... {expr} ..."` | String interpolation | The schema, read, and verify statements are ordinary bindings that embed typed wires. |
+| `tile doc : json { ... }` | Tile | The reading as a JSON document. Holes are wires: `u64` and `f64` render bare, `Str` quoted, `${flagged: bool}` as a boolean; `\| .2` is a format; the `meta` arm is one static copy; `@for s in 0..4` repeats its body over a comprehension. |
+| `tile load : text <<< ... >>>` | Tile carrying a tile | The load statement, with the document inlined raw through `${doc!}`. Both tiles are wires like any other. |
 | `select_str(str_eq(phase, "load"), ...)` | Phase selection | The statement an activation executes follows its `phase` element. |
 
 ## Running it
@@ -141,17 +165,35 @@ phase=load interval_ms=1000 row=500000 tenant=0 device=0 reading=500 ts=17000005
 phase=load interval_ms=1000 row=500001 tenant=1 device=0 reading=500 ts=1700000500000 status=ok
 ```
 
-Four fibers, one cycle per activation, as CSV:
+The document each reading carries, one per activation with one cycle
+each. Naming the tile in `--emit` writes its rendered text and nothing
+else; the first of the sixteen:
 
 ```text
-$ polydat run toy_test_definition.polydat --fibers 4 --cycles 1 --emit csv \
-    --outputs phase,interval_ms,row,tenant_id,ts,stmt -q
-phase,interval_ms,row,tenant_id,ts,stmt
-load,1000,0,607535,1700000000000,"INSERT INTO toy.readings (tenant_id, device_id, ts, temp_c, humidity, status) VALUES (607535, 'd9ac876f-bb3a-4bc7-b9f8-382893178079', 1700000000000, 22.282993976163535, 35.548376405822175, 'ok')"
-load,1000,250000,607535,1700000250000,"INSERT INTO toy.readings (tenant_id, device_id, ts, temp_c, humidity, status) VALUES (607535, 'd9ac876f-bb3a-4bc7-b9f8-382893178079', 1700000250000, 19.322731887641915, 49.560474909266304, 'ok')"
-load,1000,500000,607535,1700000500000,"INSERT INTO toy.readings (tenant_id, device_id, ts, temp_c, humidity, status) VALUES (607535, 'd9ac876f-bb3a-4bc7-b9f8-382893178079', 1700000500000, 21.696623542008687, 60.56241450142866, 'ok')"
-load,1000,750000,607535,1700000750000,"INSERT INTO toy.readings (tenant_id, device_id, ts, temp_c, humidity, status) VALUES (607535, 'd9ac876f-bb3a-4bc7-b9f8-382893178079', 1700000750000, 20.750799765843645, 67.01162199294797, 'ok')"
-load,60000,0,607535,1700000000000,"INSERT INTO toy.readings (tenant_id, device_id, ts, temp_c, humidity, status) VALUES (607535, 'd9ac876f-bb3a-4bc7-b9f8-382893178079', 1700000000000, 22.282993976163535, 35.548376405822175, 'ok')"
+$ polydat run toy_test_definition.polydat --cycles 1 --emit tile:doc -q
+{
+    "meta": { "schema": 3, "source": "polydat", "units": { "temp": "C", "rh": "%" } },
+    "tenant": 607535,
+    "device": "d9ac876f-bb3a-4bc7-b9f8-382893178079",
+    "kind": "sensor",
+    "ts": 1700000000000,
+    "reading": { "temp": 22.28, "rh": 35.5, "status": "ok" },
+    "samples": [ { "n": 0, "temp": 22.28 },{ "n": 1, "temp": 23.28 },{ "n": 2, "temp": 24.28 },{ "n": 3, "temp": 25.28 } ],
+    "flagged": false
+}
+```
+
+The load statement carries that document inline. One activation's
+statement, as a CSV row:
+
+```text
+$ polydat run toy_test_definition.polydat --cycles 1 --emit csv --outputs phase,stmt -q
+phase,stmt
+load,"INSERT INTO toy.readings (tenant_id, device_id, ts, doc) VALUES (607535, 'd9ac876f-bb3a-4bc7-b9f8-382893178079', 1700000000000, '{
+    ""meta"": { ""schema"": 3, ""source"": ""polydat"", ""units"": { ""temp"": ""C"", ""rh"": ""%"" } },
+    ...
+    ""flagged"": false
+}')"
 ```
 
 Assigning the externs reshapes the run without recompiling anything but
@@ -167,7 +209,8 @@ row=300 ts=5
 
 `polydat check --stats` reports two programs, the root and the one
 traversal body; `polydat explain traversals` prints the body's elements
-and cascade.
+and cascade, and `polydat explain tiles` prints each tile's skeleton and
+how every hole was typed and encoded.
 
 ## Reading the output
 
@@ -189,6 +232,11 @@ and cascade.
   partition spec and the cursor, so assigning it to 400 makes each
   quarter 100 rows. `base_epoch_ms` cascades into the body as the
   timestamp base.
+- **The document is a wire.** `doc` renders once per cycle from the
+  same coordinate as everything else, so the load statement, the
+  verify statement, and the document can never disagree about a
+  reading. `${temp_c | .2}` and `${humidity | .1}` fix the precision
+  the document carries; the verify statement keeps the full values.
 
 ## What this shows and what it does not
 
@@ -199,4 +247,6 @@ build counter stays flat while it does. What the file does not decide is
 scheduling: how many fibers, how many cycles per activation, and what to
 do with each statement are the host's choices, and the binary exposes
 them as options. The contract is [The `for` Construct](design/for_traversal.md);
-each feature is shown on its own in [Illustrations](illustrations.md).
+the document tiles are [Polytile](design/polytile.md), walked through in
+[the Polytile tutorial](polytile_tutorial.md); each feature is shown on
+its own in [Illustrations](illustrations.md).

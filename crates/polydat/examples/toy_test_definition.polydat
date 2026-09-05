@@ -6,7 +6,8 @@
 // Traversal:  a comprehension over phases, intervals, and partitions of
 //             the row domain, bound as a producer and traversed below.
 // Flow:       schema, load, read, and verify statements derived from
-//             the same coordinate, so any row can be regenerated.
+//             the same coordinate, so any row can be regenerated. The
+//             load statement carries a JSON document rendered by a tile.
 
 // ---- Coordinates and parameters ---------------------------------------
 
@@ -24,7 +25,7 @@ extern rows_total: u64 = 1000000
 const dataset := "iot-readings-toy"
 const keyspace := "toy"
 const table := "readings"
-const schema_stmt := "CREATE TABLE {keyspace}.{table} (tenant_id bigint, device_id text, ts bigint, temp_c double, humidity double, status text, PRIMARY KEY ((tenant_id, device_id), ts))"
+const schema_stmt := "CREATE TABLE {keyspace}.{table} (tenant_id bigint, device_id text, ts bigint, doc text, PRIMARY KEY ((tenant_id, device_id), ts))"
 const shape := "tenants=20 devices_per_tenant=50 readings=unbounded"
 
 // ---- Reusable model ---------------------------------------------------
@@ -65,16 +66,37 @@ for flow {
     (temp_c, humidity, status) := reading_model(reading_seed)
     ts := base_epoch_ms + reading * interval_ms
 
-    // ---- Test flow ----------------------------------------------------
-
-    load_stmt   := "INSERT INTO {keyspace}.{table} (tenant_id, device_id, ts, temp_c, humidity, status) VALUES ({tenant_id}, '{device_id}', {ts}, {temp_c}, {humidity}, '{status}')"
-    read_stmt   := "SELECT temp_c, humidity, status FROM {keyspace}.{table} WHERE tenant_id = {tenant_id} AND device_id = '{device_id}' AND ts = {ts}"
-    verify_stmt := "expect temp_c = {temp_c}, humidity = {humidity}, status = '{status}'"
-
-    // The statement this activation executes is selected by its phase.
-    stmt := select_str(str_eq(phase, "load"), load_stmt, verify_stmt)
-
     // A coarse health signal derived from the same coordinate: nonzero
     // when the reading should be flagged by a verifier.
     flagged := if temp_c > 26.0 { 1 } else { 0 }
+
+    // ---- Document -----------------------------------------------------
+
+    // The reading as a JSON document. A tile is a template whose holes
+    // are wires: numbers render bare and strings quoted by their types,
+    // the `meta` arm is one static copy, and `samples` repeats its body
+    // over a comprehension. The tile is a wire like any other.
+    tile doc : json {
+        "meta": { "schema": 3, "source": "polydat", "units": { "temp": "C", "rh": "%" } },
+        "tenant": ${tenant_id},
+        "device": ${device_id},
+        "kind": ${device_kind},
+        "ts": ${ts},
+        "reading": { "temp": ${temp_c | .2}, "rh": ${humidity | .1}, "status": ${status} },
+        "samples": [ @for s in 0..4 { { "n": ${s}, "temp": ${temp_c + s | .2} } } ],
+        "flagged": ${flagged: bool}
+    }
+
+    // ---- Test flow ----------------------------------------------------
+
+    // The load statement carries the document raw: it is already JSON.
+    tile load : text <<<
+INSERT INTO ${keyspace}.${table} (tenant_id, device_id, ts, doc) VALUES (${tenant_id}, '${device_id}', ${ts}, '${doc!}')
+>>>
+    read_stmt   := "SELECT doc FROM {keyspace}.{table} WHERE tenant_id = {tenant_id} AND device_id = '{device_id}' AND ts = {ts}"
+    verify_stmt := "expect temp_c = {temp_c}, humidity = {humidity}, status = '{status}'"
+
+    // The statement this activation executes is selected by its phase.
+    stmt := select_str(str_eq(phase, "load"), load, verify_stmt)
+
 }

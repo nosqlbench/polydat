@@ -173,3 +173,39 @@ fn the_binary_applies_tile_delimiters_and_sigil_as_a_transform() {
     assert!(ok, "{stderr}");
     assert!(stdout.contains("page") && stdout.contains("static run") && stdout.contains("${cycle}"), "{stdout}");
 }
+
+#[test]
+fn the_toy_definition_emits_a_json_document_per_reading() {
+    // SRD 114 step 8: the toy test definition's load statement carries a
+    // document rendered by a tile inside the traversal body.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples").join("toy_test_definition.polydat");
+    let (ok, stdout, stderr) = run_binary(&["run", path.to_str().unwrap(), "--cycles", "1", "--emit", "tile:doc", "-q"]);
+    assert!(ok, "{stderr}");
+    let text: String = stdout.lines().filter(|l| !l.starts_with("DBG")).collect::<Vec<_>>().join("\n");
+    // Sixteen activations, one document each; every one is valid JSON.
+    let docs: Vec<serde_json::Value> = serde_json::Deserializer::from_str(&text).into_iter().map(|d| d.unwrap()).collect();
+    assert_eq!(docs.len(), 16, "{text}");
+    let first = &docs[0];
+    assert_eq!(first["meta"]["schema"], 3);
+    assert_eq!(first["tenant"], 607535);
+    assert_eq!(first["device"], "d9ac876f-bb3a-4bc7-b9f8-382893178079");
+    assert_eq!(first["ts"], 1700000000000u64);
+    assert_eq!(first["reading"]["status"], "ok");
+    assert_eq!(first["samples"].as_array().unwrap().len(), 4);
+    assert_eq!(first["flagged"], false);
+    // The load statement carries the same document raw.
+    let (ok, stdout, stderr) = run_binary(&["run", path.to_str().unwrap(), "--cycles", "1", "--emit", "jsonl", "--outputs", "phase,stmt", "-q"]);
+    assert!(ok, "{stderr}");
+    let row: serde_json::Value = serde_json::from_str(stdout.lines().find(|l| l.starts_with('{')).unwrap()).unwrap();
+    assert_eq!(row["phase"], "load");
+    let stmt = row["stmt"].as_str().unwrap();
+    assert!(stmt.starts_with("INSERT INTO toy.readings (tenant_id, device_id, ts, doc) VALUES (607535, 'd9ac876f-bb3a-4bc7-b9f8-382893178079', 1700000000000, '{"), "{stmt}");
+    let start = stmt.find('{').unwrap();
+    let end = stmt.rfind('}').unwrap();
+    let carried: serde_json::Value = serde_json::from_str(&stmt[start..=end]).unwrap();
+    assert_eq!(carried, docs[0]);
+    // `explain tiles` sees the body's tiles.
+    let (ok, stdout, stderr) = run_binary(&["explain", path.to_str().unwrap(), "tiles"]);
+    assert!(ok, "{stderr}");
+    assert!(stdout.contains("doc") && stdout.contains("${tenant_id}") && stdout.contains("load"), "{stdout}");
+}

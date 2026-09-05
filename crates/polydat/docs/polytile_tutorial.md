@@ -71,6 +71,11 @@ tile doc : json {
 }
 ```
 
+A block body keeps the layout you wrote, minus the indentation of the
+statement it sits in: the common leading whitespace of its lines is
+removed, so a tile declared inside a `for` body renders the same bytes
+as one at top level.
+
 The `json` encoding is **position aware**. Look at the three holes:
 
 - `"id": ${user_id}` sits in value position and its wire is a `u64`, so

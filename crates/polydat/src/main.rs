@@ -336,7 +336,12 @@ fn compile_ast(ast: &PolydatFile, source: &str, args: &CompileArgs) -> Result<Co
         Engine::Auto => JitMode::Auto,
         Engine::Force => JitMode::Force,
     });
-    let source_dir = args.file.parent().map(Path::to_path_buf);
+    // A bare file name has an empty parent; modules beside it live in
+    // the current directory.
+    let source_dir = args
+        .file
+        .parent()
+        .map(|p| if p.as_os_str().is_empty() { PathBuf::from(".") } else { p.to_path_buf() });
     let options = CompileOptions {
         source_dir,
         lib_paths: args.libs.clone(),
@@ -412,22 +417,34 @@ fn run(args: RunArgs) -> Result<(), String> {
 
     // The emit transform: one appended binding that names the selected
     // wires. Everything else about emission is the node's business.
+    // A program with top-level traversals runs in traversal mode: the
+    // emit transform goes inside each for body, where it sees the
+    // body's scope, and the run activates the traversals.
+    let traversal_mode = !probe.program.traversals().is_empty();
+
     // `--emit tile:<name>` selects the tile and the text format: the
-    // tile's rendered text is the row.
+    // tile's rendered text is the row. The tile lives where the emit
+    // binding will: in every traversal body, else at the root.
     let (emit_format, selected) = match &args.emit {
         Some(EmitSpec::Tile(name)) => {
-            if probe.program.output_index(name).is_none() {
-                return Err(format!("no tile or output named '{name}'; declared outputs: {}", probe.program.output_names().join(", ")));
+            let present = if traversal_mode {
+                probe.program.traversals().iter().all(|t| t.program.output_index(name).is_some())
+            } else {
+                probe.program.output_index(name).is_some()
+            };
+            if !present {
+                let known: Vec<String> = if traversal_mode {
+                    probe.program.traversals().iter().flat_map(|t| body_wire_names(&t.program)).collect()
+                } else {
+                    probe.program.output_names().iter().map(|s| s.to_string()).collect()
+                };
+                return Err(format!("no tile or output named '{name}'; declared outputs: {}", known.join(", ")));
             }
             (Some(EmitFormat::Text), vec![name.clone()])
         }
         Some(EmitSpec::Format(f)) => (Some(*f), selected),
         None => (None, selected),
     };
-    // A program with top-level traversals runs in traversal mode: the
-    // emit transform goes inside each for body, where it sees the
-    // body's scope, and the run activates the traversals.
-    let traversal_mode = !probe.program.traversals().is_empty();
 
     let emit_binding = |names: &[String]| -> Result<Statement, String> {
         let fmt_name = match emit_format {
@@ -450,10 +467,8 @@ fn run(args: RunArgs) -> Result<(), String> {
         if traversal_mode {
             for stmt in ast.statements.iter_mut() {
                 if let Statement::For(f) = stmt {
-                    let names: Vec<String> = match &args.outputs {
-                        Some(_) => selected.clone(),
-                        None => body_output_names(&f.body),
-                    };
+                    let explicit = args.outputs.is_some() || matches!(args.emit, Some(EmitSpec::Tile(_)));
+                    let names: Vec<String> = if explicit { selected.clone() } else { body_output_names(&f.body) };
                     f.body.push(emit_binding(&names)?);
                 }
             }

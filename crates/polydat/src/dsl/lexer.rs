@@ -688,7 +688,34 @@ fn capture_tile_body(chars: &[char], start: usize, start_col: usize) -> Result<O
         _ => return Ok(None),
     }
     let text: String = chars[body_start..pos].iter().collect();
-    Ok(Some((text, kind, pos - start, newlines, col)))
+    Ok(Some((dedent_block(&text), kind, pos - start, newlines, col)))
+}
+
+/// A block body keeps the author's layout but not the indentation of
+/// the statement it sits in: the common leading whitespace of the lines
+/// after the first is removed, so a tile declared inside a `for` body
+/// renders the same bytes as one at top level.
+fn dedent_block(text: &str) -> String {
+    let mut lines = text.split('\n');
+    let first = lines.next().unwrap_or("");
+    let rest: Vec<&str> = lines.collect();
+    let indent = rest
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.chars().take_while(|c| *c == ' ' || *c == '\t').count())
+        .min()
+        .unwrap_or(0);
+    if indent == 0 {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    out.push_str(first);
+    for line in rest {
+        out.push('\n');
+        let skip = line.chars().take_while(|c| *c == ' ' || *c == '\t').count().min(indent);
+        out.push_str(&line.chars().skip(skip).collect::<String>());
+    }
+    out
 }
 
 /// Capture the raw comprehension text after a `for` keyword.

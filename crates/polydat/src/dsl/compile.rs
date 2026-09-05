@@ -2425,10 +2425,18 @@ impl Compiler {
         self.producers_seen = producers.clone();
         let original = file;
         let file = &parent_file;
-        let mut kernel = self.compile_parent_with_log(file, required_outputs, log)?;
+        let mut log = log;
+        let mut kernel = self.compile_parent_with_log(file, required_outputs, log.as_deref_mut())?;
         if !for_stmts.is_empty() || !producers.is_empty() {
             let traversals = self.compile_traversals(&for_stmts, &producers, kernel.program())?;
             kernel.set_traversals(traversals, producers);
+            // Tiles inside the bodies typed and compiled in the child
+            // compilers; their events belong to this program's log.
+            if let Some(log) = log {
+                for e in self.tile_events.drain(..) {
+                    log.push(e);
+                }
+            }
         }
         let _ = original;
         Ok(kernel)
@@ -2489,6 +2497,7 @@ impl Compiler {
                     "`for {}` at line {}, col {}: body failed to compile: {e}",
                     f.source.text, f.span.line, f.span.col
                 ))?;
+            self.tile_events.append(&mut child_compiler.tile_events);
             out.push(Traversal {
                 span: f.span,
                 source_text: f.source.text.clone(),

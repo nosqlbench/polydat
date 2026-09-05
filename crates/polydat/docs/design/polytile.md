@@ -1,7 +1,7 @@
 # Polytile — Compiled Variate Templates
 
-**Status:** Proposed SRD 114, second revision. Steps 1 through 6 of
-§12 are implemented: the grammar in
+**Status:** Proposed SRD 114, second revision. Steps 1 through 6 and 8
+of §12 are implemented: the grammar in
 every body form with options; the structural JSON form; tiles handed
 in by a host as template text, JSON text, a parsed JSON value, or a
 `polytile` binding; and tiles that compile to wires and render at P1
@@ -130,6 +130,11 @@ Both are overridable per tile (§2.3) and per host (§5).
 - The braces of a directive block delimit it; whitespace padding them
   is not body. `@if x { "hot" }` renders `"hot"`. Braces inside body
   text are balanced, so JSON objects sit in a block unescaped.
+- A block body (`{ ... }` or `[ ... ]` after the header) keeps the
+  author's layout but not the indentation of the statement around it:
+  the common leading whitespace of the lines after the first is
+  removed. A tile inside a `for` body therefore renders the same bytes
+  as the same tile at top level. Heredoc and string bodies are exact.
 - A hole cannot appear in a directive header. Polydat's `{name}`
   interpolation may, as in `where {k} > 0`; a free-standing `{word}`
   after the header is the block itself (`@if x {plain}`), and `{name}`
@@ -562,7 +567,10 @@ body programs.
 
 The toy test definition's load statement as a tile, with a JSON document
 per reading written in the structural form as it would sit in a
-workload file, and its textual twin:
+workload file, and its textual twin. The textual form is now the
+definition itself
+([`examples/toy_test_definition.polydat`](../../examples/toy_test_definition.polydat)),
+with `kind` and `flagged` members added:
 
 ```json
 {
@@ -713,10 +721,18 @@ a handful of integer and float encodes, and a four-tuple loop.
 7. **P2 and P3.** Monomorphic closure and Cranelift lowering over the
    SRD 111 helper ABI. Differential tests against P1 across the fuzz
    corpus.
-8. **Docs.** Begun: [the Polytile tutorial](../polytile_tutorial.md)
+8. **Docs.** Done. [The Polytile tutorial](../polytile_tutorial.md)
    walks every implemented form with output from
-   `examples/polytile_tutorial.rs` and `examples/polytile_demo.polydat`,
-   and the illustrations page has a tile section. Still owed: the toy
-   definition emitting a JSON document.
+   `examples/polytile_tutorial.rs` and `examples/polytile_demo.polydat`;
+   the illustrations page has a tile section; and the toy test
+   definition renders each reading as a JSON document from a `tile`
+   inside its traversal body and carries it in the load statement, as
+   §11 sketched. Getting there fixed two things: block bodies are now
+   dedented by the indentation of the statement around them, and tile
+   events from traversal bodies reach the parent's compile log so
+   `explain tiles` sees them. `--emit tile:<name>` accepts a tile that
+   lives in a traversal body, and a bare file name resolves its
+   same-directory modules. Tested end to end in
+   `tests/tile_host_surfaces.rs`.
 
 Each step lands with its tests and leaves the previous surfaces working.
