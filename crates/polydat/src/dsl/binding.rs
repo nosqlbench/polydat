@@ -499,6 +499,12 @@ impl Compiler {
                 let wire_types: Vec<PortType> = wire_refs.iter()
                     .map(|w| asm.wire_type(w).unwrap_or(PortType::U64))
                     .collect();
+                // A module the program defines (or one already resolved)
+                // takes the call before the function registry does, so an
+                // author's definition shadows a library node of that name.
+                if self.has_known_module(&call.func) && self.try_inline_module(asm, &call.func, &call.args, targets)? {
+                    return Ok(());
+                }
                 let node = match build_node(&call.func, &wire_refs, &wire_types, &const_args) {
                     Ok(n) => n,
                     Err(e) if e.contains("unknown function") => {
@@ -984,9 +990,8 @@ impl Compiler {
                     Box::new(crate::library::identity::PortPassthrough::new(name, *target))
                 } else {
                     match (from, *target) {
-                        // Widening / parse fusions — alignment-only.
-                        (PT::U64, PT::F64) =>
-                            Box::new(crate::library::convert::ToF64::new()),
+                        // The parse fusion: text to a number is a
+                        // declared reading, not a lossy narrowing.
                         (PT::Str, PT::U64) =>
                             Box::new(crate::library::convert::StrToU64::new()),
                         // SRD-84 Part 1b — `as` does NOT perform lossy
@@ -1000,9 +1005,15 @@ impl Compiler {
                              or `ceil_to_u64(x)`. `as` performs only widening / \
                              alignment fusion (SRD-84 Part 1b)."
                                 .to_string()),
-                        (f, t) => return Err(format!(
-                            "`as {t:?}`: no type-fusion from {f:?} to {t:?} is \
-                             defined (SRD-84 Part 1b)")),
+                        // Every other alignment-only fusion is the same
+                        // lossless adapter the assembler inserts between
+                        // mismatched wires (type_system.md §3, class A).
+                        (f, t) => match crate::compile::assembly::auto_adapter(f, t) {
+                            Some(adapter) => adapter,
+                            None => return Err(format!(
+                                "`as {t:?}`: no type-fusion from {f:?} to {t:?} is \
+                                 defined (SRD-84 Part 1b)")),
+                        },
                     }
                 };
                 asm.add_node(name, node, vec![inner_wire]);

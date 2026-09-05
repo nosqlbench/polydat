@@ -427,6 +427,15 @@ where
             }
             Comprehension::Order { child, strategy, truncation } => {
                 let inner = self.evaluate_node(child, prefix)?;
+                // A continuous source has no tuples of its own; an order
+                // strategy with a truncation samples that many points
+                // from its intervals (spec §10.7.8, continuous inputs).
+                if inner.tuples.is_empty()
+                    && let Some(intervals) = continuous_axes(child)
+                {
+                    let names = child.coordinate_names();
+                    return Self::sample_continuous(&names, &intervals, *strategy, *truncation);
+                }
                 self.apply_order(inner, *strategy, *truncation)
             }
         }
@@ -687,6 +696,61 @@ where
         Ok(EvaluatedNode { tuples: out, index_fn: None })
     }
 
+    /// Sample `truncation` points from continuous intervals with a
+    /// space-filling strategy. The strategies encode a continuous
+    /// coordinate as a 53-bit fraction of the unit interval; each is
+    /// mapped onto its axis's interval and bound to the axis's name.
+    fn sample_continuous(
+        names: &[String],
+        intervals: &[crate::iteration::comprehension::cardinality::Interval],
+        strategy: StrategyName,
+        truncation: Option<u64>,
+    ) -> Result<EvaluatedNode, RuntimeError> {
+        use crate::iteration::comprehension::strategies::{
+            halton::halton_multi_indices, lhs::lhs_multi_indices, shuffle::shuffle_multi_indices,
+            sobol::sobol_multi_indices,
+        };
+        let Some(n) = truncation else {
+            return Err(RuntimeError::OrderEval {
+                strategy,
+                message: "a continuous source has no finite tuple set; give the order a count, as in `order halton/16`".into(),
+            });
+        };
+        let index_fn = IndexFn::Continuous {
+            intervals: intervals.to_vec(),
+            measure: crate::iteration::comprehension::cardinality::ProductMeasure::Uniform,
+        };
+        let points = match strategy {
+            StrategyName::Halton => halton_multi_indices(&index_fn, Some(n)),
+            StrategyName::Sobol => sobol_multi_indices(&index_fn, Some(n)),
+            StrategyName::Lhs => lhs_multi_indices(&index_fn, Some(n)),
+            StrategyName::Shuffle => shuffle_multi_indices(&index_fn, Some(n)),
+            other => {
+                return Err(RuntimeError::OrderEval {
+                    strategy: other,
+                    message: "a continuous source needs a sampling strategy: halton, sobol, lhs, or shuffle".into(),
+                })
+            }
+        };
+        let scale = (1u64 << 53) as f64;
+        let tuples = points
+            .into_iter()
+            .map(|mi| {
+                mi.iter()
+                    .enumerate()
+                    .map(|(axis, u)| {
+                        let iv = &intervals[axis.min(intervals.len().saturating_sub(1))];
+                        let frac = (*u as f64) / scale;
+                        let x = iv.lo + frac * (iv.hi - iv.lo);
+                        let name = names.get(axis).cloned().unwrap_or_else(|| format!("axis{axis}"));
+                        (name, Value::F64(x))
+                    })
+                    .collect::<RuntimeTuple>()
+            })
+            .collect();
+        Ok(EvaluatedNode { tuples, index_fn: None })
+    }
+
     fn apply_order(
         &mut self,
         input: EvaluatedNode,
@@ -787,6 +851,26 @@ where
         // preserves; non-Lex destroys), but downstream
         // consumers of evaluate_for_iteration only read tuples.
         Ok(EvaluatedNode { tuples: out, index_fn: None })
+    }
+}
+
+/// The intervals of a comprehension whose every clause is continuous,
+/// in coordinate order; `None` when any clause is discrete or the shape
+/// is not a plain product of clauses.
+pub(crate) fn continuous_axes(c: &Comprehension) -> Option<Vec<crate::iteration::comprehension::cardinality::Interval>> {
+    match c {
+        Comprehension::Clause { source: Source::ContinuousInterval { interval, .. }, .. } => Some(vec![interval.clone()]),
+        Comprehension::Clause { source: Source::Distribution { support, .. }, .. } => Some(vec![support.clone()]),
+        Comprehension::Clause { .. } => None,
+        Comprehension::Cartesian { children } => {
+            let mut out = Vec::new();
+            for ch in children {
+                out.extend(continuous_axes(ch)?);
+            }
+            Some(out)
+        }
+        Comprehension::Filter { child, .. } => continuous_axes(child),
+        Comprehension::Zip { .. } | Comprehension::Union { .. } | Comprehension::Order { .. } => None,
     }
 }
 

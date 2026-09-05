@@ -79,6 +79,9 @@ fn pp_tile(t: &TileDef) -> String {
     if t.options.strict {
         opts.push("strict".to_string());
     }
+    if t.options.in_string {
+        opts.push("instring".to_string());
+    }
     if !opts.is_empty() {
         out.push_str(&format!(" ({})", opts.join(", ")));
     }

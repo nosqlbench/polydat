@@ -23,7 +23,7 @@ fn tile_defaults_transform_rereads_untouched_tiles_only() {
     let mut ast = polydat::dsl::parser::parse(tokens).unwrap();
     // Before the transform, `a` reads `${keep}` as a hole and fails.
     assert!(compile_ast(&ast).is_err());
-    let defaults = TileOptions { open: "<%".into(), close: "%>".into(), sigil: "#".into(), strict: false };
+    let defaults = TileOptions { open: "<%".into(), close: "%>".into(), sigil: "#".into(), strict: false, in_string: false };
     apply_tile_defaults(&mut ast, &defaults).unwrap();
     let mut k = compile_ast(&ast).unwrap();
     k.set_inputs(&[3]);
@@ -32,8 +32,8 @@ fn tile_defaults_transform_rereads_untouched_tiles_only() {
     assert_eq!(k.pull("b").as_str(), "3 <%cycle%>");
 }
 
-// Same-file modules resolve through the source directory, so these run
-// through the binary on a temp file.
+// These run through the binary on a temp file, so they also cover the
+// binary's module resolution from the program's own directory.
 #[test]
 fn a_tile_inside_a_module_body_inlines_with_the_call() {
     let path = write_temp(

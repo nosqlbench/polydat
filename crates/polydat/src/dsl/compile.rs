@@ -1905,6 +1905,7 @@ impl Compiler {
     }
 
     pub(super) fn compile(&mut self, file: &PolydatFile) -> Result<PolydatKernel, String> {
+        self.register_local_modules(file);
         // SRD 113: same lowering as `compile_filtered_with_log`; the
         // parent compiles without `for` forms, then each body compiles
         // once against it.
@@ -2303,6 +2304,7 @@ impl Compiler {
     pub(super) fn build_assembler(&mut self, file: &PolydatFile) -> Result<PolydatAssembler, String> {
         // Reuse the same logic as compile(), but return the assembler
         // instead of calling asm.compile().
+        self.register_local_modules(file);
 
         // First pass: collect explicit `input` declarations, dedup by name.
         for stmt in &file.statements {
@@ -2516,6 +2518,7 @@ impl Compiler {
         required_outputs: Option<&[String]>,
         log: Option<&mut super::events::CompileEventLog>,
     ) -> Result<PolydatKernel, String> {
+        self.register_local_modules(file);
         // First pass: collect explicit `input` declarations, dedup by name.
         for stmt in &file.statements {
             if let Statement::InputDecl(d) = stmt

@@ -130,6 +130,10 @@ Both are overridable per tile (§2.3) and per host (§5).
 - The braces of a directive block delimit it; whitespace padding them
   is not body. `@if x { "hot" }` renders `"hot"`. Braces inside body
   text are balanced, so JSON objects sit in a block unescaped.
+- The `instring` option declares that the body begins inside a JSON
+  string literal, so holes encode as escaped text from the first byte.
+  The compiler sets it on the tile it makes for a projection nested in
+  a string position; authors rarely need it.
 - A block body (`{ ... }` or `[ ... ]` after the header) keeps the
   author's layout but not the indentation of the statement around it:
   the common leading whitespace of the lines after the first is
@@ -393,8 +397,10 @@ source is an expression over the enclosing scope: it compiles as a wire
 there, so it may read any wire in scope, and its value is the clause's
 element list, one tuple for a scalar and one per item for a list. A
 filter predicate sees the comprehension's elements; a `{name}` that
-names a wire outside it is a compile error. Continuous sources do not
-project, since they have no finite tuple set.
+names a wire outside it is a compile error. A continuous source has no
+finite tuple set of its own; it projects when its order names a
+sampling strategy (`halton`, `sobol`, `lhs`, `shuffle`) with a count,
+which samples that many points from its intervals.
 
 A projection over a bound producer dispenses the producer's stream at
 render time. Two renders of the same tile never share dispense state.
@@ -638,8 +644,12 @@ a handful of integer and float encodes, and a four-tuple loop.
    grammar, and rejects directive strings in value position. The
    textual parser then produces the pieces, so the two forms are
    equivalent by construction; `tests/tile_structural.rs` renders the
-   §3.2 example both ways and compares the documents. Still owed: the
-   bounded-cardinality check for directives beside static members.
+   §3.2 example both ways and compares the documents. A directive
+   member beside static members carries its own separating comma inside
+   each repetition, leading when a member precedes it and trailing when
+   members follow, so a projection that renders zero tuples or a branch
+   that renders nothing leaves the object valid; the cardinality check
+   §3.2 called for is unnecessary by construction.
 3. **Typing.** Done. Every hole is typed in `dsl::tile_lower` before
    its encode binding is emitted: the wire type by the compiler's own
    expression inference (projection elements and cascaded outer wires
@@ -694,8 +704,16 @@ a handful of integer and float encodes, and a four-tuple loop.
    its variadic inputs are exempt from wire typing, as `printf`'s are,
    so cascaded wires, generator scalars, and generator lists (streams,
    vectors, JSON arrays) arrive typed rather than as display text.
-   Tests in `tests/tile_projections.rs`. Still owed: a nested
-   projection inside a string position.
+   A nested projection inside a JSON string position compiles its tile
+   with the `instring` option, so its holes escape as text from the
+   first byte. A continuous source projects when its order names a
+   sampling strategy with a count: the comprehension runtime now
+   samples `halton`, `sobol`, `lhs`, and `shuffle` points from the
+   intervals, for tiles and for the `for` construct alike, and the tile
+   compiler rejects a non-sampling strategy over a continuous source
+   ahead of time. Inside a body every catalog adapter is available to a
+   declared type, since `as` now reaches the whole catalog. Tests in
+   `tests/tile_projections.rs`.
 6. **Host surfaces.** Done. In source, `name := polytile(enc, body,
    options...)` and `name := polytile_json(body, options...)` are
    parsed into `tile` statements before compilation; the body is a
@@ -716,14 +734,36 @@ a handful of integer and float encodes, and a four-tuple loop.
    are rewritten against the caller's arguments, `{name}` placeholders
    in projection sources are renamed when they name a module input
    bound to a caller's wire or a module-internal binding, and
-   projection elements shadow module names inside their bodies. Each
+   projection elements shadow module names inside their bodies. A
+   producer bound inside a module (`axes := for ...`) is bound under
+   the module prefix as a `streamer` constant and its tiles project over
+   it. Modules defined in the program itself are registered by name
+   before compilation, so `compile_polydat` on a string resolves them
+   without a source directory and an author's definition shadows a
+   library node of the same name. Each
    tile records a `TileCompiled` event with its static runs and bytes,
    holes, branches, projections, and body programs, which `explain
    tiles` prints ahead of the hole typing. Tests in
    `tests/tile_host_surfaces.rs`, including the binary end to end.
-7. **P2 and P3.** Monomorphic closure and Cranelift lowering over the
-   SRD 111 helper ABI. Differential tests against P1 across the fuzz
-   corpus.
+7. **P2 and P3.** Not started, and blocked on a prerequisite outside
+   this SRD. The P2 closure tier and the P3 cone tier both run over a
+   flat scalar slot buffer: no `Str`-, `Json`-, or `Ext`-valued node
+   has a compiled form today, cone classification admits scalar ports
+   only, and the SRD 111 handle helpers (`jit_str_to_u64` and its
+   siblings) read string handles into scalars rather than producing
+   strings. A tile renderer at P2/P3 therefore needs first a non-scalar
+   slot representation for the compiled tiers (arena handles in the
+   slot buffer, a `Copy` over interned static ranges, encoders that
+   write into the arena), which is the SRD 111 arena ABI landing in
+   Polydat's compiled tiers rather than a tile-specific piece of work.
+   Once that exists, the lowering is mechanical: `tile_encode` becomes
+   a helper per encoder over a scalar or handle, `tile_render` a helper
+   over a handle vector, and the skeleton's `Repeat` an activation of
+   the body program as `for` bodies already are. Differential tests
+   against P1 across the fuzz corpus remain the acceptance criterion.
+   Everything that precedes this step (typed transport into bodies,
+   skeleton counts, one program per position) was shaped so that this
+   lowering does not have to undo anything.
 8. **Docs.** Done. [The Polytile tutorial](../polytile_tutorial.md)
    walks every implemented form with output from
    `examples/polytile_tutorial.rs` and `examples/polytile_demo.polydat`;

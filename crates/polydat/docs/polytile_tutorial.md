@@ -284,8 +284,13 @@ tile grid : json {
   in scope, including an outer element when nested.
 
 A projection's source must have a finite tuple set. A continuous
-interval such as `x in 0.0..1.0` is rejected with a message; project
-over a discrete range or list instead.
+interval such as `x in 0.0..1.0` has none of its own, so it is rejected
+unless an order with a sampling strategy and a count gives it one:
+`x in 2.0..4.0 order halton/4` renders four Halton points from the
+interval, and `x in 0.0..1.0, y in 10.0..20.0 order sobol/3` samples
+the two axes jointly. The sampling strategies are `halton`, `sobol`,
+`lhs`, and `shuffle`; ordering a continuous source with `lex` is a
+compile error.
 
 ## 7. Splicing one tile into another
 
@@ -546,18 +551,12 @@ shared by two tiles is computed once.
 
 ## Limits at this level
 
-- Inside a projection body, only the `u64` to `f64` widening and the
-  `str` and `bool` readings are available as declared-type adapters;
-  other widenings must be written in the expression.
-- A nested `@for` cannot sit inside a string position of a JSON tile;
-  project the inner text into a wire of its own and reference it.
-- Continuous sources do not project, and a predicate sees only the
-  comprehension's elements.
-- In the structural form, a projection or branch that sits beside
-  static members or elements contributes its own separators; if it
-  renders zero tuples the document keeps a dangling comma. Put such
-  projections in their own array or object until the cardinality check
-  lands.
-- Rendering runs at engine level P1. The P2 and P3 renderers, the
-  structural JSON front end, and the `polytile` node for hosts that only
-  hold strings are later steps of the SRD's plan.
+- A predicate sees only the comprehension's elements; a `{name}` for a
+  wire outside it is a compile error.
+- A continuous source needs an order with a sampling strategy and a
+  count, such as `order halton/16`; without one it has no finite tuple
+  set and is rejected.
+- Rendering runs at engine level P1. Tiles are ordinary nodes, so they
+  take part in provenance, lifecycle, and pruning, but they are not
+  fused into P2 closures or P3 native cones, which today carry only
+  scalar slots.

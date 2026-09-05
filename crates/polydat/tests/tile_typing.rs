@@ -179,3 +179,11 @@ fn explain_events_report_wire_type_declaration_expectation_and_encoder() {
     let text = log.format();
     assert!(text.contains("tile 'd' hole `n`"), "{text}");
 }
+
+// §4.1 inside a projection body: every catalog adapter is available,
+// through the `as` fusion the body's source text can express.
+#[test]
+fn body_holes_reach_every_catalog_adapter() {
+    let src = "input cycle: u64\ntile t : json {\"xs\": [@for k in 1..3 { {\"j\": ${k: json}, \"f\": ${k: f64 | .1}, \"s\": ${k: str}} }]}\n";
+    assert_eq!(render(src, 0, "t"), "{\"xs\": [{\"j\": 1, \"f\": 1.0, \"s\": \"1\"},{\"j\": 2, \"f\": 2.0, \"s\": \"2\"}]}");
+}

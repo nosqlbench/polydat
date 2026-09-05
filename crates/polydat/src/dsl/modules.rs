@@ -326,6 +326,33 @@ impl Compiler {
         for stmt in &module_stmts {
             match stmt {
                 Statement::InputDecl(_) => {} // skip — kernel inputs handled by caller
+                Statement::Binding(b) if matches!(b.value, Expr::For(_)) => {
+                    // A producer inside the module (SRD 113 §3.1): bound
+                    // under the module prefix as a `streamer` constant and
+                    // recorded so this module's tiles can project over it.
+                    let Expr::For(source) = &b.value else { unreachable!() };
+                    let rewritten = self
+                        .rewrite_for_source(source, &prefix, &module_inputs, &arg_map, &module_stmts)
+                        .map_err(|e| format!("producer '{}' inside module '{}': {e}", b.targets.join(","), func_name))?;
+                    let comprehension = super::traversal::resolve_source(&rewritten, &self.producers_seen)
+                        .map_err(|e| format!("producer '{}' inside module '{}': {e}", b.targets.join(","), func_name))?;
+                    let name = format!("{prefix}{}", b.targets.join(","));
+                    let value = crate::iteration::comprehension::StreamerValue::new(rewritten.text.clone(), comprehension.clone());
+                    let call = Expr::Call(CallExpr {
+                        func: "streamer".into(),
+                        args: vec![Arg::Positional(Expr::StringLit(value.to_json(), b.span))],
+                        span: b.span,
+                    });
+                    self.compile_binding(asm, std::slice::from_ref(&name), &call)?;
+                    asm.mark_const_output(&name);
+                    asm.set_output_modifier(&name, crate::dsl::ast::BindingModifier::CONST);
+                    self.producers_seen.push(super::traversal::Producer {
+                        name,
+                        span: b.span,
+                        source_text: rewritten.text.clone(),
+                        comprehension,
+                    });
+                }
                 Statement::Binding(b) => {
                     let prefixed_targets: Vec<String> = b.targets.iter()
                         .map(|t| format!("{prefix}{t}"))
@@ -435,14 +462,6 @@ impl Compiler {
         module_stmts: &[Statement],
     ) -> Result<Vec<crate::dsl::ast::TilePiece>, String> {
         use crate::dsl::ast::{ForSourceKind, TilePiece};
-        let internal: Vec<String> = module_stmts
-            .iter()
-            .flat_map(|s| match s {
-                Statement::Binding(b) => b.targets.clone(),
-                Statement::Tile(t) => vec![t.name.clone()],
-                _ => Vec::new(),
-            })
-            .collect();
         let mut out = Vec::with_capacity(pieces.len());
         for piece in pieces {
             out.push(match piece {
@@ -462,42 +481,14 @@ impl Compiler {
                     span: *span,
                 },
                 TilePiece::Projection { source, sep, body, span } => {
-                    if !matches!(source.kind, ForSourceKind::Comprehension(_)) {
-                        return Err(format!(
-                            "projection `for {}` names a producer; producers are not bound inside module bodies",
-                            source.text
-                        ));
-                    }
-                    let mut text = source.text.clone();
-                    for name in placeholder_names(&text) {
-                        let replacement = if module_inputs.contains(&name) {
-                            match arg_map.get(&name) {
-                                Some(Arg::Positional(Expr::Ident(w, _)) | Arg::Named(_, Expr::Ident(w, _))) => Some(w.clone()),
-                                Some(_) => {
-                                    return Err(format!(
-                                        "projection `for {}` reads module input `{name}` through a placeholder, so the caller must pass a wire for it",
-                                        source.text
-                                    ))
-                                }
-                                None => None,
-                            }
-                        } else if internal.contains(&name) {
-                            Some(format!("{prefix}{name}"))
-                        } else {
-                            None
-                        };
-                        if let Some(r) = replacement {
-                            text = text.replace(&format!("{{{name}}}"), &format!("{{{r}}}"));
-                        }
-                    }
-                    let mut rewritten = super::parser::for_source_from_text(&text, *span, true)?;
-                    // Generator expressions read the module's names too.
-                    let mut elements = Vec::new();
-                    if let ForSourceKind::Comprehension(c) = &rewritten.kind {
-                        let c = self.rewrite_generators(c, prefix, module_inputs, arg_map)?;
-                        elements = c.coordinate_names();
-                        rewritten.kind = ForSourceKind::Comprehension(c);
-                    }
+                    let rewritten = self.rewrite_for_source(source, prefix, module_inputs, arg_map, module_stmts)?;
+                    // Elements shadow module names inside the body.
+                    let elements = match &rewritten.kind {
+                        ForSourceKind::Comprehension(c) => c.coordinate_names(),
+                        _ => super::traversal::resolve_source(&rewritten, &self.producers_seen)
+                            .map(|c| c.coordinate_names())
+                            .unwrap_or_default(),
+                    };
                     // Inside the body the elements shadow module names:
                     // they map to themselves so the rewriter leaves them.
                     let mut body_inputs = module_inputs.to_vec();
@@ -516,6 +507,78 @@ impl Compiler {
             });
         }
         Ok(out)
+    }
+
+    /// Rewrite a `for` source from a module against the caller: `{name}`
+    /// placeholders that name a module input bound to a caller's wire or
+    /// a module-internal binding are renamed (others name the
+    /// comprehension's own elements and stay); generator expressions go
+    /// through [`Self::rewrite_module_expr`]; a producer the module bound
+    /// itself takes the module prefix.
+    fn rewrite_for_source(
+        &self,
+        source: &crate::dsl::ast::ForSource,
+        prefix: &str,
+        module_inputs: &[String],
+        arg_map: &std::collections::HashMap<String, Arg>,
+        module_stmts: &[Statement],
+    ) -> Result<crate::dsl::ast::ForSource, String> {
+        use crate::dsl::ast::{ForSource, ForSourceKind};
+        let internal: Vec<String> = module_stmts
+            .iter()
+            .flat_map(|s| match s {
+                Statement::Binding(b) => b.targets.clone(),
+                Statement::Tile(t) => vec![t.name.clone()],
+                _ => Vec::new(),
+            })
+            .collect();
+        let mut text = source.text.clone();
+        for name in placeholder_names(&text) {
+            let replacement = if module_inputs.contains(&name) {
+                match arg_map.get(&name) {
+                    Some(Arg::Positional(Expr::Ident(w, _)) | Arg::Named(_, Expr::Ident(w, _))) => Some(w.clone()),
+                    Some(_) => {
+                        return Err(format!(
+                            "`for {}` reads module input `{name}` through a placeholder, so the caller must pass a wire for it",
+                            source.text
+                        ))
+                    }
+                    None => None,
+                }
+            } else if internal.contains(&name) {
+                Some(format!("{prefix}{name}"))
+            } else {
+                None
+            };
+            if let Some(r) = replacement {
+                text = text.replace(&format!("{{{name}}}"), &format!("{{{r}}}"));
+            }
+        }
+        // A producer the module bound takes the prefix, in the kind and
+        // at the head of the text.
+        let renamed = |n: &str| if internal.contains(&n.to_string()) { format!("{prefix}{n}") } else { n.to_string() };
+        match &source.kind {
+            ForSourceKind::Producer(n) => {
+                let p = renamed(n);
+                Ok(ForSource { text: p.clone(), kind: ForSourceKind::Producer(p), span: source.span })
+            }
+            ForSourceKind::Derived { base, filter, order } => {
+                let b = renamed(base);
+                let text = match text.strip_prefix(base.as_str()) {
+                    Some(rest) => format!("{b}{rest}"),
+                    None => text,
+                };
+                Ok(ForSource { text, kind: ForSourceKind::Derived { base: b, filter: filter.clone(), order: order.clone() }, span: source.span })
+            }
+            ForSourceKind::Comprehension(_) => {
+                let mut rewritten = super::parser::for_source_from_text(&text, source.span, true)?;
+                if let ForSourceKind::Comprehension(c) = &rewritten.kind {
+                    let c = self.rewrite_generators(c, prefix, module_inputs, arg_map)?;
+                    rewritten.kind = ForSourceKind::Comprehension(c);
+                }
+                Ok(rewritten)
+            }
+        }
     }
 
     /// Rewrite the generator-call expressions of a comprehension against
@@ -737,6 +800,36 @@ impl Compiler {
     /// First checks for a formal `ModuleDef` statement matching the name.
     /// If found, uses its typed signature and body directly.
     /// Otherwise, falls back to subgraph extraction by binding name.
+    /// Make every formal module defined in `file` resolvable by name in
+    /// this compile, ahead of the filesystem and the embedded library.
+    /// A definition in the program shadows a library node of the same
+    /// name, so an author's `pick(...)` is the author's.
+    pub(super) fn register_local_modules(&mut self, file: &PolydatFile) {
+        for stmt in &file.statements {
+            if let Statement::ModuleDef(mdef) = stmt {
+                self.module_cache.insert(mdef.name.clone(), Self::resolved_from_def(mdef));
+            }
+        }
+    }
+
+    fn resolved_from_def(mdef: &crate::dsl::ast::ModuleDef) -> ResolvedModule {
+        ResolvedModule {
+            inputs: mdef.params.iter().map(|p| p.name.clone()).collect(),
+            input_types: mdef.params.iter().map(|p| Some(p.typ.clone())).collect(),
+            outputs: mdef.outputs.iter().map(|o| o.name.clone()).collect(),
+            output_types: mdef.outputs.iter().map(|o| Some(o.typ.clone())).collect(),
+            is_formal: true,
+            statements: mdef.body.clone(),
+        }
+    }
+
+    /// Whether `name` is a module this compile already knows: defined in
+    /// the program or resolved earlier. Cheap, so callers may consult it
+    /// before the function registry.
+    pub(super) fn has_known_module(&self, name: &str) -> bool {
+        self.module_cache.contains_key(name)
+    }
+
     pub(super) fn parse_module(source: &str, target_name: &str) -> Result<ResolvedModule, String> {
         let tokens = lexer::lex(source)?;
         let ast = parser::parse(tokens)?;

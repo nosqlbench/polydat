@@ -154,3 +154,25 @@ fn pretty_printer_reproduces_a_host_tile_as_a_tile_statement() {
     // And the printed form compiles to the same output.
     assert_eq!(render(&printed, 9, "doc"), "{\"n\": 9}");
 }
+
+#[test]
+fn directive_members_beside_static_members_carry_their_own_commas() {
+    // Zero tuples beside a static member leaves valid JSON; so does a
+    // leading projection followed by static members, and a branch.
+    let src = "input cycle: u64\nnone := for k in 1..1\nsome := for k in 1..3\nflag := u64_gt(cycle, 0)\n\
+        a := polytile_json(\"{\\\"fixed\\\": 1, \\\"@for none\\\": {\\\"k${k}\\\": \\\"${k}\\\"}}\")\n\
+        b := polytile_json(\"{\\\"@for some\\\": {\\\"k${k}\\\": \\\"${k}\\\"}, \\\"fixed\\\": 1}\")\n\
+        c := polytile_json(\"{\\\"@for none\\\": {\\\"k${k}\\\": \\\"${k}\\\"}, \\\"fixed\\\": 1}\")\n\
+        d := polytile_json(\"{\\\"fixed\\\": 1, \\\"@if flag\\\": {\\\"on\\\": true}, \\\"last\\\": 2}\")\n";
+    for (name, cycle, expect) in [
+        ("a", 0u64, serde_json::json!({"fixed": 1})),
+        ("b", 0, serde_json::json!({"k1": 1, "k2": 2, "fixed": 1})),
+        ("c", 0, serde_json::json!({"fixed": 1})),
+        ("d", 0, serde_json::json!({"fixed": 1, "last": 2})),
+        ("d", 1, serde_json::json!({"fixed": 1, "on": true, "last": 2})),
+    ] {
+        let text = render(src, cycle, name);
+        let doc: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{name} at cycle {cycle} is not JSON: {e}\n{text}"));
+        assert_eq!(doc, expect, "{name} at cycle {cycle}: {text}");
+    }
+}

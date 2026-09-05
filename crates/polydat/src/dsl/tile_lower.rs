@@ -37,7 +37,7 @@ impl Compiler {
             inputs: Vec::new(),
             children: Vec::new(),
             hole_counter: 0,
-            in_string: false,
+            in_string: tile.options.in_string,
             strict: self.strict || tile.options.strict,
             span: tile.span,
         };
@@ -486,23 +486,9 @@ impl TileLowering {
         enc.ty = Some(typing.effective.to_keyword().to_string());
         let value = match typing.adapter {
             // The child is source text, so the adapter is the `as`
-            // fusion, which covers the widening the catalog allows here.
-            Some((PortType::U64, PortType::F64)) => Expr::Cast(Box::new(expr.clone()), PortType::F64, self.span),
-            Some((from, to)) if to == PortType::Str || to == PortType::Bool => {
-                // Display and truth readings need no node: the encoder
-                // applies them from the effective type.
-                let _ = from;
-                expr.clone()
-            }
-            Some((from, to)) => {
-                return Err(format!(
-                    "tile '{}': hole `{text}`: the {} -> {} adapter is not supported inside a projection body yet; \
-                     write the conversion explicitly in the expression",
-                    self.tile_name,
-                    from.to_keyword(),
-                    to.to_keyword()
-                ));
-            }
+            // fusion, which inserts the same catalog adapter the parent
+            // scope would.
+            Some((_, to)) => Expr::Cast(Box::new(expr.clone()), to, self.span),
             None => expr.clone(),
         };
         let name = format!("__b{}", ctx.counter);
@@ -543,6 +529,20 @@ impl TileLowering {
     /// cardinality.
     fn check_bounded(&self, c: &crate::iteration::comprehension::Comprehension, text: &str) -> Result<(), String> {
         use crate::iteration::comprehension::cardinality::CardinalityClass as C;
+        use crate::iteration::comprehension::strategy::StrategyName as S;
+        use crate::iteration::comprehension::Comprehension as K;
+        // Sampling a continuous source needs a space-filling strategy;
+        // say so here rather than when the first render fails.
+        if let K::Order { child, strategy, .. } = c
+            && crate::iteration::comprehension::runtime::continuous_axes(child).is_some()
+            && !matches!(strategy, S::Halton | S::Sobol | S::Lhs | S::Shuffle)
+        {
+            return Err(format!(
+                "tile '{}': projection `for {text}` orders a continuous source with `{strategy:?}`; \
+                 a continuous source needs a sampling strategy: halton, sobol, lhs, or shuffle",
+                self.tile_name
+            ));
+        }
         match c.metadata().cardinality {
             C::Bounded(_) | C::BoundedAtMost(_) => Ok(()),
             // A generator or parameter list with no cardinality hint
@@ -554,12 +554,11 @@ impl TileLowering {
                 "tile '{}': projection `for {text}` has unbounded cardinality; a projection renders once per tuple and needs a finite source",
                 self.tile_name
             )),
-            // The comprehension runtime does not sample continuous
-            // intervals into tuples yet, so a projection over one would
-            // render nothing; say so instead.
+            // A continuous interval has no finite tuple set of its own;
+            // an order strategy with a count samples one.
             C::Continuous { .. } | C::ContinuousAtMost { .. } | C::Hybrid(_) => Err(format!(
                 "tile '{}': projection `for {text}` ranges over a continuous source, which has no finite tuple set; \
-                 project over a discrete range or list, or over values sampled by an expression",
+                 add `order <strategy>/<count>` (halton, sobol, lhs, or shuffle) to sample that many points",
                 self.tile_name
             )),
         }
@@ -598,13 +597,6 @@ impl TileLowering {
         body: &[TilePiece],
         ctx: &mut BodyContext,
     ) -> Result<TileOp, String> {
-        if self.in_string {
-            return Err(format!(
-                "tile '{}': a nested projection inside a string position is not supported yet; \
-                 project the inner text into a wire of its own and reference it",
-                self.tile_name
-            ));
-        }
         // Validate the nested source here, in the enclosing scope, so a
         // bad source is this tile's error and its element names are known.
         let comprehension = super::traversal::resolve_source(source, &compiler.producers_seen)
@@ -674,6 +666,11 @@ impl TileLowering {
         }
         if self.strict {
             opts.push("strict".to_string());
+        }
+        // Inside a JSON string the nested tile's holes must escape as
+        // text from its first byte; the option carries the position.
+        if self.in_string {
+            opts.push("instring".to_string());
         }
         let opts = if opts.is_empty() { String::new() } else { format!(" ({})", opts.join(", ")) };
         ctx.bindings.push(format!("tile {name} : {}{opts} := \"{}\"", self.encoding, escape_polydat_string(&text)));

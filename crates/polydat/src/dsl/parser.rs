@@ -271,9 +271,10 @@ fn parse_tile(p: &mut Parser) -> Result<Statement, String> {
                     }
                 }
                 "strict" => options.strict = true,
+                "instring" => options.in_string = true,
                 other => {
                     return Err(format!(
-                        "tile '{name}' at line {}, col {}: unknown option '{other}'; options are delims, sigil, strict",
+                        "tile '{name}' at line {}, col {}: unknown option '{other}'; options are delims, sigil, strict, instring",
                         span.line, span.col
                     ))
                 }
@@ -369,7 +370,11 @@ fn parse_polytile_binding(p: &mut Parser) -> Result<Statement, String> {
                 let v = p.expect_ident().map_err(|m| at(&m))?;
                 options.strict = v == "true";
             }
-            other => return Err(at(&format!("unknown option '{other}'; options are open, close, sigil, strict"))),
+            "instring" => {
+                let v = p.expect_ident().map_err(|m| at(&m))?;
+                options.in_string = v == "true";
+            }
+            other => return Err(at(&format!("unknown option '{other}'; options are open, close, sigil, strict, instring"))),
         }
     }
     p.expect(&TokenKind::RParen).map_err(|m| at(&m))?;

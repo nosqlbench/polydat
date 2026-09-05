@@ -310,6 +310,26 @@ fn read_source(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))
 }
 
+/// Advance the coordinate to `cycle`. Only coordinate inputs move; an
+/// extern, including an input a `name=value` argument fixed for this
+/// run, keeps the value it was given.
+fn drive_cycle(program: &polydat::kernel::PolydatProgram, state: &mut polydat::kernel::PolydatState, cycle: u64) {
+    let mut moved = false;
+    for i in 0..program.input_names().len() {
+        if program.input_kind(i) == Some(polydat::kernel::InputKind::Coordinate) {
+            state.set_input(i, polydat::ast::Value::U64(cycle));
+            moved = true;
+        }
+    }
+    if !moved {
+        // Nothing changed, so nothing would re-evaluate. Every cycle is
+        // still a cycle: restore the defaults, which hold the assigned
+        // values, and mark the graph dirty so per-cycle nodes such as
+        // the emit binding fire.
+        state.invalidate_all();
+    }
+}
+
 fn parse_source(source: &str) -> Result<PolydatFile, String> {
     let tokens = polydat::dsl::lexer::lex(source)?;
     polydat::dsl::parser::parse(tokens)
@@ -560,7 +580,7 @@ fn run(args: RunArgs) -> Result<(), String> {
         let mut state = program.create_state();
         plan.apply(&program, &mut state, 0);
         for c in 0..args.warmup {
-            state.set_inputs(&[start_cycle.wrapping_add(c)]);
+            drive_cycle(&program, &mut state, start_cycle.wrapping_add(c));
             for &idx in &pull_indices {
                 state.pull_by_index(&program, idx);
             }
@@ -612,7 +632,7 @@ fn run(args: RunArgs) -> Result<(), String> {
                     let n = chunk.min(total - local_seq * chunk);
                     let t = Instant::now();
                     for i in 0..n {
-                        state.set_inputs(&[lo.wrapping_add(i)]);
+                        drive_cycle(&program, &mut state, lo.wrapping_add(i));
                         for &idx in pull_indices {
                             state.pull_by_index(&program, idx);
                         }

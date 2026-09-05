@@ -86,6 +86,19 @@ struct Textualizer<'a> {
     out: String,
 }
 
+/// Where a directive member's separating comma goes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Comma {
+    /// A static member: the ordinary `, ` between members.
+    Between,
+    /// A directive with a member before it: `, ` opens each repetition.
+    Leading,
+    /// A directive with members after it: `, ` closes each repetition.
+    Trailing,
+    /// A lone directive: the encoding's separator between repetitions.
+    Sep,
+}
+
 /// A directive string: `@for <header>`, `@if <cond>`, or `@else`.
 enum Directive<'s> {
     For(&'s str),
@@ -210,31 +223,54 @@ impl Textualizer<'_> {
         Ok(())
     }
 
+    /// An object. A directive member beside static members carries the
+    /// comma that separates it inside its own body, so a projection that
+    /// renders zero tuples or a branch that renders nothing leaves no
+    /// dangling separator: a directive with a member before it puts the
+    /// comma first in every repetition, a leading directive with members
+    /// after it puts the comma last, and a lone directive uses the
+    /// encoding's separator.
     fn object(&mut self, map: &Map<String, Value>) -> Result<(), String> {
         self.out.push('{');
         let entries: Vec<(&String, &Value)> = map.iter().collect();
         let mut i = 0;
+        let mut emitted_static = false;
         while i < entries.len() {
             let (key, value) = entries[i];
-            if i > 0 {
+            let directive = self.directive(key);
+            let is_directive = directive.is_some();
+            let has_before = emitted_static;
+            // Any later member other than this directive's own `@else`.
+            let has_after = entries[i + 1..].iter().any(|(k, _)| !matches!(self.directive(k), Some(Directive::Else)));
+            let comma = match (is_directive, has_before, has_after) {
+                (false, _, _) => Comma::Between,
+                (true, true, _) => Comma::Leading,
+                (true, false, true) => Comma::Trailing,
+                (true, false, false) => Comma::Sep,
+            };
+            if !is_directive && emitted_static {
                 self.out.push_str(", ");
             }
-            match self.directive(key) {
+            match directive {
                 Some(Directive::For(header)) => {
                     // A member projection: the value's members, per tuple.
-                    self.out.push_str(&format!("{}for {header} {{ ", self.opts.sigil));
-                    self.members(key, value)?;
+                    self.out.push_str(&format!("{}for {header}", self.opts.sigil));
+                    if matches!(comma, Comma::Leading | Comma::Trailing) {
+                        self.out.push_str(" sep \"\"");
+                    }
+                    self.out.push_str(" { ");
+                    self.members(key, value, comma)?;
                     self.out.push_str(" }");
                 }
                 Some(Directive::If(cond)) => {
                     self.out.push_str(&format!("{}if {cond} {{ ", self.opts.sigil));
-                    self.members(key, value)?;
+                    self.members(key, value, comma)?;
                     self.out.push_str(" }");
                     if let Some((next_key, next_value)) = entries.get(i + 1)
                         && matches!(self.directive(next_key), Some(Directive::Else))
                     {
                         self.out.push_str(&format!(" {}else {{ ", self.opts.sigil));
-                        self.members(next_key, next_value)?;
+                        self.members(next_key, next_value, comma)?;
                         self.out.push_str(" }");
                         i += 1;
                     }
@@ -246,6 +282,7 @@ impl Textualizer<'_> {
                     self.string(key, true)?;
                     self.out.push_str(": ");
                     self.value(value)?;
+                    emitted_static = true;
                 }
             }
             i += 1;
@@ -254,11 +291,15 @@ impl Textualizer<'_> {
         Ok(())
     }
 
-    /// The members of a directive key's object value, as `"k": v` runs.
-    fn members(&mut self, key: &str, value: &Value) -> Result<(), String> {
+    /// The members of a directive key's object value, as `"k": v` runs,
+    /// with the separator the position calls for.
+    fn members(&mut self, key: &str, value: &Value, comma: Comma) -> Result<(), String> {
         let Some(obj) = value.as_object() else {
             return Err(format!("the value under directive key `{key}` must be an object of members"));
         };
+        if matches!(comma, Comma::Leading) {
+            self.out.push_str(", ");
+        }
         for (i, (k, v)) in obj.iter().enumerate() {
             if i > 0 {
                 self.out.push_str(", ");
@@ -266,6 +307,9 @@ impl Textualizer<'_> {
             self.string(k, true)?;
             self.out.push_str(": ");
             self.value(v)?;
+        }
+        if matches!(comma, Comma::Trailing) {
+            self.out.push_str(", ");
         }
         Ok(())
     }

@@ -1153,20 +1153,7 @@ impl PolydatAssembler {
                 // escapes, and `^`-anchored regexes never match
                 // inside `create_statement` columns.
                 let node_name_for_typing = &all_nodes[node_idx].node.meta().name;
-                let skip_type_check = node_name_for_typing == "printf"
-                    || node_name_for_typing == "pick"
-                    || node_name_for_typing == "log_debug"
-                    || node_name_for_typing == "log_info"
-                    || node_name_for_typing == "log_warn"
-                    || node_name_for_typing == "log_error"
-                    || node_name_for_typing == "exactly_one_value"
-                    || node_name_for_typing == "json_text"
-                    || node_name_for_typing == "str_concat"
-                    // SRD 114: the tile render node's variadic inputs
-                    // carry encoded hole text and the typed values a
-                    // projection body imports; the values must arrive
-                    // as they are, not as display text.
-                    || node_name_for_typing == "tile_render";
+                let skip_type_check = UNTYPED_VARIADIC_NODES.contains(&node_name_for_typing.as_str());
 
                 if skip_type_check || source_type == expected_type {
                     node_wiring.push(source);
@@ -1620,6 +1607,30 @@ fn assertion_skip_reason(
 /// total over the input domain (never panics on any valid
 /// runtime value of `from`). Lossy or parseable adapters
 /// belong in [`boundary_adapter`] only.
+/// Nodes whose `&[Value]` variadic inputs take every wire as it is.
+///
+/// The macro types a `&[Value]` port as `Str`, which would put a
+/// to-string adapter on every non-string wire. These nodes inspect the
+/// `Value` variant themselves (formatting, JSON construction, selection,
+/// emission, tile rendering), so the wire is connected untyped and the
+/// value arrives with its own kind: `json_array(cycle)` holds a number,
+/// not the text of one.
+const UNTYPED_VARIADIC_NODES: &[&str] = &[
+    "printf",
+    "pick",
+    "log_debug",
+    "log_info",
+    "log_warn",
+    "log_error",
+    "exactly_one_value",
+    "json_text",
+    "json_array",
+    "json_object",
+    "str_concat",
+    "emit_row",
+    "tile_render",
+];
+
 pub fn auto_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>> {
     use crate::library::convert::{
         BoolToStr, BoolToU64,

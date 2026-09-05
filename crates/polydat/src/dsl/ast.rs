@@ -83,11 +83,16 @@ pub struct TileOptions {
     pub close: String,
     pub sigil: String,
     pub strict: bool,
+    /// The body begins inside a JSON string literal (`instring`): holes
+    /// encode as escaped text from the first byte. The compiler sets
+    /// this on the tile it makes for a projection nested in a string
+    /// position; authors rarely need it.
+    pub in_string: bool,
 }
 
 impl Default for TileOptions {
     fn default() -> Self {
-        Self { open: "${".into(), close: "}".into(), sigil: "@".into(), strict: false }
+        Self { open: "${".into(), close: "}".into(), sigil: "@".into(), strict: false, in_string: false }
     }
 }
 

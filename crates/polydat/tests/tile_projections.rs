@@ -74,9 +74,31 @@ fn generator_call_sources_compile_to_wires_of_the_scope() {
 }
 
 #[test]
-fn continuous_sources_are_rejected_and_discrete_truncation_works() {
+fn continuous_sources_sample_with_an_order_count() {
     let e = err("input cycle: u64\ntile t : text := \"@for x in 0.0..1.0 {${x}}\"\n");
     assert!(e.contains("continuous source"), "{e}");
+    assert!(e.contains("order <strategy>/<count>"), "{e}");
+    // With a strategy and a count, that many points come from the interval.
+    let src = "input cycle: u64\ntile t : text := \"@for x in 2.0..4.0 order halton/4 sep \\\" \\\" {${x | .3}}\"\n";
+    let text = render(src, 0, "t");
+    let xs: Vec<f64> = text.split(' ').map(|s| s.parse().unwrap()).collect();
+    assert_eq!(xs.len(), 4, "{text}");
+    assert!(xs.iter().all(|x| (2.0..4.0).contains(x)), "{text}");
+    assert_eq!(text, "3.000 2.500 3.500 2.250");
+    // Two continuous axes sample jointly; sobol and lhs work too.
+    let src = "input cycle: u64\ntile t : text := \"@for x in 0.0..1.0, y in 10.0..20.0 order sobol/3 sep \\\";\\\" {${x | .2},${y | .1}}\"\n";
+    let text = render(src, 0, "t");
+    assert_eq!(text.split(';').count(), 3, "{text}");
+    for pair in text.split(';') {
+        let (x, y) = pair.split_once(',').unwrap();
+        assert!((0.0..1.0).contains(&x.parse::<f64>().unwrap()), "{text}");
+        assert!((10.0..20.0).contains(&y.parse::<f64>().unwrap()), "{text}");
+    }
+    let src = "input cycle: u64\ntile t : text := \"@for x in 0.0..1.0 order lhs/5 sep \\\" \\\" {${x | .2}}\"\n";
+    assert_eq!(render(src, 0, "t").split(' ').count(), 5);
+    // A non-sampling strategy over a continuous source is a compile error.
+    let e = err("input cycle: u64\ntile t : text := \"@for x in 0.0..1.0 order lex/4 {${x}}\"\n");
+    assert!(e.contains("sampling strategy"), "{e}");
     assert!(e.contains("tile 't'"), "{e}");
     // An order strategy with truncation over a discrete range samples
     // exactly that many tuples.
@@ -128,9 +150,18 @@ fn nested_projection_three_levels_deep() {
 }
 
 #[test]
-fn nested_projection_inside_a_string_position_is_a_clear_error() {
-    let e = err("input cycle: u64\ntile t : json {\"rows\": [@for r in 0..2 { {\"s\": \"@for c in 0..2 {${c}}\"} }]}\n");
-    assert!(e.contains("nested projection inside a string position"), "{e}");
+fn nested_projection_inside_a_string_position_escapes_as_text() {
+    // The inner projection compiles as a tile that starts inside a JSON
+    // string, so its holes escape as text and the outer string stays one
+    // string value.
+    let src = "input cycle: u64\nq := \"say \\\"hi\\\"\"\n\
+        tile t : json {\"rows\": [@for r in 0..2 { {\"s\": \"r${r}: @for c in 0..2 sep \\\"; \\\" {${c}=${q}}\"} }]}\n";
+    assert_eq!(
+        render(src, 0, "t"),
+        "{\"rows\": [{\"s\": \"r0: 0=say \\\"hi\\\"; 1=say \\\"hi\\\"\"},{\"s\": \"r1: 0=say \\\"hi\\\"; 1=say \\\"hi\\\"\"}]}"
+    );
+    let doc: serde_json::Value = serde_json::from_str(&render(src, 0, "t")).unwrap();
+    assert_eq!(doc["rows"][1]["s"], "r1: 0=say \"hi\"; 1=say \"hi\"");
 }
 
 #[test]
