@@ -39,7 +39,7 @@ fn a_tile_inside_a_module_body_inlines_with_the_call() {
     let path = write_temp(
         "module",
         "input cycle: u64\n\
-         make_card(n: u64, label: String) -> (doc: String) := {\n\
+         make_card(n: u64, label: str) -> (doc: str) := {\n\
              twice := n * 2\n\
              tile doc : json := {\"n\": ${n}, \"twice\": ${twice}, \"label\": ${label}, \"big\": @if n > 5 { true } @else { false }}\n\
          }\n\
@@ -60,7 +60,7 @@ fn a_module_tile_projection_reads_module_wires() {
     let path = write_temp(
         "module-proj",
         "input cycle: u64\n\
-         make_row(top: u64) -> (chosen: String) := {\n\
+         make_row(top: u64) -> (chosen: str) := {\n\
              limit := top + 1\n\
              tile chosen : text := \"@for g in hash_range(limit, 50), k in 1..3 sep \\\",\\\" {${g + k * top}}\"\n\
          }\n\
@@ -77,7 +77,7 @@ fn a_module_tile_projection_reads_module_wires() {
     let path = write_temp(
         "module-ph",
         "input cycle: u64\n\
-         make_parts(n: u64) -> (out: String) := {\n\
+         make_parts(n: u64) -> (out: str) := {\n\
              tile out : text := \"@for p in partitions(\\\"*/4\\\", {n}) {x}\"\n\
          }\n\
          r := make_parts(cycle + 2)\n",

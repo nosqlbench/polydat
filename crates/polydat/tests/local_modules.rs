@@ -41,7 +41,7 @@ fn a_local_module_shadows_a_library_node_of_the_same_name() {
 #[test]
 fn a_local_module_with_a_tile_resolves_too() {
     let src = "input cycle: u64\n\
-        card(n: u64) -> (doc: String) := {\n\
+        card(n: u64) -> (doc: str) := {\n\
             tile doc : json := {\"n\": ${n}, \"twice\": ${n * 2}}\n\
         }\n\
         d := card(cycle + 1)\n";
@@ -82,7 +82,7 @@ fn as_casts_through_the_adapter_catalog() {
 #[test]
 fn a_producer_bound_inside_a_module_projects_in_its_tiles() {
     let src = "input cycle: u64\n\
-        grid(n: u64) -> (cells: String) := {\n\
+        grid(n: u64) -> (cells: str) := {\n\
             axes := for r in 0..2, c in 0..2\n\
             tile cells : text := \"@for axes sep \\\",\\\" {${r * n + c}} | @for axes where {c} > 0 sep \\\",\\\" {${r}}\"\n\
         }\n\
@@ -95,4 +95,31 @@ fn a_producer_bound_inside_a_module_projects_in_its_tiles() {
     let mut k = compile_polydat(&src).unwrap();
     k.set_inputs(&[0]);
     assert_eq!(k.pull("h").as_str(), "0,1,100,101 | 0,1");
+}
+
+#[test]
+fn module_string_parameters_spell_str_like_inputs_and_externs() {
+    // `str` is the type keyword inputs and externs use; modules accept it,
+    // and a string literal argument satisfies it.
+    let src = "input cycle: u64\n\
+        greet(name: str, n: u64) -> (line: str) := {\n\
+            line := \"hello {name} #{n}\"\n\
+        }\n\
+        a := greet(\"world\", cycle)\n";
+    let mut k = compile_polydat(src).unwrap();
+    k.set_inputs(&[3]);
+    assert_eq!(k.pull("a").as_str(), "hello world #3");
+    // The library's older spelling `String` names the same type.
+    let src = "input cycle: u64\n\
+        greet(name: String) -> (line: String) := {\n\
+            line := \"hi {name}\"\n\
+        }\n\
+        a := greet(\"there\")\n";
+    let mut k = compile_polydat(src).unwrap();
+    k.set_inputs(&[0]);
+    assert_eq!(k.pull("a").as_str(), "hi there");
+    // A literal of the wrong kind is still refused, in the keyword the
+    // author will recognise.
+    let e = compile_polydat("input cycle: u64\nf(name: str) -> (line: str) := {\n line := name\n}\na := f(7)\n").unwrap_err();
+    assert!(e.contains("expects str, got u64"), "{e}");
 }

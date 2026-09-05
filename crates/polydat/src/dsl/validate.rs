@@ -216,20 +216,22 @@ pub(crate) fn literal_type(expr: &Expr) -> Option<String> {
     match expr {
         Expr::IntLit(_, _) => Some("u64".into()),
         Expr::FloatLit(_, _) => Some("f64".into()),
-        Expr::StringLit(_, _) => Some("String".into()),
+        Expr::StringLit(_, _) => Some("str".into()),
         _ => None, // wire references, calls — type not known from the literal
     }
 }
 
 /// Check if a literal type is compatible with a declared parameter type.
+///
+/// Both sides are type keywords and compare as the port types they
+/// name, so a module may spell a string parameter `str` as inputs and
+/// externs do, or `String` as the library modules have; the two are one
+/// type. A `u64` literal may feed an `f64` parameter (widening).
 pub(crate) fn types_compatible(lit_type: &str, declared: &str) -> bool {
-    match (lit_type, declared) {
-        ("u64", "u64") => true,
-        ("f64", "f64") => true,
-        ("String", "String") => true,
-        // u64 literal can be used where f64 is expected (implicit widening)
-        ("u64", "f64") => true,
-        _ => false,
+    use crate::ast::PortType;
+    match (PortType::from_keyword(lit_type), PortType::from_keyword(declared)) {
+        (Some(l), Some(d)) => l == d || (l == PortType::U64 && d == PortType::F64),
+        _ => lit_type == declared,
     }
 }
 

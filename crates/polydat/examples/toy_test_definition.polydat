@@ -30,7 +30,7 @@ const shape := "tenants=20 devices_per_tenant=50 readings=unbounded"
 
 // ---- Reusable model ---------------------------------------------------
 
-reading_model(seed: u64) -> (temp_c: f64, humidity: f64, status: String) := {
+reading_model(seed: u64) -> (temp_c: f64, humidity: f64, status: str) := {
     temp_c   := normal_sample(input: seed, mean: 21.5, stddev: 2.0)
     humidity := uniform_sample(input: hash(seed), min: 30.0, max: 70.0)
     status   := weighted_strings(hash(hash(seed)), "ok:0.97;degraded:0.02;error:0.01")
