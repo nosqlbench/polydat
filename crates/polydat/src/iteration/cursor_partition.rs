@@ -2606,3 +2606,166 @@ mod tests {
         assert_eq!(parts.last().unwrap().end_ord, 100);
     }
 }
+
+// ── Host-side cursor narrowing ─────────────────────────────────────────
+//
+// A cursor declared `over <expr>` compiles to a raw output carrying the
+// `over` value plus a set of external-write slots (`<cursor>__cursor` and
+// its scalar projections) that stay `None` until a host resolves the
+// value and writes them at scope setup. These helpers are that step, so
+// every host narrows cursors the same way.
+
+/// Resolve the value of an `over` expression into the partitions it
+/// denotes, against a cursor of `extent` ordinals.
+///
+/// A string is parsed as a partition spec and resolved against
+/// `[0, extent)`. A `Partition` is re-projected onto `extent` from its
+/// percentage bounds when its base extent differs. A `PartitionSpec` is
+/// resolved. A `PartitionList` is re-projected element by element.
+/// `Value::None` yields an empty list. Open-extent cursors reject specs,
+/// because they have no extent to resolve against.
+pub fn resolve_over(value: &Value, extent: u64, open_extent: bool) -> Result<Vec<Partition>, String> {
+    let reproject = |p: &Partition| -> Partition {
+        if open_extent || p.base_extent == extent || extent == 0 {
+            return *p;
+        }
+        Partition {
+            idx: p.idx,
+            count: p.count,
+            start_ord: ((p.start_pct / 100.0) * extent as f64).round() as u64,
+            end_ord: ((p.end_pct / 100.0) * extent as f64).round() as u64,
+            start_pct: p.start_pct,
+            end_pct: p.end_pct,
+            base_extent: extent,
+        }
+    };
+    let reject_open = || {
+        "an open-extent cursor has no extent to resolve a partition spec against; \
+         resolve the spec against an explicit extent first and declare the cursor `over p`"
+            .to_string()
+    };
+    match value {
+        Value::None => Ok(Vec::new()),
+        Value::Str(s) => {
+            if open_extent {
+                return Err(reject_open());
+            }
+            resolve(&parse(s.as_ref())?, 0, extent)
+        }
+        Value::Ext(b) => {
+            if let Some(p) = value.as_partition() {
+                Ok(vec![reproject(p)])
+            } else if let Some(spec) = value.as_partition_spec() {
+                if open_extent {
+                    return Err(reject_open());
+                }
+                resolve(spec, 0, extent)
+            } else if let Some(list) = value.as_partition_list() {
+                Ok(list.as_slice().iter().map(reproject).collect())
+            } else {
+                Err(format!(
+                    "`over` expression produced an Ext value of type `{}`; expected Partition, PartitionSpec, or PartitionList",
+                    b.type_name()
+                ))
+            }
+        }
+        other => Err(format!(
+            "`over` expression produced an unsupported value; expected a spec string or a partition-typed value, got {other:?}"
+        )),
+    }
+}
+
+/// The extent a cursor resolves partitions against: the schema's static
+/// extent when known, otherwise the difference of its extent outputs
+/// pulled from `state`.
+pub fn cursor_extent(
+    program: &crate::kernel::PolydatProgram,
+    state: &mut crate::kernel::PolydatState,
+    schema: &crate::iteration::source::SourceSchema,
+) -> u64 {
+    if let Some((start_out, end_out)) = &schema.extent_outputs {
+        let start = state.pull(program, start_out).as_u64();
+        let end = state.pull(program, end_out).as_u64();
+        let extent = end.saturating_sub(start);
+        return schema.extent_limit.map(|l| extent.min(l)).unwrap_or(extent);
+    }
+    schema.extent.unwrap_or(0)
+}
+
+/// Resolve the partitions a cursor's `over` clause denotes, pulling the
+/// raw `over` value from `state`. Returns an empty list for a cursor
+/// without an `over` clause.
+pub fn cursor_over_partitions(
+    program: &crate::kernel::PolydatProgram,
+    state: &mut crate::kernel::PolydatState,
+    schema: &crate::iteration::source::SourceSchema,
+) -> Result<Vec<Partition>, String> {
+    let Some(raw) = &schema.partition_output else { return Ok(Vec::new()) };
+    let value = state.pull(program, raw).clone();
+    let extent = cursor_extent(program, state, schema);
+    let open = !matches!(schema.cursor_kind, crate::iteration::source::CursorKind::Range);
+    resolve_over(&value, extent, open)
+}
+
+/// Write one resolved partition into a cursor's `<cursor>__cursor` slot
+/// and its six scalar projection slots. Slots the program does not
+/// declare are skipped.
+pub fn narrow_cursor(
+    program: &crate::kernel::PolydatProgram,
+    state: &mut crate::kernel::PolydatState,
+    cursor_name: &str,
+    partition: &Partition,
+) {
+    let mut write = |suffix: &str, v: Value| {
+        let slot = format!("{cursor_name}__cursor{suffix}");
+        if let Some(idx) = program.find_input(&slot) {
+            state.set_input(idx, v);
+        }
+    };
+    write("", Value::from_partition(*partition));
+    write("__idx", Value::U64(partition.idx));
+    write("__partition_count", Value::U64(partition.count.max(1)));
+    write("__start_pct", Value::F64(partition.start_pct));
+    write("__end_pct", Value::F64(partition.end_pct));
+    write("__start_ordinal", Value::U64(partition.start_ord));
+    write("__end_ordinal", Value::U64(partition.end_ord));
+}
+
+#[cfg(test)]
+mod over_tests {
+    use super::*;
+
+    #[test]
+    fn resolve_over_string_spec_against_extent() {
+        let parts = resolve_over(&Value::Str("20%,30%,*".into()), 1000, false).unwrap();
+        let bounds: Vec<(u64, u64)> = parts.iter().map(|p| (p.start_ord, p.end_ord)).collect();
+        assert_eq!(bounds, vec![(0, 200), (200, 500), (500, 1000)]);
+    }
+
+    #[test]
+    fn resolve_over_reprojects_partition_onto_cursor_extent() {
+        let p = resolve(&parse("50%..100%").unwrap(), 0, 100).unwrap()[0];
+        let got = resolve_over(&Value::from_partition(p), 1000, false).unwrap();
+        assert_eq!((got[0].start_ord, got[0].end_ord), (500, 1000));
+        assert_eq!(got[0].base_extent, 1000);
+    }
+
+    #[test]
+    fn resolve_over_none_is_empty_and_open_rejects_specs() {
+        assert!(resolve_over(&Value::None, 10, false).unwrap().is_empty());
+        assert!(resolve_over(&Value::Str("*/2".into()), 10, true).is_err());
+    }
+
+    #[test]
+    fn narrow_cursor_writes_declared_slots() {
+        let src = "input cycle: u64\ncursor q = range(0, 100) over \"*/4\"\nn := cardinality(q.cursor)\ns := q.cursor.start_ordinal";
+        let mut k = crate::dsl::compile_polydat(src).unwrap();
+        let program = k.program().clone();
+        let parts = cursor_over_partitions(&program, k.state(), &program.cursor_schemas()[0]).unwrap();
+        assert_eq!(parts.len(), 4);
+        narrow_cursor(&program, k.state(), "q", &parts[2]);
+        k.set_inputs(&[0]);
+        assert_eq!(k.pull("n").as_u64(), 25);
+        assert_eq!(k.pull("s").as_u64(), 50);
+    }
+}

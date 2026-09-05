@@ -18,11 +18,14 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use polydat::ast::{PortType, Slot, Value};
+use polydat::ast::Slot;
 use polydat::dsl::ast::{Statement, WireModifier};
 use polydat::dsl::events::{CompileEvent, CompileEventLog};
-use polydat::dsl::{compile_polydat_with_options, CompileOptions};
+use polydat::dsl::ast::PolydatFile;
+use polydat::dsl::transform::{assign_values, parse_assignment};
+use polydat::dsl::{compile_ast_with_options, CompileOptions};
 use polydat::kernel::{extract_manifest, PolydatProgram, WireSource};
+use polydat::iteration::cursor_partition::{cursor_over_partitions, narrow_cursor, Partition};
 use polydat::library::emit::{self, EmitFormat};
 use polydat::library::support::audit::{self, LogLevel};
 use polydat::JitMode;
@@ -69,6 +72,9 @@ struct CompileArgs {
 struct RunArgs {
     #[command(flatten)]
     compile: CompileArgs,
+    /// Extern or input assignments as bare `name=value` arguments.
+    #[arg(value_name = "NAME=VALUE")]
+    assignments: Vec<String>,
     /// Number of cycles to run.
     #[arg(long, default_value_t = 10)]
     cycles: u64,
@@ -93,9 +99,15 @@ struct RunArgs {
     /// Write emitted rows here instead of stdout.
     #[arg(long, value_name = "PATH")]
     out: Option<PathBuf>,
-    /// Set an extern or input slot: `name=value`. Repeatable.
+    /// Set an extern or input slot: `--set name=value`. Same as a bare
+    /// `name=value` argument. Repeatable.
     #[arg(long = "set", value_name = "NAME=VALUE")]
     sets: Vec<String>,
+    /// When a cursor's `over` spec yields several partitions, run this one.
+    /// Without it, a run with as many fibers as partitions gives each
+    /// fiber its own partition and every fiber walks the full cycle range.
+    #[arg(long, value_name = "INDEX")]
+    partition: Option<usize>,
     /// Cycles to run before timing starts.
     #[arg(long, default_value_t = 0)]
     warmup: u64,
@@ -254,7 +266,17 @@ fn read_source(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))
 }
 
+fn parse_source(source: &str) -> Result<PolydatFile, String> {
+    let tokens = polydat::dsl::lexer::lex(source)?;
+    polydat::dsl::parser::parse(tokens)
+}
+
 fn compile_source(source: &str, args: &CompileArgs) -> Result<Compiled, String> {
+    let ast = parse_source(source)?;
+    compile_ast(&ast, source, args)
+}
+
+fn compile_ast(ast: &PolydatFile, source: &str, args: &CompileArgs) -> Result<Compiled, String> {
     polydat::set_default_jit_mode(match args.engine {
         Engine::Off => JitMode::Off,
         Engine::Auto => JitMode::Auto,
@@ -272,7 +294,7 @@ fn compile_source(source: &str, args: &CompileArgs) -> Result<Compiled, String> 
     let mut events = CompileEventLog::new();
     take_audit();
     let start = Instant::now();
-    let kernel = compile_polydat_with_options(source, &options, Some(&mut events))?;
+    let kernel = compile_ast_with_options(ast, source, &options, Some(&mut events))?;
     let elapsed = start.elapsed();
     Ok(Compiled { program: kernel.into_program(), events, audit: take_audit(), elapsed })
 }
@@ -285,8 +307,20 @@ fn run(args: RunArgs) -> Result<(), String> {
     install_audit(!args.quiet);
     let source = read_source(&args.compile.file)?;
 
-    // Probe compile: discovers the declared outputs the transform names.
-    let probe = compile_source(&source, &args.compile)?;
+    // Assignments are a program transform: each `name=value` rewrites the
+    // extern or input declaration, and the program's typing fuses the
+    // text to the declared type. Nothing is set on states at runtime.
+    let assignments: Vec<(String, String)> = args
+        .assignments
+        .iter()
+        .chain(args.sets.iter())
+        .map(|a| parse_assignment(a))
+        .collect::<Result<_, _>>()?;
+    let mut ast = parse_source(&source)?;
+    assign_values(&mut ast, &assignments)?;
+
+    // Probe compile: discovers the declared outputs the emit transform names.
+    let probe = compile_ast(&ast, &source, &args.compile)?;
     let selected: Vec<String> = match &args.outputs {
         Some(list) => list.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
         None => {
@@ -313,27 +347,23 @@ fn run(args: RunArgs) -> Result<(), String> {
         Emit::Csv => EmitFormat::Csv,
         Emit::Jsonl => EmitFormat::Jsonl,
     });
-    let (source, compiled) = if let Some(fmt) = emit_format {
+    let compiled = if let Some(fmt) = emit_format {
         let fmt_name = match fmt {
             EmitFormat::Map => "map",
             EmitFormat::Csv => "csv",
             EmitFormat::Jsonl => "jsonl",
         };
-        let mut transformed = source.clone();
-        if !transformed.ends_with('\n') {
-            transformed.push('\n');
-        }
-        transformed.push_str(&format!(
+        let binding = format!(
             "__emit := emit_row(\"{fmt_name}\", \"{}\", {})\n",
             selected.join(","),
             selected.join(", ")
-        ));
-        let compiled = compile_source(&transformed, &args.compile)?;
-        (transformed, compiled)
+        );
+        let emit_ast = parse_source(&binding)?;
+        ast.statements.extend(emit_ast.statements);
+        compile_ast(&ast, &source, &args.compile)?
     } else {
-        (source, probe)
+        probe
     };
-    let _ = source;
     let program = compiled.program.clone();
 
     if args.events {
@@ -343,8 +373,41 @@ fn run(args: RunArgs) -> Result<(), String> {
         print_stats(&program, &compiled, Report::Text);
     }
 
-    // Extern and input overrides, applied to every fiber's state.
-    let overrides = parse_sets(&program, &args.sets)?;
+    // Cursor narrowing. Each cursor declared `over <spec>` resolves to a
+    // list of partitions; this run either represents one of them or, when
+    // fibers and partitions match, spreads them one per fiber.
+    let fibers = args.fibers.max(1);
+    let mut plan = CursorPlan { per_cursor: Vec::new(), per_fiber: false };
+    {
+        let mut probe_state = program.create_state();
+        for schema in program.cursor_schemas() {
+            let parts = cursor_over_partitions(&program, &mut probe_state, schema)?;
+            if parts.is_empty() {
+                continue;
+            }
+            let chosen: Vec<Partition> = match (parts.len(), args.partition) {
+                (1, _) => vec![parts[0]],
+                (_, Some(i)) => vec![*parts.get(i).ok_or_else(|| format!(
+                    "cursor '{}' resolves to {} partitions; --partition {i} is out of range", schema.name, parts.len()))?],
+                (n, None) if n == fibers => {
+                    plan.per_fiber = true;
+                    parts.clone()
+                }
+                (n, None) => return Err(format!(
+                    "cursor '{}' resolves to {n} partitions; pass --partition INDEX to run one, or --fibers {n} to run one per fiber",
+                    schema.name)),
+            };
+            plan.per_cursor.push((schema.name.clone(), chosen));
+        }
+        emit::take_rows();
+    }
+    if !args.quiet {
+        for (name, parts) in &plan.per_cursor {
+            for p in parts {
+                eprintln!("cursor {name}: partition {}/{} [{}, {})", p.idx + 1, p.count.max(1), p.start_ord, p.end_ord);
+            }
+        }
+    }
 
     // Which outputs each cycle pulls. With emission, pulling `__emit`
     // pulls everything it names; without it, pull the selection.
@@ -354,7 +417,6 @@ fn run(args: RunArgs) -> Result<(), String> {
         selected.iter().map(|n| program.output_index(n).unwrap()).collect()
     };
 
-    let fibers = args.fibers.max(1);
     let chunk = args.chunk.max(1);
     let total = args.cycles;
     let start_cycle = args.start;
@@ -377,7 +439,7 @@ fn run(args: RunArgs) -> Result<(), String> {
     // Warmup on one state, untimed.
     if args.warmup > 0 {
         let mut state = program.create_state();
-        apply_overrides(&mut state, &overrides);
+        plan.apply(&program, &mut state, 0);
         for c in 0..args.warmup {
             state.set_inputs(&[start_cycle.wrapping_add(c)]);
             for &idx in &pull_indices {
@@ -392,6 +454,7 @@ fn run(args: RunArgs) -> Result<(), String> {
     // cycle order when asked to.
     let next_chunk = AtomicU64::new(0);
     let chunk_count = total.div_ceil(chunk);
+    let per_fiber = plan.per_fiber;
     let (tx, rx) = mpsc::channel::<(u64, Vec<String>)>();
     let fiber_busy: Mutex<Vec<Duration>> = Mutex::new(vec![Duration::ZERO; fibers]);
     let run_start = Instant::now();
@@ -400,22 +463,34 @@ fn run(args: RunArgs) -> Result<(), String> {
         for fiber in 0..fibers {
             let program = program.clone();
             let tx = tx.clone();
-            let overrides = &overrides;
             let pull_indices = &pull_indices;
             let next_chunk = &next_chunk;
             let fiber_busy = &fiber_busy;
             let emitting = emit_format.is_some();
+            let plan = &plan;
             s.spawn(move || {
                 let mut state = program.create_state();
-                apply_overrides(&mut state, overrides);
+                plan.apply(&program, &mut state, fiber);
                 let mut busy = Duration::ZERO;
+                // Shared mode: fibers claim chunks of one cycle range.
+                // Per-fiber mode: every fiber walks the whole range over
+                // its own partition, and its rows sort after the
+                // previous fiber's.
+                let mut local = 0u64;
                 loop {
-                    let seq = next_chunk.fetch_add(1, Ordering::Relaxed);
-                    if seq >= chunk_count {
+                    let local_seq = if per_fiber {
+                        let s = local;
+                        local += 1;
+                        s
+                    } else {
+                        next_chunk.fetch_add(1, Ordering::Relaxed)
+                    };
+                    if local_seq >= chunk_count {
                         break;
                     }
-                    let lo = start_cycle.wrapping_add(seq * chunk);
-                    let n = chunk.min(total - seq * chunk);
+                    let seq = if per_fiber { fiber as u64 * chunk_count + local_seq } else { local_seq };
+                    let lo = start_cycle.wrapping_add(local_seq * chunk);
+                    let n = chunk.min(total - local_seq * chunk);
                     let t = Instant::now();
                     for i in 0..n {
                         state.set_inputs(&[lo.wrapping_add(i)]);
@@ -461,40 +536,26 @@ fn run(args: RunArgs) -> Result<(), String> {
 
     if let Some(report) = args.timing {
         let busy = fiber_busy.into_inner().unwrap();
-        print_timing(report, &compiled, total, fibers, wall, &busy);
+        let ran = if per_fiber { total * fibers as u64 } else { total };
+        print_timing(report, &compiled, ran, fibers, wall, &busy);
     }
     Ok(())
 }
 
-fn parse_sets(program: &PolydatProgram, sets: &[String]) -> Result<Vec<(usize, Value)>, String> {
-    let mut out = Vec::new();
-    for s in sets {
-        let (name, raw) = s.split_once('=').ok_or_else(|| format!("--set expects NAME=VALUE, got '{s}'"))?;
-        let idx = program
-            .find_input(name)
-            .ok_or_else(|| format!("no input or extern named '{name}'; inputs: {}", program.input_names().join(", ")))?;
-        let ty = program.input_port_type_by_idx(idx).unwrap_or(PortType::U64);
-        let value = parse_value(ty, raw).ok_or_else(|| format!("cannot parse '{raw}' as {ty:?} for '{name}'"))?;
-        out.push((idx, value));
-    }
-    Ok(out)
+/// Which partition each cursor takes, per fiber.
+struct CursorPlan {
+    /// Cursor name and its chosen partitions. One entry means every
+    /// fiber shares it; `fibers` entries means fiber `i` takes entry `i`.
+    per_cursor: Vec<(String, Vec<Partition>)>,
+    per_fiber: bool,
 }
 
-fn parse_value(ty: PortType, raw: &str) -> Option<Value> {
-    let raw = raw.trim();
-    Some(match ty {
-        PortType::U64 | PortType::U32 | PortType::U16 | PortType::U8 => Value::U64(raw.parse().ok()?),
-        PortType::I64 | PortType::I32 | PortType::I16 | PortType::I8 => Value::U64(raw.parse::<i64>().ok()? as u64),
-        PortType::F64 | PortType::F32 => Value::F64(raw.parse().ok()?),
-        PortType::Bool => Value::Bool(matches!(raw, "true" | "1" | "yes")),
-        PortType::Str => Value::Str(raw.trim_matches('"').into()),
-        _ => return None,
-    })
-}
-
-fn apply_overrides(state: &mut polydat::kernel::PolydatState, overrides: &[(usize, Value)]) {
-    for (idx, value) in overrides {
-        state.set_input(*idx, value.clone());
+impl CursorPlan {
+    fn apply(&self, program: &PolydatProgram, state: &mut polydat::kernel::PolydatState, fiber: usize) {
+        for (name, parts) in &self.per_cursor {
+            let p = if parts.len() == 1 { &parts[0] } else { &parts[fiber.min(parts.len() - 1)] };
+            narrow_cursor(program, state, name, p);
+        }
     }
 }
 

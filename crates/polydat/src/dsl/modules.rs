@@ -483,7 +483,7 @@ impl Compiler {
             if let Ok(entries) = std::fs::read_dir(&source_dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) == Some("gk") {
+                    if path.extension().and_then(|e| e.to_str()) == Some("polydat") {
                         let source = match std::fs::read_to_string(&path) {
                             Ok(s) => s,
                             Err(_) => continue,

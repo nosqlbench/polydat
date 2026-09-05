@@ -310,7 +310,7 @@ cargo run -p polydat -- run graph.polydat --cycles 10 --emit csv
 
 ```text
 polydat run graph.polydat --cycles 1000000 --fibers 8 --emit csv --timing
-polydat run graph.polydat --emit jsonl --outputs user_id,score --set tenant_seed=7
+polydat run graph.polydat tenant_seed=7 --emit jsonl --outputs user_id,score
 polydat check graph.polydat --stats --manifest
 polydat explain graph.polydat
 polydat explain graph.polydat wires engines provenance
@@ -320,7 +320,10 @@ polydat viz graph.polydat --format mermaid
 Optional behaviors are graph transforms rather than runtime decorators.
 `--emit` appends one `emit_row` binding that names the selected wires, so
 emission is an ordinary side-channel node inside the kernel with access to
-the local scope. Fibers each own a state over the shared program and claim
+the local scope. Bare `name=value` arguments assign externs and inputs by
+rewriting their declarations, and the program's own typing fuses the text
+to the declared type.
+Fibers each own a state over the shared program and claim
 chunks of cycles; rows come out in cycle order unless `--unordered` is
 given. `--timing` reports compile time, wall time, throughput, and per-fiber
 busy time as text or JSON. `explain` narrates each compilation phase, from

@@ -478,19 +478,31 @@ pub struct CompileOptions {
 pub fn compile_polydat_with_options(
     source: &str,
     options: &CompileOptions,
+    log: Option<&mut super::events::CompileEventLog>,
+) -> Result<PolydatKernel, String> {
+    let tokens = lexer::lex(source)?;
+    let ast = parser::parse(tokens)?;
+    compile_ast_with_options(&ast, source, options, log)
+}
+
+/// [`compile_polydat_with_options`] for an already parsed, possibly
+/// transformed, program. `source` is the text the program was parsed
+/// from and is used for diagnostics only.
+pub fn compile_ast_with_options(
+    ast: &PolydatFile,
+    source: &str,
+    options: &CompileOptions,
     mut log: Option<&mut super::events::CompileEventLog>,
 ) -> Result<PolydatKernel, String> {
     let _data_base = options.source_dir.as_deref().map(DataBaseDirGuard::set);
-    let tokens = lexer::lex(source)?;
-    let ast = parser::parse(tokens)?;
-    let pragmas = super::pragmas::collect_from_ast(&ast);
+    let pragmas = super::pragmas::collect_from_ast(ast);
     if let Some(log) = log.as_deref_mut() {
         record_pragma_events(&pragmas, log);
     }
     let extended = if options.required_outputs.is_empty() {
         Vec::new()
     } else {
-        extend_required_with_const_bindings(&options.required_outputs, &ast)
+        extend_required_with_const_bindings(&options.required_outputs, ast)
     };
     let filter = if extended.is_empty() { None } else { Some(extended.as_slice()) };
     let mut compiler = Compiler::with_lib_paths(
@@ -502,7 +514,7 @@ pub fn compile_polydat_with_options(
     compiler.context_label = options.context.clone();
     compiler.cursor_limit = options.cursor_limit;
     compiler.pragmas = pragmas;
-    compiler.compile_filtered_with_log(&ast, filter, log)
+    compiler.compile_filtered_with_log(ast, filter, log)
 }
 
 /// Compile with a compile event log for diagnostic inspection.
@@ -974,6 +986,35 @@ fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// `bool` ports). Non-literal expressions are rejected with a
 /// clear error; complex defaults belong in a binding, not on
 /// the extern declaration.
+/// Run one of the assembler's str-to-typed coercion nodes over a string
+/// literal at compile time, turning the node's panic diagnostic into a
+/// compile error.
+fn coerce_string_literal(node: Box<dyn crate::ast::PolydatNode>, s: &str) -> Result<crate::ast::Value, String> {
+    use crate::ast::Value;
+    // The coercion node reports a bad value by panicking with its
+    // diagnostic. Silence the default hook so the diagnostic surfaces
+    // once, as the compile error, rather than also on stderr.
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut out = [Value::None];
+        node.eval(&[Value::Str(s.into())], &mut out);
+        out[0].clone()
+    }));
+    std::panic::set_hook(hook);
+    result.map_err(|e| coercion_panic_message(&e))
+}
+
+fn coercion_panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "string value could not be coerced to the declared type".to_string()
+    }
+}
+
 fn evaluate_default_expr(
     expr: &crate::dsl::ast::Expr,
     port_type: crate::ast::PortType,
@@ -987,6 +1028,19 @@ fn evaluate_default_expr(
         (Expr::StringLit(s, _), PortType::Str) => Ok(Value::Str(s.as_str().into())),
         (Expr::Ident(name, _), PortType::Bool) if name == "true" => Ok(Value::Bool(true)),
         (Expr::Ident(name, _), PortType::Bool) if name == "false" => Ok(Value::Bool(false)),
+        // A string literal default fuses to the declared type through the
+        // same coercions the assembler inserts when a str wire feeds a
+        // typed port. This is what lets a host inject `name=value` text
+        // as a program transform and leave typing to the program.
+        (Expr::StringLit(s, _), PortType::U64) => {
+            coerce_string_literal(Box::new(crate::library::convert::StrToU64::new()), s)
+        }
+        (Expr::StringLit(s, _), PortType::F64) => {
+            coerce_string_literal(Box::new(crate::library::convert::StrToF64::new()), s)
+        }
+        (Expr::StringLit(s, _), PortType::Bool) => {
+            coerce_string_literal(Box::new(crate::library::convert::StrToBool::new()), s)
+        }
         _ => Err(format!(
             "default expression must be a literal of type {port_type:?}; got {expr:?}"
         )),

@@ -8,13 +8,11 @@ of one coordinate, so any of them can be regenerated on any fiber or
 host without state.
 
 The file is
-[`examples/toy_test_definition.polydat`](../examples/toy_test_definition.polydat)
-and the runner is
-[`examples/toy_test_definition.rs`](../examples/toy_test_definition.rs).
-Run it with:
+[`examples/toy_test_definition.polydat`](../examples/toy_test_definition.polydat).
+It is driven by the `polydat` binary with no host code. From the repository:
 
 ```text
-cargo run -p polydat --example toy_test_definition
+cargo run -p polydat -- run crates/polydat/examples/toy_test_definition.polydat --partition 1 --cycles 3 --emit map
 ```
 
 ## The grammar
@@ -106,48 +104,55 @@ flagged := if temp_c > 26.0 { 1 } else { 0 }
 
 ## Running it
 
-The runner plays the host. It compiles the file with the examples
-directory as a module library path so the in-file module resolves,
-resolves the `*/4` partition spec and writes fiber 1's slice into the
-cursor slots, overrides `interval_ms` to one minute, and pulls a few
-rows.
+The binary plays the host. It compiles the file, resolving the in-file
+module from the file's own directory, then resolves the cursor's `*/4`
+spec into four partitions. A run represents one partition with
+`--partition`, or spreads them across fibers when `--fibers` matches the
+partition count. Externs and inputs are assigned with bare `name=value`
+arguments. Emission is a graph
+transform: `--emit` appends an `emit_row` binding naming the selected
+wires, so the rows below come from a node inside the kernel.
+
+One fiber on partition 1, the second quarter of the row domain:
 
 ```text
-dataset: iot-readings-toy
-shape:   tenants=20 devices_per_tenant=50 readings=unbounded
-fiber:   partition 1 of 4 = [250000, 500000)
-schema:  CREATE TABLE toy.readings (tenant_id bigint, device_id text, ts bigint, temp_c double, humidity double, status text, PRIMARY KEY ((tenant_id, device_id), ts))
-
-cycle 0: row=250000 tenant=0 device=0 reading=250 kind=sensor
-  load:   INSERT INTO toy.readings (tenant_id, device_id, ts, temp_c, humidity, status) VALUES (607535, 'd9ac876f-bb3a-4bc7-b9f8-382893178079', 1700015000000, 19.322731887641915, 49.560474909266304, 'ok')
-  read:   SELECT temp_c, humidity, status FROM toy.readings WHERE tenant_id = 607535 AND device_id = 'd9ac876f-bb3a-4bc7-b9f8-382893178079' AND ts = 1700015000000
-  verify: expect temp_c = 19.322731887641915, humidity = 49.560474909266304, status = 'ok'  flagged=0
-cycle 1: row=250001 tenant=1 device=0 reading=250 kind=gateway
-  load:   INSERT INTO toy.readings (tenant_id, device_id, ts, temp_c, humidity, status) VALUES (822465, '2e79db64-3559-4c2f-8afc-353405f2fcd0', 1700015000000, 19.83699105568422, 38.567674388524416, 'ok')
-  read:   SELECT temp_c, humidity, status FROM toy.readings WHERE tenant_id = 822465 AND device_id = '2e79db64-3559-4c2f-8afc-353405f2fcd0' AND ts = 1700015000000
-  verify: expect temp_c = 19.83699105568422, humidity = 38.567674388524416, status = 'ok'  flagged=0
-cycle 1000: row=251000 tenant=0 device=0 reading=251 kind=sensor
-  load:   INSERT INTO toy.readings (tenant_id, device_id, ts, temp_c, humidity, status) VALUES (607535, 'd9ac876f-bb3a-4bc7-b9f8-382893178079', 1700015060000, 19.30569487327788, 41.76980748475056, 'ok')
-  read:   SELECT temp_c, humidity, status FROM toy.readings WHERE tenant_id = 607535 AND device_id = 'd9ac876f-bb3a-4bc7-b9f8-382893178079' AND ts = 1700015060000
-  verify: expect temp_c = 19.30569487327788, humidity = 41.76980748475056, status = 'ok'  flagged=0
-cycle 12345: row=262345 tenant=5 device=17 reading=262 kind=sensor
-  load:   INSERT INTO toy.readings (tenant_id, device_id, ts, temp_c, humidity, status) VALUES (358618, '4376abb8-fee3-41db-82ca-4a82f7b6acc9', 1700015720000, 17.70320094594486, 57.480835928562946, 'ok')
-  read:   SELECT temp_c, humidity, status FROM toy.readings WHERE tenant_id = 358618 AND device_id = '4376abb8-fee3-41db-82ca-4a82f7b6acc9' AND ts = 1700015720000
-  verify: expect temp_c = 17.70320094594486, humidity = 57.480835928562946, status = 'ok'  flagged=0
+$ polydat run toy_test_definition.polydat --partition 1 --cycles 3 --emit map \
+    --outputs row,tenant,device,reading,device_kind,ts,status
+cursor rows: partition 2/4 [250000, 500000)
+row=250000 tenant=0 device=0 reading=250 device_kind=sensor ts=1700000250000 status=ok
+row=250001 tenant=1 device=0 reading=250 device_kind=gateway ts=1700000250000 status=ok
+row=250002 tenant=2 device=0 reading=250 device_kind=gateway ts=1700000250000 status=ok
 ```
+
+Four fibers, one per partition, in the verify phase with one-minute
+intervals, one cycle each:
+
+```text
+$ polydat run toy_test_definition.polydat phase=verify interval_ms=60000 \
+    --fibers 4 --cycles 1 --emit csv --outputs row,tenant_id,stmt -q
+row,tenant_id,stmt
+0,607535,"expect temp_c = 22.282993976163535, humidity = 35.548376405822175, status = 'ok'"
+250000,607535,"expect temp_c = 19.322731887641915, humidity = 49.560474909266304, status = 'ok'"
+500000,607535,"expect temp_c = 21.696623542008687, humidity = 60.56241450142866, status = 'ok'"
+750000,607535,"expect temp_c = 20.750799765843645, humidity = 67.01162199294797, status = 'ok'"
+```
+
+`polydat check --stats`, `polydat explain`, and `polydat viz` all accept
+the same file.
 
 ## Reading the output
 
-- **Fiber 1 starts at row 250000.** Cycle 0 on this fiber is reading
-  250 of device 0 in tenant 0, because the 1000-row stride of the
-  first two dimensions has already been walked 250 times by the
-  ordinals below its slice. Fiber 0 would produce reading 0 for the
-  same cycle. The slices never overlap.
-- **Identity is stable across rows.** Cycles 0 and 1000 land on the
-  same tenant and device, and they get the same tenant id and device
-  uuid. Only the reading and its derived values change.
-- **The override took effect.** Timestamps step by 60000 between
-  readings 250 and 251 rather than the declared 1000.
+- **Each fiber starts at its own slice.** Cycle 0 on partition 1 is row
+  250000, which is reading 250 of device 0 in tenant 0: the 1000-row
+  stride of the first two dimensions has been walked 250 times by the
+  ordinals below the slice. The four fibers above produce rows 0, 250000,
+  500000, and 750000 for the same local cycle. The slices never overlap.
+- **Identity is stable across slices.** All four fibers land on tenant 0
+  and device 0 for cycle 0, and all four get the same tenant id. Only the
+  reading and its derived values differ.
+- **The override took effect.** With `phase=verify` the selected
+  statement is the verify form, and `interval_ms=60000` spaces
+  readings a minute apart.
 - **Load, read, and verify agree by construction.** All three
   statements pull the same wires. A verifier that regenerates the row
   from its ordinal gets the expected values without consulting the
@@ -158,8 +163,7 @@ cycle 12345: row=262345 tenant=5 device=17 reading=262 kind=sensor
 The `over` clause and the `for` comprehension surface are driven by a
 host such as nmbrs, which resolves partitions, activates scopes, and
 streams coordinate tuples into kernels. This file declares those
-contracts; the runner simulates the host's part of them in a few
-lines. The draft [`for` construct](design/for_traversal.md) moves that
+contracts; the binary performs the host's part of them. The draft [`for` construct](design/for_traversal.md) moves that
 work into Polydat, and its worked example is this definition in the
 target form: the flow declared as a comprehension producer, and the
 body traversed once per tuple with `phase`, `interval_ms`, and `p` as

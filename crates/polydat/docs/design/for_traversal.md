@@ -315,8 +315,11 @@ At activation, for each cursor in the body with an `over` clause:
 3. Write `<cursor>__cursor` and its six scalar projections.
 4. Record the narrowed interval on the `Activation`.
 
-This is the logic nmbrs holds in its executor today. It moves into the
-crate unchanged in behavior.
+The resolution and slot-writing steps already live in the crate as
+`resolve_over`, `cursor_over_partitions`, and `narrow_cursor` in the
+cursor partition module, ported from the nmbrs executor unchanged in
+behavior. The `polydat` binary calls them at fiber setup today; activation
+calls them once the construct lands.
 
 ### 5.4 Fibers
 
@@ -432,6 +435,12 @@ where it has ordinary wired access to everything the scope can see.
   inside the affected block, so every activation emits its own rows with
   the block's element names in scope. The node buffers per thread; the
   harness drains buffers at chunk boundaries.
+- **Assignment.** A bare `name=value` argument rewrites the named
+  extern's default, or turns the named input into an extern with that
+  default, before compilation. The text fuses to the declared type
+  through the program's own string coercions, so a bad value is a
+  compile error with the program's diagnostic. Nothing is written to a
+  state at runtime.
 - **Ordering.** Fibers claim work in chunks with sequence numbers. The
   writer restores cycle order by default and emits in completion order
   with `--unordered`. Under traversal, the sequence number is the tuple

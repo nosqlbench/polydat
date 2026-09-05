@@ -5,9 +5,8 @@
 //! fiber narrow its cursor to a single partition. The host plays its
 //! scope-setup role explicitly here by writing the cursor slots.
 
-use polydat::ast::Value;
 use polydat::dsl::compile_polydat;
-use polydat::iteration::cursor_partition::{parse, resolve};
+use polydat::iteration::cursor_partition::{cursor_over_partitions, narrow_cursor};
 
 fn main() {
     // 1. Resolve a partition spec against a domain.
@@ -35,19 +34,10 @@ fn main() {
     "#).expect("compile2");
 
     // The host resolves the `over` spec and hands fiber 1 its partition.
-    let spec = parse("20%,30%,*").expect("spec");
-    let mine = resolve(&spec, 0, 1_000_000).expect("resolve")[1].clone();
-    let writes = [
-        ("q__cursor", Value::from_partition(mine.clone())),
-        ("q__cursor__idx", Value::U64(mine.idx)),
-        ("q__cursor__partition_count", Value::U64(mine.count)),
-        ("q__cursor__start_ordinal", Value::U64(mine.start_ord)),
-        ("q__cursor__end_ordinal", Value::U64(mine.end_ord)),
-    ];
-    for (name, value) in writes {
-        let idx = k.program().find_input(name).expect(name);
-        k.state().set_input(idx, value);
-    }
+    let program = k.program().clone();
+    let schema = &program.cursor_schemas()[0];
+    let parts = cursor_over_partitions(&program, k.state(), schema).expect("resolve");
+    narrow_cursor(&program, k.state(), "q", &parts[1]);
 
     for cycle in [0u64, 1, 299_999, 300_000] {
         k.set_inputs(&[cycle]);
