@@ -430,6 +430,9 @@ Good starting points:
 - [The `for` Construct](crates/polydat/docs/design/for_traversal.md) —
   comprehension producers and traversal scopes in the grammar: typing,
   activation, cursors, and the one-program-per-position property.
+- [Polytile](crates/polydat/docs/design/polytile.md) — draft specification
+  for compiled variate templates: static skeletons with typed holes,
+  encodings, projections over comprehensions, and native lowering.
 - [Cursor Partitions](crates/polydat/docs/design/cursor_partitions.md) — partition
   grammar, resolution, ordering, metadata, and cursor narrowing.
 - [Type System](crates/polydat/docs/design/type_system.md) — scalar, vector,

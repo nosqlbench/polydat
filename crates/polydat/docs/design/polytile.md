@@ -1,0 +1,591 @@
+# Polytile — Compiled Variate Templates
+
+**Status:** Draft for review, second revision. Proposed SRD 114. Nothing
+in this document is implemented yet; it specifies the contract that
+implementation must meet.
+
+**Ownership:** Polydat owns the tile grammar in both its textual and
+structural forms, the skeleton IR, the type model for holes, the
+renderers at every engine level, and the encodings named here. Hosts own
+what they do with a rendered tile and which containment form they hand
+Polydat.
+
+**Companion documents:**
+[The `for` Construct](for_traversal.md) (producers, traversal, activation),
+[Language Spec](language_spec.md) (string interpolation, expressions),
+[Type System](type_system.md) and [Type-System Alignment](type_system_alignment.md)
+(`Str`, `Bytes`, `Json`, adapters),
+[Engines](engines.md) and [JIT Boundary](jit_boundary.md) (P1, P2, P3),
+nmbrs SRD 111 (cycle arenas and handle-encoded non-scalar slots).
+
+## 1. The claim
+
+Polydat produces variates. Most of what consumes them wants an encoding:
+a CQL statement, a JSON document, a CSV row, a protobuf message. Today
+that encoding is assembled from pieces. Flat text goes through string
+interpolation, which is `printf` over segments. JSON goes through
+`json_object`, `json_array`, and `to_json`, which build a `serde_json`
+value per cycle and serialize it. A document with a deep static skeleton
+and a few dynamic leaves is rebuilt and re-serialized in full on every
+cycle, and every nested object costs an allocation.
+
+Polytile is a template language for that last step. A tile is a skeleton
+of static bytes with typed holes bound to wires. The skeleton is fixed at
+compile time, including every nested arm that contains no hole, so
+rendering copies static byte ranges and encodes hole values, nothing
+more. A tile is a wire like any other, so it composes with the rest of
+the graph, participates in lifecycle classification, and lowers to native
+code through the same handle-encoded arena machinery that carries strings
+through P3. Projections over comprehensions are part of the grammar, so a
+tile can repeat a sub-skeleton over a producer or an inline
+comprehension.
+
+A tile has to live where templates actually live: inside a YAML workload,
+inside a JSON body in a config file, inside a statement string that
+another tool also templates, or as a data structure rather than text at
+all. So the grammar has two front ends, textual and structural, and every
+form is chosen so it can be carried as an ordinary string or an ordinary
+document by whatever contains it.
+
+Three limits shape the design, the same three that shape the kernel:
+
+- **Structure lives in the template, not in the data.** However deep a
+  document is, its static arms are serialized once at compile time and
+  copied by range at render time. Adding a static field costs bytes, not
+  work.
+- **Rendering cost is the cost of the output.** Bytes copied plus holes
+  encoded plus projection tuples times body cost. No intermediate tree.
+- **A tile is a pure function of its coordinate.** Same inputs, same
+  bytes, on every engine and every host.
+
+## 2. The textual form
+
+### 2.1 Statement grammar
+
+Extends [Grammar](grammar.md) §2.
+
+```ebnf
+statement   ::= ...existing...
+             |  tile_def
+
+tile_def    ::= "tile" ident (":" encoding)? options? ":=" tile_body
+encoding    ::= "json" | "text" | "csv"                (* extensible *)
+options     ::= "(" option ("," option)* ")"
+option      ::= "delims" string string                  (* hole delimiters *)
+             |  "sigil" string                          (* directive prefix *)
+             |  "strict"
+
+tile_body   ::= json_block                              (* json: balanced { } or [ ] *)
+             |  heredoc                                 (* <<< ... >>> *)
+             |  string_literal                          (* one-line tiles *)
+```
+
+The lexer captures a tile body raw, as it does the text after `for`. A
+`json` body is a brace- or bracket-balanced block, string-aware, so the
+template is written in JSON's own syntax. A heredoc body is everything
+between `<<<` and `>>>` and suits any encoding. A string-literal body is
+an ordinary Polydat string and suits short tiles.
+
+### 2.2 Template grammar
+
+Inside a body:
+
+```ebnf
+hole        ::= open expr (":" type)? ("|" format)? ("!")? close
+projection  ::= sigil "for" for_source ("sep" string)? "{" body "}"
+branch      ::= sigil "if" expr "{" body "}" (sigil "else" "{" body "}")?
+splice      ::= open tile_name close
+escape      ::= open open                               (* a literal open delimiter *)
+```
+
+`open` and `close` default to `${` and `}`; `sigil` defaults to `@`.
+Both are overridable per tile (§2.3) and per host (§5).
+
+- A **hole** is a Polydat expression in the enclosing scope. `:type` is a
+  declared type (§4). `|format` is a printf format spec applied before
+  encoding. `!` marks the hole raw: its text is copied without the
+  encoding's escaping. Polydat's own `{name}` interpolation stays
+  available inside string literals within a hole expression.
+- A **projection** repeats its body once per tuple of a comprehension.
+  `for_source` is the same surface as the `for` construct: inline
+  comprehension text or a bound producer, including derivations. Element
+  names are wires inside the body. `sep` overrides the encoding's
+  default separator between repetitions.
+- A **branch** renders one of two bodies by a `u64` condition. Both
+  bodies must satisfy the encoding's structural rules.
+- A **splice** is a hole whose expression is the bare name of another
+  tile in scope. It is resolved at compile time by inlining that tile's
+  skeleton.
+- A doubled open delimiter is a literal open delimiter.
+
+Examples:
+
+```text
+tile reading : json {
+    "meta": { "schema": 3, "source": "polydat", "units": { "temp": "C", "rh": "%" } },
+    "tenant": ${tenant_id},
+    "device": "${device_id}",
+    "ts": ${ts: u64},
+    "samples": [ @for s in 0..4 { { "n": ${s}, "temp": ${temp_c + s | .2} } } ],
+    "status": "${status}"
+}
+
+tile load : text <<<
+INSERT INTO ${keyspace}.${table} (tenant_id, device_id, ts, doc)
+VALUES (${tenant_id}, '${device_id}', ${ts}, '${reading!}')
+>>>
+
+tile row : csv := "${tenant_id},${device_id},${ts},${status}"
+```
+
+`tile` is a hard keyword. Directives and delimiters have no meaning
+outside a tile body.
+
+### 2.3 Containment: living inside another grammar
+
+A tile is often carried by something that has its own template syntax or
+its own idea of what braces, dollars, and at-signs mean: a YAML workload
+whose values are strings, a JSON config, a shell here-doc, a CQL string
+that another tool also expands, a Jinja or Handlebars page. Four rules
+make a tile portable into those places.
+
+1. **Delimiters are declarable.** `tile t : text (delims "<%" "%>")`
+   uses `<%expr%>` for holes; `(sigil "#")` uses `#for` and `#if`. A
+   host may also set defaults for every tile it passes in (§5). The
+   canonical defaults are `${`, `}`, and `@`, chosen because they are
+   inert in JSON, CQL, SQL, YAML double-quoted strings, and Markdown, and
+   because `{name}` interpolation inside Polydat strings is untouched.
+2. **Every body form is carryable as a string.** The heredoc and
+   string-literal bodies contain no construct that a YAML or JSON string
+   cannot hold. Where the carrier's own escaping interferes, the doubled
+   open delimiter (`${${`) is the only escape a tile needs, and a host
+   can choose delimiters the carrier never uses.
+3. **The tile keyword is optional at the host boundary.** A host that
+   holds only a string can hand it to Polydat as a tile without wrapping
+   it in a statement: the `polytile(encoding, text)` node and the
+   `compile_tile` API (§5) accept bare template text, so a YAML value
+   `body: '{"tenant": ${tenant_id}}'` becomes a tile with no grammar the
+   YAML author has to learn beyond the hole syntax.
+4. **Nested carriers compose by encoding, not by text.** A tile that is
+   itself the value of a hole in another tile is spliced (compile time)
+   or rendered and copied (raw hole), never re-parsed. A tile carried by
+   another template engine is opaque text to that engine as long as the
+   two do not share delimiters, which rule 1 guarantees the author can
+   arrange.
+
+A tile body never needs a construct outside its own hole and directive
+syntax, so no carrier ever has to understand Polydat to carry one.
+
+## 3. The structural form
+
+A template can be a document rather than text: a JSON value (or a YAML
+value, which is the same thing once loaded) in which strings define
+insertion points. This is the natural form for hosts whose configuration
+is already structured, and it is how a workload file can carry a
+document template as data.
+
+### 3.1 Insertion points
+
+In a structural template, a string is examined for holes:
+
+| String value | Meaning |
+| --- | --- |
+| exactly one hole, `"${expr}"` | a **value hole**: the string node is replaced by the hole's value, encoded by type. `"${ts}"` renders as `1700000000000`, a bare number. |
+| text with one or more holes, `"row-${row}"` | a **string hole**: renders as a string with the holes encoded as text inside it. |
+| exactly one hole with a `str` declaration, `"${ts: str}"` | a string hole whose value is the number's text; the declaration forces string position. |
+| a directive string, `"@for s in 0..4"` or `"@if cond"` | a **structural directive**; see §3.2. |
+| no hole | static content, folded into the skeleton. |
+
+The distinction between a value hole and a string hole is the one that
+lets a structural template express `"ts": 1700000000000` and
+`"device": "d9ac..."` from the same string syntax: the wire's type
+decides, and a declaration overrides.
+
+### 3.2 Directives in structure
+
+Projections and branches are expressed with the carrier's own array and
+object shapes:
+
+```json
+{
+  "meta": { "schema": 3, "units": { "temp": "C" } },
+  "tenant": "${tenant_id}",
+  "samples": [ "@for s in 0..4", { "n": "${s}", "temp": "${temp_c + s | .2}" } ],
+  "audit": [ "@if verbose", { "by": "${operator}" } ],
+  "tags": { "@for t in tags": { "${t}": true } }
+}
+```
+
+- An **array** whose first element is a `@for` string is a projection:
+  the remaining elements form the body, rendered per tuple and separated
+  as array items. With one body element the projection yields that
+  element per tuple; with several, each tuple contributes all of them in
+  order.
+- An **array** whose first element is an `@if` string is a branch: the
+  remaining elements render when the condition holds; a following
+  `"@else"` string separates the alternative.
+- An **object** with a single `@for` key is a member projection: the
+  value is an object template rendered per tuple, and its members are
+  merged into the enclosing object. A key that is itself a hole is
+  rendered as the member name.
+
+Arrays and objects without a leading directive are static structure with
+holes inside.
+
+### 3.3 One skeleton
+
+The structural front end produces the same skeleton IR as the textual
+front end (§6). Static arms of the document, however deep, fold into
+single byte ranges exactly as in the textual form; the only difference
+is that the structural form is validated by construction rather than by
+parsing the template with placeholders.
+
+A host may hand Polydat a `serde_json::Value` directly through the
+`compile_tile_value` API, or embed the document in a Polydat file as a
+`json` tile body, which is the textual form of the same thing. The two
+forms are interconvertible: a structural template pretty-prints as a
+valid textual `json` tile, and a textual `json` tile parses to the same
+structure.
+
+## 4. Type awareness
+
+Every hole has a type, known at compile time, and the encoder for a hole
+is chosen by that type. The type comes from three sources in priority
+order.
+
+### 4.1 Declared type
+
+`${expr: u64}` declares the hole's type. The compiler inserts the same
+adapter it would insert for a wire of the expression's type feeding a
+port of the declared type: lossless widening is automatic, narrowing and
+string-to-number conversions must be written explicitly, and an
+impossible conversion is a compile error at the hole's position. The
+declaration is the author's statement of what the encoding should see,
+and it wins over everything else.
+
+Type keywords are the port-type keywords of the type system: `u64`,
+`i64`, `f64`, `str`, `bool`, `json`, `bytes`, and the rest.
+
+### 4.2 Wire type
+
+Without a declaration, the hole takes the compile-time type of its
+expression, resolved by the same inference the compiler applies to any
+binding: literals, declared inputs and externs, node return types, and
+`for` elements all carry types. This covers most holes, and it is what
+lets `"${ts}"` in a structural template become a number.
+
+### 4.3 Contextual type
+
+Where an encoding assigns a meaning to a position, that position carries
+an expected type, and the hole is checked against it:
+
+| Encoding | Position | Expected | Rule |
+| --- | --- | --- | --- |
+| `json` | inside a string literal | text | any type renders as text, escaped |
+| `json` | value position | any JSON value | the wire's type picks the JSON form; `Str` is quoted, numbers bare, `Bool` bare, `Json` serialized, `None` is `null` |
+| `json` | object key | text | any type renders as text, escaped |
+| `csv` | field | text | any type renders as text, quoted when needed |
+| `text` | anywhere | text | display form |
+
+Contextual expectations never silently change a value's meaning. A `Str`
+wire at a JSON value position stays a string; if the author wants a
+number there, the declaration `: u64` says so and the conversion is
+explicit. A `Json` wire inside a string literal is serialized and
+escaped, not spliced.
+
+### 4.4 Diagnostics and strict mode
+
+A hole whose declared type cannot be reached from its wire type, or whose
+wire type is unknown, is a compile error naming the tile, the hole's
+position in the template, the expression, and both types. Under
+`(strict)` or the compiler's strict mode, implicit adapters at holes are
+rejected exactly as implicit adapters on wires are, so every conversion
+is written down.
+
+`explain tiles` prints each hole with its expression, its wire type, its
+declared type if any, its contextual expectation, and the encoder that
+was chosen, so the typing of a document is inspectable before it runs.
+
+## 5. Semantics
+
+### 5.1 A tile is a wire
+
+A tile binds a wire named by its definition. Its port type is `Str` for
+text encodings and `Bytes` for binary ones. Its value is the byte
+sequence obtained by substituting each hole's encoded text into the
+template, in order. Its lifecycle follows its holes: a tile whose holes
+are all const is const, and any dynamic hole makes it dynamic. A tile
+with no holes is a constant and folds like one.
+
+A tile depends exactly on the wires its holes and projections reference,
+so provenance and invalidation treat it like any other node. Pulling a
+tile evaluates only the holes that changed.
+
+### 5.2 Encodings
+
+An encoding defines how a body is captured, how each hole is encoded by
+type, what structural rules the skeleton must satisfy, and the default
+separator for projections.
+
+| Encoding | Capture | Structural rules | Separator |
+| --- | --- | --- | --- |
+| `json` | balanced block, heredoc, string, or structural document | the skeleton with holes at value positions is valid JSON; `@for` in an array repeats items; `@for` in an object repeats members | `,` |
+| `text` | heredoc or string | none | none |
+| `csv` | heredoc or string | one record per render; fields separated by the delimiter | the delimiter |
+
+A `json` tile is checked at compile time: the template with every hole
+replaced by a placeholder of its type must parse as JSON, holes must sit
+at value positions, inside string literals, or in key position, and a
+projection's body must be a complete value or member. A tile that fails
+this is a compile error carrying the position inside the template.
+
+Raw holes bypass the encoding's escaping. They exist for splicing
+pre-encoded content, such as one tile's rendered bytes into another at
+render time when compile-time splicing is not possible, and they are the
+author's responsibility.
+
+### 5.3 Holes
+
+A hole's expression is compiled as a binding in the enclosing scope, so
+it sees every wire the scope sees, including `for` elements and cascaded
+outer wires when the tile is declared inside a traversal body. The
+expression's type decides the encoder per §4. A format spec applies
+first, then the encoder, then the raw flag decides whether escaping
+applies.
+
+### 5.4 Projections
+
+A projection's comprehension must have bounded cardinality; an unbounded
+source is a compile error. The body's holes may reference the
+comprehension's element names and any wire of the enclosing scope. The
+body renders once per tuple with the elements bound, separated by the
+encoding's default separator or `sep`. Element names are typed from the
+comprehension's sources by the same table as [The `for`
+Construct](for_traversal.md) §3.3.
+
+A projection over a bound producer dispenses the producer's stream at
+render time. Two renders of the same tile never share dispense state.
+
+### 5.5 Splicing
+
+`${name}` where `name` is a tile in scope splices that tile's skeleton
+into this one at compile time. Its holes join this tile's holes; its
+static bytes join this tile's static bytes; adjacent statics coalesce.
+Splicing is transitive and must be acyclic. The spliced tile's encoding
+must match, except that any tile may be spliced into a `text` tile as
+raw bytes.
+
+### 5.6 Host APIs
+
+Beyond the statement form, hosts build tiles from what they hold:
+
+```text
+compile_tile(encoding, text, options)        textual body, bare
+compile_tile_value(encoding, json_value)     structural body
+polytile(encoding, text)                     a node; tile from a const string
+```
+
+`polytile` is an ordinary registered node taking constants, so a host
+that only has strings, such as a YAML workload runner, lowers
+`body: '{"tenant": ${tenant_id}}'` to `doc := polytile("json", "...")`
+as a program transform and never touches a runtime decorator. Options
+set the delimiters, the sigil, and strictness, and a host may set
+process defaults for all three.
+
+## 6. Compilation
+
+A tile compiles to a **skeleton**: a straight-line program over a small
+instruction set.
+
+```text
+Copy    { static: handle, range }           copy bytes from the static interner
+Hole    { wire, encoder, format }           encode a wire's value
+Repeat  { stream, body: skeleton, sep }     render body per tuple
+Branch  { cond, then: skeleton, else }      render one body
+```
+
+Compilation proceeds in six passes:
+
+1. **Parse** the body into segments, holes, projections, and branches,
+   with template positions for diagnostics. The textual front end
+   tokenizes by delimiter; the structural front end walks the document
+   and classifies strings per §3.1.
+2. **Splice** referenced tiles, checking for cycles.
+3. **Type** every hole per §4, inserting adapters where allowed and
+   reporting mismatches.
+4. **Fold statics.** Every maximal run of bytes containing no hole,
+   including whole nested objects and arrays, becomes one `Copy` of an
+   interned byte range. This is the pass that gives static arms their
+   O(1) render cost regardless of depth.
+5. **Validate** against the encoding's structural rules.
+6. **Lower.** Each hole expression compiles to an anonymous binding. The
+   tile itself compiles to a `tile_render` node whose wire inputs are
+   the hole bindings in skeleton order and whose constant is the
+   skeleton. A projection body compiles to a child program keyed by its
+   lexical position, exactly as a `for` body does, with one
+   `IterationExtern` per element; the `Repeat` instruction carries its
+   identity. One program per position, however many tuples flow.
+
+Tiles declared inside a `for` body compile inside that body's program.
+
+## 7. Runtime
+
+### 7.1 P1
+
+The interpreter renders into the thread-local cycle arena from nmbrs SRD
+111: `Copy` is a memcpy from the static interner, `Hole` runs the
+encoder for the hole's type straight into the arena with no intermediate
+`String`, `Repeat` activates the body program over a scratch state that
+is reset rather than reallocated per tuple, and `Branch` selects. The
+result is the arena range, surfaced as a `Str` or `Bytes` value. Nothing
+is allocated on the heap per render once the arena is warm.
+
+### 7.2 P2
+
+The `tile_render` node's closure form is monomorphic over the skeleton:
+a loop over instructions with the encoders specialized by type. Hole
+values arrive as typed slots rather than `Value`.
+
+### 7.3 P3
+
+The skeleton lowers to Cranelift IR as straight-line code. `Copy` becomes
+a call to the arena copy helper with a static handle. `Hole` becomes a
+call to the typed encoder helper, `put_u64`, `put_f64`, `put_escaped`,
+and so on, each taking the arena pointer and the slot. `Repeat` with a
+bounded stream becomes a counted loop that binds element slots and calls
+the body cone. `Branch` is a conditional jump. Hole expressions are
+ordinary cones and inline where eligible. The rendered handle flows on as
+a 64-bit slot, so a tile feeds an adapter or an `emit_row` without
+leaving native code.
+
+The helper ABI is the one SRD 111 defines for string nodes; Polytile adds
+no new calling convention.
+
+### 7.4 Cost
+
+Rendering a tile costs the bytes it copies, the holes it encodes, and,
+for each projection, the tuple count times its body's cost. Skeleton
+depth does not appear in that sum. A one-hole document with a
+thousand-byte static arm renders in one copy and one encode.
+
+## 8. Axioms
+
+- **L1, Purity.** A tile's bytes are a pure function of its hole wires.
+  Same coordinate, same bytes, on every engine and every host. Follows
+  from D1 in the runtime model applied to the tile node.
+- **L2, Static invariance.** The skeleton and every interned static range
+  are fixed at compile time. No render re-serializes structure.
+- **L3, Cost.** Render cost is linear in output bytes plus hole count plus
+  projection tuples, independent of skeleton depth.
+- **L4, Encoding soundness.** A `json` tile whose holes carry values of
+  their compile-time types renders valid JSON. A `csv` tile renders a
+  valid record. Guaranteed by compile-time validation plus per-type
+  encoders.
+- **L5, Form equivalence.** A textual `json` tile and the structural
+  template it parses to compile to the same skeleton and render the same
+  bytes.
+- **L6, Type determinism.** Every hole's encoder is fixed at compile
+  time from its declared, wire, or contextual type. No render inspects a
+  value's runtime variant to choose an encoding.
+
+## 9. Boundaries
+
+Not in this revision:
+
+- binary encodings such as protobuf and Avro, which need length-prefix
+  and back-patch instructions in the skeleton; the instruction set is
+  designed to grow those without changing the grammar;
+- parsing rendered output back into values;
+- unbounded projections;
+- recursion or user-defined template functions; splicing is the only
+  composition, and it is static;
+- YAML as an output encoding; YAML is supported as a carrier of
+  structural templates, which is the same as JSON once loaded.
+
+A tile is not a general templating language. Its expressions are
+Polydat expressions, its loops are comprehensions, and its structure is
+fixed.
+
+## 10. The `polydat` binary
+
+`--emit` gains a tile form: `--emit tile:<name>` emits the named tile
+per cycle instead of a formatted row. Under the transform rule, this
+appends an `emit_row("text", "<name>", <name>)` binding, so nothing new
+happens at runtime. `--tile-delims OPEN CLOSE` and `--tile-sigil S` set
+process defaults for tiles the binary compiles. `explain` gains a
+`tiles` phase that prints each tile's skeleton: static ranges with their
+byte counts, holes with their expressions, types, and encoders per §4.4,
+and projections with their programs.
+
+## 11. Worked example
+
+The toy test definition's load statement as a tile, with a JSON document
+per reading written in the structural form as it would sit in a
+workload file, and its textual twin:
+
+```json
+{
+  "meta": { "schema": 3, "source": "polydat", "units": { "temp": "C", "rh": "%" } },
+  "tenant": "${tenant_id}",
+  "device": "${device_id}",
+  "ts": "${ts}",
+  "reading": { "temp": "${temp_c | .2}", "rh": "${humidity | .1}", "status": "${status}" },
+  "samples": [ "@for s in 0..4", { "n": "${s}", "temp": "${temp_c + s | .2}" } ]
+}
+```
+
+```text
+tile doc : json {
+    "meta": { "schema": 3, "source": "polydat", "units": { "temp": "C", "rh": "%" } },
+    "tenant": ${tenant_id},
+    "device": "${device_id}",
+    "ts": ${ts},
+    "reading": { "temp": ${temp_c | .2}, "rh": ${humidity | .1}, "status": "${status}" },
+    "samples": [ @for s in 0..4 { { "n": ${s}, "temp": ${temp_c + s | .2} } } ]
+}
+
+tile load : text <<<
+INSERT INTO ${keyspace}.${table} (tenant_id, device_id, ts, doc)
+VALUES (${tenant_id}, '${device_id}', ${ts}, '${doc!}')
+>>>
+```
+
+In the structural form, `"${tenant_id}"` and `"${ts}"` are value holes
+and render bare because their wires are `u64`; `"${device_id}"` and
+`"${status}"` render quoted because their wires are `Str`; the `meta`
+arm is one static range. `doc`'s skeleton is eleven instructions with a
+`Repeat` for `samples`. `load` splices nothing at compile time because
+`doc` is dynamic; the raw hole copies `doc`'s rendered range into
+`load`'s arena range. Rendering both per cycle is two memcpy sequences,
+a handful of integer and float encodes, and a four-tuple loop.
+
+## 12. Implementation plan
+
+1. **Grammar.** `tile` statement with options, body capture per
+   encoding, template tokens with configurable delimiters, doubled-open
+   escape, pretty-printer round trip. Fuzz the capture and the template
+   parser as `for` was fuzzed, including delimiter variants.
+2. **Structural front end.** Classification of strings per §3.1,
+   directive arrays and objects per §3.2, and the `compile_tile_value`
+   API; tests for form equivalence (L5) between textual and structural
+   templates.
+3. **Typing.** Declared, wire, and contextual types per §4 with adapter
+   insertion, strict-mode rejection, and `explain tiles` output. Tests
+   per row of the §4.3 table and per error case.
+4. **Skeleton and P1 renderer.** Splicing, static folding, validation,
+   `tile_render` lowering, arena-backed rendering with typed encoders;
+   tiles as `Str`/`Bytes` wires; lifecycle and provenance through the
+   existing passes. Byte-exact tests against a reference built from
+   `serde_json`.
+5. **Projections.** Child program per body, scratch-state reuse,
+   separators, bounded-cardinality check, member projections. Tests
+   including producers and derivations as sources.
+6. **Host surfaces.** `polytile` node, `compile_tile`, process defaults
+   for delimiters and sigil, `--emit tile:<name>`, `--tile-delims`.
+7. **P2 and P3.** Monomorphic closure and Cranelift lowering over the
+   SRD 111 helper ABI. Differential tests against P1 across the fuzz
+   corpus.
+8. **Docs.** An illustration for each form, and the toy definition
+   emitting a JSON document.
+
+Each step lands with its tests and leaves the previous surfaces working.
