@@ -1140,6 +1140,9 @@ fn infer_auto_extern_type(
         }
         // SRD-84 Part 1b — a cast's type is its target.
         Expr::Cast(_, ty, _) => Some(*ty),
+        // A producer is an Ext-carried comprehension until the Streamer
+        // port type lands (SRD 113 step 3).
+        Expr::For(_) => Some(PortType::Ext),
         Expr::Call(call) => {
             // Each call we recognize here is one fewer
             // boundary-adapter `… → Ext` warning at runtime.
@@ -1868,13 +1871,14 @@ impl Compiler {
                     Statement::InputDecl(_) => vec![],
                     Statement::Cursor(_) => vec![],
                     Statement::Pragma { .. } => vec![],
+                    Statement::For(_) => vec![],
                 }
             }).collect();
 
             let mut referenced: HashSet<String> = HashSet::new();
             for stmt in &file.statements {
                 let expr = match stmt {
-                    Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } => continue,
+                    Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) => continue,
                     Statement::Binding(b) => &b.value,
                 };
                 collect_references(expr, &mut referenced);
@@ -2154,6 +2158,12 @@ impl Compiler {
                 Statement::Cursor(decl) => {
                     self.process_cursor(&mut asm, decl)?;
                 }
+                Statement::For(f) => {
+                    return Err(format!(
+                        "`for {}` at line {}, col {}: {}",
+                        f.source.text, f.span.line, f.span.col, "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
+                    ));
+                }
                 Statement::Pragma { .. } => {
                     // Pragmas were collected before this pass (see
                     // `collect_pragmas`) and applied to the
@@ -2227,13 +2237,14 @@ impl Compiler {
                     Statement::InputDecl(_) => vec![],
                     Statement::Cursor(_) => vec![],
                     Statement::Pragma { .. } => vec![],
+                    Statement::For(_) => vec![],
                 }
             }).collect();
 
             let mut referenced: HashSet<String> = HashSet::new();
             for stmt in &file.statements {
                 let expr = match stmt {
-                    Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } => continue,
+                    Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) => continue,
                     Statement::Binding(b) => &b.value,
                 };
                 collect_references(expr, &mut referenced);
@@ -2273,6 +2284,12 @@ impl Compiler {
                 Statement::ModuleDef(_) => {}
                 Statement::InputDecl(_) => {}
                 Statement::Pragma { .. } => {}
+                Statement::For(f) => {
+                    return Err(format!(
+                        "`for {}` at line {}, col {}: {}",
+                        f.source.text, f.span.line, f.span.col, "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
+                    ));
+                }
                 Statement::Cursor(decl) => {
                     self.process_cursor(&mut asm, decl)?;
                 }
@@ -2340,13 +2357,14 @@ impl Compiler {
                     Statement::InputDecl(_) => vec![],
                     Statement::Cursor(_) => vec![],
                     Statement::Pragma { .. } => vec![],
+                    Statement::For(_) => vec![],
                 }
             }).collect();
 
             let mut referenced: HashSet<String> = HashSet::new();
             for stmt in &file.statements {
                 let expr = match stmt {
-                    Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } => continue,
+                    Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) => continue,
                     Statement::Binding(b) => &b.value,
                 };
                 collect_references(expr, &mut referenced);
@@ -2546,6 +2564,12 @@ impl Compiler {
                     self.process_cursor(&mut asm, decl)?;
                 }
                 Statement::Pragma { .. } => {}
+                Statement::For(f) => {
+                    return Err(format!(
+                        "`for {}` at line {}, col {}: {}",
+                        f.source.text, f.span.line, f.span.col, "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
+                    ));
+                }
             }
         }
 

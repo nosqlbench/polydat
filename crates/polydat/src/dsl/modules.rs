@@ -338,6 +338,12 @@ impl Compiler {
                 Statement::ModuleDef(_) | Statement::ExternPort(_) => {} // nested module defs not inlined
                 Statement::Cursor(_) => {}
                 Statement::Pragma { .. } => {} // pragmas don't inline; they're module-scoped
+                Statement::For(f) => {
+                    return Err(format!(
+                        "`for {}` inside module '{}': {}",
+                        f.source.text, func_name, "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
+                    ));
+                }
             }
         }
 
@@ -590,7 +596,7 @@ impl Compiler {
 
         for (i, stmt) in ast.statements.iter().enumerate() {
             let (names, expr) = match stmt {
-                Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } => {
+                Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) => {
                     stmt_refs.push(HashSet::new());
                     continue;
                 }
@@ -648,11 +654,12 @@ impl Compiler {
                 Statement::ModuleDef(_) | Statement::ExternPort(_) => {}
                 Statement::Cursor(_) => {}
                 Statement::Pragma { .. } => {}
+                Statement::For(_) => {}
             }
         }
         for stmt in &extracted {
             let expr = match stmt {
-                Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } => continue,
+                Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) => continue,
                 Statement::Binding(b) => &b.value,
             };
             collect_references(expr, &mut referenced);

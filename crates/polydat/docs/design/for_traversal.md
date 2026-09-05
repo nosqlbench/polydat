@@ -1,7 +1,9 @@
 # The `for` Construct — Comprehension Producers and Traversal Scopes
 
-**Status:** Draft for review. Proposed SRD 113. Nothing in this document is
-implemented yet; it specifies the contract that implementation must meet.
+**Status:** Proposed SRD 113. Step 1 of §11, the parser and AST, is
+implemented: both `for` forms lex, parse, and pretty-print, and the
+compiler rejects them with a pointer here until step 2 lands. Later
+sections specify the contract the remaining steps must meet.
 
 **Ownership:** Polydat owns the grammar, the compiled form, the activation
 runtime, and the consumption surfaces defined here. Hosts own scheduling
@@ -89,6 +91,15 @@ for phase in load,verify, p in partitions("*/4", 1000000) {
 
 `for` is a hard keyword. Existing programs do not use it as an identifier
 because the comprehension parser already reserved it.
+
+The lexer captures the comprehension text as one token: everything after
+`for` up to the end of the line or a `{` at bracket depth zero, whichever
+comes first, with string literals skipped whole. A `{name}` coordinate
+reference inside a `where` predicate is part of the text, since a block
+brace is never immediately followed by an identifier and a closing brace.
+A traversal's `{` therefore opens on the same line as its comprehension.
+The captured text is handed to the comprehension parser unchanged, so the
+traversal grammar has exactly one owner.
 
 ## 3. Semantics
 
@@ -457,9 +468,11 @@ where it has ordinary wired access to everything the scope can see.
 
 ## 11. Implementation plan
 
-1. **Parser and AST.** `for` token, `Expr::For`, `Statement::For`, block
-   bodies. Pretty-printer round trip. Tests: parse and print every form in
-   §2.
+1. **Parser and AST.** Done. `TokenKind::For(text)`, `Expr::For`,
+   `Statement::For` with `ForSource` and `ForStmt`, block bodies, and
+   pretty-printer round trip. Tests in `tests/for_syntax.rs` parse and
+   print every form in §2, including nesting and `where` placeholders, and
+   check the compiler's interim rejection.
 2. **Element typing and body compilation.** Child program per `for`
    statement, `IterationExtern` inputs, cascade externs, compile-time type
    errors. Tests: each row of the §3.3 table, outer-wire visibility,

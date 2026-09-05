@@ -75,6 +75,7 @@ fn expr_span(expr: &Expr) -> Span {
         Expr::IntLit(_, s) | Expr::FloatLit(_, s) | Expr::StringLit(_, s)
             | Expr::Ident(_, s) | Expr::UnaryNeg(_, s) | Expr::UnaryBitNot(_, s)
             | Expr::ArrayLit(_, s) | Expr::Cast(_, _, s) => *s,
+        Expr::For(source) => source.span,
         Expr::Call(c) => c.span,
         Expr::FieldAccess { span, .. } => *span,
         Expr::BinOp(..) => Span { line: 0, col: 0 },
@@ -154,6 +155,7 @@ fn infer_expr_type(
         Expr::StringLit(_, _) => PortType::Str,
         // SRD-84 Part 1b — a cast's type is its target.
         Expr::Cast(_, ty, _) => *ty,
+        Expr::For(_) => PortType::Ext,
         Expr::Ident(name, _) => {
             // An input's declared type. Coordinate inputs are u64, but
             // an `f64` / `str` extern carries its declared type — must
@@ -467,6 +469,12 @@ impl Compiler {
                                     wire_refs.push(WireRef::node(anon));
                                 }
                             }
+                        }
+                        Expr::For(source) => {
+                            return Err(format!(
+                                "`for {}` at line {}, col {}: {}",
+                                source.text, source.span.line, source.span.col, "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
+                            ));
                         }
                         Expr::BinOp(..) | Expr::UnaryBitNot(..) | Expr::Cast(..) => {
                             // Inline arithmetic / cast: desugar to an anonymous node
@@ -954,6 +962,12 @@ impl Compiler {
                 let rendered = render_list_literal(elems);
                 asm.add_node(name, Box::new(ConstStr::new(rendered)), vec![]);
                 self.all_names.push(name.clone());
+            }
+            Expr::For(source) => {
+                return Err(format!(
+                    "`for {}` at line {}, col {}: {}",
+                    source.text, source.span.line, source.span.col, "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
+                ));
             }
             Expr::Cast(inner, target, _) => {
                 // SRD-84 Part 1b — `<expr> as <type>`: an alignment-only

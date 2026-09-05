@@ -50,13 +50,14 @@ pub(crate) fn validate_ast(file: &PolydatFile, report: &mut DiagnosticReport) {
             }
             Statement::Cursor(_) => {}
             Statement::Pragma { .. } => {}
+            Statement::For(_) => {}
         }
     }
 
     // Second pass: validate function calls and collect references
     for stmt in &file.statements {
         let expr = match stmt {
-            Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } => continue,
+            Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) => continue,
             Statement::Binding(b) => &b.value,
         };
         validate_expr(expr, &mut referenced, report);
@@ -131,6 +132,7 @@ pub(crate) fn validate_ast(file: &PolydatFile, report: &mut DiagnosticReport) {
             }
             Statement::Cursor(_) => {}
             Statement::Pragma { .. } => {}
+            Statement::For(_) => {}
         }
     }
 }

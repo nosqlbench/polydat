@@ -62,6 +62,12 @@ pub enum TokenKind {
     /// pragmas as first-class statements rather than scraping them
     /// out of `// @pragma:` text.
     Pragma,
+    /// `for` followed by its raw comprehension text (SRD 113). The
+    /// lexer captures everything after the keyword up to a `{` at
+    /// nesting depth zero or the end of the line, whichever comes
+    /// first, so the comprehension grammar stays owned by the
+    /// comprehension parser rather than being re-tokenized here.
+    For(String),
     /// `.` (field access: `base.ordinal`)
     Dot,
     /// Integer literal: `1000`, `0xFF`
@@ -501,6 +507,13 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
                 "cursor" => TokenKind::Cursor,
                 "over" => TokenKind::Over,
                 "pragma" => TokenKind::Pragma,
+                "for" => {
+                    let (text, consumed) = capture_for_text(&chars, pos);
+                    pos += consumed;
+                    col += consumed;
+                    tokens.push(Token { kind: TokenKind::For(text), span });
+                    continue;
+                }
                 _ => TokenKind::Ident(word),
             };
             tokens.push(Token { kind, span });
@@ -512,6 +525,79 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
 
     tokens.push(Token { kind: TokenKind::Eof, span: Span { line, col } });
     Ok(tokens)
+}
+
+/// Capture the raw comprehension text after a `for` keyword.
+///
+/// Scans from `start` until a `{` at paren/bracket depth zero or a
+/// newline, stopping early at a `//` or `#` comment. String literals
+/// are skipped whole so braces and commas inside them do not count.
+/// Returns the trimmed text and the number of chars consumed; the `{`
+/// and the newline are left for the main loop.
+fn capture_for_text(chars: &[char], start: usize) -> (String, usize) {
+    let mut pos = start;
+    let mut depth = 0usize;
+    let mut text = String::new();
+    while pos < chars.len() {
+        let c = chars[pos];
+        match c {
+            '\n' => break,
+            '{' if depth == 0 => {
+                // `{name}` inside a `where` predicate is a coordinate
+                // reference, not the start of the block. A block brace
+                // is never immediately followed by an identifier and a
+                // closing brace.
+                match placeholder_len(chars, pos) {
+                    Some(n) => {
+                        text.extend(chars[pos..pos + n].iter());
+                        pos += n;
+                        continue;
+                    }
+                    None => break,
+                }
+            }
+            '#' => break,
+            '/' if pos + 1 < chars.len() && chars[pos + 1] == '/' => break,
+            '"' | '\'' => {
+                let quote = c;
+                text.push(c);
+                pos += 1;
+                while pos < chars.len() && chars[pos] != quote && chars[pos] != '\n' {
+                    if chars[pos] == '\\' && pos + 1 < chars.len() {
+                        text.push(chars[pos]);
+                        pos += 1;
+                    }
+                    text.push(chars[pos]);
+                    pos += 1;
+                }
+                if pos < chars.len() && chars[pos] == quote {
+                    text.push(quote);
+                    pos += 1;
+                }
+                continue;
+            }
+            '(' | '[' => depth += 1,
+            ')' | ']' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+        text.push(c);
+        pos += 1;
+    }
+    (text.trim().to_string(), pos - start)
+}
+
+/// Length of a `{identifier}` placeholder starting at `pos`, if the
+/// text there is one.
+fn placeholder_len(chars: &[char], pos: usize) -> Option<usize> {
+    let mut i = pos + 1;
+    let first = *chars.get(i)?;
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return None;
+    }
+    while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+        i += 1;
+    }
+    (chars.get(i) == Some(&'}')).then_some(i + 1 - pos)
 }
 
 /// SRD-18c Layer 6 / SRD-18e Push 4: peek for an SI suffix

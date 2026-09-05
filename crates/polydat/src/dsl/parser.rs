@@ -178,6 +178,7 @@ fn parse_statement_into(p: &mut Parser, out: &mut Vec<Statement>) -> Result<(), 
         TokenKind::Input => parse_input_decl(p, out)?,
         TokenKind::Extern => out.push(parse_extern_port(p)?),
         TokenKind::Cursor => out.push(parse_cursor_decl(p)?),
+        TokenKind::For(_) => out.push(parse_for_statement(p)?),
         TokenKind::Const | TokenKind::Shared | TokenKind::Volatile => {
             out.push(parse_modified_binding(p)?);
         }
@@ -204,6 +205,58 @@ fn parse_statement_into(p: &mut Parser, out: &mut Vec<Statement>) -> Result<(), 
 /// is a bare identifier; arguments are not currently supported (the
 /// recognised set in SRD 15 has none, and adding them later is
 /// non-breaking). See SRD 15 §"Module-Level Pragmas".
+/// `for <source> { statements }` — SRD 113 §2.
+///
+/// The lexer already captured the source text. A bare identifier names
+/// a bound producer; anything else is comprehension text handed to the
+/// comprehension parser, so the traversal grammar has one owner.
+fn parse_for_statement(p: &mut Parser) -> Result<Statement, String> {
+    let span = p.span();
+    let text = match p.peek().clone() {
+        TokenKind::For(text) => text,
+        other => return Err(format!("expected `for`, got {other:?} at line {}, col {}", span.line, span.col)),
+    };
+    p.advance();
+    let source = for_source_from_text(&text, span, true)?;
+    if !matches!(p.peek(), TokenKind::LBrace) {
+        return Err(format!(
+            "`for {text}` at line {}, col {} needs a `{{` block on the same line; \
+             to bind a producer instead, write `name := for {text}`",
+            span.line, span.col
+        ));
+    }
+    p.advance();
+    let mut body = Vec::new();
+    while !matches!(p.peek(), TokenKind::RBrace | TokenKind::Eof) {
+        parse_statement_into(p, &mut body)?;
+    }
+    p.expect(&TokenKind::RBrace)?;
+    Ok(Statement::For(ForStmt { source, body, span }))
+}
+
+/// Classify and parse the text after `for`.
+fn for_source_from_text(text: &str, span: Span, allow_producer: bool) -> Result<ForSource, String> {
+    if text.is_empty() {
+        return Err(format!("`for` at line {}, col {} has no comprehension", span.line, span.col));
+    }
+    let is_ident = text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && text.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    if is_ident {
+        if allow_producer {
+            return Ok(ForSource { text: text.to_string(), kind: ForSourceKind::Producer(text.to_string()), span });
+        }
+        return Err(format!(
+            "`for {text}` at line {}, col {}: a producer expression needs comprehension text such as `k in 1..10`",
+            span.line, span.col
+        ));
+    }
+    let legacy = crate::iteration::comprehension::parse::parse_comprehension_text(text)
+        .map_err(|e| format!("`for {text}` at line {}, col {}: {e}", span.line, span.col))?;
+    let algebra = crate::iteration::comprehension::spec::legacy_to_algebra(&legacy)
+        .map_err(|e| format!("`for {text}` at line {}, col {}: {e}", span.line, span.col))?;
+    Ok(ForSource { text: text.to_string(), kind: ForSourceKind::Comprehension(algebra), span })
+}
+
 fn parse_pragma(p: &mut Parser) -> Result<Statement, String> {
     let span = p.span();
     p.expect(&TokenKind::Pragma)?;
@@ -703,6 +756,11 @@ fn parse_atom(p: &mut Parser) -> Result<Expr, String> {
         }
         TokenKind::LBracket => {
             parse_array_lit(p)
+        }
+        TokenKind::For(text) => {
+            p.advance();
+            let source = for_source_from_text(&text, span, false)?;
+            Ok(Expr::For(Box::new(source)))
         }
         TokenKind::Ident(name) => {
             p.advance();

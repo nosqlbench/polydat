@@ -31,7 +31,7 @@
 
 use crate::dsl::ast::{
     Arg, BindingModifier, CallExpr, Binding, Expr, PolydatFile,
-    ModuleDef, Statement, BinOpKind, ExternPort, CursorDecl, WireModifier,
+    ModuleDef, Statement, BinOpKind, ExternPort, CursorDecl, WireModifier, ForStmt,
 };
 
 /// Pretty-print a full file: every statement, separated by
@@ -57,7 +57,22 @@ pub fn pp_statement(stmt: &Statement) -> String {
         Statement::ExternPort(p) => pp_extern_port(p),
         Statement::Cursor(c) => pp_cursor(c),
         Statement::Pragma { name, .. } => format!("pragma {name}"),
+        Statement::For(f) => pp_for_stmt(f, 0),
     }
+}
+
+fn pp_for_stmt(f: &ForStmt, indent: usize) -> String {
+    let pad = "    ".repeat(indent + 1);
+    let mut body = String::new();
+    for s in &f.body {
+        body.push_str(&pad);
+        body.push_str(&match s {
+            Statement::For(inner) => pp_for_stmt(inner, indent + 1),
+            other => pp_statement(other),
+        });
+        body.push('\n');
+    }
+    format!("for {} {{\n{}{}}}", f.source.text, body, "    ".repeat(indent))
 }
 
 /// Pretty-print an expression. Always emits parens around
@@ -80,6 +95,7 @@ pub fn pp_expr(expr: &Expr) -> String {
         Expr::UnaryBitNot(e, _) => format!("(!{})", pp_expr(e)),
         Expr::FieldAccess { source, field, .. } => format!("{source}.{field}"),
         Expr::Cast(e, ty, _) => format!("({} as {})", pp_expr(e), ty.to_keyword()),
+        Expr::For(source) => format!("for {}", source.text),
     }
 }
 

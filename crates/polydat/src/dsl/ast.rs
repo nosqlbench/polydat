@@ -66,6 +66,49 @@ pub enum Statement {
     /// `CompileEvent::UnknownPragma` and are otherwise ignored
     /// (forward-compatible).
     Pragma { name: String, span: Span },
+    /// `for <source> { body }` — a traversal scope (SRD 113 §3.2).
+    /// One child scope activates per tuple of the source; the
+    /// comprehension's element names are wires inside the body.
+    For(ForStmt),
+}
+
+/// What a `for` iterates: inline comprehension text, or the name of a
+/// bound producer wire.
+#[derive(Debug, Clone)]
+pub struct ForSource {
+    /// The raw text after `for`, preserved for diagnostics and for
+    /// pretty-printing round trips.
+    pub text: String,
+    pub kind: ForSourceKind,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum ForSourceKind {
+    /// A bare identifier naming a `Streamer` wire bound by a `for`
+    /// expression elsewhere in scope.
+    Producer(String),
+    /// Comprehension text, parsed to the algebra AST.
+    Comprehension(crate::iteration::comprehension::Comprehension),
+}
+
+impl ForSource {
+    /// The element names the source dispenses, when known statically.
+    /// A producer reference resolves its names at compile time.
+    pub fn element_names(&self) -> Vec<String> {
+        match &self.kind {
+            ForSourceKind::Producer(_) => Vec::new(),
+            ForSourceKind::Comprehension(c) => c.coordinate_names(),
+        }
+    }
+}
+
+/// A traversal statement: `for <source> { statements }`.
+#[derive(Debug, Clone)]
+pub struct ForStmt {
+    pub source: ForSource,
+    pub body: Vec<Statement>,
+    pub span: Span,
 }
 
 /// An external input port declaration.
@@ -318,6 +361,9 @@ pub enum Expr {
     /// the compiler inserts the SRD-79 fusion adapter (or errors if no
     /// valid fusion exists). The cast's type is its target.
     Cast(Box<Expr>, crate::ast::PortType, Span),
+    /// `for <comprehension>` in expression position — a comprehension
+    /// producer (SRD 113 §3.1). Binds a `Streamer` wire.
+    For(Box<ForSource>),
 }
 
 /// Binary arithmetic operator kind.

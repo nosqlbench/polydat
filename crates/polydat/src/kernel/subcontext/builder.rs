@@ -735,7 +735,8 @@ fn collect_free_idents(stmt: &Statement, out: &mut std::collections::HashSet<Str
         Statement::ModuleDef(_)
         | Statement::ExternPort(_)
         | Statement::InputDecl(_)
-        | Statement::Pragma { .. } => {}
+        | Statement::Pragma { .. }
+        | Statement::For(_) => {}
     }
 }
 
@@ -765,6 +766,7 @@ fn collect_expr_idents(expr: &Expr, out: &mut std::collections::HashSet<String>)
             collect_expr_idents(a, out);
             collect_expr_idents(b, out);
         }
+        Expr::For(_) => {}
         Expr::UnaryNeg(e, _) | Expr::UnaryBitNot(e, _)
         | Expr::Cast(e, _, _) => collect_expr_idents(e, out),
         Expr::FieldAccess { source, .. } => {

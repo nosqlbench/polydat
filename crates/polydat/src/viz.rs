@@ -222,6 +222,7 @@ fn build_graph(source: &str) -> Result<(Vec<VizNode>, Vec<VizEdge>), String> {
             Statement::ModuleDef(_) | Statement::ExternPort(_) => {}
             Statement::Cursor(_) => {}
             Statement::Pragma { .. } => {}
+            Statement::For(_) => {}
         }
     }
 
@@ -230,7 +231,7 @@ fn build_graph(source: &str) -> Result<(Vec<VizNode>, Vec<VizEdge>), String> {
         let mut refs: HashSet<String> = HashSet::new();
         for stmt in &ast.statements {
             let expr = match stmt {
-                Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } => continue,
+                Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) => continue,
                 Statement::Binding(b) => &b.value,
             };
             collect_expr_idents(expr, &mut refs);
@@ -245,7 +246,7 @@ fn build_graph(source: &str) -> Result<(Vec<VizNode>, Vec<VizEdge>), String> {
     let mut consumed: HashSet<String> = HashSet::new();
     for stmt in &ast.statements {
         let expr = match stmt {
-            Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } => continue,
+            Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) => continue,
             Statement::Binding(b) => &b.value,
         };
         collect_expr_idents(expr, &mut consumed);
@@ -279,7 +280,7 @@ fn build_graph(source: &str) -> Result<(Vec<VizNode>, Vec<VizEdge>), String> {
     // ─── Function nodes (middle) ────────────────────────
     for stmt in &ast.statements {
         match stmt {
-            Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } => continue,
+            Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) => continue,
             Statement::Binding(b) => {
                 let id = format!("n{node_counter}");
                 node_counter += 1;

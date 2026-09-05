@@ -85,6 +85,10 @@ pub fn collect_expr_refs(expr: &Expr, out: &mut BTreeSet<String>) {
             collect_expr_refs(lhs, out);
             collect_expr_refs(rhs, out);
         }
+        // A producer's element names are bound inside its own scope;
+        // outer references in its sources resolve at compile time
+        // (SRD 113 step 2).
+        Expr::For(_) => {}
         Expr::UnaryNeg(inner, _) | Expr::UnaryBitNot(inner, _)
         | Expr::Cast(inner, _, _) => {
             collect_expr_refs(inner, out);

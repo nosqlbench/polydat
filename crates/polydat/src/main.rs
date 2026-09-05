@@ -791,6 +791,7 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
                         Statement::Cursor(c) => println!("  cursor    {}{}", c.name, if c.over.is_some() { " over ..." } else { "" }),
                         Statement::ModuleDef(m) => println!("  module    {}({} params) -> ({} outputs), {} body statements", m.name, m.params.len(), m.outputs.len(), m.body.len()),
                         Statement::Pragma { name, .. } => println!("  pragma    {name}"),
+                        Statement::For(f) => println!("  for       {} {{ {} statements }}", f.source.text, f.body.len()),
                         Statement::Binding(b) => {
                             let mods = modifier_suffix(&b.modifier);
                             let targets = if b.targets.len() > 1 { format!("({})", b.targets.join(", ")) } else { b.targets.join("") };
