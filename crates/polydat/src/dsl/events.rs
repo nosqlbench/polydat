@@ -82,6 +82,19 @@ pub enum CompileEvent {
         to_node: String,
         reason: String,
     },
+    /// A tile hole was typed (SRD 114 §4): its expression, the wire
+    /// type the compiler inferred, the declared type if any, the
+    /// contextual expectation of its position, the encoder chosen, and
+    /// the adapter inserted between wire and declared type if one was.
+    TileHoleTyped {
+        tile: String,
+        hole: String,
+        wire_type: String,
+        declared: Option<String>,
+        expectation: String,
+        encoder: String,
+        adapter: Option<String>,
+    },
 }
 
 impl CompileEvent {
@@ -98,8 +111,10 @@ impl CompileEvent {
             CompileEvent::ConstantFolded { .. } => EventLevel::Info,
             CompileEvent::FusionApplied { .. } => EventLevel::Info,
             CompileEvent::Summary { .. } => EventLevel::Info,
+            CompileEvent::TileHoleTyped { adapter: None, .. } => EventLevel::Info,
 
             // Advisory: implicit conversions the user should review
+            CompileEvent::TileHoleTyped { adapter: Some(_), .. } => EventLevel::Advisory,
             CompileEvent::TypeAdapterInserted { .. } => EventLevel::Advisory,
             CompileEvent::TypeWidening { .. } => EventLevel::Advisory,
             CompileEvent::LegacyTranslated { .. } => EventLevel::Advisory,
@@ -195,6 +210,12 @@ impl CompileEventLog {
                 format!("assertion inserted: {from_node} → {to_node} ({kind})"),
             CompileEvent::AssertionSkipped { from_node, to_node, reason } =>
                 format!("assertion skipped: {from_node} → {to_node} ({reason})"),
+            CompileEvent::TileHoleTyped { tile, hole, wire_type, declared, expectation, encoder, adapter } =>
+                format!(
+                    "tile '{tile}' hole `{hole}`: wire {wire_type}{} expects {expectation}, encoder {encoder}{}",
+                    declared.as_ref().map(|d| format!(", declared {d},")).unwrap_or_else(|| ",".to_string()),
+                    adapter.as_ref().map(|a| format!(", adapter {a}")).unwrap_or_default()
+                ),
             };
             format!("polydat[{tag}]: {msg}")
         }).collect::<Vec<_>>().join("\n")

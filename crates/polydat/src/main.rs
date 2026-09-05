@@ -202,9 +202,10 @@ enum Phase {
     Provenance,
     Outputs,
     Traversals,
+    Tiles,
 }
 
-const ALL_PHASES: [Phase; 13] = [
+const ALL_PHASES: [Phase; 14] = [
     Phase::Lex,
     Phase::Parse,
     Phase::Inputs,
@@ -218,6 +219,7 @@ const ALL_PHASES: [Phase; 13] = [
     Phase::Provenance,
     Phase::Outputs,
     Phase::Traversals,
+    Phase::Tiles,
 ];
 
 fn main() {
@@ -1175,6 +1177,23 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
                 }
                 println!("Deterministic: {}", program.is_deterministic());
             }
+            Phase::Tiles => {
+                let holes: Vec<_> = events.iter().filter(|e| matches!(e, CompileEvent::TileHoleTyped { .. })).collect();
+                if holes.is_empty() {
+                    println!("No tiles in this program.");
+                } else {
+                    println!("Every hole was typed before the tile compiled: a declared type wins, otherwise the wire's type; the hole's position says what the encoding expects there, and the two pick the encoder.");
+                    for e in holes {
+                        if let CompileEvent::TileHoleTyped { tile, hole, wire_type, declared, expectation, encoder, adapter } = e {
+                            let declared = declared.as_ref().map(|d| format!(", declared {d}")).unwrap_or_default();
+                            let adapter = adapter.as_ref().map(|a| format!("  adapter {a}")).unwrap_or_default();
+                            println!("  {tile:<12} ${{{hole}}}");
+                            println!("               wire {wire_type}{declared}; expects {expectation}");
+                            println!("               -> {encoder}{adapter}");
+                        }
+                    }
+                }
+            }
             Phase::Traversals => {
                 let ts = program.traversals();
                 let ps = program.producers();
@@ -1231,6 +1250,7 @@ fn phase_title(p: Phase) -> &'static str {
         Phase::Provenance => "provenance: which inputs invalidate which outputs",
         Phase::Outputs => "outputs: the manifest",
         Phase::Traversals => "traversals: for bodies compiled once per lexical position",
+        Phase::Tiles => "tiles: how each hole is typed and encoded",
     }
 }
 

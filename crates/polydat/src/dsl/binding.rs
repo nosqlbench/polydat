@@ -144,7 +144,7 @@ fn flatten_str_add(expr: &Expr, out: &mut Vec<Expr>) {
 /// (e.g. `u64_mul`) instead of the f64 variant (`f64_mul`).
 ///
 /// For unknown cases, defaults to `PortType::U64`.
-fn infer_expr_type(
+pub(super) fn infer_expr_type(
     expr: &Expr,
     asm: &PolydatAssembler,
     input_names: &[String],

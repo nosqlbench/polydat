@@ -36,6 +36,7 @@ impl Compiler {
             children: Vec::new(),
             hole_counter: 0,
             in_string: false,
+            strict: self.strict || tile.options.strict,
             span: tile.span,
         };
         let pieces = self.splice_tiles(&tile.pieces, &tile.name, &tile.encoding, 0)?;
@@ -119,7 +120,20 @@ struct TileLowering {
     /// Whether the static text so far leaves a `json` skeleton inside a
     /// string literal.
     in_string: bool,
+    /// Reject implicit adapters at holes (SRD 114 §4.4).
+    strict: bool,
     span: super::lexer::Span,
+}
+
+/// How one hole was typed (SRD 114 §4): the wire's compile-time type,
+/// the declared type if any, the type the encoder sees, and the
+/// adapter between them when the declaration asks for one.
+struct HoleTyping {
+    wire: PortType,
+    declared: Option<PortType>,
+    effective: PortType,
+    adapter: Option<(PortType, PortType)>,
+    expectation: &'static str,
 }
 
 /// A projection body under construction.
@@ -163,8 +177,8 @@ impl TileLowering {
                         cond: false,
                     };
                     let source = match body.as_deref_mut() {
-                        Some(ctx) => self.body_hole(asm, &h.expr, &enc, ctx)?,
-                        None => self.wire_hole(compiler, asm, &h.text, &h.expr, &enc)?,
+                        Some(ctx) => self.body_hole(compiler, asm, &h.text, &h.expr, enc, ctx)?,
+                        None => self.wire_hole(compiler, asm, &h.text, &h.expr, enc)?,
                     };
                     ops.push(TileOp::Hole(source));
                 }
@@ -178,9 +192,10 @@ impl TileLowering {
                         raw: true,
                         cond: true,
                     };
+                    let text = format!("if {}", super::pprint::pp_expr(cond));
                     let source = match body.as_deref_mut() {
-                        Some(ctx) => self.body_hole(asm, cond, &enc, ctx)?,
-                        None => self.wire_hole(compiler, asm, "condition", cond, &enc)?,
+                        Some(ctx) => self.body_hole(compiler, asm, &text, cond, enc, ctx)?,
+                        None => self.wire_hole(compiler, asm, &text, cond, enc)?,
                     };
                     let saved = self.in_string;
                     let then_ops = self.lower_pieces(compiler, asm, then, body.as_deref_mut())?;
@@ -253,14 +268,146 @@ impl TileLowering {
         Ok(ops)
     }
 
-    /// A hole in the tile's own scope: `__tile_<name>_hN := tile_encode(expr, spec)`.
-    fn wire_hole(&mut self, compiler: &mut Compiler, asm: &mut PolydatAssembler, text: &str, expr: &Expr, enc: &HoleEncoding) -> Result<HoleSource, String> {
-        validate_type(text, enc)?;
+    /// The compile-time type of a hole expression (SRD 114 §4.2): the
+    /// same inference every binding gets, with projection elements and
+    /// cascaded outer wires resolved from the body context.
+    fn infer_type(&self, compiler: &Compiler, asm: &PolydatAssembler, expr: &Expr, ctx: Option<&BodyContext>) -> PortType {
+        if let Expr::Ident(name, _) = expr
+            && let Some(ctx) = ctx
+        {
+            if let Some((_, t)) = ctx.elements.iter().find(|(n, _)| n == name) {
+                return *t;
+            }
+            if let Some((_, _, t)) = ctx.cascade.iter().find(|(n, _, _)| n == name) {
+                return PortType::from_keyword(t).unwrap_or(PortType::U64);
+            }
+        }
+        super::binding::infer_expr_type(expr, asm, &compiler.input_names)
+    }
+
+    /// Type one hole (SRD 114 §4): the declared type wins and must be
+    /// reachable from the wire type through the assembler's own adapter
+    /// catalog; otherwise the wire type stands. Strict mode rejects the
+    /// adapter a declaration would need.
+    fn type_hole(&self, text: &str, wire: PortType, declared: Option<&str>, position: HolePosition, cond: bool) -> Result<HoleTyping, String> {
+        let tile = &self.tile_name;
+        let expectation = if cond {
+            "a truth value"
+        } else {
+            match (self.encoding.as_str(), position) {
+                ("json", HolePosition::Value) => "any JSON value",
+                ("json", HolePosition::InString) => "text inside a JSON string",
+                ("csv", _) => "a CSV field",
+                _ => "text",
+            }
+        };
+        if matches!(
+            wire,
+            PortType::Ext
+                | PortType::Handle
+                | PortType::Reg128
+                | PortType::RegI8x16
+                | PortType::RegI16x8
+                | PortType::RegI32x4
+                | PortType::RegI64x2
+                | PortType::RegF16x8
+                | PortType::RegF32x4
+                | PortType::RegF64x2
+        ) {
+            return Err(format!(
+                "tile '{tile}': hole `{text}`: a {} wire has no text form and cannot fill a hole",
+                wire.to_keyword()
+            ));
+        }
+        let declared_ty = match declared {
+            Some(kw) => Some(
+                PortType::from_keyword(kw).ok_or_else(|| format!("tile '{tile}': hole `{text}`: unknown type '{kw}'"))?,
+            ),
+            None => None,
+        };
+        let mut adapter = None;
+        if let Some(to) = declared_ty
+            && to != wire
+        {
+            if crate::compile::assembly::auto_adapter(wire, to).is_none() {
+                return Err(format!(
+                    "tile '{tile}': hole `{text}`: no conversion from the wire type {} to the declared type {}; \
+                     write the conversion explicitly in the expression",
+                    wire.to_keyword(),
+                    to.to_keyword()
+                ));
+            }
+            if self.strict {
+                return Err(format!(
+                    "tile '{tile}': hole `{text}`: strict mode rejects the implicit {} -> {} adapter the declaration needs; \
+                     write the conversion explicitly in the expression",
+                    wire.to_keyword(),
+                    to.to_keyword()
+                ));
+            }
+            adapter = Some((wire, to));
+        }
+        Ok(HoleTyping { wire, declared: declared_ty, effective: declared_ty.unwrap_or(wire), adapter, expectation })
+    }
+
+    /// Record how a hole was typed for `explain tiles` (SRD 114 §4.4).
+    fn record(&self, compiler: &mut Compiler, text: &str, typing: &HoleTyping, enc: &HoleEncoding) {
+        let kw = typing.effective.to_keyword();
+        let mut encoder = if enc.cond {
+            "truth value as 1 or 0".to_string()
+        } else if enc.raw {
+            "raw text, no escaping".to_string()
+        } else {
+            match (enc.encoding.as_str(), enc.position) {
+                ("json", HolePosition::Value) => match typing.effective {
+                    PortType::Str | PortType::Bytes => "json string, quoted and escaped".to_string(),
+                    PortType::Bool => "json boolean".to_string(),
+                    PortType::Json => "json value, serialized".to_string(),
+                    t if is_numeric(t) => "json number".to_string(),
+                    _ => "json string, quoted and escaped".to_string(),
+                },
+                ("json", HolePosition::InString) => "json escaped text".to_string(),
+                ("csv", _) => "csv field, quoted when needed".to_string(),
+                _ => "display text".to_string(),
+            }
+        };
+        if let Some(f) = &enc.format {
+            encoder.push_str(&format!(", format {f}"));
+        }
+        compiler.tile_events.push(super::events::CompileEvent::TileHoleTyped {
+            tile: self.tile_name.clone(),
+            hole: text.to_string(),
+            wire_type: typing.wire.to_keyword().to_string(),
+            declared: typing.declared.map(|t| t.to_keyword().to_string()),
+            expectation: format!("{} ({kw})", typing.expectation),
+            encoder,
+            adapter: typing.adapter.map(|(f, t)| format!("{} -> {}", f.to_keyword(), t.to_keyword())),
+        });
+    }
+
+    /// A hole in the tile's own scope: `__tile_<name>_hN := tile_encode(expr, spec)`,
+    /// with the declaration's adapter node between when one is needed.
+    fn wire_hole(&mut self, compiler: &mut Compiler, asm: &mut PolydatAssembler, text: &str, expr: &Expr, mut enc: HoleEncoding) -> Result<HoleSource, String> {
+        let wire = self.infer_type(compiler, asm, expr, None);
+        let typing = self.type_hole(text, wire, enc.ty.as_deref(), enc.position, enc.cond)?;
+        enc.ty = Some(typing.effective.to_keyword().to_string());
         let name = self.next_name("h");
-        let call = encode_call(expr, enc, self.span);
-        compiler
-            .compile_binding(asm, std::slice::from_ref(&name), &call)
-            .map_err(|e| format!("tile '{}': hole `{text}`: {e}", self.tile_name))?;
+        let err = |e: String| format!("tile '{}': hole `{text}`: {e}", self.tile_name);
+        let value = match typing.adapter {
+            Some((from, to)) => {
+                let vname = format!("{name}_v");
+                compiler.compile_binding(asm, std::slice::from_ref(&vname), expr).map_err(err)?;
+                let aname = format!("{name}_a");
+                let node = crate::compile::assembly::auto_adapter(from, to).expect("adapter checked by type_hole");
+                asm.add_node(&aname, node, vec![crate::compile::assembly::WireRef::node(&vname)]);
+                compiler.all_names.push(aname.clone());
+                Expr::Ident(aname, self.span)
+            }
+            None => expr.clone(),
+        };
+        let call = encode_call(&value, &enc, self.span);
+        compiler.compile_binding(asm, std::slice::from_ref(&name), &call).map_err(err)?;
+        self.record(compiler, text, &typing, &enc);
         let index = self.push_input(name);
         Ok(HoleSource::Wire(index))
     }
@@ -268,8 +415,15 @@ impl TileLowering {
     /// A hole inside a projection body: a `tile_encode` binding of the
     /// child program. Outer names it references cascade in as render
     /// node inputs, typed by the parent's wire.
-    fn body_hole(&mut self, asm: &mut PolydatAssembler, expr: &Expr, enc: &HoleEncoding, ctx: &mut BodyContext) -> Result<HoleSource, String> {
-        validate_type("body hole", enc)?;
+    fn body_hole(
+        &mut self,
+        compiler: &mut Compiler,
+        asm: &mut PolydatAssembler,
+        text: &str,
+        expr: &Expr,
+        mut enc: HoleEncoding,
+        ctx: &mut BodyContext,
+    ) -> Result<HoleSource, String> {
         let mut refs = BTreeSet::new();
         collect_expr_refs(expr, &mut refs);
         for r in refs {
@@ -286,10 +440,35 @@ impl TileLowering {
             // Names the parent does not define are left for the child
             // compile to report as unknown wires.
         }
+        let wire = self.infer_type(compiler, asm, expr, Some(ctx));
+        let typing = self.type_hole(text, wire, enc.ty.as_deref(), enc.position, enc.cond)?;
+        enc.ty = Some(typing.effective.to_keyword().to_string());
+        let value = match typing.adapter {
+            // The child is source text, so the adapter is the `as`
+            // fusion, which covers the widening the catalog allows here.
+            Some((PortType::U64, PortType::F64)) => Expr::Cast(Box::new(expr.clone()), PortType::F64, self.span),
+            Some((from, to)) if to == PortType::Str || to == PortType::Bool => {
+                // Display and truth readings need no node: the encoder
+                // applies them from the effective type.
+                let _ = from;
+                expr.clone()
+            }
+            Some((from, to)) => {
+                return Err(format!(
+                    "tile '{}': hole `{text}`: the {} -> {} adapter is not supported inside a projection body yet; \
+                     write the conversion explicitly in the expression",
+                    self.tile_name,
+                    from.to_keyword(),
+                    to.to_keyword()
+                ));
+            }
+            None => expr.clone(),
+        };
         let name = format!("__b{}", ctx.counter);
         ctx.counter += 1;
-        let call = encode_call(expr, enc, self.span);
+        let call = encode_call(&value, &enc, self.span);
         ctx.bindings.push(format!("{name} := {}", super::pprint::pp_expr(&call)));
+        self.record(compiler, text, &typing, &enc);
         Ok(HoleSource::Child(name))
     }
 
@@ -339,13 +518,23 @@ impl TileLowering {
     }
 }
 
-fn validate_type(text: &str, enc: &HoleEncoding) -> Result<(), String> {
-    if let Some(kw) = &enc.ty
-        && PortType::from_keyword(kw).is_none()
-    {
-        return Err(format!("hole `{text}`: unknown type '{kw}'"));
-    }
-    Ok(())
+fn is_numeric(t: PortType) -> bool {
+    matches!(
+        t,
+        PortType::U64
+            | PortType::I64
+            | PortType::F64
+            | PortType::U32
+            | PortType::I32
+            | PortType::F32
+            | PortType::U16
+            | PortType::I16
+            | PortType::U8
+            | PortType::I8
+            | PortType::F16
+            | PortType::U128
+            | PortType::I128
+    )
 }
 
 /// `tile_encode(expr, "<spec>")`.

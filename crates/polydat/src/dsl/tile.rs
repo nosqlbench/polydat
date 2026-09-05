@@ -140,7 +140,20 @@ impl TemplateParser<'_> {
         if body.is_empty() {
             return Err(self.err(&format!("hole `{text}` has no expression")));
         }
-        let expr = parse_hole_expr(&body).map_err(|e| self.err(&format!("hole `{text}`: {e}")))?;
+        let expr = parse_hole_expr(&body).map_err(|e| {
+            // `${x: integer}`: the suffix looked like a declaration but
+            // is not a type keyword, so it stayed in the expression.
+            if let Some(idx) = rfind_top_level(&body, ':')
+                && let Some(word) = body.get(idx + 1..).map(str::trim)
+                && !word.is_empty()
+                && word.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                return self.err(&format!(
+                    "hole `{text}`: unknown type '{word}'; types are the port-type keywords (u64, i64, f64, str, bool, json, bytes, ...)"
+                ));
+            }
+            self.err(&format!("hole `{text}`: {e}"))
+        })?;
         let _ = start;
         Ok(TileHole { text, expr, decl_type, format, raw, span: self.span })
     }

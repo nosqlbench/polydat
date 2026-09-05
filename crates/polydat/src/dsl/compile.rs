@@ -547,6 +547,9 @@ pub fn compile_polydat_with_log(source: &str, log: &mut super::events::CompileEv
     compiler.pragmas = pragmas;
     let mut asm = compiler.build_assembler(&ast)?;
     asm.set_strict_wires(compiler.pragmas.strict_types(), compiler.pragmas.strict_values());
+    for e in compiler.tile_events.drain(..) {
+        log.push(e);
+    }
     asm.compile_with_log(Some(log)).map_err(|e| e.to_string())
 }
 
@@ -1457,6 +1460,10 @@ pub(super) struct Compiler {
     /// Producer bindings seen so far, so tile projections over a
     /// producer can type their elements.
     pub(super) producers_seen: Vec<super::traversal::Producer>,
+    /// SRD 114 §4.4: one `TileHoleTyped` event per hole, handed to the
+    /// compile event log so `explain tiles` can show how each hole was
+    /// typed and encoded.
+    pub(super) tile_events: Vec<super::events::CompileEvent>,
 }
 
 /// Records a cursor whose `range(...)` bounds reference const
@@ -1492,6 +1499,7 @@ impl Compiler {
             current_binding: None,
             tiles: Vec::new(),
             producers_seen: Vec::new(),
+            tile_events: Vec::new(),
         }
     }
 
@@ -1513,6 +1521,7 @@ impl Compiler {
             current_binding: None,
             tiles: Vec::new(),
             producers_seen: Vec::new(),
+            tile_events: Vec::new(),
         }
     }
 
@@ -2818,6 +2827,9 @@ impl Compiler {
         let mut kernel = match log {
             Some(log) if !self.strict => {
                 asm.set_strict_wires(self.pragmas.strict_types(), self.pragmas.strict_values());
+                for e in self.tile_events.drain(..) {
+                    log.push(e);
+                }
                 asm.compile_with_log(Some(log)).map_err(|e| format!("{e}"))?
             }
             _ => asm.compile_strict(self.strict).map_err(|e| format!("{e}"))?,

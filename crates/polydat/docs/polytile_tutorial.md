@@ -114,8 +114,40 @@ cycle 255 typed: {"n": 255, "as_text": "255", "hex": "ff", "odd": true, "padded"
 - Formats and declared types combine: `${x: str | 04}` pads, then
   quotes.
 
-A declared type only steers the encoder. It never casts the wire, so it
-cannot fail at compile time the way a type fusion can.
+Every hole is typed when the tile compiles, not when it renders. The
+type comes from three places, in priority order:
+
+1. **The declared type**, `${expr: type}`, wins. It must be reachable
+   from the expression's type through the same adapter catalog the
+   compiler uses between wires: lossless widening such as `u64` to
+   `f64`, display text for `str`, and truth values for `bool` are
+   inserted for you. A conversion the catalog does not have, such as
+   `str` to `u64` or `f64` to `u64`, is a compile error naming the
+   tile, the hole, and both types. Write it in the expression instead,
+   as `${s as u64}` or `${floor_to_u64(f)}`.
+2. **The wire type** otherwise: the same inference every binding gets,
+   covering literals, inputs and externs, node return types, and
+   `for` elements.
+3. **The position** says what the encoding expects there. A `json`
+   value position accepts any JSON value and lets the type pick the
+   form; a position inside a JSON string, a CSV field, or any `text`
+   position expects text and renders any type as text.
+
+A tile declared `(strict)`, or a program compiled in strict mode,
+rejects the implicit adapter a declaration would need, so
+`${cycle: f64}` becomes an error and `${to_f64(cycle)}` is required.
+
+`polydat explain <file> tiles` prints each hole with its wire type, its
+declared type, the expectation of its position, the encoder chosen,
+and any adapter inserted, so the typing of a document can be read
+before it runs:
+
+```text
+== tiles: how each hole is typed and encoded ==
+  typed        ${cycle: str}
+               wire u64, declared str; expects any JSON value (str)
+               -> json string, quoted and escaped  adapter u64 -> str
+```
 
 ## 4. A CSV row and a raw hole
 
@@ -440,9 +472,9 @@ shared by two tiles is computed once.
 
 ## Limits at this level
 
-- The encoder is chosen by declared type or by the value's runtime
-  variant. Compile-time contextual typing and strict mode (SRD §4) are
-  not yet applied.
+- Inside a projection body, only the `u64` to `f64` widening and the
+  `str` and `bool` readings are available as declared-type adapters;
+  other widenings must be written in the expression.
 - Projection bodies cannot nest another `@for`, use derived sources
   (`where`, `order by`), or use generator-call sources.
 - In the structural form, a projection or branch that sits beside

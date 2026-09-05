@@ -7,9 +7,10 @@ in by a host as template text, JSON text, a parsed JSON value, or a
 `polytile` binding; and tiles that compile to wires and render at P1
 for the `text`, `json`, and `csv` encodings with type- and
 position-aware encoding, formats, raw holes, branches, projections
-over inline comprehensions and bound producers, and splicing. Typing
-beyond the declared type and the runtime variant (§4) and P2/P3 are
-not yet implemented; §12 records what each step still owes. The walk-through with real output is
+over inline comprehensions and bound producers, and splicing; and
+compile-time typing of every hole per §4 with adapter insertion, strict
+mode, and `explain tiles`. P2/P3 renderers are not yet implemented;
+§12 records what each step still owes. The walk-through with real output is
 [the Polytile tutorial](../polytile_tutorial.md).
 
 **Ownership:** Polydat owns the tile grammar in both its textual and
@@ -618,12 +619,21 @@ a handful of integer and float encodes, and a four-tuple loop.
    equivalent by construction; `tests/tile_structural.rs` renders the
    §3.2 example both ways and compares the documents. Still owed: the
    bounded-cardinality check for directives beside static members.
-3. **Typing.** Partly done: the declared type steers the encoder and
-   the runtime variant decides otherwise (`u64` bare, `str` quoted,
-   `bool` as `true`/`false`, `f64` with formats). Still owed: wire and
-   contextual types resolved at compile time per §4 with adapter
-   insertion, strict-mode rejection, and `explain tiles` output. Tests
-   per row of the §4.3 table and per error case.
+3. **Typing.** Done. Every hole is typed in `dsl::tile_lower` before
+   its encode binding is emitted: the wire type by the compiler's own
+   expression inference (projection elements and cascaded outer wires
+   from the body context), the declared type checked for reachability
+   through `assembly::auto_adapter`, the adapter node inserted between
+   the expression and `tile_encode` when the declaration needs one (in
+   a projection body, as the `as` fusion), and the effective type
+   written into the encode spec so the encoder never consults the
+   runtime variant. Unreachable declarations, unknown type keywords,
+   and wires with no text form (`Ext`, `Handle`, registers) are compile
+   errors naming the tile, the hole, and both types; `(strict)` or
+   compiler strict mode rejects the implicit adapter. Each hole records
+   a `TileHoleTyped` compile event, which `polydat explain <file>
+   tiles` prints. Tests in `tests/tile_typing.rs`, one per row of the
+   §4.3 table and per error case.
 4. **Skeleton and P1 renderer.** Done. `dsl::tile_lower` lowers each
    hole to a `tile_encode` node whose constant spec carries encoding,
    position, declared type, format, and raw flag; branch conditions to
