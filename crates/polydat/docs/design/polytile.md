@@ -1,17 +1,36 @@
 # Polytile — Compiled Variate Templates
 
-**Status:** Proposed SRD 114, second revision. Steps 1 through 6 and 8
-of §12 are implemented: the grammar in
-every body form with options; the structural JSON form; tiles handed
-in by a host as template text, JSON text, a parsed JSON value, or a
-`polytile` binding; and tiles that compile to wires and render at P1
-for the `text`, `json`, and `csv` encodings with type- and
-position-aware encoding, formats, raw holes, branches, projections
-over inline comprehensions and bound producers, and splicing; and
+**Status:** Proposed SRD 114, third revision. Every step of §12 except
+the compiled renderers is implemented and tested: the grammar in every
+body form with options, with `:=` binding the tile's wire as in every
+other binding; the structural JSON form; tiles handed in by a host as
+template text, JSON text, a parsed JSON value, or a `polytile` binding;
 compile-time typing of every hole per §4 with adapter insertion, strict
-mode, and `explain tiles`. P2/P3 renderers are not yet implemented;
-§12 records what each step still owes. The walk-through with real output is
+mode, and `explain tiles`; rendering at P1 for the `text`, `json`, and
+`csv` encodings with position-aware encoding, formats, raw holes,
+branches, splicing, and projections over inline comprehensions, bound
+producers, derivations, generator calls, sampled continuous sources,
+and nested bodies; the binary's `--emit tile:<name>`, `--tile-delims`,
+and `--tile-sigil`; tiles inside module bodies; and the toy test
+definition rendering its readings as documents.
+
+Step 7, the P2 and P3 renderers, is not started and is blocked outside
+this SRD: the compiled tiers carry scalar slots only, so no `Str`-,
+`Json`-, or `Ext`-valued node has a compiled form today. A tile
+renderer there needs the SRD 111 arena ABI to land in Polydat's compiled
+tiers first; §12 step 7 records the prerequisite and the lowering that
+follows it. Until then tiles are ordinary P1 nodes, which the engines
+leave in place while fusing the scalar graph around them.
+
+The walk-through with real output is
 [the Polytile tutorial](../polytile_tutorial.md).
+
+**Revisions:** the first draft set the textual grammar, the skeleton,
+and the engine plan; the second added containment inside other
+templating grammars, the structural JSON form, and type awareness; the
+third made `:=` mandatory in every tile form, added `instring`, nested
+and continuous projections, typed transport into projection bodies, the
+host surfaces, and recorded the P2/P3 prerequisite.
 
 **Ownership:** Polydat owns the tile grammar in both its textual and
 structural forms, the skeleton IR, the type model for holes, the

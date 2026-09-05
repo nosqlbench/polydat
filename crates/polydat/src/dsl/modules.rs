@@ -13,6 +13,8 @@
 //! 5. The embedded standard library
 
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::compile::assembly::{PolydatAssembler, WireRef};
 use crate::dsl::ast::*;
@@ -416,6 +418,55 @@ impl Compiler {
 
 }
 
+/// Parsed `.polydat` files by path, with the modification time they
+/// were read at. Shared across compilers in the process: a for-body or
+/// probe compiler resolving the same library module reuses the parse,
+/// and a file edited between compiles is re-read because its time moved.
+type ParsedFiles = std::collections::HashMap<PathBuf, (std::time::SystemTime, Arc<PolydatFile>)>;
+static PARSED_FILES: std::sync::OnceLock<std::sync::Mutex<ParsedFiles>> = std::sync::OnceLock::new();
+
+/// The parsed form of a `.polydat` file, from the cache when its
+/// modification time is unchanged. `None` when the file cannot be read;
+/// `Some(Err)` when it does not parse.
+fn parsed_file(path: &Path) -> Option<Result<Arc<PolydatFile>, String>> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    let cache = PARSED_FILES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Ok(map) = cache.lock()
+        && let Some((seen, ast)) = map.get(path)
+        && *seen == modified
+    {
+        return Some(Ok(ast.clone()));
+    }
+    let source = std::fs::read_to_string(path).ok()?;
+    let parsed = lexer::lex(&source).and_then(parser::parse);
+    match parsed {
+        Ok(ast) => {
+            let ast = Arc::new(ast);
+            if let Ok(mut map) = cache.lock() {
+                map.insert(path.to_path_buf(), (modified, ast.clone()));
+            }
+            Some(Ok(ast))
+        }
+        Err(e) => Some(Err(format!("module file '{}': {e}", path.display()))),
+    }
+}
+
+/// The `.polydat` files directly in `dir`, in name order so resolution
+/// is deterministic across platforms.
+fn polydat_files_in(dir: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("polydat"))
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort();
+    files
+}
+
 /// `{name}` placeholders in comprehension text.
 fn placeholder_names(text: &str) -> Vec<String> {
     let chars: Vec<char> = text.chars().collect();
@@ -713,65 +764,31 @@ impl Compiler {
             return Ok(self.module_cache.get(name));
         }
 
-        // Strategy 1-2: filesystem search in source_dir
+        // Strategies 1-3: the program's directory, then each library
+        // directory. Files are read and parsed once per process and
+        // reused while unmodified, so a cold compile of a large
+        // directory pays for each file once, not once per unknown name.
+        let mut dirs: Vec<PathBuf> = Vec::new();
         if let Some(source_dir) = &self.source_dir {
-            let source_dir = source_dir.clone();
-
-            // 1. Look for <name>.polydat in source_dir
-            let module_path = source_dir.join(format!("{name}.polydat"));
-            if module_path.exists() {
-                let source = std::fs::read_to_string(&module_path)
-                    .map_err(|e| format!("failed to read module '{}': {e}", module_path.display()))?;
-                let resolved = Self::parse_module(&source, name)?;
-                self.module_cache.insert(name.to_string(), resolved);
-                return Ok(self.module_cache.get(name));
-            }
-
-            // 2. Scan all .polydat files in source_dir for a matching export
-            if let Ok(entries) = std::fs::read_dir(&source_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) == Some("polydat") {
-                        let source = match std::fs::read_to_string(&path) {
-                            Ok(s) => s,
-                            Err(_) => continue,
-                        };
-                        if let Ok(resolved) = Self::parse_module(&source, name) {
-                            self.module_cache.insert(name.to_string(), resolved);
-                            return Ok(self.module_cache.get(name));
-                        }
-                    }
-                }
-            }
+            dirs.push(source_dir.clone());
         }
-
-        // Strategy 3: search --polydat-lib directories
-        let lib_paths = self.polydat_lib_paths.clone();
-        for lib_dir in &lib_paths {
-            // 3a. Look for <name>.polydat in lib_dir
-            let module_path = lib_dir.join(format!("{name}.polydat"));
-            if module_path.exists() {
-                let source = std::fs::read_to_string(&module_path)
-                    .map_err(|e| format!("failed to read module '{}': {e}", module_path.display()))?;
-                let resolved = Self::parse_module(&source, name)?;
+        dirs.extend(self.polydat_lib_paths.iter().cloned());
+        for dir in &dirs {
+            // <name>.polydat first: the file named for the module.
+            let named = dir.join(format!("{name}.polydat"));
+            if named.exists() {
+                let ast = parsed_file(&named)
+                    .ok_or_else(|| format!("failed to read module '{}'", named.display()))??;
+                let resolved = Self::module_from_ast(&ast, name)?;
                 self.module_cache.insert(name.to_string(), resolved);
                 return Ok(self.module_cache.get(name));
             }
-
-            // 3b. Scan all .polydat files in lib_dir for a matching export
-            if let Ok(entries) = std::fs::read_dir(lib_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) == Some("polydat") {
-                        let source = match std::fs::read_to_string(&path) {
-                            Ok(s) => s,
-                            Err(_) => continue,
-                        };
-                        if let Ok(resolved) = Self::parse_module(&source, name) {
-                            self.module_cache.insert(name.to_string(), resolved);
-                            return Ok(self.module_cache.get(name));
-                        }
-                    }
+            // Then any .polydat in the directory that exports the name.
+            for path in polydat_files_in(dir) {
+                let Some(Ok(ast)) = parsed_file(&path) else { continue };
+                if let Ok(resolved) = Self::module_from_ast(&ast, name) {
+                    self.module_cache.insert(name.to_string(), resolved);
+                    return Ok(self.module_cache.get(name));
                 }
             }
         }
@@ -833,7 +850,13 @@ impl Compiler {
     pub(super) fn parse_module(source: &str, target_name: &str) -> Result<ResolvedModule, String> {
         let tokens = lexer::lex(source)?;
         let ast = parser::parse(tokens)?;
+        Self::module_from_ast(&ast, target_name)
+    }
 
+    /// Resolve `target_name` from an already-parsed file: a formal
+    /// module definition of that name, else the subgraph that produces
+    /// a binding of that name.
+    fn module_from_ast(ast: &PolydatFile, target_name: &str) -> Result<ResolvedModule, String> {
         // Strategy 1: look for a formal ModuleDef with matching name
         for stmt in &ast.statements {
             if let Statement::ModuleDef(mdef) = stmt

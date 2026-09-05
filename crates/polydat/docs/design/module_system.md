@@ -35,16 +35,28 @@ Requesting more targets than the module declares is an error.
 
 ## 2. Resolution
 
-Native nodes and registered factories have their normal call-resolution
-precedence. When a call name is not resolved there, the compiler attempts to
-resolve a Polydat module with the same name. Module lookup is deterministic:
+Every formal module defined in the program being compiled is registered by
+name before any statement compiles, so it resolves without a source
+directory and shadows a native node or registered factory of the same name:
+an author's `pick(...)` is the author's. For every other call name, native
+nodes and registered factories have their normal call-resolution precedence,
+and when a name is not resolved there the compiler attempts to resolve a
+Polydat module with the same name. Module lookup is deterministic:
 
-1. the compiler's per-compilation module cache;
+1. the compiler's per-compilation module cache, which holds the program's
+   own definitions and every module resolved so far;
 2. `<name>.polydat` in the source directory and compatible subgraph exports
    discoverable there;
 3. the same lookup in each configured Polydat library directory, in caller
    order; and
 4. the embedded standard library.
+
+Directory lookups read and parse each `.polydat` file once per process and
+reuse the parse while the file's modification time is unchanged, so a cold
+compile of a large directory pays for each file once rather than once per
+unresolved name, and compilers for `for` bodies and probes share the work.
+Files within a directory are visited in name order, so resolution does not
+depend on the platform's directory ordering.
 
 Failure to resolve the name through either the node registry or the module
 chain is a compile error. File read, parse, signature, and inline errors retain
