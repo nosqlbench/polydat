@@ -1,9 +1,8 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! SRD 113 step 1: the `for` construct parses in both readings, round
-//! trips through the pretty-printer, and is rejected by the compiler
-//! with a clear message until the later steps land.
+//! SRD 113 step 1: the `for` construct parses in both readings and
+//! round trips through the pretty-printer. Step 2 lowers both forms.
 
 use polydat::dsl::ast::{Expr, ForSourceKind, PolydatFile, Statement};
 use polydat::dsl::pprint::pp_file;
@@ -108,9 +107,11 @@ fn bad_comprehension_text_reports_position() {
 }
 
 #[test]
-fn compiler_rejects_for_until_step_two() {
-    let err = polydat::dsl::compile_polydat("input cycle: u64\nfor k in 1..4 {\n    x := hash(k)\n}\n").unwrap_err();
-    assert!(err.contains("SRD 113"), "{err}");
-    let err = polydat::dsl::compile_polydat("input cycle: u64\nsweep := for k in 1..4\n").unwrap_err();
-    assert!(err.contains("SRD 113"), "{err}");
+fn compiler_lowers_both_forms() {
+    // Step 2: a traversal body compiles to a child program and a
+    // producer binding becomes program metadata.
+    let k = polydat::dsl::compile_polydat("input cycle: u64\nfor k in 1..4 {\n    x := hash(k)\n}\n").unwrap();
+    assert_eq!(k.program().traversals().len(), 1);
+    let k = polydat::dsl::compile_polydat("input cycle: u64\nsweep := for k in 1..4\n").unwrap();
+    assert_eq!(k.program().producers().len(), 1);
 }

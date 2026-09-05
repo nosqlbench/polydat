@@ -1,9 +1,10 @@
 # The `for` Construct — Comprehension Producers and Traversal Scopes
 
-**Status:** Proposed SRD 113. Step 1 of §11, the parser and AST, is
-implemented: both `for` forms lex, parse, and pretty-print, and the
-compiler rejects them with a pointer here until step 2 lands. Later
-sections specify the contract the remaining steps must meet.
+**Status:** Proposed SRD 113. Steps 1 and 2 of §11 are implemented:
+both `for` forms lex, parse, and pretty-print; every traversal body
+compiles once into a child program with typed element externs and
+cascade externs, keyed by lexical position; producer bindings are
+recorded as program metadata. Steps 3 through 6 specify what remains.
 
 **Ownership:** Polydat owns the grammar, the compiled form, the activation
 runtime, and the consumption surfaces defined here. Hosts own scheduling
@@ -477,10 +478,20 @@ where it has ordinary wired access to everything the scope can see.
    byte-level mutants of them, and checks that the front end never
    panics, element names match, the printer reaches a fixed point, and
    the compiler declines by name; an ignored superfuzz sweeps many seeds.
-2. **Element typing and body compilation.** Child program per `for`
-   statement, `IterationExtern` inputs, cascade externs, compile-time type
-   errors. Tests: each row of the §3.3 table, outer-wire visibility,
-   nested bodies.
+2. **Element typing and body compilation.** Done. `dsl::traversal`
+   strips `for` forms from the parent, types each element from its source
+   per §3.3 (generator calls are typed by compiling a one-line probe
+   program), builds the body as a child file with an implicit `cycle`
+   input, one `IterationExtern` per element, and one cascade extern per
+   outer wire the parent exposes, and compiles it once with the parent's
+   library paths and pragmas. `PolydatProgram::traversals()` and
+   `producers()` expose the result; the binary's `explain traversals`
+   phase prints the per-position program table. Tests in
+   `tests/for_compile.rs` cover each row of the §3.3 table, widening and
+   mixed-literal errors, outer-wire cascade with types, producer
+   resolution, three-level nesting with one program per body, body type
+   errors, unknown outer names, the extra-coordinate rule, and cursors
+   over elements.
 3. **Producer wires.** `Streamer` port type, `const` producer nodes,
    derived `where` and `order` nodes, stream factories on pulled values.
    Tests: independence of derived streams, cardinality metadata.

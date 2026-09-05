@@ -12,8 +12,9 @@
 //!   every strategy, zip groups, string and generator sources, comments
 //!   and odd whitespace. Invariants: lex and parse succeed, the
 //!   element names match what was emitted, the pretty-printer round
-//!   trips to a fixed point, and the compiler rejects the program with
-//!   the interim SRD 113 message rather than panicking.
+//!   trips to a fixed point, and the compiler lowers every form to a
+//!   child program or producer entry, or errors in a sentence, and
+//!   never panics.
 //! - **Mutated programs.** Random byte-level edits of well-formed
 //!   programs. Invariants: no stage panics, and every error is a
 //!   sentence rather than a leaked backtrace.
@@ -304,6 +305,16 @@ fn panic_text(p: &Box<dyn std::any::Any + Send>) -> String {
         .unwrap_or_else(|| "<non-string panic>".into())
 }
 
+/// Count traversals and producers reachable from a program, recursing
+/// into child programs.
+fn count_lowered(p: &polydat::kernel::PolydatProgram, n: &mut usize) {
+    *n += p.producers().len();
+    for t in p.traversals() {
+        *n += 1;
+        count_lowered(&t.program, n);
+    }
+}
+
 fn cryptic(msg: &str) -> bool {
     let m = msg.to_lowercase();
     msg.trim().is_empty() || m.contains("panic") || m.contains("index out of bounds") || m.contains("unreachable")
@@ -369,13 +380,20 @@ fn run_wellformed_pass(seed: u64, iterations: usize) -> Vec<String> {
             }
         }
 
-        // Invariant 4: the compiler declines with the interim message
-        // and never panics.
+        // Invariant 4: the compiler never panics. It either lowers every
+        // for form (one child program per traversal, one producer entry
+        // per binding) or returns a sentence naming the offending form.
         match std::panic::catch_unwind(|| polydat::dsl::compile_polydat(&source)) {
-            Ok(Ok(_)) => failures.push(format!("[seed {seed:#x}] iteration {i}: compiler accepted a for program before step 2 landed.\n  source:\n{source}\n  {}", repro(i))),
+            Ok(Ok(k)) => {
+                let mut lowered = 0;
+                count_lowered(k.program(), &mut lowered);
+                if lowered != expected.len() {
+                    failures.push(format!("[seed {seed:#x}] iteration {i}: compiled program lowered {lowered} for forms but the source has {}.\n  source:\n{source}\n  {}", expected.len(), repro(i)));
+                }
+            }
             Ok(Err(e)) => {
-                if !e.contains("SRD 113") {
-                    failures.push(format!("[seed {seed:#x}] iteration {i}: compiler error does not name the construct: {e}\n  source:\n{source}\n  {}", repro(i)));
+                if cryptic(&e) || !e.contains("for ") {
+                    failures.push(format!("[seed {seed:#x}] iteration {i}: compiler error is cryptic or does not name the for form: {e}\n  source:\n{source}\n  {}", repro(i)));
                 }
             }
             Err(p) => failures.push(format!("[seed {seed:#x}] iteration {i}: compiler panicked: {}\n  source:\n{source}\n  {}", panic_text(&p), repro(i))),
@@ -437,14 +455,16 @@ fn run_mutation_pass(seed: u64, iterations: usize) -> Vec<String> {
                     failures.push(format!("[seed {seed:#x}] iteration {i}: {e}\n  source:\n{source}\n  {}", repro(i)));
                 }
             }
-            Ok(Ok(_)) => {
-                // A mutant that compiles must have lost every `for`;
-                // otherwise step 2 landed silently.
+            Ok(Ok(k)) => {
+                // A mutant that compiles must have lowered exactly the
+                // for forms it still contains.
                 if let Ok(f) = parse(&source) {
                     let mut forms = Vec::new();
                     collect_for_forms(&f.statements, &mut forms);
-                    if !forms.is_empty() {
-                        failures.push(format!("[seed {seed:#x}] iteration {i}: a for program compiled before step 2.\n  source:\n{source}\n  {}", repro(i)));
+                    let mut lowered = 0;
+                    count_lowered(k.program(), &mut lowered);
+                    if lowered != forms.len() {
+                        failures.push(format!("[seed {seed:#x}] iteration {i}: mutant has {} for forms but {lowered} were lowered.\n  source:\n{source}\n  {}", forms.len(), repro(i)));
                     }
                 }
             }

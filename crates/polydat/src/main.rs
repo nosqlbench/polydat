@@ -201,9 +201,10 @@ enum Phase {
     Engines,
     Provenance,
     Outputs,
+    Traversals,
 }
 
-const ALL_PHASES: [Phase; 12] = [
+const ALL_PHASES: [Phase; 13] = [
     Phase::Lex,
     Phase::Parse,
     Phase::Inputs,
@@ -216,6 +217,7 @@ const ALL_PHASES: [Phase; 12] = [
     Phase::Engines,
     Phase::Provenance,
     Phase::Outputs,
+    Phase::Traversals,
 ];
 
 fn main() {
@@ -715,6 +717,7 @@ fn print_stats(program: &PolydatProgram, compiled: &Compiled, _report: Report) {
     println!("engines       P1 nodes {p1}  P2 nodes {p2}  P3 cones {p3}");
     println!("deterministic {}", program.is_deterministic());
     println!("cursors       {}", program.cursor_schemas().len());
+    println!("traversals    {} (producers {})", program.traversals().len(), program.producers().len());
     println!("events        {} recorded ({} warnings, {} advisories)",
         compiled.events.events().len(),
         compiled.events.warnings().len(),
@@ -961,6 +964,19 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
                 }
                 println!("Deterministic: {}", program.is_deterministic());
             }
+            Phase::Traversals => {
+                let ts = program.traversals();
+                let ps = program.producers();
+                if ts.is_empty() && ps.is_empty() {
+                    println!("No for forms. Every statement compiled into the one program above.");
+                } else {
+                    println!("Each for body is one program for the life of the parent, keyed by where it appears. Activation only allocates state over it.");
+                    for p in ps {
+                        println!("  producer {} := for {}  (line {})", p.name, p.source_text, p.span.line);
+                    }
+                    explain_traversals(ts, 1);
+                }
+            }
         }
         println!();
     }
@@ -973,6 +989,20 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn explain_traversals(ts: &[polydat::dsl::traversal::Traversal], indent: usize) {
+    let pad = "  ".repeat(indent);
+    for t in ts {
+        let elems: Vec<String> = t.elements.iter().map(|(n, ty)| format!("{n}:{ty:?}")).collect();
+        let cascade: Vec<String> = t.cascade.iter().map(|(n, ty)| format!("{n}:{ty:?}")).collect();
+        println!("{pad}for {}  (line {}, col {})", t.source_text, t.span.line, t.span.col);
+        println!("{pad}  elements {}", if elems.is_empty() { "(none)".to_string() } else { elems.join(", ") });
+        println!("{pad}  cascade  {}", if cascade.is_empty() { "(none)".to_string() } else { cascade.join(", ") });
+        println!("{pad}  program  {} nodes, {} outputs, {} nested traversals",
+            t.program.node_count(), t.program.output_count(), t.program.traversals().len());
+        explain_traversals(t.program.traversals(), indent + 2);
+    }
 }
 
 fn phase_title(p: Phase) -> &'static str {
@@ -989,6 +1019,7 @@ fn phase_title(p: Phase) -> &'static str {
         Phase::Engines => "engines: P1, P2, and P3 selection",
         Phase::Provenance => "provenance: which inputs invalidate which outputs",
         Phase::Outputs => "outputs: the manifest",
+        Phase::Traversals => "traversals: for bodies compiled once per lexical position",
     }
 }
 

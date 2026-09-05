@@ -1838,6 +1838,19 @@ impl Compiler {
     }
 
     pub(super) fn compile(&mut self, file: &PolydatFile) -> Result<PolydatKernel, String> {
+        // SRD 113: same lowering as `compile_filtered_with_log`; the
+        // parent compiles without `for` forms, then each body compiles
+        // once against it.
+        let (parent_file, for_stmts, producers) = super::traversal::strip_for_forms(file);
+        let mut kernel = self.compile_parent(&parent_file)?;
+        if !for_stmts.is_empty() || !producers.is_empty() {
+            let traversals = self.compile_traversals(&for_stmts, &producers, kernel.program())?;
+            kernel.set_traversals(traversals, producers);
+        }
+        Ok(kernel)
+    }
+
+    fn compile_parent(&mut self, file: &PolydatFile) -> Result<PolydatKernel, String> {
         // First pass: collect explicit `input` declarations,
         // deduping by name so re-declaration is a no-op (the slot
         // already exists; the second `input cycle: u64` line is just
@@ -2324,6 +2337,89 @@ impl Compiler {
     /// strict path validates and returns before the logged resolver
     /// runs.
     pub(super) fn compile_filtered_with_log(
+        &mut self,
+        file: &PolydatFile,
+        required_outputs: Option<&[String]>,
+        log: Option<&mut super::events::CompileEventLog>,
+    ) -> Result<PolydatKernel, String> {
+        // SRD 113: `for` statements lower to child programs and producer
+        // bindings become program metadata. The parent compiles without
+        // them, then each body compiles once against the parent.
+        let (parent_file, for_stmts, producers) = super::traversal::strip_for_forms(file);
+        let original = file;
+        let file = &parent_file;
+        let mut kernel = self.compile_parent_with_log(file, required_outputs, log)?;
+        if !for_stmts.is_empty() || !producers.is_empty() {
+            let traversals = self.compile_traversals(&for_stmts, &producers, kernel.program())?;
+            kernel.set_traversals(traversals, producers);
+        }
+        let _ = original;
+        Ok(kernel)
+    }
+
+    /// Lower each `for` statement's body to a child program, typed from
+    /// its comprehension and the parent's manifest (SRD 113 §3.3, §4).
+    fn compile_traversals(
+        &mut self,
+        for_stmts: &[super::ast::ForStmt],
+        producers: &[super::traversal::Producer],
+        parent: &crate::kernel::PolydatProgram,
+    ) -> Result<Vec<super::traversal::Traversal>, String> {
+        use super::traversal::{child_file, element_types, resolve_source, Traversal};
+        let mut out = Vec::with_capacity(for_stmts.len());
+        for f in for_stmts {
+            let comprehension = resolve_source(&f.source, producers)?.clone();
+            let mut probe = |expr: &str| -> Result<crate::ast::PortType, String> {
+                let src = format!("input cycle: u64\n__probe := {expr}\n");
+                let tokens = lexer::lex(&src)?;
+                let ast = parser::parse(tokens)?;
+                let mut probe_compiler = Compiler::with_lib_paths(
+                    self.source_dir.clone(),
+                    self.polydat_lib_paths.clone(),
+                    false,
+                );
+                probe_compiler.source_text = src.clone();
+                probe_compiler.context_label = format!("{} (element probe)", self.context_label);
+                let k = probe_compiler.compile_filtered_with_log(&ast, None, None)?;
+                k.program()
+                    .output_port_type("__probe")
+                    .ok_or_else(|| "probe produced no output".to_string())
+            };
+            let elements = element_types(&comprehension, &mut probe).map_err(|e| format!(
+                "`for {}` at line {}, col {}: {e}", f.source.text, f.span.line, f.span.col
+            ))?;
+            let (child, cascade) = child_file(f, &elements, parent)?;
+            let mut child_compiler = Compiler::with_lib_paths(
+                self.source_dir.clone(),
+                self.polydat_lib_paths.clone(),
+                self.strict,
+            );
+            child_compiler.source_text = super::pprint::pp_file(&child);
+            child_compiler.context_label = format!(
+                "{} :: for {} (line {}, col {})",
+                self.context_label, f.source.text, f.span.line, f.span.col
+            );
+            child_compiler.cursor_limit = self.cursor_limit;
+            child_compiler.pragmas = self.pragmas.clone();
+            let child_kernel = child_compiler
+                .compile_filtered_with_log(&child, None, None)
+                .map_err(|e| format!(
+                    "`for {}` at line {}, col {}: body failed to compile: {e}",
+                    f.source.text, f.span.line, f.span.col
+                ))?;
+            out.push(Traversal {
+                span: f.span,
+                source_text: f.source.text.clone(),
+                comprehension,
+                elements,
+                cascade,
+                program: child_kernel.into_program(),
+            });
+        }
+        Ok(out)
+    }
+
+    fn compile_parent_with_log(
         &mut self,
         file: &PolydatFile,
         required_outputs: Option<&[String]>,

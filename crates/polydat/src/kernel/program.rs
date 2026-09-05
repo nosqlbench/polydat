@@ -257,6 +257,11 @@ pub struct PolydatProgram {
     /// Source schemas declared in the Polydat program. The runtime queries
     /// these to discover data sources and their extents.
     cursor_schemas: Vec<crate::iteration::source::SourceSchema>,
+    /// Compiled `for` traversals declared at this program's top level,
+    /// in document order (SRD 113). Each carries its child program.
+    traversals: Vec<crate::dsl::traversal::Traversal>,
+    /// Producer bindings (`name := for ...`) declared at this level.
+    producers: Vec<crate::dsl::traversal::Producer>,
     /// Names declared with the `const` keyword in the source. Subject
     /// to the init-binding contract (SRD 11 §"Init Binding Contract"):
     /// every name listed here must reach exactly one effectively-const
@@ -343,6 +348,8 @@ impl PolydatProgram {
             output_modifiers: HashMap::new(),
             inherited_outputs: std::collections::HashSet::new(),
             cursor_schemas: Vec::new(),
+            traversals: Vec::new(),
+            producers: Vec::new(),
             const_outputs: std::collections::HashSet::new(),
             write_throughs: Vec::new(),
             ast: None,
@@ -379,6 +386,8 @@ impl PolydatProgram {
             output_modifiers: HashMap::new(),
             inherited_outputs: std::collections::HashSet::new(),
             cursor_schemas: Vec::new(),
+            traversals: Vec::new(),
+            producers: Vec::new(),
             const_outputs: std::collections::HashSet::new(),
             write_throughs: Vec::new(),
             ast: None,
@@ -600,6 +609,27 @@ impl PolydatProgram {
     /// Set source schemas (called by the compiler after processing source declarations).
     pub(crate) fn set_cursor_schemas(&mut self, schemas: Vec<crate::iteration::source::SourceSchema>) {
         self.cursor_schemas = schemas;
+    }
+
+    /// The `for` traversals declared at this program's top level, each
+    /// with its compiled child program (SRD 113 §5.1: one program per
+    /// lexical position).
+    pub fn traversals(&self) -> &[crate::dsl::traversal::Traversal] {
+        &self.traversals
+    }
+
+    /// Producer bindings declared at this program's top level.
+    pub fn producers(&self) -> &[crate::dsl::traversal::Producer] {
+        &self.producers
+    }
+
+    pub(crate) fn set_traversals(
+        &mut self,
+        traversals: Vec<crate::dsl::traversal::Traversal>,
+        producers: Vec<crate::dsl::traversal::Producer>,
+    ) {
+        self.traversals = traversals;
+        self.producers = producers;
     }
 
     /// Build ordered output list from declaration order and the output map.

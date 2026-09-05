@@ -582,6 +582,18 @@ impl PolydatKernel {
             .set_ast(ast);
     }
 
+    /// Attach compiled traversals and producers (SRD 113). Called by
+    /// the DSL compiler while the program Arc is still uniquely owned.
+    pub fn set_traversals(
+        &mut self,
+        traversals: Vec<crate::dsl::traversal::Traversal>,
+        producers: Vec<crate::dsl::traversal::Producer>,
+    ) {
+        Arc::get_mut(&mut self.program)
+            .expect("set_traversals must be called before program is shared")
+            .set_traversals(traversals, producers);
+    }
+
     /// The per-fiber mutable evaluation state.
     pub fn state(&mut self) -> &mut PolydatState {
         &mut self.state
