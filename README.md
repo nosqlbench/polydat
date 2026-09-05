@@ -299,8 +299,14 @@ Library](crates/polydat/docs/nodes.md).
 ## Command line
 
 The crate ships a `polydat` binary for compiling, explaining, and running
-programs without writing a host. Install it with `cargo install polydat`, or
-run it from this repository with `cargo run -p polydat --`.
+programs without writing a host. Install it from crates.io with
+`cargo install polydat`. From a checkout, the repository root is a workspace
+rather than a package, so point at the crate:
+
+```text
+cargo install --path crates/polydat
+cargo run -p polydat -- run graph.polydat --cycles 10 --emit csv
+```
 
 ```text
 polydat run graph.polydat --cycles 1000000 --fibers 8 --emit csv --timing
