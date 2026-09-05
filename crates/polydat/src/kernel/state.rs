@@ -420,7 +420,22 @@ impl PolydatKernel {
     /// caches its program, and instantiates a fresh kernel per
     /// `run_phase` call against the cached program.
     pub(crate) fn from_program(program: Arc<PolydatProgram>) -> Self {
+        Self::build(program, false)
+    }
+
+    /// A kernel that runs inside another kernel's cycle (SRD 115 §4):
+    /// a traversal activation, a projection body, a materialized
+    /// subscope. It is marked nested before construction seeds any
+    /// input, so it never resets the thread's cycle arena.
+    pub(crate) fn from_program_nested(program: Arc<PolydatProgram>) -> Self {
+        Self::build(program, true)
+    }
+
+    fn build(program: Arc<PolydatProgram>, nested: bool) -> Self {
         let mut state = program.create_state();
+        if nested {
+            state.mark_nested();
+        }
         // Populate buffers for folded constants so get_constant()
         // works on the new kernel — mirrors the seeding done in
         // `new_with_inputs` after fold.
@@ -609,6 +624,14 @@ impl PolydatKernel {
     /// Convenience: set coordinate inputs on the owned state.
     pub fn set_inputs(&mut self, coords: &[u64]) {
         self.state.set_inputs(coords);
+    }
+
+    /// Mark this kernel as nested inside another kernel's cycle (SRD 115
+    /// §4): a traversal activation, a projection body, a materialized
+    /// subscope. A nested kernel never resets the thread's cycle arena;
+    /// the root kernel the host drives does so on each cycle advance.
+    pub fn mark_nested(&mut self) {
+        self.state.mark_nested();
     }
 
     /// Read an input value by name. Cell-aware: cell-bound
@@ -831,7 +854,9 @@ impl PolydatKernel {
         program: Arc<PolydatProgram>,
         iter_bindings: &[(String, Value)],
     ) -> PolydatKernel {
-        let mut child = PolydatKernel::from_program(program);
+        // A materialized subscope runs inside its parent's cycle and
+        // never resets the thread's arena (SRD 115, axiom H5).
+        let mut child = PolydatKernel::from_program_nested(program);
         for (var, value) in iter_bindings {
             if let Some(idx) = child.program.find_input(var) {
                 child.state.set_input(idx, value.clone());

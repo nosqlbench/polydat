@@ -774,7 +774,9 @@ a handful of integer and float encodes, and a four-tuple loop.
    tiles` prints ahead of the hole typing. Tests in
    `tests/tile_host_surfaces.rs`, including the binary end to end.
 7. **P2 and P3.** Not started, and blocked on a prerequisite outside
-   this SRD. The P2 closure tier and the P3 cone tier both run over a
+   this SRD, now specified as [Compiled Non-Scalar
+   Slots](compiled_handles.md) (SRD 115), whose step 6 is this step's
+   lowering. The P2 closure tier and the P3 cone tier both run over a
    flat scalar slot buffer: no `Str`-, `Json`-, or `Ext`-valued node
    has a compiled form today, cone classification admits scalar ports
    only, and the SRD 111 handle helpers (`jit_str_to_u64` and its

@@ -859,6 +859,11 @@ pub struct PolydatState {
     /// `counter()`, `current_epoch_millis()`). They are unconditionally
     /// marked dirty on every `set_input()` call so they are never cached.
     nondeterministic_nodes: Vec<usize>,
+    /// SRD 115 §4: a nested state runs inside another state's cycle
+    /// (a traversal activation, a projection body, a materialized
+    /// subscope) and never resets the thread's cycle arena. A root
+    /// state, which the host drives, resets it on every cycle advance.
+    nested: bool,
 }
 
 impl PolydatState {
@@ -868,13 +873,35 @@ impl PolydatState {
         input_dependents: Vec<Vec<usize>>,
         nondeterministic_nodes: Vec<usize>,
     ) -> Self {
-        Self { core, input_dependents, nondeterministic_nodes }
+        Self { core, input_dependents, nondeterministic_nodes, nested: false }
+    }
+
+    /// Mark this state as nested: it runs inside a root state's cycle
+    /// and must not reset the thread's cycle arena (SRD 115, axiom H5).
+    pub fn mark_nested(&mut self) {
+        self.nested = true;
+    }
+
+    /// Whether this state is nested inside another's cycle.
+    pub fn is_nested(&self) -> bool {
+        self.nested
+    }
+
+    /// A root state's input write begins a cycle on the thread: the
+    /// cycle arena resets and the generation advances. Nested states do
+    /// nothing here.
+    #[inline]
+    fn begin_cycle_if_root(&self) {
+        if !self.nested {
+            crate::kernel::arena::begin_root_cycle();
+        }
     }
 
     /// Set all coordinate inputs at once (convenience for the common
     /// single-cycle case). Wraps each u64 as `Value::U64` and sets
     /// them at indices 0..N with per-input change detection.
     pub fn set_inputs(&mut self, coords: &[u64]) {
+        self.begin_cycle_if_root();
         for (i, &c) in coords.iter().enumerate().take(self.core.inputs.len()) {
             self.core.inputs[i] = Value::U64(c);
             // Unconditional invalidation: the write itself is the
@@ -906,6 +933,7 @@ impl PolydatState {
     /// (`RawState`, `ProvScanState`) implement different
     /// strategies — see their own `set_inputs` impls.
     pub fn set_input(&mut self, idx: usize, value: Value) {
+        self.begin_cycle_if_root();
         if let Some(cell) = self.core.shared_cells.get(idx).and_then(|c| c.as_ref()) {
             // Cell-bound slot: the cell is the register. We do
             // NOT mirror the value into `inputs[idx]`; that

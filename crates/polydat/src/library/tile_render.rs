@@ -164,8 +164,15 @@ impl TileProgram {
                     .into_program()
             })
             .collect();
-        let canonicals = children.iter().map(|p| Arc::new(PolydatKernel::from_program(p.clone()))).collect();
-        let empty = Arc::new(crate::dsl::compile_polydat("\n").expect("the empty program compiles"));
+        // Both kernels serve the comprehension evaluator inside a render,
+        // so neither is a root of its own cycle (SRD 115, axiom H5).
+        let canonicals = children
+            .iter()
+            .map(|p| Arc::new(PolydatKernel::from_program_nested(p.clone())))
+            .collect();
+        let mut empty_kernel = crate::dsl::compile_polydat("\n").expect("the empty program compiles");
+        empty_kernel.mark_nested();
+        let empty = Arc::new(empty_kernel);
         TileProgram { spec, children, canonicals, empty }
     }
 
@@ -353,7 +360,13 @@ fn with_scratch(program: &Arc<PolydatProgram>, f: impl FnOnce(&mut PolydatState)
         .with(|m| m.borrow_mut().remove(&key))
         .filter(|(p, _)| Arc::ptr_eq(p, program))
         .map(|(_, s)| s)
-        .unwrap_or_else(|| program.create_state());
+        .unwrap_or_else(|| {
+            // A body runs inside the enclosing cycle: it must never
+            // reset the thread's arena (SRD 115, axiom H5).
+            let mut s = program.create_state();
+            s.mark_nested();
+            s
+        });
     f(&mut state);
     SCRATCH.with(|m| {
         let mut m = m.borrow_mut();

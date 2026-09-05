@@ -55,6 +55,12 @@ impl CycleArena {
         self.cursor = 0;
     }
 
+    /// Bytes allocated since the last reset.
+    #[inline(always)]
+    pub fn used(&self) -> usize {
+        self.cursor
+    }
+
     /// Allocate raw bytes in the arena and return the mutable slice.
     #[inline]
     pub fn alloc_bytes(&mut self, len: usize) -> &mut [u8] {
@@ -134,6 +140,42 @@ thread_local! {
 #[inline]
 pub fn with_cycle_arena<R>(f: impl FnOnce(&mut CycleArena) -> R) -> R {
     THREAD_CYCLE_ARENA.with(|arena| f(&mut arena.borrow_mut()))
+}
+
+thread_local! {
+    /// The thread's cycle generation: incremented by every root cycle
+    /// advance (SRD 115 §4). An arena handle is valid only within the
+    /// generation that produced it.
+    static CYCLE_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Begin a root cycle on this thread (SRD 115 §4, axiom H5): reset the
+/// cycle arena so its bytes are reused, and advance the generation so a
+/// handle held across the boundary can be recognised as stale. Only a
+/// root state calls this; nested kernels (traversal activations,
+/// projection bodies, materialized subscopes) run inside the root's
+/// cycle and never reset.
+#[inline]
+pub fn begin_root_cycle() -> u64 {
+    THREAD_CYCLE_ARENA.with(|arena| arena.borrow_mut().reset());
+    CYCLE_GENERATION.with(|g| {
+        let next = g.get().wrapping_add(1);
+        g.set(next);
+        next
+    })
+}
+
+/// The current cycle generation on this thread.
+#[inline]
+pub fn cycle_generation() -> u64 {
+    CYCLE_GENERATION.with(|g| g.get())
+}
+
+/// Bytes currently allocated in this thread's cycle arena; zero right
+/// after a root cycle begins.
+#[inline]
+pub fn cycle_arena_used() -> usize {
+    THREAD_CYCLE_ARENA.with(|arena| arena.borrow().used())
 }
 
 /// Resolve a string from a 64-bit handle using the thread-local cycle arena.

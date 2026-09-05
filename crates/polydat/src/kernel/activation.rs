@@ -163,7 +163,8 @@ impl TraversalStream {
             .get(index)
             .ok_or_else(|| format!("activation index {index} is out of range; traversal has {} tuples", self.tuples.len()))?;
         let program = self.traversal.program.clone();
-        let mut kernel = PolydatKernel::from_program(program);
+        // An activation runs inside the root's cycle (SRD 115, H5).
+        let mut kernel = PolydatKernel::from_program_nested(program);
         bind_by_name(&mut kernel, tuple);
         bind_by_name(&mut kernel, &self.cascade);
         let cursor = narrow_cursors(&mut kernel)?;
@@ -251,10 +252,10 @@ impl PolydatKernel {
         // The parent is a snapshot of this kernel; the canonical kernel is
         // the body's program, whose element externs let filter predicates
         // and dependent sources see the tuple being built.
-        let mut snapshot = PolydatKernel::from_program(program.clone());
+        let mut snapshot = PolydatKernel::from_program_nested(program.clone());
         self.propagate_inputs_into(&mut snapshot);
         let parent = Arc::new(snapshot);
-        let mut canonical_kernel = PolydatKernel::from_program(traversal.program.clone());
+        let mut canonical_kernel = PolydatKernel::from_program_nested(traversal.program.clone());
         bind_by_name(&mut canonical_kernel, &cascade);
         let canonical = Arc::new(canonical_kernel);
         let params: HashMap<String, String> = HashMap::new();
