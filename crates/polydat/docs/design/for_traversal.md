@@ -140,10 +140,13 @@ call `streamer` with comprehension text directly. A dedicated port-type
 variant is not needed for any contract in this document; the reflected
 type name is the wire-level tag.
 
-A producer's sources may reference wires of the enclosing scope. Those
-references resolve through the same auto-extern mechanism that module
-bodies use. A source that depends on a dynamic wire is a compile error:
-a producer is a scope-init value and cannot vary per cycle.
+A producer's sources may reference wires of the enclosing scope through
+the comprehension grammar's reference form, `{name}`, as in
+`partitions("*/4", {total})`. The reference is resolved against the
+enclosing kernel's current values when the traversal is opened, so a
+host can change an extern and re-open the traversal without recompiling.
+A source that depends on a per-cycle wire is an error at that point: a
+producer is a scope-init value and cannot vary per cycle.
 
 ### 3.2 Traversal
 
@@ -517,10 +520,24 @@ where it has ordinary wired access to everything the scope can see.
    const wire and its value, stream independence, `where` and `order`
    derivations, chaining, traversal over a derivation, error cases, and
    cardinality metadata.
-4. **Activation runtime.** `TraversalStream`, `Activation`, cursor
-   narrowing moved from the nmbrs executor, `cycles` iteration, `seek`.
-   Tests: T1 across two hosts of the same program, T2 by counting node
-   visits, fiber partitioning of a traversal.
+4. **Activation runtime.** Done. `kernel::activation` provides
+   `PolydatKernel::traverse(i)` and `traverse_all()`, which snapshot the
+   cascade, evaluate the comprehension against the kernel's current
+   values through the kernel-aware runtime evaluator, and return a
+   `TraversalStream` with `len`, `seek`, `advance`, and random-access
+   `activation(i)`. An `Activation` is a fresh state over the body's
+   shared program with elements and cascade bound and every cursor
+   narrowed, exposing `cycle_count`, `cycle(i)`, and `for_each_cycle`
+   under the §3.4 rule; nested traversals open from the activation's
+   kernel. The binary runs programs with top-level traversals in
+   traversal mode, inserting the emit binding into each body and striding
+   activations across fibers. Tests in `tests/for_runtime.rs` cover one
+   program per position (T2), T1 across two hosts, element and cascade
+   binding, cursor narrowing and ordinal projection, full-extent cursors,
+   nesting, fiber partitioning by index against a sequential trace,
+   multi-partition `over` errors, and outer references in sources. The
+   fuzzer activates every traversal of each generated program with
+   bounded activations and cycles and checks T1 between two hosts.
 5. **Program invariance.** Tests that a nested traversal compiles exactly
    one program per `for` body regardless of tuple count, and that
    activation performs no compilation. Count compile events across a

@@ -328,7 +328,13 @@ chunks of cycles; rows come out in cycle order unless `--unordered` is
 given. `--timing` reports compile time, wall time, throughput, and per-fiber
 busy time as text or JSON. `explain` narrates each compilation phase, from
 tokens through wires, types, lifecycle, constants, fusion, engine
-selection, and provenance, and accepts phase names to narrate one at a time.
+selection, provenance, and traversals, and accepts phase names to narrate
+one at a time.
+
+A program with top-level `for` traversals runs in traversal mode: the emit
+binding is inserted into each body, fibers take activations by index, and
+each activation runs its cycles under the traversal rule, capped by
+`--cycles`. See [The `for` Construct](crates/polydat/docs/design/for_traversal.md).
 
 The binary is behind the default `cli` feature. Library consumers who
 disable default features do not pull in its dependencies.

@@ -60,9 +60,10 @@ struct Comp {
 struct Gen {
     rng: Rng,
     counter: usize,
-    /// Producer wires bound so far at the current scope depth, usable
-    /// by `for <producer> { ... }`.
-    producers: Vec<String>,
+    /// Producer wires bound so far at the current scope depth, with
+    /// their element names, usable by `for <producer> { ... }` and by
+    /// derivations.
+    producers: Vec<(String, Vec<String>)>,
 }
 
 const STRATEGIES: &[&str] = &[
@@ -182,7 +183,7 @@ impl Gen {
                 let c = self.comprehension();
                 let n = self.name("prod");
                 out.push(Expected::Producer { names: c.names.clone() });
-                self.producers.push(n.clone());
+                self.producers.push((n.clone(), c.names.clone()));
                 format!("{n} := for {}", c.text)
             }
             7 if depth > 0 => self.traversal(depth - 1, out),
@@ -198,9 +199,14 @@ impl Gen {
     fn traversal(&mut self, depth: usize, out: &mut Vec<Expected>) -> String {
         let use_producer = !self.producers.is_empty() && self.rng.coin(30);
         let (head, names) = if use_producer {
-            let p = self.producers[self.rng.range(self.producers.len())].clone();
+            let (p, names) = self.producers[self.rng.range(self.producers.len())].clone();
             out.push(Expected::TraversalOverProducer { producer: p.clone() });
-            (p, Vec::new())
+            if self.rng.coin(40) {
+                // A derived head: `for base where ... order ... {`.
+                (self.derivation_text(&p, &names), names)
+            } else {
+                (p, names)
+            }
         } else {
             let c = self.comprehension();
             out.push(Expected::Traversal { names: c.names.clone() });
@@ -218,6 +224,26 @@ impl Gen {
         format!("for {head}{brace}{comment}\n{}\n}}", body.iter().map(|s| format!("    {s}")).collect::<Vec<_>>().join("\n"))
     }
 
+    /// `base where <pred>`, `base order <spec>`, or both, over a
+    /// producer with the given element names.
+    fn derivation_text(&mut self, base: &str, names: &[String]) -> String {
+        let mut text = base.to_string();
+        let which = self.rng.range(3);
+        if which != 1 && !names.is_empty() {
+            let a = names[self.rng.range(names.len())].clone();
+            text.push_str(&format!(" where {{{a}}} {} {}", self.rng.pick(CMP), self.rng.range(50)));
+        }
+        if which != 0 || names.is_empty() {
+            let strat = self.rng.pick(STRATEGIES);
+            if self.rng.coin(50) {
+                text.push_str(&format!(" order {strat}/{}", 1 + self.rng.range(9)));
+            } else {
+                text.push_str(&format!(" order {strat}"));
+            }
+        }
+        text
+    }
+
     /// A whole program: an input, a few top-level statements, one to
     /// three `for` forms.
     fn program(&mut self) -> (String, Vec<Expected>) {
@@ -233,9 +259,19 @@ impl Gen {
                     let c = self.comprehension();
                     let name = self.name("sweep");
                     out.push(Expected::Producer { names: c.names.clone() });
-                    self.producers.push(name.clone());
+                    self.producers.push((name.clone(), c.names.clone()));
                     let comment = if self.rng.coin(25) { "   # sweep" } else { "" };
                     lines.push(format!("{name} := for {}{comment}", c.text));
+                    if self.rng.coin(50) {
+                        // A derived producer over the one just bound. Its
+                        // element names resolve at compile time, so the
+                        // parsed form reports none.
+                        let derived = self.name("derived");
+                        let text = self.derivation_text(&name, &c.names);
+                        out.push(Expected::Producer { names: Vec::new() });
+                        self.producers.push((derived.clone(), c.names.clone()));
+                        lines.push(format!("{derived} := for {text}"));
+                    }
                 }
                 _ => {
                     let depth = self.rng.range(3);
@@ -244,7 +280,8 @@ impl Gen {
                 }
             }
             if self.rng.coin(30) {
-                lines.push(format!("plain{} := hash(cycle)", self.counter));
+                let plain = self.name("plain");
+                lines.push(format!("{plain} := hash(cycle)"));
             }
         }
         (lines.join("\n") + "\n", out)
@@ -399,8 +436,63 @@ fn run_wellformed_pass(seed: u64, iterations: usize) -> Vec<String> {
             }
             Err(p) => failures.push(format!("[seed {seed:#x}] iteration {i}: compiler panicked: {}\n  source:\n{source}\n  {}", panic_text(&p), repro(i))),
         }
+
+        // Invariant 5: a compiled program's traversals activate and cycle
+        // without panicking, and two hosts of the same source produce the
+        // same trace (T1). Bounded so a wide comprehension stays cheap.
+        let run = || -> Result<Vec<String>, String> {
+            let mut k = polydat::dsl::compile_polydat(&source)?;
+            k.set_inputs(&[3]);
+            let mut trace = Vec::new();
+            run_traversals_bounded(&mut k, 0, &mut trace)?;
+            Ok(trace)
+        };
+        let first = std::panic::catch_unwind(run);
+        match first {
+            Err(p) => failures.push(format!("[seed {seed:#x}] iteration {i}: traversal runtime panicked: {}\n  source:\n{source}\n  {}", panic_text(&p), repro(i))),
+            Ok(Err(e)) => {
+                if cryptic(&e) {
+                    failures.push(format!("[seed {seed:#x}] iteration {i}: cryptic runtime error: {e}\n  source:\n{source}\n  {}", repro(i)));
+                }
+            }
+            Ok(Ok(trace_a)) => {
+                if let Ok(Ok(trace_b)) = std::panic::catch_unwind(run)
+                    && trace_a != trace_b
+                {
+                    failures.push(format!("[seed {seed:#x}] iteration {i}: T1 violated, two hosts diverged.\n  source:\n{source}\n  {}", repro(i)));
+                }
+            }
+        }
     }
     failures
+}
+
+/// Activate every traversal of `k` (recursing into activations' own
+/// traversals), running at most a few activations and cycles of each,
+/// and append every pulled output's display form to `trace`.
+fn run_traversals_bounded(k: &mut polydat::kernel::PolydatKernel, depth: usize, trace: &mut Vec<String>) -> Result<(), String> {
+    const MAX_ACTIVATIONS: usize = 6;
+    const MAX_CYCLES: u64 = 3;
+    if depth > 4 {
+        return Ok(());
+    }
+    let n = k.program().traversals().len();
+    for t in 0..n {
+        let stream = k.traverse(t)?;
+        let outputs: Vec<String> = stream.traversal().program.own_output_names().iter().map(|s| s.to_string()).collect();
+        for a in 0..stream.len().min(MAX_ACTIVATIONS) {
+            let mut act = stream.activation(a)?;
+            for c in 0..act.cycle_count().min(MAX_CYCLES) {
+                let kernel = act.cycle(c);
+                for name in &outputs {
+                    trace.push(format!("{t}/{a}/{c} {name}={}", kernel.pull(name).to_display_string()));
+                }
+            }
+            act.cycle(0);
+            run_traversals_bounded(&mut act.kernel, depth + 1, trace)?;
+        }
+    }
+    Ok(())
 }
 
 /// Byte-level mutations of well-formed programs.
@@ -500,6 +592,7 @@ fn generator_smoke() {
     // sample, or the fuzz above is weaker than it looks.
     let mut rng = Rng::new(7);
     let (mut producers, mut traversals, mut over_producer, mut nested, mut wheres, mut orders, mut zips) = (0, 0, 0, 0, 0, 0, 0);
+    let mut derived = 0;
     for _ in 0..200 {
         let mut g = Gen::new(rng.next_u64());
         let (src, expected) = g.program();
@@ -514,9 +607,10 @@ fn generator_smoke() {
         if src.contains(" where ") { wheres += 1; }
         if src.contains(" order ") { orders += 1; }
         if src.contains("zip_") || src.contains(") in (") { zips += 1; }
+        if src.contains(":= for sweep") || src.contains("for sweep") && (src.contains(" where ") || src.contains(" order ")) { derived += 1; }
     }
-    assert!(producers > 20 && traversals > 20 && over_producer > 5 && nested > 5 && wheres > 20 && orders > 20 && zips > 5,
-        "generator coverage too thin: producers={producers} traversals={traversals} over_producer={over_producer} nested={nested} wheres={wheres} orders={orders} zips={zips}");
+    assert!(producers > 20 && traversals > 20 && over_producer > 5 && nested > 5 && wheres > 20 && orders > 20 && zips > 5 && derived > 5,
+        "generator coverage too thin: producers={producers} traversals={traversals} over_producer={over_producer} nested={nested} wheres={wheres} orders={orders} zips={zips} derived={derived}");
 }
 
 /// Manual deep sweep. Run with `-- --ignored`.

@@ -63,6 +63,8 @@ mod opt;
 pub mod interp;
 pub mod subcontext;
 pub mod arena;
+pub mod activation;
+pub use activation::{Activation, CursorSlice, TraversalStream};
 
 pub use arena::{CycleArena, with_cycle_arena, encode_arena_handle, decode_arena_handle, StaticInterner, resolve_thread_str, resolve_thread_bytes, put_thread_str, put_thread_bytes};
 pub use program::*;

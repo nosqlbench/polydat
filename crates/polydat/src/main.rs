@@ -336,9 +336,25 @@ fn run(args: RunArgs) -> Result<(), String> {
                 .collect()
         }
     };
-    for name in &selected {
-        if probe.program.output_index(name).is_none() {
-            return Err(format!("no output named '{name}'; declared outputs: {}", probe.program.output_names().join(", ")));
+    // Selected outputs must exist where they will be pulled: in every
+    // traversal body when the program traverses, else at the root.
+    if probe.program.traversals().is_empty() {
+        for name in &selected {
+            if probe.program.output_index(name).is_none() {
+                return Err(format!("no output named '{name}'; declared outputs: {}", probe.program.output_names().join(", ")));
+            }
+        }
+    } else if args.outputs.is_some() {
+        for t in probe.program.traversals() {
+            for name in &selected {
+                if t.program.output_index(name).is_none() {
+                    return Err(format!(
+                        "no output named '{name}' in the body of `for {}`; its outputs: {}",
+                        t.source_text,
+                        body_wire_names(&t.program).join(", ")
+                    ));
+                }
+            }
         }
     }
 
@@ -349,19 +365,41 @@ fn run(args: RunArgs) -> Result<(), String> {
         Emit::Csv => EmitFormat::Csv,
         Emit::Jsonl => EmitFormat::Jsonl,
     });
-    let compiled = if let Some(fmt) = emit_format {
-        let fmt_name = match fmt {
-            EmitFormat::Map => "map",
-            EmitFormat::Csv => "csv",
-            EmitFormat::Jsonl => "jsonl",
+    // A program with top-level traversals runs in traversal mode: the
+    // emit transform goes inside each for body, where it sees the
+    // body's scope, and the run activates the traversals.
+    let traversal_mode = !probe.program.traversals().is_empty();
+
+    let emit_binding = |names: &[String]| -> Result<Statement, String> {
+        let fmt_name = match emit_format {
+            Some(EmitFormat::Map) => "map",
+            Some(EmitFormat::Csv) => "csv",
+            Some(EmitFormat::Jsonl) => "jsonl",
+            None => unreachable!(),
         };
         let binding = format!(
             "__emit := emit_row(\"{fmt_name}\", \"{}\", {})\n",
-            selected.join(","),
-            selected.join(", ")
+            names.join(","),
+            names.join(", ")
         );
-        let emit_ast = parse_source(&binding)?;
-        ast.statements.extend(emit_ast.statements);
+        let mut emit_ast = parse_source(&binding)?;
+        Ok(emit_ast.statements.remove(0))
+    };
+
+    let compiled = if emit_format.is_some() {
+        if traversal_mode {
+            for stmt in ast.statements.iter_mut() {
+                if let Statement::For(f) = stmt {
+                    let names: Vec<String> = match &args.outputs {
+                        Some(_) => selected.clone(),
+                        None => body_output_names(&f.body),
+                    };
+                    f.body.push(emit_binding(&names)?);
+                }
+            }
+        } else {
+            ast.statements.push(emit_binding(&selected)?);
+        }
         compile_ast(&ast, &source, &args.compile)?
     } else {
         probe
@@ -373,6 +411,10 @@ fn run(args: RunArgs) -> Result<(), String> {
     }
     if args.stats {
         print_stats(&program, &compiled, Report::Text);
+    }
+
+    if traversal_mode {
+        return run_traversals(&args, &compiled, emit_format, &selected);
     }
 
     // Cursor narrowing. Each cursor declared `over <spec>` resolves to a
@@ -559,6 +601,173 @@ impl CursorPlan {
             narrow_cursor(program, state, name, p);
         }
     }
+}
+
+/// Wires a compiled body computes itself: its outputs that are not its
+/// inputs (elements, cascade, cycle) and not compiler-internal.
+fn body_wire_names(program: &PolydatProgram) -> Vec<String> {
+    program
+        .own_output_names()
+        .into_iter()
+        .filter(|n| !n.starts_with("__") && program.find_input(n).is_none())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Binding targets a for body declares, excluding compiler-internal names.
+fn body_output_names(body: &[Statement]) -> Vec<String> {
+    let mut out = Vec::new();
+    for stmt in body {
+        if let Statement::Binding(b) = stmt {
+            for t in &b.targets {
+                if !t.starts_with("__") && !out.contains(t) {
+                    out.push(t.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Run every top-level traversal of the program (SRD 113 §3.6). Fibers
+/// take activations by index, stride `fibers`, so no coordination is
+/// needed. Each activation runs its cycles under the §3.4 rule, capped
+/// by `--cycles`. Rows are ordered by traversal and activation index
+/// unless `--unordered` is given.
+fn run_traversals(args: &RunArgs, compiled: &Compiled, emit_format: Option<EmitFormat>, selected: &[String]) -> Result<(), String> {
+    let program = compiled.program.clone();
+    let fibers = args.fibers.max(1);
+    let cap = args.cycles.max(1);
+
+    let sink: Box<dyn Write + Send> = match &args.out {
+        Some(path) => Box::new(std::io::BufWriter::new(
+            std::fs::File::create(path).map_err(|e| format!("cannot create {}: {e}", path.display()))?,
+        )),
+        None => Box::new(std::io::BufWriter::new(std::io::stdout())),
+    };
+    let sink = Arc::new(Mutex::new(sink));
+
+    // Open every traversal against a root kernel positioned at --start.
+    let mut root = polydat::kernel::PolydatKernel::over(program.clone());
+    root.set_inputs(&[args.start]);
+    let streams = root.traverse_all()?;
+    if !args.quiet {
+        for (i, s) in streams.iter().enumerate() {
+            eprintln!("traversal {i}: for {}  ({} activations)", s.traversal().source_text, s.len());
+        }
+    }
+    // Header rows travel with each traversal's first activation, so a
+    // format with a header (csv) labels each traversal's columns even
+    // when the bodies differ.
+    let headers: Vec<Option<String>> = streams
+        .iter()
+        .map(|s| {
+            let fmt = emit_format?;
+            let names: Vec<String> = if args.outputs.is_some() { selected.to_vec() } else { body_wire_names(&s.traversal().program) };
+            let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+            emit::header(fmt, &refs)
+        })
+        .collect();
+
+    // Sequence numbers: activation index within a traversal, offset by
+    // the activations of the traversals before it.
+    let offsets: Vec<u64> = streams.iter().scan(0u64, |acc, s| { let o = *acc; *acc += s.len() as u64; Some(o) }).collect();
+    let total_activations: u64 = streams.iter().map(|s| s.len() as u64).sum();
+
+    let (tx, rx) = mpsc::channel::<(u64, Vec<String>)>();
+    let cycles_run = AtomicU64::new(0);
+    let fiber_busy: Mutex<Vec<Duration>> = Mutex::new(vec![Duration::ZERO; fibers]);
+    let run_start = Instant::now();
+
+    std::thread::scope(|s| {
+        for fiber in 0..fibers {
+            let tx = tx.clone();
+            let streams = &streams;
+            let offsets = &offsets;
+            let headers = &headers;
+            let cycles_run = &cycles_run;
+            let fiber_busy = &fiber_busy;
+            let emitting = emit_format.is_some();
+            s.spawn(move || {
+                let mut busy = Duration::ZERO;
+                for (t, stream) in streams.iter().enumerate() {
+                    let pull_names: Vec<String> = if emitting {
+                        vec!["__emit".to_string()]
+                    } else if args.outputs.is_some() {
+                        selected.to_vec()
+                    } else {
+                        body_wire_names(&stream.traversal().program)
+                    };
+                    let mut i = fiber;
+                    while i < stream.len() {
+                        let start = Instant::now();
+                        let rows = match stream.activation(i) {
+                            Ok(mut act) => {
+                                let n = act.cycle_count().min(cap);
+                                let mut rows = Vec::new();
+                                if i == 0
+                                    && let Some(h) = &headers[t]
+                                {
+                                    rows.push(h.clone());
+                                }
+                                for c in 0..n {
+                                    let kernel = act.cycle(c);
+                                    if emitting {
+                                        kernel.pull("__emit");
+                                    } else {
+                                        let line: Vec<String> = pull_names.iter().map(|name| format!("{name}={}", kernel.pull(name).to_display_string())).collect();
+                                        rows.push(format!("{t}/{i}/{c} {}", line.join(" ")));
+                                    }
+                                }
+                                cycles_run.fetch_add(n, Ordering::Relaxed);
+                                if emitting { rows.extend(emit::take_rows()); }
+                                rows
+                            }
+                            Err(e) => vec![format!("error: activation {i} of traversal {t}: {e}")],
+                        };
+                        busy += start.elapsed();
+                        let _ = tx.send((offsets[t] + i as u64, rows));
+                        i += fibers;
+                    }
+                }
+                fiber_busy.lock().unwrap()[fiber] = busy;
+            });
+        }
+        drop(tx);
+
+        let mut out = sink.lock().unwrap();
+        if args.unordered {
+            for (_, rows) in rx {
+                for r in rows {
+                    let _ = writeln!(out, "{r}");
+                }
+            }
+        } else {
+            let mut expected = 0u64;
+            let mut pending: BTreeMap<u64, Vec<String>> = BTreeMap::new();
+            for (seq, rows) in rx {
+                pending.insert(seq, rows);
+                while let Some(rows) = pending.remove(&expected) {
+                    for r in rows {
+                        let _ = writeln!(out, "{r}");
+                    }
+                    expected += 1;
+                }
+            }
+        }
+        let _ = out.flush();
+    });
+    let wall = run_start.elapsed();
+
+    if let Some(report) = args.timing {
+        let busy = fiber_busy.into_inner().unwrap();
+        let ran = cycles_run.load(Ordering::Relaxed);
+        if !args.quiet {
+            eprintln!("{total_activations} activations across {} traversal(s)", streams.len());
+        }
+        print_timing(report, compiled, ran, fibers, wall, &busy);
+    }
+    Ok(())
 }
 
 fn print_timing(report: Report, compiled: &Compiled, cycles: u64, fibers: usize, wall: Duration, busy: &[Duration]) {
