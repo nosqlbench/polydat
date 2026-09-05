@@ -160,3 +160,29 @@ fn nested_projection_through_the_structural_form() {
     assert_eq!(doc[1][0]["r"], 1);
     assert_eq!(doc[1][1]["c"], 1);
 }
+
+#[test]
+fn values_cross_into_bodies_as_themselves() {
+    // A JSON wire cascaded into a body renders serialized, not as a
+    // quoted string of its text; an f64 keeps its value.
+    let src = "input cycle: u64\nj := str_to_json(\"{\\\"k\\\": [1, 2]}\")\nf := to_f64(cycle) / 3.0\n\
+        tile t : json {\"xs\": [@for i in 0..2 { {\"i\": ${i}, \"j\": ${j}, \"f\": ${f | .4}} }]}\n";
+    assert_eq!(
+        render(src, 1, "t"),
+        "{\"xs\": [{\"i\": 0, \"j\": {\"k\":[1,2]}, \"f\": 0.3333},{\"i\": 1, \"j\": {\"k\":[1,2]}, \"f\": 0.3333}]}"
+    );
+}
+
+#[test]
+fn list_valued_generators_contribute_one_tuple_per_item() {
+    // A JSON array from a node call is a list source: one tuple per
+    // element, each carrying its own JSON kind.
+    let src = "input cycle: u64\nlist := str_to_json(\"[3, 4.5, true, \\\"x\\\"]\")\ntile t : json {\"g\": [@for g in list { ${g} }]}\n";
+    assert_eq!(render(src, 3, "t"), "{\"g\": [3,4.5,true,\"x\"]}");
+    // `json_array` receives its arguments as text, so its items are strings.
+    let src = "input cycle: u64\ntile t : text := \"@for g in json_array(\\\"a\\\", \\\"b\\\") sep \\\"-\\\" {${g}}\"\n";
+    assert_eq!(render(src, 0, "t"), "a-b");
+    // Combined with a range, the list is one axis of the product.
+    let src = "input cycle: u64\npair := str_to_json(\"[1, 2]\")\ntile t : text := \"@for g in pair, k in 0..2 sep \\\",\\\" {${g}${k}}\"\n";
+    assert_eq!(render(src, 0, "t"), "10,11,20,21");
+}

@@ -690,9 +690,12 @@ a handful of integer and float encodes, and a four-tuple loop.
    unknown. A predicate placeholder for a wire outside the
    comprehension is a compile error, as it is for `for`. The body's
    own input is the tuple index and the program's `cycle` is cascaded
-   like any outer wire. Tests in `tests/tile_projections.rs`. Still
-   owed: a nested projection inside a string position, and stream-valued
-   generators, whose values cannot cross the node's text-typed inputs.
+   like any outer wire. Values cross into the render node as they are:
+   its variadic inputs are exempt from wire typing, as `printf`'s are,
+   so cascaded wires, generator scalars, and generator lists (streams,
+   vectors, JSON arrays) arrive typed rather than as display text.
+   Tests in `tests/tile_projections.rs`. Still owed: a nested
+   projection inside a string position.
 6. **Host surfaces.** Done. In source, `name := polytile(enc, body,
    options...)` and `name := polytile_json(body, options...)` are
    parsed into `tile` statements before compilation; the body is a

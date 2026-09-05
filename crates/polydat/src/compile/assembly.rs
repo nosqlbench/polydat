@@ -1161,7 +1161,12 @@ impl PolydatAssembler {
                     || node_name_for_typing == "log_error"
                     || node_name_for_typing == "exactly_one_value"
                     || node_name_for_typing == "json_text"
-                    || node_name_for_typing == "str_concat";
+                    || node_name_for_typing == "str_concat"
+                    // SRD 114: the tile render node's variadic inputs
+                    // carry encoded hole text and the typed values a
+                    // projection body imports; the values must arrive
+                    // as they are, not as display text.
+                    || node_name_for_typing == "tile_render";
 
                 if skip_type_check || source_type == expected_type {
                     node_wiring.push(source);

@@ -279,9 +279,9 @@ tile grid : json {
   outside the comprehension is a compile error, as it is for `for`.
 - **Generators.** `hash_range(cycle, 1000)` is compiled as a wire of
   the program and its value is the element, one tuple for a scalar and
-  one per item for a list. It is typed by the same inference as a hole,
-  so it may read any wire in scope, including an outer element when
-  nested.
+  one per item for a list such as a JSON array, a vector, or a stream.
+  It is typed by the same inference as a hole, so it may read any wire
+  in scope, including an outer element when nested.
 
 A projection's source must have a finite tuple set. A continuous
 interval such as `x in 0.0..1.0` is rejected with a message; project
@@ -551,10 +551,8 @@ shared by two tiles is computed once.
   other widenings must be written in the expression.
 - A nested `@for` cannot sit inside a string position of a JSON tile;
   project the inner text into a wire of its own and reference it.
-- Continuous sources do not project; a predicate sees only the
-  comprehension's elements; a generator's list value arrives as text,
-  so JSON arrays and scalars expand, but stream-valued generators do
-  not.
+- Continuous sources do not project, and a predicate sees only the
+  comprehension's elements.
 - In the structural form, a projection or branch that sits beside
   static members or elements contributes its own separators; if it
   renders zero tuples the document keeps a dangling comma. Put such
