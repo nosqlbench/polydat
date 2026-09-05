@@ -179,6 +179,7 @@ fn parse_statement_into(p: &mut Parser, out: &mut Vec<Statement>) -> Result<(), 
         TokenKind::Extern => out.push(parse_extern_port(p)?),
         TokenKind::Cursor => out.push(parse_cursor_decl(p)?),
         TokenKind::For(_) => out.push(parse_for_statement(p)?),
+        TokenKind::Tile => out.push(parse_tile(p)?),
         TokenKind::Const | TokenKind::Shared | TokenKind::Volatile => {
             out.push(parse_modified_binding(p)?);
         }
@@ -189,6 +190,8 @@ fn parse_statement_into(p: &mut Parser, out: &mut Vec<Statement>) -> Result<(), 
             //   name(p: type) -> ... := { → module def
             if is_module_def(p) {
                 out.push(parse_module_def(p)?);
+            } else if is_polytile_binding(p) {
+                out.push(parse_polytile_binding(p)?);
             } else {
                 out.push(parse_cycle_binding(p)?);
             }
@@ -234,8 +237,167 @@ fn parse_for_statement(p: &mut Parser) -> Result<Statement, String> {
     Ok(Statement::For(ForStmt { source, body, span }))
 }
 
+/// `tile name [: encoding] [(options)] := body` — SRD 114 §2.1.
+///
+/// The lexer captured block and heredoc bodies raw into a `TileBody`
+/// token; a string-literal body arrives as an ordinary string token.
+fn parse_tile(p: &mut Parser) -> Result<Statement, String> {
+    let span = p.span();
+    p.expect(&TokenKind::Tile)?;
+    let name = p.expect_ident()?;
+    let encoding = if matches!(p.peek(), TokenKind::Colon) {
+        p.advance();
+        Some(p.expect_ident()?)
+    } else {
+        None
+    };
+    let mut options = TileOptions::default();
+    if matches!(p.peek(), TokenKind::LParen) {
+        p.advance();
+        while !matches!(p.peek(), TokenKind::RParen | TokenKind::Eof) {
+            let key = p.expect_ident()?;
+            match key.as_str() {
+                "delims" => {
+                    options.open = expect_string(p, "delims open")?;
+                    options.close = expect_string(p, "delims close")?;
+                    if options.open.is_empty() || options.close.is_empty() {
+                        return Err(format!("tile '{name}' at line {}, col {}: delimiters must not be empty", span.line, span.col));
+                    }
+                }
+                "sigil" => {
+                    options.sigil = expect_string(p, "sigil")?;
+                    if options.sigil.is_empty() {
+                        return Err(format!("tile '{name}' at line {}, col {}: sigil must not be empty", span.line, span.col));
+                    }
+                }
+                "strict" => options.strict = true,
+                other => {
+                    return Err(format!(
+                        "tile '{name}' at line {}, col {}: unknown option '{other}'; options are delims, sigil, strict",
+                        span.line, span.col
+                    ))
+                }
+            }
+            if matches!(p.peek(), TokenKind::Comma) {
+                p.advance();
+            }
+        }
+        p.expect(&TokenKind::RParen)?;
+    }
+    // `:=` is required before a string body and optional before a block
+    // or heredoc, which the lexer captured as a body token already.
+    if matches!(p.peek(), TokenKind::ColonEq) {
+        p.advance();
+    }
+    let (body_kind, body) = match p.peek().clone() {
+        TokenKind::TileBody(text, kind) => {
+            p.advance();
+            (kind, text)
+        }
+        TokenKind::StringLit(s) => {
+            p.advance();
+            (TileBodyKind::Literal, s)
+        }
+        other => {
+            return Err(format!(
+                "tile '{name}' at line {}, col {}: expected a body (a `{{ }}` or `[ ]` block, `<<< >>>` heredoc, or string), got {other:?}",
+                span.line, span.col
+            ))
+        }
+    };
+    if let Some(enc) = &encoding
+        && !matches!(enc.as_str(), "json" | "text" | "csv")
+    {
+        return Err(format!(
+            "tile '{name}' at line {}, col {}: unknown encoding '{enc}'; encodings are json, text, csv",
+            span.line, span.col
+        ));
+    }
+    let pieces = super::tile::parse_template(&body, &options, span)
+        .map_err(|e| format!("tile '{name}': {e}"))?;
+    Ok(Statement::Tile(TileDef { name, encoding, options, body_kind, body, pieces, span }))
+}
+
+/// `name := polytile(...)` or `name := polytile_json(...)`: a tile
+/// whose body arrives as an argument (SRD 114 §5.6).
+fn is_polytile_binding(p: &Parser) -> bool {
+    p.pos + 3 < p.tokens.len()
+        && matches!(&p.tokens[p.pos].kind, TokenKind::Ident(_))
+        && matches!(&p.tokens[p.pos + 1].kind, TokenKind::ColonEq)
+        && matches!(&p.tokens[p.pos + 2].kind, TokenKind::Ident(f) if f == "polytile" || f == "polytile_json")
+        && matches!(&p.tokens[p.pos + 3].kind, TokenKind::LParen)
+}
+
+/// `name := polytile("<encoding>", "<template>" [, open: "..", close: "..", sigil: ".."])`
+/// `name := polytile_json("<structural json>" [, options])`
+///
+/// The body is a string literal or a heredoc, taken raw: it is
+/// compiled as a template, never evaluated, so interpolation inside it
+/// belongs to the tile. This is the form a host that only holds strings
+/// emits as a program transform.
+fn parse_polytile_binding(p: &mut Parser) -> Result<Statement, String> {
+    let span = p.span();
+    let name = p.expect_ident()?;
+    p.expect(&TokenKind::ColonEq)?;
+    let func = p.expect_ident()?;
+    p.expect(&TokenKind::LParen)?;
+    let at = |what: &str| format!("{func} for '{name}' at line {}, col {}: {what}", span.line, span.col);
+    let encoding = if func == "polytile" {
+        let e = expect_string(p, "the encoding").map_err(|m| at(&m))?;
+        if !matches!(p.peek(), TokenKind::Comma) {
+            return Err(at("expected `,` and then the template"));
+        }
+        p.advance();
+        Some(e)
+    } else {
+        None
+    };
+    let body = expect_string(p, "the template body (a string or a `<<< >>>` heredoc)").map_err(|m| at(&m))?;
+    let mut options = TileOptions::default();
+    while matches!(p.peek(), TokenKind::Comma) {
+        p.advance();
+        if matches!(p.peek(), TokenKind::RParen) {
+            break;
+        }
+        let key = p.expect_ident()?;
+        p.expect(&TokenKind::Colon).map_err(|_| at(&format!("option `{key}` needs `: \"value\"`")))?;
+        match key.as_str() {
+            "open" => options.open = expect_string(p, "open").map_err(|m| at(&m))?,
+            "close" => options.close = expect_string(p, "close").map_err(|m| at(&m))?,
+            "sigil" => options.sigil = expect_string(p, "sigil").map_err(|m| at(&m))?,
+            "strict" => {
+                let v = p.expect_ident().map_err(|m| at(&m))?;
+                options.strict = v == "true";
+            }
+            other => return Err(at(&format!("unknown option '{other}'; options are open, close, sigil, strict"))),
+        }
+    }
+    p.expect(&TokenKind::RParen).map_err(|m| at(&m))?;
+    if options.open.is_empty() || options.close.is_empty() || options.sigil.is_empty() {
+        return Err(at("delimiters and sigil must not be empty"));
+    }
+    let tile = match encoding {
+        Some(enc) => super::tile_structural::tile_from_text(&name, &enc, &body, &options, span)?,
+        None => super::tile_structural::tile_from_json_text(&name, &body, &options, span)?,
+    };
+    Ok(Statement::Tile(tile))
+}
+
+fn expect_string(p: &mut Parser, what: &str) -> Result<String, String> {
+    match p.peek().clone() {
+        TokenKind::StringLit(s) => {
+            p.advance();
+            Ok(s)
+        }
+        other => Err(format!(
+            "expected a string for {what}, got {other:?} at line {}, col {}",
+            p.span().line, p.span().col
+        )),
+    }
+}
+
 /// Classify and parse the text after `for`.
-fn for_source_from_text(text: &str, span: Span, allow_producer: bool) -> Result<ForSource, String> {
+pub(crate) fn for_source_from_text(text: &str, span: Span, allow_producer: bool) -> Result<ForSource, String> {
     if text.is_empty() {
         return Err(format!("`for` at line {}, col {} has no comprehension", span.line, span.col));
     }

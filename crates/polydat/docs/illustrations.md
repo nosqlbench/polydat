@@ -489,6 +489,38 @@ activations by index. The full contract is [The `for`
 Construct](design/for_traversal.md). See
 [`examples/for_traversal.rs`](../examples/for_traversal.rs).
 
+## Tiles: documents as wires
+
+A `tile` is a template whose holes are expressions. It compiles into
+the graph and renders per cycle as a string wire, with the encoding
+deciding how each hole is written.
+
+```rust
+let mut kernel = compile_polydat(r#"
+    input cycle: u64
+    base := cycle * 100
+    tile samples : json {
+        "base": ${base},
+        "points": [ @for i in 0..3 { {"i": ${i}, "v": ${base + i}} } ]
+    }
+"#).unwrap();
+kernel.set_inputs(&[2]);
+println!("{}", kernel.pull("samples").as_str());
+```
+
+```json
+{
+    "base": 200,
+    "points": [ {"i": 0, "v": 200},{"i": 1, "v": 201},{"i": 2, "v": 202} ]
+}
+```
+
+Numbers render bare and strings render quoted because the encoder
+reads the wire's type; `@for` repeats its body over a comprehension.
+The walk-through from a one-line text tile to a statement carrying a
+JSON document is [the Polytile tutorial](polytile_tutorial.md). See
+[`examples/polytile_tutorial.rs`](../examples/polytile_tutorial.rs).
+
 ## A context layering API
 
 A library function can be composed into a parent kernel as a sub-DAG.

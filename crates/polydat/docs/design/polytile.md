@@ -1,8 +1,16 @@
 # Polytile — Compiled Variate Templates
 
-**Status:** Draft for review, second revision. Proposed SRD 114. Nothing
-in this document is implemented yet; it specifies the contract that
-implementation must meet.
+**Status:** Proposed SRD 114, second revision. Steps 1, 2, and 4 of
+§12 are implemented and steps 5 and 6 in most part: the grammar in
+every body form with options; the structural JSON form; tiles handed
+in by a host as template text, JSON text, a parsed JSON value, or a
+`polytile` binding; and tiles that compile to wires and render at P1
+for the `text`, `json`, and `csv` encodings with type- and
+position-aware encoding, formats, raw holes, branches, projections
+over inline comprehensions and bound producers, and splicing. Typing
+beyond the declared type and the runtime variant (§4) and P2/P3 are
+not yet implemented; §12 records what each step still owes. The walk-through with real output is
+[the Polytile tutorial](../polytile_tutorial.md).
 
 **Ownership:** Polydat owns the tile grammar in both its textual and
 structural forms, the skeleton IR, the type model for holes, the
@@ -68,7 +76,8 @@ Extends [Grammar](grammar.md) §2.
 statement   ::= ...existing...
              |  tile_def
 
-tile_def    ::= "tile" ident (":" encoding)? options? ":=" tile_body
+tile_def    ::= "tile" ident (":" encoding)? options? (":=")? tile_body
+                                                       (* `:=` is required before a string body *)
 encoding    ::= "json" | "text" | "csv"                (* extensible *)
 options     ::= "(" option ("," option)* ")"
 option      ::= "delims" string string                  (* hole delimiters *)
@@ -117,6 +126,14 @@ Both are overridable per tile (§2.3) and per host (§5).
   tile in scope. It is resolved at compile time by inlining that tile's
   skeleton.
 - A doubled open delimiter is a literal open delimiter.
+- The braces of a directive block delimit it; whitespace padding them
+  is not body. `@if x { "hot" }` renders `"hot"`. Braces inside body
+  text are balanced, so JSON objects sit in a block unescaped.
+- A hole cannot appear in a directive header. Polydat's `{name}`
+  interpolation may, as in `where {k} > 0`; a free-standing `{word}`
+  after the header is the block itself (`@if x {plain}`), and `{name}`
+  is read as interpolation only when it is attached to header
+  punctuation (`1..{n}`) or followed by an operator.
 
 Examples:
 
@@ -371,26 +388,36 @@ render time. Two renders of the same tile never share dispense state.
 `${name}` where `name` is a tile in scope splices that tile's skeleton
 into this one at compile time. Its holes join this tile's holes; its
 static bytes join this tile's static bytes; adjacent statics coalesce.
-Splicing is transitive and must be acyclic. The spliced tile's encoding
-must match, except that any tile may be spliced into a `text` tile as
-raw bytes.
+Splicing is transitive and must be acyclic. Only a tile of the same
+encoding is spliced; across encodings the named tile is an ordinary
+wire whose rendered text enters through the hole and is encoded by the
+outer tile's rules, or inlined with `!`. A `json` document carried in a
+`text` statement is `'${doc!}'`; a `text` message carried in a `json`
+document is `"body": ${msg}` and arrives quoted and escaped.
 
 ### 5.6 Host APIs
 
 Beyond the statement form, hosts build tiles from what they hold:
 
 ```text
-compile_tile(encoding, text, options)        textual body, bare
-compile_tile_value(encoding, json_value)     structural body
-polytile(encoding, text)                     a node; tile from a const string
+tile_from_text(name, encoding, text, options)   textual body, bare
+tile_from_json_text(name, json, options)        structural body as text
+tile_from_json_value(name, value, options)      structural body, already parsed
+compile_polydat_with_tiles(source, tiles)       compile them with a program
+
+name := polytile(encoding, body, options...)    in source; body is a string or heredoc
+name := polytile_json(body, options...)         in source; structural JSON
 ```
 
-`polytile` is an ordinary registered node taking constants, so a host
+The Rust functions live in `polydat::tile` and each returns the
+`TileDef` the `tile` keyword produces. `polytile` and `polytile_json`
+are binding forms the parser rewrites into `tile` statements, so a host
 that only has strings, such as a YAML workload runner, lowers
 `body: '{"tenant": ${tenant_id}}'` to `doc := polytile("json", "...")`
-as a program transform and never touches a runtime decorator. Options
-set the delimiters, the sigil, and strictness, and a host may set
-process defaults for all three.
+as a program transform and never touches a runtime decorator. The body
+is taken raw, never evaluated. Options `open`, `close`, `sigil`, and
+`strict` are named arguments, and a host may set process defaults for
+all of them.
 
 ## 6. Compilation
 
@@ -561,31 +588,79 @@ a handful of integer and float encodes, and a four-tuple loop.
 
 ## 12. Implementation plan
 
-1. **Grammar.** `tile` statement with options, body capture per
-   encoding, template tokens with configurable delimiters, doubled-open
-   escape, pretty-printer round trip. Fuzz the capture and the template
-   parser as `for` was fuzzed, including delimiter variants.
-2. **Structural front end.** Classification of strings per §3.1,
-   directive arrays and objects per §3.2, and the `compile_tile_value`
-   API; tests for form equivalence (L5) between textual and structural
-   templates.
-3. **Typing.** Declared, wire, and contextual types per §4 with adapter
+1. **Grammar.** Done. `TokenKind::Tile` and a raw `TileBody` token
+   captured by the lexer for block and heredoc bodies, with `:=`
+   optional before them; `Statement::Tile(TileDef)` carrying the
+   encoding, options, raw body, and parsed pieces; `dsl::tile` parsing
+   holes with declared type, format, and raw flag, projections with
+   separators, branches, splices as bare-name holes, the doubled-open
+   escape, and balanced braces in static text, with a `render_template`
+   inverse; the printer reproduces every body form. Tests in
+   `tests/tile_syntax.rs` cover each form and each error; the fuzzer in
+   `tests/fuzz_tile_syntax.rs` generates tiles over every encoding, six
+   delimiter pairs, four sigils, and nested directives, checks parsed
+   pieces against the emitted shape, printer and renderer fixed points,
+   and the compiler's interim rejection, and mutates programs to prove
+   no stage panics. The first sweep found two grammar defects, braces in
+   static text ending a directive block early and hole delimiters that
+   begin with `{` hiding a block brace, both fixed.
+   A second sweep after step 4 found and fixed three more: a
+   free-standing `{word}` block read as interpolation, a hole in a
+   directive header reported as a range error instead of a missing
+   block, and projection scratch states keyed by a program address that
+   a later program could reuse.
+2. **Structural front end.** Done. `dsl::tile_structural` classifies
+   strings per §3.1 (value hole, string hole, `str`-declared string
+   hole, static), lowers directive arrays and `@for`/`@if`/`@else`
+   object keys per §3.2 by textualizing the value into the template
+   grammar, and rejects directive strings in value position. The
+   textual parser then produces the pieces, so the two forms are
+   equivalent by construction; `tests/tile_structural.rs` renders the
+   §3.2 example both ways and compares the documents. Still owed: the
+   bounded-cardinality check for directives beside static members.
+3. **Typing.** Partly done: the declared type steers the encoder and
+   the runtime variant decides otherwise (`u64` bare, `str` quoted,
+   `bool` as `true`/`false`, `f64` with formats). Still owed: wire and
+   contextual types resolved at compile time per §4 with adapter
    insertion, strict-mode rejection, and `explain tiles` output. Tests
    per row of the §4.3 table and per error case.
-4. **Skeleton and P1 renderer.** Splicing, static folding, validation,
-   `tile_render` lowering, arena-backed rendering with typed encoders;
-   tiles as `Str`/`Bytes` wires; lifecycle and provenance through the
-   existing passes. Byte-exact tests against a reference built from
-   `serde_json`.
-5. **Projections.** Child program per body, scratch-state reuse,
-   separators, bounded-cardinality check, member projections. Tests
-   including producers and derivations as sources.
-6. **Host surfaces.** `polytile` node, `compile_tile`, process defaults
-   for delimiters and sigil, `--emit tile:<name>`, `--tile-delims`.
+4. **Skeleton and P1 renderer.** Done. `dsl::tile_lower` lowers each
+   hole to a `tile_encode` node whose constant spec carries encoding,
+   position, declared type, format, and raw flag; branch conditions to
+   `1`/`0` holes; static runs to single copies; the tile to one
+   `tile_render` node over the encoded holes, constant when it has no
+   holes. `library::tile_render` holds the skeleton IR (`TileSpec`,
+   `TileOp`), the encoders for `text`, `json` (value and in-string
+   positions), and `csv`, printf formats, and the P1 renderer. Splicing
+   inlines same-encoding tiles and treats others as wires (§5.5).
+   Tests in `tests/tile_render.rs`; `tests/function_coverage.rs`
+   exercises both nodes. The `Bytes` form and arena-backed output are
+   still owed.
+5. **Projections.** Mostly done: a child program per body with element
+   and cascaded outer externs, the comprehension embedded in the
+   skeleton as a `StreamerValue`, per-thread scratch-state reuse, and
+   separators with per-encoding defaults, over inline comprehensions
+   and bound producers. The body's own input is the tuple index and
+   the program's `cycle` is cascaded like any outer wire; the tutorial
+   example caught `cycle` resolving to the index before this was so. Still owed: nested projections inside a body,
+   derived and generator-call sources, member projections, and the
+   bounded-cardinality check.
+6. **Host surfaces.** Mostly done. In source, `name := polytile(enc,
+   body, options...)` and `name := polytile_json(body, options...)` are
+   parsed into `tile` statements before compilation; the body is a
+   string literal or a `<<< >>>` heredoc, which the lexer now accepts
+   as a string literal anywhere. In Rust, `polydat::tile` exposes
+   `tile_from_text`, `tile_from_json_text`, `tile_from_json_value`
+   (a `serde_json::Value`), and `compile_polydat_with_tiles`. Still
+   owed: process defaults for delimiters and sigil, `--emit
+   tile:<name>`, `--tile-delims`, and tiles inside module bodies.
 7. **P2 and P3.** Monomorphic closure and Cranelift lowering over the
    SRD 111 helper ABI. Differential tests against P1 across the fuzz
    corpus.
-8. **Docs.** An illustration for each form, and the toy definition
-   emitting a JSON document.
+8. **Docs.** Begun: [the Polytile tutorial](../polytile_tutorial.md)
+   walks every implemented form with output from
+   `examples/polytile_tutorial.rs` and `examples/polytile_demo.polydat`,
+   and the illustrations page has a tile section. Still owed: the toy
+   definition emitting a JSON document.
 
 Each step lands with its tests and leaves the previous surfaces working.

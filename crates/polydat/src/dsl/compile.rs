@@ -239,6 +239,25 @@ pub fn compile_polydat(source: &str) -> Result<PolydatKernel, String> {
     compile_polydat_with_path(source, None)
 }
 
+/// Compile source together with tiles a host built from what it holds
+/// (SRD 114 §5.6): template text, JSON text, or a parsed JSON value,
+/// via [`crate::tile`]. The tiles are appended as `tile` statements, so
+/// they see every wire the source defines and are wires themselves.
+pub fn compile_polydat_with_tiles(source: &str, tiles: Vec<super::ast::TileDef>) -> Result<PolydatKernel, String> {
+    let tokens = super::lexer::lex(source)?;
+    let mut ast = super::parser::parse(tokens)?;
+    ast.statements.extend(tiles.into_iter().map(Statement::Tile));
+    let options = CompileOptions {
+        source_dir: None,
+        lib_paths: Vec::new(),
+        required_outputs: Vec::new(),
+        strict: false,
+        context: "polydat source with host tiles".to_string(),
+        cursor_limit: None,
+    };
+    compile_ast_with_options(&ast, source, &options, None)
+}
+
 /// Compile Polydat source to an assembler (not yet compiled to a kernel).
 ///
 /// Returns the `PolydatAssembler` with all nodes and wiring populated,
@@ -1432,6 +1451,12 @@ pub(super) struct Compiler {
     /// errors point at the user-level binding (`overscan__anon_3`)
     /// instead of an opaque counter (`__anon_14`).
     pub(super) current_binding: Option<String>,
+    /// Tiles lowered so far in this compile, in order, so later tiles
+    /// can splice earlier ones (SRD 114 §5.5).
+    pub(super) tiles: Vec<super::ast::TileDef>,
+    /// Producer bindings seen so far, so tile projections over a
+    /// producer can type their elements.
+    pub(super) producers_seen: Vec<super::traversal::Producer>,
 }
 
 /// Records a cursor whose `range(...)` bounds reference const
@@ -1465,6 +1490,8 @@ impl Compiler {
             cursor_limit: None,
             pragmas: super::pragmas::PragmaSet::default(),
             current_binding: None,
+            tiles: Vec::new(),
+            producers_seen: Vec::new(),
         }
     }
 
@@ -1484,6 +1511,8 @@ impl Compiler {
             cursor_limit: None,
             pragmas: super::pragmas::PragmaSet::default(),
             current_binding: None,
+            tiles: Vec::new(),
+            producers_seen: Vec::new(),
         }
     }
 
@@ -1871,6 +1900,7 @@ impl Compiler {
         // parent compiles without `for` forms, then each body compiles
         // once against it.
         let (parent_file, for_stmts, producers) = super::traversal::strip_for_forms(file)?;
+        self.producers_seen = producers.clone();
         let mut kernel = self.compile_parent(&parent_file)?;
         if !for_stmts.is_empty() || !producers.is_empty() {
             let traversals = self.compile_traversals(&for_stmts, &producers, kernel.program())?;
@@ -1914,13 +1944,14 @@ impl Compiler {
                     Statement::Cursor(_) => vec![],
                     Statement::Pragma { .. } => vec![],
                     Statement::For(_) => vec![],
+                    Statement::Tile(t) => vec![t.name.clone()],
                 }
             }).collect();
 
             let mut referenced: HashSet<String> = HashSet::new();
             for stmt in &file.statements {
                 let expr = match stmt {
-                    Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) => continue,
+                    Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) | Statement::Tile(_) => continue,
                     Statement::Binding(b) => &b.value,
                 };
                 collect_references(expr, &mut referenced);
@@ -2206,6 +2237,9 @@ impl Compiler {
                         f.source.text, f.span.line, f.span.col, "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
                     ));
                 }
+                Statement::Tile(t) => {
+                    self.compile_tile(&mut asm, t)?;
+                }
                 Statement::Pragma { .. } => {
                     // Pragmas were collected before this pass (see
                     // `collect_pragmas`) and applied to the
@@ -2280,13 +2314,14 @@ impl Compiler {
                     Statement::Cursor(_) => vec![],
                     Statement::Pragma { .. } => vec![],
                     Statement::For(_) => vec![],
+                    Statement::Tile(t) => vec![t.name.clone()],
                 }
             }).collect();
 
             let mut referenced: HashSet<String> = HashSet::new();
             for stmt in &file.statements {
                 let expr = match stmt {
-                    Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) => continue,
+                    Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) | Statement::Tile(_) => continue,
                     Statement::Binding(b) => &b.value,
                 };
                 collect_references(expr, &mut referenced);
@@ -2332,6 +2367,9 @@ impl Compiler {
                         f.source.text, f.span.line, f.span.col, "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
                     ));
                 }
+                Statement::Tile(t) => {
+                    self.compile_tile(&mut asm, t)?;
+                }
                 Statement::Cursor(decl) => {
                     self.process_cursor(&mut asm, decl)?;
                 }
@@ -2375,6 +2413,7 @@ impl Compiler {
         // bindings become program metadata. The parent compiles without
         // them, then each body compiles once against the parent.
         let (parent_file, for_stmts, producers) = super::traversal::strip_for_forms(file)?;
+        self.producers_seen = producers.clone();
         let original = file;
         let file = &parent_file;
         let mut kernel = self.compile_parent_with_log(file, required_outputs, log)?;
@@ -2384,6 +2423,11 @@ impl Compiler {
         }
         let _ = original;
         Ok(kernel)
+    }
+
+    /// The comprehension a producer bound earlier in this compile.
+    pub(super) fn producer_comprehension(&self, name: &str) -> Option<crate::iteration::comprehension::Comprehension> {
+        self.producers_seen.iter().rev().find(|p| p.name == name).map(|p| p.comprehension.clone())
     }
 
     /// Lower each `for` statement's body to a child program, typed from
@@ -2483,13 +2527,14 @@ impl Compiler {
                     Statement::Cursor(_) => vec![],
                     Statement::Pragma { .. } => vec![],
                     Statement::For(_) => vec![],
+                    Statement::Tile(t) => vec![t.name.clone()],
                 }
             }).collect();
 
             let mut referenced: HashSet<String> = HashSet::new();
             for stmt in &file.statements {
                 let expr = match stmt {
-                    Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) => continue,
+                    Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) | Statement::Tile(_) => continue,
                     Statement::Binding(b) => &b.value,
                 };
                 collect_references(expr, &mut referenced);
@@ -2694,6 +2739,9 @@ impl Compiler {
                         "`for {}` at line {}, col {}: {}",
                         f.source.text, f.span.line, f.span.col, "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
                     ));
+                }
+                Statement::Tile(t) => {
+                    self.compile_tile(&mut asm, t)?;
                 }
             }
         }

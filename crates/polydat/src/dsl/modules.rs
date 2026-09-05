@@ -344,6 +344,12 @@ impl Compiler {
                         f.source.text, func_name, "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
                     ));
                 }
+                Statement::Tile(t) => {
+                    return Err(format!(
+                        "tile '{}' inside module '{}': tiles are not supported inside module bodies yet; declare the tile at top level and pass its wire in (SRD 114); see docs/design/polytile.md",
+                        t.name, func_name
+                    ));
+                }
             }
         }
 
@@ -596,7 +602,7 @@ impl Compiler {
 
         for (i, stmt) in ast.statements.iter().enumerate() {
             let (names, expr) = match stmt {
-                Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) => {
+                Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) | Statement::Tile(_) => {
                     stmt_refs.push(HashSet::new());
                     continue;
                 }
@@ -655,11 +661,12 @@ impl Compiler {
                 Statement::Cursor(_) => {}
                 Statement::Pragma { .. } => {}
                 Statement::For(_) => {}
+                Statement::Tile(_) => {}
             }
         }
         for stmt in &extracted {
             let expr = match stmt {
-                Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) => continue,
+                Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) | Statement::Tile(_) => continue,
                 Statement::Binding(b) => &b.value,
             };
             collect_references(expr, &mut referenced);

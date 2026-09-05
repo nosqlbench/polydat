@@ -1,0 +1,27 @@
+// Polytile demo: a JSON document and the statement that carries it,
+// both rendered per cycle by the polydat binary.
+
+input cycle: u64
+
+const keyspace := "toy"
+const table := "readings"
+
+(tenant, device, reading) := mixed_radix(cycle, 20, 50, 0)
+tenant_id := hashed_id(input: tenant, bound: 1000000)
+device_id := hashed_uuid(interleave(tenant, device))
+temp_c    := normal_sample(input: hash(cycle), mean: 21.5, stddev: 2.0)
+status    := weighted_strings(hash(hash(cycle)), "ok:0.97;degraded:0.02;error:0.01")
+alert     := u64_gt(mod(cycle, 5), 3)
+
+tile doc : json {
+    "meta": { "schema": 3, "source": "polydat", "units": { "temp": "C" } },
+    "tenant": ${tenant_id},
+    "device": ${device_id},
+    "reading": { "n": ${reading}, "temp": ${temp_c | .2}, "status": ${status} },
+    "history": [ @for i in 0..3 { {"n": ${reading + i}, "temp": ${temp_c + to_f64(i) | .1}} } ],
+    "alert": @if alert { { "level": "high", "cycle": ${cycle} } } @else { null }
+}
+
+tile load : text <<<
+INSERT INTO ${keyspace}.${table} (tenant_id, device_id, doc) VALUES (${tenant_id}, '${device_id}', '${doc!}')
+>>>

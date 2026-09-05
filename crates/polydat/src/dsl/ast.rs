@@ -70,6 +70,86 @@ pub enum Statement {
     /// One child scope activates per tuple of the source; the
     /// comprehension's element names are wires inside the body.
     For(ForStmt),
+    /// `tile name : encoding (options) := body` — a compiled variate
+    /// template (SRD 114 §2).
+    Tile(TileDef),
+}
+
+/// Per-tile template options (SRD 114 §2.3): the hole delimiters, the
+/// directive sigil, and strictness.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TileOptions {
+    pub open: String,
+    pub close: String,
+    pub sigil: String,
+    pub strict: bool,
+}
+
+impl Default for TileOptions {
+    fn default() -> Self {
+        Self { open: "${".into(), close: "}".into(), sigil: "@".into(), strict: false }
+    }
+}
+
+/// How a tile body was written, so the printer can reproduce it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TileBodyKind {
+    /// A brace- or bracket-balanced block, as `json` templates are written.
+    Block,
+    /// Text between `<<<` and `>>>`.
+    Heredoc,
+    /// An ordinary string literal.
+    Literal,
+}
+
+/// A tile definition: its header, its raw body, and the parsed template.
+#[derive(Debug, Clone)]
+pub struct TileDef {
+    pub name: String,
+    pub encoding: Option<String>,
+    pub options: TileOptions,
+    pub body_kind: TileBodyKind,
+    /// The body text exactly as captured.
+    pub body: String,
+    /// The body parsed into static runs, holes, projections, and branches.
+    pub pieces: Vec<TilePiece>,
+    pub span: Span,
+}
+
+/// One element of a parsed template.
+#[derive(Debug, Clone)]
+pub enum TilePiece {
+    /// Bytes copied as written.
+    Static(String),
+    /// `${expr : type | format !}`.
+    Hole(TileHole),
+    /// `@for <source> [sep "..."] { body }`.
+    Projection {
+        source: ForSource,
+        sep: Option<String>,
+        body: Vec<TilePiece>,
+        span: Span,
+    },
+    /// `@if cond { body } [@else { body }]`.
+    Branch {
+        cond: Expr,
+        then: Vec<TilePiece>,
+        otherwise: Option<Vec<TilePiece>>,
+        span: Span,
+    },
+}
+
+/// A hole: an expression with an optional declared type, format spec,
+/// and raw flag.
+#[derive(Debug, Clone)]
+pub struct TileHole {
+    /// The text between the delimiters, as written.
+    pub text: String,
+    pub expr: Expr,
+    pub decl_type: Option<String>,
+    pub format: Option<String>,
+    pub raw: bool,
+    pub span: Span,
 }
 
 /// What a `for` iterates: inline comprehension text, or the name of a

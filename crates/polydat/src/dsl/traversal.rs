@@ -270,9 +270,32 @@ fn body_declared(body: &[Statement], elements: &[(String, PortType)]) -> BTreeSe
                 // but a producer it binds is visible after it.
                 let _ = f;
             }
+            Statement::Tile(t) => {
+                names.insert(t.name.clone());
+            }
         }
     }
     names
+}
+
+/// Wires a tile's holes and branch conditions reference.
+fn tile_references(pieces: &[super::ast::TilePiece], out: &mut BTreeSet<String>) {
+    use super::ast::TilePiece;
+    use super::refs::collect_expr_refs;
+    for piece in pieces {
+        match piece {
+            TilePiece::Static(_) => {}
+            TilePiece::Hole(h) => collect_expr_refs(&h.expr, out),
+            TilePiece::Projection { body, .. } => tile_references(body, out),
+            TilePiece::Branch { cond, then, otherwise, .. } => {
+                collect_expr_refs(cond, out);
+                tile_references(then, out);
+                if let Some(o) = otherwise {
+                    tile_references(o, out);
+                }
+            }
+        }
+    }
 }
 
 /// Names a body references, gathered from binding expressions, cursor
@@ -306,6 +329,7 @@ fn body_references(body: &[Statement], out: &mut BTreeSet<String>) {
                     }
                 }
             }
+            Statement::Tile(t) => tile_references(&t.pieces, out),
             Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::Pragma { .. } => {}
         }
     }

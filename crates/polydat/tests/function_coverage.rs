@@ -2112,6 +2112,12 @@ fn every_registered_function_compiles() {
     // JSON payload); the generic string example is neither.
     overrides.insert("streamer",
         "input cycle: u64\nout := streamer(\"k in 1..4, limit in 10,20,30\")".into());
+    // SRD 114: `tile_render` takes a compiled skeleton the compiler
+    // emits for a `tile` statement; exercise it through one.
+    overrides.insert("tile_render",
+        "input cycle: u64\ntile out : text := \"n=${cycle}\"".into());
+    overrides.insert("tile_encode",
+        "input cycle: u64\nout := tile_encode(cycle, \"json|value|u64||\")".into());
 
     // Vectordata nodes (category RealData) require downloaded datasets —
     // tested separately in vectordata_integration.rs. Skip here to avoid

@@ -130,6 +130,20 @@ pub mod library;
 pub mod dsl;
 pub mod viz;
 
+/// Polytile at the host boundary (SRD 114 §5.6): build a tile from
+/// template text, from structural JSON text, or from a parsed JSON
+/// value, then compile it with a program via
+/// [`dsl::compile_polydat_with_tiles`].
+pub mod tile {
+    pub use crate::dsl::ast::{TileBodyKind, TileDef, TileOptions, TilePiece};
+    pub use crate::dsl::compile::compile_polydat_with_tiles;
+    pub use crate::dsl::lexer::Span;
+    pub use crate::dsl::tile::{parse_template, render_template};
+    pub use crate::dsl::tile_structural::{
+        template_text_from_value, tile_from_json_text, tile_from_json_value, tile_from_text, ENCODINGS,
+    };
+}
+
 // SRD-104 — dependency-inverted resource-accessor bridge. A
 // type-erased trait + process-global install point by which a
 // kernel node reaches a live, host-owned resource by fingerprint,

@@ -32,6 +32,7 @@
 use crate::dsl::ast::{
     Arg, BindingModifier, CallExpr, Binding, Expr, PolydatFile,
     ModuleDef, Statement, BinOpKind, ExternPort, CursorDecl, WireModifier, ForStmt,
+    TileBodyKind, TileDef, TileOptions,
 };
 
 /// Pretty-print a full file: every statement, separated by
@@ -58,7 +59,42 @@ pub fn pp_statement(stmt: &Statement) -> String {
         Statement::Cursor(c) => pp_cursor(c),
         Statement::Pragma { name, .. } => format!("pragma {name}"),
         Statement::For(f) => pp_for_stmt(f, 0),
+        Statement::Tile(t) => pp_tile(t),
     }
+}
+
+fn pp_tile(t: &TileDef) -> String {
+    let mut out = format!("tile {}", t.name);
+    if let Some(enc) = &t.encoding {
+        out.push_str(&format!(" : {enc}"));
+    }
+    let defaults = TileOptions::default();
+    let mut opts = Vec::new();
+    if t.options.open != defaults.open || t.options.close != defaults.close {
+        opts.push(format!("delims \"{}\" \"{}\"", escape_string(&t.options.open), escape_string(&t.options.close)));
+    }
+    if t.options.sigil != defaults.sigil {
+        opts.push(format!("sigil \"{}\"", escape_string(&t.options.sigil)));
+    }
+    if t.options.strict {
+        opts.push("strict".to_string());
+    }
+    if !opts.is_empty() {
+        out.push_str(&format!(" ({})", opts.join(", ")));
+    }
+    match t.body_kind {
+        TileBodyKind::Block => {
+            out.push(' ');
+            out.push_str(&t.body);
+        }
+        TileBodyKind::Heredoc => {
+            out.push_str(" <<<\n");
+            out.push_str(&t.body);
+            out.push_str("\n>>>");
+        }
+        TileBodyKind::Literal => out.push_str(&format!(" := \"{}\"", escape_string(&t.body))),
+    }
+    out
 }
 
 fn pp_for_stmt(f: &ForStmt, indent: usize) -> String {

@@ -15,6 +15,9 @@ pub mod pragmas;
 pub mod cursor_sugar;
 pub mod pprint;
 pub mod transform;
+pub mod tile;
+pub mod tile_lower;
+pub mod tile_structural;
 pub mod traversal;
 /// External-facing factory module. Made `pub` (was `pub(crate)`) so
 /// crates that host polydat nodes outside the polydat crate

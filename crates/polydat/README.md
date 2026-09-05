@@ -49,6 +49,9 @@ and a consistent set of precedence and referencing rules.
 
 - [Illustrations](docs/illustrations.md) — runnable examples through the Polydat
   DSL and the programmatic Assembler API.
+- [Polytile tutorial](docs/polytile_tutorial.md) — templates whose holes are
+  wires: JSON, CSV, and text documents rendered per cycle, with projections
+  and branches.
 - [Compilation](docs/compilation.md) — Phase 1 / 2 / 3 levels, Hybrid mode,
   throughput numbers, and the `jit` /
   `vectordata` Cargo features.

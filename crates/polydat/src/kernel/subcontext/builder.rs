@@ -736,7 +736,8 @@ fn collect_free_idents(stmt: &Statement, out: &mut std::collections::HashSet<Str
         | Statement::ExternPort(_)
         | Statement::InputDecl(_)
         | Statement::Pragma { .. }
-        | Statement::For(_) => {}
+        | Statement::For(_)
+        | Statement::Tile(_) => {}
     }
 }
 

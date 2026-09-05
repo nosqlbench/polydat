@@ -68,6 +68,11 @@ pub enum TokenKind {
     /// first, so the comprehension grammar stays owned by the
     /// comprehension parser rather than being re-tokenized here.
     For(String),
+    /// `tile` keyword (SRD 114). The body after `:=` is captured raw
+    /// into a [`TokenKind::TileBody`] when it is a block or heredoc.
+    Tile,
+    /// A raw tile body and how it was written.
+    TileBody(String, crate::dsl::ast::TileBodyKind),
     /// `.` (field access: `base.ordinal`)
     Dot,
     /// Integer literal: `1000`, `0xFF`
@@ -151,6 +156,8 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
     let mut pos = 0;
     let mut line = 1;
     let mut col = 1;
+    // Set by the `tile` keyword; the next `:=` captures a raw body.
+    let mut tile_pending = false;
 
     while pos < chars.len() {
         let c = chars[pos];
@@ -217,11 +224,60 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
 
         let span = Span { line, col };
 
+        // A tile body may follow the header directly, without `:=`,
+        // when it is a block or heredoc: `tile doc : json { ... }`.
+        if tile_pending && (c == '{' || c == '[' || chars[pos..].starts_with(&['<', '<', '<'])) {
+            tile_pending = false;
+            if let Some((body, kind, consumed, newlines, end_col)) = capture_tile_body(&chars, pos, col)? {
+                tokens.push(Token { kind: TokenKind::TileBody(body, kind), span });
+                pos += consumed;
+                if newlines > 0 {
+                    line += newlines;
+                    col = end_col;
+                } else {
+                    col += consumed;
+                }
+                continue;
+            }
+        }
+
+        // A heredoc anywhere else is a string literal: `<<<` ... `>>>`
+        // with one newline trimmed from each end. This is how a
+        // template handed in by a host arrives as an argument, as in
+        // `doc := polytile("json", <<< ... >>>)`.
+        if !tile_pending
+            && chars[pos..].starts_with(&['<', '<', '<'])
+            && let Some((body, _, consumed, newlines, end_col)) = capture_tile_body(&chars, pos, col)?
+        {
+            tokens.push(Token { kind: TokenKind::StringLit(body), span });
+            pos += consumed;
+            if newlines > 0 {
+                line += newlines;
+                col = end_col;
+            } else {
+                col += consumed;
+            }
+            continue;
+        }
+
         // Two-character operators
         if c == ':' && pos + 1 < chars.len() && chars[pos + 1] == '=' {
             tokens.push(Token { kind: TokenKind::ColonEq, span });
             pos += 2;
             col += 2;
+            if tile_pending {
+                tile_pending = false;
+                if let Some((body, kind, consumed, newlines, end_col)) = capture_tile_body(&chars, pos, col)? {
+                    tokens.push(Token { kind: TokenKind::TileBody(body, kind), span: Span { line, col } });
+                    pos += consumed;
+                    if newlines > 0 {
+                        line += newlines;
+                        col = end_col;
+                    } else {
+                        col += consumed;
+                    }
+                }
+            }
             continue;
         }
         if c == '-' && pos + 1 < chars.len() && chars[pos + 1] == '>' {
@@ -507,6 +563,10 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
                 "cursor" => TokenKind::Cursor,
                 "over" => TokenKind::Over,
                 "pragma" => TokenKind::Pragma,
+                "tile" => {
+                    tile_pending = true;
+                    TokenKind::Tile
+                }
                 "for" => {
                     let (text, consumed) = capture_for_text(&chars, pos);
                     pos += consumed;
@@ -525,6 +585,110 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
 
     tokens.push(Token { kind: TokenKind::Eof, span: Span { line, col } });
     Ok(tokens)
+}
+
+/// Capture a raw tile body after `tile ... :=` (SRD 114 §2.1).
+///
+/// Skips whitespace, then: a `{` or `[` starts a balanced, string-aware
+/// block that includes its brackets; `<<<` starts a heredoc ending at
+/// `>>>`, with one leading and one trailing newline trimmed. Anything
+/// else, such as a string literal, is left to the main loop and `None`
+/// is returned. On success returns the body, its kind, the chars
+/// consumed from `start`, the newlines crossed, and the column after
+/// the body.
+type TileBodyCapture = (String, crate::dsl::ast::TileBodyKind, usize, usize, usize);
+
+fn capture_tile_body(chars: &[char], start: usize, start_col: usize) -> Result<Option<TileBodyCapture>, String> {
+    use crate::dsl::ast::TileBodyKind;
+    let mut pos = start;
+    let mut col = start_col;
+    let mut newlines = 0;
+    while pos < chars.len() && chars[pos].is_whitespace() {
+        if chars[pos] == '\n' {
+            newlines += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+        pos += 1;
+    }
+    if pos >= chars.len() {
+        return Ok(None);
+    }
+    let body_start = pos;
+    let kind;
+    match chars[pos] {
+        '{' | '[' => {
+            kind = TileBodyKind::Block;
+            let mut depth = 0i32;
+            let mut quote: Option<char> = None;
+            loop {
+                if pos >= chars.len() {
+                    return Err("unterminated tile body: block never closed".to_string());
+                }
+                let c = chars[pos];
+                if c == '\n' {
+                    newlines += 1;
+                    col = 0;
+                }
+                if let Some(q) = quote {
+                    if c == '\\' && pos + 1 < chars.len() {
+                        pos += 2;
+                        col += 2;
+                        continue;
+                    }
+                    if c == q {
+                        quote = None;
+                    }
+                } else {
+                    match c {
+                        '"' => quote = Some(c),
+                        '{' | '[' => depth += 1,
+                        '}' | ']' => depth -= 1,
+                        _ => {}
+                    }
+                }
+                pos += 1;
+                col += 1;
+                if depth == 0 && quote.is_none() {
+                    break;
+                }
+            }
+        }
+        '<' if chars[pos..].starts_with(&['<', '<', '<']) => {
+            kind = TileBodyKind::Heredoc;
+            pos += 3;
+            col += 3;
+            let text_start = pos;
+            loop {
+                if pos + 2 >= chars.len() {
+                    return Err("unterminated tile body: heredoc never closed with `>>>`".to_string());
+                }
+                if chars[pos..].starts_with(&['>', '>', '>']) {
+                    break;
+                }
+                if chars[pos] == '\n' {
+                    newlines += 1;
+                    col = 0;
+                }
+                pos += 1;
+                col += 1;
+            }
+            let mut text: String = chars[text_start..pos].iter().collect();
+            if let Some(t) = text.strip_prefix('\n') {
+                text = t.to_string();
+            }
+            if let Some(t) = text.strip_suffix('\n') {
+                text = t.to_string();
+            }
+            pos += 3;
+            col += 3;
+            return Ok(Some((text, kind, pos - start, newlines, col)));
+        }
+        _ => return Ok(None),
+    }
+    let text: String = chars[body_start..pos].iter().collect();
+    Ok(Some((text, kind, pos - start, newlines, col)))
 }
 
 /// Capture the raw comprehension text after a `for` keyword.
