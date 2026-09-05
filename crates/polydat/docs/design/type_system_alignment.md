@@ -129,17 +129,25 @@ built alone or in a larger workspace.
 
 | Color | Width | Members | Meaning |
 |---|---:|---|---|
-| `Imm1` | 1 | scalars and non-vector single-slot carriers | Immediate data; never interpreted as an address. |
+| `Imm1` | 1 | scalars | Immediate data; never interpreted as an address or a name. |
 | `Imm2` | 2 | `U128/I128`, all `Reg128` views | Two limbs of immediate data; never interpreted as an address. |
 | `Ref2` | 2 | all `Vec*` types | Engine-internal `(ptr, len)` pair with a proven owner. |
+| `Hdl1` | 1 | `Str`, `Bytes`, `Json`, `Ext`, `Handle` | A handle naming a value in the static interner, the cycle arena, or the state's value table ([Compiled Non-Scalar Slots](compiled_handles.md)). Opaque to generated code. |
+
+`PortType::handle_kind()` refines `Hdl1`: `Str` and `Bytes` handles are
+byte-string handles (interner or arena); `Json`, `Ext`, and `Handle`
+handles name value-table entries. The kind is fixed by the port type, so
+no code branches on a handle's tag.
 
 The following are invariants:
 
 - all slots of one logical value share provenance;
 - port offsets are computed from cumulative slot widths;
 - `Imm2` and `Ref2` are never interchangeable even though
-  both occupy two slots;
-- only engine-owned code dereferences `Ref2`;
+  both occupy two slots, and `Imm1` and `Hdl1` are never
+  interchangeable even though both occupy one;
+- only engine-owned code dereferences `Ref2`, and only helpers and
+  boundary marshalling decode `Hdl1`;
 - vector output scratch has one logical writer;
 - publication precedes any read;
 - a skipped producer cannot leave a consumer observing an

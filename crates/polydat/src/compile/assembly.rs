@@ -256,25 +256,28 @@ impl SlotLayout {
             .collect()
     }
 
-    /// Axiom S2: per-slot Ref2 mask over the whole buffer —
-    /// kernel inputs and node outputs alike. Both slots of a Ref
-    /// pair are masked.
+    /// Axiom S2 and SRD 115 axiom H1: per-slot mask of the slots raw
+    /// readers must refuse, over the whole buffer — kernel inputs and
+    /// node outputs alike. Both slots of a Ref pair are masked; a
+    /// handle slot is masked because its bits name a value rather than
+    /// being one, and only a boundary decode may read it.
     fn ref_slot_mask(&self, resolved: &ResolvedDag) -> Vec<bool> {
+        use crate::ast::SlotColor;
         let mut mask = vec![false; self.total_slots];
-        for (i, d) in resolved.input_defs[..resolved.coord_count].iter().enumerate() {
-            if d.port_type.slot_color() == crate::ast::SlotColor::Ref2 {
-                let start = self.input_starts[i];
+        let mut mark = |start: usize, color: SlotColor| match color {
+            SlotColor::Ref2 => {
                 mask[start] = true;
                 mask[start + 1] = true;
             }
+            SlotColor::Hdl1 => mask[start] = true,
+            SlotColor::Imm1 | SlotColor::Imm2 => {}
+        };
+        for (i, d) in resolved.input_defs[..resolved.coord_count].iter().enumerate() {
+            mark(self.input_starts[i], d.port_type.slot_color());
         }
         for (n, node) in resolved.nodes.iter().enumerate() {
             for (p, out) in node.meta().outs.iter().enumerate() {
-                if out.typ.slot_color() == crate::ast::SlotColor::Ref2 {
-                    let start = self.port_offsets[n][p];
-                    mask[start] = true;
-                    mask[start + 1] = true;
-                }
+                mark(self.port_offsets[n][p], out.typ.slot_color());
             }
         }
         mask
@@ -824,12 +827,25 @@ impl PolydatAssembler {
         // axiom directly rather than relying on classification.
         for node in &resolved.nodes {
             for out in &node.meta().outs {
-                if out.typ.slot_color() == crate::ast::SlotColor::Ref2 {
-                    return Err(format!(
-                        "node '{}' has a Ref2-colored output ({}); pure-P3 \
-                         kernels carry no reference slots",
-                        node.meta().name, out.typ
-                    ));
+                match out.typ.slot_color() {
+                    crate::ast::SlotColor::Ref2 => {
+                        return Err(format!(
+                            "node '{}' has a Ref2-colored output ({}); pure-P3 \
+                             kernels carry no reference slots",
+                            node.meta().name, out.typ
+                        ));
+                    }
+                    // SRD 115: a handle slot needs the boundary
+                    // marshalling of step 4 before a pure-P3 kernel can
+                    // read it as a value; until then the node stays on P1.
+                    crate::ast::SlotColor::Hdl1 => {
+                        return Err(format!(
+                            "node '{}' has a handle-colored output ({}); the \
+                             compiled tiers do not marshal handles yet (SRD 115 §5)",
+                            node.meta().name, out.typ
+                        ));
+                    }
+                    crate::ast::SlotColor::Imm1 | crate::ast::SlotColor::Imm2 => {}
                 }
             }
         }

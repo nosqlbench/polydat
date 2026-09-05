@@ -1294,9 +1294,26 @@ impl PortType {
             Self::VecF32 | Self::VecI32 | Self::VecF64
             | Self::VecI64 | Self::VecF16 | Self::VecI16
             | Self::VecI8 => SlotColor::Ref2,
+            // Non-scalar values (SRD 115 §2): one slot holding a
+            // handle that names the value in the static interner,
+            // the cycle arena, or the state's value table. Never
+            // decoded by generated code.
+            Self::Str | Self::Bytes | Self::Json | Self::Ext | Self::Handle => SlotColor::Hdl1,
             // Everything else (incl. all narrow widths riding
             // their 64-bit carriers): one slot of immediate data.
             _ => SlotColor::Imm1,
+        }
+    }
+
+    /// Where a `Hdl1`-colored port's handles point (SRD 115 §2.2,
+    /// axiom H2): byte strings live in the static interner or the
+    /// cycle arena; every other non-scalar value lives in the state's
+    /// value table. `None` for every other color.
+    pub fn handle_kind(&self) -> Option<HandleKind> {
+        match self {
+            Self::Str | Self::Bytes => Some(HandleKind::Bytes),
+            Self::Json | Self::Ext | Self::Handle => Some(HandleKind::Table),
+            _ => None,
         }
     }
 
@@ -1304,7 +1321,7 @@ impl PortType {
     /// [`Self::slot_color`] per axiom S1.
     pub fn slot_width(&self) -> usize {
         match self.slot_color() {
-            SlotColor::Imm1 => 1,
+            SlotColor::Imm1 | SlotColor::Hdl1 => 1,
             SlotColor::Imm2 | SlotColor::Ref2 => 2,
         }
     }
@@ -1731,6 +1748,22 @@ pub enum SlotColor {
     Imm2,
     /// Two slots holding a (ptr, len) reference pair.
     Ref2,
+    /// One slot holding a handle that names a non-scalar value
+    /// (SRD 115 §2): a static interner entry, a cycle-arena byte
+    /// range, or a value-table entry. Opaque to generated code, which
+    /// only loads, stores, and passes it to helpers (axiom H1).
+    Hdl1,
+}
+
+/// Where a handle-colored port's values live (SRD 115 §2.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HandleKind {
+    /// `Str` and `Bytes`: a static interner entry or a cycle-arena
+    /// range, valid for the current root cycle.
+    Bytes,
+    /// `Json`, `Ext`, `Handle`: an entry in the owning state's value
+    /// table, single-writer per entry.
+    Table,
 }
 
 /// One kernel-owned scratch buffer. A vector-producing port's

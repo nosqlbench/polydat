@@ -202,3 +202,38 @@ fn lookup_does_not_allocate_per_call() {
     let b = lookup("hash").expect("hash registered") as *const _;
     assert_eq!(a, b, "lookup must return a stable &'static, not a fresh leak");
 }
+
+/// SRD 115 §2, axioms H1 and H2: the non-scalar types have their own
+/// one-slot color, their handle kind is fixed by the port type, and the
+/// scalar colors are untouched.
+#[test]
+fn hdl1_is_the_color_of_handle_types() {
+    use polydat::ast::{HandleKind, PortType, SlotColor};
+    for ty in [PortType::Str, PortType::Bytes, PortType::Json, PortType::Ext, PortType::Handle] {
+        assert_eq!(ty.slot_color(), SlotColor::Hdl1, "{ty:?}");
+        assert_eq!(ty.slot_width(), 1, "{ty:?}");
+    }
+    assert_eq!(PortType::Str.handle_kind(), Some(HandleKind::Bytes));
+    assert_eq!(PortType::Bytes.handle_kind(), Some(HandleKind::Bytes));
+    assert_eq!(PortType::Json.handle_kind(), Some(HandleKind::Table));
+    assert_eq!(PortType::Ext.handle_kind(), Some(HandleKind::Table));
+    assert_eq!(PortType::Handle.handle_kind(), Some(HandleKind::Table));
+    for ty in [PortType::U64, PortType::F64, PortType::Bool, PortType::I64, PortType::U8, PortType::F32] {
+        assert_eq!(ty.slot_color(), SlotColor::Imm1, "{ty:?}");
+        assert_eq!(ty.handle_kind(), None, "{ty:?}");
+    }
+    assert_eq!(PortType::U128.slot_color(), SlotColor::Imm2);
+    assert_eq!(PortType::VecF32.slot_color(), SlotColor::Ref2);
+    assert_eq!(PortType::VecF32.handle_kind(), None);
+}
+
+/// SRD 115 P3 corollary: until boundary marshalling lands, a pure-P3
+/// kernel refuses a handle-colored output rather than reading its
+/// handle as a value.
+#[cfg(feature = "jit")]
+#[test]
+fn pure_p3_rejects_handle_outputs_until_marshalling_lands() {
+    let asm = compile_polydat_to_assembler("input cycle: u64\ns := \"row-{cycle}\"\nn := cycle * 2\n").unwrap();
+    let err = asm.try_compile_jit().err().expect("a Str output cannot enter a pure-P3 kernel yet");
+    assert!(err.contains("handle-colored") && err.contains("SRD 115"), "{err}");
+}

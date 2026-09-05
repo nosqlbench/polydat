@@ -505,3 +505,14 @@ steps.
 **Forwarding boundary.** Ref-pair pass-through is not a P3
 optimization. Every Ref output is scratch-backed and S9(a)'s
 validator mapping applies to every Ref output without exemption.
+
+**Handle slots (SRD 115).** A fourth color, `Hdl1`, carries `Str`,
+`Bytes`, `Json`, `Ext`, and `Handle` values as one-slot handles. S1's
+statement that immediate slots never contain an address is unchanged:
+`Hdl1` is not an immediate color. S7's ban on arena handles applies to
+`Ref2` data, where a handle would be a second dereference; for `Hdl1`
+the handle is the value's representation and the single dereference S7
+protects is the helper's. Raw readers refuse `Hdl1` slots as they
+refuse `Ref2` slots, and pure-P3 layout rejects a handle-colored output
+until the boundary marshalling of SRD 115 §5 lands. The handle axioms
+H1–H7 are stated in [Compiled Non-Scalar Slots](compiled_handles.md) §8.

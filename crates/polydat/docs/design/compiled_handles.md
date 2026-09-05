@@ -8,7 +8,14 @@ generation, and every kernel the runtime creates inside another's cycle
 materialized subscopes, projection body states, the renderer's
 evaluator kernels) is constructed nested before scope-init seeds any
 input, so none of them resets. This also fixed the arena's unbounded
-growth. Steps 2 through 8 are not started.
+growth. Step 2, the color, has landed: `SlotColor::Hdl1` is the color
+of `Str`, `Bytes`, `Json`, `Ext`, and `Handle`; `PortType::handle_kind()`
+fixes each to byte-string or table handles; raw readers refuse handle
+slots as they refuse `Ref2` slots; pure-P3 layout rejects a
+handle-colored output until step 4's marshalling; cone admission
+requires the `Imm1` color by name; and the alignment, engines, and JIT
+boundary documents carry the new color. Steps 3 through 8 are not
+started.
 This document fixes the slot representation that lets string, byte,
 JSON, and extension values ride through the P2 and P3 engines, so that
 the nodes which produce and consume them (string operations, JSON

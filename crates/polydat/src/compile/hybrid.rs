@@ -98,14 +98,16 @@ impl HybridCore {
         }
     }
 
-    /// Axiom S2 guard for raw u64 readers.
+    /// Axiom S2 guard for raw u64 readers, and SRD 115 axiom H1 for
+    /// handle slots.
     #[inline]
     fn guard_ref_slot(&self, slot: usize) {
         if self.ref_slots.get(slot).copied().unwrap_or(false) {
             panic!(
-                "S2 pointer containment: slot {slot} is Ref2-colored; raw \
-                 u64 readers would leak an interior address. Use the typed \
-                 borrow-checked accessor (read_vec_*) or copy out."
+                "S2 pointer containment: slot {slot} is Ref2- or Hdl1-colored; raw \
+                 u64 readers would leak an interior address or a handle. Use the \
+                 typed borrow-checked accessor (read_vec_*), the boundary decode, \
+                 or copy out."
             );
         }
     }

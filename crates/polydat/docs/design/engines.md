@@ -114,8 +114,12 @@ Compiled buffers are arrays of `u64` slots, not arrays of logical values. A
 static `SlotColor` maps each port type to one of three layouts:
 
 - `Imm1` — one immediate slot for ordinary scalar bit patterns;
-- `Imm2` — two immediate slots for 128-bit integers and register words; and
-- `Ref2` — a `(ptr, len)` pair referencing kernel-owned typed-slice scratch.
+- `Imm2` — two immediate slots for 128-bit integers and register words;
+- `Ref2` — a `(ptr, len)` pair referencing kernel-owned typed-slice scratch; and
+- `Hdl1` — one slot holding a handle that names a `Str`, `Bytes`, `Json`,
+  `Ext`, or `Handle` value in the static interner, the cycle arena, or
+  the state's value table, per [Compiled Non-Scalar
+  Slots](compiled_handles.md). Generated code never decodes it.
 
 Narrow integers and `f16`/`f32` use defined bit-stuffing rules inside `Imm1`.
 Signedness and exact width remain properties of `PortType`; the common physical

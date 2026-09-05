@@ -200,7 +200,7 @@ mod jit_impl {
     /// arms would be dead, untested marshalling.
     fn scalar_ok(ty: PortType) -> bool {
         matches!(ty, PortType::U64 | PortType::F64 | PortType::Bool)
-            && ty.slot_width() == 1
+            && ty.slot_color() == crate::ast::SlotColor::Imm1
     }
 
     /// A node may join a cone iff the P3 classifier can lower it,
