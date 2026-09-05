@@ -472,7 +472,11 @@ where it has ordinary wired access to everything the scope can see.
    `Statement::For` with `ForSource` and `ForStmt`, block bodies, and
    pretty-printer round trip. Tests in `tests/for_syntax.rs` parse and
    print every form in §2, including nesting and `where` placeholders, and
-   check the compiler's interim rejection.
+   check the compiler's interim rejection. `tests/fuzz_for_syntax.rs`
+   generates random programs over the whole `for` surface and random
+   byte-level mutants of them, and checks that the front end never
+   panics, element names match, the printer reaches a fixed point, and
+   the compiler declines by name; an ignored superfuzz sweeps many seeds.
 2. **Element typing and body compilation.** Child program per `for`
    statement, `IterationExtern` inputs, cascade externs, compile-time type
    errors. Tests: each row of the §3.3 table, outer-wire visibility,
