@@ -383,6 +383,112 @@ with the coordinates already bound. Both are specified in
 
 See [`examples/parameter_space_traversal.rs`](../examples/parameter_space_traversal.rs).
 
+## A comprehension producer
+
+`name := for ...` binds a comprehension as a value. The wire carries a
+Streamer: the comprehension's text and validated algebra, with stream
+factories and cardinality metadata. Derivations are written with the
+same keyword over a bound producer.
+
+```rust
+let mut kernel = polydat::dsl::compile_polydat(r#"
+    input cycle: u64
+
+    base    := for k in 1..4, limit in 10,20,30
+    corners := for base where {k} == 1 || {k} == 3
+    sampled := for base order halton/4
+    label   := "plan: {base}"
+"#).expect("compile failed");
+
+kernel.set_inputs(&[0]);
+println!("{}", kernel.pull("label").as_str());
+for name in ["base", "corners", "sampled"] {
+    let value = kernel.pull(name).clone();
+    show(name, value.as_streamer().expect("streamer"));
+}
+
+// Two streams from one wire never share a cursor.
+let value = kernel.pull("base").clone();
+let base = value.as_streamer().unwrap();
+let mut a = base.coordinate_stream();
+let b = base.coordinate_stream();
+a.next();
+a.next();
+println!("after two pulls on a: a has {} left, b has {}", a.count(), b.count());
+```
+
+where `show` prints the cardinality class and dispenses the stream:
+
+```text
+plan: for k in 1..4, limit in 10,20,30
+base     Bounded(9)   9 tuples  (1,10) (1,20) (1,30) (2,10) (2,20) (2,30) (3,10) (3,20) (3,30)
+corners  BoundedAtMost(9)   6 tuples  (1,10) (1,20) (1,30) (3,10) (3,20) (3,30)
+sampled  Bounded(4)   4 tuples  (2,20) (1,30) (3,10) (1,20)
+after two pulls on a: a has 7 left, b has 9
+```
+
+The producer is an init-time constant, so it costs nothing per cycle,
+and it interpolates as its `for` text. See
+[`examples/for_producer.rs`](../examples/for_producer.rs).
+
+## A traversal
+
+`for <comprehension> { body }` activates one child scope per tuple. The
+body compiles once, at parent compile time, into its own program. Each
+activation is a fresh state over that program with the tuple's elements
+bound as typed wires and the parent's referenced wires cascaded in. A
+cursor declared `over` an element is narrowed per activation, and its
+slice sets how many cycles the activation runs.
+
+```rust
+let mut kernel = polydat::dsl::compile_polydat(r#"
+    input cycle: u64
+    extern total: u64 = 1000
+    base := hash(cycle)
+
+    for p in partitions("*/4", {total}), scale in 1,100 {
+        cursor rows = range(0, 1000) over p
+        row  := mod_in(cycle, rows.cursor)
+        v    := u64_add(u64_mul(row, scale), base)
+    }
+"#).expect("compile failed");
+kernel.set_inputs(&[7]);
+
+let built_before = programs_built();
+let mut stream = kernel.traverse(0).expect("open traversal");
+while let Some(mut act) = stream.advance().expect("activation") {
+    let slice = act.cursor.clone().expect("cursor slice");
+    let scale = act.coord("scale").unwrap().as_u64();
+    let kernel = act.cycle(0);
+    // ... print index, slice, scale, cycle count, row, v
+}
+println!("programs built while activating: {}", programs_built() - built_before);
+```
+
+```text
+body program: 18 nodes, compiled once
+8 activations from `p in partitions("*/4", {total}), scale in 1,100`
+
+act  p          scale  cycles  first row  first v
+  0  [  0, 250)      1     250          0  7191089600892374487
+  1  [  0, 250)    100     250          0  7191089600892374487
+  2  [250, 500)      1     250        250  7191089600892374737
+  3  [250, 500)    100     250        250  7191089600892399487
+  4  [500, 750)      1     250        500  7191089600892374987
+  5  [500, 750)    100     250        500  7191089600892424487
+  6  [750,1000)      1     250        750  7191089600892375237
+  7  [750,1000)    100     250        750  7191089600892449487
+
+programs built while activating: 0
+```
+
+The comprehension's source reads the parent's `total` through `{total}`
+when the traversal is opened, so a host can change the extern and open
+it again without recompiling. Fibers partition a traversal by taking
+activations by index. The full contract is [The `for`
+Construct](design/for_traversal.md). See
+[`examples/for_traversal.rs`](../examples/for_traversal.rs).
+
 ## A context layering API
 
 A library function can be composed into a parent kernel as a sub-DAG.

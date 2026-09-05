@@ -62,8 +62,10 @@ programs across threads.
 
 For everything in one place, [A toy test
 definition](crates/polydat/docs/toy_test_definition.md) is a single grammar
-file that declares its parameters, describes itself, unwinds a hierarchic
-dataset, and derives the load, read, and verify statements of a test flow.
+file that declares its parameters, describes itself, binds its test flow as
+a comprehension, traverses it with `for`, unwinds a hierarchic dataset in
+each activation, and derives the load, read, and verify statements of a
+test flow. The `polydat` binary runs it directly.
 
 ## A function graph at a glance
 
@@ -275,6 +277,24 @@ shell forms, deterministic shuffles, PRNG traversal, Latin hypercube sampling,
 Halton sequences, and Sobol sequences. Cardinality, predicate analysis,
 optimization, serialization, and legacy conversion live in the same subsystem.
 
+The `for` construct brings comprehensions into the grammar. `name := for ...`
+binds a comprehension as a value with independent stream factories, and
+`for ... { body }` traverses one: the body compiles once into a child
+program, and each tuple activates a fresh state over it with the element
+names as typed wires, outer wires cascaded in, and any cursor declared
+`over` an element narrowed to that element's slice. A three-level traversal
+compiles three body programs however many tuples flow through it.
+
+```text
+flow := for phase in load,verify, p in partitions("*/4", {rows_total})
+
+for flow {
+    cursor rows = range(0, 1000000) over p
+    row  := mod_in(cycle, rows.cursor)
+    stmt := select_str(str_eq(phase, "load"), load_stmt, verify_stmt)
+}
+```
+
 The authoritative contracts are [Comprehension
 Forms](crates/polydat/docs/design/comprehension_forms.md) for coordinate algebra
 and [Cursor Partitions](crates/polydat/docs/design/cursor_partitions.md) for the
@@ -407,9 +427,9 @@ Good starting points:
   graph measured consistently through P1, P2, and P3.
 - [Comprehension Forms](crates/polydat/docs/design/comprehension_forms.md) —
   coordinate algebra and dispense semantics.
-- [The `for` Construct](crates/polydat/docs/design/for_traversal.md) — draft
-  specification for comprehension producers and traversal scopes in the
-  grammar.
+- [The `for` Construct](crates/polydat/docs/design/for_traversal.md) —
+  comprehension producers and traversal scopes in the grammar: typing,
+  activation, cursors, and the one-program-per-position property.
 - [Cursor Partitions](crates/polydat/docs/design/cursor_partitions.md) — partition
   grammar, resolution, ordering, metadata, and cursor narrowing.
 - [Type System](crates/polydat/docs/design/type_system.md) — scalar, vector,

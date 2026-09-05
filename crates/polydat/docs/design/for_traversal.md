@@ -1,12 +1,14 @@
 # The `for` Construct — Comprehension Producers and Traversal Scopes
 
-**Status:** Proposed SRD 113. Steps 1 through 3 of §11 are implemented:
-both `for` forms lex, parse, and pretty-print; every traversal body
-compiles once into a child program with typed element externs and
+**Status:** Implemented. Proposed SRD 113. All six steps of §11 have
+landed: both `for` forms lex, parse, and pretty-print; every traversal
+body compiles once into a child program with typed element externs and
 cascade externs, keyed by lexical position; producer bindings are
 `const` wires carrying a `Streamer` value with independent stream
-factories, and derivations filter and order them. Steps 4 through 6
-specify what remains.
+factories, and derivations filter and order them; the activation runtime
+dispenses fresh states over those programs and iterates cycles under the
+cursor rule; the one-program-per-position property is measured; and the
+toy test definition, the illustrations, and the README use the construct.
 
 **Ownership:** Polydat owns the grammar, the compiled form, the activation
 runtime, and the consumption surfaces defined here. Hosts own scheduling
@@ -458,12 +460,17 @@ Sixteen activations, one per tuple. Each iterates its 250000-row slice.
 reaches it from the parent. The host's entire job is:
 
 ```rust
-let mut traversal = kernel.traverse("flow")?;
-while let Some(activation) = traversal.advance() {
-    for cycle in activation.cycles() {
-        execute(cycle.pull("stmt").as_str());
-    }
+let mut traversal = kernel.traverse(0)?;
+while let Some(mut activation) = traversal.advance()? {
+    activation.for_each_cycle(|_, kernel| execute(kernel.pull("stmt").as_str()));
 }
+```
+
+The shipped form is `examples/toy_test_definition.polydat`, and the
+`polydat` binary is that host:
+
+```text
+polydat run toy_test_definition.polydat --fibers 4 --cycles 1000 --emit csv
 ```
 
 ## 10. The `polydat` binary
@@ -567,7 +574,12 @@ where it has ordinary wired access to everything the scope can see.
    grammar. An ignored measurement test reports per-activation cost
    against bare state allocation and asserts it does not grow with the
    tuple index.
-6. **Examples and docs.** The toy definition and its runner in the new
-   form; illustrations for producer and traversal; README update.
+6. **Examples and docs.** Done. `examples/toy_test_definition.polydat`
+   binds its flow as a producer and traverses it, and the `polydat`
+   binary runs it in traversal mode; `docs/toy_test_definition.md` shows
+   the grammar and real output. `examples/for_producer.rs` and
+   `examples/for_traversal.rs` back two new sections of
+   `docs/illustrations.md`. The README describes the construct in its
+   iteration section and links here.
 
 Each step lands with its tests and leaves the previous surfaces working.

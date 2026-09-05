@@ -3,16 +3,21 @@
 //
 // Hierarchy:  cycle -> row -> (tenant, device, reading)
 // Parameters: externs with defaults; a host may override any of them.
+// Traversal:  a comprehension over phases, intervals, and partitions of
+//             the row domain, bound as a producer and traversed below.
 // Flow:       schema, load, read, and verify statements derived from
 //             the same coordinate, so any row can be regenerated.
 
-// ---- Parameters -------------------------------------------------------
+// ---- Coordinates and parameters ---------------------------------------
 
-// Runtime parameters are externs with defaults; a host may override
-// them per scope activation without recompiling.
+// The root coordinate. Each traversal activation below has its own
+// `cycle`, local to its slice; this one positions the root scope.
+input cycle: u64
+
+// Runtime parameters are externs with defaults; a host may assign them
+// on the command line without recompiling.
 extern base_epoch_ms: u64 = 1700000000000
-extern interval_ms: u64 = 1000
-extern phase: String = "load"
+extern rows_total: u64 = 1000000
 
 // ---- Self-description ------------------------------------------------
 
@@ -20,21 +25,6 @@ const dataset := "iot-readings-toy"
 const keyspace := "toy"
 const table := "readings"
 const schema_stmt := "CREATE TABLE {keyspace}.{table} (tenant_id bigint, device_id text, ts bigint, temp_c double, humidity double, status text, PRIMARY KEY ((tenant_id, device_id), ts))"
-
-// ---- Coordinates and hierarchy ---------------------------------------
-
-input cycle: u64
-
-// A fiber owns one slice of the row domain. The host resolves the
-// partition spec and narrows this cursor at scope setup; the fiber's
-// local cycle then maps onto an absolute row ordinal in its slice.
-cursor rows = range(0, 1000000) over "*/4"
-row := mod_in(cycle, rows.cursor)
-
-// Structural parameters are literal constants in the decomposition.
-// The first two dimensions are bounded; the third is unbounded, so
-// the dataset grows with the row count.
-(tenant, device, reading) := mixed_radix(row, 20, 50, 0)
 const shape := "tenants=20 devices_per_tenant=50 readings=unbounded"
 
 // ---- Reusable model ---------------------------------------------------
@@ -45,26 +35,46 @@ reading_model(seed: u64) -> (temp_c: f64, humidity: f64, status: String) := {
     status   := weighted_strings(hash(hash(seed)), "ok:0.97;degraded:0.02;error:0.01")
 }
 
-// ---- Entities ---------------------------------------------------------
+// ---- Traversal ----------------------------------------------------------
 
-tenant_id   := hashed_id(input: tenant, bound: 1000000)
-device_key  := interleave(tenant, device)
-device_id   := hashed_uuid(device_key)
-device_kind := weighted_strings(device_key, "sensor:0.7;gateway:0.2;controller:0.1")
+// The test flow is a comprehension bound as a producer: every phase runs
+// over every quarter of the row domain, at two reading intervals. Its
+// element names are wires inside the traversal below.
+flow := for phase in load,verify, interval_ms in 1000,60000, p in partitions("*/4", {rows_total})
 
-reading_seed := hash(interleave(device_key, reading))
-(temp_c, humidity, status) := reading_model(reading_seed)
-ts := base_epoch_ms + reading * interval_ms
+for flow {
+    // Each activation owns the slice `p` of the row domain. The cursor is
+    // narrowed to `p` at activation, and the local cycle maps onto an
+    // absolute row ordinal inside the slice.
+    cursor rows = range(0, rows_total) over p
+    row := mod_in(cycle, rows.cursor)
 
-// ---- Test flow ----------------------------------------------------------
+    // Structural parameters are literal constants in the decomposition.
+    // The first two dimensions are bounded; the third is unbounded, so
+    // the dataset grows with the row count.
+    (tenant, device, reading) := mixed_radix(row, 20, 50, 0)
 
-load_stmt   := "INSERT INTO {keyspace}.{table} (tenant_id, device_id, ts, temp_c, humidity, status) VALUES ({tenant_id}, '{device_id}', {ts}, {temp_c}, {humidity}, '{status}')"
-read_stmt   := "SELECT temp_c, humidity, status FROM {keyspace}.{table} WHERE tenant_id = {tenant_id} AND device_id = '{device_id}' AND ts = {ts}"
-verify_stmt := "expect temp_c = {temp_c}, humidity = {humidity}, status = '{status}'"
+    // ---- Entities -----------------------------------------------------
 
-// The statement this scope activation executes is selected by phase.
-stmt := select_str(str_eq(phase, "load"), load_stmt, verify_stmt)
+    tenant_id   := hashed_id(input: tenant, bound: 1000000)
+    device_key  := interleave(tenant, device)
+    device_id   := hashed_uuid(device_key)
+    device_kind := weighted_strings(device_key, "sensor:0.7;gateway:0.2;controller:0.1")
 
-// A coarse health signal derived from the same coordinate: nonzero when
-// the reading should be flagged by a verifier.
-flagged := if temp_c > 26.0 { 1 } else { 0 }
+    reading_seed := hash(interleave(device_key, reading))
+    (temp_c, humidity, status) := reading_model(reading_seed)
+    ts := base_epoch_ms + reading * interval_ms
+
+    // ---- Test flow ----------------------------------------------------
+
+    load_stmt   := "INSERT INTO {keyspace}.{table} (tenant_id, device_id, ts, temp_c, humidity, status) VALUES ({tenant_id}, '{device_id}', {ts}, {temp_c}, {humidity}, '{status}')"
+    read_stmt   := "SELECT temp_c, humidity, status FROM {keyspace}.{table} WHERE tenant_id = {tenant_id} AND device_id = '{device_id}' AND ts = {ts}"
+    verify_stmt := "expect temp_c = {temp_c}, humidity = {humidity}, status = '{status}'"
+
+    // The statement this activation executes is selected by its phase.
+    stmt := select_str(str_eq(phase, "load"), load_stmt, verify_stmt)
+
+    // A coarse health signal derived from the same coordinate: nonzero
+    // when the reading should be flagged by a verifier.
+    flagged := if temp_c > 26.0 { 1 } else { 0 }
+}
