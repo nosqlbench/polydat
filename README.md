@@ -57,7 +57,13 @@ with no state carried between cycles. Run this from the repository with
 `cargo run -p polydat --example basic`. The
 [examples directory](crates/polydat/examples) also covers the programmatic
 assembler, expression syntax, module loading, context layering, parameter-space
-projection, type safety, and sharing programs across threads.
+projection, cursor partitions, traversal strategies, type safety, and sharing
+programs across threads.
+
+For everything in one place, [A toy test
+definition](crates/polydat/docs/toy_test_definition.md) is a single grammar
+file that declares its parameters, describes itself, unwinds a hierarchic
+dataset, and derives the load, read, and verify statements of a test flow.
 
 ## A function graph at a glance
 
@@ -290,14 +296,43 @@ dependency on `polydat-derive`.
 The built-in catalog and source locations are summarized in [Node
 Library](crates/polydat/docs/nodes.md).
 
+## Command line
+
+The crate ships a `polydat` binary for compiling, explaining, and running
+programs without writing a host. Install it with `cargo install polydat`, or
+run it from this repository with `cargo run -p polydat --`.
+
+```text
+polydat run graph.polydat --cycles 1000000 --fibers 8 --emit csv --timing
+polydat run graph.polydat --emit jsonl --outputs user_id,score --set tenant_seed=7
+polydat check graph.polydat --stats --manifest
+polydat explain graph.polydat
+polydat explain graph.polydat wires engines provenance
+polydat viz graph.polydat --format mermaid
+```
+
+Optional behaviors are graph transforms rather than runtime decorators.
+`--emit` appends one `emit_row` binding that names the selected wires, so
+emission is an ordinary side-channel node inside the kernel with access to
+the local scope. Fibers each own a state over the shared program and claim
+chunks of cycles; rows come out in cycle order unless `--unordered` is
+given. `--timing` reports compile time, wall time, throughput, and per-fiber
+busy time as text or JSON. `explain` narrates each compilation phase, from
+tokens through wires, types, lifecycle, constants, fusion, engine
+selection, and provenance, and accepts phase names to narrate one at a time.
+
+The binary is behind the default `cli` feature. Library consumers who
+disable default features do not pull in its dependencies.
+
 ## Cargo features
 
 | Feature | Default | Purpose |
 | --- | ---: | --- |
 | `jit` | yes | Cranelift-backed P3 cones and explicit native-kernel APIs. |
+| `cli` | yes | The `polydat` command-line harness. |
 | `vectordata` | no | Vector-dataset access nodes for ML/AI-oriented workloads. |
 
-For an interpreter-capable build without Cranelift:
+For an interpreter-capable library build without Cranelift or the binary:
 
 ```toml
 [dependencies]
@@ -338,8 +373,11 @@ cargo bench -p polydat --bench simd_autopromotion
 
 Good starting points:
 
+- [A toy test definition](crates/polydat/docs/toy_test_definition.md) — one
+  grammar file combining parameters, self-description, hierarchy, modules,
+  partitions, and a test flow.
 - [Illustrations](crates/polydat/docs/illustrations.md) — runnable DSL and
-  assembler examples.
+  assembler examples, including cursor partitions and traversal strategies.
 - [Language Spec](crates/polydat/docs/design/language_spec.md) — syntax, type
   inference, node contracts, wiring, and invalidation.
 - [Node Library](crates/polydat/docs/nodes.md) — built-in function families and
@@ -354,6 +392,9 @@ Good starting points:
   graph measured consistently through P1, P2, and P3.
 - [Comprehension Forms](crates/polydat/docs/design/comprehension_forms.md) —
   coordinate algebra and dispense semantics.
+- [The `for` Construct](crates/polydat/docs/design/for_traversal.md) — draft
+  specification for comprehension producers and traversal scopes in the
+  grammar.
 - [Cursor Partitions](crates/polydat/docs/design/cursor_partitions.md) — partition
   grammar, resolution, ordering, metadata, and cursor narrowing.
 - [Type System](crates/polydat/docs/design/type_system.md) — scalar, vector,

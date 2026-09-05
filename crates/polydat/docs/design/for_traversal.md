@@ -1,0 +1,472 @@
+# The `for` Construct — Comprehension Producers and Traversal Scopes
+
+**Status:** Draft for review. Proposed SRD 113. Nothing in this document is
+implemented yet; it specifies the contract that implementation must meet.
+
+**Ownership:** Polydat owns the grammar, the compiled form, the activation
+runtime, and the consumption surfaces defined here. Hosts own scheduling
+policy, side effects, and any surface sugar over the canonical text form.
+
+**Companion documents:**
+[Comprehension Forms](comprehension_forms.md) (the algebra),
+[Cursor Partitions](cursor_partitions.md) (partition values and `over`),
+[Scope Model](scope_model.md) (activation, materialization, coordinates),
+[Runtime Model](runtime_model.md) (the D-axioms),
+[Grammar](grammar.md) (productions this document extends).
+
+## 1. The claim
+
+Today a Polydat kernel is a pure function of its coordinates, and every
+loop that drives it lives in the host. The comprehension algebra, cursor
+partitions, and per-iteration scope materialization all exist in the crate,
+but nothing in the grammar can name a traversal and nothing in the runtime
+can run one. The host must parse the comprehension, evaluate it, bind each
+tuple, resolve every `over` clause, write cursor slots, and advance cycles.
+nmbrs does exactly this in its executor.
+
+This document adds one construct, `for`, with two readings that share one
+compiled form:
+
+- **Producer.** `name := for ...` binds a comprehension as a value. The wire
+  has type `Streamer`. Derived comprehensions compose on it.
+- **Traversal.** `for ... { body }` with no l-value activates one child scope
+  per tuple. The comprehension's element names are wires inside the body.
+
+The traversal reading is a functor over the producer reading: a traversal
+is the image of a coordinate stream under "activate the body at this
+tuple". Both readings are deterministic enumerations, so the D-axioms
+compose across them.
+
+## 2. Grammar
+
+Extends [Grammar](grammar.md) §2.
+
+```ebnf
+statement      ::= ...existing...
+                |  for_stmt
+
+binding        ::= modifier* ident ":=" expr
+                |  ...existing...
+
+expr           ::= ...existing...
+                |  for_expr
+
+for_expr       ::= "for" comprehension_text
+
+for_stmt       ::= "for" for_source "{" statement* "}"
+
+for_source     ::= comprehension_text        (* inline comprehension *)
+                |  ident                     (* a bound producer *)
+
+comprehension_text ::= clause ("," clause)* ("where" predicate)? ("order" strategy ("/" int)?)?
+clause         ::= ident "in" source
+                |  "(" ident ("," ident)+ ")" "in" source
+```
+
+`comprehension_text` is the canonical text form already accepted by the
+comprehension parser. `source` is the existing source surface: literal
+lists, `lo..hi` ranges, generator calls such as `partitions("*/4", n)` and
+`subdivide(p, n)`, and string comprehensions. `predicate` and `strategy`
+are unchanged. The grammar adds no new source forms.
+
+Examples:
+
+```text
+sweep := for k in 1..4, limit in 10,20,30 order halton/5
+edges := sweep where {k} == 1 || {k} == 3
+
+for sweep {
+    f := myfunc(k)
+    g := otherfunc(limit, k)
+}
+
+for phase in load,verify, p in partitions("*/4", 1000000) {
+    cursor rows = range(0, 1000000) over p
+    row := mod_in(cycle, rows.cursor)
+    stmt := select_str(str_eq(phase, "load"), load_stmt, verify_stmt)
+}
+```
+
+`for` is a hard keyword. Existing programs do not use it as an identifier
+because the comprehension parser already reserved it.
+
+## 3. Semantics
+
+### 3.1 Producer
+
+A `for` expression evaluates to a compiled comprehension. The binding is
+effectively `const`: the value is computed once at scope init and never
+re-evaluated within the scope. The wire type is `Streamer`. A `Streamer`
+carries the comprehension AST after validation and optimization, plus the
+metadata the algebra already computes: tuple shape, cardinality class, and
+index addressability.
+
+Derived forms apply the algebra's modifiers to a bound producer:
+
+```text
+base    := for k in 1..100, limit in 1..100
+boundary := base where {k} == 1 || {k} == 100
+sampled  := base order halton/50
+```
+
+Each derived wire is a distinct comprehension. Streams obtained from them
+never share dispense state. This is the independence contract in
+[Comprehension Forms](comprehension_forms.md) §9.5.2, applied to wires.
+
+A producer's sources may reference wires of the enclosing scope. Those
+references resolve through the same auto-extern mechanism that module
+bodies use. A source that depends on a dynamic wire is a compile error:
+a producer is a scope-init value and cannot vary per cycle.
+
+### 3.2 Traversal
+
+A `for` statement declares a traversal scope. The body is a statement list
+compiled as a child program. For each tuple the comprehension dispenses,
+the runtime activates one child scope: a fresh state over the child
+program with the tuple's values bound.
+
+Inside the body:
+
+- **Element names are wires.** Each comprehension variable is an input slot
+  of kind `IterationExtern`, typed from the source. The full type plane is
+  allowed: `u64`, `f64`, strings, booleans, `Ext` values such as
+  `Partition`, and `Streamer` when a source yields comprehensions.
+- **Every statement kind is allowed,** including cursors, `const`
+  bindings, module calls, nested `for` statements, and nested producers.
+- **Outer wires are visible** under the visibility rules in
+  [Scope Model](scope_model.md) §5. The body is a child; the enclosing
+  scope is its parent. Parent values reach the body through the existing
+  parent-gated materialization.
+- **Outputs are the body's named bindings.** A host observes them by
+  pulling from the activation's kernel.
+
+A traversal over a bound producer, `for sweep { ... }`, is identical to a
+traversal over the producer's inline text. The body sees the producer's
+element names. Traversing the same producer twice creates two independent
+streams.
+
+### 3.3 Typing of element names
+
+Element types are determined at compile time from the source:
+
+| Source form | Element type |
+| --- | --- |
+| Integer literal list or `lo..hi` range | `u64` |
+| Float literal list or continuous interval | `f64` |
+| String literal list or string comprehension | `String` |
+| Boolean literal list | `Bool` |
+| `partitions(...)`, `subdivide(...)`, `<name>.partitions` | `Ext` carrying `Partition` |
+| A generator node call | The node's declared return type |
+| A bound `Streamer` used as a source | `Streamer` |
+
+Mixed literal lists are a compile error. The body is type-checked against
+these types before any activation exists, so a mismatch is reported once,
+at compile time, with the source span of the offending clause.
+
+### 3.4 Cursors and cycles inside a traversal
+
+A body may declare cursors. An `over <name>` clause may name an element of
+the enclosing comprehension. At activation, Polydat resolves the `over`
+value to a `Partition`, narrows the cursor to that interval, and writes the
+`<cursor>.cursor` value and its scalar projections. This is the step the
+compiler comments today describe as "written by the executor at phase
+setup"; it moves into the crate and becomes part of activation.
+
+The cycle rule for an activation:
+
+- **A body with one or more cursors** iterates its narrowest cursor
+  extent. Each ordinal in the slice is one cycle. The cursor's ordinal and
+  field projections are written before each pull, exactly as
+  `inject_into_state` does now.
+- **A body with no cursor** has exactly one cycle per activation. The
+  tuple is the complete coordinate.
+
+A traversal therefore has a two-level coordinate: the tuple selects the
+activation, and the cursor ordinal selects the cycle. Both are pure
+functions of position. Any activation and any cycle can be regenerated in
+isolation, which is what makes activations distributable across fibers
+without coordination.
+
+### 3.5 Nesting
+
+A `for` statement inside a body declares a grandchild traversal. Its
+comprehension may reference the parent tuple's elements, so
+`for inner in subdivide(p, 4) { ... }` inside `for p in partitions(...)`
+is the nested-partition form the cursor partition specification already
+names. Coordinate paths compose root-first, matching
+[Scope Model](scope_model.md) §7.
+
+### 3.6 Consumption surfaces
+
+Polydat exposes three surfaces, extending
+[Comprehension Forms](comprehension_forms.md) §9.5:
+
+```text
+CoordinateStream        tuples only                       (exists)
+ScopedKernelStream<K>   one bound kernel per tuple        (exists)
+TraversalStream         one Activation per tuple          (new)
+
+Activation {
+    coords:  ScopeCoord            // the tuple, root-first path available
+    kernel:  PolydatKernel         // fresh state over the cached program
+    cursor:  Option<CursorSlice>   // narrowed extent, if the body has one
+}
+```
+
+`TraversalStream::advance` yields the next activation. `Activation::cycles`
+yields cycles under the rule in §3.4, writing cursor projections and
+returning the kernel ready to pull. A host that wants only tuples uses the
+first surface; one that wants to schedule work uses the third.
+
+`Streamer` wires pulled from a kernel expose the same three factories, so
+a host holding a compiled program can traverse any producer it names.
+
+## 4. Compilation
+
+1. **Parse.** `for_expr` produces `Expr::For(ComprehensionAst)`. `for_stmt`
+   produces `Statement::For { source, body }` where `source` is either a
+   comprehension AST or a wire reference.
+2. **Element typing.** The compiler evaluates each clause source's type per
+   §3.3. Sources that reference outer wires are resolved through the
+   auto-extern pass first.
+3. **Body compilation.** The body compiles to a child `PolydatProgram`
+   exactly as a module body does, with one `IterationExtern` input per
+   element and cascade externs for every outer name it references. This
+   happens once, at parent compile time. The child program is stored on
+   the parent program keyed by the `for` statement's lexical position,
+   per §5.1.
+4. **Comprehension compilation.** The comprehension AST is validated,
+   optimized, and lowered to the IR. The IR is stored alongside the child
+   program.
+5. **Producer wires.** A `for_expr` binding compiles to a `const` node
+   whose value is the compiled comprehension. Derived `where` and `order`
+   forms compile to nodes that wrap the parent `Streamer`.
+
+The body's cursors compile as they do today, allocating the `over` slots.
+No new node types are required for cursor narrowing; the runtime writes
+the existing slots.
+
+## 5. Runtime
+
+### 5.1 One program per lexical position
+
+A compiled program is a property of where a `for` body appears in the
+program text, not of which coordinates reach it. The body's wiring, types,
+lifecycle classification, fusion, and native code are the same for every
+tuple, because the tuple only supplies values for slots the program already
+declares. Coordinates vary; the program does not.
+
+Polydat therefore compiles each `for` body exactly once, at parent compile
+time, and caches it keyed on the body's lexical position. The cache is not
+an optimization over tuple identity. It is the statement that a kernel
+program is invariant under its coordinates.
+
+The consequence for nesting is what makes deep traversals cheap:
+
+```text
+for p in partitions("*/4", 1000000) {            // program A, compiled once
+    for tenant in 0..20 {                        // program B, compiled once
+        for device in 0..50 {                    // program C, compiled once
+            ...
+        }
+    }
+}
+```
+
+Three programs exist for the life of the root program, however many
+tuples the traversal dispenses. The 4 × 20 × 50 = 4000 innermost
+activations share program C. Each activation is a fresh state over that
+program with its own tuple bound.
+
+### 5.2 Affine activation
+
+Activation never compiles. It does what `for_iteration` does now: clone
+the program `Arc`, allocate fresh state, inject the tuple, and run parent
+materialization. The first activation of a body pays compilation once;
+every activation after that costs the same constant, which depends only on
+the size of the state. This is the affine property: compile once, then a
+per-activation cost that is independent of how many coordinates precede
+it.
+
+Shared cells and transit cells remain shared across activations per
+[Scope Model](scope_model.md) §8. Ordinary buffers and clean flags are
+fresh.
+
+A host may additionally reuse a live activation when it revisits the same
+tuple under the same parent, for replay or for a second phase over the
+same slice. That is a state-reuse policy, not a compilation concern, and
+Polydat leaves it to the host. Correctness never depends on it; the
+program cache in §5.1 is what Polydat guarantees.
+
+Hosts may also elide a traversal whose body adds no matter beyond its
+parent. Elision is likewise host policy; the runtime provides the
+program-identity hashes it needs.
+
+### 5.3 Cursor narrowing
+
+At activation, for each cursor in the body with an `over` clause:
+
+1. Pull the compiled `over` expression on the activation kernel. Accept a
+   string spec, a `Partition`, a `PartitionSpec`, or a `PartitionList`
+   with exactly one element. A multi-element list is an activation error.
+2. Resolve against the cursor's extent using the existing `resolve`
+   routine, honoring open-extent cursors as the cursor partition
+   specification defines.
+3. Write `<cursor>__cursor` and its six scalar projections.
+4. Record the narrowed interval on the `Activation`.
+
+This is the logic nmbrs holds in its executor today. It moves into the
+crate unchanged in behavior.
+
+### 5.4 Fibers
+
+Activations are independent. A host may hand consecutive activations to
+different fibers, or partition the traversal's index space and give each
+fiber a range of tuple indices. Because every strategy is a decidable
+permutation, a fiber can seek to its tuple index without dispensing the
+tuples before it. Polydat exposes `TraversalStream::seek(index)` for this.
+
+## 6. Axioms
+
+- **T1, Traversal determinism.** For a fixed program and parent state, the
+  sequence of tuples and the state of every activation at every cycle is
+  the same on every run, on every host. Follows from D1 and D4 in the
+  runtime model and from the strategy determinism in the algebra.
+- **T2, Cost bound.** The work of a full traversal is bounded by the tuple
+  cardinality times the per-activation cone cost from D3, plus a constant
+  activation cost. Nothing in a traversal is unbounded unless a cursor or
+  a comprehension source is declared unbounded.
+- **T3, Purity of the construct.** `for` introduces no mutation and no
+  ordering dependence between activations. Side effects in a body are
+  governed by D2 exactly as in any other kernel.
+- **T4, No control flow inside a cycle.** A body is a scope, not a loop
+  body. A cycle remains a pure pull. `for` cannot appear inside an
+  expression that varies per cycle.
+
+## 7. Boundaries
+
+Not specified here, and deliberately left to hosts:
+
+- when to create activations, how many to keep live, and how to schedule
+  them across threads;
+- any YAML or command-line sugar over the canonical text form;
+- stop conditions, rate control, and metrics;
+- side-effect sinks.
+
+Not supported in this revision, and reported as compile errors rather than
+silently accepted:
+
+- a producer whose source depends on a per-cycle wire;
+- a body that declares an `input` other than `cycle`;
+- `over` naming a wire that is not `Partition`-typed at compile time.
+
+## 8. Relationship to nmbrs
+
+What moves into Polydat: the per-tuple activation loop, `over`
+resolution and cursor-slot writes, the activation cache, and the seekable
+traversal surface. nmbrs keeps its scope tree, elision policy, phase
+scheduling, and YAML surface, and calls `TraversalStream` where it
+currently calls `evaluate_for_iteration` plus `for_iteration` plus its own
+slot writes.
+
+The migration is additive. Existing nmbrs paths keep working while it
+adopts the new surface one call site at a time.
+
+## 9. Worked example
+
+The toy test definition in its target form:
+
+```text
+extern base_epoch_ms: u64 = 1700000000000
+
+const dataset := "iot-readings-toy"
+const schema_stmt := "CREATE TABLE toy.readings (...)"
+
+reading_model(seed: u64) -> (temp_c: f64, humidity: f64, status: String) := {
+    temp_c   := normal_sample(input: seed, mean: 21.5, stddev: 2.0)
+    humidity := uniform_sample(input: hash(seed), min: 30.0, max: 70.0)
+    status   := weighted_strings(hash(hash(seed)), "ok:0.97;degraded:0.02;error:0.01")
+}
+
+flow := for phase in load,verify, interval_ms in 1000,60000, p in partitions("*/4", 1000000)
+
+for flow {
+    cursor rows = range(0, 1000000) over p
+    row := mod_in(cycle, rows.cursor)
+    (tenant, device, reading) := mixed_radix(row, 20, 50, 0)
+
+    tenant_id  := hashed_id(input: tenant, bound: 1000000)
+    device_key := interleave(tenant, device)
+    device_id  := hashed_uuid(device_key)
+    (temp_c, humidity, status) := reading_model(hash(interleave(device_key, reading)))
+    ts := base_epoch_ms + reading * interval_ms
+
+    load_stmt   := "INSERT INTO toy.readings (...) VALUES ({tenant_id}, '{device_id}', {ts}, {temp_c}, {humidity}, '{status}')"
+    verify_stmt := "expect temp_c = {temp_c}, humidity = {humidity}, status = '{status}'"
+    stmt := select_str(str_eq(phase, "load"), load_stmt, verify_stmt)
+}
+```
+
+Sixteen activations, one per tuple. Each iterates its 250000-row slice.
+`phase`, `interval_ms`, and `p` are wires in the body; `base_epoch_ms`
+reaches it from the parent. The host's entire job is:
+
+```rust
+let mut traversal = kernel.traverse("flow")?;
+while let Some(activation) = traversal.advance() {
+    for cycle in activation.cycles() {
+        execute(cycle.pull("stmt").as_str());
+    }
+}
+```
+
+## 10. The `polydat` binary
+
+The crate's binary is the reference host for this construct. Its optional
+behaviors are graph transforms, not runtime decorators: a feature that
+needs to observe a scope is expressed by inserting a node into that scope,
+where it has ordinary wired access to everything the scope can see.
+
+- **Emission.** `--emit` appends `__emit := emit_row(format, names, ...)`
+  to the program today. Once traversal lands, the same binding is inserted
+  inside the affected block, so every activation emits its own rows with
+  the block's element names in scope. The node buffers per thread; the
+  harness drains buffers at chunk boundaries.
+- **Ordering.** Fibers claim work in chunks with sequence numbers. The
+  writer restores cycle order by default and emits in completion order
+  with `--unordered`. Under traversal, the sequence number is the tuple
+  index, which every strategy makes decidable.
+- **Diagnostics.** `check` reports statistics and the manifest. `explain`
+  narrates each compilation phase from the compiler's event log and the
+  compiled program: tokens, statements, inputs, modules, wires, types,
+  lifecycle, constants, fusion, engine selection, provenance, and outputs.
+  Traversal adds two phases: the comprehension plan and the per-body
+  program table showing one compiled program per lexical position.
+- **Timing.** `--timing` reports compile time, wall time, throughput, and
+  per-fiber busy time. It wraps the run from outside because it measures
+  the kernel rather than participating in it.
+
+## 11. Implementation plan
+
+1. **Parser and AST.** `for` token, `Expr::For`, `Statement::For`, block
+   bodies. Pretty-printer round trip. Tests: parse and print every form in
+   §2.
+2. **Element typing and body compilation.** Child program per `for`
+   statement, `IterationExtern` inputs, cascade externs, compile-time type
+   errors. Tests: each row of the §3.3 table, outer-wire visibility,
+   nested bodies.
+3. **Producer wires.** `Streamer` port type, `const` producer nodes,
+   derived `where` and `order` nodes, stream factories on pulled values.
+   Tests: independence of derived streams, cardinality metadata.
+4. **Activation runtime.** `TraversalStream`, `Activation`, cursor
+   narrowing moved from the nmbrs executor, `cycles` iteration, `seek`.
+   Tests: T1 across two hosts of the same program, T2 by counting node
+   visits, fiber partitioning of a traversal.
+5. **Program invariance.** Tests that a nested traversal compiles exactly
+   one program per `for` body regardless of tuple count, and that
+   activation performs no compilation. Count compile events across a
+   three-level traversal with thousands of tuples.
+6. **Examples and docs.** The toy definition and its runner in the new
+   form; illustrations for producer and traversal; README update.
+
+Each step lands with its tests and leaves the previous surfaces working.

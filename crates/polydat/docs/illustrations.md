@@ -14,6 +14,9 @@ and the Assembler API (programmatic node-by-node construction). They
 produce the same kind of compiled kernel; pick the one that fits your
 call-site shape.
 
+For all of these features working together in one grammar file, see
+[A toy test definition](toy_test_definition.md).
+
 Every code block in this file is the body of a runnable example under
 [`polydat/examples/`](../examples/). They all compile under
 `cargo build --examples` and produce the printed outputs you see
@@ -249,6 +252,144 @@ Replace it with a finite cardinality to cap the total space.
 give type-checked access to the resulting cells.
 
 See [`examples/parameter_space.rs`](../examples/parameter_space.rs).
+
+## Partitioning a domain across fibers
+
+A cursor names an ordinal domain. A partition spec splits that domain
+into stable, absolute intervals that fibers can own without talking to
+each other. The `partitions` node resolves a spec against an extent
+and returns the list as a value:
+
+```rust
+let mut k = compile_polydat(r#"
+    input cycle: u64
+    parts := partitions("20%,30%,*", 1000000)
+"#).expect("compile");
+k.set_inputs(&[0]);
+let list = k.pull("parts").as_partition_list().expect("list").clone();
+for p in list.0.iter() {
+    println!("p{}  [{:>7}, {:>7})  {:>6} ordinals", p.idx, p.start_ord, p.end_ord, p.end_ord - p.start_ord);
+}
+```
+
+```text
+p0  [      0,  200000)  200000 ordinals
+p1  [ 200000,  500000)  300000 ordinals
+p2  [ 500000, 1000000)  500000 ordinals
+```
+
+A fiber claims its slice with `over`. The kernel exposes the resolved
+partition as `q.cursor` and its bounds as metadata wires. Resolving the
+`over` spec and writing those slots is the host's job at scope setup,
+so this example does it by hand for fiber 1:
+
+```rust
+let mut k = compile_polydat(r#"
+    input cycle: u64
+    cursor q = range(0, 1000000) over "20%,30%,*"
+    start := q.cursor.start_ordinal
+    end   := q.cursor.end_ordinal
+    size  := cardinality(q.cursor)
+    slot  := mod_in(cycle, q.cursor)
+    row   := mod(hash(slot), 1000000)
+    sub   := subdivide(q.cursor, 4)
+"#).expect("compile2");
+
+// The host resolves the `over` spec and hands fiber 1 its partition.
+let spec = parse("20%,30%,*").expect("spec");
+let mine = resolve(&spec, 0, 1_000_000).expect("resolve")[1].clone();
+let writes = [
+    ("q__cursor", Value::from_partition(mine.clone())),
+    ("q__cursor__idx", Value::U64(mine.idx)),
+    ("q__cursor__partition_count", Value::U64(mine.count)),
+    ("q__cursor__start_ordinal", Value::U64(mine.start_ord)),
+    ("q__cursor__end_ordinal", Value::U64(mine.end_ord)),
+];
+for (name, value) in writes {
+    let idx = k.program().find_input(name).expect(name);
+    k.state().set_input(idx, value);
+}
+
+for cycle in [0u64, 1, 299_999, 300_000] {
+    k.set_inputs(&[cycle]);
+    // ... pull start, end, size, slot, row
+}
+```
+
+```text
+cycle=0      window=[200000, 500000) size=300000 slot=200000 row=70708
+cycle=1      window=[200000, 500000) size=300000 slot=200001 row=145486
+cycle=299999 window=[200000, 500000) size=300000 slot=499999 row=795364
+cycle=300000 window=[200000, 500000) size=300000 slot=200000 row=70708
+
+sub0  [200000, 275000)
+sub1  [275000, 350000)
+sub2  [350000, 425000)
+sub3  [425000, 500000)
+```
+
+`mod_in` wraps the fiber's local cycle into its absolute slice, so the
+fiber never touches another fiber's ordinals and every row it produces
+can be regenerated from its ordinal alone. `subdivide` splits the slice
+again with the same boundary math, which is how a fiber hands work to
+worker threads. The full spec language, including recipes, windows,
+gaps, and ordering, is in
+[Cursor Partitions](design/cursor_partitions.md).
+
+See [`examples/cursor_partitions.rs`](../examples/cursor_partitions.rs).
+
+## Traversing a parameter space
+
+A comprehension names a parameter space and how to walk it. The
+algebra has four constructors, `cartesian`, `zip`, `union`, and
+`filter`, plus `order`, which applies a named traversal strategy.
+In the text form that hosts embed, the same space reads:
+
+```text
+for k in 1..4, limit in 10..40 step 10
+for k in 1..4, limit in 10..40 step 10 order halton/5
+for k in 1..4, limit in 10..40 step 10 where {k} >= 2 && {limit} != 20
+```
+
+Built directly, dispensed as coordinate tuples:
+
+```rust
+let base = Comprehension::cartesian(vec![
+    Comprehension::clause("k", Source::IntRange { lo: 1, hi: 4, step: 1 }),
+    Comprehension::clause("limit", Source::IntRange { lo: 10, hi: 40, step: 10 }),
+]);
+show("lex", &base);
+show("reverse", &Comprehension::order(base.clone(), StrategyName::ReverseLex, None));
+show("diagonal", &Comprehension::order(base.clone(), StrategyName::Diagonal, None));
+show("shells", &Comprehension::order(base.clone(), StrategyName::Shells, None));
+show("extrema/1", &Comprehension::order(base.clone(), StrategyName::Extrema, Some(1)));
+show("halton/5", &Comprehension::order(base.clone(), StrategyName::Halton, Some(5)));
+show("where", &Comprehension::filter(base.clone(), "{k} >= 2 && {limit} != 20"));
+```
+
+where `show` compiles the comprehension, drains its coordinate stream,
+and prints each tuple as `(k,limit)`:
+
+```text
+lex             9  (1,10) (1,20) (1,30) (2,10) (2,20) (2,30) (3,10) (3,20) (3,30)
+reverse         9  (3,30) (3,20) (3,10) (2,30) (2,20) (2,10) (1,30) (1,20) (1,10)
+diagonal        9  (1,10) (1,20) (2,10) (1,30) (2,20) (3,10) (2,30) (3,20) (3,30)
+shells          9  (1,10) (1,20) (1,30) (2,10) (2,30) (3,10) (3,20) (3,30) (2,20)
+extrema/1       4  (1,10) (1,30) (3,10) (3,30)
+halton/5        5  (2,20) (1,30) (3,10) (1,20) (2,30)
+where           4  (2,10) (2,30) (3,10) (3,30)
+```
+
+Every strategy is a decidable permutation of the same nine points, so
+the optimizer can reason about it and a run can be replayed from its
+position. `extrema` visits the corners first, `shells` works inward
+from the boundary, and `halton` is a low-discrepancy sample that
+covers the space evenly at any truncation. A `CoordinateStream` yields
+the tuples; a `ScopedKernelStream` yields a kernel instance per tuple
+with the coordinates already bound. Both are specified in
+[Comprehension Forms](design/comprehension_forms.md).
+
+See [`examples/parameter_space_traversal.rs`](../examples/parameter_space_traversal.rs).
 
 ## A context layering API
 

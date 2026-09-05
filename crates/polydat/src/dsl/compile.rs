@@ -459,6 +459,52 @@ pub fn compile_polydat_strict(source: &str, source_dir: Option<&Path>, strict: b
     compile_ast_strict_with_source(&ast, source_dir, strict, source)
 }
 
+/// Options for [`compile_polydat_with_options`], the entry point the
+/// `polydat` binary uses. Every field has the same meaning as the
+/// corresponding parameter of [`compile_polydat_with_libs_and_limit`].
+#[derive(Debug, Default, Clone)]
+pub struct CompileOptions {
+    pub source_dir: Option<PathBuf>,
+    pub lib_paths: Vec<PathBuf>,
+    pub required_outputs: Vec<String>,
+    pub strict: bool,
+    pub context: String,
+    pub cursor_limit: Option<u64>,
+}
+
+/// Compile with library paths, strictness, and an optional compile-event
+/// log in one call. Pragma events are recorded the same way
+/// [`compile_polydat_with_log`] records them.
+pub fn compile_polydat_with_options(
+    source: &str,
+    options: &CompileOptions,
+    mut log: Option<&mut super::events::CompileEventLog>,
+) -> Result<PolydatKernel, String> {
+    let _data_base = options.source_dir.as_deref().map(DataBaseDirGuard::set);
+    let tokens = lexer::lex(source)?;
+    let ast = parser::parse(tokens)?;
+    let pragmas = super::pragmas::collect_from_ast(&ast);
+    if let Some(log) = log.as_deref_mut() {
+        record_pragma_events(&pragmas, log);
+    }
+    let extended = if options.required_outputs.is_empty() {
+        Vec::new()
+    } else {
+        extend_required_with_const_bindings(&options.required_outputs, &ast)
+    };
+    let filter = if extended.is_empty() { None } else { Some(extended.as_slice()) };
+    let mut compiler = Compiler::with_lib_paths(
+        options.source_dir.clone(),
+        options.lib_paths.clone(),
+        options.strict,
+    );
+    compiler.source_text = source.to_string();
+    compiler.context_label = options.context.clone();
+    compiler.cursor_limit = options.cursor_limit;
+    compiler.pragmas = pragmas;
+    compiler.compile_filtered_with_log(&ast, filter, log)
+}
+
 /// Compile with a compile event log for diagnostic inspection.
 pub fn compile_polydat_with_log(source: &str, log: &mut super::events::CompileEventLog) -> Result<PolydatKernel, String> {
     let tokens = lexer::lex(source)?;
@@ -2199,6 +2245,19 @@ impl Compiler {
         file: &PolydatFile,
         required_outputs: Option<&[String]>,
     ) -> Result<PolydatKernel, String> {
+        self.compile_filtered_with_log(file, required_outputs, None)
+    }
+
+    /// [`Self::compile_filtered`] with an optional compile-event log.
+    /// Strict compilation does not record assembler events; the
+    /// strict path validates and returns before the logged resolver
+    /// runs.
+    pub(super) fn compile_filtered_with_log(
+        &mut self,
+        file: &PolydatFile,
+        required_outputs: Option<&[String]>,
+        log: Option<&mut super::events::CompileEventLog>,
+    ) -> Result<PolydatKernel, String> {
         // First pass: collect explicit `input` declarations, dedup by name.
         for stmt in &file.statements {
             if let Statement::InputDecl(d) = stmt
@@ -2505,7 +2564,13 @@ impl Compiler {
         }
 
         asm.set_context(&self.source_text, &self.context_label);
-        let mut kernel = asm.compile_strict(self.strict).map_err(|e| format!("{e}"))?;
+        let mut kernel = match log {
+            Some(log) if !self.strict => {
+                asm.set_strict_wires(self.pragmas.strict_types(), self.pragmas.strict_values());
+                asm.compile_with_log(Some(log)).map_err(|e| format!("{e}"))?
+            }
+            _ => asm.compile_strict(self.strict).map_err(|e| format!("{e}"))?,
+        };
 
         // Retain the parsed AST as live program metadata (SRD-13f
         // §"Wire-reference classification"). The subscope

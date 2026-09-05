@@ -71,9 +71,13 @@ indexmap = "2"
 # stored as half-precision flow through the kernel without
 # widening to f32 at the boundary.
 half = "2"
+# Command-line harness (`polydat` binary). Optional so library
+# consumers who disable default features do not pull it in.
+clap = { version = "4", features = ["derive"], optional = true }
 
 [features]
-default = ["jit"]
+default = ["jit", "cli"]
+cli = ["dep:clap"]
 vectordata = ["dep:vectordata"]
 jit = ["dep:cranelift-jit", "dep:cranelift-module", "dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-native"]
 
@@ -85,6 +89,11 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 # time varies widely; rayon's stealing scheduler keeps every core
 # fed where fixed chunking leaves stragglers).
 rayon = "1"
+
+[[bin]]
+name = "polydat"
+path = "src/main.rs"
+required-features = ["cli"]
 
 [[bench]]
 name = "polydat_throughput"
