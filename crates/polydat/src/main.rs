@@ -927,6 +927,7 @@ fn print_stats(program: &PolydatProgram, compiled: &Compiled, _report: Report) {
     println!("deterministic {}", program.is_deterministic());
     println!("cursors       {}", program.cursor_schemas().len());
     println!("traversals    {} (producers {})", program.traversals().len(), program.producers().len());
+    println!("programs      {} (root plus one per for body at every depth)", polydat::kernel::program_count(program));
     println!("events        {} recorded ({} warnings, {} advisories)",
         compiled.events.events().len(),
         compiled.events.warnings().len(),

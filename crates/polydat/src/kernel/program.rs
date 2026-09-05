@@ -201,6 +201,26 @@ pub(crate) struct NodeInventory {
 }
 
 /// The immutable compiled DAG. Shared across fibers via `Arc`.
+/// Process-wide count of programs constructed. A diagnostic for the
+/// program-invariance property (SRD 113 §5.1): compiling a program with
+/// `for` bodies builds one program per body, and activation builds
+/// none. Hosts and tests read it before and after an operation.
+static PROGRAMS_BUILT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Number of [`PolydatProgram`] values constructed so far in this
+/// process, across every compile path.
+pub fn programs_built() -> u64 {
+    PROGRAMS_BUILT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Count the programs reachable from `program`: itself plus every
+/// traversal body at every depth. This is the number of compiled
+/// programs a traversing kernel needs for its whole lifetime, however
+/// many tuples it dispenses.
+pub fn program_count(program: &PolydatProgram) -> usize {
+    1 + program.traversals().iter().map(|t| program_count(&t.program)).sum::<usize>()
+}
+
 pub struct PolydatProgram {
     /// Node instances in topological order.
     pub(crate) nodes: Vec<Box<dyn PolydatNode>>,
@@ -317,6 +337,7 @@ impl PolydatProgram {
         source: &str,
         context: &str,
     ) -> Self {
+        PROGRAMS_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let coord_count = input_names.len();
         let input_defs: Vec<InputDef> = input_names.into_iter()
             .map(|name| InputDef {
@@ -371,6 +392,7 @@ impl PolydatProgram {
         source: &str,
         context: &str,
     ) -> Self {
+        PROGRAMS_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let inventory = Self::compute_node_inventory(&nodes, &wiring);
         let input_dependents = Self::compute_dependents(
             &inventory.input_provenance, input_defs.len());

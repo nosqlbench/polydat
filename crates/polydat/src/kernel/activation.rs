@@ -248,11 +248,17 @@ impl PolydatKernel {
         }
 
         // Evaluate the comprehension with this kernel's values in scope.
+        // The parent is a snapshot of this kernel; the canonical kernel is
+        // the body's program, whose element externs let filter predicates
+        // and dependent sources see the tuple being built.
         let mut snapshot = PolydatKernel::from_program(program.clone());
         self.propagate_inputs_into(&mut snapshot);
         let parent = Arc::new(snapshot);
+        let mut canonical_kernel = PolydatKernel::from_program(traversal.program.clone());
+        bind_by_name(&mut canonical_kernel, &cascade);
+        let canonical = Arc::new(canonical_kernel);
         let params: HashMap<String, String> = HashMap::new();
-        let tuples = evaluate_for_iteration(&traversal.comprehension, &parent, &parent, &params, |_| Ok(()))
+        let tuples = evaluate_for_iteration(&traversal.comprehension, &parent, &canonical, &params, |_| Ok(()))
             .map_err(|e| format!("`for {}` at line {}, col {}: {e}", traversal.source_text, traversal.span.line, traversal.span.col))?;
 
         Ok(TraversalStream { traversal, tuples, cascade, next: 0 })

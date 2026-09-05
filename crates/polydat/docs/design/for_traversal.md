@@ -328,6 +328,19 @@ same slice. That is a state-reuse policy, not a compilation concern, and
 Polydat leaves it to the host. Correctness never depends on it; the
 program cache in §5.1 is what Polydat guarantees.
 
+**Opening cost.** Opening a traversal evaluates its comprehension. Ranges
+and literal lists evaluate directly. A generator-call source such as
+`partitions("*/4", {total})` evaluates through the constant-expression
+path, which compiles a one-binding program for the expression text; that
+path is cached by text, so the same source text compiles once per
+process and every later open is compile-free. Filter predicates in the
+comprehension grammar, `{name}` compared to a literal or another element
+and joined by `&&`, `||`, `!`, or `in [...]`, evaluate directly against
+each tuple with no kernel and no compilation; only a predicate outside
+that grammar takes the kernel path, which is likewise cached by
+interpolated text. `kernel::programs_built()` exposes the process-wide
+build count so a host can verify these properties.
+
 Hosts may also elide a traversal whose body adds no matter beyond its
 parent. Elision is likewise host policy; the runtime provides the
 program-identity hashes it needs.
@@ -538,10 +551,22 @@ where it has ordinary wired access to everything the scope can see.
    multi-partition `over` errors, and outer references in sources. The
    fuzzer activates every traversal of each generated program with
    bounded activations and cycles and checks T1 between two hosts.
-5. **Program invariance.** Tests that a nested traversal compiles exactly
-   one program per `for` body regardless of tuple count, and that
-   activation performs no compilation. Count compile events across a
-   three-level traversal with thousands of tuples.
+5. **Program invariance.** Done. `kernel::programs_built()` counts every
+   program constructed in the process and `program_count(program)` counts
+   the root plus one program per body at every depth; `check --stats`
+   prints the latter. Tests in `tests/for_invariance.rs` compile a
+   three-level traversal, assert exactly four programs, activate all
+   4000 innermost tuples while the build counter stays flat and every
+   innermost activation shares one program by pointer, show a second host
+   over the same program building nothing, show a generator-sourced
+   traversal compiling its source once and re-opening compile-free, and
+   show producers and derivations adding no programs per tuple. Making
+   those tests pass required two runtime changes, both recorded in §5.2:
+   a text-keyed cache for constant-expression evaluation, and a
+   compile-free evaluator for filter predicates in the comprehension
+   grammar. An ignored measurement test reports per-activation cost
+   against bare state allocation and asserts it does not grow with the
+   tuple index.
 6. **Examples and docs.** The toy definition and its runner in the new
    form; illustrations for producer and traversal; README update.
 

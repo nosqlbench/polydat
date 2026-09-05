@@ -624,7 +624,36 @@ pub fn compile_polydat_checked(source: &str) -> (Result<PolydatKernel, ()>, Diag
 /// let v = eval_const_expr("4.0 * 4.0").unwrap();
 /// assert_eq!(v.as_f64(), 16.0);  // both float literals → f64_mul
 /// ```
+/// Cache of constant-expression results keyed by source text. A const
+/// expression compiles with no inputs, so its value is a pure function
+/// of its text; caching is exact. Bounded so a pathological caller
+/// cannot grow it without limit. This is what keeps repeated evaluation
+/// of the same range, list, or predicate text compile-free (SRD 113
+/// §5.2).
+static CONST_EXPR_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, crate::ast::Value>>> =
+    std::sync::OnceLock::new();
+const CONST_EXPR_CACHE_CAP: usize = 8192;
+
 pub fn eval_const_expr(source: &str) -> Result<crate::ast::Value, EmbeddingError> {
+    let cache = CONST_EXPR_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    if let Ok(map) = cache.lock()
+        && let Some(v) = map.get(source)
+    {
+        return Ok(v.clone());
+    }
+    let result = eval_const_expr_uncached(source);
+    if let Ok(v) = &result
+        && let Ok(mut map) = cache.lock()
+    {
+        if map.len() >= CONST_EXPR_CACHE_CAP {
+            map.clear();
+        }
+        map.insert(source.to_string(), v.clone());
+    }
+    result
+}
+
+fn eval_const_expr_uncached(source: &str) -> Result<crate::ast::Value, EmbeddingError> {
     let wrapped = format!("\nout := {source}");
     let source_owned = source.to_string();
     // Constant-folding inside `compile_polydat` invokes node `eval`
@@ -2388,7 +2417,7 @@ impl Compiler {
             let elements = element_types(&comprehension, &mut probe).map_err(|e| format!(
                 "`for {}` at line {}, col {}: {e}", f.source.text, f.span.line, f.span.col
             ))?;
-            let (child, cascade) = child_file(f, &elements, parent)?;
+            let (child, cascade) = child_file(f, &comprehension, &elements, parent)?;
             let mut child_compiler = Compiler::with_lib_paths(
                 self.source_dir.clone(),
                 self.polydat_lib_paths.clone(),

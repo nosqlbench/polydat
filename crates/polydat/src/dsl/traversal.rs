@@ -317,6 +317,7 @@ fn body_references(body: &[Statement], out: &mut BTreeSet<String>) {
 /// Returns the file and the cascade list.
 pub fn child_file(
     f: &ForStmt,
+    comprehension: &Comprehension,
     elements: &[(String, PortType)],
     parent: &PolydatProgram,
 ) -> Result<(PolydatFile, Vec<(String, PortType)>), String> {
@@ -334,6 +335,9 @@ pub fn child_file(
     let declared = body_declared(&f.body, elements);
     let mut referenced = BTreeSet::new();
     body_references(&f.body, &mut referenced);
+    // Outer wires the comprehension's own sources reference through
+    // `{name}` also cascade, so the tuple evaluation sees them.
+    referenced.extend(comprehension.referenced_source_names());
 
     let mut cascade = Vec::new();
     for name in referenced {
