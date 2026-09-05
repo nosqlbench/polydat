@@ -1841,7 +1841,7 @@ impl Compiler {
         // SRD 113: same lowering as `compile_filtered_with_log`; the
         // parent compiles without `for` forms, then each body compiles
         // once against it.
-        let (parent_file, for_stmts, producers) = super::traversal::strip_for_forms(file);
+        let (parent_file, for_stmts, producers) = super::traversal::strip_for_forms(file)?;
         let mut kernel = self.compile_parent(&parent_file)?;
         if !for_stmts.is_empty() || !producers.is_empty() {
             let traversals = self.compile_traversals(&for_stmts, &producers, kernel.program())?;
@@ -2345,7 +2345,7 @@ impl Compiler {
         // SRD 113: `for` statements lower to child programs and producer
         // bindings become program metadata. The parent compiles without
         // them, then each body compiles once against the parent.
-        let (parent_file, for_stmts, producers) = super::traversal::strip_for_forms(file);
+        let (parent_file, for_stmts, producers) = super::traversal::strip_for_forms(file)?;
         let original = file;
         let file = &parent_file;
         let mut kernel = self.compile_parent_with_log(file, required_outputs, log)?;

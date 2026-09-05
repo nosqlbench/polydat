@@ -144,6 +144,10 @@ fn format_value(val: &Value, spec: &FormatSpec) -> String {
                 v.to_string()
             }
         }
+        // Extension values render through their reflected display form,
+        // the same text `to_display_string` produces, so a Streamer or
+        // Partition interpolates as the author would expect.
+        Value::Ext(_) => val.to_display_string(),
         _ => format!("{val:?}"),
     }
 }

@@ -90,14 +90,23 @@ pub enum ForSourceKind {
     Producer(String),
     /// Comprehension text, parsed to the algebra AST.
     Comprehension(crate::iteration::comprehension::Comprehension),
+    /// A derivation of a bound producer: `base where <pred>`,
+    /// `base order <spec>`, or both (SRD 113 §3.1). Resolved against
+    /// the producer at compile time.
+    Derived {
+        base: String,
+        filter: Option<String>,
+        order: Option<String>,
+    },
 }
 
 impl ForSource {
     /// The element names the source dispenses, when known statically.
-    /// A producer reference resolves its names at compile time.
+    /// A producer reference or derivation resolves its names at compile
+    /// time.
     pub fn element_names(&self) -> Vec<String> {
         match &self.kind {
-            ForSourceKind::Producer(_) => Vec::new(),
+            ForSourceKind::Producer(_) | ForSourceKind::Derived { .. } => Vec::new(),
             ForSourceKind::Comprehension(c) => c.coordinate_names(),
         }
     }

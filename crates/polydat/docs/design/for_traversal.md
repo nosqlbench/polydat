@@ -1,10 +1,12 @@
 # The `for` Construct — Comprehension Producers and Traversal Scopes
 
-**Status:** Proposed SRD 113. Steps 1 and 2 of §11 are implemented:
+**Status:** Proposed SRD 113. Steps 1 through 3 of §11 are implemented:
 both `for` forms lex, parse, and pretty-print; every traversal body
 compiles once into a child program with typed element externs and
 cascade externs, keyed by lexical position; producer bindings are
-recorded as program metadata. Steps 3 through 6 specify what remains.
+`const` wires carrying a `Streamer` value with independent stream
+factories, and derivations filter and order them. Steps 4 through 6
+specify what remains.
 
 **Ownership:** Polydat owns the grammar, the compiled form, the activation
 runtime, and the consumption surfaces defined here. Hosts own scheduling
@@ -76,7 +78,7 @@ Examples:
 
 ```text
 sweep := for k in 1..4, limit in 10,20,30 order halton/5
-edges := sweep where {k} == 1 || {k} == 3
+edges := for sweep where {k} == 1 || {k} == 3
 
 for sweep {
     f := myfunc(k)
@@ -113,17 +115,30 @@ carries the comprehension AST after validation and optimization, plus the
 metadata the algebra already computes: tuple shape, cardinality class, and
 index addressability.
 
-Derived forms apply the algebra's modifiers to a bound producer:
+Derived forms apply the algebra's modifiers to a bound producer. They are
+introduced by `for` like every other comprehension value, so one keyword
+opens every comprehension and the lexer owns the text capture:
 
 ```text
-base    := for k in 1..100, limit in 1..100
-boundary := base where {k} == 1 || {k} == 100
-sampled  := base order halton/50
+base     := for k in 1..100, limit in 1..100
+boundary := for base where {k} == 1 || {k} == 100
+sampled  := for base order halton/50
 ```
 
 Each derived wire is a distinct comprehension. Streams obtained from them
 never share dispense state. This is the independence contract in
 [Comprehension Forms](comprehension_forms.md) §9.5.2, applied to wires.
+
+**Realization.** `Streamer` rides the type plane's extension point: the
+wire's port type is `Ext` and its value is a reflected `StreamerValue`
+whose type name is `Streamer`, carrying the text and the resolved
+algebra AST and exposing `coordinate_stream`, `compiled`, `metadata`,
+and `cardinality`. The compiler lowers `name := for ...` to
+`const name := streamer("<payload>")`, where `streamer` is an ordinary
+registered node whose payload is the resolved comprehension. Authors may
+call `streamer` with comprehension text directly. A dedicated port-type
+variant is not needed for any contract in this document; the reflected
+type name is the wire-level tag.
 
 A producer's sources may reference wires of the enclosing scope. Those
 references resolve through the same auto-extern mechanism that module
@@ -492,9 +507,16 @@ where it has ordinary wired access to everything the scope can see.
    resolution, three-level nesting with one program per body, body type
    errors, unknown outer names, the extra-coordinate rule, and cursors
    over elements.
-3. **Producer wires.** `Streamer` port type, `const` producer nodes,
-   derived `where` and `order` nodes, stream factories on pulled values.
-   Tests: independence of derived streams, cardinality metadata.
+3. **Producer wires.** Done. `StreamerValue` in the comprehension
+   module is the reflected value; the `streamer` node in the library
+   materializes it as a `const` wire; `ForSourceKind::Derived` parses
+   `for base where ... order ...` and `resolve_source` applies the filter
+   and order to the base producer's AST, so derivations chain and
+   traversals over them resolve their elements. Interpolating a producer
+   renders its `for` text. Tests in `tests/for_producers.rs` cover the
+   const wire and its value, stream independence, `where` and `order`
+   derivations, chaining, traversal over a derivation, error cases, and
+   cardinality metadata.
 4. **Activation runtime.** `TraversalStream`, `Activation`, cursor
    narrowing moved from the nmbrs executor, `cycles` iteration, `seek`.
    Tests: T1 across two hosts of the same program, T2 by counting node

@@ -246,9 +246,28 @@ fn for_source_from_text(text: &str, span: Span, allow_producer: bool) -> Result<
             return Ok(ForSource { text: text.to_string(), kind: ForSourceKind::Producer(text.to_string()), span });
         }
         return Err(format!(
-            "`for {text}` at line {}, col {}: a producer expression needs comprehension text such as `k in 1..10`",
+            "`for {text}` at line {}, col {}: a producer expression needs comprehension text such as `k in 1..10`, \
+             or a derivation such as `{text} where {{k}} > 1` or `{text} order halton/5`",
             span.line, span.col
         ));
+    }
+    // A derivation: `<producer> [where <pred>] [order <spec>]`. The
+    // head is a bare identifier and the text has no `in` clause.
+    {
+        use crate::iteration::comprehension::parse::{split_at_order, split_at_where};
+        let (head, order) = split_at_order(text);
+        let (base, filter) = split_at_where(&head);
+        let base = base.trim();
+        let base_is_ident = !base.is_empty()
+            && base.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+            && base.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+        if base_is_ident && (filter.is_some() || order.is_some()) {
+            return Ok(ForSource {
+                text: text.to_string(),
+                kind: ForSourceKind::Derived { base: base.to_string(), filter, order },
+                span,
+            });
+        }
     }
     let legacy = crate::iteration::comprehension::parse::parse_comprehension_text(text)
         .map_err(|e| format!("`for {text}` at line {}, col {}: {e}", span.line, span.col))?;

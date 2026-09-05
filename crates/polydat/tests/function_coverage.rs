@@ -2108,6 +2108,10 @@ fn every_registered_function_compiles() {
     // (derived from `cycle == const`) and two U64 values.
     overrides.insert("pick",
         "input cycle: u64\nout := pick(cycle == 0, cycle == 1, 100, 200)".into());
+    // SRD 113: `streamer` takes comprehension text (or the compiler's
+    // JSON payload); the generic string example is neither.
+    overrides.insert("streamer",
+        "input cycle: u64\nout := streamer(\"k in 1..4, limit in 10,20,30\")".into());
 
     // Vectordata nodes (category RealData) require downloaded datasets —
     // tested separately in vectordata_integration.rs. Skip here to avoid

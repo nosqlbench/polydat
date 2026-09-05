@@ -281,6 +281,7 @@ fn collect_for_forms(stmts: &[Statement], out: &mut Vec<Expected>) {
             Statement::For(f) => {
                 match &f.source.kind {
                     ForSourceKind::Producer(p) => out.push(Expected::TraversalOverProducer { producer: p.clone() }),
+                    ForSourceKind::Derived { base, .. } => out.push(Expected::TraversalOverProducer { producer: base.clone() }),
                     ForSourceKind::Comprehension(_) => out.push(Expected::Traversal { names: f.source.element_names() }),
                 }
                 collect_for_forms(&f.body, out);

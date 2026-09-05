@@ -17,10 +17,13 @@ use std::sync::Arc;
 
 use crate::ast::PortType;
 use crate::iteration::comprehension::source::{LiteralValue, Source};
-use crate::iteration::comprehension::Comprehension;
+use crate::iteration::comprehension::{Comprehension, StreamerValue};
 use crate::kernel::PolydatProgram;
 
-use super::ast::{Expr, ExternPort, ForSource, ForSourceKind, ForStmt, InputDecl, PolydatFile, Statement};
+use super::ast::{
+    Arg, Binding, BindingModifier, CallExpr, Expr, ExternPort, ForSource, ForSourceKind, ForStmt, InputDecl,
+    PolydatFile, Statement,
+};
 use super::lexer::Span;
 
 /// A compiled traversal: one `for` statement and the child program its
@@ -56,54 +59,97 @@ pub struct Producer {
 /// Split a parsed file into the statements the parent compiles directly,
 /// the `for` statements to lower into child programs, and the producer
 /// bindings to record. Order within each group is preserved.
-pub fn strip_for_forms(file: &PolydatFile) -> (PolydatFile, Vec<ForStmt>, Vec<Producer>) {
+///
+/// Producer bindings stay in the parent as `const name := streamer(...)`
+/// calls carrying the resolved comprehension, so the wire exists with a
+/// `Streamer` value on it (SRD 113 §3.1). Derivations resolve against
+/// producers bound earlier in the file, in document order.
+pub fn strip_for_forms(file: &PolydatFile) -> Result<(PolydatFile, Vec<ForStmt>, Vec<Producer>), String> {
     let mut parent = Vec::with_capacity(file.statements.len());
     let mut fors = Vec::new();
-    let mut producers = Vec::new();
+    let mut producers: Vec<Producer> = Vec::new();
     for stmt in &file.statements {
         match stmt {
             Statement::For(f) => fors.push(f.clone()),
             Statement::Binding(b) if matches!(b.value, Expr::For(_)) => {
                 let Expr::For(source) = &b.value else { unreachable!() };
-                let ForSourceKind::Comprehension(comprehension) = &source.kind else {
-                    // The parser only builds producer expressions from
-                    // comprehension text; a producer reference here is
-                    // unreachable, but stay total.
-                    parent.push(stmt.clone());
-                    continue;
-                };
+                let comprehension = resolve_source(source, &producers)?;
+                let name = b.targets.join(",");
+                let value = StreamerValue::new(source.text.clone(), comprehension.clone());
+                parent.push(Statement::Binding(Binding {
+                    targets: b.targets.clone(),
+                    value: Expr::Call(CallExpr {
+                        func: "streamer".into(),
+                        args: vec![Arg::Positional(Expr::StringLit(value.to_json(), b.span))],
+                        span: b.span,
+                    }),
+                    modifier: BindingModifier::CONST,
+                    type_annotation: None,
+                    span: b.span,
+                }));
                 producers.push(Producer {
-                    name: b.targets.join(","),
+                    name,
                     span: b.span,
                     source_text: source.text.clone(),
-                    comprehension: comprehension.clone(),
+                    comprehension,
                 });
             }
             other => parent.push(other.clone()),
         }
     }
-    (PolydatFile { statements: parent }, fors, producers)
+    Ok((PolydatFile { statements: parent }, fors, producers))
 }
 
-/// Resolve a traversal's source to a comprehension, following a producer
-/// reference to the producer bound in the same scope.
-pub fn resolve_source<'a>(source: &'a ForSource, producers: &'a [Producer]) -> Result<&'a Comprehension, String> {
-    match &source.kind {
-        ForSourceKind::Comprehension(c) => Ok(c),
-        ForSourceKind::Producer(name) => producers
+/// Resolve a traversal's source to a comprehension: inline text as is, a
+/// producer reference to the producer bound in the same scope, and a
+/// derivation to the base producer with its filter and order applied.
+pub fn resolve_source(source: &ForSource, producers: &[Producer]) -> Result<Comprehension, String> {
+    let find = |name: &str| -> Result<Comprehension, String> {
+        producers
             .iter()
             .rev()
-            .find(|p| &p.name == name)
-            .map(|p| &p.comprehension)
+            .find(|p| p.name == name)
+            .map(|p| p.comprehension.clone())
             .ok_or_else(|| {
                 let known: Vec<&str> = producers.iter().map(|p| p.name.as_str()).collect();
                 format!(
-                    "`for {name}` at line {}, col {}: no producer named '{name}' is bound in this scope{}",
+                    "`for {}` at line {}, col {}: no producer named '{name}' is bound in this scope{}",
+                    source.text,
                     source.span.line,
                     source.span.col,
                     if known.is_empty() { String::new() } else { format!("; producers here: {}", known.join(", ")) }
                 )
-            }),
+            })
+    };
+    match &source.kind {
+        ForSourceKind::Comprehension(c) => Ok(c.clone()),
+        ForSourceKind::Producer(name) => find(name),
+        ForSourceKind::Derived { base, filter, order } => {
+            let mut c = find(base)?;
+            if let Some(pred) = filter {
+                c = Comprehension::filter(c, pred.clone());
+            }
+            if let Some(spec) = order {
+                let (strategy, truncation) = parse_order(spec).map_err(|e| format!(
+                    "`for {}` at line {}, col {}: {e}", source.text, source.span.line, source.span.col
+                ))?;
+                c = Comprehension::order(c, strategy, truncation);
+            }
+            Ok(c)
+        }
+    }
+}
+
+/// Parse an `order` spec such as `halton/5` into the algebra's strategy
+/// and truncation by running it through the comprehension parser on a
+/// one-clause carrier.
+fn parse_order(spec: &str) -> Result<(crate::iteration::comprehension::StrategyName, Option<u64>), String> {
+    let carrier = format!("__o in 0..1 order {spec}");
+    let legacy = crate::iteration::comprehension::parse::parse_comprehension_text(&carrier)?;
+    let algebra = crate::iteration::comprehension::spec::legacy_to_algebra(&legacy).map_err(|e| e.to_string())?;
+    match algebra {
+        Comprehension::Order { strategy, truncation, .. } => Ok((strategy, truncation)),
+        other => Err(format!("order spec `{spec}` did not produce an ordering (got {other:?})")),
     }
 }
 

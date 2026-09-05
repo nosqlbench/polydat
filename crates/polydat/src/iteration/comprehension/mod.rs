@@ -83,6 +83,8 @@ pub mod validate;
 pub mod ast_legacy;
 pub mod eval;
 pub mod parse;
+pub mod streamer_value;
+pub use streamer_value::StreamerValue;
 
 // --- Canonical algebra re-exports — `polydat::iteration::comprehension::Comprehension`
 // resolves to the algebra type; same for Source, ZipMode, etc.
