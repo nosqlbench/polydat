@@ -85,13 +85,14 @@ fn pp_tile(t: &TileDef) -> String {
     if !opts.is_empty() {
         out.push_str(&format!(" ({})", opts.join(", ")));
     }
+    // A tile binds a wire: `:=` precedes every body form.
     match t.body_kind {
         TileBodyKind::Block => {
-            out.push(' ');
+            out.push_str(" := ");
             out.push_str(&t.body);
         }
         TileBodyKind::Heredoc => {
-            out.push_str(" <<<\n");
+            out.push_str(" := <<<\n");
             out.push_str(&t.body);
             out.push_str("\n>>>");
         }

@@ -77,24 +77,32 @@ Extends [Grammar](grammar.md) §2.
 statement   ::= ...existing...
              |  tile_def
 
-tile_def    ::= "tile" ident (":" encoding)? options? (":=")? tile_body
-                                                       (* `:=` is required before a string body *)
-encoding    ::= "json" | "text" | "csv"                (* extensible *)
+tile_def    ::= "tile" ident (":" encoding)? options? ":=" tile_body
+encoding    ::= "json" | "text" | "csv"                (* extensible; default text *)
 options     ::= "(" option ("," option)* ")"
 option      ::= "delims" string string                  (* hole delimiters *)
              |  "sigil" string                          (* directive prefix *)
              |  "strict"
+             |  "instring"
 
 tile_body   ::= json_block                              (* json: balanced { } or [ ] *)
              |  heredoc                                 (* <<< ... >>> *)
              |  string_literal                          (* one-line tiles *)
 ```
 
-The lexer captures a tile body raw, as it does the text after `for`. A
-`json` body is a brace- or bracket-balanced block, string-aware, so the
-template is written in JSON's own syntax. A heredoc body is everything
-between `<<<` and `>>>` and suits any encoding. A string-literal body is
-an ordinary Polydat string and suits short tiles.
+A tile statement has the shape of every other wire binding in the
+grammar, `modifier name : type := value`: `tile` is the modifier, the
+encoding is the type of the document that flows on the wire (its port
+type is `Str`), and `:=` binds the wire, so `${doc!}` in another tile
+and `f(doc)` in a binding read it as they read any wire. The encoding
+defaults to `text`, so `tile greeting := "..."` is the whole statement
+for a one-line text tile.
+
+The lexer captures a tile body raw after `:=`, as it does the text
+after `for`. A `json` body is a brace- or bracket-balanced block,
+string-aware, so the template is written in JSON's own syntax. A heredoc
+body is everything between `<<<` and `>>>` and suits any encoding. A
+string-literal body is an ordinary Polydat string and suits short tiles.
 
 ### 2.2 Template grammar
 
@@ -148,7 +156,7 @@ Both are overridable per tile (§2.3) and per host (§5).
 Examples:
 
 ```text
-tile reading : json {
+tile reading : json := {
     "meta": { "schema": 3, "source": "polydat", "units": { "temp": "C", "rh": "%" } },
     "tenant": ${tenant_id},
     "device": "${device_id}",
@@ -157,7 +165,7 @@ tile reading : json {
     "status": "${status}"
 }
 
-tile load : text <<<
+tile load := <<<
 INSERT INTO ${keyspace}.${table} (tenant_id, device_id, ts, doc)
 VALUES (${tenant_id}, '${device_id}', ${ts}, '${reading!}')
 >>>
@@ -176,7 +184,7 @@ whose values are strings, a JSON config, a shell here-doc, a CQL string
 that another tool also expands, a Jinja or Handlebars page. Four rules
 make a tile portable into those places.
 
-1. **Delimiters are declarable.** `tile t : text (delims "<%" "%>")`
+1. **Delimiters are declarable.** `tile t (delims "<%" "%>")`
    uses `<%expr%>` for holes; `(sigil "#")` uses `#for` and `#if`. A
    host may also set defaults for every tile it passes in (§5). The
    canonical defaults are `${`, `}`, and `@`, chosen because they are
@@ -590,7 +598,7 @@ with `kind` and `flagged` members added:
 ```
 
 ```text
-tile doc : json {
+tile doc : json := {
     "meta": { "schema": 3, "source": "polydat", "units": { "temp": "C", "rh": "%" } },
     "tenant": ${tenant_id},
     "device": "${device_id}",
@@ -599,7 +607,7 @@ tile doc : json {
     "samples": [ @for s in 0..4 { { "n": ${s}, "temp": ${temp_c + s | .2} } } ]
 }
 
-tile load : text <<<
+tile load := <<<
 INSERT INTO ${keyspace}.${table} (tenant_id, device_id, ts, doc)
 VALUES (${tenant_id}, '${device_id}', ${ts}, '${doc!}')
 >>>
@@ -617,8 +625,9 @@ a handful of integer and float encodes, and a four-tuple loop.
 ## 12. Implementation plan
 
 1. **Grammar.** Done. `TokenKind::Tile` and a raw `TileBody` token
-   captured by the lexer for block and heredoc bodies, with `:=`
-   optional before them; `Statement::Tile(TileDef)` carrying the
+   captured by the lexer for block and heredoc bodies after `:=`, which
+   every body form requires since a tile binds a wire;
+   `Statement::Tile(TileDef)` carrying the
    encoding, options, raw body, and parsed pieces; `dsl::tile` parsing
    holes with declared type, format, and raw flag, projections with
    separators, branches, splices as bare-name holes, the doubled-open

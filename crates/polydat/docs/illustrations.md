@@ -499,7 +499,7 @@ deciding how each hole is written.
 let mut kernel = compile_polydat(r#"
     input cycle: u64
     base := cycle * 100
-    tile samples : json {
+    tile samples : json := {
         "base": ${base},
         "points": [ @for i in 0..3 { {"i": ${i}, "v": ${base + i}} } ]
     }

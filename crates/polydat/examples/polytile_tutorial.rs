@@ -25,7 +25,7 @@ fn main() {
         r#"
             input cycle: u64
             user_id := mod(hash(cycle), 1000000)
-            tile greeting : text := "user ${user_id} on cycle ${cycle}"
+            tile greeting := "user ${user_id} on cycle ${cycle}"
         "#,
         &[0, 1],
         &["greeting"],
@@ -38,7 +38,7 @@ fn main() {
             user_id := mod(hash(cycle), 1000000)
             name    := "user-{user_id}"
             score   := unit_interval(hash(cycle)) * 100.0
-            tile doc : json {
+            tile doc : json := {
                 "meta": { "schema": 3, "source": "polydat", "units": { "score": "pct" } },
                 "id": ${user_id},
                 "name": ${name},
@@ -55,7 +55,7 @@ fn main() {
         r#"
             input cycle: u64
             flag := u64_gt(mod(cycle, 2), 0)
-            tile typed : json {"n": ${cycle}, "as_text": ${cycle: str}, "hex": "${cycle | x}", "odd": ${flag: bool}, "padded": "${cycle | 04}"}
+            tile typed : json := {"n": ${cycle}, "as_text": ${cycle: str}, "hex": "${cycle | x}", "odd": ${flag: bool}, "padded": "${cycle | 04}"}
         "#,
         &[10, 255],
         &["typed"],
@@ -77,7 +77,7 @@ fn main() {
         r#"
             input cycle: u64
             hot := u64_gt(mod(cycle, 3), 1)
-            tile status : json {"cycle": ${cycle}, "state": @if hot { "hot" } @else { "cold" }}
+            tile status : json := {"cycle": ${cycle}, "state": @if hot { "hot" } @else { "cold" }}
         "#,
         &[0, 1, 2],
         &["status"],
@@ -89,7 +89,7 @@ fn main() {
             input cycle: u64
             base := cycle * 100
             axes := for k in 1..3, side in left,right
-            tile samples : json {
+            tile samples : json := {
                 "base": ${base},
                 "points": [ @for i in 0..3 { {"i": ${i}, "v": ${base + i}} } ],
                 "grid": "@for axes sep \"; \" {${k}-${side}}"
@@ -105,7 +105,7 @@ fn main() {
             input cycle: u64
             base := cycle * 10
             ks := for k in 1..7
-            tile grid : json {
+            tile grid : json := {
                 "rows": [ @for r in 0..2 { {"r": ${r}, "cells": [ @for c in 0..3 { ${base + r * 10 + c} } ]} } ],
                 "big": [ @for ks where {k} > 4 { ${k} } ],
                 "sampled": [ @for k in 1..100 order halton/4 { ${k} } ],
@@ -120,9 +120,9 @@ fn main() {
         "7. Splicing one tile into another",
         r#"
             input cycle: u64
-            tile inner : json {"n": ${cycle}, "double": ${cycle * 2}}
-            tile outer : json {"first": ${inner}, "second": ${inner}, "wrapped": true}
-            tile stmt  : text := "INSERT INTO docs (id, body) VALUES (${cycle}, '${outer!}')"
+            tile inner : json := {"n": ${cycle}, "double": ${cycle * 2}}
+            tile outer : json := {"first": ${inner}, "second": ${inner}, "wrapped": true}
+            tile stmt := "INSERT INTO docs (id, body) VALUES (${cycle}, '${outer!}')"
         "#,
         &[5],
         &["outer", "stmt"],
@@ -132,7 +132,7 @@ fn main() {
         "8. Custom delimiters for a template that lives inside another template",
         r##"
             input cycle: u64
-            tile page : text (delims "<%" "%>", sigil "#") := "Hello {{ user.name }}, cycle <%cycle%> #if cycle { is live } #else { is zero }"
+            tile page (delims "<%" "%>", sigil "#") := "Hello {{ user.name }}, cycle <%cycle%> #if cycle { is live } #else { is zero }"
         "##,
         &[0, 3],
         &["page"],

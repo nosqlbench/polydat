@@ -76,7 +76,7 @@ for flow {
     // are wires: numbers render bare and strings quoted by their types,
     // the `meta` arm is one static copy, and `samples` repeats its body
     // over a comprehension. The tile is a wire like any other.
-    tile doc : json {
+    tile doc : json := {
         "meta": { "schema": 3, "source": "polydat", "units": { "temp": "C", "rh": "%" } },
         "tenant": ${tenant_id},
         "device": ${device_id},
@@ -90,7 +90,7 @@ for flow {
     // ---- Test flow ----------------------------------------------------
 
     // The load statement carries the document raw: it is already JSON.
-    tile load : text <<<
+    tile load := <<<
 INSERT INTO ${keyspace}.${table} (tenant_id, device_id, ts, doc) VALUES (${tenant_id}, '${device_id}', ${ts}, '${doc!}')
 >>>
     read_stmt   := "SELECT doc FROM {keyspace}.{table} WHERE tenant_id = {tenant_id} AND device_id = '{device_id}' AND ts = {ts}"

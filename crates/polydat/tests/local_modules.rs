@@ -42,7 +42,7 @@ fn a_local_module_shadows_a_library_node_of_the_same_name() {
 fn a_local_module_with_a_tile_resolves_too() {
     let src = "input cycle: u64\n\
         card(n: u64) -> (doc: String) := {\n\
-            tile doc : json {\"n\": ${n}, \"twice\": ${n * 2}}\n\
+            tile doc : json := {\"n\": ${n}, \"twice\": ${n * 2}}\n\
         }\n\
         d := card(cycle + 1)\n";
     let mut k = compile_polydat(src).unwrap();

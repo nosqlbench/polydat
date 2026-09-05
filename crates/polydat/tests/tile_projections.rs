@@ -56,7 +56,7 @@ fn generator_call_sources_compile_to_wires_of_the_scope() {
     }
     // The element type reached the encoder: numbers are bare in json,
     // and the generator combines with other clauses.
-    let src = "input cycle: u64\ntile t : json {\"g\": [@for g in hash_range(cycle, 10), i in 0..2 { {\"g\": ${g}, \"i\": ${i}} }]}\n";
+    let src = "input cycle: u64\ntile t : json := {\"g\": [@for g in hash_range(cycle, 10), i in 0..2 { {\"g\": ${g}, \"i\": ${i}} }]}\n";
     let doc: serde_json::Value = serde_json::from_str(&render(src, 1, "t")).unwrap();
     assert_eq!(doc["g"].as_array().unwrap().len(), 2, "{doc}");
     assert!(doc["g"][0]["g"].is_number(), "{doc}");
@@ -109,7 +109,7 @@ fn continuous_sources_sample_with_an_order_count() {
 #[test]
 fn nested_projection_in_a_json_value_position() {
     let src = "input cycle: u64\nbase := cycle * 10\n\
-        tile grid : json {\"rows\": [@for r in 0..2 { {\"r\": ${r}, \"cells\": [@for c in 0..3 { ${base + r * 10 + c} }]} }]}\n";
+        tile grid : json := {\"rows\": [@for r in 0..2 { {\"r\": ${r}, \"cells\": [@for c in 0..3 { ${base + r * 10 + c} }]} }]}\n";
     assert_eq!(
         render(src, 1, "grid"),
         "{\"rows\": [{\"r\": 0, \"cells\": [10,11,12]},{\"r\": 1, \"cells\": [20,21,22]}]}"
@@ -155,7 +155,7 @@ fn nested_projection_inside_a_string_position_escapes_as_text() {
     // string, so its holes escape as text and the outer string stays one
     // string value.
     let src = "input cycle: u64\nq := \"say \\\"hi\\\"\"\n\
-        tile t : json {\"rows\": [@for r in 0..2 { {\"s\": \"r${r}: @for c in 0..2 sep \\\"; \\\" {${c}=${q}}\"} }]}\n";
+        tile t : json := {\"rows\": [@for r in 0..2 { {\"s\": \"r${r}: @for c in 0..2 sep \\\"; \\\" {${c}=${q}}\"} }]}\n";
     assert_eq!(
         render(src, 0, "t"),
         "{\"rows\": [{\"s\": \"r0: 0=say \\\"hi\\\"; 1=say \\\"hi\\\"\"},{\"s\": \"r1: 0=say \\\"hi\\\"; 1=say \\\"hi\\\"\"}]}"
@@ -197,7 +197,7 @@ fn values_cross_into_bodies_as_themselves() {
     // A JSON wire cascaded into a body renders serialized, not as a
     // quoted string of its text; an f64 keeps its value.
     let src = "input cycle: u64\nj := str_to_json(\"{\\\"k\\\": [1, 2]}\")\nf := to_f64(cycle) / 3.0\n\
-        tile t : json {\"xs\": [@for i in 0..2 { {\"i\": ${i}, \"j\": ${j}, \"f\": ${f | .4}} }]}\n";
+        tile t : json := {\"xs\": [@for i in 0..2 { {\"i\": ${i}, \"j\": ${j}, \"f\": ${f | .4}} }]}\n";
     assert_eq!(
         render(src, 1, "t"),
         "{\"xs\": [{\"i\": 0, \"j\": {\"k\":[1,2]}, \"f\": 0.3333},{\"i\": 1, \"j\": {\"k\":[1,2]}, \"f\": 0.3333}]}"
@@ -208,7 +208,7 @@ fn values_cross_into_bodies_as_themselves() {
 fn list_valued_generators_contribute_one_tuple_per_item() {
     // A JSON array from a node call is a list source: one tuple per
     // element, each carrying its own JSON kind.
-    let src = "input cycle: u64\nlist := str_to_json(\"[3, 4.5, true, \\\"x\\\"]\")\ntile t : json {\"g\": [@for g in list { ${g} }]}\n";
+    let src = "input cycle: u64\nlist := str_to_json(\"[3, 4.5, true, \\\"x\\\"]\")\ntile t : json := {\"g\": [@for g in list { ${g} }]}\n";
     assert_eq!(render(src, 3, "t"), "{\"g\": [3,4.5,true,\"x\"]}");
     // `json_array` receives its arguments as text, so its items are strings.
     let src = "input cycle: u64\ntile t : text := \"@for g in json_array(\\\"a\\\", \\\"b\\\") sep \\\"-\\\" {${g}}\"\n";

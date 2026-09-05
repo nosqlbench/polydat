@@ -23,7 +23,7 @@ fn text_tile_with_holes_and_a_raw_hole() {
 #[test]
 fn json_tile_encodes_by_wire_type_and_position() {
     let src = "input cycle: u64\nlabel := \"q\\\"uote\"\nflag := u64_gt(cycle, 3)\nratio := to_f64(cycle) / 3.0\n\
-               tile doc : json {\"id\": ${cycle}, \"label\": ${label}, \"inline\": \"v-${label}\", \"ratio\": ${ratio | .2}, \"flag\": ${flag: bool}, \"meta\": {\"schema\": 3, \"units\": {\"t\": \"C\"}}}\n";
+               tile doc : json := {\"id\": ${cycle}, \"label\": ${label}, \"inline\": \"v-${label}\", \"ratio\": ${ratio | .2}, \"flag\": ${flag: bool}, \"meta\": {\"schema\": 3, \"units\": {\"t\": \"C\"}}}\n";
     assert_eq!(
         render(src, 5, "doc"),
         "{\"id\": 5, \"label\": \"q\\\"uote\", \"inline\": \"v-q\\\"uote\", \"ratio\": 1.67, \"flag\": true, \"meta\": {\"schema\": 3, \"units\": {\"t\": \"C\"}}}"
@@ -36,7 +36,7 @@ fn json_tile_encodes_by_wire_type_and_position() {
 
 #[test]
 fn declared_type_wins_over_wire_type() {
-    let src = "input cycle: u64\ntile t : json {\"as_text\": ${cycle: str}, \"as_num\": ${cycle}}\n";
+    let src = "input cycle: u64\ntile t : json := {\"as_text\": ${cycle: str}, \"as_num\": ${cycle}}\n";
     assert_eq!(render(src, 9, "t"), "{\"as_text\": \"9\", \"as_num\": 9}");
 }
 
@@ -61,7 +61,7 @@ fn branches_select_by_condition() {
 
 #[test]
 fn projection_over_an_inline_comprehension_with_element_and_outer_wires() {
-    let src = "input cycle: u64\nbase := cycle * 100\ntile t : json {\"samples\": [@for s in 0..3 {{\"n\": ${s}, \"v\": ${base + s}}}]}\n";
+    let src = "input cycle: u64\nbase := cycle * 100\ntile t : json := {\"samples\": [@for s in 0..3 {{\"n\": ${s}, \"v\": ${base + s}}}]}\n";
     assert_eq!(render(src, 2, "t"), "{\"samples\": [{\"n\": 0, \"v\": 200},{\"n\": 1, \"v\": 201},{\"n\": 2, \"v\": 202}]}");
     let parsed: serde_json::Value = serde_json::from_str(&render(src, 2, "t")).unwrap();
     assert_eq!(parsed["samples"].as_array().unwrap().len(), 3);
@@ -75,19 +75,19 @@ fn projection_over_a_producer_with_a_separator_and_two_elements() {
 
 #[test]
 fn projection_inside_a_string_position_escapes() {
-    let src = "input cycle: u64\ntile t : json {\"list\": \"@for w in x,y sep \\\"|\\\" {${w}}\"}\n";
+    let src = "input cycle: u64\ntile t : json := {\"list\": \"@for w in x,y sep \\\"|\\\" {${w}}\"}\n";
     assert_eq!(render(src, 0, "t"), "{\"list\": \"x|y\"}");
 }
 
 #[test]
 fn splicing_inlines_an_earlier_tile() {
-    let src = "input cycle: u64\ntile inner : json {\"n\": ${cycle}}\ntile outer : json {\"wrapped\": ${inner}, \"again\": ${inner}}\n";
+    let src = "input cycle: u64\ntile inner : json := {\"n\": ${cycle}}\ntile outer : json := {\"wrapped\": ${inner}, \"again\": ${inner}}\n";
     assert_eq!(render(src, 4, "outer"), "{\"wrapped\": {\"n\": 4}, \"again\": {\"n\": 4}}");
 }
 
 #[test]
 fn a_tile_is_an_ordinary_wire() {
-    let src = "input cycle: u64\ntile doc : json {\"n\": ${cycle}}\nstmt := \"INSERT doc '{doc}'\"\nup := str_upper(doc)\n";
+    let src = "input cycle: u64\ntile doc : json := {\"n\": ${cycle}}\nstmt := \"INSERT doc '{doc}'\"\nup := str_upper(doc)\n";
     let mut k = compile_polydat(src).unwrap();
     k.set_inputs(&[3]);
     assert_eq!(k.pull("stmt").as_str(), "INSERT doc '{\"n\": 3}'");
@@ -97,7 +97,7 @@ fn a_tile_is_an_ordinary_wire() {
 
 #[test]
 fn a_tile_without_holes_is_a_constant() {
-    let src = "input cycle: u64\ntile fixed : json {\"schema\": 3}\n";
+    let src = "input cycle: u64\ntile fixed : json := {\"schema\": 3}\n";
     let k = compile_polydat(src).unwrap();
     assert!(k.program().const_outputs().contains(&"fixed"));
 }
@@ -124,10 +124,10 @@ fn unknown_wire_in_a_hole_is_a_compile_error_naming_the_tile() {
 fn splicing_across_encodings_keeps_the_inner_encoding() {
     // A json tile carried inside a text tile renders as json: its
     // strings stay quoted and its projection keeps the `,` separator.
-    let src = "input cycle: u64\nword := \"ok\"\ntile doc : json {\"w\": ${word}, \"xs\": [@for i in 0..2 { ${i} }]}\ntile stmt : text := \"INSERT ${cycle} '${doc!}'\"\n";
+    let src = "input cycle: u64\nword := \"ok\"\ntile doc : json := {\"w\": ${word}, \"xs\": [@for i in 0..2 { ${i} }]}\ntile stmt : text := \"INSERT ${cycle} '${doc!}'\"\n";
     assert_eq!(render(src, 3, "stmt"), "INSERT 3 '{\"w\": \"ok\", \"xs\": [0,1]}'");
     // Without `!` the inner text is a string value of the outer encoding.
-    let src = "input cycle: u64\ntile inner : text := \"a \\\"b\\\"\"\ntile outer : json {\"body\": ${inner}}\n";
+    let src = "input cycle: u64\ntile inner : text := \"a \\\"b\\\"\"\ntile outer : json := {\"body\": ${inner}}\n";
     assert_eq!(render(src, 3, "outer"), "{\"body\": \"a \\\"b\\\"\"}");
 }
 

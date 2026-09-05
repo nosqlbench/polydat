@@ -97,7 +97,7 @@ for flow {
     // are wires: numbers render bare and strings quoted by their types,
     // the `meta` arm is one static copy, and `samples` repeats its body
     // over a comprehension. The tile is a wire like any other.
-    tile doc : json {
+    tile doc : json := {
         "meta": { "schema": 3, "source": "polydat", "units": { "temp": "C", "rh": "%" } },
         "tenant": ${tenant_id},
         "device": ${device_id},
@@ -111,7 +111,7 @@ for flow {
     // ---- Test flow ----------------------------------------------------
 
     // The load statement carries the document raw: it is already JSON.
-    tile load : text <<<
+    tile load := <<<
 INSERT INTO ${keyspace}.${table} (tenant_id, device_id, ts, doc) VALUES (${tenant_id}, '${device_id}', ${ts}, '${doc!}')
 >>>
     read_stmt   := "SELECT doc FROM {keyspace}.{table} WHERE tenant_id = {tenant_id} AND device_id = '{device_id}' AND ts = {ts}"
@@ -138,8 +138,8 @@ INSERT INTO ${keyspace}.${table} (tenant_id, device_id, ts, doc) VALUES (${tenan
 | `mixed_radix(row, 20, 50, 0)` | Hierarchy | Unwinds one ordinal into tenant, device, and reading. The trailing `0` leaves readings unbounded. |
 | `hashed_id`, `normal_sample`, `uniform_sample` | Standard library | Modules from the embedded `.polydat` library, called with named arguments. |
 | `"... {expr} ..."` | String interpolation | The schema, read, and verify statements are ordinary bindings that embed typed wires. |
-| `tile doc : json { ... }` | Tile | The reading as a JSON document. Holes are wires: `u64` and `f64` render bare, `Str` quoted, `${flagged: bool}` as a boolean; `\| .2` is a format; the `meta` arm is one static copy; `@for s in 0..4` repeats its body over a comprehension. |
-| `tile load : text <<< ... >>>` | Tile carrying a tile | The load statement, with the document inlined raw through `${doc!}`. Both tiles are wires like any other. |
+| `tile doc : json := { ... }` | Tile | The reading as a JSON document. Holes are wires: `u64` and `f64` render bare, `Str` quoted, `${flagged: bool}` as a boolean; `\| .2` is a format; the `meta` arm is one static copy; `@for s in 0..4` repeats its body over a comprehension. |
+| `tile load := <<< ... >>>` | Tile carrying a tile | The load statement, with the document inlined raw through `${doc!}`. Both tiles are wires like any other. |
 | `select_str(str_eq(phase, "load"), ...)` | Phase selection | The statement an activation executes follows its `phase` element. |
 
 ## Running it

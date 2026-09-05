@@ -285,11 +285,18 @@ fn parse_tile(p: &mut Parser) -> Result<Statement, String> {
         }
         p.expect(&TokenKind::RParen)?;
     }
-    // `:=` is required before a string body and optional before a block
-    // or heredoc, which the lexer captured as a body token already.
-    if matches!(p.peek(), TokenKind::ColonEq) {
-        p.advance();
+    // A tile binds a wire, so `:=` precedes every body form; the lexer
+    // captures a block or heredoc body right after it.
+    if !matches!(p.peek(), TokenKind::ColonEq) {
+        return Err(format!(
+            "tile '{name}' at line {}, col {}: expected `:=` before the body; a tile binds a wire, \
+             as in `tile {name} : json := {{ ... }}` or `tile {name} := \"...\"`, got {:?}",
+            span.line,
+            span.col,
+            p.peek()
+        ));
     }
+    p.advance();
     let (body_kind, body) = match p.peek().clone() {
         TokenKind::TileBody(text, kind) => {
             p.advance();

@@ -41,7 +41,7 @@ fn a_tile_inside_a_module_body_inlines_with_the_call() {
         "input cycle: u64\n\
          make_card(n: u64, label: String) -> (doc: String) := {\n\
              twice := n * 2\n\
-             tile doc : json {\"n\": ${n}, \"twice\": ${twice}, \"label\": ${label}, \"big\": @if n > 5 { true } @else { false }}\n\
+             tile doc : json := {\"n\": ${n}, \"twice\": ${twice}, \"label\": ${label}, \"big\": @if n > 5 { true } @else { false }}\n\
          }\n\
          first := make_card(cycle, \"one\")\n\
          second := make_card(cycle + 10, \"two\")\n",
@@ -91,7 +91,7 @@ fn a_module_tile_projection_reads_module_wires() {
 fn the_compile_log_describes_each_tile_skeleton() {
     let mut log = CompileEventLog::default();
     let src = "input cycle: u64\n\
-        tile doc : json {\"meta\": {\"schema\": 3}, \"n\": ${cycle}, \"xs\": [@for i in 0..2 { ${i} }], \"f\": @if cycle { 1 } @else { 0 }}\n";
+        tile doc : json := {\"meta\": {\"schema\": 3}, \"n\": ${cycle}, \"xs\": [@for i in 0..2 { ${i} }], \"f\": @if cycle { 1 } @else { 0 }}\n";
     compile_polydat_with_log(src, &mut log).unwrap();
     let shape = log
         .events()
@@ -138,7 +138,7 @@ fn run_binary(args: &[&str]) -> (bool, String, String) {
 
 #[test]
 fn the_binary_emits_a_tile_per_cycle() {
-    let path = write_temp("emit", "input cycle: u64\nn := cycle * 2\ntile doc : json {\"cycle\": ${cycle}, \"n\": ${n}}\n");
+    let path = write_temp("emit", "input cycle: u64\nn := cycle * 2\ntile doc : json := {\"cycle\": ${cycle}, \"n\": ${n}}\n");
     let (ok, stdout, stderr) = run_binary(&["run", path.to_str().unwrap(), "--cycles", "3", "--emit", "tile:doc", "-q"]);
     assert!(ok, "{stderr}");
     let lines: Vec<&str> = stdout.lines().filter(|l| !l.starts_with("DBG")).collect();

@@ -53,7 +53,7 @@ fn canonical(s: &str) -> serde_json::Value {
 
 #[test]
 fn structural_and_textual_forms_render_the_same_document() {
-    let src_text = format!("{PROGRAM}tile doc : json {TEXTUAL}\n");
+    let src_text = format!("{PROGRAM}tile doc : json := {TEXTUAL}\n");
     let src_struct = format!("{PROGRAM}doc := polytile_json(<<<\n{STRUCTURAL}\n>>>)\n");
     for cycle in [0u64, 3] {
         let a = render(&src_text, cycle, "doc");
@@ -150,7 +150,7 @@ fn pretty_printer_reproduces_a_host_tile_as_a_tile_statement() {
     let tokens = polydat::dsl::lexer::lex("input cycle: u64\ndoc := polytile_json(\"{\\\"n\\\": \\\"${cycle}\\\"}\")\n").unwrap();
     let file = polydat::dsl::parser::parse(tokens).unwrap();
     let printed = polydat::dsl::pprint::pp_file(&file);
-    assert!(printed.contains("tile doc : json {\"n\": ${cycle}}"), "{printed}");
+    assert!(printed.contains("tile doc : json := {\"n\": ${cycle}}"), "{printed}");
     // And the printed form compiles to the same output.
     assert_eq!(render(&printed, 9, "doc"), "{\"n\": 9}");
 }

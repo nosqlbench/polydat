@@ -30,13 +30,13 @@ fn err(src: &str) -> String {
 // §4.3 row: json, value position. The wire's type picks the JSON form.
 #[test]
 fn json_value_position_by_wire_type() {
-    let src = format!("{WIRES}tile d : json {{\"n\": ${{n}}, \"f\": ${{f | .2}}, \"s\": ${{s}}, \"t\": ${{t}}, \"j\": ${{j}}}}\n");
+    let src = format!("{WIRES}tile d : json := {{\"n\": ${{n}}, \"f\": ${{f | .2}}, \"s\": ${{s}}, \"t\": ${{t}}, \"j\": ${{j}}}}\n");
     assert_eq!(
         render(&src, 2, "d"),
         "{\"n\": 6, \"f\": 0.50, \"s\": \"a \\\"q\\\" b\", \"t\": 1, \"j\": {\"k\":[1,2]}}"
     );
     // A `u64` truth value stays a number unless declared `bool`.
-    let src = format!("{WIRES}tile d : json {{\"t\": ${{t: bool}}}}\n");
+    let src = format!("{WIRES}tile d : json := {{\"t\": ${{t: bool}}}}\n");
     assert_eq!(render(&src, 2, "d"), "{\"t\": true}");
     assert_eq!(render(&src, 0, "d"), "{\"t\": false}");
 }
@@ -44,14 +44,14 @@ fn json_value_position_by_wire_type() {
 // §4.3 row: json, inside a string literal. Any type renders as escaped text.
 #[test]
 fn json_string_position_renders_any_type_as_escaped_text() {
-    let src = format!("{WIRES}tile d : json {{\"all\": \"${{n}}|${{f | .1}}|${{s}}|${{t}}|${{j}}\"}}\n");
+    let src = format!("{WIRES}tile d : json := {{\"all\": \"${{n}}|${{f | .1}}|${{s}}|${{t}}|${{j}}\"}}\n");
     assert_eq!(render(&src, 2, "d"), "{\"all\": \"6|0.5|a \\\"q\\\" b|1|{\\\"k\\\":[1,2]}\"}");
 }
 
 // §4.3 row: json, object key. Text, escaped.
 #[test]
 fn json_object_key_is_text() {
-    let src = format!("{WIRES}tile d : json {{\"${{s}}\": ${{n}}, \"k-${{n}}\": true}}\n");
+    let src = format!("{WIRES}tile d : json := {{\"${{s}}\": ${{n}}, \"k-${{n}}\": true}}\n");
     assert_eq!(render(&src, 1, "d"), "{\"a \\\"q\\\" b\": 3, \"k-3\": true}");
 }
 
@@ -73,20 +73,20 @@ fn text_encoding_is_display_form() {
 // and the encoder sees a float, so a precision format applies.
 #[test]
 fn declared_type_widens_through_the_adapter_catalog() {
-    let src = "input cycle: u64\ntile d : json {\"w\": ${cycle: f64 | .1}, \"n\": ${cycle}}\n";
+    let src = "input cycle: u64\ntile d : json := {\"w\": ${cycle: f64 | .1}, \"n\": ${cycle}}\n";
     assert_eq!(render(src, 7, "d"), "{\"w\": 7.0, \"n\": 7}");
     // Declared str on a number is the display text, quoted in json.
-    let src = "input cycle: u64\ntile d : json {\"s\": ${cycle: str}}\n";
+    let src = "input cycle: u64\ntile d : json := {\"s\": ${cycle: str}}\n";
     assert_eq!(render(src, 7, "d"), "{\"s\": \"7\"}");
     // Declared json on a number serializes it as a JSON value.
-    let src = "input cycle: u64\ntile d : json {\"v\": ${cycle: json}}\n";
+    let src = "input cycle: u64\ntile d : json := {\"v\": ${cycle: json}}\n";
     assert_eq!(render(src, 7, "d"), "{\"v\": 7}");
 }
 
 // §4.1: string-to-number must be written explicitly.
 #[test]
 fn declared_type_unreachable_from_wire_type_is_an_error_naming_both() {
-    let e = err("input cycle: u64\ns := \"12\"\ntile d : json {\"n\": ${s: u64}}\n");
+    let e = err("input cycle: u64\ns := \"12\"\ntile d : json := {\"n\": ${s: u64}}\n");
     assert!(e.contains("tile 'd'"), "{e}");
     assert!(e.contains("hole `s: u64`"), "{e}");
     assert!(e.contains("str") && e.contains("u64"), "{e}");
@@ -95,7 +95,7 @@ fn declared_type_unreachable_from_wire_type_is_an_error_naming_both() {
     let e = err("input cycle: u64\nf := to_f64(cycle)\ntile d : text := \"${f: u64}\"\n");
     assert!(e.contains("f64") && e.contains("u64"), "{e}");
     // The explicit form compiles.
-    let src = "input cycle: u64\ns := \"12\"\ntile d : json {\"n\": ${s as u64}}\n";
+    let src = "input cycle: u64\ns := \"12\"\ntile d : json := {\"n\": ${s as u64}}\n";
     assert_eq!(render(src, 0, "d"), "{\"n\": 12}");
 }
 
@@ -115,14 +115,14 @@ fn a_producer_wire_cannot_fill_a_hole() {
 // §4.4: strict mode rejects the implicit adapter a declaration needs.
 #[test]
 fn strict_mode_rejects_implicit_adapters_at_holes() {
-    let e = err("input cycle: u64\ntile d : json (strict) {\"w\": ${cycle: f64}}\n");
+    let e = err("input cycle: u64\ntile d : json (strict) := {\"w\": ${cycle: f64}}\n");
     assert!(e.contains("strict mode rejects"), "{e}");
     assert!(e.contains("u64 -> f64"), "{e}");
     // The explicit conversion is accepted under strict.
-    let src = "input cycle: u64\ntile d : json (strict) {\"w\": ${to_f64(cycle) | .1}}\n";
+    let src = "input cycle: u64\ntile d : json (strict) := {\"w\": ${to_f64(cycle) | .1}}\n";
     assert_eq!(render(src, 3, "d"), "{\"w\": 3.0}");
     // A declaration that matches the wire type needs no adapter.
-    let src = "input cycle: u64\ntile d : json (strict) {\"n\": ${cycle: u64}}\n";
+    let src = "input cycle: u64\ntile d : json (strict) := {\"n\": ${cycle: u64}}\n";
     assert_eq!(render(src, 3, "d"), "{\"n\": 3}");
 }
 
@@ -130,7 +130,7 @@ fn strict_mode_rejects_implicit_adapters_at_holes() {
 #[test]
 fn projection_body_holes_are_typed_from_elements_and_outer_wires() {
     let src = "input cycle: u64\nlabel := \"L\"\n\
-        tile d : json {\"xs\": [@for k in 1..3, w in a,b { {\"k\": ${k}, \"w\": ${w}, \"l\": ${label}, \"kf\": ${k: f64 | .1}} }]}\n";
+        tile d : json := {\"xs\": [@for k in 1..3, w in a,b { {\"k\": ${k}, \"w\": ${w}, \"l\": ${label}, \"kf\": ${k: f64 | .1}} }]}\n";
     assert_eq!(
         render(src, 0, "d"),
         "{\"xs\": [{\"k\": 1, \"w\": \"a\", \"l\": \"L\", \"kf\": 1.0},{\"k\": 1, \"w\": \"b\", \"l\": \"L\", \"kf\": 1.0},{\"k\": 2, \"w\": \"a\", \"l\": \"L\", \"kf\": 2.0},{\"k\": 2, \"w\": \"b\", \"l\": \"L\", \"kf\": 2.0}]}"
@@ -141,7 +141,7 @@ fn projection_body_holes_are_typed_from_elements_and_outer_wires() {
 #[test]
 fn explain_events_report_wire_type_declaration_expectation_and_encoder() {
     let mut log = CompileEventLog::default();
-    let src = format!("{WIRES}tile d : json {{\"n\": ${{n}}, \"s\": \"x-${{s}}\", \"w\": ${{cycle: f64}}, \"b\": @if t {{ 1 }} @else {{ 0 }}}}\n");
+    let src = format!("{WIRES}tile d : json := {{\"n\": ${{n}}, \"s\": \"x-${{s}}\", \"w\": ${{cycle: f64}}, \"b\": @if t {{ 1 }} @else {{ 0 }}}}\n");
     polydat::dsl::compile::compile_polydat_with_log(&src, &mut log).unwrap();
     let holes: Vec<&CompileEvent> = log.events().iter().filter(|e| matches!(e, CompileEvent::TileHoleTyped { .. })).collect();
     assert_eq!(holes.len(), 4, "{holes:?}");
@@ -184,6 +184,6 @@ fn explain_events_report_wire_type_declaration_expectation_and_encoder() {
 // through the `as` fusion the body's source text can express.
 #[test]
 fn body_holes_reach_every_catalog_adapter() {
-    let src = "input cycle: u64\ntile t : json {\"xs\": [@for k in 1..3 { {\"j\": ${k: json}, \"f\": ${k: f64 | .1}, \"s\": ${k: str}} }]}\n";
+    let src = "input cycle: u64\ntile t : json := {\"xs\": [@for k in 1..3 { {\"j\": ${k: json}, \"f\": ${k: f64 | .1}, \"s\": ${k: str}} }]}\n";
     assert_eq!(render(src, 0, "t"), "{\"xs\": [{\"j\": 1, \"f\": 1.0, \"s\": \"1\"},{\"j\": 2, \"f\": 2.0, \"s\": \"2\"}]}");
 }

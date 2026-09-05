@@ -13,7 +13,7 @@ temp_c    := normal_sample(input: hash(cycle), mean: 21.5, stddev: 2.0)
 status    := weighted_strings(hash(hash(cycle)), "ok:0.97;degraded:0.02;error:0.01")
 alert     := u64_gt(mod(cycle, 5), 3)
 
-tile doc : json {
+tile doc : json := {
     "meta": { "schema": 3, "source": "polydat", "units": { "temp": "C" } },
     "tenant": ${tenant_id},
     "device": ${device_id},
@@ -22,6 +22,6 @@ tile doc : json {
     "alert": @if alert { { "level": "high", "cycle": ${cycle} } } @else { null }
 }
 
-tile load : text <<<
+tile load := <<<
 INSERT INTO ${keyspace}.${table} (tenant_id, device_id, doc) VALUES (${tenant_id}, '${device_id}', '${doc!}')
 >>>

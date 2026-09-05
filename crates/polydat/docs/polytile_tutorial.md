@@ -15,13 +15,15 @@ semantics are in [Polytile](design/polytile.md) (SRD 114).
 
 ## 1. A text tile
 
-A tile is declared with the `tile` keyword, a name, an encoding, and a
-body. Holes are written `${expr}`.
+A tile is declared like any other wire binding: the `tile` keyword, a
+name, an optional encoding after a colon, and `:=` before the body. The
+encoding defaults to `text`, so a one-line text tile needs none. Holes
+are written `${expr}`.
 
 ```polydat
 input cycle: u64
 user_id := mod(hash(cycle), 1000000)
-tile greeting : text := "user ${user_id} on cycle ${cycle}"
+tile greeting := "user ${user_id} on cycle ${cycle}"
 ```
 
 ```text
@@ -34,12 +36,13 @@ Three things to notice:
 - **A hole is an expression, not a name.** `${cycle * 2}` or
   `${hashed_id(input: cycle, bound: 10)}` are holes too. Any expression
   you could bind with `:=` can sit in a hole.
-- **The tile is a wire named `greeting`.** Pull it like any output,
-  reference it in another binding, or emit it from the binary with
-  `--outputs greeting`.
-- **`:= "..."` is the string-literal body form.** It is convenient for
+- **The tile is a wire named `greeting`.** That is what `:=` says, as
+  it does in every binding: pull it like any output, reference it in
+  another binding, or emit it from the binary with `--outputs greeting`.
+- **`"..."` is the string-literal body form.** It is convenient for
   one-liners and for tiles that must be carried inside another file
-  format as a string. Block and heredoc bodies come next.
+  format as a string. Block and heredoc bodies come next; every form
+  follows `:=`.
 
 ## 2. A JSON tile with a static arm
 
@@ -52,7 +55,7 @@ input cycle: u64
 user_id := mod(hash(cycle), 1000000)
 name    := "user-{user_id}"
 score   := unit_interval(hash(cycle)) * 100.0
-tile doc : json {
+tile doc : json := {
     "meta": { "schema": 3, "source": "polydat", "units": { "score": "pct" } },
     "id": ${user_id},
     "name": ${name},
@@ -105,7 +108,7 @@ different rule, declare the type in the hole with `: type`.
 ```polydat
 input cycle: u64
 flag := u64_gt(mod(cycle, 2), 0)
-tile typed : json {"n": ${cycle}, "as_text": ${cycle: str}, "hex": "${cycle | x}", "odd": ${flag: bool}, "padded": "${cycle | 04}"}
+tile typed : json := {"n": ${cycle}, "as_text": ${cycle: str}, "hex": "${cycle | x}", "odd": ${flag: bool}, "padded": "${cycle | 04}"}
 ```
 
 ```text
@@ -182,7 +185,7 @@ condition is any expression; nonzero is true.
 ```polydat
 input cycle: u64
 hot := u64_gt(mod(cycle, 3), 1)
-tile status : json {"cycle": ${cycle}, "state": @if hot { "hot" } @else { "cold" }}
+tile status : json := {"cycle": ${cycle}, "state": @if hot { "hot" } @else { "cold" }}
 ```
 
 ```text
@@ -207,7 +210,7 @@ everything the enclosing program defines.
 input cycle: u64
 base := cycle * 100
 axes := for k in 1..3, side in left,right
-tile samples : json {
+tile samples : json := {
     "base": ${base},
     "points": [ @for i in 0..3 { {"i": ${i}, "v": ${base + i}} } ],
     "grid": "@for axes sep \"; \" {${k}-${side}}"
@@ -252,7 +255,7 @@ generator call is an expression over the program's wires:
 input cycle: u64
 base := cycle * 10
 ks := for k in 1..7
-tile grid : json {
+tile grid : json := {
     "rows": [ @for r in 0..2 { {"r": ${r}, "cells": [ @for c in 0..3 { ${base + r * 10 + c} } ]} } ],
     "big": [ @for ks where {k} > 4 { ${k} } ],
     "sampled": [ @for k in 1..100 order halton/4 { ${k} } ],
@@ -301,9 +304,9 @@ through the hole.
 
 ```polydat
 input cycle: u64
-tile inner : json {"n": ${cycle}, "double": ${cycle * 2}}
-tile outer : json {"first": ${inner}, "second": ${inner}, "wrapped": true}
-tile stmt  : text := "INSERT INTO docs (id, body) VALUES (${cycle}, '${outer!}')"
+tile inner : json := {"n": ${cycle}, "double": ${cycle * 2}}
+tile outer : json := {"first": ${inner}, "second": ${inner}, "wrapped": true}
+tile stmt := "INSERT INTO docs (id, body) VALUES (${cycle}, '${outer!}')"
 ```
 
 ```text
@@ -326,7 +329,7 @@ and directive sigil so it can coexist:
 
 ```polydat
 input cycle: u64
-tile page : text (delims "<%" "%>", sigil "#") := "Hello {{ user.name }}, cycle <%cycle%> #if cycle { is live } #else { is zero }"
+tile page (delims "<%" "%>", sigil "#") := "Hello {{ user.name }}, cycle <%cycle%> #if cycle { is live } #else { is zero }"
 ```
 
 ```text
@@ -458,7 +461,7 @@ temp_c    := normal_sample(input: hash(cycle), mean: 21.5, stddev: 2.0)
 status    := weighted_strings(hash(hash(cycle)), "ok:0.97;degraded:0.02;error:0.01")
 alert     := u64_gt(mod(cycle, 5), 3)
 
-tile doc : json {
+tile doc : json := {
     "meta": { "schema": 3, "source": "polydat", "units": { "temp": "C" } },
     "tenant": ${tenant_id},
     "device": ${device_id},
@@ -467,7 +470,7 @@ tile doc : json {
     "alert": @if alert { { "level": "high", "cycle": ${cycle} } } @else { null }
 }
 
-tile load : text <<<
+tile load := <<<
 INSERT INTO ${keyspace}.${table} (tenant_id, device_id, doc) VALUES (${tenant_id}, '${device_id}', '${doc!}')
 >>>
 ```

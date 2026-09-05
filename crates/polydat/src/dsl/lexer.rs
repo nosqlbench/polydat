@@ -167,6 +167,10 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
             line += 1;
             col = 1;
             pos += 1;
+            // A tile header and its `:=` sit on one line; a header that
+            // ends without one is the parser's error to report, not a
+            // reason to read the next binding's value as a tile body.
+            tile_pending = false;
             continue;
         }
         if c.is_ascii_whitespace() {
@@ -224,22 +228,9 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
 
         let span = Span { line, col };
 
-        // A tile body may follow the header directly, without `:=`,
-        // when it is a block or heredoc: `tile doc : json { ... }`.
-        if tile_pending && (c == '{' || c == '[' || chars[pos..].starts_with(&['<', '<', '<'])) {
-            tile_pending = false;
-            if let Some((body, kind, consumed, newlines, end_col)) = capture_tile_body(&chars, pos, col)? {
-                tokens.push(Token { kind: TokenKind::TileBody(body, kind), span });
-                pos += consumed;
-                if newlines > 0 {
-                    line += newlines;
-                    col = end_col;
-                } else {
-                    col += consumed;
-                }
-                continue;
-            }
-        }
+        // A tile binds a wire, so its body follows `:=` like any other
+        // binding's value. A block that follows the header directly is
+        // left to the parser, which reports the missing `:=`.
 
         // A heredoc anywhere else is a string literal: `<<<` ... `>>>`
         // with one newline trimmed from each end. This is how a
