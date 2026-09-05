@@ -19,9 +19,10 @@ use crate::compile::assembly::PolydatAssembler;
 use crate::iteration::comprehension::StreamerValue;
 use crate::library::tile_render::{ChildSpec, HoleEncoding, HolePosition, HoleSource, TileOp, TileSpec};
 
-use super::ast::{Arg, CallExpr, Expr, ForSourceKind, TileDef, TilePiece};
+use super::ast::{Arg, CallExpr, Expr, ForSource, ForSourceKind, TileDef, TileOptions, TilePiece};
 use super::compile::Compiler;
 use super::refs::collect_expr_refs;
+use super::tile::render_template;
 
 impl Compiler {
     /// Lower a tile into encode bindings and a `tile_render` binding
@@ -32,6 +33,7 @@ impl Compiler {
         let mut lowering = TileLowering {
             tile_name: tile.name.clone(),
             encoding: encoding.clone(),
+            options: tile.options.clone(),
             inputs: Vec::new(),
             children: Vec::new(),
             hole_counter: 0,
@@ -113,6 +115,7 @@ impl Compiler {
 struct TileLowering {
     tile_name: String,
     encoding: String,
+    options: TileOptions,
     /// Wire names passed to `tile_render`, in input order.
     inputs: Vec<String>,
     children: Vec<ChildSpec>,
@@ -142,6 +145,8 @@ struct BodyContext {
     bindings: Vec<String>,
     /// Outer names the body references: `(name, node input index, type keyword)`.
     cascade: Vec<(String, usize, String)>,
+    /// Producers re-bound inside the body program for nested projections.
+    producers: Vec<String>,
     counter: usize,
 }
 
@@ -208,29 +213,47 @@ impl TileLowering {
                     ops.push(TileOp::Branch { cond: source, then: then_ops, otherwise: else_ops });
                 }
                 TilePiece::Projection { source, sep, body: proj_body, .. } => {
-                    if body.is_some() {
-                        return Err(format!("tile '{}': a projection inside a projection body is not supported yet", self.tile_name));
-                    }
                     flush(&mut static_buf, &mut ops);
-                    let comprehension = match &source.kind {
-                        ForSourceKind::Comprehension(c) => c.clone(),
-                        ForSourceKind::Producer(name) => compiler
-                            .producer_comprehension(name)
-                            .ok_or_else(|| format!("tile '{}': producer '{name}' is not bound before this tile", self.tile_name))?,
-                        ForSourceKind::Derived { .. } => {
+                    if let Some(ctx) = body.as_deref_mut() {
+                        let op = self.nested_projection(compiler, asm, source, sep, proj_body, ctx)?;
+                        ops.push(op);
+                        continue;
+                    }
+                    // The same resolution the `for` construct uses, so
+                    // inline text, bound producers, and derivations
+                    // (`base where ... order ...`) all project.
+                    let comprehension = super::traversal::resolve_source(source, &compiler.producers_seen)
+                        .map_err(|e| format!("tile '{}': projection: {e}", self.tile_name))?;
+                    self.check_bounded(&comprehension, &source.text)?;
+                    self.check_predicates(&comprehension, &source.text)?;
+                    let stream = StreamerValue::new(source.text.clone(), comprehension.clone()).to_json();
+                    let mut probe = |expr: &str| self.generator_type(compiler, asm, expr, None);
+                    let elements = super::traversal::element_types(&comprehension, &mut probe)
+                        .map_err(|e| format!("tile '{}': projection `for {}`: {e}", self.tile_name, source.text))?;
+                    // Generator-call sources are expressions over the
+                    // enclosing scope: each compiles to a wire here and
+                    // its value reaches the render node as an input, so
+                    // the projection needs no kernel of its own.
+                    let mut generators = Vec::new();
+                    for (name, expr_text) in generator_clauses(&comprehension) {
+                        if expr_text.contains('{') {
                             return Err(format!(
-                                "tile '{}': a derived comprehension (`for base where ...`) is not supported in a projection yet; bind it as a producer first",
-                                self.tile_name
+                                "tile '{}': projection `for {}`: generator `{expr_text}` uses a `{{name}}` placeholder; \
+                                 in a tile the generator is an expression over the scope's wires, so name the wire directly",
+                                self.tile_name, source.text
                             ));
                         }
-                    };
-                    let stream = StreamerValue::new(source.text.clone(), comprehension.clone()).to_json();
-                    let mut probe = |_: &str| -> Result<PortType, String> {
-                        Err("generator-call sources are not supported in tile projections yet".to_string())
-                    };
-                    let elements = super::traversal::element_types(&comprehension, &mut probe)
-                        .map_err(|e| format!("tile '{}': projection: {e}", self.tile_name))?;
-                    let mut ctx = BodyContext { elements, bindings: Vec::new(), cascade: Vec::new(), counter: 0 };
+                        let expr = super::tile::parse_hole_expr(&expr_text)
+                            .map_err(|e| format!("tile '{}': projection `for {}`: generator `{expr_text}`: {e}", self.tile_name, source.text))?;
+                        let wire = self.next_name("g");
+                        compiler
+                            .compile_binding(asm, std::slice::from_ref(&wire), &expr)
+                            .map_err(|e| format!("tile '{}': projection `for {}`: generator `{expr_text}`: {e}", self.tile_name, source.text))?;
+                        let idx = self.push_input(wire);
+                        let ty = elements.iter().find(|(n, _)| *n == name).map(|(_, t)| t.to_keyword()).unwrap_or("str");
+                        generators.push((name, idx, ty.to_string()));
+                    }
+                    let mut ctx = BodyContext { elements, bindings: Vec::new(), cascade: Vec::new(), producers: Vec::new(), counter: 0 };
                     let saved = self.in_string;
                     let body_ops = self.lower_pieces(compiler, asm, proj_body, Some(&mut ctx))?;
                     self.in_string = saved;
@@ -260,7 +283,13 @@ impl TileLowering {
                         "json" | "csv" => ",",
                         _ => "",
                     };
-                    ops.push(TileOp::Repeat { stream, child, sep: sep.clone().unwrap_or_else(|| default_sep.to_string()), body: body_ops });
+                    ops.push(TileOp::Repeat {
+                        stream,
+                        child,
+                        sep: sep.clone().unwrap_or_else(|| default_sep.to_string()),
+                        body: body_ops,
+                        generators,
+                    });
                 }
             }
         }
@@ -283,6 +312,17 @@ impl TileLowering {
             }
         }
         super::binding::infer_expr_type(expr, asm, &compiler.input_names)
+    }
+
+    /// The element type of a generator-call source. In a tile the
+    /// generator is an expression over the enclosing scope, so it is
+    /// typed by the same inference as a hole; the isolated probe the
+    /// `for` construct uses is the fallback when it does not parse.
+    fn generator_type(&self, compiler: &Compiler, asm: &PolydatAssembler, expr: &str, ctx: Option<&BodyContext>) -> Result<PortType, String> {
+        match super::tile::parse_hole_expr(expr) {
+            Ok(e) => Ok(self.infer_type(compiler, asm, &e, ctx)),
+            Err(_) => compiler.probe_element_type(expr),
+        }
     }
 
     /// Type one hole (SRD 114 §4): the declared type wins and must be
@@ -427,18 +467,7 @@ impl TileLowering {
         let mut refs = BTreeSet::new();
         collect_expr_refs(expr, &mut refs);
         for r in refs {
-            if ctx.elements.iter().any(|(n, _)| *n == r) || ctx.cascade.iter().any(|(n, _, _)| *n == r) {
-                continue;
-            }
-            let ty = asm
-                .node_output_type(&r)
-                .or_else(|| if asm.input_names().iter().any(|n| *n == r) { Some(PortType::U64) } else { None });
-            if let Some(ty) = ty {
-                let idx = self.push_input(r.clone());
-                ctx.cascade.push((r, idx, ty.to_keyword().to_string()));
-            }
-            // Names the parent does not define are left for the child
-            // compile to report as unknown wires.
+            self.cascade_ref(asm, r, ctx);
         }
         let wire = self.infer_type(compiler, asm, expr, Some(ctx));
         let typing = self.type_hole(text, wire, enc.ty.as_deref(), enc.position, enc.cond)?;
@@ -470,6 +499,173 @@ impl TileLowering {
         ctx.bindings.push(format!("{name} := {}", super::pprint::pp_expr(&call)));
         self.record(compiler, text, &typing, &enc);
         Ok(HoleSource::Child(name))
+    }
+
+    /// Make an outer name the body references available inside the body
+    /// program as a cascaded extern typed by the parent's wire. Names
+    /// the body defines itself, and names the parent does not define,
+    /// are left alone; the latter surface as unknown wires when the
+    /// body compiles.
+    fn cascade_ref(&mut self, asm: &PolydatAssembler, r: String, ctx: &mut BodyContext) {
+        if ctx.elements.iter().any(|(n, _)| *n == r)
+            || ctx.cascade.iter().any(|(n, _, _)| *n == r)
+            || ctx.producers.contains(&r)
+        {
+            return;
+        }
+        // An extern carries its declared type; a coordinate input is u64.
+        let ty = asm.node_output_type(&r).or_else(|| {
+            if asm.input_names().iter().any(|n| *n == r) {
+                Some(asm.input_type(&r).unwrap_or(PortType::U64))
+            } else {
+                None
+            }
+        });
+        if let Some(ty) = ty {
+            let idx = self.push_input(r.clone());
+            ctx.cascade.push((r, idx, ty.to_keyword().to_string()));
+        }
+    }
+
+    /// SRD 114 §5.4: a projection's comprehension must have bounded
+    /// cardinality.
+    fn check_bounded(&self, c: &crate::iteration::comprehension::Comprehension, text: &str) -> Result<(), String> {
+        use crate::iteration::comprehension::cardinality::CardinalityClass as C;
+        match c.metadata().cardinality {
+            C::Bounded(_) | C::BoundedAtMost(_) => Ok(()),
+            // A generator or parameter list with no cardinality hint
+            // reports unbounded because its count is unknown, not
+            // infinite. Its finiteness is the source's own contract, as
+            // it is for the `for` construct, so it projects.
+            C::Unbounded if has_unhinted_source(c) => Ok(()),
+            C::Unbounded => Err(format!(
+                "tile '{}': projection `for {text}` has unbounded cardinality; a projection renders once per tuple and needs a finite source",
+                self.tile_name
+            )),
+            // The comprehension runtime does not sample continuous
+            // intervals into tuples yet, so a projection over one would
+            // render nothing; say so instead.
+            C::Continuous { .. } | C::ContinuousAtMost { .. } | C::Hybrid(_) => Err(format!(
+                "tile '{}': projection `for {text}` ranges over a continuous source, which has no finite tuple set; \
+                 project over a discrete range or list, or over values sampled by an expression",
+                self.tile_name
+            )),
+        }
+    }
+
+    /// A filter predicate may name the comprehension's own elements;
+    /// a `{name}` for a wire outside it has no value at render time.
+    fn check_predicates(&self, c: &crate::iteration::comprehension::Comprehension, text: &str) -> Result<(), String> {
+        let elements = c.coordinate_names();
+        for pred in filter_predicates(c) {
+            for name in placeholder_names(&pred) {
+                if !elements.contains(&name) {
+                    return Err(format!(
+                        "tile '{}': projection `for {text}`: predicate placeholder `{{{name}}}` names a wire outside the comprehension; \
+                         a projection's predicate sees only its elements",
+                        self.tile_name
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// A projection inside a projection body (SRD 114 §5.4). The body
+    /// program is Polydat source, so the nested projection becomes a
+    /// `tile` statement inside it, compiled by this same lowering one
+    /// level down; the outer body reads the nested tile's text through a
+    /// raw hole. Producers the nested source names are re-bound inside
+    /// the body program from their original text.
+    fn nested_projection(
+        &mut self,
+        compiler: &mut Compiler,
+        asm: &mut PolydatAssembler,
+        source: &ForSource,
+        sep: &Option<String>,
+        body: &[TilePiece],
+        ctx: &mut BodyContext,
+    ) -> Result<TileOp, String> {
+        if self.in_string {
+            return Err(format!(
+                "tile '{}': a nested projection inside a string position is not supported yet; \
+                 project the inner text into a wire of its own and reference it",
+                self.tile_name
+            ));
+        }
+        // Validate the nested source here, in the enclosing scope, so a
+        // bad source is this tile's error and its element names are known.
+        let comprehension = super::traversal::resolve_source(source, &compiler.producers_seen)
+            .map_err(|e| format!("tile '{}': nested projection: {e}", self.tile_name))?;
+        self.check_bounded(&comprehension, &source.text)?;
+        self.check_predicates(&comprehension, &source.text)?;
+        let mut probe = |expr: &str| self.generator_type(compiler, asm, expr, Some(&*ctx));
+        let nested_elements = super::traversal::element_types(&comprehension, &mut probe)
+            .map_err(|e| format!("tile '{}': nested projection `for {}`: {e}", self.tile_name, source.text))?;
+        // Generator expressions of the nested source read the scope's
+        // wires; they must reach the body program too.
+        for (_, expr_text) in generator_clauses(&comprehension) {
+            if let Ok(expr) = super::tile::parse_hole_expr(&expr_text) {
+                let mut refs = BTreeSet::new();
+                collect_expr_refs(&expr, &mut refs);
+                for r in refs {
+                    self.cascade_ref(asm, r, ctx);
+                }
+            }
+        }
+        // Producers the source names, directly or as a derivation base,
+        // are re-bound in the body program from their original text.
+        let producer = match &source.kind {
+            ForSourceKind::Producer(n) | ForSourceKind::Derived { base: n, .. } => Some(n.clone()),
+            ForSourceKind::Comprehension(_) => None,
+        };
+        if let Some(name) = producer
+            && !ctx.producers.contains(&name)
+        {
+            let p = compiler
+                .producers_seen
+                .iter()
+                .rev()
+                .find(|p| p.name == name)
+                .cloned()
+                .ok_or_else(|| format!("tile '{}': producer '{name}' is not bound before this tile", self.tile_name))?;
+            for r in placeholder_names(&p.source_text) {
+                self.cascade_ref(asm, r, ctx);
+            }
+            ctx.producers.push(name.clone());
+            ctx.bindings.push(format!("{name} := for {}", p.source_text));
+        }
+        for r in placeholder_names(&source.text) {
+            self.cascade_ref(asm, r, ctx);
+        }
+        // Every outer wire the nested body reads must reach the body
+        // program; the nested tile then cascades it one level further.
+        let mut refs = BTreeSet::new();
+        collect_piece_refs(body, &compiler.producers_seen, &mut refs);
+        for r in refs {
+            if nested_elements.iter().any(|(n, _)| *n == r) {
+                continue;
+            }
+            self.cascade_ref(asm, r, ctx);
+        }
+        let piece = TilePiece::Projection { source: source.clone(), sep: sep.clone(), body: body.to_vec(), span: self.span };
+        let text = render_template(std::slice::from_ref(&piece), &self.options);
+        let name = format!("__b{}", ctx.counter);
+        ctx.counter += 1;
+        let defaults = TileOptions::default();
+        let mut opts = Vec::new();
+        if self.options.open != defaults.open || self.options.close != defaults.close {
+            opts.push(format!("delims \"{}\" \"{}\"", escape_polydat_string(&self.options.open), escape_polydat_string(&self.options.close)));
+        }
+        if self.options.sigil != defaults.sigil {
+            opts.push(format!("sigil \"{}\"", escape_polydat_string(&self.options.sigil)));
+        }
+        if self.strict {
+            opts.push("strict".to_string());
+        }
+        let opts = if opts.is_empty() { String::new() } else { format!(" ({})", opts.join(", ")) };
+        ctx.bindings.push(format!("tile {name} : {}{opts} := \"{}\"", self.encoding, escape_polydat_string(&text)));
+        Ok(TileOp::Hole(HoleSource::Child(name)))
     }
 
     fn push_input(&mut self, name: String) -> usize {
@@ -516,6 +712,121 @@ impl TileLowering {
             }
         }
     }
+}
+
+/// Wire names a run of pieces references: hole expressions, branch
+/// conditions, `{name}` placeholders in nested projection sources, and
+/// the wires their generator expressions read.
+fn collect_piece_refs(pieces: &[TilePiece], producers: &[super::traversal::Producer], out: &mut BTreeSet<String>) {
+    for p in pieces {
+        match p {
+            TilePiece::Static(_) => {}
+            TilePiece::Hole(h) => collect_expr_refs(&h.expr, out),
+            TilePiece::Branch { cond, then, otherwise, .. } => {
+                collect_expr_refs(cond, out);
+                collect_piece_refs(then, producers, out);
+                if let Some(o) = otherwise {
+                    collect_piece_refs(o, producers, out);
+                }
+            }
+            TilePiece::Projection { source, body, .. } => {
+                out.extend(placeholder_names(&source.text));
+                if let ForSourceKind::Producer(n) | ForSourceKind::Derived { base: n, .. } = &source.kind {
+                    out.insert(n.clone());
+                }
+                if let Ok(c) = super::traversal::resolve_source(source, producers) {
+                    for (_, expr_text) in generator_clauses(&c) {
+                        if let Ok(expr) = super::tile::parse_hole_expr(&expr_text) {
+                            collect_expr_refs(&expr, out);
+                        }
+                    }
+                }
+                collect_piece_refs(body, producers, out);
+            }
+        }
+    }
+}
+
+/// `(element, expression)` for each generator-call clause.
+fn generator_clauses(c: &crate::iteration::comprehension::Comprehension) -> Vec<(String, String)> {
+    use crate::iteration::comprehension::source::Source;
+    use crate::iteration::comprehension::Comprehension as K;
+    let mut out = Vec::new();
+    match c {
+        K::Clause { name, source: Source::Generator { expr, .. } } => out.push((name.clone(), expr.clone())),
+        K::Clause { .. } => {}
+        K::Cartesian { children } | K::Zip { children, .. } | K::Union { children } => {
+            for ch in children {
+                out.extend(generator_clauses(ch));
+            }
+        }
+        K::Filter { child, .. } | K::Order { child, .. } => out.extend(generator_clauses(child)),
+    }
+    out
+}
+
+/// Every filter predicate in a comprehension.
+fn filter_predicates(c: &crate::iteration::comprehension::Comprehension) -> Vec<String> {
+    use crate::iteration::comprehension::Comprehension as K;
+    let mut out = Vec::new();
+    match c {
+        K::Clause { .. } => {}
+        K::Cartesian { children } | K::Zip { children, .. } | K::Union { children } => {
+            for ch in children {
+                out.extend(filter_predicates(ch));
+            }
+        }
+        K::Filter { child, predicate } => {
+            out.push(predicate.clone());
+            out.extend(filter_predicates(child));
+        }
+        K::Order { child, .. } => out.extend(filter_predicates(child)),
+    }
+    out
+}
+
+/// Whether a comprehension draws on a generator call or a workload
+/// parameter list that carries no cardinality hint.
+fn has_unhinted_source(c: &crate::iteration::comprehension::Comprehension) -> bool {
+    use crate::iteration::comprehension::source::Source;
+    use crate::iteration::comprehension::Comprehension as K;
+    match c {
+        K::Clause { source, .. } => matches!(
+            source,
+            Source::Generator { cardinality_hint: None, .. } | Source::WorkloadParamList { len_hint: None, .. }
+        ),
+        K::Cartesian { children } | K::Zip { children, .. } | K::Union { children } => {
+            children.iter().any(has_unhinted_source)
+        }
+        K::Filter { child, .. } | K::Order { child, .. } => has_unhinted_source(child),
+    }
+}
+
+/// `{name}` placeholders in comprehension text.
+fn placeholder_names(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '{' {
+            let start = i + 1;
+            let mut j = start;
+            while j < chars.len() && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
+                j += 1;
+            }
+            if j > start && chars.get(j) == Some(&'}') {
+                out.push(chars[start..j].iter().collect());
+                i = j;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Escape text for a Polydat string literal.
+fn escape_polydat_string(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\t', "\\t")
 }
 
 fn is_numeric(t: PortType) -> bool {

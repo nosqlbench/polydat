@@ -1,0 +1,162 @@
+// Copyright 2024-2026 Jonathan Shook
+// SPDX-License-Identifier: Apache-2.0
+
+//! SRD 114 §5.4, step 5: projections over every source the `for`
+//! construct accepts (inline text, producers, derivations, generator
+//! calls), nested projections inside a body, the bounded-cardinality
+//! check, and member projections through the structural form.
+
+use polydat::dsl::compile_polydat;
+
+fn render(src: &str, cycle: u64, name: &str) -> String {
+    let mut k = compile_polydat(src).unwrap_or_else(|e| panic!("compile failed: {e}\n{src}"));
+    k.set_inputs(&[cycle]);
+    k.pull(name).as_str().to_string()
+}
+
+fn err(src: &str) -> String {
+    compile_polydat(src).err().unwrap_or_else(|| panic!("expected a compile error\n{src}"))
+}
+
+#[test]
+fn derived_sources_filter_and_order_a_producer() {
+    let src = "input cycle: u64\nks := for k in 1..7\n\
+        tile t : text := \"[@for ks where {k} > 4 sep \\\",\\\" {${k}}] [@for ks where {k} < 3 sep \\\",\\\" {${k}}]\"\n";
+    assert_eq!(render(src, 0, "t"), "[5,6] [1,2]");
+    // Ordering with truncation bounds a larger sweep.
+    let src = "input cycle: u64\nsweep := for k in 1..100\n\
+        tile t : text := \"@for sweep order lex/3 sep \\\",\\\" {${k}}\"\n";
+    assert_eq!(render(src, 0, "t"), "1,2,3");
+}
+
+#[test]
+fn a_predicate_placeholder_for_an_outer_wire_is_a_clear_error() {
+    // Predicates see the comprehension's elements, as in the `for`
+    // construct; an outer wire has no value inside the stream.
+    let e = err("input cycle: u64\nlimit := cycle + 2\n\
+        tile t : text := \"@for k in 1..9 where {k} < {limit} sep \\\" \\\" {${k}}\"\n");
+    assert!(e.contains("tile 't'"), "{e}");
+    assert!(e.contains("`{limit}`"), "{e}");
+    assert!(e.contains("outside the comprehension"), "{e}");
+    // The header still parsed as a whole: the block is `${k}`, not `{limit}`.
+    let src = "input cycle: u64\ntile t : text := \"@for k in 1..9 where {k} < {k} {x}\"\n";
+    assert_eq!(render(src, 0, "t"), "");
+}
+
+#[test]
+fn generator_call_sources_compile_to_wires_of_the_scope() {
+    // A scalar generator is one tuple whose element is the wire's value.
+    let src = "input cycle: u64\nexpect := hash_range(cycle, 1000)\n\
+        tile t : text := \"@for g in hash_range(cycle, 1000) sep \\\",\\\" {${g}}\"\n";
+    let mut k = compile_polydat(src).unwrap();
+    for cycle in [1u64, 2, 3] {
+        k.set_inputs(&[cycle]);
+        let expect = k.pull("expect").as_u64().to_string();
+        assert_eq!(k.pull("t").as_str(), expect);
+    }
+    // The element type reached the encoder: numbers are bare in json,
+    // and the generator combines with other clauses.
+    let src = "input cycle: u64\ntile t : json {\"g\": [@for g in hash_range(cycle, 10), i in 0..2 { {\"g\": ${g}, \"i\": ${i}} }]}\n";
+    let doc: serde_json::Value = serde_json::from_str(&render(src, 1, "t")).unwrap();
+    assert_eq!(doc["g"].as_array().unwrap().len(), 2, "{doc}");
+    assert!(doc["g"][0]["g"].is_number(), "{doc}");
+    assert_eq!(doc["g"][1]["i"], 1);
+    // A generator reading an outer wire inside a nested projection.
+    let src = "input cycle: u64\nseed := cycle + 1\n\
+        tile t : text := \"@for a in 0..2 sep \\\" \\\" {@for g in hash_range(seed, 100) {${a}:${g}}}\"\n";
+    let mut k = compile_polydat(src).unwrap();
+    k.set_inputs(&[4]);
+    let text = k.pull("t").as_str().to_string();
+    let parts: Vec<&str> = text.split(' ').collect();
+    assert_eq!(parts.len(), 2, "{text}");
+    assert!(parts[0].starts_with("0:") && parts[1].starts_with("1:"), "{text}");
+    assert_eq!(parts[0][2..], parts[1][2..]);
+}
+
+#[test]
+fn continuous_sources_are_rejected_and_discrete_truncation_works() {
+    let e = err("input cycle: u64\ntile t : text := \"@for x in 0.0..1.0 {${x}}\"\n");
+    assert!(e.contains("continuous source"), "{e}");
+    assert!(e.contains("tile 't'"), "{e}");
+    // An order strategy with truncation over a discrete range samples
+    // exactly that many tuples.
+    let src = "input cycle: u64\ntile t : text := \"@for k in 1..100 order halton/4 sep \\\" \\\" {${k}}\"\n";
+    assert_eq!(render(src, 0, "t"), "50 25 75 13");
+}
+
+#[test]
+fn nested_projection_in_a_json_value_position() {
+    let src = "input cycle: u64\nbase := cycle * 10\n\
+        tile grid : json {\"rows\": [@for r in 0..2 { {\"r\": ${r}, \"cells\": [@for c in 0..3 { ${base + r * 10 + c} }]} }]}\n";
+    assert_eq!(
+        render(src, 1, "grid"),
+        "{\"rows\": [{\"r\": 0, \"cells\": [10,11,12]},{\"r\": 1, \"cells\": [20,21,22]}]}"
+    );
+    let doc: serde_json::Value = serde_json::from_str(&render(src, 1, "grid")).unwrap();
+    assert_eq!(doc["rows"][1]["cells"][2], 22);
+}
+
+#[test]
+fn nested_projection_over_producers_and_derivations() {
+    let src = "input cycle: u64\nsides := for s in left,right\n\
+        tile t : text := \"@for k in 1..3 sep \\\"; \\\" {${k}: @for sides sep \\\",\\\" {${s}${k}}}\"\n";
+    assert_eq!(render(src, 0, "t"), "1: left1,right1; 2: left2,right2");
+    let src = "input cycle: u64\nks := for k in 1..5\n\
+        tile t : text := \"@for a in 1..3 sep \\\"|\\\" {${a}=@for ks where {k} > 2 sep \\\",\\\" {${k}}}\"\n";
+    assert_eq!(render(src, 0, "t"), "1=3,4|2=3,4");
+}
+
+#[test]
+fn nested_projection_reads_outer_elements_and_program_wires() {
+    let src = "input cycle: u64\nlabel := \"L{cycle}\"\n\
+        tile t : text := \"@for a in 0..2 sep \\\" \\\" {@for b in 0..2 sep \\\",\\\" {${label}:${a}${b}:${cycle}}}\"\n";
+    assert_eq!(render(src, 7, "t"), "L7:00:7,L7:01:7 L7:10:7,L7:11:7");
+}
+
+#[test]
+fn nested_projection_keeps_custom_delimiters_and_branches() {
+    let src = "input cycle: u64\n\
+        tile t : text (delims \"<%\" \"%>\", sigil \"#\") := \"#for a in 1..3 sep \\\" \\\" {#for b in 1..3 sep \\\",\\\" {<%a * b%>#if a == b { = } #else { ~ }}}\"\n";
+    assert_eq!(render(src, 0, "t"), "1=,2~ 2~,4=");
+}
+
+#[test]
+fn nested_projection_three_levels_deep() {
+    let src = "input cycle: u64\n\
+        tile t : text := \"@for a in 0..2 sep \\\"|\\\" {@for b in 0..2 sep \\\"/\\\" {@for c in 0..2 {${a}${b}${c}}}}\"\n";
+    assert_eq!(render(src, 0, "t"), "000001/010011|100101/110111");
+}
+
+#[test]
+fn nested_projection_inside_a_string_position_is_a_clear_error() {
+    let e = err("input cycle: u64\ntile t : json {\"rows\": [@for r in 0..2 { {\"s\": \"@for c in 0..2 {${c}}\"} }]}\n");
+    assert!(e.contains("nested projection inside a string position"), "{e}");
+}
+
+#[test]
+fn errors_in_nested_sources_name_the_tile() {
+    let e = err("input cycle: u64\ntile t : text := \"@for a in 0..2 {@for nowhere {${a}}}\"\n");
+    assert!(e.contains("tile 't'"), "{e}");
+    assert!(e.contains("nowhere"), "{e}");
+}
+
+#[test]
+fn member_projections_through_the_structural_form() {
+    let src = "input cycle: u64\nns := for n in 1..4\n\
+        doc := polytile_json(\"{\\\"fixed\\\": true, \\\"@for ns\\\": {\\\"k${n}\\\": \\\"${n * n}\\\"}}\")\n";
+    let doc: serde_json::Value = serde_json::from_str(&render(src, 0, "doc")).unwrap();
+    assert_eq!(doc["fixed"], true);
+    assert_eq!(doc["k1"], 1);
+    assert_eq!(doc["k2"], 4);
+    assert_eq!(doc["k3"], 9);
+}
+
+#[test]
+fn nested_projection_through_the_structural_form() {
+    let src = "input cycle: u64\n\
+        doc := polytile_json(\"[\\\"@for r in 0..2\\\", [\\\"@for c in 0..2\\\", {\\\"r\\\": \\\"${r}\\\", \\\"c\\\": \\\"${c}\\\"}]]\")\n";
+    let doc: serde_json::Value = serde_json::from_str(&render(src, 0, "doc")).unwrap();
+    assert_eq!(doc.as_array().unwrap().len(), 2);
+    assert_eq!(doc[1][0]["r"], 1);
+    assert_eq!(doc[1][1]["c"], 1);
+}

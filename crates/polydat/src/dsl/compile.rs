@@ -2434,9 +2434,24 @@ impl Compiler {
         Ok(kernel)
     }
 
-    /// The comprehension a producer bound earlier in this compile.
-    pub(super) fn producer_comprehension(&self, name: &str) -> Option<crate::iteration::comprehension::Comprehension> {
-        self.producers_seen.iter().rev().find(|p| p.name == name).map(|p| p.comprehension.clone())
+    /// The output type of a generator expression used as a comprehension
+    /// source (SRD 113 §3.3): compile `__probe := <expr>` on its own and
+    /// read the port type. Shared by `for` bodies and tile projections.
+    pub(super) fn probe_element_type(&self, expr: &str) -> Result<crate::ast::PortType, String> {
+        let src = format!("input cycle: u64\n__probe := {expr}\n");
+        let tokens = lexer::lex(&src)?;
+        let ast = parser::parse(tokens)?;
+        let mut probe_compiler = Compiler::with_lib_paths(
+            self.source_dir.clone(),
+            self.polydat_lib_paths.clone(),
+            false,
+        );
+        probe_compiler.source_text = src.clone();
+        probe_compiler.context_label = format!("{} (element probe)", self.context_label);
+        let k = probe_compiler.compile_filtered_with_log(&ast, None, None)?;
+        k.program()
+            .output_port_type("__probe")
+            .ok_or_else(|| "probe produced no output".to_string())
     }
 
     /// Lower each `for` statement's body to a child program, typed from
@@ -2451,22 +2466,7 @@ impl Compiler {
         let mut out = Vec::with_capacity(for_stmts.len());
         for f in for_stmts {
             let comprehension = resolve_source(&f.source, producers)?.clone();
-            let mut probe = |expr: &str| -> Result<crate::ast::PortType, String> {
-                let src = format!("input cycle: u64\n__probe := {expr}\n");
-                let tokens = lexer::lex(&src)?;
-                let ast = parser::parse(tokens)?;
-                let mut probe_compiler = Compiler::with_lib_paths(
-                    self.source_dir.clone(),
-                    self.polydat_lib_paths.clone(),
-                    false,
-                );
-                probe_compiler.source_text = src.clone();
-                probe_compiler.context_label = format!("{} (element probe)", self.context_label);
-                let k = probe_compiler.compile_filtered_with_log(&ast, None, None)?;
-                k.program()
-                    .output_port_type("__probe")
-                    .ok_or_else(|| "probe produced no output".to_string())
-            };
+            let mut probe = |expr: &str| self.probe_element_type(expr);
             let elements = element_types(&comprehension, &mut probe).map_err(|e| format!(
                 "`for {}` at line {}, col {}: {e}", f.source.text, f.span.line, f.span.col
             ))?;

@@ -100,6 +100,23 @@ fn main() {
     );
 
     show(
+        "6b. Nested projections, derivations, and a generator source",
+        r#"
+            input cycle: u64
+            base := cycle * 10
+            ks := for k in 1..7
+            tile grid : json {
+                "rows": [ @for r in 0..2 { {"r": ${r}, "cells": [ @for c in 0..3 { ${base + r * 10 + c} } ]} } ],
+                "big": [ @for ks where {k} > 4 { ${k} } ],
+                "sampled": [ @for k in 1..100 order halton/4 { ${k} } ],
+                "pick": [ @for g in hash_range(cycle, 1000) { ${g} } ]
+            }
+        "#,
+        &[1],
+        &["grid"],
+    );
+
+    show(
         "7. Splicing one tile into another",
         r#"
             input cycle: u64

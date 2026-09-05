@@ -234,10 +234,53 @@ string; the `"grid"` line shows the spelling.
 
 The body compiles to its own small program that is built once and
 re-run per tuple with reused scratch state, so a projection allocates
-nothing per element. A projection body can contain holes, branches, and
-static text. Nesting a second `@for` inside a body is not supported at
-this level yet, and neither are derived sources such as
-`for axes where ...`; both are called out in the SRD's plan.
+nothing per element. A projection body can contain holes, branches,
+static text, and further projections.
+
+### Nested projections, derivations, and generators
+
+Every source the `for` construct accepts projects. A body may contain
+another `@for`, a producer may be filtered or ordered in place, and a
+generator call is an expression over the program's wires:
+
+```polydat
+input cycle: u64
+base := cycle * 10
+ks := for k in 1..7
+tile grid : json {
+    "rows": [ @for r in 0..2 { {"r": ${r}, "cells": [ @for c in 0..3 { ${base + r * 10 + c} } ]} } ],
+    "big": [ @for ks where {k} > 4 { ${k} } ],
+    "sampled": [ @for k in 1..100 order halton/4 { ${k} } ],
+    "pick": [ @for g in hash_range(cycle, 1000) { ${g} } ]
+}
+```
+
+```json
+{
+    "rows": [ {"r": 0, "cells": [ 10,11,12 ]},{"r": 1, "cells": [ 20,21,22 ]} ],
+    "big": [ 5,6 ],
+    "sampled": [ 50,25,75,13 ],
+    "pick": [ 465 ]
+}
+```
+
+- **Nested `@for`.** The inner projection reads the outer element `r`,
+  the program wire `base`, and `cycle` alike. It compiles as a tile of
+  its own inside the outer body's program, so each level is one
+  compiled program however many tuples flow through it.
+- **Derivations.** `ks where {k} > 4` filters the producer in place;
+  `order halton/4` samples four tuples of a hundred in Halton order.
+  A predicate sees the comprehension's elements. A `{name}` for a wire
+  outside the comprehension is a compile error, as it is for `for`.
+- **Generators.** `hash_range(cycle, 1000)` is compiled as a wire of
+  the program and its value is the element, one tuple for a scalar and
+  one per item for a list. It is typed by the same inference as a hole,
+  so it may read any wire in scope, including an outer element when
+  nested.
+
+A projection's source must have a finite tuple set. A continuous
+interval such as `x in 0.0..1.0` is rejected with a message; project
+over a discrete range or list instead.
 
 ## 7. Splicing one tile into another
 
@@ -475,8 +518,12 @@ shared by two tiles is computed once.
 - Inside a projection body, only the `u64` to `f64` widening and the
   `str` and `bool` readings are available as declared-type adapters;
   other widenings must be written in the expression.
-- Projection bodies cannot nest another `@for`, use derived sources
-  (`where`, `order by`), or use generator-call sources.
+- A nested `@for` cannot sit inside a string position of a JSON tile;
+  project the inner text into a wire of its own and reference it.
+- Continuous sources do not project; a predicate sees only the
+  comprehension's elements; a generator's list value arrives as text,
+  so JSON arrays and scalars expand, but stream-valued generators do
+  not.
 - In the structural form, a projection or branch that sits beside
   static members or elements contributes its own separators; if it
   renders zero tuples the document keeps a dangling comma. Put such

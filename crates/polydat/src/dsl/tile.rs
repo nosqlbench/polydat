@@ -198,7 +198,7 @@ impl TemplateParser<'_> {
     fn projection(&mut self) -> Result<TilePiece, String> {
         self.take(&self.opts.sigil.clone());
         self.take("for");
-        let header = self.header_until_brace()?;
+        let header = self.header_until_brace(HeaderKind::For)?;
         let (source_text, sep) = split_sep(&header);
         let source = for_source_from_text(source_text.trim(), self.span, true)
             .map_err(|e| self.err(&format!("projection: {e}")))?;
@@ -210,7 +210,7 @@ impl TemplateParser<'_> {
     fn branch(&mut self) -> Result<TilePiece, String> {
         self.take(&self.opts.sigil.clone());
         self.take("if");
-        let header = self.header_until_brace()?;
+        let header = self.header_until_brace(HeaderKind::If)?;
         let cond = parse_hole_expr(header.trim()).map_err(|e| self.err(&format!("branch condition `{}`: {e}", header.trim())))?;
         let then = self.block()?;
         let save = self.pos;
@@ -231,7 +231,7 @@ impl TemplateParser<'_> {
     /// placeholder. A hole cannot appear in a directive header, so the
     /// open delimiter is not considered here. Leaves the brace
     /// unconsumed.
-    fn header_until_brace(&mut self) -> Result<String, String> {
+    fn header_until_brace(&mut self, kind: HeaderKind) -> Result<String, String> {
         let mut depth = 0i32;
         let mut quote: Option<char> = None;
         let mut buf = String::new();
@@ -270,7 +270,14 @@ impl TemplateParser<'_> {
                     if rest.is_empty() || rest.starts_with(&self.opts.sigil) || rest.starts_with(&self.opts.open) {
                         return false;
                     }
-                    rest.starts_with(|c: char| HEADER_PUNCT.contains(c) && !"()[]".contains(c))
+                    if rest.starts_with(|c: char| HEADER_PUNCT.contains(c) && !"()[]".contains(c)) {
+                        return true;
+                    }
+                    // Free-standing, followed by more text: it is the
+                    // block when the header so far is already complete
+                    // (`@if x {plain} tail`), and interpolation when the
+                    // header still needs it (`where {k} < {limit} {`).
+                    !header_complete(kind, &buf)
                 });
                 if !placeholder {
                     return Ok(buf);
@@ -325,6 +332,35 @@ fn trim_block(body: &mut Vec<TilePiece>) {
     body.retain(|p| !matches!(p, TilePiece::Static(s) if s.is_empty()));
 }
 
+/// Which directive a header belongs to; decides what "complete" means.
+#[derive(Clone, Copy)]
+enum HeaderKind {
+    For,
+    If,
+}
+
+/// Whether header text so far already forms a whole directive header.
+/// A `for` header must parse as a source and not end mid-expression; an
+/// `if` header must parse as an expression.
+fn header_complete(kind: HeaderKind, header: &str) -> bool {
+    let h = header.trim();
+    if h.is_empty() {
+        return false;
+    }
+    match kind {
+        HeaderKind::If => parse_hole_expr(h).is_ok(),
+        HeaderKind::For => {
+            let dangling = h.ends_with(|c: char| "<>=!+-*/%&|,(".contains(c))
+                || ["where", "order", "in", "&&", "||"].iter().any(|kw| h.ends_with(kw));
+            if dangling {
+                return false;
+            }
+            let (source, _) = split_sep(h);
+            for_source_from_text(source.trim(), Span { line: 0, col: 0 }, true).is_ok()
+        }
+    }
+}
+
 /// Split a trailing `sep "<text>"` off a directive header. Inside a JSON
 /// string literal the quotes arrive escaped as `\"`; both spellings are
 /// accepted.
@@ -343,7 +379,7 @@ fn split_sep(header: &str) -> (String, Option<String>) {
     (t.to_string(), None)
 }
 
-fn parse_hole_expr(text: &str) -> Result<Expr, String> {
+pub(super) fn parse_hole_expr(text: &str) -> Result<Expr, String> {
     let tokens = lex(text)?;
     parse_expression(tokens)
 }

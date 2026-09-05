@@ -20,9 +20,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{PortType, Value};
-use crate::iteration::comprehension::surfaces::tuple_value_to_polydat_value;
+use crate::iteration::comprehension::runtime::evaluate_for_iteration;
 use crate::iteration::comprehension::StreamerValue;
-use crate::kernel::{PolydatProgram, PolydatState};
+use crate::kernel::{PolydatKernel, PolydatProgram, PolydatState};
 
 /// Where a hole sits in a `json` skeleton, which decides its encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,6 +97,11 @@ pub enum TileOp {
         child: usize,
         sep: String,
         body: Vec<TileOp>,
+        /// Generator-call clauses whose expressions compiled to wires of
+        /// the enclosing program: `(element, node input index, type)`.
+        /// At render the input's value stands in for the clause.
+        #[serde(default)]
+        generators: Vec<(String, usize, String)>,
     },
     Branch {
         cond: HoleSource,
@@ -135,6 +140,12 @@ impl TileSpec {
 pub struct TileProgram {
     pub spec: TileSpec,
     pub children: Vec<Arc<PolydatProgram>>,
+    /// One kernel over each body program, the canonical kernel the
+    /// comprehension evaluator installs tuple values into.
+    canonicals: Vec<Arc<PolydatKernel>>,
+    /// The empty parent kernel: every scope value a projection needs
+    /// arrives through the node's inputs instead.
+    empty: Arc<PolydatKernel>,
 }
 
 impl TileProgram {
@@ -144,7 +155,7 @@ impl TileProgram {
     pub fn from_json(json: &str) -> Self {
         let spec: TileSpec = serde_json::from_str(json)
             .unwrap_or_else(|e| panic!("tile_render: malformed skeleton payload: {e}"));
-        let children = spec
+        let children: Vec<Arc<PolydatProgram>> = spec
             .children
             .iter()
             .map(|c| {
@@ -153,7 +164,9 @@ impl TileProgram {
                     .into_program()
             })
             .collect();
-        TileProgram { spec, children }
+        let canonicals = children.iter().map(|p| Arc::new(PolydatKernel::from_program(p.clone()))).collect();
+        let empty = Arc::new(crate::dsl::compile_polydat("\n").expect("the empty program compiles"));
+        TileProgram { spec, children, canonicals, empty }
     }
 
     /// Render with the node's wire inputs, each already encoded text.
@@ -176,21 +189,38 @@ impl TileProgram {
                         None => self.render_ops(branch, inputs, None, out),
                     }
                 }
-                TileOp::Repeat { stream, child: child_idx, sep, body } => {
-                    let streamer = StreamerValue::from_json(stream);
+                TileOp::Repeat { stream, child: child_idx, sep, body, generators } => {
+                    let mut streamer = StreamerValue::from_json(stream);
+                    if !generators.is_empty() {
+                        streamer.ast = bind_generators(&streamer.ast, generators, inputs);
+                    }
                     let program = &self.children[*child_idx];
                     let child_spec = &self.spec.children[*child_idx];
+                    // The same evaluator the `for` construct opens a
+                    // traversal with: it applies order strategies,
+                    // samples continuous sources, and runs predicates
+                    // over the tuple. Generators were bound above, so
+                    // the parent kernel it sees is empty and the
+                    // canonical kernel is the body program.
+                    let tuples = evaluate_for_iteration(
+                        &streamer.ast,
+                        &self.empty,
+                        &self.canonicals[*child_idx],
+                        &HashMap::new(),
+                        |_| Ok(()),
+                    )
+                    .unwrap_or_else(|e| panic!("tile '{}': projection `for {}` failed at render: {e}", self.spec.name, streamer.text));
                     let mut first = true;
                     with_scratch(program, |state| {
-                        for (index, tuple) in streamer.coordinate_stream().enumerate() {
+                        for (index, tuple) in tuples.iter().enumerate() {
                             if !first {
                                 out.push_str(sep);
                             }
                             first = false;
                             state.set_inputs(&[index as u64]);
-                            for (name, tv) in &tuple.bindings {
+                            for (name, v) in tuple {
                                 if let Some(idx) = program.find_input(name) {
-                                    state.set_input(idx, tuple_value_to_polydat_value(tv));
+                                    state.set_input(idx, v.clone());
                                 }
                             }
                             for (name, input_idx, ty) in &child_spec.cascade {
@@ -214,6 +244,60 @@ impl TileProgram {
                 None => String::new(),
             },
         }
+    }
+}
+
+/// Replace each generator-call clause with the literal values its wire
+/// carries at this render: a list value contributes its items, a scalar
+/// contributes itself. The wire arrives as display text, so a JSON array
+/// is read as a list and anything else is retyped by the element type.
+fn bind_generators(
+    c: &crate::iteration::comprehension::Comprehension,
+    generators: &[(String, usize, String)],
+    inputs: &[Value],
+) -> crate::iteration::comprehension::Comprehension {
+    use crate::iteration::comprehension::source::{LiteralValue, Source};
+    use crate::iteration::comprehension::Comprehension as K;
+    match c {
+        K::Clause { name, source: Source::Generator { .. } } => {
+            let Some((_, idx, ty)) = generators.iter().find(|(n, _, _)| n == name) else {
+                return c.clone();
+            };
+            let raw = inputs.get(*idx).cloned().unwrap_or(Value::None);
+            let items: Vec<Value> = match crate::iteration::comprehension::source::iteration_interior(&raw) {
+                Some(interior) => interior,
+                None => {
+                    let text = raw.to_display_string();
+                    match serde_json::from_str::<serde_json::Value>(text.trim()) {
+                        Ok(serde_json::Value::Array(items)) => items
+                            .iter()
+                            .map(|j| retype(&Value::Str(j.to_string().trim_matches('"').into()), ty))
+                            .collect(),
+                        _ => vec![retype(&raw, ty)],
+                    }
+                }
+            };
+            let values = items
+                .iter()
+                .map(|v| match v {
+                    Value::U64(n) => LiteralValue::Int(*n as i64),
+                    Value::F64(f) => LiteralValue::Float(*f),
+                    Value::Bool(b) => LiteralValue::Bool(*b),
+                    other => LiteralValue::String(other.to_display_string()),
+                })
+                .collect();
+            K::Clause { name: name.clone(), source: Source::Literal { values } }
+        }
+        K::Clause { .. } => c.clone(),
+        K::Cartesian { children } => K::Cartesian { children: children.iter().map(|ch| bind_generators(ch, generators, inputs)).collect() },
+        K::Zip { children, mode } => K::Zip { children: children.iter().map(|ch| bind_generators(ch, generators, inputs)).collect(), mode: *mode },
+        K::Union { children } => K::Union { children: children.iter().map(|ch| bind_generators(ch, generators, inputs)).collect() },
+        K::Filter { child, predicate } => K::Filter { child: Box::new(bind_generators(child, generators, inputs)), predicate: predicate.clone() },
+        K::Order { child, strategy, truncation } => K::Order {
+            child: Box::new(bind_generators(child, generators, inputs)),
+            strategy: *strategy,
+            truncation: *truncation,
+        },
     }
 }
 

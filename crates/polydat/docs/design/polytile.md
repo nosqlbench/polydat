@@ -1,7 +1,7 @@
 # Polytile — Compiled Variate Templates
 
-**Status:** Proposed SRD 114, second revision. Steps 1, 2, and 4 of
-§12 are implemented and steps 5 and 6 in most part: the grammar in
+**Status:** Proposed SRD 114, second revision. Steps 1 through 5 of
+§12 are implemented and step 6 in most part: the grammar in
 every body form with options; the structural JSON form; tiles handed
 in by a host as template text, JSON text, a parsed JSON value, or a
 `polytile` binding; and tiles that compile to wires and render at P1
@@ -381,6 +381,16 @@ encoding's default separator or `sep`. Element names are typed from the
 comprehension's sources by the same table as [The `for`
 Construct](for_traversal.md) §3.3.
 
+A body may contain further projections; each nests as one compiled
+program per lexical position, exactly as the `for` construct nests
+bodies, and reads outer elements and scope wires alike. A generator-call
+source is an expression over the enclosing scope: it compiles as a wire
+there, so it may read any wire in scope, and its value is the clause's
+element list, one tuple for a scalar and one per item for a list. A
+filter predicate sees the comprehension's elements; a `{name}` that
+names a wire outside it is a compile error. Continuous sources do not
+project, since they have no finite tuple set.
+
 A projection over a bound producer dispenses the producer's stream at
 render time. Two renders of the same tile never share dispense state.
 
@@ -646,15 +656,32 @@ a handful of integer and float encodes, and a four-tuple loop.
    Tests in `tests/tile_render.rs`; `tests/function_coverage.rs`
    exercises both nodes. The `Bytes` form and arena-backed output are
    still owed.
-5. **Projections.** Mostly done: a child program per body with element
-   and cascaded outer externs, the comprehension embedded in the
-   skeleton as a `StreamerValue`, per-thread scratch-state reuse, and
-   separators with per-encoding defaults, over inline comprehensions
-   and bound producers. The body's own input is the tuple index and
-   the program's `cycle` is cascaded like any outer wire; the tutorial
-   example caught `cycle` resolving to the index before this was so. Still owed: nested projections inside a body,
-   derived and generator-call sources, member projections, and the
-   bounded-cardinality check.
+5. **Projections.** Done. A child program per body with element and
+   cascaded outer externs, the comprehension embedded in the skeleton
+   as a `StreamerValue`, per-thread scratch-state reuse, and separators
+   with per-encoding defaults. Sources resolve through the `for`
+   construct's own `resolve_source`, so inline text, bound producers,
+   and derivations (`base where ... order ...`) all project. The
+   renderer evaluates the comprehension with the same
+   `evaluate_for_iteration` the `for` runtime opens a traversal with,
+   over an empty parent kernel and the body program as canonical, so
+   order strategies with truncation and element predicates behave
+   identically. Generator-call clauses compile to wires of the
+   enclosing program, typed by hole inference, and the render node
+   binds their values into the comprehension as literal lists, so a
+   projection never needs a kernel of its own. Nested projections lower
+   to a `tile` statement inside the body program (one program per
+   lexical position at every depth), with producers re-bound from
+   their source text and outer wires cascaded through. Member
+   projections come through the structural form. The bounded
+   cardinality check rejects continuous sources, which the runtime does
+   not sample into tuples, and accepts generator sources whose count is
+   unknown. A predicate placeholder for a wire outside the
+   comprehension is a compile error, as it is for `for`. The body's
+   own input is the tuple index and the program's `cycle` is cascaded
+   like any outer wire. Tests in `tests/tile_projections.rs`. Still
+   owed: a nested projection inside a string position, and stream-valued
+   generators, whose values cannot cross the node's text-typed inputs.
 6. **Host surfaces.** Mostly done. In source, `name := polytile(enc,
    body, options...)` and `name := polytile_json(body, options...)` are
    parsed into `tile` statements before compilation; the body is a
