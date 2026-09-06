@@ -14,13 +14,14 @@ and nested bodies; the binary's `--emit tile:<name>`, `--tile-delims`,
 and `--tile-sigil`; tiles inside module bodies; and the toy test
 definition rendering its readings as documents.
 
-Step 7, the P2 and P3 renderers, is not started and is blocked outside
-this SRD: the compiled tiers carry scalar slots only, so no `Str`-,
-`Json`-, or `Ext`-valued node has a compiled form today. A tile
-renderer there needs the SRD 111 arena ABI to land in Polydat's compiled
-tiers first; §12 step 7 records the prerequisite and the lowering that
-follows it. Until then tiles are ordinary P1 nodes, which the engines
-leave in place while fusing the scalar graph around them.
+Step 7, the P2 and P3 renderers, is in progress through SRD 115. With
+its step 6, a tile without projections renders natively: `tile_encode`
+and `tile_render` lower by the types of their wires, join the fused
+cones of the production kernel and the pure-P3 kernels, and produce the
+same bytes P1 does (`tests/variadic_lowering.rs`). A tile with a
+projection stays an ordinary P1 node, which the engines leave in place
+while fusing the graph around it, until projection bodies activate as
+`for` bodies do; §12 step 7 records what remains.
 
 The walk-through with real output is
 [the Polytile tutorial](../polytile_tutorial.md).
@@ -775,27 +776,25 @@ a handful of integer and float encodes, and a four-tuple loop.
    holes, branches, projections, and body programs, which `explain
    tiles` prints ahead of the hole typing. Tests in
    `tests/tile_host_surfaces.rs`, including the binary end to end.
-7. **P2 and P3.** Not started, and blocked on a prerequisite outside
-   this SRD, now specified as [Compiled Non-Scalar
+7. **P2 and P3.** In progress through [Compiled Non-Scalar
    Slots](compiled_handles.md) (SRD 115), whose step 6 is this step's
-   lowering. The P2 closure tier and the P3 cone tier both run over a
-   flat scalar slot buffer: no `Str`-, `Json`-, or `Ext`-valued node
-   has a compiled form today, cone classification admits scalar ports
-   only, and the SRD 111 handle helpers (`jit_str_to_u64` and its
-   siblings) read string handles into scalars rather than producing
-   strings. A tile renderer at P2/P3 therefore needs first a non-scalar
-   slot representation for the compiled tiers (arena handles in the
-   slot buffer, a `Copy` over interned static ranges, encoders that
-   write into the arena), which is the SRD 111 arena ABI landing in
-   Polydat's compiled tiers rather than a tile-specific piece of work.
-   Once that exists, the lowering is mechanical: `tile_encode` becomes
-   a helper per encoder over a scalar or handle, `tile_render` a helper
-   over a handle vector, and the skeleton's `Repeat` an activation of
-   the body program as `for` bodies already are. Differential tests
-   against P1 across the fuzz corpus remain the acceptance criterion.
-   Everything that precedes this step (typed transport into bodies,
-   skeleton counts, one program per position) was shaped so that this
-   lowering does not have to undo anything.
+   lowering. Landed: the compiled tiers carry `Str`, `Json`, and `Ext`
+   as handle slots; static runs and separators are interned at build;
+   `tile_encode` lowers to a helper over the hole's wire type and the
+   interned encoding, and `tile_render` to a helper over the interned
+   program and the typed hole texts, so a tile without projections
+   joins the fused cones of the production kernel and the pure-P3
+   kernels and renders the same bytes P1 does. An encoder fed straight
+   by a kernel input stays on P1 by the SRD-74 None rule (it would
+   write `null` for a None the fused cone would instead propagate),
+   and the render node takes its text as a boundary input. Remaining:
+   the skeleton's `Repeat`, an activation of the body program as `for`
+   bodies already are, which keeps any tile with a projection on P1;
+   and the P2 closure form with the differential suite across the fuzz
+   corpus (SRD 115 step 7), the acceptance criterion. Everything that
+   precedes this step (typed transport into bodies, skeleton counts,
+   one program per position) was shaped so that this lowering does not
+   have to undo anything.
 8. **Docs.** Done. [The Polytile tutorial](../polytile_tutorial.md)
    walks every implemented form with output from
    `examples/polytile_tutorial.rs` and `examples/polytile_demo.polydat`;

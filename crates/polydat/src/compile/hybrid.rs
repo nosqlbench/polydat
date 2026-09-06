@@ -129,9 +129,13 @@ impl HybridCore {
 }
 
 /// Run all hybrid steps unconditionally (no clean checks).
+///
+/// A hybrid kernel is driven by a host, never wrapped by a state, so each
+/// run begins a root cycle: the arena resets and the table takes the new
+/// generation (SRD 115 §4).
 #[inline]
 fn eval_all_hybrid_steps(core: &mut HybridCore) {
-    core.table.set_generation(crate::kernel::cycle_generation());
+    core.table.set_generation(crate::kernel::begin_root_cycle());
     for step in &core.steps {
         match step {
             #[cfg(feature = "jit")]
@@ -405,7 +409,7 @@ impl HybridKernelPushPull {
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_inputs(coords);
-        self.core.table.set_generation(crate::kernel::cycle_generation());
+        self.core.table.set_generation(crate::kernel::begin_root_cycle());
         for (step_idx, step) in self.core.steps.iter().enumerate() {
             if self.step_clean[step_idx] { continue; }
             match step {
@@ -455,7 +459,7 @@ impl HybridKernelPushPull {
             && self.slot_provenance[slot] & self.changed_mask == 0 {
                 return self.core.buffer[slot];
             }
-        self.core.table.set_generation(crate::kernel::cycle_generation());
+        self.core.table.set_generation(crate::kernel::begin_root_cycle());
         for (step_idx, step) in self.core.steps.iter().enumerate() {
             if self.step_clean[step_idx] { continue; }
             match step {

@@ -52,8 +52,19 @@ kernel is never skipped as clean, since its storage belongs to the
 cycle that ran it. The marshalling rule lives in one place,
 `compile::marshal`, and the pure-P3 kernels carry a slot mask and their
 outputs' port types, so their raw readers refuse handle slots and
-`get_value` decodes by type. Tests in `tests/value_table.rs`. Steps 6
-through 8 are not started.
+`get_value` decodes by type. Tests in `tests/value_table.rs`. Step 6,
+helpers and lowerings, has landed for every node it names except the
+projection form of `tile_render`: `printf`, `json_array`, `json_object`,
+`to_json`, `json_text`, `tile_encode`, and `tile_render` over a skeleton
+without projections lower by the wire-typed classification of §6, run
+the same body P1 runs, and agree with it across the type set. Cones
+admit a None-tolerant node behind a member (§9). The P3 kernels lower
+the same set by port type. A tile with a projection stays on P1 until
+projection bodies activate as `for` bodies do, the remaining part of
+step 6. Getting there fixed a hybrid-kernel gap: a host-driven hybrid
+kernel never began a root cycle, so string-producing segments grew the
+arena across runs. Tests in `tests/variadic_lowering.rs`. Steps 7 and
+8 are not started.
 This document fixes the slot representation that lets string, byte,
 JSON, and extension values ride through the P2 and P3 engines, so that
 the nodes which produce and consume them (string operations, JSON
@@ -345,6 +356,48 @@ set, in order of leverage: the string operations that already have
 helpers, `printf`, the JSON constructors and `json_text`, `to_json` and
 `json_to_str`, and then `tile_encode` and `tile_render`.
 
+### 6.1 Wire-typed lowerings
+
+A node whose P1 body dispatches on `Value` variants (`printf` and the
+JSON constructors over `&[Value]`, `to_json`, `json_text`, and the tile
+nodes over a `Value` port) has no fixed port types to lower by. Its
+lowering is decided with the types of its wires, which the assembler
+knows for every edge: `classify_node_typed(node, wire_types)` is the
+classifier the P3 layout and the cone planner use, and it falls back to
+the untyped classifier for every other node. The rules:
+
+- **One code per argument.** Each wire type maps to a one-byte code
+  (`u i f b s y j e h` for `U64 I64 F64 Bool Str Bytes Json Ext
+  Handle`); the codes of a node's wires are interned as one static
+  string, and its handle is baked into the call. A wire of any other
+  type has no code, and the node stays on P1. This is the only place
+  the advertised port types of a variadic node are set aside: the cone
+  planner's rule that a wire equals its port type is waived exactly for
+  the ops this classification produced, never by node name, so
+  `str_concat`, whose helper takes strings, still needs string wires.
+- **Arguments in a stack array.** Generated code stores the argument
+  slots into an array in its own frame and passes its address; the
+  helper decodes each argument by its code, scalars from bits, strings
+  by reference from the arena or interner, table kinds from the
+  installed table, and runs the same function the P1 node runs
+  (`ParsedFormat::render_with`, `json_array_of`, `json_object_of`,
+  `value_to_json`, `json_text_of`, `encode`, `TileProgram::render`).
+  H7 holds by construction: there is one body per node.
+- **Parsed constants are interned.** The parsed format of a `printf`,
+  the encoding of a `tile_encode` spec, and the program of a
+  `tile_render` skeleton are interned by content for the process, as
+  static strings are, and the helper receives the address. They are
+  immutable once made and outlive every kernel compiled from them.
+- **Strings are not copied to be formatted.** `printf` takes its
+  arguments as borrowed views (`FmtArg`), so a string argument is
+  formatted from the arena in place. The JSON and tile helpers build
+  owned `Value`s for their arguments, which copies a string once; a
+  borrowed form of `encode` and `value_to_json` is a refinement.
+- **Projections stay on P1.** A skeleton with a projection re-runs a
+  body program per tuple through nested kernels; its `tile_render`
+  classifies as fallback until projection bodies activate as `for`
+  bodies do.
+
 ## 7. The P2 closure form
 
 P2 is the equivalence oracle for P3 and stays one. A `compiled_slot`
@@ -420,7 +473,19 @@ jit_boundary.md when this SRD lands.
   cone, and comes back as the same `Arc`.
 - **No coercion for eligibility.** The classifier never re-types a port
   to admit a node; a `Hdl1` port is admitted as `Hdl1` or the node stays
-  on P1.
+  on P1. The wire-typed lowerings of §6.1 read the wire types the
+  assembler already established; they change nothing about them.
+- **The SRD-74 None rule is refined, not relaxed.** A fused cone is one
+  node to the kernel guard: a None on any boundary input makes every
+  output None. A node that tolerates None inputs and would have
+  produced a value from one (`tile_encode` writes `null`, `to_json`
+  keeps going, `identity` passes it through) may therefore join a cone
+  only when every one of its inputs is an intra-cone wire from another
+  member, where no None can arrive because the cone's own boundary is
+  guarded and no lowered op produces None. Eligibility is decided in
+  topological order on that basis, and the planner rejects a cone whose
+  component split left such a node on the boundary. Fed by a kernel
+  input, the node stays on P1 and keeps its P1 semantics exactly.
 
 ## 10. Findings this design rests on
 
@@ -468,7 +533,9 @@ point.
 6. **Helpers and lowerings.** `printf`, the JSON constructors,
    `json_text`, `to_json`, `json_to_str`; then `tile_encode` and
    `tile_render` per SRD 114 §12 step 7, with tile statics interned and
-   projection bodies activated as `for` bodies are.
+   projection bodies activated as `for` bodies are. Landed by the
+   wire-typed classification of §6.1 for everything but projections,
+   which remain the open part of this step.
 7. **P2 closures and differential tests.** `compiled_slot` kits for
    `Hdl1` nodes from the macro; the P1↔P2↔P3 suite over the fuzz corpus,
    including the tile fuzzer; the S9-style post-pass assertions for

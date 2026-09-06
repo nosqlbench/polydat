@@ -629,6 +629,167 @@ extern "C" fn jit_json_to_str(h: u64) -> u64 {
     crate::kernel::put_thread_str(&text)
 }
 
+// ── Variadic and polymorphic nodes by wire type (SRD 115 §6) ─────
+// A node that inspects `Value` variants at P1 is lowered with the
+// types of its wires fixed at classification: one code per argument,
+// interned as a static string whose handle the code passes along.
+// Generated code stores the arguments into a stack array and the
+// helper decodes each by its code (scalars from bits, strings from the
+// arena or interner, table kinds from the installed table), then runs
+// the same body the P1 node runs.
+
+fn type_codes(types: u64) -> &'static str {
+    crate::kernel::StaticInterner::resolve_handle(types).unwrap_or("")
+}
+
+/// The arguments of a variadic call as owned values, by their codes.
+///
+/// # Safety
+/// `args` points at `type_codes(types).len()` slots written by the
+/// generated code into its own frame, live for the duration of the call.
+unsafe fn decode_args(types: u64, args: *const u64) -> Vec<crate::ast::Value> {
+    type_codes(types)
+        .bytes()
+        .enumerate()
+        .map(|(i, code)| crate::compile::marshal::arg_value(code, unsafe { *args.add(i) }))
+        .collect()
+}
+
+extern "C" fn jit_printf(format: u64, types: u64, args: *const u64) -> u64 {
+    // SAFETY: `format` is the address of a `ParsedFormat` interned for
+    // the process (`ParsedFormat::interned`), baked by the classifier.
+    let parsed = unsafe { &*(format as *const crate::library::format::ParsedFormat) };
+    let codes = type_codes(types).as_bytes();
+    let text = parsed.render_with(codes.len(), |i| {
+        // SAFETY: see `decode_args`; `i < codes.len()`.
+        crate::compile::marshal::fmt_arg(codes[i], unsafe { *args.add(i) })
+    });
+    crate::kernel::put_thread_str(&text)
+}
+
+extern "C" fn jit_json_array(entry: u64, types: u64, args: *const u64) -> u64 {
+    // SAFETY: see `decode_args`.
+    let vals = unsafe { decode_args(types, args) };
+    write_json(entry, crate::library::json::json_array_of(&vals))
+}
+
+extern "C" fn jit_json_object(entry: u64, types: u64, args: *const u64) -> u64 {
+    // SAFETY: see `decode_args`.
+    let vals = unsafe { decode_args(types, args) };
+    write_json(entry, crate::library::json::json_object_of(&vals))
+}
+
+extern "C" fn jit_to_json(entry: u64, code: u64, bits: u64) -> u64 {
+    let v = crate::compile::marshal::arg_value(code as u8, bits);
+    write_json(entry, crate::library::json::value_to_json(&v))
+}
+
+extern "C" fn jit_json_text(code: u64, bits: u64) -> u64 {
+    let v = crate::compile::marshal::arg_value(code as u8, bits);
+    crate::kernel::put_thread_str(&crate::library::json::json_text_of(&v))
+}
+
+extern "C" fn jit_tile_encode(spec: u64, code: u64, bits: u64) -> u64 {
+    // SAFETY: `spec` is the address of a `HoleEncoding` interned for the
+    // process (`HoleEncoding::interned`), baked by the classifier.
+    let enc = unsafe { &*(spec as *const crate::library::tile_render::HoleEncoding) };
+    let v = crate::compile::marshal::arg_value(code as u8, bits);
+    let mut out = String::new();
+    crate::library::tile_render::encode(&v, enc, &mut out);
+    crate::kernel::put_thread_str(&out)
+}
+
+extern "C" fn jit_tile_render(program: u64, types: u64, args: *const u64) -> u64 {
+    // SAFETY: `program` is the address of a `TileProgram` interned for
+    // the process (`TileProgram::interned`), baked by the classifier.
+    let program = unsafe { &*(program as *const crate::library::tile_render::TileProgram) };
+    // SAFETY: see `decode_args`.
+    let vals = unsafe { decode_args(types, args) };
+    crate::kernel::put_thread_str(&program.render(&vals))
+}
+
+/// True for an op whose helper decodes its arguments by the wire types
+/// fixed at classification, so the node's advertised port types do not
+/// bind its wires (SRD 115 §6).
+pub(crate) fn wires_typed_at_lowering(op: &JitOp) -> bool {
+    matches!(
+        op,
+        JitOp::Printf { .. }
+            | JitOp::JsonArray { .. }
+            | JitOp::JsonObject { .. }
+            | JitOp::ToJson(_)
+            | JitOp::JsonText(_)
+            | JitOp::TileEncode { .. }
+            | JitOp::TileRender { .. }
+    )
+}
+
+/// The value of a node's `Const<&str>` slot, by parameter name.
+fn const_str_of<'a>(node: &'a dyn PolydatNode, param: &str) -> Option<&'a str> {
+    node.meta().ins.iter().find_map(|slot| match slot {
+        crate::ast::Slot::Const { name, value: crate::ast::ConstValue::Str(v) } if name == param => Some(v.as_str()),
+        _ => None,
+    })
+}
+
+/// Classify a node with the types of its wire inputs known (SRD 115
+/// §6). Nodes that dispatch on `Value` variants at P1 (`printf`, the
+/// JSON constructors, `to_json`, `json_text`, the tile nodes) lower to
+/// helpers that decode each argument by a type code fixed here; a wire
+/// of a type no helper takes keeps the node on P1. Everything else
+/// classifies as [`classify_node`] does.
+pub fn classify_node_typed(node: &dyn PolydatNode, wire_types: &[crate::ast::PortType]) -> JitOp {
+    use crate::compile::marshal::type_code;
+    use crate::kernel::StaticInterner;
+    let codes = || -> Option<u64> {
+        let s: Option<String> = wire_types.iter().map(|t| type_code(*t).map(|c| c as char)).collect();
+        s.map(|s| StaticInterner::intern(&s))
+    };
+    let single = || -> Option<u8> {
+        match wire_types {
+            [t] => type_code(*t),
+            _ => None,
+        }
+    };
+    match node.meta().name.as_str() {
+        "printf" => match (const_str_of(node, "format"), codes()) {
+            (Some(fmt), Some(types)) => {
+                let parsed = crate::library::format::ParsedFormat::interned(fmt);
+                JitOp::Printf { format: parsed as *const _ as u64, types }
+            }
+            _ => JitOp::Fallback,
+        },
+        // The concat helper takes string handles; any other wire on it
+        // keeps the node on P1, where it inspects the `Value`.
+        "str_concat" | "concat" if wire_types.iter().any(|t| *t != crate::ast::PortType::Str) => JitOp::Fallback,
+        "json_array" => codes().map_or(JitOp::Fallback, |types| JitOp::JsonArray { types }),
+        "json_object" => codes().map_or(JitOp::Fallback, |types| JitOp::JsonObject { types }),
+        "to_json" => single().map_or(JitOp::Fallback, JitOp::ToJson),
+        "json_text" => single().map_or(JitOp::Fallback, JitOp::JsonText),
+        "tile_encode" => match (const_str_of(node, "spec"), single()) {
+            (Some(spec), Some(code)) => {
+                let enc = crate::library::tile_render::HoleEncoding::interned(spec);
+                JitOp::TileEncode { spec: enc as *const _ as u64, code }
+            }
+            _ => JitOp::Fallback,
+        },
+        "tile_render" => match (const_str_of(node, "spec"), codes()) {
+            (Some(spec), Some(types)) => {
+                let program = crate::library::tile_render::TileProgram::interned(spec);
+                // A projection re-runs a body program per tuple; that
+                // stays on P1 until bodies activate as `for` bodies do.
+                if program.has_projections() {
+                    JitOp::Fallback
+                } else {
+                    JitOp::TileRender { program: program as *const _ as u64, types }
+                }
+            }
+            _ => JitOp::Fallback,
+        },
+        _ => classify_node(node),
+    }
+}
+
 // ── JitOp ──────────────────────────────────────────────────
 
 /// Description of a JIT step — what operation to generate.
@@ -930,6 +1091,26 @@ pub enum JitOp {
     StrToJson,
     /// output[0] = jit_json_to_str(input[0]): serializes to the arena
     JsonToStr,
+    // --- Variadic and polymorphic nodes by wire type (SRD 115 §6) ---
+    /// output[0] = jit_printf(format, types, args): `format` is the
+    /// address of the interned parsed format, `types` the static
+    /// handle of the argument type codes, `args` the inputs in a
+    /// stack array
+    Printf { format: u64, types: u64 },
+    /// output[0] = jit_json_array(entry, types, args)
+    JsonArray { types: u64 },
+    /// output[0] = jit_json_object(entry, types, args)
+    JsonObject { types: u64 },
+    /// output[0] = jit_to_json(entry, code, input[0])
+    ToJson(u8),
+    /// output[0] = jit_json_text(code, input[0])
+    JsonText(u8),
+    /// output[0] = jit_tile_encode(spec, code, input[0]): `spec` is
+    /// the address of the interned hole encoding
+    TileEncode { spec: u64, code: u8 },
+    /// output[0] = jit_tile_render(program, types, args): `program`
+    /// is the address of the interned tile program
+    TileRender { program: u64, types: u64 },
 
     /// Fallback: call the Phase 2 closure
     Fallback,
@@ -1692,12 +1873,29 @@ fn produces_handle(op: &JitOp) -> bool {
             | JitOp::BoolToJson
             | JitOp::StrToJson
             | JitOp::JsonToStr
+            | JitOp::Printf { .. }
+            | JitOp::JsonArray { .. }
+            | JitOp::JsonObject { .. }
+            | JitOp::ToJson(_)
+            | JitOp::JsonText(_)
+            | JitOp::TileEncode { .. }
+            | JitOp::TileRender { .. }
     )
 }
 
 /// True for an op whose output is a value-table entry.
 fn produces_table_entry(op: &JitOp) -> bool {
-    matches!(op, JitOp::U64ToJson | JitOp::I64ToJson | JitOp::F64ToJson | JitOp::BoolToJson | JitOp::StrToJson)
+    matches!(
+        op,
+        JitOp::U64ToJson
+            | JitOp::I64ToJson
+            | JitOp::F64ToJson
+            | JitOp::BoolToJson
+            | JitOp::StrToJson
+            | JitOp::JsonArray { .. }
+            | JitOp::JsonObject { .. }
+            | JitOp::ToJson(_)
+    )
 }
 
 /// Core JIT compilation. Returns (raw_fn, prov_fn, module, table_entries).
@@ -1801,6 +1999,13 @@ fn compile_jit_impl(
     jit_builder.symbol("jit_bool_to_json", jit_bool_to_json as *const u8);
     jit_builder.symbol("jit_str_to_json", jit_str_to_json as *const u8);
     jit_builder.symbol("jit_json_to_str", jit_json_to_str as *const u8);
+    jit_builder.symbol("jit_printf", jit_printf as *const u8);
+    jit_builder.symbol("jit_json_array", jit_json_array as *const u8);
+    jit_builder.symbol("jit_json_object", jit_json_object as *const u8);
+    jit_builder.symbol("jit_to_json", jit_to_json as *const u8);
+    jit_builder.symbol("jit_json_text", jit_json_text as *const u8);
+    jit_builder.symbol("jit_tile_encode", jit_tile_encode as *const u8);
+    jit_builder.symbol("jit_tile_render", jit_tile_render as *const u8);
 
     let mut module = JITModule::new(jit_builder);
 
@@ -2032,6 +2237,29 @@ fn compile_jit_impl(
         );
     }
 
+    // Declare the wire-typed helpers (SRD 115 §6): every argument and
+    // the return are I64 (bits, handles, addresses, codes).
+    let variadic_names: [(&str, usize); 7] = [
+        ("jit_printf", 3),
+        ("jit_json_array", 3),
+        ("jit_json_object", 3),
+        ("jit_to_json", 3),
+        ("jit_json_text", 2),
+        ("jit_tile_encode", 3),
+        ("jit_tile_render", 3),
+    ];
+    let mut variadic_ids: HashMap<&'static str, cranelift_module::FuncId> = HashMap::new();
+    for (name, arity) in variadic_names {
+        let mut sig = module.make_signature();
+        for _ in 0..arity {
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = module.declare_function(name, Linkage::Import, &sig)
+            .map_err(|e| format!("declare {name}: {e}"))?;
+        variadic_ids.insert(name, id);
+    }
+
     let str_concat_id = {
         let mut sig = module.make_signature();
         sig.params.push(AbiParam::new(types::I64));
@@ -2099,6 +2327,9 @@ fn compile_jit_impl(
             .collect();
         let table_binary_refs: Vec<_> = table_binary_ids.iter()
             .map(|id| module.declare_func_in_func(*id, builder.func))
+            .collect();
+        let variadic_refs: HashMap<&'static str, ir::FuncRef> = variadic_ids.iter()
+            .map(|(name, id)| (*name, module.declare_func_in_func(*id, builder.func)))
             .collect();
         let str_concat_ref = module.declare_func_in_func(str_concat_id, builder.func);
 
@@ -3286,6 +3517,54 @@ fn compile_jit_impl(
                 JitOp::JsonToStr => {
                     let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
                     let call = builder.ins().call(string_unary_refs[12], &[val]);
+                    let result = builder.inst_results(call)[0];
+                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                }
+                // Wire-typed variadic nodes (SRD 115 §6): the inputs go
+                // into a stack array of this frame and the helper reads
+                // them by the type codes baked at classification.
+                JitOp::Printf { .. } | JitOp::JsonArray { .. } | JitOp::JsonObject { .. } | JitOp::TileRender { .. } => {
+                    let n = input_slots.len();
+                    let slot_data = ir::StackSlotData::new(ir::StackSlotKind::ExplicitSlot, (8 * n.max(1)) as u32, 3);
+                    let ss = builder.create_sized_stack_slot(slot_data);
+                    for (i, &slot) in input_slots.iter().enumerate() {
+                        let v = load_slot(&mut builder, buffer_ptr, slot);
+                        builder.ins().stack_store(v, ss, (8 * i) as i32);
+                    }
+                    let args = builder.ins().stack_addr(types::I64, ss, 0);
+                    let (helper, first, second) = match jit_op {
+                        JitOp::Printf { format, types } => ("jit_printf", *format, *types),
+                        JitOp::JsonArray { types } => ("jit_json_array", entry_of_slot[&output_slots[0]] as u64, *types),
+                        JitOp::JsonObject { types } => ("jit_json_object", entry_of_slot[&output_slots[0]] as u64, *types),
+                        JitOp::TileRender { program, types } => ("jit_tile_render", *program, *types),
+                        _ => unreachable!(),
+                    };
+                    let a = builder.ins().iconst(types::I64, first as i64);
+                    let b = builder.ins().iconst(types::I64, second as i64);
+                    let call = builder.ins().call(variadic_refs[helper], &[a, b, args]);
+                    let result = builder.inst_results(call)[0];
+                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                }
+                JitOp::ToJson(code) => {
+                    let entry = builder.ins().iconst(types::I64, entry_of_slot[&output_slots[0]] as i64);
+                    let c = builder.ins().iconst(types::I64, *code as i64);
+                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                    let call = builder.ins().call(variadic_refs["jit_to_json"], &[entry, c, val]);
+                    let result = builder.inst_results(call)[0];
+                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                }
+                JitOp::JsonText(code) => {
+                    let c = builder.ins().iconst(types::I64, *code as i64);
+                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                    let call = builder.ins().call(variadic_refs["jit_json_text"], &[c, val]);
+                    let result = builder.inst_results(call)[0];
+                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                }
+                JitOp::TileEncode { spec, code } => {
+                    let s = builder.ins().iconst(types::I64, *spec as i64);
+                    let c = builder.ins().iconst(types::I64, *code as i64);
+                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                    let call = builder.ins().call(variadic_refs["jit_tile_encode"], &[s, c, val]);
                     let result = builder.inst_results(call)[0];
                     store_slot(&mut builder, buffer_ptr, output_slots[0], result);
                 }

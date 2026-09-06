@@ -38,6 +38,63 @@ pub(crate) fn encode_slot(v: &Value, table: &mut ValueTable, entry: Option<usize
     })
 }
 
+/// The one-byte type code a variadic lowering records per argument
+/// (SRD 115 §6): the codes of a node's wires are interned as a static
+/// string, and the helper decodes each argument by its code. `None`
+/// for a type no helper can take.
+pub(crate) fn type_code(ty: PortType) -> Option<u8> {
+    Some(match ty {
+        PortType::U64 => b'u',
+        PortType::I64 => b'i',
+        PortType::F64 => b'f',
+        PortType::Bool => b'b',
+        PortType::Str => b's',
+        PortType::Bytes => b'y',
+        PortType::Json => b'j',
+        PortType::Ext => b'e',
+        PortType::Handle => b'h',
+        _ => return None,
+    })
+}
+
+/// The port type a type code names.
+pub(crate) fn type_of_code(code: u8) -> PortType {
+    match code {
+        b'i' => PortType::I64,
+        b'f' => PortType::F64,
+        b'b' => PortType::Bool,
+        b's' => PortType::Str,
+        b'y' => PortType::Bytes,
+        b'j' => PortType::Json,
+        b'e' => PortType::Ext,
+        b'h' => PortType::Handle,
+        _ => PortType::U64,
+    }
+}
+
+/// An argument's slot bits as an owned `Value`, decoded by its type
+/// code through the table installed for the running native code.
+pub(crate) fn arg_value(code: u8, bits: u64) -> Value {
+    let ty = type_of_code(code);
+    match ty.handle_kind() {
+        Some(crate::ast::HandleKind::Table) => crate::kernel::with_current_value_table(|t| t.read(bits)),
+        _ => decode_slot(bits, ty, &ValueTable::new(0)),
+    }
+}
+
+/// An argument as a format argument: strings are borrowed from the
+/// arena or the interner rather than copied.
+pub(crate) fn fmt_arg(code: u8, bits: u64) -> crate::library::format::FmtArg<'static> {
+    use crate::library::format::FmtArg;
+    match code {
+        b'u' => FmtArg::U64(bits),
+        b'f' => FmtArg::F64(f64::from_bits(bits)),
+        b'b' => FmtArg::Bool(bits != 0),
+        b's' => FmtArg::Str(crate::kernel::resolve_thread_str(bits)),
+        _ => FmtArg::Value(arg_value(code, bits)),
+    }
+}
+
 /// Slot bits as the `Value` their declared port type names, copied out
 /// of the arena or of `table` where the bits are a handle.
 pub(crate) fn decode_slot(bits: u64, ty: PortType, table: &ValueTable) -> Value {

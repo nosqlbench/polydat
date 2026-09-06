@@ -61,6 +61,24 @@ impl HoleEncoding {
         format!("{}|{}|{}|{}|{}", self.encoding, pos, self.ty.as_deref().unwrap_or(""), self.format.as_deref().unwrap_or(""), flags)
     }
 
+    /// The encoding for a spec, interned for the process (SRD 115 §6)
+    /// so the compiled lowering of `tile_encode` can bake its address.
+    pub fn interned(spec: &str) -> &'static HoleEncoding {
+        use std::sync::RwLock;
+        static ENCODINGS: RwLock<Option<HashMap<String, &'static HoleEncoding>>> = RwLock::new(None);
+        if let Some(e) = ENCODINGS.read().unwrap().as_ref().and_then(|m| m.get(spec).copied()) {
+            return e;
+        }
+        let mut guard = ENCODINGS.write().unwrap();
+        let map = guard.get_or_insert_with(HashMap::new);
+        if let Some(e) = map.get(spec).copied() {
+            return e;
+        }
+        let leaked: &'static HoleEncoding = Box::leak(Box::new(Self::from_spec(spec)));
+        map.insert(spec.to_string(), leaked);
+        leaked
+    }
+
     pub fn from_spec(spec: &str) -> Self {
         let mut parts = spec.splitn(5, '|');
         let encoding = parts.next().unwrap_or("text").to_string();
@@ -230,6 +248,42 @@ impl TileProgram {
         let empty = Arc::new(empty_kernel);
         let ops = lower_ops(&spec.ops);
         TileProgram { spec, ops, children, canonicals, empty }
+    }
+
+    /// The program for a skeleton payload, interned for the process
+    /// (SRD 115 §6): the compiled lowering of `tile_render` bakes its
+    /// address, so it must outlive every kernel compiled from it, and
+    /// the same payload is parsed and its bodies compiled once.
+    pub fn interned(spec: &str) -> &'static TileProgram {
+        use std::sync::RwLock;
+        static PROGRAMS: RwLock<Option<HashMap<String, usize>>> = RwLock::new(None);
+        let found = PROGRAMS.read().unwrap().as_ref().and_then(|m| m.get(spec).copied());
+        if let Some(p) = found {
+            // SAFETY: the address was leaked below and is never freed.
+            return unsafe { &*(p as *const TileProgram) };
+        }
+        let mut guard = PROGRAMS.write().unwrap();
+        let map = guard.get_or_insert_with(HashMap::new);
+        if let Some(&p) = map.get(spec) {
+            // SAFETY: as above.
+            return unsafe { &*(p as *const TileProgram) };
+        }
+        let leaked: &'static TileProgram = Box::leak(Box::new(Self::from_json(spec)));
+        map.insert(spec.to_string(), leaked as *const TileProgram as usize);
+        leaked
+    }
+
+    /// True when any op re-runs a projection body: such a skeleton
+    /// stays on P1 until projection bodies activate as `for` bodies do.
+    pub fn has_projections(&self) -> bool {
+        fn walk(ops: &[RtOp]) -> bool {
+            ops.iter().any(|op| match op {
+                RtOp::Repeat { .. } => true,
+                RtOp::Branch { then, otherwise, .. } => walk(then) || walk(otherwise),
+                _ => false,
+            })
+        }
+        walk(&self.ops)
     }
 
     /// Render with the node's wire inputs, each already encoded text.

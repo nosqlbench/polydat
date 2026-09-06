@@ -74,7 +74,7 @@ mod jit_impl {
     use super::JitMode;
     use crate::ast::{NodeMeta, PolydatNode, Port, PortType, Purity, Slot, Value};
     use crate::compile::assembly::{PolydatAssembler, ResolvedDag};
-    use crate::compile::jit::{classify_node, JitOp};
+    use crate::compile::jit::{classify_node_typed, JitOp};
     use crate::kernel::{InputDef, InputKind, WireSource};
     use std::collections::HashMap;
 
@@ -244,15 +244,16 @@ mod jit_impl {
         }
     }
 
-    /// A node may join a cone iff the P3 classifier can lower it,
-    /// it is pure, it follows the SRD-74 None rule (so the kernel
-    /// guard applies uniformly to the fused cone), and every wire
-    /// port is a single-slot scalar this push can marshal.
-    fn node_eligible(node: &dyn PolydatNode) -> bool {
+    /// A node may join a cone iff the P3 classifier can lower it with
+    /// its wire types known, it is pure, and every wire port is a
+    /// single-slot value this push can marshal. The SRD-74 None rule
+    /// is applied by the caller, which knows where each input comes
+    /// from.
+    fn node_eligible(node: &dyn PolydatNode, wire_types: &[PortType]) -> bool {
         matches!(node.purity(), Purity::Pure)
-            && !node.accepts_none_inputs()
-            && !matches!(classify_node(node), JitOp::Fallback)
+            && !matches!(classify_node_typed(node, wire_types), JitOp::Fallback)
             && node.meta().outs.iter().all(|p| scalar_ok(p.typ))
+            && wire_types.iter().all(|t| scalar_ok(*t))
             && node
                 .meta()
                 .wire_inputs()
@@ -352,12 +353,30 @@ mod jit_impl {
         }
 
         let lifecycles = classify_lifecycles(dag, &dag.nodes);
-        let eligible: Vec<bool> = dag
-            .nodes
-            .iter()
-            .zip(&lifecycles)
-            .map(|(nd, lc)| *lc == Lc::Dynamic && node_eligible(nd.as_ref()))
-            .collect();
+        // Eligibility in topological order, because the SRD-74 None
+        // rule for a None-tolerant node depends on its sources: the
+        // kernel guard makes a fused cone None whenever a boundary
+        // input is None, so a node that would have seen the None and
+        // produced a value (`tile_encode` writes `null`, `to_json`
+        // keeps going) may join only when every input is an intra-cone
+        // wire from an eligible node, where no None can arrive. Every
+        // other node is guarded the same way fused or not.
+        let mut eligible: Vec<bool> = vec![false; n];
+        for i in 0..n {
+            if lifecycles[i] != Lc::Dynamic {
+                continue;
+            }
+            let nd = dag.nodes[i].as_ref();
+            if !node_eligible(nd, &crate::compile::assembly::wire_types_of(dag, i)) {
+                continue;
+            }
+            if nd.accepts_none_inputs()
+                && !dag.wiring[i].iter().all(|src| matches!(src, WireSource::NodeOutput(j, _) if eligible[*j]))
+            {
+                continue;
+            }
+            eligible[i] = true;
+        }
 
         // Connected components over eligible-to-eligible wires.
         let mut parent: Vec<usize> = (0..n).collect();
@@ -522,7 +541,22 @@ mod jit_impl {
         let mut in_types: Vec<PortType> = Vec::new();
         let mut seen_in: HashMap<(u8, usize, usize), usize> = HashMap::new();
         for &m in members {
-            let member_ports: Vec<PortType> = nodes[m].as_ref()?.meta().wire_inputs().iter().map(|p| p.typ).collect();
+            let member = nodes[m].as_ref()?;
+            let member_ports: Vec<PortType> = member.meta().wire_inputs().iter().map(|p| p.typ).collect();
+            // A variadic node that inspects `Value`s at P1 lowers with
+            // its wire types fixed (SRD 115 §6), so its advertised
+            // port types do not bind its wires. Only the lowering
+            // decides that: `str_concat` is variadic too, but its
+            // helper takes strings, so its wires must be strings.
+            let member_wire_types: Vec<PortType> = dag.wiring[m]
+                .iter()
+                .map(|src| match src {
+                    WireSource::Input(i) => Some(dag.input_defs[*i].port_type),
+                    WireSource::NodeOutput(j, p) => nodes[*j].as_ref().map(|nd| nd.meta().outs[*p].typ),
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let wires_typed_at_lowering =
+                crate::compile::jit::wires_typed_at_lowering(&classify_node_typed(member.as_ref(), &member_wire_types));
             for (k, src) in dag.wiring[m].iter().enumerate() {
                 let ty = match src {
                     WireSource::Input(i) => dag.input_defs[*i].port_type,
@@ -530,19 +564,27 @@ mod jit_impl {
                         nodes[*j].as_ref()?.meta().outs[*p].typ
                     }
                 };
-                // Inside a cone every wire is exactly its port's type.
-                // The assembler lets some variadic nodes take any wire
-                // untyped (they inspect the `Value`); a native helper
-                // cannot, so such an edge keeps the node on P1.
-                if let Some(expected) = member_ports.get(k)
+                // Inside a cone every wire is exactly its port's type,
+                // unless the lowering fixed the wire types itself.
+                if !wires_typed_at_lowering
+                    && let Some(expected) = member_ports.get(k)
                     && *expected != ty
                 {
                     audit_skip(members.len(), &format!(
                         "input [{k}] of `{}` is a {ty:?} wire on a {expected:?} port",
-                        nodes[m].as_ref()?.meta().name));
+                        member.meta().name));
                     return None;
                 }
                 let intra = matches!(src, WireSource::NodeOutput(j, _) if is_member(*j));
+                // SRD-74: a None-tolerant member must not sit on the
+                // boundary, where a None could reach it (see the
+                // eligibility pass); a component split can put it there.
+                if !intra && member.accepts_none_inputs() {
+                    audit_skip(members.len(), &format!(
+                        "`{}` tolerates None inputs and input [{k}] is a boundary wire",
+                        member.meta().name));
+                    return None;
+                }
                 if intra {
                     continue;
                 }

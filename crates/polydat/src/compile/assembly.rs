@@ -846,7 +846,7 @@ impl PolydatAssembler {
 
         let mut jit_steps = Vec::new();
         for (node_idx, node) in resolved.nodes.iter().enumerate() {
-            let jit_op = crate::compile::jit::classify_node(node.as_ref());
+            let jit_op = crate::compile::jit::classify_node_typed(node.as_ref(), &wire_types_of(resolved, node_idx));
             jit_steps.push((
                 jit_op,
                 layout.input_slots(resolved, node_idx),
@@ -1660,7 +1660,19 @@ fn assertion_skip_reason(
 /// emission, tile rendering), so the wire is connected untyped and the
 /// value arrives with its own kind: `json_array(cycle)` holds a number,
 /// not the text of one.
-const UNTYPED_VARIADIC_NODES: &[&str] = &[
+/// The port type of each wire input of a node, from its sources: the
+/// type a compiled lowering sees (SRD 115 §6).
+pub(crate) fn wire_types_of(resolved: &ResolvedDag, node_idx: usize) -> Vec<PortType> {
+    resolved.wiring[node_idx]
+        .iter()
+        .map(|src| match src {
+            crate::kernel::WireSource::Input(i) => resolved.input_defs[*i].port_type,
+            crate::kernel::WireSource::NodeOutput(j, p) => resolved.nodes[*j].meta().outs[*p].typ,
+        })
+        .collect()
+}
+
+pub(crate) const UNTYPED_VARIADIC_NODES: &[&str] = &[
     "printf",
     "pick",
     "log_debug",

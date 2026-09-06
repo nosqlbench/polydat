@@ -71,6 +71,12 @@ fn json_with(
 /// const keys + per-slot wires in the workload DSL.
 #[crate::polydat_node(category = Json, variadic_min = 0)]
 fn json_object(parts: &[Value]) -> std::sync::Arc<serde_json::Value> {
+    std::sync::Arc::new(json_object_of(parts))
+}
+
+/// The merge `json_object` performs, shared with its compiled helper
+/// (SRD 115 §6) so both tiers run one body.
+pub(crate) fn json_object_of(parts: &[Value]) -> serde_json::Value {
     let mut merged = serde_json::Map::new();
     for v in parts {
         if let Value::Json(arc) = v
@@ -80,7 +86,12 @@ fn json_object(parts: &[Value]) -> std::sync::Arc<serde_json::Value> {
                 }
             }
     }
-    std::sync::Arc::new(serde_json::Value::Object(merged))
+    serde_json::Value::Object(merged)
+}
+
+/// The array `json_array` builds, shared with its compiled helper.
+pub(crate) fn json_array_of(elems: &[Value]) -> serde_json::Value {
+    serde_json::Value::Array(elems.iter().map(value_to_json).collect())
 }
 
 /// Build a JSON array from N inputs.
@@ -96,8 +107,7 @@ fn json_object(parts: &[Value]) -> std::sync::Arc<serde_json::Value> {
 /// programmatic-construction signature.
 #[crate::polydat_node(category = Json, variadic_min = 0)]
 fn json_array(elems: &[Value]) -> std::sync::Arc<serde_json::Value> {
-    let arr: Vec<serde_json::Value> = elems.iter().map(value_to_json).collect();
-    std::sync::Arc::new(serde_json::Value::Array(arr))
+    std::sync::Arc::new(json_array_of(elems))
 }
 
 /// Wrap a single value as a JSON value.
@@ -208,7 +218,7 @@ fn json_field(
 // Helpers
 // =================================================================
 
-fn value_to_json(v: &Value) -> serde_json::Value {
+pub(crate) fn value_to_json(v: &Value) -> serde_json::Value {
     match v {
         // Bytes uses base64 here (JSON-payload convention) instead of
         // the hex form `Value::to_json_value` returns, so the Bytes
@@ -250,7 +260,12 @@ fn value_to_json(v: &Value) -> serde_json::Value {
 /// sometimes carries a string, sometimes a JSON value).
 #[crate::polydat_node(category = Json)]
 fn json_text(input: Value) -> String {
-    match &input {
+    json_text_of(&input)
+}
+
+/// The text `json_text` produces, shared with its compiled helper.
+pub(crate) fn json_text_of(input: &Value) -> String {
+    match input {
         Value::Json(j) => {
             let mut buf = String::new();
             walk_json_leaves(j, &mut buf);

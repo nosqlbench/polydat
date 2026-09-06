@@ -101,25 +101,33 @@ fn printf(
     parsed: &ParsedFormat,
     parts: &[polydat::ast::Value],
 ) -> String {
-    let mut result = String::new();
-    for seg in &parsed.segments {
-        match seg {
-            Segment::Literal(s) => result.push_str(s),
-            Segment::Placeholder(spec) => {
-                let val = match parts.get(spec.index) {
-                    Some(v) => v,
-                    None => panic!(
-                        "printf: format references input #{} but only {} wire input(s) supplied",
-                        spec.index,
-                        parts.len(),
-                    ),
-                };
-                let formatted = format_value(val, spec);
-                result.push_str(&formatted);
-            }
+    parsed.render_with(parts.len(), |i| FmtArg::from(&parts[i]))
+}
+
+/// One argument to a format, as the formatter needs it: a scalar by
+/// value, a string by reference, anything else as the `Value` whose
+/// display form is used. The P1 node builds these from its `Value`
+/// inputs and the compiled helper from slot bits and handles, so both
+/// tiers run the same formatting code (SRD 115 §6, axiom H7) and a
+/// string argument is formatted without being copied first.
+pub enum FmtArg<'a> {
+    U64(u64),
+    F64(f64),
+    Bool(bool),
+    Str(&'a str),
+    Value(Value),
+}
+
+impl<'a> From<&'a Value> for FmtArg<'a> {
+    fn from(v: &'a Value) -> Self {
+        match v {
+            Value::U64(x) => FmtArg::U64(*x),
+            Value::F64(x) => FmtArg::F64(*x),
+            Value::Bool(b) => FmtArg::Bool(*b),
+            Value::Str(s) => FmtArg::Str(s),
+            other => FmtArg::Value(other.clone()),
         }
     }
-    result
 }
 
 impl ParsedFormat {
@@ -130,14 +138,57 @@ impl ParsedFormat {
     pub fn from_format_str(fmt: &str) -> Self {
         Self { segments: parse_format(fmt) }
     }
+
+    /// The parsed form of a format string, interned for the process
+    /// (SRD 115 §6): the compiled lowering of `printf` bakes its
+    /// address, so it must outlive every kernel compiled from it, and
+    /// the same text parses once. Immutable once made, like a static
+    /// string.
+    pub fn interned(fmt: &str) -> &'static ParsedFormat {
+        use std::sync::RwLock;
+        static FORMATS: RwLock<Option<std::collections::HashMap<String, &'static ParsedFormat>>> = RwLock::new(None);
+        if let Some(p) = FORMATS.read().unwrap().as_ref().and_then(|m| m.get(fmt).copied()) {
+            return p;
+        }
+        let mut guard = FORMATS.write().unwrap();
+        let map = guard.get_or_insert_with(std::collections::HashMap::new);
+        if let Some(p) = map.get(fmt).copied() {
+            return p;
+        }
+        let leaked: &'static ParsedFormat = Box::leak(Box::new(Self::from_format_str(fmt)));
+        map.insert(fmt.to_string(), leaked);
+        leaked
+    }
+
+    /// Render the format over `argc` arguments fetched by index.
+    /// Panics, as the node always has, when a placeholder names an
+    /// argument that was not supplied.
+    pub fn render_with<'a>(&self, argc: usize, arg: impl Fn(usize) -> FmtArg<'a>) -> String {
+        let mut result = String::new();
+        for seg in &self.segments {
+            match seg {
+                Segment::Literal(s) => result.push_str(s),
+                Segment::Placeholder(spec) => {
+                    if spec.index >= argc {
+                        panic!(
+                            "printf: format references input #{} but only {argc} wire input(s) supplied",
+                            spec.index,
+                        );
+                    }
+                    result.push_str(&format_arg(&arg(spec.index), spec));
+                }
+            }
+        }
+        result
+    }
 }
 
-fn format_value(val: &Value, spec: &FormatSpec) -> String {
-    match val {
-        Value::U64(v) => format_u64(*v, spec),
-        Value::F64(v) => format_f64(*v, spec),
-        Value::Bool(v) => v.to_string(),
-        Value::Str(v) => {
+fn format_arg(arg: &FmtArg<'_>, spec: &FormatSpec) -> String {
+    match arg {
+        FmtArg::U64(v) => format_u64(*v, spec),
+        FmtArg::F64(v) => format_f64(*v, spec),
+        FmtArg::Bool(v) => v.to_string(),
+        FmtArg::Str(v) => {
             if let Some(w) = spec.width {
                 format!("{:>width$}", v, width = w)
             } else {
@@ -147,8 +198,8 @@ fn format_value(val: &Value, spec: &FormatSpec) -> String {
         // Extension values render through their reflected display form,
         // the same text `to_display_string` produces, so a Streamer or
         // Partition interpolates as the author would expect.
-        Value::Ext(_) => val.to_display_string(),
-        _ => format!("{val:?}"),
+        FmtArg::Value(val @ Value::Ext(_)) => val.to_display_string(),
+        FmtArg::Value(val) => format!("{val:?}"),
     }
 }
 
