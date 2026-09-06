@@ -63,10 +63,12 @@ mod opt;
 pub mod interp;
 pub mod subcontext;
 pub mod arena;
+pub mod value_table;
 pub mod activation;
 pub use activation::{Activation, CursorSlice, TraversalStream};
 
-pub use arena::{CycleArena, with_cycle_arena, begin_root_cycle, TAG_STATIC, TAG_ARENA, TAG_RES, TAG_MASK, cycle_generation, cycle_arena_used, encode_arena_handle, decode_arena_handle, StaticInterner, resolve_thread_str, resolve_thread_bytes, put_thread_str, put_thread_bytes};
+pub use value_table::{ValueTable, with_value_table, with_current_value_table, encode_table_handle, decode_table_handle};
+pub use arena::{CycleArena, with_cycle_arena, begin_root_cycle, TAG_STATIC, TAG_ARENA, TAG_RES, TAG_MASK, cycle_generation, cycle_arena_used, cycle_arena_mark, cycle_arena_release, encode_arena_handle, decode_arena_handle, StaticInterner, resolve_thread_str, resolve_thread_bytes, put_thread_str, put_thread_bytes};
 pub use program::*;
 pub use engines::*;
 pub use state::*;

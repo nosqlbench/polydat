@@ -88,16 +88,20 @@ fn a_string_round_trips_through_parse_and_widening() {
 }
 
 #[test]
-fn a_str_boundary_input_enters_the_arena_and_the_next_cycle_reclaims_it() {
+fn a_str_boundary_input_enters_the_arena_and_the_cone_eval_releases_it() {
     // `printf` stays on P1 (variadic, untyped), so its Str output is a
-    // cone boundary input for the string ops that follow.
-    let src = "input cycle: u64\nw := \"w{cycle}\"\nu := str_upper(w)\nl := str_len_or_upper(u)\n";
-    let src = src.replace("l := str_len_or_upper(u)\n", "");
-    let mut p3 = kernel(&src, JitMode::Force);
+    // cone boundary input for the string ops that follow. The boundary
+    // copy and the helper's result live in the arena only for the
+    // cone's eval (SRD 115 §3): once the outputs are copied out the
+    // cone releases to the mark it took, so the cursor is back where
+    // it was, and the root cycle advance resets it to zero regardless.
+    let src = "input cycle: u64\nw := \"w{cycle}\"\nu := str_upper(w)\n";
+    let mut p3 = kernel(src, JitMode::Force);
     assert!(cones(&p3).iter().any(|c| c.contains("str_upper")), "{:?}", cones(&p3));
     p3.set_inputs(&[7]);
+    let mark = cycle_arena_used();
     assert_eq!(p3.pull("u").as_str(), "W7");
-    assert!(cycle_arena_used() > 0, "the boundary copy and the helper's result live in the arena");
+    assert_eq!(cycle_arena_used(), mark, "the cone released what it took");
     p3.set_inputs(&[8]);
     assert_eq!(cycle_arena_used(), 0, "the root cycle advance reclaimed the arena");
     assert_eq!(p3.pull("u").as_str(), "W8");

@@ -577,6 +577,58 @@ extern "C" fn jit_str_len(h: u64) -> u64 {
     s.len() as u64
 }
 
+// ── JSON through the value table (SRD 115 §3) ────────────────────
+// Each helper matches its P1 node (`__u64_to_json` and siblings in
+// `library/polyfill.rs`, `json_to_str` in `library/json.rs`). A producer
+// takes the table entry the layout assigned to its output slot as its
+// first argument, writes the value there in place, and returns the
+// handle that names it (axiom H4: one writer per entry). The table is
+// the one the owning engine installed around this native call.
+
+fn write_json(entry: u64, j: serde_json::Value) -> u64 {
+    crate::kernel::with_current_value_table(|t| {
+        t.write(entry as usize, crate::ast::Value::Json(std::sync::Arc::new(j)))
+    })
+}
+
+extern "C" fn jit_u64_to_json(entry: u64, n: u64) -> u64 {
+    write_json(entry, serde_json::Value::from(n))
+}
+
+extern "C" fn jit_i64_to_json(entry: u64, n: i64) -> u64 {
+    write_json(entry, serde_json::Value::from(n))
+}
+
+extern "C" fn jit_f64_to_json(entry: u64, bits: u64) -> u64 {
+    write_json(entry, serde_json::Value::from(f64::from_bits(bits)))
+}
+
+extern "C" fn jit_bool_to_json(entry: u64, b: u64) -> u64 {
+    write_json(entry, serde_json::Value::Bool(b != 0))
+}
+
+extern "C" fn jit_str_to_json(entry: u64, h: u64) -> u64 {
+    let s = crate::kernel::resolve_thread_str(h);
+    // The same try-parse-or-wrap as P1's `__str_to_json`.
+    let parsed = match serde_json::from_str::<serde_json::Value>(s) {
+        Ok(v) => v,
+        Err(e) => serde_json::json!({
+            "error": "invalid JSON",
+            "message": e.to_string(),
+            "raw": s,
+        }),
+    };
+    write_json(entry, parsed)
+}
+
+extern "C" fn jit_json_to_str(h: u64) -> u64 {
+    let text = crate::kernel::with_current_value_table(|t| match t.get(h) {
+        crate::ast::Value::Json(j) => j.to_string(),
+        other => other.to_display_string(),
+    });
+    crate::kernel::put_thread_str(&text)
+}
+
 // ── JitOp ──────────────────────────────────────────────────
 
 /// Description of a JIT step — what operation to generate.
@@ -864,6 +916,20 @@ pub enum JitOp {
     /// 3): output[0] = the static handle, stored as an immediate. The
     /// bytes never enter the cycle arena.
     StaticStr(u64),
+
+    // --- JSON through the cycle value table (SRD 115 §3, step 5) ---
+    /// output[0] = jit_u64_to_json(input[0]): a table handle
+    U64ToJson,
+    /// output[0] = jit_i64_to_json(input[0])
+    I64ToJson,
+    /// output[0] = jit_f64_to_json(input[0])
+    F64ToJson,
+    /// output[0] = jit_bool_to_json(input[0])
+    BoolToJson,
+    /// output[0] = jit_str_to_json(input[0]): parses the text
+    StrToJson,
+    /// output[0] = jit_json_to_str(input[0]): serializes to the arena
+    JsonToStr,
 
     /// Fallback: call the Phase 2 closure
     Fallback,
@@ -1444,6 +1510,22 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
 
         "__str_to_bool" | "__string_to_bool" | "str_to_bool" | "parse_bool" => JitOp::StringToBool,
 
+        // JSON conversions (SRD 115 step 5). `to_json` is polymorphic:
+        // its lowering follows the input port's type, fixed at build.
+        "__u64_to_json" | "__u32_to_json" => JitOp::U64ToJson,
+        "__i64_to_json" | "__i32_to_json" => JitOp::I64ToJson,
+        "__f64_to_json" | "__f32_to_json" => JitOp::F64ToJson,
+        "__bool_to_json" => JitOp::BoolToJson,
+        "__str_to_json" => JitOp::StrToJson,
+        "json_to_str" | "__json_to_str" => JitOp::JsonToStr,
+        "to_json" => match node.meta().wire_inputs().first().map(|p| p.typ) {
+            Some(crate::ast::PortType::U64) => JitOp::U64ToJson,
+            Some(crate::ast::PortType::I64) => JitOp::I64ToJson,
+            Some(crate::ast::PortType::F64) => JitOp::F64ToJson,
+            Some(crate::ast::PortType::Bool) => JitOp::BoolToJson,
+            // A string becomes a JSON string value, not parsed text.
+            _ => JitOp::Fallback,
+        },
         // The helper joins exactly two strings; the node is variadic.
         "str_concat" | "concat" => {
             if node.meta().wire_inputs().len() == 2 {
@@ -1486,21 +1568,28 @@ pub fn compile_jit_raw(
     output_map: HashMap<String, usize>,
     nodes: Vec<Box<dyn PolydatNode>>,
 ) -> Result<JitKernelRaw, String> {
-    let (raw_fn, _, module) = compile_jit_impl(&steps, false)?;
+    let (raw_fn, _, module, table_entries) = compile_jit_impl(&steps, false, 0)?;
     Ok(JitKernelRaw {
-        core: JitCore { buffer: vec![0u64; total_slots], coord_count, output_map, _module: module, _nodes: nodes },
+        core: JitCore::new(total_slots, coord_count, output_map, table_entries, module, nodes),
         code_fn: raw_fn,
     })
 }
 
+/// A compiled segment for an engine that owns its own buffer and value
+/// table: the entry point, the module that keeps it alive, and the
+/// `(slot, entry)` pairs of the table-kind slots it writes, numbered
+/// from `entry_base` (SRD-105 cones, hybrid JIT segments).
+pub(crate) type JitSegmentCode = (unsafe fn(*const u64, *mut u64), JITModule, Vec<(usize, usize)>);
+
 /// SRD-105 cone entry: codegen only, no kernel wrapper — the cone
 /// node owns the function pointer and module directly and provides
-/// its own buffer per eval.
+/// its own buffer and value table per eval.
 pub(crate) fn compile_jit_entry(
     steps: &[(JitOp, Vec<usize>, Vec<usize>)],
-) -> Result<(unsafe fn(*const u64, *mut u64), JITModule), String> {
-    let (raw_fn, _, module) = compile_jit_impl(steps, false)?;
-    Ok((raw_fn, module))
+    entry_base: usize,
+) -> Result<JitSegmentCode, String> {
+    let (raw_fn, _, module, table_entries) = compile_jit_impl(steps, false, entry_base)?;
+    Ok((raw_fn, module, table_entries))
 }
 
 /// Compile a set of JIT steps into a push (per-node dirty tracking) native kernel.
@@ -1513,9 +1602,9 @@ pub(crate) fn compile_jit_push(
     input_dependents: Vec<Vec<usize>>,
 ) -> Result<JitKernelPush, String> {
     let step_count = steps.len();
-    let (_, prov_fn, module) = compile_jit_impl(&steps, true)?;
+    let (_, prov_fn, module, table_entries) = compile_jit_impl(&steps, true, 0)?;
     Ok(JitKernelPush {
-        core: JitCore { buffer: vec![0u64; total_slots], coord_count, output_map, _module: module, _nodes: nodes },
+        core: JitCore::new(total_slots, coord_count, output_map, table_entries, module, nodes),
         code_fn_prov: prov_fn,
         node_clean: vec![0u8; step_count],
         input_dependents,
@@ -1533,11 +1622,11 @@ pub(crate) fn compile_jit_pull(
 ) -> Result<JitKernelPull, String> {
     let buffer_len = total_slots;
     // Pull uses the RAW jit function (no per-node clean checks)
-    let (raw_fn, _, module) = compile_jit_impl(&steps, false)?;
+    let (raw_fn, _, module, table_entries) = compile_jit_impl(&steps, false, 0)?;
     let step_outs: Vec<Vec<usize>> = steps.iter().map(|(_, _, o)| o.clone()).collect();
     let slot_provenance = compute_jit_slot_provenance(coord_count, buffer_len, &step_outs, input_dependents);
     Ok(JitKernelPull {
-        core: JitCore { buffer: vec![0u64; total_slots], coord_count, output_map, _module: module, _nodes: nodes },
+        core: JitCore::new(total_slots, coord_count, output_map, table_entries, module, nodes),
         code_fn: raw_fn,
         slot_provenance,
         changed_mask: crate::kernel::ProvMask::all_below(coord_count),
@@ -1555,11 +1644,11 @@ pub(crate) fn compile_jit_push_pull(
 ) -> Result<JitKernelPushPull, String> {
     let step_count = steps.len();
     let buffer_len = total_slots;
-    let (_, prov_fn, module) = compile_jit_impl(&steps, true)?;
+    let (_, prov_fn, module, table_entries) = compile_jit_impl(&steps, true, 0)?;
     let step_outs: Vec<Vec<usize>> = steps.iter().map(|(_, _, o)| o.clone()).collect();
     let slot_provenance = compute_jit_slot_provenance(coord_count, buffer_len, &step_outs, &input_dependents);
     Ok(JitKernelPushPull {
-        core: JitCore { buffer: vec![0u64; total_slots], coord_count, output_map, _module: module, _nodes: nodes },
+        core: JitCore::new(total_slots, coord_count, output_map, table_entries, module, nodes),
         code_fn_prov: prov_fn,
         node_clean: vec![0u8; step_count],
         input_dependents,
@@ -1570,22 +1659,64 @@ pub(crate) fn compile_jit_push_pull(
 
 // ── Core Cranelift IR generation ───────────────────────────
 
-/// `(raw_fn, prov_fn, module)` — the trio produced by the core
+/// `(raw_fn, prov_fn, module, table_entries)` — produced by the core
 /// JIT compile: the scalar entry point, the provenance-tracking
-/// entry point, and the owning module that keeps both alive.
+/// entry point, the owning module that keeps both alive, and the
+/// `(slot, entry)` pairs of the table-kind slots the code writes
+/// (SRD 115 §3): the engine sizes its value table from them and the
+/// validator checks each slot's handle names its own entry.
 type JitCompiled = (
     unsafe fn(*const u64, *mut u64),
     unsafe fn(*const u64, *mut u64, *mut u8),
     JITModule,
+    Vec<(usize, usize)>,
 );
 
-/// Core JIT compilation. Returns (raw_fn, prov_fn, module).
+/// True for an op whose output slot holds a handle (SRD 115 §2): an
+/// arena string, a static string, or a value-table entry.
+fn produces_handle(op: &JitOp) -> bool {
+    matches!(
+        op,
+        JitOp::U64ToString
+            | JitOp::I64ToString
+            | JitOp::F64ToString
+            | JitOp::BoolToString
+            | JitOp::StrLower
+            | JitOp::StrUpper
+            | JitOp::StrTrim
+            | JitOp::StrConcat
+            | JitOp::StaticStr(_)
+            | JitOp::U64ToJson
+            | JitOp::I64ToJson
+            | JitOp::F64ToJson
+            | JitOp::BoolToJson
+            | JitOp::StrToJson
+            | JitOp::JsonToStr
+    )
+}
+
+/// True for an op whose output is a value-table entry.
+fn produces_table_entry(op: &JitOp) -> bool {
+    matches!(op, JitOp::U64ToJson | JitOp::I64ToJson | JitOp::F64ToJson | JitOp::BoolToJson | JitOp::StrToJson)
+}
+
+/// Core JIT compilation. Returns (raw_fn, prov_fn, module, table_entries).
 /// If provenance=false, prov_fn is a dummy transmute of raw_fn.
 /// If provenance=true, raw_fn is a dummy transmute of prov_fn.
+/// Table-kind output slots are assigned entries `entry_base..` in step
+/// order, one per slot, so the owning engine can size its table.
 fn compile_jit_impl(
     steps: &[(JitOp, Vec<usize>, Vec<usize>)],
     provenance: bool,
+    entry_base: usize,
 ) -> Result<JitCompiled, String> {
+    let mut table_entries: Vec<(usize, usize)> = Vec::new();
+    for (op, _, outs) in steps {
+        if produces_table_entry(op) {
+            table_entries.push((outs[0], entry_base + table_entries.len()));
+        }
+    }
+    let entry_of_slot: HashMap<usize, usize> = table_entries.iter().copied().collect();
     let mut flag_builder = settings::builder();
     flag_builder.set("opt_level", "speed").unwrap();
     // Emit DWARF/SEH unwind tables so a panic raised from an
@@ -1664,6 +1795,12 @@ fn compile_jit_impl(
     jit_builder.symbol("jit_str_upper", jit_str_upper as *const u8);
     jit_builder.symbol("jit_str_trim", jit_str_trim as *const u8);
     jit_builder.symbol("jit_str_len", jit_str_len as *const u8);
+    jit_builder.symbol("jit_u64_to_json", jit_u64_to_json as *const u8);
+    jit_builder.symbol("jit_i64_to_json", jit_i64_to_json as *const u8);
+    jit_builder.symbol("jit_f64_to_json", jit_f64_to_json as *const u8);
+    jit_builder.symbol("jit_bool_to_json", jit_bool_to_json as *const u8);
+    jit_builder.symbol("jit_str_to_json", jit_str_to_json as *const u8);
+    jit_builder.symbol("jit_json_to_str", jit_json_to_str as *const u8);
 
     let mut module = JITModule::new(jit_builder);
 
@@ -1865,6 +2002,7 @@ fn compile_jit_impl(
         "jit_u64_to_str", "jit_i64_to_str", "jit_f64_to_str", "jit_bool_to_str",
         "jit_str_to_u64", "jit_str_to_i64", "jit_str_to_f64", "jit_str_to_bool",
         "jit_str_lower", "jit_str_upper", "jit_str_trim", "jit_str_len",
+        "jit_json_to_str",
     ];
     let mut string_unary_ids = Vec::new();
     for name in &string_unary_names {
@@ -1872,6 +2010,23 @@ fn compile_jit_impl(
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(types::I64));
         string_unary_ids.push(
+            module.declare_function(name, Linkage::Import, &sig)
+                .map_err(|e| format!("declare {name}: {e}"))?
+        );
+    }
+
+    // Declare the value-table producers (SRD 115 §3): `(entry, arg) -> handle`.
+    let table_binary_names = [
+        "jit_u64_to_json", "jit_i64_to_json", "jit_f64_to_json", "jit_bool_to_json",
+        "jit_str_to_json",
+    ];
+    let mut table_binary_ids = Vec::new();
+    for name in &table_binary_names {
+        let mut sig = module.make_signature();
+        sig.params.push(AbiParam::new(types::I64));
+        sig.params.push(AbiParam::new(types::I64));
+        sig.returns.push(AbiParam::new(types::I64));
+        table_binary_ids.push(
             module.declare_function(name, Linkage::Import, &sig)
                 .map_err(|e| format!("declare {name}: {e}"))?
         );
@@ -1942,12 +2097,20 @@ fn compile_jit_impl(
         let string_unary_refs: Vec<_> = string_unary_ids.iter()
             .map(|id| module.declare_func_in_func(*id, builder.func))
             .collect();
+        let table_binary_refs: Vec<_> = table_binary_ids.iter()
+            .map(|id| module.declare_func_in_func(*id, builder.func))
+            .collect();
         let str_concat_ref = module.declare_func_in_func(str_concat_id, builder.func);
 
         // Generate code for each step
         for (step_idx, (jit_op, input_slots, output_slots)) in steps.iter().enumerate() {
-            // Provenance guard: if clean[step_idx] != 0, skip this node
-            let skip_block = if let Some(cp) = clean_ptr {
+            // Provenance guard: if clean[step_idx] != 0, skip this node.
+            // A handle-producing step is never skipped (SRD 115 §4): its
+            // arena bytes or table entry belong to the cycle that ran
+            // it, so a clean slot would hold a handle into storage the
+            // next root cycle has reset. It recomputes from unchanged
+            // inputs, as P1 does.
+            let skip_block = if let Some(cp) = clean_ptr.filter(|_| !produces_handle(jit_op)) {
                 let skip = builder.create_block();
                 let cont = builder.create_block();
                 // Load clean[step_idx] (u8)
@@ -3104,6 +3267,28 @@ fn compile_jit_impl(
                     let result = builder.inst_results(call)[0];
                     store_slot(&mut builder, buffer_ptr, output_slots[0], result);
                 }
+                // JSON through the value table (SRD 115 §3): a producer
+                // is told the entry its output slot owns.
+                JitOp::U64ToJson | JitOp::I64ToJson | JitOp::F64ToJson | JitOp::BoolToJson | JitOp::StrToJson => {
+                    let idx = match jit_op {
+                        JitOp::U64ToJson => 0,
+                        JitOp::I64ToJson => 1,
+                        JitOp::F64ToJson => 2,
+                        JitOp::BoolToJson => 3,
+                        _ => 4,
+                    };
+                    let entry = builder.ins().iconst(types::I64, entry_of_slot[&output_slots[0]] as i64);
+                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                    let call = builder.ins().call(table_binary_refs[idx], &[entry, val]);
+                    let result = builder.inst_results(call)[0];
+                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                }
+                JitOp::JsonToStr => {
+                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                    let call = builder.ins().call(string_unary_refs[12], &[val]);
+                    let result = builder.inst_results(call)[0];
+                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                }
                 JitOp::StrConcat => {
                     let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
                     let b = load_slot(&mut builder, buffer_ptr, if input_slots.len() > 1 { input_slots[1] } else { input_slots[0] });
@@ -3154,13 +3339,13 @@ fn compile_jit_impl(
             unsafe { mem::transmute(code_ptr) };
         let dummy_raw: unsafe fn(*const u64, *mut u64) =
             unsafe { mem::transmute(code_ptr) };
-        Ok((dummy_raw, prov_fn, module))
+        Ok((dummy_raw, prov_fn, module, table_entries))
     } else {
         let raw_fn: unsafe fn(*const u64, *mut u64) =
             unsafe { mem::transmute(code_ptr) };
         let dummy_prov: unsafe fn(*const u64, *mut u64, *mut u8) =
             unsafe { mem::transmute(code_ptr) };
-        Ok((raw_fn, dummy_prov, module))
+        Ok((raw_fn, dummy_prov, module, table_entries))
     }
 }
 

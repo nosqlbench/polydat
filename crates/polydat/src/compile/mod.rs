@@ -39,6 +39,7 @@ pub mod hybrid;
 #[cfg(feature = "jit")]
 pub mod jit;
 pub mod cone;
+pub(crate) mod marshal;
 pub mod lattice;
 pub mod simd_plan;
 #[cfg(feature = "jit")]

@@ -516,6 +516,9 @@ protects is the helper's. Raw readers refuse `Hdl1` slots as they
 refuse `Ref2` slots. Byte-string handles (`Str`, `Bytes`) cross a cone
 boundary by SRD 115 §5: the input is copied into the cycle arena and the
 output is copied out to an owned value, so P1 never holds a handle.
-Table handles (`Json`, `Ext`, `Handle`) keep their node on P1 until the
-value table of SRD 115 §3 lands. The handle axioms H1–H7 are stated in
+Table handles (`Json`, `Ext`, `Handle`) cross by the engine-owned value
+table of SRD 115 §3: a cone borrows one for the eval and releases it, a
+whole kernel owns one and validates it after every run, and helpers
+reach it only through the installation the engine makes around its
+native call. The handle axioms H1–H7 are stated in
 [Compiled Non-Scalar Slots](compiled_handles.md) §8.

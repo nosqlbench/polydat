@@ -109,6 +109,12 @@ mod jit_impl {
         out_slots: Vec<usize>,
         in_types: Vec<PortType>,
         out_types: Vec<PortType>,
+        /// Value-table entry per boundary input, for the table-kind
+        /// inputs (SRD 115 §3); `None` for every other input.
+        in_entries: Vec<Option<usize>>,
+        /// Entries in the cone's value table: one per table-kind slot
+        /// the native code writes, then one per table-kind input.
+        table_len: usize,
         /// The original member nodes — kept alive for the LUT /
         /// constant memory the native code references, and walked
         /// by identity hashing (`fusion_subgraph`).
@@ -135,59 +141,79 @@ mod jit_impl {
             })
         }
 
+        /// One eval scopes every handle it makes to itself (SRD 115
+        /// §3, embedded cones): table entries and arena bytes are
+        /// taken before the native call and released once every
+        /// output is copied out, so nothing a cone allocates outlives
+        /// its eval and a cycle's use is bounded by its largest cone.
         fn eval(&self, inputs: &[Value], outputs: &mut [Value]) {
             CONE_SCRATCH.with(|cell| {
-                let mut buf = cell.borrow_mut();
-                buf.clear();
-                buf.resize(self.total_slots, 0);
-                for (i, v) in inputs.iter().enumerate() {
-                    buf[i] = encode_boundary(v, self.in_types[i], i, &self.meta.name);
-                }
-                let code_fn = self.code_fn;
-                let cp = buf.as_ptr();
-                let mp = buf.as_mut_ptr();
-                crate::compile::jit::invoke_with_catch(move || unsafe {
-                    (code_fn)(cp, mp);
+                CONE_TABLE.with(|tcell| {
+                    let mut buf = cell.borrow_mut();
+                    let mut table = tcell.borrow_mut();
+                    buf.clear();
+                    buf.resize(self.total_slots, 0);
+                    table.resize(self.table_len);
+                    table.set_generation(crate::kernel::cycle_generation());
+                    let mark = crate::kernel::cycle_arena_mark();
+                    for (i, v) in inputs.iter().enumerate() {
+                        buf[i] = encode_boundary(v, self.in_types[i], i, &self.meta.name, &mut table, self.in_entries[i]);
+                    }
+                    let code_fn = self.code_fn;
+                    let cp = buf.as_ptr();
+                    let mp = buf.as_mut_ptr();
+                    crate::kernel::with_value_table(&mut table, || {
+                        crate::compile::jit::invoke_with_catch(move || unsafe {
+                            (code_fn)(cp, mp);
+                        })
+                    });
+                    for (k, slot) in self.out_slots.iter().enumerate() {
+                        outputs[k] = decode_boundary(buf[*slot], self.out_types[k], &table);
+                    }
+                    table.clear();
+                    crate::kernel::cycle_arena_release(mark);
                 });
-                for (k, slot) in self.out_slots.iter().enumerate() {
-                    outputs[k] = decode_boundary(buf[*slot], self.out_types[k]);
-                }
             });
         }
+    }
+
+    thread_local! {
+        /// The value table a cone eval borrows (SRD 115 §3). Per
+        /// thread for the same reason as `CONE_SCRATCH`; sized to the
+        /// cone at the top of each eval and cleared at its end.
+        static CONE_TABLE: std::cell::RefCell<crate::kernel::ValueTable> =
+            std::cell::RefCell::new(crate::kernel::ValueTable::new(0));
     }
 
     /// `Value` → u64 slot bits at a cone boundary. The assembler
     /// proved the types; a mismatch here means a type-stability
     /// violation upstream, and the panic routes through the
     /// standard eval_node enrichment.
-    fn encode_boundary(v: &Value, ty: PortType, port: usize, cone: &str) -> u64 {
-        match v {
-            Value::U64(x) => *x,
-            Value::F64(x) => x.to_bits(),
-            Value::Bool(b) => *b as u64,
-            // SRD 115 §5: a byte string enters the cone as an arena
-            // handle, valid for this root cycle (axiom H3). The copy
-            // is one bump allocation; the cone's helpers resolve it.
-            Value::Str(s) => crate::kernel::put_thread_str(s),
-            Value::Bytes(b) => crate::kernel::put_thread_bytes(b),
-            other => panic!(
+    fn encode_boundary(
+        v: &Value,
+        ty: PortType,
+        port: usize,
+        cone: &str,
+        table: &mut crate::kernel::ValueTable,
+        entry: Option<usize>,
+    ) -> u64 {
+        // SRD 115 §5: scalars ride as bits, byte strings enter the
+        // cycle arena, other non-scalars are written to the entry of
+        // the cone's table assigned to this input; the slot holds the
+        // handle (axiom H3).
+        crate::compile::marshal::encode_slot(v, table, entry).unwrap_or_else(|| {
+            panic!(
                 "cone `{cone}` boundary input [{port}] expected {ty:?}, \
                  got {:?}",
-                other.port_type()
-            ),
-        }
+                v.port_type()
+            )
+        })
     }
 
     /// u64 slot bits → `Value` by the declared boundary type. A handle
     /// is copied out to an owned value (axiom H6): P1 never holds one.
-    fn decode_boundary(bits: u64, ty: PortType) -> Value {
-        match ty {
-            PortType::F64 => Value::F64(f64::from_bits(bits)),
-            PortType::Bool => Value::Bool(bits != 0),
-            PortType::Str => Value::Str(std::sync::Arc::from(crate::kernel::resolve_thread_str(bits))),
-            PortType::Bytes => Value::Bytes(std::sync::Arc::from(crate::kernel::resolve_thread_bytes(bits))),
-            _ => Value::U64(bits),
-        }
+    fn decode_boundary(bits: u64, ty: PortType, table: &crate::kernel::ValueTable) -> Value {
+        crate::compile::marshal::decode_slot(bits, ty, table)
     }
 
     /// A planned-but-rejected cone is diagnosable state, never
@@ -211,9 +237,9 @@ mod jit_impl {
         match ty.slot_color() {
             SlotColor::Imm1 => matches!(ty, PortType::U64 | PortType::F64 | PortType::Bool),
             // SRD 115 §5: byte-string handles marshal in (arena copy)
-            // and out (copy to an owned value). Table handles wait for
-            // the value table of step 5.
-            SlotColor::Hdl1 => ty.handle_kind() == Some(HandleKind::Bytes),
+            // and out (copy to an owned value); table handles marshal
+            // through the cycle value table (§3).
+            SlotColor::Hdl1 => matches!(ty.handle_kind(), Some(HandleKind::Bytes | HandleKind::Table)),
             SlotColor::Imm2 | SlotColor::Ref2 => false,
         }
     }
@@ -701,14 +727,30 @@ mod jit_impl {
         };
         let (coord_count, total_slots, jit_steps, jit_outputs) = layout;
         debug_assert_eq!(coord_count, plan.boundary_in.len());
-        let compiled = crate::compile::jit::compile_jit_entry(&jit_steps);
-        let (code_fn, module) = match compiled {
-            Ok(pair) => pair,
+        let compiled = crate::compile::jit::compile_jit_entry(&jit_steps, 0);
+        let (code_fn, module, table_entries) = match compiled {
+            Ok(parts) => parts,
             Err(e) => {
                 restore(sub.nodes, nodes);
                 return Err(e);
             }
         };
+        // The cone's table: the entries its native code writes, then
+        // one per table-kind boundary input, written by the boundary
+        // encode (SRD 115 §3).
+        let mut table_len = table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0);
+        let in_entries: Vec<Option<usize>> = plan
+            .in_types
+            .iter()
+            .map(|ty| {
+                if ty.handle_kind() == Some(crate::ast::HandleKind::Table) {
+                    table_len += 1;
+                    Some(table_len - 1)
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         let out_slots: Vec<usize> = (0..plan.boundary_out.len())
             .map(|k| jit_outputs[&format!("o{k}")])
@@ -760,6 +802,8 @@ mod jit_impl {
             .map(|(j, p)| (local[j], *p))
             .collect();
         Ok(JitConeNode {
+            in_entries,
+            table_len,
             meta,
             code_fn,
             total_slots,

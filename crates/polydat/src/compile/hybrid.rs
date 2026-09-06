@@ -74,6 +74,9 @@ struct HybridCore {
     ref_slots: Vec<bool>,
     /// Axiom S9(a): (first slot of a Ref pair → scratch index).
     ref_scratch: Vec<(usize, usize)>,
+    /// The kernel's value table (SRD 115 §3), shared by every JIT
+    /// segment; entries are numbered across segments at build.
+    table: crate::kernel::ValueTable,
     /// Keep source nodes alive so JIT-baked pointers remain valid.
     _nodes: Vec<Box<dyn PolydatNode>>,
 }
@@ -128,6 +131,7 @@ impl HybridCore {
 /// Run all hybrid steps unconditionally (no clean checks).
 #[inline]
 fn eval_all_hybrid_steps(core: &mut HybridCore) {
+    core.table.set_generation(crate::kernel::cycle_generation());
     for step in &core.steps {
         match step {
             #[cfg(feature = "jit")]
@@ -135,12 +139,16 @@ fn eval_all_hybrid_steps(core: &mut HybridCore) {
                 // Funnel through the setjmp wrapper so JIT
                 // predicate violations surface as catchable
                 // panics instead of aborting. Matches the path
-                // every stand-alone JIT kernel variant uses.
+                // every stand-alone JIT kernel variant uses. The
+                // kernel's value table is installed for the
+                // segment's helpers (SRD 115 §3).
                 let code_fn = seg.code_fn;
                 let buf_const = core.buffer.as_ptr();
                 let buf_mut = core.buffer.as_mut_ptr();
-                crate::compile::jit::invoke_with_catch(move || {
-                    unsafe { (code_fn)(buf_const, buf_mut); }
+                crate::kernel::with_value_table(&mut core.table, || {
+                    crate::compile::jit::invoke_with_catch(move || {
+                        unsafe { (code_fn)(buf_const, buf_mut); }
+                    })
                 });
             }
             HybridStep::Closure(cs) => {
@@ -397,6 +405,7 @@ impl HybridKernelPushPull {
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_inputs(coords);
+        self.core.table.set_generation(crate::kernel::cycle_generation());
         for (step_idx, step) in self.core.steps.iter().enumerate() {
             if self.step_clean[step_idx] { continue; }
             match step {
@@ -405,8 +414,10 @@ impl HybridKernelPushPull {
                     let code_fn = seg.code_fn;
                     let buf_const = self.core.buffer.as_ptr();
                     let buf_mut = self.core.buffer.as_mut_ptr();
-                    crate::compile::jit::invoke_with_catch(move || {
-                        unsafe { (code_fn)(buf_const, buf_mut); }
+                    crate::kernel::with_value_table(&mut self.core.table, || {
+                        crate::compile::jit::invoke_with_catch(move || {
+                            unsafe { (code_fn)(buf_const, buf_mut); }
+                        })
                     });
                 }
                 HybridStep::Closure(cs) => {
@@ -444,6 +455,7 @@ impl HybridKernelPushPull {
             && self.slot_provenance[slot] & self.changed_mask == 0 {
                 return self.core.buffer[slot];
             }
+        self.core.table.set_generation(crate::kernel::cycle_generation());
         for (step_idx, step) in self.core.steps.iter().enumerate() {
             if self.step_clean[step_idx] { continue; }
             match step {
@@ -452,8 +464,10 @@ impl HybridKernelPushPull {
                     let code_fn = seg.code_fn;
                     let buf_const = self.core.buffer.as_ptr();
                     let buf_mut = self.core.buffer.as_mut_ptr();
-                    crate::compile::jit::invoke_with_catch(move || {
-                        unsafe { (code_fn)(buf_const, buf_mut); }
+                    crate::kernel::with_value_table(&mut self.core.table, || {
+                        crate::compile::jit::invoke_with_catch(move || {
+                            unsafe { (code_fn)(buf_const, buf_mut); }
+                        })
                     });
                 }
                 HybridStep::Closure(cs) => {
@@ -607,6 +621,9 @@ pub fn build_hybrid(
     let mut ref_scratch: Vec<(usize, usize)> = Vec::new();
     let mut max_inputs = 0usize;
     let mut max_outputs = 0usize;
+    // `(slot, entry)` of every table-kind slot across all JIT segments
+    // (SRD 115 §3); the kernel's value table is sized from it.
+    let mut table_entries: Vec<(usize, usize)> = Vec::new();
 
     // Classify each node
     let classifications: Vec<(JitOp, Vec<usize>, Vec<usize>)> = nodes.iter()
@@ -678,10 +695,11 @@ pub fn build_hybrid(
             // Batching multiple nodes into one segment is a future optimization.
             for (jit_op, input_slots, output_slots) in &classifications[batch_start..i] {
                 let single_batch = vec![(jit_op.clone(), input_slots.clone(), output_slots.clone())];
-                let jit_kernel = jit::compile_jit_raw(coord_count, total_slots, single_batch, HashMap::new(), Vec::new())?;
-
-                // Extract fn and module
-                let (code_fn, module) = jit_kernel.into_parts();
+                // Table-kind slots are numbered across every segment
+                // so the kernel's one value table serves them all
+                // (SRD 115 §3).
+                let (code_fn, module, entries) = jit::compile_jit_entry(&single_batch, table_entries.len())?;
+                table_entries.extend(entries);
                 steps.push(HybridStep::Jit(JitSegment {
                     code_fn,
                     _module: Box::new(module),
@@ -693,7 +711,7 @@ pub fn build_hybrid(
     build_pushpull_from_steps(
         steps, scratch, ref_scratch, ref_slots, wiring, nodes, coord_count,
         total_slots, output_map, max_inputs, max_outputs, input_starts,
-        input_widths,
+        input_widths, table_entries,
     )
 }
 
@@ -755,7 +773,7 @@ pub fn build_hybrid(
     build_pushpull_from_steps(
         steps, scratch, ref_scratch, ref_slots, wiring, nodes, coord_count,
         total_slots, output_map, max_inputs, max_outputs, input_starts,
-        input_widths,
+        input_widths, Vec::new(),
     )
 }
 
@@ -779,8 +797,10 @@ fn build_pushpull_from_steps(
     max_outputs: usize,
     _input_starts: &[usize],
     input_widths: &[usize],
+    table_entries: Vec<(usize, usize)>,
 ) -> Result<HybridKernelPushPull, String> {
     let step_count = steps.len();
+    let table_len = table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0);
 
     // Compute per-node provenance and invert into per-input step dependents.
     // Since each step currently maps to one node, step index == node index.
@@ -813,6 +833,7 @@ fn build_pushpull_from_steps(
             scratch,
             ref_slots,
             ref_scratch,
+            table: crate::kernel::ValueTable::new(table_len),
             _nodes: Vec::new(),
         },
         step_clean: vec![false; step_count],

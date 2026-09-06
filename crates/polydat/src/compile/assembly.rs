@@ -835,20 +835,11 @@ impl PolydatAssembler {
                             node.meta().name, out.typ
                         ));
                     }
-                    // SRD 115 §5: byte-string handles marshal across a
-                    // boundary (arena in, copy out); table handles wait
-                    // for the value table of step 5, so a node with one
-                    // stays on P1.
-                    crate::ast::SlotColor::Hdl1 => {
-                        if out.typ.handle_kind() != Some(crate::ast::HandleKind::Bytes) {
-                            return Err(format!(
-                                "node '{}' has a table-handle output ({}); the \
-                                 compiled tiers do not carry value-table handles yet (SRD 115 §3)",
-                                node.meta().name, out.typ
-                            ));
-                        }
-                    }
-                    crate::ast::SlotColor::Imm1 | crate::ast::SlotColor::Imm2 => {}
+                    // SRD 115: a handle slot marshals across a boundary
+                    // through the arena (byte strings) or the cycle
+                    // value table (everything else), and raw readers
+                    // refuse it; it is legal in a pure-P3 layout.
+                    crate::ast::SlotColor::Hdl1 | crate::ast::SlotColor::Imm1 | crate::ast::SlotColor::Imm2 => {}
                 }
             }
         }
@@ -871,12 +862,27 @@ impl PolydatAssembler {
         Ok((layout.coord_slots, layout.total_slots, jit_steps, output_map))
     }
 
+    /// The slots a pure-P3 kernel's raw readers must refuse and the
+    /// port type of each named output, for typed decode (SRD 115 §5).
+    #[cfg(feature = "jit")]
+    fn jit_slot_info(resolved: &ResolvedDag) -> (Vec<bool>, HashMap<String, PortType>) {
+        let layout = slot_layout(resolved);
+        let guard = layout.ref_slot_mask(resolved);
+        let types = resolved
+            .output_map
+            .iter()
+            .map(|(name, (n, p))| (name.clone(), resolved.nodes[*n].meta().outs[*p].typ))
+            .collect();
+        (guard, types)
+    }
+
     /// Phase 3 JIT: push+pull (full provenance).
     #[cfg(feature = "jit")]
     pub fn try_compile_jit(self) -> Result<crate::compile::jit::JitKernelPushPull, String> {
         let resolved = self.resolve().map_err(|e| format!("{e}"))?;
         let _coord_names = resolved.input_names();
         let (coord_count, total_slots, jit_steps, output_map) = Self::build_jit_layout(&resolved)?;
+        let (guard, types) = Self::jit_slot_info(&resolved);
         let deps = slot_layout(&resolved).expand_dependents(
             &resolved,
             &PolydatProgram::compute_dependents(
@@ -884,7 +890,9 @@ impl PolydatAssembler {
                 resolved.coord_count,
             ),
         );
-        crate::compile::jit::compile_jit_push_pull(coord_count, total_slots, jit_steps, output_map, resolved.nodes, deps)
+        let mut k = crate::compile::jit::compile_jit_push_pull(coord_count, total_slots, jit_steps, output_map, resolved.nodes, deps)?;
+        k.set_slot_info(guard, types);
+        Ok(k)
     }
 
     /// Phase 3 JIT: raw (no provenance).
@@ -893,7 +901,10 @@ impl PolydatAssembler {
         let resolved = self.resolve().map_err(|e| format!("{e}"))?;
         let _coord_names = resolved.input_names();
         let (coord_count, total_slots, jit_steps, output_map) = Self::build_jit_layout(&resolved)?;
-        crate::compile::jit::compile_jit_raw(coord_count, total_slots, jit_steps, output_map, resolved.nodes)
+        let (guard, types) = Self::jit_slot_info(&resolved);
+        let mut k = crate::compile::jit::compile_jit_raw(coord_count, total_slots, jit_steps, output_map, resolved.nodes)?;
+        k.set_slot_info(guard, types);
+        Ok(k)
     }
 
     /// Compile the conservative perfect-ordinal Tier-1 SIMD execution plan.
@@ -929,7 +940,10 @@ impl PolydatAssembler {
                 resolved.coord_count,
             ),
         );
-        crate::compile::jit::compile_jit_push(coord_count, total_slots, jit_steps, output_map, resolved.nodes, deps)
+        let (guard, types) = Self::jit_slot_info(&resolved);
+        let mut k = crate::compile::jit::compile_jit_push(coord_count, total_slots, jit_steps, output_map, resolved.nodes, deps)?;
+        k.set_slot_info(guard, types);
+        Ok(k)
     }
 
     /// Phase 3 JIT: pull-only (cone guard, no per-node dirty tracking).
@@ -945,7 +959,10 @@ impl PolydatAssembler {
                 resolved.coord_count,
             ),
         );
-        crate::compile::jit::compile_jit_pull(coord_count, total_slots, jit_steps, output_map, resolved.nodes, &deps)
+        let (guard, types) = Self::jit_slot_info(&resolved);
+        let mut k = crate::compile::jit::compile_jit_pull(coord_count, total_slots, jit_steps, output_map, resolved.nodes, &deps)?;
+        k.set_slot_info(guard, types);
+        Ok(k)
     }
 
     /// Analyze the graph and auto-select the optimal P2 provenance mode.
@@ -1005,7 +1022,10 @@ impl PolydatAssembler {
 
         let engine = match mode {
             ProvMode::Raw => {
-                let k = crate::compile::jit::compile_jit_raw(coord_count, total_slots, jit_steps, output_map, resolved.nodes)?;
+                let (guard, types) = Self::jit_slot_info(&resolved);
+                let mut k = crate::compile::jit::compile_jit_raw(coord_count, total_slots, jit_steps, output_map, resolved.nodes)?;
+                k.set_slot_info(guard, types);
+                k.set_owns_cycle(false);
                 select::P3Engine::Raw(k)
             }
             ProvMode::Pull => {
@@ -1016,7 +1036,10 @@ impl PolydatAssembler {
                         resolved.coord_count,
                     ),
                 );
-                let k = crate::compile::jit::compile_jit_pull(coord_count, total_slots, jit_steps, output_map, resolved.nodes, &deps)?;
+                let (guard, types) = Self::jit_slot_info(&resolved);
+                let mut k = crate::compile::jit::compile_jit_pull(coord_count, total_slots, jit_steps, output_map, resolved.nodes, &deps)?;
+                k.set_slot_info(guard, types);
+                k.set_owns_cycle(false);
                 select::P3Engine::Pull(k)
             }
             ProvMode::PushPull => {
@@ -1027,7 +1050,10 @@ impl PolydatAssembler {
                         resolved.coord_count,
                     ),
                 );
-                let k = crate::compile::jit::compile_jit_push_pull(coord_count, total_slots, jit_steps, output_map, resolved.nodes, deps)?;
+                let (guard, types) = Self::jit_slot_info(&resolved);
+                let mut k = crate::compile::jit::compile_jit_push_pull(coord_count, total_slots, jit_steps, output_map, resolved.nodes, deps)?;
+                k.set_slot_info(guard, types);
+                k.set_owns_cycle(false);
                 select::P3Engine::PushPull(k)
             }
         };

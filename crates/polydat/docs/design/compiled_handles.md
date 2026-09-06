@@ -1,6 +1,8 @@
 # Compiled Non-Scalar Slots — Handles for `Str`, `Bytes`, `Json`, and `Ext`
 
-**Status:** Proposed SRD 115, first revision. Step 1 of §11, the arena
+**Status:** Proposed SRD 115, second revision (§2.2 states the table
+handle's generation stamp as a design choice; §3 is restated by tier
+around an engine-owned, fixed-entry table). Step 1 of §11, the arena
 lifetime, has landed: a `PolydatState` is root or nested, a root state's
 cycle advance resets the thread's cycle arena and advances its
 generation, and every kernel the runtime creates inside another's cycle
@@ -30,7 +32,27 @@ getting there fixed three of them: `format_u64` with a non-decimal radix
 was classified as decimal, `str_concat` with other than two inputs was
 classified for the two-input helper, and the parse helpers returned zero
 where P1 raises a diagnostic. Pure-P3 layout now refuses only
-table-handle outputs. Tests in `tests/handle_boundaries.rs`. Steps 5
+table-handle outputs. Tests in `tests/handle_boundaries.rs`. Step 5,
+the value table, has landed as §3 specifies: a table is owned by the
+engine that runs the native code, sized at compile time to one entry
+per table-kind slot, written in place by the one helper that owns each
+entry, and reached by helpers through the installation the engine makes
+around its native call. An embedded cone borrows a table for one eval
+and releases its entries and its arena bytes when the outputs are
+copied out; a whole compiled kernel owns its table for its lifetime and
+checks H4 after every run. A `Json`, `Ext`, or `Handle` value enters a
+cone as a table handle and leaves as a clone of its entry, and a handle
+from another cycle generation is refused. The typed JSON adapters
+(`__u64_to_json` and siblings, `__str_to_json`, `json_to_str`) lower to
+helpers that write and read the table, so a JSON value can be built and
+serialized natively in one cone. The polymorphic `to_json` and
+`identity` stay on P1 by the SRD-74 None rule, which excludes
+None-tolerant nodes from cones. A handle-producing step in a provenance
+kernel is never skipped as clean, since its storage belongs to the
+cycle that ran it. The marshalling rule lives in one place,
+`compile::marshal`, and the pure-P3 kernels carry a slot mask and their
+outputs' port types, so their raw readers refuse handle slots and
+`get_value` decodes by type. Tests in `tests/value_table.rs`. Steps 6
 through 8 are not started.
 This document fixes the slot representation that lets string, byte,
 JSON, and extension values ride through the P2 and P3 engines, so that
@@ -145,7 +167,7 @@ The format is SRD 111's, adopted as Polydat's own:
 bits 63..62   tag
 tag 00  static      [tag:2][reserved:30][interner id:32]      process-wide, immutable
 tag 01  arena       [tag:2][offset:31][length:31]             valid for the current cycle generation
-tag 10  table       [tag:2][kind:6][reserved:24][entry:32]    state-owned, single-writer per entry
+tag 10  table       [tag:2][kind:6][generation:24][entry:32]  engine-owned, single-writer per entry
 tag 11  reserved
 ```
 
@@ -158,11 +180,18 @@ tag 11  reserved
   It is valid from the moment its bytes are written until the arena is
   next reset, which is the start of the next root cycle on that thread
   (§4). `Str` and `Bytes` values produced during a cycle live here.
-- A **table** handle names an entry in the owning state's value table,
-  a `Vec<Value>` sized at kernel build with one entry per `Hdl1` output
-  port whose values are not byte strings (§3). The `kind` field records
-  the `PortType` so a boundary can decode without consulting the port
-  table.
+- A **table** handle names an entry in the value table of the engine
+  that ran the code (§3), sized at compile time with one entry per
+  `Hdl1` slot whose values are not byte strings. The `kind` field
+  records the value's variant, so a reader can refuse a handle of the
+  wrong kind without touching the entry. The `generation` field is the
+  low 24 bits of the cycle generation the entry was written in, and a
+  read checks it against the table's current generation: a table handle
+  that outlives its cycle fails by handle rather than naming whatever
+  the entry holds now (H3). Where SRD 111 reserved these bits, Polydat
+  spends them on the stamp, in every build, because the table is where
+  a stale handle is cheapest to catch and most expensive to miss. Arena
+  handles carry no stamp; their bound is the root cycle's reset (§4).
 
 Byte-string values (`Str`, `Bytes`) use static or arena handles. Other
 non-scalar values (`Json`, `Ext`, `Handle`) use table handles. A helper
@@ -174,21 +203,55 @@ generated code never branches on the tag.
 
 ## 3. The value table
 
-Each `PolydatState` that backs a compiled tier owns a value table:
-`Vec<Value>` with one entry per `Hdl1`-colored output port of `Json`,
-`Ext`, or `Handle` type in the program, plus one entry per boundary
-input of those types. Entries are owned exactly as `Ref2` scratch is
-owned (S3): a single (step, output port) writes an entry, and every
-execution of that step republishes it. Consumers read the entry through
-the handle inside the producer's validity interval (S4). There is no
-allocation per cycle: the `Arc` in the entry is replaced, and the
-previous value drops when it was the last reference.
+A value table is owned by the engine that runs native code, never by
+the thread. Its shape is fixed when the code is compiled: one entry per
+table-kind slot the code can write, numbered in step order, plus one
+per table-kind boundary input where the engine has boundary inputs.
+Each entry has exactly one writer, the helper lowered for the step that
+owns the slot, which is told its entry number as an immediate and
+replaces the entry in place every time it runs (H4). Nothing appends;
+native code cannot grow the table, and an entry number outside it is
+refused. A steady cycle therefore allocates nothing beyond the `Arc`
+that enters an entry, and the table's size is a property of the program
+rather than of how many values a cycle happened to make.
 
-The table lives beside the buffer and the scratch arena in the
-compiled state and is passed to native code as a context pointer, the
-second argument every segment already threads through for the buffer.
-A helper that reads a table handle receives the context pointer and the
-handle; the engine, not the helper, owns the table.
+Native code reaches the table through a context the engine installs
+around each native call and removes when it returns. A helper that runs
+with no table installed has no owner for what it writes and panics.
+The context is a thread-local pointer rather than a parameter in the
+segment signature; it is set and cleared by the engine that holds the
+`&mut` to the table, is restored on unwind, and nests correctly when one
+engine's call contains another's. This keeps the entry-point signatures
+unchanged while giving the table a single owner.
+
+The two tiers use the table differently:
+
+- **Embedded cones** in a P1 kernel borrow a table for one eval. The
+  cone node sizes it at the top of `eval`, stamps it with the thread's
+  cycle generation, writes its table-kind boundary inputs into their
+  entries, runs, copies every output out, then clears the table and
+  releases the cycle arena back to the mark it took before the call.
+  Nothing a cone allocates outlives its eval, so a cycle's arena and
+  table use is bounded by its largest cone rather than by the number of
+  cone evals, and pulling an output a thousand times in one cycle costs
+  no storage. The root cycle's reset (§4) remains the outer bound.
+- **Whole compiled kernels** (pure P3 now, P2 with step 7) own a table
+  for their lifetime, sized from the `(slot, entry)` pairs codegen
+  returns. A kernel that a host drives directly begins a root cycle at
+  each run; one wrapped by a state that owns the cycle takes the
+  state's generation. After every run, in debug builds, the kernel
+  checks that each table-kind slot holds a table handle of the current
+  generation naming exactly its own entry and that the entry was
+  written: the S9 validator, restated for handles (H4). A hybrid kernel
+  owns one table across all its JIT segments, with entries numbered
+  across segments at build.
+
+A helper that produces a `Json` writes the `Arc<serde_json::Value>` into
+its entry and returns the entry's handle; a helper that reads one
+resolves the handle to a borrow of the entry and copies out what it
+needs. A read checks the handle's tag, its generation against the
+table's, and that the entry exists and was written, so a handle held
+across a cycle is a deterministic failure by handle (the H3 tripwire).
 
 `Ext` values stay opaque. A helper may forward an `Ext` handle, read the
 value's reflected projection (`display`, `to_json_value`, the
@@ -210,11 +273,12 @@ every slot on the thread must be valid until it does.
   materialization, or tile rendering is nested and never resets. The
   reset is the one instruction SRD 111 promised.
 - **Generation.** The thread keeps a cycle generation counter that the
-  reset increments. In debug and test builds every arena handle written
-  to a slot is stamped with the generation in a side vector parallel to
-  the buffer, and every resolve asserts the stamp matches, so a handle
-  held across a reset fails deterministically by slot number. Release
-  builds carry no stamp.
+  reset increments. A table handle carries the generation in its own
+  bits (§2.2) and every read checks it, in every build. Arena handles
+  carry no stamp; a handle-producing step in a provenance kernel is
+  never skipped as clean, so no slot holds an arena handle from before
+  the last reset, and a cone releases its arena bytes at the end of its
+  eval (§3).
 - **Nothing outlives its cycle inside the compiled tier.** A slot value
   that must persist across cycles, an `init`-lifecycle output or a
   `shared` cell, is never an arena handle: constants are interned, and
@@ -262,8 +326,10 @@ helpers are. Its conventions:
 - Byte-string arguments and returns are handles; the helper resolves
   through the thread arena or the interner and writes results into the
   arena.
-- Table-handle arguments and returns are handles plus the context
-  pointer; the helper resolves and writes through the engine's table.
+- Table-handle arguments and returns are handles. A producer takes the
+  entry it owns as its first argument, an immediate from the layout,
+  and writes through the table the engine installed around the call
+  (§3); a reader resolves through the same table.
 - A helper never allocates on the Rust heap for a `Str` or `Bytes`
   result; it writes bytes into the arena directly. A helper that must
   build an intermediate (`serde_json::to_string`) writes the final bytes
@@ -304,15 +370,20 @@ SAFETY comment can cite the one it depends on.
   static or arena for byte strings and table for everything else, by
   `PortType`. No slot ever holds a handle of another kind. *Chokepoint:
   `PortType::handle_kind()`.*
-- **H3 — Arena handles live one cycle.** An arena handle is valid from
-  its write until the root cycle's next reset. Nothing in the compiled
-  tier carries one across a reset; init and shared values are interned
-  or copied out. *Tripwire: the debug generation stamp of §4.*
+- **H3 — Handles live one cycle.** An arena handle is valid from its
+  write until the root cycle's next reset, and a cone's handles only
+  until its eval returns; a table handle is valid within the generation
+  that wrote it. Nothing in the compiled tier carries one across; init
+  and shared values are interned or copied out. *Tripwire: the
+  generation stamp in every table handle (§2.2), checked on every read;
+  handle-producing steps never skipped as clean (§4).*
 - **H4 — One writer per table entry.** Exactly one (step, output port)
-  writes an entry and republishes it every execution, and every reader
-  reads inside the writer's validity interval. This is S3 and S4 for
-  the table. *Tripwire: the same post-pass assertion S9(a) makes for
-  scratch, extended to table entries.*
+  writes an entry, is told its entry number at compile time, and
+  republishes it every execution; every reader reads inside the
+  writer's validity interval. This is S3 and S4 for the table.
+  *Tripwire: the post-run validator of §3, the S9(a) assertion restated
+  for handles: each table-kind slot's handle names its own entry, in
+  the current generation, and the entry was written.*
 - **H5 — Only the root resets.** The arena resets at a root kernel's
   cycle advance and nowhere else; nested kernels never reset. *Chokepoint:
   the `is_root` flag set by the constructors that create nested
@@ -389,9 +460,11 @@ point.
    `encode_boundary`/`decode_boundary` for `Str` and `Bytes` (interner
    or arena in, copy out). With this, the existing string lowerings run
    at cone boundaries. Equivalence tests for each string `JitOp`.
-5. **The value table.** The per-state table, its context pointer in the
-   segment ABI, table handles for `Json`, `Ext`, and `Handle`, the H4
-   tripwire, and boundary marshalling for them.
+5. **The value table.** The engine-owned table of §3 with fixed entries
+   assigned at codegen, the installed context helpers write through,
+   table handles for `Json`, `Ext`, and `Handle` with the generation
+   stamp, eval-scoped release in cones, the H4 validator in whole
+   kernels, and boundary marshalling for them.
 6. **Helpers and lowerings.** `printf`, the JSON constructors,
    `json_text`, `to_json`, `json_to_str`; then `tile_encode` and
    `tile_render` per SRD 114 §12 step 7, with tile statics interned and

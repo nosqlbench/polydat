@@ -227,14 +227,21 @@ fn hdl1_is_the_color_of_handle_types() {
     assert_eq!(PortType::VecF32.handle_kind(), None);
 }
 
-/// SRD 115 P3 corollary: a pure-P3 kernel refuses a table-handle output
-/// (`Json`, `Ext`, `Handle`) until the value table lands, rather than
-/// reading its handle as a value. Byte-string handles marshal (§5), so
-/// a `Str` output is no longer a reason to refuse.
+/// SRD 115 P3 corollary: a handle-colored output is legal in a pure-P3
+/// layout once it marshals (byte strings through the arena, everything
+/// else through the cycle value table); the raw readers still refuse
+/// its slot (axiom H1), so it is read only by decode. A node without a
+/// lowering keeps the whole kernel off pure P3 for its own reason.
 #[cfg(feature = "jit")]
 #[test]
-fn pure_p3_rejects_table_handle_outputs_until_the_value_table_lands() {
-    let asm = compile_polydat_to_assembler("input cycle: u64\nj := to_json(cycle)\nn := cycle * 2\n").unwrap();
-    let err = asm.try_compile_jit().err().expect("a Json output cannot enter a pure-P3 kernel yet");
-    assert!(err.contains("table-handle") && err.contains("SRD 115"), "{err}");
+fn pure_p3_layout_admits_handle_outputs_and_guards_their_slots() {
+    let asm = compile_polydat_to_assembler("input cycle: u64\nh := hash(cycle)\nj := __u64_to_json(h)\ns := __u64_to_string(h)\n").unwrap();
+    let mut k = asm.try_compile_jit().expect("handle outputs lay out; every node here has a lowering");
+    k.eval_for_slot(&[3], k.resolve_output("h").unwrap());
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| k.get("s")));
+    assert!(r.is_err(), "a raw read of a handle slot must be refused");
+    // The typed reader decodes by port type and copies out.
+    let h = k.get("h");
+    assert_eq!(k.get_value("s").as_str(), h.to_string());
+    assert_eq!(k.get_value("j").to_display_string(), h.to_string());
 }

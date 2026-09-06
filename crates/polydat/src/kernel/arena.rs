@@ -12,7 +12,7 @@
 //! - **Tag (bits 62..64)**:
 //!   - `0b00`: Static string interner handle (`[Tag: 2][Unused: 30][InternerId: 32]`)
 //!   - `0b01`: Dynamic cycle arena slice (`[Tag: 2][Offset: 31][Length: 31]`)
-//!   - `0b10`: Resource handle / dataset index (`[Tag: 2][Type: 30][ResourceId: 32]`)
+//!   - `0b10`: Value-table handle (`[Tag: 2][Kind: 6][Generation: 24][Entry: 32]`, see `value_table`)
 //!
 //! This enables non-scalar data to flow through flat 64-bit slot registers
 //! without per-operation heap allocations or pointer invalidation risks.
@@ -150,11 +150,11 @@ thread_local! {
 }
 
 /// Begin a root cycle on this thread (SRD 115 §4, axiom H5): reset the
-/// cycle arena so its bytes are reused, and advance the generation so a
-/// handle held across the boundary can be recognised as stale. Only a
-/// root state calls this; nested kernels (traversal activations,
-/// projection bodies, materialized subscopes) run inside the root's
-/// cycle and never reset.
+/// cycle arena so its bytes are reused,
+/// and advance the generation so a handle held across the boundary can
+/// be recognised as stale. Only a root state calls this; nested kernels
+/// (traversal activations, projection bodies, materialized subscopes)
+/// run inside the root's cycle and never reset.
 #[inline]
 pub fn begin_root_cycle() -> u64 {
     THREAD_CYCLE_ARENA.with(|arena| arena.borrow_mut().reset());
@@ -164,6 +164,7 @@ pub fn begin_root_cycle() -> u64 {
         next
     })
 }
+
 
 /// The current cycle generation on this thread.
 #[inline]
@@ -280,6 +281,27 @@ impl StaticInterner {
     pub fn len() -> usize {
         STATIC_STRINGS.read().unwrap().as_ref().map_or(0, |t| t.entries.len())
     }
+}
+
+/// The cycle arena's cursor, for an engine that scopes its arena use to
+/// one native call (SRD 115 §3, embedded cones): take the mark before
+/// the call and release to it once every output is copied out, so a
+/// cycle's arena use is bounded by its largest cone eval rather than
+/// the sum of them.
+#[inline]
+pub fn cycle_arena_mark() -> usize {
+    cycle_arena_used()
+}
+
+/// Release the cycle arena back to `mark`. Bytes past the mark are
+/// dead: every handle into them was decoded before the release.
+#[inline]
+pub fn cycle_arena_release(mark: usize) {
+    THREAD_CYCLE_ARENA.with(|arena| {
+        let mut a = arena.borrow_mut();
+        debug_assert!(mark <= a.cursor, "arena release past the cursor");
+        a.cursor = mark;
+    });
 }
 
 #[cfg(test)]

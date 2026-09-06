@@ -20,8 +20,90 @@ pub(super) struct JitCore {
     pub(super) buffer: Vec<u64>,
     pub(super) coord_count: usize,
     pub(super) output_map: HashMap<String, usize>,
+    /// Slots the raw readers refuse: `Ref2` pairs (axiom S2) and
+    /// `Hdl1` handles (SRD 115, axiom H1). Set by the assembler once the
+    /// layout is known; empty means no such slot.
+    pub(super) guard_slots: Vec<bool>,
+    /// Port type of each named output, for `get_value`'s decode.
+    pub(super) output_types: HashMap<String, crate::ast::PortType>,
+    /// The kernel's value table (SRD 115 §3): one entry per table-kind
+    /// slot the native code writes, owned for the kernel's lifetime.
+    pub(super) table: crate::kernel::ValueTable,
+    /// `(slot, entry)` for every table-kind slot, from codegen; the
+    /// validator checks each slot's handle names its own entry.
+    pub(super) table_entries: Vec<(usize, usize)>,
+    /// True when this kernel is driven directly by a host and so begins
+    /// a root cycle at every eval (SRD 115 §4). False when a state that
+    /// owns the cycle wraps it.
+    pub(super) owns_cycle: bool,
     pub(super) _module: JITModule,
     pub(super) _nodes: Vec<Box<dyn PolydatNode>>,
+}
+
+impl JitCore {
+    pub(super) fn new(
+        total_slots: usize,
+        coord_count: usize,
+        output_map: HashMap<String, usize>,
+        table_entries: Vec<(usize, usize)>,
+        module: JITModule,
+        nodes: Vec<Box<dyn PolydatNode>>,
+    ) -> Self {
+        let table_len = table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0);
+        Self {
+            buffer: vec![0u64; total_slots],
+            coord_count,
+            output_map,
+            guard_slots: Vec::new(),
+            output_types: HashMap::new(),
+            table: crate::kernel::ValueTable::new(table_len),
+            table_entries,
+            owns_cycle: true,
+            _module: module,
+            _nodes: nodes,
+        }
+    }
+
+    /// Run one native evaluation: begin the cycle it belongs to, install
+    /// the kernel's value table for the helpers, run inside the longjmp
+    /// catch, then check the table invariants.
+    #[inline]
+    pub(super) fn run(&mut self, native: impl FnOnce()) {
+        let generation = if self.owns_cycle {
+            crate::kernel::begin_root_cycle()
+        } else {
+            crate::kernel::cycle_generation()
+        };
+        self.table.set_generation(generation);
+        crate::kernel::with_value_table(&mut self.table, || super::codegen::invoke_with_catch(native));
+        self.validate_table();
+    }
+
+    /// SRD 115 axiom H4 validator (the S9 analogue for handles): after
+    /// a native run, every table-kind slot holds a table handle of this
+    /// generation naming exactly the entry the layout assigned it, and
+    /// that entry was written. Debug builds only.
+    #[inline]
+    fn validate_table(&self) {
+        if cfg!(debug_assertions) {
+            for &(slot, entry) in &self.table_entries {
+                let handle = self.buffer[slot];
+                assert_eq!(
+                    handle & crate::kernel::TAG_MASK,
+                    crate::kernel::TAG_RES,
+                    "H4: slot {slot} should hold a table handle, holds {handle:#x}"
+                );
+                let (_, generation, named) = crate::kernel::decode_table_handle(handle);
+                assert_eq!(named, entry, "H4: slot {slot} names entry {named}; the layout assigned it entry {entry}");
+                assert_eq!(
+                    generation,
+                    self.table.generation() & 0xFF_FFFF,
+                    "H3: slot {slot} holds a handle from another cycle generation"
+                );
+                assert!(self.table.is_written(entry), "H4: entry {entry} was not written by the run that produced slot {slot}");
+            }
+        }
+    }
 }
 
 /// Compute slot provenance from input_dependents.
@@ -75,13 +157,49 @@ macro_rules! jit_accessors {
         /// Returns the raw u64 value stored in the named output slot.
         #[inline]
         pub fn get(&self, name: &str) -> u64 {
-            self.core.buffer[self.core.output_map[name]]
+            self.get_slot(self.core.output_map[name])
         }
 
-        /// Returns the raw u64 value stored at the given buffer slot index.
+        /// Returns the raw u64 value stored at the given buffer slot
+        /// index. Refuses a reference or handle slot (axioms S2, H1):
+        /// read those through [`Self::get_value`].
         #[inline]
         pub fn get_slot(&self, slot: usize) -> u64 {
+            if self.core.guard_slots.get(slot).copied().unwrap_or(false) {
+                panic!(
+                    "slot {slot} is Ref2- or Hdl1-colored; a raw u64 read would leak an \
+                     interior address or a handle. Use get_value to decode it."
+                );
+            }
             self.core.buffer[slot]
+        }
+
+        /// The named output as a typed `Value`, decoded by its port type:
+        /// a handle slot is copied out of the arena or the value table
+        /// (SRD 115 §5), so the caller never holds a handle.
+        pub fn get_value(&self, name: &str) -> crate::ast::Value {
+            let slot = self.core.output_map[name];
+            let ty = self.core.output_types.get(name).copied().unwrap_or(crate::ast::PortType::U64);
+            crate::compile::marshal::decode_slot(self.core.buffer[slot], ty, &self.core.table)
+        }
+
+        /// Record the slots raw readers must refuse and each output's
+        /// port type. Called by the assembler after construction.
+        pub(crate) fn set_slot_info(&mut self, guard_slots: Vec<bool>, output_types: HashMap<String, crate::ast::PortType>) {
+            self.core.guard_slots = guard_slots;
+            self.core.output_types = output_types;
+        }
+
+        /// Whether each eval begins a root cycle (SRD 115 §4). A state
+        /// that owns the cycle and wraps this kernel sets this false.
+        #[allow(dead_code)] // no state wraps the push-only variant
+        pub(crate) fn set_owns_cycle(&mut self, owns: bool) {
+            self.core.owns_cycle = owns;
+        }
+
+        /// Entries in the kernel's value table.
+        pub fn table_len(&self) -> usize {
+            self.core.table.len()
         }
     };
 }
@@ -109,7 +227,7 @@ impl JitKernelRaw {
         let code_fn = self.code_fn;
         let buf_ptr_const = self.core.buffer.as_ptr();
         let buf_ptr_mut = self.core.buffer.as_mut_ptr();
-        super::codegen::invoke_with_catch(move || {
+        self.core.run(move || {
             unsafe { (code_fn)(buf_ptr_const, buf_ptr_mut); }
         });
     }
@@ -121,9 +239,11 @@ impl JitKernelRaw {
         self.core.buffer[slot]
     }
 
-    /// Decompose into raw parts for hybrid kernel integration.
-    pub fn into_parts(self) -> (unsafe fn(*const u64, *mut u64), JITModule) {
-        (self.code_fn, self.core._module)
+    /// Decompose into raw parts for hybrid kernel integration: the
+    /// entry point, its module, and the table-kind `(slot, entry)`
+    /// pairs the code writes.
+    pub fn into_parts(self) -> super::codegen::JitSegmentCode {
+        (self.code_fn, self.core._module, self.core.table_entries)
     }
 
     jit_accessors!();
@@ -162,7 +282,7 @@ impl JitKernelPush {
         let buf_const = self.core.buffer.as_ptr();
         let buf_mut = self.core.buffer.as_mut_ptr();
         let clean_mut = self.node_clean.as_mut_ptr();
-        super::codegen::invoke_with_catch(move || {
+        self.core.run(move || {
             unsafe { (code_fn)(buf_const, buf_mut, clean_mut); }
         });
     }
@@ -207,7 +327,7 @@ impl JitKernelPull {
         let code_fn = self.code_fn;
         let buf_const = self.core.buffer.as_ptr();
         let buf_mut = self.core.buffer.as_mut_ptr();
-        super::codegen::invoke_with_catch(move || {
+        self.core.run(move || {
             unsafe { (code_fn)(buf_const, buf_mut); }
         });
     }
@@ -224,7 +344,7 @@ impl JitKernelPull {
         let code_fn = self.code_fn;
         let buf_const = self.core.buffer.as_ptr();
         let buf_mut = self.core.buffer.as_mut_ptr();
-        super::codegen::invoke_with_catch(move || {
+        self.core.run(move || {
             unsafe { (code_fn)(buf_const, buf_mut); }
         });
         self.core.buffer[slot]
@@ -270,7 +390,7 @@ impl JitKernelPushPull {
         let buf_const = self.core.buffer.as_ptr();
         let buf_mut = self.core.buffer.as_mut_ptr();
         let clean_mut = self.node_clean.as_mut_ptr();
-        super::codegen::invoke_with_catch(move || {
+        self.core.run(move || {
             unsafe { (code_fn)(buf_const, buf_mut, clean_mut); }
         });
     }
@@ -288,7 +408,7 @@ impl JitKernelPushPull {
         let buf_const = self.core.buffer.as_ptr();
         let buf_mut = self.core.buffer.as_mut_ptr();
         let clean_mut = self.node_clean.as_mut_ptr();
-        super::codegen::invoke_with_catch(move || {
+        self.core.run(move || {
             unsafe { (code_fn)(buf_const, buf_mut, clean_mut); }
         });
         self.core.buffer[slot]
