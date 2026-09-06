@@ -14,8 +14,13 @@ fixes each to byte-string or table handles; raw readers refuse handle
 slots as they refuse `Ref2` slots; pure-P3 layout rejects a
 handle-colored output until step 4's marshalling; cone admission
 requires the `Imm1` color by name; and the alignment, engines, and JIT
-boundary documents carry the new color. Steps 3 through 8 are not
-started.
+boundary documents carry the new color. Step 3, interning at build, has
+landed: the static interner is indexed by content and resolves whole
+handles; a `const_str` node classifies to `JitOp::StaticStr` with its
+text interned, lowered as an immediate store of the handle; and the
+Polytile renderer interns every static run and separator when it is
+constructed and copies them from the interner, so tile constants never
+enter the arena. Steps 4 through 8 are not started.
 This document fixes the slot representation that lets string, byte,
 JSON, and extension values ride through the P2 and P3 engines, so that
 the nodes which produce and consume them (string operations, JSON

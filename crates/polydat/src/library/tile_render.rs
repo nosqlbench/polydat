@@ -135,10 +135,65 @@ impl TileSpec {
     }
 }
 
+/// One skeleton instruction in its runtime form (SRD 114 §6): static
+/// runs are interned once at build and copied from the interner, the
+/// comprehension of a projection is parsed once, and separators are
+/// interned too.
+#[derive(Debug)]
+enum RtOp {
+    /// Copy an interned static run.
+    Copy(&'static str),
+    Hole(HoleSource),
+    Repeat {
+        stream: Arc<StreamerValue>,
+        child: usize,
+        sep: &'static str,
+        body: Vec<RtOp>,
+        generators: Vec<(String, usize, String)>,
+    },
+    Branch {
+        cond: HoleSource,
+        then: Vec<RtOp>,
+        otherwise: Vec<RtOp>,
+    },
+}
+
+/// Intern every static run and separator of a skeleton and parse every
+/// projection stream, once, at construction.
+fn lower_ops(ops: &[TileOp]) -> Vec<RtOp> {
+    use crate::kernel::StaticInterner;
+    ops.iter()
+        .map(|op| match op {
+            TileOp::Static(s) => {
+                let handle = StaticInterner::intern(s);
+                RtOp::Copy(StaticInterner::resolve_handle(handle).expect("just interned"))
+            }
+            TileOp::Hole(h) => RtOp::Hole(h.clone()),
+            TileOp::Repeat { stream, child, sep, body, generators } => {
+                let sep_handle = StaticInterner::intern(sep);
+                RtOp::Repeat {
+                    stream: Arc::new(StreamerValue::from_json(stream)),
+                    child: *child,
+                    sep: StaticInterner::resolve_handle(sep_handle).expect("just interned"),
+                    body: lower_ops(body),
+                    generators: generators.clone(),
+                }
+            }
+            TileOp::Branch { cond, then, otherwise } => RtOp::Branch {
+                cond: cond.clone(),
+                then: lower_ops(then),
+                otherwise: lower_ops(otherwise),
+            },
+        })
+        .collect()
+}
+
 /// The runtime form: the spec, compiled body programs, and parsed streams.
 #[derive(Debug)]
 pub struct TileProgram {
     pub spec: TileSpec,
+    /// The skeleton with statics interned and streams parsed.
+    ops: Vec<RtOp>,
     pub children: Vec<Arc<PolydatProgram>>,
     /// One kernel over each body program, the canonical kernel the
     /// comprehension evaluator installs tuple values into.
@@ -173,22 +228,25 @@ impl TileProgram {
         let mut empty_kernel = crate::dsl::compile_polydat("\n").expect("the empty program compiles");
         empty_kernel.mark_nested();
         let empty = Arc::new(empty_kernel);
-        TileProgram { spec, children, canonicals, empty }
+        let ops = lower_ops(&spec.ops);
+        TileProgram { spec, ops, children, canonicals, empty }
     }
 
     /// Render with the node's wire inputs, each already encoded text.
     pub fn render(&self, inputs: &[Value]) -> String {
         let mut out = String::new();
-        self.render_ops(&self.spec.ops, inputs, None, &mut out);
+        self.render_ops(&self.ops, inputs, None, &mut out);
         out
     }
 
-    fn render_ops(&self, ops: &[TileOp], inputs: &[Value], mut child: Option<(&Arc<PolydatProgram>, &mut PolydatState)>, out: &mut String) {
+    fn render_ops(&self, ops: &[RtOp], inputs: &[Value], mut child: Option<(&Arc<PolydatProgram>, &mut PolydatState)>, out: &mut String) {
         for op in ops {
             match op {
-                TileOp::Static(s) => out.push_str(s),
-                TileOp::Hole(source) => out.push_str(&self.text_of(source, inputs, child.as_mut())),
-                TileOp::Branch { cond, then, otherwise } => {
+                // `Copy`: a memcpy from the static interner (SRD 114 §6,
+                // SRD 115 step 3). The bytes were interned at build.
+                RtOp::Copy(s) => out.push_str(s),
+                RtOp::Hole(source) => out.push_str(&self.text_of(source, inputs, child.as_mut())),
+                RtOp::Branch { cond, then, otherwise } => {
                     let c = self.text_of(cond, inputs, child.as_mut());
                     let branch = if c.trim() == "1" { then } else { otherwise };
                     match child.as_mut() {
@@ -196,8 +254,8 @@ impl TileProgram {
                         None => self.render_ops(branch, inputs, None, out),
                     }
                 }
-                TileOp::Repeat { stream, child: child_idx, sep, body, generators } => {
-                    let mut streamer = StreamerValue::from_json(stream);
+                RtOp::Repeat { stream, child: child_idx, sep, body, generators } => {
+                    let mut streamer = (**stream).clone();
                     if !generators.is_empty() {
                         streamer.ast = bind_generators(&streamer.ast, generators, inputs);
                     }

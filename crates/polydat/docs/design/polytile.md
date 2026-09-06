@@ -703,8 +703,10 @@ a handful of integer and float encodes, and a four-tuple loop.
    positions), and `csv`, printf formats, and the P1 renderer. Splicing
    inlines same-encoding tiles and treats others as wires (§5.5).
    Tests in `tests/tile_render.rs`; `tests/function_coverage.rs`
-   exercises both nodes. The `Bytes` form and arena-backed output are
-   still owed.
+   exercises both nodes. Static runs and separators are interned at
+   render-node construction and copied from the static interner, the
+   `Copy` instruction of §6 (SRD 115 step 3). The `Bytes` form and
+   arena-backed output are still owed to SRD 115.
 5. **Projections.** Done. A child program per body with element and
    cascaded outer externs, the comprehension embedded in the skeleton
    as a `StreamerValue`, per-thread scratch-state reuse, and separators

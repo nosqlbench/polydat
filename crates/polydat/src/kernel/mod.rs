@@ -66,7 +66,7 @@ pub mod arena;
 pub mod activation;
 pub use activation::{Activation, CursorSlice, TraversalStream};
 
-pub use arena::{CycleArena, with_cycle_arena, begin_root_cycle, cycle_generation, cycle_arena_used, encode_arena_handle, decode_arena_handle, StaticInterner, resolve_thread_str, resolve_thread_bytes, put_thread_str, put_thread_bytes};
+pub use arena::{CycleArena, with_cycle_arena, begin_root_cycle, TAG_STATIC, TAG_ARENA, TAG_RES, TAG_MASK, cycle_generation, cycle_arena_used, encode_arena_handle, decode_arena_handle, StaticInterner, resolve_thread_str, resolve_thread_bytes, put_thread_str, put_thread_bytes};
 pub use program::*;
 pub use engines::*;
 pub use state::*;

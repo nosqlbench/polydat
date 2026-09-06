@@ -849,6 +849,11 @@ pub enum JitOp {
     /// output[0] = jit_str_len(input[0])
     StrLen,
 
+    /// A string constant, interned at kernel build (SRD 115 §2.2, step
+    /// 3): output[0] = the static handle, stored as an immediate. The
+    /// bytes never enter the cycle arena.
+    StaticStr(u64),
+
     /// Fallback: call the Phase 2 closure
     Fallback,
 }
@@ -865,6 +870,19 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
 
     match name {
         "identity" => JitOp::Identity,
+        // A string literal: intern its text now so the cone stores a
+        // static handle (SRD 115 step 3). The text is the node's
+        // `value` constant.
+        "const_str" => {
+            let text = node.meta().ins.iter().find_map(|slot| match slot {
+                crate::ast::Slot::Const { name, value: crate::ast::ConstValue::Str(v) } if name == "value" => Some(v.as_str()),
+                _ => None,
+            });
+            match text {
+                Some(v) => JitOp::StaticStr(crate::kernel::StaticInterner::intern(v)),
+                None => JitOp::Fallback,
+            }
+        }
         "hash" | "splitmix64" | "scatter" => JitOp::SplitMix64,
         "fair_coin" => JitOp::FairCoin,
         "unfair_coin" | "bernoulli" => {
@@ -3066,6 +3084,13 @@ fn compile_jit_impl(
                     let call = builder.ins().call(str_concat_ref, &[a, b]);
                     let result = builder.inst_results(call)[0];
                     store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                }
+
+                JitOp::StaticStr(handle) => {
+                    // The handle is the value's representation (axiom
+                    // H1): an immediate store, no decode, no arena.
+                    let h = builder.ins().iconst(types::I64, *handle as i64);
+                    store_slot(&mut builder, buffer_ptr, output_slots[0], h);
                 }
 
                 JitOp::Fallback => {

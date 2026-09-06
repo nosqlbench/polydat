@@ -224,32 +224,61 @@ pub fn put_thread_bytes(b: &[u8]) -> u64 {
     THREAD_CYCLE_ARENA.with(|arena| arena.borrow_mut().put_bytes(b))
 }
 
-/// Global static string interner for workload-compile-time constants.
+/// Global static string interner for workload-compile-time constants
+/// (SRD 115 §2.2, tag `static`). Every string literal, `Const<&str>`
+/// argument, and tile static run is interned at kernel build, so
+/// constants never enter the cycle arena. Interned bytes are immutable
+/// and live for the process; interning the same text twice yields the
+/// same handle.
 pub struct StaticInterner;
 
-static STATIC_STRINGS: RwLock<Vec<&'static str>> = RwLock::new(Vec::new());
+struct StaticTable {
+    entries: Vec<&'static str>,
+    index: std::collections::HashMap<&'static str, u32>,
+}
+
+static STATIC_STRINGS: RwLock<Option<StaticTable>> = RwLock::new(None);
 
 impl StaticInterner {
-    /// Intern a string literal or leaked string and return its static handle.
+    /// Intern a string and return its static handle.
     pub fn intern(s: &str) -> u64 {
-        let mut table = STATIC_STRINGS.write().unwrap();
-        if let Some((idx, _)) = table.iter().enumerate().find(|&(_, entry)| *entry == s) {
-            return TAG_STATIC | (idx as u64);
+        if let Some(id) = STATIC_STRINGS.read().unwrap().as_ref().and_then(|t| t.index.get(s).copied()) {
+            return TAG_STATIC | u64::from(id);
+        }
+        let mut guard = STATIC_STRINGS.write().unwrap();
+        let table = guard.get_or_insert_with(|| StaticTable { entries: Vec::new(), index: std::collections::HashMap::new() });
+        if let Some(&id) = table.index.get(s) {
+            return TAG_STATIC | u64::from(id);
         }
         let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
-        let idx = table.len();
-        table.push(leaked);
-        TAG_STATIC | (idx as u64)
+        let id = table.entries.len() as u32;
+        table.entries.push(leaked);
+        table.index.insert(leaked, id);
+        TAG_STATIC | u64::from(id)
     }
 
-    /// Resolve a static handle back to string slice.
+    /// Resolve a static handle's id back to its string slice.
     pub fn resolve(id: u32) -> &'static str {
-        let table = STATIC_STRINGS.read().unwrap();
-        if let Some(&s) = table.get(id as usize) {
-            s
-        } else {
-            ""
+        STATIC_STRINGS
+            .read()
+            .unwrap()
+            .as_ref()
+            .and_then(|t| t.entries.get(id as usize).copied())
+            .unwrap_or("")
+    }
+
+    /// Resolve a whole handle, when it is a static handle.
+    pub fn resolve_handle(handle: u64) -> Option<&'static str> {
+        if handle & TAG_MASK != TAG_STATIC {
+            return None;
         }
+        let id = handle as u32;
+        STATIC_STRINGS.read().unwrap().as_ref().and_then(|t| t.entries.get(id as usize).copied())
+    }
+
+    /// Number of distinct strings interned so far.
+    pub fn len() -> usize {
+        STATIC_STRINGS.read().unwrap().as_ref().map_or(0, |t| t.entries.len())
     }
 }
 
