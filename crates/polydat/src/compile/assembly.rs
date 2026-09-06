@@ -835,15 +835,18 @@ impl PolydatAssembler {
                             node.meta().name, out.typ
                         ));
                     }
-                    // SRD 115: a handle slot needs the boundary
-                    // marshalling of step 4 before a pure-P3 kernel can
-                    // read it as a value; until then the node stays on P1.
+                    // SRD 115 §5: byte-string handles marshal across a
+                    // boundary (arena in, copy out); table handles wait
+                    // for the value table of step 5, so a node with one
+                    // stays on P1.
                     crate::ast::SlotColor::Hdl1 => {
-                        return Err(format!(
-                            "node '{}' has a handle-colored output ({}); the \
-                             compiled tiers do not marshal handles yet (SRD 115 §5)",
-                            node.meta().name, out.typ
-                        ));
+                        if out.typ.handle_kind() != Some(crate::ast::HandleKind::Bytes) {
+                            return Err(format!(
+                                "node '{}' has a table-handle output ({}); the \
+                                 compiled tiers do not carry value-table handles yet (SRD 115 §3)",
+                                node.meta().name, out.typ
+                            ));
+                        }
                     }
                     crate::ast::SlotColor::Imm1 | crate::ast::SlotColor::Imm2 => {}
                 }

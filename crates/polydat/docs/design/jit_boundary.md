@@ -513,6 +513,9 @@ statement that immediate slots never contain an address is unchanged:
 `Ref2` data, where a handle would be a second dereference; for `Hdl1`
 the handle is the value's representation and the single dereference S7
 protects is the helper's. Raw readers refuse `Hdl1` slots as they
-refuse `Ref2` slots, and pure-P3 layout rejects a handle-colored output
-until the boundary marshalling of SRD 115 §5 lands. The handle axioms
-H1–H7 are stated in [Compiled Non-Scalar Slots](compiled_handles.md) §8.
+refuse `Ref2` slots. Byte-string handles (`Str`, `Bytes`) cross a cone
+boundary by SRD 115 §5: the input is copied into the cycle arena and the
+output is copied out to an owned value, so P1 never holds a handle.
+Table handles (`Json`, `Ext`, `Handle`) keep their node on P1 until the
+value table of SRD 115 §3 lands. The handle axioms H1–H7 are stated in
+[Compiled Non-Scalar Slots](compiled_handles.md) §8.

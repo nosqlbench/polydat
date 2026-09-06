@@ -512,20 +512,31 @@ extern "C" fn jit_bool_to_str(val: u64) -> u64 {
     crate::kernel::put_thread_str(s)
 }
 
+// The parse helpers match P1's adapters (`__str_to_u64` and siblings):
+// an unparseable value is a diagnostic, not a silent zero. Failure
+// leaves native code through the predicate-violation path.
 extern "C" fn jit_str_to_u64(handle: u64) -> u64 {
     let s = crate::kernel::resolve_thread_str(handle);
-    s.trim().parse::<u64>().unwrap_or(0)
+    match s.trim().parse::<u64>() {
+        Ok(v) => v,
+        Err(e) => jit_violation_longjmp(format!("__str_to_u64: cannot read {:?} as a whole number: {e}", s.trim())),
+    }
 }
 
 extern "C" fn jit_str_to_i64(handle: u64) -> i64 {
     let s = crate::kernel::resolve_thread_str(handle);
-    s.trim().parse::<i64>().unwrap_or(0)
+    match s.trim().parse::<i64>() {
+        Ok(v) => v,
+        Err(e) => jit_violation_longjmp(format!("__str_to_i64: cannot read {:?} as an integer: {e}", s.trim())),
+    }
 }
 
 extern "C" fn jit_str_to_f64(handle: u64) -> u64 {
     let s = crate::kernel::resolve_thread_str(handle);
-    let f = s.trim().parse::<f64>().unwrap_or(0.0);
-    f.to_bits()
+    match s.trim().parse::<f64>() {
+        Ok(f) => f.to_bits(),
+        Err(e) => jit_violation_longjmp(format!("__str_to_f64: cannot read {:?} as a number: {e}", s.trim())),
+    }
 }
 
 extern "C" fn jit_str_to_bool(handle: u64) -> u64 {
@@ -1399,8 +1410,16 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
         "__u64_to_string" | "__u64_to_str" | "u64_to_str" | "u64_to_string"
         | "__u32_to_string" | "__u32_to_str" | "u32_to_str"
         | "__u16_to_string" | "__u16_to_str"
-        | "__u8_to_string" | "__u8_to_str"
-        | "format_u64" => JitOp::U64ToString,
+        | "__u8_to_string" | "__u8_to_str" => JitOp::U64ToString,
+        // `format_u64` is decimal only when its radix is; the other
+        // radices print a prefix the helper does not.
+        "format_u64" => {
+            if consts.first().copied().unwrap_or(10) == 10 {
+                JitOp::U64ToString
+            } else {
+                JitOp::Fallback
+            }
+        }
 
         "__i64_to_string" | "__i64_to_str" | "i64_to_str" | "i64_to_string"
         | "__i32_to_string" | "__i32_to_str" | "i32_to_str"
@@ -1425,7 +1444,14 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
 
         "__str_to_bool" | "__string_to_bool" | "str_to_bool" | "parse_bool" => JitOp::StringToBool,
 
-        "str_concat" | "concat" => JitOp::StrConcat,
+        // The helper joins exactly two strings; the node is variadic.
+        "str_concat" | "concat" => {
+            if node.meta().wire_inputs().len() == 2 {
+                JitOp::StrConcat
+            } else {
+                JitOp::Fallback
+            }
+        }
         "str_lower" | "to_lower" | "lower" | "lowercase" => JitOp::StrLower,
         "str_upper" | "to_upper" | "upper" | "uppercase" => JitOp::StrUpper,
         "str_trim" | "trim" => JitOp::StrTrim,

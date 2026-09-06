@@ -227,13 +227,14 @@ fn hdl1_is_the_color_of_handle_types() {
     assert_eq!(PortType::VecF32.handle_kind(), None);
 }
 
-/// SRD 115 P3 corollary: until boundary marshalling lands, a pure-P3
-/// kernel refuses a handle-colored output rather than reading its
-/// handle as a value.
+/// SRD 115 P3 corollary: a pure-P3 kernel refuses a table-handle output
+/// (`Json`, `Ext`, `Handle`) until the value table lands, rather than
+/// reading its handle as a value. Byte-string handles marshal (§5), so
+/// a `Str` output is no longer a reason to refuse.
 #[cfg(feature = "jit")]
 #[test]
-fn pure_p3_rejects_handle_outputs_until_marshalling_lands() {
-    let asm = compile_polydat_to_assembler("input cycle: u64\ns := \"row-{cycle}\"\nn := cycle * 2\n").unwrap();
-    let err = asm.try_compile_jit().err().expect("a Str output cannot enter a pure-P3 kernel yet");
-    assert!(err.contains("handle-colored") && err.contains("SRD 115"), "{err}");
+fn pure_p3_rejects_table_handle_outputs_until_the_value_table_lands() {
+    let asm = compile_polydat_to_assembler("input cycle: u64\nj := to_json(cycle)\nn := cycle * 2\n").unwrap();
+    let err = asm.try_compile_jit().err().expect("a Json output cannot enter a pure-P3 kernel yet");
+    assert!(err.contains("table-handle") && err.contains("SRD 115"), "{err}");
 }

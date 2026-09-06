@@ -20,7 +20,18 @@ handles; a `const_str` node classifies to `JitOp::StaticStr` with its
 text interned, lowered as an immediate store of the handle; and the
 Polytile renderer interns every static run and separator when it is
 constructed and copies them from the interner, so tile constants never
-enter the arena. Steps 4 through 8 are not started.
+enter the arena. Step 4, boundary marshalling, has landed: the cone
+planner admits `Str` and `Bytes` ports, a boundary input of either is
+copied into the cycle arena and a boundary output is copied out to an
+owned value, and every wire inside a cone must be exactly its port's
+type, so a variadic node fed untyped stays on P1. With this the string
+lowerings that existed run at cone boundaries, bit-identical to P1;
+getting there fixed three of them: `format_u64` with a non-decimal radix
+was classified as decimal, `str_concat` with other than two inputs was
+classified for the two-input helper, and the parse helpers returned zero
+where P1 raises a diagnostic. Pure-P3 layout now refuses only
+table-handle outputs. Tests in `tests/handle_boundaries.rs`. Steps 5
+through 8 are not started.
 This document fixes the slot representation that lets string, byte,
 JSON, and extension values ride through the P2 and P3 engines, so that
 the nodes which produce and consume them (string operations, JSON

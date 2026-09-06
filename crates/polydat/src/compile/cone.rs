@@ -165,6 +165,11 @@ mod jit_impl {
             Value::U64(x) => *x,
             Value::F64(x) => x.to_bits(),
             Value::Bool(b) => *b as u64,
+            // SRD 115 §5: a byte string enters the cone as an arena
+            // handle, valid for this root cycle (axiom H3). The copy
+            // is one bump allocation; the cone's helpers resolve it.
+            Value::Str(s) => crate::kernel::put_thread_str(s),
+            Value::Bytes(b) => crate::kernel::put_thread_bytes(b),
             other => panic!(
                 "cone `{cone}` boundary input [{port}] expected {ty:?}, \
                  got {:?}",
@@ -173,11 +178,14 @@ mod jit_impl {
         }
     }
 
-    /// u64 slot bits → `Value` by the declared boundary type.
+    /// u64 slot bits → `Value` by the declared boundary type. A handle
+    /// is copied out to an owned value (axiom H6): P1 never holds one.
     fn decode_boundary(bits: u64, ty: PortType) -> Value {
         match ty {
             PortType::F64 => Value::F64(f64::from_bits(bits)),
             PortType::Bool => Value::Bool(bits != 0),
+            PortType::Str => Value::Str(std::sync::Arc::from(crate::kernel::resolve_thread_str(bits))),
+            PortType::Bytes => Value::Bytes(std::sync::Arc::from(crate::kernel::resolve_thread_bytes(bits))),
             _ => Value::U64(bits),
         }
     }
@@ -199,8 +207,15 @@ mod jit_impl {
     /// a narrow-typed node gains a JIT lowering; until then extra
     /// arms would be dead, untested marshalling.
     fn scalar_ok(ty: PortType) -> bool {
-        matches!(ty, PortType::U64 | PortType::F64 | PortType::Bool)
-            && ty.slot_color() == crate::ast::SlotColor::Imm1
+        use crate::ast::{HandleKind, SlotColor};
+        match ty.slot_color() {
+            SlotColor::Imm1 => matches!(ty, PortType::U64 | PortType::F64 | PortType::Bool),
+            // SRD 115 §5: byte-string handles marshal in (arena copy)
+            // and out (copy to an owned value). Table handles wait for
+            // the value table of step 5.
+            SlotColor::Hdl1 => ty.handle_kind() == Some(HandleKind::Bytes),
+            SlotColor::Imm2 | SlotColor::Ref2 => false,
+        }
     }
 
     /// A node may join a cone iff the P3 classifier can lower it,
@@ -481,7 +496,26 @@ mod jit_impl {
         let mut in_types: Vec<PortType> = Vec::new();
         let mut seen_in: HashMap<(u8, usize, usize), usize> = HashMap::new();
         for &m in members {
-            for src in &dag.wiring[m] {
+            let member_ports: Vec<PortType> = nodes[m].as_ref()?.meta().wire_inputs().iter().map(|p| p.typ).collect();
+            for (k, src) in dag.wiring[m].iter().enumerate() {
+                let ty = match src {
+                    WireSource::Input(i) => dag.input_defs[*i].port_type,
+                    WireSource::NodeOutput(j, p) => {
+                        nodes[*j].as_ref()?.meta().outs[*p].typ
+                    }
+                };
+                // Inside a cone every wire is exactly its port's type.
+                // The assembler lets some variadic nodes take any wire
+                // untyped (they inspect the `Value`); a native helper
+                // cannot, so such an edge keeps the node on P1.
+                if let Some(expected) = member_ports.get(k)
+                    && *expected != ty
+                {
+                    audit_skip(members.len(), &format!(
+                        "input [{k}] of `{}` is a {ty:?} wire on a {expected:?} port",
+                        nodes[m].as_ref()?.meta().name));
+                    return None;
+                }
                 let intra = matches!(src, WireSource::NodeOutput(j, _) if is_member(*j));
                 if intra {
                     continue;
@@ -490,12 +524,6 @@ mod jit_impl {
                 if seen_in.contains_key(&key) {
                     continue;
                 }
-                let ty = match src {
-                    WireSource::Input(i) => dag.input_defs[*i].port_type,
-                    WireSource::NodeOutput(j, p) => {
-                        nodes[*j].as_ref()?.meta().outs[*p].typ
-                    }
-                };
                 if !scalar_ok(ty) {
                     audit_skip(members.len(), &format!(
                         "boundary input of type {ty:?} is not marshalable"));
