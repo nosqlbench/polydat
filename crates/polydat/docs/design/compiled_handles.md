@@ -83,7 +83,8 @@ has landed: engines.md §5–§7, type_system_alignment.md §5 and §7, and
 jit_boundary.md's helper table and axiom section carry the handle
 color, the helper ABI, and H1–H7, and the Polytile SRD's step 7 is
 marked done. Every step of §11 has landed, including the native form
-of a projection tile.
+of a projection tile and the H1 tripwire of §8, a taint pass over the
+emitted IR that runs on every compile.
 This document fixes the slot representation that lets string, byte,
 JSON, and extension values ride through the P2 and P3 engines, so that
 the nodes which produce and consume them (string operations, JSON
@@ -474,9 +475,16 @@ SAFETY comment can cite the one it depends on.
 
 - **H1 — A handle is a name, not an address.** Generated code loads,
   stores, and passes handles; it never decodes one. Only helpers and
-  the engine decode. *Chokepoint: no `Hdl1` slot is an operand of any
-  arithmetic or memory instruction in emitted IR; the tripwire is the
-  IR verifier pass in the JIT tests.*
+  the engine decode. *Tripwire: `verify_handle_discipline` runs over
+  the emitted IR of every compiled function before it is defined.
+  Every value loaded from a handle slot or stored into one is tainted;
+  a tainted value may reach only a store as its data, a stack store,
+  or a call as an argument, and a value stored into a handle slot must
+  come from a load, a helper call, or an interned immediate. A
+  violation fails the compile, naming the slot and the instruction.
+  The handle slots are the outputs of handle-producing steps plus the
+  handle slots the caller fills: a cone's handle-colored boundary
+  inputs, a hybrid kernel's closure-written slots.*
 - **H2 — Three places, decided at build.** A `Hdl1` port's handles are
   static or arena for byte strings and table for everything else, by
   `PortType`. No slot ever holds a handle of another kind. *Chokepoint:

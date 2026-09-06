@@ -816,7 +816,16 @@ mod jit_impl {
         };
         let (coord_count, total_slots, jit_steps, jit_outputs) = layout;
         debug_assert_eq!(coord_count, plan.boundary_in.len());
-        let compiled = crate::compile::jit::compile_jit_entry(&jit_steps, 0);
+        // Boundary inputs occupy the first slots; the handle-colored
+        // ones are handle slots the H1 verifier tracks (SRD 115 §8).
+        let handle_inputs: Vec<usize> = plan
+            .in_types
+            .iter()
+            .enumerate()
+            .filter(|(_, ty)| ty.slot_color() == crate::ast::SlotColor::Hdl1)
+            .map(|(i, _)| i)
+            .collect();
+        let compiled = crate::compile::jit::compile_jit_entry(&jit_steps, 0, &handle_inputs);
         let (code_fn, module, table_entries) = match compiled {
             Ok(parts) => parts,
             Err(e) => {

@@ -1771,7 +1771,7 @@ pub fn compile_jit_raw(
     output_map: HashMap<String, usize>,
     nodes: Vec<Box<dyn PolydatNode>>,
 ) -> Result<JitKernelRaw, String> {
-    let (raw_fn, _, module, table_entries) = compile_jit_impl(&steps, false, 0)?;
+    let (raw_fn, _, module, table_entries) = compile_jit_impl(&steps, false, 0, &[])?;
     Ok(JitKernelRaw {
         core: JitCore::new(total_slots, coord_count, output_map, table_entries, module, nodes),
         code_fn: raw_fn,
@@ -1790,8 +1790,9 @@ pub(crate) type JitSegmentCode = (unsafe fn(*const u64, *mut u64), JITModule, Ve
 pub(crate) fn compile_jit_entry(
     steps: &[(JitOp, Vec<usize>, Vec<usize>)],
     entry_base: usize,
+    handle_inputs: &[usize],
 ) -> Result<JitSegmentCode, String> {
-    let (raw_fn, _, module, table_entries) = compile_jit_impl(steps, false, entry_base)?;
+    let (raw_fn, _, module, table_entries) = compile_jit_impl(steps, false, entry_base, handle_inputs)?;
     Ok((raw_fn, module, table_entries))
 }
 
@@ -1805,7 +1806,7 @@ pub(crate) fn compile_jit_push(
     input_dependents: Vec<Vec<usize>>,
 ) -> Result<JitKernelPush, String> {
     let step_count = steps.len();
-    let (_, prov_fn, module, table_entries) = compile_jit_impl(&steps, true, 0)?;
+    let (_, prov_fn, module, table_entries) = compile_jit_impl(&steps, true, 0, &[])?;
     Ok(JitKernelPush {
         core: JitCore::new(total_slots, coord_count, output_map, table_entries, module, nodes),
         code_fn_prov: prov_fn,
@@ -1825,7 +1826,7 @@ pub(crate) fn compile_jit_pull(
 ) -> Result<JitKernelPull, String> {
     let buffer_len = total_slots;
     // Pull uses the RAW jit function (no per-node clean checks)
-    let (raw_fn, _, module, table_entries) = compile_jit_impl(&steps, false, 0)?;
+    let (raw_fn, _, module, table_entries) = compile_jit_impl(&steps, false, 0, &[])?;
     let step_outs: Vec<Vec<usize>> = steps.iter().map(|(_, _, o)| o.clone()).collect();
     let slot_provenance = compute_jit_slot_provenance(coord_count, buffer_len, &step_outs, input_dependents);
     Ok(JitKernelPull {
@@ -1847,7 +1848,7 @@ pub(crate) fn compile_jit_push_pull(
 ) -> Result<JitKernelPushPull, String> {
     let step_count = steps.len();
     let buffer_len = total_slots;
-    let (_, prov_fn, module, table_entries) = compile_jit_impl(&steps, true, 0)?;
+    let (_, prov_fn, module, table_entries) = compile_jit_impl(&steps, true, 0, &[])?;
     let step_outs: Vec<Vec<usize>> = steps.iter().map(|(_, _, o)| o.clone()).collect();
     let slot_provenance = compute_jit_slot_provenance(coord_count, buffer_len, &step_outs, &input_dependents);
     Ok(JitKernelPushPull {
@@ -1874,6 +1875,103 @@ type JitCompiled = (
     JITModule,
     Vec<(usize, usize)>,
 );
+
+/// SRD 115 axiom H1, the tripwire: a handle is a name, not an address,
+/// and generated code only loads, stores, and passes it. Every value
+/// loaded from a handle slot, and every value stored into one, is
+/// tainted; a tainted value may flow only into a store as the stored
+/// data, a stack store as the stored data, or a call as an argument.
+/// Any other use, arithmetic, comparison, a bitcast, a branch
+/// condition, an address, is a violation, reported with the slot it
+/// came from and the instruction that misused it. Runs on every
+/// compiled function before it is defined, so a bad lowering never
+/// produces code.
+pub(crate) fn verify_handle_discipline(
+    func: &ir::Function,
+    handle_slots: &std::collections::HashSet<usize>,
+) -> Result<(), String> {
+    use cranelift_codegen::ir::InstructionData;
+    if handle_slots.is_empty() {
+        return Ok(());
+    }
+    let Some(entry) = func.layout.entry_block() else { return Ok(()) };
+    let params = func.dfg.block_params(entry);
+    if params.len() < 2 {
+        return Ok(());
+    }
+    let buffer_ptr = params[1];
+    let slot_of = |base: ir::Value, offset: ir::immediates::Offset32| -> Option<usize> {
+        if base != buffer_ptr {
+            return None;
+        }
+        let off = i32::from(offset);
+        if off < 0 || off % 8 != 0 {
+            return None;
+        }
+        let slot = (off / 8) as usize;
+        handle_slots.contains(&slot).then_some(slot)
+    };
+    // Seed: value → the handle slot it came from or went to.
+    let mut tainted: HashMap<ir::Value, usize> = HashMap::new();
+    for block in func.layout.blocks() {
+        for inst in func.layout.block_insts(block) {
+            match func.dfg.insts[inst] {
+                InstructionData::Load { arg, offset, .. } => {
+                    if let Some(slot) = slot_of(arg, offset) {
+                        tainted.insert(func.dfg.inst_results(inst)[0], slot);
+                    }
+                }
+                InstructionData::Store { args, offset, .. } => {
+                    if let Some(slot) = slot_of(args[1], offset) {
+                        tainted.entry(args[0]).or_insert(slot);
+                        // A handle is made by a helper, interned as an
+                        // immediate, or loaded from another slot; it is
+                        // never computed.
+                        let made_by = match func.dfg.value_def(args[0]) {
+                            ir::ValueDef::Result(def, _) => Some(func.dfg.insts[def].opcode()),
+                            _ => None,
+                        };
+                        let legitimate = matches!(
+                            made_by,
+                            Some(ir::Opcode::Load) | Some(ir::Opcode::Iconst)
+                        ) || made_by.is_some_and(|op| op.is_call());
+                        if !legitimate {
+                            return Err(format!(
+                                "H1 handle discipline: slot {slot} was written with a value made by `{}`; \
+                                 a handle is only loaded, returned by a helper, or interned as an immediate (SRD 115 §8)",
+                                made_by.map_or("a block parameter".to_string(), |op| op.to_string())
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    // Every use of a tainted value must be a sanctioned one.
+    for block in func.layout.blocks() {
+        for inst in func.layout.block_insts(block) {
+            let data = &func.dfg.insts[inst];
+            let opcode = data.opcode();
+            for (k, arg) in func.dfg.inst_args(inst).iter().enumerate() {
+                let Some(&slot) = tainted.get(arg) else { continue };
+                let sanctioned = match data {
+                    // The handle is the data of the store, never its address.
+                    InstructionData::Store { .. } => k == 0,
+                    InstructionData::StackStore { .. } => true,
+                    _ => opcode.is_call(),
+                };
+                if !sanctioned {
+                    return Err(format!(
+                        "H1 handle discipline: the handle in slot {slot} reached `{opcode}` as operand {k}; \
+                         generated code may only load, store, and pass a handle (SRD 115 §8)"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
 
 /// True for an op whose output slot holds a handle (SRD 115 §2): an
 /// arena string, a static string, or a value-table entry.
@@ -1929,6 +2027,7 @@ fn compile_jit_impl(
     steps: &[(JitOp, Vec<usize>, Vec<usize>)],
     provenance: bool,
     entry_base: usize,
+    handle_inputs: &[usize],
 ) -> Result<JitCompiled, String> {
     let mut table_entries: Vec<(usize, usize)> = Vec::new();
     for (op, _, outs) in steps {
@@ -1937,6 +2036,16 @@ fn compile_jit_impl(
         }
     }
     let entry_of_slot: HashMap<usize, usize> = table_entries.iter().copied().collect();
+    // Every slot that holds a handle inside this function: the outputs
+    // of handle-producing steps and the handle slots the caller fills
+    // before the call (a cone's boundary inputs, a hybrid kernel's
+    // closure-written slots). The H1 verifier tracks these.
+    let mut handle_slots: std::collections::HashSet<usize> = handle_inputs.iter().copied().collect();
+    for (op, _, outs) in steps {
+        if produces_handle(op) {
+            handle_slots.extend(outs.iter().copied());
+        }
+    }
     let mut flag_builder = settings::builder();
     flag_builder.set("opt_level", "speed").unwrap();
     // Emit DWARF/SEH unwind tables so a panic raised from an
@@ -3627,6 +3736,10 @@ fn compile_jit_impl(
         builder.finalize();
     }
 
+    // SRD 115 axiom H1: the emitted IR only loads, stores, and passes
+    // handles. Checked on every compile, before the code exists.
+    verify_handle_discipline(&ctx.func, &handle_slots)?;
+
     module.define_function(func_id, &mut ctx)
         .map_err(|e| format!("define function: {e}"))?;
     module.clear_context(&mut ctx);
@@ -4377,5 +4490,94 @@ mod tests {
         // Happy path still works.
         kernel.eval(&[42]);
         assert_eq!(kernel.get("out"), 42);
+    }
+}
+
+/// SRD 115 axiom H1, the tripwire's own tests: hand-built IR that
+/// misuses a handle is refused, and IR that only loads, stores, and
+/// passes one is accepted.
+#[cfg(test)]
+mod h1_tests {
+    use super::*;
+    use cranelift_codegen::ir::{Function, MemFlags, Signature, UserFuncName};
+    use cranelift_codegen::isa::CallConv;
+
+    enum Shape {
+        /// load slot 3, store to slot 4
+        Forward,
+        /// load slot 3, add one, store to slot 4
+        Arithmetic,
+        /// load slot 3, branch on it
+        Branch,
+    }
+
+    fn function(shape: Shape) -> Function {
+        let mut sig = Signature::new(CallConv::Fast);
+        sig.params.push(AbiParam::new(types::I64));
+        sig.params.push(AbiParam::new(types::I64));
+        let mut func = Function::with_name_signature(UserFuncName::default(), sig);
+        let mut fb_ctx = FunctionBuilderContext::new();
+        let mut b = FunctionBuilder::new(&mut func, &mut fb_ctx);
+        let block = b.create_block();
+        b.append_block_params_for_function_params(block);
+        b.switch_to_block(block);
+        b.seal_block(block);
+        let buf = b.block_params(block)[1];
+        let h = b.ins().load(types::I64, MemFlags::trusted(), buf, 8 * 3);
+        match shape {
+            Shape::Forward => {
+                b.ins().store(MemFlags::trusted(), h, buf, 8 * 4);
+                b.ins().return_(&[]);
+            }
+            Shape::Arithmetic => {
+                let one = b.ins().iconst(types::I64, 1);
+                let v = b.ins().iadd(h, one);
+                b.ins().store(MemFlags::trusted(), v, buf, 8 * 4);
+                b.ins().return_(&[]);
+            }
+            Shape::Branch => {
+                let yes = b.create_block();
+                let no = b.create_block();
+                b.ins().brif(h, yes, &[], no, &[]);
+                b.switch_to_block(yes);
+                b.seal_block(yes);
+                b.ins().return_(&[]);
+                b.switch_to_block(no);
+                b.seal_block(no);
+                b.ins().return_(&[]);
+            }
+        }
+        b.finalize();
+        func
+    }
+
+    fn slots(s: &[usize]) -> std::collections::HashSet<usize> {
+        s.iter().copied().collect()
+    }
+
+    #[test]
+    fn loading_storing_and_passing_a_handle_is_allowed() {
+        verify_handle_discipline(&function(Shape::Forward), &slots(&[3, 4])).unwrap();
+        verify_handle_discipline(&function(Shape::Arithmetic), &slots(&[])).unwrap();
+    }
+
+    #[test]
+    fn a_handle_used_as_an_arithmetic_operand_is_refused() {
+        let err = verify_handle_discipline(&function(Shape::Arithmetic), &slots(&[3])).unwrap_err();
+        assert!(err.contains("slot 3") && err.contains("iadd"), "{err}");
+    }
+
+    #[test]
+    fn a_computed_value_written_to_a_handle_slot_is_refused() {
+        // Only the destination is known to be a handle slot: the value
+        // stored there was made by arithmetic, which no lowering does.
+        let err = verify_handle_discipline(&function(Shape::Arithmetic), &slots(&[4])).unwrap_err();
+        assert!(err.contains("slot 4") && err.contains("iadd"), "{err}");
+    }
+
+    #[test]
+    fn a_handle_as_a_branch_condition_is_refused() {
+        let err = verify_handle_discipline(&function(Shape::Branch), &slots(&[3])).unwrap_err();
+        assert!(err.contains("brif"), "{err}");
     }
 }

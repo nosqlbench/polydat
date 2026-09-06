@@ -553,8 +553,12 @@ so a SAFETY comment can cite them beside the S-axioms:
 
 - **H1 — A handle is a name, not an address.** Generated code loads,
   stores, and passes handles; only helpers, closures, and the engine
-  decode. *Chokepoint: no `Hdl1` slot is an operand of arithmetic or
-  memory instructions in emitted IR.*
+  decode. *Tripwire: `verify_handle_discipline` in codegen.rs, a
+  taint pass over the emitted IR of every compiled function: a value
+  loaded from or stored into a handle slot may reach only a store's
+  data, a stack store, or a call argument, and a handle slot is only
+  written from a load, a helper call, or an interned immediate. A
+  violation fails the compile.*
 - **H2 — Three places, decided at build.** Byte strings are static or
   arena handles, everything else a table handle, by `PortType`.
   *Chokepoint: `PortType::handle_kind()`.*

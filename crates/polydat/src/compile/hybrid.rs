@@ -727,7 +727,11 @@ pub fn build_hybrid(
                 // Table-kind slots are numbered across every segment
                 // so the kernel's one value table serves them all
                 // (SRD 115 §3).
-                let (code_fn, module, entries) = jit::compile_jit_entry(&single_batch, table_entries.len())?;
+                // Slots closures fill with handles or Ref pairs are
+                // handle slots to the H1 verifier: a segment may only
+                // load, store, and pass them.
+                let guarded_slots: Vec<usize> = ref_slots.iter().enumerate().filter(|(_, r)| **r).map(|(s, _)| s).collect();
+                let (code_fn, module, entries) = jit::compile_jit_entry(&single_batch, table_entries.len(), &guarded_slots)?;
                 table_entries.extend(entries);
                 steps.push(HybridStep::Jit(JitSegment {
                     code_fn,
