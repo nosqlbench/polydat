@@ -1,7 +1,7 @@
 # Polytile — Compiled Variate Templates
 
-**Status:** Proposed SRD 114, third revision. Every step of §12 except
-the compiled renderers is implemented and tested: the grammar in every
+**Status:** Proposed SRD 114, third revision. Every step of §12 is
+implemented and tested: the grammar in every
 body form with options, with `:=` binding the tile's wire as in every
 other binding; the structural JSON form; tiles handed in by a host as
 template text, JSON text, a parsed JSON value, or a `polytile` binding;
@@ -508,38 +508,44 @@ Tiles declared inside a `for` body compile inside that body's program.
 
 ## 7. Runtime
 
-### 7.1 P1
+### 7.1 The render program
 
-The interpreter renders into the thread-local cycle arena from nmbrs SRD
-111: `Copy` is a memcpy from the static interner, `Hole` runs the
-encoder for the hole's type straight into the arena with no intermediate
-`String`, `Repeat` activates the body program over a scratch state that
-is reset rather than reallocated per tuple, and `Branch` selects. The
-result is the arena range, surfaced as a `Str` or `Bytes` value. Nothing
-is allocated on the heap per render once the arena is warm.
+A tile renders by walking its skeleton once. `Copy` appends an interned
+static run; `Hole` appends the encoded text the hole's `tile_encode`
+binding produced; `Branch` selects a body on a `1`/`0` hole; `Repeat`
+evaluates its comprehension with the evaluator the `for` runtime opens a
+traversal with, binds each tuple into a per-thread scratch state over
+the body program, and renders the body per tuple with the separator
+between. The comprehension and the static runs are parsed and interned
+once, when the render node is constructed; scratch states are reused
+across renders; two renders never share dispense state. The same walk
+runs on every tier.
 
-### 7.2 P2
+### 7.2 Tiers
 
-The `tile_render` node's closure form is monomorphic over the skeleton:
-a loop over instructions with the encoders specialized by type. Hole
-values arrive as typed slots rather than `Value`.
+The tiers differ only in how the hole texts arrive and where the result
+goes, per [Compiled Non-Scalar Slots](compiled_handles.md):
 
-### 7.3 P3
+- **P1.** `tile_encode` runs per hole and `tile_render` walks the
+  skeleton, both as ordinary nodes on `Value`s. The document is built in
+  a `String` and surfaced as a `Str`; writing straight into the cycle
+  arena is a refinement recorded in SRD 115.
+- **P2.** Both nodes run as `compiled_handle` closures over handle
+  slots: hole texts are arena handles decoded by the wire types the
+  kernel supplies, and the rendered document enters the arena.
+- **P3.** In a fused cone or a pure-P3 kernel, `tile_encode` lowers to a
+  helper over the hole's wire type and the interned encoding, and
+  `tile_render` to a helper over the interned tile program and the
+  encoded hole texts, passed in a stack array with their type codes.
+  Projections activate the body program through nested kernels inside
+  the helper, exactly as at P1; the cone eval is re-entrant so a body's
+  own cones run inside it. The rendered handle flows on as a slot, so a
+  tile feeds an adapter or `emit_row` without leaving native code. One
+  rule keeps semantics exact: `tile_encode` tolerates a `None` input (it
+  writes `null`), so fed straight by a kernel input it stays on P1 and
+  the render node takes its text as a boundary input (SRD 115 §9).
 
-The skeleton lowers to Cranelift IR as straight-line code. `Copy` becomes
-a call to the arena copy helper with a static handle. `Hole` becomes a
-call to the typed encoder helper, `put_u64`, `put_f64`, `put_escaped`,
-and so on, each taking the arena pointer and the slot. `Repeat` with a
-bounded stream becomes a counted loop that binds element slots and calls
-the body cone. `Branch` is a conditional jump. Hole expressions are
-ordinary cones and inline where eligible. The rendered handle flows on as
-a 64-bit slot, so a tile feeds an adapter or an `emit_row` without
-leaving native code.
-
-The helper ABI is the one SRD 111 defines for string nodes; Polytile adds
-no new calling convention.
-
-### 7.4 Cost
+### 7.3 Cost
 
 Rendering a tile costs the bytes it copies, the holes it encodes, and,
 for each projection, the tuple count times its body's cost. Skeleton
@@ -645,171 +651,86 @@ a handful of integer and float encodes, and a four-tuple loop.
 
 ## 12. Implementation plan
 
-1. **Grammar.** Done. `TokenKind::Tile` and a raw `TileBody` token
-   captured by the lexer for block and heredoc bodies after `:=`, which
-   every body form requires since a tile binds a wire;
-   `Statement::Tile(TileDef)` carrying the
-   encoding, options, raw body, and parsed pieces; `dsl::tile` parsing
-   holes with declared type, format, and raw flag, projections with
-   separators, branches, splices as bare-name holes, the doubled-open
-   escape, and balanced braces in static text, with a `render_template`
-   inverse; the printer reproduces every body form. Tests in
-   `tests/tile_syntax.rs` cover each form and each error; the fuzzer in
-   `tests/fuzz_tile_syntax.rs` generates tiles over every encoding, six
-   delimiter pairs, four sigils, and nested directives, checks parsed
-   pieces against the emitted shape, printer and renderer fixed points,
-   and the compiler's interim rejection, and mutates programs to prove
-   no stage panics. The first sweep found two grammar defects, braces in
-   static text ending a directive block early and hole delimiters that
-   begin with `{` hiding a block brace, both fixed.
-   A second sweep after step 4 found and fixed three more: a
-   free-standing `{word}` block read as interpolation, a hole in a
-   directive header reported as a range error instead of a missing
-   block, and projection scratch states keyed by a program address that
-   a later program could reuse.
-2. **Structural front end.** Done. `dsl::tile_structural` classifies
-   strings per §3.1 (value hole, string hole, `str`-declared string
-   hole, static), lowers directive arrays and `@for`/`@if`/`@else`
-   object keys per §3.2 by textualizing the value into the template
-   grammar, and rejects directive strings in value position. The
-   textual parser then produces the pieces, so the two forms are
-   equivalent by construction; `tests/tile_structural.rs` renders the
-   §3.2 example both ways and compares the documents. A directive
-   member beside static members carries its own separating comma inside
-   each repetition, leading when a member precedes it and trailing when
-   members follow, so a projection that renders zero tuples or a branch
-   that renders nothing leaves the object valid; the cardinality check
-   §3.2 called for is unnecessary by construction.
-3. **Typing.** Done. Every hole is typed in `dsl::tile_lower` before
-   its encode binding is emitted: the wire type by the compiler's own
-   expression inference (projection elements and cascaded outer wires
-   from the body context), the declared type checked for reachability
-   through `assembly::auto_adapter`, the adapter node inserted between
-   the expression and `tile_encode` when the declaration needs one (in
-   a projection body, as the `as` fusion), and the effective type
-   written into the encode spec so the encoder never consults the
-   runtime variant. Unreachable declarations, unknown type keywords,
-   and wires with no text form (`Ext`, `Handle`, registers) are compile
-   errors naming the tile, the hole, and both types; `(strict)` or
-   compiler strict mode rejects the implicit adapter. Each hole records
-   a `TileHoleTyped` compile event, which `polydat explain <file>
-   tiles` prints. Tests in `tests/tile_typing.rs`, one per row of the
-   §4.3 table and per error case.
-4. **Skeleton and P1 renderer.** Done. `dsl::tile_lower` lowers each
-   hole to a `tile_encode` node whose constant spec carries encoding,
-   position, declared type, format, and raw flag; branch conditions to
-   `1`/`0` holes; static runs to single copies; the tile to one
-   `tile_render` node over the encoded holes, constant when it has no
-   holes. `library::tile_render` holds the skeleton IR (`TileSpec`,
-   `TileOp`), the encoders for `text`, `json` (value and in-string
-   positions), and `csv`, printf formats, and the P1 renderer. Splicing
-   inlines same-encoding tiles and treats others as wires (§5.5).
-   Tests in `tests/tile_render.rs`; `tests/function_coverage.rs`
-   exercises both nodes. Static runs and separators are interned at
-   render-node construction and copied from the static interner, the
-   `Copy` instruction of §6 (SRD 115 step 3). The `Bytes` form and
-   arena-backed output are still owed to SRD 115.
-5. **Projections.** Done. A child program per body with element and
-   cascaded outer externs, the comprehension embedded in the skeleton
-   as a `StreamerValue`, per-thread scratch-state reuse, and separators
-   with per-encoding defaults. Sources resolve through the `for`
-   construct's own `resolve_source`, so inline text, bound producers,
-   and derivations (`base where ... order ...`) all project. The
-   renderer evaluates the comprehension with the same
-   `evaluate_for_iteration` the `for` runtime opens a traversal with,
-   over an empty parent kernel and the body program as canonical, so
-   order strategies with truncation and element predicates behave
-   identically. Generator-call clauses compile to wires of the
-   enclosing program, typed by hole inference, and the render node
-   binds their values into the comprehension as literal lists, so a
-   projection never needs a kernel of its own. Nested projections lower
-   to a `tile` statement inside the body program (one program per
-   lexical position at every depth), with producers re-bound from
-   their source text and outer wires cascaded through. Member
-   projections come through the structural form. The bounded
-   cardinality check rejects continuous sources, which the runtime does
-   not sample into tuples, and accepts generator sources whose count is
-   unknown. A predicate placeholder for a wire outside the
-   comprehension is a compile error, as it is for `for`. The body's
-   own input is the tuple index and the program's `cycle` is cascaded
-   like any outer wire. Values cross into the render node as they are:
-   its variadic inputs are exempt from wire typing, as `printf`'s are,
-   so cascaded wires, generator scalars, and generator lists (streams,
-   vectors, JSON arrays) arrive typed rather than as display text.
-   A nested projection inside a JSON string position compiles its tile
-   with the `instring` option, so its holes escape as text from the
-   first byte. A continuous source projects when its order names a
-   sampling strategy with a count: the comprehension runtime now
-   samples `halton`, `sobol`, `lhs`, and `shuffle` points from the
-   intervals, for tiles and for the `for` construct alike, and the tile
-   compiler rejects a non-sampling strategy over a continuous source
-   ahead of time. Inside a body every catalog adapter is available to a
-   declared type, since `as` now reaches the whole catalog. Tests in
-   `tests/tile_projections.rs`.
-6. **Host surfaces.** Done. In source, `name := polytile(enc, body,
-   options...)` and `name := polytile_json(body, options...)` are
-   parsed into `tile` statements before compilation; the body is a
-   string literal or a `<<< >>>` heredoc, which the lexer accepts as a
-   string literal anywhere. In Rust, `polydat::tile` exposes
-   `tile_from_text`, `tile_from_json_text`, `tile_from_json_value` (a
-   `serde_json::Value`), and `compile_polydat_with_tiles`. Host
-   defaults for delimiters and sigil are the transform
-   `transform::apply_tile_defaults`: tiles that declare no options of
-   their own are re-read under the host's, tiles that declare any keep
-   all of theirs; the binary applies it from `--tile-delims OPEN CLOSE`
-   and `--tile-sigil S` before compiling, so `explain` narrates the
-   program as it compiled. `--emit tile:<name>` selects the tile and
-   the `text` emit format, so the appended `emit_row` binding writes
-   the rendered document per cycle and nothing new happens at runtime.
-   Tiles inside module bodies inline with the call: the tile takes the
-   module prefix, hole and branch expressions and generator expressions
-   are rewritten against the caller's arguments, `{name}` placeholders
-   in projection sources are renamed when they name a module input
-   bound to a caller's wire or a module-internal binding, and
-   projection elements shadow module names inside their bodies. A
-   producer bound inside a module (`axes := for ...`) is bound under
-   the module prefix as a `streamer` constant and its tiles project over
-   it. Modules defined in the program itself are registered by name
-   before compilation, so `compile_polydat` on a string resolves them
-   without a source directory and an author's definition shadows a
-   library node of the same name. Each
-   tile records a `TileCompiled` event with its static runs and bytes,
-   holes, branches, projections, and body programs, which `explain
-   tiles` prints ahead of the hole typing. Tests in
-   `tests/tile_host_surfaces.rs`, including the binary end to end.
-7. **P2 and P3.** Done, through [Compiled Non-Scalar
-   Slots](compiled_handles.md) (SRD 115). Landed: the compiled tiers carry `Str`, `Json`, and `Ext`
-   as handle slots; static runs and separators are interned at build;
-   `tile_encode` lowers to a helper over the hole's wire type and the
-   interned encoding, and `tile_render` to a helper over the interned
-   program and the typed hole texts, so a tile without projections
-   joins the fused cones of the production kernel and the pure-P3
-   kernels and renders the same bytes P1 does. An encoder fed straight
-   by a kernel input stays on P1 by the SRD-74 None rule (it would
-   write `null` for a None the fused cone would instead propagate),
-   and the render node takes its text as a boundary input. The
-   skeleton's `Repeat` is an activation of the body program through
-   nested kernels, as `for` bodies already are, inside the render
-   helper at P3 and the `compiled_handle` closure at P2; the cone eval
-   is re-entrant so a body's own cones run inside it. The differential
-   suite in `tests/handle_tiers.rs` pins random tiles, projections
-   included, to the interpreter across the tiers (SRD 115 step 7).
-   Everything that
-   precedes this step (typed transport into bodies, skeleton counts,
-   one program per position) was shaped so that this lowering does not
-   have to undo anything.
-8. **Docs.** Done. [The Polytile tutorial](../polytile_tutorial.md)
-   walks every implemented form with output from
-   `examples/polytile_tutorial.rs` and `examples/polytile_demo.polydat`;
-   the illustrations page has a tile section; and the toy test
-   definition renders each reading as a JSON document from a `tile`
-   inside its traversal body and carries it in the load statement, as
-   §11 sketched. Getting there fixed two things: block bodies are now
-   dedented by the indentation of the statement around them, and tile
-   events from traversal bodies reach the parent's compile log so
-   `explain tiles` sees them. `--emit tile:<name>` accepts a tile that
-   lives in a traversal body, and a bare file name resolves its
-   same-directory modules. Tested end to end in
-   `tests/tile_host_surfaces.rs`.
+All eight steps have landed; §13 is the landing record.
 
-Each step lands with its tests and leaves the previous surfaces working.
+1. **Grammar.** `TokenKind::Tile`, the raw body token after `:=`,
+   `Statement::Tile`, the template parser in `dsl::tile` with its
+   `render_template` inverse, and the printer. `tests/tile_syntax.rs`,
+   `tests/fuzz_tile_syntax.rs`.
+2. **Structural front end.** `dsl::tile_structural` classifies strings
+   per §3.1 and textualizes directives per §3.2 into the template
+   grammar, so both forms share one parser. `tests/tile_structural.rs`.
+3. **Typing.** Every hole typed in `dsl::tile_lower` per §4, adapters
+   inserted, the effective type written into the encode spec, and the
+   `TileHoleTyped` events `explain tiles` prints. `tests/tile_typing.rs`.
+4. **Skeleton and P1 renderer.** `tile_encode` per hole and one
+   `tile_render` per tile; the skeleton IR, encoders, and formats in
+   `library::tile_render`; splicing per §5.5. `tests/tile_render.rs`.
+5. **Projections.** One body program per lexical position, sources
+   resolved through the `for` construct's own resolver, the comprehension
+   evaluated with the `for` runtime's evaluator, generator sources bound
+   as literal lists, nested and continuous projections, `instring`.
+   `tests/tile_projections.rs`.
+6. **Host surfaces.** `polytile` and `polytile_json` bindings, the
+   `polydat::tile` functions, `apply_tile_defaults`, the binary's
+   `--emit tile:<name>`, `--tile-delims`, and `--tile-sigil`, tiles in
+   module bodies, and the `TileCompiled` events.
+   `tests/tile_host_surfaces.rs`.
+7. **P2 and P3.** Through SRD 115: handle slots, the wire-typed
+   lowerings of both tile nodes, the `compiled_handle` closures, and
+   projections rendering inside the helper. `tests/variadic_lowering.rs`,
+   `tests/handle_tiers.rs`.
+8. **Docs.** [The Polytile tutorial](../polytile_tutorial.md) with real
+   output, the illustrations page, and the toy test definition rendering
+   its readings as documents.
+
+## 13. Landing record
+
+Decisions and defects worth knowing that the sections above state only
+as rules. Dates are 2026-09-04 to 2026-09-06.
+
+- **`:=` in every form.** The first drafts allowed `tile doc : json {`
+  without `:=`. The third revision made `:=` mandatory because a tile is
+  a wire binding like every other: `:=` assigns a wire that can be named
+  symbolically and wired wherever a wire is accepted, which neither `:`
+  nor `=` means.
+- **Grammar defects found by the fuzzer.** Braces in static text ended a
+  directive block early; hole delimiters beginning with `{` hid a block
+  brace; a free-standing `{word}` after a header was read as
+  interpolation; a hole in a directive header was reported as a range
+  error; projection scratch states were keyed by a program address a
+  later program could reuse. All fixed; the rules in §2.2 record the
+  outcomes.
+- **Structural commas.** A directive member beside static members carries
+  its own separating comma inside each repetition, leading or trailing
+  as its position requires, so a projection that renders zero tuples or a
+  branch that renders nothing leaves the object valid without a
+  cardinality check.
+- **Projections.** Sources resolve through `resolve_source` and evaluate
+  through `evaluate_for_iteration`, so order strategies, truncation, and
+  predicates behave exactly as in `for`. Generator-call clauses compile
+  to wires of the enclosing program and bind into the comprehension as
+  literal lists, so a projection never needs a kernel of its own. The
+  body's own input is the tuple index; the program's `cycle` cascades
+  like any outer wire. Render-node inputs cross as typed values, not
+  display text. Continuous sources project only under a sampling order
+  (`halton`, `sobol`, `lhs`, `shuffle`) with a count; the comprehension
+  runtime gained that sampling for tiles and `for` alike. A predicate
+  placeholder naming a wire outside the comprehension is a compile
+  error, as in `for`. Declared hole types reach every catalog adapter
+  because `as` was widened to the whole catalog.
+- **Modules.** A tile inside a module body inlines with the call under
+  the module prefix; producers bound in a module are bound under the
+  prefix as `streamer` constants; modules defined in the program itself
+  register before compilation and shadow library nodes of the same name
+  (Module System §2).
+- **Block bodies** are dedented by the indentation of the statement
+  around them, so a tile inside a `for` body renders the same bytes as
+  at top level. Tile events from traversal bodies reach the parent's
+  compile log, and `--emit tile:<name>` accepts a tile in a traversal
+  body.
+- **P2 and P3.** The typed transport into bodies, the skeleton counts,
+  and one program per position were shaped so that the SRD 115 lowering
+  undid nothing; it did not. The P3 renderer is the P1 walk behind a
+  helper, not the straight-line skeleton code the first drafts sketched;
+  SRD 115 §12 records what remains a refinement.

@@ -209,7 +209,10 @@ expr           ::= ident
                 |  call_expr
                 |  bin_op_expr
                 |  unary_expr
+                |  cast_expr
                 |  field_access
+
+cast_expr      ::= expr "as" type             (* postfix; binds to the atom *)
 
 call_expr      ::= ident "(" arg_list? ")"
 arg_list       ::= arg ("," arg)*
@@ -231,10 +234,19 @@ string_literal ::= "\"" ( char | "{" ident "}" )* "\""
 array_literal  ::= "[" (expr ("," expr)*)? "]"
 ```
 
-Seven expression constructors. Six lifecycle-typed kinds
+`as` is a contextual keyword: only the postfix `expr as type` form is a
+cast, and `as` is an ordinary identifier elsewhere. The cast binds to
+the atom before it, as in Rust, so `a + b as u64` is `a + (b as u64)`;
+parenthesize to cast a whole sub-expression. `type` is any port-type
+keyword. The cast's meaning is in [Language Spec](language_spec.md)
+§"Type Inference Details".
+
+Eight expression constructors. Six lifecycle-typed kinds
 (`Ident`, `IntLit`, `FloatLit`, `StringLit`, `ArrayLit`,
-`Call`) plus three sugar-only kinds (`BinOp`, `UnaryNeg`,
-`UnaryBitNot`) that desugar to `Call`.
+`Call`) plus four sugar-only kinds (`BinOp`, `UnaryNeg`,
+`UnaryBitNot`, `Cast`) that desugar to `Call` (a `Cast` to the
+catalog adapter node, or to a passthrough when the types already
+agree).
 
 `FieldAccess` (the seventh non-sugar form) is a source
 field projection — reads a field from a typed source

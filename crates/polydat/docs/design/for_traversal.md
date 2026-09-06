@@ -481,16 +481,19 @@ needs to observe a scope is expressed by inserting a node into that scope,
 where it has ordinary wired access to everything the scope can see.
 
 - **Emission.** `--emit` appends `__emit := emit_row(format, names, ...)`
-  to the program today. Once traversal lands, the same binding is inserted
-  inside the affected block, so every activation emits its own rows with
-  the block's element names in scope. The node buffers per thread; the
-  harness drains buffers at chunk boundaries.
-- **Assignment.** A bare `name=value` argument rewrites the named
-  extern's default, or turns the named input into an extern with that
-  default, before compilation. The text fuses to the declared type
-  through the program's own string coercions, so a bad value is a
-  compile error with the program's diagnostic. Nothing is written to a
-  state at runtime.
+  to the program; under traversal the same binding is inserted inside
+  the affected block, so every activation emits its own rows with the
+  block's element names in scope. `--emit tile:<name>` selects a tile as
+  the row ([Polytile](polytile.md) §10). The node buffers per thread;
+  the harness drains buffers at chunk boundaries.
+- **Assignment.** A bare `name=value` argument (or `--set name=value`)
+  rewrites the named extern's default, or turns the named input into an
+  extern with that default, before compilation. The text fuses to the
+  declared type through the program's own string coercions, so a bad
+  value is a compile error with the program's diagnostic. Nothing is
+  written to a state at runtime, and the run loop advances only the
+  program's coordinate inputs each cycle: an assigned input is an extern
+  now and keeps its value.
 - **Ordering.** Fibers claim work in chunks with sequence numbers. The
   writer restores cycle order by default and emits in completion order
   with `--unordered`. Under traversal, the sequence number is the tuple

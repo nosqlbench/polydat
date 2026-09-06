@@ -444,6 +444,25 @@ Auto-widening inserts an implicit `to_f64` adapter and emits
 a `polydat[advisory]` diagnostic. Narrowing (f64 → u64) is never
 implicit — use an explicit cast function.
 
+### The `as` cast
+
+`expr as type` declares the type a wire should have and inserts
+the adapter that gets it there. When the expression already has
+the type, the cast is a no-op passthrough. Otherwise it is
+exactly the adapter the assembler would insert between a wire of
+the expression's type and a port of the target type, from the
+whole adapter catalog: every lossless widening, every register
+retag, the string-to-number parses (`"42" as u64` is a declared
+reading, not a narrowing), and the JSON and byte-string
+conversions the catalog defines. Two things `as` never does:
+narrow a float to an integer, because the rounding is a semantic
+choice the author must make by name (`f64_to_u64`,
+`round_to_u64`, `floor_to_u64`, `ceil_to_u64`), and invent a
+conversion the catalog lacks, which is a compile error naming
+both types. A hole's declared type in a tile (`${x: u64}`) is the
+same cast, so a tile can reach every catalog adapter a binding
+can.
+
 ---
 
 ## Compilation Pipeline

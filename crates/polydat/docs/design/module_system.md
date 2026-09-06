@@ -89,6 +89,10 @@ order. Formal modules enforce exact parameter coverage, known argument names,
 literal compatibility with declared parameter types, and output arity. Wire
 arguments are checked by the assembler after inlining.
 
+Parameter and output types are the port-type keywords of the type system,
+compared as types rather than as spellings: `str` and `String` name the same
+type, so a caller's `Str` wire satisfies a parameter declared either way.
+
 When the compilation entry point's `strict` flag is true:
 
 - graph inputs require explicit declarations;
