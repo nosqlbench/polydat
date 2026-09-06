@@ -14,14 +14,17 @@ and nested bodies; the binary's `--emit tile:<name>`, `--tile-delims`,
 and `--tile-sigil`; tiles inside module bodies; and the toy test
 definition rendering its readings as documents.
 
-Step 7, the P2 and P3 renderers, is in progress through SRD 115. With
-its step 6, a tile without projections renders natively: `tile_encode`
-and `tile_render` lower by the types of their wires, join the fused
-cones of the production kernel and the pure-P3 kernels, and produce the
-same bytes P1 does (`tests/variadic_lowering.rs`). A tile with a
-projection stays an ordinary P1 node, which the engines leave in place
-while fusing the graph around it, until projection bodies activate as
-`for` bodies do; §12 step 7 records what remains.
+Step 7, the P2 and P3 renderers, is done through SRD 115 except for
+native projections. A tile without projections renders natively:
+`tile_encode` and `tile_render` lower by the types of their wires, join
+the fused cones of the production kernel and the pure-P3 kernels, and
+produce the same bytes P1 does (`tests/variadic_lowering.rs`). At P2
+the whole renderer runs as a closure, projections included, and the
+tier differential in `tests/handle_tiers.rs` pins random tiles to the
+interpreter across the tiers. A tile with a projection stays an
+ordinary P1 node inside a cone, which the engines leave in place while
+fusing the graph around it, until projection bodies activate natively
+as `for` bodies do; §12 step 7 records that follow-up.
 
 The walk-through with real output is
 [the Polytile tutorial](../polytile_tutorial.md).
@@ -776,9 +779,9 @@ a handful of integer and float encodes, and a four-tuple loop.
    holes, branches, projections, and body programs, which `explain
    tiles` prints ahead of the hole typing. Tests in
    `tests/tile_host_surfaces.rs`, including the binary end to end.
-7. **P2 and P3.** In progress through [Compiled Non-Scalar
-   Slots](compiled_handles.md) (SRD 115), whose step 6 is this step's
-   lowering. Landed: the compiled tiers carry `Str`, `Json`, and `Ext`
+7. **P2 and P3.** Done, through [Compiled Non-Scalar
+   Slots](compiled_handles.md) (SRD 115), except for native projections,
+   the one follow-up recorded there. Landed: the compiled tiers carry `Str`, `Json`, and `Ext`
    as handle slots; static runs and separators are interned at build;
    `tile_encode` lowers to a helper over the hole's wire type and the
    interned encoding, and `tile_render` to a helper over the interned

@@ -77,8 +77,13 @@ every run in debug builds, and read handle outputs through
 suite in `tests/handle_tiers.rs` generates random programs over the
 string, JSON, and tile nodes and checks every output across the
 interpreter, forced cones, P2, and pure P3 (`FUZZ_SEED`,
-`FUZZ_ITERATIONS`), beside the hand-written corpus. Step 8 is not
-started.
+`FUZZ_ITERATIONS`), beside the hand-written corpus. Step 8, the docs,
+has landed: engines.md §5–§7, type_system_alignment.md §5 and §7, and
+jit_boundary.md's helper table and axiom section carry the handle
+color, the helper ABI, and H1–H7, and the Polytile SRD's step 7 is
+marked done except for native projections. Every step of §11 has
+landed; the one open item is the native form of a projection tile,
+recorded under step 6.
 This document fixes the slot representation that lets string, byte,
 JSON, and extension values ride through the P2 and P3 engines, so that
 the nodes which produce and consume them (string operations, JSON
@@ -587,7 +592,7 @@ point.
    assertions for table entries in the P2 kernels. Landed.
 8. **Docs.** engines.md §5 and §7, type_system_alignment.md §5–§7,
    jit_boundary.md's axiom section with H1–H7, and the Polytile SRD's
-   step 7 marked done.
+   step 7 marked done. Landed.
 
 Each step lands with its tests and leaves the previous surfaces working.
 Step 1 is independent of the rest and is a fix in its own right.

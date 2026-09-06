@@ -117,15 +117,23 @@ static `SlotColor` maps each port type to one of three layouts:
 - `Imm2` — two immediate slots for 128-bit integers and register words;
 - `Ref2` — a `(ptr, len)` pair referencing kernel-owned typed-slice scratch; and
 - `Hdl1` — one slot holding a handle that names a `Str`, `Bytes`, `Json`,
-  `Ext`, or `Handle` value in the static interner, the cycle arena, or
-  the state's value table, per [Compiled Non-Scalar
-  Slots](compiled_handles.md). Generated code never decodes it.
+  `Ext`, or `Handle` value, per [Compiled Non-Scalar
+  Slots](compiled_handles.md). Byte strings are static-interner or
+  cycle-arena handles; the other kinds name entries of a value table the
+  running engine owns: a whole P2 or P3 kernel for its lifetime, an
+  embedded cone for one eval. Generated code never decodes a handle;
+  helpers, closures, boundary marshalling, and the kernels' `get_value`
+  readers do, and raw readers refuse the slot.
 
 Narrow integers and `f16`/`f32` use defined bit-stuffing rules inside `Imm1`.
 Signedness and exact width remain properties of `PortType`; the common physical
 slot does not permit untyped wiring. Ref-bearing nodes remain subject to the
 ownership, lifetime, and no-forwarding rules in [jit_boundary.md](jit_boundary.md)
-and [type_system_alignment.md](type_system_alignment.md).
+and [type_system_alignment.md](type_system_alignment.md). Handle-bearing nodes
+are subject to the cycle lifetime and single-writer rules of SRD 115 §4 and
+§8: the root state's cycle advance resets the arena, nested kernels never do,
+a cone releases what its eval took, and every table entry has one writer,
+checked after every run in debug builds.
 
 ## 6. Engine equivalence
 
@@ -141,13 +149,29 @@ pull sequence:
    masks prove the requested result unaffected.
 
 The engine ladder, slot-state axioms, cone tests, and equivalence harnesses are
-the regression contract for these properties.
+the regression contract for these properties. For handle-bearing nodes the
+contract is `tests/handle_tiers.rs`: random programs over the string, JSON,
+and tile nodes checked across the interpreter, forced cones, P2, and pure P3.
+
+Property 2 has one refinement for fused cones (SRD 115 §9). A cone is a single
+node to the kernel guard, so a `None` on any of its boundary inputs makes every
+output `None`. A node that tolerates `None` inputs and would have produced a
+value from one may therefore join a cone only when all of its inputs are wires
+from other members, where no `None` can arrive; fed by a kernel input it stays
+P1 with its exact semantics.
 
 ## 7. Unsupported combinations
 
 - A node without the required compiled closure or lowering remains P1.
 - A Ref-bearing value cannot cross a P3 cone boundary or be forwarded by an
   identity-style compiled step.
+- A tile with a projection does not enter a cone or a pure-P3 kernel; it runs
+  as a P2 closure or on P1 until projection bodies activate natively as `for`
+  bodies do.
+- A node whose variadic wires carry a type its helper cannot decode stays P1;
+  the classifier never re-types a wire to admit it.
+- Hybrid kernels have no typed reader for handle outputs; their handle slots
+  are engine-internal.
 - SIMD scalar-flow promotion is not selected by ordinary engine choice; it has
   its own explicit qualification and execution contract in
   [simd_isa_autopromotion.md](simd_isa_autopromotion.md).

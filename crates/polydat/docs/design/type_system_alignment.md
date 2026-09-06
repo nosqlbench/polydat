@@ -109,15 +109,17 @@ scalar left fold.
 
 | PortType | Runtime carrier | Compiled status | JSON behavior |
 |---|---|---|---|
-| `Str` | `Arc<str>` | closure/hosted operation where supported | string |
-| `Bytes` | `Arc<[u8]>` | closure/hosted operation where supported | documented hex convention |
-| `Json` | `Arc<serde_json::Value>` | P1/hosted | identity |
-| `Ext` | `Box<dyn ReflectedValue>` | P1 | extension-defined reflected projection |
-| `Handle` | `Arc<dyn Any + Send + Sync>` | P1 | no general JSON identity |
+| `Str` | `Arc<str>` | `Hdl1` byte-string handle (interner or cycle arena); P2 closures and P3 helpers | string |
+| `Bytes` | `Arc<[u8]>` | `Hdl1` byte-string handle; P2 closures and P3 helpers | documented hex convention |
+| `Json` | `Arc<serde_json::Value>` | `Hdl1` value-table handle; P2 closures and P3 helpers | identity |
+| `Ext` | `Box<dyn ReflectedValue>` | `Hdl1` value-table handle; crosses compiled tiers, is forwarded or projected, never operated on natively | extension-defined reflected projection |
+| `Handle` | `Arc<dyn Any + Send + Sync>` | `Hdl1` value-table handle; crosses compiled tiers, never downcast natively | no general JSON identity |
 
 `Ext` and `Handle` are explicit escape types. They do not
 gain implicit structural adapters or JIT layout by resemblance
-to a built-in type.
+to a built-in type. In the compiled tiers they are named by a
+value-table entry and come back as the same `Arc`
+([Compiled Non-Scalar Slots](compiled_handles.md) §3, §9).
 
 The crate enables serde_json's `preserve_order` feature so
 object iteration order does not depend on whether Polydat is
@@ -164,14 +166,22 @@ Type support and engine eligibility are separate:
   node implementation exists.
 - One-slot scalar nodes with a supported lowering may execute
   through P2 or P3.
+- Handle-bearing nodes (`Hdl1` ports) execute through P2 when
+  the macro emits a `compiled_u64` or `compiled_handle` kit for
+  them, and through P3 when `classify_node_typed` has a helper
+  for the operation; a node that dispatches on `Value` variants
+  lowers with the types of its wires fixed at classification, and
+  a wire of a type no helper takes keeps it on P1 ([Compiled
+  Non-Scalar Slots](compiled_handles.md) §6, §7).
 - Register-plane nodes may execute through P2 and, when
   `classify_node` has a lowering for the operation, native P3
   SIMD. Unsupported register operations remain on a lower tier.
 - Slice-bearing nodes may use `CompiledSlotOp` and
   kernel-owned scratch; their internal vector math may call
   compiled SIMD helpers.
-- `U128/I128`, `Ext`, `Handle`, and other unclassified
-  operations remain P1.
+- `U128/I128` operations and nodes that downcast an `Ext` or
+  `Handle` remain P1; the values themselves cross compiled
+  tiers as table handles.
 
 No compiler may coerce a value merely to make a higher engine
 tier available. Engine selection follows the typed graph; it

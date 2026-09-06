@@ -282,6 +282,33 @@ The `u64` return type matches the extern-function ABI the JIT
 uses; since each helper ends in `_longjmp` (which is `-> !`),
 the return is unreachable.
 
+### Handle helpers (SRD 115 §6)
+
+The non-scalar lowerings call helpers over `u64` handles, registered
+the same way. Every argument and return is an `I64`: bits, a handle,
+an interned address, or a type code.
+
+| Extern | Arity | Called from |
+|---|---|---|
+| `jit_u64_to_str`, `jit_i64_to_str`, `jit_f64_to_str`, `jit_bool_to_str` | `(bits) -> arena handle` | `JitOp::U64ToString` and siblings |
+| `jit_str_to_u64`, `jit_str_to_i64`, `jit_str_to_f64`, `jit_str_to_bool` | `(handle) -> bits`; a failed parse longjmps | `JitOp::StringToU64` and siblings |
+| `jit_str_lower`, `jit_str_upper`, `jit_str_trim`, `jit_str_len` | `(handle) -> handle or u64` | `JitOp::StrLower` and siblings |
+| `jit_str_concat` | `(handle, handle) -> arena handle` | `JitOp::StrConcat` |
+| `jit_u64_to_json`, `jit_i64_to_json`, `jit_f64_to_json`, `jit_bool_to_json`, `jit_str_to_json` | `(entry, arg) -> table handle` | `JitOp::U64ToJson` and siblings |
+| `jit_json_to_str` | `(handle) -> arena handle` | `JitOp::JsonToStr` |
+| `jit_printf`, `jit_tile_render` | `(interned address, type codes, args ptr) -> arena handle` | `JitOp::Printf`, `JitOp::TileRender` |
+| `jit_json_array`, `jit_json_object` | `(entry, type codes, args ptr) -> table handle` | `JitOp::JsonArray`, `JitOp::JsonObject` |
+| `jit_to_json` | `(entry, type code, bits) -> table handle` | `JitOp::ToJson` |
+| `jit_json_text` | `(type code, bits) -> arena handle` | `JitOp::JsonText` |
+| `jit_tile_encode` | `(interned address, type code, bits) -> arena handle` | `JitOp::TileEncode` |
+
+A producer of a table handle is told the entry it owns as an immediate
+and writes through the table the engine installed around the call
+(`with_value_table`); a helper that runs with no table installed
+panics. The variadic helpers read their arguments from an array the
+generated code stores into its own frame, decoding each by a one-byte
+type code interned as a static string.
+
 The message formatting happens at the Rust side, inside the
 helper:
 
@@ -520,5 +547,30 @@ Table handles (`Json`, `Ext`, `Handle`) cross by the engine-owned value
 table of SRD 115 §3: a cone borrows one for the eval and releases it, a
 whole kernel owns one and validates it after every run, and helpers
 reach it only through the installation the engine makes around its
-native call. The handle axioms H1–H7 are stated in
-[Compiled Non-Scalar Slots](compiled_handles.md) §8.
+native call. The handle axioms are stated normatively in
+[Compiled Non-Scalar Slots](compiled_handles.md) §8 and summarised here
+so a SAFETY comment can cite them beside the S-axioms:
+
+- **H1 — A handle is a name, not an address.** Generated code loads,
+  stores, and passes handles; only helpers, closures, and the engine
+  decode. *Chokepoint: no `Hdl1` slot is an operand of arithmetic or
+  memory instructions in emitted IR.*
+- **H2 — Three places, decided at build.** Byte strings are static or
+  arena handles, everything else a table handle, by `PortType`.
+  *Chokepoint: `PortType::handle_kind()`.*
+- **H3 — Handles live one cycle.** Arena handles until the root cycle's
+  reset, a cone's until its eval returns, table handles within the
+  generation that wrote them. *Tripwire: the generation stamp in every
+  table handle, checked on every read; handle-producing steps are never
+  skipped as clean.*
+- **H4 — One writer per table entry.** Exactly one (step, port) owns an
+  entry, is told its number at compile time, and republishes it every
+  execution. *Tripwire: the post-run validator in the P2 and P3
+  kernels, the S9(a) assertion restated for handles.*
+- **H5 — Only the root resets.** The arena resets at a root kernel's
+  cycle advance and nowhere else. *Chokepoint: the nested flag the
+  activation, subscope, and tile constructors set.*
+- **H6 — P1 never holds a handle.** Every `Hdl1` boundary output and
+  every `get_value` read copies out to an owned `Value`.
+- **H7 — Equivalence.** P1, P2, and P3 produce identical bytes.
+  *Tripwire: `tests/handle_tiers.rs`.*
