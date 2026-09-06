@@ -138,11 +138,41 @@ fn a_hole_fed_by_a_kernel_input_keeps_its_encoder_on_p1() {
 }
 
 #[test]
-fn a_tile_with_a_projection_stays_on_p1_and_agrees() {
+fn a_tile_with_a_projection_renders_natively_and_agrees() {
     // The tile depends on `cycle` so it is per-cycle work rather than a
-    // constant the fold passes take.
+    // constant the fold passes take. The projection re-runs its body
+    // program per tuple through nested kernels inside the helper.
     let src = "input cycle: u64\ntile t : text := \"${cycle}: @for k in 1..4 sep \\\",\\\" {${k}}\"\n";
-    agree(src, &["t"], 3, &[], &["tile_render"]);
+    agree(src, &["t"], 3, &["tile_render"], &[]);
+}
+
+/// A projection body with its own fusable work: the body program's
+/// cone evaluates inside the outer cone's helper, so the cone eval
+/// must be re-entrant, and the body's strings must not disturb the
+/// outer cone's arena mark.
+#[test]
+fn a_projection_body_with_cones_renders_inside_a_cone() {
+    let src = "input cycle: u64\nh := hash(cycle)\ns := __u64_to_string(h)\ntile t : json := {\"h\": ${h}, \"xs\": [@for k in 1..4 sep \",\" { {\"k\": ${k}, \"hk\": ${hash(k)}, \"s\": ${__u64_to_string(hash(k))}, \"outer\": ${s}} }]}\n";
+    let mut p3 = agree(src, &["t"], 5, &["tile_render"], &[]);
+    p3.set_inputs(&[2]);
+    let before = polydat::kernel::cycle_arena_used();
+    let text = p3.pull("t").to_display_string();
+    assert!(text.contains("\"hk\":"), "{text}");
+    assert_eq!(polydat::kernel::cycle_arena_used(), before, "the cone released what its render took");
+}
+
+/// The same tile in a pure-P3 kernel: the helper runs the projection's
+/// nested kernels inside the kernel's own root cycle.
+#[test]
+fn a_projection_tile_lays_out_in_a_pure_p3_kernel() {
+    let src = "input cycle: u64\nh := hash(cycle)\ntile t : text := \"${h}: @for k in 1..3 sep \\\"-\\\" {${hash(k)}}\"\n";
+    let mut k = compile_polydat_to_assembler(src).unwrap().try_compile_jit().expect("every node lowers");
+    let mut p1 = kernel(src, JitMode::Off);
+    for c in 0..6u64 {
+        k.eval(&[c]);
+        p1.set_inputs(&[c]);
+        assert_eq!(k.get_value("t").as_str(), p1.pull("t").as_str());
+    }
 }
 
 #[test]

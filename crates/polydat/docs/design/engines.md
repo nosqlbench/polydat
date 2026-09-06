@@ -165,9 +165,6 @@ P1 with its exact semantics.
 - A node without the required compiled closure or lowering remains P1.
 - A Ref-bearing value cannot cross a P3 cone boundary or be forwarded by an
   identity-style compiled step.
-- A tile with a projection does not enter a cone or a pure-P3 kernel; it runs
-  as a P2 closure or on P1 until projection bodies activate natively as `for`
-  bodies do.
 - A node whose variadic wires carry a type its helper cannot decode stays P1;
   the classifier never re-types a wire to admit it.
 - Hybrid kernels have no typed reader for handle outputs; their handle slots

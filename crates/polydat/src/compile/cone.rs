@@ -146,34 +146,38 @@ mod jit_impl {
         /// taken before the native call and released once every
         /// output is copied out, so nothing a cone allocates outlives
         /// its eval and a cycle's use is bounded by its largest cone.
+        ///
+        /// The eval is re-entrant: a helper the native code calls may
+        /// run nested kernels (a tile projection re-runs its body
+        /// program per tuple), and those kernels may contain cones.
+        /// The scratch buffer and table are therefore taken out of
+        /// their thread-local cells for the duration of the call, so a
+        /// nested cone eval finds the cells free and uses its own, and
+        /// put back afterwards, on every exit path.
         fn eval(&self, inputs: &[Value], outputs: &mut [Value]) {
-            CONE_SCRATCH.with(|cell| {
-                CONE_TABLE.with(|tcell| {
-                    let mut buf = cell.borrow_mut();
-                    let mut table = tcell.borrow_mut();
-                    buf.clear();
-                    buf.resize(self.total_slots, 0);
-                    table.resize(self.table_len);
-                    table.set_generation(crate::kernel::cycle_generation());
-                    let mark = crate::kernel::cycle_arena_mark();
-                    for (i, v) in inputs.iter().enumerate() {
-                        buf[i] = encode_boundary(v, self.in_types[i], i, &self.meta.name, &mut table, self.in_entries[i]);
-                    }
-                    let code_fn = self.code_fn;
-                    let cp = buf.as_ptr();
-                    let mp = buf.as_mut_ptr();
-                    crate::kernel::with_value_table(&mut table, || {
-                        crate::compile::jit::invoke_with_catch(move || unsafe {
-                            (code_fn)(cp, mp);
-                        })
-                    });
-                    for (k, slot) in self.out_slots.iter().enumerate() {
-                        outputs[k] = decode_boundary(buf[*slot], self.out_types[k], &table);
-                    }
-                    table.clear();
-                    crate::kernel::cycle_arena_release(mark);
-                });
+            let mut scratch = ConeScratch::take();
+            let (buf, table) = scratch.parts();
+            buf.clear();
+            buf.resize(self.total_slots, 0);
+            table.resize(self.table_len);
+            table.set_generation(crate::kernel::cycle_generation());
+            let mark = crate::kernel::cycle_arena_mark();
+            for (i, v) in inputs.iter().enumerate() {
+                buf[i] = encode_boundary(v, self.in_types[i], i, &self.meta.name, table, self.in_entries[i]);
+            }
+            let code_fn = self.code_fn;
+            let cp = buf.as_ptr();
+            let mp = buf.as_mut_ptr();
+            crate::kernel::with_value_table(table, || {
+                crate::compile::jit::invoke_with_catch(move || unsafe {
+                    (code_fn)(cp, mp);
+                })
             });
+            for (k, slot) in self.out_slots.iter().enumerate() {
+                outputs[k] = decode_boundary(buf[*slot], self.out_types[k], table);
+            }
+            table.clear();
+            crate::kernel::cycle_arena_release(mark);
         }
     }
 
@@ -183,6 +187,49 @@ mod jit_impl {
         /// cone at the top of each eval and cleared at its end.
         static CONE_TABLE: std::cell::RefCell<crate::kernel::ValueTable> =
             std::cell::RefCell::new(crate::kernel::ValueTable::new(0));
+    }
+
+    /// The thread's cone scratch and table, taken out of their cells
+    /// for one eval and returned on drop (including on unwind). A
+    /// nested cone eval, run by a helper of this one, takes the cells'
+    /// contents in turn, which are empty at that point and grow to
+    /// its own size; whichever eval finishes last leaves the larger
+    /// buffers in the cells.
+    struct ConeScratch {
+        buf: Vec<u64>,
+        table: crate::kernel::ValueTable,
+    }
+
+    impl ConeScratch {
+        fn take() -> Self {
+            ConeScratch {
+                buf: CONE_SCRATCH.with(|c| std::mem::take(&mut *c.borrow_mut())),
+                table: CONE_TABLE.with(|c| std::mem::take(&mut *c.borrow_mut())),
+            }
+        }
+
+        fn parts(&mut self) -> (&mut Vec<u64>, &mut crate::kernel::ValueTable) {
+            (&mut self.buf, &mut self.table)
+        }
+    }
+
+    impl Drop for ConeScratch {
+        fn drop(&mut self) {
+            let buf = std::mem::take(&mut self.buf);
+            let table = std::mem::take(&mut self.table);
+            CONE_SCRATCH.with(|c| {
+                let mut cell = c.borrow_mut();
+                if cell.capacity() < buf.capacity() {
+                    *cell = buf;
+                }
+            });
+            CONE_TABLE.with(|c| {
+                let mut cell = c.borrow_mut();
+                if cell.len() < table.len() {
+                    *cell = table;
+                }
+            });
+        }
     }
 
     /// `Value` → u64 slot bits at a cone boundary. The assembler

@@ -53,15 +53,16 @@ cycle that ran it. The marshalling rule lives in one place,
 `compile::marshal`, and the pure-P3 kernels carry a slot mask and their
 outputs' port types, so their raw readers refuse handle slots and
 `get_value` decodes by type. Tests in `tests/value_table.rs`. Step 6,
-helpers and lowerings, has landed for every node it names except the
-projection form of `tile_render`: `printf`, `json_array`, `json_object`,
-`to_json`, `json_text`, `tile_encode`, and `tile_render` over a skeleton
-without projections lower by the wire-typed classification of §6, run
-the same body P1 runs, and agree with it across the type set. Cones
-admit a None-tolerant node behind a member (§9). The P3 kernels lower
-the same set by port type. A tile with a projection stays on P1 until
-projection bodies activate as `for` bodies do, the remaining part of
-step 6. Getting there fixed a hybrid-kernel gap: a host-driven hybrid
+helpers and lowerings, has landed for every node it names: `printf`,
+`json_array`, `json_object`, `to_json`, `json_text`, `tile_encode`, and
+`tile_render` lower by the wire-typed classification of §6, run the
+same body P1 runs, and agree with it across the type set. Cones admit a
+None-tolerant node behind a member (§9). The P3 kernels lower the same
+set by port type. A tile with a projection renders natively too: the
+helper re-runs the body program per tuple through nested kernels, the
+cone eval is re-entrant so those kernels' own cones run inside it, and
+a helper that can panic as its P1 node does re-raises through the
+longjmp path (§6.1). Getting there fixed a hybrid-kernel gap: a host-driven hybrid
 kernel never began a root cycle, so string-producing segments grew the
 arena across runs. Tests in `tests/variadic_lowering.rs`. Step 7, the
 P2 closure form and the differential suite, has landed: the
@@ -81,9 +82,8 @@ interpreter, forced cones, P2, and pure P3 (`FUZZ_SEED`,
 has landed: engines.md §5–§7, type_system_alignment.md §5 and §7, and
 jit_boundary.md's helper table and axiom section carry the handle
 color, the helper ABI, and H1–H7, and the Polytile SRD's step 7 is
-marked done except for native projections. Every step of §11 has
-landed; the one open item is the native form of a projection tile,
-recorded under step 6.
+marked done. Every step of §11 has landed, including the native form
+of a projection tile.
 This document fixes the slot representation that lets string, byte,
 JSON, and extension values ride through the P2 and P3 engines, so that
 the nodes which produce and consume them (string operations, JSON
@@ -412,10 +412,18 @@ the untyped classifier for every other node. The rules:
   formatted from the arena in place. The JSON and tile helpers build
   owned `Value`s for their arguments, which copies a string once; a
   borrowed form of `encode` and `value_to_json` is a refinement.
-- **Projections stay on P1.** A skeleton with a projection re-runs a
-  body program per tuple through nested kernels; its `tile_render`
-  classifies as fallback until projection bodies activate as `for`
-  bodies do.
+- **Projections render inside the helper.** A skeleton with a
+  projection re-runs its body program per tuple through nested
+  kernels, at P3 exactly as at P1 and P2: the nested kernels never
+  reset the arena, take their own cone scratch and tables, and install
+  and restore their own value tables, so the render runs inside the
+  calling engine's cycle and leaves only its text. For this the cone
+  eval is re-entrant: it takes its scratch buffer and table out of
+  their thread-local cells for the duration of the native call, so a
+  nested cone eval finds the cells free. A helper whose body may panic
+  as its P1 node panics (`printf`, the tile nodes) catches the panic
+  and re-raises it through the longjmp path, since a panic cannot
+  cross an `extern "C"` frame.
 
 ## 7. The P2 closure form
 
@@ -457,7 +465,7 @@ result enters the arena); for the table kinds it emits a second kit,
 The P1↔P2↔P3 equivalence suite (`tests/handle_tiers.rs`) pins all
 tiers to the same bytes over a random corpus of string, JSON, and tile
 programs, including tiles with projections, which run at P2 through
-the closure and stay on P1 in cones.
+the closure and at P3 through the render helper.
 
 ## 8. Axioms
 
@@ -584,8 +592,9 @@ point.
    `json_text`, `to_json`, `json_to_str`; then `tile_encode` and
    `tile_render` per SRD 114 §12 step 7, with tile statics interned and
    projection bodies activated as `for` bodies are. Landed by the
-   wire-typed classification of §6.1 for everything but projections,
-   which remain the open part of this step.
+   wire-typed classification of §6.1, projections included: the helper
+   activates the body program through nested kernels as P1 does, and
+   the cone eval is re-entrant so that works inside a cone.
 7. **P2 closures and differential tests.** `compiled_handle` kits for
    `Hdl1` nodes from the macro; the P1↔P2↔P3 suite over a random
    corpus of string, JSON, and tile programs; the S9-style post-run

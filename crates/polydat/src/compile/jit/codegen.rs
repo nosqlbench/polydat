@@ -655,14 +655,35 @@ unsafe fn decode_args(types: u64, args: *const u64) -> Vec<crate::ast::Value> {
         .collect()
 }
 
+/// Run a body that may panic as its P1 node panics (a `printf`
+/// placeholder without an argument, a projection that fails at
+/// render) inside an `extern "C"` helper, where a panic would abort:
+/// the panic is caught and re-raised through the longjmp path, so it
+/// surfaces in Rust land as the same panic the P1 node raises.
+fn guarded<T>(body: impl FnOnce() -> T) -> T {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(v) => v,
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "panic in a compiled helper".to_string());
+            jit_violation_longjmp(msg)
+        }
+    }
+}
+
 extern "C" fn jit_printf(format: u64, types: u64, args: *const u64) -> u64 {
     // SAFETY: `format` is the address of a `ParsedFormat` interned for
     // the process (`ParsedFormat::interned`), baked by the classifier.
     let parsed = unsafe { &*(format as *const crate::library::format::ParsedFormat) };
     let codes = type_codes(types).as_bytes();
-    let text = parsed.render_with(codes.len(), |i| {
-        // SAFETY: see `decode_args`; `i < codes.len()`.
-        crate::compile::marshal::fmt_arg(codes[i], unsafe { *args.add(i) })
+    let text = guarded(|| {
+        parsed.render_with(codes.len(), |i| {
+            // SAFETY: see `decode_args`; `i < codes.len()`.
+            crate::compile::marshal::fmt_arg(codes[i], unsafe { *args.add(i) })
+        })
     });
     crate::kernel::put_thread_str(&text)
 }
@@ -695,17 +716,24 @@ extern "C" fn jit_tile_encode(spec: u64, code: u64, bits: u64) -> u64 {
     let enc = unsafe { &*(spec as *const crate::library::tile_render::HoleEncoding) };
     let v = crate::compile::marshal::arg_value(code as u8, bits);
     let mut out = String::new();
-    crate::library::tile_render::encode(&v, enc, &mut out);
+    guarded(|| crate::library::tile_render::encode(&v, enc, &mut out));
     crate::kernel::put_thread_str(&out)
 }
 
+/// Render a tile, projections included: a projection re-runs its body
+/// program per tuple through nested kernels, exactly as P1 and P2 do.
+/// Those kernels never reset the arena (they are nested), take their
+/// own cone scratch and tables, and install and restore their own
+/// value tables, so the render runs inside this helper's cycle and
+/// leaves only its text behind.
 extern "C" fn jit_tile_render(program: u64, types: u64, args: *const u64) -> u64 {
     // SAFETY: `program` is the address of a `TileProgram` interned for
     // the process (`TileProgram::interned`), baked by the classifier.
     let program = unsafe { &*(program as *const crate::library::tile_render::TileProgram) };
     // SAFETY: see `decode_args`.
     let vals = unsafe { decode_args(types, args) };
-    crate::kernel::put_thread_str(&program.render(&vals))
+    let text = guarded(|| program.render(&vals));
+    crate::kernel::put_thread_str(&text)
 }
 
 /// True for an op whose helper decodes its arguments by the wire types
@@ -776,13 +804,7 @@ pub fn classify_node_typed(node: &dyn PolydatNode, wire_types: &[crate::ast::Por
         "tile_render" => match (const_str_of(node, "spec"), codes()) {
             (Some(spec), Some(types)) => {
                 let program = crate::library::tile_render::TileProgram::interned(spec);
-                // A projection re-runs a body program per tuple; that
-                // stays on P1 until bodies activate as `for` bodies do.
-                if program.has_projections() {
-                    JitOp::Fallback
-                } else {
-                    JitOp::TileRender { program: program as *const _ as u64, types }
-                }
+                JitOp::TileRender { program: program as *const _ as u64, types }
             }
             _ => JitOp::Fallback,
         },
