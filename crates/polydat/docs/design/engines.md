@@ -151,7 +151,8 @@ pull sequence:
 The engine ladder, slot-state axioms, cone tests, and equivalence harnesses are
 the regression contract for these properties. For handle-bearing nodes the
 contract is `tests/handle_tiers.rs`: random programs over the string, JSON,
-and tile nodes checked across the interpreter, forced cones, P2, and pure P3.
+and tile nodes checked across the interpreter, forced cones, P2, the hybrid
+kernel, and pure P3, each read through its typed `get_value`.
 
 Property 2 has one refinement for fused cones (SRD 115 §9). A cone is a single
 node to the kernel guard, so a `None` on any of its boundary inputs makes every
@@ -167,8 +168,6 @@ P1 with its exact semantics.
   identity-style compiled step.
 - A node whose variadic wires carry a type its helper cannot decode stays P1;
   the classifier never re-types a wire to admit it.
-- Hybrid kernels have no typed reader for handle outputs; their handle slots
-  are engine-internal.
 - SIMD scalar-flow promotion is not selected by ordinary engine choice; it has
   its own explicit qualification and execution contract in
   [simd_isa_autopromotion.md](simd_isa_autopromotion.md).

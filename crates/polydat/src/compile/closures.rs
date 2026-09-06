@@ -27,6 +27,11 @@ use crate::kernel::ValueTable;
 pub(crate) struct P2Extras {
     pub(crate) table_entries: Vec<(usize, usize)>,
     pub(crate) output_types: HashMap<String, PortType>,
+    /// Per-slot `Hdl1` mask: a step that writes a handle slot is never
+    /// marked clean, because its arena bytes or table entry belong to
+    /// the cycle that ran it (SRD 115 §4); it recomputes from unchanged
+    /// inputs, as the P3 codegen does for the same steps.
+    pub(crate) handle_slots: Vec<bool>,
 }
 
 /// A single evaluation step in the compiled kernel.
@@ -55,6 +60,9 @@ struct CompiledStep {
     input_slots: Vec<usize>,
     output_slots: Vec<usize>,
     scratch_range: (usize, usize),
+    /// True when an output is a handle slot: the step runs every
+    /// cycle regardless of the clean mask (SRD 115 §4).
+    rerun: bool,
 }
 
 /// Common fields shared by all kernel variants.
@@ -195,7 +203,8 @@ fn build_core(
     ref_slots: Vec<bool>,
     extras: P2Extras,
 ) -> KernelCore {
-    let table_len = extras.table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0);
+    let P2Extras { table_entries, output_types, handle_slots } = extras;
+    let table_len = table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0);
     let max_inputs = steps.iter().map(|s| s.input_slots.len()).max().unwrap_or(0);
     let max_outputs = steps.iter().map(|s| s.output_slots.len()).max().unwrap_or(0);
     let mut scratch: Vec<ScratchBuf> = Vec::new();
@@ -218,11 +227,16 @@ fn build_core(
             for (k, &slot) in step.ref_output_starts.iter().enumerate() {
                 ref_scratch.push((slot, start + k));
             }
+            let rerun = step
+                .output_slots
+                .iter()
+                .any(|&s| handle_slots.get(s).copied().unwrap_or(false));
             CompiledStep {
                 op: step.op,
                 input_slots: step.input_slots,
                 output_slots: step.output_slots,
                 scratch_range: (start, scratch.len()),
+                rerun,
             }
         })
         .collect();
@@ -237,9 +251,9 @@ fn build_core(
         ref_slots,
         ref_scratch,
         table: ValueTable::new(table_len),
-        table_entries: extras.table_entries,
+        table_entries,
         owns_cycle: true,
-        output_types: extras.output_types,
+        output_types,
     }
 }
 
@@ -390,7 +404,8 @@ fn eval_dirty_steps(core: &mut KernelCore, node_clean: &mut [bool]) {
             let step: *const CompiledStep = &core.steps[i];
             // SAFETY: as in `eval_all_steps`.
             run_step(core, unsafe { &*step });
-            *clean = true;
+            // A handle-writing step is never clean (SRD 115 §4).
+            *clean = !core.steps[i].rerun;
         }
     }
     core.end_run(table);

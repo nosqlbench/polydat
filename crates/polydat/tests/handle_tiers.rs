@@ -5,10 +5,11 @@
 //! slots. A grammar-directed generator emits random programs over the
 //! string, JSON, and tile nodes with typed wires, formats, branches, and
 //! projections; every program compiles on the interpreter (the oracle),
-//! with forced cone extraction, as a P2 closure kernel, and where every
-//! node lowers as a pure-P3 kernel, and every output agrees across the
-//! tiers by type and text for a run of cycles (axiom H7). The P2 and P3
-//! kernels run the H4 validator after every run in these debug builds.
+//! with forced cone extraction, as a P2 closure kernel, as a hybrid
+//! kernel, and where every node lowers as a pure-P3 kernel, and every
+//! output agrees across the tiers by type and text for a run of cycles
+//! (axiom H7). The P2, P3, and hybrid kernels run the H4 validator after
+//! every run in these debug builds.
 //!
 //! `FUZZ_SEED` and `FUZZ_ITERATIONS` follow the other fuzzers.
 
@@ -263,20 +264,35 @@ fn check(src: &str, outputs: &[&str], cycles: u64) -> bool {
             panic!("every node here has a P2 form, but the kernel fell back; nodes: {names:?}\n{src}")
         });
     let mut p3 = compile_polydat_to_assembler(src).unwrap().try_compile_jit().ok();
+    let mut hybrid = compile_polydat_to_assembler(src)
+        .unwrap()
+        .compile_hybrid()
+        .unwrap_or_else(|e| panic!("hybrid: {e}\n{src}"));
+    // Every kernel here is a root on this thread, and a root's cycle
+    // advance resets the arena (SRD 115 §4), so each kernel's outputs
+    // are copied out right after its own run, before the next root
+    // kernel runs. Reading them later would read through handles into
+    // storage another kernel has reused.
     for c in 0..cycles {
         p1.set_inputs(&[c]);
+        let want: Vec<Value> = outputs.iter().map(|o| p1.pull(o).clone()).collect();
         cones.set_inputs(&[c]);
+        let got_cones: Vec<Value> = outputs.iter().map(|o| cones.pull(o).clone()).collect();
         p2.eval(&[c]);
-        if let Some(k) = p3.as_mut() {
+        let got_p2: Vec<Value> = outputs.iter().map(|o| p2.get_value(o)).collect();
+        let got_p3: Option<Vec<Value>> = p3.as_mut().map(|k| {
             k.eval(&[c]);
-        }
-        for out in outputs {
-            let want = p1.pull(out).clone();
-            same(&want, &cones.pull(out).clone(), "cones", out, c, src);
-            same(&want, &p2.get_value(out), "P2", out, c, src);
-            if let Some(k) = p3.as_ref() {
-                same(&want, &k.get_value(out), "P3", out, c, src);
+            outputs.iter().map(|o| k.get_value(o)).collect()
+        });
+        hybrid.eval(&[c]);
+        let got_hybrid: Vec<Value> = outputs.iter().map(|o| hybrid.get_value(o)).collect();
+        for (i, out) in outputs.iter().enumerate() {
+            same(&want[i], &got_cones[i], "cones", out, c, src);
+            same(&want[i], &got_p2[i], "P2", out, c, src);
+            if let Some(g) = got_p3.as_ref() {
+                same(&want[i], &g[i], "P3", out, c, src);
             }
+            same(&want[i], &got_hybrid[i], "hybrid", out, c, src);
         }
     }
     p3.is_some()
@@ -325,6 +341,30 @@ fn the_corpus_agrees_across_every_tier() {
         let outputs: Vec<String> = asm.output_names().iter().map(|s| s.to_string()).collect();
         let outs: Vec<&str> = outputs.iter().map(String::as_str).collect();
         check(src, &outs, 8);
+    }
+}
+
+/// A step that writes a handle slot is never marked clean in the
+/// provenance kernels (SRD 115 §4): with repeating coordinates the P2
+/// push-pull kernel and the hybrid kernel still recompute their string
+/// and JSON outputs each run, so no slot holds a handle into storage the
+/// root cycle has reset.
+#[test]
+fn provenance_kernels_rerun_handle_steps_on_repeated_coordinates() {
+    let src = "input cycle: u64\nh := hash(cycle)\ns := __u64_to_string(h)\nj := to_json(s)\nt := json_to_str(j)\nn := __str_to_u64(s)\n";
+    let mut p1 = kernel(src, JitMode::Off);
+    let mut p2 = compile_polydat_to_assembler(src).unwrap().try_compile().unwrap_or_else(|_| panic!("P2 push-pull"));
+    let mut hybrid = compile_polydat_to_assembler(src).unwrap().compile_hybrid().expect("hybrid");
+    let coords = [3u64, 3, 3, 4, 4, 3, 3, 5, 5, 5];
+    for &c in &coords {
+        p1.set_inputs(&[c]);
+        let want: Vec<Value> = ["s", "j", "t", "n"].iter().map(|o| p1.pull(o).clone()).collect();
+        p2.eval(&[c]);
+        let got: Vec<Value> = ["s", "j", "t", "n"].iter().map(|o| p2.get_value(o)).collect();
+        assert_eq!(got.iter().map(Value::to_display_string).collect::<Vec<_>>(), want.iter().map(Value::to_display_string).collect::<Vec<_>>(), "P2 at {c}");
+        hybrid.eval(&[c]);
+        let got: Vec<Value> = ["s", "j", "t", "n"].iter().map(|o| hybrid.get_value(o)).collect();
+        assert_eq!(got.iter().map(Value::to_display_string).collect::<Vec<_>>(), want.iter().map(Value::to_display_string).collect::<Vec<_>>(), "hybrid at {c}");
     }
 }
 

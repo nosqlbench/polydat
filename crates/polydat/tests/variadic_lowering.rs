@@ -195,6 +195,9 @@ fn a_hybrid_kernel_begins_a_root_cycle_per_run_so_the_arena_stays_bounded() {
     for c in 2..500u64 {
         hy.eval(&[c]);
         assert_eq!(hy.get_slot(n), want[(c - 1) as usize]);
+        // The typed reader copies the string out; the raw reader refuses it.
+        assert_eq!(hy.get_value("s").as_str(), want[(c - 1) as usize].to_string());
     }
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hy.get("s"))).is_err());
     assert_eq!(cycle_arena_used(), used, "each run reset the arena before writing");
 }

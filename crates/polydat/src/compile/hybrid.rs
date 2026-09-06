@@ -77,8 +77,31 @@ struct HybridCore {
     /// The kernel's value table (SRD 115 §3), shared by every JIT
     /// segment; entries are numbered across segments at build.
     table: crate::kernel::ValueTable,
+    /// `(slot, entry)` for every table-kind slot, from the JIT
+    /// segments and the handle closures; the H4 validator checks each
+    /// slot's handle names its own entry.
+    table_entries: Vec<(usize, usize)>,
+    /// Port type of each named output, for `get_value`.
+    output_types: HashMap<String, crate::ast::PortType>,
+    /// Per step, true when it writes a handle slot: such a step is
+    /// never marked clean, because its arena bytes or table entry
+    /// belong to the cycle that ran it (SRD 115 §4).
+    step_rerun: Vec<bool>,
     /// Keep source nodes alive so JIT-baked pointers remain valid.
     _nodes: Vec<Box<dyn PolydatNode>>,
+}
+
+/// Per-slot `Hdl1` mask over the nodes' output ports.
+fn handle_slot_mask_of(nodes: &[Box<dyn PolydatNode>], port_offsets: &[Vec<usize>], total_slots: usize) -> Vec<bool> {
+    let mut mask = vec![false; total_slots];
+    for (node_idx, node) in nodes.iter().enumerate() {
+        for (p, out) in node.meta().outs.iter().enumerate() {
+            if out.typ.slot_color() == crate::ast::SlotColor::Hdl1 {
+                mask[port_offsets[node_idx][p]] = true;
+            }
+        }
+    }
+    mask
 }
 
 impl HybridCore {
@@ -98,6 +121,20 @@ impl HybridCore {
                 self.buffer[slot],
                 self.buffer[slot + 1],
             );
+        }
+        // SRD 115 axiom H4, the same check for handles: every
+        // table-kind slot names its own entry, in this generation.
+        for &(slot, entry) in &self.table_entries {
+            let handle = self.buffer[slot];
+            assert_eq!(
+                handle & crate::kernel::TAG_MASK,
+                crate::kernel::TAG_RES,
+                "H4: slot {slot} should hold a table handle, holds {handle:#x}"
+            );
+            let (_, generation, named) = crate::kernel::decode_table_handle(handle);
+            assert_eq!(named, entry, "H4: slot {slot} names entry {named}; the layout assigned it entry {entry}");
+            assert_eq!(generation, self.table.generation() & 0xFF_FFFF, "H3: slot {slot} holds a handle from another cycle generation");
+            assert!(self.table.is_written(entry), "H4: entry {entry} was not written by the run that produced slot {slot}");
         }
     }
 
@@ -135,7 +172,11 @@ impl HybridCore {
 /// generation (SRD 115 §4).
 #[inline]
 fn eval_all_hybrid_steps(core: &mut HybridCore) {
-    core.table.set_generation(crate::kernel::begin_root_cycle());
+    // The table is installed around every step, closures included, so
+    // handle closures write through it as the segments' helpers do.
+    let mut table = std::mem::take(&mut core.table);
+    table.set_generation(crate::kernel::begin_root_cycle());
+    let installed = crate::kernel::install_value_table(&mut table);
     for step in &core.steps {
         match step {
             #[cfg(feature = "jit")]
@@ -149,11 +190,9 @@ fn eval_all_hybrid_steps(core: &mut HybridCore) {
                 let code_fn = seg.code_fn;
                 let buf_const = core.buffer.as_ptr();
                 let buf_mut = core.buffer.as_mut_ptr();
-                crate::kernel::with_value_table(&mut core.table, || {
-                    crate::compile::jit::invoke_with_catch(move || {
+                crate::compile::jit::invoke_with_catch(move || {
                         unsafe { (code_fn)(buf_const, buf_mut); }
-                    })
-                });
+                    });
             }
             HybridStep::Closure(cs) => {
                 for (i, &slot) in cs.input_slots.iter().enumerate() {
@@ -176,6 +215,8 @@ fn eval_all_hybrid_steps(core: &mut HybridCore) {
             }
         }
     }
+    drop(installed);
+    core.table = table;
     #[cfg(debug_assertions)]
     core.validate_refs();
 }
@@ -268,6 +309,20 @@ impl HybridKernelRaw {
 
     crate::compile::ref_readers!();
 
+    /// The named output as a typed `Value`, decoded by its port type:
+    /// a handle slot is copied out of the arena or the value table
+    /// (SRD 115 §5), so the caller never holds a handle.
+    pub fn get_value(&self, name: &str) -> crate::ast::Value {
+        let slot = self.core.output_map[name];
+        let ty = self.core.output_types.get(name).copied().unwrap_or(crate::ast::PortType::U64);
+        crate::compile::marshal::decode_slot(self.core.buffer[slot], ty, &self.core.table)
+    }
+
+    /// Entries in the kernel's value table.
+    pub fn table_len(&self) -> usize {
+        self.core.table.len()
+    }
+
     /// Number of coordinate inputs.
     pub fn coord_count(&self) -> usize { self.core.coord_count }
 
@@ -352,6 +407,20 @@ impl HybridKernelPull {
 
     crate::compile::ref_readers!();
 
+    /// The named output as a typed `Value`, decoded by its port type:
+    /// a handle slot is copied out of the arena or the value table
+    /// (SRD 115 §5), so the caller never holds a handle.
+    pub fn get_value(&self, name: &str) -> crate::ast::Value {
+        let slot = self.core.output_map[name];
+        let ty = self.core.output_types.get(name).copied().unwrap_or(crate::ast::PortType::U64);
+        crate::compile::marshal::decode_slot(self.core.buffer[slot], ty, &self.core.table)
+    }
+
+    /// Entries in the kernel's value table.
+    pub fn table_len(&self) -> usize {
+        self.core.table.len()
+    }
+
     /// Number of coordinate inputs.
     pub fn coord_count(&self) -> usize { self.core.coord_count }
 
@@ -409,7 +478,11 @@ impl HybridKernelPushPull {
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_inputs(coords);
-        self.core.table.set_generation(crate::kernel::begin_root_cycle());
+        // The table is installed around every step, closures included, so
+        // handle closures write through it as the segments' helpers do.
+        let mut table = std::mem::take(&mut self.core.table);
+        table.set_generation(crate::kernel::begin_root_cycle());
+        let installed = crate::kernel::install_value_table(&mut table);
         for (step_idx, step) in self.core.steps.iter().enumerate() {
             if self.step_clean[step_idx] { continue; }
             match step {
@@ -418,11 +491,9 @@ impl HybridKernelPushPull {
                     let code_fn = seg.code_fn;
                     let buf_const = self.core.buffer.as_ptr();
                     let buf_mut = self.core.buffer.as_mut_ptr();
-                    crate::kernel::with_value_table(&mut self.core.table, || {
-                        crate::compile::jit::invoke_with_catch(move || {
+                    crate::compile::jit::invoke_with_catch(move || {
                             unsafe { (code_fn)(buf_const, buf_mut); }
-                        })
-                    });
+                        });
                 }
                 HybridStep::Closure(cs) => {
                     for (i, &slot) in cs.input_slots.iter().enumerate() {
@@ -444,8 +515,10 @@ impl HybridKernelPushPull {
                     }
                 }
             }
-            self.step_clean[step_idx] = true;
+            self.step_clean[step_idx] = !self.core.step_rerun[step_idx];
         }
+        drop(installed);
+        self.core.table = table;
         #[cfg(debug_assertions)]
         self.core.validate_refs();
     }
@@ -459,7 +532,11 @@ impl HybridKernelPushPull {
             && self.slot_provenance[slot] & self.changed_mask == 0 {
                 return self.core.buffer[slot];
             }
-        self.core.table.set_generation(crate::kernel::begin_root_cycle());
+        // The table is installed around every step, closures included, so
+        // handle closures write through it as the segments' helpers do.
+        let mut table = std::mem::take(&mut self.core.table);
+        table.set_generation(crate::kernel::begin_root_cycle());
+        let installed = crate::kernel::install_value_table(&mut table);
         for (step_idx, step) in self.core.steps.iter().enumerate() {
             if self.step_clean[step_idx] { continue; }
             match step {
@@ -468,11 +545,9 @@ impl HybridKernelPushPull {
                     let code_fn = seg.code_fn;
                     let buf_const = self.core.buffer.as_ptr();
                     let buf_mut = self.core.buffer.as_mut_ptr();
-                    crate::kernel::with_value_table(&mut self.core.table, || {
-                        crate::compile::jit::invoke_with_catch(move || {
+                    crate::compile::jit::invoke_with_catch(move || {
                             unsafe { (code_fn)(buf_const, buf_mut); }
-                        })
-                    });
+                        });
                 }
                 HybridStep::Closure(cs) => {
                     for (i, &slot) in cs.input_slots.iter().enumerate() {
@@ -494,8 +569,10 @@ impl HybridKernelPushPull {
                     }
                 }
             }
-            self.step_clean[step_idx] = true;
+            self.step_clean[step_idx] = !self.core.step_rerun[step_idx];
         }
+        drop(installed);
+        self.core.table = table;
         #[cfg(debug_assertions)]
         self.core.validate_refs();
         self.core.buffer[slot]
@@ -519,6 +596,20 @@ impl HybridKernelPushPull {
     }
 
     crate::compile::ref_readers!();
+
+    /// The named output as a typed `Value`, decoded by its port type:
+    /// a handle slot is copied out of the arena or the value table
+    /// (SRD 115 §5), so the caller never holds a handle.
+    pub fn get_value(&self, name: &str) -> crate::ast::Value {
+        let slot = self.core.output_map[name];
+        let ty = self.core.output_types.get(name).copied().unwrap_or(crate::ast::PortType::U64);
+        crate::compile::marshal::decode_slot(self.core.buffer[slot], ty, &self.core.table)
+    }
+
+    /// Entries in the kernel's value table.
+    pub fn table_len(&self) -> usize {
+        self.core.table.len()
+    }
 
     /// Number of coordinate inputs.
     pub fn coord_count(&self) -> usize { self.core.coord_count }
@@ -629,12 +720,24 @@ pub fn build_hybrid(
     // `(slot, entry)` of every table-kind slot across all JIT segments
     // (SRD 115 §3); the kernel's value table is sized from it.
     let mut table_entries: Vec<(usize, usize)> = Vec::new();
+    let handle_mask = handle_slot_mask_of(nodes, port_offsets, total_slots);
+    let mut step_rerun: Vec<bool> = Vec::new();
 
     // Classify each node
     let classifications: Vec<(JitOp, Vec<usize>, Vec<usize>)> = nodes.iter()
         .enumerate()
         .map(|(node_idx, node)| {
-            let jit_op = jit::classify_node(node.as_ref());
+            // Classified with the wire types known (SRD 115 §6.1), as
+            // cones and pure-P3 layouts are: a variadic node whose
+            // wires its helper cannot decode falls back to its closure.
+            let wire_types: Vec<crate::ast::PortType> = wiring[node_idx]
+                .iter()
+                .map(|src| match src {
+                    WireSource::Input(c) => input_types.get(*c).copied().unwrap_or(crate::ast::PortType::U64),
+                    WireSource::NodeOutput(j, p) => nodes[*j].meta().outs[*p].typ,
+                })
+                .collect();
+            let jit_op = jit::classify_node_typed(node.as_ref(), &wire_types);
 
             let input_slots = flatten_input_slots(
                 wiring, nodes, node_idx, port_offsets, input_starts, input_widths,
@@ -701,6 +804,7 @@ pub fn build_hybrid(
                     node.meta().name
                 ));
             };
+            step_rerun.push(output_slots.iter().any(|&s| handle_mask[s]));
             steps.push(HybridStep::Closure(ClosureStep {
                 op,
                 input_slots: input_slots.clone(),
@@ -733,6 +837,7 @@ pub fn build_hybrid(
                 let guarded_slots: Vec<usize> = ref_slots.iter().enumerate().filter(|(_, r)| **r).map(|(s, _)| s).collect();
                 let (code_fn, module, entries) = jit::compile_jit_entry(&single_batch, table_entries.len(), &guarded_slots)?;
                 table_entries.extend(entries);
+                step_rerun.push(output_slots.iter().any(|&s| handle_mask[s]));
                 steps.push(HybridStep::Jit(JitSegment {
                     code_fn,
                     _module: Box::new(module),
@@ -741,11 +846,36 @@ pub fn build_hybrid(
         }
     }
 
+    let output_types = output_types_of(nodes, port_offsets, input_starts, input_types, &output_map);
     build_pushpull_from_steps(
         steps, scratch, ref_scratch, ref_slots, wiring, nodes, coord_count,
         total_slots, output_map, max_inputs, max_outputs, input_starts,
-        input_widths, table_entries,
+        input_widths, table_entries, output_types, step_rerun,
     )
+}
+
+/// The port type of each named output, by the slot it names: a node
+/// output port's type, or a coordinate input's declared type.
+fn output_types_of(
+    nodes: &[Box<dyn PolydatNode>],
+    port_offsets: &[Vec<usize>],
+    input_starts: &[usize],
+    input_types: &[crate::ast::PortType],
+    output_map: &HashMap<String, usize>,
+) -> HashMap<String, crate::ast::PortType> {
+    let mut slot_types: HashMap<usize, crate::ast::PortType> = HashMap::new();
+    for (start, ty) in input_starts.iter().zip(input_types) {
+        slot_types.insert(*start, *ty);
+    }
+    for (node_idx, node) in nodes.iter().enumerate() {
+        for (p, out) in node.meta().outs.iter().enumerate() {
+            slot_types.insert(port_offsets[node_idx][p], out.typ);
+        }
+    }
+    output_map
+        .iter()
+        .map(|(name, slot)| (name.clone(), slot_types.get(slot).copied().unwrap_or(crate::ast::PortType::U64)))
+        .collect()
 }
 
 /// Build a hybrid kernel without JIT (all closures).
@@ -761,13 +891,15 @@ pub fn build_hybrid(
     input_widths: &[usize],
     output_map: HashMap<String, usize>,
     ref_slots: Vec<bool>,
-    _input_types: &[crate::ast::PortType],
+    input_types: &[crate::ast::PortType],
 ) -> Result<HybridKernelPushPull, String> {
     let mut steps: Vec<HybridStep> = Vec::new();
     let mut scratch: Vec<crate::ast::ScratchBuf> = Vec::new();
     let mut ref_scratch: Vec<(usize, usize)> = Vec::new();
     let mut max_inputs = 0usize;
     let mut max_outputs = 0usize;
+    let handle_mask = handle_slot_mask_of(nodes, port_offsets, total_slots);
+    let mut step_rerun: Vec<bool> = Vec::new();
 
     for (node_idx, node) in nodes.iter().enumerate() {
         let input_slots = flatten_input_slots(
@@ -796,6 +928,7 @@ pub fn build_hybrid(
         } else {
             return Err(format!("node '{}' has no compiled form", node.meta().name));
         };
+        step_rerun.push(output_slots.iter().any(|&s| handle_mask[s]));
         steps.push(HybridStep::Closure(ClosureStep {
             op,
             input_slots,
@@ -804,10 +937,11 @@ pub fn build_hybrid(
         }));
     }
 
+    let output_types = output_types_of(nodes, port_offsets, input_starts, input_types, &output_map);
     build_pushpull_from_steps(
         steps, scratch, ref_scratch, ref_slots, wiring, nodes, coord_count,
         total_slots, output_map, max_inputs, max_outputs, input_starts,
-        input_widths, Vec::new(),
+        input_widths, Vec::new(), output_types, step_rerun,
     )
 }
 
@@ -832,8 +966,11 @@ fn build_pushpull_from_steps(
     _input_starts: &[usize],
     input_widths: &[usize],
     table_entries: Vec<(usize, usize)>,
+    output_types: HashMap<String, crate::ast::PortType>,
+    step_rerun: Vec<bool>,
 ) -> Result<HybridKernelPushPull, String> {
     let step_count = steps.len();
+    debug_assert_eq!(step_rerun.len(), step_count);
     let table_len = table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0);
 
     // Compute per-node provenance and invert into per-input step dependents.
@@ -868,6 +1005,9 @@ fn build_pushpull_from_steps(
             ref_slots,
             ref_scratch,
             table: crate::kernel::ValueTable::new(table_len),
+            table_entries,
+            output_types,
+            step_rerun,
             _nodes: Vec::new(),
         },
         step_clean: vec![false; step_count],

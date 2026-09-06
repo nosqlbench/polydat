@@ -316,6 +316,26 @@ impl SlotLayout {
         mask
     }
 
+    /// Per-slot `Hdl1` mask (SRD 115): the slots that hold handles.
+    /// A step that writes one must run every cycle, since its arena
+    /// bytes or table entry belong to the cycle that ran it (§4).
+    fn handle_slot_mask(&self, resolved: &ResolvedDag) -> Vec<bool> {
+        let mut mask = vec![false; self.total_slots];
+        for (i, d) in resolved.input_defs[..resolved.coord_count].iter().enumerate() {
+            if d.port_type.slot_color() == crate::ast::SlotColor::Hdl1 {
+                mask[self.input_starts[i]] = true;
+            }
+        }
+        for (n, node) in resolved.nodes.iter().enumerate() {
+            for (p, out) in node.meta().outs.iter().enumerate() {
+                if out.typ.slot_color() == crate::ast::SlotColor::Hdl1 {
+                    mask[self.port_offsets[n][p]] = true;
+                }
+            }
+        }
+        mask
+    }
+
     /// First slot of each Ref2-colored output port of one node,
     /// in port order — pairs with the node's `CompiledSlotKit`
     /// scratch entries (axiom S3).
@@ -765,6 +785,7 @@ impl PolydatAssembler {
             compiled_ops.push(node_step_op(node.as_ref(), entry_base, &wire_types_of(resolved, node_idx))?);
             extras.table_entries.extend(table_entries_of(resolved, &layout, node_idx, entry_base));
         }
+        extras.handle_slots = layout.handle_slot_mask(resolved);
         extras.output_types = resolved
             .output_map
             .iter()
