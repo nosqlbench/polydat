@@ -164,17 +164,41 @@ impl ValueTable {
     }
 }
 
+impl Default for ValueTable {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
 thread_local! {
     /// The table native code on this thread writes through, installed
     /// by the engine around each native call. Null outside a call.
     static CURRENT_TABLE: Cell<*mut ValueTable> = const { Cell::new(std::ptr::null_mut()) };
 }
 
-struct Restore(*mut ValueTable);
+/// An installation of a table as the one compiled code on this thread
+/// writes through (see [`install_value_table`]). Dropping it restores
+/// the previous installation.
+pub struct TableInstallation<'a> {
+    previous: *mut ValueTable,
+    _table: std::marker::PhantomData<&'a mut ValueTable>,
+}
 
-impl Drop for Restore {
+impl Drop for TableInstallation<'_> {
     fn drop(&mut self) {
-        CURRENT_TABLE.set(self.0);
+        CURRENT_TABLE.set(self.previous);
+    }
+}
+
+/// Install `table` as the one compiled code on this thread writes
+/// through until the returned guard drops. The borrow of `table` lasts
+/// as long as the guard, so the engine cannot touch the table while
+/// compiled code may.
+#[inline]
+pub fn install_value_table(table: &mut ValueTable) -> TableInstallation<'_> {
+    TableInstallation {
+        previous: CURRENT_TABLE.replace(table as *mut ValueTable),
+        _table: std::marker::PhantomData,
     }
 }
 
@@ -184,8 +208,41 @@ impl Drop for Restore {
 /// call installs and releases its own table cleanly.
 #[inline]
 pub fn with_value_table<R>(table: &mut ValueTable, f: impl FnOnce() -> R) -> R {
-    let _restore = Restore(CURRENT_TABLE.replace(table as *mut ValueTable));
+    let _installed = install_value_table(table);
     f()
+}
+
+// ── The compiled closure ABI (SRD 115 §7) ────────────────────────
+// A P2 closure over handle slots reaches the table the same way a
+// native helper does, through the installation its kernel made. These
+// are the entry points the `#[polydat_node]` macro's `compiled_handle`
+// kit calls; they are public because generated code in other crates
+// calls them, not because hosts should.
+
+/// Slot bits as the owned `Value` a port of type `ty` carries: scalars
+/// from bits, byte strings copied out of the arena, table kinds read
+/// from the installed table.
+#[inline]
+pub fn decode_arg(ty: crate::ast::PortType, bits: u64) -> Value {
+    match ty.handle_kind() {
+        Some(crate::ast::HandleKind::Table) => with_current_value_table(|t| t.read(bits)),
+        _ => crate::compile::marshal::decode_slot(bits, ty, &ValueTable::new(0)),
+    }
+}
+
+/// The JSON value a table handle names, shared.
+#[inline]
+pub fn read_table_json(bits: u64) -> std::sync::Arc<serde_json::Value> {
+    with_current_value_table(|t| match t.get(bits) {
+        Value::Json(j) => j.clone(),
+        other => panic!("a Json port holds a {:?} table entry", other.port_type()),
+    })
+}
+
+/// Write `v` to `entry` of the installed table and return its handle.
+#[inline]
+pub fn write_table_entry(entry: usize, v: Value) -> u64 {
+    with_current_value_table(|t| t.write(entry, v))
 }
 
 /// Access the installed table from a native helper. Panics when no

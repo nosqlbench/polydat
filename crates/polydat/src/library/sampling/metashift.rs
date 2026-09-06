@@ -26,7 +26,6 @@
 //! compute `feedback` themselves via [`feedback_for_width_and_bank`] or
 //! [`feedback_for_size`].
 
-use crate::derive_support::Const;
 
 // -----------------------------------------------------------------
 // LFSR feedback polynomials (one per register width 4..64)

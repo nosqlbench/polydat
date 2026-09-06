@@ -9,7 +9,6 @@
 //! independent dimensions.
 
 use crate::ast::CompiledU64Op;
-use crate::derive_support::Const;
 
 /// Add a constant to a u64 value (wrapping).
 ///

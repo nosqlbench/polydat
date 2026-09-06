@@ -2816,6 +2816,210 @@ fn generate(
         && slot_arg_reads.is_some()
         && (ret_jit_type.is_some() || vec_ret_elem.is_some());
 
+    // ── SRD 115 §7 — `compiled_handle()`: the P2 closure over
+    // handle slots. Emitted for a node with at least one shape the
+    // u64 kit cannot carry but the value table can: a JSON port
+    // (`&serde_json::Value` / `Arc<serde_json::Value>`), a
+    // polymorphic `Value` port, or a non-u64 variadic, with every
+    // other arg a one-slot JIT carrier, a const, or a setup derived
+    // from consts. Byte strings ride as handles exactly as in the
+    // u64 kit; JSON values are read from and written to the table
+    // the kernel installs around each run; polymorphic and variadic
+    // ports decode by the wire types the kernel hands the kit.
+    enum HandleArg {
+        Jit(JitType),
+        JsonRef,
+        JsonArc,
+        Poly,
+        Variadic(VariadicElement),
+        Const(ConstShape),
+        ConstVec,
+        Setup,
+    }
+    enum HandleRet {
+        Jit(JitType),
+        Json,
+    }
+    let handle_plan: Option<(Vec<HandleArg>, HandleRet)> = (|| {
+        if attrs.no_jit
+            || is_fallible
+            || dynamic_outputs_inner.is_some()
+            || tuple_ret_elems.is_some()
+            || is_split_halves
+        {
+            return None;
+        }
+        let mut handle_shape = false;
+        let ret_shape = if classify_wrapper_wire(&ret_ty) == Some(WrapperWire::Json) {
+            handle_shape = true;
+            HandleRet::Json
+        } else if let Some(jt) = ret_jit_type {
+            if jt.width() != 1 {
+                return None;
+            }
+            HandleRet::Jit(jt)
+        } else {
+            return None;
+        };
+        let mut shapes = Vec::with_capacity(args.len());
+        for a in &args {
+            let shape = match &a.kind {
+                ArgKind::Wire => {
+                    if matches!(is_borrow_wire_shape(&a.declared_ty), Some(BorrowWire::Json)) {
+                        handle_shape = true;
+                        HandleArg::JsonRef
+                    } else if classify_wrapper_wire(&a.declared_ty) == Some(WrapperWire::Json) {
+                        handle_shape = true;
+                        HandleArg::JsonArc
+                    } else if let Some(jt) = wire_type_to_jit_type(&a.declared_ty) {
+                        if jt.width() != 1 {
+                            return None;
+                        }
+                        HandleArg::Jit(jt)
+                    } else {
+                        return None;
+                    }
+                }
+                ArgKind::PolyWire => {
+                    handle_shape = true;
+                    HandleArg::Poly
+                }
+                ArgKind::Variadic(elem) => {
+                    if *elem != VariadicElement::U64 {
+                        handle_shape = true;
+                    }
+                    HandleArg::Variadic(*elem)
+                }
+                ArgKind::Const(shape) => HandleArg::Const(*shape),
+                ArgKind::ConstVec(_) => HandleArg::ConstVec,
+                ArgKind::Setup(spec) => {
+                    // Session-static setup (`from = ()`) is not a
+                    // function of the consts; it stays on P1.
+                    if spec.source_args.is_empty() {
+                        return None;
+                    }
+                    HandleArg::Setup
+                }
+            };
+            shapes.push(shape);
+        }
+        if !handle_shape {
+            return None;
+        }
+        Some((shapes, ret_shape))
+    })();
+    let handle_eligible = handle_plan.is_some();
+
+    let compiled_handle_impl: TokenStream2 = if let Some((shapes, ret_shape)) = &handle_plan {
+        // Captures: consts and const lists by clone, then setups
+        // recomputed from those captured consts exactly as `new()`
+        // computes them (a setup is a pure function of its consts).
+        let mut captures: Vec<TokenStream2> = Vec::new();
+        for (a, shape) in args.iter().zip(shapes.iter()) {
+            let n = &a.name;
+            match shape {
+                HandleArg::Const(_) | HandleArg::ConstVec => captures.push(quote!(let #n = self.#n.clone();)),
+                _ => {}
+            }
+        }
+        for (a, shape) in args.iter().zip(shapes.iter()) {
+            if let (HandleArg::Setup, ArgKind::Setup(spec)) = (shape, &a.kind) {
+                let n = &a.name;
+                let setup_fn = &spec.setup_fn;
+                let src_exprs: Vec<TokenStream2> = spec.source_args.iter()
+                    .map(|src| match const_shape_by_name.get(&src.to_string()) {
+                        Some(ConstSourceShape::ScalarStr) => quote!(#src.as_str()),
+                        Some(ConstSourceShape::ScalarValue) => quote!(#src),
+                        Some(ConstSourceShape::VecValues) => quote!(&#src),
+                        None => quote!(#src),
+                    })
+                    .collect();
+                captures.push(quote!(let #n = #setup_fn( #( #src_exprs ),* );));
+            }
+        }
+        let mut wire_buf_idx = 0usize;
+        let arg_reads: Vec<TokenStream2> = args.iter().zip(shapes.iter())
+            .map(|(a, shape)| {
+                let n = &a.name;
+                match shape {
+                    HandleArg::Jit(jt) => {
+                        let read = jt.read_from_u64_buffer(wire_buf_idx);
+                        wire_buf_idx += 1;
+                        quote!(let #n = #read;)
+                    }
+                    HandleArg::JsonRef => {
+                        let i = syn::Index::from(wire_buf_idx);
+                        wire_buf_idx += 1;
+                        let arc = format_ident!("__{}_json", a.name);
+                        quote! {
+                            let #arc = polydat::kernel::read_table_json(inputs[#i]);
+                            let #n = &*#arc;
+                        }
+                    }
+                    HandleArg::JsonArc => {
+                        let i = syn::Index::from(wire_buf_idx);
+                        wire_buf_idx += 1;
+                        quote!(let #n = polydat::kernel::read_table_json(inputs[#i]);)
+                    }
+                    HandleArg::Poly => {
+                        let i = syn::Index::from(wire_buf_idx);
+                        wire_buf_idx += 1;
+                        quote!(let #n: polydat::ast::Value = polydat::kernel::decode_arg(__wire_types[#i], inputs[#i]);)
+                    }
+                    HandleArg::Variadic(elem) => {
+                        // The variadic takes every remaining slot.
+                        let start = syn::Index::from(wire_buf_idx);
+                        let owned = format_ident!("__{}_owned", a.name);
+                        let (elem_ty, extract) = match elem {
+                            VariadicElement::U64 => (quote!(u64), quote!(inputs[__i])),
+                            VariadicElement::F64 => (quote!(f64), quote!(f64::from_bits(inputs[__i]))),
+                            VariadicElement::Bool => (quote!(bool), quote!(inputs[__i] != 0)),
+                            VariadicElement::BorrowedStr => (quote!(&str), quote!(polydat::kernel::resolve_thread_str(inputs[__i]))),
+                            VariadicElement::OwnedString => (quote!(String), quote!(polydat::kernel::resolve_thread_str(inputs[__i]).to_string())),
+                            VariadicElement::Value => (
+                                quote!(polydat::ast::Value),
+                                quote!(polydat::kernel::decode_arg(__wire_types[__i], inputs[__i])),
+                            ),
+                        };
+                        quote! {
+                            let #owned: Vec<#elem_ty> = (#start..inputs.len()).map(|__i| #extract).collect();
+                            let #n = &#owned[..];
+                        }
+                    }
+                    HandleArg::Const(shape) => {
+                        let wrap = shape.wrap_as_const(quote!(#n));
+                        quote!(let #n = #wrap;)
+                    }
+                    HandleArg::ConstVec => quote!(let #n = polydat::derive_support::Const(#n.clone());),
+                    HandleArg::Setup => quote!(let #n = &#n;),
+                }
+            })
+            .collect();
+        let arg_names: Vec<&syn::Ident> = args.iter().map(|a| &a.name).collect();
+        let write = match ret_shape {
+            HandleRet::Jit(jt) => jt.write_to_u64_buffer(quote!(result)),
+            HandleRet::Json => quote! {
+                outputs[0] = polydat::kernel::write_table_entry(__entry_base, polydat::ast::Value::Json(result));
+            },
+        };
+        quote! {
+            fn compiled_handle(&self, entry_base: usize, wire_types: &[polydat::ast::PortType]) -> Option<polydat::ast::CompiledU64Op> {
+                #( #captures )*
+                let __wire_types: Vec<polydat::ast::PortType> = wire_types.to_vec();
+                let __entry_base = entry_base;
+                Some(Box::new(move |inputs: &[u64], outputs: &mut [u64]| {
+                    let _ = &__wire_types;
+                    let _ = __entry_base;
+                    #( #arg_reads )*
+                    let result: #ret_ty = Self::__polydat_body( #( #arg_names ),* );
+                    #write
+                }))
+            }
+        }
+    } else {
+        quote!()
+    };
+
     let emit_compiled_u64 = attrs.compiled_u64_override.is_some()
         || (jit_eligible && !attrs.no_jit);
     let emit_jit_constants = attrs.jit_constants_override.is_some()
@@ -2832,7 +3036,8 @@ fn generate(
     // setup-derived locals via `let n = &self.n` bindings).
 
     let use_shared_body = (jit_eligible && (emit_compiled_u64 || !attrs.no_jit))
-        || (slot_eligible && !attrs.no_jit);
+        || (slot_eligible && !attrs.no_jit)
+        || handle_eligible;
 
     // Body-fn parameter list — every arg in its DECLARED form
     // (wire as bare type, const as `Const<T>`, setup as `&T`).
@@ -2840,6 +3045,16 @@ fn generate(
         .map(|a| {
             let n = &a.name;
             let t = &a.declared_ty;
+            // A `Const<T>` is spelled by its bare name in the source
+            // signature; the shared body must not depend on the
+            // module having imported it.
+            if let (ArgKind::Const(_) | ArgKind::ConstVec(_), syn::Type::Path(p)) = (&a.kind, t)
+                && let Some(last) = p.path.segments.last()
+                && last.ident == "Const"
+            {
+                let generics = &last.arguments;
+                return quote!(#n: polydat::derive_support::Const #generics);
+            }
             quote!(#n: #t)
         })
         .collect();
@@ -3563,6 +3778,7 @@ fn generate(
 
             #compiled_u64_impl
             #compiled_slot_impl
+            #compiled_handle_impl
             #jit_constants_impl
             #purity_impl
             #simd_variant_impl

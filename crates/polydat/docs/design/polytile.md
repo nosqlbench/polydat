@@ -787,11 +787,14 @@ a handful of integer and float encodes, and a four-tuple loop.
    kernels and renders the same bytes P1 does. An encoder fed straight
    by a kernel input stays on P1 by the SRD-74 None rule (it would
    write `null` for a None the fused cone would instead propagate),
-   and the render node takes its text as a boundary input. Remaining:
-   the skeleton's `Repeat`, an activation of the body program as `for`
-   bodies already are, which keeps any tile with a projection on P1;
-   and the P2 closure form with the differential suite across the fuzz
-   corpus (SRD 115 step 7), the acceptance criterion. Everything that
+   and the render node takes its text as a boundary input. At P2 the
+   whole renderer, projections included, runs as a closure from the
+   macro's `compiled_handle` kit, and the differential suite in
+   `tests/handle_tiers.rs` pins random tiles to the interpreter across
+   the tiers (SRD 115 step 7). Remaining: the skeleton's `Repeat` in
+   native code, an activation of the body program as `for` bodies
+   already are, which keeps any tile with a projection on P1 inside a
+   cone and off the pure-P3 kernel. Everything that
    precedes this step (typed transport into bodies, skeleton counts,
    one program per position) was shaped so that this lowering does not
    have to undo anything.

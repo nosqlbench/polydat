@@ -199,17 +199,50 @@ fn slot_layout(resolved: &ResolvedDag) -> SlotLayout {
 }
 
 /// Compiled-op selection for one node: pure-scalar `compiled_u64`
-/// first (cheapest dispatch), then the slot op for slice-bearing
-/// nodes (§8.4 layer 3), else `None` → typed-eval fallback.
+/// first (cheapest dispatch), then the handle closure for nodes with
+/// JSON, polymorphic, or variadic ports (SRD 115 §7), then the slot
+/// op for slice-bearing nodes (§8.4 layer 3), else `None` →
+/// typed-eval fallback. `entry_base` is the first value-table entry
+/// the node's table-kind outputs own; `wire_types` the type of each
+/// wire input.
 fn node_step_op(
     node: &dyn crate::ast::PolydatNode,
+    entry_base: usize,
+    wire_types: &[PortType],
 ) -> Option<(crate::compile::closures::StepOp, Vec<crate::ast::ScratchElem>)> {
     if let Some(op) = node.compiled_u64() {
+        return Some((crate::compile::closures::StepOp::U64(op), Vec::new()));
+    }
+    if let Some(op) = node.compiled_handle(entry_base, wire_types) {
         return Some((crate::compile::closures::StepOp::U64(op), Vec::new()));
     }
     node.compiled_slot().map(|kit| {
         (crate::compile::closures::StepOp::Slot(kit.op), kit.scratch)
     })
+}
+
+/// The `(slot, entry)` pairs of a node's table-kind output ports,
+/// numbered from `entry_base` in port order (SRD 115 §3).
+fn table_entries_of(
+    resolved: &ResolvedDag,
+    layout: &SlotLayout,
+    node_idx: usize,
+    entry_base: usize,
+) -> Vec<(usize, usize)> {
+    let mut entries = Vec::new();
+    let mut slot = layout.output_slots(resolved, node_idx).into_iter();
+    for port in &resolved.nodes[node_idx].meta().outs {
+        let first = slot.next();
+        for _ in 1..port.typ.slot_width() {
+            slot.next();
+        }
+        if port.typ.handle_kind() == Some(crate::ast::HandleKind::Table)
+            && let Some(first) = first
+        {
+            entries.push((first, entry_base + entries.len()));
+        }
+    }
+    entries
 }
 
 impl SlotLayout {
@@ -363,6 +396,7 @@ type P2Layout = (
     Vec<crate::compile::closures::P2Step>,
     HashMap<String, usize>,
     Vec<bool>,
+    crate::compile::closures::P2Extras,
 );
 
 /// `(coord_slots, total_slots, JIT steps, named outputs)` — the
@@ -630,61 +664,23 @@ impl PolydatAssembler {
     pub fn try_compile(self) -> Result<CompiledKernelPushPull, Box<PolydatKernel>> {
         let resolved = self.resolve().expect("assembly validation failed");
         let coord_names = resolved.input_names();
-        let layout = slot_layout(&resolved);
-
-        // Try to extract a compiled op from every node
-        let mut compiled_ops = Vec::with_capacity(resolved.nodes.len());
-        let mut all_compilable = true;
-        for node in &resolved.nodes {
-            if let Some(op) = node_step_op(node.as_ref()) {
-                compiled_ops.push(Some(op));
-            } else {
-                all_compilable = false;
-                compiled_ops.push(None);
-            }
-        }
-
-        if !all_compilable {
-            // Fall back to Phase 1
-            return Err(Box::new(PolydatKernel::new(
-                resolved.nodes,
-                resolved.wiring,
-                coord_names,
-                resolved.output_map,
-                &resolved.source,
-                &resolved.context,
-            )));
-        }
-
-        // Build compiled steps over the per-port-width layout
-        let mut steps = Vec::with_capacity(resolved.nodes.len());
-        for (node_idx, op) in compiled_ops.into_iter().enumerate() {
-            let (op, scratch) = op.unwrap(); // safe: all_compilable checked above
-            steps.push(crate::compile::closures::P2Step {
-                op,
-                input_slots: layout.input_slots(&resolved, node_idx),
-                output_slots: layout.output_slots(&resolved, node_idx),
-                ref_output_starts: if scratch.is_empty() {
-                    Vec::new()
-                } else {
-                    layout.ref_output_starts(&resolved, node_idx)
-                },
-                scratch,
-            });
-        }
-
-        let output_map = layout.named_outputs(&resolved);
-
-        let dependents = layout.expand_dependents(
+        let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
+            match Self::build_p2_layout(&resolved) {
+                Some(r) => r,
+                // Fall back to Phase 1
+                None => return Err(Box::new(PolydatKernel::new(
+                    resolved.nodes, resolved.wiring, coord_names, resolved.output_map,
+                    &resolved.source, &resolved.context))),
+            };
+        let dependents = slot_layout(&resolved).expand_dependents(
             &resolved,
             &PolydatProgram::compute_dependents(
                 &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
                 resolved.coord_count,
             ),
         );
-        let ref_slots = layout.ref_slot_mask(&resolved);
         Ok(CompiledKernelPushPull::new(
-            layout.coord_slots, layout.total_slots, steps, output_map, dependents, ref_slots,
+            coord_count, total_slots, steps, output_map, dependents, ref_slots, extras,
         ))
     }
 
@@ -695,43 +691,14 @@ impl PolydatAssembler {
             Err(_) => return Err(Box::new(PolydatKernel::new(vec![], vec![], vec![], HashMap::new(), "", "(fallback)"))),
         };
         let coord_names = resolved.input_names();
-        let layout = slot_layout(&resolved);
-        let mut compiled_ops = Vec::with_capacity(resolved.nodes.len());
-        let mut all_compilable = true;
-        for node in &resolved.nodes {
-            if let Some(op) = node_step_op(node.as_ref()) {
-                compiled_ops.push(Some(op));
-            } else {
-                all_compilable = false;
-                compiled_ops.push(None);
-            }
-        }
-        if !all_compilable {
-            return Err(Box::new(PolydatKernel::new(
-                resolved.nodes, resolved.wiring, coord_names.clone(), resolved.output_map,
-                &resolved.source, &resolved.context,
-            )));
-        }
-        let mut steps = Vec::with_capacity(resolved.nodes.len());
-        for (node_idx, op) in compiled_ops.into_iter().enumerate() {
-            let (op, scratch) = op.unwrap();
-            steps.push(crate::compile::closures::P2Step {
-                op,
-                input_slots: layout.input_slots(&resolved, node_idx),
-                output_slots: layout.output_slots(&resolved, node_idx),
-                ref_output_starts: if scratch.is_empty() {
-                    Vec::new()
-                } else {
-                    layout.ref_output_starts(&resolved, node_idx)
-                },
-                scratch,
-            });
-        }
-        let output_map = layout.named_outputs(&resolved);
-        let ref_slots = layout.ref_slot_mask(&resolved);
-        Ok(CompiledKernelRaw::new(
-            layout.coord_slots, layout.total_slots, steps, output_map, ref_slots,
-        ))
+        let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
+            match Self::build_p2_layout(&resolved) {
+                Some(r) => r,
+                None => return Err(Box::new(PolydatKernel::new(
+                    resolved.nodes, resolved.wiring, coord_names, resolved.output_map,
+                    &resolved.source, &resolved.context))),
+            };
+        Ok(CompiledKernelRaw::new(coord_count, total_slots, steps, output_map, ref_slots, extras))
     }
 
     /// Phase 2 compilation with push-side provenance only (no cone guard).
@@ -741,7 +708,7 @@ impl PolydatAssembler {
             Err(_) => return Err(Box::new(PolydatKernel::new(vec![], vec![], vec![], HashMap::new(), "", "(fallback)"))),
         };
         let coord_names = resolved.input_names();
-        let (coord_count, total_slots, steps, output_map, ref_slots) =
+        let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
             match Self::build_p2_layout(&resolved) {
                 Some(r) => r,
                 None => return Err(Box::new(PolydatKernel::new(
@@ -755,7 +722,7 @@ impl PolydatAssembler {
                 resolved.coord_count,
             ),
         );
-        Ok(CompiledKernelPush::new(coord_count, total_slots, steps, output_map, dependents, ref_slots))
+        Ok(CompiledKernelPush::new(coord_count, total_slots, steps, output_map, dependents, ref_slots, extras))
     }
 
     /// Phase 2 compilation with pull-side cone guard only (no per-node skip).
@@ -765,7 +732,7 @@ impl PolydatAssembler {
             Err(_) => return Err(Box::new(PolydatKernel::new(vec![], vec![], vec![], HashMap::new(), "", "(fallback)"))),
         };
         let coord_names = resolved.input_names();
-        let (coord_count, total_slots, steps, output_map, ref_slots) =
+        let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
             match Self::build_p2_layout(&resolved) {
                 Some(r) => r,
                 None => return Err(Box::new(PolydatKernel::new(
@@ -779,20 +746,30 @@ impl PolydatAssembler {
                 resolved.coord_count,
             ),
         );
-        Ok(CompiledKernelPull::new(coord_count, total_slots, steps, output_map, &dependents, ref_slots))
+        Ok(CompiledKernelPull::new(coord_count, total_slots, steps, output_map, &dependents, ref_slots, extras))
     }
 
     /// Shared: extract P2 compiled steps + slot layout from resolved DAG.
-    /// Returns None if any node lacks a compiled_u64 implementation.
+    /// Returns None if any node lacks a compiled form. Table-kind
+    /// output slots are assigned value-table entries in node and port
+    /// order (SRD 115 §3, §7).
     fn build_p2_layout(
         resolved: &ResolvedDag,
     ) -> Option<P2Layout> {
         let layout = slot_layout(resolved);
 
         let mut compiled_ops = Vec::with_capacity(resolved.nodes.len());
-        for node in &resolved.nodes {
-            compiled_ops.push(node_step_op(node.as_ref())?);
+        let mut extras = crate::compile::closures::P2Extras::default();
+        for (node_idx, node) in resolved.nodes.iter().enumerate() {
+            let entry_base = extras.table_entries.len();
+            compiled_ops.push(node_step_op(node.as_ref(), entry_base, &wire_types_of(resolved, node_idx))?);
+            extras.table_entries.extend(table_entries_of(resolved, &layout, node_idx, entry_base));
         }
+        extras.output_types = resolved
+            .output_map
+            .iter()
+            .map(|(name, (n, p))| (name.clone(), resolved.nodes[*n].meta().outs[*p].typ))
+            .collect();
 
         let mut steps = Vec::with_capacity(resolved.nodes.len());
         for (node_idx, (op, scratch)) in compiled_ops.into_iter().enumerate() {
@@ -811,7 +788,7 @@ impl PolydatAssembler {
         let output_map = layout.named_outputs(resolved);
         let ref_slots = layout.ref_slot_mask(resolved);
 
-        Some((layout.coord_slots, layout.total_slots, steps, output_map, ref_slots))
+        Some((layout.coord_slots, layout.total_slots, steps, output_map, ref_slots, extras))
     }
 
     /// Shared: resolve nodes to JIT steps + slot layout.
@@ -975,15 +952,18 @@ impl PolydatAssembler {
         let analysis = select::analyze_graph(&resolved.nodes, &resolved.wiring, &resolved.output_map);
         let mode = select::select_prov_mode(&analysis);
 
-        let (coord_count, total_slots, steps, output_map, ref_slots) =
+        let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
             match Self::build_p2_layout(&resolved) {
                 Some(r) => r,
                 None => return Err("not all nodes support P2 compilation".into()),
             };
 
+        // The state that wraps the engine owns the cycle (SRD 115 §4).
         let engine = match mode {
             ProvMode::Raw => {
-                P2Engine::Raw(CompiledKernelRaw::new(coord_count, total_slots, steps, output_map, ref_slots))
+                let mut k = CompiledKernelRaw::new(coord_count, total_slots, steps, output_map, ref_slots, extras);
+                k.set_owns_cycle(false);
+                P2Engine::Raw(k)
             }
             ProvMode::Pull => {
                 let deps = slot_layout(&resolved).expand_dependents(
@@ -993,7 +973,9 @@ impl PolydatAssembler {
                         resolved.coord_count,
                     ),
                 );
-                P2Engine::Pull(CompiledKernelPull::new(coord_count, total_slots, steps, output_map, &deps, ref_slots))
+                let mut k = CompiledKernelPull::new(coord_count, total_slots, steps, output_map, &deps, ref_slots, extras);
+                k.set_owns_cycle(false);
+                P2Engine::Pull(k)
             }
             ProvMode::PushPull => {
                 let deps = slot_layout(&resolved).expand_dependents(
@@ -1003,7 +985,9 @@ impl PolydatAssembler {
                         resolved.coord_count,
                     ),
                 );
-                P2Engine::PushPull(CompiledKernelPushPull::new(coord_count, total_slots, steps, output_map, deps, ref_slots))
+                let mut k = CompiledKernelPushPull::new(coord_count, total_slots, steps, output_map, deps, ref_slots, extras);
+                k.set_owns_cycle(false);
+                P2Engine::PushPull(k)
             }
         };
         Ok((engine, analysis))
@@ -1077,6 +1061,7 @@ impl PolydatAssembler {
             .collect();
 
         let ref_slots = layout.ref_slot_mask(&resolved);
+        let input_types: Vec<PortType> = resolved.input_defs.iter().map(|d| d.port_type).collect();
         let mut kernel = crate::compile::hybrid::build_hybrid(
             &resolved.nodes,
             &resolved.wiring,
@@ -1087,6 +1072,7 @@ impl PolydatAssembler {
             &input_widths,
             output_map,
             ref_slots,
+            &input_types,
         )?;
         kernel.retain_nodes(resolved.nodes);
         Ok(kernel)

@@ -26,7 +26,7 @@
 use crate::ast::CompiledU64Op;
 #[cfg(test)]
 use crate::ast::{PolydatNode, Value};
-use crate::derive_support::{Const, PolydatSetup};
+use crate::derive_support::PolydatSetup;
 
 // =================================================================
 // PCG-RXS-M-XS 64/64 core algorithm

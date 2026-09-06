@@ -18,7 +18,6 @@
 //! SRD-80b §"No transitional aliases".
 
 use crate::compile::fusion::{DecomposedGraph, DecomposedWire, FusedNode};
-use crate::derive_support::Const;
 use xxhash_rust::xxh3::xxh3_64;
 
 /// Ultra-fast 64-bit pseudo-random permutation mixer (SplitMix64).

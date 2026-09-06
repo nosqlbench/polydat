@@ -26,7 +26,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::ast::{PolydatNode, NodeMeta, Port, Slot, SlotType, Value};
-use crate::derive_support::Const;
 
 /// Current wall-clock time in epoch milliseconds.
 ///

@@ -619,6 +619,7 @@ pub fn build_hybrid(
     input_widths: &[usize],
     output_map: HashMap<String, usize>,
     ref_slots: Vec<bool>,
+    input_types: &[crate::ast::PortType],
 ) -> Result<HybridKernelPushPull, String> {
     let mut steps: Vec<HybridStep> = Vec::new();
     let mut scratch: Vec<crate::ast::ScratchBuf> = Vec::new();
@@ -656,7 +657,31 @@ pub fn build_hybrid(
             let node = &nodes[i];
             let (_, ref input_slots, ref output_slots) = classifications[i];
             let scratch_start = scratch.len();
+            // A handle closure (SRD 115 §7) owns the next entries of
+            // the kernel's one table, numbered with the JIT segments'.
+            let entry_base = table_entries.len();
+            let wire_types: Vec<crate::ast::PortType> = wiring[i]
+                .iter()
+                .map(|src| match src {
+                    WireSource::Input(c) => input_types.get(*c).copied().unwrap_or(crate::ast::PortType::U64),
+                    WireSource::NodeOutput(j, p) => nodes[*j].meta().outs[*p].typ,
+                })
+                .collect();
             let op = if let Some(op) = node.compiled_u64() {
+                ClosureOp::U64(op)
+            } else if let Some(op) = node.compiled_handle(entry_base, &wire_types) {
+                let mut slot = output_slots.iter().copied();
+                for port in &node.meta().outs {
+                    let first = slot.next();
+                    for _ in 1..port.typ.slot_width() {
+                        slot.next();
+                    }
+                    if port.typ.handle_kind() == Some(crate::ast::HandleKind::Table)
+                        && let Some(first) = first
+                    {
+                        table_entries.push((first, table_entries.len()));
+                    }
+                }
                 ClosureOp::U64(op)
             } else if let Some(kit) = node.compiled_slot() {
                 scratch.extend(kit.scratch.iter().map(|e| crate::ast::ScratchBuf::new(*e)));
@@ -732,6 +757,7 @@ pub fn build_hybrid(
     input_widths: &[usize],
     output_map: HashMap<String, usize>,
     ref_slots: Vec<bool>,
+    _input_types: &[crate::ast::PortType],
 ) -> Result<HybridKernelPushPull, String> {
     let mut steps: Vec<HybridStep> = Vec::new();
     let mut scratch: Vec<crate::ast::ScratchBuf> = Vec::new();

@@ -27,7 +27,7 @@
 use crate::ast::Value;
 #[cfg(test)]
 use crate::ast::{PolydatNode, PortType};
-use crate::derive_support::{Const, PolydatSetup};
+use crate::derive_support::PolydatSetup;
 
 /// Convert a u64 hash to a value in the unit interval [0.0, 1.0).
 ///

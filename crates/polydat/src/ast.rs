@@ -2022,6 +2022,22 @@ pub trait PolydatNode: Send + Sync {
         None
     }
 
+    /// Return a compiled closure over handle slots (SRD 115 §7): the
+    /// same buffer contract as [`Self::compiled_u64`], with byte
+    /// strings as arena or static handles and `Json`, `Ext`, and
+    /// `Handle` values as entries of the value table the kernel
+    /// installs around each run. `entry_base` is the first table
+    /// entry this node owns, one per table-kind output port in port
+    /// order; `wire_types` is the type of each wire input, in slot
+    /// order, which a polymorphic or variadic port decodes by.
+    ///
+    /// Default: `None` (no handle-slot form). The `#[polydat_node]`
+    /// macro emits this for nodes with a JSON, polymorphic, or
+    /// variadic port whose other shapes fit the buffer.
+    fn compiled_handle(&self, _entry_base: usize, _wire_types: &[PortType]) -> Option<CompiledU64Op> {
+        None
+    }
+
     /// Return assembly-time constants for JIT compilation.
     ///
     /// Nodes with baked-in constants (Mod's modulus, Add's addend, etc.)

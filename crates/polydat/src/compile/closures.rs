@@ -16,7 +16,18 @@
 
 use std::collections::HashMap;
 
-use crate::ast::{CompiledSlotOp, CompiledU64Op, ScratchBuf, ScratchElem};
+use crate::ast::{CompiledSlotOp, CompiledU64Op, PortType, ScratchBuf, ScratchElem};
+use crate::kernel::ValueTable;
+
+/// What a P2 kernel needs beyond its steps for handle slots (SRD 115
+/// §7): the `(slot, entry)` of every table-kind output, which sizes
+/// the kernel's value table and drives the H4 validator, and each
+/// named output's port type for the typed reader.
+#[derive(Default)]
+pub(crate) struct P2Extras {
+    pub(crate) table_entries: Vec<(usize, usize)>,
+    pub(crate) output_types: HashMap<String, PortType>,
+}
 
 /// A single evaluation step in the compiled kernel.
 /// A compiled step's op: pure-scalar u64 closure, or a slot op
@@ -63,9 +74,65 @@ struct KernelCore {
     /// Axiom S9(a): (first slot of a Ref pair → scratch arena
     /// index) for every scratch-backed Ref output.
     ref_scratch: Vec<(usize, usize)>,
+    /// The kernel's value table (SRD 115 §3): one entry per
+    /// table-kind output slot, owned for the kernel's lifetime and
+    /// installed around every run for the handle closures.
+    table: ValueTable,
+    /// `(slot, entry)` for every table-kind output slot; the H4
+    /// validator checks each slot's handle names its own entry.
+    table_entries: Vec<(usize, usize)>,
+    /// True when a host drives this kernel directly, so each run
+    /// begins a root cycle (SRD 115 §4); false when a state that owns
+    /// the cycle wraps it.
+    owns_cycle: bool,
+    /// Port type of each named output, for `get_value`.
+    output_types: HashMap<String, PortType>,
 }
 
 impl KernelCore {
+    /// Begin a run (SRD 115 §4, §7): advance or adopt the cycle
+    /// generation and hand the table out for installation. The table
+    /// leaves the core for the duration of the run so the step loop's
+    /// borrows of the core and the installation's borrow of the table
+    /// do not overlap; `end_run` puts it back.
+    #[inline]
+    fn begin_run(&mut self) -> ValueTable {
+        let generation = if self.owns_cycle {
+            crate::kernel::begin_root_cycle()
+        } else {
+            crate::kernel::cycle_generation()
+        };
+        let mut table = std::mem::take(&mut self.table);
+        table.set_generation(generation);
+        table
+    }
+
+    /// End a run: take the table back and check the handle
+    /// invariants (H3, H4) in debug builds, as `validate_refs` checks
+    /// the Ref pairs.
+    #[inline]
+    fn end_run(&mut self, table: ValueTable) {
+        self.table = table;
+        if cfg!(debug_assertions) {
+            for &(slot, entry) in &self.table_entries {
+                let handle = self.buffer[slot];
+                assert_eq!(
+                    handle & crate::kernel::TAG_MASK,
+                    crate::kernel::TAG_RES,
+                    "H4: slot {slot} should hold a table handle, holds {handle:#x}"
+                );
+                let (_, generation, named) = crate::kernel::decode_table_handle(handle);
+                assert_eq!(named, entry, "H4: slot {slot} names entry {named}; the layout assigned it entry {entry}");
+                assert_eq!(
+                    generation,
+                    self.table.generation() & 0xFF_FFFF,
+                    "H3: slot {slot} holds a handle from another cycle generation"
+                );
+                assert!(self.table.is_written(entry), "H4: entry {entry} was not written by the run that produced slot {slot}");
+            }
+        }
+    }
+
     /// Axiom S9(a) — deterministic Ref validation: every
     /// scratch-backed Ref pair in the buffer must equal its
     /// owning entry's current `(as_ptr(), len())`. Run after
@@ -126,7 +193,9 @@ fn build_core(
     steps: Vec<P2Step>,
     output_map: HashMap<String, usize>,
     ref_slots: Vec<bool>,
+    extras: P2Extras,
 ) -> KernelCore {
+    let table_len = extras.table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0);
     let max_inputs = steps.iter().map(|s| s.input_slots.len()).max().unwrap_or(0);
     let max_outputs = steps.iter().map(|s| s.output_slots.len()).max().unwrap_or(0);
     let mut scratch: Vec<ScratchBuf> = Vec::new();
@@ -167,6 +236,10 @@ fn build_core(
         scratch,
         ref_slots,
         ref_scratch,
+        table: ValueTable::new(table_len),
+        table_entries: extras.table_entries,
+        owns_cycle: true,
+        output_types: extras.output_types,
     }
 }
 
@@ -236,32 +309,91 @@ macro_rules! kernel_accessors {
             self.core.buffer[slot]
         }
 
+        /// The named output as a typed `Value`, decoded by its port
+        /// type: a handle slot is copied out of the arena or the value
+        /// table (SRD 115 §5), so the caller never holds a handle.
+        pub fn get_value(&self, name: &str) -> crate::ast::Value {
+            let slot = self.core.output_map[name];
+            let ty = self.core.output_types.get(name).copied().unwrap_or(crate::ast::PortType::U64);
+            crate::compile::marshal::decode_slot(self.core.buffer[slot], ty, &self.core.table)
+        }
+
+        /// Whether each run begins a root cycle (SRD 115 §4). A state
+        /// that owns the cycle and wraps this kernel sets this false.
+        #[allow(dead_code)]
+        pub(crate) fn set_owns_cycle(&mut self, owns: bool) {
+            self.core.owns_cycle = owns;
+        }
+
+        /// Entries in the kernel's value table.
+        pub fn table_len(&self) -> usize {
+            self.core.table.len()
+        }
+
         crate::compile::ref_readers!();
     };
+}
+
+/// One step: gather, run the closure, scatter.
+#[inline]
+fn run_step(core: &mut KernelCore, step: &CompiledStep) {
+    for (i, &s) in step.input_slots.iter().enumerate() {
+        core.gather_buf[i] = core.buffer[s];
+    }
+    match &step.op {
+        StepOp::U64(op) => op(
+            &core.gather_buf[..step.input_slots.len()],
+            &mut core.scatter_buf[..step.output_slots.len()],
+        ),
+        StepOp::Slot(op) => op(
+            &core.gather_buf[..step.input_slots.len()],
+            &mut core.scatter_buf[..step.output_slots.len()],
+            &mut core.scratch[step.scratch_range.0..step.scratch_range.1],
+        ),
+    }
+    for (i, &s) in step.output_slots.iter().enumerate() {
+        core.buffer[s] = core.scatter_buf[i];
+    }
 }
 
 /// Run all steps unconditionally (no clean checks).
 #[inline]
 fn eval_all_steps(core: &mut KernelCore) {
-    for step in &core.steps {
-        for (i, &s) in step.input_slots.iter().enumerate() {
-            core.gather_buf[i] = core.buffer[s];
-        }
-        match &step.op {
-            StepOp::U64(op) => op(
-                &core.gather_buf[..step.input_slots.len()],
-                &mut core.scatter_buf[..step.output_slots.len()],
-            ),
-            StepOp::Slot(op) => op(
-                &core.gather_buf[..step.input_slots.len()],
-                &mut core.scatter_buf[..step.output_slots.len()],
-                &mut core.scratch[step.scratch_range.0..step.scratch_range.1],
-            ),
-        }
-        for (i, &s) in step.output_slots.iter().enumerate() {
-            core.buffer[s] = core.scatter_buf[i];
+    let mut table = core.begin_run();
+    {
+        let _installed = crate::kernel::install_value_table(&mut table);
+        for i in 0..core.steps.len() {
+            let step = &core.steps[i];
+            // The step is borrowed from `core.steps` while `run_step`
+            // writes the other fields; split the borrow by index.
+            let step: *const CompiledStep = step;
+            // SAFETY: `core.steps` is not touched by `run_step`, so the
+            // step outlives the call and no other reference aliases it.
+            run_step(core, unsafe { &*step });
         }
     }
+    core.end_run(table);
+    #[cfg(debug_assertions)]
+    core.validate_refs();
+}
+
+/// Run the steps that are not clean, marking each clean afterwards.
+#[inline]
+fn eval_dirty_steps(core: &mut KernelCore, node_clean: &mut [bool]) {
+    let mut table = core.begin_run();
+    {
+        let _installed = crate::kernel::install_value_table(&mut table);
+        for (i, clean) in node_clean.iter_mut().enumerate().take(core.steps.len()) {
+            if *clean {
+                continue;
+            }
+            let step: *const CompiledStep = &core.steps[i];
+            // SAFETY: as in `eval_all_steps`.
+            run_step(core, unsafe { &*step });
+            *clean = true;
+        }
+    }
+    core.end_run(table);
     #[cfg(debug_assertions)]
     core.validate_refs();
 }
@@ -281,8 +413,9 @@ impl CompiledKernelRaw {
         steps: Vec<P2Step>,
         output_map: HashMap<String, usize>,
         ref_slots: Vec<bool>,
+        extras: P2Extras,
     ) -> Self {
-        Self { core: build_core(coord_count, total_slots, steps, output_map, ref_slots) }
+        Self { core: build_core(coord_count, total_slots, steps, output_map, ref_slots, extras) }
     }
 
     #[inline]
@@ -322,10 +455,11 @@ impl CompiledKernelPush {
         output_map: HashMap<String, usize>,
         input_dependents: Vec<Vec<usize>>,
         ref_slots: Vec<bool>,
+        extras: P2Extras,
     ) -> Self {
         let step_count = steps.len();
         Self {
-            core: build_core(coord_count, total_slots, steps, output_map, ref_slots),
+            core: build_core(coord_count, total_slots, steps, output_map, ref_slots, extras),
             node_clean: vec![false; step_count],
             input_dependents,
         }
@@ -348,29 +482,7 @@ impl CompiledKernelPush {
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_inputs(coords);
-        for (step_idx, step) in self.core.steps.iter().enumerate() {
-            if self.node_clean[step_idx] { continue; }
-            for (i, &s) in step.input_slots.iter().enumerate() {
-                self.core.gather_buf[i] = self.core.buffer[s];
-            }
-            match &step.op {
-                StepOp::U64(op) => op(
-                    &self.core.gather_buf[..step.input_slots.len()],
-                    &mut self.core.scatter_buf[..step.output_slots.len()],
-                ),
-                StepOp::Slot(op) => op(
-                    &self.core.gather_buf[..step.input_slots.len()],
-                    &mut self.core.scatter_buf[..step.output_slots.len()],
-                    &mut self.core.scratch[step.scratch_range.0..step.scratch_range.1],
-                ),
-            }
-            for (i, &s) in step.output_slots.iter().enumerate() {
-                self.core.buffer[s] = self.core.scatter_buf[i];
-            }
-            self.node_clean[step_idx] = true;
-        }
-        #[cfg(debug_assertions)]
-        self.core.validate_refs();
+        eval_dirty_steps(&mut self.core, &mut self.node_clean);
     }
 
     /// Eval + return a specific slot. No cone guard — always enters eval loop.
@@ -404,8 +516,9 @@ impl CompiledKernelPull {
         output_map: HashMap<String, usize>,
         input_dependents: &[Vec<usize>],
         ref_slots: Vec<bool>,
+        extras: P2Extras,
     ) -> Self {
-        let core = build_core(coord_count, total_slots, steps, output_map, ref_slots);
+        let core = build_core(coord_count, total_slots, steps, output_map, ref_slots, extras);
         let slot_provenance = compute_slot_provenance(
             coord_count, total_slots, input_dependents, &core.steps);
         Self {
@@ -473,9 +586,10 @@ impl CompiledKernelPushPull {
         output_map: HashMap<String, usize>,
         input_dependents: Vec<Vec<usize>>,
         ref_slots: Vec<bool>,
+        extras: P2Extras,
     ) -> Self {
         let step_count = steps.len();
-        let core = build_core(coord_count, total_slots, steps, output_map, ref_slots);
+        let core = build_core(coord_count, total_slots, steps, output_map, ref_slots, extras);
         let slot_provenance = compute_slot_provenance(
             coord_count, total_slots, &input_dependents, &core.steps);
         Self {
@@ -507,29 +621,7 @@ impl CompiledKernelPushPull {
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_inputs(coords);
-        for (step_idx, step) in self.core.steps.iter().enumerate() {
-            if self.node_clean[step_idx] { continue; }
-            for (i, &s) in step.input_slots.iter().enumerate() {
-                self.core.gather_buf[i] = self.core.buffer[s];
-            }
-            match &step.op {
-                StepOp::U64(op) => op(
-                    &self.core.gather_buf[..step.input_slots.len()],
-                    &mut self.core.scatter_buf[..step.output_slots.len()],
-                ),
-                StepOp::Slot(op) => op(
-                    &self.core.gather_buf[..step.input_slots.len()],
-                    &mut self.core.scatter_buf[..step.output_slots.len()],
-                    &mut self.core.scratch[step.scratch_range.0..step.scratch_range.1],
-                ),
-            }
-            for (i, &s) in step.output_slots.iter().enumerate() {
-                self.core.buffer[s] = self.core.scatter_buf[i];
-            }
-            self.node_clean[step_idx] = true;
-        }
-        #[cfg(debug_assertions)]
-        self.core.validate_refs();
+        eval_dirty_steps(&mut self.core, &mut self.node_clean);
     }
 
     /// Cone guard + push-side skip: the full optimization.
@@ -541,29 +633,7 @@ impl CompiledKernelPushPull {
             && !self.slot_provenance[slot].intersects(&self.changed_mask) {
                 return self.core.buffer[slot];
             }
-        for (step_idx, step) in self.core.steps.iter().enumerate() {
-            if self.node_clean[step_idx] { continue; }
-            for (i, &s) in step.input_slots.iter().enumerate() {
-                self.core.gather_buf[i] = self.core.buffer[s];
-            }
-            match &step.op {
-                StepOp::U64(op) => op(
-                    &self.core.gather_buf[..step.input_slots.len()],
-                    &mut self.core.scatter_buf[..step.output_slots.len()],
-                ),
-                StepOp::Slot(op) => op(
-                    &self.core.gather_buf[..step.input_slots.len()],
-                    &mut self.core.scatter_buf[..step.output_slots.len()],
-                    &mut self.core.scratch[step.scratch_range.0..step.scratch_range.1],
-                ),
-            }
-            for (i, &s) in step.output_slots.iter().enumerate() {
-                self.core.buffer[s] = self.core.scatter_buf[i];
-            }
-            self.node_clean[step_idx] = true;
-        }
-        #[cfg(debug_assertions)]
-        self.core.validate_refs();
+        eval_dirty_steps(&mut self.core, &mut self.node_clean);
         self.core.buffer[slot]
     }
 

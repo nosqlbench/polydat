@@ -182,7 +182,6 @@ fn macro_registered_funcsig_params_match_function_signature() {
 
 // ── PR B.5 — Const<T> args + #[poly_default(VAL)] ──
 
-use polydat::derive_support::Const;
 
 // Pilot 5 — single Const<u64> with no default. Wire u64 input
 // gets shifted by the captured const offset.

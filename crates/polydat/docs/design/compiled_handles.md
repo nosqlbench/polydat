@@ -63,8 +63,22 @@ the same set by port type. A tile with a projection stays on P1 until
 projection bodies activate as `for` bodies do, the remaining part of
 step 6. Getting there fixed a hybrid-kernel gap: a host-driven hybrid
 kernel never began a root cycle, so string-producing segments grew the
-arena across runs. Tests in `tests/variadic_lowering.rs`. Steps 7 and
-8 are not started.
+arena across runs. Tests in `tests/variadic_lowering.rs`. Step 7, the
+P2 closure form and the differential suite, has landed: the
+`#[polydat_node]` macro emits a `compiled_handle` kit (§7) for every
+node with a JSON, polymorphic, or variadic port whose other shapes fit
+the buffer, including nodes with const-derived setup, so `printf`, the
+JSON constructors and conversions, `json_with`, `json_merge`,
+`tile_encode`, and `tile_render` (projections included) run as P2
+closures; the P2 kernels own a value table, install it around every
+run, begin a root cycle when a host drives them, validate H4 after
+every run in debug builds, and read handle outputs through
+`get_value`; hybrid kernels take the same closures. The differential
+suite in `tests/handle_tiers.rs` generates random programs over the
+string, JSON, and tile nodes and checks every output across the
+interpreter, forced cones, P2, and pure P3 (`FUZZ_SEED`,
+`FUZZ_ITERATIONS`), beside the hand-written corpus. Step 8 is not
+started.
 This document fixes the slot representation that lets string, byte,
 JSON, and extension values ride through the P2 and P3 engines, so that
 the nodes which produce and consume them (string operations, JSON
@@ -400,14 +414,45 @@ the untyped classifier for every other node. The rules:
 
 ## 7. The P2 closure form
 
-P2 is the equivalence oracle for P3 and stays one. A `compiled_slot`
-kit for a `Hdl1`-bearing node is a Rust closure over the same slot
-buffer, arena, and table that P3 uses; it calls the same Rust function
-the `extern "C"` helper wraps. The `#[polydat_node]` macro emits this
-kit for any node whose ports are all `Imm1` or `Hdl1` when the body is
-expressible over handles, which for the string and JSON nodes it is.
-The P1↔P2↔P3 equivalence tests then pin all three tiers to the same
-bytes, as `polydat_node_macro.rs` does for scalars today.
+P2 is the equivalence oracle for P3 and stays one. A P2 closure for a
+`Hdl1`-bearing node runs over the same slot buffer, arena, and table
+that P3 uses and calls the same body the P1 node and the native helper
+call. The `#[polydat_node]` macro already emits the `compiled_u64` kit
+for byte strings (a `&str` argument resolves its handle, a `String`
+result enters the arena); for the table kinds it emits a second kit,
+`compiled_handle(entry_base, wire_types)`:
+
+- **Eligibility.** The node has at least one shape the u64 kit cannot
+  carry but the table can: a JSON port (`&serde_json::Value` or
+  `Arc<serde_json::Value>`), a polymorphic `Value` port, or a variadic
+  of anything but `u64`; every other argument is a one-slot carrier, a
+  const, or a setup derived from consts; the return is a one-slot
+  carrier or a JSON value. Session-static setup (`from = ()`), fallible
+  bodies, tuple and dynamic returns, and split variadics stay on P1.
+- **Entries and types from the kernel.** The kit takes the first
+  value-table entry the node's table-kind outputs own and the type of
+  each wire input. A JSON result is written to its entry through the
+  installed table; a polymorphic or variadic argument decodes by its
+  wire type (`decode_arg`), a JSON argument by handle
+  (`read_table_json`). This is the P2 form of §6.1's type codes.
+- **Setup recomputed.** A `#[poly_const]` value is a pure function of
+  the node's consts, so the kit recomputes it from the captured consts
+  at construction, once, and the closure borrows it; nothing on the
+  node is borrowed by the closure.
+- **The kernel owns the table.** The P2 kernels carry a value table
+  sized from the `(slot, entry)` pairs the assembler numbers in node
+  and port order, install it around every run, begin a root cycle
+  when a host drives them and adopt the wrapping state's generation
+  otherwise, and run the H4 validator after every run in debug builds,
+  as they run the S9 validator for Ref pairs. Named handle outputs are
+  read through `get_value`. Hybrid kernels take the same closures for
+  the nodes they do not JIT, numbering their entries with the
+  segments'.
+
+The P1↔P2↔P3 equivalence suite (`tests/handle_tiers.rs`) pins all
+tiers to the same bytes over a random corpus of string, JSON, and tile
+programs, including tiles with projections, which run at P2 through
+the closure and stay on P1 in cones.
 
 ## 8. Axioms
 
@@ -536,10 +581,10 @@ point.
    projection bodies activated as `for` bodies are. Landed by the
    wire-typed classification of §6.1 for everything but projections,
    which remain the open part of this step.
-7. **P2 closures and differential tests.** `compiled_slot` kits for
-   `Hdl1` nodes from the macro; the P1↔P2↔P3 suite over the fuzz corpus,
-   including the tile fuzzer; the S9-style post-pass assertions for
-   table entries.
+7. **P2 closures and differential tests.** `compiled_handle` kits for
+   `Hdl1` nodes from the macro; the P1↔P2↔P3 suite over a random
+   corpus of string, JSON, and tile programs; the S9-style post-run
+   assertions for table entries in the P2 kernels. Landed.
 8. **Docs.** engines.md §5 and §7, type_system_alignment.md §5–§7,
    jit_boundary.md's axiom section with H1–H7, and the Polytile SRD's
    step 7 marked done.

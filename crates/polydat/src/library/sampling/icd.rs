@@ -22,7 +22,6 @@
 //! **Discrete:**
 //! Zipf, Poisson, Binomial, Geometric
 
-use crate::derive_support::Const;
 use crate::library::sampling::lut::LutF64;
 
 /// Default interpolation table resolution.
