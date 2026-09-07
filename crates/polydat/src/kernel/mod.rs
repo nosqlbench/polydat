@@ -68,7 +68,7 @@ pub mod activation;
 pub use activation::{Activation, CursorSlice, TraversalStream};
 
 pub use value_table::{ValueTable, TableInstallation, install_value_table, with_value_table, with_current_value_table, encode_table_handle, decode_table_handle, decode_arg, read_table_json, write_table_entry};
-pub use arena::{CycleArena, with_cycle_arena, begin_root_cycle, TAG_STATIC, TAG_ARENA, TAG_RES, TAG_MASK, cycle_generation, cycle_arena_used, cycle_arena_mark, cycle_arena_release, encode_arena_handle, decode_arena_handle, StaticInterner, resolve_thread_str, resolve_thread_bytes, put_thread_str, put_thread_bytes};
+pub use arena::{CycleArena, ArenaMark, ArenaWriter, with_cycle_arena, begin_root_cycle, TAG_STATIC, TAG_ARENA, TAG_RES, TAG_MASK, cycle_generation, cycle_arena_used, cycle_arena_mark, cycle_arena_release, encode_arena_handle, decode_arena_handle, StaticInterner, resolve_thread_str, resolve_thread_bytes, put_thread_str, put_thread_bytes};
 pub use program::*;
 pub use engines::*;
 pub use state::*;

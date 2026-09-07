@@ -1,21 +1,30 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Thread-local and cycle-scoped bump allocator and handle encoding
-//! for non-scalar types in JIT execution frames (SRD 111).
+//! Thread-local, cycle-scoped bump allocator and handle encoding for
+//! non-scalar types in compiled execution frames (SRD 111, SRD 115).
 //!
-//! ## 64-bit Handle Format
+//! ## 64-bit handle format
 //!
-//! Non-scalar values (`String`, `Vec<u8>`, `serde_json::Value`, `&str`)
-//! are encoded as 64-bit integer values in JIT buffer slots:
+//! Non-scalar values are encoded as 64-bit integers in slots:
 //!
 //! - **Tag (bits 62..64)**:
 //!   - `0b00`: Static string interner handle (`[Tag: 2][Unused: 30][InternerId: 32]`)
 //!   - `0b01`: Dynamic cycle arena slice (`[Tag: 2][Offset: 31][Length: 31]`)
 //!   - `0b10`: Value-table handle (`[Tag: 2][Kind: 6][Generation: 24][Entry: 32]`, see `value_table`)
 //!
-//! This enables non-scalar data to flow through flat 64-bit slot registers
-//! without per-operation heap allocations or pointer invalidation risks.
+//! ## The arena is chunked
+//!
+//! The arena is a list of fixed-size chunks rather than one growable
+//! buffer, so bytes already written never move within a cycle. That is
+//! what makes two things sound: a resolved `&str` stays valid while a
+//! helper allocates more (a concat, a case change, a render), and an
+//! [`ArenaWriter`] can write a result straight into the arena while it
+//! is produced, with no intermediate `String`. An arena handle's offset
+//! is `chunk << 16 | position`; a chunk holds either small allocations
+//! bumped within its first 64 KiB or one large allocation at position
+//! zero. Chunks are retained across resets, so a steady cycle allocates
+//! nothing.
 
 use std::cell::RefCell;
 use std::sync::RwLock;
@@ -26,13 +35,29 @@ pub const TAG_ARENA: u64  = 0b01 << 62;
 pub const TAG_RES: u64    = 0b10 << 62;
 pub const TAG_MASK: u64   = 0b11 << 62;
 
-/// Default initial size for thread-local cycle bump arena (64KB).
-const DEFAULT_ARENA_CAPACITY: usize = 64 * 1024;
+/// Chunk size and the offset split: `offset = chunk << CHUNK_SHIFT | position`.
+const CHUNK_SHIFT: u32 = 16;
+const CHUNK_SIZE: usize = 1 << CHUNK_SHIFT;
+const POSITION_MASK: usize = CHUNK_SIZE - 1;
 
-/// Thread-local cycle bump arena for dynamic strings, byte buffers, and JSON.
-pub struct CycleArena {
-    buffer: Vec<u8>,
+/// A position in the arena, taken with [`CycleArena::mark`] and restored
+/// with [`CycleArena::release`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArenaMark {
+    chunk: usize,
     cursor: usize,
+    total: usize,
+}
+
+/// Thread-local cycle bump arena for dynamic strings and byte buffers.
+pub struct CycleArena {
+    chunks: Vec<Vec<u8>>,
+    /// The chunk allocations currently go into.
+    chunk: usize,
+    /// The next free byte within `chunk`.
+    cursor: usize,
+    /// Bytes allocated since the last reset.
+    total: usize,
 }
 
 impl Default for CycleArena {
@@ -43,44 +68,95 @@ impl Default for CycleArena {
 
 impl CycleArena {
     pub fn new() -> Self {
-        Self {
-            buffer: vec![0u8; DEFAULT_ARENA_CAPACITY],
-            cursor: 0,
-        }
+        Self { chunks: vec![vec![0u8; CHUNK_SIZE]], chunk: 0, cursor: 0, total: 0 }
     }
 
-    /// Reset cursor in 1 instruction at cycle boundaries.
+    /// Reset at a cycle boundary: back to the first chunk, chunks kept.
     #[inline(always)]
     pub fn reset(&mut self) {
+        self.chunk = 0;
         self.cursor = 0;
+        self.total = 0;
     }
 
     /// Bytes allocated since the last reset.
     #[inline(always)]
     pub fn used(&self) -> usize {
-        self.cursor
+        self.total
     }
 
-    /// Allocate raw bytes in the arena and return the mutable slice.
+    /// The current position, to release back to.
+    #[inline]
+    pub fn mark(&self) -> ArenaMark {
+        ArenaMark { chunk: self.chunk, cursor: self.cursor, total: self.total }
+    }
+
+    /// Release back to `mark`. Bytes past it are dead: every handle into
+    /// them was decoded before the release.
+    #[inline]
+    pub fn release(&mut self, mark: ArenaMark) {
+        debug_assert!(
+            (mark.chunk, mark.cursor) <= (self.chunk, self.cursor),
+            "arena release past the cursor"
+        );
+        self.chunk = mark.chunk;
+        self.cursor = mark.cursor;
+        self.total = mark.total;
+    }
+
+    /// Where the next allocation of `len` bytes will land, moving to a
+    /// chunk that can hold it first. Small allocations bump within a
+    /// chunk's first 64 KiB; a larger one takes a chunk of its own at
+    /// position zero, replacing a retained chunk that is too small.
+    fn place(&mut self, len: usize) -> (usize, usize) {
+        if len <= CHUNK_SIZE {
+            if self.cursor + len > CHUNK_SIZE {
+                self.chunk += 1;
+                self.cursor = 0;
+                if self.chunk == self.chunks.len() {
+                    self.chunks.push(vec![0u8; CHUNK_SIZE]);
+                }
+            }
+        } else {
+            if self.cursor != 0 {
+                self.chunk += 1;
+                self.cursor = 0;
+            }
+            if self.chunk == self.chunks.len() {
+                self.chunks.push(vec![0u8; len]);
+            } else if self.chunks[self.chunk].len() < len {
+                self.chunks[self.chunk] = vec![0u8; len];
+            }
+        }
+        (self.chunk, self.cursor)
+    }
+
+    /// Allocate `len` bytes and return the mutable slice.
     #[inline]
     pub fn alloc_bytes(&mut self, len: usize) -> &mut [u8] {
-        if self.cursor + len > self.buffer.len() {
-            let new_cap = (self.buffer.len() * 2).max(self.cursor + len);
-            self.buffer.resize(new_cap, 0);
-        }
-        let start = self.cursor;
-        self.cursor += len;
-        &mut self.buffer[start..self.cursor]
+        let (chunk, start) = self.place(len);
+        self.cursor = start + len;
+        self.total += len;
+        &mut self.chunks[chunk][start..start + len]
     }
 
     /// Copy a byte slice into the arena and return its 64-bit handle.
+    /// `bytes` may borrow the arena itself: chunks never move.
     #[inline]
     pub fn put_bytes(&mut self, bytes: &[u8]) -> u64 {
         let len = bytes.len();
-        let offset = self.cursor;
-        let dest = self.alloc_bytes(len);
-        dest.copy_from_slice(bytes);
-        encode_arena_handle(offset as u32, len as u32)
+        let (chunk, start) = self.place(len);
+        self.cursor = start + len;
+        self.total += len;
+        let (src_ptr, src_len) = (bytes.as_ptr(), bytes.len());
+        let dest = &mut self.chunks[chunk][start..start + len];
+        // SAFETY: `bytes` is either outside the arena or inside a chunk
+        // that `place` did not touch (a chunk is only replaced when it is
+        // beyond the cursor, and nothing live points past the cursor),
+        // and the destination is fresh bytes past the cursor, so the
+        // ranges cannot overlap.
+        unsafe { std::ptr::copy_nonoverlapping(src_ptr, dest.as_mut_ptr(), src_len) };
+        encode_arena_handle(((chunk << CHUNK_SHIFT) | start) as u32, len as u32)
     }
 
     /// Copy a string into the arena and return its 64-bit handle.
@@ -89,16 +165,20 @@ impl CycleArena {
         self.put_bytes(s.as_bytes())
     }
 
+    /// The bytes an arena handle names.
+    #[inline]
+    fn arena_slice(&self, handle: u64) -> &[u8] {
+        let (offset, len) = decode_arena_handle(handle);
+        let (chunk, start) = ((offset as usize) >> CHUNK_SHIFT, (offset as usize) & POSITION_MASK);
+        &self.chunks[chunk][start..start + len as usize]
+    }
+
     /// Resolve a string from a 64-bit handle (static or arena).
     #[inline]
     pub fn resolve_str(&self, handle: u64) -> &str {
         match handle & TAG_MASK {
             TAG_STATIC => StaticInterner::resolve(handle as u32),
-            TAG_ARENA => {
-                let (offset, len) = decode_arena_handle(handle);
-                let bytes = &self.buffer[offset as usize..(offset + len) as usize];
-                unsafe { std::str::from_utf8_unchecked(bytes) }
-            }
+            TAG_ARENA => unsafe { std::str::from_utf8_unchecked(self.arena_slice(handle)) },
             _ => "",
         }
     }
@@ -108,10 +188,7 @@ impl CycleArena {
     pub fn resolve_bytes(&self, handle: u64) -> &[u8] {
         match handle & TAG_MASK {
             TAG_STATIC => StaticInterner::resolve(handle as u32).as_bytes(),
-            TAG_ARENA => {
-                let (offset, len) = decode_arena_handle(handle);
-                &self.buffer[offset as usize..(offset + len) as usize]
-            }
+            TAG_ARENA => self.arena_slice(handle),
             _ => &[],
         }
     }
@@ -165,7 +242,6 @@ pub fn begin_root_cycle() -> u64 {
     })
 }
 
-
 /// The current cycle generation on this thread.
 #[inline]
 pub fn cycle_generation() -> u64 {
@@ -179,37 +255,45 @@ pub fn cycle_arena_used() -> usize {
     THREAD_CYCLE_ARENA.with(|arena| arena.borrow().used())
 }
 
-/// Resolve a string from a 64-bit handle using the thread-local cycle arena.
+/// The cycle arena's position, for an engine that scopes its arena use
+/// to one native call (SRD 115 §3, embedded cones): take the mark before
+/// the call and release to it once every output is copied out, so a
+/// cycle's arena use is bounded by its largest cone eval rather than
+/// the sum of them.
+#[inline]
+pub fn cycle_arena_mark() -> ArenaMark {
+    THREAD_CYCLE_ARENA.with(|arena| arena.borrow().mark())
+}
+
+/// Release the cycle arena back to `mark`. Bytes past the mark are
+/// dead: every handle into them was decoded before the release.
+#[inline]
+pub fn cycle_arena_release(mark: ArenaMark) {
+    THREAD_CYCLE_ARENA.with(|arena| arena.borrow_mut().release(mark));
+}
+
+/// Resolve a string from a 64-bit handle using the thread-local cycle
+/// arena. The reference is valid until the arena's next reset or a
+/// release past the handle's bytes: chunks never move within a cycle.
 #[inline]
 pub fn resolve_thread_str(handle: u64) -> &'static str {
     THREAD_CYCLE_ARENA.with(|arena| {
         let a = arena.borrow();
-        match handle & TAG_MASK {
-            TAG_STATIC => StaticInterner::resolve(handle as u32),
-            TAG_ARENA => {
-                let (offset, len) = decode_arena_handle(handle);
-                let bytes = &a.buffer[offset as usize..(offset + len) as usize];
-                unsafe { std::mem::transmute::<&str, &'static str>(std::str::from_utf8_unchecked(bytes)) }
-            }
-            _ => "",
-        }
+        // SAFETY: arena bytes stay at their address until the arena is
+        // reset or released past them (SRD 115 axiom H3), and every
+        // holder of the reference is inside that interval.
+        unsafe { std::mem::transmute::<&str, &'static str>(a.resolve_str(handle)) }
     })
 }
 
-/// Resolve bytes from a 64-bit handle using the thread-local cycle arena.
+/// Resolve bytes from a 64-bit handle using the thread-local cycle
+/// arena; the same lifetime as [`resolve_thread_str`].
 #[inline]
 pub fn resolve_thread_bytes(handle: u64) -> &'static [u8] {
     THREAD_CYCLE_ARENA.with(|arena| {
         let a = arena.borrow();
-        match handle & TAG_MASK {
-            TAG_STATIC => StaticInterner::resolve(handle as u32).as_bytes(),
-            TAG_ARENA => {
-                let (offset, len) = decode_arena_handle(handle);
-                let bytes = &a.buffer[offset as usize..(offset + len) as usize];
-                unsafe { std::mem::transmute::<&[u8], &'static [u8]>(bytes) }
-            }
-            _ => &[],
-        }
+        // SAFETY: as in `resolve_thread_str`.
+        unsafe { std::mem::transmute::<&[u8], &'static [u8]>(a.resolve_bytes(handle)) }
     })
 }
 
@@ -223,6 +307,111 @@ pub fn put_thread_str(s: &str) -> u64 {
 #[inline]
 pub fn put_thread_bytes(b: &[u8]) -> u64 {
     THREAD_CYCLE_ARENA.with(|arena| arena.borrow_mut().put_bytes(b))
+}
+
+/// A result being written straight into the thread's cycle arena
+/// (SRD 115 §6): a helper appends the bytes it produces and, when done,
+/// takes the handle of the whole. No intermediate `String` exists.
+///
+/// The writer extends its allocation at the arena's cursor. If something
+/// else allocated in between (a projection body's kernels running inside
+/// a tile render), or the current chunk is full, the bytes so far are
+/// moved to a fresh allocation and writing continues there; the result
+/// is always one contiguous range. Only one writer is open at a time on
+/// a thread; nested helpers finish theirs before returning.
+pub struct ArenaWriter {
+    chunk: usize,
+    start: usize,
+    len: usize,
+}
+
+impl Default for ArenaWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ArenaWriter {
+    /// Open a writer at the arena's cursor.
+    pub fn new() -> Self {
+        let (chunk, start) = with_cycle_arena(|a| (a.chunk, a.cursor));
+        ArenaWriter { chunk, start, len: 0 }
+    }
+
+    /// Append bytes.
+    pub fn push(&mut self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        with_cycle_arena(|a| {
+            let contiguous = a.chunk == self.chunk && a.cursor == self.start + self.len;
+            if contiguous && self.start + self.len + bytes.len() <= a.chunks[self.chunk].len().min(CHUNK_SIZE).max(self.start + self.len) {
+                let dest = a.alloc_bytes(bytes.len());
+                dest.copy_from_slice(bytes);
+                self.len += bytes.len();
+            } else {
+                // Relocate: one fresh allocation for everything so far
+                // plus the new bytes. The old bytes stay where they are
+                // until the cycle ends; nothing names them.
+                let new_len = self.len + bytes.len();
+                let (chunk, start) = a.place(new_len);
+                a.cursor = start + new_len;
+                a.total += new_len;
+                if self.len > 0 {
+                    let (old_chunk, old_start, old_len) = (self.chunk, self.start, self.len);
+                    if old_chunk == chunk {
+                        a.chunks[chunk].copy_within(old_start..old_start + old_len, start);
+                    } else {
+                        let (old, new) = if old_chunk < chunk {
+                            let (lo, hi) = a.chunks.split_at_mut(chunk);
+                            (&lo[old_chunk][old_start..old_start + old_len], &mut hi[0][start..start + old_len])
+                        } else {
+                            let (lo, hi) = a.chunks.split_at_mut(old_chunk);
+                            (&hi[0][old_start..old_start + old_len], &mut lo[chunk][start..start + old_len])
+                        };
+                        new.copy_from_slice(old);
+                    }
+                }
+                a.chunks[chunk][start + self.len..start + new_len].copy_from_slice(bytes);
+                self.chunk = chunk;
+                self.start = start;
+                self.len = new_len;
+            }
+        });
+    }
+
+    /// Bytes written so far.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// True when nothing has been written.
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Close the writer and return the handle of what it wrote.
+    pub fn finish(self) -> u64 {
+        encode_arena_handle(((self.chunk << CHUNK_SHIFT) | self.start) as u32, self.len as u32)
+    }
+}
+
+impl std::fmt::Write for ArenaWriter {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.push(s.as_bytes());
+        Ok(())
+    }
+}
+
+impl std::io::Write for ArenaWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.push(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Global static string interner for workload-compile-time constants
@@ -283,30 +472,10 @@ impl StaticInterner {
     }
 }
 
-/// The cycle arena's cursor, for an engine that scopes its arena use to
-/// one native call (SRD 115 §3, embedded cones): take the mark before
-/// the call and release to it once every output is copied out, so a
-/// cycle's arena use is bounded by its largest cone eval rather than
-/// the sum of them.
-#[inline]
-pub fn cycle_arena_mark() -> usize {
-    cycle_arena_used()
-}
-
-/// Release the cycle arena back to `mark`. Bytes past the mark are
-/// dead: every handle into them was decoded before the release.
-#[inline]
-pub fn cycle_arena_release(mark: usize) {
-    THREAD_CYCLE_ARENA.with(|arena| {
-        let mut a = arena.borrow_mut();
-        debug_assert!(mark <= a.cursor, "arena release past the cursor");
-        a.cursor = mark;
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fmt::Write as _;
 
     #[test]
     fn arena_alloc_and_resolve() {
@@ -329,5 +498,86 @@ mod tests {
 
         let arena = CycleArena::new();
         assert_eq!(arena.resolve_str(h1), "test_constant");
+    }
+
+    /// Bytes never move: a string resolved before the arena grows past
+    /// its first chunk is still readable at the same address after.
+    #[test]
+    fn chunks_keep_earlier_bytes_in_place() {
+        let mut arena = CycleArena::new();
+        let h = arena.put_str("anchor");
+        let p = arena.resolve_str(h).as_ptr();
+        for _ in 0..40 {
+            arena.put_bytes(&[7u8; 5000]);
+        }
+        let big = arena.put_bytes(&vec![9u8; 3 * CHUNK_SIZE]);
+        assert_eq!(arena.resolve_str(h).as_ptr(), p);
+        assert_eq!(arena.resolve_str(h), "anchor");
+        assert_eq!(arena.resolve_bytes(big).len(), 3 * CHUNK_SIZE);
+        assert!(arena.resolve_bytes(big).iter().all(|&b| b == 9));
+        // A small allocation after a large one lands in a fresh chunk.
+        let after = arena.put_str("after");
+        assert_eq!(arena.resolve_str(after), "after");
+    }
+
+    #[test]
+    fn a_source_inside_the_arena_can_be_copied_into_it() {
+        let mut arena = CycleArena::new();
+        let h = arena.put_str("copy me");
+        let s: *const str = arena.resolve_str(h);
+        // SAFETY: chunks never move; the source stays valid across the put.
+        let h2 = arena.put_str(unsafe { &*s });
+        assert_eq!(arena.resolve_str(h2), "copy me");
+    }
+
+    #[test]
+    fn mark_and_release_restore_the_position_across_chunks() {
+        let mut arena = CycleArena::new();
+        arena.put_str("kept");
+        let mark = arena.mark();
+        for _ in 0..30 {
+            arena.put_bytes(&[1u8; 4000]);
+        }
+        assert!(arena.chunk > 0);
+        arena.release(mark);
+        assert_eq!(arena.mark(), mark);
+        let h = arena.put_str("next");
+        assert_eq!(decode_arena_handle(h).0 as usize & POSITION_MASK, 4);
+    }
+
+    #[test]
+    fn the_writer_builds_one_contiguous_result() {
+        begin_root_cycle();
+        let mut w = ArenaWriter::new();
+        let n = 12;
+        write!(w, "{n}-ab").unwrap();
+        w.push(b"!");
+        let h = w.finish();
+        assert_eq!(resolve_thread_str(h), "12-ab!");
+    }
+
+    #[test]
+    fn the_writer_relocates_when_something_allocates_between_pushes() {
+        begin_root_cycle();
+        let mut w = ArenaWriter::new();
+        w.push(b"head");
+        let other = put_thread_str("interleaved");
+        w.push(b"-tail");
+        let h = w.finish();
+        assert_eq!(resolve_thread_str(h), "head-tail");
+        assert_eq!(resolve_thread_str(other), "interleaved");
+    }
+
+    #[test]
+    fn the_writer_crosses_a_chunk_boundary() {
+        begin_root_cycle();
+        put_thread_bytes(&vec![0u8; CHUNK_SIZE - 10]);
+        let mut w = ArenaWriter::new();
+        w.push(b"12345");
+        w.push(&[b'x'; 20]);
+        let h = w.finish();
+        let s = resolve_thread_str(h);
+        assert_eq!(s.len(), 25);
+        assert!(s.starts_with("12345") && s.ends_with("xxxxx"));
     }
 }

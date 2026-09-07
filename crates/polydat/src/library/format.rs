@@ -165,9 +165,18 @@ impl ParsedFormat {
     /// argument that was not supplied.
     pub fn render_with<'a>(&self, argc: usize, arg: impl Fn(usize) -> FmtArg<'a>) -> String {
         let mut result = String::new();
+        self.render_into(argc, arg, &mut result);
+        result
+    }
+
+    /// Render into any text sink: a `String` at P1, the cycle arena
+    /// writer in the compiled helper (SRD 115 §6).
+    pub fn render_into<'a, W: std::fmt::Write>(&self, argc: usize, arg: impl Fn(usize) -> FmtArg<'a>, out: &mut W) {
         for seg in &self.segments {
             match seg {
-                Segment::Literal(s) => result.push_str(s),
+                Segment::Literal(s) => {
+                    let _ = out.write_str(s);
+                }
                 Segment::Placeholder(spec) => {
                     if spec.index >= argc {
                         panic!(
@@ -175,11 +184,10 @@ impl ParsedFormat {
                             spec.index,
                         );
                     }
-                    result.push_str(&format_arg(&arg(spec.index), spec));
+                    let _ = out.write_str(&format_arg(&arg(spec.index), spec));
                 }
             }
         }
-        result
     }
 }
 

@@ -528,8 +528,7 @@ goes, per [Compiled Non-Scalar Slots](compiled_handles.md):
 
 - **P1.** `tile_encode` runs per hole and `tile_render` walks the
   skeleton, both as ordinary nodes on `Value`s. The document is built in
-  a `String` and surfaced as a `Str`; writing straight into the cycle
-  arena is a refinement recorded in SRD 115.
+  a `String` and surfaced as a `Str`, since a P1 value owns its bytes.
 - **P2.** Both nodes run as `compiled_handle` closures over handle
   slots: hole texts are arena handles decoded by the wire types the
   kernel supplies, and the rendered document enters the arena.
@@ -537,6 +536,8 @@ goes, per [Compiled Non-Scalar Slots](compiled_handles.md):
   helper over the hole's wire type and the interned encoding, and
   `tile_render` to a helper over the interned tile program and the
   encoded hole texts, passed in a stack array with their type codes.
+  Both write straight into the cycle arena as they render, with no
+  intermediate `String` (SRD 115 §6).
   Projections activate the body program through nested kernels inside
   the helper, exactly as at P1; the cone eval is re-entrant so a body's
   own cones run inside it. The rendered handle flows on as a slot, so a

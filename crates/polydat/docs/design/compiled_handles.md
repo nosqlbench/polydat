@@ -111,7 +111,11 @@ tag 11  reserved
 - An **arena** handle names a byte range in the thread's cycle arena.
   It is valid from the moment its bytes are written until the arena is
   next reset, at the start of the next root cycle on that thread (§4).
-  `Str` and `Bytes` values produced during a cycle live here.
+  `Str` and `Bytes` values produced during a cycle live here. The arena
+  is a list of fixed-size chunks rather than one growable buffer, so
+  bytes already written never move within a cycle; the offset is
+  `chunk << 16 | position`, and an allocation larger than a chunk takes
+  a chunk of its own. Chunks are retained across resets.
 - A **table** handle names an entry in the value table of the engine
   that ran the code (§3). The `kind` field records the value's variant,
   so a reader can refuse a handle of the wrong kind without touching the
@@ -253,10 +257,19 @@ return, registered with the JIT symbol table. Its conventions:
   entry it owns as its first argument, an immediate from the layout, and
   writes through the installed table (§3); a reader resolves through the
   same table.
-- A helper that must build an intermediate writes the final bytes into
-  the arena and drops the intermediate. Today the string helpers build a
-  `String` and copy it in; writing directly into the arena is a
-  refinement.
+- A helper writes a string result straight into the arena through an
+  `ArenaWriter`, which extends one allocation at the cursor as the
+  bytes are produced and yields the handle at the end: scalar
+  formatting, case changes, concatenation, JSON serialization
+  (`serde_json::to_writer` through the writer's `io::Write`), `printf`,
+  `json_text`, the tile encoder, and the tile renderer all write this
+  way, with no intermediate `String`. If something else allocates
+  between two of the writer's pushes (a projection body's kernels
+  running inside a tile render) or the chunk fills, the writer moves
+  what it has to a fresh allocation and continues, so the result is
+  always one range. This is sound because the arena is chunked: bytes
+  already written never move within a cycle, so a resolved source
+  string stays valid while its result is written (§4).
 - Panics do not cross the boundary. A helper that can fail reports
   through the `longjmp` path of jit_boundary.md, never by unwinding. A
   helper whose body may panic as its P1 node panics (`printf` on a
@@ -512,6 +525,13 @@ Kept short; the normative text above is what the code does. Dates are
   handles after another root's cycle advance, the host rule §4 now
   states.
 
-Refinements recorded and not yet taken: helpers writing string results
-directly into the arena; borrowed argument forms for the tile encoder
-and the JSON coercion; a Miri lane for the arena and table paths.
+- **Direct arena writing.** Landed after the record above: the arena
+  became chunked so bytes never move within a cycle, and every
+  string-producing helper writes through `ArenaWriter` instead of
+  building a `String`. The tile renderer, encoder, `printf`, and
+  `json_text` gained sink-generic forms so P1 and the helpers share one
+  body over a `String` or the writer.
+
+Refinements recorded and not yet taken: borrowed argument forms for the
+tile encoder and the JSON coercion; a Miri lane for the arena and table
+paths.

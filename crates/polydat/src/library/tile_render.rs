@@ -289,17 +289,23 @@ impl TileProgram {
     /// Render with the node's wire inputs, each already encoded text.
     pub fn render(&self, inputs: &[Value]) -> String {
         let mut out = String::new();
-        self.render_ops(&self.ops, inputs, None, &mut out);
+        self.render_into(inputs, &mut out);
         out
     }
 
-    fn render_ops(&self, ops: &[RtOp], inputs: &[Value], mut child: Option<(&Arc<PolydatProgram>, &mut PolydatState)>, out: &mut String) {
+    /// Render into any text sink: a `String` at P1, the cycle arena
+    /// writer in a compiled helper (SRD 115 §6).
+    pub fn render_into<W: std::fmt::Write>(&self, inputs: &[Value], out: &mut W) {
+        self.render_ops(&self.ops, inputs, None, out);
+    }
+
+    fn render_ops<W: std::fmt::Write>(&self, ops: &[RtOp], inputs: &[Value], mut child: Option<(&Arc<PolydatProgram>, &mut PolydatState)>, out: &mut W) {
         for op in ops {
             match op {
                 // `Copy`: a memcpy from the static interner (SRD 114 §6,
                 // SRD 115 step 3). The bytes were interned at build.
-                RtOp::Copy(s) => out.push_str(s),
-                RtOp::Hole(source) => out.push_str(&self.text_of(source, inputs, child.as_mut())),
+                RtOp::Copy(s) => out.put(s),
+                RtOp::Hole(source) => out.put(&self.text_of(source, inputs, child.as_mut())),
                 RtOp::Branch { cond, then, otherwise } => {
                     let c = self.text_of(cond, inputs, child.as_mut());
                     let branch = if c.trim() == "1" { then } else { otherwise };
@@ -333,7 +339,7 @@ impl TileProgram {
                     with_scratch(program, |state| {
                         for (index, tuple) in tuples.iter().enumerate() {
                             if !first {
-                                out.push_str(sep);
+                                out.put(sep);
                             }
                             first = false;
                             state.set_inputs(&[index as u64]);
@@ -489,16 +495,30 @@ fn with_scratch(program: &Arc<PolydatProgram>, f: impl FnOnce(&mut PolydatState)
     });
 }
 
-/// Encode one value per a hole's encoding.
-pub fn encode(value: &Value, enc: &HoleEncoding, out: &mut String) {
+/// A text sink that cannot fail: a `String`, or the cycle arena writer
+/// in a compiled helper. `fmt::Write`'s results are ignored because
+/// neither sink reports an error.
+pub(crate) trait Sink: std::fmt::Write {
+    fn put(&mut self, s: &str) {
+        let _ = self.write_str(s);
+    }
+    fn put_char(&mut self, c: char) {
+        let _ = self.write_char(c);
+    }
+}
+
+impl<W: std::fmt::Write> Sink for W {}
+
+/// Encode one value per a hole's encoding, into any text sink.
+pub fn encode<W: std::fmt::Write>(value: &Value, enc: &HoleEncoding, out: &mut W) {
     if enc.cond {
-        out.push(if truthy_of(value) { '1' } else { '0' });
+        out.put_char(if truthy_of(value) { '1' } else { '0' });
         return;
     }
     let ty = enc.ty.as_deref();
     let text = formatted_text(value, ty, enc.format.as_deref());
     if enc.raw {
-        out.push_str(&text);
+        out.put(&text);
         return;
     }
     match (enc.encoding.as_str(), enc.position) {
@@ -506,35 +526,40 @@ pub fn encode(value: &Value, enc: &HoleEncoding, out: &mut String) {
         ("json", HolePosition::Value) => {
             let kind = ty.map(str::to_string).unwrap_or_else(|| value.port_type().to_keyword().to_string());
             match (kind.as_str(), value) {
-                (_, Value::None) => out.push_str("null"),
-                ("bool", _) => out.push_str(if truthy_of(value) { "true" } else { "false" }),
-                ("json", Value::Json(j)) => out.push_str(&j.to_string()),
+                (_, Value::None) => out.put("null"),
+                ("bool", _) => out.put(if truthy_of(value) { "true" } else { "false" }),
+                ("json", Value::Json(j)) => { let _ = write!(out, "{j}"); }
                 ("str", _) | ("String", _) | ("string", _) => {
-                    out.push('"');
+                    out.put_char('"');
                     push_json_escaped(&text, out);
-                    out.push('"');
+                    out.put_char('"');
                 }
-                (k, _) if is_numeric_keyword(k) => out.push_str(&text),
-                (_, Value::Json(j)) => out.push_str(&j.to_string()),
-                (_, Value::Bool(b)) => out.push_str(if *b { "true" } else { "false" }),
-                (_, Value::U64(_)) | (_, Value::F64(_)) => out.push_str(&text),
+                (k, _) if is_numeric_keyword(k) => out.put(&text),
+                (_, Value::Json(j)) => { let _ = write!(out, "{j}"); }
+                (_, Value::Bool(b)) => out.put(if *b { "true" } else { "false" }),
+                (_, Value::U64(_)) | (_, Value::F64(_)) => out.put(&text),
                 _ => {
-                    out.push('"');
+                    out.put_char('"');
                     push_json_escaped(&text, out);
-                    out.push('"');
+                    out.put_char('"');
                 }
             }
         }
         ("csv", _) => {
             if text.contains([',', '"', '\n']) {
-                out.push('"');
-                out.push_str(&text.replace('"', "\"\""));
-                out.push('"');
+                out.put_char('"');
+                for (i, piece) in text.split('"').enumerate() {
+                    if i > 0 {
+                        out.put("\"\"");
+                    }
+                    out.put(piece);
+                }
+                out.put_char('"');
             } else {
-                out.push_str(&text);
+                out.put(&text);
             }
         }
-        _ => out.push_str(&text),
+        _ => out.put(&text),
     }
 }
 
@@ -599,16 +624,16 @@ fn as_f64(v: &Value) -> Option<f64> {
     }
 }
 
-fn push_json_escaped(s: &str, out: &mut String) {
+fn push_json_escaped<W: std::fmt::Write>(s: &str, out: &mut W) {
     for c in s.chars() {
         match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
+            '"' => out.put("\\\""),
+            '\\' => out.put("\\\\"),
+            '\n' => out.put("\\n"),
+            '\r' => out.put("\\r"),
+            '\t' => out.put("\\t"),
+            c if (c as u32) < 0x20 => { let _ = write!(out, "\\u{:04x}", c as u32); }
+            c => out.put_char(c),
         }
     }
 }

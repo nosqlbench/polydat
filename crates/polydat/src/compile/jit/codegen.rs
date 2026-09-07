@@ -490,26 +490,35 @@ extern "C" fn jit_weighted_pick(
 }
 
 // ── Non-scalar String & Byte extern helpers (SRD 111) ──────────
+// A helper that produces a string writes it straight into the cycle
+// arena through an `ArenaWriter` (SRD 115 §6): no intermediate
+// `String`. Arena chunks never move within a cycle, so a resolved
+// source string stays valid while its result is written.
 
 extern "C" fn jit_u64_to_str(val: u64) -> u64 {
-    let s = val.to_string();
-    crate::kernel::put_thread_str(&s)
+    use std::fmt::Write as _;
+    let mut w = crate::kernel::ArenaWriter::new();
+    let _ = write!(w, "{val}");
+    w.finish()
 }
 
 extern "C" fn jit_i64_to_str(val: i64) -> u64 {
-    let s = val.to_string();
-    crate::kernel::put_thread_str(&s)
+    use std::fmt::Write as _;
+    let mut w = crate::kernel::ArenaWriter::new();
+    let _ = write!(w, "{val}");
+    w.finish()
 }
 
 extern "C" fn jit_f64_to_str(val_bits: u64) -> u64 {
-    let val = f64::from_bits(val_bits);
-    let s = val.to_string();
-    crate::kernel::put_thread_str(&s)
+    use std::fmt::Write as _;
+    let mut w = crate::kernel::ArenaWriter::new();
+    let _ = write!(w, "{}", f64::from_bits(val_bits));
+    w.finish()
 }
 
 extern "C" fn jit_bool_to_str(val: u64) -> u64 {
-    let s = if val != 0 { "true" } else { "false" };
-    crate::kernel::put_thread_str(s)
+    // Both spellings are interned constants; nothing enters the arena.
+    crate::kernel::StaticInterner::intern(if val != 0 { "true" } else { "false" })
 }
 
 // The parse helpers match P1's adapters (`__str_to_u64` and siblings):
@@ -550,26 +559,39 @@ extern "C" fn jit_str_to_bool(handle: u64) -> u64 {
 extern "C" fn jit_str_concat(h1: u64, h2: u64) -> u64 {
     let s1 = crate::kernel::resolve_thread_str(h1);
     let s2 = crate::kernel::resolve_thread_str(h2);
-    let combined = format!("{s1}{s2}");
-    crate::kernel::put_thread_str(&combined)
+    let mut w = crate::kernel::ArenaWriter::new();
+    w.push(s1.as_bytes());
+    w.push(s2.as_bytes());
+    w.finish()
 }
 
 extern "C" fn jit_str_lower(h: u64) -> u64 {
+    use std::fmt::Write as _;
     let s = crate::kernel::resolve_thread_str(h);
-    let lower = s.to_lowercase();
-    crate::kernel::put_thread_str(&lower)
+    let mut w = crate::kernel::ArenaWriter::new();
+    for c in s.chars().flat_map(char::to_lowercase) {
+        let _ = w.write_char(c);
+    }
+    w.finish()
 }
 
 extern "C" fn jit_str_upper(h: u64) -> u64 {
+    use std::fmt::Write as _;
     let s = crate::kernel::resolve_thread_str(h);
-    let upper = s.to_uppercase();
-    crate::kernel::put_thread_str(&upper)
+    let mut w = crate::kernel::ArenaWriter::new();
+    for c in s.chars().flat_map(char::to_uppercase) {
+        let _ = w.write_char(c);
+    }
+    w.finish()
 }
 
 extern "C" fn jit_str_trim(h: u64) -> u64 {
     let s = crate::kernel::resolve_thread_str(h);
-    let trimmed = s.trim();
-    crate::kernel::put_thread_str(trimmed)
+    // A trim is a sub-range of the source; the source's bytes are
+    // already in the arena or the interner, so a new range over the
+    // same bytes would name it, but a handle names a range of one
+    // allocation and a static source has no arena range. Copy once.
+    crate::kernel::put_thread_str(s.trim())
 }
 
 extern "C" fn jit_str_len(h: u64) -> u64 {
@@ -622,11 +644,19 @@ extern "C" fn jit_str_to_json(entry: u64, h: u64) -> u64 {
 }
 
 extern "C" fn jit_json_to_str(h: u64) -> u64 {
-    let text = crate::kernel::with_current_value_table(|t| match t.get(h) {
-        crate::ast::Value::Json(j) => j.to_string(),
-        other => other.to_display_string(),
+    // Serialized straight into the arena: serde writes through the
+    // writer's `io::Write`, so no intermediate `String` is built.
+    let mut w = crate::kernel::ArenaWriter::new();
+    crate::kernel::with_current_value_table(|t| match t.get(h) {
+        crate::ast::Value::Json(j) => {
+            let _ = serde_json::to_writer(&mut w, &**j);
+        }
+        other => {
+            use std::fmt::Write as _;
+            let _ = w.write_str(&other.to_display_string());
+        }
     });
-    crate::kernel::put_thread_str(&text)
+    w.finish()
 }
 
 // ── Variadic and polymorphic nodes by wire type (SRD 115 §6) ─────
@@ -679,13 +709,18 @@ extern "C" fn jit_printf(format: u64, types: u64, args: *const u64) -> u64 {
     // the process (`ParsedFormat::interned`), baked by the classifier.
     let parsed = unsafe { &*(format as *const crate::library::format::ParsedFormat) };
     let codes = type_codes(types).as_bytes();
-    let text = guarded(|| {
-        parsed.render_with(codes.len(), |i| {
-            // SAFETY: see `decode_args`; `i < codes.len()`.
-            crate::compile::marshal::fmt_arg(codes[i], unsafe { *args.add(i) })
-        })
+    let mut w = crate::kernel::ArenaWriter::new();
+    guarded(|| {
+        parsed.render_into(
+            codes.len(),
+            |i| {
+                // SAFETY: see `decode_args`; `i < codes.len()`.
+                crate::compile::marshal::fmt_arg(codes[i], unsafe { *args.add(i) })
+            },
+            &mut w,
+        )
     });
-    crate::kernel::put_thread_str(&text)
+    w.finish()
 }
 
 extern "C" fn jit_json_array(entry: u64, types: u64, args: *const u64) -> u64 {
@@ -707,7 +742,9 @@ extern "C" fn jit_to_json(entry: u64, code: u64, bits: u64) -> u64 {
 
 extern "C" fn jit_json_text(code: u64, bits: u64) -> u64 {
     let v = crate::compile::marshal::arg_value(code as u8, bits);
-    crate::kernel::put_thread_str(&crate::library::json::json_text_of(&v))
+    let mut w = crate::kernel::ArenaWriter::new();
+    crate::library::json::json_text_into(&v, &mut w);
+    w.finish()
 }
 
 extern "C" fn jit_tile_encode(spec: u64, code: u64, bits: u64) -> u64 {
@@ -715,9 +752,9 @@ extern "C" fn jit_tile_encode(spec: u64, code: u64, bits: u64) -> u64 {
     // process (`HoleEncoding::interned`), baked by the classifier.
     let enc = unsafe { &*(spec as *const crate::library::tile_render::HoleEncoding) };
     let v = crate::compile::marshal::arg_value(code as u8, bits);
-    let mut out = String::new();
-    guarded(|| crate::library::tile_render::encode(&v, enc, &mut out));
-    crate::kernel::put_thread_str(&out)
+    let mut w = crate::kernel::ArenaWriter::new();
+    guarded(|| crate::library::tile_render::encode(&v, enc, &mut w));
+    w.finish()
 }
 
 /// Render a tile, projections included: a projection re-runs its body
@@ -732,8 +769,13 @@ extern "C" fn jit_tile_render(program: u64, types: u64, args: *const u64) -> u64
     let program = unsafe { &*(program as *const crate::library::tile_render::TileProgram) };
     // SAFETY: see `decode_args`.
     let vals = unsafe { decode_args(types, args) };
-    let text = guarded(|| program.render(&vals));
-    crate::kernel::put_thread_str(&text)
+    // The document is written straight into the arena as it renders.
+    // A projection's nested kernels allocate in the arena between the
+    // writer's pushes; the writer relocates its bytes when that happens
+    // and the result is still one range.
+    let mut w = crate::kernel::ArenaWriter::new();
+    guarded(|| program.render_into(&vals, &mut w));
+    w.finish()
 }
 
 /// True for an op whose helper decodes its arguments by the wire types

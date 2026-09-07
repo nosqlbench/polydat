@@ -265,37 +265,44 @@ fn json_text(input: Value) -> String {
 
 /// The text `json_text` produces, shared with its compiled helper.
 pub(crate) fn json_text_of(input: &Value) -> String {
+    let mut buf = String::new();
+    json_text_into(input, &mut buf);
+    buf
+}
+
+/// The text `json_text` produces, written into any text sink (the
+/// cycle arena writer in the compiled helper, SRD 115 §6).
+pub(crate) fn json_text_into<W: std::fmt::Write>(input: &Value, out: &mut W) {
     match input {
         Value::Json(j) => {
-            let mut buf = String::new();
-            walk_json_leaves(j, &mut buf);
-            buf
+            let mut first = true;
+            walk_json_leaves(j, out, &mut first);
         }
-        other => other.to_display_string(),
+        other => {
+            let _ = out.write_str(&other.to_display_string());
+        }
     }
 }
 
-fn walk_json_leaves(j: &serde_json::Value, out: &mut String) {
+fn walk_json_leaves<W: std::fmt::Write>(j: &serde_json::Value, out: &mut W, first: &mut bool) {
     use serde_json::Value as J;
+    let mut leaf = |out: &mut W, text: &str| {
+        if !*first {
+            let _ = out.write_char('\n');
+        }
+        *first = false;
+        let _ = out.write_str(text);
+    };
     match j {
-        J::String(s) => {
-            if !out.is_empty() { out.push('\n'); }
-            out.push_str(s);
-        }
-        J::Number(n) => {
-            if !out.is_empty() { out.push('\n'); }
-            out.push_str(&n.to_string());
-        }
-        J::Bool(b) => {
-            if !out.is_empty() { out.push('\n'); }
-            out.push_str(if *b { "true" } else { "false" });
-        }
+        J::String(s) => leaf(out, s),
+        J::Number(n) => leaf(out, &n.to_string()),
+        J::Bool(b) => leaf(out, if *b { "true" } else { "false" }),
         J::Null => {}
         J::Array(arr) => {
-            for item in arr { walk_json_leaves(item, out); }
+            for item in arr { walk_json_leaves(item, out, first); }
         }
         J::Object(obj) => {
-            for value in obj.values() { walk_json_leaves(value, out); }
+            for value in obj.values() { walk_json_leaves(value, out, first); }
         }
     }
 }
