@@ -456,6 +456,7 @@ Every axiom has a mechanical check, and every tier is pinned to P1:
 | Tier differential: random string, JSON, and tile programs across the interpreter, forced cones, P2, hybrid, and pure P3; the hand-written corpus; provenance kernels on repeated coordinates | `tests/handle_tiers.rs` (`FUZZ_SEED`, `FUZZ_ITERATIONS`) |
 | H1 taint pass on hand-built IR | `h1_tests` in `compile/jit/codegen.rs` |
 | H4 validator | every P2, P3, and hybrid run in debug builds |
+| Miri lane: arena bytes never move, sources inside the arena, the writer's relocation, mark and release, table installation nesting and unwind, P2 handle closures with and without projections | `tests/handle_miri.rs` under `cargo +nightly miri test -p polydat --no-default-features --test handle_miri` |
 
 ## 11. Implementation plan
 
@@ -545,5 +546,16 @@ Kept short; the normative text above is what the code does. Dates are
   entry is borrowed for a helper's duration through
   `current_table_value`, on the same interval argument as arena bytes.
 
-Refinements recorded and not yet taken: a Miri lane for the arena and
-table paths.
+- **Miri lane.** `tests/handle_miri.rs` runs the arena, writer, table,
+  and P2 closure paths under Miri without the JIT feature, the handle
+  analogue of the S9(b) lane; the same tests run natively in the suite.
+  Its first run found a real defect the native runs could not: the
+  arena allocated by mutably indexing a whole chunk, which under the
+  aliasing model invalidates every shared reference a helper still
+  holds into that chunk, so "bytes never move" was necessary but not
+  sufficient. The arena now builds every mutable view from a raw
+  pointer over exactly the fresh range; `src/kernel/arena.rs` is on the
+  S10 allowlist for that reason. The lane passes clean, leak check
+  included.
+
+No refinements remain recorded.

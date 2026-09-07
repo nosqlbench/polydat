@@ -578,3 +578,12 @@ so a SAFETY comment can cite them beside the S-axioms:
   every `get_value` read copies out to an owned `Value`.
 - **H7 — Equivalence.** P1, P2, and P3 produce identical bytes.
   *Tripwire: `tests/handle_tiers.rs`.*
+
+The handle analogue of S9(b) is `tests/handle_miri.rs`: the chunked
+arena, the arena writer, the value table and its installation, and the
+P2 closure kernels over handle slots, run under Miri in the no-JIT
+configuration. Lane command:
+
+```sh
+cargo +nightly miri test -p polydat --no-default-features --test handle_miri
+```

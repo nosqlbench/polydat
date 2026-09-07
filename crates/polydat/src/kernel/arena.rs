@@ -131,31 +131,46 @@ impl CycleArena {
         (self.chunk, self.cursor)
     }
 
+    /// A mutable view of exactly `[start, start + len)` of a chunk.
+    ///
+    /// Never `&mut self.chunks[chunk][..]`: indexing a `Vec` mutably
+    /// reborrows the whole chunk, which under the aliasing model
+    /// invalidates every shared reference a helper still holds into that
+    /// chunk (a resolved `&str` being copied or formatted). A view built
+    /// from the raw pointer covers only the fresh bytes, so it coexists
+    /// with those references; the Miri lane checks this.
+    ///
+    /// # Safety
+    /// The range must lie within the chunk and must not overlap any live
+    /// reference, which holds for fresh bytes past the cursor.
+    #[inline]
+    unsafe fn fresh(&mut self, chunk: usize, start: usize, len: usize) -> &mut [u8] {
+        debug_assert!(start + len <= self.chunks[chunk].len());
+        unsafe { std::slice::from_raw_parts_mut(self.chunks[chunk].as_mut_ptr().add(start), len) }
+    }
+
     /// Allocate `len` bytes and return the mutable slice.
     #[inline]
     pub fn alloc_bytes(&mut self, len: usize) -> &mut [u8] {
         let (chunk, start) = self.place(len);
         self.cursor = start + len;
         self.total += len;
-        &mut self.chunks[chunk][start..start + len]
+        // SAFETY: fresh bytes past the cursor.
+        unsafe { self.fresh(chunk, start, len) }
     }
 
     /// Copy a byte slice into the arena and return its 64-bit handle.
-    /// `bytes` may borrow the arena itself: chunks never move.
+    /// `bytes` may borrow the arena itself: chunks never move, and the
+    /// destination view covers only fresh bytes.
     #[inline]
     pub fn put_bytes(&mut self, bytes: &[u8]) -> u64 {
         let len = bytes.len();
         let (chunk, start) = self.place(len);
         self.cursor = start + len;
         self.total += len;
-        let (src_ptr, src_len) = (bytes.as_ptr(), bytes.len());
-        let dest = &mut self.chunks[chunk][start..start + len];
-        // SAFETY: `bytes` is either outside the arena or inside a chunk
-        // that `place` did not touch (a chunk is only replaced when it is
-        // beyond the cursor, and nothing live points past the cursor),
-        // and the destination is fresh bytes past the cursor, so the
-        // ranges cannot overlap.
-        unsafe { std::ptr::copy_nonoverlapping(src_ptr, dest.as_mut_ptr(), src_len) };
+        // SAFETY: fresh bytes past the cursor; `bytes` lies before the
+        // cursor or outside the arena, so the ranges cannot overlap.
+        unsafe { self.fresh(chunk, start, len).copy_from_slice(bytes) };
         encode_arena_handle(((chunk << CHUNK_SHIFT) | start) as u32, len as u32)
     }
 
@@ -165,12 +180,16 @@ impl CycleArena {
         self.put_bytes(s.as_bytes())
     }
 
-    /// The bytes an arena handle names.
+    /// The bytes an arena handle names: a shared view of exactly that
+    /// range, built from the raw pointer for the same reason `fresh` is.
     #[inline]
     fn arena_slice(&self, handle: u64) -> &[u8] {
         let (offset, len) = decode_arena_handle(handle);
-        let (chunk, start) = ((offset as usize) >> CHUNK_SHIFT, (offset as usize) & POSITION_MASK);
-        &self.chunks[chunk][start..start + len as usize]
+        let (chunk, start, len) = ((offset as usize) >> CHUNK_SHIFT, (offset as usize) & POSITION_MASK, len as usize);
+        debug_assert!(start + len <= self.chunks[chunk].len());
+        // SAFETY: the range was allocated by `place` within this chunk and
+        // chunks never move or shrink within a cycle.
+        unsafe { std::slice::from_raw_parts(self.chunks[chunk].as_ptr().add(start), len) }
     }
 
     /// Resolve a string from a 64-bit handle (static or arena).
@@ -358,21 +377,19 @@ impl ArenaWriter {
                 a.cursor = start + new_len;
                 a.total += new_len;
                 if self.len > 0 {
-                    let (old_chunk, old_start, old_len) = (self.chunk, self.start, self.len);
-                    if old_chunk == chunk {
-                        a.chunks[chunk].copy_within(old_start..old_start + old_len, start);
-                    } else {
-                        let (old, new) = if old_chunk < chunk {
-                            let (lo, hi) = a.chunks.split_at_mut(chunk);
-                            (&lo[old_chunk][old_start..old_start + old_len], &mut hi[0][start..start + old_len])
-                        } else {
-                            let (lo, hi) = a.chunks.split_at_mut(old_chunk);
-                            (&hi[0][old_start..old_start + old_len], &mut lo[chunk][start..start + old_len])
-                        };
-                        new.copy_from_slice(old);
+                    let old = a.chunks[self.chunk].as_ptr();
+                    // SAFETY: the old range is before the new one (the new
+                    // allocation is past the cursor, in this chunk or a
+                    // later one), so the ranges are disjoint, and the
+                    // destination view covers only the fresh bytes.
+                    unsafe {
+                        let old = old.add(self.start);
+                        let new = a.fresh(chunk, start, self.len);
+                        std::ptr::copy_nonoverlapping(old, new.as_mut_ptr(), self.len);
                     }
                 }
-                a.chunks[chunk][start + self.len..start + new_len].copy_from_slice(bytes);
+                // SAFETY: fresh bytes past the copied prefix.
+                unsafe { a.fresh(chunk, start + self.len, bytes.len()).copy_from_slice(bytes) };
                 self.chunk = chunk;
                 self.start = start;
                 self.len = new_len;

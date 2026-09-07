@@ -157,6 +157,11 @@ fn s10_from_raw_parts_tripwire() {
         // Dataset accessor reading an mmap-backed uniform facet
         // (vectordata owner-lifetime contract).
         ("src/library/vectors.rs", "dataset facet view"),
+        // The chunked cycle arena's subrange views (SRD 115 §2.2):
+        // built from raw pointers so a fresh allocation never reborrows
+        // a whole chunk under a live shared reference; adjudicated by
+        // the handle Miri lane (`tests/handle_miri.rs`).
+        ("src/kernel/arena.rs", "cycle arena subrange views"),
     ];
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut offending = Vec::new();
