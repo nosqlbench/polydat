@@ -304,11 +304,17 @@ and it falls back to the untyped classifier for every other node.
   installed table.
 - **Parsed constants are interned** (§2.2), and the helper receives the
   address.
-- **Strings are not copied to be formatted.** `printf` takes its
-  arguments as borrowed views, so a string argument is formatted from
-  the arena in place. The JSON and tile helpers build owned `Value`s for
-  their arguments, which copies a string once; a borrowed form of the
-  tile encoder and the JSON coercion is a refinement.
+- **Arguments are borrowed, not copied.** A helper sees each argument
+  as a `ValueRef`, a borrowed view of a `Value`: a scalar by value, a
+  string or byte string by reference into the arena or interner, a JSON
+  value by reference into the installed table, anything else by
+  reference to the `Value`. `printf` (through `FmtArg`), the JSON
+  constructors and coercion, `json_text`, and the tile encoder all run
+  over the view, and the P1 nodes build the same view from their
+  `Value` inputs, so one body serves both tiers and a string argument
+  is never copied to be inspected, formatted, or encoded. The one
+  exception is `tile_render`, whose inputs are re-bound into projection
+  states and so must be owned `Value`s.
 
 ### 6.2 Projections and re-entrancy
 
@@ -532,6 +538,12 @@ Kept short; the normative text above is what the code does. Dates are
   `json_text` gained sink-generic forms so P1 and the helpers share one
   body over a `String` or the writer.
 
-Refinements recorded and not yet taken: borrowed argument forms for the
-tile encoder and the JSON coercion; a Miri lane for the arena and table
-paths.
+- **Borrowed arguments.** `ValueRef` (in `ast`) is the view every
+  argument-inspecting helper runs over; `encode_ref`, `json_of_ref`,
+  `json_array_of_refs`, `json_object_of_refs`, and `json_text_ref_into`
+  are the borrowed bodies, and the owned forms call them. A table
+  entry is borrowed for a helper's duration through
+  `current_table_value`, on the same interval argument as arena bytes.
+
+Refinements recorded and not yet taken: a Miri lane for the arena and
+table paths.

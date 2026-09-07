@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::ast::{PortType, Value};
+use crate::ast::{PortType, Value, ValueRef};
 use crate::iteration::comprehension::runtime::evaluate_for_iteration;
 use crate::iteration::comprehension::StreamerValue;
 use crate::kernel::{PolydatKernel, PolydatProgram, PolydatState};
@@ -511,6 +511,13 @@ impl<W: std::fmt::Write> Sink for W {}
 
 /// Encode one value per a hole's encoding, into any text sink.
 pub fn encode<W: std::fmt::Write>(value: &Value, enc: &HoleEncoding, out: &mut W) {
+    encode_ref(ValueRef::from(value), enc, out)
+}
+
+/// Encode a borrowed view of a value (SRD 115 §6.1): the compiled
+/// helper calls this on its slot without owning a `Value`, and a
+/// string hole is encoded from the arena in place.
+pub fn encode_ref<W: std::fmt::Write>(value: ValueRef<'_>, enc: &HoleEncoding, out: &mut W) {
     if enc.cond {
         out.put_char(if truthy_of(value) { '1' } else { '0' });
         return;
@@ -524,20 +531,20 @@ pub fn encode<W: std::fmt::Write>(value: &Value, enc: &HoleEncoding, out: &mut W
     match (enc.encoding.as_str(), enc.position) {
         ("json", HolePosition::InString) => push_json_escaped(&text, out),
         ("json", HolePosition::Value) => {
-            let kind = ty.map(str::to_string).unwrap_or_else(|| value.port_type().to_keyword().to_string());
-            match (kind.as_str(), value) {
-                (_, Value::None) => out.put("null"),
+            let kind = ty.unwrap_or_else(|| value.port_type().to_keyword());
+            match (kind, value) {
+                (_, ValueRef::None) => out.put("null"),
                 ("bool", _) => out.put(if truthy_of(value) { "true" } else { "false" }),
-                ("json", Value::Json(j)) => { let _ = write!(out, "{j}"); }
+                ("json", ValueRef::Json(j)) => { let _ = write!(out, "{j}"); }
                 ("str", _) | ("String", _) | ("string", _) => {
                     out.put_char('"');
                     push_json_escaped(&text, out);
                     out.put_char('"');
                 }
                 (k, _) if is_numeric_keyword(k) => out.put(&text),
-                (_, Value::Json(j)) => { let _ = write!(out, "{j}"); }
-                (_, Value::Bool(b)) => out.put(if *b { "true" } else { "false" }),
-                (_, Value::U64(_)) | (_, Value::F64(_)) => out.put(&text),
+                (_, ValueRef::Json(j)) => { let _ = write!(out, "{j}"); }
+                (_, ValueRef::Bool(b)) => out.put(if b { "true" } else { "false" }),
+                (_, ValueRef::U64(_)) | (_, ValueRef::F64(_)) => out.put(&text),
                 _ => {
                     out.put_char('"');
                     push_json_escaped(&text, out);
@@ -563,13 +570,13 @@ pub fn encode<W: std::fmt::Write>(value: &Value, enc: &HoleEncoding, out: &mut W
     }
 }
 
-fn truthy_of(v: &Value) -> bool {
+fn truthy_of(v: ValueRef<'_>) -> bool {
     match v {
-        Value::Bool(b) => *b,
-        Value::U64(n) => *n != 0,
-        Value::F64(f) => *f != 0.0,
-        Value::Str(s) => !s.is_empty() && s.as_ref() != "0" && s.as_ref() != "false",
-        Value::None => false,
+        ValueRef::Bool(b) => b,
+        ValueRef::U64(n) => n != 0,
+        ValueRef::F64(f) => f != 0.0,
+        ValueRef::Str(s) => !s.is_empty() && s != "0" && s != "false",
+        ValueRef::None => false,
         _ => true,
     }
 }
@@ -581,45 +588,48 @@ fn is_numeric_keyword(k: &str) -> bool {
 /// Display text for a value under an optional printf-style format:
 /// `.N` precision for floats, `0N` zero-padded width, `N` width, `>N`
 /// and `<N` alignment, `x`/`X` hex for integers.
-fn formatted_text(value: &Value, ty: Option<&str>, format: Option<&str>) -> String {
-    let base = match (ty, value) {
-        (Some("bool"), v) => truthy_of(v).to_string(),
-        (_, Value::Json(j)) => j.to_string(),
-        (_, v) => v.to_display_string(),
+fn formatted_text<'a>(value: ValueRef<'a>, ty: Option<&str>, format: Option<&str>) -> std::borrow::Cow<'a, str> {
+    use std::borrow::Cow;
+    // A string with no format is borrowed as it is; everything else is
+    // owned text.
+    let base: Cow<'a, str> = match (ty, value) {
+        (Some("bool"), v) => Cow::Owned(truthy_of(v).to_string()),
+        (_, ValueRef::Json(j)) => Cow::Owned(j.to_string()),
+        (_, v) => v.display(),
     };
     let Some(fmt) = format else { return base };
     let fmt = fmt.trim();
     if let Some(prec) = fmt.strip_prefix('.').and_then(|p| p.parse::<usize>().ok()) {
         if let Some(f) = as_f64(value) {
-            return format!("{f:.prec$}");
+            return Cow::Owned(format!("{f:.prec$}"));
         }
         return base;
     }
     if fmt == "x" || fmt == "X" {
-        if let Value::U64(n) = value {
-            return if fmt == "x" { format!("{n:x}") } else { format!("{n:X}") };
+        if let ValueRef::U64(n) = value {
+            return Cow::Owned(if fmt == "x" { format!("{n:x}") } else { format!("{n:X}") });
         }
         return base;
     }
     if let Some(w) = fmt.strip_prefix('0').and_then(|w| w.parse::<usize>().ok()) {
-        return format!("{base:0>w$}");
+        return Cow::Owned(format!("{base:0>w$}"));
     }
     if let Some(w) = fmt.strip_prefix('>').and_then(|w| w.parse::<usize>().ok()) {
-        return format!("{base:>w$}");
+        return Cow::Owned(format!("{base:>w$}"));
     }
     if let Some(w) = fmt.strip_prefix('<').and_then(|w| w.parse::<usize>().ok()) {
-        return format!("{base:<w$}");
+        return Cow::Owned(format!("{base:<w$}"));
     }
     if let Ok(w) = fmt.parse::<usize>() {
-        return format!("{base:>w$}");
+        return Cow::Owned(format!("{base:>w$}"));
     }
     base
 }
 
-fn as_f64(v: &Value) -> Option<f64> {
+fn as_f64(v: ValueRef<'_>) -> Option<f64> {
     match v {
-        Value::F64(f) => Some(*f),
-        Value::U64(n) => Some(*n as f64),
+        ValueRef::F64(f) => Some(f),
+        ValueRef::U64(n) => Some(n as f64),
         _ => None,
     }
 }
@@ -707,8 +717,8 @@ mod tests {
 
     #[test]
     fn formats_apply_before_encoding() {
-        assert_eq!(formatted_text(&Value::U64(5), None, Some("03")), "005");
-        assert_eq!(formatted_text(&Value::U64(255), None, Some("x")), "ff");
-        assert_eq!(formatted_text(&Value::Str("ab".into()), None, Some(">4")), "  ab");
+        assert_eq!(formatted_text(ValueRef::U64(5), None, Some("03")), "005");
+        assert_eq!(formatted_text(ValueRef::U64(255), None, Some("x")), "ff");
+        assert_eq!(formatted_text(ValueRef::Str("ab"), None, Some(">4")), "  ab");
     }
 }

@@ -82,6 +82,23 @@ pub(crate) fn arg_value(code: u8, bits: u64) -> Value {
     }
 }
 
+/// An argument's slot bits as a borrowed view, decoded by its type
+/// code: nothing is copied. Strings are borrowed from the arena or the
+/// interner and table kinds from the installed table, both valid for
+/// the rest of the current native call.
+pub(crate) fn arg_ref(code: u8, bits: u64) -> crate::ast::ValueRef<'static> {
+    use crate::ast::ValueRef;
+    match code {
+        b'u' => ValueRef::U64(bits),
+        b'i' => ValueRef::I64(bits as i64),
+        b'f' => ValueRef::F64(f64::from_bits(bits)),
+        b'b' => ValueRef::Bool(bits != 0),
+        b's' => ValueRef::Str(crate::kernel::resolve_thread_str(bits)),
+        b'y' => ValueRef::Bytes(crate::kernel::resolve_thread_bytes(bits)),
+        _ => ValueRef::from(crate::kernel::current_table_value(bits)),
+    }
+}
+
 /// An argument as a format argument: strings are borrowed from the
 /// arena or the interner rather than copied.
 pub(crate) fn fmt_arg(code: u8, bits: u64) -> crate::library::format::FmtArg<'static> {

@@ -230,6 +230,20 @@ pub fn decode_arg(ty: crate::ast::PortType, bits: u64) -> Value {
     }
 }
 
+/// The value a table handle names, borrowed from the installed table
+/// for the rest of the current native call. The entry is written only
+/// by its one producing step (H4), which ran before any consumer, and
+/// the table is cleared or dropped only after the call returns, so a
+/// helper may hold this for its own duration and no longer.
+#[inline]
+pub fn current_table_value(bits: u64) -> &'static Value {
+    with_current_value_table(|t| {
+        // SAFETY: see above; the same interval `resolve_thread_str`
+        // relies on for arena bytes, restated for table entries.
+        unsafe { std::mem::transmute::<&Value, &'static Value>(t.get(bits)) }
+    })
+}
+
 /// The JSON value a table handle names, shared.
 #[inline]
 pub fn read_table_json(bits: u64) -> std::sync::Arc<serde_json::Value> {

@@ -22,7 +22,7 @@
 //! )
 //! ```
 
-use crate::ast::Value;
+use crate::ast::{Value, ValueRef};
 use serde_json::json;
 
 // =================================================================
@@ -74,24 +74,34 @@ fn json_object(parts: &[Value]) -> std::sync::Arc<serde_json::Value> {
     std::sync::Arc::new(json_object_of(parts))
 }
 
-/// The merge `json_object` performs, shared with its compiled helper
-/// (SRD 115 §6) so both tiers run one body.
-pub(crate) fn json_object_of(parts: &[Value]) -> serde_json::Value {
+/// The merge `json_object` performs, over borrowed views (SRD 115
+/// §6.1), so both tiers run one body: P1 views its `Value` inputs, the
+/// compiled helper views its slots.
+pub(crate) fn json_object_of_refs<'a>(parts: impl IntoIterator<Item = ValueRef<'a>>) -> serde_json::Value {
     let mut merged = serde_json::Map::new();
     for v in parts {
-        if let Value::Json(arc) = v
-            && let serde_json::Value::Object(map) = arc.as_ref() {
-                for (k, val) in map {
-                    merged.insert(k.clone(), val.clone());
-                }
+        if let ValueRef::Json(serde_json::Value::Object(map)) = v {
+            for (k, val) in map {
+                merged.insert(k.clone(), val.clone());
             }
+        }
     }
     serde_json::Value::Object(merged)
 }
 
-/// The array `json_array` builds, shared with its compiled helper.
+/// The merge `json_object` performs, over owned values.
+pub(crate) fn json_object_of(parts: &[Value]) -> serde_json::Value {
+    json_object_of_refs(parts.iter().map(ValueRef::from))
+}
+
+/// The array `json_array` builds, over borrowed views.
+pub(crate) fn json_array_of_refs<'a>(elems: impl IntoIterator<Item = ValueRef<'a>>) -> serde_json::Value {
+    serde_json::Value::Array(elems.into_iter().map(|v| json_of_ref(v)).collect())
+}
+
+/// The array `json_array` builds, over owned values.
 pub(crate) fn json_array_of(elems: &[Value]) -> serde_json::Value {
-    serde_json::Value::Array(elems.iter().map(value_to_json).collect())
+    json_array_of_refs(elems.iter().map(ValueRef::from))
 }
 
 /// Build a JSON array from N inputs.
@@ -219,14 +229,19 @@ fn json_field(
 // =================================================================
 
 pub(crate) fn value_to_json(v: &Value) -> serde_json::Value {
+    json_of_ref(ValueRef::from(v))
+}
+
+/// The JSON coercion over a borrowed view (SRD 115 §6.1): the compiled
+/// helpers call this on their slots without owning a `Value`.
+pub(crate) fn json_of_ref(v: ValueRef<'_>) -> serde_json::Value {
     match v {
         // Bytes uses base64 here (JSON-payload convention) instead of
         // the hex form `Value::to_json_value` returns, so the Bytes
         // arm stays local. Everything else delegates to the
-        // canonical typed-to-JSON projection on Value itself —
-        // adding a new Value variant doesn't require a parallel
-        // arm here anymore.
-        Value::Bytes(b) => {
+        // canonical typed-to-JSON projection — adding a new Value
+        // variant doesn't require a parallel arm here.
+        ValueRef::Bytes(b) => {
             use base64::Engine;
             json!(base64::engine::general_purpose::STANDARD.encode(b))
         }
@@ -273,13 +288,18 @@ pub(crate) fn json_text_of(input: &Value) -> String {
 /// The text `json_text` produces, written into any text sink (the
 /// cycle arena writer in the compiled helper, SRD 115 §6).
 pub(crate) fn json_text_into<W: std::fmt::Write>(input: &Value, out: &mut W) {
+    json_text_ref_into(ValueRef::from(input), out);
+}
+
+/// `json_text` over a borrowed view, into any sink.
+pub(crate) fn json_text_ref_into<W: std::fmt::Write>(input: ValueRef<'_>, out: &mut W) {
     match input {
-        Value::Json(j) => {
+        ValueRef::Json(j) => {
             let mut first = true;
             walk_json_leaves(j, out, &mut first);
         }
         other => {
-            let _ = out.write_str(&other.to_display_string());
+            let _ = out.write_str(&other.display());
         }
     }
 }

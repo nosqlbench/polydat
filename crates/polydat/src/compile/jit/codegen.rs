@@ -723,27 +723,41 @@ extern "C" fn jit_printf(format: u64, types: u64, args: *const u64) -> u64 {
     w.finish()
 }
 
+/// The arguments of a variadic call as borrowed views (SRD 115 §6.1):
+/// strings from the arena or interner, table kinds from the installed
+/// table, nothing copied.
+///
+/// # Safety
+/// As for `decode_args`.
+unsafe fn arg_refs(types: u64, args: *const u64) -> Vec<crate::ast::ValueRef<'static>> {
+    type_codes(types)
+        .bytes()
+        .enumerate()
+        .map(|(i, code)| crate::compile::marshal::arg_ref(code, unsafe { *args.add(i) }))
+        .collect()
+}
+
 extern "C" fn jit_json_array(entry: u64, types: u64, args: *const u64) -> u64 {
     // SAFETY: see `decode_args`.
-    let vals = unsafe { decode_args(types, args) };
-    write_json(entry, crate::library::json::json_array_of(&vals))
+    let vals = unsafe { arg_refs(types, args) };
+    write_json(entry, crate::library::json::json_array_of_refs(vals))
 }
 
 extern "C" fn jit_json_object(entry: u64, types: u64, args: *const u64) -> u64 {
     // SAFETY: see `decode_args`.
-    let vals = unsafe { decode_args(types, args) };
-    write_json(entry, crate::library::json::json_object_of(&vals))
+    let vals = unsafe { arg_refs(types, args) };
+    write_json(entry, crate::library::json::json_object_of_refs(vals))
 }
 
 extern "C" fn jit_to_json(entry: u64, code: u64, bits: u64) -> u64 {
-    let v = crate::compile::marshal::arg_value(code as u8, bits);
-    write_json(entry, crate::library::json::value_to_json(&v))
+    let v = crate::compile::marshal::arg_ref(code as u8, bits);
+    write_json(entry, crate::library::json::json_of_ref(v))
 }
 
 extern "C" fn jit_json_text(code: u64, bits: u64) -> u64 {
-    let v = crate::compile::marshal::arg_value(code as u8, bits);
+    let v = crate::compile::marshal::arg_ref(code as u8, bits);
     let mut w = crate::kernel::ArenaWriter::new();
-    crate::library::json::json_text_into(&v, &mut w);
+    crate::library::json::json_text_ref_into(v, &mut w);
     w.finish()
 }
 
@@ -751,9 +765,9 @@ extern "C" fn jit_tile_encode(spec: u64, code: u64, bits: u64) -> u64 {
     // SAFETY: `spec` is the address of a `HoleEncoding` interned for the
     // process (`HoleEncoding::interned`), baked by the classifier.
     let enc = unsafe { &*(spec as *const crate::library::tile_render::HoleEncoding) };
-    let v = crate::compile::marshal::arg_value(code as u8, bits);
+    let v = crate::compile::marshal::arg_ref(code as u8, bits);
     let mut w = crate::kernel::ArenaWriter::new();
-    guarded(|| crate::library::tile_render::encode(&v, enc, &mut w));
+    guarded(|| crate::library::tile_render::encode_ref(v, enc, &mut w));
     w.finish()
 }
 

@@ -2263,3 +2263,93 @@ mod value_size_probe {
              (raw u128/i128?) snuck in");
     }
 }
+
+/// A borrowed view of a [`Value`] (SRD 115 §6.1): what a compiled helper
+/// or closure sees for an argument it does not own. A scalar is carried
+/// by value, a string or byte string by reference into the arena or the
+/// interner, a JSON value by reference into the value table, and any
+/// other variant by reference to the `Value` itself. The P1 nodes build
+/// the same view from their `Value` inputs, so one body serves both
+/// tiers without copying a string argument to inspect it.
+#[derive(Clone, Copy, Debug)]
+pub enum ValueRef<'a> {
+    U64(u64),
+    I64(i64),
+    F64(f64),
+    Bool(bool),
+    Str(&'a str),
+    Bytes(&'a [u8]),
+    Json(&'a serde_json::Value),
+    None,
+    Other(&'a Value),
+}
+
+impl<'a> From<&'a Value> for ValueRef<'a> {
+    fn from(v: &'a Value) -> Self {
+        match v {
+            Value::U64(x) => ValueRef::U64(*x),
+            Value::I64(x) => ValueRef::I64(*x),
+            Value::F64(x) => ValueRef::F64(*x),
+            Value::Bool(b) => ValueRef::Bool(*b),
+            Value::Str(s) => ValueRef::Str(s),
+            Value::Bytes(b) => ValueRef::Bytes(b),
+            Value::Json(j) => ValueRef::Json(j),
+            Value::None => ValueRef::None,
+            other => ValueRef::Other(other),
+        }
+    }
+}
+
+impl<'a> ValueRef<'a> {
+    /// The port type of the value viewed.
+    pub fn port_type(&self) -> PortType {
+        match self {
+            ValueRef::U64(_) => PortType::U64,
+            ValueRef::I64(_) => PortType::I64,
+            ValueRef::F64(_) => PortType::F64,
+            ValueRef::Bool(_) => PortType::Bool,
+            ValueRef::Str(_) => PortType::Str,
+            ValueRef::Bytes(_) => PortType::Bytes,
+            ValueRef::Json(_) => PortType::Json,
+            ValueRef::None => Value::None.port_type(),
+            ValueRef::Other(v) => v.port_type(),
+        }
+    }
+
+    /// The display form, exactly as [`Value::to_display_string`] gives
+    /// it; a string is borrowed rather than copied.
+    pub fn display(&self) -> std::borrow::Cow<'a, str> {
+        use std::borrow::Cow;
+        match self {
+            ValueRef::Str(s) => Cow::Borrowed(s),
+            ValueRef::U64(v) => Cow::Owned(v.to_string()),
+            ValueRef::I64(v) => Cow::Owned(v.to_string()),
+            ValueRef::F64(v) => Cow::Owned(format!("{v:?}")),
+            ValueRef::Bool(v) => Cow::Owned(v.to_string()),
+            ValueRef::Bytes(b) => Cow::Owned(b.iter().map(|b| format!("{b:02x}")).collect()),
+            ValueRef::Json(j) => Cow::Owned(j.to_string()),
+            ValueRef::None => Cow::Owned(Value::None.to_display_string()),
+            ValueRef::Other(v) => Cow::Owned(v.to_display_string()),
+        }
+    }
+
+    /// The display form as an owned string.
+    pub fn to_display_string(&self) -> String {
+        self.display().into_owned()
+    }
+
+    /// The JSON projection, exactly as [`Value::to_json_value`] gives it.
+    pub fn to_json_value(&self) -> serde_json::Value {
+        match self {
+            ValueRef::U64(v) => serde_json::Value::from(*v),
+            ValueRef::I64(v) => serde_json::Value::from(*v),
+            ValueRef::F64(v) => serde_json::json!(*v),
+            ValueRef::Bool(v) => serde_json::Value::from(*v),
+            ValueRef::Str(s) => serde_json::Value::from(*s),
+            ValueRef::Bytes(b) => serde_json::Value::from(b.iter().map(|b| format!("{b:02x}")).collect::<String>()),
+            ValueRef::Json(j) => (*j).clone(),
+            ValueRef::None => Value::None.to_json_value(),
+            ValueRef::Other(v) => v.to_json_value(),
+        }
+    }
+}
