@@ -119,7 +119,7 @@ tile typed : json := {"n": ${cycle}, "as_text": ${cycle: str}, "hex": "${cycle |
 ```
 
 ```text
-cycle 10  typed: {"n": 10, "as_text": "10", "hex": "a", "odd": false, "padded": "0010"}
+cycle 10 typed: {"n": 10, "as_text": "10", "hex": "a", "odd": false, "padded": "0010"}
 cycle 255 typed: {"n": 255, "as_text": "255", "hex": "ff", "odd": true, "padded": "0255"}
 ```
 
@@ -160,7 +160,7 @@ position, and the encoder chosen, so the typing of a document can be
 read before it runs. For the demo file of section 10, abridged to a
 few of its holes:
 
-```text
+```console
 == tiles: how each hole is typed and encoded ==
 Each tile compiled to a skeleton: static runs copied whole, encoded holes, branches, and projections whose bodies are programs of their own.
   doc          json: 14 static run(s) totalling 245 bytes, 8 hole(s), 1 branch(es), 1 projection(s)
@@ -344,8 +344,8 @@ tile stmt := "INSERT INTO docs (id, body) VALUES (${cycle}, '${outer!}')"
 ```
 
 ```text
-outer: {"first": {"n": 5, "double": 10}, "second": {"n": 5, "double": 10}, "wrapped": true}
-stmt:  INSERT INTO docs (id, body) VALUES (5, '{"first": {"n": 5, "double": 10}, "second": {"n": 5, "double": 10}, "wrapped": true}')
+cycle 5 outer: {"first": {"n": 5, "double": 10}, "second": {"n": 5, "double": 10}, "wrapped": true}
+cycle 5 stmt: INSERT INTO docs (id, body) VALUES (5, '{"first": {"n": 5, "double": 10}, "second": {"n": 5, "double": 10}, "wrapped": true}')
 ```
 
 `outer` splices `inner` twice; both copies of `${cycle}` are the same
@@ -418,6 +418,7 @@ line := polytile("text", "cycle ${cycle}: ${doc!}")
 
 ```text
 cycle 0 doc: {"id": 0, "label": "row-0", "samples": [{"n": 0, "twice": 0},{"n": 1, "twice": 2}], "audit": [null], "tags": {"a": true,"b": true}}
+cycle 0 line: cycle 0: {"id": 0, "label": "row-0", "samples": [{"n": 0, "twice": 0},{"n": 1, "twice": 2}], "audit": [null], "tags": {"a": true,"b": true}}
 cycle 1 doc: {"id": 1, "label": "row-1", "samples": [{"n": 0, "twice": 0},{"n": 1, "twice": 2}], "audit": [{"by": "ops"}], "tags": {"a": true,"b": true}}
 cycle 1 line: cycle 1: {"id": 1, "label": "row-1", "samples": [{"n": 0, "twice": 0},{"n": 1, "twice": 2}], "audit": [{"by": "ops"}], "tags": {"a": true,"b": true}}
 ```
@@ -529,7 +530,7 @@ polydat run examples/polytile_demo.polydat --cycles 5 --emit map --outputs load 
 
 The fifth row, where the `alert` branch is taken:
 
-```text
+```console
 load=INSERT INTO toy.readings (tenant_id, device_id, doc) VALUES (603978, '86a03fe5-bba5-4b06-b8ec-3cb9441ca1b6', '{
     "meta": { "schema": 3, "source": "polydat", "units": { "temp": "C" } },
     "tenant": 603978,

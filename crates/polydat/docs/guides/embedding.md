@@ -417,8 +417,9 @@ let with_emit = format!("{src}__emit := emit_row(\"jsonl\", \"cycle,id,name\", c
 let mut kernel = compile_polydat(&with_emit)?;
 for cycle in [0u64, 1, 2] {
     kernel.set_inputs(&[cycle]);
-    kernel.pull("__emit");
+    kernel.pull("__emit");   // the pull is what emits
 }
+// Drain this thread's buffer. Nothing here refers to the kernel.
 for row in polydat::library::emit::take_rows() {
     println!("{row}");
 }
@@ -429,6 +430,32 @@ for row in polydat::library::emit::take_rows() {
 {"cycle":1,"id":465,"name":"user-465"}
 {"cycle":2,"id":110,"name":"user-110"}
 ```
+
+Notice that `take_rows` takes no kernel. The emit node never writes
+into the state that evaluated it: when the kernel evaluates `__emit`,
+the node renders the row and pushes it onto a buffer that is
+thread-local to the emit module, and `take_rows` drains the calling
+thread's buffer. The only link between the kernel and the rows is that
+both ran on the same thread. Four consequences follow:
+
+- **The pull is the trigger.** Nothing is emitted for a cycle unless the
+  host pulls the emit wire, or a wire downstream of it, in that cycle.
+  A host that forgets the pull gets an empty buffer and no error.
+- **Drain on the thread that ran the kernel.** A kernel driven on a
+  worker thread leaves its rows in that worker's buffer; `take_rows`
+  from another thread returns nothing.
+- **Kernels on one thread share one buffer.** Two kernels with emit
+  bindings on the same thread interleave their rows in evaluation order.
+  There is no per-kernel channel; a host that needs one runs each kernel
+  on its own thread or drains between them.
+- **Rows accumulate until drained.** A kernel that emits every cycle
+  under a host that never drains grows the buffer without bound. The
+  binary drains after each cycle.
+
+This shape is deliberate. The node needs no reference back to the state
+that evaluated it, so emitting costs one push, and the host gets the
+feature with no kernel API for it. The scope is the thread because that
+is the unit the host already owns (§4).
 
 The pattern generalizes. To pin a default, rewrite the `extern` line
 (§3). To add a derived output, append a binding. To attach a template,

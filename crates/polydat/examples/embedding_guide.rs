@@ -271,8 +271,9 @@ fn section_transforms() {
     let mut kernel = compile_polydat(&with_emit).expect("compile");
     for cycle in [0u64, 1, 2] {
         kernel.set_inputs(&[cycle]);
-        kernel.pull("__emit");
+        kernel.pull("__emit"); // the pull is what emits
     }
+    // Drain this thread's buffer; nothing here refers to the kernel.
     for row in polydat::library::emit::take_rows() {
         println!("{row}");
     }

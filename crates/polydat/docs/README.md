@@ -8,7 +8,9 @@ and the invariants.
 ## Tutorials
 
 Walk-throughs with real output; every program in them is run by an
-example under `examples/`.
+example under `examples/`. For the polytile tutorial and the embedding
+guide, `tests/guide_output.rs` checks that every quoted `text` block is
+verbatim output of the companion example.
 
 - [Illustrations](tutorials/illustrations.md): the DSL, the assembler
   API, function graphs, procedural generation, libraries, type safety,
