@@ -55,7 +55,7 @@ pub fn try_referenced_names(text: &str) -> Result<BTreeSet<String>, String> {
 
 /// Walk a parsed [`Expr`], inserting every free name reference
 /// into `out`. The traversal mirrors
-/// [`crate::dsl::validate::validate_expr`]'s reference-collection
+/// `crate::dsl::validate::validate_expr`'s reference-collection
 /// arm minus the diagnostics, so the two stay in lockstep about
 /// what counts as a reference.
 pub fn collect_expr_refs(expr: &Expr, out: &mut BTreeSet<String>) {

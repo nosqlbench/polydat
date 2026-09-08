@@ -15,8 +15,8 @@
 //!   top-level entries of the YAML's string form, calls this.
 //! - [`comprehension_from_subspaces`] takes the parsed sub-spaces
 //!   (each sub-space is a `Vec<Clause>` — a Cartesian list) and
-//!   decides between [`ComprehensionMode::Cartesian`] and
-//!   [`ComprehensionMode::Union`]. This is the structural
+//!   decides between `ComprehensionMode::Cartesian` and
+//!   `ComprehensionMode::Union`. This is the structural
 //!   detection rule: any variable name repeating across the
 //!   sub-spaces' flat clause set ⇒ Union; otherwise Cartesian
 //!   over the flattened list.
@@ -553,9 +553,9 @@ pub fn parse_clause_list(text: &str) -> Result<Vec<Clause>, String> {
 ///
 /// **Detection rule**: if any variable name appears more than
 /// once across the flat list of all sub-spaces' clauses,
-/// emit [`ComprehensionMode::Union`] (preserving sub-space
+/// emit `ComprehensionMode::Union` (preserving sub-space
 /// boundaries). Otherwise — every var name distinct — flatten
-/// into a single [`ComprehensionMode::Cartesian`] list.
+/// into a single `ComprehensionMode::Cartesian` list.
 ///
 /// This collapses the YAML's string form (which produces one
 /// sub-space per top-level clause) into the natural

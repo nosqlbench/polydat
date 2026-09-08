@@ -5,7 +5,7 @@
 //!
 //! Emits one structured line per significant data-source event so
 //! the operator can spot mismatches between what
-//! [`crate::library::vectors::do_dataset_prebuffer`] *covered* and
+//! `crate::library::vectors::do_dataset_prebuffer` *covered* and
 //! what cycle-time accessors *opened*. The typical failure mode
 //! this catches: prebuffer reports success but readers still hit
 //! HTTP per cycle, because the facets the workload reads aren't

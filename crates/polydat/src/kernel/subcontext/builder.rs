@@ -47,7 +47,7 @@ fn port_type_keyword(pt: PortType) -> &'static str {
 }
 
 /// Optional compile-time configuration passed through to
-/// [`compile_polydat_with_libs`] when finalize compiles the body. When
+/// [`compile_polydat_with_libs`](crate::dsl::compile::compile_polydat_with_libs) when finalize compiles the body. When
 /// every field is at its default, finalize falls back to the
 /// minimal [`compile_ast`] path used by the do-loop bridge — no
 /// behaviour change for the simplest synthesisers.
@@ -70,7 +70,7 @@ pub struct CompileOptions {
     /// DCE unreferenced slots; `Diagnostic` force-allocates every
     /// magic-extern and result-binding-LHS slot so step-debug /
     /// cycle-replay sees writes that the runtime would otherwise
-    /// drop on the floor. See [`KernelOptLevel`].
+    /// drop on the floor. See [`KernelOptLevel`](crate::kernel::KernelOptLevel).
     pub kernel_opt: crate::kernel::KernelOptLevel,
 }
 
@@ -124,7 +124,7 @@ impl<P> SubcontextBuilder<P> {
     }
 
     /// SRD-67 Phase 3 bridge hook: route the legacy
-    /// [`compile_polydat_with_libs`] knobs (lib paths, strict mode,
+    /// [`compile_polydat_with_libs`](crate::dsl::compile::compile_polydat_with_libs) knobs (lib paths, strict mode,
     /// required-output filter, workload dir, context label)
     /// through the builder. Synthesisers that previously called
     /// `compile_polydat_with_libs` directly fold those calls into a
@@ -143,7 +143,7 @@ impl<P> SubcontextBuilder<P> {
     /// names flagged via `mark_inherited_outputs` before its
     /// program Arc is shared.
     ///
-    /// Used by [`super::build_kernel_under_parent`] to migrate
+    /// Used by `super::build_kernel_under_parent` to migrate
     /// `build_do_loop_scope_kernel` and similar synthesisers
     /// without semantic drift; explicit-import callers leave this
     /// empty.

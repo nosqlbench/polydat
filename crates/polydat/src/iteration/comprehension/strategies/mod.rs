@@ -118,7 +118,7 @@ pub struct EvaluatedInput {
 
 /// The strategy invocation surface per spec §10.7.8.
 ///
-/// Implementations are stateless — every call to [`apply`]
+/// Implementations are stateless — every call to [`apply`](Strategy::apply)
 /// produces the same output given the same inputs
 /// (deterministic). PRNG-based strategies (`Shuffle`) take
 /// their seed from the truncation companion — the seed is
@@ -136,7 +136,7 @@ pub trait Strategy {
 
     /// R2 push-down eligibility (spec §10.2 R2). `true` if
     /// this strategy has a closed-form indexed lookup over the
-    /// given input. If `false`, [`apply`] uses the strategy's
+    /// given input. If `false`, [`apply`](Strategy::apply) uses the strategy's
     /// fallback reorder over the materialized tuples.
     fn has_closed_form_for(&self, idx: &IndexFn) -> bool;
 

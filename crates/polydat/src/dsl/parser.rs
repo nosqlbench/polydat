@@ -146,7 +146,7 @@ pub fn parse(tokens: Vec<Token>) -> Result<PolydatFile, String> {
 /// all work uniformly because this is the same `parse_expr`
 /// entry the compiler uses elsewhere.
 ///
-/// ```ignore
+/// ```text
 /// // "{format_u64(hash(cycle), 10)}" → printf("{}", format_u64(hash(cycle), 10))
 /// // "{a + b}"                       → printf("{}", a + b)
 /// ```

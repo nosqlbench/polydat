@@ -516,7 +516,7 @@ impl ExtensionContext {
 }
 
 /// Policy that decides whether to extend an
-/// [`ExtendingRangeSource`] when its current end is reached.
+/// `ExtendingRangeSource` when its current end is reached.
 ///
 /// Implementations are pure predicates over the
 /// [`ExtensionContext`] — no internal state, no side effects.

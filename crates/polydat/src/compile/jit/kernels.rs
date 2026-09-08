@@ -218,7 +218,7 @@ impl JitKernelRaw {
     /// Predicate violations (`is_positive`, `in_range`,
     /// `is_one_of`) from JIT-lowered code surface as normal
     /// Rust panics carrying the violation message. The
-    /// longjmp wrapper in [`super::codegen::invoke_with_catch`]
+    /// longjmp wrapper in `super::codegen::invoke_with_catch`
     /// handles the transition back to Rust land.
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {

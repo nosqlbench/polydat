@@ -13,7 +13,7 @@
 //!
 //! This is the load-bearing bridge for the PR 9 migration:
 //! once `KernelScope for PolydatKernelScope` exists, the algebra-
-//! layer [`ScopedKernelStream<PolydatKernelScope>`] can replace
+//! layer `ScopedKernelStream<PolydatKernelScope>` can replace
 //! the legacy `ComprehensionIter` everywhere nb-activity
 //! drives comprehension dispatch.
 

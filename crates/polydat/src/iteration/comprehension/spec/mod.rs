@@ -5,7 +5,7 @@
 //! form for YAML / JSON consumers.
 //!
 //! Polydat owns the conversion from a YAML/JSON-native
-//! structural form into the algebra-layer [`Comprehension`]
+//! structural form into the algebra-layer `Comprehension`
 //! AST. Consumers (nb-workload, REPL, tooling) deserialize
 //! into [`ComprehensionSpec`] via serde and call
 //! [`ComprehensionSpec::into_algebra`]; text-block consumers
@@ -48,7 +48,7 @@
 //! the existing legacy parsers in
 //! [`crate::iteration::comprehension::parse`] — `parse_clause_list`,
 //! `parse_comprehension_text`, `parse_order_spec`. Those
-//! parsers produce a legacy [`Comprehension`] AST with raw
+//! parsers produce a legacy `Comprehension` AST with raw
 //! string sources. The [`legacy_convert`] module then walks
 //! the legacy AST and assembles the algebra-layer AST,
 //! using [`source_parser::parse_source`] for typed-source

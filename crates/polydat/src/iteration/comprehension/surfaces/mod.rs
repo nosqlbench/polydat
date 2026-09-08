@@ -11,10 +11,10 @@
 //! - [`ScopedKernelStream<K>`] (second-order) — dispenses
 //!   scoped kernel instances; functor over the first-order
 //!   via `K`'s `KernelScope` impl.
-//! - [`scope_once`] (one-shot) — non-streamed; takes a single
+//! - [`scope_once`](fn@scope_once) (one-shot) — non-streamed; takes a single
 //!   coord tuple and produces a single scoped kernel instance.
 //!
-//! All three surfaces share the underlying [`Program`] via
+//! All three surfaces share the underlying `Program` via
 //! `Arc<Program>` but maintain independent dispense state per
 //! spec §9.5.2's independence contract:
 //!
@@ -24,7 +24,7 @@
 //! > compiled IR but allocate their own per-streamer state.
 //!
 //! The entry point is [`CompiledComprehension`], obtained via
-//! [`Comprehension::compile`] (an extension method on the AST
+//! `Comprehension::compile` (an extension method on the AST
 //! type).
 
 use std::sync::Arc;

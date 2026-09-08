@@ -24,7 +24,7 @@
 //! - **Cartesian is dependent-tuple, not independent.** Clause
 //!   N's spec text may reference iter-vars from clauses
 //!   1..N-1. Per-branch kernels (via
-//!   [`PolydatKernel::materialize_subscope`]) carry the prior
+//!   `PolydatKernel::materialize_subscope`) carry the prior
 //!   values forward so each clause evaluates against the
 //!   correct context. This is SRD-18b §"Dependent Tuple
 //!   Iteration".
@@ -46,7 +46,7 @@
 //! construction via [`PolydatKernel::for_iteration`].
 //!
 //! Order modifiers route through the unified
-//! [`Strategy::apply`] (spec §10.7.8): each node returns its
+//! `Strategy::apply` (spec §10.7.8): each node returns its
 //! tuples paired with the [`IndexFn`] the materialized stream
 //! satisfies; the Order node assembles an [`EvaluatedInput`]
 //! and invokes the strategy. V4 fires at this site,

@@ -14,7 +14,7 @@
 //!   `Comprehension`. There is no auxiliary value type at the
 //!   AST level.
 //! - C2 — well-formedness is decidable in one bottom-up pass
-//!   (the [`crate::iteration::comprehension::validate`] module
+//!   (the [`validate`](mod@crate::iteration::comprehension::validate) module
 //!   implements the check).
 
 use serde::{Deserialize, Serialize};

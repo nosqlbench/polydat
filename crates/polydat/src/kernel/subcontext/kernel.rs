@@ -105,7 +105,7 @@ impl<M> std::fmt::Debug for ScopeKernel<M> {
 ///    body never references the name.
 ///
 /// Both cases are answered by walking the parent's input
-/// slots and reading [`crate::kernel::engines::Engines::shared_cell`].
+/// slots and reading `crate::kernel::engines::Engines::shared_cell`.
 #[derive(Clone)]
 pub struct SharedCellInScope {
     pub name: String,
@@ -129,7 +129,7 @@ impl<M> ScopeKernel<M> {
     /// any wrap/unwrap dance the activity layer does. The
     /// `SharedCellInScope` re-export is kept for callers in
     /// the SRD-67 builder; it's a thin alias over the kernel
-    /// layer's [`SharedCellEntry`].
+    /// layer's `SharedCellEntry`.
     pub fn shared_cells_in_scope(&self) -> Vec<SharedCellInScope> {
         let inner = self.lock_inner();
         inner

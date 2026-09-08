@@ -36,7 +36,7 @@
 //! - **Escape**: `\{` and `\}` pass through as literal `{` /
 //!   `}` and are removed from the final string.
 //! - **Round cap**: if substitution doesn't stabilize in
-//!   [`ROUND_HARD`] iterations, returns Err (the input had
+//!   `ROUND_HARD` iterations, returns Err (the input had
 //!   cyclic placeholders).
 //! - **Unresolved name**: any `{name}` that survives the
 //!   substitution rounds errors with a diagnostic naming the

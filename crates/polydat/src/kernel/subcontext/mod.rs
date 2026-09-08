@@ -36,7 +36,7 @@
 //!   [`ContractViolation::FinalShadow`]; collision with `shared`
 //!   parent rewrites the body's `X := <expr>` into
 //!   `extern X: <type>` + `__write_X := <expr>` and records a
-//!   [`WriteThroughBinding`] on the artifact. Per-cycle eval
+//!   `WriteThroughBinding` on the artifact. Per-cycle eval
 //!   calls [`ScopeKernel::commit_write_throughs`] to fan values
 //!   through the parent's `SharedCell`.
 //! * Rule 4 — coordinate routing handled by `materialize_wiring_from_outer`'s
@@ -63,8 +63,8 @@
 //! `PolydatKernel::from_program` are `pub(crate)` after Phase 4.
 //! External consumers must go through the typed surface:
 //! [`SubcontextBuilder`] / [`ScopeKernel::spawn`] for child
-//! construction, [`instance_program`] for parentless re-instancing
-//! of a compiled program, [`chain_kernel_under_parent`] for top-
+//! construction, `instance_program` for parentless re-instancing
+//! of a compiled program, `chain_kernel_under_parent` for top-
 //! level kernel chaining.
 //!
 //! The following compile-fail doctests guard the seal — if any

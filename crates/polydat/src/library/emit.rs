@@ -23,7 +23,7 @@ thread_local! {
     static ROWS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Formats supported by [`emit_row`]. Parsed from the node's `format`
+/// Formats supported by `emit_row`. Parsed from the node's `format`
 /// constant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmitFormat {

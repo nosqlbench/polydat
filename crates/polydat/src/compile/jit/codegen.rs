@@ -877,61 +877,61 @@ pub fn classify_node_typed(node: &dyn PolydatNode, wire_types: &[crate::ast::Por
 #[derive(Debug, Clone, PartialEq)]
 pub enum JitOp {
     // --- u64 integer ops ---
-    /// output[0] = input[0]  (identity / copy)
+    /// `output[0] = input[0]`  (identity / copy)
     Identity,
-    /// output[0] = input[0] + constant
+    /// `output[0] = input[0] + constant`
     AddConst(u64),
-    /// output[0] = input[0] * constant
+    /// `output[0] = input[0] * constant`
     MulConst(u64),
-    /// output[0] = input[0] / constant
+    /// `output[0] = input[0] / constant`
     DivConst(u64),
-    /// output[0] = input[0] % constant
+    /// `output[0] = input[0] % constant`
     ModConst(u64),
-    /// output[0] = clamp(input[0], min, max)  (unsigned)
+    /// `output[0] = clamp(input[0], min, max)`  (unsigned)
     ClampConst(u64, u64),
-    /// output[0] = interleave_bits(input[0], input[1])  (extern call)
+    /// `output[0] = interleave_bits(input[0], input[1])`  (extern call)
     Interleave,
-    /// output[i] = mixed-radix decomposition of input[0]  (inline urem/udiv)
+    /// `output[i] = mixed-radix decomposition of input[0]`  (inline urem/udiv)
     MixedRadixConst(Vec<u64>),
-    /// output[0] = xxh3_hash(input[0])  (extern call)
+    /// `output[0] = xxh3_hash(input[0])`  (extern call)
     Hash,
-    /// output[0] = splitmix64(input[0]) (fully inlined 64-bit ALU bit mixer)
+    /// `output[0] = splitmix64(input[0]) (fully inlined 64-bit ALU bit mixer)`
     SplitMix64,
-    /// output[0] = popcount(input[0])
+    /// `output[0] = popcount(input[0])`
     Popcnt,
-    /// output[0] = leading_zeros(input[0])
+    /// `output[0] = leading_zeros(input[0])`
     Clz,
-    /// output[0] = trailing_zeros(input[0])
+    /// `output[0] = trailing_zeros(input[0])`
     Ctz,
-    /// output[0] = byte_swap(input[0])
+    /// `output[0] = byte_swap(input[0])`
     Bswap,
-    /// output[0] = shuffle(input[0])  (extern call: feedback, size, min)
+    /// `output[0] = shuffle(input[0])`  (extern call: feedback, size, min)
     ShuffleConst(u64, u64, u64),
 
     // --- f64 ops (values stored as u64 bits in buffer) ---
-    /// output[0] = input[0] as f64 / u64::MAX as f64  (u64 → f64 bits)
+    /// `output[0] = input[0] as f64 / u64::MAX as f64`  (u64 → f64 bits)
     UnitInterval,
-    /// output[0] = f64::from_bits(input[0]) as u64  (f64 bits → u64, truncate)
+    /// `output[0] = f64::from_bits(input[0]) as u64`  (f64 bits → u64, truncate)
     F64ToU64,
-    /// output[0] = f64::from_bits(input[0]).round() as u64
+    /// `output[0] = f64::from_bits(input[0]).round() as u64`
     RoundToU64,
-    /// output[0] = f64::from_bits(input[0]).floor() as u64
+    /// `output[0] = f64::from_bits(input[0]).floor() as u64`
     FloorToU64,
-    /// output[0] = f64::from_bits(input[0]).ceil() as u64
+    /// `output[0] = f64::from_bits(input[0]).ceil() as u64`
     CeilToU64,
-    /// output[0] = clamp(f64::from_bits(input[0]), min, max)  → f64 bits
+    /// `output[0] = clamp(f64::from_bits(input[0]), min, max)`  → f64 bits
     ClampF64Const(u64, u64), // min.to_bits(), max.to_bits()
-    /// output[0] = a + (b - a) * f64::from_bits(input[0])  → f64 bits
+    /// `output[0] = a + (b - a) * f64::from_bits(input[0])`  → f64 bits
     LerpConst(u64, u64), // a.to_bits(), b.to_bits()
-    /// output[0] = min + range * (input[0] as f64 / MAX)  → f64 bits  (u64 input)
+    /// `output[0] = min + range * (input[0] as f64 / MAX)`  → f64 bits  (u64 input)
     ScaleRangeConst(u64, u64), // min.to_bits(), range.to_bits()
-    /// output[0] = round(f64::from_bits(input[0]) / step) * step  → f64 bits
+    /// `output[0] = round(f64::from_bits(input[0]) / step) * step`  → f64 bits
     QuantizeConst(u64), // step.to_bits()
-    /// output[0] = discretize(f64 input, range, buckets)  → u64
+    /// `output[0] = discretize(f64 input, range, buckets)`  → u64
     DiscretizeConst(u64, u64), // range.to_bits(), buckets
-    /// output[0] = lut_sample(f64 input, lut_ptr, lut_len)  → f64 bits  (extern call)
+    /// `output[0] = lut_sample(f64 input, lut_ptr, lut_len)`  → f64 bits  (extern call)
     LutSampleConst(u64, u64), // lut_ptr as u64, lut_len
-    /// output[0] = weighted_pick(input, values_ptr, biases_ptr, primaries_ptr, aliases_ptr, n)
+    /// `output[0] = weighted_pick(input, values_ptr, biases_ptr, primaries_ptr, aliases_ptr, n)`
     WeightedPickConst(u64, u64, u64, u64, u64), // values_ptr, biases_ptr, primaries_ptr, aliases_ptr, n
 
     /// Unary f64 math function via extern call. The u8 identifies which function.
@@ -942,27 +942,27 @@ pub enum JitOp {
     MathBinary(u8),
 
     // --- Two-wire u64 integer ops ---
-    /// output = input[0] + input[1]  (wrapping)
+    /// output = `input[0]` + `input[1]`  (wrapping)
     U64Add2,
-    /// output = input[0] - input[1]  (wrapping)
+    /// output = `input[0]` - `input[1]`  (wrapping)
     U64Sub2,
-    /// output = input[0] * input[1]  (wrapping)
+    /// output = `input[0]` * `input[1]`  (wrapping)
     U64Mul2,
-    /// output = input[0] / input[1]  (0 if divisor is 0)
+    /// output = `input[0]` / `input[1]`  (0 if divisor is 0)
     U64Div2,
-    /// output = input[0] % input[1]  (0 if divisor is 0)
+    /// output = `input[0]` % `input[1]`  (0 if divisor is 0)
     U64Mod2,
-    /// output = input[0] & input[1]
+    /// output = `input[0]` & `input[1]`
     U64And,
-    /// output = input[0] | input[1]
+    /// output = `input[0]` | `input[1]`
     U64Or,
-    /// output = input[0] ^ input[1]
+    /// output = `input[0]` ^ `input[1]`
     U64Xor,
-    /// output = input[0] << input[1]
+    /// output = `input[0]` << `input[1]`
     U64Shl,
-    /// output = input[0] >> input[1]  (logical)
+    /// output = `input[0]` >> `input[1]`  (logical)
     U64Shr,
-    /// output = !input[0]  (unary bitwise NOT)
+    /// output = !`input[0]`  (unary bitwise NOT)
     U64Not,
 
     // --- Inline binary f64 arithmetic (no extern call) ---
@@ -980,19 +980,19 @@ pub enum JitOp {
     /// output = f64(a) % f64(b) (0 if b==0)
     F64Mod,
 
-    /// Parameter predicate: pass input[0] through to output[0];
-    /// if input[0] == 0, call `jit_is_positive_fail` (panics)
+    /// Parameter predicate: pass `input[0]` through to `output[0]`;
+    /// if `input[0]` == 0, call `jit_is_positive_fail` (panics)
     /// with the configured predicate name — (ptr, len) into the
     /// node's meta const, (0, 0) for the default. Message parity
     /// with the interpreter's `is_positive({name}): …` is asserted
     /// by the SRD-105 battery.
     IsPositiveCheck { name_ptr: u64, name_len: u64 },
-    /// Parameter predicate: pass input[0] through to output[0];
-    /// if input[0] < lo or input[0] > hi, call
+    /// Parameter predicate: pass `input[0]` through to `output[0]`;
+    /// if `input[0]` < lo or `input[0]` > hi, call
     /// `jit_in_range_fail` (panics). Stored as (lo, hi).
     InRangeCheck(u64, u64),
-    /// Parameter predicate: pass input[0] through to output[0];
-    /// if input[0] is not in the allow-list, call
+    /// Parameter predicate: pass `input[0]` through to `output[0]`;
+    /// if `input[0]` is not in the allow-list, call
     /// `jit_is_one_of_fail` (panics) with the allow-list contents
     /// — (ptr, len) into the node's meta VecU64 const, (0, 0)
     /// when unavailable. Message parity with the interpreter's
@@ -1022,53 +1022,53 @@ pub enum JitOp {
     RegSplat(u8),
 
     // --- Comparisons & selections (SRD 110) ---
-    /// Integer comparison: output[0] = if a <cond> b { 1 } else { 0 }
+    /// Integer comparison: `output[0]` = if a `<cond>` b { 1 } else { 0 }
     U64Cmp(ir::condcodes::IntCC),
-    /// Float comparison: output[0] = if a <cond> b { 1 } else { 0 }
+    /// Float comparison: `output[0]` = if a `<cond>` b { 1 } else { 0 }
     F64Cmp(ir::condcodes::FloatCC),
-    /// Conditional select for u64: output[0] = if cond != 0 { a } else { b }
+    /// Conditional select for u64: `output[0]` = if cond != 0 { a } else { b }
     SelectU64,
-    /// Conditional select for f64: output[0] = if cond != 0 { a } else { b }
+    /// Conditional select for f64: `output[0]` = if cond != 0 { a } else { b }
     SelectF64,
 
     // --- Type conversions & lattice adapters (SRD 110) ---
-    /// Signed integer to float: output[0] = (input[0] as i64 as f64).to_bits()
+    /// Signed integer to float: `output[0]` = (`input[0]` as i64 as f64).to_bits()
     I64ToF64,
-    /// Float to signed integer: output[0] = (f64::from_bits(input[0]) as i64) as u64
+    /// Float to signed integer: `output[0]` = (f64::from_bits(`input[0]`) as i64) as u64
     F64ToI64,
-    /// Sign-extend 32-bit integer: output[0] = ((input[0] as i32) as i64) as u64
+    /// Sign-extend 32-bit integer: `output[0]` = ((`input[0]` as i32) as i64) as u64
     SignExtendI32,
-    /// Sign-extend 16-bit integer: output[0] = ((input[0] as i16) as i64) as u64
+    /// Sign-extend 16-bit integer: `output[0]` = ((`input[0]` as i16) as i64) as u64
     SignExtendI16,
-    /// Sign-extend 8-bit integer: output[0] = ((input[0] as i8) as i64) as u64
+    /// Sign-extend 8-bit integer: `output[0]` = ((`input[0]` as i8) as i64) as u64
     SignExtendI8,
-    /// Zero-extend 32-bit integer: output[0] = (input[0] as u32) as u64
+    /// Zero-extend 32-bit integer: `output[0]` = (`input[0]` as u32) as u64
     ZeroExtendU32,
-    /// Zero-extend 16-bit integer: output[0] = (input[0] as u16) as u64
+    /// Zero-extend 16-bit integer: `output[0]` = (`input[0]` as u16) as u64
     ZeroExtendU16,
-    /// Zero-extend 8-bit integer: output[0] = (input[0] as u8) as u64
+    /// Zero-extend 8-bit integer: `output[0]` = (`input[0]` as u8) as u64
     ZeroExtendU8,
-    /// Truthiness boolean coercion: output[0] = if input[0] != 0 { 1 } else { 0 }
+    /// Truthiness boolean coercion: `output[0]` = if `input[0]` != 0 { 1 } else { 0 }
     ToBool,
-    /// Constant u64: output[0] = val
+    /// Constant u64: `output[0]` = val
     ConstU64(u64),
-    /// Constant f64: output[0] = val_bits
+    /// Constant f64: `output[0]` = val_bits
     ConstF64(u64),
 
     // --- Interpolation & Hashing (SRD 110) ---
-    /// Hash range: output[0] = if max == 0 { 0 } else { hash(input[0]) % max }
+    /// Hash range: `output[0]` = if max == 0 { 0 } else { hash(`input[0]`) % max }
     HashRangeConst(u64),
-    /// Hash interval: output[0] = min + (hash(input[0]) / MAX) * (max - min)
+    /// Hash interval: `output[0]` = min + (hash(`input[0]`) / MAX) * (max - min)
     HashIntervalConst(u64, u64),
-    /// Inverse lerp: output[0] = ((input[0] - a) / (b - a)).clamp(0, 1)
+    /// Inverse lerp: `output[0]` = ((`input[0]` - a) / (b - a)).clamp(0, 1)
     InvLerpConst(u64, u64),
-    /// Remap: output[0] = out_min + ((input[0] - in_min) / (in_max - in_min)) * (out_max - out_min)
+    /// Remap: `output[0]` = out_min + ((`input[0]` - in_min) / (in_max - in_min)) * (out_max - out_min)
     RemapConst(u64, u64, u64, u64),
 
     // --- Context & Datetime (SRD 110) ---
-    /// Epoch offset: output[0] = input[0].wrapping_add(base)
+    /// Epoch offset: `output[0]` = `input[0]`.wrapping_add(base)
     EpochOffsetConst(u64),
-    /// Epoch scale: output[0] = input[0].wrapping_mul(factor)
+    /// Epoch scale: `output[0]` = `input[0]`.wrapping_mul(factor)
     EpochScaleConst(u64),
     /// OS thread ID
     ThreadId,
@@ -1091,24 +1091,24 @@ pub enum JitOp {
     VariadicMin,
     /// Variadic maximum across all inputs (unsigned)
     VariadicMax,
-    /// Checked unsigned addition: output[0] = a.checked_add(b).unwrap_or(0)
+    /// Checked unsigned addition: `output[0]` = a.checked_add(b).unwrap_or(0)
     CheckedAdd,
-    /// Saturating unsigned subtraction: output[0] = a.saturating_sub(b)
+    /// Saturating unsigned subtraction: `output[0]` = a.saturating_sub(b)
     CheckedSub,
-    /// Checked unsigned multiplication: output[0] = a.checked_mul(b).unwrap_or(0)
+    /// Checked unsigned multiplication: `output[0]` = a.checked_mul(b).unwrap_or(0)
     CheckedMul,
-    /// Smallest multiple of multiple >= value: output[0] = if m == 0 { v } else { ((v + m - 1) / m) * m }
+    /// Smallest multiple of multiple >= value: `output[0]` = if m == 0 { v } else { ((v + m - 1) / m) * m }
     CeilToMultiple,
-    /// Multiples at least: output[0] = if m == 0 { 0 } else { (v + m - 1) / m }
+    /// Multiples at least: `output[0]` = if m == 0 { 0 } else { (v + m - 1) / m }
     MultiplesAtLeast,
 
     // --- Probability & permutations (SRD 110) ---
-    /// Fair coin flip: output[0] = input[0] & 1
+    /// Fair coin flip: `output[0]` = `input[0]` & 1
     FairCoin,
-    /// Float blend with constant mix: output[0] = (fa * (1 - mix) + fb * mix).round() as u64
+    /// Float blend with constant mix: `output[0]` = (fa * (1 - mix) + fb * mix).round() as u64
     BlendConst(u64),
     /// LFSR advance step with constant feedback polynomial:
-    /// output[0] = (input[0] >> 1) ^ (if input[0] & 1 != 0 { feedback } else { 0 })
+    /// `output[0] = (input[0] >> 1) ^ (if input[0] & 1 != 0 { feedback } else { 0 })`
     LfsrStepConst(u64),
     /// PCG random with constant seed and stream: (seed, stream)
     PcgConst(u64, u64),
@@ -1124,69 +1124,69 @@ pub enum JitOp {
     NOfConst(u64, u64),
 
     // --- String & Non-scalar ops (SRD 111) ---
-    /// output[0] = jit_u64_to_str(input[0])
+    /// `output[0] = jit_u64_to_str(input[0])`
     U64ToString,
-    /// output[0] = jit_i64_to_str(input[0])
+    /// `output[0] = jit_i64_to_str(input[0])`
     I64ToString,
-    /// output[0] = jit_f64_to_str(input[0])
+    /// `output[0] = jit_f64_to_str(input[0])`
     F64ToString,
-    /// output[0] = jit_bool_to_str(input[0])
+    /// `output[0] = jit_bool_to_str(input[0])`
     BoolToString,
-    /// output[0] = jit_str_to_u64(input[0])
+    /// `output[0] = jit_str_to_u64(input[0])`
     StringToU64,
-    /// output[0] = jit_str_to_i64(input[0])
+    /// `output[0] = jit_str_to_i64(input[0])`
     StringToI64,
-    /// output[0] = jit_str_to_f64(input[0])
+    /// `output[0] = jit_str_to_f64(input[0])`
     StringToF64,
-    /// output[0] = jit_str_to_bool(input[0])
+    /// `output[0] = jit_str_to_bool(input[0])`
     StringToBool,
-    /// output[0] = jit_str_concat(input[0], input[1])
+    /// `output[0] = jit_str_concat(input[0], input[1])`
     StrConcat,
-    /// output[0] = jit_str_lower(input[0])
+    /// `output[0] = jit_str_lower(input[0])`
     StrLower,
-    /// output[0] = jit_str_upper(input[0])
+    /// `output[0] = jit_str_upper(input[0])`
     StrUpper,
-    /// output[0] = jit_str_trim(input[0])
+    /// `output[0] = jit_str_trim(input[0])`
     StrTrim,
-    /// output[0] = jit_str_len(input[0])
+    /// `output[0] = jit_str_len(input[0])`
     StrLen,
 
     /// A string constant, interned at kernel build (SRD 115 §2.2, step
-    /// 3): output[0] = the static handle, stored as an immediate. The
+    /// 3): `output[0]` = the static handle, stored as an immediate. The
     /// bytes never enter the cycle arena.
     StaticStr(u64),
 
     // --- JSON through the cycle value table (SRD 115 §3, step 5) ---
-    /// output[0] = jit_u64_to_json(input[0]): a table handle
+    /// `output[0] = jit_u64_to_json(input[0])`: a table handle
     U64ToJson,
-    /// output[0] = jit_i64_to_json(input[0])
+    /// `output[0] = jit_i64_to_json(input[0])`
     I64ToJson,
-    /// output[0] = jit_f64_to_json(input[0])
+    /// `output[0] = jit_f64_to_json(input[0])`
     F64ToJson,
-    /// output[0] = jit_bool_to_json(input[0])
+    /// `output[0] = jit_bool_to_json(input[0])`
     BoolToJson,
-    /// output[0] = jit_str_to_json(input[0]): parses the text
+    /// `output[0] = jit_str_to_json(input[0])`: parses the text
     StrToJson,
-    /// output[0] = jit_json_to_str(input[0]): serializes to the arena
+    /// `output[0] = jit_json_to_str(input[0])`: serializes to the arena
     JsonToStr,
     // --- Variadic and polymorphic nodes by wire type (SRD 115 §6) ---
-    /// output[0] = jit_printf(format, types, args): `format` is the
+    /// `output[0] = jit_printf(format, types, args)`: format is the
     /// address of the interned parsed format, `types` the static
     /// handle of the argument type codes, `args` the inputs in a
     /// stack array
     Printf { format: u64, types: u64 },
-    /// output[0] = jit_json_array(entry, types, args)
+    /// `output[0] = jit_json_array(entry, types, args)`
     JsonArray { types: u64 },
-    /// output[0] = jit_json_object(entry, types, args)
+    /// `output[0] = jit_json_object(entry, types, args)`
     JsonObject { types: u64 },
-    /// output[0] = jit_to_json(entry, code, input[0])
+    /// `output[0] = jit_to_json(entry, code, input[0])`
     ToJson(u8),
-    /// output[0] = jit_json_text(code, input[0])
+    /// `output[0] = jit_json_text(code, input[0])`
     JsonText(u8),
-    /// output[0] = jit_tile_encode(spec, code, input[0]): `spec` is
+    /// `output[0] = jit_tile_encode(spec, code, input[0])`: spec is
     /// the address of the interned hole encoding
     TileEncode { spec: u64, code: u8 },
-    /// output[0] = jit_tile_render(program, types, args): `program`
+    /// `output[0] = jit_tile_render(program, types, args)`: `program`
     /// is the address of the interned tile program
     TileRender { program: u64, types: u64 },
 

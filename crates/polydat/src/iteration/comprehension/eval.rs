@@ -1641,10 +1641,10 @@ fn seq_interval(items: &[Value], ratios: &[usize]) -> Vec<Value> {
 
 /// Map a `Value` to the canonical polydat extern type keyword.
 ///
-/// Delegates to [`Value::port_type`] + [`PortType::to_keyword`] —
+/// Delegates to [`Value::port_type`] + [`PortType::to_keyword`](crate::ast::PortType::to_keyword) —
 /// the single source of truth for the str↔PortType table. The
 /// returned keyword round-trips byte-cleanly through
-/// [`PortType::from_keyword`] in the DSL extern parser, so every
+/// [`PortType::from_keyword`](crate::ast::PortType::from_keyword) in the DSL extern parser, so every
 /// typed `Value` variant (including `VecF32`, `Bytes`, `Json`,
 /// `Handle`) becomes a precisely-typed input on the synthesized
 /// inner kernel.
@@ -1657,7 +1657,7 @@ pub fn value_to_polydat_type_name(v: &Value) -> &'static str {
 /// Walks the dependent-tuple tree depth-first using fresh
 /// per-branch kernels. Each branch installs the prior clauses'
 /// typed values as inputs on a fresh kernel
-/// ([`PolydatKernel::from_program`] + [`PolydatKernel::materialize_wiring_from_outer`]),
+/// (`PolydatKernel::from_program` + `PolydatKernel::materialize_wiring_from_outer`),
 /// then evaluates the next clause's spec against that kernel.
 /// This is the kernel-per-logical-subspace rule from SRD-18b
 /// §"Dependent Tuple Iteration".
@@ -1673,7 +1673,7 @@ pub fn value_to_polydat_type_name(v: &Value) -> &'static str {
 /// Empty-clause handling is delegated to `on_empty_clause`: the
 /// caller decides whether to propagate as a hard error (strict
 /// mode) or warn-and-skip (relaxed mode). The callback receives
-/// the offending [`Clause`] (which carries both single-var and
+/// the offending `Clause` (which carries both single-var and
 /// parallel-iter shapes) and returns `Result<(), String>` —
 /// returning `Err` aborts enumeration, `Ok(())` skips the
 /// branch.

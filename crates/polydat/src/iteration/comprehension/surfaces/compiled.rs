@@ -25,8 +25,8 @@ use super::scoped_stream::ScopedKernelStream;
 /// and is ready to dispense. The single source of truth for
 /// the underlying program across the consumption surfaces.
 ///
-/// Construction is via [`from_ast`] (compiles once) or
-/// [`from_program`] (when the IR was compiled elsewhere).
+/// Construction is via [`from_ast`](Self::from_ast) (compiles once) or
+/// [`from_program`](Self::from_program) (when the IR was compiled elsewhere).
 /// Cloning a `CompiledComprehension` is cheap — just an
 /// `Arc::clone` on the program.
 #[derive(Debug, Clone)]

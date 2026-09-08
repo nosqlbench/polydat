@@ -37,7 +37,7 @@ use super::legacy_convert::{legacy_to_algebra, ConvertError};
 /// The friendly, serde-deserializable comprehension surface.
 ///
 /// Field names match the YAML / JSON keys 1:1. The
-/// [`r#for`](Self::r#for) field carries the only required input
+/// `for` field carries the only required input
 /// — the clause specification — in any of the three accepted
 /// shapes (see [`ForSpec`]).
 #[derive(Debug, Clone, Serialize, Deserialize)]

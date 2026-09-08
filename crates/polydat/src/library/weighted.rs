@@ -164,7 +164,7 @@ fn weighted_u64(
 /// alias table, built once at construction from the spec string and
 /// read on every cycle (both in the eval path and the compiled
 /// closure). `weights` is retained alongside `values` so
-/// [`FusedNode::decomposed`] can reconstruct the equivalent
+/// `FusedNode::decomposed` can reconstruct the equivalent
 /// `weighted_u64` spec string.
 pub struct WeightedPickState {
     pub table: AliasTableU64,

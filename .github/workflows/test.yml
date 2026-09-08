@@ -19,7 +19,8 @@
 #   all-features — single fast leg on linux/amd64 covering the
 #     optional `vectordata` feature (pulls network-stack deps;
 #     one platform is enough since the feature is pure Rust and
-#     arch-independent, unlike the JIT).
+#     arch-independent, unlike the JIT). Also builds rustdoc with
+#     warnings as errors.
 #
 # Platform notes (deltas from the nbrs matrix):
 #
@@ -106,3 +107,10 @@ jobs:
 
       - name: Test (all features)
         run: cargo test --workspace --all-features
+
+      # Rustdoc is kept warning-free: a broken intra-doc link or a
+      # link to a private item fails the build here.
+      - name: Rustdoc (warnings are errors)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --all-features --no-deps

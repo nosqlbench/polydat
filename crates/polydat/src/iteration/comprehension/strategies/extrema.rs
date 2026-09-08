@@ -25,7 +25,7 @@
 //! it — the `/N` selects strata, and partial counts within an
 //! equidistant set are not a meaningful subset (use `lex/N` /
 //! `halton/N` / `sobol/N` for count subsampling, `shells/N` for
-//! concentric-shell depth). See [`take_n_strata`].
+//! concentric-shell depth). See `take_n_strata`.
 
 use super::{
     EvaluatedInput, MultiIndex, Strategy, Tuple, index_fn_dim,

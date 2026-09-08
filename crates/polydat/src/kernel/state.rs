@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! PolydatKernel: a compiled Polydat Kernel pairing an Arc<PolydatProgram> with a PolydatState.
+//! PolydatKernel: a compiled Polydat Kernel pairing an `Arc<PolydatProgram>` with a PolydatState.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -138,11 +138,11 @@ pub(crate) fn adapt_boundary_value(slot_name: &str, slot_type: crate::ast::PortT
 ///   chain: leaf-first list of [`super::ScopeCoord`] from the kernel's
 ///   own scope up through every enclosing comprehension. Root-scope
 ///   kernels (no parent) start with their own coords (or empty).
-///   [`Self::materialize_wiring_from_outer`] re-computes the path so post-bind it
+///   `Self::materialize_wiring_from_outer` re-computes the path so post-bind it
 ///   includes the outer's chain. Consumers (presentation layer,
 ///   inspector, scope-aware diagnostics) call
 ///   [`Self::scope_coordinates`] without needing to walk the scope
-///   tree themselves. See [`super::scope_coords`].
+///   tree themselves. See the scope model design document (`docs/design/scope_model.md`).
 pub struct PolydatKernel {
     program: Arc<PolydatProgram>,
     state: PolydatState,
@@ -893,7 +893,7 @@ impl PolydatKernel {
         snapshot
     }
 
-    /// Public form of [`Self::snapshot_with_cells`]: a fresh kernel
+    /// Public form of `Self::snapshot_with_cells`: a fresh kernel
     /// mirroring this one's program and full shared-cell view (own
     /// input-slot cells + transit cells, Arc-shared — the snapshot
     /// reads/writes the SAME cells as `self`). For holding a scope's
@@ -1274,7 +1274,7 @@ impl PolydatKernel {
     ///
     /// # See also
     ///
-    /// - [`Self::from_program`] (internal) — the
+    /// - `Self::from_program` (internal) — the
     ///   build-fresh-state primitive `for_iteration` composes
     ///   with parent-chain wiring.
     /// - [`Self::propagate_inputs_into`] — the kernel-chain
@@ -1340,9 +1340,9 @@ impl PolydatKernel {
     }
 
     /// The leaf-first scope coordinate path — see the
-    /// [`super::scope_coords`] module doc for the formal
+    /// scope model design document (`docs/design/scope_model.md`) for the formal
     /// definition. Always reflects the current binding state:
-    /// after [`Self::materialize_wiring_from_outer`] the path includes the
+    /// after `Self::materialize_wiring_from_outer` the path includes the
     /// outer kernel's full chain; for root scopes the path is
     /// just this kernel's own coords (or empty).
     pub fn scope_coordinates(&self) -> &[super::ScopeCoord] {

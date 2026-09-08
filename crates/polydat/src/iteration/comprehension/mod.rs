@@ -24,7 +24,7 @@
 //!
 //! The algebra modules ([`ast`], [`source`], [`strategy`],
 //! [`spec`], [`runtime`], [`surfaces`], [`ir`], [`optimize`],
-//! [`predicate`], [`metadata`], [`validate`], [`cardinality`],
+//! [`predicate`], [`metadata`], [`validate`](fn@validate), [`cardinality`],
 //! [`strategies`]) are the canonical comprehension layer.
 //! Top-level re-exports surface the common types
 //! ([`Comprehension`], [`Source`], [`ZipMode`], etc.) for

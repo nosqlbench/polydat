@@ -5,7 +5,7 @@
 //!
 //! The IR is a finite linear sequence of opcodes (the 8-op
 //! set in [`Op`]) that compiles from an optimized AST and
-//! executes via a stack-machine interpreter ([`Interpreter`])
+//! executes via a stack-machine interpreter (`Interpreter`)
 //! or a stream-fusion compiler (future). Both interpretation
 //! models produce identical dispense sequences per spec §9.2.
 //!
@@ -14,7 +14,7 @@
 //! - [`op`] — the 8-opcode enum + supporting parameter types.
 //! - [`program`] — `#[non_exhaustive] Program` wrapper:
 //!   immutable, accessible by value (spec §9.1).
-//! - [`compile`] — bottom-up AST → IR walker.
+//! - [`compile`](fn@compile) — bottom-up AST → IR walker.
 //! - [`interpreter`] — stack-machine interpreter; produces a
 //!   tuple stream that pulls lazily.
 //! - [`bounds`] — §9.3 closed-form peak-memory checker.

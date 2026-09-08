@@ -189,14 +189,14 @@ pub trait Metadata {
     fn input_port_type(&self, name: &str) -> Option<PortType>;
 
     /// Declared port type of an input wire by index. The
-    /// indexed counterpart of [`input_port_type`] — used by
+    /// indexed counterpart of [`input_port_type`](Self::input_port_type) — used by
     /// the typed-write fast path so [`Dataflow::set_wire_idx`]
     /// can look up the slot's expected type without first
     /// reverse-resolving an index to a name.
     fn input_port_type_by_idx(&self, idx: usize) -> Option<PortType>;
 
     /// Declared port type of an output wire, if present.
-    /// Symmetric counterpart to [`input_port_type`]. Used by
+    /// Symmetric counterpart to [`input_port_type`](Self::input_port_type). Used by
     /// the binder verification path
     /// (`crate::binder::verify_against_kernel`) to look up wire
     /// types for type-checking adapter binding shapes.

@@ -7,7 +7,7 @@
 //!
 //! 1. Stratify each axis's `[0, size)` into n equal bins.
 //! 2. For each axis, generate a random permutation of `0..n`.
-//! 3. Sample i = zip per-axis permutations[i].
+//! 3. Sample i = zip per-axis `permutations[i]`.
 //!
 //! The result is n tuples that cover each axis's bins
 //! uniformly (Latin square property in K-D). Native to

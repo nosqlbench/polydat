@@ -75,8 +75,8 @@ pub trait Wire: Sized + 'static {
     const RESOLVER: Option<crate::dsl::registry::DefaultResolver> = None;
 
     /// SRD-15 §"WireCost::Config" — cost class for this wire.
-    /// Defaults to [`WireCost::Data`] (cheap per-cycle input).
-    /// Set to [`WireCost::Config`] via the [`Config<T>`] marker
+    /// Defaults to [`WireCost::Data`](crate::ast::WireCost::Data) (cheap per-cycle input).
+    /// Set to [`WireCost::Config`](crate::ast::WireCost::Config) via the [`Config<T>`] marker
     /// wrapper to signal that the wire is rarely-changing and
     /// the compiler should warn on cycle-time binding.
     const WIRE_COST: crate::ast::WireCost = crate::ast::WireCost::Data;

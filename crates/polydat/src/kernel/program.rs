@@ -922,7 +922,7 @@ impl PolydatProgram {
 
     /// Lookup the declared port type of an input by index.
     /// Returns `None` if `idx` is out of range. Used by the
-    /// typed-write fast path so [`Dataflow::set_wire_idx`] can
+    /// typed-write fast path so [`Dataflow::set_wire_idx`](crate::kernel::api::Dataflow::set_wire_idx) can
     /// type-check without reverse-resolving an index to a name.
     pub fn input_port_type_by_idx(&self, idx: usize) -> Option<crate::ast::PortType> {
         self.input_defs.get(idx).map(|d| d.port_type)
@@ -1178,7 +1178,7 @@ impl PolydatProgram {
     /// its enclosing scopes to produce exactly those outputs.
     ///
     /// A projection of the construction-time node inventory (see
-    /// [`Self::compute_node_inventory`] — no traversal here):
+    /// `Self::compute_node_inventory` — no traversal here):
     /// union the producing nodes' provenance masks, then map set
     /// bits to input names whose kind is not
     /// [`super::InputKind::Coordinate`] (coordinates are runtime

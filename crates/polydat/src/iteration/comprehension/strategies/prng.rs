@@ -45,7 +45,7 @@ pub struct Prng {
 impl Prng {
     /// Construct a new PRNG with the given seed. The default
     /// stream is 0; for parallel-independent streams use
-    /// [`with_stream`].
+    /// [`with_stream`](Self::with_stream).
     pub fn new(seed: u64) -> Self {
         Self {
             seed,

@@ -351,7 +351,7 @@ use crate::dsl::registry::FuncSig;
 /// `FuncSig`/`build_node` pair that predated that migration was
 /// removed: it duplicated the macro's registration under the same
 /// name, leaving `lookup("mixed_radix")`'s answer to inventory
-/// link order. Only [`validate_node`] stays hand-written (its
+/// link order. Only `validate_node` stays hand-written (its
 /// positional rule can't ride on a per-param constraint).
 pub fn signatures() -> &'static [FuncSig] {
     &[]

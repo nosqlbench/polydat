@@ -60,7 +60,7 @@ pub struct Pragma {
 }
 
 /// All pragmas declared in one Polydat scope. Multiple `PragmaSet`s
-/// chain via [`PragmaSet::with_parent`] to model nested scopes
+/// chain via `PragmaSet::with_parent` to model nested scopes
 /// (workload → phase → `for_each` iteration). Per SRD 13b
 /// §"Scope composition" + SRD 15 §"Pragma Scope": each scope is
 /// its own `PragmaSet`, the chain is walked at lookup time, and

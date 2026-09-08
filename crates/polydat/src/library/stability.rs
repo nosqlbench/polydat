@@ -11,7 +11,7 @@
 //! a naïve post-execution read returns the empty-window value
 //! rather than the level the phase actually produced.
 //!
-//! [`is_stable`] conditions that volatile wire into a stable
+//! `is_stable` conditions that volatile wire into a stable
 //! register the phase executor can read after completion. It is a
 //! *stateful* node — its cross-cycle state (a bounded ring of the
 //! most recent samples) lives in a `Mutex<SettleState>` setup

@@ -16,7 +16,7 @@
 //!
 //! Lets Rust code build a polydat binding from an expression and emit
 //! it as a [`Statement`] for a grammar-safe
-//! [`crate::kernel::subcontext::module::BodyFragment::Statements`]
+//! `crate::kernel::subcontext::module::BodyFragment::Statements`
 //! (SRD-84 Part 2) — **without** concatenating source strings. The
 //! return type is bound at the call site via the SRD-80b [`Wire`]
 //! trait, so the Rust generic and the polydat target type are one and
@@ -110,7 +110,7 @@ impl GraphMatter {
 
     /// [`Self::extern_wire`] with the port type as a runtime value, for
     /// callers whose type comes from inspection (e.g. a parent scope's
-    /// [`SharedCellEntry`](crate::kernel::engines::SharedCellEntry)
+    /// [`SharedCellEntry`](crate::kernel::SharedCellEntry)
     /// `port_type`) rather than a compile-time generic. The type must be
     /// faithful: an extern that names an in-scope shared cell attaches to
     /// it at subscope build, and the cell's own port type is the contract.

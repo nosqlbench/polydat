@@ -17,7 +17,7 @@ use super::op::Op;
 ///
 /// `Program` is the load-bearing immutable public API per
 /// spec §9.1. The optimizer is the only constructor; consumers
-/// read via [`ops`] and [`stack_depth`].
+/// read via `ops` and [`stack_depth`](Program::stack_depth).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Program {

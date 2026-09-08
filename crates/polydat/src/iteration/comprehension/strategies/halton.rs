@@ -23,7 +23,7 @@
 //!   prime bases.
 //! - J. G. van der Corput, "Verteilungsfunktionen I & II," *Proc.
 //!   Akad. Wet. Amsterdam* 38 (1935), 813–821, 1058–1066. The base-`b`
-//!   radical-inverse [`radical_inverse`] is the van der Corput
+//!   radical-inverse `radical_inverse` is the van der Corput
 //!   sequence; Halton is its multi-base generalization.
 //! - The canonical base-2 van der Corput prefix is
 //!   `1/2, 1/4, 3/4, 1/8, 5/8, 3/8, 7/8, …` (digit-reversal of the

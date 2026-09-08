@@ -34,7 +34,7 @@ pub enum ConstArg {
     /// `Const<Vec<C>>` shape. Each inner [`ConstArg`] is one
     /// element; `<Vec<C> as ConstSource>::extract` walks the
     /// list and calls `C::extract` per element. Distinct from
-    /// [`FloatArray`] because the latter is the array-literal
+    /// `FloatArray` because the latter is the array-literal
     /// lowering for the `ConstVecF64` slot type while `List`
     /// is the typed-element variadic-const slot.
     List(Vec<ConstArg>),

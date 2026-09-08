@@ -95,7 +95,7 @@ impl SharedCellInner {
     /// Construct a new cell with the given initial value, bound
     /// to the defining scope's intent-dirty word at the given
     /// bit position within that word. Callers must allocate
-    /// `(word, bit)` via [`EngineCore::allocate_cell_bit`] —
+    /// `(word, bit)` via `EngineCore::allocate_cell_bit` —
     /// the bit is not reusable for the cell's lifetime.
     pub fn new(
         initial: Value,
@@ -224,7 +224,7 @@ static PANIC_REPORTING_DOWNSTREAM: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// Declare that a downstream reporter will render eval-panic
-/// diagnostics in full (see [`PANIC_REPORTING_DOWNSTREAM`]).
+/// diagnostics in full (see `PANIC_REPORTING_DOWNSTREAM`).
 pub fn set_panic_reporting_downstream(on: bool) {
     PANIC_REPORTING_DOWNSTREAM.store(on, std::sync::atomic::Ordering::Relaxed);
 }

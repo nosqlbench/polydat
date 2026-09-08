@@ -1244,7 +1244,7 @@ fn matching_profile_name_at(
 
 source_only_node!(
     /// Eagerly download all facets for a dataset profile into the
-    /// local cache, returning a [`DatasetHandle::Group`] handle
+    /// local cache, returning a `DatasetHandle::Group` handle
     /// that downstream facet accessors take as their first
     /// argument. After this returns, every subsequent facet read
     /// served by [`vectordata::TestDataView`] hits the merkle-

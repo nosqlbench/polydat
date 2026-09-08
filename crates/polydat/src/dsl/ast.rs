@@ -278,10 +278,10 @@ pub enum WireModifier {
 /// Set of wire modifiers carried by one binding declaration.
 /// Stored as a bitset under the hood; consumers use
 /// [`Self::has`] to test for individual modifiers and
-/// [`Self::insert`] / [`Self::from_iter`] to build instances.
+/// [`Self::insert`] / `Self::from_iter` to build instances.
 ///
 /// **Validity:** the combination `const` + `volatile` is
-/// rejected at parse time as contradictory ([`Self::from_iter`]
+/// rejected at parse time as contradictory (`Self::from_iter`
 /// is the validating builder). All other combinations are
 /// representable.
 ///

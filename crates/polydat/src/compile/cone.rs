@@ -4,7 +4,7 @@
 //! SRD-105 — cone-level JIT inside the interpreter kernel.
 //!
 //! At assembly time, maximal cones of JIT-eligible nodes with
-//! scalar boundaries collapse into one synthetic [`JitConeNode`]
+//! scalar boundaries collapse into one synthetic `JitConeNode`
 //! each, compiled to native code via the existing P3 codegen. The
 //! cone node is an ordinary `PolydatNode`: the walker, scope
 //! chains, shared cells, None propagation, node_clean caching, and
