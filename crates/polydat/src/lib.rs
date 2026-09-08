@@ -49,6 +49,23 @@
 //! assert!(kernel.pull("user_id").as_u64() < 1_000_000);
 //! ```
 //!
+//! ## Documentation
+//!
+//! The rustdoc covers the API. The narrative documentation lives in the
+//! repository under `crates/polydat/docs/`, organized by the
+//! [documentation index](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/README.md):
+//!
+//! - Tutorials with real, test-checked output:
+//!   [illustrations](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/tutorials/illustrations.md),
+//!   the [Polytile tutorial](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/tutorials/polytile_tutorial.md),
+//!   and a [toy test definition](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/tutorials/toy_test_definition.md).
+//! - Guides: [embedding Polydat in a host](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/guides/embedding.md),
+//!   [compilation levels](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/guides/compilation.md),
+//!   and [engine-ladder performance](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/guides/performance.md).
+//! - Reference: the [node library](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/reference/nodes.md).
+//! - Design: the [specifications](https://github.com/nosqlbench/polydat/tree/main/crates/polydat/docs/design)
+//!   the code implements, with their axioms and landing records.
+//!
 //! ## Architecture
 //!
 //! ```text
@@ -133,7 +150,7 @@ pub mod viz;
 /// Polytile at the host boundary (SRD 114 §5.6): build a tile from
 /// template text, from structural JSON text, or from a parsed JSON
 /// value, then compile it with a program via
-/// [`dsl::compile_polydat_with_tiles`].
+/// [`tile::compile_polydat_with_tiles`].
 pub mod tile {
     pub use crate::dsl::ast::{TileBodyKind, TileDef, TileOptions, TilePiece};
     pub use crate::dsl::compile::compile_polydat_with_tiles;
