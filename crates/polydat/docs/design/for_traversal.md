@@ -579,10 +579,10 @@ where it has ordinary wired access to everything the scope can see.
    tuple index.
 6. **Examples and docs.** Done. `examples/toy_test_definition.polydat`
    binds its flow as a producer and traverses it, and the `polydat`
-   binary runs it in traversal mode; `docs/toy_test_definition.md` shows
+   binary runs it in traversal mode; `docs/tutorials/toy_test_definition.md` shows
    the grammar and real output. `examples/for_producer.rs` and
    `examples/for_traversal.rs` back two new sections of
-   `docs/illustrations.md`. The README describes the construct in its
+   `docs/tutorials/illustrations.md`. The README describes the construct in its
    iteration section and links here.
 
 Each step lands with its tests and leaves the previous surfaces working.

@@ -9,7 +9,7 @@ of one coordinate, so any of them can be regenerated on any fiber or
 host without state.
 
 The file is
-[`examples/toy_test_definition.polydat`](../examples/toy_test_definition.polydat).
+[`examples/toy_test_definition.polydat`](../../examples/toy_test_definition.polydat).
 It is driven by the `polydat` binary with no host code. From the repository:
 
 ```text
@@ -246,7 +246,7 @@ compiles the body once and the binary activates it sixteen times; the
 build counter stays flat while it does. What the file does not decide is
 scheduling: how many fibers, how many cycles per activation, and what to
 do with each statement are the host's choices, and the binary exposes
-them as options. The contract is [The `for` Construct](design/for_traversal.md);
-the document tiles are [Polytile](design/polytile.md), walked through in
+them as options. The contract is [The `for` Construct](../design/for_traversal.md);
+the document tiles are [Polytile](../design/polytile.md), walked through in
 [the Polytile tutorial](polytile_tutorial.md); each feature is shown on
 its own in [Illustrations](illustrations.md).

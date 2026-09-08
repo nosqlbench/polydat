@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Tutorial companion: every program in docs/polytile_tutorial.md,
+//! Tutorial companion: every program in docs/tutorials/polytile_tutorial.md,
 //! compiled and rendered here so the document's output is real.
 
 use polydat::dsl::compile_polydat;

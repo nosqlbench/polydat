@@ -47,15 +47,34 @@ and a consistent set of precedence and referencing rules.
 
 ## Documentation
 
-- [Illustrations](docs/illustrations.md) — runnable examples through the Polydat
-  DSL and the programmatic Assembler API.
-- [Polytile tutorial](docs/polytile_tutorial.md) — templates whose holes are
-  wires: JSON, CSV, and text documents rendered per cycle, with projections
-  and branches.
-- [Compilation](docs/compilation.md) — Phase 1 / 2 / 3 levels, Hybrid mode,
-  throughput numbers, and the `jit` /
-  `vectordata` Cargo features.
-- [Nodes](docs/nodes.md) — the 250+ built-in function nodes.
+The [documentation index](docs/README.md) lists everything by section.
+
+Tutorials, each backed by a runnable example:
+
+- [Illustrations](docs/tutorials/illustrations.md) — the DSL and the
+  programmatic Assembler API, function graphs, libraries, parameter
+  spaces, partitions, traversal, and tiles.
+- [Polytile tutorial](docs/tutorials/polytile_tutorial.md) — templates whose
+  holes are wires: JSON, CSV, and text documents rendered per cycle, with
+  projections, branches, and the corner cases.
+- [A toy test definition](docs/tutorials/toy_test_definition.md) — one
+  grammar for coordinates, a workload, and the documents it emits.
+
+Guides:
+
+- [Embedding Polydat](docs/guides/embedding.md) — host and kernel
+  responsibilities, the APIs for compiling, driving, sharing, and
+  extending a kernel, and the extension points, each with real output.
+- [Compilation](docs/guides/compilation.md) — Phase 1 / 2 / 3 levels, Hybrid
+  mode, throughput numbers, and the `jit` / `vectordata` Cargo features.
+- [Engine-ladder performance](docs/guides/performance.md) — one typed graph
+  measured on every engine.
+
+Reference and design:
+
+- [Nodes](docs/reference/nodes.md) — the 250+ built-in function nodes.
+- [Design documents](docs/design) — the specifications the code
+  implements, with their axioms and landing records.
 - [License](docs/license.md) — Apache-2.0; full text at [LICENSE](LICENSE).
 
 Part of the [nb-rs](https://github.com/nosqlbench/nb-rs) workspace.

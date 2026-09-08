@@ -18,7 +18,7 @@ For all of these features working together in one grammar file, see
 [A toy test definition](toy_test_definition.md).
 
 Every code block in this file is the body of a runnable example under
-[`polydat/examples/`](../examples/). They all compile under
+[`polydat/examples/`](../../examples/). They all compile under
 `cargo build --examples` and produce the printed outputs you see
 quoted below. If a snippet ever drifts from what the example actually
 does, the example is the source of truth.
@@ -39,7 +39,7 @@ let user_id = kernel.pull("user_id").as_u64();
 assert!(user_id < 1_000_000);
 ```
 
-See [`examples/basic.rs`](../examples/basic.rs) for the full runnable form.
+See [`examples/basic.rs`](../../examples/basic.rs) for the full runnable form.
 
 ## From the Assembler API
 
@@ -58,7 +58,7 @@ kernel.set_inputs(&[42]);
 assert!(kernel.pull("user_id").as_u64() < 1_000_000);
 ```
 
-See [`examples/assembler.rs`](../examples/assembler.rs).
+See [`examples/assembler.rs`](../../examples/assembler.rs).
 
 ---
 
@@ -103,7 +103,7 @@ ever runs.
 Note: Polydat numeric literals don't accept Rust-style underscores —
 `1000000` is fine, `1_000_000` is a parse error.
 
-See [`examples/function_graph_grammar.rs`](../examples/function_graph_grammar.rs).
+See [`examples/function_graph_grammar.rs`](../../examples/function_graph_grammar.rs).
 
 ## A procedural generation kernel
 
@@ -136,8 +136,8 @@ let results: Vec<u64> = std::thread::scope(|s| {
 // All threads produce the same value (915720 for coord=42).
 ```
 
-See [`examples/generation_kernel.rs`](../examples/generation_kernel.rs)
-and [`examples/multi_thread.rs`](../examples/multi_thread.rs) (the
+See [`examples/generation_kernel.rs`](../../examples/generation_kernel.rs)
+and [`examples/multi_thread.rs`](../../examples/multi_thread.rs) (the
 larger benchmark form).
 
 ## A function library and loader
@@ -169,7 +169,7 @@ The shipped [`stdlib/`](../stdlib/) directory has more examples:
 `identity.polydat`, `distributions.polydat`, `hashing.polydat`, `modeling.polydat`, etc.
 Each is loadable the same way.
 
-See [`examples/library_and_loader.rs`](../examples/library_and_loader.rs).
+See [`examples/library_and_loader.rs`](../../examples/library_and_loader.rs).
 
 ## A runtime type-safety reifier
 
@@ -210,7 +210,7 @@ returns `u64` (0 or 1) rather than `Bool`. The `Bool` variant of
 few others, but most comparison-driven workloads stay in u64 for
 fast-path math.
 
-See [`examples/type_safety.rs`](../examples/type_safety.rs).
+See [`examples/type_safety.rs`](../../examples/type_safety.rs).
 
 ## A parameter space projection system
 
@@ -251,7 +251,7 @@ Replace it with a finite cardinality to cap the total space.
 `partition` nodes (see [nodes.md §Determinism](nodes.md#determinism-and-sampling))
 give type-checked access to the resulting cells.
 
-See [`examples/parameter_space.rs`](../examples/parameter_space.rs).
+See [`examples/parameter_space.rs`](../../examples/parameter_space.rs).
 
 ## Partitioning a domain across fibers
 
@@ -326,9 +326,9 @@ can be regenerated from its ordinal alone. `subdivide` splits the slice
 again with the same boundary math, which is how a fiber hands work to
 worker threads. The full spec language, including recipes, windows,
 gaps, and ordering, is in
-[Cursor Partitions](design/cursor_partitions.md).
+[Cursor Partitions](../design/cursor_partitions.md).
 
-See [`examples/cursor_partitions.rs`](../examples/cursor_partitions.rs).
+See [`examples/cursor_partitions.rs`](../../examples/cursor_partitions.rs).
 
 ## Traversing a parameter space
 
@@ -379,9 +379,9 @@ from the boundary, and `halton` is a low-discrepancy sample that
 covers the space evenly at any truncation. A `CoordinateStream` yields
 the tuples; a `ScopedKernelStream` yields a kernel instance per tuple
 with the coordinates already bound. Both are specified in
-[Comprehension Forms](design/comprehension_forms.md).
+[Comprehension Forms](../design/comprehension_forms.md).
 
-See [`examples/parameter_space_traversal.rs`](../examples/parameter_space_traversal.rs).
+See [`examples/parameter_space_traversal.rs`](../../examples/parameter_space_traversal.rs).
 
 ## A comprehension producer
 
@@ -429,7 +429,7 @@ after two pulls on a: a has 7 left, b has 9
 
 The producer is an init-time constant, so it costs nothing per cycle,
 and it interpolates as its `for` text. See
-[`examples/for_producer.rs`](../examples/for_producer.rs).
+[`examples/for_producer.rs`](../../examples/for_producer.rs).
 
 ## A traversal
 
@@ -486,8 +486,8 @@ The comprehension's source reads the parent's `total` through `{total}`
 when the traversal is opened, so a host can change the extern and open
 it again without recompiling. Fibers partition a traversal by taking
 activations by index. The full contract is [The `for`
-Construct](design/for_traversal.md). See
-[`examples/for_traversal.rs`](../examples/for_traversal.rs).
+Construct](../design/for_traversal.md). See
+[`examples/for_traversal.rs`](../../examples/for_traversal.rs).
 
 ## Tiles: documents as wires
 
@@ -519,7 +519,7 @@ Numbers render bare and strings render quoted because the encoder
 reads the wire's type; `@for` repeats its body over a comprehension.
 The walk-through from a one-line text tile to a statement carrying a
 JSON document is [the Polytile tutorial](polytile_tutorial.md). See
-[`examples/polytile_tutorial.rs`](../examples/polytile_tutorial.rs).
+[`examples/polytile_tutorial.rs`](../../examples/polytile_tutorial.rs).
 
 ## A context layering API
 
@@ -551,7 +551,7 @@ scope-trees over parent kernels — with typed import/export contracts
 at every boundary. The principle is the same; the multi-scope case
 just needs more bookkeeping.
 
-See [`examples/context_layering.rs`](../examples/context_layering.rs).
+See [`examples/context_layering.rs`](../../examples/context_layering.rs).
 
 ## An expression language
 
@@ -587,4 +587,4 @@ cycle  user_id  word     bucket
     4   862456  FOUR          1
 ```
 
-See [`examples/expression_language.rs`](../examples/expression_language.rs).
+See [`examples/expression_language.rs`](../../examples/expression_language.rs).

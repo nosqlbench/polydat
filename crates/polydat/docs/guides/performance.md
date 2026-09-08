@@ -60,7 +60,7 @@ has P1 semantics, a P2 compiled closure, and a P3 lowering. P3 therefore cannot
 silently fall back while this benchmark is being assembled.
 
 The exact source is
-[`examples/engine_ladder.polydat`](../examples/engine_ladder.polydat):
+[`examples/engine_ladder.polydat`](../../examples/engine_ladder.polydat):
 
 ```polydat
 input cycle: u64
@@ -197,5 +197,5 @@ This benchmark does not include graph compilation latency, partially clean
 graphs, selective output pulls, mixed P1/P3 cones, SIMD auto-promotion, strings
 or reference-backed values, host I/O, or application-level scheduling. Those
 are separate questions with different cost centers. See the detailed
-[engine design](design/engines.md) and [SIMD ISA and auto-promotion
-study](design/simd_isa_autopromotion.md) for those execution modes.
+[engine design](../design/engines.md) and [SIMD ISA and auto-promotion
+study](../design/simd_isa_autopromotion.md) for those execution modes.

@@ -11,11 +11,11 @@ with nested projections carried inside a database statement, then works
 through the corner cases that matter in practice: escapes, layout,
 encoding rules, empty projections, modules, what the compiler refuses,
 and what the engines guarantee. Every program here is run by
-[`examples/polytile_tutorial.rs`](../examples/polytile_tutorial.rs);
+[`examples/polytile_tutorial.rs`](../../examples/polytile_tutorial.rs);
 the quoted outputs are what it prints. The complete grammar and
-semantics are in [Polytile](design/polytile.md) (SRD 114); the compiled
+semantics are in [Polytile](../design/polytile.md) (SRD 114); the compiled
 representation is in [Compiled Non-Scalar
-Slots](design/compiled_handles.md) (SRD 115).
+Slots](../design/compiled_handles.md) (SRD 115).
 
 Part one, sections 1 to 10, is the basics. Part two, sections 11 to 16,
 is the corner cases.
@@ -265,7 +265,7 @@ Two forms of source appear here:
 - **A bound producer**, `axes`, declared once with the `for` construct
   and reused. Its elements `k` and `side` are the body's wires. This is
   the same producer surface as [The `for`
-  Construct](design/for_traversal.md); a tile projects over it instead
+  Construct](../design/for_traversal.md); a tile projects over it instead
   of traversing it.
 
 `sep "..."` sets the text between repetitions. The default is `,` for
@@ -486,7 +486,7 @@ keyword produces, and the tiles see every wire the program defines.
 
 ## 10. Running a tile program from the command line
 
-[`examples/polytile_demo.polydat`](../examples/polytile_demo.polydat)
+[`examples/polytile_demo.polydat`](../../examples/polytile_demo.polydat)
 puts the pieces together: a reading document with a projection and a
 branch, and the statement that loads it.
 
@@ -694,7 +694,7 @@ A module's parameter types are the port-type keywords, and `str` and
 the same way: it compiles inside the body's program, its holes see the
 elements and the cascaded outer wires, and `--emit tile:<name>` can
 select it. The toy test definition in
-[`docs/toy_test_definition.md`](toy_test_definition.md) renders a
+[`docs/tutorials/toy_test_definition.md`](toy_test_definition.md) renders a
 document per reading that way.
 
 ## 15. What the compiler refuses

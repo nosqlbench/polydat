@@ -61,7 +61,7 @@ projection, cursor partitions, traversal strategies, type safety, and sharing
 programs across threads.
 
 For everything in one place, [A toy test
-definition](crates/polydat/docs/toy_test_definition.md) is a single grammar
+definition](crates/polydat/docs/tutorials/toy_test_definition.md) is a single grammar
 file that declares its parameters, describes itself, binds its test flow as
 a comprehension, traverses it with `for`, unwinds a hierarchic dataset in
 each activation, and derives the load, read, and verify statements of a
@@ -171,7 +171,7 @@ three engines on one core:
 | P3 native | 46 ns | 21.8 M cycles/s | 8.7x |
 
 The graph, measurement contract, correctness gate, and benchmark command are in
-[Engine-ladder performance](crates/polydat/docs/performance.md).
+[Engine-ladder performance](crates/polydat/docs/guides/performance.md).
 
 ## Why one graph?
 
@@ -260,7 +260,7 @@ design](crates/polydat/docs/design/jit_boundary.md) for the detailed execution
 contracts.
 
 For a reproducible example of one non-trivial graph running through all three
-levels, see [Engine-ladder performance](crates/polydat/docs/performance.md). It
+levels, see [Engine-ladder performance](crates/polydat/docs/guides/performance.md). It
 includes the source graph, P1/P2/P3 measurement contract, correctness gate, and
 Criterion benchmark command.
 
@@ -314,7 +314,7 @@ variant. Most consumers only need the `polydat` crate; they do not need a direct
 dependency on `polydat-derive`.
 
 The built-in catalog and source locations are summarized in [Node
-Library](crates/polydat/docs/nodes.md).
+Library](crates/polydat/docs/reference/nodes.md).
 
 ## Command line
 
@@ -406,33 +406,55 @@ cargo bench -p polydat --bench simd_autopromotion
 
 ## Documentation map
 
-Good starting points:
+The [documentation index](crates/polydat/docs/README.md) lists every
+document by section: tutorials, guides, reference, and design.
 
-- [A toy test definition](crates/polydat/docs/toy_test_definition.md) — one
+Tutorials:
+
+- [A toy test definition](crates/polydat/docs/tutorials/toy_test_definition.md) — one
   grammar file combining parameters, self-description, hierarchy, modules,
   partitions, and a test flow.
-- [Illustrations](crates/polydat/docs/illustrations.md) — runnable DSL and
+- [Illustrations](crates/polydat/docs/tutorials/illustrations.md) — runnable DSL and
   assembler examples, including cursor partitions and traversal strategies.
+- [Polytile tutorial](crates/polydat/docs/tutorials/polytile_tutorial.md) —
+  templates whose holes are wires, from a one-line text tile to nested
+  projections and the compiler's refusals.
+
+Guides:
+
+- [Embedding Polydat](crates/polydat/docs/guides/embedding.md) — what a
+  host owns and what Polydat owns, the APIs for compiling, driving,
+  sharing, and extending a kernel, and the extension points.
+- [Compilation levels](crates/polydat/docs/guides/compilation.md) — the
+  interpreter, the closure tier, the hybrid kernel, and native code.
+- [Engine-ladder Performance](crates/polydat/docs/guides/performance.md) — one typed
+  graph measured consistently through P1, P2, and P3.
+
+Reference:
+
+- [Node Library](crates/polydat/docs/reference/nodes.md) — built-in function families and
+  their source modules.
+
+Design:
+
 - [Language Spec](crates/polydat/docs/design/language_spec.md) — syntax, type
   inference, node contracts, wiring, and invalidation.
-- [Node Library](crates/polydat/docs/nodes.md) — built-in function families and
-  their source modules.
 - [Runtime Model](crates/polydat/docs/design/runtime_model.md) — ownership,
   caching, invalidation, layering, and determinism axioms.
 - [Graph Compiler](crates/polydat/docs/design/graph_compiler.md) — compiler
   passes and their ordering.
 - [Engines](crates/polydat/docs/design/engines.md) — P1/P2/P3 execution and
   provenance optimization.
-- [Engine-ladder Performance](crates/polydat/docs/performance.md) — one typed
-  graph measured consistently through P1, P2, and P3.
 - [Comprehension Forms](crates/polydat/docs/design/comprehension_forms.md) —
   coordinate algebra and dispense semantics.
 - [The `for` Construct](crates/polydat/docs/design/for_traversal.md) —
   comprehension producers and traversal scopes in the grammar: typing,
   activation, cursors, and the one-program-per-position property.
-- [Polytile](crates/polydat/docs/design/polytile.md) — draft specification
-  for compiled variate templates: static skeletons with typed holes,
-  encodings, projections over comprehensions, and native lowering.
+- [Polytile](crates/polydat/docs/design/polytile.md) — compiled variate
+  templates: static skeletons with typed holes, encodings, projections
+  over comprehensions, and native lowering.
+- [Compiled Non-Scalar Slots](crates/polydat/docs/design/compiled_handles.md) —
+  how strings, JSON, and tiles flow through the compiled engines.
 - [Cursor Partitions](crates/polydat/docs/design/cursor_partitions.md) — partition
   grammar, resolution, ordering, metadata, and cursor narrowing.
 - [Type System](crates/polydat/docs/design/type_system.md) — scalar, vector,
