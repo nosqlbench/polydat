@@ -7,10 +7,10 @@ and the invariants.
 
 ## Tutorials
 
-Walk-throughs with real output; every program in them is run by an
-example under `examples/`. For the polytile tutorial and the embedding
-guide, `tests/guide_output.rs` checks that every quoted `text` block is
-verbatim output of the companion example.
+Walk-throughs with real output. Every program in them is run by an
+example under `examples/` or by the binary, and `tests/guide_output.rs`
+checks that every quoted `text` block in the tutorials and the embedding
+guide is output of that run.
 
 - [Illustrations](tutorials/illustrations.md): the DSL, the assembler
   API, function graphs, procedural generation, libraries, type safety,

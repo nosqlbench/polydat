@@ -1,70 +1,214 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Every fenced `text` block in a guide is verbatim output of the
-//! guide's companion example. The guides promise that every quoted
-//! line is real; this test makes the promise fail loudly when the
-//! example or the compiler drifts from the document.
+//! Every fenced `text` block in a tutorial or guide is real output. The
+//! documents promise that every quoted line was produced by running
+//! something; this test makes the promise fail loudly when an example,
+//! the binary, or the compiler drifts from the document.
 //!
-//! Output that a guide quotes from somewhere other than its example
-//! (the binary, another tool) is fenced as `console` and not checked.
+//! How a block is attributed to its producer:
+//!
+//! - A block whose first line starts with `$ polydat ` is a binary run.
+//!   The command (with `\` continuations joined) is executed from the
+//!   `examples/` directory and the remaining lines are its output.
+//! - Otherwise the block belongs to the first `examples/<name>.rs` link
+//!   in its `##` section, or to the document's default example.
+//!
+//! Every non-blank quoted line must appear in the producer's output, in
+//! order. A line consisting of `...` marks an elision and matches
+//! nothing. Output quoted from a source this test cannot run is fenced
+//! as `console` and skipped.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Run a companion example and return its stdout with normalized
-/// line endings.
-fn example_output(example: &str) -> String {
-    let out = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--all-features", "--example", example])
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .output()
-        .unwrap_or_else(|e| panic!("run example {example}: {e}"));
-    assert!(out.status.success(), "example {example} failed:\n{}", String::from_utf8_lossy(&out.stderr));
-    String::from_utf8_lossy(&out.stdout).replace("\r\n", "\n")
+fn manifest_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// The `text` fenced blocks of a document, each with the line number
-/// of its opening fence.
-fn text_blocks(doc: &str) -> Vec<(usize, String)> {
+/// Run the crate's binary or one of its examples. The binary's progress
+/// lines go to stderr and precede its output on a terminal, so a
+/// binary run is quoted as stderr followed by stdout.
+fn run(args: &[&str], cwd: &Path, with_stderr: bool) -> String {
+    let manifest = manifest_dir().join("Cargo.toml");
+    let out = Command::new(env!("CARGO"))
+        .args(["run", "--quiet", "--all-features", "--manifest-path"])
+        .arg(&manifest)
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .unwrap_or_else(|e| panic!("cargo run {args:?}: {e}"));
+    assert!(out.status.success(), "cargo run {args:?} failed:\n{}", String::from_utf8_lossy(&out.stderr));
+    let mut text = String::new();
+    if with_stderr {
+        text.push_str(&String::from_utf8_lossy(&out.stderr));
+    }
+    text.push_str(&String::from_utf8_lossy(&out.stdout));
+    text.replace("\r\n", "\n")
+}
+
+/// What produced a block.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+enum Producer {
+    Example(String),
+    Binary(Vec<String>),
+}
+
+impl Producer {
+    fn output(&self) -> String {
+        match self {
+            Producer::Example(name) => run(&["--example", name], &manifest_dir(), false),
+            Producer::Binary(args) => {
+                let mut argv = vec!["--"];
+                argv.extend(args.iter().map(String::as_str));
+                run(&argv, &manifest_dir().join("examples"), true)
+            }
+        }
+    }
+}
+
+struct Block {
+    line: usize,
+    producer: Option<Producer>,
+    lines: Vec<String>,
+}
+
+/// The first `examples/<name>.rs` link inside each `##` section, keyed
+/// by the section's starting line.
+fn section_examples(lines: &[&str]) -> Vec<(usize, Option<String>)> {
+    let mut sections: Vec<(usize, Option<String>)> = vec![(0, None)];
+    for (i, line) in lines.iter().enumerate() {
+        if line.starts_with("## ") {
+            sections.push((i, None));
+        } else if let Some(rest) = line.split("examples/").nth(1) {
+            let name: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+            if rest[name.len()..].starts_with(".rs") {
+                let current = sections.last_mut().unwrap();
+                if current.1.is_none() {
+                    current.1 = Some(name);
+                }
+            }
+        }
+    }
+    sections
+}
+
+fn text_blocks(doc: &str, default: Option<&str>) -> Vec<Block> {
+    let lines: Vec<&str> = doc.lines().collect();
+    let sections = section_examples(&lines);
+    // A document with a default example is quoted from that example
+    // alone; links to other examples in its prose are cross-references.
+    let example_for = |line: usize| -> Option<String> {
+        default.map(str::to_string).or_else(|| {
+            let section = sections.iter().rev().find(|(start, _)| *start <= line).unwrap();
+            section.1.clone()
+        })
+    };
     let mut blocks = Vec::new();
-    let mut open: Option<(usize, Vec<&str>)> = None;
-    for (i, line) in doc.lines().enumerate() {
+    let mut open: Option<(usize, Vec<String>)> = None;
+    for (i, line) in lines.iter().enumerate() {
         match &mut open {
-            None if line.trim_end() == "```text" => open = Some((i + 1, Vec::new())),
+            None if line.trim_end() == "```text" => open = Some((i, Vec::new())),
             None => {}
-            Some((start, lines)) if line.starts_with("```") => {
-                blocks.push((*start, lines.join("\n")));
+            Some((start, body)) if line.starts_with("```") => {
+                let start = *start;
+                let body = std::mem::take(body);
+                let block = if body.first().is_some_and(|l| l.starts_with("$ polydat ")) {
+                    let mut command = String::new();
+                    let mut rest = Vec::new();
+                    let mut continuing = true;
+                    for l in body {
+                        if continuing {
+                            let l = l.trim_start_matches("$ polydat ");
+                            continuing = l.ends_with('\\');
+                            command.push(' ');
+                            command.push_str(l.trim_end_matches('\\'));
+                        } else {
+                            rest.push(l);
+                        }
+                    }
+                    let args = command.split_whitespace().map(str::to_string).collect();
+                    Block { line: start + 1, producer: Some(Producer::Binary(args)), lines: rest }
+                } else {
+                    Block { line: start + 1, producer: example_for(start).map(Producer::Example), lines: body }
+                };
+                blocks.push(block);
                 open = None;
             }
-            Some((_, lines)) => lines.push(line.trim_end()),
+            Some((_, body)) => body.push(line.trim_end().to_string()),
         }
     }
     assert!(open.is_none(), "unterminated fence");
     blocks
 }
 
-fn check(doc: &str, example: &str) {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(doc);
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    let text = text.replace("\r\n", "\n");
-    let blocks = text_blocks(&text);
+/// The quoted lines that do not appear, in order, in the output.
+fn missing_lines(block: &[String], output: &str) -> Vec<String> {
+    let out: Vec<&str> = output.lines().map(str::trim_end).collect();
+    let mut cursor = 0;
+    let mut missing = Vec::new();
+    for line in block {
+        if line.trim().is_empty() || line.trim() == "..." {
+            continue;
+        }
+        match out[cursor..].iter().position(|o| o == line) {
+            Some(p) => cursor += p + 1,
+            None => missing.push(line.clone()),
+        }
+    }
+    missing
+}
+
+fn check(doc: &str, default: Option<&str>) {
+    let path = manifest_dir().join(doc);
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display())).replace("\r\n", "\n");
+    let blocks = text_blocks(&text, default);
     assert!(!blocks.is_empty(), "{doc} has no text blocks");
-    let output: String = example_output(example).lines().map(str::trim_end).collect::<Vec<_>>().join("\n");
-    let missing: Vec<String> = blocks
-        .iter()
-        .filter(|(_, block)| !output.contains(block.as_str()))
-        .map(|(line, block)| format!("{doc}:{line}: not in the output of examples/{example}.rs:\n{block}\n"))
-        .collect();
-    assert!(missing.is_empty(), "{} of {} blocks are not verbatim example output:\n\n{}", missing.len(), blocks.len(), missing.join("\n"));
+    let mut outputs: HashMap<Producer, String> = HashMap::new();
+    let mut failures = Vec::new();
+    for block in &blocks {
+        let Some(producer) = &block.producer else {
+            failures.push(format!("{doc}:{}: no example link in this section and no default", block.line));
+            continue;
+        };
+        let output = outputs.entry(producer.clone()).or_insert_with(|| producer.output());
+        let missing = missing_lines(&block.lines, output);
+        if !missing.is_empty() {
+            failures.push(format!("{doc}:{}: lines not produced by {producer:?}:\n  {}", block.line, missing.join("\n  ")));
+        }
+    }
+    assert!(failures.is_empty(), "{} of {} blocks are not real output:\n\n{}\n", failures.len(), blocks.len(), failures.join("\n\n"));
 }
 
 #[test]
 fn embedding_guide_quotes_its_example() {
-    check("docs/guides/embedding.md", "embedding_guide");
+    check("docs/guides/embedding.md", Some("embedding_guide"));
 }
 
 #[test]
 fn polytile_tutorial_quotes_its_example() {
-    check("docs/tutorials/polytile_tutorial.md", "polytile_tutorial");
+    check("docs/tutorials/polytile_tutorial.md", Some("polytile_tutorial"));
+}
+
+#[test]
+fn illustrations_quote_their_examples() {
+    check("docs/tutorials/illustrations.md", None);
+}
+
+#[test]
+fn toy_tutorial_quotes_the_binary() {
+    check("docs/tutorials/toy_test_definition.md", None);
+}
+
+/// The toy tutorial reproduces its grammar file in full; the copy must
+/// be the file.
+#[test]
+fn toy_tutorial_quotes_the_grammar_file() {
+    let doc = std::fs::read_to_string(manifest_dir().join("docs/tutorials/toy_test_definition.md")).unwrap().replace("\r\n", "\n");
+    let file = std::fs::read_to_string(manifest_dir().join("examples/toy_test_definition.polydat")).unwrap().replace("\r\n", "\n");
+    let after_heading = doc.split("\n## The grammar\n").nth(1).expect("grammar section");
+    let block = after_heading.split("```polydat\n").nth(1).expect("polydat fence").split("\n```").next().unwrap();
+    let normalize = |s: &str| s.lines().map(str::trim_end).collect::<Vec<_>>().join("\n").trim_end().to_string();
+    assert_eq!(normalize(block), normalize(&file), "the quoted grammar differs from examples/toy_test_definition.polydat");
 }

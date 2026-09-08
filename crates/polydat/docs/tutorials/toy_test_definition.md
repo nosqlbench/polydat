@@ -12,13 +12,13 @@ The file is
 [`examples/toy_test_definition.polydat`](../../examples/toy_test_definition.polydat).
 It is driven by the `polydat` binary with no host code. From the repository:
 
-```text
+```sh
 cargo run -p polydat -- run crates/polydat/examples/toy_test_definition.polydat --cycles 2 --emit map
 ```
 
 ## The grammar
 
-```text
+```polydat
 // Toy test definition: a self-describing, hierarchic, parameterized
 // dataset and test flow in one Polydat grammar file.
 //

@@ -160,7 +160,8 @@ position, and the encoder chosen, so the typing of a document can be
 read before it runs. For the demo file of section 10, abridged to a
 few of its holes:
 
-```console
+```text
+$ polydat explain polytile_demo.polydat tiles
 == tiles: how each hole is typed and encoded ==
 Each tile compiled to a skeleton: static runs copied whole, encoded holes, branches, and projections whose bodies are programs of their own.
   doc          json: 14 static run(s) totalling 245 bytes, 8 hole(s), 1 branch(es), 1 projection(s)
@@ -202,7 +203,7 @@ tile row : csv := "${cycle},${note},${note!}"
 ```
 
 ```text
-7,"has, comma",has, comma
+cycle 7 row: 7,"has, comma",has, comma
 ```
 
 The second field is quoted because it contains a comma. The third is the
@@ -530,7 +531,8 @@ polydat run examples/polytile_demo.polydat --cycles 5 --emit map --outputs load 
 
 The fifth row, where the `alert` branch is taken:
 
-```console
+```text
+$ polydat run polytile_demo.polydat --cycles 5 --emit map --outputs load -q
 load=INSERT INTO toy.readings (tenant_id, device_id, doc) VALUES (603978, '86a03fe5-bba5-4b06-b8ec-3cb9441ca1b6', '{
     "meta": { "schema": 3, "source": "polydat", "units": { "temp": "C" } },
     "tenant": 603978,

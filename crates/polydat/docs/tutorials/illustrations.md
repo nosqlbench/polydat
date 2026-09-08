@@ -236,13 +236,18 @@ for cycle in [0u64, 1, 99, 100, 49_999, 50_000] {
 Actual output (from the runnable example):
 
 ```text
-cycle=0      → device=0  reading=0
-cycle=1      → device=1  reading=0    (devices fill before readings advance)
-cycle=99     → device=99 reading=0
-cycle=100    → device=0  reading=1
-cycle=49999  → device=99 reading=499
-cycle=50000  → device=0  reading=500  (second dim unbounded with radix `0`)
+cycle  device  reading
+-----  ------  -------
+    0       0        0
+    1       1        0
+   99      99        0
+  100       0        1
+49999      99      499
+50000       0      500
 ```
+
+Devices fill before readings advance: the first dimension wraps at its
+cardinality of 100 and the second increments once per wrap.
 
 The trailing `0` in `mixed_radix(cycle, 100, 0)` declares the second
 dimension as unbounded — it grows indefinitely rather than wrapping.
@@ -337,7 +342,7 @@ algebra has four constructors, `cartesian`, `zip`, `union`, and
 `filter`, plus `order`, which applies a named traversal strategy.
 In the text form that hosts embed, the same space reads:
 
-```text
+```polydat
 for k in 1..4, limit in 10..40 step 10
 for k in 1..4, limit in 10..40 step 10 order halton/5
 for k in 1..4, limit in 10..40 step 10 where {k} >= 2 && {limit} != 20
@@ -580,11 +585,11 @@ Sample output (from the runnable example):
 ```text
 cycle  user_id  word     bucket
 -----  -------  -------  ------
-    0   527897  ZERO          1
-    1   460078  ONE           0
-    2   564547  TWO           1
-    3   960189  THREE         1
-    4   862456  FOUR          1
+    0   607535  ZERO          1
+    1   822465  ONE           1
+    2   348110  TWO           0
+    3   139053  THREE         0
+    4   603978  FOUR          1
 ```
 
 See [`examples/expression_language.rs`](../../examples/expression_language.rs).
