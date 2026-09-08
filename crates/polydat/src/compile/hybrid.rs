@@ -786,6 +786,8 @@ pub fn build_hybrid(
                     }
                 }
                 ClosureOp::U64(op)
+            } else if let Some(op) = crate::compile::assembly::identity_op(node.as_ref()) {
+                ClosureOp::U64(op)
             } else if let Some(kit) = node.compiled_slot() {
                 scratch.extend(kit.scratch.iter().map(|e| crate::ast::ScratchBuf::new(*e)));
                 // Axiom S9(a): map this step's Ref output pairs to

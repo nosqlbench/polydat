@@ -42,6 +42,9 @@ impl Compiler {
             span: tile.span,
         };
         let pieces = self.splice_tiles(&tile.pieces, &tile.name, &tile.encoding, 0)?;
+        if encoding == "json" && !tile.options.in_string && !tile.name.starts_with("__") {
+            Self::validate_json_skeleton_impl(&tile.name, &pieces)?;
+        }
         let ops = lowering.lower_pieces(self, asm, &pieces, None)?;
         let spec = TileSpec { name: tile.name.clone(), encoding, ops, children: lowering.children };
         let mut shape = SkeletonShape::default();
@@ -69,6 +72,36 @@ impl Compiler {
         }
         self.tiles.push(tile.clone());
         Ok(())
+    }
+
+    /// SRD 114 §5.2: a `json` skeleton must be valid JSON once every
+    /// hole is a placeholder. Every hole stands in as `0`, which is a
+    /// value in value position and text inside a string or a key; a
+    /// projection body appears once; a branch shows its first arm. A
+    /// document that fails to parse is rejected here, with serde's
+    /// position, rather than rendering malformed output per cycle.
+    /// Author tiles only: the compiler's own body tiles are fragments.
+    fn validate_json_skeleton_impl(name: &str, pieces: &[TilePiece]) -> Result<(), String> {
+        fn placeholder(pieces: &[TilePiece], out: &mut String) {
+            for piece in pieces {
+                match piece {
+                    TilePiece::Static(s) => out.push_str(s),
+                    TilePiece::Hole(_) => out.push('0'),
+                    TilePiece::Projection { body, .. } => placeholder(body, out),
+                    TilePiece::Branch { then, .. } => placeholder(then, out),
+                }
+            }
+        }
+        let mut doc = String::new();
+        placeholder(pieces, &mut doc);
+        match serde_json::from_str::<serde_json::Value>(&doc) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!(
+                "tile '{name}': the json body is not valid JSON once every hole is a placeholder: {e}; \
+                 with holes as `0`, one repetition per projection, and each branch's first arm, the skeleton reads: {}",
+                doc.trim()
+            )),
+        }
     }
 
     /// Replace splice holes, `${name}` where `name` is an earlier tile,

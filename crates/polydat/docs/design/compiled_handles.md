@@ -558,4 +558,15 @@ Kept short; the normative text above is what the code does. Dates are
   S10 allowlist for that reason. The lane passes clean, leak check
   included.
 
+- **Coverage review.** Extending the differential's generator to every
+  landed shape found two nodes without a P2 form that the P3 tiers had
+  masked: a string literal (`const_str`, now a `compiled_u64` override
+  that stores the interned static handle, as its P3 lowering does) and
+  `identity`, which is polymorphic and so has no kit of its own; the
+  P2 and hybrid builders now synthesize a slot copy for it on every
+  color but `Ref2`, whose pairs may not be forwarded (S3). A longer
+  sweep then found the compiler's own port passthrough
+  (`__port_<name>`, inserted for a hole's adapter chain) in the same
+  state; it now carries the same slot copy.
+
 No refinements remain recorded.

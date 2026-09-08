@@ -71,7 +71,8 @@ impl Gen {
             2 => Some("text"),
             _ => Some("csv"),
         };
-        Gen { rng, opts: TileOptions { open: open.into(), close: close.into(), sigil: sigil.into(), strict, in_string: false }, encoding }
+        let in_string = rng.coin(10);
+        Gen { rng, opts: TileOptions { open: open.into(), close: close.into(), sigil: sigil.into(), strict, in_string }, encoding }
     }
 
     /// Static text that never contains the open delimiter, the sigil
@@ -181,6 +182,9 @@ impl Gen {
         }
         if self.opts.strict {
             opts.push("strict".to_string());
+        }
+        if self.opts.in_string {
+            opts.push("instring".to_string());
         }
         if !opts.is_empty() {
             header.push_str(&format!(" ({})", opts.join(", ")));

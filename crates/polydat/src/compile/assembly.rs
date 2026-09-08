@@ -216,9 +216,28 @@ fn node_step_op(
     if let Some(op) = node.compiled_handle(entry_base, wire_types) {
         return Some((crate::compile::closures::StepOp::U64(op), Vec::new()));
     }
+    if let Some(op) = identity_op(node) {
+        return Some((crate::compile::closures::StepOp::U64(op), Vec::new()));
+    }
     node.compiled_slot().map(|kit| {
         (crate::compile::closures::StepOp::Slot(kit.op), kit.scratch)
     })
+}
+
+/// The compiled form of `identity`, synthesized by the builder: a slot
+/// copy, for every port color except `Ref2`, whose pairs may not be
+/// forwarded by an identity-style step (engines.md §7, axiom S3). The
+/// node itself is polymorphic over `Value` and so has no kit of its
+/// own; the builder knows the resolved port type and can supply one.
+pub(crate) fn identity_op(node: &dyn crate::ast::PolydatNode) -> Option<crate::ast::CompiledU64Op> {
+    let meta = node.meta();
+    if meta.name != "identity" || meta.outs.len() != 1 {
+        return None;
+    }
+    if meta.outs[0].typ.slot_color() == crate::ast::SlotColor::Ref2 {
+        return None;
+    }
+    Some(Box::new(|inputs: &[u64], outputs: &mut [u64]| outputs.copy_from_slice(inputs)))
 }
 
 /// The `(slot, entry)` pairs of a node's table-kind output ports,

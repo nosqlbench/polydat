@@ -389,11 +389,16 @@ separator for projections.
 | `text` | heredoc or string | none | none |
 | `csv` | heredoc or string | one record per render; fields separated by the delimiter | the delimiter |
 
-A `json` tile is checked at compile time: the template with every hole
-replaced by a placeholder of its type must parse as JSON, holes must sit
-at value positions, inside string literals, or in key position, and a
-projection's body must be a complete value or member. A tile that fails
-this is a compile error carrying the position inside the template.
+A `json` tile is checked at compile time: the skeleton with every hole
+replaced by the placeholder `0`, each projection body written once, and
+each branch showing its first arm must parse as JSON. `0` is a value in
+value position and text inside a string or a key, so the check accepts
+every well-placed hole and rejects a missing comma, an unquoted key, or
+a hole where no value may go. A tile that fails is a compile error
+naming the tile, serde's position, and the placeholder skeleton.
+Author tiles are checked; the body tiles the compiler makes for nested
+projections are fragments and are not. An `instring` tile begins inside
+a string literal and is not a document, so it is not checked either.
 
 Raw holes bypass the encoding's escaping. They exist for splicing
 pre-encoded content, such as one tile's rendered bytes into another at
@@ -442,7 +447,12 @@ static bytes join this tile's static bytes; adjacent statics coalesce.
 Splicing is transitive and must be acyclic. Only a tile of the same
 encoding is spliced; across encodings the named tile is an ordinary
 wire whose rendered text enters through the hole and is encoded by the
-outer tile's rules, or inlined with `!`. A `json` document carried in a
+outer tile's rules, or inlined with `!`. A splice belongs where a value
+belongs: a `json` tile spliced inside a string literal of another
+`json` tile inlines its skeleton there unescaped, and the compile-time
+check of §5.2 rejects the result. To carry a same-encoding tile's text
+inside a string, bind it first (`s := inner`) and use the binding,
+which is an ordinary string wire. A `json` document carried in a
 `text` statement is `'${doc!}'`; a `text` message carried in a `json`
 document is `"body": ${msg}` and arrives quoted and escaped.
 
@@ -735,3 +745,13 @@ as rules. Dates are 2026-09-04 to 2026-09-06.
   undid nothing; it did not. The P3 renderer is the P1 walk behind a
   helper, not the straight-line skeleton code the first drafts sketched;
   SRD 115 §12 records what remains a refinement.
+- **Coverage review (2026-09-07).** The tier differential's generator
+  was extended to every string, JSON, and tile shape that landed: casts,
+  parses, the typed JSON adapters, `json_merge`, `escape_json`,
+  declared hole types, raw holes, splices, empty and string-position
+  projections, nested projections, structural templates, and a P2
+  push-pull kernel over repeating coordinates. It found that a string
+  literal (`const_str`) had no P2 form, so any program with one fell
+  off P2, and that the compile-time JSON check §5.2 describes had never
+  been implemented; both landed. The tile grammar fuzzer now emits the
+  `instring` option.

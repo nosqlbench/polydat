@@ -51,6 +51,16 @@ impl PolydatNode for PortPassthrough {
     fn eval(&self, inputs: &[Value], outputs: &mut [Value]) {
         outputs[0] = inputs[0].clone();
     }
+
+    /// A passthrough copies its slots, on every color but `Ref2`, whose
+    /// pairs may not be forwarded by an identity-style step (axiom S3).
+    /// Handle slots copy like scalars: a handle is a name (SRD 115 H1).
+    fn compiled_u64(&self) -> Option<crate::ast::CompiledU64Op> {
+        if self.meta.outs[0].typ.slot_color() == crate::ast::SlotColor::Ref2 {
+            return None;
+        }
+        Some(Box::new(|inputs: &[u64], outputs: &mut [u64]| outputs.copy_from_slice(inputs)))
+    }
 }
 
 /// Emit a fixed u64 value (no inputs).
@@ -84,7 +94,8 @@ fn const_u64(value: crate::derive_support::Const<u64>) -> u64 {
 /// fixed table name, a static label, or a separator for string
 /// concatenation pipelines.
 ///
-/// JIT level: P1 (Str output; no compiled_u64 path).
+/// JIT level: P2 stores the interned static handle; P3 lowers to an
+/// immediate static handle (SRD 115 §2.2).
 ///
 /// SRD-80b Phase E migration: `Const<&str>` source captures the
 /// owned `String`; `#[poly_const]` derives an `Arc<str>` cache at
@@ -96,7 +107,15 @@ fn const_str_arc(s: &str) -> std::sync::Arc<str> {
     std::sync::Arc::from(s)
 }
 
-#[crate::polydat_node(category = Diagnostic)]
+/// The P2 form of a string literal (SRD 115 §2.2): the text is interned
+/// at kernel build and the closure stores its static handle, exactly as
+/// the P3 lowering (`JitOp::StaticStr`) does. Nothing enters the arena.
+fn const_str_compiled(node: &ConstStr) -> crate::ast::CompiledU64Op {
+    let handle = crate::kernel::StaticInterner::intern(&node.value);
+    Box::new(move |_inputs: &[u64], outputs: &mut [u64]| outputs[0] = handle)
+}
+
+#[crate::polydat_node(category = Diagnostic, compiled_u64 = const_str_compiled)]
 fn const_str(
     #[poly_default("")] value: crate::derive_support::Const<&str>,
     #[poly_const(const_str_arc, from = value)] cached: &std::sync::Arc<str>,

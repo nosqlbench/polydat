@@ -3,15 +3,22 @@
 Polytile is the templating layer of Polydat. A **tile** is a template
 whose holes are Polydat expressions. It compiles into the same graph as
 everything else, so a rendered document is just another wire: it is
-computed per cycle, it can feed other wires, and it costs what its
-holes cost.
+computed per cycle, it can feed other wires, it runs on every engine
+level, and it costs what its holes cost.
 
 This tutorial builds up from a one-line text tile to a JSON document
-with nested projections that is carried inside a database statement.
-Every program here is run by
+with nested projections carried inside a database statement, then works
+through the corner cases that matter in practice: escapes, layout,
+encoding rules, empty projections, modules, what the compiler refuses,
+and what the engines guarantee. Every program here is run by
 [`examples/polytile_tutorial.rs`](../examples/polytile_tutorial.rs);
 the quoted outputs are what it prints. The complete grammar and
-semantics are in [Polytile](design/polytile.md) (SRD 114).
+semantics are in [Polytile](design/polytile.md) (SRD 114); the compiled
+representation is in [Compiled Non-Scalar
+Slots](design/compiled_handles.md) (SRD 115).
+
+Part one, sections 1 to 10, is the basics. Part two, sections 11 to 16,
+is the corner cases.
 
 ## 1. A text tile
 
@@ -77,7 +84,7 @@ tile doc : json := {
 A block body keeps the layout you wrote, minus the indentation of the
 statement it sits in: the common leading whitespace of its lines is
 removed, so a tile declared inside a `for` body renders the same bytes
-as one at top level.
+as one at top level. Section 11 shows the rule in detail.
 
 The `json` encoding is **position aware**. Look at the three holes:
 
@@ -126,13 +133,14 @@ Every hole is typed when the tile compiles, not when it renders. The
 type comes from three places, in priority order:
 
 1. **The declared type**, `${expr: type}`, wins. It must be reachable
-   from the expression's type through the same adapter catalog the
-   compiler uses between wires: lossless widening such as `u64` to
-   `f64`, display text for `str`, and truth values for `bool` are
-   inserted for you. A conversion the catalog does not have, such as
-   `str` to `u64` or `f64` to `u64`, is a compile error naming the
-   tile, the hole, and both types. Write it in the expression instead,
-   as `${s as u64}` or `${floor_to_u64(f)}`.
+   from the expression's type through the lossless adapters the
+   compiler inserts between wires: widening such as `u64` to `f64`,
+   display text for `str`, and truth values for `bool`. A conversion
+   outside that set, such as `str` to `u64` or `f64` to `u64`, is a
+   compile error naming the tile, the hole, and both types. Write it in
+   the expression instead: `${s as u64}` reaches the whole adapter
+   catalog, including parses, and `${floor_to_u64(f)}` names the
+   rounding.
 2. **The wire type** otherwise: the same inference every binding gets,
    covering literals, inputs and externs, node return types, and
    `for` elements.
@@ -144,17 +152,42 @@ type comes from three places, in priority order:
 A tile declared `(strict)`, or a program compiled in strict mode,
 rejects the implicit adapter a declaration would need, so
 `${cycle: f64}` becomes an error and `${to_f64(cycle)}` is required.
+Section 15 shows the messages.
 
-`polydat explain <file> tiles` prints each hole with its wire type, its
-declared type, the expectation of its position, the encoder chosen,
-and any adapter inserted, so the typing of a document can be read
-before it runs:
+`polydat explain <file> tiles` prints each tile's skeleton and then
+each hole with its wire type, its declared type, the expectation of its
+position, and the encoder chosen, so the typing of a document can be
+read before it runs. For the demo file of section 10, abridged to a
+few of its holes:
 
 ```text
 == tiles: how each hole is typed and encoded ==
-  typed        ${cycle: str}
-               wire u64, declared str; expects any JSON value (str)
-               -> json string, quoted and escaped  adapter u64 -> str
+Each tile compiled to a skeleton: static runs copied whole, encoded holes, branches, and projections whose bodies are programs of their own.
+  doc          json: 14 static run(s) totalling 245 bytes, 8 hole(s), 1 branch(es), 1 projection(s)
+               projection body 0:
+                 input __tuple: u64
+                 extern i: u64
+                 extern reading: u64
+                 extern temp_c: f64
+                 __b0 := tile_encode((reading + i), "json|value|u64||")
+                 __b1 := tile_encode((temp_c + to_f64(i)), "json|value|f64|.1|")
+  load         text: 6 static run(s) totalling 59 bytes, 5 hole(s), 0 branch(es), 0 projection(s)
+Every hole was typed before the tile compiled: a declared type wins, otherwise the wire's type; the hole's position says what the encoding expects there, and the two pick the encoder.
+  doc          ${tenant_id}
+               wire u64; expects any JSON value (u64)
+               -> json number
+  doc          ${device_id}
+               wire str; expects any JSON value (str)
+               -> json string, quoted and escaped
+  doc          ${temp_c | .2}
+               wire f64; expects any JSON value (f64)
+               -> json number, format .2
+  doc          ${if alert}
+               wire u64; expects a truth value (u64)
+               -> truth value as 1 or 0
+  load         ${doc!}
+               wire str; expects text (str)
+               -> raw text, no escaping
 ```
 
 ## 4. A CSV row and a raw hole
@@ -197,8 +230,8 @@ cycle 2 status: {"cycle": 2, "state": "hot"}
 The whitespace that pads the braces is not part of the body: `{ "hot" }`
 renders `"hot"`. Put any spacing you want to keep in the static text
 outside the block. Both bodies may contain holes, other directives, and
-JSON structure of their own, as `"alert"` does in the demo file at the
-end.
+JSON structure of their own, as `"alert"` does in the demo file of
+section 10.
 
 ## 6. Projections
 
@@ -279,7 +312,8 @@ tile grid : json := {
 - **Derivations.** `ks where {k} > 4` filters the producer in place;
   `order halton/4` samples four tuples of a hundred in Halton order.
   A predicate sees the comprehension's elements. A `{name}` for a wire
-  outside the comprehension is a compile error, as it is for `for`.
+  outside the comprehension is a compile error, as it is for `for`;
+  section 15 shows the message.
 - **Generators.** `hash_range(cycle, 1000)` is compiled as a wire of
   the program and its value is the element, one tuple for a scalar and
   one per item for a list such as a JSON array, a vector, or a stream.
@@ -321,6 +355,13 @@ copy the text unchanged, but inside a `json` tile a non-raw hole
 holding a `text` tile would be encoded as a JSON string, which is
 usually what you want when a document embeds a message body.
 
+A splice belongs where a value belongs. Writing `"s": "${inner}"`, a
+same-encoding tile's name inside a string literal, would inline its
+skeleton unescaped inside the string, and the compile-time check of
+section 15 rejects the result. To carry the document's text inside a
+string, bind it first (`s := inner`) and use `${s}`: a binding is an
+ordinary string wire, and the encoder escapes it.
+
 ## 8. Living inside another template
 
 Tiles are often written inside YAML, a Jinja template, or another
@@ -338,7 +379,8 @@ cycle 3 page: Hello {{ user.name }}, cycle 3 is live
 ```
 
 The `{{ user.name }}` passes through untouched for whatever renders it
-next. With default delimiters, a literal `${` is written `${${`.
+next. With default delimiters, a literal `${` is written `${${`;
+section 11 shows it.
 
 ## 9. Templates handed in as data
 
@@ -521,13 +563,223 @@ tile that left its options to the default is re-read under the host's
 before the program compiles, and a tile that declared any option keeps
 all of its own. `polydat explain <file> tiles` then shows the program
 as it compiled, with each tile's skeleton summary above the hole
-typing.
+typing, as in section 3.
 
-A tile may also be declared inside a module body. It inlines with the
-call like any binding: the tile is named with the module's prefix, its
+## 11. Escapes, braces, and block layout
+
+Two questions come up as soon as a template contains the characters
+the grammar uses. A literal open delimiter is written by doubling it,
+`${${`, and it renders as `${`. Braces in static text are ordinary
+text; they only mean something after a directive keyword, and even
+there they are balanced, so a JSON object can sit inside a branch or a
+projection body without escaping.
+
+```polydat
+input cycle: u64
+tile lit := "a literal ${${cycle} and braces {ok} around cycle ${cycle}"
+tile block : json := {
+    "a": ${cycle},
+        "b": { "deep": ${cycle} }
+}
+```
+
+```text
+cycle 3 lit: a literal ${cycle} and braces {ok} around cycle 3
+cycle 3 block: {
+    "a": 3,
+        "b": { "deep": 3 }
+}
+```
+
+The block body shows the layout rule exactly. In the source the tile
+statement is indented twelve spaces and its lines sixteen and twenty;
+the rendered document has the statement's indentation removed and
+keeps the four extra spaces of the `"b"` line. What you wrote relative
+to the statement is what you get, wherever the statement sits. Heredoc
+and string bodies are copied exactly.
+
+## 12. Encoding corner cases
+
+The encoders differ in what they do with a value that contains the
+encoding's own special characters. One string with a quote, a comma,
+and a newline in it, through each of them:
+
+```polydat
+input cycle: u64
+line := printf("quote {} and comma, then newline{}end", "\"", "\n")
+tile injson : json := {"s": ${line}, "in": "x-${line}-y", "n": ${cycle: str}}
+tile row : csv := "${line},${cycle},${cycle | 04}"
+tile txt := "[${line}]"
+tile raw : json := {"raw": "${line!}"}
+```
+
+```text
+cycle 1 injson: {"s": "quote \" and comma, then newline\nend", "in": "x-quote \" and comma, then newline\nend-y", "n": "1"}
+cycle 1 row: "quote "" and comma, then newline
+end",1,0001
+cycle 1 txt: [quote " and comma, then newline
+end]
+cycle 1 raw: {"raw": "quote " and comma, then newline
+end"}
+```
+
+- **JSON, value position** (`"s"`): quoted, with `\"` and `\n`
+  escapes. **JSON, inside a string** (`"in"`): the same escaping with no
+  quotes of its own, so the surrounding literal stays one string.
+- **CSV**: a field containing a comma, a quote, or a newline is wrapped
+  in quotes and its quotes are doubled, the RFC 4180 rule; the other
+  fields are bare. Formats apply first, so `${cycle | 04}` pads.
+- **Text**: nothing is escaped, so the newline is a real newline in the
+  output.
+- **Raw in JSON** (`"raw"`): `!` copies the text with no escaping, and
+  the result is not valid JSON. Raw holes are for text that is already
+  in the target encoding. The compile-time check of section 15 cannot
+  see this, because the hole's value is only known at run time; the
+  author is responsible for what a raw hole carries.
+
+A `None` value in JSON value position renders as `null`; in text and
+CSV it renders as empty text.
+
+## 13. Empty projections and separators
+
+A projection over zero tuples renders nothing, and the object or array
+around it stays valid: the separator is written only between
+repetitions, never before the first or after the last.
+
+```polydat
+input cycle: u64
+tile doc : json := {"before": 1, "none": [@for k in 1..1 { ${k} }], "after": 2, "ys": [@for k in 0..3 sep " | " { ${k + cycle} }]}
+tile line := "@for k in 0..3 {${k}}|@for k in 0..3 sep \", \" {${k}}"
+tile cells : csv := "@for k in 0..3 {${k + cycle}}"
+```
+
+```text
+cycle 1 doc: {"before": 1, "none": [], "after": 2, "ys": [1 | 2 | 3]}
+cycle 1 line: 012|0, 1, 2
+cycle 1 cells: 1,2,3
+```
+
+`sep` is any text. The defaults follow the encoding: `,` for `json` and
+`csv`, nothing for `text`, so the first `@for` in `line` runs its
+digits together and the second separates them. In the structural form
+(section 9) a projection that is an object member carries its own
+comma inside each repetition, so a member projection that renders zero
+tuples also leaves the object valid.
+
+## 14. A tile inside a module
+
+A tile may be declared inside a module body. It inlines with the call
+like any binding: the tile is named with the module's prefix, its
 holes and branch conditions read the caller's arguments, and its
 projections' generator expressions are rewritten the same way. Two
-calls to the module give two tiles.
+calls give two tiles.
+
+```polydat
+input cycle: u64
+label(n: u64, tag: str) -> (out: str) := {
+    tile t : json := {"n": ${n}, "twice": ${n * 2}, "tag": ${tag}}
+    out := t
+}
+a := label(n: cycle, tag: "first")
+b := label(n: cycle + 100, tag: "second")
+```
+
+```text
+cycle 2 a: {"n": 2, "twice": 4, "tag": "first"}
+cycle 2 b: {"n": 102, "twice": 204, "tag": "second"}
+```
+
+A module's parameter types are the port-type keywords, and `str` and
+`String` name the same type. A tile inside a `for` traversal body works
+the same way: it compiles inside the body's program, its holes see the
+elements and the cascaded outer wires, and `--emit tile:<name>` can
+select it. The toy test definition in
+[`docs/toy_test_definition.md`](toy_test_definition.md) renders a
+document per reading that way.
+
+## 15. What the compiler refuses
+
+Every rule above has an error with the tile's name in it. These are
+the messages for the mistakes that come up most:
+
+```text
+a declared type the catalog cannot reach:
+  tile 't': hole `s: u64`: no conversion from the wire type str to the declared type u64; write the conversion explicitly in the expression
+a predicate over a per-cycle outer wire:
+  tile 't': projection `for k in 1..9 where {k} < {limit}`: predicate placeholder `{limit}` names a wire outside the comprehension; a projection's predicate sees only its elements
+a continuous source without a sampling order:
+  tile 't': projection `for x in 0.0..1.0` ranges over a continuous source, which has no finite tuple set; add `order <strategy>/<count>` (halton, sobol, lhs, or shuffle) to sample that many points
+strict mode and an implicit adapter:
+  tile 't': hole `cycle: f64`: strict mode rejects the implicit u64 -> f64 adapter the declaration needs; write the conversion explicitly in the expression
+a json body that is not valid JSON once the holes are typed:
+  tile 't': the json body is not valid JSON once every hole is a placeholder: expected `,` or `}` at line 1 column 9; with holes as `0`, one repetition per projection, and each branch's first arm, the skeleton reads: {"n": 0 "x": 1}
+```
+
+The programs that produced them, in order:
+
+```polydat
+s := __u64_to_string(cycle)
+tile t : json := {"n": ${s: u64}}              -- write ${s as u64}
+
+limit := cycle
+tile t : text := "@for k in 1..9 where {k} < {limit} {${k}}"
+
+tile t : text := "@for x in 0.0..1.0 {${x}}"   -- add order halton/8
+
+tile t : json (strict) := {"f": ${cycle: f64}} -- write ${to_f64(cycle)}
+
+tile t : json := {"n": ${cycle} "x": 1}        -- a missing comma
+```
+
+The last one is the compile-time check every `json` tile passes: the
+skeleton with every hole replaced by `0`, each projection body written
+once, and each branch showing its first arm must parse as JSON. `0` is
+a value in value position and text inside a string or a key, so every
+well-placed hole passes, and a missing comma, an unquoted key, or a
+hole where no value can go is caught before the first render.
+
+## 16. One tile, every engine
+
+Polydat runs a program on one of three engine levels: the interpreter
+(P1), closures over a flat slot buffer (P2), and native code (P3),
+either as fused cones inside the production kernel or as a whole native
+kernel. Strings, JSON values, and rendered documents ride through the
+compiled levels as handles into a per-cycle arena and a value table,
+and a tile renders there by the same code path it renders on the
+interpreter. The result is bit-identical on every level:
+
+```polydat
+input cycle: u64
+user_id := mod(hash(cycle), 1000000)
+name    := "user-{user_id}"
+tile doc : json := {"id": ${user_id}, "name": ${name}, "label": "id-${user_id}", "tags": [@for k in 0..2 { ${k + user_id} }]}
+```
+
+```text
+cycle 0 P1:    {"id": 607535, "name": "user-607535", "label": "id-607535", "tags": [607535,607536]}
+cycle 0 cones: identical
+cycle 0 P2:    identical
+cycle 0 P3:    identical
+cycle 1 P1:    {"id": 822465, "name": "user-822465", "label": "id-822465", "tags": [822465,822466]}
+cycle 1 cones: identical
+cycle 1 P2:    identical
+cycle 1 P3:    identical
+```
+
+The example compiles the program four ways: the interpreter, the
+production kernel with cone extraction forced on, the P2 closure
+kernel, and the pure-P3 native kernel, and reads the tile from each.
+The production kernel chooses the mix itself; nothing in a program
+selects an engine, and nothing about a tile changes its meaning when
+the engine changes. The differential suite in `tests/handle_tiers.rs`
+holds that line over random programs of string, JSON, and tile nodes,
+including every corner case in this tutorial.
+
+One rule belongs to hosts that drive a whole compiled kernel directly:
+read a kernel's handle outputs, through `get_value`, before running
+another root kernel on the same thread, because each root kernel's
+cycle advance resets the thread's arena. The interpreter never hands
+out a handle, so nothing about this applies to `pull`.
 
 ## What a tile compiles to
 
@@ -550,7 +802,9 @@ Knowing the lowering makes the rules above predictable:
 
 Because the hole nodes are ordinary wires, `explain` and `viz` show
 them, dead holes are pruned with the rest of the graph, and a hole
-shared by two tiles is computed once.
+shared by two tiles is computed once. On the compiled levels each node
+has the same body behind a native helper or a closure, which is why
+section 16 holds.
 
 ## Limits at this level
 
@@ -559,7 +813,10 @@ shared by two tiles is computed once.
 - A continuous source needs an order with a sampling strategy and a
   count, such as `order halton/16`; without one it has no finite tuple
   set and is rejected.
-- Rendering runs at engine level P1. Tiles are ordinary nodes, so they
-  take part in provenance, lifecycle, and pruning, but they are not
-  fused into P2 closures or P3 native cones, which today carry only
-  scalar slots.
+- A splice belongs in value position; inside a string literal, bind
+  the tile first and use the binding.
+- A raw hole is the author's responsibility; the compile-time JSON
+  check cannot see through it.
+- Binary encodings, parsing rendered output back into values,
+  unbounded projections, and user-defined template functions are out
+  of scope for this revision.

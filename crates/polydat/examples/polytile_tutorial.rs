@@ -160,6 +160,131 @@ fn main() {
     );
 
     host_boundary();
+
+    show(
+        "11. Escapes, braces, and block layout",
+        r#"
+            input cycle: u64
+            tile lit := "a literal ${${cycle} and braces {ok} around cycle ${cycle}"
+            tile block : json := {
+                "a": ${cycle},
+                    "b": { "deep": ${cycle} }
+            }
+        "#,
+        &[3],
+        &["lit", "block"],
+    );
+
+    show(
+        "12. Encoding corner cases",
+        r##"
+            input cycle: u64
+            line := printf("quote {} and comma, then newline{}end", "\"", "\n")
+            tile injson : json := {"s": ${line}, "in": "x-${line}-y", "n": ${cycle: str}}
+            tile row : csv := "${line},${cycle},${cycle | 04}"
+            tile txt := "[${line}]"
+            tile raw : json := {"raw": "${line!}"}
+        "##,
+        &[1],
+        &["injson", "row", "txt", "raw"],
+    );
+
+    show(
+        "13. Empty projections and separators",
+        r#"
+            input cycle: u64
+            tile doc : json := {"before": 1, "none": [@for k in 1..1 { ${k} }], "after": 2, "ys": [@for k in 0..3 sep " | " { ${k + cycle} }]}
+            tile line := "@for k in 0..3 {${k}}|@for k in 0..3 sep \", \" {${k}}"
+            tile cells : csv := "@for k in 0..3 {${k + cycle}}"
+        "#,
+        &[1],
+        &["doc", "line", "cells"],
+    );
+
+    show(
+        "14. A tile inside a module",
+        r#"
+            input cycle: u64
+            label(n: u64, tag: str) -> (out: str) := {
+                tile t : json := {"n": ${n}, "twice": ${n * 2}, "tag": ${tag}}
+                out := t
+            }
+            a := label(n: cycle, tag: "first")
+            b := label(n: cycle + 100, tag: "second")
+        "#,
+        &[2],
+        &["a", "b"],
+    );
+
+    println!("== 15. What the compiler refuses ==");
+    fail(
+        "a declared type the catalog cannot reach",
+        "input cycle: u64\ns := __u64_to_string(cycle)\ntile t : json := {\"n\": ${s: u64}}\n",
+    );
+    fail(
+        "a predicate over a per-cycle outer wire",
+        "input cycle: u64\nlimit := cycle\ntile t : text := \"@for k in 1..9 where {k} < {limit} {${k}}\"\n",
+    );
+    fail(
+        "a continuous source without a sampling order",
+        "input cycle: u64\ntile t : text := \"@for x in 0.0..1.0 {${x}}\"\n",
+    );
+    fail(
+        "strict mode and an implicit adapter",
+        "input cycle: u64\ntile t : json (strict) := {\"f\": ${cycle: f64}}\n",
+    );
+    fail(
+        "a json body that is not valid JSON once the holes are typed",
+        "input cycle: u64\ntile t : json := {\"n\": ${cycle} \"x\": 1}\n",
+    );
+    println!();
+
+    tiers();
+}
+
+/// Print the compiler's diagnostic for a program it refuses.
+fn fail(title: &str, src: &str) {
+    match compile_polydat(src) {
+        Ok(_) => println!("{title}: compiled (unexpected)"),
+        Err(e) => println!("{title}:\n  {}", e.to_string().replace('\n', "\n  ")),
+    }
+}
+
+/// The same tile at every engine level: the interpreter, the production
+/// kernel with fused native cones, the P2 closure kernel, and the
+/// pure-P3 native kernel produce identical bytes.
+fn tiers() {
+    use polydat::dsl::compile::compile_polydat_to_assembler;
+    let src = r#"
+        input cycle: u64
+        user_id := mod(hash(cycle), 1000000)
+        name    := "user-{user_id}"
+        tile doc : json := {"id": ${user_id}, "name": ${name}, "label": "id-${user_id}", "tags": [@for k in 0..2 { ${k + user_id} }]}
+    "#;
+    println!("== 16. One tile, every engine ==");
+    let mut p1 = compile_polydat_to_assembler(src).unwrap();
+    p1.set_jit_mode(polydat::JitMode::Off);
+    let mut p1 = p1.compile().unwrap();
+    let mut cones = compile_polydat_to_assembler(src).unwrap();
+    cones.set_jit_mode(polydat::JitMode::Force);
+    let mut cones = cones.compile().unwrap();
+    let mut p2 = compile_polydat_to_assembler(src).unwrap().try_compile_raw().unwrap_or_else(|_| panic!("P2 closures"));
+    let mut p3 = compile_polydat_to_assembler(src).unwrap().try_compile_jit().expect("pure P3");
+    for cycle in [0u64, 1] {
+        p1.set_inputs(&[cycle]);
+        let a = p1.pull("doc").to_display_string();
+        cones.set_inputs(&[cycle]);
+        let b = cones.pull("doc").to_display_string();
+        p2.eval(&[cycle]);
+        let c = p2.get_value("doc").to_display_string();
+        p3.eval(&[cycle]);
+        let d = p3.get_value("doc").to_display_string();
+        println!("cycle {cycle} P1:    {a}");
+        println!("cycle {cycle} cones: {}", if b == a { "identical" } else { &b });
+        println!("cycle {cycle} P2:    {}", if c == a { "identical" } else { &c });
+        println!("cycle {cycle} P3:    {}", if d == a { "identical" } else { &d });
+    }
+    println!();
 }
 
 /// A host that already holds the template as a parsed JSON value hands
