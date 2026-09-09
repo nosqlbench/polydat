@@ -92,7 +92,7 @@ single-letter `a`/`b`/`c` are positional outputs of multi-output nodes
 work.
 
 ### `partition` — partition-typed indexing ([SRD 71](../design/cursor_partitions.md))
-`partitions`, `at`, `start_of`, `end_of`, `cardinality`, `idx_of`,
+`partitions`, `partition_count`, `partition_at`, `at`, `start_of`, `end_of`, `cardinality`, `idx_of`,
 `mod_in`, `clamp_in`. The `Partition` type wraps a closed-open `u64`
 range and the partition nodes give type-checked access to its bounds
 and to per-index slicing.

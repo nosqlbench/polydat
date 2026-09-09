@@ -2011,6 +2011,10 @@ fn every_registered_function_compiles() {
             "input cycle: u64\ncursor q = range(0, 100) over \"0..50%\"\nout := subdivide(q.cursor, 2)".into()),
         ("partitions",
             "input cycle: u64\nout := partitions(\"linear:4\", 1000)".into()),
+        ("partition_count",
+            "input cycle: u64\nout := partition_count(partitions(\"linear:4\", 1000))".into()),
+        ("partition_at",
+            "input cycle: u64\nout := partition_at(partitions(\"linear:4\", 1000), u64_mod(cycle, 4))".into()),
         // Vector-math nodes need vec_f32 operands — hash_vec is
         // the workload-callable synthetic generator.
         ("vec_add",

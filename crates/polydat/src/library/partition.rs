@@ -24,6 +24,8 @@
 //! - `subdivide`   — split a partition into n near-equal
 //!   sub-partitions.
 //! - `partitions`  — parse a string spec into a `PartitionList`.
+//! - `partition_count`, `partition_at` — the length of a list and one
+//!   of its partitions by position.
 //!
 //! All of these are deterministic and JIT-friendly at the call
 //! site (the partition value is effectively-const for a scope
@@ -161,6 +163,23 @@ fn partitions(
     Ext(PartitionList(std::sync::Arc::new(parts)))
 }
 
+/// Number of partitions in a list.
+#[crate::polydat_node(category = Arithmetic)]
+fn partition_count(list: Ext<PartitionList>) -> u64 {
+    list.0.len() as u64
+}
+
+/// The `i`-th partition of a list, by position. Panics when `i` is
+/// out of range, like `at` does for ordinals.
+#[crate::polydat_node(category = Arithmetic)]
+fn partition_at(list: Ext<PartitionList>, i: u64) -> Ext<Partition> {
+    let n = list.0.len() as u64;
+    if i >= n {
+        panic!("partition_at: index {i} out of range for a list of {n} partition(s)");
+    }
+    Ext(list.0.0[i as usize])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,6 +307,25 @@ mod tests {
         assert_eq!(out[0].as_u64(), 100);
     }
 
+
+    #[test]
+    fn partition_at_and_count_index_a_list_by_position() {
+        let list = Value::Ext(Box::new(PartitionList::new(vec![fixture(0, 0, 10), fixture(1, 10, 25), fixture(2, 25, 100)])));
+        let mut out = [Value::None];
+        PartitionCount::new().eval(std::slice::from_ref(&list), &mut out);
+        assert_eq!(out[0], Value::U64(3));
+        PartitionAt::new().eval(&[list.clone(), Value::U64(1)], &mut out);
+        let p = out[0].as_partition().expect("Partition");
+        assert_eq!((p.start_ord, p.end_ord), (10, 25));
+    }
+
+    #[test]
+    #[should_panic(expected = "out of range")]
+    fn partition_at_past_the_end_panics() {
+        let list = Value::Ext(Box::new(PartitionList::new(vec![fixture(0, 0, 10)])));
+        let mut out = [Value::None];
+        PartitionAt::new().eval(&[list, Value::U64(1)], &mut out);
+    }
     #[test]
     fn subdivide_splits_into_near_equal_contiguous_parts() {
         let node = Subdivide::new();

@@ -578,6 +578,10 @@ Kept short; the normative text above is what the code does. Dates are
   table kind; the gap was only the macro's plan. Every library node with
   an `Ext` signature (the partition family, `streamer`) and every host
   node like them now runs on the closure tier and in hybrid kernels;
-  none has a native form. `tests/ext_tiers.rs` is the differential.
+  none has a native form. `tests/ext_tiers.rs` is the differential for
+  host-defined values, and the generative fuzzer in
+  `tests/handle_tiers.rs` emits the partition family and the streamer,
+  with `partition_count` and `partition_at` added to the library so a
+  partition can be reached without a cursor.
 
 No refinements remain recorded.

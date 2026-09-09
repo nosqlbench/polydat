@@ -3,7 +3,8 @@
 
 //! SRD 115 §7, step 7: the P1↔P2↔P3 differential suite for handle
 //! slots. A grammar-directed generator emits random programs over the
-//! string, JSON, and tile nodes with typed wires, casts, formats,
+//! string, JSON, tile, partition, and streamer nodes with typed wires,
+//! extension values, casts, formats,
 //! declared hole types, raw holes, splices, branches, projections
 //! (nested, in string position, and empty), and structural templates;
 //! every program compiles on the interpreter (the oracle), with forced
@@ -55,6 +56,12 @@ struct Wire {
     /// A `json` tile: its bare name in a hole of another `json` tile is
     /// a splice, so it may only fill a value position there.
     json_tile: bool,
+    /// An extension value's runtime type, for wires the consumers of
+    /// that type may take: `Partition`, `PartitionList`, or `Streamer`.
+    ext: Option<&'static str>,
+    /// How many times a partition has been subdivided, which bounds
+    /// its cardinality from below so the next subdivision is legal.
+    depth: u8,
 }
 
 struct Gen {
@@ -71,7 +78,7 @@ impl Gen {
     fn new(seed: u64) -> Self {
         Gen {
             rng: Rng::new(seed),
-            wires: vec![Wire { name: "cycle".into(), ty: PortType::U64, numeric_text: false, json_tile: false }],
+            wires: vec![Wire { name: "cycle".into(), ty: PortType::U64, numeric_text: false, json_tile: false, ext: None, depth: 0 }],
             json_tiles: Vec::new(),
             lines: vec!["input cycle: u64".into()],
             outputs: Vec::new(),
@@ -102,6 +109,26 @@ impl Gen {
         }
     }
 
+    fn pick_ext(&mut self, kind: &'static str) -> Option<Wire> {
+        let candidates: Vec<Wire> = self.wires.iter().filter(|w| w.ext == Some(kind)).cloned().collect();
+        if candidates.is_empty() {
+            None
+        } else {
+            Some(candidates[self.rng.range(candidates.len())].clone())
+        }
+    }
+
+    /// An extension-valued binding: an output like any other, compared
+    /// across tiers by type name and display.
+    fn bind_ext(&mut self, kind: &'static str, depth: u8, expr: String) -> Wire {
+        let name = self.name();
+        self.lines.push(format!("{name} := {expr}"));
+        let w = Wire { name: name.clone(), ty: PortType::Ext, numeric_text: false, json_tile: false, ext: Some(kind), depth };
+        self.wires.push(w.clone());
+        self.outputs.push(name);
+        w
+    }
+
     fn any(&mut self) -> Wire {
         let i = self.rng.range(self.wires.len());
         self.wires[i].clone()
@@ -114,7 +141,7 @@ impl Gen {
     fn bind_with(&mut self, ty: PortType, expr: String, numeric_text: bool) -> Wire {
         let name = self.name();
         self.lines.push(format!("{name} := {expr}"));
-        let w = Wire { name: name.clone(), ty, numeric_text, json_tile: false };
+        let w = Wire { name: name.clone(), ty, numeric_text, json_tile: false, ext: None, depth: 0 };
         self.wires.push(w.clone());
         self.outputs.push(name);
         w
@@ -123,7 +150,7 @@ impl Gen {
     /// One binding from the grammar.
     fn step(&mut self) {
         let u = self.pick(PortType::U64).expect("cycle is always u64");
-        match self.rng.range(26) {
+        match self.rng.range(30) {
             0 => {
                 self.bind(PortType::U64, format!("hash({})", u.name));
             }
@@ -254,7 +281,9 @@ impl Gen {
                             self.bind(PortType::F64, format!("__str_to_f64({})", d.name));
                         }
                         _ => {
-                            self.bind(PortType::I64, format!("__str_to_i64({})", d.name));
+                            // Bounded text: a hash rendered as text exceeds i64::MAX,
+                            // which P1 diagnoses (as for `__u64_to_i64` above).
+                            self.bind(PortType::I64, format!("__str_to_i64(__u64_to_string(mod({}, 1000003)))", u.name));
                         }
                     }
                 }
@@ -296,7 +325,51 @@ impl Gen {
                 }
             }
             23 => self.structural(),
-            _ => self.tile(),
+            24 => self.tile(),
+            25 => self.tile(),
+            26 => {
+                // A partition list from a spec, the root of every partition.
+                let spec = ["*/4", "20%,30%,*", "*/2", "10%,*"][self.rng.range(4)];
+                let extent = [100u64, 500, 1000, 1024][self.rng.range(4)];
+                self.bind_ext("PartitionList", 0, format!("partitions(\"{spec}\", {extent})"));
+            }
+            27 => {
+                if let Some(l) = self.pick_ext("PartitionList") {
+                    if self.rng.coin(30) {
+                        self.bind(PortType::U64, format!("partition_count({})", l.name));
+                    } else {
+                        self.bind_ext("Partition", l.depth, format!("partition_at({}, u64_mod({}, partition_count({})))", l.name, u.name, l.name));
+                    }
+                }
+            }
+            28 => {
+                if let Some(p) = self.pick_ext("Partition") {
+                    match self.rng.range(10) {
+                        0 => self.bind(PortType::U64, format!("cardinality({})", p.name)),
+                        1 => self.bind(PortType::U64, format!("start_of({})", p.name)),
+                        2 => self.bind(PortType::U64, format!("end_of({})", p.name)),
+                        3 => self.bind(PortType::U64, format!("idx_of({})", p.name)),
+                        4 => self.bind(PortType::U64, format!("count_of({})", p.name)),
+                        5 => self.bind(PortType::U64, format!("mod_in({}, {})", u.name, p.name)),
+                        6 => self.bind(PortType::U64, format!("clamp_in({}, {})", u.name, p.name)),
+                        7 => self.bind(PortType::U64, format!("random_in({}, {})", p.name, u.name)),
+                        8 => self.bind(PortType::U64, format!("at({}, u64_mod({}, cardinality({})))", p.name, u.name, p.name)),
+                        _ => {
+                            // Every spec above leaves at least 25 ordinals per
+                            // partition, so two halvings are always legal.
+                            if p.depth < 2 {
+                                self.bind_ext("PartitionList", p.depth + 1, format!("subdivide({}, 2)", p.name))
+                            } else {
+                                self.bind(PortType::U64, format!("cardinality({})", p.name))
+                            }
+                        }
+                    };
+                }
+            }
+            _ => {
+                let spec = ["k in 1..4", "k in 1..3, side in left,right", "n in 0..10 order halton/3"][self.rng.range(3)];
+                self.bind_ext("Streamer", 0, format!("streamer(\"{spec}\")"));
+            }
         }
     }
 
@@ -304,7 +377,7 @@ impl Gen {
     /// raw sometimes when the tile allows it.
     fn hole(&mut self, raw_ok: bool, splice_ok: bool) -> String {
         let mut w = self.any();
-        if w.json_tile && !splice_ok {
+        if (w.json_tile && !splice_ok) || w.ext.is_some() {
             w = self.pick(PortType::U64).expect("cycle is always u64");
         }
         // A declaration reaches only the catalog's lossless adapters; a
@@ -386,7 +459,7 @@ impl Gen {
             }
         };
         self.lines.push(body);
-        self.wires.push(Wire { name: name.clone(), ty: PortType::Str, numeric_text: false, json_tile: kind == 0 });
+        self.wires.push(Wire { name: name.clone(), ty: PortType::Str, numeric_text: false, json_tile: kind == 0, ext: None, depth: 0 });
         self.outputs.push(name);
     }
 
@@ -394,7 +467,7 @@ impl Gen {
     /// would not belong.
     fn non_tile(&mut self) -> Wire {
         let w = self.any();
-        if w.json_tile {
+        if w.json_tile || w.ext.is_some() {
             self.pick(PortType::U64).expect("cycle is always u64")
         } else {
             w
@@ -419,7 +492,7 @@ impl Gen {
         }
         let text = format!("{{ {} }}", members.join(", "));
         self.lines.push(format!("{name} := polytile_json(<<<\n{text}\n>>>)"));
-        self.wires.push(Wire { name: name.clone(), ty: PortType::Str, numeric_text: false, json_tile: true });
+        self.wires.push(Wire { name: name.clone(), ty: PortType::Str, numeric_text: false, json_tile: true, ext: None, depth: 0 });
         self.outputs.push(name);
     }
 
@@ -520,14 +593,19 @@ fn seed() -> u64 {
 fn random_programs_agree_across_every_tier() {
     let base = seed();
     let mut p3_available = 0usize;
+    let mut ext_seen = 0usize;
     for i in 0..iterations() {
         let (src, outputs) = Gen::new(base.wrapping_add(i as u64)).program(4 + i % 7);
+        if src.contains("partitions(") || src.contains("streamer(") {
+            ext_seen += 1;
+        }
         let outs: Vec<&str> = outputs.iter().map(String::as_str).collect();
         if check(&src, &outs, 6) {
             p3_available += 1;
         }
     }
     assert!(p3_available > 0, "some generated programs lower whole to P3");
+    assert!(ext_seen > 0, "some generated programs carry extension values");
 }
 
 /// The hand-written corpus from the earlier steps, through the same
@@ -549,6 +627,9 @@ fn the_corpus_agrees_across_every_tier() {
         format!("{WIRES}tile inner : json := {{\"n\": ${{h}}}}\ntile outer : json := {{\"a\": ${{inner}}, \"b\": ${{inner}}, \"e\": [@for k in 1..1 {{ ${{k}} }}], \"sp\": \"@for k in 1..3 sep \\\"-\\\" {{${{k}}:${{s}}}}\"}}\n"),
         format!("{WIRES}d := polytile_json(<<<\n{{ \"id\": \"${{h}}\", \"label\": \"row-${{s}}\", \"samples\": [ \"@for k in 0..2\", {{ \"k\": \"${{k}}\" }} ], \"audit\": [ \"@if b\", {{ \"by\": \"ops\" }} ], \"tags\": {{ \"@for t in a,b\": {{ \"${{t}}\": true }} }} }}\n>>>)\n"),
         format!("{WIRES}a := h as str\nc := __str_to_u64(s)\ne := escape_json(s)\nm := json_merge(json_object(json_with(\"x\", h)), json_object(json_with(\"y\", s)))\np := json_to_str_pretty(m)\n"),
+        // Extension values: the partition family and the streamer, read
+        // through every consumer and rendered as JSON, text, and a string.
+        format!("{WIRES}q := partitions(\"20%,30%,*\", 500)\nn := partition_count(q)\np := partition_at(q, u64_mod(h, n))\nc := cardinality(p)\nm := mod_in(h, p)\nl := subdivide(p, 4)\nk := streamer(\"k in 1..4\")\nr := random_in(p, h)\na := at(p, u64_mod(h, cardinality(p)))\nj := json_object(json_with(\"p\", p), json_with(\"k\", k))\nd := printf(\"{{}} {{}} {{}}\", p, l, k)\ne := \"{{p}}/{{l}}\"\n"),
     ];
     for src in &corpus {
         let asm = compile_polydat_to_assembler(src).unwrap();
