@@ -586,13 +586,14 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                             &key,
                             format!(
                                 "#[polydat_node] does not recognize parameter `{other}`. \
-                                 PR B.2 keys: `category = ...`. PR B.7 keys: \
-                                 `no_jit`, `compiled_u64 = ...`, \
-                                 `jit_constants = ...`, `purity = ...`, \
-                                 `simd = \"...\"`. \
-                                 PR B.9 keys: `identity = ...`, \
-                                 `commutativity = ...`, `variadic_min = ...`. \
-                                 Naming: `struct_name = ...`, `adapter = \"...\"`.",
+                                 Registration: `category = <FuncCategory>`, \
+                                 `struct_name = <Ident>`, `adapter = \"<name>\"`. \
+                                 Engines: `no_jit`, `compiled_u64 = <path>`, \
+                                 `jit_constants = <path>`, `decompose = <path>`, \
+                                 `simd = \"<node>\"`, `simd_total`. \
+                                 Semantics: `purity = <Purity>`, `identity = <expr>`, \
+                                 `commutativity = <Commutativity>`, `variadic_min = <int>`. \
+                                 Shapes: `output_names(...)`, `instantiate(...)`.",
                             ),
                         ));
                     }
