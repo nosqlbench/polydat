@@ -246,8 +246,8 @@ impl ReflectedValue for GeoCell {
     fn as_any(&self) -> &dyn std::any::Any { self }
 }
 
-#[polydat::polydat_node(category = Math)]
-fn locate_cell(lat: f64, lon: f64, level: u64) -> Ext<GeoCell> {
+#[polydat::polydat_node(category = Math, struct_name = GeoCellNode)]
+fn geo_cell(lat: f64, lon: f64, level: u64) -> Ext<GeoCell> {
     Ext(GeoCell { lat_deg: lat, lon_deg: lon, level })
 }
 
@@ -263,7 +263,7 @@ let mut kernel = compile_polydat(r#"
     input cycle: u64
     lat  := unit_interval(hash(cycle)) * 180.0 - 90.0
     lon  := unit_interval(hash(cycle + 1000)) * 360.0 - 180.0
-    cell := locate_cell(lat, lon, 6)
+    cell := geo_cell(lat, lon, 6)
     tok  := cell_token(cell)
     line := "{tok} is {cell}"
 "#)?;
@@ -285,6 +285,11 @@ cycle 1: L6:36:20 is cell(11.981, -62.941, L6)
 cycle 1: level 6 at (12.0, -62.9); json {"lat":11.981083531010583,"lon":-62.94065304500829,"level":6}
 cell wire type: Some(Ext)
 ```
+
+The attribute generates a struct named after the function in PascalCase,
+which for `geo_cell` would be `GeoCell`, the value type itself. The
+`struct_name` parameter picks another Rust name; the DSL name is always
+the function name.
 
 Three things to know about extension values:
 

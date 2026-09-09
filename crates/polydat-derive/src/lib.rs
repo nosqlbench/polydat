@@ -109,6 +109,11 @@ use syn::{
 /// - `category = <ident>` — the polydat `FuncCategory` variant
 ///   the node belongs to (`Comparison`, `Math`, `String`, etc.).
 ///   Defaults to `Misc` when unspecified.
+/// - `struct_name = <Ident>` — the Rust name of the generated node
+///   struct. Defaults to the function name in PascalCase, so a node
+///   `fn geo_cell` produces `struct GeoCell`; set this when that name
+///   is already taken, typically by the value type the node returns.
+///   The DSL name is always the function name.
 /// - `simd = "<node-name>"` declares an exact, lane-independent
 ///   register-typed implementation of the scalar function.
 /// - `simd_total` certifies that the declared SIMD implementation is defined
@@ -183,6 +188,15 @@ fn instantiate_and_generate(
                  types in the `instantiate(...)` clause.",
                 type_params.len(),
             ),
+        ));
+    }
+    // Every instantiation gets its own type-suffixed struct name, so
+    // a single `struct_name` cannot name them all.
+    if let Some(name) = &attrs.struct_name {
+        return Err(syn::Error::new_spanned(
+            name,
+            "`struct_name = ...` cannot be combined with `instantiate(...)`: \
+             each instantiation is named after its concrete type.",
         ));
     }
     let type_param_ident = type_params[0].ident.clone();
@@ -344,6 +358,11 @@ struct NodeAttrs {
     /// absent. Length must match tuple arity — operator gets a
     /// compile error otherwise.
     output_names: Option<Vec<Ident>>,
+    /// Rust name for the generated node struct. Defaults to the
+    /// function name in PascalCase; set it when that name would
+    /// collide with a type the operator already has in scope,
+    /// such as a `ReflectedValue` type the node produces.
+    struct_name: Option<Ident>,
     /// SRD-80b Phase D1 — generic-over-Wire instantiation policy
     /// (SRD-80b §"Open questions" item 1). For a function
     /// declared `fn pp<T: Wire>(input: T) -> T`, the macro emits
@@ -387,6 +406,7 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
     let mut commutativity: Option<Ident> = None;
     let mut variadic_min: Option<syn::LitInt> = None;
     let mut output_names: Option<Vec<Ident>> = None;
+    let mut struct_name: Option<Ident> = None;
     let mut instantiate: Vec<Type> = Vec::new();
     let mut adapter: Option<String> = None;
 
@@ -527,6 +547,25 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                         };
                         variadic_min = Some(n.clone());
                     }
+                    "struct_name" => {
+                        // The generated Rust struct is named after the
+                        // function in PascalCase by default; a host whose
+                        // module already has a type of that name picks
+                        // another one here. The DSL name is unchanged.
+                        let syn::Expr::Path(p) = &nv.value else {
+                            return Err(syn::Error::new_spanned(
+                                &nv.value,
+                                "`struct_name` value must be a bare identifier, \
+                                 e.g. `struct_name = GeoCellNode`.",
+                            ));
+                        };
+                        struct_name = Some(p.path.get_ident()
+                            .ok_or_else(|| syn::Error::new_spanned(
+                                &nv.value,
+                                "`struct_name` value must be a single identifier, not a path.",
+                            ))?
+                            .clone());
+                    }
                     "adapter" => {
                         // Canonical-name prefix enforcement. The value is
                         // the adapter's registered name; the node function
@@ -553,7 +592,7 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                                  `simd = \"...\"`. \
                                  PR B.9 keys: `identity = ...`, \
                                  `commutativity = ...`, `variadic_min = ...`. \
-                                 Namespacing: `adapter = \"...\"`.",
+                                 Naming: `struct_name = ...`, `adapter = \"...\"`.",
                             ),
                         ));
                     }
@@ -630,6 +669,7 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
         commutativity,
         variadic_min,
         output_names,
+        struct_name,
         instantiate,
         adapter,
     })
@@ -1588,7 +1628,10 @@ fn generate(
         .strip_prefix("r#")
         .unwrap_or(&fn_name_raw)
         .to_string();
-    let struct_name = format_ident!("{}", to_camel_case(&rust_name_str));
+    let struct_name = attrs
+        .struct_name
+        .clone()
+        .unwrap_or_else(|| format_ident!("{}", to_camel_case(&rust_name_str)));
     // SRD-80b Phase D1 — when instantiating a generic-over-Wire
     // function, the per-instantiation copies have suffixed Rust
     // names (`passthrough_u64`, `passthrough_f64`) but share a

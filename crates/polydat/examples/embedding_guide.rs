@@ -57,9 +57,11 @@ impl polydat::ast::ReflectedValue for GeoCell {
 }
 
 /// A node that produces the host type. The return type `Ext<GeoCell>`
-/// boxes it into the wire.
-#[polydat::polydat_node(category = Math)]
-fn locate_cell(lat: f64, lon: f64, level: u64) -> Ext<GeoCell> {
+/// boxes it into the wire. The generated struct would be named `GeoCell`
+/// after the function, which is the value type, so the attribute names
+/// it `GeoCellNode` instead; the DSL name stays `geo_cell`.
+#[polydat::polydat_node(category = Math, struct_name = GeoCellNode)]
+fn geo_cell(lat: f64, lon: f64, level: u64) -> Ext<GeoCell> {
     Ext(GeoCell { lat_deg: lat, lon_deg: lon, level })
 }
 
@@ -208,7 +210,7 @@ fn section_host_values() {
             input cycle: u64
             lat  := unit_interval(hash(cycle)) * 180.0 - 90.0
             lon  := unit_interval(hash(cycle + 1000)) * 360.0 - 180.0
-            cell := locate_cell(lat, lon, 6)
+            cell := geo_cell(lat, lon, 6)
             tok  := cell_token(cell)
             line := "{tok} is {cell}"
         "#,
