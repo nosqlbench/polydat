@@ -1,0 +1,6 @@
+# Every text file is committed and checked out with LF line endings,
+# on every platform, regardless of core.autocrlf. The workspace is
+# developed on Windows and Unix alike; the rustfmt, rustdoc, and
+# guide-output checks all read files byte for byte, so the tree must
+# not vary by platform.
+* text=auto eol=lf
