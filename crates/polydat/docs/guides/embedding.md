@@ -19,16 +19,16 @@ thread. The host owns everything that touches the outside world.
 
 | Concern | Owner | Where it shows up |
 | --- | --- | --- |
-| Which coordinates to visit, in what order, on which threads | host | §3, §4, §8 |
-| Parsing, typing, and compiling the program | Polydat | §2, §7 |
-| Selecting engines (interpreter, closures, native code) | Polydat | §10 |
+| Which coordinates to visit, in what order, on which threads | host | §3, §4, §9 |
+| Parsing, typing, and compiling the program | Polydat | §2, §8 |
+| Selecting engines (interpreter, closures, native code) | Polydat | §11 |
 | Per-coordinate values and their determinism | Polydat | §2, §4 |
 | Extern values and their defaults | host sets, Polydat types | §3 |
-| Functions the program may call | Polydat's library plus the host's registered nodes | §5 |
-| Modules on disk | host names the directories, Polydat resolves and compiles | §7 |
-| Templates that arrive as data | host hands them in, Polydat lowers them | §9 |
-| Side effects: sinks, files, network | host | §11 |
-| Feature switches: emit formats, defaults, overrides | host, as program transforms | §3, §11 |
+| Functions the program may call | Polydat's library plus the host's registered nodes | §5, §6 |
+| Modules on disk | host names the directories, Polydat resolves and compiles | §8 |
+| Templates that arrive as data | host hands them in, Polydat lowers them | §10 |
+| Side effects: sinks, files, network | host | §12 |
+| Feature switches: emit formats, defaults, overrides | host, as program transforms | §3, §12 |
 
 The last row is the rule that shapes the rest: a host feature is a
 rewrite of the program text or AST that the compiler then sees. Nothing
@@ -84,9 +84,9 @@ The other compile entry points differ only in what they take:
 | `compile_polydat_with_path(src, path)` | the source directory, so relative `import` paths resolve |
 | `compile_polydat_with_libs(src, dir, libs, outputs, strict, ctx)` | library directories, required outputs, strict typing, and a context label for errors |
 | `compile_polydat_strict(src, dir, strict)` | strict mode: implicit adapters are errors |
-| `compile_polydat_with_log(src, &mut log)` | the compile event log (§12) |
-| `compile_polydat_with_tiles(src, tiles)` | tile statements built from host data (§9) |
-| `compile_polydat_to_assembler(src)` | stops before engine selection and returns the assembler (§6, §10) |
+| `compile_polydat_with_log(src, &mut log)` | the compile event log (§13) |
+| `compile_polydat_with_tiles(src, tiles)` | tile statements built from host data (§10) |
+| `compile_polydat_to_assembler(src)` | stops before engine selection and returns the assembler (§7, §11) |
 
 ## 3. Externs
 
@@ -129,7 +129,7 @@ transformed: ap-south/7
 ```
 
 Prefer the transform when the value is fixed for the run: the compiler
-then sees a constant, folds it, and the fused native cones in §10 carry
+then sees a constant, folds it, and the fused native cones in §11 carry
 it as an immediate. Use `set_input` when the value genuinely varies per
 state, such as a per-thread shard label. `set_input` takes a `Value` and
 writes it without re-checking the slot's declared type, so passing the
@@ -208,7 +208,7 @@ Parameter types follow the wire types: `u64`, `f64`, `bool`, `&str`,
 extension values, and `&[Value]` for a variadic tail. The return type
 is the output wire's type. Attribute options declare the category, the
 purity (the default is pure; `SideChannel` marks a node that writes
-somewhere the kernel does not see, as the emit node in §11 does), and
+somewhere the kernel does not see, as the emit node in §12 does), and
 constraints such as `#[constraint(NonZeroU64)]` on a parameter.
 
 A node with a scalar signature runs on every engine: the interpreter
@@ -220,7 +220,91 @@ landed, inside native kernels through the handle boundary. The macro
 kit that makes a node native-capable is described there in §7; a host
 never needs it for correctness, only for speed.
 
-## 6. The assembler API
+## 6. Host-defined value types
+
+Nodes are not the only thing a host can add. A host type becomes a wire
+value by implementing `ReflectedValue`; the wire's port type is `Ext`,
+nodes take and return it through `Ext<T>`, and everything generic in the
+kernel reaches it through the trait: string interpolation calls
+`display`, JSON encoding calls `to_json_value`, and cloning goes through
+`clone_reflected`. The host gets the concrete type back with `as_any`.
+
+```rust
+use polydat::ast::ReflectedValue;
+use polydat::derive_support::Ext;
+
+#[derive(Debug, Clone, PartialEq)]
+struct GeoCell { lat_deg: f64, lon_deg: f64, level: u64 }
+
+impl ReflectedValue for GeoCell {
+    fn type_name(&self) -> &str { "GeoCell" }
+    fn display(&self) -> String { format!("cell({:.3}, {:.3}, L{})", self.lat_deg, self.lon_deg, self.level) }
+    fn to_json_value(&self) -> serde_json::Value {
+        serde_json::json!({ "lat": self.lat_deg, "lon": self.lon_deg, "level": self.level })
+    }
+    fn clone_reflected(&self) -> Box<dyn ReflectedValue> { Box::new(self.clone()) }
+    fn as_any(&self) -> &dyn std::any::Any { self }
+}
+
+#[polydat::polydat_node(category = Math)]
+fn locate_cell(lat: f64, lon: f64, level: u64) -> Ext<GeoCell> {
+    Ext(GeoCell { lat_deg: lat, lon_deg: lon, level })
+}
+
+#[polydat::polydat_node(category = String)]
+fn cell_token(cell: Ext<GeoCell>) -> String {
+    let scale = (1u64 << cell.level) as f64;
+    let row = ((cell.lat_deg + 90.0) / 180.0 * scale) as u64;
+    let col = ((cell.lon_deg + 180.0) / 360.0 * scale) as u64;
+    format!("L{}:{row}:{col}", cell.level)
+}
+
+let mut kernel = compile_polydat(r#"
+    input cycle: u64
+    lat  := unit_interval(hash(cycle)) * 180.0 - 90.0
+    lon  := unit_interval(hash(cycle + 1000)) * 360.0 - 180.0
+    cell := locate_cell(lat, lon, 6)
+    tok  := cell_token(cell)
+    line := "{tok} is {cell}"
+"#)?;
+for cycle in [0u64, 1] {
+    kernel.set_inputs(&[cycle]);
+    println!("cycle {cycle}: {}", kernel.pull("line").as_str());
+    // The host reads the wire as its own type again.
+    let Value::Ext(boxed) = kernel.pull("cell").clone() else { panic!("cell is an Ext wire") };
+    let cell = boxed.as_any().downcast_ref::<GeoCell>().expect("a GeoCell");
+    println!("cycle {cycle}: level {} at ({:.1}, {:.1}); json {}", cell.level, cell.lat_deg, cell.lon_deg, boxed.to_json_value());
+}
+println!("cell wire type: {:?}", kernel.program().output_port_type("cell"));
+```
+
+```text
+cycle 0: L6:56:15 is cell(68.996, -95.456, L6)
+cycle 0: level 6 at (69.0, -95.5); json {"lat":68.9959454784557,"lon":-95.45620227479236,"level":6}
+cycle 1: L6:36:20 is cell(11.981, -62.941, L6)
+cycle 1: level 6 at (12.0, -62.9); json {"lat":11.981083531010583,"lon":-62.94065304500829,"level":6}
+cell wire type: Some(Ext)
+```
+
+Three things to know about extension values:
+
+- **The type check is by name at compile time and by downcast at run
+  time.** The compiler sees only `Ext`, so wiring a `GeoCell` into a node
+  that expects a `Partition` compiles. The downcast in `Ext<T>::extract`
+  then panics with both type names. Give distinct host types distinct
+  producers and consumers, and keep them in one crate so the downcast
+  can see the concrete type.
+- **Extension wires are never native.** A node with an `Ext` signature
+  is never fused into a cone. The scalar work around it still is: in the
+  run above the hashing and scaling fused into two cones while the two
+  host nodes ran on the interpreter, and a native neighbour reads an
+  extension value through the table handle described in
+  [Compiled Non-Scalar Slots](../design/compiled_handles.md).
+- **The value is cloned on every read.** `Ext<T>::extract` clones the
+  boxed value, so a large host type should hold its payload in an `Arc`.
+  The crate's own `Partition` and `Streamer` values do exactly that.
+
+## 7. The assembler API
 
 Source text is one front end. The assembler builds the same graph from
 node instances and wire references, which suits hosts that generate
@@ -247,7 +331,7 @@ The DSL compiler produces exactly this assembler, so
 adjust the graph between parsing and engine selection, and where it can
 set the JIT mode before calling `compile()`.
 
-## 7. Modules from a library directory
+## 8. Modules from a library directory
 
 Modules are `.polydat` files whose top-level definitions become callable
 functions. The host names the directories; the compiler resolves calls
@@ -281,7 +365,7 @@ The binary's `--lib` flag is this argument. See
 [Module System](../design/module_system.md) for resolution order and the
 rules for named and positional arguments.
 
-## 8. Traversal
+## 9. Traversal
 
 A `for` statement declares a traversal: a comprehension over coordinates
 with a body that compiles once. The host opens it, receives one
@@ -325,7 +409,7 @@ program is compiled once per traversal position, not once per
 activation; `examples/for_traversal.rs` measures that.
 [The `for` Construct](../design/for_traversal.md) has the full contract.
 
-## 9. Tiles from host data
+## 10. Tiles from host data
 
 A tile is a template whose holes are wires. In source it is a `tile`
 statement; at the host boundary it may arrive as text, as JSON text, or
@@ -357,7 +441,7 @@ points. The [Polytile tutorial](../tutorials/polytile_tutorial.md) covers
 the template language; [Polytile](../design/polytile.md) §6 specifies the
 structural JSON form the value above uses.
 
-## 10. Compiled kernels
+## 11. Compiled kernels
 
 A host normally lets `compile()` choose engines. The production kernel
 runs the interpreter over a graph in which every native-eligible region
@@ -405,7 +489,7 @@ assembler (`Auto`, `Off`, `Force`) and the `jit` Cargo feature.
 [Compilation levels](compilation.md) describes each engine and
 [Engines](../design/engines.md) the selection rules.
 
-## 11. Program transforms
+## 12. Program transforms
 
 A host feature is a rewrite of the program. The emit facility the binary
 exposes as `--emit` is nothing more than an appended binding to a
@@ -459,7 +543,7 @@ is the unit the host already owns (§4).
 
 The pattern generalizes. To pin a default, rewrite the `extern` line
 (§3). To add a derived output, append a binding. To attach a template,
-add a tile statement (§9). To restrict what runs, pass required outputs
+add a tile statement (§10). To restrict what runs, pass required outputs
 and let the compiler prune. The `dsl::transform` module holds the
 rewrites the crate ships, such as `apply_tile_defaults`, and a host adds its own
 by operating on the source text or the parsed `PolydatFile` before
@@ -472,7 +556,7 @@ Side effects belong on the host side of the emit buffer. A node marked
 does; it must not read anything that varies between runs, because the
 kernel's determinism contract does not know it exists.
 
-## 12. Diagnostics
+## 13. Diagnostics
 
 The compile log records what the compiler did to a program: what it
 inlined, folded, fused, and why. The binary's `explain` command narrates
@@ -503,7 +587,13 @@ wall-clock or a true random source, which is the check a host should
 make before relying on replay. Side-channel nodes such as `emit_row`
 do not clear it: they write outward but read nothing that varies.
 
-## 13. Where to go next
+The compiler and the data-source nodes also write an audit log. With no
+sink installed it goes to stderr, which is where the `DBG jit cone`
+lines come from when the example above runs. A host that has its own
+logger installs it once with `library::support::audit::set_log_fn`,
+which receives a severity and a line and is called from every thread.
+
+## 14. Where to go next
 
 - [Illustrations](../tutorials/illustrations.md) runs the DSL and the
   assembler through more complete examples.
@@ -512,5 +602,5 @@ do not clear it: they write outward but read nothing that varies.
 - [Runtime Model](../design/runtime_model.md) states the ownership and
   determinism axioms that this guide's division of labor implements.
 - `examples/multi_thread.rs`, `examples/for_traversal.rs`, and
-  `examples/embedding_guide.rs` are the runnable versions of §4, §8,
+  `examples/embedding_guide.rs` are the runnable versions of §4, §9,
   and this whole guide.

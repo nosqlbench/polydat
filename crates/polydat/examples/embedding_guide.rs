@@ -6,10 +6,11 @@
 //! responsibility or extension point.
 
 use polydat::ast::Value;
+use polydat::derive_support::Ext;
 use polydat::dsl::compile::{compile_polydat, compile_polydat_to_assembler, compile_polydat_with_libs, compile_polydat_with_log};
 use polydat::dsl::events::CompileEventLog;
 
-/// 1. A node the host defines. The attribute registers it at link time
+/// A node the host defines. The attribute registers it at link time
 /// under its function name, so DSL text compiled anywhere in this
 /// process can call `host_checksum(a, b)` and every engine level can run
 /// it: the macro emits the P1 body and the P2 closure, and the P3 tiers
@@ -19,11 +20,58 @@ fn host_checksum(a: u64, b: u64) -> u64 {
     a.rotate_left(7) ^ b.wrapping_mul(0x9E37_79B9_7F4A_7C15)
 }
 
-/// 2. A string node the host defines, over the same borrowed-argument
+/// A string node the host defines, over the same borrowed-argument
 /// contract the built-in string nodes use.
 #[polydat::polydat_node(category = String)]
 fn host_tag(prefix: &str, n: u64) -> String {
     format!("{prefix}-{n:04}")
+}
+
+/// A value type the host defines. Implementing `ReflectedValue`
+/// lets it ride a wire as `Value::Ext`: nodes take and return it
+/// through `Ext<T>`, string interpolation and JSON use `display` and
+/// `to_json_value`, and the host downcasts it back through `as_any`.
+#[derive(Debug, Clone, PartialEq)]
+struct GeoCell {
+    lat_deg: f64,
+    lon_deg: f64,
+    level: u64,
+}
+
+impl polydat::ast::ReflectedValue for GeoCell {
+    fn type_name(&self) -> &str {
+        "GeoCell"
+    }
+    fn display(&self) -> String {
+        format!("cell({:.3}, {:.3}, L{})", self.lat_deg, self.lon_deg, self.level)
+    }
+    fn to_json_value(&self) -> serde_json::Value {
+        serde_json::json!({ "lat": self.lat_deg, "lon": self.lon_deg, "level": self.level })
+    }
+    fn clone_reflected(&self) -> Box<dyn polydat::ast::ReflectedValue> {
+        Box::new(self.clone())
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// A node that produces the host type. The return type `Ext<GeoCell>`
+/// boxes it into the wire.
+#[polydat::polydat_node(category = Math)]
+fn locate_cell(lat: f64, lon: f64, level: u64) -> Ext<GeoCell> {
+    Ext(GeoCell { lat_deg: lat, lon_deg: lon, level })
+}
+
+/// A node that consumes it. The parameter type `Ext<GeoCell>` downcasts
+/// the wire value; a wire carrying some other extension type is a
+/// panic, not a silent mismatch.
+#[polydat::polydat_node(category = String)]
+fn cell_token(cell: Ext<GeoCell>) -> String {
+    let scale = (1u64 << cell.level) as f64;
+    let row = ((cell.lat_deg + 90.0) / 180.0 * scale) as u64;
+    let col = ((cell.lon_deg + 180.0) / 360.0 * scale) as u64;
+    format!("L{}:{row}:{col}", cell.level)
 }
 
 fn main() {
@@ -31,6 +79,7 @@ fn main() {
     section_externs();
     section_share_across_threads();
     section_host_nodes();
+    section_host_values();
     section_assembler();
     section_modules();
     section_traversal();
@@ -151,9 +200,36 @@ fn section_host_nodes() {
     println!();
 }
 
+/// A host type carried through wires as an extension value.
+fn section_host_values() {
+    println!("== 5. Host-defined value types ==");
+    let mut kernel = compile_polydat(
+        r#"
+            input cycle: u64
+            lat  := unit_interval(hash(cycle)) * 180.0 - 90.0
+            lon  := unit_interval(hash(cycle + 1000)) * 360.0 - 180.0
+            cell := locate_cell(lat, lon, 6)
+            tok  := cell_token(cell)
+            line := "{tok} is {cell}"
+        "#,
+    )
+    .expect("compile");
+    for cycle in [0u64, 1] {
+        kernel.set_inputs(&[cycle]);
+        println!("cycle {cycle}: {}", kernel.pull("line").as_str());
+        // The host reads the wire as its own type again.
+        let cell = kernel.pull("cell").clone();
+        let Value::Ext(boxed) = cell else { panic!("cell is an Ext wire") };
+        let cell = boxed.as_any().downcast_ref::<GeoCell>().expect("a GeoCell");
+        println!("cycle {cycle}: level {} at ({:.1}, {:.1}); json {}", cell.level, cell.lat_deg, cell.lon_deg, boxed.to_json_value());
+    }
+    println!("cell wire type: {:?}", kernel.program().output_port_type("cell"));
+    println!();
+}
+
 /// The assembler API: the same graph without source text.
 fn section_assembler() {
-    println!("== 5. The assembler API ==");
+    println!("== 6. The assembler API ==");
     use polydat::compile::assembly::{PolydatAssembler, WireRef};
     use polydat::library::arithmetic::Mod;
     use polydat::library::hash::Hash;
@@ -169,7 +245,7 @@ fn section_assembler() {
 
 /// Modules from files: a library directory the host controls.
 fn section_modules() {
-    println!("== 6. Modules from a library directory ==");
+    println!("== 7. Modules from a library directory ==");
     let dir = std::env::temp_dir().join(format!("polydat-embedding-guide-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("temp dir");
     std::fs::write(
@@ -197,7 +273,7 @@ fn section_modules() {
 /// A traversal: the host opens the comprehension the program declares
 /// and drives each activation itself.
 fn section_traversal() {
-    println!("== 7. Traversal ==");
+    println!("== 8. Traversal ==");
     let mut kernel = compile_polydat(
         r#"
             input cycle: u64
@@ -222,7 +298,7 @@ fn section_traversal() {
 /// Tiles at the host boundary: a template that arrives as a parsed
 /// JSON value becomes a tile statement.
 fn section_tiles() {
-    println!("== 8. Tiles from host data ==");
+    println!("== 9. Tiles from host data ==");
     use polydat::tile::{compile_polydat_with_tiles, tile_from_json_value, Span, TileOptions};
     let template = serde_json::json!({
         "id": "${cycle}",
@@ -239,7 +315,7 @@ fn section_tiles() {
 /// Driving a compiled kernel directly: the closure tier and native code,
 /// with typed reads and the one host rule they carry.
 fn section_compiled_kernels() {
-    println!("== 9. Compiled kernels ==");
+    println!("== 10. Compiled kernels ==");
     let src = "input cycle: u64\nh := hash(cycle)\nname := \"user-{h}\"\ntile j : json := {\"h\": ${h}, \"name\": ${name}}\n";
     let mut p2 = compile_polydat_to_assembler(src).unwrap().try_compile_raw().unwrap_or_else(|_| panic!("P2"));
     let mut p3 = compile_polydat_to_assembler(src).unwrap().try_compile_jit().expect("P3");
@@ -265,7 +341,7 @@ fn section_compiled_kernels() {
 /// Host features are program transforms: append a binding, compile the
 /// result, and drain what the node buffered.
 fn section_transforms() {
-    println!("== 10. Program transforms ==");
+    println!("== 11. Program transforms ==");
     let src = "input cycle: u64\nid := mod(hash(cycle), 1000)\nname := \"user-{id}\"\n";
     let with_emit = format!("{src}__emit := emit_row(\"jsonl\", \"cycle,id,name\", cycle, id, name)\n");
     let mut kernel = compile_polydat(&with_emit).expect("compile");
@@ -283,7 +359,7 @@ fn section_transforms() {
 /// Diagnostics: the compile log the binary's `explain` narrates, and the
 /// program's own introspection.
 fn section_diagnostics() {
-    println!("== 11. Diagnostics ==");
+    println!("== 12. Diagnostics ==");
     let mut log = CompileEventLog::new();
     let kernel = compile_polydat_with_log("input cycle: u64\nh := hash(cycle)\nf := to_f64(h) / 3.0\ntile t : json := {\"h\": ${h}, \"f\": ${f | .2}}\n", &mut log)
         .expect("compile");
