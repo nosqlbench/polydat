@@ -27,7 +27,7 @@
 //! - [`closures`]: Phase 2 monomorphic u64-only kernels.
 //! - [`hybrid`]: per-node optimal kernel (JIT segments + closure
 //!   segments sharing a flat u64 buffer).
-//! - [`jit`]: Phase 3 Cranelift JIT compilation
+//! - `jit`: Phase 3 Cranelift JIT compilation
 //!   (feature-gated on `jit`).
 
 pub mod assembly;

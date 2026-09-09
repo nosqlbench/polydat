@@ -117,7 +117,7 @@
 //! - [`compile`]: DAG construction + compilation strategies —
 //!   [`compile::assembly::PolydatAssembler`], [`compile::fusion`],
 //!   [`compile::closures`] (Phase 2), [`compile::hybrid`]
-//!   (per-node optimal), [`compile::jit`] (Phase 3 Cranelift,
+//!   (per-node optimal), `compile::jit` (Phase 3 Cranelift,
 //!   feature-gated)
 //! - [`dsl`]: Polydat language — [`dsl::compile_polydat`], lexer, parser, registry
 //! - [`library`]: 250+ built-in function nodes (hash, arithmetic, string,

@@ -11,7 +11,7 @@
 //!   distribution-emitting nodes (weighted, probability, etc.).
 //! - [`support`]: library-internal infrastructure
 //!   ([`support::cache`], [`support::audit`]) used by nodes
-//!   like [`vectors`] for caching dataset handles and
+//!   like `vectors` for caching dataset handles and
 //!   diagnosing data-source mismatches.
 
 pub mod sampling;
