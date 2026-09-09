@@ -25,7 +25,7 @@ differential in `tests/handle_tiers.rs` pins random tiles, projections
 included, to the interpreter across the tiers.
 
 The walk-through with real output is
-[the Polytile tutorial](../polytile_tutorial.md).
+[the Polytile tutorial](../tutorials/polytile_tutorial.md).
 
 **Revisions:** the first draft set the textual grammar, the skeleton,
 and the engine plan; the second added containment inside other
@@ -691,7 +691,7 @@ All eight steps have landed; §13 is the landing record.
    lowerings of both tile nodes, the `compiled_handle` closures, and
    projections rendering inside the helper. `tests/variadic_lowering.rs`,
    `tests/handle_tiers.rs`.
-8. **Docs.** [The Polytile tutorial](../polytile_tutorial.md) with real
+8. **Docs.** [The Polytile tutorial](../tutorials/polytile_tutorial.md) with real
    output, the illustrations page, and the toy test definition rendering
    its readings as documents.
 

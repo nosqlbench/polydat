@@ -164,27 +164,27 @@ machine-code lowering, not SIMD auto-promotion.
 
 Run the semantic gate first:
 
-```text
+```sh
 cargo test -p polydat --test engine_ladder_equivalence
 ```
 
 Then run only the focused performance target:
 
-```text
+```sh
 cargo bench -p polydat --bench engine_ladder
 ```
 
 The P3 case requires the default `jit` feature. A no-default-features run still
 builds and measures P1 and P2:
 
-```text
+```sh
 cargo bench -p polydat --no-default-features --bench engine_ladder
 ```
 
 The benchmark source is
-[`benches/engine_ladder.rs`](../benches/engine_ladder.rs), and its cross-engine
+[`benches/engine_ladder.rs`](../../benches/engine_ladder.rs), and its cross-engine
 gate is
-[`tests/engine_ladder_equivalence.rs`](../tests/engine_ladder_equivalence.rs).
+[`tests/engine_ladder_equivalence.rs`](../../tests/engine_ladder_equivalence.rs).
 
 ## Interpreting results
 

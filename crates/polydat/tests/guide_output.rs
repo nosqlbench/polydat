@@ -18,6 +18,11 @@
 //! order. A line consisting of `...` marks an elision and matches
 //! nothing. Output quoted from a source this test cannot run is fenced
 //! as `console` and skipped.
+//!
+//! Guides that quote files and facts instead of output get their own
+//! checks below: a quoted grammar or graph must equal its file, counts
+//! and names stated in prose must describe that file, feature names must
+//! exist in the manifest, and every relative link must resolve.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -211,4 +216,132 @@ fn toy_tutorial_quotes_the_grammar_file() {
     let block = after_heading.split("```polydat\n").nth(1).expect("polydat fence").split("\n```").next().unwrap();
     let normalize = |s: &str| s.lines().map(str::trim_end).collect::<Vec<_>>().join("\n").trim_end().to_string();
     assert_eq!(normalize(block), normalize(&file), "the quoted grammar differs from examples/toy_test_definition.polydat");
+}
+
+// ── Guides that quote files and facts rather than program output ──
+
+fn read(rel: &str) -> String {
+    let path = manifest_dir().join(rel);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display())).replace("\r\n", "\n")
+}
+
+/// The fenced block of the given language that follows a heading.
+fn block_after<'a>(doc: &'a str, heading: &str, lang: &str) -> &'a str {
+    let after = doc.split(&format!("\n{heading}\n")).nth(1).unwrap_or_else(|| panic!("heading {heading:?}"));
+    after.split(&format!("```{lang}\n")).nth(1).unwrap_or_else(|| panic!("{lang} fence after {heading:?}")).split("\n```").next().unwrap()
+}
+
+fn normalize(s: &str) -> String {
+    s.lines().map(str::trim_end).collect::<Vec<_>>().join("\n").trim_end().to_string()
+}
+
+/// Backticked spans in a line, in order.
+fn code_spans(line: &str) -> Vec<&str> {
+    line.split('`').skip(1).step_by(2).collect()
+}
+
+/// The performance guide reproduces its benchmark graph; the copy must
+/// be the file, less the comment header that the prose around the
+/// quote already paraphrases.
+#[test]
+fn performance_guide_quotes_the_graph_file() {
+    let doc = read("docs/guides/performance.md");
+    let file = read("examples/engine_ladder.polydat");
+    let body: Vec<&str> = file.lines().skip_while(|l| l.starts_with("//") || l.trim().is_empty()).collect();
+    assert_eq!(normalize(block_after(&doc, "## The graph", "polydat")), normalize(&body.join("\n")), "the quoted graph differs from examples/engine_ladder.polydat");
+}
+
+/// The measurement contract names the graph's inputs, node count, and
+/// consumed outputs in prose. Those must describe the graph file.
+#[test]
+fn performance_guide_describes_the_graph() {
+    let doc = read("docs/guides/performance.md");
+    let file = read("examples/engine_ladder.polydat");
+    let inputs = file.lines().filter(|l| l.starts_with("input ")).count();
+    let nodes = file.lines().filter(|l| l.contains(":=")).count();
+    let words = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
+    let word = |n: usize| words.get(n).copied().unwrap_or_else(|| panic!("no number word for {n}; extend the table"));
+    let contract = doc.split("\n## Measurement contract\n").nth(1).expect("contract section").split("\n## ").next().unwrap();
+    assert!(contract.contains(&format!("all {} inputs", word(inputs))), "the graph has {inputs} inputs; the contract says otherwise");
+    assert!(contract.contains(&format!("the {} graph nodes", word(nodes))), "the graph has {nodes} nodes; the contract says otherwise");
+    let consume = contract.lines().find(|l| l.contains("Consume `")).expect("a Consume step");
+    let outputs = code_spans(consume);
+    assert_eq!(outputs.len(), 4, "the contract consumes four outputs");
+    for name in outputs {
+        assert!(file.lines().any(|l| l.starts_with(&format!("{name} :="))), "consumed output `{name}` is not a binding in the graph");
+    }
+    let manifest = read("Cargo.toml");
+    let cranelift = manifest.lines().find(|l| l.starts_with("cranelift-jit = ")).expect("cranelift-jit dependency");
+    let version = cranelift.split("version = \"").nth(1).expect("version").split('"').next().unwrap();
+    assert!(doc.contains(&format!("Cranelift {version}")), "the reference environment names a Cranelift version other than the manifest's {version}");
+}
+
+/// The compilation guide's feature names are real Cargo features.
+#[test]
+fn compilation_guide_names_real_features() {
+    let doc = read("docs/guides/compilation.md");
+    let manifest = read("Cargo.toml");
+    let features: Vec<&str> = manifest
+        .split("\n[features]\n")
+        .nth(1)
+        .expect("[features] table")
+        .split("\n[")
+        .next()
+        .unwrap()
+        .lines()
+        .filter_map(|l| l.split_once(" = ").map(|(k, _)| k.trim()))
+        .collect();
+    let mut named = Vec::new();
+    for line in doc.lines() {
+        if line.starts_with("| Phase") || line.starts_with("| Hybrid") {
+            let cell = line.trim_end_matches('|').rsplit('|').next().unwrap().trim();
+            if cell != "always" {
+                named.extend(code_spans(cell));
+            }
+        } else if line.starts_with("- **`") {
+            named.push(code_spans(line)[0]);
+        }
+    }
+    assert!(!named.is_empty(), "no feature names found in the guide");
+    for name in named {
+        assert!(features.contains(&name), "`{name}` is not a feature in Cargo.toml (features: {features:?})");
+    }
+}
+
+/// Every relative link in the documentation resolves to a file or
+/// directory in the repository.
+#[test]
+fn documentation_links_resolve() {
+    fn markdown_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                markdown_files(&path, out);
+            } else if path.extension().is_some_and(|e| e == "md") {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    markdown_files(&manifest_dir().join("docs"), &mut files);
+    files.push(manifest_dir().join("README.md"));
+    files.push(manifest_dir().join("../../README.md"));
+    let mut broken = Vec::new();
+    for file in &files {
+        let text = std::fs::read_to_string(file).unwrap();
+        let dir = file.parent().unwrap();
+        for (i, line) in text.lines().enumerate() {
+            for piece in line.split("](").skip(1) {
+                let target = piece.split(')').next().unwrap_or("");
+                let target = target.split('#').next().unwrap();
+                if target.is_empty() || target.contains("://") || target.starts_with("mailto:") {
+                    continue;
+                }
+                if !dir.join(target).exists() {
+                    broken.push(format!("{}:{}: {target}", file.strip_prefix(manifest_dir()).unwrap_or(file).display(), i + 1));
+                }
+            }
+        }
+    }
+    assert!(broken.is_empty(), "{} broken links:\n{}", broken.len(), broken.join("\n"));
 }

@@ -94,7 +94,7 @@ kernel.set_inputs(&[12_345]);
 // device=45, reading=123, q_temp=0.071753, q_humid=0.452280
 ```
 
-The grammar fits on one page (see [`src/dsl/`](../src/dsl/)) but the
+The grammar fits on one page (see [`src/dsl/`](../../src/dsl/)) but the
 graphs you can build are arbitrarily wide and deep. The compiler
 tracks each wire's port type (u64, f64, str, bool, bytes, json,
 vectors…) and rejects mismatches at compile time, before the kernel
@@ -142,7 +142,7 @@ larger benchmark form).
 
 ## A function library and loader
 
-The 230 built-in nodes (see [nodes.md](nodes.md)) are one library.
+The 230 built-in nodes (see [nodes.md](../reference/nodes.md)) are one library.
 Workload-author functions written in `.polydat` files are another —
 `compile_polydat_with_libs` loads them from disk and they're callable from
 your DSL by name as if they were built in.
@@ -165,7 +165,7 @@ let mut kernel = polydat::dsl::compile_polydat_with_libs(
 ).expect("compile failed");
 ```
 
-The shipped [`stdlib/`](../stdlib/) directory has more examples:
+The shipped [`stdlib/`](../../stdlib/) directory has more examples:
 `identity.polydat`, `distributions.polydat`, `hashing.polydat`, `modeling.polydat`, etc.
 Each is loadable the same way.
 
@@ -253,7 +253,7 @@ The trailing `0` in `mixed_radix(cycle, 100, 0)` declares the second
 dimension as unbounded — it grows indefinitely rather than wrapping.
 Replace it with a finite cardinality to cap the total space.
 
-`partition` nodes (see [nodes.md §Determinism](nodes.md#determinism-and-sampling))
+`partition` nodes (see [nodes.md §Determinism](../reference/nodes.md#determinism-and-sampling))
 give type-checked access to the resulting cells.
 
 See [`examples/parameter_space.rs`](../../examples/parameter_space.rs).

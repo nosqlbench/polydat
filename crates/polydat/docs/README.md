@@ -10,7 +10,10 @@ and the invariants.
 Walk-throughs with real output. Every program in them is run by an
 example under `examples/` or by the binary, and `tests/guide_output.rs`
 checks that every quoted `text` block in the tutorials and the embedding
-guide is output of that run.
+guide is output of that run. The same test checks that the performance
+guide quotes its graph file exactly and describes it correctly, that the
+compilation guide names real Cargo features, and that every relative
+link in the documentation resolves.
 
 - [Illustrations](tutorials/illustrations.md): the DSL, the assembler
   API, function graphs, procedural generation, libraries, type safety,

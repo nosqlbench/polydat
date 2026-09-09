@@ -14,7 +14,7 @@ nodes into the graph. The catalog below is the menu the resolver picks
 from, not a usage manual.
 
 **Inventory:** Built-in nodes live in
-[`src/library/`](../src/library/). This file is a hand-curated snapshot;
+[`src/library/`](../../src/library/). This file is a hand-curated snapshot;
 when the runtime diverges, the source files are authoritative.
 
 ---
@@ -192,7 +192,7 @@ runtime PortType for debugging type-error chains.
 
 ### `realer` — bundled human-readable datasets
 `first_names`, `full_names`, `country_names`, `state_codes`. Backed by
-CSV files in [`data/`](../data/) — Census names, ISO country codes,
+CSV files in [`data/`](../../data/) — Census names, ISO country codes,
 US state abbreviations.
 
 ### `datafile` — ordinal access to user-provided files
@@ -236,38 +236,38 @@ const-constraint contracts at wire boundaries.
 
 | File | Nodes |
 |------|------:|
-| [`vectors.rs`](../src/library/vectors.rs) | 35 |
-| [`math.rs`](../src/library/math.rs) | 17 |
-| [`compare.rs`](../src/library/compare.rs) | 17 |
-| [`probability.rs`](../src/library/probability.rs) | 12 |
-| [`bitwise.rs`](../src/library/bitwise.rs) | 14 |
-| [`arithmetic.rs`](../src/library/arithmetic.rs) | 12 |
-| [`convert.rs`](../src/library/convert.rs) | 11 |
-| [`json.rs`](../src/library/json.rs) | 10 |
+| [`vectors.rs`](../../src/library/vectors.rs) | 35 |
+| [`math.rs`](../../src/library/math.rs) | 17 |
+| [`compare.rs`](../../src/library/compare.rs) | 17 |
+| [`probability.rs`](../../src/library/probability.rs) | 12 |
+| [`bitwise.rs`](../../src/library/bitwise.rs) | 14 |
+| [`arithmetic.rs`](../../src/library/arithmetic.rs) | 12 |
+| [`convert.rs`](../../src/library/convert.rs) | 11 |
+| [`json.rs`](../../src/library/json.rs) | 10 |
 | Runtime-control nodes (externally registered) | 9 |
-| [`context.rs`](../src/library/context.rs) | 9 |
-| [`partition.rs`](../src/library/partition.rs) | 8 |
-| [`string.rs`](../src/library/string.rs) | 8 |
+| [`context.rs`](../../src/library/context.rs) | 9 |
+| [`partition.rs`](../../src/library/partition.rs) | 8 |
+| [`string.rs`](../../src/library/string.rs) | 8 |
 | `nbrs-metrics::polydat_nodes` (externally registered) | 8 |
-| [`param_helpers.rs`](../src/library/param_helpers.rs) | 6 |
-| [`datafile.rs`](../src/library/datafile.rs) | 6 |
-| [`noise.rs`](../src/library/noise.rs) | 5 |
-| [`weighted.rs`](../src/library/weighted.rs) | 4 |
-| [`log_levels.rs`](../src/library/log_levels.rs) | 4 |
-| [`digest.rs`](../src/library/digest.rs) | 4 |
-| [`encoding.rs`](../src/library/encoding.rs) | 4 |
-| [`pcg.rs`](../src/library/pcg.rs) | 4 |
-| [`bytebuf.rs`](../src/library/bytebuf.rs) | 4 |
-| [`realer.rs`](../src/library/realer.rs) | 4 |
-| [`datetime.rs`](../src/library/datetime.rs) | 4 |
-| [`diagnostic.rs`](../src/library/diagnostic.rs) | 4 |
-| [`lerp.rs`](../src/library/lerp.rs) | 3 |
-| [`regex.rs`](../src/library/regex.rs) | 2 |
-| [`hash.rs`](../src/library/hash.rs) | 1 |
-| [`format.rs`](../src/library/format.rs) | 1 |
-| [`exactly_one.rs`](../src/library/exactly_one.rs) | 1 |
-| [`assertions.rs`](../src/library/assertions.rs) | (typed family — not name-registered) |
-| [`pick.rs`](../src/library/pick.rs) | (op-template dispatch primitive) |
-| [`random.rs`](../src/library/random.rs) | (non-deterministic prototyping) |
-| [`fixed.rs`](../src/library/fixed.rs) | (const / fixed-value family) |
-| [`identity.rs`](../src/library/identity.rs) | (identity / constant) |
+| [`param_helpers.rs`](../../src/library/param_helpers.rs) | 6 |
+| [`datafile.rs`](../../src/library/datafile.rs) | 6 |
+| [`noise.rs`](../../src/library/noise.rs) | 5 |
+| [`weighted.rs`](../../src/library/weighted.rs) | 4 |
+| [`log_levels.rs`](../../src/library/log_levels.rs) | 4 |
+| [`digest.rs`](../../src/library/digest.rs) | 4 |
+| [`encoding.rs`](../../src/library/encoding.rs) | 4 |
+| [`pcg.rs`](../../src/library/pcg.rs) | 4 |
+| [`bytebuf.rs`](../../src/library/bytebuf.rs) | 4 |
+| [`realer.rs`](../../src/library/realer.rs) | 4 |
+| [`datetime.rs`](../../src/library/datetime.rs) | 4 |
+| [`diagnostic.rs`](../../src/library/diagnostic.rs) | 4 |
+| [`lerp.rs`](../../src/library/lerp.rs) | 3 |
+| [`regex.rs`](../../src/library/regex.rs) | 2 |
+| [`hash.rs`](../../src/library/hash.rs) | 1 |
+| [`format.rs`](../../src/library/format.rs) | 1 |
+| [`exactly_one.rs`](../../src/library/exactly_one.rs) | 1 |
+| [`assertions.rs`](../../src/library/assertions.rs) | (typed family — not name-registered) |
+| [`pick.rs`](../../src/library/pick.rs) | (op-template dispatch primitive) |
+| [`random.rs`](../../src/library/random.rs) | (non-deterministic prototyping) |
+| [`fixed.rs`](../../src/library/fixed.rs) | (const / fixed-value family) |
+| [`identity.rs`](../../src/library/identity.rs) | (identity / constant) |
