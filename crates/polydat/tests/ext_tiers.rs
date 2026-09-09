@@ -185,3 +185,20 @@ fn a_failing_construction_is_a_compile_error_on_every_tier() {
     let err = compile_polydat_to_assembler(src).err().expect("construction fails at compile time");
     assert!(err.contains("base must be non-zero"), "{err}");
 }
+
+// ── What the compiled engines cannot take ──
+
+/// An extern is a host-settable input slot. The compiled engines are
+/// driven by coordinates alone and seed nothing else, so the assembler
+/// entry point refuses a program with one and says where to go.
+#[test]
+fn the_assembler_entry_refuses_externs_with_direction() {
+    let err = compile_polydat_to_assembler("input cycle: u64\nextern label: str = \"lbl\"\nx := str_concat(label, \"!\")\n")
+        .err()
+        .expect("the assembler entry refuses externs");
+    assert!(err.contains("extern 'label'") && err.contains("compile_polydat"), "{err}");
+    // The kernel path takes the same program.
+    let mut k = polydat::dsl::compile::compile_polydat("input cycle: u64\nextern label: str = \"lbl\"\nx := str_concat(label, \"!\")\n").expect("kernel path");
+    k.set_inputs(&[1]);
+    assert_eq!(k.pull("x").as_str(), "lbl!");
+}

@@ -611,5 +611,13 @@ Kept short; the normative text above is what the code does. Dates are
   cycle's handle while its producer had rerun (H3). Codegen now treats
   a copy of a handle slot as a handle-writing step, never skipped, by
   propagating handle status through `identity` in dependency order.
+  The one copy step the fuzzer cannot reach is an extern's
+  passthrough: the compiled engines are driven by coordinates alone,
+  seed no extern default, and have no lowering for an input
+  passthrough, so `compile_polydat_to_assembler` now refuses an
+  `extern` with a message that points at `compile_polydat`, where the
+  earlier behaviour was an unknown-wire error. Bringing externs to the
+  compiled engines would mean seeding defaults into every kernel's
+  input slots and lowering the passthrough natively; it is not done.
 
 No refinements remain recorded.

@@ -2368,7 +2368,19 @@ impl Compiler {
                         }
                     }
                 }
-                Statement::ExternPort(_) => {}
+                Statement::ExternPort(port) => {
+                    // Compiled kernels take coordinates only: nothing seeds
+                    // an extern's default into their input slots and no
+                    // API sets one, so a graph built here cannot carry an
+                    // extern. The kernel path (`compile_polydat`) can.
+                    return Err(format!(
+                        "extern '{}': the assembler entry point builds coordinate-driven \
+                         graphs for the compiled engines, which have no extern slots; \
+                         compile a program with externs through `compile_polydat`, \
+                         which seeds their defaults and lets a host set them",
+                        port.name
+                    ));
+                }
                 Statement::ModuleDef(_) => {}
                 Statement::InputDecl(_) => {}
                 Statement::Pragma { .. } => {}

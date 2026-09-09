@@ -86,7 +86,7 @@ The other compile entry points differ only in what they take:
 | `compile_polydat_strict(src, dir, strict)` | strict mode: implicit adapters are errors |
 | `compile_polydat_with_log(src, &mut log)` | the compile event log (§13) |
 | `compile_polydat_with_tiles(src, tiles)` | tile statements built from host data (§10) |
-| `compile_polydat_to_assembler(src)` | stops before engine selection and returns the assembler (§7, §11) |
+| `compile_polydat_to_assembler(src)` | stops before engine selection and returns the assembler (§7, §11); refuses externs, since the compiled engines take coordinates only |
 
 ## 3. Externs
 
