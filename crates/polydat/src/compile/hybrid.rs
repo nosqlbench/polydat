@@ -923,6 +923,7 @@ pub fn build_hybrid(
     let mut max_outputs = 0usize;
     let handle_mask = handle_slot_mask_of(nodes, port_offsets, total_slots);
     let mut step_rerun: Vec<bool> = Vec::new();
+    let mut table_entries: Vec<(usize, usize)> = Vec::new();
 
     for (node_idx, node) in nodes.iter().enumerate() {
         let input_slots = flatten_input_slots(
@@ -934,7 +935,33 @@ pub fn build_hybrid(
         max_outputs = max_outputs.max(output_slots.len());
 
         let scratch_start = scratch.len();
+        // A handle closure (SRD 115 §7) owns the next entries of the
+        // kernel's one table, exactly as in the JIT-enabled builder.
+        let entry_base = table_entries.len();
+        let wire_types: Vec<crate::ast::PortType> = wiring[node_idx]
+            .iter()
+            .map(|src| match src {
+                WireSource::Input(c) => input_types.get(*c).copied().unwrap_or(crate::ast::PortType::U64),
+                WireSource::NodeOutput(j, p) => nodes[*j].meta().outs[*p].typ,
+            })
+            .collect();
         let op = if let Some(op) = node.compiled_u64() {
+            ClosureOp::U64(op)
+        } else if let Some(op) = node.compiled_handle(entry_base, &wire_types) {
+            let mut slot = output_slots.iter().copied();
+            for port in &node.meta().outs {
+                let first = slot.next();
+                for _ in 1..port.typ.slot_width() {
+                    slot.next();
+                }
+                if port.typ.handle_kind() == Some(crate::ast::HandleKind::Table)
+                    && let Some(first) = first
+                {
+                    table_entries.push((first, table_entries.len()));
+                }
+            }
+            ClosureOp::U64(op)
+        } else if let Some(op) = crate::compile::assembly::identity_op(node.as_ref()) {
             ClosureOp::U64(op)
         } else if let Some(kit) = node.compiled_slot() {
             scratch.extend(kit.scratch.iter().map(|e| crate::ast::ScratchBuf::new(*e)));
@@ -964,7 +991,7 @@ pub fn build_hybrid(
     build_pushpull_from_steps(
         steps, scratch, ref_scratch, ref_slots, wiring, nodes, coord_count,
         total_slots, output_map, max_inputs, max_outputs, input_starts,
-        input_widths, Vec::new(), output_types, step_rerun,
+        input_widths, table_entries, output_types, step_rerun,
     )
 }
 

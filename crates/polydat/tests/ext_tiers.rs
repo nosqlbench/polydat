@@ -96,7 +96,11 @@ fn extension_nodes_are_closure_steps_never_native() {
     let hybrid = compile_polydat_to_assembler(SRC).unwrap().compile_hybrid().expect("hybrid");
     let (native, closures) = hybrid.engine_counts();
     assert!(closures >= 3, "the three extension nodes and the text node should be closure steps, got {closures}");
-    assert!(native >= 1, "the scalar prefix should still be native, got {native}");
     #[cfg(feature = "jit")]
-    assert!(compile_polydat_to_assembler(SRC).unwrap().try_compile_jit().is_err(), "pure native code has no form for an extension node");
+    {
+        assert!(native >= 1, "the scalar prefix should still be native, got {native}");
+        assert!(compile_polydat_to_assembler(SRC).unwrap().try_compile_jit().is_err(), "pure native code has no form for an extension node");
+    }
+    #[cfg(not(feature = "jit"))]
+    assert_eq!(native, 0, "nothing is native without the jit feature");
 }
