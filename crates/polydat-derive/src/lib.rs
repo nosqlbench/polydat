@@ -1413,6 +1413,15 @@ enum BorrowWire {
     Vec(&'static str /* variant name */, TokenStream2 /* PortType expr */),
 }
 
+/// `Ext<T>` for some `T`: an extension value that rides a table
+/// handle (SRD 115 §3) and reaches the body through `Wire::extract`.
+/// The generic path already handles it on the interpreter; this
+/// recognizer lets the handle closure carry it too.
+fn is_ext_wire(ty: &Type) -> bool {
+    let s = type_to_string(ty);
+    s.starts_with("Ext <") || s.contains(":: Ext <")
+}
+
 fn is_borrow_wire_shape(ty: &Type) -> Option<BorrowWire> {
     let syn::Type::Reference(r) = ty else { return None; };
     if r.mutability.is_some() { return None; }
@@ -2869,11 +2878,14 @@ fn generate(
     // from consts. Byte strings ride as handles exactly as in the
     // u64 kit; JSON values are read from and written to the table
     // the kernel installs around each run; polymorphic and variadic
-    // ports decode by the wire types the kernel hands the kit.
+    // ports decode by the wire types the kernel hands the kit; an
+    // `Ext<T>` rides a table handle and reaches the body through the
+    // same `Wire::extract` downcast the interpreter uses.
     enum HandleArg {
         Jit(JitType),
         JsonRef,
         JsonArc,
+        Ext,
         Poly,
         Variadic(VariadicElement),
         Const(ConstShape),
@@ -2883,6 +2895,7 @@ fn generate(
     enum HandleRet {
         Jit(JitType),
         Json,
+        Ext,
     }
     let handle_plan: Option<(Vec<HandleArg>, HandleRet)> = (|| {
         if attrs.no_jit
@@ -2897,6 +2910,9 @@ fn generate(
         let ret_shape = if classify_wrapper_wire(&ret_ty) == Some(WrapperWire::Json) {
             handle_shape = true;
             HandleRet::Json
+        } else if is_ext_wire(&ret_ty) {
+            handle_shape = true;
+            HandleRet::Ext
         } else if let Some(jt) = ret_jit_type {
             if jt.width() != 1 {
                 return None;
@@ -2915,6 +2931,9 @@ fn generate(
                     } else if classify_wrapper_wire(&a.declared_ty) == Some(WrapperWire::Json) {
                         handle_shape = true;
                         HandleArg::JsonArc
+                    } else if is_ext_wire(&a.declared_ty) {
+                        handle_shape = true;
+                        HandleArg::Ext
                     } else if let Some(jt) = wire_type_to_jit_type(&a.declared_ty) {
                         if jt.width() != 1 {
                             return None;
@@ -3005,6 +3024,12 @@ fn generate(
                         wire_buf_idx += 1;
                         quote!(let #n = polydat::kernel::read_table_json(inputs[#i]);)
                     }
+                    HandleArg::Ext => {
+                        let i = syn::Index::from(wire_buf_idx);
+                        wire_buf_idx += 1;
+                        let ty = &a.declared_ty;
+                        quote!(let #n: #ty = <#ty as polydat::derive_support::Wire>::extract(polydat::kernel::current_table_value(inputs[#i]));)
+                    }
                     HandleArg::Poly => {
                         let i = syn::Index::from(wire_buf_idx);
                         wire_buf_idx += 1;
@@ -3044,6 +3069,9 @@ fn generate(
             HandleRet::Jit(jt) => jt.write_to_u64_buffer(quote!(result)),
             HandleRet::Json => quote! {
                 outputs[0] = polydat::kernel::write_table_entry(__entry_base, polydat::ast::Value::Json(result));
+            },
+            HandleRet::Ext => quote! {
+                outputs[0] = polydat::kernel::write_table_entry(__entry_base, <#ret_ty as polydat::derive_support::Wire>::inject(result));
             },
         };
         quote! {

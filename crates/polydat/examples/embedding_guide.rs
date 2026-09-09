@@ -318,9 +318,9 @@ fn section_tiles() {
 /// with typed reads and the one host rule they carry.
 fn section_compiled_kernels() {
     println!("== 10. Compiled kernels ==");
-    // host_tag has a closure form but no native one, so the hybrid
-    // kernel must mix engines to run this program.
-    let src = "input cycle: u64\nh := hash(cycle)\nname := \"user-{h}\"\ntag := host_tag(\"job\", mod(h, 10000))\ntile j : json := {\"h\": ${h}, \"name\": ${name}, \"tag\": ${tag}}\n";
+    // host_tag and the two extension nodes have closure forms but no
+    // native one, so the hybrid kernel must mix engines to run this.
+    let src = "input cycle: u64\nh := hash(cycle)\nname := \"user-{h}\"\ntag := host_tag(\"job\", mod(h, 10000))\ncell := geo_cell(to_f64(mod(h, 180)) - 90.0, to_f64(mod(h, 360)) - 180.0, 4)\ntok := cell_token(cell)\ntile j : json := {\"h\": ${h}, \"name\": ${name}, \"tag\": ${tag}, \"cell\": ${tok}}\n";
     let mut p2 = compile_polydat_to_assembler(src).unwrap().try_compile_raw().unwrap_or_else(|_| panic!("P2"));
     // Pure native code needs every node to have a native form.
     match compile_polydat_to_assembler(src).unwrap().try_compile_jit() {

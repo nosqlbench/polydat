@@ -299,14 +299,16 @@ Three things to know about extension values:
   then panics with both type names. Give distinct host types distinct
   producers and consumers, and keep them in one crate so the downcast
   can see the concrete type.
-- **Extension nodes run on the interpreter.** A node with an `Ext`
-  signature has neither a closure form nor a native one, so the closure
-  and native kernels of §11 refuse a program that contains one, and the
-  production kernel runs it on the interpreter. The scalar work around it
-  is still fused: in the run above the hashing and scaling fused into two
-  native cones while the two host nodes ran interpreted, and a native
-  neighbour reads an extension value through the table handle described
-  in [Compiled Non-Scalar Slots](../design/compiled_handles.md).
+- **Extension nodes have a closure form but no native one.** An
+  extension value rides the compiled engines as a table handle, the same
+  way JSON does, so the closure tier and the hybrid kernel of §11 run a
+  node with an `Ext` signature as a closure step. Pure native code
+  refuses it, and the production kernel never fuses it into a cone. The
+  scalar work around it is still fused: in the run above the hashing
+  and scaling fused into two native cones while the two host nodes ran
+  interpreted, and a native neighbour reads the value through the table
+  handle described in
+  [Compiled Non-Scalar Slots](../design/compiled_handles.md).
 - **The value is cloned on every read.** `Ext<T>::extract` clones the
   boxed value, so a large host type should hold its payload in an `Arc`.
   The crate's own `Partition` and `Streamer` values do exactly that.
@@ -457,8 +459,8 @@ or the interpreter. Three direct forms exist for hosts that want a whole
 kernel compiled, such as benchmarks and the differential tests: the
 closure tier, pure native code, and the hybrid kernel that lowers what
 it can and runs the rest as closures. The program below includes
-`host_tag` from §5, which has a closure form but no native one, so the
-three forms behave differently:
+`host_tag` from §5 and the two extension nodes from §6, which have
+closure forms but no native one, so the three forms behave differently:
 
 ```rust
 let src = r#"
@@ -466,7 +468,9 @@ let src = r#"
     h := hash(cycle)
     name := "user-{h}"
     tag := host_tag("job", mod(h, 10000))
-    tile j : json := {"h": ${h}, "name": ${name}, "tag": ${tag}}
+    cell := geo_cell(to_f64(mod(h, 180)) - 90.0, to_f64(mod(h, 360)) - 180.0, 4)
+    tok := cell_token(cell)
+    tile j : json := {"h": ${h}, "name": ${name}, "tag": ${tag}, "cell": ${tok}}
 "#;
 let asm = || compile_polydat_to_assembler(src).unwrap();
 let mut p2 = asm().try_compile_raw().unwrap_or_else(|_| panic!("P2"));   // closures
@@ -491,18 +495,20 @@ let mut mixed = asm().compile()?;   // what a host should normally use
 
 ```text
 pure P3 refused: some nodes cannot be JIT-compiled
-hybrid plan: 8 native segment(s), 1 closure step(s)
-cycle 0: P2 h=16294208416658607535 j={"h": 16294208416658607535, "name": "user-16294208416658607535", "tag": "job-7535"}
+hybrid plan: 18 native segment(s), 3 closure step(s)
+cycle 0: P2 h=16294208416658607535 j={"h": 16294208416658607535, "name": "user-16294208416658607535", "tag": "job-7535", "cell": "L4:10:13"}
 cycle 0: hybrid agrees: true
-cycle 1: P2 h=10451216379200822465 j={"h": 10451216379200822465, "name": "user-10451216379200822465", "tag": "job-2465"}
+cycle 1: P2 h=10451216379200822465 j={"h": 10451216379200822465, "name": "user-10451216379200822465", "tag": "job-2465", "cell": "L4:0:8"}
 cycle 1: hybrid agrees: true
-production kernel j: {"h": 10451216379200822465, "name": "user-10451216379200822465", "tag": "job-2465"}
+production kernel j: {"h": 10451216379200822465, "name": "user-10451216379200822465", "tag": "job-2465", "cell": "L4:0:8"}
 ```
 
-Pure native code refuses the program because one node has no native
-form. The hybrid kernel accepts it: eight steps run as native segments,
-the host node runs as one closure step, and every value matches the
-closure tier. `engine_counts` is the only planning detail the hybrid
+Pure native code refuses the program because three nodes have no native
+form. The hybrid kernel accepts it: eighteen steps run as native
+segments, the three host nodes run as closure steps, and every value
+matches the closure tier, including the extension value that passes
+between the two closure steps as a table handle. `engine_counts` is the
+only planning detail the hybrid
 kernel exposes, and it exists so a host can see whether a program is
 mostly native before deciding to care.
 

@@ -340,12 +340,12 @@ the arena); for the table kinds it emits a second kit,
 
 - **Eligibility.** The node has at least one shape the u64 kit cannot
   carry but the table can: a JSON port (`&serde_json::Value` or
-  `Arc<serde_json::Value>`), a polymorphic `Value` port, or a variadic
-  of anything but `u64`; every other argument is a one-slot carrier, a
-  const, or a setup derived from consts; the return is a one-slot
-  carrier or a JSON value. Session-static setup (`from = ()`), fallible
-  bodies, tuple and dynamic returns, split variadics, and `Handle`
-  downcasts stay on P1.
+  `Arc<serde_json::Value>`), a polymorphic `Value` port, an `Ext<T>`
+  port, or a variadic of anything but `u64`; every other argument is a
+  one-slot carrier, a const, or a setup derived from consts; the return
+  is a one-slot carrier, a JSON value, or an `Ext<T>`. Session-static
+  setup (`from = ()`), fallible bodies, tuple and dynamic returns, split
+  variadics, and `Handle` downcasts stay on P1.
 - **Entries and types from the kernel.** The kit takes the first
   value-table entry the node's table-kind outputs own and the type of
   each wire input. A JSON result is written to its entry through the
@@ -568,5 +568,16 @@ Kept short; the normative text above is what the code does. Dates are
   sweep then found the compiler's own port passthrough
   (`__port_<name>`, inserted for a hole's adapter chain) in the same
   state; it now carries the same slot copy.
+
+- **Extension values on the closure tier.** Landed 2026-09-09. The
+  `compiled_handle` kit accepts `Ext<T>` arguments and returns: an
+  argument is read from the installed table through `current_table_value`
+  and downcast by the same `Wire::extract` the interpreter uses, and a
+  return is written with `write_table_entry` through `Wire::inject`.
+  Nothing changed in the engines, which already treated `Ext` as a
+  table kind; the gap was only the macro's plan. Every library node with
+  an `Ext` signature (the partition family, `streamer`) and every host
+  node like them now runs on the closure tier and in hybrid kernels;
+  none has a native form. `tests/ext_tiers.rs` is the differential.
 
 No refinements remain recorded.
