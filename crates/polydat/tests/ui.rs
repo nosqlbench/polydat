@@ -8,8 +8,18 @@
 //! snapshots with `TRYBUILD=overwrite cargo test --test ui` and review
 //! the diff. `tests/ui/pass/` holds the shapes that must keep
 //! compiling.
+//!
+//! Each case is a separate compile, so the suite takes most of a
+//! minute. It is ignored by default and run explicitly:
+//!
+//! ```sh
+//! cargo test --test ui -- --ignored
+//! ```
+//!
+//! CI runs it on every push.
 
 #[test]
+#[ignore = "one compile per case; run with --ignored, as CI does"]
 fn node_attribute_diagnostics() {
     let t = trybuild::TestCases::new();
     t.pass("tests/ui/pass/*.rs");

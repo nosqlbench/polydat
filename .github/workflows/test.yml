@@ -20,7 +20,8 @@
 #     optional `vectordata` feature (pulls network-stack deps;
 #     one platform is enough since the feature is pure Rust and
 #     arch-independent, unlike the JIT). Also runs clippy and builds
-#     rustdoc, both with warnings as errors.
+#     rustdoc, both with warnings as errors, and the node attribute's
+#     compile-fail suite, which is ignored by default.
 #
 # Platform notes (deltas from the nbrs matrix):
 #
@@ -121,3 +122,8 @@ jobs:
         run: |
           cargo clippy --workspace --all-features --all-targets -- -D warnings
           cargo clippy --workspace --no-default-features --all-targets -- -D warnings
+
+      # The node attribute's compile-fail suite is ignored by default
+      # because every case is a separate compile; CI always runs it.
+      - name: Node attribute diagnostics (trybuild)
+        run: cargo test -p polydat --all-features --test ui -- --ignored
