@@ -1,0 +1,5 @@
+error: `Value` args (PolyWire) don't combine with #[poly_default(...)] or #[poly_const(...)]; the runtime port type comes from the upstream wire at construction time.
+ --> tests/ui/fail/value_arg_with_default.rs:2:6
+  |
+2 | fn f(#[poly_default(1u64)] v: polydat::ast::Value) -> polydat::ast::Value { v }
+  |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

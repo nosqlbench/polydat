@@ -1,0 +1,5 @@
+error: scalar `Const<T>` arg declared after a `Const<Vec<C>>` arg is unreachable — the variadic consumes everything from its position to the end of the consts slice. Move the scalar consts BEFORE the `Const<Vec<C>>` in the function signature.
+ --> tests/ui/fail/scalar_const_after_vec.rs:2:63
+  |
+2 | fn f(a: u64, xs: polydat::derive_support::Const<Vec<u64>>, n: polydat::derive_support::Const<u64>) -> u64 { a + xs.len() as u64 + *n }
+  |                                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

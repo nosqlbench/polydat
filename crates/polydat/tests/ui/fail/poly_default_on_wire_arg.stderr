@@ -1,0 +1,5 @@
+error: #[poly_default(...)] only applies to const args (`Const<T>`); bare-type wire args don't have assembly-time defaults.
+ --> tests/ui/fail/poly_default_on_wire_arg.rs:2:14
+  |
+2 | fn f(a: u64, #[poly_default(8u64)] size: u64) -> u64 { a + size }
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

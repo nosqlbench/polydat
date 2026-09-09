@@ -1,0 +1,5 @@
+error: `instantiate(...)` requires at least one type. List the concrete `Wire`-impl types that should get their own per-instantiation registrations.
+ --> tests/ui/fail/instantiate_empty.rs:1:42
+  |
+1 | #[polydat::polydat_node(category = Math, instantiate())]
+  |                                          ^^^^^^^^^^^^^

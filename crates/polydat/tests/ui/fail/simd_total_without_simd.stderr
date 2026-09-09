@@ -1,0 +1,7 @@
+error: `simd_total` requires `simd = "<register node>"`.
+ --> tests/ui/fail/simd_total_without_simd.rs:1:1
+  |
+1 | #[polydat::polydat_node(category = Math, simd_total)]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `polydat::polydat_node` (in Nightly builds, run with -Z macro-backtrace for more info)

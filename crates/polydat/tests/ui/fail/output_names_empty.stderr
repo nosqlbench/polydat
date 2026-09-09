@@ -1,0 +1,5 @@
+error: `output_names(...)` requires at least one name.
+ --> tests/ui/fail/output_names_empty.rs:1:42
+  |
+1 | #[polydat::polydat_node(category = Math, output_names())]
+  |                                          ^^^^^^^^^^^^^^

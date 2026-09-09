@@ -1,0 +1,5 @@
+error: #[polydat_node(instantiate(...))] requires exactly one type parameter on the function (got 0). Declare the function as `fn name<T: Wire>(...) -> ...` and list concrete `Wire`-impl types in the `instantiate(...)` clause.
+ --> tests/ui/fail/instantiate_without_type_param.rs:2:1
+  |
+2 | fn f(a: u64) -> u64 { a }
+  | ^^^^^^^^^^^^^^^^^^^

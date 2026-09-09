@@ -1,0 +1,5 @@
+error: `struct_name` value must be a single identifier, not a path.
+ --> tests/ui/fail/struct_name_path.rs:1:56
+  |
+1 | #[polydat::polydat_node(category = Math, struct_name = nodes::GeoCell)]
+  |                                                        ^^^^^^^^^^^^^^

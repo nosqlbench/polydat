@@ -1,0 +1,7 @@
+error: #[polydat_node] requires `category = <FuncCategory variant>`. Example: #[polydat_node(category = Comparison)]
+ --> tests/ui/fail/missing_category.rs:1:1
+  |
+1 | #[polydat::polydat_node]
+  | ^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `polydat::polydat_node` (in Nightly builds, run with -Z macro-backtrace for more info)

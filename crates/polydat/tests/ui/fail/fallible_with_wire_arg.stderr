@@ -1,0 +1,5 @@
+error: fallible-construction nodes (-> Result<T, E>) must have only Const args. Wire/PolyWire/variadic inputs can't be evaluated at construction time. Use the #[poly_const(setup_fn, from = ...)] shape instead when per-eval inputs are needed.
+ --> tests/ui/fail/fallible_with_wire_arg.rs:2:9
+  |
+2 | fn f(a: u64, n: polydat::derive_support::Const<u64>) -> Result<u64, String> { Ok(a + *n) }
+  |         ^^^

@@ -1,0 +1,5 @@
+error: `variadic_min` value must be an integer literal.
+ --> tests/ui/fail/variadic_min_not_int.rs:1:57
+  |
+1 | #[polydat::polydat_node(category = Math, variadic_min = "1")]
+  |                                                         ^^^

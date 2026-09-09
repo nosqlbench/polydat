@@ -1,0 +1,5 @@
+error: #[polydat_node] does not recognize parameter `colour`. PR B.2 keys: `category = ...`. PR B.7 keys: `no_jit`, `compiled_u64 = ...`, `jit_constants = ...`, `purity = ...`, `simd = "..."`. PR B.9 keys: `identity = ...`, `commutativity = ...`, `variadic_min = ...`. Naming: `struct_name = ...`, `adapter = "..."`.
+ --> tests/ui/fail/unknown_parameter.rs:1:42
+  |
+1 | #[polydat::polydat_node(category = Math, colour = Red)]
+  |                                          ^^^^^^

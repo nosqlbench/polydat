@@ -1,0 +1,5 @@
+error: `purity` value must be a Purity variant: `Pure`, `Nondeterministic`, or `SideChannel(<sink>)` where `<sink>` is a `SideChannelSink` variant ident.
+ --> tests/ui/fail/purity_invalid.rs:1:51
+  |
+1 | #[polydat::polydat_node(category = Math, purity = 1)]
+  |                                                   ^

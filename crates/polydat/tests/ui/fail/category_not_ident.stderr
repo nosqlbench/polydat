@@ -1,0 +1,5 @@
+error: `category` value must be a bare identifier (a polydat `FuncCategory` variant name).
+ --> tests/ui/fail/category_not_ident.rs:1:36
+  |
+1 | #[polydat::polydat_node(category = "Math")]
+  |                                    ^^^^^^

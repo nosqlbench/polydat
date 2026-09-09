@@ -1,0 +1,5 @@
+error: `DynamicOutputs<T>` return requires exactly one `Const<Vec<C>>` arg to drive the output port count (got 0). Declare one `Const<Vec<C>>` arg whose length determines the number of output ports.
+ --> tests/ui/fail/dynamic_outputs_without_const_vec.rs:2:17
+  |
+2 | fn f(a: u64) -> polydat::derive_support::DynamicOutputs<u64> { polydat::derive_support::DynamicOutputs(vec![a]) }
+  |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: `simd` value must be the string name of a register-typed node.
+ --> tests/ui/fail/simd_not_string.rs:1:49
+  |
+1 | #[polydat::polydat_node(category = Math, simd = fast_f)]
+  |                                                 ^^^^^^

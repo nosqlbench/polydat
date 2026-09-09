@@ -1,0 +1,5 @@
+error: #[poly_const(...)] requires a `from = <source>` clause. Supported shapes: `from = ()` (empty), `from = ident` (single), `from = (a, b, c)` (multi-source).
+ --> tests/ui/fail/poly_const_without_from.rs:3:34
+  |
+3 | fn f(a: u64, #[poly_const(build, into = size)] size: polydat::derive_support::Const<u64>) -> u64 { a + *size }
+  |                                  ^^^^

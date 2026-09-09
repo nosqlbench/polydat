@@ -1,0 +1,5 @@
+error: `commutativity` value must be a `Commutativity` variant ident (Positional / AllCommutative / ...).
+ --> tests/ui/fail/commutativity_not_ident.rs:1:58
+  |
+1 | #[polydat::polydat_node(category = Math, commutativity = "AllCommutative")]
+  |                                                          ^^^^^^^^^^^^^^^^

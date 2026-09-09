@@ -89,6 +89,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 # time varies widely; rayon's stealing scheduler keeps every core
 # fed where fixed chunking leaves stragglers).
 rayon = "1"
+trybuild = "1.0.121"
 
 [[bin]]
 name = "polydat"

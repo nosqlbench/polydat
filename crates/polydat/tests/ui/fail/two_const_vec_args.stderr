@@ -1,0 +1,5 @@
+error: #[polydat_node] supports at most one `Const<Vec<C>>` arg per function; the variadic-const surface consumes the tail of the consts slice and a second one would have no entries to claim.
+ --> tests/ui/fail/two_const_vec_args.rs:2:64
+  |
+2 | fn f(a: u64, xs: polydat::derive_support::Const<Vec<u64>>, ys: polydat::derive_support::Const<Vec<u64>>) -> u64 { a + xs.len() as u64...
+  |                                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

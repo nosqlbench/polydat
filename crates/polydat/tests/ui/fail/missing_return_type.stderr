@@ -1,0 +1,5 @@
+error: #[polydat_node] requires an explicit return type; nodes always produce a value.
+ --> tests/ui/fail/missing_return_type.rs:2:1
+  |
+2 | fn f(a: u64) { let _ = a; }
+  | ^^^^^^^^^^^^

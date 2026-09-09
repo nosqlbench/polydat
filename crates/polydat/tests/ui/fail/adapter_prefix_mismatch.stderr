@@ -1,0 +1,5 @@
+error: #[polydat_node(adapter = "cql")] requires the node name to start with "cql_" (found "make_row")
+ --> tests/ui/fail/adapter_prefix_mismatch.rs:2:4
+  |
+2 | fn make_row(a: u64) -> u64 { a }
+  |    ^^^^^^^^

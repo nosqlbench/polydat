@@ -1,0 +1,5 @@
+error: variadic `&[T]` args don't combine with #[poly_default(...)], #[poly_const(...)], or `Value`.
+ --> tests/ui/fail/variadic_with_default.rs:2:6
+  |
+2 | fn f(#[poly_default(1u64)] values: &[polydat::ast::Value]) -> u64 { values.len() as u64 }
+  |      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

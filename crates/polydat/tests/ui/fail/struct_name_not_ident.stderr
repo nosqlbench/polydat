@@ -1,0 +1,5 @@
+error: `struct_name` value must be a bare identifier, e.g. `struct_name = GeoCellNode`.
+ --> tests/ui/fail/struct_name_not_ident.rs:1:56
+  |
+1 | #[polydat::polydat_node(category = Math, struct_name = "GeoCellNode")]
+  |                                                        ^^^^^^^^^^^^^

@@ -1,0 +1,5 @@
+error: function returns `Value` but has no `Value` arg — the macro needs at least one PolyWire (`Value`) arg or a `&[Value]` variadic to source the runtime port type for the output.
+ --> tests/ui/fail/value_return_without_value_arg.rs:2:17
+  |
+2 | fn f(a: u64) -> polydat::ast::Value { polydat::ast::Value::U64(a) }
+  |                 ^^^^^^^^^^^^^^^^^^^

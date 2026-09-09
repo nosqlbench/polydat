@@ -1,0 +1,5 @@
+error: #[polydat_node] requires plain identifier parameters; pattern matching in argument position isn't supported.
+ --> tests/ui/fail/pattern_parameter.rs:2:6
+  |
+2 | fn f((a, b): (u64, u64)) -> u64 { a + b }
+  |      ^^^^^^
