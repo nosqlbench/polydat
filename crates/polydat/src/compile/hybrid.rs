@@ -265,6 +265,15 @@ fn compute_hybrid_slot_provenance(
 // Raw: no provenance, no cone guard. Eval runs all steps.
 // ═══════════════════════════════════════════════════════════════
 
+impl HybridCore {
+    /// How many steps run as native segments and how many as closures:
+    /// what the per-node engine choice decided for this graph.
+    fn engine_counts(&self) -> (usize, usize) {
+        let closures = self.steps.iter().filter(|s| matches!(s, HybridStep::Closure(_))).count();
+        (self.steps.len() - closures, closures)
+    }
+}
+
 /// Hybrid kernel with no provenance tracking.
 ///
 /// Every `eval()` call runs all steps unconditionally. Useful as a
@@ -325,6 +334,10 @@ impl HybridKernelRaw {
 
     /// Number of coordinate inputs.
     pub fn coord_count(&self) -> usize { self.core.coord_count }
+
+    /// The number of native segments and of closure steps in this
+    /// kernel, in that order: what the per-node engine choice decided.
+    pub fn engine_counts(&self) -> (usize, usize) { self.core.engine_counts() }
 
     /// Resolve an output name to its buffer slot.
     pub fn resolve_output(&self, name: &str) -> Option<usize> {
@@ -423,6 +436,10 @@ impl HybridKernelPull {
 
     /// Number of coordinate inputs.
     pub fn coord_count(&self) -> usize { self.core.coord_count }
+
+    /// The number of native segments and of closure steps in this
+    /// kernel, in that order: what the per-node engine choice decided.
+    pub fn engine_counts(&self) -> (usize, usize) { self.core.engine_counts() }
 
     /// Resolve an output name to its buffer slot.
     pub fn resolve_output(&self, name: &str) -> Option<usize> {
@@ -613,6 +630,10 @@ impl HybridKernelPushPull {
 
     /// Number of coordinate inputs.
     pub fn coord_count(&self) -> usize { self.core.coord_count }
+
+    /// The number of native segments and of closure steps in this
+    /// kernel, in that order: what the per-node engine choice decided.
+    pub fn engine_counts(&self) -> (usize, usize) { self.core.engine_counts() }
 
     /// Resolve an output name to its buffer slot.
     pub fn resolve_output(&self, name: &str) -> Option<usize> {

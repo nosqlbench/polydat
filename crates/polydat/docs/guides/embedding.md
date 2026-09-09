@@ -299,12 +299,14 @@ Three things to know about extension values:
   then panics with both type names. Give distinct host types distinct
   producers and consumers, and keep them in one crate so the downcast
   can see the concrete type.
-- **Extension wires are never native.** A node with an `Ext` signature
-  is never fused into a cone. The scalar work around it still is: in the
-  run above the hashing and scaling fused into two cones while the two
-  host nodes ran on the interpreter, and a native neighbour reads an
-  extension value through the table handle described in
-  [Compiled Non-Scalar Slots](../design/compiled_handles.md).
+- **Extension nodes run on the interpreter.** A node with an `Ext`
+  signature has neither a closure form nor a native one, so the closure
+  and native kernels of §11 refuse a program that contains one, and the
+  production kernel runs it on the interpreter. The scalar work around it
+  is still fused: in the run above the hashing and scaling fused into two
+  native cones while the two host nodes ran interpreted, and a native
+  neighbour reads an extension value through the table handle described
+  in [Compiled Non-Scalar Slots](../design/compiled_handles.md).
 - **The value is cloned on every read.** `Ext<T>::extract` clones the
   boxed value, so a large host type should hold its payload in an `Arc`.
   The crate's own `Partition` and `Streamer` values do exactly that.
@@ -451,32 +453,58 @@ structural JSON form the value above uses.
 A host normally lets `compile()` choose engines. The production kernel
 runs the interpreter over a graph in which every native-eligible region
 has been fused into a cone, and everything else runs through closures
-or the interpreter. Two direct forms exist for hosts that want a whole
-kernel on one engine, such as benchmarks and the differential tests:
+or the interpreter. Three direct forms exist for hosts that want a whole
+kernel compiled, such as benchmarks and the differential tests: the
+closure tier, pure native code, and the hybrid kernel that lowers what
+it can and runs the rest as closures. The program below includes
+`host_tag` from §5, which has a closure form but no native one, so the
+three forms behave differently:
 
 ```rust
+let src = r#"
+    input cycle: u64
+    h := hash(cycle)
+    name := "user-{h}"
+    tag := host_tag("job", mod(h, 10000))
+    tile j : json := {"h": ${h}, "name": ${name}, "tag": ${tag}}
+"#;
 let asm = || compile_polydat_to_assembler(src).unwrap();
-let mut p2 = asm().try_compile_raw().unwrap_or_else(|_| panic!("P2"));  // closures
-let mut p3 = asm().try_compile_jit()?;                                  // native code
+let mut p2 = asm().try_compile_raw().unwrap_or_else(|_| panic!("P2"));   // closures
+match asm().try_compile_jit() {                                          // pure native code
+    Ok(_) => println!("pure P3: compiled"),
+    Err(e) => println!("pure P3 refused: {e}"),
+}
+let mut hybrid = asm().compile_hybrid()?;                                // native where possible
+let (native, closures) = hybrid.engine_counts();
+println!("hybrid plan: {native} native segment(s), {closures} closure step(s)");
 for cycle in [0u64, 1] {
     p2.eval(&[cycle]);
     let p2_h = p2.get("h");                              // scalar read
     let p2_j = p2.get_value("j").to_display_string();    // handle read: copies out
-    p3.eval(&[cycle]);
-    let p3_h = p3.get("h");
-    let p3_j = p3.get_value("j").to_display_string();
-    println!("cycle {cycle}: P3 agrees: {}", p2_h == p3_h && p2_j == p3_j);
+    hybrid.eval(&[cycle]);
+    let hy_h = hybrid.get("h");
+    let hy_j = hybrid.get_value("j").to_display_string();
+    println!("cycle {cycle}: hybrid agrees: {}", p2_h == hy_h && p2_j == hy_j);
 }
 let mut mixed = asm().compile()?;   // what a host should normally use
 ```
 
 ```text
-cycle 0: P2 h=16294208416658607535 j={"h": 16294208416658607535, "name": "user-16294208416658607535"}
-cycle 0: P3 agrees: true
-cycle 1: P2 h=10451216379200822465 j={"h": 10451216379200822465, "name": "user-10451216379200822465"}
-cycle 1: P3 agrees: true
-production kernel j: {"h": 10451216379200822465, "name": "user-10451216379200822465"}
+pure P3 refused: some nodes cannot be JIT-compiled
+hybrid plan: 8 native segment(s), 1 closure step(s)
+cycle 0: P2 h=16294208416658607535 j={"h": 16294208416658607535, "name": "user-16294208416658607535", "tag": "job-7535"}
+cycle 0: hybrid agrees: true
+cycle 1: P2 h=10451216379200822465 j={"h": 10451216379200822465, "name": "user-10451216379200822465", "tag": "job-2465"}
+cycle 1: hybrid agrees: true
+production kernel j: {"h": 10451216379200822465, "name": "user-10451216379200822465", "tag": "job-2465"}
 ```
+
+Pure native code refuses the program because one node has no native
+form. The hybrid kernel accepts it: eight steps run as native segments,
+the host node runs as one closure step, and every value matches the
+closure tier. `engine_counts` is the only planning detail the hybrid
+kernel exposes, and it exists so a host can see whether a program is
+mostly native before deciding to care.
 
 Scalars come back by value from `get`. Strings, JSON, and rendered tiles
 are handles into a per-thread arena that lives for one cycle of the
@@ -485,9 +513,10 @@ gives the one rule a host must follow when it drives compiled kernels
 directly: read a kernel's handle outputs before running another root
 kernel on the same thread, because the next kernel's cycle reclaims the
 arena. The production kernel and the traversal runtime follow the rule
-internally, so it only reaches a host through `try_compile_raw` and
-`try_compile_jit`. [Compiled Non-Scalar Slots](../design/compiled_handles.md)
-§4 states it as axiom H3.
+internally, so it only reaches a host through `try_compile_raw`,
+`try_compile_jit`, and `compile_hybrid`.
+[Compiled Non-Scalar Slots](../design/compiled_handles.md) §4 states it
+as axiom H3.
 
 Engine choice is not a host concern beyond `set_jit_mode` on the
 assembler (`Auto`, `Off`, `Force`) and the `jit` Cargo feature.

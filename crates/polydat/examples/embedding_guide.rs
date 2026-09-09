@@ -318,20 +318,30 @@ fn section_tiles() {
 /// with typed reads and the one host rule they carry.
 fn section_compiled_kernels() {
     println!("== 10. Compiled kernels ==");
-    let src = "input cycle: u64\nh := hash(cycle)\nname := \"user-{h}\"\ntile j : json := {\"h\": ${h}, \"name\": ${name}}\n";
+    // host_tag has a closure form but no native one, so the hybrid
+    // kernel must mix engines to run this program.
+    let src = "input cycle: u64\nh := hash(cycle)\nname := \"user-{h}\"\ntag := host_tag(\"job\", mod(h, 10000))\ntile j : json := {\"h\": ${h}, \"name\": ${name}, \"tag\": ${tag}}\n";
     let mut p2 = compile_polydat_to_assembler(src).unwrap().try_compile_raw().unwrap_or_else(|_| panic!("P2"));
-    let mut p3 = compile_polydat_to_assembler(src).unwrap().try_compile_jit().expect("P3");
+    // Pure native code needs every node to have a native form.
+    match compile_polydat_to_assembler(src).unwrap().try_compile_jit() {
+        Ok(_) => println!("pure P3: compiled"),
+        Err(e) => println!("pure P3 refused: {e}"),
+    }
+    // The hybrid kernel lowers what it can and runs the rest as closures.
+    let mut hybrid = compile_polydat_to_assembler(src).unwrap().compile_hybrid().expect("hybrid");
+    let (native, closures) = hybrid.engine_counts();
+    println!("hybrid plan: {native} native segment(s), {closures} closure step(s)");
     for cycle in [0u64, 1] {
         p2.eval(&[cycle]);
         // Handle outputs are read through get_value, which copies out;
         // do that before running another root kernel on this thread.
         let p2_h = p2.get("h");
         let p2_j = p2.get_value("j").to_display_string();
-        p3.eval(&[cycle]);
-        let p3_h = p3.get("h");
-        let p3_j = p3.get_value("j").to_display_string();
+        hybrid.eval(&[cycle]);
+        let hy_h = hybrid.get("h");
+        let hy_j = hybrid.get_value("j").to_display_string();
         println!("cycle {cycle}: P2 h={p2_h} j={p2_j}");
-        println!("cycle {cycle}: P3 agrees: {}", p2_h == p3_h && p2_j == p3_j);
+        println!("cycle {cycle}: hybrid agrees: {}", p2_h == hy_h && p2_j == hy_j);
     }
     // The production kernel mixes engines itself; the host never picks.
     let mut mixed = compile_polydat_to_assembler(src).unwrap().compile().expect("mixed");
