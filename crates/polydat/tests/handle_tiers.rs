@@ -629,7 +629,7 @@ fn the_corpus_agrees_across_every_tier() {
         format!("{WIRES}a := h as str\nc := __str_to_u64(s)\ne := escape_json(s)\nm := json_merge(json_object(json_with(\"x\", h)), json_object(json_with(\"y\", s)))\np := json_to_str_pretty(m)\n"),
         // Extension values: the partition family and the streamer, read
         // through every consumer and rendered as JSON, text, and a string.
-        format!("{WIRES}q := partitions(\"20%,30%,*\", 500)\nn := partition_count(q)\np := partition_at(q, u64_mod(h, n))\nc := cardinality(p)\nm := mod_in(h, p)\nl := subdivide(p, 4)\nk := streamer(\"k in 1..4\")\nr := random_in(p, h)\na := at(p, u64_mod(h, cardinality(p)))\nj := json_object(json_with(\"p\", p), json_with(\"k\", k))\nd := printf(\"{{}} {{}} {{}}\", p, l, k)\ne := \"{{p}}/{{l}}\"\n"),
+        format!("{WIRES}q := partitions(\"20%,30%,*\", 500)\nn := partition_count(q)\np := partition_at(q, u64_mod(h, n))\nc := cardinality(p)\nm := mod_in(h, p)\nl := subdivide(p, 4)\nk := streamer(\"k in 1..4\")\nr := random_in(p, h)\na := at(p, u64_mod(h, cardinality(p)))\nj := json_object(json_with(\"p\", p), json_with(\"k\", k))\nd := printf(\"{{}} {{}} {{}}\", p, l, k)\ne := \"{{p}}/{{l}}\"\nx := str_concat(\"x\", p, k)\n"),
     ];
     for src in &corpus {
         let asm = compile_polydat_to_assembler(src).unwrap();

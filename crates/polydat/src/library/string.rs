@@ -424,7 +424,9 @@ fn str_concat(parts: &[polydat::ast::Value]) -> String {
             Value::Bool(b) => out.push_str(&b.to_string()),
             Value::Json(j) => out.push_str(&j.to_string()),
             Value::Bytes(b) => out.push_str(&String::from_utf8_lossy(b)),
-            other => out.push_str(&format!("{other:?}")),
+            // Everything else, extension values included, renders as it
+            // does in interpolation and `printf`: its display form.
+            other => out.push_str(&other.to_display_string()),
         }
     }
     out
@@ -599,6 +601,22 @@ mod tests {
             &mut out,
         );
         assert_eq!(out[0].as_str(), "hello world");
+    }
+
+    #[test]
+    fn str_concat_renders_extension_values_by_display() {
+        #[derive(Debug, Clone)]
+        struct Tag(u64);
+        impl crate::ast::ReflectedValue for Tag {
+            fn type_name(&self) -> &str { "Tag" }
+            fn display(&self) -> String { format!("tag#{}", self.0) }
+            fn clone_reflected(&self) -> Box<dyn crate::ast::ReflectedValue> { Box::new(self.clone()) }
+            fn as_any(&self) -> &dyn std::any::Any { self }
+        }
+        let node = StrConcat::new(2);
+        let mut out = [Value::None];
+        node.eval(&[Value::Str("x".into()), Value::Ext(Box::new(Tag(7)))], &mut out);
+        assert_eq!(out[0].as_str(), "xtag#7");
     }
 
     #[test]
