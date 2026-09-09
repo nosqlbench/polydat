@@ -186,19 +186,142 @@ fn a_failing_construction_is_a_compile_error_on_every_tier() {
     assert!(err.contains("base must be non-zero"), "{err}");
 }
 
-// ── What the compiled engines cannot take ──
+// ── Externs on every engine ──
 
-/// An extern is a host-settable input slot. The compiled engines are
-/// driven by coordinates alone and seed nothing else, so the assembler
-/// entry point refuses a program with one and says where to go.
+/// A type the host defines, to carry through an extern.
+#[derive(Debug, Clone, PartialEq)]
+struct Region(String);
+
+impl ReflectedValue for Region {
+    fn type_name(&self) -> &str {
+        "Region"
+    }
+    fn display(&self) -> String {
+        self.0.clone()
+    }
+    fn clone_reflected(&self) -> Box<dyn ReflectedValue> {
+        Box::new(self.clone())
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+#[polydat::polydat_node(category = String)]
+fn region_code(region: Ext<Region>, n: u64) -> String {
+    format!("{}-{n}", (*region).0.to_uppercase())
+}
+
+/// Externs with defaults and externs the host sets, of every kind the
+/// compiled engines carry: a carrier, a string, JSON, and an extension
+/// value. Every engine seeds the defaults, takes a host value through
+/// `set_input`, and agrees with the interpreter afterwards.
+const EXTERNS: &str = "input cycle: u64\n\
+    extern scale: u64 = 10\n\
+    extern label: str = \"lbl\"\n\
+    extern doc: json\n\
+    extern region: ext\n\
+    h := hash(cycle)\n\
+    id := mod_wire(h, scale)\n\
+    tag := str_concat(label, \"-\", id)\n\
+    text := json_to_str(doc)\n\
+    code := region_code(region, id)\n\
+    line := \"{tag}/{text}/{code}\"\n";
+
+fn host_values(doc_n: u64, region: &str) -> [(&'static str, Value); 4] {
+    [
+        ("scale", Value::U64(1000)),
+        ("label", Value::Str("host".into())),
+        ("doc", Value::Json(std::sync::Arc::new(serde_json::json!({ "n": doc_n })))),
+        ("region", Value::Ext(Box::new(Region(region.to_string())))),
+    ]
+}
+
 #[test]
-fn the_assembler_entry_refuses_externs_with_direction() {
-    let err = compile_polydat_to_assembler("input cycle: u64\nextern label: str = \"lbl\"\nx := str_concat(label, \"!\")\n")
-        .err()
-        .expect("the assembler entry refuses externs");
-    assert!(err.contains("extern 'label'") && err.contains("compile_polydat"), "{err}");
-    // The kernel path takes the same program.
-    let mut k = polydat::dsl::compile::compile_polydat("input cycle: u64\nextern label: str = \"lbl\"\nx := str_concat(label, \"!\")\n").expect("kernel path");
-    k.set_inputs(&[1]);
-    assert_eq!(k.pull("x").as_str(), "lbl!");
+fn externs_agree_between_interpreter_closures_hybrid_and_native() {
+    let mut p1 = polydat::dsl::compile::compile_polydat(EXTERNS).expect("interpreter");
+    let mut p2 = compile_polydat_to_assembler(EXTERNS).unwrap().try_compile_raw().unwrap_or_else(|_| panic!("the closure tier refused externs"));
+    let mut p2pp = compile_polydat_to_assembler(EXTERNS).unwrap().try_compile().unwrap_or_else(|_| panic!("the push-pull closure tier refused externs"));
+    let mut hybrid = compile_polydat_to_assembler(EXTERNS).unwrap().compile_hybrid().expect("hybrid");
+    // `doc` and `region` have no default, so the host sets every extern
+    // before the first run and again between rounds; the compiled
+    // engines evaluate eagerly and refuse to start with an unset JSON
+    // or extension extern.
+    let read = ["id", "tag", "text", "code", "line"];
+    for round in 0..3u64 {
+        let (doc_n, region) = (round * 7, ["east", "west", "north"][round as usize]);
+        for (name, value) in host_values(doc_n, region) {
+            p1.set_input(name, value.clone()).expect("P1 set_input");
+            p2.set_input(name, value.clone()).expect("P2 set_input");
+            p2pp.set_input(name, value.clone()).expect("P2 push-pull set_input");
+            hybrid.set_input(name, value).expect("hybrid set_input");
+        }
+        for cycle in [0u64, 1, 1, 2, 2, 0] {
+            p1.set_inputs(&[cycle]);
+            let want: Vec<(polydat::ast::PortType, String)> = read.iter().map(|o| { let v = p1.pull(o); (v.port_type(), v.to_display_string()) }).collect();
+            p2.eval(&[cycle]);
+            for (i, o) in read.iter().enumerate() {
+                let v = p2.get_value(o);
+                assert_eq!((v.port_type(), v.to_display_string()), want[i], "round {round} cycle {cycle}: P2 `{o}`");
+            }
+            p2pp.eval(&[cycle]);
+            for (i, o) in read.iter().enumerate() {
+                let v = p2pp.get_value(o);
+                assert_eq!((v.port_type(), v.to_display_string()), want[i], "round {round} cycle {cycle}: P2 push-pull `{o}`");
+            }
+            hybrid.eval(&[cycle]);
+            for (i, o) in read.iter().enumerate() {
+                let v = hybrid.get_value(o);
+                assert_eq!((v.port_type(), v.to_display_string()), want[i], "round {round} cycle {cycle}: hybrid `{o}`");
+            }
+        }
+    }
+}
+
+#[test]
+fn an_extern_set_to_the_wrong_type_is_refused_by_name() {
+    let mut p2 = compile_polydat_to_assembler(EXTERNS).unwrap().try_compile_raw().unwrap_or_else(|_| panic!("P2"));
+    let err = p2.set_input("scale", Value::Str("ten".into())).expect_err("a string is not a u64");
+    assert!(err.contains("scale") && err.contains("u64"), "{err}");
+    let err = p2.set_input("nope", Value::U64(1)).expect_err("no such extern");
+    assert!(err.contains("nope") && err.contains("scale"), "{err}");
+    assert_eq!(p2.externs().len(), 4);
+}
+
+/// Pure native code with externs. The program uses only nodes with a
+/// native form, so the whole kernel lowers; the externs, the extension
+/// value included, reach it through their passthroughs and are set by
+/// the host between runs.
+#[cfg(feature = "jit")]
+#[test]
+fn externs_agree_between_interpreter_and_pure_native_code() {
+    const SRC: &str = "input cycle: u64\n\
+        extern scale: u64 = 10\n\
+        extern label: str = \"lbl\"\n\
+        extern doc: json\n\
+        extern region: ext\n\
+        h := hash(cycle)\n\
+        id := mod_wire(h, scale)\n\
+        tag := str_concat(label, \"-\")\n\
+        text := json_to_str(doc)\n\
+        line := printf(\"{}/{}/{}\", tag, id, text)\n";
+    let mut p1 = polydat::dsl::compile::compile_polydat(SRC).expect("interpreter");
+    let mut p3 = compile_polydat_to_assembler(SRC).unwrap().try_compile_jit().expect("pure native code with externs");
+    let all = ["id", "tag", "text", "line", "region"];
+    for round in 0..3u64 {
+        let (doc_n, region) = (round * 7, ["east", "west", "north"][round as usize]);
+        for (name, value) in host_values(doc_n, region) {
+            p1.set_input(name, value.clone()).expect("P1 set_input");
+            p3.set_input(name, value).expect("P3 set_input");
+        }
+        for cycle in [0u64, 1, 1, 2, 2, 0] {
+            p1.set_inputs(&[cycle]);
+            let want: Vec<(polydat::ast::PortType, String)> = all.iter().map(|o| { let v = p1.pull(o); (v.port_type(), v.to_display_string()) }).collect();
+            p3.eval(&[cycle]);
+            for (i, o) in all.iter().enumerate() {
+                let v = p3.get_value(o);
+                assert_eq!((v.port_type(), v.to_display_string()), want[i], "round {round} cycle {cycle}: P3 `{o}`");
+            }
+        }
+    }
 }

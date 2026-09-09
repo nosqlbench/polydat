@@ -836,6 +836,13 @@ pub fn classify_node_typed(node: &dyn PolydatNode, wire_types: &[crate::ast::Por
         }
     };
     match node.meta().name.as_str() {
+        // The compiler's input passthrough: a slot copy of any carrier,
+        // handle, or 128-bit immediate. A reference pair (axiom S3) keeps
+        // it on the closure tier.
+        n if n.starts_with("__port_") => match wire_types {
+            [t] if t.slot_color() != crate::ast::SlotColor::Ref2 => JitOp::Identity,
+            _ => JitOp::Fallback,
+        },
         "printf" => match (const_str_of(node, "format"), codes()) {
             (Some(fmt), Some(types)) => {
                 let parsed = crate::library::format::ParsedFormat::interned(fmt);
@@ -1827,11 +1834,24 @@ pub fn compile_jit_raw(
     output_map: HashMap<String, usize>,
     nodes: Vec<Box<dyn PolydatNode>>,
 ) -> Result<JitKernelRaw, String> {
-    let (raw_fn, _, module, table_entries) = compile_jit_impl(&steps, false, 0, &[])?;
-    Ok(JitKernelRaw {
-        core: JitCore::new(total_slots, coord_count, output_map, table_entries, module, nodes),
-        code_fn: raw_fn,
-    })
+    compile_jit_raw_with(coord_count, total_slots, steps, output_map, nodes, crate::compile::externs::Externs::default())
+}
+
+/// `compile_jit_raw` for a graph with extern inputs: their slots are
+/// handle inputs to the verifier, their defaults are seeded, and the
+/// kernel materializes them every run.
+pub(crate) fn compile_jit_raw_with(
+    coord_count: usize,
+    total_slots: usize,
+    steps: Vec<(JitOp, Vec<usize>, Vec<usize>)>,
+    output_map: HashMap<String, usize>,
+    nodes: Vec<Box<dyn PolydatNode>>,
+    externs: crate::compile::externs::Externs,
+) -> Result<JitKernelRaw, String> {
+    let (raw_fn, _, module, table_entries) = compile_jit_impl(&steps, false, 0, &externs.handle_slots())?;
+    let mut core = JitCore::new(total_slots, coord_count, output_map, table_entries, module, nodes);
+    core.set_externs(externs);
+    Ok(JitKernelRaw { core, code_fn: raw_fn })
 }
 
 /// A compiled segment for an engine that owns its own buffer and value
@@ -1860,11 +1880,14 @@ pub(crate) fn compile_jit_push(
     output_map: HashMap<String, usize>,
     nodes: Vec<Box<dyn PolydatNode>>,
     input_dependents: Vec<Vec<usize>>,
+    externs: crate::compile::externs::Externs,
 ) -> Result<JitKernelPush, String> {
     let step_count = steps.len();
-    let (_, prov_fn, module, table_entries) = compile_jit_impl(&steps, true, 0, &[])?;
+    let (_, prov_fn, module, table_entries) = compile_jit_impl(&steps, true, 0, &externs.handle_slots())?;
+    let mut core = JitCore::new(total_slots, coord_count, output_map, table_entries, module, nodes);
+    core.set_externs(externs);
     Ok(JitKernelPush {
-        core: JitCore::new(total_slots, coord_count, output_map, table_entries, module, nodes),
+        core,
         code_fn_prov: prov_fn,
         node_clean: vec![0u8; step_count],
         input_dependents,
@@ -1879,17 +1902,21 @@ pub(crate) fn compile_jit_pull(
     output_map: HashMap<String, usize>,
     nodes: Vec<Box<dyn PolydatNode>>,
     input_dependents: &[Vec<usize>],
+    externs: crate::compile::externs::Externs,
 ) -> Result<JitKernelPull, String> {
     let buffer_len = total_slots;
     // Pull uses the RAW jit function (no per-node clean checks)
-    let (raw_fn, _, module, table_entries) = compile_jit_impl(&steps, false, 0, &[])?;
+    let (raw_fn, _, module, table_entries) = compile_jit_impl(&steps, false, 0, &externs.handle_slots())?;
     let step_outs: Vec<Vec<usize>> = steps.iter().map(|(_, _, o)| o.clone()).collect();
     let slot_provenance = compute_jit_slot_provenance(coord_count, buffer_len, &step_outs, input_dependents);
+    let mut core = JitCore::new(total_slots, coord_count, output_map, table_entries, module, nodes);
+    core.set_externs(externs);
     Ok(JitKernelPull {
-        core: JitCore::new(total_slots, coord_count, output_map, table_entries, module, nodes),
+        core,
         code_fn: raw_fn,
         slot_provenance,
         changed_mask: crate::kernel::ProvMask::all_below(coord_count),
+        force_run: false,
     })
 }
 
@@ -1901,19 +1928,23 @@ pub(crate) fn compile_jit_push_pull(
     output_map: HashMap<String, usize>,
     nodes: Vec<Box<dyn PolydatNode>>,
     input_dependents: Vec<Vec<usize>>,
+    externs: crate::compile::externs::Externs,
 ) -> Result<JitKernelPushPull, String> {
     let step_count = steps.len();
     let buffer_len = total_slots;
-    let (_, prov_fn, module, table_entries) = compile_jit_impl(&steps, true, 0, &[])?;
+    let (_, prov_fn, module, table_entries) = compile_jit_impl(&steps, true, 0, &externs.handle_slots())?;
     let step_outs: Vec<Vec<usize>> = steps.iter().map(|(_, _, o)| o.clone()).collect();
     let slot_provenance = compute_jit_slot_provenance(coord_count, buffer_len, &step_outs, &input_dependents);
+    let mut core = JitCore::new(total_slots, coord_count, output_map, table_entries, module, nodes);
+    core.set_externs(externs);
     Ok(JitKernelPushPull {
-        core: JitCore::new(total_slots, coord_count, output_map, table_entries, module, nodes),
+        core,
         code_fn_prov: prov_fn,
         node_clean: vec![0u8; step_count],
         input_dependents,
         slot_provenance,
         changed_mask: crate::kernel::ProvMask::all_below(coord_count),
+        force_run: false,
     })
 }
 
@@ -2553,8 +2584,12 @@ fn compile_jit_impl(
             };
             match jit_op {
                 JitOp::Identity => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], val);
+                    // A copy of every slot the port spans: one for a
+                    // carrier or handle, two for a 128-bit immediate.
+                    for (&i, &o) in input_slots.iter().zip(output_slots.iter()) {
+                        let val = load_slot(&mut builder, buffer_ptr, i);
+                        store_slot(&mut builder, buffer_ptr, o, val);
+                    }
                 }
                 JitOp::AddConst(c) => {
                     let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);

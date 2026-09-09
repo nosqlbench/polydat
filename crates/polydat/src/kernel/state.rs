@@ -626,6 +626,17 @@ impl PolydatKernel {
         self.state.set_inputs(coords);
     }
 
+    /// Set an extern by name on the owned state. The compiled kernels
+    /// offer the same call, so a host drives every engine alike.
+    pub fn set_input(&mut self, name: &str, value: Value) -> Result<(), String> {
+        let idx = self
+            .program
+            .find_input(name)
+            .ok_or_else(|| format!("no input named '{name}'; this program's inputs are {:?}", self.program.input_names()))?;
+        self.state.set_input(idx, value);
+        Ok(())
+    }
+
     /// Mark this kernel as nested inside another kernel's cycle (SRD 115
     /// §4): a traversal activation, a projection body, a materialized
     /// subscope. A nested kernel never resets the thread's cycle arena;

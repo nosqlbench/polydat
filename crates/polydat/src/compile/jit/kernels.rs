@@ -36,6 +36,8 @@ pub(super) struct JitCore {
     /// a root cycle at every eval (SRD 115 §4). False when a state that
     /// owns the cycle wraps it.
     pub(super) owns_cycle: bool,
+    /// The extern inputs, materialized at the start of every run.
+    pub(super) externs: crate::compile::externs::Externs,
     pub(super) _module: JITModule,
     pub(super) _nodes: Vec<Box<dyn PolydatNode>>,
 }
@@ -59,9 +61,27 @@ impl JitCore {
             table: crate::kernel::ValueTable::new(table_len),
             table_entries,
             owns_cycle: true,
+            externs: crate::compile::externs::Externs::default(),
             _module: module,
             _nodes: nodes,
         }
+    }
+
+    /// Install the extern inputs: table-kind externs take entries after
+    /// the ones the code owns, carriers are seeded now, and every run
+    /// materializes the handle kinds.
+    pub(super) fn set_externs(&mut self, mut externs: crate::compile::externs::Externs) {
+        externs.renumber_entries(self.table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0));
+        self.table_entries.extend(externs.table_entries());
+        let table_len = self.table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0);
+        self.table = crate::kernel::ValueTable::new(table_len);
+        externs.seed(&mut self.buffer);
+        self.externs = externs;
+    }
+
+    /// Set an extern by name; returns its slot for dirty marking.
+    fn set_extern(&mut self, name: &str, value: crate::ast::Value) -> Result<usize, String> {
+        self.externs.set(name, value, &mut self.buffer)
     }
 
     /// Run one native evaluation: begin the cycle it belongs to, install
@@ -75,6 +95,8 @@ impl JitCore {
             crate::kernel::cycle_generation()
         };
         self.table.set_generation(generation);
+        // Extern handles belong to this run (H3, H4).
+        self.externs.materialize(&mut self.buffer, &mut self.table);
         crate::kernel::with_value_table(&mut self.table, || super::codegen::invoke_with_catch(native));
         self.validate_table();
     }
@@ -201,6 +223,22 @@ macro_rules! jit_accessors {
         pub fn table_len(&self) -> usize {
             self.core.table.len()
         }
+
+        /// Set an extern by name, as `PolydatState::set_input` does on
+        /// the interpreter. The value must be of the declared port
+        /// type. A carrier takes effect at once; a string, JSON, or
+        /// extension value is written at the start of the next run, and
+        /// every step downstream of the extern reruns.
+        pub fn set_input(&mut self, name: &str, value: crate::ast::Value) -> Result<(), String> {
+            let slot = self.core.set_extern(name, value)?;
+            self.mark_input_changed(slot);
+            Ok(())
+        }
+
+        /// The kernel's externs by name and declared type.
+        pub fn externs(&self) -> Vec<(&str, crate::ast::PortType)> {
+            self.core.externs.names()
+        }
     };
 }
 
@@ -246,6 +284,9 @@ impl JitKernelRaw {
         (self.code_fn, self.core._module, self.core.table_entries)
     }
 
+    /// Every run evaluates everything; a changed input needs no mark.
+    fn mark_input_changed(&mut self, _slot: usize) {}
+
     jit_accessors!();
 }
 
@@ -265,11 +306,16 @@ impl JitKernelPush {
         for (i, &c) in coords.iter().enumerate().take(self.core.coord_count) {
             if self.core.buffer[i] != c {
                 self.core.buffer[i] = c;
-                if i < self.input_dependents.len() {
-                    for &step_idx in &self.input_dependents[i] {
-                        self.node_clean[step_idx] = 0;
-                    }
-                }
+                self.mark_input_changed(i);
+            }
+        }
+    }
+
+    /// Every step downstream of the slot reruns.
+    fn mark_input_changed(&mut self, slot: usize) {
+        if slot < self.input_dependents.len() {
+            for &step_idx in &self.input_dependents[slot] {
+                self.node_clean[step_idx] = 0;
             }
         }
     }
@@ -306,6 +352,9 @@ pub struct JitKernelPull {
     pub(super) code_fn: unsafe fn(*const u64, *mut u64),
     pub(super) slot_provenance: Vec<ProvMask>,
     pub(super) changed_mask: ProvMask,
+    /// Set by `set_input`: an extern changed, so the next evaluation
+    /// runs whatever the cone guard says.
+    pub(super) force_run: bool,
 }
 
 impl JitKernelPull {
@@ -320,10 +369,17 @@ impl JitKernelPull {
         }
     }
 
+    /// The next evaluation runs regardless of the cone guard, since
+    /// `set_inputs` rebuilds the changed set from the coordinates alone.
+    fn mark_input_changed(&mut self, _slot: usize) {
+        self.force_run = true;
+    }
+
     /// Evaluate the kernel with the given coordinate values.
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_inputs(coords);
+        self.force_run = false;
         let code_fn = self.code_fn;
         let buf_const = self.core.buffer.as_ptr();
         let buf_mut = self.core.buffer.as_mut_ptr();
@@ -337,10 +393,12 @@ impl JitKernelPull {
     #[inline]
     pub fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
         self.set_inputs(coords);
-        if slot < self.slot_provenance.len()
+        if !self.force_run
+            && slot < self.slot_provenance.len()
             && !self.slot_provenance[slot].intersects(&self.changed_mask) {
             return self.core.buffer[slot];
         }
+        self.force_run = false;
         let code_fn = self.code_fn;
         let buf_const = self.core.buffer.as_ptr();
         let buf_mut = self.core.buffer.as_mut_ptr();
@@ -363,6 +421,9 @@ pub struct JitKernelPushPull {
     pub(super) input_dependents: Vec<Vec<usize>>,
     pub(super) slot_provenance: Vec<ProvMask>,
     pub(super) changed_mask: ProvMask,
+    /// Set by `set_input`: an extern changed, so the next evaluation
+    /// runs whatever the cone guard says.
+    pub(super) force_run: bool,
 }
 
 impl JitKernelPushPull {
@@ -382,10 +443,22 @@ impl JitKernelPushPull {
         }
     }
 
+    /// Every step downstream of the slot reruns, and the next
+    /// evaluation runs whatever the cone guard says.
+    fn mark_input_changed(&mut self, slot: usize) {
+        if slot < self.input_dependents.len() {
+            for &step_idx in &self.input_dependents[slot] {
+                self.node_clean[step_idx] = 0;
+            }
+        }
+        self.force_run = true;
+    }
+
     /// Evaluate the kernel with the given coordinate values.
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_inputs(coords);
+        self.force_run = false;
         let code_fn = self.code_fn_prov;
         let buf_const = self.core.buffer.as_ptr();
         let buf_mut = self.core.buffer.as_mut_ptr();
@@ -400,10 +473,12 @@ impl JitKernelPushPull {
     #[inline]
     pub fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
         self.set_inputs(coords);
-        if slot < self.slot_provenance.len()
+        if !self.force_run
+            && slot < self.slot_provenance.len()
             && !self.slot_provenance[slot].intersects(&self.changed_mask) {
             return self.core.buffer[slot];
         }
+        self.force_run = false;
         let code_fn = self.code_fn_prov;
         let buf_const = self.core.buffer.as_ptr();
         let buf_mut = self.core.buffer.as_mut_ptr();

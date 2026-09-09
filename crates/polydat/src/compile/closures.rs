@@ -32,6 +32,9 @@ pub(crate) struct P2Extras {
     /// the cycle that ran it (SRD 115 §4); it recomputes from unchanged
     /// inputs, as the P3 codegen does for the same steps.
     pub(crate) handle_slots: Vec<bool>,
+    /// The kernel's extern inputs: seeded at build, host-settable,
+    /// materialized every run (`compile::externs`).
+    pub(crate) externs: crate::compile::externs::Externs,
 }
 
 /// A single evaluation step in the compiled kernel.
@@ -95,6 +98,8 @@ struct KernelCore {
     owns_cycle: bool,
     /// Port type of each named output, for `get_value`.
     output_types: HashMap<String, PortType>,
+    /// The extern inputs, materialized at the start of every run.
+    externs: crate::compile::externs::Externs,
 }
 
 impl KernelCore {
@@ -112,7 +117,15 @@ impl KernelCore {
         };
         let mut table = std::mem::take(&mut self.table);
         table.set_generation(generation);
+        // Extern handles belong to this run: strings into the arena the
+        // cycle just reset, table kinds into their entries (H3, H4).
+        self.externs.materialize(&mut self.buffer, &mut table);
         table
+    }
+
+    /// Set an extern by name; returns its slot for dirty marking.
+    fn set_extern(&mut self, name: &str, value: crate::ast::Value) -> Result<usize, String> {
+        self.externs.set(name, value, &mut self.buffer)
     }
 
     /// End a run: take the table back and check the handle
@@ -203,7 +216,10 @@ fn build_core(
     ref_slots: Vec<bool>,
     extras: P2Extras,
 ) -> KernelCore {
-    let P2Extras { table_entries, output_types, handle_slots } = extras;
+    let P2Extras { mut table_entries, output_types, handle_slots, externs } = extras;
+    // Table-kind externs own entries after the nodes' and are checked
+    // by the same validator.
+    table_entries.extend(externs.table_entries());
     let table_len = table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0);
     let max_inputs = steps.iter().map(|s| s.input_slots.len()).max().unwrap_or(0);
     let max_outputs = steps.iter().map(|s| s.output_slots.len()).max().unwrap_or(0);
@@ -240,8 +256,10 @@ fn build_core(
             }
         })
         .collect();
+    let mut buffer = vec![0u64; total_slots];
+    externs.seed(&mut buffer);
     KernelCore {
-        buffer: vec![0u64; total_slots],
+        buffer,
         coord_count,
         steps: compiled_steps,
         output_map,
@@ -254,6 +272,7 @@ fn build_core(
         table_entries,
         owns_cycle: true,
         output_types,
+        externs,
     }
 }
 
@@ -342,6 +361,22 @@ macro_rules! kernel_accessors {
         /// Entries in the kernel's value table.
         pub fn table_len(&self) -> usize {
             self.core.table.len()
+        }
+
+        /// Set an extern by name, as `PolydatState::set_input` does on
+        /// the interpreter. The value must be of the declared port
+        /// type. A carrier takes effect at once; a string, JSON, or
+        /// extension value is written at the start of the next run, and
+        /// every step downstream of the extern reruns.
+        pub fn set_input(&mut self, name: &str, value: crate::ast::Value) -> Result<(), String> {
+            let slot = self.core.set_extern(name, value)?;
+            self.mark_input_changed(slot);
+            Ok(())
+        }
+
+        /// The kernel's externs by name and declared type.
+        pub fn externs(&self) -> Vec<(&str, crate::ast::PortType)> {
+            self.core.externs.names()
         }
 
         crate::compile::ref_readers!();
@@ -433,6 +468,9 @@ impl CompiledKernelRaw {
         Self { core: build_core(coord_count, total_slots, steps, output_map, ref_slots, extras) }
     }
 
+    /// Every run evaluates everything; a changed input needs no mark.
+    fn mark_input_changed(&mut self, _slot: usize) {}
+
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.core.buffer[..self.core.coord_count.min(coords.len())]
@@ -485,11 +523,16 @@ impl CompiledKernelPush {
         for (i, &c) in coords.iter().enumerate().take(self.core.coord_count) {
             if self.core.buffer[i] != c {
                 self.core.buffer[i] = c;
-                if i < self.input_dependents.len() {
-                    for &step_idx in &self.input_dependents[i] {
-                        self.node_clean[step_idx] = false;
-                    }
-                }
+                self.mark_input_changed(i);
+            }
+        }
+    }
+
+    /// Every step downstream of the slot reruns.
+    fn mark_input_changed(&mut self, slot: usize) {
+        if slot < self.input_dependents.len() {
+            for &step_idx in &self.input_dependents[slot] {
+                self.node_clean[step_idx] = false;
             }
         }
     }
@@ -521,6 +564,9 @@ pub struct CompiledKernelPull {
     core: KernelCore,
     slot_provenance: Vec<crate::kernel::ProvMask>,
     changed_mask: crate::kernel::ProvMask,
+    /// Set by `set_input`: an extern changed, so the next evaluation
+    /// runs whatever the cone guard says.
+    force_run: bool,
 }
 
 impl CompiledKernelPull {
@@ -540,6 +586,7 @@ impl CompiledKernelPull {
             core,
             slot_provenance,
             changed_mask: crate::kernel::ProvMask::all_below(coord_count), // all dirty initially
+            force_run: false,
         }
     }
 
@@ -556,10 +603,17 @@ impl CompiledKernelPull {
         }
     }
 
+    /// The next evaluation runs regardless of the cone guard, since
+    /// `set_inputs` rebuilds the changed set from the coordinates alone.
+    fn mark_input_changed(&mut self, _slot: usize) {
+        self.force_run = true;
+    }
+
     /// Evaluate eagerly (no cone guard). Runs all steps.
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_inputs(coords);
+        self.force_run = false;
         eval_all_steps(&mut self.core);
     }
 
@@ -569,10 +623,12 @@ impl CompiledKernelPull {
     pub fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
         self.core.guard_ref_slot(slot);
         self.set_inputs(coords);
-        if slot < self.slot_provenance.len()
+        if !self.force_run
+            && slot < self.slot_provenance.len()
             && !self.slot_provenance[slot].intersects(&self.changed_mask) {
                 return self.core.buffer[slot];
             }
+        self.force_run = false;
         eval_all_steps(&mut self.core);
         self.core.buffer[slot]
     }
@@ -591,6 +647,9 @@ pub struct CompiledKernelPushPull {
     input_dependents: Vec<Vec<usize>>,
     slot_provenance: Vec<crate::kernel::ProvMask>,
     changed_mask: crate::kernel::ProvMask,
+    /// Set by `set_input`: an extern changed, so the next evaluation
+    /// runs whatever the cone guard says.
+    force_run: bool,
 }
 
 impl CompiledKernelPushPull {
@@ -613,6 +672,7 @@ impl CompiledKernelPushPull {
             input_dependents,
             slot_provenance,
             changed_mask: crate::kernel::ProvMask::all_below(coord_count),
+            force_run: false,
         }
     }
 
@@ -632,10 +692,22 @@ impl CompiledKernelPushPull {
         }
     }
 
+    /// Every step downstream of the slot reruns, and the next
+    /// evaluation runs whatever the cone guard says.
+    fn mark_input_changed(&mut self, slot: usize) {
+        if slot < self.input_dependents.len() {
+            for &step_idx in &self.input_dependents[slot] {
+                self.node_clean[step_idx] = false;
+            }
+        }
+        self.force_run = true;
+    }
+
     /// Eval with push-side skip (no cone guard).
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_inputs(coords);
+        self.force_run = false;
         eval_dirty_steps(&mut self.core, &mut self.node_clean);
     }
 
@@ -644,10 +716,12 @@ impl CompiledKernelPushPull {
     pub fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
         self.core.guard_ref_slot(slot);
         self.set_inputs(coords);
-        if slot < self.slot_provenance.len()
+        if !self.force_run
+            && slot < self.slot_provenance.len()
             && !self.slot_provenance[slot].intersects(&self.changed_mask) {
                 return self.core.buffer[slot];
             }
+        self.force_run = false;
         eval_dirty_steps(&mut self.core, &mut self.node_clean);
         self.core.buffer[slot]
     }

@@ -87,6 +87,8 @@ struct HybridCore {
     /// never marked clean, because its arena bytes or table entry
     /// belong to the cycle that ran it (SRD 115 §4).
     step_rerun: Vec<bool>,
+    /// The extern inputs, materialized at the start of every run.
+    externs: crate::compile::externs::Externs,
     /// Keep source nodes alive so JIT-baked pointers remain valid.
     _nodes: Vec<Box<dyn PolydatNode>>,
 }
@@ -176,6 +178,7 @@ fn eval_all_hybrid_steps(core: &mut HybridCore) {
     // handle closures write through it as the segments' helpers do.
     let mut table = std::mem::take(&mut core.table);
     table.set_generation(crate::kernel::begin_root_cycle());
+    core.externs.materialize(&mut core.buffer, &mut table);
     let installed = crate::kernel::install_value_table(&mut table);
     for step in &core.steps {
         match step {
@@ -272,6 +275,11 @@ impl HybridCore {
         let closures = self.steps.iter().filter(|s| matches!(s, HybridStep::Closure(_))).count();
         (self.steps.len() - closures, closures)
     }
+
+    /// Set an extern by name; returns its slot for dirty marking.
+    fn set_extern(&mut self, name: &str, value: crate::ast::Value) -> Result<usize, String> {
+        self.externs.set(name, value, &mut self.buffer)
+    }
 }
 
 /// Hybrid kernel with no provenance tracking.
@@ -289,6 +297,18 @@ impl HybridKernelRaw {
         self.core.buffer[..self.core.coord_count.min(coords.len())]
             .copy_from_slice(&coords[..self.core.coord_count.min(coords.len())]);
         eval_all_hybrid_steps(&mut self.core);
+    }
+
+    /// Set an extern by name, as `PolydatState::set_input` does on the
+    /// interpreter. Every run evaluates everything, so it takes effect
+    /// at the next run.
+    pub fn set_input(&mut self, name: &str, value: crate::ast::Value) -> Result<(), String> {
+        self.core.set_extern(name, value).map(|_| ())
+    }
+
+    /// The kernel's externs by name and declared type.
+    pub fn externs(&self) -> Vec<(&str, crate::ast::PortType)> {
+        self.core.externs.names()
     }
 
     /// Eval all steps and return the value at `slot`.
@@ -365,6 +385,9 @@ pub struct HybridKernelPull {
     core: HybridCore,
     slot_provenance: Vec<u64>,
     changed_mask: u64,
+    /// Set by `set_input`: an extern changed, so the next evaluation
+    /// runs whatever the cone guard says.
+    force_run: bool,
 }
 
 impl HybridKernelPull {
@@ -384,6 +407,7 @@ impl HybridKernelPull {
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_inputs(coords);
+        self.force_run = false;
         eval_all_hybrid_steps(&mut self.core);
     }
 
@@ -393,12 +417,29 @@ impl HybridKernelPull {
     pub fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
         self.core.guard_ref_slot(slot);
         self.set_inputs(coords);
-        if slot < self.slot_provenance.len()
+        if !self.force_run
+            && slot < self.slot_provenance.len()
             && self.slot_provenance[slot] & self.changed_mask == 0 {
                 return self.core.buffer[slot];
             }
+        self.force_run = false;
         eval_all_hybrid_steps(&mut self.core);
         self.core.buffer[slot]
+    }
+
+    /// Set an extern by name, as `PolydatState::set_input` does on the
+    /// interpreter. A carrier takes effect at once; a string, JSON, or
+    /// extension value is written at the start of the next run, which
+    /// runs whatever the cone guard says.
+    pub fn set_input(&mut self, name: &str, value: crate::ast::Value) -> Result<(), String> {
+        self.core.set_extern(name, value)?;
+        self.force_run = true;
+        Ok(())
+    }
+
+    /// The kernel's externs by name and declared type.
+    pub fn externs(&self) -> Vec<(&str, crate::ast::PortType)> {
+        self.core.externs.names()
     }
 
     /// Read a named output after `eval()`. Panics on Ref2 slots
@@ -471,9 +512,33 @@ pub struct HybridKernelPushPull {
     input_dependents: Vec<Vec<usize>>,
     slot_provenance: Vec<u64>,
     changed_mask: u64,
+    /// Set by `set_input`: an extern changed, so the next evaluation
+    /// runs whatever the cone guard says.
+    force_run: bool,
 }
 
 impl HybridKernelPushPull {
+    /// Set an extern by name, as `PolydatState::set_input` does on the
+    /// interpreter. A carrier takes effect at once; a string, JSON, or
+    /// extension value is written at the start of the next run. Every
+    /// step downstream of the extern reruns, and the next evaluation
+    /// runs whatever the cone guard says.
+    pub fn set_input(&mut self, name: &str, value: crate::ast::Value) -> Result<(), String> {
+        let slot = self.core.set_extern(name, value)?;
+        if slot < self.input_dependents.len() {
+            for &step_idx in &self.input_dependents[slot] {
+                self.step_clean[step_idx] = false;
+            }
+        }
+        self.force_run = true;
+        Ok(())
+    }
+
+    /// The kernel's externs by name and declared type.
+    pub fn externs(&self) -> Vec<(&str, crate::ast::PortType)> {
+        self.core.externs.names()
+    }
+
     /// Track which inputs changed and dirty affected steps.
     #[inline]
     fn set_inputs(&mut self, coords: &[u64]) {
@@ -495,10 +560,12 @@ impl HybridKernelPushPull {
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_inputs(coords);
+        self.force_run = false;
         // The table is installed around every step, closures included, so
         // handle closures write through it as the segments' helpers do.
         let mut table = std::mem::take(&mut self.core.table);
         table.set_generation(crate::kernel::begin_root_cycle());
+        self.core.externs.materialize(&mut self.core.buffer, &mut table);
         let installed = crate::kernel::install_value_table(&mut table);
         for (step_idx, step) in self.core.steps.iter().enumerate() {
             if self.step_clean[step_idx] { continue; }
@@ -545,14 +612,17 @@ impl HybridKernelPushPull {
     pub fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
         self.core.guard_ref_slot(slot);
         self.set_inputs(coords);
-        if slot < self.slot_provenance.len()
+        if !self.force_run
+            && slot < self.slot_provenance.len()
             && self.slot_provenance[slot] & self.changed_mask == 0 {
                 return self.core.buffer[slot];
             }
+        self.force_run = false;
         // The table is installed around every step, closures included, so
         // handle closures write through it as the segments' helpers do.
         let mut table = std::mem::take(&mut self.core.table);
         table.set_generation(crate::kernel::begin_root_cycle());
+        self.core.externs.materialize(&mut self.core.buffer, &mut table);
         let installed = crate::kernel::install_value_table(&mut table);
         for (step_idx, step) in self.core.steps.iter().enumerate() {
             if self.step_clean[step_idx] { continue; }
@@ -721,7 +791,7 @@ fn flatten_output_slots(
 /// Returns a `HybridKernelPushPull` (the production default).
 #[cfg(feature = "jit")]
 #[allow(clippy::too_many_arguments)]
-pub fn build_hybrid(
+pub(crate) fn build_hybrid(
     nodes: &[Box<dyn PolydatNode>],
     wiring: &[Vec<WireSource>],
     coord_count: usize,
@@ -732,6 +802,7 @@ pub fn build_hybrid(
     output_map: HashMap<String, usize>,
     ref_slots: Vec<bool>,
     input_types: &[crate::ast::PortType],
+    externs: crate::compile::externs::Externs,
 ) -> Result<HybridKernelPushPull, String> {
     let mut steps: Vec<HybridStep> = Vec::new();
     let mut scratch: Vec<crate::ast::ScratchBuf> = Vec::new();
@@ -877,7 +948,7 @@ pub fn build_hybrid(
     build_pushpull_from_steps(
         steps, scratch, ref_scratch, ref_slots, wiring, nodes, coord_count,
         total_slots, output_map, max_inputs, max_outputs, input_starts,
-        input_widths, table_entries, output_types, step_rerun,
+        input_widths, table_entries, output_types, step_rerun, externs,
     )
 }
 
@@ -908,7 +979,7 @@ fn output_types_of(
 /// Build a hybrid kernel without JIT (all closures).
 #[cfg(not(feature = "jit"))]
 #[allow(clippy::too_many_arguments)]
-pub fn build_hybrid(
+pub(crate) fn build_hybrid(
     nodes: &[Box<dyn PolydatNode>],
     wiring: &[Vec<WireSource>],
     coord_count: usize,
@@ -919,6 +990,7 @@ pub fn build_hybrid(
     output_map: HashMap<String, usize>,
     ref_slots: Vec<bool>,
     input_types: &[crate::ast::PortType],
+    externs: crate::compile::externs::Externs,
 ) -> Result<HybridKernelPushPull, String> {
     let mut steps: Vec<HybridStep> = Vec::new();
     let mut scratch: Vec<crate::ast::ScratchBuf> = Vec::new();
@@ -999,7 +1071,7 @@ pub fn build_hybrid(
     build_pushpull_from_steps(
         steps, scratch, ref_scratch, ref_slots, wiring, nodes, coord_count,
         total_slots, output_map, max_inputs, max_outputs, input_starts,
-        input_widths, table_entries, output_types, step_rerun,
+        input_widths, table_entries, output_types, step_rerun, externs,
     )
 }
 
@@ -1023,13 +1095,19 @@ fn build_pushpull_from_steps(
     max_outputs: usize,
     _input_starts: &[usize],
     input_widths: &[usize],
-    table_entries: Vec<(usize, usize)>,
+    mut table_entries: Vec<(usize, usize)>,
     output_types: HashMap<String, crate::ast::PortType>,
     step_rerun: Vec<bool>,
+    mut externs: crate::compile::externs::Externs,
 ) -> Result<HybridKernelPushPull, String> {
     let step_count = steps.len();
     debug_assert_eq!(step_rerun.len(), step_count);
+    // Table-kind externs own entries after every segment's and closure's.
+    externs.renumber_entries(table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0));
+    table_entries.extend(externs.table_entries());
     let table_len = table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0);
+    let mut buffer = vec![0u64; total_slots];
+    externs.seed(&mut buffer);
 
     // Compute per-node provenance and invert into per-input step dependents.
     // Since each step currently maps to one node, step index == node index.
@@ -1053,7 +1131,7 @@ fn build_pushpull_from_steps(
 
     Ok(HybridKernelPushPull {
         core: HybridCore {
-            buffer: vec![0u64; total_slots],
+            buffer,
             coord_count,
             steps,
             output_map,
@@ -1066,11 +1144,13 @@ fn build_pushpull_from_steps(
             table_entries,
             output_types,
             step_rerun,
+            externs,
             _nodes: Vec::new(),
         },
         step_clean: vec![false; step_count],
         input_dependents: step_dependents,
         slot_provenance,
         changed_mask: u64::MAX, // all dirty on first eval
+        force_run: false,
     })
 }

@@ -132,15 +132,15 @@ tag 11  reserved
 
 A value table is owned by the engine that runs compiled code, never by
 the thread. Its shape is fixed when the code is compiled: one entry per
-table-kind slot the code can write, numbered in step and port order,
-plus one per table-kind boundary input where the engine has boundary
-inputs. Each entry has exactly one writer, the helper or closure for the
-step that owns the slot, which is told its entry number at compile time
-and replaces the entry in place every time it runs (H4). Nothing
-appends; compiled code cannot grow the table, and an entry number
-outside it is refused. A steady cycle allocates nothing beyond the `Arc`
-that enters an entry, and the table's size is a property of the program,
-not of how many values a cycle happened to make.
+table-kind slot the code can write, numbered in step and port order, then
+one per table-kind extern input, plus one per table-kind boundary input
+where the engine has boundary inputs. Each entry has exactly one writer,
+the helper or closure for the step that owns the slot, which is told its
+entry number at compile time and replaces the entry in place every time
+it runs (H4). Nothing appends; compiled code cannot grow the table, and
+an entry number outside it is refused. A steady cycle allocates nothing
+beyond the `Arc` that enters an entry, and the table's size is a property
+of the program, not of how many values a cycle happened to make.
 
 Compiled code reaches the table through an installation the engine
 makes around each run and removes when it returns. A helper or closure
@@ -611,13 +611,25 @@ Kept short; the normative text above is what the code does. Dates are
   cycle's handle while its producer had rerun (H3). Codegen now treats
   a copy of a handle slot as a handle-writing step, never skipped, by
   propagating handle status through `identity` in dependency order.
-  The one copy step the fuzzer cannot reach is an extern's
-  passthrough: the compiled engines are driven by coordinates alone,
-  seed no extern default, and have no lowering for an input
-  passthrough, so `compile_polydat_to_assembler` now refuses an
-  `extern` with a message that points at `compile_polydat`, where the
-  earlier behaviour was an unknown-wire error. Bringing externs to the
-  compiled engines would mean seeding defaults into every kernel's
-  input slots and lowering the passthrough natively; it is not done.
+
+- **Externs on the compiled engines.** Landed 2026-09-09. Until this
+  step the compiled layer laid out slots for coordinates only: an
+  extern had no slot, its default was never seeded, no API set one,
+  and native code had no lowering for an input passthrough, so
+  `compile_polydat_to_assembler` failed on any program with an
+  `extern` while `compile_polydat` accepted it. Now every input owns
+  slots after the coordinates, a table-kind extern owns an entry after
+  the nodes' (so H4 holds for it), carriers are seeded at build,
+  strings and table kinds are materialized at the start of every run
+  (so H3 holds for them), and every compiled kernel has `set_input`,
+  which type-checks by declared port type and marks the extern's
+  dependents dirty; a cone-guarded kernel runs its next evaluation
+  regardless. `__port_` passthroughs lower to `Identity` natively. The
+  assembler entry point builds through the same path as the kernel
+  path, so the two produce the same graph from the same source; the
+  benchmark's kernels gained one passthrough step per coordinate as a
+  result. `compile::externs` is the shared plumbing;
+  `tests/ext_tiers.rs` differentials every engine, the extension value
+  included, and the fuzzer emits externs.
 
 No refinements remain recorded.

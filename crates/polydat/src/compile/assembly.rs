@@ -181,7 +181,7 @@ struct SlotLayout {
 fn slot_layout(resolved: &ResolvedDag) -> SlotLayout {
     let mut input_starts = Vec::with_capacity(resolved.coord_count);
     let mut next = 0usize;
-    for d in &resolved.input_defs[..resolved.coord_count] {
+    for d in &resolved.input_defs {
         input_starts.push(next);
         next += d.port_type.slot_width();
     }
@@ -346,7 +346,7 @@ impl SlotLayout {
             SlotColor::Hdl1 => mask[start] = true,
             SlotColor::Imm1 | SlotColor::Imm2 => {}
         };
-        for (i, d) in resolved.input_defs[..resolved.coord_count].iter().enumerate() {
+        for (i, d) in resolved.input_defs.iter().enumerate() {
             mark(self.input_starts[i], d.port_type.slot_color());
         }
         for (n, node) in resolved.nodes.iter().enumerate() {
@@ -362,7 +362,7 @@ impl SlotLayout {
     /// bytes or table entry belong to the cycle that ran it (§4).
     fn handle_slot_mask(&self, resolved: &ResolvedDag) -> Vec<bool> {
         let mut mask = vec![false; self.total_slots];
-        for (i, d) in resolved.input_defs[..resolved.coord_count].iter().enumerate() {
+        for (i, d) in resolved.input_defs.iter().enumerate() {
             if d.port_type.slot_color() == crate::ast::SlotColor::Hdl1 {
                 mask[self.input_starts[i]] = true;
             }
@@ -402,7 +402,7 @@ impl SlotLayout {
         deps: &[Vec<usize>],
     ) -> Vec<Vec<usize>> {
         let mut out = Vec::with_capacity(self.coord_slots);
-        for (i, d) in resolved.input_defs[..resolved.coord_count].iter().enumerate() {
+        for (i, d) in resolved.input_defs.iter().enumerate() {
             for _ in 0..d.port_type.slot_width() {
                 out.push(deps.get(i).cloned().unwrap_or_default());
             }
@@ -737,7 +737,7 @@ impl PolydatAssembler {
             &resolved,
             &PolydatProgram::compute_dependents(
                 &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
-                resolved.coord_count,
+                resolved.input_defs.len(),
             ),
         );
         Ok(CompiledKernelPushPull::new(
@@ -780,7 +780,7 @@ impl PolydatAssembler {
             &resolved,
             &PolydatProgram::compute_dependents(
                 &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
-                resolved.coord_count,
+                resolved.input_defs.len(),
             ),
         );
         Ok(CompiledKernelPush::new(coord_count, total_slots, steps, output_map, dependents, ref_slots, extras))
@@ -804,7 +804,7 @@ impl PolydatAssembler {
             &resolved,
             &PolydatProgram::compute_dependents(
                 &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
-                resolved.coord_count,
+                resolved.input_defs.len(),
             ),
         );
         Ok(CompiledKernelPull::new(coord_count, total_slots, steps, output_map, &dependents, ref_slots, extras))
@@ -827,6 +827,15 @@ impl PolydatAssembler {
             extras.table_entries.extend(table_entries_of(resolved, &layout, node_idx, entry_base));
         }
         extras.handle_slots = layout.handle_slot_mask(resolved);
+        // Externs take the entries after the nodes'; the core seeds and
+        // materializes them (compile::externs).
+        extras.externs = crate::compile::externs::Externs::new(
+            &resolved.input_defs,
+            resolved.coord_count,
+            &layout.input_starts,
+            extras.table_entries.len(),
+        )
+        .ok()?;
         extras.output_types = resolved
             .output_map
             .iter()
@@ -926,12 +935,20 @@ impl PolydatAssembler {
             &resolved,
             &PolydatProgram::compute_dependents(
                 &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
-                resolved.coord_count,
+                resolved.input_defs.len(),
             ),
         );
-        let mut k = crate::compile::jit::compile_jit_push_pull(coord_count, total_slots, jit_steps, output_map, resolved.nodes, deps)?;
+        let externs = Self::externs_of(&resolved)?;
+        let mut k = crate::compile::jit::compile_jit_push_pull(coord_count, total_slots, jit_steps, output_map, resolved.nodes, deps, externs)?;
         k.set_slot_info(guard, types);
         Ok(k)
+    }
+
+    /// The extern inputs of a resolved graph, at the slots the layout
+    /// gives them; table-kind entries are numbered by the kernel.
+    fn externs_of(resolved: &ResolvedDag) -> Result<crate::compile::externs::Externs, String> {
+        let layout = slot_layout(resolved);
+        crate::compile::externs::Externs::new(&resolved.input_defs, resolved.coord_count, &layout.input_starts, 0)
     }
 
     /// Phase 3 JIT: raw (no provenance).
@@ -941,7 +958,8 @@ impl PolydatAssembler {
         let _coord_names = resolved.input_names();
         let (coord_count, total_slots, jit_steps, output_map) = Self::build_jit_layout(&resolved)?;
         let (guard, types) = Self::jit_slot_info(&resolved);
-        let mut k = crate::compile::jit::compile_jit_raw(coord_count, total_slots, jit_steps, output_map, resolved.nodes)?;
+        let externs = Self::externs_of(&resolved)?;
+        let mut k = crate::compile::jit::compile_jit_raw_with(coord_count, total_slots, jit_steps, output_map, resolved.nodes, externs)?;
         k.set_slot_info(guard, types);
         Ok(k)
     }
@@ -976,11 +994,12 @@ impl PolydatAssembler {
             &resolved,
             &PolydatProgram::compute_dependents(
                 &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
-                resolved.coord_count,
+                resolved.input_defs.len(),
             ),
         );
         let (guard, types) = Self::jit_slot_info(&resolved);
-        let mut k = crate::compile::jit::compile_jit_push(coord_count, total_slots, jit_steps, output_map, resolved.nodes, deps)?;
+        let externs = Self::externs_of(&resolved)?;
+        let mut k = crate::compile::jit::compile_jit_push(coord_count, total_slots, jit_steps, output_map, resolved.nodes, deps, externs)?;
         k.set_slot_info(guard, types);
         Ok(k)
     }
@@ -995,11 +1014,12 @@ impl PolydatAssembler {
             &resolved,
             &PolydatProgram::compute_dependents(
                 &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
-                resolved.coord_count,
+                resolved.input_defs.len(),
             ),
         );
         let (guard, types) = Self::jit_slot_info(&resolved);
-        let mut k = crate::compile::jit::compile_jit_pull(coord_count, total_slots, jit_steps, output_map, resolved.nodes, &deps)?;
+        let externs = Self::externs_of(&resolved)?;
+        let mut k = crate::compile::jit::compile_jit_pull(coord_count, total_slots, jit_steps, output_map, resolved.nodes, &deps, externs)?;
         k.set_slot_info(guard, types);
         Ok(k)
     }
@@ -1032,7 +1052,7 @@ impl PolydatAssembler {
                     &resolved,
                     &PolydatProgram::compute_dependents(
                         &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
-                        resolved.coord_count,
+                        resolved.input_defs.len(),
                     ),
                 );
                 let mut k = CompiledKernelPull::new(coord_count, total_slots, steps, output_map, &deps, ref_slots, extras);
@@ -1044,7 +1064,7 @@ impl PolydatAssembler {
                     &resolved,
                     &PolydatProgram::compute_dependents(
                         &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
-                        resolved.coord_count,
+                        resolved.input_defs.len(),
                     ),
                 );
                 let mut k = CompiledKernelPushPull::new(coord_count, total_slots, steps, output_map, deps, ref_slots, extras);
@@ -1069,7 +1089,8 @@ impl PolydatAssembler {
         let engine = match mode {
             ProvMode::Raw => {
                 let (guard, types) = Self::jit_slot_info(&resolved);
-                let mut k = crate::compile::jit::compile_jit_raw(coord_count, total_slots, jit_steps, output_map, resolved.nodes)?;
+                let externs = Self::externs_of(&resolved)?;
+                let mut k = crate::compile::jit::compile_jit_raw_with(coord_count, total_slots, jit_steps, output_map, resolved.nodes, externs)?;
                 k.set_slot_info(guard, types);
                 k.set_owns_cycle(false);
                 select::P3Engine::Raw(k)
@@ -1079,11 +1100,12 @@ impl PolydatAssembler {
                     &resolved,
                     &PolydatProgram::compute_dependents(
                         &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
-                        resolved.coord_count,
+                        resolved.input_defs.len(),
                     ),
                 );
                 let (guard, types) = Self::jit_slot_info(&resolved);
-                let mut k = crate::compile::jit::compile_jit_pull(coord_count, total_slots, jit_steps, output_map, resolved.nodes, &deps)?;
+                let externs = Self::externs_of(&resolved)?;
+                let mut k = crate::compile::jit::compile_jit_pull(coord_count, total_slots, jit_steps, output_map, resolved.nodes, &deps, externs)?;
                 k.set_slot_info(guard, types);
                 k.set_owns_cycle(false);
                 select::P3Engine::Pull(k)
@@ -1093,11 +1115,12 @@ impl PolydatAssembler {
                     &resolved,
                     &PolydatProgram::compute_dependents(
                         &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
-                        resolved.coord_count,
+                        resolved.input_defs.len(),
                     ),
                 );
                 let (guard, types) = Self::jit_slot_info(&resolved);
-                let mut k = crate::compile::jit::compile_jit_push_pull(coord_count, total_slots, jit_steps, output_map, resolved.nodes, deps)?;
+                let externs = Self::externs_of(&resolved)?;
+                let mut k = crate::compile::jit::compile_jit_push_pull(coord_count, total_slots, jit_steps, output_map, resolved.nodes, deps, externs)?;
                 k.set_slot_info(guard, types);
                 k.set_owns_cycle(false);
                 select::P3Engine::PushPull(k)
@@ -1117,13 +1140,14 @@ impl PolydatAssembler {
         let layout = slot_layout(&resolved);
 
         let output_map = layout.named_outputs(&resolved);
-        let input_widths: Vec<usize> = resolved.input_defs[..resolved.coord_count]
+        let input_widths: Vec<usize> = resolved.input_defs
             .iter()
             .map(|d| d.port_type.slot_width())
             .collect();
 
         let ref_slots = layout.ref_slot_mask(&resolved);
         let input_types: Vec<PortType> = resolved.input_defs.iter().map(|d| d.port_type).collect();
+        let externs = Self::externs_of(&resolved)?;
         let mut kernel = crate::compile::hybrid::build_hybrid(
             &resolved.nodes,
             &resolved.wiring,
@@ -1135,6 +1159,7 @@ impl PolydatAssembler {
             output_map,
             ref_slots,
             &input_types,
+            externs,
         )?;
         kernel.retain_nodes(resolved.nodes);
         Ok(kernel)

@@ -86,7 +86,7 @@ The other compile entry points differ only in what they take:
 | `compile_polydat_strict(src, dir, strict)` | strict mode: implicit adapters are errors |
 | `compile_polydat_with_log(src, &mut log)` | the compile event log (§13) |
 | `compile_polydat_with_tiles(src, tiles)` | tile statements built from host data (§10) |
-| `compile_polydat_to_assembler(src)` | stops before engine selection and returns the assembler (§7, §11); refuses externs, since the compiled engines take coordinates only |
+| `compile_polydat_to_assembler(src)` | stops before engine selection and returns the assembler (§7, §11) |
 
 ## 3. Externs
 
@@ -120,20 +120,44 @@ let transformed = src.replace(r#"extern region: str = "us-east""#, r#"extern reg
 let mut fixed = compile_polydat(&transformed)?;
 fixed.set_inputs(&[7]);
 println!("transformed: {}", fixed.pull("key").as_str());
+
+// The compiled engines carry the same externs.
+let mut compiled = compile_polydat_to_assembler(src)?.try_compile_raw().unwrap_or_else(|_| panic!("P2"));
+compiled.eval(&[7]);
+println!("compiled, defaults: {}", compiled.get_value("key").as_str());
+compiled.set_input("region", Value::Str("eu-west".into()))?;
+compiled.set_input("scale", Value::U64(1000))?;
+compiled.eval(&[7]);
+println!("compiled, overridden: {}", compiled.get_value("key").as_str());
 ```
 
 ```text
 defaults: us-east/7
 overridden: eu-west/487
 transformed: ap-south/7
+compiled, defaults: us-east/7
+compiled, overridden: eu-west/487
 ```
+
+Every engine treats an extern the same way. The interpreter keeps it as
+a value in the state. A compiled kernel gives it a slot after the
+coordinates, seeds the default when the kernel is built, and offers the
+same `set_input` by name: a number or boolean is written into its slot
+at once, and a string, JSON, or extension value is written afresh at
+the start of every run, so its handle always belongs to the cycle that
+reads it. Setting an extern marks everything downstream of it for
+recomputation. The compiled `set_input` checks the value against the
+declared port type and refuses a mismatch by name; the state's
+`set_input` writes without checking, so the wrong variant there is a
+host bug that surfaces when a consumer reads it. An extern declared
+without a default, such as `extern doc: json`, must be set before the
+first run of a compiled kernel, which evaluates eagerly and stops with
+a message naming the extern if it is not.
 
 Prefer the transform when the value is fixed for the run: the compiler
 then sees a constant, folds it, and the fused native cones in §11 carry
 it as an immediate. Use `set_input` when the value genuinely varies per
-state, such as a per-thread shard label. `set_input` takes a `Value` and
-writes it without re-checking the slot's declared type, so passing the
-wrong variant is a host bug that surfaces when a consumer reads it.
+state, such as a per-thread shard label.
 
 ## 4. Share a program across threads
 
@@ -495,7 +519,7 @@ let mut mixed = asm().compile()?;   // what a host should normally use
 
 ```text
 pure P3 refused: some nodes cannot be JIT-compiled
-hybrid plan: 18 native segment(s), 3 closure step(s)
+hybrid plan: 19 native segment(s), 3 closure step(s)
 cycle 0: P2 h=16294208416658607535 j={"h": 16294208416658607535, "name": "user-16294208416658607535", "tag": "job-7535", "cell": "L4:10:13"}
 cycle 0: hybrid agrees: true
 cycle 1: P2 h=10451216379200822465 j={"h": 10451216379200822465, "name": "user-10451216379200822465", "tag": "job-2465", "cell": "L4:0:8"}
@@ -504,7 +528,7 @@ production kernel j: {"h": 10451216379200822465, "name": "user-10451216379200822
 ```
 
 Pure native code refuses the program because three nodes have no native
-form. The hybrid kernel accepts it: eighteen steps run as native
+form. The hybrid kernel accepts it: nineteen steps run as native
 segments, the three host nodes run as closure steps, and every value
 matches the closure tier, including the extension value that passes
 between the two closure steps as a table handle. `engine_counts` is the
@@ -621,8 +645,8 @@ compile events: 4
   Info: TileHoleTyped { tile: "t", hole: "f | .2", wire_type: "f64", declared: None, expectation: "any JSON value (f64)", encoder: "json number, format .2", adapter: None }
   Info: TileCompiled { tile: "t", encoding: "json", statics: 3, static_bytes: 14, holes: 2, branches: 0, projections: 0, bodies: [] }
   Info: ConstantFolded { node: "const_f64", value: "3.0" }
-nodes: 2, deterministic: true
-node names: ["const_f64", "jit_cone[hash+tile_encode+to_f64+f64_div+tile_encode+tile_render]"]
+nodes: 3, deterministic: true
+node names: ["const_f64", "__port_cycle", "jit_cone[hash+tile_encode+to_f64+f64_div+tile_encode+tile_render]"]
 ```
 
 The program in this section is a hash, a division, and a JSON tile with
@@ -636,8 +660,9 @@ widening, and warnings, such as an unknown pragma, arrive in the same
 list, so a host that wants a strict build can fail on any event whose
 level is a warning. Cone fusion is not an
 event: the node list shows what the host is actually running, one
-constant and one native cone that fused the hash, the conversion, the
-division, both hole encoders, and the tile renderer. `is_deterministic`
+constant, the passthrough that exposes the coordinate as an output, and
+one native cone that fused the hash, the conversion, the division, both
+hole encoders, and the tile renderer. `is_deterministic`
 is false when any node's purity is nondeterministic, such as a
 wall-clock or a true random source, which is the check a host should
 make before relying on replay. Side-channel nodes such as `emit_row`

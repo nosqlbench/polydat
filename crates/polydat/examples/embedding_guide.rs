@@ -145,6 +145,15 @@ fn section_externs() {
     let mut fixed = compile_polydat(&transformed).expect("compile");
     fixed.set_inputs(&[7]);
     println!("transformed: {}", fixed.pull("key").as_str());
+    // The compiled engines carry the same externs: defaults are seeded
+    // into the kernel and set_input replaces them between runs.
+    let mut compiled = compile_polydat_to_assembler(src).unwrap().try_compile_raw().unwrap_or_else(|_| panic!("P2"));
+    compiled.eval(&[7]);
+    println!("compiled, defaults: {}", compiled.get_value("key").as_str());
+    compiled.set_input("region", Value::Str("eu-west".into())).expect("a str extern");
+    compiled.set_input("scale", Value::U64(1000)).expect("a u64 extern");
+    compiled.eval(&[7]);
+    println!("compiled, overridden: {}", compiled.get_value("key").as_str());
     println!();
 }
 

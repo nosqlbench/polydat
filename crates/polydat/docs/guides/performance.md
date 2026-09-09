@@ -160,6 +160,11 @@ Reference environment:
 This graph uses scalar `u64` operations. The P3 result demonstrates native
 machine-code lowering, not SIMD auto-promotion.
 
+Since 2026-09-09 every compiled kernel also carries one passthrough step
+per input, so that the same source yields the same graph on every
+engine; the run above predates that step. Re-record before comparing
+against it.
+
 ## Run it locally
 
 Run the semantic gate first:

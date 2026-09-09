@@ -6,7 +6,8 @@
 //! string, JSON, tile, partition, and streamer nodes with typed wires,
 //! extension values, a fallible construction, a mixed tuple return
 //! destructured through the compiler's copy steps, explicit copies of
-//! table kinds, casts, formats,
+//! table kinds, externs with defaults and externs the harness sets on
+//! every kernel (a JSON document and a partition), casts, formats,
 //! declared hole types, raw holes, splices, branches, projections
 //! (nested, in string position, and empty), and structural templates;
 //! every program compiles on the interpreter (the oracle), with forced
@@ -91,6 +92,9 @@ struct Gen {
     json_tiles: Vec<String>,
     lines: Vec<String>,
     outputs: Vec<String>,
+    /// Externs without a default, with the value the harness sets on
+    /// every kernel before it runs.
+    host_externs: Vec<(String, Value)>,
     next: usize,
 }
 
@@ -102,8 +106,20 @@ impl Gen {
             json_tiles: Vec::new(),
             lines: vec!["input cycle: u64".into()],
             outputs: Vec::new(),
+            host_externs: Vec::new(),
             next: 0,
         }
+    }
+
+    /// An extern declaration goes before the bindings; its wire is
+    /// usable like any other.
+    fn declare_extern(&mut self, ty: PortType, decl: String, ext: Option<&'static str>) -> Wire {
+        let name = self.name();
+        self.lines.insert(1, format!("extern {name}{decl}"));
+        let w = Wire { name: name.clone(), ty, numeric_text: false, json_tile: false, ext, depth: 0 };
+        self.wires.push(w.clone());
+        self.outputs.push(name);
+        w
     }
 
     fn name(&mut self) -> String {
@@ -170,7 +186,7 @@ impl Gen {
     /// One binding from the grammar.
     fn step(&mut self) {
         let u = self.pick(PortType::U64).expect("cycle is always u64");
-        match self.rng.range(33) {
+        match self.rng.range(35) {
             0 => {
                 self.bind(PortType::U64, format!("hash({})", u.name));
             }
@@ -415,6 +431,32 @@ impl Gen {
                     self.outputs.push(name);
                 }
             }
+            32 => {
+                // An extern with a default: a carrier or a string the
+                // kernel seeds. Its passthrough is a copy step on every
+                // engine.
+                if self.rng.coin(50) {
+                    let n = [3u64, 42, 1000, 65535][self.rng.range(4)];
+                    self.declare_extern(PortType::U64, format!(": u64 = {n}"), None);
+                } else {
+                    let s = ["us-east", "row", "k,q\\\"z"][self.rng.range(3)];
+                    self.declare_extern(PortType::Str, format!(": str = \"{s}\""), None);
+                }
+            }
+            33 => {
+                // An extern the host sets: a JSON document or a
+                // partition, so a table kind crosses the input boundary
+                // and its passthrough copies a table handle.
+                if self.rng.coin(50) {
+                    let w = self.declare_extern(PortType::Json, ": json".into(), None);
+                    let n = self.rng.range(1000) as u64;
+                    self.host_externs.push((w.name, Value::Json(std::sync::Arc::new(serde_json::json!({ "n": n, "tags": ["a", "b"] })))));
+                } else {
+                    let w = self.declare_extern(PortType::Ext, ": ext".into(), Some("Partition"));
+                    let idx = self.rng.range(4) as u64;
+                    self.host_externs.push((w.name, host_partition(idx)));
+                }
+            }
             _ => {
                 let spec = ["k in 1..4", "k in 1..3, side in left,right", "n in 0..10 order halton/3"][self.rng.range(3)];
                 self.bind_ext("Streamer", 0, format!("streamer(\"{spec}\")"));
@@ -545,14 +587,26 @@ impl Gen {
         self.outputs.push(name);
     }
 
-    fn program(mut self, steps: usize) -> (String, Vec<String>) {
+    fn program(mut self, steps: usize) -> (String, Vec<String>, Vec<(String, Value)>) {
         for _ in 0..steps {
             self.step();
         }
         let mut src = self.lines.join("\n");
         src.push('\n');
-        (src, self.outputs)
+        (src, self.outputs, self.host_externs)
     }
+}
+
+/// One of the four quarters of `[0, 1000)`, as a host would hand a
+/// partition to an extern.
+fn host_partition(idx: u64) -> Value {
+    let list = polydat::iteration::cursor_partition::resolve(
+        &polydat::iteration::cursor_partition::parse("*/4").expect("spec"),
+        0,
+        1000,
+    )
+    .expect("resolve");
+    Value::from_partition(list[idx as usize % list.len()])
 }
 
 fn kernel(src: &str, mode: JitMode) -> PolydatKernel {
@@ -569,6 +623,12 @@ fn same(a: &Value, b: &Value, tier: &str, out: &str, c: u64, src: &str) {
 /// Every tier agrees with the interpreter on every output. Returns
 /// whether a pure-P3 kernel was available for the program.
 fn check(src: &str, outputs: &[&str], cycles: u64) -> bool {
+    check_with(src, outputs, cycles, &[])
+}
+
+/// `check` for a program with externs the host sets: every kernel gets
+/// the same values before it runs.
+fn check_with(src: &str, outputs: &[&str], cycles: u64, externs: &[(String, Value)]) -> bool {
     let mut p1 = kernel(src, JitMode::Off);
     let mut cones = kernel(src, JitMode::Force);
     let mut p2 = compile_polydat_to_assembler(src)
@@ -588,6 +648,16 @@ fn check(src: &str, outputs: &[&str], cycles: u64) -> bool {
         .unwrap()
         .compile_hybrid()
         .unwrap_or_else(|e| panic!("hybrid: {e}\n{src}"));
+    for (name, value) in externs {
+        p1.set_input(name, value.clone()).unwrap_or_else(|e| panic!("P1 set_input: {e}\n{src}"));
+        cones.set_input(name, value.clone()).unwrap_or_else(|e| panic!("cones set_input: {e}\n{src}"));
+        p2.set_input(name, value.clone()).unwrap_or_else(|e| panic!("P2 set_input: {e}\n{src}"));
+        p2pp.set_input(name, value.clone()).unwrap_or_else(|e| panic!("P2 push-pull set_input: {e}\n{src}"));
+        if let Some(k) = p3.as_mut() {
+            k.set_input(name, value.clone()).unwrap_or_else(|e| panic!("P3 set_input: {e}\n{src}"));
+        }
+        hybrid.set_input(name, value.clone()).unwrap_or_else(|e| panic!("hybrid set_input: {e}\n{src}"));
+    }
     // Every kernel here is a root on this thread, and a root's cycle
     // advance resets the arena (SRD 115 §4), so each kernel's outputs
     // are copied out right after its own run, before the next root
@@ -644,14 +714,14 @@ fn random_programs_agree_across_every_tier() {
     let mut p3_available = 0usize;
     let mut ext_seen = 0usize;
     for i in 0..iterations() {
-        let (src, outputs) = Gen::new(base.wrapping_add(i as u64)).program(4 + i % 7);
-        if src.contains("partitions(") || src.contains("streamer(") {
+        let (src, outputs, externs) = Gen::new(base.wrapping_add(i as u64)).program(4 + i % 7);
+        if src.contains("partitions(") || src.contains("streamer(") || src.contains(": ext") {
             ext_seen += 1;
         }
         let outs: Vec<&str> = outputs.iter().map(String::as_str).collect();
         // A panic inside a kernel (a validator, a diagnostic) carries no
         // program text; attach it so the case can be reproduced.
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check(&src, &outs, 6))) {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check_with(&src, &outs, 6, &externs))) {
             Ok(true) => p3_available += 1,
             Ok(false) => {}
             Err(payload) => {
@@ -736,4 +806,34 @@ fn a_p2_kernel_owns_a_fixed_table() {
         assert_eq!(p2.get_value("t").as_str(), p2.get_value("j").to_display_string());
     }
     assert_eq!(p2.table_len(), 2);
+}
+
+/// Externs of every kind the compiled engines carry, through every
+/// tier: two with defaults the kernels seed, and a JSON document and a
+/// partition the harness sets on every kernel, read through the
+/// partition consumers, JSON text, interpolation, and a tile.
+#[test]
+fn externs_agree_across_every_tier() {
+    let src = "input cycle: u64\n\
+        extern scale: u64 = 100\n\
+        extern label: str = \"lbl\"\n\
+        extern doc: json\n\
+        extern part: ext\n\
+        h := hash(cycle)\n\
+        id := mod_wire(h, scale)\n\
+        m := mod_in(h, part)\n\
+        c := cardinality(part)\n\
+        s := start_of(part)\n\
+        t := json_to_str(doc)\n\
+        copy := identity(doc)\n\
+        line := \"{label}/{id}/{m}/{c}/{s}/{t}/{part}\"\n\
+        tile d : json := {\"label\": ${label}, \"id\": ${id}, \"m\": ${m}, \"doc\": ${t}}\n";
+    let externs = vec![
+        ("doc".to_string(), Value::Json(std::sync::Arc::new(serde_json::json!({ "k": 7, "tags": ["a", "b"] })))),
+        ("part".to_string(), host_partition(2)),
+    ];
+    let asm = compile_polydat_to_assembler(src).unwrap();
+    let outputs: Vec<String> = asm.output_names().iter().map(|s| s.to_string()).collect();
+    let outs: Vec<&str> = outputs.iter().map(String::as_str).collect();
+    check_with(src, &outs, 8, &externs);
 }

@@ -2302,108 +2302,11 @@ impl Compiler {
 
     /// Build an assembler with all nodes and wiring, without compiling.
     pub(super) fn build_assembler(&mut self, file: &PolydatFile) -> Result<PolydatAssembler, String> {
-        // Reuse the same logic as compile(), but return the assembler
-        // instead of calling asm.compile().
-        self.register_local_modules(file);
-
-        // First pass: collect explicit `input` declarations, dedup by name.
-        for stmt in &file.statements {
-            if let Statement::InputDecl(d) = stmt
-                && !self.input_names.iter().any(|n| n == &d.name)
-            {
-                self.input_names.push(d.name.clone());
-            }
-        }
-
-        if self.input_names.is_empty() {
-            let defined: HashSet<String> = file.statements.iter().flat_map(|stmt| {
-                match stmt {
-                    Statement::Binding(b) => b.targets.clone(),
-                    Statement::ModuleDef(m) => vec![m.name.clone()],
-                    Statement::ExternPort(p) => vec![p.name.clone()],
-                    Statement::InputDecl(_) => vec![],
-                    Statement::Cursor(_) => vec![],
-                    Statement::Pragma { .. } => vec![],
-                    Statement::For(_) => vec![],
-                    Statement::Tile(t) => vec![t.name.clone()],
-                }
-            }).collect();
-
-            let mut referenced: HashSet<String> = HashSet::new();
-            for stmt in &file.statements {
-                let expr = match stmt {
-                    Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) | Statement::Tile(_) => continue,
-                    Statement::Binding(b) => &b.value,
-                };
-                collect_references(expr, &mut referenced);
-            }
-
-            let mut inferred: Vec<String> = referenced.into_iter()
-                .filter(|name| !defined.contains(name))
-                .collect();
-            inferred.sort();
-            self.input_names = inferred;
-        }
-
-        // Zero inferred inputs means all bindings are constants — valid.
-
-        let mut asm = PolydatAssembler::new(self.input_names.clone());
-        for (name, ty) in declared_input_types(file) {
-            asm.set_input_type(&name, ty);
-        }
+        // One assembly path for every entry point: the assembler a host
+        // gets from `compile_polydat_to_assembler` is the one the kernel
+        // path compiles, externs, shared bindings, and cursors included.
+        let mut asm = self.assemble_parent(file, None)?;
         asm.set_strict_wires(self.pragmas.strict_types(), self.pragmas.strict_values());
-
-        for stmt in file.statements.clone() {
-            match &stmt {
-                Statement::Binding(binding) => {
-                    self.compile_binding(&mut asm, &binding.targets, &binding.value)?;
-                    if binding.modifier != BindingModifier::NONE {
-                        for target in &binding.targets {
-                            asm.set_output_modifier(target, binding.modifier);
-                        }
-                    }
-                    if binding.modifier.is_const() {
-                        for target in &binding.targets {
-                            asm.mark_const_output(target);
-                        }
-                    }
-                }
-                Statement::ExternPort(port) => {
-                    // Compiled kernels take coordinates only: nothing seeds
-                    // an extern's default into their input slots and no
-                    // API sets one, so a graph built here cannot carry an
-                    // extern. The kernel path (`compile_polydat`) can.
-                    return Err(format!(
-                        "extern '{}': the assembler entry point builds coordinate-driven \
-                         graphs for the compiled engines, which have no extern slots; \
-                         compile a program with externs through `compile_polydat`, \
-                         which seeds their defaults and lets a host set them",
-                        port.name
-                    ));
-                }
-                Statement::ModuleDef(_) => {}
-                Statement::InputDecl(_) => {}
-                Statement::Pragma { .. } => {}
-                Statement::For(f) => {
-                    return Err(format!(
-                        "`for {}` at line {}, col {}: {}",
-                        f.source.text, f.span.line, f.span.col, "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
-                    ));
-                }
-                Statement::Tile(t) => {
-                    self.compile_tile(&mut asm, t)?;
-                }
-                Statement::Cursor(decl) => {
-                    self.process_cursor(&mut asm, decl)?;
-                }
-            }
-        }
-
-        for name in &self.all_names {
-            asm.add_output(name, WireRef::node(name));
-        }
-
-        asm.set_context(&self.source_text, &self.context_label);
         Ok(asm)
     }
 
@@ -2524,12 +2427,15 @@ impl Compiler {
         Ok(out)
     }
 
-    fn compile_parent_with_log(
+    /// Assemble the parent program: inputs and their passthroughs,
+    /// externs, bindings, cursors, tiles, and the output set. Every
+    /// entry point builds its assembler here, so a kernel and an
+    /// assembler from the same source are the same graph.
+    fn assemble_parent(
         &mut self,
         file: &PolydatFile,
         required_outputs: Option<&[String]>,
-        log: Option<&mut super::events::CompileEventLog>,
-    ) -> Result<PolydatKernel, String> {
+    ) -> Result<PolydatAssembler, String> {
         self.register_local_modules(file);
         // First pass: collect explicit `input` declarations, dedup by name.
         for stmt in &file.statements {
@@ -2848,6 +2754,16 @@ impl Compiler {
         }
 
         asm.set_context(&self.source_text, &self.context_label);
+        Ok(asm)
+    }
+
+    fn compile_parent_with_log(
+        &mut self,
+        file: &PolydatFile,
+        required_outputs: Option<&[String]>,
+        log: Option<&mut super::events::CompileEventLog>,
+    ) -> Result<PolydatKernel, String> {
+        let mut asm = self.assemble_parent(file, required_outputs)?;
         let mut kernel = match log {
             Some(log) if !self.strict => {
                 asm.set_strict_wires(self.pragmas.strict_types(), self.pragmas.strict_values());
