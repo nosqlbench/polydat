@@ -601,6 +601,9 @@ program itself answers the questions a host usually has at run time.
 let mut log = CompileEventLog::new();
 let kernel = compile_polydat_with_log(src, &mut log)?;
 println!("compile events: {}", log.events().len());
+for event in log.events() {
+    println!("  {:?}: {event:?}", event.level());
+}
 let program = kernel.program();
 println!("nodes: {}, deterministic: {}", program.node_count(), program.is_deterministic());
 let names: Vec<_> = (0..program.node_count()).map(|i| program.node_meta(i).name.clone()).collect();
@@ -608,12 +611,25 @@ let names: Vec<_> = (0..program.node_count()).map(|i| program.node_meta(i).name.
 
 ```text
 compile events: 4
+  Info: TileHoleTyped { tile: "t", hole: "h", wire_type: "u64", declared: None, expectation: "any JSON value (u64)", encoder: "json number", adapter: None }
+  Info: TileHoleTyped { tile: "t", hole: "f | .2", wire_type: "f64", declared: None, expectation: "any JSON value (f64)", encoder: "json number, format .2", adapter: None }
+  Info: TileCompiled { tile: "t", encoding: "json", statics: 3, static_bytes: 14, holes: 2, branches: 0, projections: 0, bodies: [] }
+  Info: ConstantFolded { node: "const_f64", value: "3.0" }
 nodes: 2, deterministic: true
 node names: ["const_f64", "jit_cone[hash+tile_encode+to_f64+f64_div+tile_encode+tile_render]"]
 ```
 
 The program in this section is a hash, a division, and a JSON tile with
-two holes. The node list shows what the host is actually running: one
+two holes. `CompileEvent` is an enum with one variant per kind of
+decision, each carrying its particulars, and `level` classifies it as
+info, advisory, or warning. The four events here are the two hole
+typings, each naming the wire type it saw, what the hole's position
+expects, and the encoder it chose; the tile's compiled shape; and the
+one constant the compiler folded. Advisories, such as an implicit type
+widening, and warnings, such as an unknown pragma, arrive in the same
+list, so a host that wants a strict build can fail on any event whose
+level is a warning. Cone fusion is not an
+event: the node list shows what the host is actually running, one
 constant and one native cone that fused the hash, the conversion, the
 division, both hole encoders, and the tile renderer. `is_deterministic`
 is false when any node's purity is nondeterministic, such as a

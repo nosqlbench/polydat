@@ -376,6 +376,9 @@ fn section_diagnostics() {
     let kernel = compile_polydat_with_log("input cycle: u64\nh := hash(cycle)\nf := to_f64(h) / 3.0\ntile t : json := {\"h\": ${h}, \"f\": ${f | .2}}\n", &mut log)
         .expect("compile");
     println!("compile events: {}", log.events().len());
+    for event in log.events() {
+        println!("  {:?}: {event:?}", event.level());
+    }
     let program = kernel.program();
     println!("nodes: {}, deterministic: {}", program.node_count(), program.is_deterministic());
     let names: Vec<String> = (0..program.node_count()).map(|i| program.node_meta(i).name.clone()).collect();
