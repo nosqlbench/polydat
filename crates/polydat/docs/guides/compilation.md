@@ -5,12 +5,19 @@ artifact is the same shape at each level — a kernel callers can poke
 coordinates into and pull outputs out of — so picking a level is a
 performance / build-size trade rather than a behaviour switch.
 
-| Level   | Mechanism                 | Throughput    | Feature |
-|---------|---------------------------|---------------|---------|
-| Phase 1 | Pull-through interpreter  | ~70ns/node    | always  |
-| Phase 2 | Compiled u64 closures     | ~4.5ns/node   | always  |
-| Hybrid  | Per-node optimal          | best of P2/P3 | `jit`   |
-| Phase 3 | Cranelift JIT native code | ~0.2ns/node   | `jit`   |
+| Level   | Mechanism                 | Measured, per cycle of an eleven-node graph | Feature |
+|---------|---------------------------|--------------------------------------------:|---------|
+| Phase 1 | Pull-through interpreter  | 398.66 ns                                   | always  |
+| Phase 2 | Compiled u64 closures     | 93.855 ns, 4.25× faster than Phase 1        | always  |
+| Hybrid  | Per-node optimal          | between Phase 2 and Phase 3                 | `jit`   |
+| Phase 3 | Cranelift JIT native code | 45.923 ns, 8.68× faster than Phase 1        | `jit`   |
+
+The measured column is the reference run recorded in
+[Engine-ladder performance](performance.md): one graph, one machine, one
+date, with Criterion's confidence intervals. It is the only measurement
+this documentation stands behind; per-node figures depend on the graph,
+and the ratios depend on the machine, so treat them as one data point
+rather than a constant.
 
 Phase 1 and 2 are always available — no extra dependency, no codegen
 backend. Phase 3 needs the Cranelift JIT and ships behind the `jit`

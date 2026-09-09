@@ -345,3 +345,22 @@ fn documentation_links_resolve() {
     }
     assert!(broken.is_empty(), "{} broken links:\n{}", broken.len(), broken.join("\n"));
 }
+
+/// The compilation guide's measured column cites the performance
+/// guide; every figure it quotes must appear in that guide's reference
+/// table, so the two cannot drift apart.
+#[test]
+fn compilation_guide_cites_the_reference_run() {
+    let doc = read("docs/guides/compilation.md");
+    let reference = read("docs/guides/performance.md");
+    let mut quoted = 0;
+    for line in doc.lines().filter(|l| l.starts_with("| Phase")) {
+        let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+        let measured = cells[3];
+        for token in measured.split([' ', ',']).filter(|t| t.chars().next().is_some_and(|c| c.is_ascii_digit())) {
+            assert!(reference.contains(token), "`{token}` from the compilation guide is not in the performance guide's reference table");
+            quoted += 1;
+        }
+    }
+    assert!(quoted >= 3, "the compilation guide quotes no measurements");
+}

@@ -93,11 +93,14 @@
 //!
 //! The kernel supports four compilation levels:
 //!
-//! - **Phase 1** (default): Pull-through interpreter. ~70ns/node.
-//! - **Phase 2**: Compiled `u64` closures. ~4.5ns/node.
+//! - **Phase 1** (default): Pull-through interpreter.
+//! - **Phase 2**: Compiled `u64` closures, measured 4.25× faster than Phase 1.
 //! - **Hybrid**: Per-node optimal (JIT where supported, closures elsewhere).
-//! - **Phase 3**: Cranelift JIT native code. ~0.2ns/node.
+//! - **Phase 3**: Cranelift JIT native code, measured 8.68× faster than Phase 1.
 //!   Requires the `jit` feature (enabled by default).
+//!
+//! The ratios are the reference run in the engine-ladder performance
+//! guide linked above: one graph on one machine, not a constant.
 //!
 //! ## Features
 //!
