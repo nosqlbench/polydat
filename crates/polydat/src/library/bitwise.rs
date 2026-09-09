@@ -31,7 +31,7 @@ fn u64_sub(a: u64, b: u64) -> u64 { a.wrapping_sub(b) }
 fn u64_mul(a: u64, b: u64) -> u64 { a.wrapping_mul(b) }
 
 #[crate::polydat_node(category = Arithmetic)]
-fn u64_div(a: u64, b: u64) -> u64 { if b != 0 { a / b } else { 0 } }
+fn u64_div(a: u64, b: u64) -> u64 { a.checked_div(b).unwrap_or(0) }
 
 #[crate::polydat_node(category = Arithmetic)]
 fn u64_mod(a: u64, b: u64) -> u64 { if b != 0 { a % b } else { 0 } }

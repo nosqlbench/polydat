@@ -507,11 +507,7 @@ impl ExtensionContext {
     /// Convenience: integer pass count (consumed / base).
     /// Returns 0 when `base == 0` (degenerate cursor).
     pub fn passes(&self) -> u64 {
-        if self.base == 0 {
-            0
-        } else {
-            self.consumed / self.base
-        }
+        self.consumed.checked_div(self.base).unwrap_or(0)
     }
 }
 

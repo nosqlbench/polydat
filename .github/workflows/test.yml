@@ -19,8 +19,8 @@
 #   all-features — single fast leg on linux/amd64 covering the
 #     optional `vectordata` feature (pulls network-stack deps;
 #     one platform is enough since the feature is pure Rust and
-#     arch-independent, unlike the JIT). Also builds rustdoc with
-#     warnings as errors.
+#     arch-independent, unlike the JIT). Also runs clippy and builds
+#     rustdoc, both with warnings as errors.
 #
 # Platform notes (deltas from the nbrs matrix):
 #
@@ -114,3 +114,10 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --workspace --all-features --no-deps
+
+      # Clippy is kept warning-free across every target, including
+      # tests, examples, and benches, with and without the JIT.
+      - name: Clippy (warnings are errors)
+        run: |
+          cargo clippy --workspace --all-features --all-targets -- -D warnings
+          cargo clippy --workspace --no-default-features --all-targets -- -D warnings

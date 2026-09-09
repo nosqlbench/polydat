@@ -15,6 +15,10 @@ use polydat::compile::jit::{classify_node, compile_jit_raw, JitOp};
 use polydat::dsl::factory::{build_node, ConstArg};
 use polydat::dsl::registry::registry;
 
+/// One category row of the benchmark table: P1, P2, and P3 latency
+/// (min, median, max) in nanoseconds per pull.
+type CategoryRow = (f64, f64, f64, f64, f64, f64, f64, f64, f64);
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct BenchResult {
@@ -87,7 +91,7 @@ fn run_all_functions_concurrency_benchmarks() {
     let concurrencies = [1usize, 4usize, 16usize];
     let iters_per_thread = 10_000usize;
 
-    let mut category_stats: HashMap<String, Vec<(f64, f64, f64, f64, f64, f64, f64, f64, f64)>> = HashMap::new();
+    let mut category_stats: HashMap<String, Vec<CategoryRow>> = HashMap::new();
     let mut total_p1_lat = [0.0; 3];
     let mut total_p2_lat = [0.0; 3];
     let mut total_p3_lat = [0.0; 3];

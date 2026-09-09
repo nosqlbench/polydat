@@ -20,6 +20,7 @@ use crate::kernel::ValueTable;
 /// A `Value` as the slot bits its port type rides as. A table-kind value
 /// is written to `entry` of `table`; `entry` is `None` for every other
 /// value. `None` when the value's variant has no compiled representation.
+#[cfg(feature = "jit")]
 pub(crate) fn encode_slot(v: &Value, table: &mut ValueTable, entry: Option<usize>) -> Option<u64> {
     Some(match v {
         Value::U64(x) => *x,
@@ -42,6 +43,7 @@ pub(crate) fn encode_slot(v: &Value, table: &mut ValueTable, entry: Option<usize
 /// (SRD 115 §6): the codes of a node's wires are interned as a static
 /// string, and the helper decodes each argument by its code. `None`
 /// for a type no helper can take.
+#[cfg(feature = "jit")]
 pub(crate) fn type_code(ty: PortType) -> Option<u8> {
     Some(match ty {
         PortType::U64 => b'u',
@@ -58,6 +60,7 @@ pub(crate) fn type_code(ty: PortType) -> Option<u8> {
 }
 
 /// The port type a type code names.
+#[cfg(feature = "jit")]
 pub(crate) fn type_of_code(code: u8) -> PortType {
     match code {
         b'i' => PortType::I64,
@@ -74,6 +77,7 @@ pub(crate) fn type_of_code(code: u8) -> PortType {
 
 /// An argument's slot bits as an owned `Value`, decoded by its type
 /// code through the table installed for the running native code.
+#[cfg(feature = "jit")]
 pub(crate) fn arg_value(code: u8, bits: u64) -> Value {
     let ty = type_of_code(code);
     match ty.handle_kind() {
@@ -86,6 +90,7 @@ pub(crate) fn arg_value(code: u8, bits: u64) -> Value {
 /// code: nothing is copied. Strings are borrowed from the arena or the
 /// interner and table kinds from the installed table, both valid for
 /// the rest of the current native call.
+#[cfg(feature = "jit")]
 pub(crate) fn arg_ref(code: u8, bits: u64) -> crate::ast::ValueRef<'static> {
     use crate::ast::ValueRef;
     match code {
@@ -101,6 +106,7 @@ pub(crate) fn arg_ref(code: u8, bits: u64) -> crate::ast::ValueRef<'static> {
 
 /// An argument as a format argument: strings are borrowed from the
 /// arena or the interner rather than copied.
+#[cfg(feature = "jit")]
 pub(crate) fn fmt_arg(code: u8, bits: u64) -> crate::library::format::FmtArg<'static> {
     use crate::library::format::FmtArg;
     match code {

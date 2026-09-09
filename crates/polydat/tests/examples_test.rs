@@ -233,7 +233,7 @@ fn shared_chained_hashes_differ() {
         let uid = k.pull("user_id").as_u64();
         let nidx = k.pull("name_idx").as_u64();
         let age = k.pull("account_age_days").as_u64();
-        if uid != nidx as u64 || uid != age as u64 {
+        if uid != nidx || uid != age {
             all_same = false;
             break;
         }

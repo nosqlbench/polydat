@@ -17,7 +17,7 @@ fn parse_err(src: &str) -> String {
         Ok(t) => t,
         Err(e) => return e,
     };
-    polydat::dsl::parser::parse(tokens).err().expect("expected a parse error")
+    polydat::dsl::parser::parse(tokens).expect_err("expected a parse error")
 }
 
 #[test]

@@ -1142,7 +1142,7 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
                     program.node_count(), program.wire_count(), program.avg_degree());
                 for i in 0..program.node_count() {
                     let meta = program.node_meta(i);
-                    let ins: Vec<String> = program.node_wiring(i).iter().map(|w| wire_label(w)).collect();
+                    let ins: Vec<String> = program.node_wiring(i).iter().map(wire_label).collect();
                     let outs: Vec<String> = meta.outs.iter().map(|o| format!("{}:{:?}", o.name, o.typ)).collect();
                     println!("  [{i:>3}] {:<28} <- ({})  -> {}", meta.name, ins.join(", "), outs.join(", "));
                 }

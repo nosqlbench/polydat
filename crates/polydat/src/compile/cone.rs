@@ -439,17 +439,15 @@ mod jit_impl {
                 continue;
             }
             for src in &dag.wiring[i] {
-                if let WireSource::NodeOutput(j, _) = src {
-                    if eligible[*j] {
-                        let (a, b) = (find(&mut parent, i), find(&mut parent, *j));
-                        parent[a] = b;
-                    }
+                if let WireSource::NodeOutput(j, _) = src && eligible[*j] {
+                    let (a, b) = (find(&mut parent, i), find(&mut parent, *j));
+                    parent[a] = b;
                 }
             }
         }
         let mut components: HashMap<usize, Vec<usize>> = HashMap::new();
-        for i in 0..n {
-            if eligible[i] {
+        for (i, &is_eligible) in eligible.iter().enumerate().take(n) {
+            if is_eligible {
                 components.entry(find(&mut parent, i)).or_default().push(i);
             }
         }
@@ -682,10 +680,8 @@ mod jit_impl {
                 continue;
             }
             for src in wiring {
-                if let WireSource::NodeOutput(j, p) = src {
-                    if is_member(*j) {
-                        note_out(*j, *p);
-                    }
+                if let WireSource::NodeOutput(j, p) = src && is_member(*j) {
+                    note_out(*j, *p);
                 }
             }
         }

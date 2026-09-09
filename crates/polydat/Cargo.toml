@@ -106,7 +106,17 @@ harness = false
 [[bench]]
 name = "simd_autopromotion"
 harness = false
+required-features = ["jit"]
 
 [[bench]]
 name = "engine_ladder"
 harness = false
+
+# These examples drive the native tier directly, so they need the JIT.
+[[example]]
+name = "polytile_tutorial"
+required-features = ["jit"]
+
+[[example]]
+name = "embedding_guide"
+required-features = ["jit"]
