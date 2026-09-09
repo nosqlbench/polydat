@@ -104,3 +104,84 @@ fn extension_nodes_are_closure_steps_never_native() {
     #[cfg(not(feature = "jit"))]
     assert_eq!(native, 0, "nothing is native without the jit feature");
 }
+
+// ── Fallible construction and tuple returns on the closure tier ──
+
+/// A fallible node runs its body once at construction and replays the
+/// cached value; the closure kits write that value every run.
+#[polydat::polydat_node(category = Math)]
+fn fixed_seed(base: polydat::derive_support::Const<u64>) -> Result<u64, String> {
+    if *base == 0 { Err("fixed_seed: base must be non-zero".into()) } else { Ok(base.wrapping_mul(0x9E37_79B9_7F4A_7C15)) }
+}
+
+#[polydat::polydat_node(category = String)]
+fn fixed_label(prefix: polydat::derive_support::Const<&str>) -> Result<String, String> {
+    if prefix.is_empty() { Err("fixed_label: empty prefix".into()) } else { Ok(format!("{}-fixed", *prefix)) }
+}
+
+#[polydat::polydat_node(category = Math, struct_name = FixedSpanNode)]
+fn fixed_span(lo: polydat::derive_support::Const<u64>, hi: polydat::derive_support::Const<u64>) -> Result<Ext<Span>, String> {
+    if *lo >= *hi { Err("fixed_span: empty".into()) } else { Ok(Ext(Span { lo: *lo, hi: *hi })) }
+}
+
+#[polydat::polydat_node(category = Math)]
+fn fixed_doc(n: polydat::derive_support::Const<u64>) -> Result<std::sync::Arc<serde_json::Value>, String> {
+    Ok(std::sync::Arc::new(serde_json::json!({ "n": *n, "twice": *n * 2 })))
+}
+
+/// A tuple return with one element of every shape the handle kit
+/// writes: a carrier, a string, an extension value, and JSON.
+#[polydat::polydat_node(category = Math, output_names(len, text, moved, doc))]
+fn span_parts(span: Ext<Span>, by: u64) -> (u64, String, Ext<Span>, std::sync::Arc<serde_json::Value>) {
+    let moved = Span { lo: span.lo + by, hi: span.hi + by };
+    let doc = std::sync::Arc::new(serde_json::json!({ "lo": moved.lo, "hi": moved.hi }));
+    (span.hi - span.lo, span.display(), Ext(moved), doc)
+}
+
+const SHAPES: &str = "input cycle: u64\n\
+    h := hash(cycle)\n\
+    seed := fixed_seed(7)\n\
+    label := fixed_label(\"job\")\n\
+    fs := fixed_span(10, 20)\n\
+    fd := fixed_doc(3)\n\
+    s := span_of(mod(h, 1000), mod(cycle, 7))\n\
+    (len, text, moved, doc) := span_parts(s, mod(seed, 100))\n\
+    tail := span_len(moved)\n\
+    line := \"{label}/{len}/{text}/{tail}/{fs}/{fd}/{doc}\"\n";
+
+#[test]
+fn fallible_and_tuple_nodes_agree_between_interpreter_closures_and_hybrid() {
+    let mut p1 = compile_polydat_to_assembler(SHAPES).unwrap();
+    p1.set_jit_mode(polydat::JitMode::Off);
+    let mut p1 = p1.compile().expect("P1");
+    let mut p2 = compile_polydat_to_assembler(SHAPES).unwrap().try_compile_raw().unwrap_or_else(|k| {
+        let p = k.program();
+        let names: Vec<String> = (0..p.node_count()).map(|i| p.node_meta(i).name.clone()).collect();
+        panic!("the closure tier refused a fallible or tuple node; nodes: {names:?}")
+    });
+    let mut hybrid = compile_polydat_to_assembler(SHAPES).unwrap().compile_hybrid().expect("hybrid");
+    let outputs = ["seed", "label", "fs", "fd", "len", "text", "moved", "doc", "tail", "line"];
+    for cycle in 0..64u64 {
+        p1.set_inputs(&[cycle]);
+        let want: Vec<(polydat::ast::PortType, String)> = outputs.iter().map(|o| { let v = p1.pull(o); (v.port_type(), v.to_display_string()) }).collect();
+        p2.eval(&[cycle]);
+        for (i, o) in outputs.iter().enumerate() {
+            let v = p2.get_value(o);
+            assert_eq!((v.port_type(), v.to_display_string()), want[i], "cycle {cycle}: P2 `{o}`");
+        }
+        hybrid.eval(&[cycle]);
+        for (i, o) in outputs.iter().enumerate() {
+            let v = hybrid.get_value(o);
+            assert_eq!((v.port_type(), v.to_display_string()), want[i], "cycle {cycle}: hybrid `{o}`");
+        }
+    }
+    let (_, closures) = hybrid.engine_counts();
+    assert!(closures >= 5, "the fallible and tuple nodes run as closure steps, got {closures}");
+}
+
+#[test]
+fn a_failing_construction_is_a_compile_error_on_every_tier() {
+    let src = "input cycle: u64\nseed := fixed_seed(0)\n";
+    let err = compile_polydat_to_assembler(src).err().expect("construction fails at compile time");
+    assert!(err.contains("base must be non-zero"), "{err}");
+}

@@ -54,7 +54,10 @@ impl PolydatNode for PortPassthrough {
 
     /// A passthrough copies its slots, on every color but `Ref2`, whose
     /// pairs may not be forwarded by an identity-style step (axiom S3).
-    /// Handle slots copy like scalars: a handle is a name (SRD 115 H1).
+    /// Byte-string handles copy like scalars: a handle is a name (SRD
+    /// 115 H1). A table-kind output is not copied here: the builders
+    /// give it `assembly::table_copy_op`, which re-enters the value so
+    /// the slot names its own entry (H4).
     fn compiled_u64(&self) -> Option<crate::ast::CompiledU64Op> {
         if self.meta.outs[0].typ.slot_color() == crate::ast::SlotColor::Ref2 {
             return None;

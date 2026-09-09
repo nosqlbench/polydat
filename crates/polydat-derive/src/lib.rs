@@ -2892,35 +2892,65 @@ fn generate(
         ConstVec,
         Setup,
     }
-    enum HandleRet {
+    /// One element of a return: a one-slot carrier or a table kind.
+    #[derive(Clone, Copy)]
+    enum HandleElem {
         Jit(JitType),
         Json,
         Ext,
     }
+    enum HandleRet {
+        Jit(JitType),
+        Json,
+        Ext,
+        /// A tuple return: one slot per element, written by shape.
+        Tuple(Vec<HandleElem>),
+    }
+    impl HandleRet {
+        /// Whether any element is a table kind.
+        fn has_handle(&self) -> bool {
+            match self {
+                HandleRet::Jit(_) => false,
+                HandleRet::Json | HandleRet::Ext => true,
+                HandleRet::Tuple(elems) => elems.iter().any(|e| !matches!(e, HandleElem::Jit(_))),
+            }
+        }
+    }
+    let classify_elem = |ty: &Type| -> Option<HandleElem> {
+        if classify_wrapper_wire(ty) == Some(WrapperWire::Json) {
+            Some(HandleElem::Json)
+        } else if is_ext_wire(ty) {
+            Some(HandleElem::Ext)
+        } else {
+            match wire_type_to_jit_type(ty) {
+                Some(jt) if jt.width() == 1 => Some(HandleElem::Jit(jt)),
+                _ => None,
+            }
+        }
+    };
+    // The return shape the kits can write: a one-slot carrier, a table
+    // kind, or a tuple of those.
+    let classify_ret_shape = || -> Option<HandleRet> {
+        if let Some(elems) = &tuple_ret_elems {
+            let shapes: Option<Vec<HandleElem>> = elems.iter().map(classify_elem).collect();
+            return shapes.map(HandleRet::Tuple);
+        }
+        Some(match classify_elem(&ret_ty)? {
+            HandleElem::Jit(jt) => HandleRet::Jit(jt),
+            HandleElem::Json => HandleRet::Json,
+            HandleElem::Ext => HandleRet::Ext,
+        })
+    };
     let handle_plan: Option<(Vec<HandleArg>, HandleRet)> = (|| {
         if attrs.no_jit
             || is_fallible
             || dynamic_outputs_inner.is_some()
-            || tuple_ret_elems.is_some()
             || is_split_halves
         {
             return None;
         }
-        let mut handle_shape = false;
-        let ret_shape = if classify_wrapper_wire(&ret_ty) == Some(WrapperWire::Json) {
-            handle_shape = true;
-            HandleRet::Json
-        } else if is_ext_wire(&ret_ty) {
-            handle_shape = true;
-            HandleRet::Ext
-        } else if let Some(jt) = ret_jit_type {
-            if jt.width() != 1 {
-                return None;
-            }
-            HandleRet::Jit(jt)
-        } else {
-            return None;
-        };
+        let ret_shape = classify_ret_shape()?;
+        let mut handle_shape = ret_shape.has_handle();
         let mut shapes = Vec::with_capacity(args.len());
         for a in &args {
             let shape = match &a.kind {
@@ -2972,6 +3002,54 @@ fn generate(
         Some((shapes, ret_shape))
     })();
     let handle_eligible = handle_plan.is_some();
+
+    // A fallible body ran once at construction; its cached value is
+    // what every run writes. The shape decides which kit carries it.
+    let fallible_ret: Option<HandleRet> = if is_fallible && !attrs.no_jit { classify_ret_shape() } else { None };
+
+    // The write of `result` (typed `ret_ty`) into `outputs`, by shape.
+    // Table kinds take the entries from `__entry_base` in port order,
+    // which is how the kernels number a node's table-kind outputs.
+    let write_for = |shape: &HandleRet| -> TokenStream2 {
+        match shape {
+            HandleRet::Jit(jt) => jt.write_to_u64_buffer(quote!(result)),
+            HandleRet::Json => quote! {
+                outputs[0] = polydat::kernel::write_table_entry(__entry_base, polydat::ast::Value::Json(result));
+            },
+            HandleRet::Ext => quote! {
+                outputs[0] = polydat::kernel::write_table_entry(__entry_base, <#ret_ty as polydat::derive_support::Wire>::inject(result));
+            },
+            HandleRet::Tuple(elems) => {
+                let types = tuple_ret_elems.as_ref().expect("a tuple shape comes from a tuple return");
+                let locals: Vec<Ident> = (0..elems.len()).map(|i| format_ident!("__r_{}", i)).collect();
+                let mut table_k = 0usize;
+                let writes: Vec<TokenStream2> = elems.iter().enumerate()
+                    .map(|(i, e)| {
+                        let local = &locals[i];
+                        let o = syn::Index::from(i);
+                        match e {
+                            HandleElem::Jit(jt) => jt.write_to_u64_buffer_at(i, quote!(#local)),
+                            HandleElem::Json => {
+                                let k = table_k;
+                                table_k += 1;
+                                quote!(outputs[#o] = polydat::kernel::write_table_entry(__entry_base + #k, polydat::ast::Value::Json(#local));)
+                            }
+                            HandleElem::Ext => {
+                                let k = table_k;
+                                table_k += 1;
+                                let ty = &types[i];
+                                quote!(outputs[#o] = polydat::kernel::write_table_entry(__entry_base + #k, <#ty as polydat::derive_support::Wire>::inject(#local));)
+                            }
+                        }
+                    })
+                    .collect();
+                quote! {
+                    let ( #( #locals ),* ) = result;
+                    #( #writes )*
+                }
+            }
+        }
+    };
 
     let compiled_handle_impl: TokenStream2 = if let Some((shapes, ret_shape)) = &handle_plan {
         // Captures: consts and const lists by clone, then setups
@@ -3065,15 +3143,7 @@ fn generate(
             })
             .collect();
         let arg_names: Vec<&syn::Ident> = args.iter().map(|a| &a.name).collect();
-        let write = match ret_shape {
-            HandleRet::Jit(jt) => jt.write_to_u64_buffer(quote!(result)),
-            HandleRet::Json => quote! {
-                outputs[0] = polydat::kernel::write_table_entry(__entry_base, polydat::ast::Value::Json(result));
-            },
-            HandleRet::Ext => quote! {
-                outputs[0] = polydat::kernel::write_table_entry(__entry_base, <#ret_ty as polydat::derive_support::Wire>::inject(result));
-            },
-        };
+        let write = write_for(ret_shape);
         quote! {
             fn compiled_handle(&self, entry_base: usize, wire_types: &[polydat::ast::PortType]) -> Option<polydat::ast::CompiledU64Op> {
                 #( #captures )*
@@ -3084,6 +3154,20 @@ fn generate(
                     let _ = __entry_base;
                     #( #arg_reads )*
                     let result: #ret_ty = Self::__polydat_body( #( #arg_names ),* );
+                    #write
+                }))
+            }
+        }
+    } else if let Some(shape) = fallible_ret.as_ref().filter(|s| s.has_handle()) {
+        // A fallible node whose cached value has a table kind: the
+        // closure writes the same value into its entries every run.
+        let write = write_for(shape);
+        quote! {
+            fn compiled_handle(&self, entry_base: usize, _wire_types: &[polydat::ast::PortType]) -> Option<polydat::ast::CompiledU64Op> {
+                let __cached = self.__polydat_cached.clone();
+                let __entry_base = entry_base;
+                Some(Box::new(move |_inputs: &[u64], outputs: &mut [u64]| {
+                    let result: #ret_ty = __cached.clone();
                     #write
                 }))
             }
@@ -3307,6 +3391,20 @@ fn generate(
         quote! {
             fn compiled_u64(&self) -> Option<polydat::ast::CompiledU64Op> {
                 Some(#path(self))
+            }
+        }
+    } else if let Some(shape) = fallible_ret.as_ref().filter(|s| !s.has_handle()) {
+        // A fallible node whose cached value is a carrier (or a tuple
+        // of carriers): the closure writes it every run. Strings go to
+        // the arena each run, as any other string result does.
+        let write = write_for(shape);
+        quote! {
+            fn compiled_u64(&self) -> Option<polydat::ast::CompiledU64Op> {
+                let __cached = self.__polydat_cached.clone();
+                Some(Box::new(move |_inputs: &[u64], outputs: &mut [u64]| {
+                    let result: #ret_ty = __cached.clone();
+                    #write
+                }))
             }
         }
     } else if jit_eligible && !attrs.no_jit {

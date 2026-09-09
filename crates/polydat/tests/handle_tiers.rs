@@ -4,7 +4,9 @@
 //! SRD 115 §7, step 7: the P1↔P2↔P3 differential suite for handle
 //! slots. A grammar-directed generator emits random programs over the
 //! string, JSON, tile, partition, and streamer nodes with typed wires,
-//! extension values, casts, formats,
+//! extension values, a fallible construction, a mixed tuple return
+//! destructured through the compiler's copy steps, explicit copies of
+//! table kinds, casts, formats,
 //! declared hole types, raw holes, splices, branches, projections
 //! (nested, in string position, and empty), and structural templates;
 //! every program compiles on the interpreter (the oracle), with forced
@@ -24,6 +26,24 @@ use polydat::ast::{PortType, Value};
 use polydat::dsl::compile::compile_polydat_to_assembler;
 use polydat::kernel::PolydatKernel;
 use polydat::JitMode;
+
+// Two shapes the library has no instance of with a handle element: a
+// fallible construction whose cached value is a string, and a tuple
+// return mixing a carrier, a string, and JSON. Both ride the closure
+// kits through their cached-value and per-element writes.
+
+/// A fallible node: the body runs once at construction and its value
+/// is replayed every cycle.
+#[polydat::polydat_node(category = String)]
+fn fixed_prefix(prefix: polydat::derive_support::Const<&str>) -> Result<String, String> {
+    if prefix.is_empty() { Err("fixed_prefix: empty".into()) } else { Ok(format!("{}#", *prefix)) }
+}
+
+/// A tuple return with a carrier, a string, and a JSON element.
+#[polydat::polydat_node(category = Math, output_names(low, text, doc))]
+fn triple_of(n: u64) -> (u64, String, std::sync::Arc<serde_json::Value>) {
+    (n % 1000, format!("t{}", n % 97), std::sync::Arc::new(serde_json::json!({ "n": n % 1000, "odd": n % 2 == 1 })))
+}
 
 struct Rng(u64);
 
@@ -150,7 +170,7 @@ impl Gen {
     /// One binding from the grammar.
     fn step(&mut self) {
         let u = self.pick(PortType::U64).expect("cycle is always u64");
-        match self.rng.range(30) {
+        match self.rng.range(33) {
             0 => {
                 self.bind(PortType::U64, format!("hash({})", u.name));
             }
@@ -364,6 +384,35 @@ impl Gen {
                             }
                         }
                     };
+                }
+            }
+            29 => {
+                // A fallible construction: a fixed string per program.
+                let prefix = ["job", "row", "k"][self.rng.range(3)];
+                self.bind(PortType::Str, format!("fixed_prefix(\"{prefix}\")"));
+            }
+            30 => {
+                // A tuple return destructured into three wires, one of
+                // them a table kind, so the copy steps the compiler
+                // inserts for the elements carry a table handle.
+                let low = self.name();
+                let text = self.name();
+                let doc = self.name();
+                self.lines.push(format!("({low}, {text}, {doc}) := triple_of({})", u.name));
+                for (name, ty) in [(&low, PortType::U64), (&text, PortType::Str), (&doc, PortType::Json)] {
+                    self.wires.push(Wire { name: name.clone(), ty, numeric_text: false, json_tile: false, ext: None, depth: 0 });
+                    self.outputs.push(name.clone());
+                }
+            }
+            31 => {
+                // An explicit copy of a table-kind wire.
+                let candidates: Vec<Wire> = self.wires.iter().filter(|w| w.ty == PortType::Json || w.ty == PortType::Ext).cloned().collect();
+                if !candidates.is_empty() {
+                    let w = candidates[self.rng.range(candidates.len())].clone();
+                    let name = self.name();
+                    self.lines.push(format!("{name} := identity({})", w.name));
+                    self.wires.push(Wire { name: name.clone(), ty: w.ty, numeric_text: false, json_tile: false, ext: w.ext, depth: w.depth });
+                    self.outputs.push(name);
                 }
             }
             _ => {
@@ -600,8 +649,19 @@ fn random_programs_agree_across_every_tier() {
             ext_seen += 1;
         }
         let outs: Vec<&str> = outputs.iter().map(String::as_str).collect();
-        if check(&src, &outs, 6) {
-            p3_available += 1;
+        // A panic inside a kernel (a validator, a diagnostic) carries no
+        // program text; attach it so the case can be reproduced.
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| check(&src, &outs, 6))) {
+            Ok(true) => p3_available += 1,
+            Ok(false) => {}
+            Err(payload) => {
+                let msg = payload
+                    .downcast_ref::<String>()
+                    .cloned()
+                    .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                    .unwrap_or_else(|| "<non-string panic>".to_string());
+                panic!("iteration {i} (seed {}):\n{msg}\n--- program ---\n{src}", base.wrapping_add(i as u64));
+            }
         }
     }
     assert!(p3_available > 0, "some generated programs lower whole to P3");

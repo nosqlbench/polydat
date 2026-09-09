@@ -343,9 +343,14 @@ the arena); for the table kinds it emits a second kit,
   `Arc<serde_json::Value>`), a polymorphic `Value` port, an `Ext<T>`
   port, or a variadic of anything but `u64`; every other argument is a
   one-slot carrier, a const, or a setup derived from consts; the return
-  is a one-slot carrier, a JSON value, or an `Ext<T>`. Session-static
-  setup (`from = ()`), fallible bodies, tuple and dynamic returns, split
-  variadics, and `Handle` downcasts stay on P1.
+  is a one-slot carrier, a JSON value, an `Ext<T>`, or a tuple of those,
+  written one slot per element with the table-kind elements taking
+  entries from the base in port order. A fallible body (`-> Result<T,
+  E>`, const arguments only) ran once at construction; its cached value
+  is written every run by whichever kit its shape names, the u64 kit for
+  carriers and this one for table kinds. Session-static setup
+  (`from = ()`), dynamic returns, split variadics, and `Handle` downcasts
+  stay on P1.
 - **Entries and types from the kernel.** The kit takes the first
   value-table entry the node's table-kind outputs own and the type of
   each wire input. A JSON result is written to its entry through the
@@ -583,5 +588,28 @@ Kept short; the normative text above is what the code does. Dates are
   `tests/handle_tiers.rs` emits the partition family and the streamer,
   with `partition_count` and `partition_at` added to the library so a
   partition can be reached without a cursor.
+
+- **Fallible construction and tuple returns.** Landed 2026-09-09. A
+  fallible node's cached value is replayed by a closure: the u64 kit
+  writes carriers and tuples of carriers, the handle kit writes table
+  kinds, and a failed construction is still a compile error. A tuple
+  return is written one slot per element by each element's shape, the
+  table-kind elements numbered from the base in port order, which is
+  how the kernels assign a node's entries. `Ext<T>` became `Clone` for
+  the cached case. `tests/ext_tiers.rs` covers both, and the fuzzer
+  carries a fallible node and a mixed tuple node of its own.
+  Destructuring a tuple exposed a defect older than this step: the
+  compiler's `identity` and `__port_` copy steps forwarded a table
+  handle, so a copied slot named its upstream entry while the layout
+  had assigned it one of its own, and the H4 validator refused the
+  first program that copied a table kind. A copy of a table kind now
+  re-enters the value into the step's own entry
+  (`assembly::table_copy_op`) in every P2 and hybrid builder. The
+  fuzzer then found the native form of the same defect: a pure-P3
+  kernel's clean guard skipped an `identity` step whose input was a
+  handle, so on a repeated coordinate the copied slot kept the previous
+  cycle's handle while its producer had rerun (H3). Codegen now treats
+  a copy of a handle slot as a handle-writing step, never skipped, by
+  propagating handle status through `identity` in dependency order.
 
 No refinements remain recorded.

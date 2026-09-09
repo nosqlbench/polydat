@@ -210,6 +210,9 @@ fn node_step_op(
     entry_base: usize,
     wire_types: &[PortType],
 ) -> Option<(crate::compile::closures::StepOp, Vec<crate::ast::ScratchElem>)> {
+    if let Some(op) = table_copy_op(node, entry_base) {
+        return Some((crate::compile::closures::StepOp::U64(op), Vec::new()));
+    }
     if let Some(op) = node.compiled_u64() {
         return Some((crate::compile::closures::StepOp::U64(op), Vec::new()));
     }
@@ -222,6 +225,25 @@ fn node_step_op(
     node.compiled_slot().map(|kit| {
         (crate::compile::closures::StepOp::Slot(kit.op), kit.scratch)
     })
+}
+
+/// The compiled form of a copy step (`identity`, or the compiler's own
+/// `__port_<name>` passthrough) whose one output is a table kind. The
+/// layout gives every table-kind output its own entry, and axiom H4
+/// requires the slot to name that entry, so a copy of a table handle
+/// re-enters the value rather than forwarding the upstream handle: the
+/// value is read from the installed table and written to this step's
+/// entry. Copies of every other color remain plain slot copies.
+pub(crate) fn table_copy_op(node: &dyn crate::ast::PolydatNode, entry_base: usize) -> Option<crate::ast::CompiledU64Op> {
+    let meta = node.meta();
+    let is_copy = meta.name == "identity" || meta.name.starts_with("__port_");
+    if !is_copy || meta.outs.len() != 1 || meta.outs[0].typ.handle_kind() != Some(crate::ast::HandleKind::Table) {
+        return None;
+    }
+    Some(Box::new(move |inputs: &[u64], outputs: &mut [u64]| {
+        let value = crate::kernel::current_table_value(inputs[0]).clone();
+        outputs[0] = crate::kernel::write_table_entry(entry_base, value);
+    }))
 }
 
 /// The compiled form of `identity`, synthesized by the builder: a slot

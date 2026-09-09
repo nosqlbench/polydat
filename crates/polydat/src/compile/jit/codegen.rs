@@ -2097,8 +2097,12 @@ fn compile_jit_impl(
     // before the call (a cone's boundary inputs, a hybrid kernel's
     // closure-written slots). The H1 verifier tracks these.
     let mut handle_slots: std::collections::HashSet<usize> = handle_inputs.iter().copied().collect();
-    for (op, _, outs) in steps {
-        if produces_handle(op) {
+    for (op, ins, outs) in steps {
+        // A copy of a handle is a handle: `identity` forwards its input
+        // slot, so its output is one whenever its input is. Steps are in
+        // dependency order, so the input's status is known here.
+        let copies_handle = matches!(op, JitOp::Identity) && ins.iter().any(|s| handle_slots.contains(s));
+        if produces_handle(op) || copies_handle {
             handle_slots.extend(outs.iter().copied());
         }
     }
@@ -2527,8 +2531,11 @@ fn compile_jit_impl(
             // arena bytes or table entry belong to the cycle that ran
             // it, so a clean slot would hold a handle into storage the
             // next root cycle has reset. It recomputes from unchanged
-            // inputs, as P1 does.
-            let skip_block = if let Some(cp) = clean_ptr.filter(|_| !produces_handle(jit_op)) {
+            // inputs, as P1 does. The same holds for a step that only
+            // copies a handle: its producer reruns every cycle, so the
+            // copy must too, or it keeps last cycle's handle.
+            let writes_handle = produces_handle(jit_op) || output_slots.iter().any(|s| handle_slots.contains(s));
+            let skip_block = if let Some(cp) = clean_ptr.filter(|_| !writes_handle) {
                 let skip = builder.create_block();
                 let cont = builder.create_block();
                 // Load clean[step_idx] (u8)

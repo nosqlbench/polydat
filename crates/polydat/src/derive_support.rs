@@ -438,6 +438,7 @@ impl<T: Wire> Wire for Option<T> {
 /// ReflectedValue>)`; downcast it to `T`." Implements `Deref` /
 /// `DerefMut` like [`Const<T>`] so the body can use `.method()`
 /// directly.
+#[derive(Clone)]
 pub struct Ext<T>(pub T);
 
 impl<T> std::ops::Deref for Ext<T> {

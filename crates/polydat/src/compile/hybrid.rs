@@ -791,9 +791,11 @@ pub fn build_hybrid(
                     WireSource::NodeOutput(j, p) => nodes[*j].meta().outs[*p].typ,
                 })
                 .collect();
-            let op = if let Some(op) = node.compiled_u64() {
-                ClosureOp::U64(op)
-            } else if let Some(op) = node.compiled_handle(entry_base, &wire_types) {
+            // A copy of a table handle re-enters the value (axiom H4),
+            // so it owns an entry like a handle closure does.
+            let table_op = crate::compile::assembly::table_copy_op(node.as_ref(), entry_base)
+                .or_else(|| if node.compiled_u64().is_some() { None } else { node.compiled_handle(entry_base, &wire_types) });
+            let op = if let Some(op) = table_op {
                 let mut slot = output_slots.iter().copied();
                 for port in &node.meta().outs {
                     let first = slot.next();
@@ -806,6 +808,8 @@ pub fn build_hybrid(
                         table_entries.push((first, table_entries.len()));
                     }
                 }
+                ClosureOp::U64(op)
+            } else if let Some(op) = node.compiled_u64() {
                 ClosureOp::U64(op)
             } else if let Some(op) = crate::compile::assembly::identity_op(node.as_ref()) {
                 ClosureOp::U64(op)
@@ -945,9 +949,11 @@ pub fn build_hybrid(
                 WireSource::NodeOutput(j, p) => nodes[*j].meta().outs[*p].typ,
             })
             .collect();
-        let op = if let Some(op) = node.compiled_u64() {
-            ClosureOp::U64(op)
-        } else if let Some(op) = node.compiled_handle(entry_base, &wire_types) {
+        // A copy of a table handle re-enters the value (axiom H4), so
+        // it owns an entry like a handle closure does.
+        let table_op = crate::compile::assembly::table_copy_op(node.as_ref(), entry_base)
+            .or_else(|| if node.compiled_u64().is_some() { None } else { node.compiled_handle(entry_base, &wire_types) });
+        let op = if let Some(op) = table_op {
             let mut slot = output_slots.iter().copied();
             for port in &node.meta().outs {
                 let first = slot.next();
@@ -960,6 +966,8 @@ pub fn build_hybrid(
                     table_entries.push((first, table_entries.len()));
                 }
             }
+            ClosureOp::U64(op)
+        } else if let Some(op) = node.compiled_u64() {
             ClosureOp::U64(op)
         } else if let Some(op) = crate::compile::assembly::identity_op(node.as_ref()) {
             ClosureOp::U64(op)
