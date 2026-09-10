@@ -164,7 +164,7 @@ fn a_cone_eval_releases_its_table_entries_and_arena_bytes() {
 fn a_pure_p3_kernel_owns_a_fixed_table_and_replaces_entries_in_place() {
     let src = "input cycle: u64\nh := hash(cycle)\nj := __u64_to_json(h)\nk := __bool_to_json(u64_gt(h, 7))\ns := __u64_to_string(h)\n";
     let asm = compile_polydat_to_assembler(src).unwrap();
-    let mut k = asm.try_compile_jit().expect("every node lowers");
+    let mut k = asm.try_compile_pure_jit().expect("every node lowers");
     assert_eq!(k.table_len(), 2, "one entry per table-kind slot");
     for c in 0..200u64 {
         k.eval(&[c]);

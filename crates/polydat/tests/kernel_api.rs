@@ -23,7 +23,6 @@ fn engines() -> Vec<Engine> {
     let mut all = vec![Engine::Interpreter];
     for m in modes {
         all.push(Engine::Closures(m));
-        all.push(Engine::Hybrid(m));
         all.push(Engine::Native(m));
     }
     all
@@ -95,10 +94,11 @@ fn every_engine_is_driven_alike_and_agrees_with_the_interpreter() {
     // The extern writes took: the key names the region the host set.
     assert!(want[0][2].to_display_string().starts_with("eu-west/"));
     for engine in engines() {
-        // Pure native code has no lowering for the partition family,
-        // so it refuses this program by name; every other engine runs it.
+        // Every engine runs it: the partition family has no native
+        // lowering, and P3 runs those nodes as closures (step 7). A build
+        // without native code refuses P3 by name.
         let kernel = compile_polydat_with(SRC, engine);
-        if let Engine::Native(_) = engine {
+        if cfg!(not(feature = "jit")) && matches!(engine, Engine::Native(_)) {
             match kernel {
                 Err(KernelError::Refused { engine: e, reason }) => {
                     assert_eq!(e, engine);
@@ -113,7 +113,7 @@ fn every_engine_is_driven_alike_and_agrees_with_the_interpreter() {
             (k.engine(), engine),
             (Engine::Interpreter, Engine::Interpreter)
                 | (Engine::Closures(_), Engine::Closures(_))
-                | (Engine::Hybrid(_), Engine::Hybrid(_))
+                | (Engine::Native(_), Engine::Native(_))
         ));
         assert_eq!(
             {
@@ -164,7 +164,6 @@ fn a_program_is_shared_across_threads_on_every_engine() {
             (program.engine(), engine),
             (Engine::Interpreter, Engine::Interpreter)
                 | (Engine::Closures(_), Engine::Closures(_))
-                | (Engine::Hybrid(_), Engine::Hybrid(_))
                 | (Engine::Native(_), Engine::Native(_))
         ));
         let results: Vec<Vec<Vec<Value>>> = (0..3)
@@ -247,11 +246,7 @@ fn the_older_constructors_build_the_same_kernels() {
 #[test]
 fn the_compile_log_reaches_every_engine() {
     use polydat::dsl::compile::{CompileOptions, compile_polydat_with_engine};
-    for engine in [
-        Engine::Interpreter,
-        Engine::Closures(Provenance::Auto),
-        Engine::Hybrid(Provenance::Auto),
-    ] {
+    for engine in [Engine::Interpreter, Engine::Closures(Provenance::Auto)] {
         let mut log = polydat::dsl::events::CompileEventLog::default();
         compile_polydat_with_engine(SRC, engine, &CompileOptions::default(), Some(&mut log))
             .unwrap_or_else(|e| panic!("{engine}: {e}"));

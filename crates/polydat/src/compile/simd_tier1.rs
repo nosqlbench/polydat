@@ -794,7 +794,7 @@ pub(crate) fn compile_tier1_ordinal(
             })?;
     vector_assembler.add_output(output, WireRef::node_port(vector_output_node, output_port));
     let vector = vector_assembler
-        .try_compile_jit_raw()
+        .try_compile_pure_jit_raw()
         .map_err(Tier1SimdError::VectorCompilation)?;
     let vector_output_slot = vector.resolve_output(output).ok_or_else(|| {
         Tier1SimdError::VectorCompilation("compiled output slot is missing".to_string())

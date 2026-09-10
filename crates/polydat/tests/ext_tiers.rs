@@ -153,7 +153,7 @@ fn extension_nodes_are_closure_steps_never_native() {
         assert!(
             compile_polydat_to_assembler(SRC)
                 .unwrap()
-                .try_compile_jit()
+                .try_compile_pure_jit()
                 .is_err(),
             "pure native code has no form for an extension node"
         );
@@ -457,7 +457,7 @@ fn externs_agree_between_interpreter_and_pure_native_code() {
     let mut p1 = polydat::dsl::compile::compile_polydat(SRC).expect("interpreter");
     let mut p3 = compile_polydat_to_assembler(SRC)
         .unwrap()
-        .try_compile_jit()
+        .try_compile_pure_jit()
         .expect("pure native code with externs");
     let all = ["id", "tag", "text", "line", "region"];
     for round in 0..3u64 {

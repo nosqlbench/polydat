@@ -214,6 +214,21 @@ pub fn install_value_table(table: &mut ValueTable) -> TableInstallation<'_> {
     }
 }
 
+/// [`install_value_table`] for a table its owner keeps in place but
+/// cannot lend for the installation's lifetime: a kernel installing its
+/// own field around a loop over its other fields.
+///
+/// # Safety
+///
+/// The table must neither move nor drop while the installation lives,
+/// and nothing may reach it except through the installation.
+pub(crate) unsafe fn install_value_table_ptr(table: *mut ValueTable) -> TableInstallation<'static> {
+    TableInstallation {
+        previous: CURRENT_TABLE.replace(table),
+        _table: std::marker::PhantomData,
+    }
+}
+
 /// Run `f` with `table` installed as the table native code writes
 /// through. The previous installation, if any, is restored afterwards,
 /// including on unwind, so an engine nested inside another engine's

@@ -33,6 +33,16 @@ fn engine_ladder_has_identical_results_at_each_level() {
         .expect("engine-ladder graph must be entirely P3-compatible");
     #[cfg(feature = "jit")]
     let p3_outputs = OUTPUTS.map(|name| p3.resolve_output(name).expect("resolve P3 output"));
+    #[cfg(feature = "jit")]
+    let mut pure = compile_polydat_to_assembler(GRAPH)
+        .expect("assemble pure native graph")
+        .try_compile_pure_jit_raw()
+        .expect("engine-ladder graph must lower entirely to native code");
+    #[cfg(feature = "jit")]
+    let pure_outputs = OUTPUTS.map(|name| {
+        pure.resolve_output(name)
+            .expect("resolve pure native output")
+    });
 
     let cases = [
         [0, 0, 0],
@@ -55,6 +65,12 @@ fn engine_ladder_has_identical_results_at_each_level() {
             p3.eval(&inputs);
             let p3_values = p3_outputs.map(|output| p3.get_slot(output));
             assert_eq!(p3_values, p1_values, "P3 differs for inputs {inputs:?}");
+            pure.eval(&inputs);
+            let pure_values = pure_outputs.map(|output| pure.get_slot(output));
+            assert_eq!(
+                pure_values, p1_values,
+                "pure native code differs for inputs {inputs:?}"
+            );
         }
 
         assert!(p1_values[0] < 10_000_000, "account_id bound");

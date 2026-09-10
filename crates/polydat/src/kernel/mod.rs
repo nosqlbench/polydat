@@ -81,6 +81,7 @@ pub use opt::KernelOptLevel;
 pub use program::*;
 pub use scope::{ScopeCoord, format_scope_coordinate_path};
 pub use state::*;
+pub(crate) use value_table::install_value_table_ptr;
 pub use value_table::{
     TableInstallation, ValueTable, current_table_value, decode_arg, decode_table_handle,
     encode_arg, encode_table_handle, install_value_table, read_table_json,

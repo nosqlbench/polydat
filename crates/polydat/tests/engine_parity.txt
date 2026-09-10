@@ -1,4 +1,4 @@
-# node	P1	P2	hybrid	P3 — outcomes per engine; regenerate with ENGINE_PARITY=overwrite
+# node	P1	P2	P3	pure — outcomes per engine (pure: native code alone, the differential tier); regenerate with ENGINE_PARITY=overwrite
 is_stable	ok	ok	ok	refused
 idx_of	ok	ok	ok	refused
 mod_in	ok	ok	ok	refused

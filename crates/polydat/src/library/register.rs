@@ -581,7 +581,7 @@ mod tests {
                     let want = p1.pull("out").as_reg_bits();
 
                     let asm = crate::dsl::compile::compile_polydat_to_assembler(&src).unwrap();
-                    match asm.try_compile_jit_raw() {
+                    match asm.try_compile_pure_jit_raw() {
                         Ok(mut p3) => {
                             let slot = p3.resolve_output("out").unwrap();
                             p3.eval(&[cycle]);

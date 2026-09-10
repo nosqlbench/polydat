@@ -7,10 +7,9 @@ performance / build-size trade rather than a behaviour switch.
 
 | Level   | Mechanism                 | Measured, per cycle of an eleven-node graph | Feature |
 |---------|---------------------------|--------------------------------------------:|---------|
-| Phase 1 | Pull-through interpreter  | 398.66 ns                                   | always  |
-| Phase 2 | Compiled u64 closures     | 93.855 ns, 4.25× faster than Phase 1        | always  |
-| Hybrid  | Per-node optimal          | between Phase 2 and Phase 3                 | `jit`   |
-| Phase 3 | Cranelift JIT native code | 45.923 ns, 8.68× faster than Phase 1        | `jit`   |
+| Phase 1 | Pull-through interpreter  | 441.83 ns                                   | always  |
+| Phase 2 | Compiled u64 closures     | 121.05 ns, 3.65× faster than Phase 1        | always  |
+| Phase 3 | Native segments, closures elsewhere | 76.104 ns, 5.81× faster than Phase 1 | `jit`   |
 
 The measured column is the reference run recorded in
 [Engine-ladder performance](performance.md): one graph, one machine, one
@@ -23,15 +22,17 @@ Phase 1 and 2 are always available — no extra dependency, no codegen
 backend. Phase 3 needs the Cranelift JIT and ships behind the `jit`
 feature flag.
 
-The Hybrid level isn't a fourth implementation; it's the runtime
-picking, per node, between the Phase 2 closure path and the Phase 3
-JIT path depending on which produced better code for that node. The
-Hybrid result is always ≤ the throughput of pure Phase 3 and ≥ pure
-Phase 2.
+Phase 3 is not all-or-nothing: every node that has a native lowering
+runs as native code and every other node runs its Phase 2 closure, over
+the one slot buffer, so Phase 3 accepts every program Phase 2 accepts.
+The pure native form, one function for the whole graph, is the
+differential reference behind it and is not a host surface; the
+performance guide measures it as a fourth rung to show what native
+lowering alone does on a graph where every node has one.
 
 ## Cargo Features
 
-- **`jit`** (default) — Cranelift JIT for Phase 3 / Hybrid compilation.
+- **`jit`** (default) — Cranelift JIT for Phase 3 compilation.
   Disable with `default-features = false` for a lighter build (~50MB
   smaller).
 - **`vectordata`** — vector dataset access nodes for ML/AI workloads.

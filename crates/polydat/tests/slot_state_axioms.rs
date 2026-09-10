@@ -268,7 +268,7 @@ fn pure_p3_layout_admits_handle_outputs_and_guards_their_slots() {
     )
     .unwrap();
     let mut k = asm
-        .try_compile_jit()
+        .try_compile_pure_jit()
         .expect("handle outputs lay out; every node here has a lowering");
     k.eval_for_slot(&[3], k.resolve_output("h").unwrap());
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| k.get("s")));

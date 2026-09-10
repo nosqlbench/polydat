@@ -51,8 +51,9 @@ fn outcome<T>(r: std::thread::Result<Result<T, String>>) -> (&'static str, Strin
     }
 }
 
-/// The four outcomes for one program: interpreter, closure tier, hybrid
-/// kernel, pure native code. Each engine compiles, runs one cycle, and
+/// The four outcomes for one program: interpreter, closure tier, P3
+/// (native code where a node lowers, closures elsewhere), and pure
+/// native code, the differential tier behind P3. Each engine compiles, runs one cycle, and
 /// reads every output, as a host would.
 fn row(src: &str) -> [(&'static str, String); 4] {
     let p1 = outcome(std::panic::catch_unwind(|| {
@@ -77,15 +78,6 @@ fn row(src: &str) -> [(&'static str, String); 4] {
         }
         Ok::<(), String>(())
     }));
-    let hybrid = outcome(std::panic::catch_unwind(|| {
-        let mut k = compile_polydat_to_assembler(src)?.compile_hybrid()?;
-        k.eval(&[3]);
-        let outs: Vec<String> = k.output_names().iter().map(|s| s.to_string()).collect();
-        for o in &outs {
-            let _ = k.get_value(o);
-        }
-        Ok::<(), String>(())
-    }));
     let p3 = outcome(std::panic::catch_unwind(|| {
         let mut k = compile_polydat_to_assembler(src)?.try_compile_jit()?;
         k.eval(&[3]);
@@ -95,14 +87,23 @@ fn row(src: &str) -> [(&'static str, String); 4] {
         }
         Ok::<(), String>(())
     }));
-    [p1, p2, hybrid, p3]
+    let pure = outcome(std::panic::catch_unwind(|| {
+        let mut k = compile_polydat_to_assembler(src)?.try_compile_pure_jit()?;
+        k.eval(&[3]);
+        let outs: Vec<String> = k.output_names().iter().map(|s| s.to_string()).collect();
+        for o in &outs {
+            let _ = k.get_value(o);
+        }
+        Ok::<(), String>(())
+    }));
+    [p1, p2, p3, pure]
 }
 
 #[test]
 fn the_node_by_engine_matrix_is_as_recorded() {
     let table = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/engine_parity.txt");
     let mut lines = vec![
-        "# node\tP1\tP2\thybrid\tP3 — outcomes per engine; regenerate with ENGINE_PARITY=overwrite"
+        "# node	P1	P2	P3	pure — outcomes per engine (pure: native code alone, the differential tier); regenerate with ENGINE_PARITY=overwrite"
             .to_string(),
     ];
     let mut detail = Vec::new();
@@ -116,7 +117,7 @@ fn the_node_by_engine_matrix_is_as_recorded() {
             "{name}\t{}\t{}\t{}\t{}",
             r[0].0, r[1].0, r[2].0, r[3].0
         ));
-        for (engine, (k, msg)) in ["P1", "P2", "hybrid", "P3"].iter().zip(r.iter()) {
+        for (engine, (k, msg)) in ["P1", "P2", "P3", "pure"].iter().zip(r.iter()) {
             if *k != "ok" {
                 detail.push(format!("  {name} on {engine}: {k}: {msg}"));
             }
@@ -187,13 +188,13 @@ fn the_engines_agree_on_every_node() {
             .unwrap()
             .try_compile_raw()
             .ok();
-        let mut hybrid = compile_polydat_to_assembler(&src)
-            .unwrap()
-            .compile_hybrid()
-            .ok();
         let mut p3 = compile_polydat_to_assembler(&src)
             .unwrap()
             .try_compile_jit()
+            .ok();
+        let mut pure = compile_polydat_to_assembler(&src)
+            .unwrap()
+            .try_compile_pure_jit()
             .ok();
         for &c in &cycles {
             // An assertion node fails on some cycles by design; the
@@ -215,19 +216,19 @@ fn the_engines_agree_on_every_node() {
                 }));
                 got.push(("P2", r.map_err(payload_text)));
             }
-            if let Some(k) = hybrid.as_mut() {
-                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    k.eval(&[c]);
-                    outs.iter().map(|o| k.get_value(o)).collect::<Vec<_>>()
-                }));
-                got.push(("hybrid", r.map_err(payload_text)));
-            }
             if let Some(k) = p3.as_mut() {
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     k.eval(&[c]);
                     outs.iter().map(|o| k.get_value(o)).collect::<Vec<_>>()
                 }));
                 got.push(("P3", r.map_err(payload_text)));
+            }
+            if let Some(k) = pure.as_mut() {
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    k.eval(&[c]);
+                    outs.iter().map(|o| k.get_value(o)).collect::<Vec<_>>()
+                }));
+                got.push(("pure", r.map_err(payload_text)));
             }
             for (engine, result) in got {
                 match (&want, result) {

@@ -2106,6 +2106,7 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
 /// Each step has: jit_op, input_slots (buffer indices), output_slots.
 /// The generated function reads coords from the buffer, executes
 /// all steps in order, and writes results to the buffer.
+#[doc(hidden)]
 pub fn compile_jit_raw(
     coord_count: usize,
     total_slots: usize,

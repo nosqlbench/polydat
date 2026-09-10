@@ -499,12 +499,13 @@ structural JSON form the value above uses.
 A host normally lets `compile()` choose engines. The production kernel
 runs the interpreter over a graph in which every native-eligible region
 has been fused into a cone, and everything else runs through closures
-or the interpreter. Three direct forms exist for hosts that want a whole
+or the interpreter. Two direct forms exist for hosts that want a whole
 kernel compiled, such as benchmarks and the differential tests, and
-they are named by one type, `Engine`: the interpreter, the closure tier,
-the hybrid kernel that lowers what it can and runs the rest as closures,
-and pure native code, each with a `Provenance` that says how much work
-repeated inputs skip (`Auto` lets the selector choose). One constructor,
+they are named by one type, `Engine`: the closure tier, and P3, native
+code for every node that has a lowering with the node's closure
+elsewhere, each with a `Provenance` that says how much work repeated
+inputs skip (`Auto` lets the selector choose); the interpreter is the
+third name. One constructor,
 `compile_polydat_with(src, engine)` or `compile_with(engine)` on the
 assembler, builds a `Box<dyn Kernel>` on any of them or returns one
 error type, `KernelError`, whose `Refused` variant names the engine and
@@ -512,7 +513,7 @@ the node or construct it cannot run. The `Kernel` trait is the same
 calls on every engine: `set_inputs`, `set_input`, `set_cursor`, `eval`,
 `pull`, and the name and type listings. The program below includes
 `host_tag` from §5 and the two extension nodes from §6, which have
-closure forms but no native one, so the engines answer differently:
+closure forms but no native one, so P3 mixes the two:
 
 ```rust
 let src = r#"
@@ -527,7 +528,6 @@ let src = r#"
 let mut kernels: Vec<Box<dyn Kernel>> = Vec::new();
 for engine in [
     Engine::Closures(Provenance::Auto),
-    Engine::Hybrid(Provenance::Auto),
     Engine::Native(Provenance::Auto),
 ] {
     match compile_polydat_with(src, engine) {
@@ -535,9 +535,9 @@ for engine in [
         Err(e) => println!("{e}"),
     }
 }
-let hybrid = compile_polydat_to_assembler(src)?.compile_hybrid()?;
-let (native, closures) = hybrid.engine_counts();
-println!("hybrid plan: {native} native segment(s), {closures} closure step(s)");
+let p3 = compile_polydat_to_assembler(src)?.try_compile_jit()?;
+let (native, closures) = p3.engine_counts();
+println!("P3 plan: {native} native segment(s), {closures} closure step(s)");
 let mut p1 = compile_polydat_with(src, Engine::Interpreter)?;
 for cycle in [0u64, 1] {
     p1.set_inputs(&[cycle]);
@@ -552,28 +552,29 @@ for cycle in [0u64, 1] {
 ```
 
 ```text
-the native (Auto) engine refuses this program: some nodes cannot be JIT-compiled
-hybrid plan: 19 native segment(s), 3 closure step(s)
+P3 plan: 4 native segment(s), 3 closure step(s)
 cycle 0: j={"h": 16294208416658607535, "name": "user-16294208416658607535", "tag": "job-7535", "cell": "L4:10:13"}
   closures (Pull) agrees: true
-  hybrid (PushPull) agrees: true
+  native (PushPull) agrees: true
 cycle 1: j={"h": 10451216379200822465, "name": "user-10451216379200822465", "tag": "job-2465", "cell": "L4:0:8"}
   closures (Pull) agrees: true
-  hybrid (PushPull) agrees: true
+  native (PushPull) agrees: true
 ```
 
-Pure native code refuses the program because three nodes have no native
-form, and says so as the error. The closure tier and the hybrid kernel
-accept it and compute what the interpreter computes; `engine()` on a
-kernel reports the provenance the selector chose. The hybrid kernel
-runs nineteen steps as native segments and the three host nodes as
-closure steps, with the extension value passing between two of them as
-a table handle; `engine_counts` is the only planning detail it exposes,
-so a host can see whether a program is mostly native before deciding
-to care.
+Both engines accept the program and compute what the interpreter
+computes; `engine()` on a kernel reports the provenance the selector
+chose. P3 runs its nineteen native-eligible nodes as four native
+segments, one per run of them between the host nodes and on either
+side of a compile-time constant, and the three host nodes as closure
+steps, with the extension value passing between
+two of them as a table handle; `engine_counts` is the only planning detail
+it exposes, so a host can see whether a program is mostly native before
+deciding to care. An engine that cannot run a program at all, the
+closure tier on a `shared` binding for one, says so as the error, with
+the engine and the node named.
 
-`pull` evaluates the output's cone and no more on every engine but pure
-native code, whose one function is the program: a side channel in the
+`pull` evaluates the output's cone and no more on every engine: a side
+channel in the
 cone fires when the output is pulled, and a failing node fails when
 pulled, as on the interpreter, with the same message: the original
 panic, the node's name, the outputs it feeds, the program's context,

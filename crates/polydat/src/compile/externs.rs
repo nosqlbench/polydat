@@ -198,12 +198,15 @@ impl Externs {
     /// strings and byte strings into the arena, table kinds into their
     /// entries. Called after the run's generation is set and before
     /// any step reads an input.
+    /// Returns whether any slot was marked `None`, so a kernel knows
+    /// without scanning its mask.
     pub(crate) fn materialize(
         &self,
         buffer: &mut [u64],
         table: &mut ValueTable,
         mut none: Option<&mut [bool]>,
-    ) {
+    ) -> bool {
+        let mut any_none = false;
         for s in &self.slots {
             // An unset extern is `None` (A12): the kernel that keeps a
             // `None` mask marks the slot and its consumers propagate
@@ -211,7 +214,10 @@ impl Externs {
             // cannot, refuses to run.
             if s.value == Value::None {
                 match none.as_deref_mut() {
-                    Some(mask) => mask[s.slot] = true,
+                    Some(mask) => {
+                        mask[s.slot] = true;
+                        any_none = true;
+                    }
                     None if s.entry.is_some() => panic!(
                         "extern '{}' ({}) has no value: it has no default, so set it with \
                          set_input before the first run (native code cannot carry `None`; \
@@ -239,6 +245,7 @@ impl Externs {
                 (v, Some(entry)) => table.write(entry, v.clone()),
             };
         }
+        any_none
     }
 
     /// Set an extern by name. The value must be of the declared port

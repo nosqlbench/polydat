@@ -837,7 +837,9 @@ n0 := reg_mul_i32(packet, factor_v)
 out := reg_add_i32(n0, addend_v)
 ";
         let asm = crate::dsl::compile::compile_polydat_to_assembler(src).unwrap();
-        let mut jit = asm.try_compile_jit_raw().expect("i32x4 graph must lower");
+        let mut jit = asm
+            .try_compile_pure_jit_raw()
+            .expect("i32x4 graph must lower");
         let output_slot = jit.resolve_output("out").unwrap();
 
         let vector = move |lanes: [i32; 4]| {

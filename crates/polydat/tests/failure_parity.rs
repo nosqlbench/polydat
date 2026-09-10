@@ -21,7 +21,6 @@ fn engines() -> Vec<Engine> {
         Provenance::PushPull,
     ] {
         all.push(Engine::Closures(m));
-        all.push(Engine::Hybrid(m));
         #[cfg(feature = "jit")]
         all.push(Engine::Native(m));
     }

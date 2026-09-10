@@ -975,7 +975,7 @@ fn check_with(src: &str, outputs: &[&str], cycles: u64, externs: &[(String, Valu
     let _ = built();
     let mut p3 = compile_polydat_to_assembler(src)
         .unwrap()
-        .try_compile_jit()
+        .try_compile_pure_jit()
         .ok();
     let p3_built = built();
     let mut hybrid = compile_polydat_to_assembler(src)

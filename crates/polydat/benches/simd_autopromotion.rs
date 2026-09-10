@@ -72,7 +72,7 @@ fn vector_graph_source(depth: usize) -> String {
 fn compile_raw(source: &str) -> JitKernelRaw {
     polydat::dsl::compile::compile_polydat_to_assembler(source)
         .expect("assemble benchmark graph")
-        .try_compile_jit_raw()
+        .try_compile_pure_jit_raw()
         .expect("benchmark graph must lower completely to P3")
 }
 

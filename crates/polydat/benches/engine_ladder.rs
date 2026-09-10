@@ -82,6 +82,24 @@ fn bench_engine_ladder(c: &mut Criterion) {
                 cycle = cycle.wrapping_add(1);
             });
         });
+
+        let mut pure = assembler()
+            .try_compile_pure_jit_raw()
+            .expect("every engine-ladder node lowers to native code");
+        let pure_outputs = OUTPUTS.map(|name| {
+            pure.resolve_output(name)
+                .expect("pure native output must resolve")
+        });
+        group.bench_function("pure_native", |b| {
+            let mut cycle = 1u64;
+            b.iter(|| {
+                pure.eval(&[cycle, TENANT_SEED, OPERATION_SEED]);
+                for &output in &pure_outputs {
+                    black_box(pure.get_slot(output));
+                }
+                cycle = cycle.wrapping_add(1);
+            });
+        });
     }
 
     group.finish();

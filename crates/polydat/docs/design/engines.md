@@ -12,11 +12,14 @@ specified in [graph_compiler.md](graph_compiler.md).
 | --- | --- | --- | --- |
 | P1 | `PolydatKernel` over `Box<dyn PolydatNode>` and typed `Value` buffers | Complete node, type, scope, and lifecycle model | Normal DSL and assembler compile paths |
 | P2 | Direct closures over a flat `u64` slot buffer | Nodes that provide `compiled_u64` or `compiled_slot` kits | Explicit `try_compile*` and `auto_compile_p2` paths |
-| P3 | Cranelift-generated native code over a flat slot buffer | Nodes and complete signatures accepted by JIT classification and lowering | Explicit `try_compile_jit*` and `auto_compile_p3` paths; embedded cones in normal compilation |
+| P3 | Cranelift native code for every node with a lowering and the node's closure elsewhere, over one flat slot buffer | Every program the closure tier accepts | Explicit `try_compile_jit*` and `auto_compile_p3` paths; embedded cones in normal compilation |
 
 P1 is the semantic host and fallback. P2 and P3 are constructive: a compiled
 builder succeeds only when every required operation and slot shape is supported.
 Failure leaves or returns the P1 kernel rather than weakening its semantics.
+Pure native code, one function for the whole program, is the differential tier
+behind P3 since engine parity step 7: it refuses a node without a lowering and
+is reachable only through the hidden `try_compile_pure_jit*` builders.
 
 The lattice is monotonic in optimization, not in feature coverage. A node can
 be valid at P1 without a P2 closure or P3 lowering. P2 also remains an
@@ -156,8 +159,8 @@ pull sequence:
 The engine ladder, slot-state axioms, cone tests, and equivalence harnesses are
 the regression contract for these properties. For handle-bearing nodes the
 contract is `tests/handle_tiers.rs`: random programs over the string, JSON,
-and tile nodes checked across the interpreter, forced cones, P2, the hybrid
-kernel, and pure P3, each read through its typed `get_value`.
+and tile nodes checked across the interpreter, forced cones, P2, P3, and pure
+native code, each read through its typed `get_value`.
 
 Property 2 has one refinement for fused cones (SRD 115 §9). A cone is a single
 node to the kernel guard, so a `None` on any of its boundary inputs makes every

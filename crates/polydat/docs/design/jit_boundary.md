@@ -36,6 +36,10 @@ but apply different optimizations:
 | `JitKernelPull` | Cone guard for per-slot eval (pull-side skip) |
 | `JitKernelPushPull` | Both |
 
+Since engine parity step 7 these four are the pure tier behind P3, the
+differential reference for native lowering, built only by the hidden
+`try_compile_pure_jit*`; the hybrid variants below are the public P3.
+
 The `HybridKernelRaw` / `HybridKernelPull` / `HybridKernelPushPull`
 variants mix Phase-3 JIT segments with Phase-2 closure steps
 inside one kernel, using the same buffer.

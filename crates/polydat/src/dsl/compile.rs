@@ -311,8 +311,8 @@ pub fn compile_polydat_with_tiles(
 ///
 /// Returns the `PolydatAssembler` with all nodes and wiring populated,
 /// ready to be compiled at any level: `.compile()` for P1,
-/// `.try_compile()` for P2, `.try_compile_jit()` for P3,
-/// `.compile_hybrid()` for Hybrid.
+/// `.try_compile()` for P2, `.try_compile_jit()` for P3 (native code
+/// where a node has a lowering, its closure elsewhere).
 pub fn compile_polydat_to_assembler(source: &str) -> Result<PolydatAssembler, String> {
     compile_polydat_to_assembler_with(source, &CompileOptions::default())
 }

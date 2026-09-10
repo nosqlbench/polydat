@@ -140,7 +140,7 @@ fn pure_p3_kernels_lower_value_port_nodes_by_port_type() {
     let src = "input cycle: u64\nh := hash(cycle)\nj := to_json(h)\nt := json_text(j)\ns := printf(\"{}/{:x}\", h, h)\n";
     let mut k = compile_polydat_to_assembler(src)
         .unwrap()
-        .try_compile_jit()
+        .try_compile_pure_jit()
         .expect("every node lowers");
     let mut p1 = kernel(src, JitMode::Off);
     for c in 0..20u64 {
@@ -221,7 +221,7 @@ fn a_projection_tile_lays_out_in_a_pure_p3_kernel() {
     let src = "input cycle: u64\nh := hash(cycle)\ntile t : text := \"${h}: @for k in 1..3 sep \\\"-\\\" {${hash(k)}}\"\n";
     let mut k = compile_polydat_to_assembler(src)
         .unwrap()
-        .try_compile_jit()
+        .try_compile_pure_jit()
         .expect("every node lowers");
     let mut p1 = kernel(src, JitMode::Off);
     for c in 0..6u64 {

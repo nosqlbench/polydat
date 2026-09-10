@@ -1,7 +1,8 @@
 # Engine-ladder performance
 
 Polydat can execute one statically typed function graph at three progressively
-lower-overhead levels. This page makes that claim concrete with a checked-in
+lower-overhead levels, and the benchmark adds a fourth rung, pure native code,
+the differential tier behind P3. This page makes that claim concrete with a checked-in
 graph, a semantic-equivalence test, and a focused Criterion benchmark.
 
 The benchmark is intentionally small enough to understand. It is not a claim
@@ -93,20 +94,23 @@ flowchart LR
     G["Resolved and type-checked DAG"]
     P1["P1 · interpreter<br/>Value slots + typed node dispatch"]
     P2["P2 · compiled closures<br/>flat u64 slots"]
-    P3["P3 · Cranelift JIT<br/>native machine code"]
+    P3["P3 · native segments<br/>with closure steps"]
+    PURE["pure native code<br/>one function"]
 
     G --> P1
     P1 -->|"compiled_u64 hooks"| P2
     P2 -->|"Cranelift lowering"| P3
+    P3 -->|"every node lowers"| PURE
 ```
 
 | Level | Construction used by this benchmark | Timed execution |
 | --- | --- | --- |
 | P1 | `JitMode::Off` plus `PolydatAssembler::compile()` | Set three typed inputs and demand-pull four pre-resolved outputs through the interpreter. |
 | P2 | `try_compile_raw()` | Copy three coordinates, execute all compiled closures over flat slots, then read four pre-resolved slots. |
-| P3 | `try_compile_jit_raw()` | Copy the same coordinates, call the generated native function, then read the same four slots. |
+| P3 | `try_compile_jit_raw()` | Copy the same coordinates, run the native segments and closure steps over the shared slots (on this graph, one segment), then read the same four slots. |
+| pure | `try_compile_pure_jit_raw()` | Copy the same coordinates, call the one generated native function, then read the same four slots. |
 
-The P2 and P3 `raw` variants are deliberate. Every cycle changes the driving
+The P2, P3, and pure `raw` variants are deliberate. Every cycle changes the driving
 input and all four outputs are consumed, so the test isolates execution-level
 overhead without mixing in provenance strategies. Production `JitMode::Auto`
 instead keeps P1 as the semantic host and embeds eligible P3 cones.
@@ -126,44 +130,53 @@ cycles per second. The benchmark uses a two-second warm-up, three-second
 measurement window, and 60 samples per level.
 
 Before comparing timings, the integration test evaluates boundary and ordinary
-input cases and requires P2 and P3 to return exactly the same four `u64` values
-as P1. It also checks all bounded outputs.
+input cases and requires P2, P3, and pure native code to return exactly the
+same four `u64` values as P1. It also checks all bounded outputs.
 
 ## Local reference result
 
-The following run was recorded on 2026-08-21. Each interval is Criterion's
+The following run was recorded on 2026-09-10. Each interval is Criterion's
 reported confidence interval; the middle value is the point estimate. Because
 one benchmark element is one complete graph cycle, `Melem/s` is reported here as
 million cycles per second.
 
 | Level | Time per cycle | Throughput | Speed relative to P1 |
 | --- | ---: | ---: | ---: |
-| P1 interpreter | 398.66 ns `[392.63, 405.15]` | 2.508 M cycles/s `[2.468, 2.547]` | 1.00× |
-| P2 closures | 93.855 ns `[92.307, 95.470]` | 10.655 M cycles/s `[10.475, 10.833]` | 4.25× |
-| P3 native | 45.923 ns `[45.517, 46.374]` | 21.776 M cycles/s `[21.564, 21.970]` | 8.68× |
+| P1 interpreter | 441.83 ns `[433.52, 451.01]` | 2.263 M cycles/s `[2.217, 2.307]` | 1.00× |
+| P2 closures | 121.05 ns `[119.64, 122.51]` | 8.261 M cycles/s `[8.162, 8.358]` | 3.65× |
+| P3 native segments | 76.104 ns `[73.329, 79.892]` | 13.140 M cycles/s `[12.517, 13.637]` | 5.81× |
+| pure native code | 75.942 ns `[74.665, 77.382]` | 13.168 M cycles/s `[12.923, 13.393]` | 5.82× |
 
 For this graph, moving from typed node dispatch to flat-slot closures removes
-most of the execution cost. Native lowering then provides another 2.04× over
-P2. These are end-to-end cycle measurements, including input copies and four
-output reads, rather than isolated instruction timings.
+most of the execution cost. Native lowering then provides another 1.59× over
+P2. Every node of this graph lowers, so P3 is one native segment and measures
+the same as pure native code; the two rungs differ only where a program has
+nodes without a lowering, which pure native code refuses and P3 runs as
+closure steps. These are end-to-end cycle measurements, including input copies
+and four output reads, rather than isolated instruction timings.
 
 Reference environment:
 
 - AMD Ryzen 9 3900X, 12 cores and 24 logical processors;
 - Windows NT 10.0.26200.0, `x86_64-pc-windows-msvc`;
 - Rust and Cargo 1.96.0, optimized `bench` profile;
-- Cranelift 0.116, repository revision `df4cded` plus the benchmark changes
-  documented on this page; and
+- Cranelift 0.116.1, the engine parity step 7 tree; and
 - 60 samples per level after a two-second warm-up, with a three-second
   measurement window.
 
 This graph uses scalar `u64` operations. The P3 result demonstrates native
 machine-code lowering, not SIMD auto-promotion.
 
-Since 2026-09-09 every compiled kernel also carries one passthrough step
-per input, so that the same source yields the same graph on every
-engine; the run above predates that step. Re-record before comparing
-against it.
+The previous record, from 2026-08-21 on the same machine, read 398.66 ns,
+93.855 ns, and 45.923 ns for P1, P2, and native code. Two things changed in
+the code between the records: since 2026-09-09 every compiled kernel carries
+one passthrough step per input, so that the same source yields the same
+graph on every engine, and since 2026-09-10 every engine catches a node's
+failure at the step boundary and attributes it (engine parity, step 6). The
+rest is the machine: native timings drifted between 57 ns and 76 ns across
+runs on the day of this record, and the step 4 tree, benchmarked in the same
+hour, measured 136 ns for P2 and 57 ns for native code. Compare rungs within
+one run, not runs across days.
 
 ## Run it locally
 
@@ -179,8 +192,8 @@ Then run only the focused performance target:
 cargo bench -p polydat --bench engine_ladder
 ```
 
-The P3 case requires the default `jit` feature. A no-default-features run still
-builds and measures P1 and P2:
+The P3 and pure cases require the default `jit` feature. A no-default-features
+run still builds and measures P1 and P2:
 
 ```sh
 cargo bench -p polydat --no-default-features --bench engine_ladder

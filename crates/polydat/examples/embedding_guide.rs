@@ -402,14 +402,13 @@ fn section_tiles() {
 fn section_compiled_kernels() {
     println!("== 10. Compiled kernels ==");
     // host_tag and the two extension nodes have closure forms but no
-    // native one, so the hybrid kernel must mix engines to run this.
+    // native one, so P3 mixes native segments and closure steps.
     let src = "input cycle: u64\nh := hash(cycle)\nname := \"user-{h}\"\ntag := host_tag(\"job\", mod(h, 10000))\ncell := geo_cell(to_f64(mod(h, 180)) - 90.0, to_f64(mod(h, 360)) - 180.0, 4)\ntok := cell_token(cell)\ntile j : json := {\"h\": ${h}, \"name\": ${name}, \"tag\": ${tag}, \"cell\": ${tok}}\n";
     // One constructor names the engine; one trait drives whatever it
     // built. An engine that cannot run the program says so by name.
     let mut kernels: Vec<Box<dyn Kernel>> = Vec::new();
     for engine in [
         Engine::Closures(Provenance::Auto),
-        Engine::Hybrid(Provenance::Auto),
         Engine::Native(Provenance::Auto),
     ] {
         match compile_polydat_with(src, engine) {
@@ -417,13 +416,13 @@ fn section_compiled_kernels() {
             Err(e) => println!("{e}"),
         }
     }
-    // The hybrid kernel's plan, the one planning detail it exposes.
-    let hybrid = compile_polydat_to_assembler(src)
+    // The P3 kernel's plan, the one planning detail it exposes.
+    let p3 = compile_polydat_to_assembler(src)
         .unwrap()
-        .compile_hybrid()
-        .expect("hybrid");
-    let (native, closures) = hybrid.engine_counts();
-    println!("hybrid plan: {native} native segment(s), {closures} closure step(s)");
+        .try_compile_jit()
+        .expect("P3");
+    let (native, closures) = p3.engine_counts();
+    println!("P3 plan: {native} native segment(s), {closures} closure step(s)");
     // The interpreter is the oracle; every engine that accepted the
     // program computes the same values through the same calls.
     let mut p1 = compile_polydat_with(src, Engine::Interpreter).unwrap();

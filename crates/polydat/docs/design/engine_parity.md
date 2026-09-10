@@ -4,7 +4,7 @@
 2026-09-09, of every place the compilation levels differ in anything
 other than performance, and the plan that removes each difference.
 §5 is the plan, §4 the findings it answers. Steps 1 through 3 of the
-plan landed on 2026-09-09 and steps 4, 5, and 6 on 2026-09-10 (the landing
+plan landed on 2026-09-09 and steps 4 through 7 on 2026-09-10 (the landing
 records are under the steps); the rest is proposed.
 
 **Ownership.** Polydat owns the feature set, the engines, and the public
@@ -223,6 +223,11 @@ constant at build, so the common case needs no host call on any engine.
 
 ### A4. Pure native code refuses half the library — functional
 
+*Closed by step 7: the hybrid kernel is the public P3 (`Engine::Native`,
+`try_compile_jit*`, `P3Engine`), and pure native code is the differential
+tier behind it, reachable through the hidden `try_compile_pure_jit*`. The
+record below is the state the review found.*
+
 Sixty-two programs the closure tier accepts fail on `try_compile_jit*`,
 while the hybrid kernel accepts all of them: the nodes with no native
 lowering and every vector-bearing node (`Ref2` ports), among them
@@ -397,6 +402,8 @@ bindings and this item (`assembly::shared_binding_refusal`).
 
 ### A11. Vectors have no native form — functional, by design
 
+*Closed by step 7 with A4: no host-visible engine refuses a vector node.*
+
 Every `Ref2` port keeps a node off pure native code
 (`build_jit_layout`: "pure-P3 kernels carry no reference slots"). The
 hybrid kernel runs vector nodes as closures and reads them with
@@ -439,6 +446,9 @@ the documented feature set and the tested one are the same file; the
 compilation guide's claim replaced by the `Kernel` trait once A8 lands.
 
 ### A14. The benchmark's reference run predates the passthrough steps — documentation
+
+*Closed by step 7: re-recorded on 2026-09-10 against the ladder with the
+hybrid kernel as P3 and pure native code as a fourth rung.*
 
 Recorded in the performance guide on 2026-09-09. A re-record on a quiet
 machine closes it.
@@ -661,6 +671,45 @@ proves it.
    the differential suites; `try_compile_jit*` and `P3Engine` become
    hybrid. The performance guide is re-recorded (A14) against the new
    ladder.
+
+   *Step 7 landed 2026-09-10.* `Engine::Native`, `try_compile_jit*`,
+   `P3Engine`, and `auto_compile_p3` build the hybrid kernel: native
+   code for every node that has a lowering and the node's closure
+   elsewhere, so P3 accepts every program the closure tier accepts
+   (A4, A11). `Engine::Hybrid` is gone, being the same thing. The pure
+   native kernels are the differential tier behind P3, `#[doc(hidden)]`
+   and reachable only through `try_compile_pure_jit*`; the matrix's
+   columns are P1, P2, P3, and `pure`, and the differential suites
+   (`handle_tiers`, `ext_tiers`, `slot_state_axioms`, `value_table`,
+   `variadic_lowering`, the register and SIMD lowerings) drive the pure
+   tier by that name. On the way the ladder benchmark showed the
+   hybrid kernel no faster than the interpreter and the closure tier at
+   twice its step 4 time, both of which the design forbids: an engine
+   below another on the ladder must be faster, and lazy evaluation is
+   an optimization over eager evaluation, never a cost. Three causes,
+   three fixes, each an optimization over the runtime model's rule
+   with the same result. The hybrid kernel compiled every native node
+   as its own segment behind its own setjmp; it now compiles each run
+   of consecutive native-eligible nodes of one lifecycle as one segment
+   (a compile-constant node never joins a segment that is not, or a
+   constant step downstream of it would run at build before its
+   producer, which the fuzzer caught), and a segment names the member
+   it is in through the tracker slot, so the attribution of step 6
+   still reads per node. The closure tier's and the hybrid's evaluation
+   loops paid per-step bookkeeping on every step of every cycle; a
+   fresh cycle in a mode without per-step skipping, with no `None` in
+   play, now runs every step straight through (`run_fresh`), a step's
+   cycle number replaces a `ran` flag that had to be cleared, the raw
+   and pull-only modes dirty only the side channels an input reaches
+   since nothing else consults a pure step's currency, the value table
+   is installed in place instead of moved out and back, and a
+   passthrough (`identity`, `__port_`) is an inline slot copy rather
+   than a closure call. And the step runners were not being inlined:
+   `#[inline(always)]` on `run_step` and `run_hybrid_step` alone
+   returned a quarter of the closure tier's time. The engine ladder,
+   re-recorded in the performance guide (A14), now reads interpreter,
+   closures, P3, and pure native code in that order, with P3 equal to
+   pure native code on a graph where every node lowers.
 8. **Traversals on compiled engines** (A5, second part): activation
    bodies compiled with the host's engine choice behind the `Kernel`
    trait.

@@ -91,12 +91,12 @@
 //!
 //! ## Compilation Levels
 //!
-//! The kernel supports four compilation levels:
+//! The kernel supports three compilation levels:
 //!
 //! - **Phase 1** (default): Pull-through interpreter.
-//! - **Phase 2**: Compiled `u64` closures, measured 4.25× faster than Phase 1.
-//! - **Hybrid**: Per-node optimal (JIT where supported, closures elsewhere).
-//! - **Phase 3**: Cranelift JIT native code, measured 8.68× faster than Phase 1.
+//! - **Phase 2**: Compiled `u64` closures, measured 3.65× faster than Phase 1.
+//! - **Phase 3**: Cranelift native code for every node that has a lowering
+//!   and the node's closure elsewhere, measured 5.81× faster than Phase 1.
 //!   Requires the `jit` feature (enabled by default).
 //!
 //! The ratios are the reference run in the engine-ladder performance

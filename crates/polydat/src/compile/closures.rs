@@ -48,6 +48,9 @@ pub(crate) struct P2Extras {
 pub(crate) enum StepOp {
     U64(CompiledU64Op),
     Slot(CompiledSlotOp),
+    /// A slot copy (`identity`, the compiler's `__port_` passthrough),
+    /// run inline: no closure call, no gather.
+    Copy,
 }
 /// One compiled step plus its slice of the scratch arena.
 pub(crate) struct P2Step {
@@ -136,8 +139,13 @@ struct KernelCore {
     /// Per slot: the slot holds `None` (SRD-74 on a compiled kernel):
     /// an unset extern, or an output of a step that propagated one.
     none: Vec<bool>,
-    /// Per step: ran in the cycle that is open.
-    ran: Vec<bool>,
+    /// Per step: the cycle it last ran in, so a new cycle forgets every
+    /// run without a scan.
+    ran: Vec<u64>,
+    /// The open cycle's number; 0 is never a cycle.
+    cycle: u64,
+    /// Every step ran in the open cycle: a full evaluation happened.
+    all_ran: bool,
     /// Per step: its outputs are current for the inputs it depends on.
     /// Cleared through the plan when an input changes, whichever call
     /// changed it; never set for a volatile or handle-writing step.
@@ -155,14 +163,35 @@ struct KernelCore {
     sites: std::sync::Arc<crate::compile::Attribution>,
     /// The step running, for the failure path.
     cur_step: usize,
+    /// Every step, in order: what `eval` runs.
+    all: std::sync::Arc<[usize]>,
+    /// Per input slot, the steps an input change marks not current:
+    /// the plan's dependents in a push mode; in a raw or pull-only
+    /// mode, which never consult a pure step's currency, only the side
+    /// channels among them (an optimization over the plan, not a change
+    /// to it).
+    dirty: std::sync::Arc<[Vec<usize>]>,
+    /// The steps that are never current, invalidated at every cycle.
+    volatile_steps: std::sync::Arc<[usize]>,
+    /// Some slot holds `None` in this cycle: an unset extern, which is
+    /// the only way one enters (SRD-74). When none does, the steps run
+    /// without the mask.
+    any_none: bool,
 }
 
 impl KernelCore {
+    /// Whether `step` ran in the open cycle.
+    #[inline]
+    fn has_run(&self, step: usize) -> bool {
+        self.all_ran || self.ran[step] == self.cycle
+    }
+
     /// Begin a cycle (SRD 115 §4, §7; engine_parity.md, step 5): advance
     /// or adopt the cycle generation, write the externs (an unset one
     /// as `None`), forget what ran in the last cycle, and invalidate
     /// the volatile steps, as the interpreter does at every
     /// `set_inputs`.
+    #[inline]
     fn begin_cycle(&mut self) {
         let generation = if self.owns_cycle {
             crate::kernel::begin_root_cycle()
@@ -172,23 +201,27 @@ impl KernelCore {
         self.table.set_generation(generation);
         // Extern handles belong to this cycle: strings into the arena
         // the cycle just reset, table kinds into their entries (H3, H4).
-        self.externs
-            .materialize(&mut self.buffer, &mut self.table, Some(&mut self.none));
-        for r in &mut self.ran {
-            *r = false;
+        // Marks left by the last cycle's propagation are stale: the externs
+        // set this cycle's, and the steps propagate from there.
+        if self.any_none {
+            self.none.fill(false);
         }
-        for (i, step) in self.steps.iter().enumerate() {
-            if step.volatile {
-                self.clean[i] = false;
-            }
+        self.any_none =
+            self.externs
+                .materialize(&mut self.buffer, &mut self.table, Some(&mut self.none));
+        self.cycle += 1;
+        self.all_ran = false;
+        for &i in self.volatile_steps.iter() {
+            self.clean[i] = false;
         }
         self.drive.stale = false;
     }
 
     /// An input slot changed, through whichever call: every step the
     /// plan lists for it is no longer current.
+    #[inline]
     fn dirty_input(&mut self, slot: usize) {
-        if let Some(deps) = self.plan.input_dependents.get(slot) {
+        if let Some(deps) = self.dirty.get(slot) {
             for &i in deps {
                 self.clean[i] = false;
             }
@@ -199,17 +232,23 @@ impl KernelCore {
     /// not current: one rule for every step, whatever reaches it. A
     /// handle-writing step runs every cycle (SRD 115 §4) and a volatile
     /// one is never current.
+    #[inline]
     fn run_steps(&mut self, order: &[usize]) {
-        let mut table = std::mem::take(&mut self.table);
-        // The capture guard is armed for the run, so a step's panic is
-        // recorded quietly and re-raised enriched, as the interpreter
-        // re-raises a node's (A7).
+        self.run_guarded(|core| core.run_order(order));
+    }
+
+    /// Run `body` with the value table installed and the capture guard
+    /// armed, so a step's panic is recorded quietly and re-raised
+    /// enriched, as the interpreter re-raises a node's (A7).
+    #[inline]
+    fn run_guarded(&mut self, body: impl FnOnce(&mut Self)) {
         let capture = crate::kernel::engines::EvalPanicCaptureGuard::arm();
-        let outcome = {
-            let _installed = crate::kernel::install_value_table(&mut table);
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run_order(order)))
-        };
-        self.table = table;
+        // SAFETY: the table stays in place for the run; the steps reach it
+        // only through the installation, and the loop touches the other
+        // fields.
+        let installed = unsafe { crate::kernel::install_value_table_ptr(&mut self.table) };
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(self)));
+        drop(installed);
         drop(capture);
         if let Err(payload) = outcome {
             let sites = std::sync::Arc::clone(&self.sites);
@@ -227,65 +266,86 @@ impl KernelCore {
     }
 
     /// The steps of `order` that have not run in the cycle, in order.
+    #[inline]
     fn run_order(&mut self, order: &[usize]) {
-        let steps = std::sync::Arc::clone(&self.steps);
+        let steps = &self.steps;
+        let none_free = !self.any_none;
         for &i in order {
-            if self.ran[i] {
+            if self.all_ran || self.ran[i] == self.cycle {
                 continue;
             }
             let step = &steps[i];
             // A pure step may be recomputed redundantly in a mode
             // without per-step skipping; a side channel may not.
             if (self.use_clean || step.side) && self.clean[i] && !step.rerun && !step.volatile {
-                self.ran[i] = true;
+                self.ran[i] = self.cycle;
                 continue;
             }
             self.cur_step = i;
-            self.run_or_propagate(step);
-            self.ran[i] = true;
+            if none_free {
+                run_step_fast(
+                    step,
+                    &mut self.buffer,
+                    &mut self.gather_buf,
+                    &mut self.scatter_buf,
+                    &mut self.scratch,
+                );
+            } else {
+                run_step(
+                    step,
+                    &mut self.buffer,
+                    &mut self.none,
+                    &mut self.gather_buf,
+                    &mut self.scatter_buf,
+                    &mut self.scratch,
+                );
+            }
+            self.ran[i] = self.cycle;
             self.clean[i] = !step.rerun && !step.volatile;
         }
     }
 
-    /// One step: SRD-74 Rule 1, then gather, run the closure, scatter.
-    /// A node that does not accept `None` emits `None` on every output
-    /// when any input is `None`, without running.
+    /// Every step, in order, in a cycle just begun, in a mode without
+    /// per-step skipping and with no `None` in play: the same steps the
+    /// general loop would run, without the bookkeeping a partial cycle
+    /// needs. A current side channel is still skipped, since its run is
+    /// observed.
     #[inline]
-    fn run_or_propagate(&mut self, step: &CompiledStep) {
-        if !step.accepts_none && step.input_slots.iter().any(|&s| self.none[s]) {
-            for &s in &step.output_slots {
-                self.none[s] = true;
+    fn run_fresh(&mut self) {
+        let steps = &self.steps;
+        for (i, step) in steps.iter().enumerate() {
+            if step.side {
+                if self.clean[i] && !step.rerun && !step.volatile {
+                    continue;
+                }
+                self.clean[i] = !step.rerun && !step.volatile;
             }
-            return;
+            self.cur_step = i;
+            run_step_fast(
+                step,
+                &mut self.buffer,
+                &mut self.gather_buf,
+                &mut self.scatter_buf,
+                &mut self.scratch,
+            );
         }
-        for (i, &s) in step.input_slots.iter().enumerate() {
-            self.gather_buf[i] = self.buffer[s];
-        }
-        match &step.op {
-            StepOp::U64(op) => op(
-                &self.gather_buf[..step.input_slots.len()],
-                &mut self.scatter_buf[..step.output_slots.len()],
-            ),
-            StepOp::Slot(op) => op(
-                &self.gather_buf[..step.input_slots.len()],
-                &mut self.scatter_buf[..step.output_slots.len()],
-                &mut self.scratch[step.scratch_range.0..step.scratch_range.1],
-            ),
-        }
-        for (i, &s) in step.output_slots.iter().enumerate() {
-            self.buffer[s] = self.scatter_buf[i];
-            self.none[s] = false;
-        }
+        self.all_ran = true;
     }
 
     /// Evaluate every output: begin the cycle if none is open, then run
     /// every step that has not run.
+    #[inline]
     fn eval_all(&mut self) {
-        if self.drive.stale {
+        let fresh = self.drive.stale;
+        if fresh {
             self.begin_cycle();
         }
-        let all: Vec<usize> = (0..self.steps.len()).collect();
-        self.run_steps(&all);
+        if fresh && !self.use_clean && !self.any_none {
+            self.run_guarded(|core| core.run_fresh());
+        } else {
+            let all = std::sync::Arc::clone(&self.all);
+            self.run_steps(&all);
+        }
     }
 
     /// The named output for the cycle's inputs, running only its cone
@@ -337,7 +397,7 @@ impl KernelCore {
         if cfg!(debug_assertions) {
             for &(slot, entry) in &self.table_entries {
                 if let Some(Some(step)) = self.slot_step.get(slot)
-                    && (!self.ran[*step] || self.none[slot])
+                    && (!self.has_run(*step) || self.none[slot])
                 {
                     continue;
                 }
@@ -376,7 +436,7 @@ impl KernelCore {
         for &(slot, idx) in &self.ref_scratch {
             // A step that has not run in this cycle has not published.
             if let Some(Some(step)) = self.slot_step.get(slot)
-                && !self.ran[*step]
+                && !self.has_run(*step)
             {
                 continue;
             }
@@ -512,6 +572,23 @@ fn build_core(
         &output_map,
         total_slots,
     );
+    let dirty: Vec<Vec<usize>> = plan
+        .input_dependents
+        .iter()
+        .map(|deps| {
+            if use_clean {
+                deps.clone()
+            } else {
+                deps.iter()
+                    .copied()
+                    .filter(|&i| compiled_steps[i].side)
+                    .collect()
+            }
+        })
+        .collect();
+    let volatile_steps: Vec<usize> = (0..compiled_steps.len())
+        .filter(|&i| compiled_steps[i].volatile)
+        .collect();
     let mut buffer = vec![0u64; total_slots];
     externs.seed(&mut buffer);
     let step_count = compiled_steps.len();
@@ -541,13 +618,19 @@ fn build_core(
             stale: true,
         },
         none: vec![false; total_slots],
-        ran: vec![false; step_count],
+        ran: vec![0; step_count],
+        cycle: 0,
+        all_ran: false,
         clean: vec![false; step_count],
         use_clean,
         plan: std::sync::Arc::new(plan),
         slot_step: slot_step.into(),
         sites: attribution,
         cur_step: 0,
+        all: (0..step_count).collect::<Vec<usize>>().into(),
+        dirty: dirty.into(),
+        volatile_steps: volatile_steps.into(),
+        any_none: false,
     };
     // The compile-constant fold of the runtime model, on this engine: a
     // step no input reaches runs at build, once, and is current from
@@ -1070,3 +1153,82 @@ crate::compile::impl_kernel_trait!(
     CompiledKernelPushPull,
     Engine::Closures(Provenance::PushPull)
 );
+
+/// One step: SRD-74 Rule 1, then gather, run the closure, scatter. A
+/// node that does not accept `None` emits `None` on every output when
+/// any input is `None`, without running.
+#[inline(always)]
+fn run_step(
+    step: &CompiledStep,
+    buffer: &mut [u64],
+    none: &mut [bool],
+    gather: &mut [u64],
+    scatter: &mut [u64],
+    scratch: &mut [ScratchBuf],
+) {
+    let mut any_none = false;
+    for (i, &s) in step.input_slots.iter().enumerate() {
+        gather[i] = buffer[s];
+        any_none |= none[s];
+    }
+    if any_none && !step.accepts_none {
+        for &s in &step.output_slots {
+            none[s] = true;
+        }
+        return;
+    }
+    if matches!(step.op, StepOp::Copy) {
+        for (&i, &o) in step.input_slots.iter().zip(&step.output_slots) {
+            buffer[o] = buffer[i];
+            none[o] = false;
+        }
+        return;
+    }
+    let (n_in, n_out) = (step.input_slots.len(), step.output_slots.len());
+    match &step.op {
+        StepOp::Copy => unreachable!(),
+        StepOp::U64(op) => op(&gather[..n_in], &mut scatter[..n_out]),
+        StepOp::Slot(op) => op(
+            &gather[..n_in],
+            &mut scatter[..n_out],
+            &mut scratch[step.scratch_range.0..step.scratch_range.1],
+        ),
+    }
+    for (i, &s) in step.output_slots.iter().enumerate() {
+        buffer[s] = scatter[i];
+        none[s] = false;
+    }
+}
+
+/// [`run_step`] when no slot holds `None`: gather, run, scatter.
+#[inline(always)]
+fn run_step_fast(
+    step: &CompiledStep,
+    buffer: &mut [u64],
+    gather: &mut [u64],
+    scatter: &mut [u64],
+    scratch: &mut [ScratchBuf],
+) {
+    if matches!(step.op, StepOp::Copy) {
+        for (&i, &o) in step.input_slots.iter().zip(&step.output_slots) {
+            buffer[o] = buffer[i];
+        }
+        return;
+    }
+    for (i, &s) in step.input_slots.iter().enumerate() {
+        gather[i] = buffer[s];
+    }
+    let (n_in, n_out) = (step.input_slots.len(), step.output_slots.len());
+    match &step.op {
+        StepOp::Copy => unreachable!(),
+        StepOp::U64(op) => op(&gather[..n_in], &mut scatter[..n_out]),
+        StepOp::Slot(op) => op(
+            &gather[..n_in],
+            &mut scatter[..n_out],
+            &mut scratch[step.scratch_range.0..step.scratch_range.1],
+        ),
+    }
+    for (i, &s) in step.output_slots.iter().enumerate() {
+        buffer[s] = scatter[i];
+    }
+}

@@ -150,7 +150,8 @@ impl JitCore {
         };
         self.table.set_generation(generation);
         // Extern handles belong to this run (H3, H4).
-        self.externs
+        let _ = self
+            .externs
             .materialize(&mut self.buffer, &mut self.table, None);
         // Native code names the step it is in before each helper call;
         // a failure before any names none. The capture guard is armed
@@ -393,6 +394,7 @@ macro_rules! jit_accessors {
 
 /// Raw JIT kernel: no provenance, all nodes evaluate unconditionally.
 #[derive(Clone)]
+#[doc(hidden)]
 pub struct JitKernelRaw {
     pub(super) core: JitCore,
     pub(super) code_fn: unsafe fn(*const u64, *mut u64),
@@ -442,6 +444,7 @@ impl JitKernelRaw {
 
 /// Push-only JIT kernel: per-node dirty tracking, no cone guard.
 #[derive(Clone)]
+#[doc(hidden)]
 pub struct JitKernelPush {
     pub(super) core: JitCore,
     pub(super) code_fn_prov: unsafe fn(*const u64, *mut u64, *mut u8),
@@ -497,6 +500,7 @@ impl JitKernelPush {
 /// Pull-only JIT kernel: cone guard, but all nodes run when cone is dirty.
 /// Uses the raw (non-provenance) JIT function — no per-node clean checks.
 #[derive(Clone)]
+#[doc(hidden)]
 pub struct JitKernelPull {
     pub(super) core: JitCore,
     pub(super) code_fn: unsafe fn(*const u64, *mut u64),
@@ -566,6 +570,7 @@ impl JitKernelPull {
 
 /// Full optimization: push-side dirty tracking + pull-side cone guard.
 #[derive(Clone)]
+#[doc(hidden)]
 pub struct JitKernelPushPull {
     pub(super) core: JitCore,
     pub(super) code_fn_prov: unsafe fn(*const u64, *mut u64, *mut u8),

@@ -266,6 +266,15 @@ fn node_step_op(
     if let Some(op) = table_copy_op(node, entry_base) {
         return Some((crate::compile::closures::StepOp::U64(op), Vec::new()));
     }
+    // A plain copy (`identity`, a `__port_` passthrough) of any color but
+    // `Ref2`, which axiom S3 forbids forwarding: an inline slot copy.
+    let meta = node.meta();
+    if (meta.name == "identity" || meta.name.starts_with("__port_"))
+        && meta.outs.len() == 1
+        && meta.outs[0].typ.slot_color() != crate::ast::SlotColor::Ref2
+    {
+        return Some((crate::compile::closures::StepOp::Copy, Vec::new()));
+    }
     if let Some(op) = node.compiled_u64() {
         return Some((crate::compile::closures::StepOp::U64(op), Vec::new()));
     }
@@ -1172,9 +1181,43 @@ impl PolydatAssembler {
         (guard, types)
     }
 
-    /// Phase 3 JIT: push+pull (full provenance).
+    /// P3, push+pull: native code for every node that has a lowering and
+    /// the node's closure elsewhere, over one slot buffer (engine
+    /// parity, step 7). Accepts every program the closure tier accepts;
+    /// `compile_hybrid` builds the same kernel.
     #[cfg(feature = "jit")]
-    pub fn try_compile_jit(self) -> Result<crate::compile::jit::JitKernelPushPull, String> {
+    pub fn try_compile_jit(self) -> Result<crate::compile::hybrid::HybridKernelPushPull, String> {
+        self.compile_hybrid()
+    }
+
+    /// P3, raw: every evaluation runs every step.
+    #[cfg(feature = "jit")]
+    pub fn try_compile_jit_raw(self) -> Result<crate::compile::hybrid::HybridKernelRaw, String> {
+        Ok(self.compile_hybrid()?.into_raw())
+    }
+
+    /// P3, push: per-step skipping. The P3 kernel's push form is its
+    /// push+pull form, since its cone guard costs nothing a push-only
+    /// host would notice.
+    #[cfg(feature = "jit")]
+    pub fn try_compile_jit_push(
+        self,
+    ) -> Result<crate::compile::hybrid::HybridKernelPushPull, String> {
+        self.compile_hybrid()
+    }
+
+    /// P3, pull: the cone guard alone.
+    #[cfg(feature = "jit")]
+    pub fn try_compile_jit_pull(self) -> Result<crate::compile::hybrid::HybridKernelPull, String> {
+        Ok(self.compile_hybrid()?.into_pull())
+    }
+
+    /// Pure native code, push+pull: the differential tier behind P3
+    /// (engine_parity.md, step 7), which refuses a node without a native
+    /// lowering. Hosts use [`Self::try_compile_jit`].
+    #[doc(hidden)]
+    #[cfg(feature = "jit")]
+    pub fn try_compile_pure_jit(self) -> Result<crate::compile::jit::JitKernelPushPull, String> {
         let resolved = self.resolve().map_err(|e| format!("{e}"))?;
         Self::jit_push_pull_from(resolved)
     }
@@ -1222,9 +1265,10 @@ impl PolydatAssembler {
         )
     }
 
-    /// Phase 3 JIT: raw (no provenance).
+    /// Pure native code, raw; see [`Self::try_compile_pure_jit`].
+    #[doc(hidden)]
     #[cfg(feature = "jit")]
-    pub fn try_compile_jit_raw(self) -> Result<crate::compile::jit::JitKernelRaw, String> {
+    pub fn try_compile_pure_jit_raw(self) -> Result<crate::compile::jit::JitKernelRaw, String> {
         let resolved = self.resolve().map_err(|e| format!("{e}"))?;
         Self::jit_raw_from(resolved)
     }
@@ -1317,9 +1361,10 @@ impl PolydatAssembler {
         crate::compile::simd_tier1::compile_tier1_ordinal(resolved, driving_input, output)
     }
 
-    /// Phase 3 JIT: push-only (per-node dirty tracking, no cone guard).
+    /// Pure native code, push-only; see [`Self::try_compile_pure_jit`].
+    #[doc(hidden)]
     #[cfg(feature = "jit")]
-    pub fn try_compile_jit_push(self) -> Result<crate::compile::jit::JitKernelPush, String> {
+    pub fn try_compile_pure_jit_push(self) -> Result<crate::compile::jit::JitKernelPush, String> {
         let resolved = self.resolve().map_err(|e| format!("{e}"))?;
         Self::jit_push_from(resolved)
     }
@@ -1352,9 +1397,10 @@ impl PolydatAssembler {
         Ok(k)
     }
 
-    /// Phase 3 JIT: pull-only (cone guard, no per-node dirty tracking).
+    /// Pure native code, pull-only; see [`Self::try_compile_pure_jit`].
+    #[doc(hidden)]
     #[cfg(feature = "jit")]
-    pub fn try_compile_jit_pull(self) -> Result<crate::compile::jit::JitKernelPull, String> {
+    pub fn try_compile_pure_jit_pull(self) -> Result<crate::compile::jit::JitKernelPull, String> {
         let resolved = self.resolve().map_err(|e| format!("{e}"))?;
         Self::jit_pull_from(resolved)
     }
@@ -1468,85 +1514,20 @@ impl PolydatAssembler {
             select::analyze_graph(&resolved.nodes, &resolved.wiring, &resolved.output_map);
         let mode = select::select_prov_mode(&analysis);
 
-        let (coord_count, total_slots, jit_steps, output_map) = Self::build_jit_layout(&resolved)?;
-
+        let mut kernel = Self::hybrid_from(resolved)?;
+        kernel.set_owns_cycle(false);
         let engine = match mode {
-            ProvMode::Raw => {
-                let (guard, types) = Self::jit_slot_info(&resolved);
-                let externs = Self::externs_of(&resolved)?;
-                let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
-                let mut k = crate::compile::jit::compile_jit_raw_with(
-                    coord_count,
-                    total_slots,
-                    jit_steps,
-                    output_map,
-                    resolved.nodes,
-                    externs,
-                )?;
-                k.set_slot_info(guard, types);
-                k.set_attribution(attribution);
-                k.set_owns_cycle(false);
-                select::P3Engine::Raw(k)
-            }
-            ProvMode::Pull => {
-                let deps = slot_layout(&resolved).expand_dependents(
-                    &resolved,
-                    &PolydatProgram::compute_dependents(
-                        &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
-                        resolved.input_defs.len(),
-                    ),
-                );
-                let (guard, types) = Self::jit_slot_info(&resolved);
-                let externs = Self::externs_of(&resolved)?;
-                let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
-                let mut k = crate::compile::jit::compile_jit_pull(
-                    coord_count,
-                    total_slots,
-                    jit_steps,
-                    output_map,
-                    resolved.nodes,
-                    &deps,
-                    externs,
-                )?;
-                k.set_slot_info(guard, types);
-                k.set_attribution(attribution);
-                k.set_owns_cycle(false);
-                select::P3Engine::Pull(k)
-            }
-            ProvMode::PushPull => {
-                let deps = slot_layout(&resolved).expand_dependents(
-                    &resolved,
-                    &PolydatProgram::compute_dependents(
-                        &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
-                        resolved.input_defs.len(),
-                    ),
-                );
-                let (guard, types) = Self::jit_slot_info(&resolved);
-                let externs = Self::externs_of(&resolved)?;
-                let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
-                let mut k = crate::compile::jit::compile_jit_push_pull(
-                    coord_count,
-                    total_slots,
-                    jit_steps,
-                    output_map,
-                    resolved.nodes,
-                    deps,
-                    externs,
-                )?;
-                k.set_slot_info(guard, types);
-                k.set_attribution(attribution);
-                k.set_owns_cycle(false);
-                select::P3Engine::PushPull(k)
-            }
+            ProvMode::Raw => select::P3Engine::Raw(kernel.into_raw()),
+            ProvMode::Pull => select::P3Engine::Pull(kernel.into_pull()),
+            ProvMode::PushPull => select::P3Engine::PushPull(kernel),
         };
         Ok((engine, analysis))
     }
 
-    /// Validate, resolve, and compile a hybrid kernel where each node
-    /// runs at its optimal level (JIT native code or Phase 2 closure).
-    ///
-    /// This always succeeds for u64-only DAGs — no all-or-nothing
-    /// fallback. JIT-able nodes get native code, others get closures.
+    /// The P3 kernel: each node at its optimal level, native code where
+    /// it has a lowering and its closure elsewhere. The same kernel as
+    /// `try_compile_jit`; without the `jit` feature every node is a
+    /// closure.
     pub fn compile_hybrid(self) -> Result<crate::compile::hybrid::HybridKernel, String> {
         let resolved = self.resolve().map_err(|e| format!("{e}"))?;
         Self::hybrid_from(resolved)
@@ -2771,23 +2752,18 @@ impl PolydatAssembler {
                 let resolved = self.resolve_with_log(log)?;
                 Self::closures_from(resolved, prov).map_err(refused)
             }
-            Engine::Hybrid(prov) => {
-                let resolved = self.resolve_with_log(log)?;
-                let kernel = Self::hybrid_from(resolved).map_err(refused)?;
-                Ok(match prov {
-                    #[cfg(feature = "jit")]
-                    Provenance::Raw => Box::new(kernel.into_raw()),
-                    #[cfg(not(feature = "jit"))]
-                    Provenance::Raw => Box::new(kernel.into_pull()),
-                    Provenance::Pull => Box::new(kernel.into_pull()),
-                    Provenance::Push | Provenance::PushPull | Provenance::Auto => Box::new(kernel),
-                })
-            }
             Engine::Native(prov) => {
                 #[cfg(feature = "jit")]
                 {
                     let resolved = self.resolve_with_log(log)?;
-                    Self::native_from(resolved, prov).map_err(refused)
+                    let kernel = Self::hybrid_from(resolved).map_err(refused)?;
+                    Ok(match prov {
+                        Provenance::Raw => Box::new(kernel.into_raw()),
+                        Provenance::Pull => Box::new(kernel.into_pull()),
+                        Provenance::Push | Provenance::PushPull | Provenance::Auto => {
+                            Box::new(kernel)
+                        }
+                    })
                 }
                 #[cfg(not(feature = "jit"))]
                 {
@@ -2862,32 +2838,6 @@ impl PolydatAssembler {
                 ref_slots,
                 extras,
             )),
-        })
-    }
-
-    /// The pure native kernel of a resolved graph in one provenance
-    /// mode, or why native code refuses the graph.
-    #[cfg(feature = "jit")]
-    fn native_from(resolved: ResolvedDag, prov: Provenance) -> Result<Box<dyn Kernel>, String> {
-        let prov = match prov {
-            Provenance::Auto => {
-                let analysis =
-                    select::analyze_graph(&resolved.nodes, &resolved.wiring, &resolved.output_map);
-                match select::select_prov_mode(&analysis) {
-                    ProvMode::Raw => Provenance::Raw,
-                    ProvMode::Pull => Provenance::Pull,
-                    ProvMode::PushPull => Provenance::PushPull,
-                }
-            }
-            p => p,
-        };
-        Ok(match prov {
-            Provenance::Raw => Box::new(Self::jit_raw_from(resolved)?),
-            Provenance::Push => Box::new(Self::jit_push_from(resolved)?),
-            Provenance::Pull => Box::new(Self::jit_pull_from(resolved)?),
-            Provenance::PushPull | Provenance::Auto => {
-                Box::new(Self::jit_push_pull_from(resolved)?)
-            }
         })
     }
 }

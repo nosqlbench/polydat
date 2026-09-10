@@ -224,12 +224,13 @@ impl P2Engine {
     }
 }
 
-/// Auto-selected P3 JIT kernel.
+/// Auto-selected P3 kernel: the hybrid kernel in the provenance mode
+/// the selector chose (engine_parity.md, step 7).
 #[cfg(feature = "jit")]
 pub enum P3Engine {
-    Raw(crate::compile::jit::JitKernelRaw),
-    Pull(crate::compile::jit::JitKernelPull),
-    PushPull(crate::compile::jit::JitKernelPushPull),
+    Raw(crate::compile::hybrid::HybridKernelRaw),
+    Pull(crate::compile::hybrid::HybridKernelPull),
+    PushPull(crate::compile::hybrid::HybridKernelPushPull),
 }
 
 #[cfg(feature = "jit")]
@@ -318,10 +319,8 @@ pub enum Engine {
     /// The closure tier: every node runs its generated closure over
     /// one slot buffer.
     Closures(Provenance),
-    /// Native code where a node has a lowering, closures elsewhere.
-    Hybrid(Provenance),
-    /// Pure native code: refuses a program with a node that has no
-    /// native lowering.
+    /// Native code where a node has a lowering, its closure elsewhere:
+    /// the P3 tier. Refused by a build without the `jit` feature.
     Native(Provenance),
 }
 
@@ -330,7 +329,6 @@ impl std::fmt::Display for Engine {
         match self {
             Engine::Interpreter => write!(f, "interpreter"),
             Engine::Closures(p) => write!(f, "closures ({p:?})"),
-            Engine::Hybrid(p) => write!(f, "hybrid ({p:?})"),
             Engine::Native(p) => write!(f, "native ({p:?})"),
         }
     }

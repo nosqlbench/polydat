@@ -251,8 +251,8 @@ fn fail(title: &str, src: &str) {
 }
 
 /// The same tile at every engine level: the interpreter, the production
-/// kernel with fused native cones, the P2 closure kernel, and the
-/// pure-P3 native kernel produce identical bytes.
+/// kernel with fused native cones, the P2 closure kernel, and the P3
+/// kernel produce identical bytes.
 fn tiers() {
     use polydat::dsl::compile::compile_polydat_to_assembler;
     let src = r#"
@@ -275,7 +275,7 @@ fn tiers() {
     let mut p3 = compile_polydat_to_assembler(src)
         .unwrap()
         .try_compile_jit()
-        .expect("pure P3");
+        .expect("P3");
     for cycle in [0u64, 1] {
         p1.set_inputs(&[cycle]);
         let a = p1.pull("doc").to_display_string();
