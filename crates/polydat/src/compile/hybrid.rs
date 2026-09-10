@@ -371,7 +371,10 @@ impl HybridKernelRaw {
             .get(name)
             .copied()
             .unwrap_or(crate::ast::PortType::U64);
-        crate::compile::marshal::decode_slot(self.core.buffer[slot], ty, &self.core.table)
+        if let Some(&(_, idx)) = self.core.ref_scratch.iter().find(|(s, _)| *s == slot) {
+            return self.core.scratch[idx].to_value();
+        }
+        crate::compile::marshal::decode_output(&self.core.buffer, slot, ty, &self.core.table)
     }
 
     /// Entries in the kernel's value table.
@@ -509,7 +512,10 @@ impl HybridKernelPull {
             .get(name)
             .copied()
             .unwrap_or(crate::ast::PortType::U64);
-        crate::compile::marshal::decode_slot(self.core.buffer[slot], ty, &self.core.table)
+        if let Some(&(_, idx)) = self.core.ref_scratch.iter().find(|(s, _)| *s == slot) {
+            return self.core.scratch[idx].to_value();
+        }
+        crate::compile::marshal::decode_output(&self.core.buffer, slot, ty, &self.core.table)
     }
 
     /// Entries in the kernel's value table.
@@ -755,7 +761,10 @@ impl HybridKernelPushPull {
             .get(name)
             .copied()
             .unwrap_or(crate::ast::PortType::U64);
-        crate::compile::marshal::decode_slot(self.core.buffer[slot], ty, &self.core.table)
+        if let Some(&(_, idx)) = self.core.ref_scratch.iter().find(|(s, _)| *s == slot) {
+            return self.core.scratch[idx].to_value();
+        }
+        crate::compile::marshal::decode_output(&self.core.buffer, slot, ty, &self.core.table)
     }
 
     /// Entries in the kernel's value table.

@@ -3,9 +3,9 @@
 **Status:** Proposed SRD 116. This document is a review, recorded on
 2026-09-09, of every place the compilation levels differ in anything
 other than performance, and the plan that removes each difference.
-§5 is the plan, §4 the findings it answers. Step 1 of the plan landed
-on 2026-09-09 (the landing record is under the step); the rest is
-proposed.
+§5 is the plan, §4 the findings it answers. Steps 1 and 2 of the plan
+landed on 2026-09-09 (the landing records are under the steps); the
+rest is proposed.
 
 **Ownership.** Polydat owns the feature set, the engines, and the public
 API that names them. A host chooses an engine for speed and for nothing
@@ -63,19 +63,22 @@ Three surveys, all reproducible from the tree at this revision:
   and the count of public items with no documentation
   (`RUSTDOCFLAGS=-W missing_docs`).
 
-The matrix as pinned in `tests/engine_parity.txt` (296 programs):
+The matrix as pinned in `tests/engine_parity.txt` (296 programs), as
+the review found it and after step 2:
 
-| Engine | Accepts | Refuses at compile | Fails at run |
-| --- | ---: | ---: | ---: |
-| Interpreter (P1) | 296 | 0 | 0 |
-| Closure tier (P2) | 215 | 71 | 10 |
-| Hybrid | 231 | 55 | 10 |
-| Pure native (P3) | 169 | 127 | 0 |
+| Engine | Accepts | Refuses at compile | Fails at run | After step 2 |
+| --- | ---: | ---: | ---: | --- |
+| Interpreter (P1) | 296 | 0 | 0 | 296 / 0 / 0 |
+| Closure tier (P2) | 215 | 71 | 10 | 286 / 0 / 10 |
+| Hybrid | 231 | 55 | 10 | 286 / 0 / 10 |
+| Pure native (P3) | 169 | 127 | 0 | 169 / 127 / 0 |
 
-The 55 the hybrid kernel refuses are the 53 nodes of A1 (two of them
-with two cases); the 71 the closure tier refuses add the 16 of A2; the
-10 run failures on both are the cursor consumers of A3; the 127 pure
-native refusals add the 62 of A4.
+The 55 the hybrid kernel refused were the 53 nodes of A1 (two of them
+with two cases); the 71 the closure tier refused added the 16 of A2;
+the 10 run failures on both are the cursor consumers of A3; the 127
+pure native refusals add the 62 of A4. The same test now also compares
+every output of every program across the engines that ran it with the
+interpreter's value (`the_engines_agree_on_every_node`).
 
 ## 3. The public API today
 
@@ -112,7 +115,9 @@ differently or is missing), **documentation**.
 
 ### A1. Fifty-three nodes run on the interpreter only — functional
 
-Fifty-three nodes have no compiled form: the closure tier and the
+*Closed by step 2.* The record below is the state the review found.
+
+Fifty-three nodes had no compiled form: the closure tier and the
 hybrid kernel refuse a program that contains one (`hybrid.rs`: "has no
 compiled form and can't be JIT-compiled"), and the production kernel
 runs them interpreted. The review's first pass found seventeen; the
@@ -161,6 +166,8 @@ onto the node attribute. Each is a plan in the derive crate with a
 differential in `tests/ext_tiers.rs` and a fuzzer arm.
 
 ### A2. Sixteen nodes run compiled only with the JIT — functional
+
+*Closed by step 2.* The record below is the state the review found.
 
 `dist_normal`, `dist_exponential`, `dist_uniform`, `dist_pareto`,
 `dist_zipf`, `dist_empirical`, `icd_normal`, `icd_exponential`,
@@ -356,7 +363,9 @@ True-up: either the shared-cell protocol reaches compiled kernels
 through `compile::externs` (a cell-bound slot is materialized from the
 cell at run start and published at run end), or `shared` is refused at
 compile time on engines that cannot honor it. The first is the ideal;
-the second is the honest interim and belongs in step 2 of the plan.
+the second is the honest interim and landed in step 2: every compiled
+constructor refuses a graph with a `shared` binding, naming the
+bindings and this item (`assembly::shared_binding_refusal`).
 
 ### A11. Vectors have no native form — functional, by design
 
@@ -432,6 +441,37 @@ proves it.
    the assembler entry point accepted a non-literal `shared`
    initializer as an ordinary binding where the kernel path rejected
    it; both reject it now.
+
+   *Step 2 landed 2026-09-09.* The `compiled_handle` kit became the
+   general closure: it takes every node the u64 kit does not, and its
+   plan covers setups (recomputed from consts, or cloned from the node
+   when session-static), byte-string arguments, const lists, `Config`
+   and `Option` wires, split variadics, two-slot carriers, and
+   polymorphic returns (`kernel::encode_arg`); the slot kit takes a
+   polymorphic argument; `limit` has a closure by hand. Every
+   registered node now compiles on the closure tier and in hybrid
+   kernels, and the JIT-less build runs the whole library compiled;
+   the ten cursor consumers still fail at run (A3). The `&[u8]`
+   argument had been refused by a whitespace mismatch in the macro's
+   type matching, not by any missing kit. Comparing values across
+   engines for every program (the new `the_engines_agree_on_every_node`
+   and three fuzzer arms in `tests/handle_tiers.rs`) found six
+   defects that step 1's outcome matrix could not, all fixed:
+   - the compiled kernels' `get_value` read a register or 128-bit
+     output as its first limb, a signed narrow output as unsigned, and a
+     vector output as its pointer (`marshal::decode_output`,
+     `ScratchBuf::to_value`);
+   - the constant fold replaced a Bool-valued init node with a
+     `const_u64`, so the interpreter read a U64 on a Bool wire
+     (`fold_init_constants`);
+   - `blend` lowered as a numeric conversion where the body
+     reinterprets bits, `coin_flip` lowered as a hashed coin where the
+     body compares the raw input against its threshold (and as a fair
+     coin when it had no constant), and `default_or` lowered as a
+     three-way select that returned the fallback for any non-zero
+     value; a native select between two handles also tripped the
+     handle discipline, so `select` over handles stays a closure.
+   `shared` is refused on every compiled engine (A10).
 2. **Close the closure tier.** Setup capture in the u64 kit, the
    `Bytes` handle in both kits, `Value` arguments in the slot kit,
    `Const<Vec<_>>` capture, and the session-static form (A1, A2). Refuse

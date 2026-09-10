@@ -82,8 +82,8 @@ pub use scope::{ScopeCoord, format_scope_coordinate_path};
 pub use state::*;
 pub use value_table::{
     TableInstallation, ValueTable, current_table_value, decode_arg, decode_table_handle,
-    encode_table_handle, install_value_table, read_table_json, with_current_value_table,
-    with_value_table, write_table_entry,
+    encode_arg, encode_table_handle, install_value_table, read_table_json,
+    with_current_value_table, with_value_table, write_table_entry,
 };
 
 use crate::ast::Value;

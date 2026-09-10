@@ -80,13 +80,19 @@ fn fixed_values_str(input: u64, values: crate::derive_support::Const<Vec<String>
 ///
 /// The input is expected to be hashed (uniform). The threshold is
 /// precomputed from the probability at init time.
-fn compute_threshold(probability: f64) -> u64 {
+pub(crate) fn compute_threshold(probability: f64) -> u64 {
     (probability.clamp(0.0, 1.0) * u64::MAX as f64) as u64
+}
+
+/// The native lowering compares against the node's own threshold, so
+/// the constant it bakes is the threshold, not the probability.
+fn coin_flip_jit_constants(node: &CoinFlip) -> Vec<u64> {
+    vec![node.threshold]
 }
 
 /// Probabilistic boolean with a precomputed threshold from a
 /// const probability arg. SRD-80 PR B.15 migration.
-#[crate::polydat_node(category = Probability)]
+#[crate::polydat_node(category = Probability, jit_constants = coin_flip_jit_constants)]
 fn coin_flip(
     input: u64,
     #[poly_default(0.5f64)] probability: crate::derive_support::Const<f64>,

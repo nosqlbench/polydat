@@ -236,14 +236,15 @@ purity (the default is pure; `SideChannel` marks a node that writes
 somewhere the kernel does not see, as the emit node in §12 does), and
 constraints such as `#[constraint(NonZeroU64)]` on a parameter.
 
-A node with a scalar signature runs on every engine: the interpreter
-calls the body, the closure tier calls the generated closure, and native
-cones call the closure through a fixed entry. A node whose signature
-uses strings or `Value` runs on the interpreter and the closure tier
-and, since [Compiled Non-Scalar Slots](../design/compiled_handles.md)
-landed, inside native kernels through the handle boundary. The macro
-kit that makes a node native-capable is described there in §7; a host
-never needs it for correctness, only for speed.
+Every node the attribute accepts runs on the interpreter, the closure
+tier, and hybrid kernels: the interpreter calls the body, and the
+closure tier calls the generated closure, which carries scalars in
+slots and strings, JSON, and host values through the handle boundary
+of [Compiled Non-Scalar Slots](../design/compiled_handles.md) (§7
+there describes the closure kits). Pure native code runs a node only
+when it has a native lowering; a host never needs one for correctness,
+only for speed, and [Engine Parity](../design/engine_parity.md) records
+what each engine accepts.
 
 ## 6. Host-defined value types
 

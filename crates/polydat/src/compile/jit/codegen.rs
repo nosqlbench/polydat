@@ -990,6 +990,25 @@ pub fn classify_node_typed(node: &dyn PolydatNode, wire_types: &[crate::ast::Por
         "str_concat" | "concat" if wire_types.iter().any(|t| *t != crate::ast::PortType::Str) => {
             JitOp::Fallback
         }
+        // `default_or(value, fallback)` is `value` unless it is `None`,
+        // and a compiled slot never carries `None` (engine_parity.md,
+        // A12), so natively it is a copy of the value; a reference pair
+        // (axiom S3) keeps it on the closure tier.
+        "default_or" => match wire_types {
+            [t, _] if t.slot_color() != crate::ast::SlotColor::Ref2 => JitOp::Identity,
+            _ => JitOp::Fallback,
+        },
+        // A native select between two handles would make a handle by
+        // an instruction other than a load, which the handle discipline
+        // (SRD 115 §8, H1) forbids; such a select stays a closure.
+        "select" | "select_u64"
+            if wire_types
+                .iter()
+                .skip(1)
+                .any(|t| t.handle_kind().is_some() || t.slot_width() != 1) =>
+        {
+            JitOp::Fallback
+        }
         "json_array" => codes().map_or(JitOp::Fallback, |types| JitOp::JsonArray { types }),
         "json_object" => codes().map_or(JitOp::Fallback, |types| JitOp::JsonObject { types }),
         "to_json" => single().map_or(JitOp::Fallback, JitOp::ToJson),
@@ -1271,6 +1290,9 @@ pub enum JitOp {
     CycleWalkConst(u64, u64, u64),
     /// Unfair coin with constant probability: (p_bits)
     UnfairCoinConst(u64),
+    /// `coin_flip`: the input compared unsigned against a threshold the
+    /// node computed from its probability at construction; no hash.
+    CoinFlipConst(u64),
     /// Chance with constant probability: (p_bits)
     ChanceConst(u64),
     /// N-of-M selection with constant n and m: (n, m)
@@ -1680,13 +1702,19 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
             }
         }
         "coin_flip" => {
-            if let Some(&p) = consts.first() {
-                JitOp::UnfairCoinConst(p)
+            // The body is `input < threshold` over the raw input
+            // (library/fixed.rs), not a hashed unit interval as
+            // `unfair_coin` is; the node bakes its threshold as its
+            // one constant.
+            if let Some(&threshold) = consts.first() {
+                JitOp::CoinFlipConst(threshold)
             } else {
-                JitOp::FairCoin
+                JitOp::Fallback
             }
         }
-        "default_or" => JitOp::SelectU64,
+        // `default_or` without wire types: the typed classifier decides
+        // (a copy of the value, since a compiled slot is never `None`).
+        "default_or" => JitOp::Identity,
         "const_u64" | "const_bool" | "session_start_millis" => {
             if let Some(&c) = consts.first() {
                 JitOp::ConstU64(c)
@@ -3048,6 +3076,17 @@ fn compile_jit_impl(
                     let result = builder.ins().band(h, one);
                     store_slot(&mut builder, buffer_ptr, output_slots[0], result);
                 }
+                JitOp::CoinFlipConst(threshold) => {
+                    let x = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                    let thr = builder.ins().iconst(types::I64, *threshold as i64);
+                    let cmp = builder
+                        .ins()
+                        .icmp(ir::condcodes::IntCC::UnsignedLessThan, x, thr);
+                    let zero = builder.ins().iconst(types::I64, 0);
+                    let one = builder.ins().iconst(types::I64, 1);
+                    let result = builder.ins().select(cmp, one, zero);
+                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                }
                 JitOp::UnfairCoinConst(p_bits) => {
                     let x0 = load_slot(&mut builder, buffer_ptr, input_slots[0]);
                     let c_gamma = builder
@@ -4070,10 +4109,14 @@ fn compile_jit_impl(
                 }
 
                 JitOp::BlendConst(mix_bits) => {
+                    // The body reinterprets both inputs' bits as f64
+                    // and returns the mix's bits (`blend` in
+                    // library/probability.rs); the lowering does the
+                    // same, not a numeric conversion.
                     let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
                     let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                    let fa = builder.ins().fcvt_from_uint(types::F64, a);
-                    let fb = builder.ins().fcvt_from_uint(types::F64, b);
+                    let fa = builder.ins().bitcast(types::F64, ir::MemFlags::new(), a);
+                    let fb = builder.ins().bitcast(types::F64, ir::MemFlags::new(), b);
                     let mix_f64 = f64::from_bits(*mix_bits);
                     let mix_val = builder.ins().f64const(mix_f64);
                     let one = builder.ins().f64const(1.0);
@@ -4081,8 +4124,7 @@ fn compile_jit_impl(
                     let a_part = builder.ins().fmul(fa, one_minus_mix);
                     let b_part = builder.ins().fmul(fb, mix_val);
                     let sum = builder.ins().fadd(a_part, b_part);
-                    let rounded = builder.ins().nearest(sum);
-                    let result = builder.ins().fcvt_to_uint(types::I64, rounded);
+                    let result = builder.ins().bitcast(types::I64, ir::MemFlags::new(), sum);
                     store_slot(&mut builder, buffer_ptr, output_slots[0], result);
                 }
                 JitOp::LfsrStepConst(feedback) => {

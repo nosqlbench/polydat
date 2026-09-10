@@ -231,6 +231,13 @@ impl PolydatNode for CursorLimit {
         // the graph and to carry the max_items metadata.
         outputs[0] = inputs[0].clone();
     }
+    /// The same passthrough on the closure tier: the limit is the
+    /// cursor system's, so the compiled step copies its slot.
+    fn compiled_u64(&self) -> Option<crate::ast::CompiledU64Op> {
+        Some(Box::new(|inputs: &[u64], outputs: &mut [u64]| {
+            outputs[0] = inputs[0];
+        }))
+    }
 }
 
 // ---------------------------------------------------------------------------

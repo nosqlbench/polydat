@@ -231,7 +231,7 @@ macro_rules! jit_accessors {
                 .get(name)
                 .copied()
                 .unwrap_or(crate::ast::PortType::U64);
-            crate::compile::marshal::decode_slot(self.core.buffer[slot], ty, &self.core.table)
+            crate::compile::marshal::decode_output(&self.core.buffer, slot, ty, &self.core.table)
         }
 
         /// Record the slots raw readers must refuse and each output's

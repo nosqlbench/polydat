@@ -2032,7 +2032,10 @@ impl PolydatProgram {
             let const_node: Box<dyn crate::ast::PolydatNode> = match &value {
                 Value::U64(v) => Box::new(ConstU64::new(*v)),
                 Value::F64(v) => Box::new(ConstF64::new(*v)),
-                Value::Bool(v) => Box::new(ConstU64::new(if *v { 1 } else { 0 })),
+                // A Bool stays a Bool: the wire is Bool-typed, and a
+                // `const_u64` here would make the interpreter read a
+                // U64 where every compiled engine reads the Bool.
+                Value::Bool(v) => Box::new(crate::library::fixed::ConstBool::new(*v)),
                 Value::Str(s) => Box::new(ConstStr::new(s.to_string())),
                 // Handles (e.g. `init prebuffered = dataset_prebuffer(...)`)
                 // get a dedicated `ConstHandle` replacement so the original

@@ -373,7 +373,10 @@ macro_rules! kernel_accessors {
                 .get(name)
                 .copied()
                 .unwrap_or(crate::ast::PortType::U64);
-            crate::compile::marshal::decode_slot(self.core.buffer[slot], ty, &self.core.table)
+            if let Some(&(_, idx)) = self.core.ref_scratch.iter().find(|(s, _)| *s == slot) {
+                return self.core.scratch[idx].to_value();
+            }
+            crate::compile::marshal::decode_output(&self.core.buffer, slot, ty, &self.core.table)
         }
 
         /// Whether each run begins a root cycle (SRD 115 §4). A state

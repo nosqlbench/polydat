@@ -256,7 +256,7 @@ bytes_to_vec!(f64 f64, i64 i64, i16 i16, i8 i8);
 
 #[crate::polydat_node(category = Conversions)]
 fn __bytes_to_vec_f16(b: &[u8]) -> Vec<half::f16> {
-    if b.len() % 2 != 0 {
+    if !b.len().is_multiple_of(2) {
         panic!(
             "__bytes_to_vec_f16: byte length {} is not a multiple of 2",
             b.len()

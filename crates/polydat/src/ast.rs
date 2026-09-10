@@ -1882,6 +1882,21 @@ impl ScratchBuf {
         }
     }
 
+    /// The vector this entry holds as an owned `Value`, copied out:
+    /// the typed read of a vector output on a compiled kernel, which
+    /// is what the interpreter's `pull` returns for the same port.
+    pub fn to_value(&self) -> Value {
+        match self {
+            ScratchBuf::F32(v) => Value::VecF32(SliceArc::from_vec(v.clone())),
+            ScratchBuf::F64(v) => Value::VecF64(SliceArc::from_vec(v.clone())),
+            ScratchBuf::F16(v) => Value::VecF16(SliceArc::from_vec(v.clone())),
+            ScratchBuf::I8(v) => Value::VecI8(SliceArc::from_vec(v.clone())),
+            ScratchBuf::I16(v) => Value::VecI16(SliceArc::from_vec(v.clone())),
+            ScratchBuf::I32(v) => Value::VecI32(SliceArc::from_vec(v.clone())),
+            ScratchBuf::I64(v) => Value::VecI64(SliceArc::from_vec(v.clone())),
+        }
+    }
+
     pub fn new(elem: ScratchElem) -> Self {
         match elem {
             ScratchElem::F32 => ScratchBuf::F32(Vec::new()),

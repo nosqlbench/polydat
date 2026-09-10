@@ -1102,8 +1102,12 @@ fn const_shape_to_jit_type(s: ConstShape) -> Option<JitType> {
 /// Map a wire arg's declared Rust type to its JIT carrier, or
 /// `None` for types that can't fit in the buffer.
 fn wire_type_to_jit_type(ty: &Type) -> Option<JitType> {
-    let s = type_to_string(ty);
-    match s.as_str() {
+    // type_to_string joins every token with a space, and a token
+    // may itself be a bracketed group (`& [u8]`, `half : : f16`,
+    // `[ f32 ; 4 ]`), so every form compares whitespace-stripped.
+    // The two-slot types ride limb pairs per alignment §8.4 layer 1.
+    let flat: String = type_to_string(ty).split_whitespace().collect();
+    match flat.as_str() {
         "u64" => Some(JitType::U64),
         "i64" => Some(JitType::I64),
         "f64" => Some(JitType::F64),
@@ -1117,32 +1121,48 @@ fn wire_type_to_jit_type(ty: &Type) -> Option<JitType> {
         "f32" => Some(JitType::F32),
         "u128" => Some(JitType::U128),
         "i128" => Some(JitType::I128),
-        "String" | "& str" | "&str" => Some(JitType::Str),
-        "Vec < u8 >" | "Vec<u8>" | "& [ u8 ]" | "&[u8]" => Some(JitType::Bytes),
-        // type_to_string joins every token with a space
-        // (`half : : f16`, `[ f32 ; 4 ]`), so the path/array
-        // forms compare whitespace-stripped. The two-slot types
-        // ride limb pairs per alignment §8.4 layer 1.
-        _ => {
-            let flat: String = s.split_whitespace().collect();
-            match flat.as_str() {
-                "Arc<str>" | "std::sync::Arc<str>" => Some(JitType::Str),
-                "Arc<[u8]>" | "std::sync::Arc<[u8]>" => Some(JitType::Bytes),
-                "half::f16" | "f16" => Some(JitType::F16),
-                "Bits128" | "crate::ast::Bits128" | "polydat::ast::Bits128" | "ast::Bits128" => {
-                    Some(JitType::RegRaw)
-                }
-                "[i8;16]" => Some(JitType::RegI8x16),
-                "[i16;8]" => Some(JitType::RegI16x8),
-                "[i32;4]" => Some(JitType::RegI32x4),
-                "[i64;2]" => Some(JitType::RegI64x2),
-                "[half::f16;8]" | "[f16;8]" => Some(JitType::RegF16x8),
-                "[f32;4]" => Some(JitType::RegF32x4),
-                "[f64;2]" => Some(JitType::RegF64x2),
-                _ => None,
-            }
+        "String" | "&str" | "Arc<str>" | "std::sync::Arc<str>" => Some(JitType::Str),
+        "Vec<u8>" | "&[u8]" | "Arc<[u8]>" | "std::sync::Arc<[u8]>" => Some(JitType::Bytes),
+        "half::f16" | "f16" => Some(JitType::F16),
+        "Bits128" | "crate::ast::Bits128" | "polydat::ast::Bits128" | "ast::Bits128" => {
+            Some(JitType::RegRaw)
         }
+        "[i8;16]" => Some(JitType::RegI8x16),
+        "[i16;8]" => Some(JitType::RegI16x8),
+        "[i32;4]" => Some(JitType::RegI32x4),
+        "[i64;2]" => Some(JitType::RegI64x2),
+        "[half::f16;8]" | "[f16;8]" => Some(JitType::RegF16x8),
+        "[f32;4]" => Some(JitType::RegF32x4),
+        "[f64;2]" => Some(JitType::RegF64x2),
+        _ => None,
     }
+}
+
+/// The `T` of an `Option<T>` argument, by its last path segment.
+fn option_inner(ty: &Type) -> Option<&Type> {
+    generic_inner(ty, "Option")
+}
+
+/// The `T` of a `Config<T>` argument, by its last path segment.
+fn config_inner(ty: &Type) -> Option<&Type> {
+    generic_inner(ty, "Config")
+}
+
+fn generic_inner<'a>(ty: &'a Type, wrapper: &str) -> Option<&'a Type> {
+    let syn::Type::Path(p) = ty else {
+        return None;
+    };
+    let last = p.path.segments.last()?;
+    if last.ident != wrapper {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return None;
+    };
+    args.args.iter().find_map(|a| match a {
+        syn::GenericArgument::Type(t) => Some(t),
+        _ => None,
+    })
 }
 
 /// Detect `Const<T>` in arg-type position. Returns `Some(shape)`
@@ -3109,7 +3129,10 @@ fn generate(
     enum SlotArgRead {
         Jit(JitType),
         Slice(&'static str),
-        Const,
+        Const(ConstShape),
+        /// A polymorphic `Value` port, decoded by the wire type the
+        /// node resolved at construction.
+        Poly,
     }
     let slot_arg_reads: Option<Vec<SlotArgRead>> =
         if has_setup || tuple_ret_elems.is_some() || is_fallible {
@@ -3120,7 +3143,8 @@ fn generate(
                     ArgKind::Wire => wire_type_to_jit_type(&a.declared_ty)
                         .map(SlotArgRead::Jit)
                         .or_else(|| slice_arg_elem(&a.declared_ty).map(SlotArgRead::Slice)),
-                    ArgKind::Const(_) => Some(SlotArgRead::Const),
+                    ArgKind::Const(shape) => Some(SlotArgRead::Const(*shape)),
+                    ArgKind::PolyWire => Some(SlotArgRead::Poly),
                     _ => None,
                 })
                 .collect()
@@ -3135,20 +3159,30 @@ fn generate(
         && slot_arg_reads.is_some()
         && (ret_jit_type.is_some() || vec_ret_elem.is_some());
 
-    // ── SRD 115 §7 — `compiled_handle()`: the P2 closure over
-    // handle slots. Emitted for a node with at least one shape the
-    // u64 kit cannot carry but the value table can: a JSON port
-    // (`&serde_json::Value` / `Arc<serde_json::Value>`), a
-    // polymorphic `Value` port, or a non-u64 variadic, with every
-    // other arg a one-slot JIT carrier, a const, or a setup derived
-    // from consts. Byte strings ride as handles exactly as in the
-    // u64 kit; JSON values are read from and written to the table
-    // the kernel installs around each run; polymorphic and variadic
-    // ports decode by the wire types the kernel hands the kit; an
-    // `Ext<T>` rides a table handle and reaches the body through the
-    // same `Wire::extract` downcast the interpreter uses.
+    // ── SRD 115 §7 — `compiled_handle()`: the general P2 closure.
+    // Emitted for every node the u64 kit does not carry, over the
+    // same slot buffer, with the table the kernel installs around
+    // each run for the table kinds (engine_parity.md, step 2). A
+    // JSON port (`&serde_json::Value` / `Arc<serde_json::Value>`)
+    // is read from and written to the table; a polymorphic `Value`
+    // port and a variadic decode by the wire types the kernel hands
+    // the kit, and a polymorphic return encodes by the node's
+    // resolved output type; an `Ext<T>` rides a table handle and
+    // reaches the body through the same `Wire::extract` downcast
+    // the interpreter uses; byte strings ride as arena handles
+    // exactly as in the u64 kit; a const or const list is captured
+    // by clone; a setup derived from consts is recomputed from the
+    // captured consts, and a session-static setup is captured from
+    // the node by clone; an `Option<T>` or `Config<T>` over a
+    // carrier is the carrier's slot, wrapped.
     enum HandleArg {
         Jit(JitType),
+        /// `Option<T>` over a one-slot carrier. A compiled kernel
+        /// never carries `None` on a scalar slot (an unset extern is
+        /// refused before the run), so the value is always present.
+        Option(JitType),
+        /// `Config<T>` over a carrier: the same slot, wrapped.
+        Config(JitType),
         JsonRef,
         JsonArc,
         Ext,
@@ -3157,6 +3191,11 @@ fn generate(
         Const(ConstShape),
         ConstVec,
         Setup,
+        /// A session-static setup (`from = ()`), captured from the
+        /// node by clone: the closure sees what the node captured at
+        /// construction, as the native form does through
+        /// `jit_constants`.
+        SetupStatic,
     }
     /// One element of a return: a one-slot carrier or a table kind.
     #[derive(Clone, Copy)]
@@ -3169,6 +3208,9 @@ fn generate(
         Jit(JitType),
         Json,
         Ext,
+        /// A polymorphic `Value` return, encoded by the node's
+        /// resolved output type.
+        Poly,
         /// A tuple return: one slot per element, written by shape.
         Tuple(Vec<HandleElem>),
     }
@@ -3177,7 +3219,7 @@ fn generate(
         fn has_handle(&self) -> bool {
             match self {
                 HandleRet::Jit(_) => false,
-                HandleRet::Json | HandleRet::Ext => true,
+                HandleRet::Json | HandleRet::Ext | HandleRet::Poly => true,
                 HandleRet::Tuple(elems) => elems.iter().any(|e| !matches!(e, HandleElem::Jit(_))),
             }
         }
@@ -3195,70 +3237,70 @@ fn generate(
         }
     };
     // The return shape the kits can write: a one-slot carrier, a table
-    // kind, or a tuple of those.
+    // kind, a polymorphic value, or a tuple of carriers and table kinds.
     let classify_ret_shape = || -> Option<HandleRet> {
+        if ret_is_polywire {
+            return Some(HandleRet::Poly);
+        }
         if let Some(elems) = &tuple_ret_elems {
             let shapes: Option<Vec<HandleElem>> = elems.iter().map(classify_elem).collect();
             return shapes.map(HandleRet::Tuple);
         }
-        Some(match classify_elem(&ret_ty)? {
-            HandleElem::Jit(jt) => HandleRet::Jit(jt),
-            HandleElem::Json => HandleRet::Json,
-            HandleElem::Ext => HandleRet::Ext,
+        // A single return may be a two-slot carrier (a register
+        // word); the write puts both limbs.
+        Some(match classify_elem(&ret_ty) {
+            Some(HandleElem::Jit(jt)) => HandleRet::Jit(jt),
+            Some(HandleElem::Json) => HandleRet::Json,
+            Some(HandleElem::Ext) => HandleRet::Ext,
+            None => HandleRet::Jit(wire_type_to_jit_type(&ret_ty)?),
         })
     };
     let handle_plan: Option<(Vec<HandleArg>, HandleRet)> = (|| {
-        if attrs.no_jit || is_fallible || dynamic_outputs_inner.is_some() || is_split_halves {
+        if attrs.no_jit || is_fallible || dynamic_outputs_inner.is_some() {
             return None;
         }
         let ret_shape = classify_ret_shape()?;
-        let mut handle_shape = ret_shape.has_handle();
         let mut shapes = Vec::with_capacity(args.len());
         for a in &args {
             let shape = match &a.kind {
                 ArgKind::Wire => {
                     if matches!(is_borrow_wire_shape(&a.declared_ty), Some(BorrowWire::Json)) {
-                        handle_shape = true;
                         HandleArg::JsonRef
                     } else if classify_wrapper_wire(&a.declared_ty) == Some(WrapperWire::Json) {
-                        handle_shape = true;
                         HandleArg::JsonArc
                     } else if is_ext_wire(&a.declared_ty) {
-                        handle_shape = true;
                         HandleArg::Ext
-                    } else if let Some(jt) = wire_type_to_jit_type(&a.declared_ty) {
+                    } else if let Some(inner) = option_inner(&a.declared_ty) {
+                        let jt = wire_type_to_jit_type(inner)?;
                         if jt.width() != 1 {
                             return None;
                         }
+                        HandleArg::Option(jt)
+                    } else if let Some(inner) = config_inner(&a.declared_ty) {
+                        HandleArg::Config(wire_type_to_jit_type(inner)?)
+                    } else if let Some(jt) = wire_type_to_jit_type(&a.declared_ty) {
                         HandleArg::Jit(jt)
                     } else {
                         return None;
                     }
                 }
-                ArgKind::PolyWire => {
-                    handle_shape = true;
-                    HandleArg::Poly
-                }
-                ArgKind::Variadic(elem) => {
-                    if *elem != VariadicElement::U64 {
-                        handle_shape = true;
-                    }
-                    HandleArg::Variadic(*elem)
-                }
+                ArgKind::PolyWire => HandleArg::Poly,
+                ArgKind::Variadic(elem) => HandleArg::Variadic(*elem),
                 ArgKind::Const(shape) => HandleArg::Const(*shape),
                 ArgKind::ConstVec(_) => HandleArg::ConstVec,
                 ArgKind::Setup(spec) => {
-                    // Session-static setup (`from = ()`) is not a
-                    // function of the consts; it stays on P1.
                     if spec.source_args.is_empty() {
-                        return None;
+                        HandleArg::SetupStatic
+                    } else {
+                        HandleArg::Setup
                     }
-                    HandleArg::Setup
                 }
             };
             shapes.push(shape);
         }
-        if !handle_shape {
+        // The u64 kit carries every node it is eligible for; this
+        // kit takes the rest.
+        if jit_eligible {
             return None;
         }
         Some((shapes, ret_shape))
@@ -3284,6 +3326,9 @@ fn generate(
             },
             HandleRet::Ext => quote! {
                 outputs[0] = polydat::kernel::write_table_entry(__entry_base, <#ret_ty as polydat::derive_support::Wire>::inject(result));
+            },
+            HandleRet::Poly => quote! {
+                outputs[0] = polydat::kernel::encode_arg(__out_type, result, __out_entry);
             },
             HandleRet::Tuple(elems) => {
                 let types = tuple_ret_elems
@@ -3329,7 +3374,7 @@ fn generate(
         for (a, shape) in args.iter().zip(shapes.iter()) {
             let n = &a.name;
             match shape {
-                HandleArg::Const(_) | HandleArg::ConstVec => {
+                HandleArg::Const(_) | HandleArg::ConstVec | HandleArg::SetupStatic => {
                     captures.push(quote!(let #n = self.#n.clone();))
                 }
                 _ => {}
@@ -3352,19 +3397,68 @@ fn generate(
                 captures.push(quote!(let #n = #setup_fn( #( #src_exprs ),* );));
             }
         }
+        // Two counters: the slot a read starts at (a register wire
+        // is two slots) and the port it is, which indexes the wire
+        // types the kernel handed the kit. `__extra` is their
+        // difference where a variadic's slots are walked at run time.
         let mut wire_buf_idx = 0usize;
+        let mut port_idx = 0usize;
+        // Where the fixed arguments end and the variadics begin, in
+        // slots and in ports.
+        let fixed_slots: usize = shapes
+            .iter()
+            .map(|s| match s {
+                HandleArg::Jit(jt) | HandleArg::Config(jt) => jt.width(),
+                HandleArg::Option(_)
+                | HandleArg::JsonRef
+                | HandleArg::JsonArc
+                | HandleArg::Ext
+                | HandleArg::Poly => 1,
+                _ => 0,
+            })
+            .sum();
+        let fixed_ports: usize = shapes
+            .iter()
+            .filter(|s| {
+                matches!(
+                    s,
+                    HandleArg::Jit(_)
+                        | HandleArg::Config(_)
+                        | HandleArg::Option(_)
+                        | HandleArg::JsonRef
+                        | HandleArg::JsonArc
+                        | HandleArg::Ext
+                        | HandleArg::Poly
+                )
+            })
+            .count();
         let arg_reads: Vec<TokenStream2> = args.iter().zip(shapes.iter())
             .map(|(a, shape)| {
                 let n = &a.name;
+                let ty = &a.declared_ty;
                 match shape {
                     HandleArg::Jit(jt) => {
                         let read = jt.read_from_u64_buffer(wire_buf_idx);
-                        wire_buf_idx += 1;
+                        wire_buf_idx += jt.width();
+                        port_idx += 1;
                         quote!(let #n = #read;)
+                    }
+                    HandleArg::Option(jt) => {
+                        let read = jt.read_from_u64_buffer(wire_buf_idx);
+                        wire_buf_idx += 1;
+                        port_idx += 1;
+                        quote!(let #n: #ty = Some(#read);)
+                    }
+                    HandleArg::Config(jt) => {
+                        let read = jt.read_from_u64_buffer(wire_buf_idx);
+                        wire_buf_idx += jt.width();
+                        port_idx += 1;
+                        quote!(let #n: #ty = polydat::derive_support::Config(#read);)
                     }
                     HandleArg::JsonRef => {
                         let i = syn::Index::from(wire_buf_idx);
                         wire_buf_idx += 1;
+                        port_idx += 1;
                         let arc = format_ident!("__{}_json", a.name);
                         quote! {
                             let #arc = polydat::kernel::read_table_json(inputs[#i]);
@@ -3374,22 +3468,41 @@ fn generate(
                     HandleArg::JsonArc => {
                         let i = syn::Index::from(wire_buf_idx);
                         wire_buf_idx += 1;
+                        port_idx += 1;
                         quote!(let #n = polydat::kernel::read_table_json(inputs[#i]);)
                     }
                     HandleArg::Ext => {
                         let i = syn::Index::from(wire_buf_idx);
                         wire_buf_idx += 1;
-                        let ty = &a.declared_ty;
+                        port_idx += 1;
                         quote!(let #n: #ty = <#ty as polydat::derive_support::Wire>::extract(polydat::kernel::current_table_value(inputs[#i]));)
                     }
                     HandleArg::Poly => {
                         let i = syn::Index::from(wire_buf_idx);
+                        let p = syn::Index::from(port_idx);
                         wire_buf_idx += 1;
-                        quote!(let #n: polydat::ast::Value = polydat::kernel::decode_arg(__wire_types[#i], inputs[#i]);)
+                        port_idx += 1;
+                        quote!(let #n: polydat::ast::Value = polydat::kernel::decode_arg(__wire_types[#p], inputs[#i]);)
                     }
                     HandleArg::Variadic(elem) => {
-                        // The variadic takes every remaining slot.
-                        let start = syn::Index::from(wire_buf_idx);
+                        // A variadic takes every remaining slot, or in
+                        // the split-halves shape (`pick`), its half of
+                        // them: the selectors first, then the values.
+                        // Each element is one slot, so a slot's port is
+                        // the slot less the extra slots of the fixed
+                        // arguments before it.
+                        let extra = syn::Index::from(fixed_slots - fixed_ports);
+                        let fixed = syn::Index::from(fixed_slots);
+                        let range = if is_split_halves {
+                            let pos = variadic_positions[&a.name.to_string()];
+                            if pos == 0 {
+                                quote!(#fixed..#fixed + (inputs.len() - #fixed) / 2)
+                            } else {
+                                quote!(#fixed + (inputs.len() - #fixed) / 2..inputs.len())
+                            }
+                        } else {
+                            quote!(#fixed..inputs.len())
+                        };
                         let owned = format_ident!("__{}_owned", a.name);
                         let (elem_ty, extract) = match elem {
                             VariadicElement::U64 => (quote!(u64), quote!(inputs[__i])),
@@ -3399,11 +3512,11 @@ fn generate(
                             VariadicElement::OwnedString => (quote!(String), quote!(polydat::kernel::resolve_thread_str(inputs[__i]).to_string())),
                             VariadicElement::Value => (
                                 quote!(polydat::ast::Value),
-                                quote!(polydat::kernel::decode_arg(__wire_types[__i], inputs[__i])),
+                                quote!(polydat::kernel::decode_arg(__wire_types[__i - #extra], inputs[__i])),
                             ),
                         };
                         quote! {
-                            let #owned: Vec<#elem_ty> = (#start..inputs.len()).map(|__i| #extract).collect();
+                            let #owned: Vec<#elem_ty> = (#range).map(|__i| #extract).collect();
                             let #n = &#owned[..];
                         }
                     }
@@ -3412,15 +3525,46 @@ fn generate(
                         quote!(let #n = #wrap;)
                     }
                     HandleArg::ConstVec => quote!(let #n = polydat::derive_support::Const(#n.clone());),
-                    HandleArg::Setup => quote!(let #n = &#n;),
+                    HandleArg::Setup | HandleArg::SetupStatic => quote!(let #n = &#n;),
                 }
             })
             .collect();
         let arg_names: Vec<&syn::Ident> = args.iter().map(|a| &a.name).collect();
         let write = write_for(ret_shape);
+        // A polymorphic return encodes by the node's resolved output
+        // type, which for the split-halves shape is the type of the
+        // first value wire, the graph's own slot for the output being
+        // a placeholder there. When that type is a table kind the
+        // graph assigned the output no entry, so the node has no
+        // closure and stays interpreted.
+        let out_type = if matches!(ret_shape, HandleRet::Poly) {
+            let fixed = syn::Index::from(fixed_ports);
+            let resolve = if is_split_halves {
+                quote!(*wire_types.get(#fixed + (wire_types.len() - #fixed) / 2)?)
+            } else {
+                quote!(self.meta().outs[0].typ)
+            };
+            quote! {
+                let __out_type: polydat::ast::PortType = #resolve;
+                let __out_entry: Option<usize> =
+                    if __out_type.handle_kind() == Some(polydat::ast::HandleKind::Table) {
+                        if self.meta().outs[0].typ.handle_kind()
+                            != Some(polydat::ast::HandleKind::Table)
+                        {
+                            return None;
+                        }
+                        Some(entry_base)
+                    } else {
+                        None
+                    };
+            }
+        } else {
+            quote!()
+        };
         quote! {
             fn compiled_handle(&self, entry_base: usize, wire_types: &[polydat::ast::PortType]) -> Option<polydat::ast::CompiledU64Op> {
                 #( #captures )*
+                #out_type
                 let __wire_types: Vec<polydat::ast::PortType> = wire_types.to_vec();
                 let __entry_base = entry_base;
                 Some(Box::new(move |inputs: &[u64], outputs: &mut [u64]| {
@@ -3497,12 +3641,14 @@ fn generate(
         quote! {
             #[inline(always)]
             #[allow(unused_variables)]
+            #[allow(clippy::ptr_arg)]
             fn __polydat_body( #( #body_params ),* ) -> #declared_ret_ty #block
         }
     } else if use_shared_body {
         quote! {
             #[inline(always)]
             #[allow(unused_variables)]
+            #[allow(clippy::ptr_arg)]
             fn __polydat_body( #( #body_params ),* ) -> #ret_ty #block
         }
     } else {
@@ -3817,6 +3963,7 @@ fn generate(
             })
             .collect();
         let mut off = 0usize;
+        let mut port = 0usize;
         let arg_reads: Vec<TokenStream2> = args
             .iter()
             .zip(reads_spec.iter())
@@ -3826,13 +3973,22 @@ fn generate(
                     SlotArgRead::Jit(jt) => {
                         let read = jt.read_from_u64_buffer(off);
                         off += jt.width();
+                        port += 1;
                         quote!(let #n = #read;)
+                    }
+                    SlotArgRead::Poly => {
+                        let i = syn::Index::from(off);
+                        let p = syn::Index::from(port);
+                        off += 1;
+                        port += 1;
+                        quote!(let #n: polydat::ast::Value = polydat::kernel::decode_arg(__in_types[#p], inputs[#i]);)
                     }
                     SlotArgRead::Slice(elem) => {
                         let et = elem_ty_tokens(elem);
                         let i = syn::Index::from(off);
                         let i1 = syn::Index::from(off + 1);
                         off += 2;
+                        port += 1;
                         // SAFETY: the (ptr, len) pair was published
                         // by an upstream slot-op into kernel-owned
                         // scratch (or by the host for the eval call's
@@ -3847,8 +4003,9 @@ fn generate(
                             };
                         }
                     }
-                    SlotArgRead::Const => {
-                        quote!(let #n = polydat::derive_support::Const(#n.clone());)
+                    SlotArgRead::Const(shape) => {
+                        let wrap = shape.wrap_as_const(quote!(#n));
+                        quote!(let #n = #wrap;)
                     }
                 }
             })
@@ -3874,6 +4031,18 @@ fn generate(
         quote! {
             fn compiled_slot(&self) -> Option<polydat::ast::CompiledSlotKit> {
                 #( #captures )*
+                // The wire type of each input port, for a polymorphic
+                // port's decode: the node resolved them at construction.
+                let __in_types: Vec<polydat::ast::PortType> = self
+                    .meta()
+                    .ins
+                    .iter()
+                    .filter_map(|s| match s {
+                        polydat::ast::Slot::Wire(p) => Some(p.typ),
+                        _ => None,
+                    })
+                    .collect();
+                let _ = &__in_types;
                 Some(polydat::ast::CompiledSlotKit {
                     scratch: #scratch_decl,
                     op: Box::new(move |inputs: &[u64], outputs: &mut [u64], scratch: &mut [polydat::ast::ScratchBuf]| {

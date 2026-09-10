@@ -333,32 +333,44 @@ path.
 P2 is the equivalence oracle for P3 and stays one. A P2 closure for a
 `Hdl1`-bearing node runs over the same slot buffer, arena, and table
 that P3 uses and calls the same body the P1 node and the native helper
-call. The `#[polydat_node]` macro emits the `compiled_u64` kit for byte
-strings (a `&str` argument resolves its handle, a `String` result enters
-the arena); for the table kinds it emits a second kit,
+call. The `#[polydat_node]` macro emits the `compiled_u64` kit for the
+nodes whose every port is a carrier, byte strings included (a `&str` or
+`&[u8]` argument resolves its handle, a `String` or `Vec<u8>` result
+enters the arena); for every other node it emits the general kit,
 `compiled_handle(entry_base, wire_types)`:
 
-- **Eligibility.** The node has at least one shape the u64 kit cannot
-  carry but the table can: a JSON port (`&serde_json::Value` or
-  `Arc<serde_json::Value>`), a polymorphic `Value` port, an `Ext<T>`
-  port, or a variadic of anything but `u64`; every other argument is a
-  one-slot carrier, a const, or a setup derived from consts; the return
-  is a one-slot carrier, a JSON value, an `Ext<T>`, or a tuple of those,
-  written one slot per element with the table-kind elements taking
-  entries from the base in port order. A fallible body (`-> Result<T,
-  E>`, const arguments only) ran once at construction; its cached value
-  is written every run by whichever kit its shape names, the u64 kit for
-  carriers and this one for table kinds. Session-static setup
-  (`from = ()`), dynamic returns, split variadics, and `Handle` downcasts
-  stay on P1.
+- **Eligibility.** Every argument is a carrier of one or two slots, a
+  JSON port (`&serde_json::Value` or `Arc<serde_json::Value>`), a
+  polymorphic `Value` port, an `Ext<T>` port, a variadic (a split
+  variadic included), an `Option<T>` or `Config<T>` over a carrier, a
+  const, a const list, or a setup, and the return is a carrier, a JSON
+  value, an `Ext<T>`, a polymorphic value, or a tuple of one-slot
+  carriers and table kinds, written one slot per element with the
+  table-kind elements taking entries from the base in port order. A
+  fallible body (`-> Result<T, E>`, const arguments only) ran once at
+  construction; its cached value is written every run by whichever kit
+  its shape names, the u64 kit for carriers and this one for table
+  kinds. Dynamic returns and `Handle` downcasts stay on P1, as does a
+  split variadic whose values are a table kind, because the graph
+  types its output as a placeholder and assigns it no entry.
 - **Entries and types from the kernel.** The kit takes the first
   value-table entry the node's table-kind outputs own and the type of
   each wire input. A JSON result is written to its entry through the
   installed table; a polymorphic or variadic argument decodes by its
-  wire type, a JSON argument by handle. This is the P2 form of §6.1.
-- **Setup recomputed.** A `#[poly_const]` value is a pure function of
-  the node's consts, so the kit recomputes it from the captured consts
-  at construction, once, and the closure borrows its own copy.
+  wire type, a JSON argument by handle; a polymorphic result encodes
+  by the node's resolved output type (`kernel::encode_arg`), which is
+  the type of the first value wire for a split variadic. This is the
+  P2 form of §6.1.
+- **Setup recomputed or captured.** A `#[poly_const]` value derived
+  from consts is a pure function of them, so the kit recomputes it from
+  the captured consts at construction, once, and the closure borrows
+  its own copy. A session-static setup (`from = ()`) is not a function
+  of anything the kit holds, so the kit clones it from the node, as the
+  native form bakes it through `jit_constants`.
+- **`Option<T>` is always present.** A compiled kernel refuses to run
+  with an unset extern and carries no `None` on a scalar slot, so an
+  `Option<T>` argument reads as `Some`. When unset externs decode to
+  `None` on every engine (engine_parity.md, step 5) this read follows.
 - **The kernel owns the table.** The P2 kernels carry a value table
   sized from the `(slot, entry)` pairs the assembler numbers, install it
   around every run, begin a root cycle when a host drives them and adopt
@@ -598,6 +610,15 @@ Kept short; the normative text above is what the code does. Dates are
   how the kernels assign a node's entries. `Ext<T>` became `Clone` for
   the cached case. `tests/ext_tiers.rs` covers both, and the fuzzer
   carries a fallible node and a mixed tuple node of its own.
+
+- **The general kit.** Landed 2026-09-09 as step 2 of
+  [engine parity](engine_parity.md). The `compiled_handle` kit no
+  longer requires a table kind: it is emitted for every node the u64
+  kit does not carry, and §7's eligibility is what it accepts now. The
+  typed readers of every compiled kernel reassemble two-slot outputs,
+  sign-extend narrow signed ones, and copy vector outputs out of
+  scratch (`marshal::decode_output`), which the value comparison across
+  engines found they did not.
   Destructuring a tuple exposed a defect older than this step: the
   compiler's `identity` and `__port_` copy steps forwarded a table
   handle, so a copied slot named its upstream entry while the layout

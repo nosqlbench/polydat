@@ -236,7 +236,7 @@ impl Gen {
     /// One binding from the grammar.
     fn step(&mut self) {
         let u = self.pick(PortType::U64).expect("cycle is always u64");
-        match self.rng.range(35) {
+        match self.rng.range(42) {
             0 => {
                 self.bind(PortType::U64, format!("hash({})", u.name));
             }
@@ -573,13 +573,120 @@ impl Gen {
                     self.host_externs.push((w.name, host_partition(idx)));
                 }
             }
-            _ => {
+            34 => {
                 let spec = [
                     "k in 1..4",
                     "k in 1..3, side in left,right",
                     "n in 0..10 order halton/3",
                 ][self.rng.range(3)];
                 self.bind_ext("Streamer", 0, format!("streamer(\"{spec}\")"));
+            }
+            // The shapes the general closure kit took on in engine
+            // parity step 2: every one of these ran on the interpreter
+            // only before it.
+            35 => {
+                // Byte strings through the arena: a `&[u8]` argument and
+                // a `Vec<u8>` result, rendered as text at the end.
+                let bytes = format!("u64_to_bytes({})", u.name);
+                let expr = match self.rng.range(3) {
+                    0 => format!("to_hex({bytes})"),
+                    1 => format!("to_hex(sha256({bytes}))"),
+                    _ => format!("to_hex(byte_slice({bytes}, 2, 4))"),
+                };
+                self.bind(PortType::Str, expr);
+            }
+            36 => {
+                // A setup derived from consts on a scalar-or-string node.
+                match self.rng.range(4) {
+                    0 => {
+                        if let Some(s) = self.pick(PortType::Str) {
+                            self.bind(
+                                PortType::Str,
+                                format!("regex_replace({}, \"[0-9]\", \"x\")", s.name),
+                            );
+                        }
+                    }
+                    1 => {
+                        if let Some(s) = self.pick(PortType::Str) {
+                            self.bind(
+                                PortType::Bool,
+                                format!("regex_match({}, \"[0-9]+\")", s.name),
+                            );
+                        }
+                    }
+                    2 => {
+                        self.bind(
+                            PortType::Str,
+                            format!("weighted_strings(hash({}), \"a:0.5;b:0.3;c:0.2\")", u.name),
+                        );
+                    }
+                    _ => {
+                        self.bind(
+                            PortType::F64,
+                            format!("dist_normal(hash({}), 0.0, 1.0)", u.name),
+                        );
+                    }
+                }
+            }
+            37 => {
+                // A const list.
+                match self.rng.range(3) {
+                    0 => self.bind(
+                        PortType::U64,
+                        format!("fixed_values_u64({}, 7, 9, 11)", u.name),
+                    ),
+                    1 => self.bind(
+                        PortType::Str,
+                        format!("one_of({}, \"x\", \"y\", \"z\")", u.name),
+                    ),
+                    _ => self.bind(
+                        PortType::U64,
+                        format!("is_one_of(u64_mod({}, 3), 0, 1, 2)", u.name),
+                    ),
+                };
+            }
+            38 => {
+                // An `Option<u64>` argument, always present on a compiled
+                // engine, and a `Config` wire.
+                if self.rng.coin(50) {
+                    self.bind(PortType::U64, format!("this_or({}, 7)", u.name));
+                } else {
+                    self.bind(
+                        PortType::Str,
+                        format!(
+                            "dynamic_weighted_select(hash({}), \"alpha:0.3;beta:0.5;gamma:0.2\")",
+                            u.name
+                        ),
+                    );
+                }
+            }
+            39 => {
+                // The split-halves variadic: two complementary selectors
+                // over the digits of a number, two u64 values.
+                let a = self.pick(PortType::U64).expect("cycle is always u64");
+                let b = self.pick(PortType::U64).expect("cycle is always u64");
+                self.bind(
+                    PortType::U64,
+                    format!(
+                        "pick(regex_match(__u64_to_string({u}), \"3\"), \
+                         regex_match(__u64_to_string({u}), \"^[^3]*$\"), {}, {})",
+                        a.name,
+                        b.name,
+                        u = u.name
+                    ),
+                );
+            }
+            40 => {
+                // A polymorphic return, encoded by the resolved output type.
+                let w = self.any();
+                if w.ext.is_none() && w.ty != PortType::Json {
+                    let fallback = self.pick(w.ty).expect("the wire itself is a candidate");
+                    self.bind(w.ty, format!("default_or({}, {})", w.name, fallback.name));
+                }
+            }
+            _ => {
+                // A session-static setup, captured from the node.
+                self.bind(PortType::Str, "tmp_dir()".to_string());
             }
         }
     }

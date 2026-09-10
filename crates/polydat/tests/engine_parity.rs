@@ -141,6 +141,113 @@ fn the_node_by_engine_matrix_is_as_recorded() {
     }
 }
 
+/// Every output of every program, on every engine that ran it, as the
+/// interpreter computed it. The matrix above pins what each engine
+/// accepts; this pins that what it accepts it computes alike. Nodes
+/// declared nondeterministic (clocks, entropy, thread identity) are
+/// left out, as are the run failures the matrix records.
+#[test]
+fn the_engines_agree_on_every_node() {
+    use polydat::ast::{Purity, Value};
+    let cycles: [u64; 3] = [3, 4, 11];
+    let mut disagreements = Vec::new();
+    for (name, src) in common::coverage_cases::programs() {
+        let Ok(mut asm) = compile_polydat_to_assembler(&src) else {
+            continue;
+        };
+        asm.set_jit_mode(polydat::JitMode::Off);
+        let Ok(mut p1) = asm.compile() else {
+            continue;
+        };
+        let program = p1.program();
+        if (0..program.node_count()).any(|i| {
+            matches!(
+                program.node_ref(i).purity(),
+                Purity::Nondeterministic { .. }
+            )
+        }) {
+            continue;
+        }
+        let outs: Vec<String> = p1.output_names().iter().map(|s| s.to_string()).collect();
+        let mut p2 = compile_polydat_to_assembler(&src)
+            .unwrap()
+            .try_compile_raw()
+            .ok();
+        let mut hybrid = compile_polydat_to_assembler(&src)
+            .unwrap()
+            .compile_hybrid()
+            .ok();
+        let mut p3 = compile_polydat_to_assembler(&src)
+            .unwrap()
+            .try_compile_jit()
+            .ok();
+        for &c in &cycles {
+            // An assertion node fails on some cycles by design; the
+            // interpreter's failure is the oracle's, so the cycle is
+            // skipped (the matrix pins the failures at cycle 3).
+            let want = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                p1.set_inputs(&[c]);
+                outs.iter()
+                    .map(|o| p1.pull(o).clone())
+                    .collect::<Vec<Value>>()
+            }));
+            let Ok(want) = want else {
+                continue;
+            };
+            let mut got: Vec<(&str, Vec<Value>)> = Vec::new();
+            if let Some(k) = p2.as_mut() {
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    k.eval(&[c]);
+                    outs.iter().map(|o| k.get_value(o)).collect::<Vec<_>>()
+                }));
+                if let Ok(v) = r {
+                    got.push(("P2", v));
+                }
+            }
+            if let Some(k) = hybrid.as_mut() {
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    k.eval(&[c]);
+                    outs.iter().map(|o| k.get_value(o)).collect::<Vec<_>>()
+                }));
+                if let Ok(v) = r {
+                    got.push(("hybrid", v));
+                }
+            }
+            if let Some(k) = p3.as_mut() {
+                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    k.eval(&[c]);
+                    outs.iter().map(|o| k.get_value(o)).collect::<Vec<_>>()
+                }));
+                if let Ok(v) = r {
+                    got.push(("P3", v));
+                }
+            }
+            for (engine, values) in got {
+                for (i, o) in outs.iter().enumerate() {
+                    let (w, g) = (&want[i], &values[i]);
+                    if w.port_type() != g.port_type()
+                        || w.to_display_string() != g.to_display_string()
+                    {
+                        disagreements.push(format!(
+                            "  {name} on {engine}: `{o}` at cycle {c}: interpreter {:?} {}, \
+                             {engine} {:?} {}",
+                            w.port_type(),
+                            w.to_display_string(),
+                            g.port_type(),
+                            g.to_display_string()
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        disagreements.is_empty(),
+        "engines disagree with the interpreter:\n{}",
+        disagreements.join("\n")
+    );
+}
+
 /// The interpreter accepts every program; that is the oracle the plan
 /// measures the other engines against.
 #[test]

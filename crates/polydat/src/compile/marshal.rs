@@ -137,6 +137,40 @@ pub(crate) fn decode_slot(bits: u64, ty: PortType, table: &ValueTable) -> Value 
             bits,
         ))),
         PortType::Json | PortType::Ext | PortType::Handle => table.read(bits),
+        // A signed narrow carrier rides sign-extended (alignment §8.1)
+        // and is the `I64` value its `Wire` impl injects.
+        PortType::I8 | PortType::I16 | PortType::I32 => Value::I64(bits as i64),
         _ => Value::U64(bits),
     }
+}
+
+/// An output at `slot` of `buffer` as the `Value` its port type names:
+/// [`decode_slot`] for a one-slot carrier and the table kinds, and the
+/// two-limb reassembly for a 128-bit integer or a register word, which
+/// ride two consecutive slots (alignment §8.4 layer 1). This is the
+/// typed read every compiled kernel's `get_value` makes; a vector
+/// output is read from the kernel's scratch before it reaches here.
+pub(crate) fn decode_output(
+    buffer: &[u64],
+    slot: usize,
+    ty: PortType,
+    table: &ValueTable,
+) -> Value {
+    use crate::ast::{Bits128, RegLanes};
+    if ty.slot_width() == 2 {
+        let limbs = Bits128([buffer[slot], buffer[slot + 1]]);
+        return match ty {
+            PortType::U128 => Value::U128(limbs),
+            PortType::I128 => Value::I128(limbs),
+            PortType::RegI8x16 => Value::Reg128(limbs, RegLanes::I8x16),
+            PortType::RegI16x8 => Value::Reg128(limbs, RegLanes::I16x8),
+            PortType::RegI32x4 => Value::Reg128(limbs, RegLanes::I32x4),
+            PortType::RegI64x2 => Value::Reg128(limbs, RegLanes::I64x2),
+            PortType::RegF16x8 => Value::Reg128(limbs, RegLanes::F16x8),
+            PortType::RegF32x4 => Value::Reg128(limbs, RegLanes::F32x4),
+            PortType::RegF64x2 => Value::Reg128(limbs, RegLanes::F64x2),
+            _ => Value::Reg128(limbs, RegLanes::Raw),
+        };
+    }
+    decode_slot(buffer[slot], ty, table)
 }

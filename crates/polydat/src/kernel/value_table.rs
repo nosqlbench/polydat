@@ -241,6 +241,45 @@ pub fn decode_arg(ty: crate::ast::PortType, bits: u64) -> Value {
     }
 }
 
+/// An owned `Value` as the slot bits a port of type `ty` carries: the
+/// inverse of [`decode_arg`], for a polymorphic return. A table kind
+/// is written to `entry` of the installed table, which the kernel
+/// assigned to the output slot. The value must be of the port's type:
+/// the graph colored the slot by the node's resolved output type, and
+/// a value of another type would be read by every consumer as
+/// something it is not, where the interpreter would have carried it.
+/// A `None` has no scalar slot form on a compiled engine
+/// (engine_parity.md, A12).
+#[inline]
+pub fn encode_arg(ty: crate::ast::PortType, v: Value, entry: Option<usize>) -> u64 {
+    if v.port_type() != ty {
+        panic!(
+            "a node produced a {:?} on an output the graph typed {:?}; a compiled engine \
+             cannot carry a value of another type than the slot's (engine_parity.md, A7)",
+            v.port_type(),
+            ty
+        );
+    }
+    match v {
+        Value::U64(x) => x,
+        Value::I64(x) => x as u64,
+        Value::F64(x) => x.to_bits(),
+        Value::Bool(b) => b as u64,
+        Value::Str(s) => crate::kernel::put_thread_str(&s),
+        Value::Bytes(b) => crate::kernel::put_thread_bytes(&b),
+        Value::Json(_) | Value::Ext(_) | Value::Handle(_) => {
+            let entry = entry.unwrap_or_else(|| {
+                panic!("a {ty:?} output has no value-table entry assigned (SRD 115 §3)")
+            });
+            write_table_entry(entry, v)
+        }
+        other => panic!(
+            "a {:?} value has no one-slot compiled form",
+            other.port_type()
+        ),
+    }
+}
+
 /// The value a table handle names, borrowed from the installed table
 /// for the rest of the current native call. The entry is written only
 /// by its one producing step (H4), which ran before any consumer, and

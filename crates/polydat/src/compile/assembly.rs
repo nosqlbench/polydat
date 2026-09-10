@@ -977,6 +977,9 @@ impl PolydatAssembler {
     /// output slots are assigned value-table entries in node and port
     /// order (SRD 115 §3, §7).
     fn build_p2_layout(resolved: &ResolvedDag) -> Option<P2Layout> {
+        if shared_binding_refusal(resolved).is_some() {
+            return None;
+        }
         let layout = slot_layout(resolved);
 
         let mut compiled_ops = Vec::with_capacity(resolved.nodes.len());
@@ -1038,6 +1041,9 @@ impl PolydatAssembler {
     /// Shared: resolve nodes to JIT steps + slot layout.
     #[cfg(feature = "jit")]
     pub(crate) fn build_jit_layout(resolved: &ResolvedDag) -> Result<JitLayout, String> {
+        if let Some(refusal) = shared_binding_refusal(resolved) {
+            return Err(refusal);
+        }
         let layout = slot_layout(resolved);
 
         // P3 corollary (jit_boundary.md slot-state axioms): a
@@ -1404,6 +1410,9 @@ impl PolydatAssembler {
     /// fallback. JIT-able nodes get native code, others get closures.
     pub fn compile_hybrid(self) -> Result<crate::compile::hybrid::HybridKernel, String> {
         let resolved = self.resolve().map_err(|e| format!("{e}"))?;
+        if let Some(refusal) = shared_binding_refusal(&resolved) {
+            return Err(refusal);
+        }
         let _coord_names = resolved.input_names();
         let layout = slot_layout(&resolved);
 
@@ -2011,6 +2020,35 @@ fn assertion_skip_reason(
 /// not the text of one.
 /// The port type of each wire input of a node, from its sources: the
 /// type a compiled lowering sees (SRD 115 §6).
+/// Why a compiled engine refuses this graph on account of a `shared`
+/// binding, if it has one. Only the interpreter state attaches the
+/// cross-fiber cell, commits write-throughs, and advances broadcasts;
+/// on a compiled kernel the binding would be an ordinary input that
+/// nothing publishes, so the graph is refused rather than run with
+/// other semantics (engine_parity.md, A10) until the cell protocol
+/// reaches compiled kernels.
+pub(crate) fn shared_binding_refusal(resolved: &ResolvedDag) -> Option<String> {
+    let mut shared: Vec<&String> = resolved
+        .output_modifiers
+        .iter()
+        .filter(|(_, m)| **m == crate::dsl::ast::BindingModifier::SHARED)
+        .map(|(name, _)| name)
+        .collect();
+    if shared.is_empty() {
+        return None;
+    }
+    shared.sort();
+    Some(format!(
+        "a `shared` binding ({}) runs on the interpreter only: compiled engines have no \
+         shared cell yet (docs/design/engine_parity.md, A10)",
+        shared
+            .iter()
+            .map(|s| format!("`{s}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
+}
+
 pub(crate) fn wire_types_of(resolved: &ResolvedDag, node_idx: usize) -> Vec<PortType> {
     resolved.wiring[node_idx]
         .iter()
