@@ -1059,6 +1059,7 @@ impl PolydatAssembler {
             resolved.input_defs.len(),
         );
         extras.input_dependents = layout.expand_dependents(resolved, &per_input);
+        extras.attribution = std::sync::Arc::new(Self::attribution_of(resolved));
 
         let mut steps = Vec::with_capacity(resolved.nodes.len());
         for (node_idx, (op, scratch)) in compiled_ops.into_iter().enumerate() {
@@ -1193,6 +1194,7 @@ impl PolydatAssembler {
             ),
         );
         let externs = Self::externs_of(&resolved)?;
+        let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
         let mut k = crate::compile::jit::compile_jit_push_pull(
             coord_count,
             total_slots,
@@ -1203,6 +1205,7 @@ impl PolydatAssembler {
             externs,
         )?;
         k.set_slot_info(guard, types);
+        k.set_attribution(attribution);
         Ok(k)
     }
 
@@ -1226,12 +1229,61 @@ impl PolydatAssembler {
         Self::jit_raw_from(resolved)
     }
 
+    /// Where each node lives, for the failure path (A7): its name, the
+    /// outputs it feeds, and `(first slot, port type)` per input port,
+    /// so a compiled kernel can report a step's failure as the
+    /// interpreter reports the node's.
+    pub(crate) fn attribution_of(resolved: &ResolvedDag) -> crate::compile::Attribution {
+        let layout = slot_layout(resolved);
+        let sites = resolved
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(node_idx, node)| {
+                let mut outputs: Vec<String> = resolved
+                    .output_map
+                    .iter()
+                    .filter(|(_, (n, _))| *n == node_idx)
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                outputs.sort();
+                let inputs = resolved.wiring[node_idx]
+                    .iter()
+                    .map(|source| match source {
+                        WireSource::Input(c) => (
+                            layout.input_starts.get(*c).copied().unwrap_or(*c),
+                            resolved
+                                .input_defs
+                                .get(*c)
+                                .map(|d| d.port_type)
+                                .unwrap_or(PortType::U64),
+                        ),
+                        WireSource::NodeOutput(u, p) => (
+                            layout.port_offsets[*u][*p],
+                            resolved.nodes[*u].meta().outs[*p].typ,
+                        ),
+                    })
+                    .collect();
+                crate::compile::NodeSite {
+                    name: node.meta().name.to_string(),
+                    outputs,
+                    inputs,
+                }
+            })
+            .collect();
+        crate::compile::Attribution {
+            sites,
+            context: resolved.context.clone(),
+        }
+    }
+
     #[cfg(feature = "jit")]
     fn jit_raw_from(resolved: ResolvedDag) -> Result<crate::compile::jit::JitKernelRaw, String> {
         let _coord_names = resolved.input_names();
         let (coord_count, total_slots, jit_steps, output_map) = Self::build_jit_layout(&resolved)?;
         let (guard, types) = Self::jit_slot_info(&resolved);
         let externs = Self::externs_of(&resolved)?;
+        let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
         let mut k = crate::compile::jit::compile_jit_raw_with(
             coord_count,
             total_slots,
@@ -1241,6 +1293,7 @@ impl PolydatAssembler {
             externs,
         )?;
         k.set_slot_info(guard, types);
+        k.set_attribution(attribution);
         Ok(k)
     }
 
@@ -1284,6 +1337,7 @@ impl PolydatAssembler {
         );
         let (guard, types) = Self::jit_slot_info(&resolved);
         let externs = Self::externs_of(&resolved)?;
+        let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
         let mut k = crate::compile::jit::compile_jit_push(
             coord_count,
             total_slots,
@@ -1294,6 +1348,7 @@ impl PolydatAssembler {
             externs,
         )?;
         k.set_slot_info(guard, types);
+        k.set_attribution(attribution);
         Ok(k)
     }
 
@@ -1317,6 +1372,7 @@ impl PolydatAssembler {
         );
         let (guard, types) = Self::jit_slot_info(&resolved);
         let externs = Self::externs_of(&resolved)?;
+        let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
         let mut k = crate::compile::jit::compile_jit_pull(
             coord_count,
             total_slots,
@@ -1327,6 +1383,7 @@ impl PolydatAssembler {
             externs,
         )?;
         k.set_slot_info(guard, types);
+        k.set_attribution(attribution);
         Ok(k)
     }
 
@@ -1417,6 +1474,7 @@ impl PolydatAssembler {
             ProvMode::Raw => {
                 let (guard, types) = Self::jit_slot_info(&resolved);
                 let externs = Self::externs_of(&resolved)?;
+                let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
                 let mut k = crate::compile::jit::compile_jit_raw_with(
                     coord_count,
                     total_slots,
@@ -1426,6 +1484,7 @@ impl PolydatAssembler {
                     externs,
                 )?;
                 k.set_slot_info(guard, types);
+                k.set_attribution(attribution);
                 k.set_owns_cycle(false);
                 select::P3Engine::Raw(k)
             }
@@ -1439,6 +1498,7 @@ impl PolydatAssembler {
                 );
                 let (guard, types) = Self::jit_slot_info(&resolved);
                 let externs = Self::externs_of(&resolved)?;
+                let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
                 let mut k = crate::compile::jit::compile_jit_pull(
                     coord_count,
                     total_slots,
@@ -1449,6 +1509,7 @@ impl PolydatAssembler {
                     externs,
                 )?;
                 k.set_slot_info(guard, types);
+                k.set_attribution(attribution);
                 k.set_owns_cycle(false);
                 select::P3Engine::Pull(k)
             }
@@ -1462,6 +1523,7 @@ impl PolydatAssembler {
                 );
                 let (guard, types) = Self::jit_slot_info(&resolved);
                 let externs = Self::externs_of(&resolved)?;
+                let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
                 let mut k = crate::compile::jit::compile_jit_push_pull(
                     coord_count,
                     total_slots,
@@ -1472,6 +1534,7 @@ impl PolydatAssembler {
                     externs,
                 )?;
                 k.set_slot_info(guard, types);
+                k.set_attribution(attribution);
                 k.set_owns_cycle(false);
                 select::P3Engine::PushPull(k)
             }
@@ -1506,6 +1569,7 @@ impl PolydatAssembler {
         let ref_slots = layout.ref_slot_mask(&resolved);
         let input_types: Vec<PortType> = resolved.input_defs.iter().map(|d| d.port_type).collect();
         let externs = Self::externs_of(&resolved)?;
+        let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
         // The runtime model's lifecycle classification, the one rule the
         // interpreter's fold applies.
         let classes = PolydatProgram::classify_lifecycle(
@@ -1534,6 +1598,7 @@ impl PolydatAssembler {
             externs,
             constant,
             classes.nondeterministic,
+            attribution,
         )?;
         kernel.retain_nodes(resolved.nodes);
         Ok(kernel)

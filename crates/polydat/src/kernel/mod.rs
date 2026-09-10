@@ -56,7 +56,7 @@ pub mod activation;
 mod api;
 mod api_impl;
 pub mod arena;
-mod engines;
+pub(crate) mod engines;
 pub mod interp;
 mod manifest;
 mod opt;

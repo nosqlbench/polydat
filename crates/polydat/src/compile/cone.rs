@@ -101,6 +101,9 @@ mod jit_impl {
         meta: NodeMeta,
         code_fn: unsafe fn(*const u64, *mut u64),
         total_slots: usize,
+        /// Where each member lives, for the failure path (A7): the
+        /// member that failed is named inside the cone's own report.
+        attribution: std::sync::Arc<crate::compile::Attribution>,
         /// Buffer slot per output port, in `meta.outs` order.
         out_slots: Vec<usize>,
         in_types: Vec<PortType>,
@@ -154,7 +157,7 @@ mod jit_impl {
             let mut scratch = ConeScratch::take();
             let (buf, table) = scratch.parts();
             buf.clear();
-            buf.resize(self.total_slots, 0);
+            buf.resize(self.total_slots + 1, 0);
             table.resize(self.table_len);
             table.set_generation(crate::kernel::cycle_generation());
             let mark = crate::kernel::cycle_arena_mark();
@@ -168,14 +171,27 @@ mod jit_impl {
                     self.in_entries[i],
                 );
             }
+            // Native code names the member it is in before each helper
+            // call (the slot past the layout); a failure is re-raised
+            // attributed to that member, and the program's own
+            // enrichment then names the cone (A7).
+            buf[self.total_slots] = u64::MAX;
             let code_fn = self.code_fn;
             let cp = buf.as_ptr();
             let mp = buf.as_mut_ptr();
-            crate::kernel::with_value_table(table, || {
-                crate::compile::jit::invoke_with_catch(move || unsafe {
-                    (code_fn)(cp, mp);
-                })
+            let capture = crate::kernel::engines::EvalPanicCaptureGuard::arm();
+            let outcome = crate::kernel::with_value_table(table, || {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    crate::compile::jit::invoke_with_catch(move || unsafe {
+                        (code_fn)(cp, mp);
+                    })
+                }))
             });
+            drop(capture);
+            if let Err(payload) = outcome {
+                let step = buf[self.total_slots] as usize;
+                self.attribution.reraise(payload, step, buf, None, table);
+            }
             for (k, slot) in self.out_slots.iter().enumerate() {
                 outputs[k] = decode_boundary(buf[*slot], self.out_types[k], table);
             }
@@ -842,7 +858,12 @@ mod jit_impl {
             .filter(|(_, ty)| ty.slot_color() == crate::ast::SlotColor::Hdl1)
             .map(|(i, _)| i)
             .collect();
-        let compiled = crate::compile::jit::compile_jit_entry(&jit_steps, 0, &handle_inputs);
+        let compiled = crate::compile::jit::compile_jit_entry(
+            &jit_steps,
+            0,
+            &handle_inputs,
+            Some(total_slots),
+        );
         let (code_fn, module, table_entries) = match compiled {
             Ok(parts) => parts,
             Err(e) => {
@@ -916,7 +937,9 @@ mod jit_impl {
             .iter()
             .map(|(j, p)| (local[j], *p))
             .collect();
+        let attribution = std::sync::Arc::new(PolydatAssembler::attribution_of(&sub));
         Ok(JitConeNode {
+            attribution,
             in_entries,
             table_len,
             meta,

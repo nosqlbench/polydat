@@ -285,12 +285,12 @@ fn install_eval_panic_hook() {
 /// Saves and restores the previous flag value: nodes that drive
 /// sub-kernels (comprehensions, gk-call) nest evals, and each
 /// level's catch_unwind must see its own panics suppressed.
-struct EvalPanicCaptureGuard {
+pub(crate) struct EvalPanicCaptureGuard {
     prev: bool,
 }
 
 impl EvalPanicCaptureGuard {
-    fn arm() -> Self {
+    pub(crate) fn arm() -> Self {
         install_eval_panic_hook();
         let prev = EVAL_PANIC_CAPTURE.with(|c| c.replace(true));
         EVAL_PANIC_LOCATION.with(|slot| slot.borrow_mut().take());
@@ -304,23 +304,32 @@ impl Drop for EvalPanicCaptureGuard {
     }
 }
 
-/// Build the rich diagnostic message for a node-level eval panic.
-/// Includes the node's function name, every output it feeds, the
-/// input values it was called with, the original panic location
-/// (captured by the suppression hook), and the program's
-/// diagnostic context (typically the source path / scope label).
-/// This is what the user sees instead of the bare panic payload.
-fn enrich_eval_panic(
-    payload: Box<dyn std::any::Any + Send>,
-    program: &PolydatProgram,
-    node_idx: usize,
-    inputs: &[Value],
-) -> String {
-    let original = payload
+/// The text of a panic payload: a `String` or a `&str`, else a marker.
+pub(crate) fn panic_payload_text(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
         .downcast_ref::<&'static str>()
         .map(|s| (*s).to_string())
         .or_else(|| payload.downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "<non-string panic payload>".into());
+        .unwrap_or_else(|| "<non-string panic payload>".into())
+}
+
+/// Build the rich diagnostic message for a node-level eval panic, on
+/// every engine (engine_parity.md, A7): the original payload, the
+/// panic location the capture guard recorded, the node's function
+/// name, every output it feeds, the program's diagnostic context
+/// (typically the source path / scope label), and the input values,
+/// already formatted (the interpreter's `Value`s through
+/// [`format_value_for_diag`], a compiled kernel's slots through its
+/// decoder). This is what the user sees instead of the bare panic
+/// payload, and it reads the same whichever engine raised it.
+pub(crate) fn enrich_panic(
+    payload: Box<dyn std::any::Any + Send>,
+    node_name: &str,
+    output_names: &[&str],
+    context: &str,
+    inputs: &[String],
+) -> String {
+    let original = panic_payload_text(payload.as_ref());
     // A payload that already carries node context came from a
     // nested wrapped eval's re-raise; its captured "location" is
     // the re-raise site, not the original panic — skip it.
@@ -332,6 +341,47 @@ fn enrich_eval_panic(
             .map(|loc| format!("\n  ↳ panicked at {loc}"))
             .unwrap_or_default()
     };
+    let outputs_label = if output_names.is_empty() {
+        "no declared output".to_string()
+    } else {
+        format!(
+            "output{} {}",
+            if output_names.len() == 1 { "" } else { "s" },
+            output_names.join(", ")
+        )
+    };
+    let mut input_label = String::new();
+    for (i, v) in inputs.iter().enumerate() {
+        if i > 0 {
+            input_label.push_str(", ");
+        }
+        input_label.push_str(&format!("[{i}]={v}"));
+    }
+    format!(
+        "{original}{location_line}\n  ↳ in node `{node_name}` ({outputs_label}) \
+         while evaluating {context}\n  \
+         ↳ inputs: [{input_label}]"
+    )
+}
+
+/// Re-raise an enriched message as the interpreter does: through
+/// `panic_any`, so the hook prints it once, or prints the short notice
+/// when a downstream reporter renders the full body (SRD-82).
+pub(crate) fn reraise_enriched(enriched: String) -> ! {
+    if PANIC_REPORTING_DOWNSTREAM.load(std::sync::atomic::Ordering::Relaxed) {
+        RERAISE_SHORT.with(|c| c.set(true));
+    }
+    std::panic::panic_any(enriched)
+}
+
+/// The interpreter's enrichment: the node's name and outputs from the
+/// program, the inputs as the `Value`s it was called with.
+fn enrich_eval_panic(
+    payload: Box<dyn std::any::Any + Send>,
+    program: &PolydatProgram,
+    node_idx: usize,
+    inputs: &[Value],
+) -> String {
     let node_name = program
         .nodes
         .get(node_idx)
@@ -348,33 +398,19 @@ fn enrich_eval_panic(
         })
         .collect();
     output_names.sort();
-    let outputs_label = if output_names.is_empty() {
-        "no declared output".to_string()
-    } else {
-        format!(
-            "output{} {}",
-            if output_names.len() == 1 { "" } else { "s" },
-            output_names.join(", ")
-        )
-    };
-    let mut input_label = String::new();
-    for (i, v) in inputs.iter().enumerate() {
-        if i > 0 {
-            input_label.push_str(", ");
-        }
-        input_label.push_str(&format!("[{i}]={}", format_value_for_diag(v)));
-    }
-    format!(
-        "{original}{location_line}\n  ↳ in node `{node_name}` ({outputs_label}) \
-         while evaluating {context}\n  \
-         ↳ inputs: [{input_label}]",
-        context = program.context(),
+    let inputs: Vec<String> = inputs.iter().map(format_value_for_diag).collect();
+    enrich_panic(
+        payload,
+        &node_name,
+        &output_names,
+        program.context(),
+        &inputs,
     )
 }
 
 /// Format a `Value` into a short diagnostic string. Strings are
 /// quoted + truncated; vectors print their length not contents.
-fn format_value_for_diag(v: &Value) -> String {
+pub(crate) fn format_value_for_diag(v: &Value) -> String {
     match v {
         Value::U64(n) => format!("U64({n})"),
         Value::F64(n) => format!("F64({n})"),
@@ -771,10 +807,7 @@ impl EngineCore {
         if let Err(e) = payload {
             let enriched =
                 enrich_eval_panic(e, program, node_idx, &self.input_scratch[..input_count]);
-            if PANIC_REPORTING_DOWNSTREAM.load(std::sync::atomic::Ordering::Relaxed) {
-                RERAISE_SHORT.with(|c| c.set(true));
-            }
-            std::panic::panic_any(enriched);
+            reraise_enriched(enriched);
         }
         self.node_clean[node_idx] = true;
     }

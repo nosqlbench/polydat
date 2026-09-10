@@ -345,11 +345,17 @@ fn __str_to_u32(input: &str) -> u32 {
         .unwrap_or_else(|e| panic!("__str_to_u32: cannot parse {raw:?} as u32: {e}"))
 }
 
-#[crate::polydat_node(category = Conversions)]
-fn __str_to_i64(input: &str) -> i64 {
+/// The adapter's parse, shared with the native helper so a failure is
+/// the same diagnostic on every engine.
+pub(crate) fn parse_i64(input: &str) -> i64 {
     let raw = input.trim();
     raw.parse::<i64>()
         .unwrap_or_else(|e| panic!("__str_to_i64: cannot parse {raw:?} as i64: {e}"))
+}
+
+#[crate::polydat_node(category = Conversions)]
+fn __str_to_i64(input: &str) -> i64 {
+    parse_i64(input)
 }
 
 #[crate::polydat_node(category = Conversions)]

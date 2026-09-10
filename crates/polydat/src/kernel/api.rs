@@ -348,7 +348,9 @@ pub trait Kernel: Send {
     /// closure tier, and the hybrid kernel alike (pure native code,
     /// being one function, evaluates the program). A side channel in
     /// the cone fires when the output is pulled; a failing node fails
-    /// when pulled. The value is owned; a handle is never returned to
+    /// when pulled, with the same attributed message on every engine:
+    /// the node's name, the outputs it feeds, the program's context,
+    /// and its inputs. The value is owned; a handle is never returned to
     /// the host, and a slot that holds `None` reads as `None`.
     fn pull(&mut self, name: &str) -> Value;
 

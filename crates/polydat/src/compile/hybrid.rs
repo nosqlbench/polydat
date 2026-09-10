@@ -149,6 +149,10 @@ struct HybridCore {
     side: std::sync::Arc<[bool]>,
     /// Per slot: the step that writes it.
     slot_step: std::sync::Arc<[Option<usize>]>,
+    /// Where each step came from, for the failure path (A7).
+    sites: std::sync::Arc<crate::compile::Attribution>,
+    /// The step running, for the failure path.
+    cur_step: usize,
 }
 
 /// Per-slot `Hdl1` mask over the nodes' output ports.
@@ -291,26 +295,47 @@ impl HybridCore {
         // The table is installed around every step, closures included,
         // so handle closures write through it as the segments' helpers do.
         let mut table = std::mem::take(&mut self.table);
-        {
+        // The capture guard is armed for the run, so a step's panic is
+        // recorded quietly and re-raised enriched, as the interpreter
+        // re-raises a node's (A7).
+        let capture = crate::kernel::engines::EvalPanicCaptureGuard::arm();
+        let outcome = {
             let _installed = crate::kernel::install_value_table(&mut table);
-            let steps = std::sync::Arc::clone(&self.steps);
-            for &i in order {
-                if self.ran[i] {
-                    continue;
-                }
-                let never = self.step_rerun[i] || self.volatile[i];
-                if (self.use_clean || self.side[i]) && self.clean[i] && !never {
-                    self.ran[i] = true;
-                    continue;
-                }
-                self.run_or_propagate(&steps[i]);
-                self.ran[i] = true;
-                self.clean[i] = !never;
-            }
-        }
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run_order(order)))
+        };
         self.table = table;
+        drop(capture);
+        if let Err(payload) = outcome {
+            let sites = std::sync::Arc::clone(&self.sites);
+            sites.reraise(
+                payload,
+                self.cur_step,
+                &self.buffer,
+                Some(&self.none),
+                &self.table,
+            );
+        }
         #[cfg(debug_assertions)]
         self.validate_refs();
+    }
+
+    /// The steps of `order` that have not run in the cycle, in order.
+    fn run_order(&mut self, order: &[usize]) {
+        let steps = std::sync::Arc::clone(&self.steps);
+        for &i in order {
+            if self.ran[i] {
+                continue;
+            }
+            let never = self.step_rerun[i] || self.volatile[i];
+            if (self.use_clean || self.side[i]) && self.clean[i] && !never {
+                self.ran[i] = true;
+                continue;
+            }
+            self.cur_step = i;
+            self.run_or_propagate(&steps[i]);
+            self.ran[i] = true;
+            self.clean[i] = !never;
+        }
     }
 
     /// One step: SRD-74 Rule 1, then the segment or the closure. A step
@@ -1040,6 +1065,7 @@ pub(crate) fn build_hybrid(
     externs: crate::compile::externs::Externs,
     constant: Vec<bool>,
     volatile: Vec<bool>,
+    attribution: std::sync::Arc<crate::compile::Attribution>,
 ) -> Result<HybridKernelPushPull, String> {
     let mut steps: Vec<HybridStep> = Vec::new();
     let mut scratch: Vec<crate::ast::ScratchBuf> = Vec::new();
@@ -1218,8 +1244,12 @@ pub(crate) fn build_hybrid(
                     .filter(|(_, r)| **r)
                     .map(|(s, _)| s)
                     .collect();
-                let (code_fn, module, entries) =
-                    jit::compile_jit_entry(&single_batch, table_entries.len(), &guarded_slots)?;
+                let (code_fn, module, entries) = jit::compile_jit_entry(
+                    &single_batch,
+                    table_entries.len(),
+                    &guarded_slots,
+                    None,
+                )?;
                 table_entries.extend(entries);
                 step_rerun.push(output_slots.iter().any(|&s| handle_mask[s]));
                 steps.push(HybridStep::Jit(JitSegment {
@@ -1253,6 +1283,7 @@ pub(crate) fn build_hybrid(
         externs,
         constant,
         volatile,
+        attribution,
     )
 }
 
@@ -1305,6 +1336,7 @@ pub(crate) fn build_hybrid(
     externs: crate::compile::externs::Externs,
     constant: Vec<bool>,
     volatile: Vec<bool>,
+    attribution: std::sync::Arc<crate::compile::Attribution>,
 ) -> Result<HybridKernelPushPull, String> {
     let mut steps: Vec<HybridStep> = Vec::new();
     let mut scratch: Vec<crate::ast::ScratchBuf> = Vec::new();
@@ -1420,6 +1452,7 @@ pub(crate) fn build_hybrid(
         externs,
         constant,
         volatile,
+        attribution,
     )
 }
 
@@ -1449,6 +1482,7 @@ fn build_pushpull_from_steps(
     mut externs: crate::compile::externs::Externs,
     constant: Vec<bool>,
     volatile: Vec<bool>,
+    attribution: std::sync::Arc<crate::compile::Attribution>,
 ) -> Result<HybridKernelPushPull, String> {
     let step_count = steps.len();
     debug_assert_eq!(step_rerun.len(), step_count);
@@ -1535,6 +1569,8 @@ fn build_pushpull_from_steps(
             volatile: volatile.into(),
             side: side.into(),
             slot_step: slot_step.into(),
+            sites: attribution,
+            cur_step: 0,
         },
         slot_provenance,
         changed_mask: u64::MAX, // all dirty on first eval

@@ -243,3 +243,87 @@ impl Invalidation {
         }
     }
 }
+
+/// Where each compiled step came from, for the failure path only
+/// (engine_parity.md, A7). A step's panic is caught at the step
+/// boundary and re-raised enriched exactly as the interpreter enriches
+/// a node's: the node's name, the outputs it feeds, the program's
+/// diagnostic context, and its input values decoded from the buffer
+/// where the slot types allow. Step index is node index on every
+/// compiled engine.
+#[derive(Default)]
+pub(crate) struct Attribution {
+    pub(crate) sites: Vec<NodeSite>,
+    /// The program's diagnostic context (`PolydatProgram::context`).
+    pub(crate) context: String,
+}
+
+/// One node's identity for the failure path.
+pub(crate) struct NodeSite {
+    pub(crate) name: String,
+    /// The declared outputs the node feeds, sorted.
+    pub(crate) outputs: Vec<String>,
+    /// `(first slot, port type)` of every input port, in port order.
+    pub(crate) inputs: Vec<(usize, crate::ast::PortType)>,
+}
+
+impl Attribution {
+    /// The inputs of `step` as diagnostic text, from the buffer: `None`
+    /// where the mask says so, the port type alone for a vector (as the
+    /// interpreter prints one), and the port type again where the slot
+    /// cannot be decoded, so the report itself never fails.
+    fn inputs_of(
+        &self,
+        step: usize,
+        buffer: &[u64],
+        none: Option<&[bool]>,
+        table: &crate::kernel::ValueTable,
+    ) -> Vec<String> {
+        let Some(site) = self.sites.get(step) else {
+            return Vec::new();
+        };
+        let _quiet = crate::kernel::engines::EvalPanicCaptureGuard::arm();
+        site.inputs
+            .iter()
+            .map(|&(slot, ty)| {
+                if none.is_some_and(|m| m.get(slot).copied().unwrap_or(false)) {
+                    return "None".to_string();
+                }
+                if ty.slot_color() == crate::ast::SlotColor::Ref2 {
+                    return format!("{ty:?}");
+                }
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    crate::kernel::engines::format_value_for_diag(&marshal::decode_output(
+                        buffer, slot, ty, table,
+                    ))
+                }))
+                .unwrap_or_else(|_| format!("{ty:?}"))
+            })
+            .collect()
+    }
+
+    /// Re-raise a step's panic enriched as the interpreter enriches a
+    /// node's (`kernel::engines::enrich_panic`). `step` beyond the
+    /// sites (native code that failed before naming a step) reports an
+    /// unknown node, as the interpreter does for an index it lacks.
+    pub(crate) fn reraise(
+        &self,
+        payload: Box<dyn std::any::Any + Send>,
+        step: usize,
+        buffer: &[u64],
+        none: Option<&[bool]>,
+        table: &crate::kernel::ValueTable,
+    ) -> ! {
+        let site = self.sites.get(step);
+        let name = site
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| format!("<unknown node #{step}>"));
+        let outputs: Vec<&str> = site
+            .map(|s| s.outputs.iter().map(String::as_str).collect())
+            .unwrap_or_default();
+        let inputs = self.inputs_of(step, buffer, none, table);
+        let enriched =
+            crate::kernel::engines::enrich_panic(payload, &name, &outputs, &self.context, &inputs);
+        crate::kernel::engines::reraise_enriched(enriched)
+    }
+}

@@ -30,17 +30,19 @@ use super::kernels::{
 
 /// Extern function: xxhash3 of a u64 (called from JIT code).
 extern "C" fn jit_xxh3_hash(value: u64) -> u64 {
-    xxhash_rust::xxh3::xxh3_64(&value.to_le_bytes())
+    guarded(|| xxhash_rust::xxh3::xxh3_64(&value.to_le_bytes()))
 }
 
 /// Extern function: interleave bits of two u64 values (called from JIT code).
 extern "C" fn jit_interleave(a: u64, b: u64) -> u64 {
-    let mut result: u64 = 0;
-    for i in 0..32 {
-        result |= ((a >> i) & 1) << (2 * i);
-        result |= ((b >> i) & 1) << (2 * i + 1);
-    }
-    result
+    guarded(|| {
+        let mut result: u64 = 0;
+        for i in 0..32 {
+            result |= ((a >> i) & 1) << (2 * i);
+            result |= ((b >> i) & 1) << (2 * i + 1);
+        }
+        result
+    })
 }
 
 /// Extern function: interpolating LUT sample (called from JIT code).
@@ -48,263 +50,309 @@ extern "C" fn jit_interleave(a: u64, b: u64) -> u64 {
 /// Input is f64 bits in [0,1]. LUT pointer + length are baked constants.
 /// Returns f64 result as u64 bits.
 extern "C" fn jit_lut_sample(input_bits: u64, lut_ptr: u64, lut_len: u64) -> u64 {
-    let u = f64::from_bits(input_bits).clamp(0.0, 1.0);
-    let n = (lut_len - 1) as f64;
-    let pos = u * n;
-    let idx = (pos as usize).min(lut_len as usize - 2);
-    let frac = pos - idx as f64;
-    let result = unsafe {
-        let ptr = lut_ptr as *const f64;
-        let a = *ptr.add(idx);
-        let b = *ptr.add(idx + 1);
-        a * (1.0 - frac) + b * frac
-    };
-    result.to_bits()
+    guarded(|| {
+        let u = f64::from_bits(input_bits).clamp(0.0, 1.0);
+        let n = (lut_len - 1) as f64;
+        let pos = u * n;
+        let idx = (pos as usize).min(lut_len as usize - 2);
+        let frac = pos - idx as f64;
+        let result = unsafe {
+            let ptr = lut_ptr as *const f64;
+            let a = *ptr.add(idx);
+            let b = *ptr.add(idx + 1);
+            a * (1.0 - frac) + b * frac
+        };
+        result.to_bits()
+    })
 }
 
 /// Extern function: LFSR shuffle (called from JIT code).
 extern "C" fn jit_shuffle(input: u64, feedback: u64, size: u64, min: u64) -> u64 {
-    let mut register = (input % size) + 1;
-    loop {
-        let lsb = register & 1;
-        register >>= 1;
-        if lsb != 0 {
-            register ^= feedback;
+    guarded(|| {
+        let mut register = (input % size) + 1;
+        loop {
+            let lsb = register & 1;
+            register >>= 1;
+            if lsb != 0 {
+                register ^= feedback;
+            }
+            if register <= size {
+                break;
+            }
         }
-        if register <= size {
-            break;
-        }
-    }
-    (register - 1) + min
+        (register - 1) + min
+    })
 }
 
 // Extern functions for math operations (called from JIT code).
 extern "C" fn jit_sin(bits: u64) -> u64 {
-    f64::from_bits(bits).sin().to_bits()
+    guarded(|| f64::from_bits(bits).sin().to_bits())
 }
 extern "C" fn jit_cos(bits: u64) -> u64 {
-    f64::from_bits(bits).cos().to_bits()
+    guarded(|| f64::from_bits(bits).cos().to_bits())
 }
 extern "C" fn jit_tan(bits: u64) -> u64 {
-    f64::from_bits(bits).tan().to_bits()
+    guarded(|| f64::from_bits(bits).tan().to_bits())
 }
 extern "C" fn jit_asin(bits: u64) -> u64 {
-    f64::from_bits(bits).asin().to_bits()
+    guarded(|| f64::from_bits(bits).asin().to_bits())
 }
 extern "C" fn jit_acos(bits: u64) -> u64 {
-    f64::from_bits(bits).acos().to_bits()
+    guarded(|| f64::from_bits(bits).acos().to_bits())
 }
 extern "C" fn jit_atan(bits: u64) -> u64 {
-    f64::from_bits(bits).atan().to_bits()
+    guarded(|| f64::from_bits(bits).atan().to_bits())
 }
 extern "C" fn jit_sqrt(bits: u64) -> u64 {
-    f64::from_bits(bits).sqrt().to_bits()
+    guarded(|| f64::from_bits(bits).sqrt().to_bits())
 }
 extern "C" fn jit_abs_f64(bits: u64) -> u64 {
-    f64::from_bits(bits).abs().to_bits()
+    guarded(|| f64::from_bits(bits).abs().to_bits())
 }
 extern "C" fn jit_ln(bits: u64) -> u64 {
-    f64::from_bits(bits).ln().to_bits()
+    guarded(|| f64::from_bits(bits).ln().to_bits())
 }
 extern "C" fn jit_exp(bits: u64) -> u64 {
-    f64::from_bits(bits).exp().to_bits()
+    guarded(|| f64::from_bits(bits).exp().to_bits())
 }
 extern "C" fn jit_floor_base10(bits: u64) -> u64 {
-    use crate::library::round_numbers::*;
-    let x = f64::from_bits(bits);
-    let r = if !positive_finite(x) {
-        0.0
-    } else {
-        floor_pow10(x)
-    };
-    r.to_bits()
+    guarded(|| {
+        use crate::library::round_numbers::*;
+        let x = f64::from_bits(bits);
+        let r = if !positive_finite(x) {
+            0.0
+        } else {
+            floor_pow10(x)
+        };
+        r.to_bits()
+    })
 }
 extern "C" fn jit_ceiling_base10(bits: u64) -> u64 {
-    use crate::library::round_numbers::*;
-    let x = f64::from_bits(bits);
-    let r = if !positive_finite(x) {
-        0.0
-    } else {
-        let lo = floor_pow10(x);
-        if lo == x { lo } else { lo * 10.0 }
-    };
-    r.to_bits()
+    guarded(|| {
+        use crate::library::round_numbers::*;
+        let x = f64::from_bits(bits);
+        let r = if !positive_finite(x) {
+            0.0
+        } else {
+            let lo = floor_pow10(x);
+            if lo == x { lo } else { lo * 10.0 }
+        };
+        r.to_bits()
+    })
 }
 extern "C" fn jit_closest_base10(bits: u64) -> u64 {
-    use crate::library::round_numbers::*;
-    let x = f64::from_bits(bits);
-    let r = if !positive_finite(x) {
-        0.0
-    } else {
-        let lo = floor_pow10(x);
-        let hi = if lo == x { lo } else { lo * 10.0 };
-        pick_closest(x, lo, hi)
-    };
-    r.to_bits()
+    guarded(|| {
+        use crate::library::round_numbers::*;
+        let x = f64::from_bits(bits);
+        let r = if !positive_finite(x) {
+            0.0
+        } else {
+            let lo = floor_pow10(x);
+            let hi = if lo == x { lo } else { lo * 10.0 };
+            pick_closest(x, lo, hi)
+        };
+        r.to_bits()
+    })
 }
 extern "C" fn jit_floor_decade(bits: u64) -> u64 {
-    use crate::library::round_numbers::*;
-    let x = f64::from_bits(bits);
-    let r = if !positive_finite(x) {
-        0.0
-    } else {
-        let base = floor_pow10(x);
-        (x / base).floor() * base
-    };
-    r.to_bits()
+    guarded(|| {
+        use crate::library::round_numbers::*;
+        let x = f64::from_bits(bits);
+        let r = if !positive_finite(x) {
+            0.0
+        } else {
+            let base = floor_pow10(x);
+            (x / base).floor() * base
+        };
+        r.to_bits()
+    })
 }
 extern "C" fn jit_ceiling_decade(bits: u64) -> u64 {
-    use crate::library::round_numbers::*;
-    let x = f64::from_bits(bits);
-    let r = if !positive_finite(x) {
-        0.0
-    } else {
-        let base = floor_pow10(x);
-        (x / base).ceil() * base
-    };
-    r.to_bits()
+    guarded(|| {
+        use crate::library::round_numbers::*;
+        let x = f64::from_bits(bits);
+        let r = if !positive_finite(x) {
+            0.0
+        } else {
+            let base = floor_pow10(x);
+            (x / base).ceil() * base
+        };
+        r.to_bits()
+    })
 }
 extern "C" fn jit_closest_decade(bits: u64) -> u64 {
-    use crate::library::round_numbers::*;
-    let x = f64::from_bits(bits);
-    let r = if !positive_finite(x) {
-        0.0
-    } else {
-        let base = floor_pow10(x);
-        (x / base).round() * base
-    };
-    r.to_bits()
+    guarded(|| {
+        use crate::library::round_numbers::*;
+        let x = f64::from_bits(bits);
+        let r = if !positive_finite(x) {
+            0.0
+        } else {
+            let base = floor_pow10(x);
+            (x / base).round() * base
+        };
+        r.to_bits()
+    })
 }
 extern "C" fn jit_floor_binomial(bits: u64) -> u64 {
-    use crate::library::round_numbers::*;
-    let x = f64::from_bits(bits);
-    let r = if !positive_finite(x) {
-        0.0
-    } else {
-        floor_pow2(x)
-    };
-    r.to_bits()
+    guarded(|| {
+        use crate::library::round_numbers::*;
+        let x = f64::from_bits(bits);
+        let r = if !positive_finite(x) {
+            0.0
+        } else {
+            floor_pow2(x)
+        };
+        r.to_bits()
+    })
 }
 extern "C" fn jit_ceiling_binomial(bits: u64) -> u64 {
-    use crate::library::round_numbers::*;
-    let x = f64::from_bits(bits);
-    let r = if !positive_finite(x) {
-        0.0
-    } else {
-        let lo = floor_pow2(x);
-        if lo == x { lo } else { lo * 2.0 }
-    };
-    r.to_bits()
+    guarded(|| {
+        use crate::library::round_numbers::*;
+        let x = f64::from_bits(bits);
+        let r = if !positive_finite(x) {
+            0.0
+        } else {
+            let lo = floor_pow2(x);
+            if lo == x { lo } else { lo * 2.0 }
+        };
+        r.to_bits()
+    })
 }
 extern "C" fn jit_closest_binomial(bits: u64) -> u64 {
-    use crate::library::round_numbers::*;
-    let x = f64::from_bits(bits);
-    let r = if !positive_finite(x) {
-        0.0
-    } else {
-        let lo = floor_pow2(x);
-        let hi = if lo == x { lo } else { lo * 2.0 };
-        pick_closest(x, lo, hi)
-    };
-    r.to_bits()
+    guarded(|| {
+        use crate::library::round_numbers::*;
+        let x = f64::from_bits(bits);
+        let r = if !positive_finite(x) {
+            0.0
+        } else {
+            let lo = floor_pow2(x);
+            let hi = if lo == x { lo } else { lo * 2.0 };
+            pick_closest(x, lo, hi)
+        };
+        r.to_bits()
+    })
 }
 extern "C" fn jit_floor_fibonacci(bits: u64) -> u64 {
-    use crate::library::round_numbers::*;
-    let x = f64::from_bits(bits);
-    let r = if !positive_finite(x) {
-        0.0
-    } else {
-        floor_fibonacci_val(x)
-    };
-    r.to_bits()
+    guarded(|| {
+        use crate::library::round_numbers::*;
+        let x = f64::from_bits(bits);
+        let r = if !positive_finite(x) {
+            0.0
+        } else {
+            floor_fibonacci_val(x)
+        };
+        r.to_bits()
+    })
 }
 extern "C" fn jit_ceiling_fibonacci(bits: u64) -> u64 {
-    use crate::library::round_numbers::*;
-    let x = f64::from_bits(bits);
-    let r = if !positive_finite(x) {
-        0.0
-    } else {
-        ceiling_fibonacci_val(x)
-    };
-    r.to_bits()
+    guarded(|| {
+        use crate::library::round_numbers::*;
+        let x = f64::from_bits(bits);
+        let r = if !positive_finite(x) {
+            0.0
+        } else {
+            ceiling_fibonacci_val(x)
+        };
+        r.to_bits()
+    })
 }
 extern "C" fn jit_closest_fibonacci(bits: u64) -> u64 {
-    use crate::library::round_numbers::*;
-    let x = f64::from_bits(bits);
-    let r = if !positive_finite(x) {
-        0.0
-    } else {
-        pick_closest(x, floor_fibonacci_val(x), ceiling_fibonacci_val(x))
-    };
-    r.to_bits()
+    guarded(|| {
+        use crate::library::round_numbers::*;
+        let x = f64::from_bits(bits);
+        let r = if !positive_finite(x) {
+            0.0
+        } else {
+            pick_closest(x, floor_fibonacci_val(x), ceiling_fibonacci_val(x))
+        };
+        r.to_bits()
+    })
 }
 
 extern "C" fn jit_atan2(y_bits: u64, x_bits: u64) -> u64 {
-    f64::from_bits(y_bits)
-        .atan2(f64::from_bits(x_bits))
-        .to_bits()
+    guarded(|| {
+        f64::from_bits(y_bits)
+            .atan2(f64::from_bits(x_bits))
+            .to_bits()
+    })
 }
 extern "C" fn jit_pow(base_bits: u64, exp_bits: u64) -> u64 {
-    f64::from_bits(base_bits)
-        .powf(f64::from_bits(exp_bits))
-        .to_bits()
+    guarded(|| {
+        f64::from_bits(base_bits)
+            .powf(f64::from_bits(exp_bits))
+            .to_bits()
+    })
 }
 extern "C" fn jit_round_nearest(x_bits: u64, iv_bits: u64) -> u64 {
-    let x = f64::from_bits(x_bits);
-    let interval = f64::from_bits(iv_bits);
-    let r = if !(interval.is_finite() && interval > 0.0) {
-        x
-    } else {
-        (x / interval).round() * interval
-    };
-    r.to_bits()
+    guarded(|| {
+        let x = f64::from_bits(x_bits);
+        let interval = f64::from_bits(iv_bits);
+        let r = if !(interval.is_finite() && interval > 0.0) {
+            x
+        } else {
+            (x / interval).round() * interval
+        };
+        r.to_bits()
+    })
 }
 extern "C" fn jit_round_floor(x_bits: u64, iv_bits: u64) -> u64 {
-    let x = f64::from_bits(x_bits);
-    let interval = f64::from_bits(iv_bits);
-    let r = if !(interval.is_finite() && interval > 0.0) {
-        x
-    } else {
-        (x / interval).floor() * interval
-    };
-    r.to_bits()
+    guarded(|| {
+        let x = f64::from_bits(x_bits);
+        let interval = f64::from_bits(iv_bits);
+        let r = if !(interval.is_finite() && interval > 0.0) {
+            x
+        } else {
+            (x / interval).floor() * interval
+        };
+        r.to_bits()
+    })
 }
 extern "C" fn jit_round_ceiling(x_bits: u64, iv_bits: u64) -> u64 {
-    let x = f64::from_bits(x_bits);
-    let interval = f64::from_bits(iv_bits);
-    let r = if !(interval.is_finite() && interval > 0.0) {
-        x
-    } else {
-        (x / interval).ceil() * interval
-    };
-    r.to_bits()
+    guarded(|| {
+        let x = f64::from_bits(x_bits);
+        let interval = f64::from_bits(iv_bits);
+        let r = if !(interval.is_finite() && interval > 0.0) {
+            x
+        } else {
+            (x / interval).ceil() * interval
+        };
+        r.to_bits()
+    })
 }
 
 extern "C" fn jit_pcg(input: u64, seed: u64, stream: u64) -> u64 {
-    let inc = 2u64.wrapping_mul(stream).wrapping_add(1);
-    crate::library::pcg::pcg_seek(seed, inc, input)
+    guarded(|| {
+        let inc = 2u64.wrapping_mul(stream).wrapping_add(1);
+        crate::library::pcg::pcg_seek(seed, inc, input)
+    })
 }
 extern "C" fn jit_pcg_stream(input: u64, stream: u64, seed: u64) -> u64 {
-    let inc = 2u64.wrapping_mul(stream).wrapping_add(1);
-    crate::library::pcg::pcg_seek(seed, inc, input)
+    guarded(|| {
+        let inc = 2u64.wrapping_mul(stream).wrapping_add(1);
+        crate::library::pcg::pcg_seek(seed, inc, input)
+    })
 }
 extern "C" fn jit_n_of(input: u64, n: u64, m: u64) -> u64 {
-    if m == 0 {
-        return 0;
-    }
-    crate::library::probability::n_of_m_eval(input, n, m)
+    guarded(|| {
+        if m == 0 {
+            return 0;
+        }
+        crate::library::probability::n_of_m_eval(input, n, m)
+    })
 }
 
 extern "C" fn jit_cycle_walk(pos: u64, range: u64, seed: u64, inc: u64) -> u64 {
-    let stream = inc.saturating_sub(1) / 2;
-    let state = crate::library::pcg::build_cycle_walk_state(range, seed, stream);
-    crate::library::pcg::cycle_walk_inner(
-        pos,
-        range,
-        state.half_bits,
-        state.half_mask,
-        &state.round_keys,
-    )
+    guarded(|| {
+        let stream = inc.saturating_sub(1) / 2;
+        let state = crate::library::pcg::build_cycle_walk_state(range, seed, stream);
+        crate::library::pcg::cycle_walk_inner(
+            pos,
+            range,
+            state.half_bits,
+            state.half_mask,
+            &state.round_keys,
+        )
+    })
 }
 
 extern "C" fn jit_perlin_1d(input: u64, perm_ptr: u64, freq_bits: u64) -> u64 {
@@ -359,17 +407,21 @@ extern "C" fn jit_fractal_noise_2d(
 }
 
 extern "C" fn jit_thread_id() -> u64 {
-    let id = std::thread::current().id();
-    let id_str = format!("{id:?}");
-    let num = id_str.trim_start_matches("ThreadId(").trim_end_matches(')');
-    num.parse().unwrap_or(0)
+    guarded(|| {
+        let id = std::thread::current().id();
+        let id_str = format!("{id:?}");
+        let num = id_str.trim_start_matches("ThreadId(").trim_end_matches(')');
+        num.parse().unwrap_or(0)
+    })
 }
 
 extern "C" fn jit_current_epoch_millis() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
+    guarded(|| {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as u64
+    })
 }
 
 // ── Catchable predicate violations via setjmp/longjmp ─────────
@@ -524,7 +576,10 @@ pub(crate) fn invoke_with_catch<F: FnOnce()>(f: F) {
         let msg = JIT_VIOLATION_MSG
             .with(|m| m.borrow_mut().take())
             .unwrap_or_else(|| "JIT predicate violation (no message)".into());
-        panic!("{msg}");
+        // Not `panic!`: the hook already saw the original panic (under
+        // `guarded`) and recorded its location for the enrichment the
+        // kernel adds; a second hook call would overwrite it.
+        std::panic::resume_unwind(Box::new(msg));
     }
 }
 
@@ -586,21 +641,23 @@ extern "C" fn jit_weighted_pick(
     aliases_ptr: u64,
     n: u64,
 ) -> u64 {
-    let n = n as usize;
-    let slot = (input as usize) % n;
-    let bias_test = ((input >> 32) as f64) / (u32::MAX as f64);
-    unsafe {
-        let biases = std::slice::from_raw_parts(biases_ptr as *const f64, n);
-        let primaries = std::slice::from_raw_parts(primaries_ptr as *const u64, n);
-        let aliases = std::slice::from_raw_parts(aliases_ptr as *const u64, n);
-        let values = std::slice::from_raw_parts(values_ptr as *const u64, n);
-        let index = if bias_test < biases[slot] {
-            primaries[slot]
-        } else {
-            aliases[slot]
-        };
-        values[index as usize]
-    }
+    guarded(|| {
+        let n = n as usize;
+        let slot = (input as usize) % n;
+        let bias_test = ((input >> 32) as f64) / (u32::MAX as f64);
+        unsafe {
+            let biases = std::slice::from_raw_parts(biases_ptr as *const f64, n);
+            let primaries = std::slice::from_raw_parts(primaries_ptr as *const u64, n);
+            let aliases = std::slice::from_raw_parts(aliases_ptr as *const u64, n);
+            let values = std::slice::from_raw_parts(values_ptr as *const u64, n);
+            let index = if bias_test < biases[slot] {
+                primaries[slot]
+            } else {
+                aliases[slot]
+            };
+            values[index as usize]
+        }
+    })
 }
 
 // ── Non-scalar String & Byte extern helpers (SRD 111) ──────────
@@ -610,116 +667,114 @@ extern "C" fn jit_weighted_pick(
 // source string stays valid while its result is written.
 
 extern "C" fn jit_u64_to_str(val: u64) -> u64 {
-    use std::fmt::Write as _;
-    let mut w = crate::kernel::ArenaWriter::new();
-    let _ = write!(w, "{val}");
-    w.finish()
+    guarded(|| {
+        use std::fmt::Write as _;
+        let mut w = crate::kernel::ArenaWriter::new();
+        let _ = write!(w, "{val}");
+        w.finish()
+    })
 }
 
 extern "C" fn jit_i64_to_str(val: i64) -> u64 {
-    use std::fmt::Write as _;
-    let mut w = crate::kernel::ArenaWriter::new();
-    let _ = write!(w, "{val}");
-    w.finish()
+    guarded(|| {
+        use std::fmt::Write as _;
+        let mut w = crate::kernel::ArenaWriter::new();
+        let _ = write!(w, "{val}");
+        w.finish()
+    })
 }
 
 extern "C" fn jit_f64_to_str(val_bits: u64) -> u64 {
-    use std::fmt::Write as _;
-    let mut w = crate::kernel::ArenaWriter::new();
-    let _ = write!(w, "{}", f64::from_bits(val_bits));
-    w.finish()
+    guarded(|| {
+        use std::fmt::Write as _;
+        let mut w = crate::kernel::ArenaWriter::new();
+        let _ = write!(w, "{}", f64::from_bits(val_bits));
+        w.finish()
+    })
 }
 
 extern "C" fn jit_bool_to_str(val: u64) -> u64 {
-    // Both spellings are interned constants; nothing enters the arena.
-    crate::kernel::StaticInterner::intern(if val != 0 { "true" } else { "false" })
+    guarded(|| {
+        // Both spellings are interned constants; nothing enters the arena.
+        crate::kernel::StaticInterner::intern(if val != 0 { "true" } else { "false" })
+    })
 }
 
-// The parse helpers match P1's adapters (`__str_to_u64` and siblings):
-// an unparseable value is a diagnostic, not a silent zero. Failure
-// leaves native code through the predicate-violation path.
+// The parse helpers are the library's own adapters (`__str_to_u64` and
+// siblings), so an unparseable value is the same diagnostic on every
+// engine, and a boolean's spellings are the same set. Failure leaves
+// native code through `guarded`.
 extern "C" fn jit_str_to_u64(handle: u64) -> u64 {
-    let s = crate::kernel::resolve_thread_str(handle);
-    match s.trim().parse::<u64>() {
-        Ok(v) => v,
-        Err(e) => jit_violation_longjmp(format!(
-            "__str_to_u64: cannot read {:?} as a whole number: {e}",
-            s.trim()
-        )),
-    }
+    guarded(|| crate::library::convert::parse_u64(crate::kernel::resolve_thread_str(handle)))
 }
 
 extern "C" fn jit_str_to_i64(handle: u64) -> i64 {
-    let s = crate::kernel::resolve_thread_str(handle);
-    match s.trim().parse::<i64>() {
-        Ok(v) => v,
-        Err(e) => jit_violation_longjmp(format!(
-            "__str_to_i64: cannot read {:?} as an integer: {e}",
-            s.trim()
-        )),
-    }
+    guarded(|| crate::library::polyfill::parse_i64(crate::kernel::resolve_thread_str(handle)))
 }
 
 extern "C" fn jit_str_to_f64(handle: u64) -> u64 {
-    let s = crate::kernel::resolve_thread_str(handle);
-    match s.trim().parse::<f64>() {
-        Ok(f) => f.to_bits(),
-        Err(e) => jit_violation_longjmp(format!(
-            "__str_to_f64: cannot read {:?} as a number: {e}",
-            s.trim()
-        )),
-    }
+    guarded(|| {
+        crate::library::convert::parse_f64(crate::kernel::resolve_thread_str(handle)).to_bits()
+    })
 }
 
 extern "C" fn jit_str_to_bool(handle: u64) -> u64 {
-    let s = crate::kernel::resolve_thread_str(handle);
-    match s.trim().to_lowercase().as_str() {
-        "true" | "1" | "t" | "yes" | "y" => 1,
-        _ => 0,
-    }
+    guarded(|| {
+        crate::library::convert::parse_bool(crate::kernel::resolve_thread_str(handle)) as u64
+    })
 }
 
 extern "C" fn jit_str_concat(h1: u64, h2: u64) -> u64 {
-    let s1 = crate::kernel::resolve_thread_str(h1);
-    let s2 = crate::kernel::resolve_thread_str(h2);
-    let mut w = crate::kernel::ArenaWriter::new();
-    w.push(s1.as_bytes());
-    w.push(s2.as_bytes());
-    w.finish()
+    guarded(|| {
+        let s1 = crate::kernel::resolve_thread_str(h1);
+        let s2 = crate::kernel::resolve_thread_str(h2);
+        let mut w = crate::kernel::ArenaWriter::new();
+        w.push(s1.as_bytes());
+        w.push(s2.as_bytes());
+        w.finish()
+    })
 }
 
 extern "C" fn jit_str_lower(h: u64) -> u64 {
-    use std::fmt::Write as _;
-    let s = crate::kernel::resolve_thread_str(h);
-    let mut w = crate::kernel::ArenaWriter::new();
-    for c in s.chars().flat_map(char::to_lowercase) {
-        let _ = w.write_char(c);
-    }
-    w.finish()
+    guarded(|| {
+        use std::fmt::Write as _;
+        let s = crate::kernel::resolve_thread_str(h);
+        let mut w = crate::kernel::ArenaWriter::new();
+        for c in s.chars().flat_map(char::to_lowercase) {
+            let _ = w.write_char(c);
+        }
+        w.finish()
+    })
 }
 
 extern "C" fn jit_str_upper(h: u64) -> u64 {
-    use std::fmt::Write as _;
-    let s = crate::kernel::resolve_thread_str(h);
-    let mut w = crate::kernel::ArenaWriter::new();
-    for c in s.chars().flat_map(char::to_uppercase) {
-        let _ = w.write_char(c);
-    }
-    w.finish()
+    guarded(|| {
+        use std::fmt::Write as _;
+        let s = crate::kernel::resolve_thread_str(h);
+        let mut w = crate::kernel::ArenaWriter::new();
+        for c in s.chars().flat_map(char::to_uppercase) {
+            let _ = w.write_char(c);
+        }
+        w.finish()
+    })
 }
 
 extern "C" fn jit_str_trim(h: u64) -> u64 {
-    let s = crate::kernel::resolve_thread_str(h);
-    // A trim is a sub-range of the source; the source's bytes are
-    // already in the arena or the interner, so a new range over the
-    // same bytes would name it, but a handle names a range of one
-    // allocation and a static source has no arena range. Copy once.
-    crate::kernel::put_thread_str(s.trim())
+    guarded(|| {
+        let s = crate::kernel::resolve_thread_str(h);
+        // A trim is a sub-range of the source; the source's bytes are
+        // already in the arena or the interner, so a new range over the
+        // same bytes would name it, but a handle names a range of one
+        // allocation and a static source has no arena range. Copy once.
+        crate::kernel::put_thread_str(s.trim())
+    })
 }
 
 extern "C" fn jit_str_len(h: u64) -> u64 {
-    let s = crate::kernel::resolve_thread_str(h);
-    s.len() as u64
+    guarded(|| {
+        let s = crate::kernel::resolve_thread_str(h);
+        s.len() as u64
+    })
 }
 
 // ── JSON through the value table (SRD 115 §3) ────────────────────
@@ -740,49 +795,53 @@ fn write_json(entry: u64, j: serde_json::Value) -> u64 {
 }
 
 extern "C" fn jit_u64_to_json(entry: u64, n: u64) -> u64 {
-    write_json(entry, serde_json::Value::from(n))
+    guarded(|| write_json(entry, serde_json::Value::from(n)))
 }
 
 extern "C" fn jit_i64_to_json(entry: u64, n: i64) -> u64 {
-    write_json(entry, serde_json::Value::from(n))
+    guarded(|| write_json(entry, serde_json::Value::from(n)))
 }
 
 extern "C" fn jit_f64_to_json(entry: u64, bits: u64) -> u64 {
-    write_json(entry, serde_json::Value::from(f64::from_bits(bits)))
+    guarded(|| write_json(entry, serde_json::Value::from(f64::from_bits(bits))))
 }
 
 extern "C" fn jit_bool_to_json(entry: u64, b: u64) -> u64 {
-    write_json(entry, serde_json::Value::Bool(b != 0))
+    guarded(|| write_json(entry, serde_json::Value::Bool(b != 0)))
 }
 
 extern "C" fn jit_str_to_json(entry: u64, h: u64) -> u64 {
-    let s = crate::kernel::resolve_thread_str(h);
-    // The same try-parse-or-wrap as P1's `__str_to_json`.
-    let parsed = match serde_json::from_str::<serde_json::Value>(s) {
-        Ok(v) => v,
-        Err(e) => serde_json::json!({
-            "error": "invalid JSON",
-            "message": e.to_string(),
-            "raw": s,
-        }),
-    };
-    write_json(entry, parsed)
+    guarded(|| {
+        let s = crate::kernel::resolve_thread_str(h);
+        // The same try-parse-or-wrap as P1's `__str_to_json`.
+        let parsed = match serde_json::from_str::<serde_json::Value>(s) {
+            Ok(v) => v,
+            Err(e) => serde_json::json!({
+                "error": "invalid JSON",
+                "message": e.to_string(),
+                "raw": s,
+            }),
+        };
+        write_json(entry, parsed)
+    })
 }
 
 extern "C" fn jit_json_to_str(h: u64) -> u64 {
-    // Serialized straight into the arena: serde writes through the
-    // writer's `io::Write`, so no intermediate `String` is built.
-    let mut w = crate::kernel::ArenaWriter::new();
-    crate::kernel::with_current_value_table(|t| match t.get(h) {
-        crate::ast::Value::Json(j) => {
-            let _ = serde_json::to_writer(&mut w, &**j);
-        }
-        other => {
-            use std::fmt::Write as _;
-            let _ = w.write_str(&other.to_display_string());
-        }
-    });
-    w.finish()
+    guarded(|| {
+        // Serialized straight into the arena: serde writes through the
+        // writer's `io::Write`, so no intermediate `String` is built.
+        let mut w = crate::kernel::ArenaWriter::new();
+        crate::kernel::with_current_value_table(|t| match t.get(h) {
+            crate::ast::Value::Json(j) => {
+                let _ = serde_json::to_writer(&mut w, &**j);
+            }
+            other => {
+                use std::fmt::Write as _;
+                let _ = w.write_str(&other.to_display_string());
+            }
+        });
+        w.finish()
+    })
 }
 
 // ── Variadic and polymorphic nodes by wire type (SRD 115 §6) ─────
@@ -864,27 +923,35 @@ unsafe fn arg_refs(types: u64, args: *const u64) -> Vec<crate::ast::ValueRef<'st
 }
 
 extern "C" fn jit_json_array(entry: u64, types: u64, args: *const u64) -> u64 {
-    // SAFETY: see `decode_args`.
-    let vals = unsafe { arg_refs(types, args) };
-    write_json(entry, crate::library::json::json_array_of_refs(vals))
+    guarded(|| {
+        // SAFETY: see `decode_args`.
+        let vals = unsafe { arg_refs(types, args) };
+        write_json(entry, crate::library::json::json_array_of_refs(vals))
+    })
 }
 
 extern "C" fn jit_json_object(entry: u64, types: u64, args: *const u64) -> u64 {
-    // SAFETY: see `decode_args`.
-    let vals = unsafe { arg_refs(types, args) };
-    write_json(entry, crate::library::json::json_object_of_refs(vals))
+    guarded(|| {
+        // SAFETY: see `decode_args`.
+        let vals = unsafe { arg_refs(types, args) };
+        write_json(entry, crate::library::json::json_object_of_refs(vals))
+    })
 }
 
 extern "C" fn jit_to_json(entry: u64, code: u64, bits: u64) -> u64 {
-    let v = crate::compile::marshal::arg_ref(code as u8, bits);
-    write_json(entry, crate::library::json::json_of_ref(v))
+    guarded(|| {
+        let v = crate::compile::marshal::arg_ref(code as u8, bits);
+        write_json(entry, crate::library::json::json_of_ref(v))
+    })
 }
 
 extern "C" fn jit_json_text(code: u64, bits: u64) -> u64 {
-    let v = crate::compile::marshal::arg_ref(code as u8, bits);
-    let mut w = crate::kernel::ArenaWriter::new();
-    crate::library::json::json_text_ref_into(v, &mut w);
-    w.finish()
+    guarded(|| {
+        let v = crate::compile::marshal::arg_ref(code as u8, bits);
+        let mut w = crate::kernel::ArenaWriter::new();
+        crate::library::json::json_text_ref_into(v, &mut w);
+        w.finish()
+    })
 }
 
 extern "C" fn jit_tile_encode(spec: u64, code: u64, bits: u64) -> u64 {
@@ -2068,7 +2135,7 @@ pub(crate) fn compile_jit_raw_with(
     externs: crate::compile::externs::Externs,
 ) -> Result<JitKernelRaw, String> {
     let (raw_fn, _, module, table_entries) =
-        compile_jit_impl(&steps, false, 0, &externs.handle_slots())?;
+        compile_jit_impl(&steps, false, 0, &externs.handle_slots(), Some(total_slots))?;
     let mut core = JitCore::new(
         total_slots,
         coord_count,
@@ -2101,9 +2168,10 @@ pub(crate) fn compile_jit_entry(
     steps: &[(JitOp, Vec<usize>, Vec<usize>)],
     entry_base: usize,
     handle_inputs: &[usize],
+    tracker: Option<usize>,
 ) -> Result<JitSegmentCode, String> {
     let (raw_fn, _, module, table_entries) =
-        compile_jit_impl(steps, false, entry_base, handle_inputs)?;
+        compile_jit_impl(steps, false, entry_base, handle_inputs, tracker)?;
     Ok((raw_fn, module, table_entries))
 }
 
@@ -2119,7 +2187,7 @@ pub(crate) fn compile_jit_push(
 ) -> Result<JitKernelPush, String> {
     let step_count = steps.len();
     let (_, prov_fn, module, table_entries) =
-        compile_jit_impl(&steps, true, 0, &externs.handle_slots())?;
+        compile_jit_impl(&steps, true, 0, &externs.handle_slots(), Some(total_slots))?;
     let mut core = JitCore::new(
         total_slots,
         coord_count,
@@ -2150,7 +2218,7 @@ pub(crate) fn compile_jit_pull(
     let buffer_len = total_slots;
     // Pull uses the RAW jit function (no per-node clean checks)
     let (raw_fn, _, module, table_entries) =
-        compile_jit_impl(&steps, false, 0, &externs.handle_slots())?;
+        compile_jit_impl(&steps, false, 0, &externs.handle_slots(), Some(total_slots))?;
     let step_outs: Vec<Vec<usize>> = steps.iter().map(|(_, _, o)| o.clone()).collect();
     let slot_provenance =
         compute_jit_slot_provenance(coord_count, buffer_len, &step_outs, input_dependents);
@@ -2185,7 +2253,7 @@ pub(crate) fn compile_jit_push_pull(
     let step_count = steps.len();
     let buffer_len = total_slots;
     let (_, prov_fn, module, table_entries) =
-        compile_jit_impl(&steps, true, 0, &externs.handle_slots())?;
+        compile_jit_impl(&steps, true, 0, &externs.handle_slots(), Some(total_slots))?;
     let step_outs: Vec<Vec<usize>> = steps.iter().map(|(_, _, o)| o.clone()).collect();
     let slot_provenance =
         compute_jit_slot_provenance(coord_count, buffer_len, &step_outs, &input_dependents);
@@ -2380,6 +2448,7 @@ fn compile_jit_impl(
     provenance: bool,
     entry_base: usize,
     handle_inputs: &[usize],
+    tracker: Option<usize>,
 ) -> Result<JitCompiled, String> {
     let mut table_entries: Vec<(usize, usize)> = Vec::new();
     for (op, _, outs) in steps {
@@ -2951,6 +3020,14 @@ fn compile_jit_impl(
             } else {
                 None
             };
+            // A7: name the step for the failure path. The store stays only
+            // when the step calls a helper, the one way native code fails;
+            // a step of inline arithmetic pays nothing.
+            let tracker_store = tracker.map(|t| {
+                let idx = builder.ins().iconst(types::I64, step_idx as i64);
+                let inst = store_slot(&mut builder, buffer_ptr, t, idx);
+                (inst, builder.func.dfg.num_insts())
+            });
             match jit_op {
                 JitOp::Identity => {
                     // A copy of every slot the port spans: one for a
@@ -4368,6 +4445,16 @@ fn compile_jit_impl(
                     // not include fallback ops in JIT steps)
                 }
             }
+            if let Some((inst, mark)) = tracker_store {
+                let calls = (mark..builder.func.dfg.num_insts()).any(|i| {
+                    builder.func.dfg.insts[ir::Inst::from_u32(i as u32)]
+                        .opcode()
+                        .is_call()
+                });
+                if !calls {
+                    builder.func.layout.remove_inst(inst);
+                }
+            }
 
             // Provenance: set clean[step_idx] = 1, then jump to skip block
             if let (Some(cp), Some(skip)) = (clean_ptr, skip_block) {
@@ -4422,11 +4509,16 @@ fn load_slot(builder: &mut FunctionBuilder, buffer_ptr: ir::Value, slot: usize) 
 }
 
 /// Store a u64 to buffer[slot].
-fn store_slot(builder: &mut FunctionBuilder, buffer_ptr: ir::Value, slot: usize, value: ir::Value) {
+fn store_slot(
+    builder: &mut FunctionBuilder,
+    buffer_ptr: ir::Value,
+    slot: usize,
+    value: ir::Value,
+) -> ir::Inst {
     let offset = (slot * 8) as i32;
     builder
         .ins()
-        .store(ir::MemFlags::trusted(), value, buffer_ptr, offset);
+        .store(ir::MemFlags::trusted(), value, buffer_ptr, offset)
 }
 
 /// Cranelift vector type for a register lane index (the

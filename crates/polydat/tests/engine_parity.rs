@@ -22,17 +22,30 @@ mod common;
 use polydat::dsl::compile::compile_polydat_to_assembler;
 use std::path::Path;
 
+/// The text of a panic payload.
+fn payload_text(p: Box<dyn std::any::Any + Send>) -> String {
+    p.downcast_ref::<String>()
+        .cloned()
+        .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_default()
+}
+
+/// A failure message without its `panicked at` line, which names the
+/// code that raised the panic and so differs by engine.
+fn without_location(msg: &str) -> String {
+    msg.lines()
+        .filter(|l| !l.trim_start().starts_with("↳ panicked at"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// One engine's outcome for one program.
 fn outcome<T>(r: std::thread::Result<Result<T, String>>) -> (&'static str, String) {
     match r {
         Ok(Ok(_)) => ("ok", String::new()),
         Ok(Err(e)) => ("refused", e.lines().next().unwrap_or("").to_string()),
         Err(p) => {
-            let msg = p
-                .downcast_ref::<String>()
-                .cloned()
-                .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
-                .unwrap_or_default();
+            let msg = payload_text(p);
             ("failed", msg.lines().next().unwrap_or("").to_string())
         }
     }
@@ -145,7 +158,8 @@ fn the_node_by_engine_matrix_is_as_recorded() {
 /// interpreter computed it. The matrix above pins what each engine
 /// accepts; this pins that what it accepts it computes alike. Nodes
 /// declared nondeterministic (clocks, entropy, thread identity) are
-/// left out, as are the run failures the matrix records.
+/// left out; a run failure the interpreter reports must read the same on
+/// every engine that fails too (step 6, A7).
 #[test]
 fn the_engines_agree_on_every_node() {
     use polydat::ast::{Purity, Value};
@@ -183,60 +197,69 @@ fn the_engines_agree_on_every_node() {
             .ok();
         for &c in &cycles {
             // An assertion node fails on some cycles by design; the
-            // interpreter's failure is the oracle's, so the cycle is
-            // skipped (the matrix pins the failures at cycle 3).
+            // interpreter's failure is the oracle's, and an engine that
+            // fails too must fail with the same message, location
+            // aside (the matrix pins the failures at cycle 3).
             let want = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 p1.set_inputs(&[c]);
                 outs.iter()
                     .map(|o| p1.pull(o).clone())
                     .collect::<Vec<Value>>()
-            }));
-            let Ok(want) = want else {
-                continue;
-            };
-            let mut got: Vec<(&str, Vec<Value>)> = Vec::new();
+            }))
+            .map_err(payload_text);
+            let mut got: Vec<(&str, Result<Vec<Value>, String>)> = Vec::new();
             if let Some(k) = p2.as_mut() {
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     k.eval(&[c]);
                     outs.iter().map(|o| k.get_value(o)).collect::<Vec<_>>()
                 }));
-                if let Ok(v) = r {
-                    got.push(("P2", v));
-                }
+                got.push(("P2", r.map_err(payload_text)));
             }
             if let Some(k) = hybrid.as_mut() {
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     k.eval(&[c]);
                     outs.iter().map(|o| k.get_value(o)).collect::<Vec<_>>()
                 }));
-                if let Ok(v) = r {
-                    got.push(("hybrid", v));
-                }
+                got.push(("hybrid", r.map_err(payload_text)));
             }
             if let Some(k) = p3.as_mut() {
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     k.eval(&[c]);
                     outs.iter().map(|o| k.get_value(o)).collect::<Vec<_>>()
                 }));
-                if let Ok(v) = r {
-                    got.push(("P3", v));
-                }
+                got.push(("P3", r.map_err(payload_text)));
             }
-            for (engine, values) in got {
-                for (i, o) in outs.iter().enumerate() {
-                    let (w, g) = (&want[i], &values[i]);
-                    if w.port_type() != g.port_type()
-                        || w.to_display_string() != g.to_display_string()
-                    {
-                        disagreements.push(format!(
-                            "  {name} on {engine}: `{o}` at cycle {c}: interpreter {:?} {}, \
-                             {engine} {:?} {}",
-                            w.port_type(),
-                            w.to_display_string(),
-                            g.port_type(),
-                            g.to_display_string()
-                        ));
+            for (engine, result) in got {
+                match (&want, result) {
+                    (Ok(want), Ok(values)) => {
+                        for (i, o) in outs.iter().enumerate() {
+                            let (w, g) = (&want[i], &values[i]);
+                            if w.port_type() != g.port_type()
+                                || w.to_display_string() != g.to_display_string()
+                            {
+                                disagreements.push(format!(
+                                    "  {name} on {engine}: `{o}` at cycle {c}: interpreter {:?} {}, \
+                                     {engine} {:?} {}",
+                                    w.port_type(),
+                                    w.to_display_string(),
+                                    g.port_type(),
+                                    g.to_display_string()
+                                ));
+                            }
+                        }
                     }
+                    (Err(want), Err(msg)) => {
+                        if without_location(&msg) != without_location(want) {
+                            disagreements.push(format!(
+                                "  {name} on {engine} at cycle {c}: the failure reads \
+                                 differently\n    interpreter: {}\n    {engine}: {}",
+                                want.replace('\n', "\n    "),
+                                msg.replace('\n', "\n    ")
+                            ));
+                        }
+                    }
+                    // What runs where is the matrix's to pin.
+                    (Ok(_), Err(_)) | (Err(_), Ok(_)) => {}
                 }
             }
         }

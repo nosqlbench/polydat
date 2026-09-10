@@ -575,7 +575,10 @@ to care.
 `pull` evaluates the output's cone and no more on every engine but pure
 native code, whose one function is the program: a side channel in the
 cone fires when the output is pulled, and a failing node fails when
-pulled, as on the interpreter. A constant no input reaches is folded
+pulled, as on the interpreter, with the same message: the original
+panic, the node's name, the outputs it feeds, the program's context,
+and its input values (only the `panicked at` line names the engine's
+own code). A constant no input reaches is folded
 when the kernel is built, on every engine, so a failure there surfaces
 at build; a step that depends on an extern is computed at the first
 pull that needs it and kept until that extern changes. An

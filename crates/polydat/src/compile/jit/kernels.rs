@@ -75,6 +75,11 @@ pub(super) struct JitCore {
     /// The coordinates set through the `Kernel` trait, pending
     /// evaluation.
     pub(super) drive: crate::compile::Drive,
+    /// Where each step came from, for the failure path (A7).
+    pub(super) sites: std::sync::Arc<crate::compile::Attribution>,
+    /// The slot past the layout where native code names the step it
+    /// is in before calling a helper; `u64::MAX` before any.
+    pub(super) tracker: usize,
 }
 
 impl JitCore {
@@ -88,7 +93,7 @@ impl JitCore {
     ) -> Self {
         let table_len = table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0);
         Self {
-            buffer: vec![0u64; total_slots],
+            buffer: vec![0u64; total_slots + 1],
             coord_count,
             output_map,
             guard_slots: Vec::new(),
@@ -100,6 +105,8 @@ impl JitCore {
             _module: JitCode::new(module),
             _nodes: std::sync::Arc::new(nodes),
             drive: crate::compile::Drive::default(),
+            sites: std::sync::Arc::default(),
+            tracker: total_slots,
         }
     }
 
@@ -145,9 +152,23 @@ impl JitCore {
         // Extern handles belong to this run (H3, H4).
         self.externs
             .materialize(&mut self.buffer, &mut self.table, None);
-        crate::kernel::with_value_table(&mut self.table, || {
-            super::codegen::invoke_with_catch(native)
+        // Native code names the step it is in before each helper call;
+        // a failure before any names none. The capture guard is armed
+        // for the run, so the helper's panic is recorded quietly and
+        // re-raised enriched, as the interpreter re-raises a node's (A7).
+        self.buffer[self.tracker] = u64::MAX;
+        let capture = crate::kernel::engines::EvalPanicCaptureGuard::arm();
+        let outcome = crate::kernel::with_value_table(&mut self.table, || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                super::codegen::invoke_with_catch(native)
+            }))
         });
+        drop(capture);
+        if let Err(payload) = outcome {
+            let step = self.buffer[self.tracker] as usize;
+            let sites = std::sync::Arc::clone(&self.sites);
+            sites.reraise(payload, step, &self.buffer, None, &self.table);
+        }
         self.validate_table();
     }
 
@@ -280,6 +301,14 @@ macro_rules! jit_accessors {
         ) {
             self.core.guard_slots = guard_slots;
             self.core.output_types = output_types;
+        }
+
+        /// Where each step came from, for the failure path (A7).
+        pub(crate) fn set_attribution(
+            &mut self,
+            sites: std::sync::Arc<crate::compile::Attribution>,
+        ) {
+            self.core.sites = sites;
         }
 
         /// Whether each eval begins a root cycle (SRD 115 §4). A state

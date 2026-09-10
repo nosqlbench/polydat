@@ -4,7 +4,7 @@
 2026-09-09, of every place the compilation levels differ in anything
 other than performance, and the plan that removes each difference.
 §5 is the plan, §4 the findings it answers. Steps 1 through 3 of the
-plan landed on 2026-09-09 and steps 4 and 5 on 2026-09-10 (the landing
+plan landed on 2026-09-09 and steps 4, 5, and 6 on 2026-09-10 (the landing
 records are under the steps); the rest is proposed.
 
 **Ownership.** Polydat owns the feature set, the engines, and the public
@@ -104,7 +104,7 @@ name, signature, and meaning as the interpreter kernel.
 | Traversal | `traverse(i)`, activations, `for_iteration` | none | none | none |
 | Cursors | `cursor_schemas` (with the partitions resolved at build), `set_cursor`; `cursor_over_partitions` for the run-time cases; activations seed their bodies | `cursor_schemas`, `set_cursor` | same | same |
 | Shared bindings | cells, write-through, broadcast | an ordinary input | same | same |
-| Failure of a node | panic enriched with node name and inputs | raw panic from the closure or helper | same | same |
+| Failure of a node | panic enriched with node name, outputs, context, and inputs | same | same | same |
 | Engine selection | `set_jit_mode` (production kernel mixes cones) | `auto_compile_p2` → `P2Engine` | one form | `auto_compile_p3` → `P3Engine` |
 
 The `P2Engine` and `P3Engine` selectors expose `eval`, `eval_for_slot`,
@@ -301,6 +301,8 @@ documented as evaluating every output. Side-channel steps then fire
 exactly when their wire is pulled on every engine.
 
 ### A7. Failures are reported differently — semantic
+
+*Closed by step 6; the record below is the state the review found.*
 
 The interpreter catches a node's panic and re-raises it with the node's
 name, its position, and its input values (`kernel/engines.rs`,
@@ -617,6 +619,44 @@ proves it.
 6. **Attributed failures** (A7): step-to-node maps and the shared
    enrichment on the failure path, with a test that the same failing
    program produces the same message on every engine.
+
+   *Step 6 landed 2026-09-10.* A node that fails at evaluation fails
+   with one message on every engine. The enrichment is one function,
+   `kernel::engines::enrich_panic`, which the interpreter's `eval_node`
+   and every compiled kernel call: the original payload, the location
+   the capture guard recorded, the node's name, the outputs it feeds,
+   the program's context, and its input values. Each compiled kernel
+   carries a `compile::Attribution`, built by the assembler from the
+   resolved graph (step index is node index on every engine): per
+   node its name, its outputs, and `(first slot, port type)` per
+   input, so the failure path decodes the inputs from the buffer as
+   `get_value` decodes an output (`None` through the mask, a vector by
+   its type). The closure tier and the hybrid kernel catch at the step
+   boundary with the step index in hand. Pure native code, being one
+   function, names the step it is in by storing the index to a slot
+   past the layout before each helper call, the one way native code
+   fails; the store is removed again from a step of inline arithmetic,
+   so a step that cannot fail pays nothing. A cone (SRD-105) does the
+   same for its members and re-raises attributed to the member, and
+   the interpreter's own enrichment then names the cone, so a failure
+   inside a fused node reads member first, cone second. Every native
+   helper runs under `guarded` now, except the three predicate-fail
+   helpers that are the longjmp themselves, so a helper's panic is the
+   longjmp the kernel catches and never a process abort; the longjmp
+   wrapper re-raises with `resume_unwind`, so the hook does not record
+   its own location over the helper's. On the way the native string
+   parsers were found to differ from the library's adapters in both
+   message and, for booleans, in the spellings accepted (`t`, `yes`,
+   `y`, and anything else read as false); they call the adapters'
+   parse functions now, so the diagnostic is the library's on every
+   engine. `tests/failure_parity.rs` drives a predicate violation and
+   a string coercion failure through the thirteen engine-and-mode
+   combinations and requires the interpreter's message, the `panicked
+   at` line aside, since that line names the engine's own code; the
+   agreement test compares failure messages the same way for every
+   coverage program that fails. Cost: a `catch_unwind` frame per
+   helper call and per run of a step loop; the ladder is re-recorded
+   at step 7 (A14).
 7. **Hybrid becomes P3** (A4, A11): the pure native kernels retreat to
    the differential suites; `try_compile_jit*` and `P3Engine` become
    hybrid. The performance guide is re-recorded (A14) against the new

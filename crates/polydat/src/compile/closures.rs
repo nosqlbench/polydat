@@ -38,6 +38,8 @@ pub(crate) struct P2Extras {
     /// Per input slot, coordinates and externs alike, the steps that
     /// depend on it: the provenance the plan is derived from.
     pub(crate) input_dependents: Vec<Vec<usize>>,
+    /// Where each step came from, for the failure path (A7).
+    pub(crate) attribution: std::sync::Arc<crate::compile::Attribution>,
 }
 
 /// A single evaluation step in the compiled kernel.
@@ -149,6 +151,10 @@ struct KernelCore {
     plan: std::sync::Arc<crate::compile::Invalidation>,
     /// Per slot: the step that writes it, for the validator.
     slot_step: std::sync::Arc<[Option<usize>]>,
+    /// Where each step came from, for the failure path (A7).
+    sites: std::sync::Arc<crate::compile::Attribution>,
+    /// The step running, for the failure path.
+    cur_step: usize,
 }
 
 impl KernelCore {
@@ -195,29 +201,50 @@ impl KernelCore {
     /// one is never current.
     fn run_steps(&mut self, order: &[usize]) {
         let mut table = std::mem::take(&mut self.table);
-        {
+        // The capture guard is armed for the run, so a step's panic is
+        // recorded quietly and re-raised enriched, as the interpreter
+        // re-raises a node's (A7).
+        let capture = crate::kernel::engines::EvalPanicCaptureGuard::arm();
+        let outcome = {
             let _installed = crate::kernel::install_value_table(&mut table);
-            let steps = std::sync::Arc::clone(&self.steps);
-            for &i in order {
-                if self.ran[i] {
-                    continue;
-                }
-                let step = &steps[i];
-                // A pure step may be recomputed redundantly in a mode
-                // without per-step skipping; a side channel may not.
-                if (self.use_clean || step.side) && self.clean[i] && !step.rerun && !step.volatile {
-                    self.ran[i] = true;
-                    continue;
-                }
-                self.run_or_propagate(step);
-                self.ran[i] = true;
-                self.clean[i] = !step.rerun && !step.volatile;
-            }
-        }
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run_order(order)))
+        };
         self.table = table;
+        drop(capture);
+        if let Err(payload) = outcome {
+            let sites = std::sync::Arc::clone(&self.sites);
+            sites.reraise(
+                payload,
+                self.cur_step,
+                &self.buffer,
+                Some(&self.none),
+                &self.table,
+            );
+        }
         self.validate_table();
         #[cfg(debug_assertions)]
         self.validate_refs();
+    }
+
+    /// The steps of `order` that have not run in the cycle, in order.
+    fn run_order(&mut self, order: &[usize]) {
+        let steps = std::sync::Arc::clone(&self.steps);
+        for &i in order {
+            if self.ran[i] {
+                continue;
+            }
+            let step = &steps[i];
+            // A pure step may be recomputed redundantly in a mode
+            // without per-step skipping; a side channel may not.
+            if (self.use_clean || step.side) && self.clean[i] && !step.rerun && !step.volatile {
+                self.ran[i] = true;
+                continue;
+            }
+            self.cur_step = i;
+            self.run_or_propagate(step);
+            self.ran[i] = true;
+            self.clean[i] = !step.rerun && !step.volatile;
+        }
     }
 
     /// One step: SRD-74 Rule 1, then gather, run the closure, scatter.
@@ -414,6 +441,7 @@ fn build_core(
         handle_slots,
         externs,
         input_dependents,
+        attribution,
     } = extras;
     // Table-kind externs own entries after the nodes' and are checked
     // by the same validator.
@@ -518,6 +546,8 @@ fn build_core(
         use_clean,
         plan: std::sync::Arc::new(plan),
         slot_step: slot_step.into(),
+        sites: attribution,
+        cur_step: 0,
     };
     // The compile-constant fold of the runtime model, on this engine: a
     // step no input reaches runs at build, once, and is current from

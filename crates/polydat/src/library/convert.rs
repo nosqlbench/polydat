@@ -199,8 +199,9 @@ fn coercion_diagnostic(raw: &str, target: &str, detail: &str) -> String {
 /// panics with a diagnostic.
 ///
 /// JIT level: P1 (Str input; no compiled_u64 path).
-#[crate::polydat_node(category = Conversions)]
-fn __str_to_bool(input: &str) -> bool {
+/// The adapter's parse, shared with the native helper so a failure is
+/// the same diagnostic on every engine.
+pub(crate) fn parse_bool(input: &str) -> bool {
     let raw = input.trim();
     match raw.to_ascii_lowercase().as_str() {
         "true" | "1" => true,
@@ -217,7 +218,13 @@ fn __str_to_bool(input: &str) -> bool {
 }
 
 #[crate::polydat_node(category = Conversions)]
-fn __str_to_u64(input: &str) -> u64 {
+fn __str_to_bool(input: &str) -> bool {
+    parse_bool(input)
+}
+
+/// The adapter's parse, shared with the native helper so a failure is
+/// the same diagnostic on every engine.
+pub(crate) fn parse_u64(input: &str) -> u64 {
     let raw = input.trim();
     raw.parse::<u64>().unwrap_or_else(|e| {
         panic!(
@@ -228,7 +235,13 @@ fn __str_to_u64(input: &str) -> u64 {
 }
 
 #[crate::polydat_node(category = Conversions)]
-fn __str_to_f64(input: &str) -> f64 {
+fn __str_to_u64(input: &str) -> u64 {
+    parse_u64(input)
+}
+
+/// The adapter's parse, shared with the native helper so a failure is
+/// the same diagnostic on every engine.
+pub(crate) fn parse_f64(input: &str) -> f64 {
     let raw = input.trim();
     raw.parse::<f64>().unwrap_or_else(|e| {
         panic!(
@@ -236,6 +249,11 @@ fn __str_to_f64(input: &str) -> f64 {
             coercion_diagnostic(raw, "a number", &format!("__str_to_f64: {e}"))
         )
     })
+}
+
+#[crate::polydat_node(category = Conversions)]
+fn __str_to_f64(input: &str) -> f64 {
+    parse_f64(input)
 }
 
 // =================================================================
