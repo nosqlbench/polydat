@@ -107,3 +107,86 @@ macro_rules! ref_readers {
     };
 }
 pub(crate) use ref_readers;
+
+/// The coordinates a host set last on a compiled kernel and whether
+/// they have been evaluated: what the [`Kernel`](crate::kernel::Kernel)
+/// trait's `set_inputs` and `pull` keep between calls.
+#[derive(Clone, Default)]
+pub(crate) struct Drive {
+    pub(crate) coords: Vec<u64>,
+    pub(crate) stale: bool,
+}
+
+/// The [`Kernel`](crate::kernel::Kernel) impl every compiled kernel
+/// shares: the type's inherent `eval`, `set_input`, `set_cursor`,
+/// `get_value`, `output_names`, `mark_all_dirty`, and a `core` with a
+/// `drive`, `externs`, `coord_count`, and `output_types`.
+macro_rules! impl_kernel_trait {
+    ($ty:ident, $engine:expr) => {
+        impl crate::kernel::Kernel for $ty {
+            fn engine(&self) -> crate::compile::select::Engine {
+                $engine
+            }
+            fn set_inputs(&mut self, coords: &[u64]) {
+                self.core.drive.coords.clear();
+                self.core.drive.coords.extend_from_slice(coords);
+                self.core.drive.stale = true;
+            }
+            fn set_input(&mut self, name: &str, value: crate::ast::Value) -> Result<(), String> {
+                self.core.drive.stale = true;
+                $ty::set_input(self, name, value)
+            }
+            fn set_cursor(
+                &mut self,
+                name: &str,
+                partition: &crate::iteration::cursor_partition::Partition,
+            ) -> Result<(), String> {
+                self.core.drive.stale = true;
+                $ty::set_cursor(self, name, partition)
+            }
+            fn eval(&mut self) {
+                let coords = std::mem::take(&mut self.core.drive.coords);
+                $ty::eval(self, &coords);
+                self.core.drive.coords = coords;
+                self.core.drive.stale = false;
+            }
+            fn pull(&mut self, name: &str) -> crate::ast::Value {
+                if self.core.drive.stale {
+                    crate::kernel::Kernel::eval(self);
+                }
+                self.get_value(name)
+            }
+            fn input_names(&self) -> Vec<String> {
+                self.core.externs.input_names().to_vec()
+            }
+            fn output_names(&self) -> Vec<String> {
+                $ty::output_names(self)
+                    .into_iter()
+                    .map(String::from)
+                    .collect()
+            }
+            fn output_type(&self, name: &str) -> Option<crate::ast::PortType> {
+                self.core.output_types.get(name).copied()
+            }
+            fn externs(&self) -> Vec<(String, crate::ast::PortType)> {
+                self.core
+                    .externs
+                    .names()
+                    .into_iter()
+                    .map(|(n, t)| (n.to_string(), t))
+                    .collect()
+            }
+            fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema] {
+                self.core.externs.cursor_schemas()
+            }
+            fn into_program(
+                mut self: Box<Self>,
+            ) -> std::sync::Arc<dyn crate::kernel::KernelProgram> {
+                self.mark_all_dirty();
+                self.core.drive.stale = true;
+                std::sync::Arc::new(crate::kernel::SharedKernel(*self))
+            }
+        }
+    };
+}
+pub(crate) use impl_kernel_trait;

@@ -67,7 +67,8 @@ pub mod subcontext;
 pub mod value_table;
 pub use activation::{Activation, CursorSlice, TraversalStream};
 
-pub use api::{Construction, Dataflow, Metadata, WireKey, WriteError};
+pub(crate) use api::SharedKernel;
+pub use api::{Construction, Dataflow, Kernel, KernelProgram, Metadata, WireKey, WriteError};
 pub use arena::{
     ArenaMark, ArenaWriter, CycleArena, StaticInterner, TAG_ARENA, TAG_MASK, TAG_RES, TAG_STATIC,
     begin_root_cycle, cycle_arena_mark, cycle_arena_release, cycle_arena_used, cycle_generation,

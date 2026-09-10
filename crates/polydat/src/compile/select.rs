@@ -285,3 +285,87 @@ impl P3Engine {
         }
     }
 }
+
+// ── The engine a host chooses (engine_parity.md, step 4) ──────────
+
+/// How much of a kernel's work is skipped when inputs repeat: the
+/// provenance mode a compiled engine is built with. Every mode computes
+/// the same values; the modes differ in what they recompute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Provenance {
+    /// Every evaluation runs every step.
+    Raw,
+    /// A changed input reruns only the steps downstream of it.
+    Push,
+    /// An output whose cone no changed input reaches is not recomputed.
+    Pull,
+    /// Both: per-step skipping and the cone guard.
+    PushPull,
+    /// The selector's choice from the graph's shape
+    /// ([`select_prov_mode`]).
+    Auto,
+}
+
+/// The engine a program runs on. Every engine accepts every program the
+/// interpreter accepts, or refuses it with a reason
+/// ([`KernelError::Refused`]); the choice changes how fast the program
+/// runs and nothing else (docs/design/engine_parity.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Engine {
+    /// The interpreter, with native cones per the assembler's
+    /// [`JitMode`](crate::JitMode): what `compile()` builds.
+    Interpreter,
+    /// The closure tier: every node runs its generated closure over
+    /// one slot buffer.
+    Closures(Provenance),
+    /// Native code where a node has a lowering, closures elsewhere.
+    Hybrid(Provenance),
+    /// Pure native code: refuses a program with a node that has no
+    /// native lowering.
+    Native(Provenance),
+}
+
+impl std::fmt::Display for Engine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Engine::Interpreter => write!(f, "interpreter"),
+            Engine::Closures(p) => write!(f, "closures ({p:?})"),
+            Engine::Hybrid(p) => write!(f, "hybrid ({p:?})"),
+            Engine::Native(p) => write!(f, "native ({p:?})"),
+        }
+    }
+}
+
+/// Why a kernel was not built: the one error type of every constructor
+/// that takes an [`Engine`].
+#[derive(Debug)]
+pub enum KernelError {
+    /// The source did not parse or compile; the message is the DSL
+    /// front end's.
+    Source(String),
+    /// The graph did not assemble.
+    Assembly(crate::compile::assembly::AssemblyError),
+    /// The engine refuses this graph, which the interpreter accepts;
+    /// `reason` names the node or construct.
+    Refused { engine: Engine, reason: String },
+}
+
+impl std::fmt::Display for KernelError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            KernelError::Source(e) => write!(f, "{e}"),
+            KernelError::Assembly(e) => write!(f, "{e}"),
+            KernelError::Refused { engine, reason } => {
+                write!(f, "the {engine} engine refuses this program: {reason}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for KernelError {}
+
+impl From<crate::compile::assembly::AssemblyError> for KernelError {
+    fn from(e: crate::compile::assembly::AssemblyError) -> Self {
+        KernelError::Assembly(e)
+    }
+}

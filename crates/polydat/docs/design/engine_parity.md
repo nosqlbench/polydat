@@ -4,8 +4,8 @@
 2026-09-09, of every place the compilation levels differ in anything
 other than performance, and the plan that removes each difference.
 §5 is the plan, §4 the findings it answers. Steps 1 through 3 of the
-plan landed on 2026-09-09 (the landing records are under the steps);
-the rest is proposed.
+plan landed on 2026-09-09 and step 4 on 2026-09-10 (the landing
+records are under the steps); the rest is proposed.
 
 **Ownership.** Polydat owns the feature set, the engines, and the public
 API that names them. A host chooses an engine for speed and for nothing
@@ -82,7 +82,13 @@ interpreter's value (`the_engines_agree_on_every_node`).
 
 ## 3. The public API today
 
-What a host holds after compiling, by engine. "Same" means the same
+*As of step 4 every engine is behind one trait, `Kernel`, built by one
+constructor, `compile_with(Engine)` on the assembler and
+`compile_polydat_with(src, Engine)` on the DSL entry, with one error
+type, `KernelError`; the table below records the surfaces the review
+found, which remain as engine-specific extras and documented aliases.*
+
+What a host held after compiling, by engine. "Same" means the same
 name, signature, and meaning as the interpreter kernel.
 
 | Surface | `PolydatKernel` (P1) | P2 kernels (4 variants) | Hybrid (3 variants) | P3 kernels (4 variants) |
@@ -319,6 +325,8 @@ Native segments attribute to the segment's node list.
 
 ### A8. The API is spelled differently by engine — API
 
+*Closed by step 4; the record below is the state the review found.*
+
 - **Construction.** `try_compile*` return the interpreter kernel as the
   error; `try_compile_jit*` and `compile_hybrid` return a string. Four
   P2 variants, four P3 variants, and one hybrid form are nine
@@ -349,6 +357,9 @@ Sharing across threads becomes `into_program` on every engine, with a
 per-thread state that owns the buffer, the table, and the externs.
 
 ### A9. The assembler entry point takes fewer options — API
+
+*Closed by steps 1 and 4: the compile log reaches every engine through
+`compile_engine_with_log` and `compile_polydat_with_engine`.*
 
 `compile_polydat_to_assembler` had no source directory, no library
 paths, no strict flag, and no compile log, so modules from disk and
@@ -499,6 +510,34 @@ proves it.
    until the host or the traversal runtime narrows it; on the
    interpreter that reads as `None`, on a compiled kernel as a refusal
    to run (A12, step 5).
+
+   *Step 4 landed 2026-09-10.* The `Kernel` trait (`kernel::api`,
+   re-exported at the crate root) is implemented by the interpreter
+   kernel and all eleven compiled kernel types: `engine`, `set_inputs`,
+   `set_input`, `set_cursor`, `eval`, `pull` (owned, never a handle),
+   `input_names`, `output_names`, `output_type`, `externs`,
+   `cursor_schemas`, and `into_program`. `Engine` names the interpreter,
+   the closure tier, the hybrid kernel, or native code, each with a
+   `Provenance` (`Raw`, `Push`, `Pull`, `PushPull`, or `Auto` for the
+   selector's choice); `PolydatAssembler::compile_with(Engine)` and
+   `compile_polydat_with(src, Engine)` build a `Box<dyn Kernel>` or a
+   `KernelError` (`Source`, `Assembly`, or `Refused { engine, reason }`),
+   and `compile_engine_with_log` and `compile_polydat_with_engine` take
+   the options and the compile log for every engine (A9). A shared
+   program is `into_program`, an `Arc<dyn KernelProgram>` whose
+   `create_kernel` gives each thread its own kernel: the interpreter's
+   program as before, and for a compiled kernel a clone that shares the
+   steps, the nodes, and the native code (now `Arc`-held) and owns its
+   buffer, table, scratch, and externs. The older constructors remain as
+   documented aliases; the raw slot readers, `eval(&[u64])`, and
+   `engine_counts` remain as engine-specific extras. On the way the
+   closure tier's refusal gained a reason (`build_p2_layout` returns it),
+   and the hybrid kernel's raw and pull-only forms, which nothing had
+   constructed, are reachable as `Engine::Hybrid(Raw)` and
+   `Engine::Hybrid(Pull)`. `tests/kernel_api.rs` drives every engine
+   through the trait against the interpreter, shares each across
+   threads, and checks the error type; the embedding guide's compiled
+   kernels section is written to the trait.
 2. **Close the closure tier.** Setup capture in the u64 kit, the
    `Bytes` handle in both kits, `Value` arguments in the slot kit,
    `Const<Vec<_>>` capture, and the session-static form (A1, A2). Refuse

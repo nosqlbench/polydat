@@ -204,7 +204,10 @@ The serial sum is the same cycles on one state. This is the whole
 concurrency story for a host: decide which thread gets which
 coordinates, create one state per thread, and never share a state.
 `examples/multi_thread.rs` shows the same pattern at a million cycles
-per thread, with timing.
+per thread, with timing. A kernel on any engine shares the same way
+through the `Kernel` trait of §11: `into_program` gives an
+`Arc<dyn KernelProgram>`, and `create_kernel` gives each thread its
+own.
 
 ## 5. Host-defined nodes
 
@@ -491,11 +494,19 @@ A host normally lets `compile()` choose engines. The production kernel
 runs the interpreter over a graph in which every native-eligible region
 has been fused into a cone, and everything else runs through closures
 or the interpreter. Three direct forms exist for hosts that want a whole
-kernel compiled, such as benchmarks and the differential tests: the
-closure tier, pure native code, and the hybrid kernel that lowers what
-it can and runs the rest as closures. The program below includes
+kernel compiled, such as benchmarks and the differential tests, and
+they are named by one type, `Engine`: the interpreter, the closure tier,
+the hybrid kernel that lowers what it can and runs the rest as closures,
+and pure native code, each with a `Provenance` that says how much work
+repeated inputs skip (`Auto` lets the selector choose). One constructor,
+`compile_polydat_with(src, engine)` or `compile_with(engine)` on the
+assembler, builds a `Box<dyn Kernel>` on any of them or returns one
+error type, `KernelError`, whose `Refused` variant names the engine and
+the node or construct it cannot run. The `Kernel` trait is the same
+calls on every engine: `set_inputs`, `set_input`, `set_cursor`, `eval`,
+`pull`, and the name and type listings. The program below includes
 `host_tag` from §5 and the two extension nodes from §6, which have
-closure forms but no native one, so the three forms behave differently:
+closure forms but no native one, so the engines answer differently:
 
 ```rust
 let src = r#"
@@ -507,62 +518,76 @@ let src = r#"
     tok := cell_token(cell)
     tile j : json := {"h": ${h}, "name": ${name}, "tag": ${tag}, "cell": ${tok}}
 "#;
-let asm = || compile_polydat_to_assembler(src).unwrap();
-let mut p2 = asm().try_compile_raw().unwrap_or_else(|_| panic!("P2"));   // closures
-match asm().try_compile_jit() {                                          // pure native code
-    Ok(_) => println!("pure P3: compiled"),
-    Err(e) => println!("pure P3 refused: {e}"),
+let mut kernels: Vec<Box<dyn Kernel>> = Vec::new();
+for engine in [
+    Engine::Closures(Provenance::Auto),
+    Engine::Hybrid(Provenance::Auto),
+    Engine::Native(Provenance::Auto),
+] {
+    match compile_polydat_with(src, engine) {
+        Ok(k) => kernels.push(k),
+        Err(e) => println!("{e}"),
+    }
 }
-let mut hybrid = asm().compile_hybrid()?;                                // native where possible
+let hybrid = compile_polydat_to_assembler(src)?.compile_hybrid()?;
 let (native, closures) = hybrid.engine_counts();
 println!("hybrid plan: {native} native segment(s), {closures} closure step(s)");
+let mut p1 = compile_polydat_with(src, Engine::Interpreter)?;
 for cycle in [0u64, 1] {
-    p2.eval(&[cycle]);
-    let p2_h = p2.get("h");                              // scalar read
-    let p2_j = p2.get_value("j").to_display_string();    // handle read: copies out
-    hybrid.eval(&[cycle]);
-    let hy_h = hybrid.get("h");
-    let hy_j = hybrid.get_value("j").to_display_string();
-    println!("cycle {cycle}: hybrid agrees: {}", p2_h == hy_h && p2_j == hy_j);
+    p1.set_inputs(&[cycle]);
+    let want = p1.pull("j").to_display_string();
+    println!("cycle {cycle}: j={want}");
+    for k in kernels.iter_mut() {
+        k.set_inputs(&[cycle]);
+        let got = k.pull("j").to_display_string();
+        println!("  {} agrees: {}", k.engine(), got == want);
+    }
 }
-let mut mixed = asm().compile()?;   // what a host should normally use
 ```
 
 ```text
-pure P3 refused: some nodes cannot be JIT-compiled
+the native (Auto) engine refuses this program: some nodes cannot be JIT-compiled
 hybrid plan: 19 native segment(s), 3 closure step(s)
-cycle 0: P2 h=16294208416658607535 j={"h": 16294208416658607535, "name": "user-16294208416658607535", "tag": "job-7535", "cell": "L4:10:13"}
-cycle 0: hybrid agrees: true
-cycle 1: P2 h=10451216379200822465 j={"h": 10451216379200822465, "name": "user-10451216379200822465", "tag": "job-2465", "cell": "L4:0:8"}
-cycle 1: hybrid agrees: true
-production kernel j: {"h": 10451216379200822465, "name": "user-10451216379200822465", "tag": "job-2465", "cell": "L4:0:8"}
+cycle 0: j={"h": 16294208416658607535, "name": "user-16294208416658607535", "tag": "job-7535", "cell": "L4:10:13"}
+  closures (Pull) agrees: true
+  hybrid (PushPull) agrees: true
+cycle 1: j={"h": 10451216379200822465, "name": "user-10451216379200822465", "tag": "job-2465", "cell": "L4:0:8"}
+  closures (Pull) agrees: true
+  hybrid (PushPull) agrees: true
 ```
 
 Pure native code refuses the program because three nodes have no native
-form. The hybrid kernel accepts it: nineteen steps run as native
-segments, the three host nodes run as closure steps, and every value
-matches the closure tier, including the extension value that passes
-between the two closure steps as a table handle. `engine_counts` is the
-only planning detail the hybrid
-kernel exposes, and it exists so a host can see whether a program is
-mostly native before deciding to care.
+form, and says so as the error. The closure tier and the hybrid kernel
+accept it and compute what the interpreter computes; `engine()` on a
+kernel reports the provenance the selector chose. The hybrid kernel
+runs nineteen steps as native segments and the three host nodes as
+closure steps, with the extension value passing between two of them as
+a table handle; `engine_counts` is the only planning detail it exposes,
+so a host can see whether a program is mostly native before deciding
+to care.
 
-Scalars come back by value from `get`. Strings, JSON, and rendered tiles
-are handles into a per-thread arena that lives for one cycle of the
-kernel that produced them; `get_value` copies the referent out. That
-gives the one rule a host must follow when it drives compiled kernels
-directly: read a kernel's handle outputs before running another root
-kernel on the same thread, because the next kernel's cycle reclaims the
-arena. The production kernel and the traversal runtime follow the rule
-internally, so it only reaches a host through `try_compile_raw`,
-`try_compile_jit`, and `compile_hybrid`.
-[Compiled Non-Scalar Slots](../design/compiled_handles.md) §4 states it
-as axiom H3.
+`pull` returns an owned value on every engine: a string, JSON document,
+or rendered tile is copied out of the arena or the value table the
+kernel produced it in, so a host holding a `dyn Kernel` never sees a
+handle. The concrete compiled kernel types keep their raw readers as
+extras (`get` for a scalar slot, `get_value` for a typed copy,
+`eval(&[u64])`), and those come with the one rule of
+[Compiled Non-Scalar Slots](../design/compiled_handles.md) §4, axiom H3:
+read a kernel's handle outputs before running another root kernel on
+the same thread, because the next kernel's cycle reclaims the arena.
 
-Engine choice is not a host concern beyond `set_jit_mode` on the
-assembler (`Auto`, `Off`, `Force`) and the `jit` Cargo feature.
-[Compilation levels](compilation.md) describes each engine and
-[Engines](../design/engines.md) the selection rules.
+A kernel on any engine shares its program across threads the way §4
+shows for the interpreter: `into_program` gives an
+`Arc<dyn KernelProgram>`, and `create_kernel` on it gives each thread a
+kernel of its own over the shared steps or native code.
+
+The production kernel of `compile()` and `compile_polydat` is
+`Engine::Interpreter`: the interpreter over a graph whose native-eligible
+regions are cones, per `set_jit_mode` on the assembler (`Auto`, `Off`,
+`Force`) and the `jit` Cargo feature. [Compilation levels](compilation.md)
+describes each engine, [Engines](../design/engines.md) the selection
+rules, and [Engine Parity](../design/engine_parity.md) what each engine
+accepts.
 
 ## 12. Program transforms
 

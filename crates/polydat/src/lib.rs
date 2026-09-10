@@ -183,6 +183,11 @@ pub use derive_support::Const;
 // SRD-105 — engine-mix surface: the process-default JIT mode and
 // its accessors. `kernel.jit: auto|off|force` maps here.
 pub use compile::cone::{JitMode, default_jit_mode, set_default_jit_mode};
+/// The engine a host chooses and the one error of every constructor
+/// that takes it (docs/design/engine_parity.md, step 4).
+pub use compile::select::{Engine, KernelError, Provenance};
+/// One kernel API for every engine.
+pub use kernel::{Kernel, KernelProgram};
 
 // SRD-82 §"Panic reporting: one full render" — host runtimes with
 // their own panic reporting declare it so the eval-panic hook

@@ -2697,6 +2697,45 @@ impl Compiler {
     }
 }
 
+// ── The one entry point (engine_parity.md, step 4) ──────────────────
+
+/// Compile `source` for `engine`: the interpreter, the closure tier,
+/// the hybrid kernel, or pure native code. Every engine accepts every
+/// program the interpreter accepts, or refuses it with a reason
+/// ([`crate::KernelError::Refused`]); a host drives the result through
+/// [`crate::Kernel`] without knowing which engine it holds. The other
+/// `compile_polydat*` entry points build the interpreter kernel and
+/// remain for that.
+pub fn compile_polydat_with(
+    source: &str,
+    engine: crate::Engine,
+) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
+    compile_polydat_with_engine(source, engine, &CompileOptions::default(), None)
+}
+
+/// [`compile_polydat_with`] with the kernel path's options (source
+/// directory, library paths, required outputs, strict typing, the
+/// error context label, the cursor limit) and the compile event log.
+/// On the interpreter this is the whole kernel path, traversals
+/// included; on a compiled engine the assembler entry point followed
+/// by [`PolydatAssembler::compile_engine_with_log`].
+pub fn compile_polydat_with_engine(
+    source: &str,
+    engine: crate::Engine,
+    options: &CompileOptions,
+    log: Option<&mut super::events::CompileEventLog>,
+) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
+    use crate::KernelError;
+    match engine {
+        crate::Engine::Interpreter => compile_polydat_with_options(source, options, log)
+            .map(|k| Box::new(k) as Box<dyn crate::Kernel>)
+            .map_err(KernelError::Source),
+        _ => compile_polydat_to_assembler_with(source, options)
+            .map_err(KernelError::Source)?
+            .compile_engine_with_log(engine, log),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

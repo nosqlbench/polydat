@@ -57,6 +57,11 @@ loop does not branch on a selected strategy.
 `Push` exists as an explicit measurement and equivalence surface. Automatic
 selection returns only `Raw`, `Pull`, or `PushPull`.
 
+Since engine parity step 4 the same variants are named by `Engine` and
+`Provenance` and built by one constructor, `compile_with(Engine)`, behind
+the `Kernel` trait; `Provenance::Auto` is the selector below. The explicit
+builders remain as aliases ([engine parity](engine_parity.md), A8).
+
 ### 3.1 Push-side invalidation
 
 Compiled push kernels store a dependent-step list for each graph input and a

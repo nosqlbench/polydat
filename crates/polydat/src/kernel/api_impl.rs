@@ -177,6 +177,70 @@ impl Construction for PolydatKernel {
     }
 }
 
+// ── The interpreter kernel on the engine-independent surface ────────
+
+impl crate::kernel::Kernel for PolydatKernel {
+    fn engine(&self) -> crate::compile::select::Engine {
+        crate::compile::select::Engine::Interpreter
+    }
+    fn set_inputs(&mut self, coords: &[u64]) {
+        PolydatKernel::set_inputs(self, coords);
+    }
+    fn set_input(&mut self, name: &str, value: Value) -> Result<(), String> {
+        PolydatKernel::set_input(self, name, value)
+    }
+    fn set_cursor(
+        &mut self,
+        name: &str,
+        partition: &crate::iteration::cursor_partition::Partition,
+    ) -> Result<(), String> {
+        PolydatKernel::set_cursor(self, name, partition)
+    }
+    /// Every output is pulled, so what a side channel observes is what
+    /// it observes on a compiled kernel's run.
+    fn eval(&mut self) {
+        for name in Metadata::output_names(self) {
+            let _ = PolydatKernel::pull(self, &name);
+        }
+    }
+    fn pull(&mut self, name: &str) -> Value {
+        PolydatKernel::pull(self, name).clone()
+    }
+    fn input_names(&self) -> Vec<String> {
+        Metadata::input_names(self)
+    }
+    fn output_names(&self) -> Vec<String> {
+        Metadata::output_names(self)
+    }
+    fn output_type(&self, name: &str) -> Option<PortType> {
+        Metadata::output_port_type(self, name)
+    }
+    fn externs(&self) -> Vec<(String, PortType)> {
+        let program = self.program();
+        Metadata::input_names(self)
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| program.input_kind(*i) != Some(crate::kernel::InputKind::Coordinate))
+            .filter_map(|(i, name)| Metadata::input_port_type_by_idx(self, i).map(|t| (name, t)))
+            .collect()
+    }
+    fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema] {
+        self.program().cursor_schemas()
+    }
+    fn into_program(self: Box<Self>) -> std::sync::Arc<dyn crate::kernel::KernelProgram> {
+        PolydatKernel::into_program(*self)
+    }
+}
+
+impl crate::kernel::KernelProgram for crate::kernel::PolydatProgram {
+    fn engine(&self) -> crate::compile::select::Engine {
+        crate::compile::select::Engine::Interpreter
+    }
+    fn create_kernel(self: std::sync::Arc<Self>) -> Box<dyn crate::kernel::Kernel> {
+        Box::new(PolydatKernel::from_program(self))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

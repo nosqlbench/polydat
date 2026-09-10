@@ -15,7 +15,39 @@ use cranelift_jit::JITModule;
 use crate::ast::PolydatNode;
 use crate::kernel::ProvMask;
 
-/// Shared fields for all JIT kernel variants.
+/// Finalized native code, shared by every kernel created from one
+/// program. The module's memory is never written after finalization,
+/// so sharing it across threads is sound; the wrapper exists so a
+/// kernel clone is a new state over the same code.
+#[derive(Clone)]
+pub struct JitCode(#[allow(dead_code)] std::sync::Arc<FinalizedModule>);
+
+/// A JIT module after finalization, which nothing writes again.
+struct FinalizedModule(#[allow(dead_code)] JITModule);
+
+// SAFETY: the module is finalized before it is wrapped and never
+// touched again; only its code runs, from any thread.
+unsafe impl Send for FinalizedModule {}
+unsafe impl Sync for FinalizedModule {}
+
+impl JitCode {
+    pub(crate) fn new(module: JITModule) -> Self {
+        JitCode(std::sync::Arc::new(FinalizedModule(module)))
+    }
+}
+
+/// A raw native kernel taken apart: its entry point, its code, and the
+/// table-kind `(slot, entry)` pairs the code writes.
+pub type JitParts = (
+    unsafe fn(*const u64, *mut u64),
+    JitCode,
+    Vec<(usize, usize)>,
+);
+
+/// Shared fields for all JIT kernel variants. A clone is a new state
+/// of the same program: the code and the nodes are shared, everything
+/// else is the clone's own (engine_parity.md, step 4).
+#[derive(Clone)]
 pub(super) struct JitCore {
     pub(super) buffer: Vec<u64>,
     pub(super) coord_count: usize,
@@ -38,8 +70,11 @@ pub(super) struct JitCore {
     pub(super) owns_cycle: bool,
     /// The extern inputs, materialized at the start of every run.
     pub(super) externs: crate::compile::externs::Externs,
-    pub(super) _module: JITModule,
-    pub(super) _nodes: Vec<Box<dyn PolydatNode>>,
+    pub(super) _module: JitCode,
+    pub(super) _nodes: std::sync::Arc<Vec<Box<dyn PolydatNode>>>,
+    /// The coordinates set through the `Kernel` trait, pending
+    /// evaluation.
+    pub(super) drive: crate::compile::Drive,
 }
 
 impl JitCore {
@@ -62,8 +97,9 @@ impl JitCore {
             table_entries,
             owns_cycle: true,
             externs: crate::compile::externs::Externs::default(),
-            _module: module,
-            _nodes: nodes,
+            _module: JitCode::new(module),
+            _nodes: std::sync::Arc::new(nodes),
+            drive: crate::compile::Drive::default(),
         }
     }
 
@@ -273,6 +309,15 @@ macro_rules! jit_accessors {
             self.core.externs.names()
         }
 
+        /// Every step downstream of a coordinate reruns at the next
+        /// evaluation: the state a kernel created from a shared program
+        /// starts in.
+        fn mark_all_dirty(&mut self) {
+            for i in 0..self.core.coord_count {
+                self.mark_input_changed(i);
+            }
+        }
+
         /// The cursors the program declares, with the partitions the
         /// compiler resolved where its `over` clause and extent were
         /// constant, as `PolydatProgram::cursor_schemas` reports them.
@@ -299,6 +344,7 @@ macro_rules! jit_accessors {
 // ── JitKernelRaw ───────────────────────────────────────────
 
 /// Raw JIT kernel: no provenance, all nodes evaluate unconditionally.
+#[derive(Clone)]
 pub struct JitKernelRaw {
     pub(super) core: JitCore,
     pub(super) code_fn: unsafe fn(*const u64, *mut u64),
@@ -334,7 +380,7 @@ impl JitKernelRaw {
     /// Decompose into raw parts for hybrid kernel integration: the
     /// entry point, its module, and the table-kind `(slot, entry)`
     /// pairs the code writes.
-    pub fn into_parts(self) -> super::codegen::JitSegmentCode {
+    pub fn into_parts(self) -> JitParts {
         (self.code_fn, self.core._module, self.core.table_entries)
     }
 
@@ -347,6 +393,7 @@ impl JitKernelRaw {
 // ── JitKernelPush ──────────────────────────────────────────
 
 /// Push-only JIT kernel: per-node dirty tracking, no cone guard.
+#[derive(Clone)]
 pub struct JitKernelPush {
     pub(super) core: JitCore,
     pub(super) code_fn_prov: unsafe fn(*const u64, *mut u64, *mut u8),
@@ -401,6 +448,7 @@ impl JitKernelPush {
 
 /// Pull-only JIT kernel: cone guard, but all nodes run when cone is dirty.
 /// Uses the raw (non-provenance) JIT function — no per-node clean checks.
+#[derive(Clone)]
 pub struct JitKernelPull {
     pub(super) core: JitCore,
     pub(super) code_fn: unsafe fn(*const u64, *mut u64),
@@ -469,6 +517,7 @@ impl JitKernelPull {
 // ── JitKernelPushPull ──────────────────────────────────────
 
 /// Full optimization: push-side dirty tracking + pull-side cone guard.
+#[derive(Clone)]
 pub struct JitKernelPushPull {
     pub(super) core: JitCore,
     pub(super) code_fn_prov: unsafe fn(*const u64, *mut u64, *mut u8),
@@ -547,3 +596,12 @@ impl JitKernelPushPull {
 
     jit_accessors!();
 }
+
+// ── The engine-independent surface (engine_parity.md, step 4) ──────
+
+use crate::compile::select::{Engine, Provenance};
+
+crate::compile::impl_kernel_trait!(JitKernelRaw, Engine::Native(Provenance::Raw));
+crate::compile::impl_kernel_trait!(JitKernelPush, Engine::Native(Provenance::Push));
+crate::compile::impl_kernel_trait!(JitKernelPull, Engine::Native(Provenance::Pull));
+crate::compile::impl_kernel_trait!(JitKernelPushPull, Engine::Native(Provenance::PushPull));

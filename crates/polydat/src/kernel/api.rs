@@ -305,3 +305,93 @@ pub trait Construction: Sized {
     /// contract checks all flow from `self` into the child.
     fn subscope(&self, matter: super::subcontext::PolydatMatter<'_>) -> Result<Self, Self::Error>;
 }
+
+// ── One kernel API for every engine (engine_parity.md, step 4) ──────
+
+/// A kernel on any engine: the interpreter, the closure tier, the
+/// hybrid kernel, or pure native code. Every engine accepts every
+/// program the interpreter accepts, or refuses it at construction
+/// with a reason, and computes the same values for the same inputs;
+/// the choice of engine changes how fast a program runs and nothing
+/// else. This trait is the surface a host drives an engine through
+/// without knowing which one it has.
+///
+/// The interpreter kernel and the compiled kernels also keep their
+/// inherent methods (raw slot readers, `eval(&[u64])`, `engine_counts`)
+/// as engine-specific extras; where a name is shared, the inherent
+/// method is the one a call on the concrete type reaches, and the
+/// trait's is reached through `dyn Kernel` or `Kernel::pull(&mut k, …)`.
+pub trait Kernel: Send {
+    /// The engine this kernel runs on.
+    fn engine(&self) -> crate::compile::select::Engine;
+
+    /// Set the coordinate inputs for the next evaluation.
+    fn set_inputs(&mut self, coords: &[u64]);
+
+    /// Set an extern by name. The value must be of the declared port
+    /// type; an unknown name is an error naming the known ones.
+    fn set_input(&mut self, name: &str, value: Value) -> Result<(), String>;
+
+    /// Narrow a cursor to one partition: its `Ext` slot and its six
+    /// scalar projections are set.
+    fn set_cursor(
+        &mut self,
+        name: &str,
+        partition: &crate::iteration::cursor_partition::Partition,
+    ) -> Result<(), String>;
+
+    /// Evaluate every output for the inputs set so far.
+    fn eval(&mut self);
+
+    /// The named output for the inputs set so far, evaluating what it
+    /// needs: on the interpreter its cone, on a compiled kernel the
+    /// program when an input changed since the last evaluation. The
+    /// value is owned; a handle is never returned to the host.
+    fn pull(&mut self, name: &str) -> Value;
+
+    /// Every input by name, the coordinates first.
+    fn input_names(&self) -> Vec<String>;
+
+    /// Every named output.
+    fn output_names(&self) -> Vec<String>;
+
+    /// The declared port type of a named output.
+    fn output_type(&self, name: &str) -> Option<PortType>;
+
+    /// The externs by name and declared type.
+    fn externs(&self) -> Vec<(String, PortType)>;
+
+    /// The cursors the program declares, with the partitions the
+    /// compiler resolved where it could.
+    fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema];
+
+    /// The program this kernel runs, shareable across threads: each
+    /// thread creates its own kernel from it with
+    /// [`KernelProgram::create_kernel`].
+    fn into_program(self: Box<Self>) -> std::sync::Arc<dyn KernelProgram>;
+}
+
+/// A program on some engine, shared across threads through an `Arc`;
+/// every kernel created from it computes the same values and owns its
+/// own inputs, buffers, and outputs.
+pub trait KernelProgram: Send + Sync {
+    /// The engine the program was built for.
+    fn engine(&self) -> crate::compile::select::Engine;
+
+    /// A kernel of this program for the calling thread.
+    fn create_kernel(self: std::sync::Arc<Self>) -> Box<dyn Kernel>;
+}
+
+/// A compiled kernel as a shared program: its steps are shared, and a
+/// created kernel is a clone that owns its own buffer, table, scratch,
+/// and externs.
+pub(crate) struct SharedKernel<K>(pub(crate) K);
+
+impl<K: Kernel + Clone + Send + Sync + 'static> KernelProgram for SharedKernel<K> {
+    fn engine(&self) -> crate::compile::select::Engine {
+        self.0.engine()
+    }
+    fn create_kernel(self: std::sync::Arc<Self>) -> Box<dyn Kernel> {
+        Box::new(self.0.clone())
+    }
+}

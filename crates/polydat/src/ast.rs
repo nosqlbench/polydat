@@ -1855,7 +1855,7 @@ pub enum HandleKind {
 /// producing step doesn't rerun (and a rerun rewrites the slots
 /// before any consumer reads them). No Arc traffic, no per-cycle
 /// allocation after warmup.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ScratchBuf {
     F32(Vec<f32>),
     F64(Vec<f64>),

@@ -68,11 +68,14 @@ struct CompiledStep {
     rerun: bool,
 }
 
-/// Common fields shared by all kernel variants.
+/// Common fields shared by all kernel variants. A clone is a new state
+/// of the same program: the steps are shared, everything else is the
+/// clone's own (engine_parity.md, step 4).
+#[derive(Clone)]
 struct KernelCore {
     buffer: Vec<u64>,
     coord_count: usize,
-    steps: Vec<CompiledStep>,
+    steps: std::sync::Arc<[CompiledStep]>,
     output_map: HashMap<String, usize>,
     gather_buf: Vec<u64>,
     scatter_buf: Vec<u64>,
@@ -100,6 +103,9 @@ struct KernelCore {
     output_types: HashMap<String, PortType>,
     /// The extern inputs, materialized at the start of every run.
     externs: crate::compile::externs::Externs,
+    /// The coordinates set through the `Kernel` trait, pending
+    /// evaluation.
+    drive: crate::compile::Drive,
 }
 
 impl KernelCore {
@@ -277,7 +283,7 @@ fn build_core(
     KernelCore {
         buffer,
         coord_count,
-        steps: compiled_steps,
+        steps: compiled_steps.into(),
         output_map,
         gather_buf: vec![0u64; max_inputs],
         scatter_buf: vec![0u64; max_outputs],
@@ -289,6 +295,7 @@ fn build_core(
         owns_cycle: true,
         output_types,
         externs,
+        drive: crate::compile::Drive::default(),
     }
 }
 
@@ -407,6 +414,15 @@ macro_rules! kernel_accessors {
             self.core.externs.names()
         }
 
+        /// Every step downstream of a coordinate reruns at the next
+        /// evaluation: the state a kernel created from a shared program
+        /// starts in.
+        fn mark_all_dirty(&mut self) {
+            for i in 0..self.core.coord_count {
+                self.mark_input_changed(i);
+            }
+        }
+
         /// The cursors the program declares, with the partitions the
         /// compiler resolved where its `over` clause and extent were
         /// constant, as `PolydatProgram::cursor_schemas` reports them.
@@ -501,6 +517,7 @@ fn eval_dirty_steps(core: &mut KernelCore, node_clean: &mut [bool]) {
 // Raw: no provenance, no cone guard. Eval runs all steps.
 // ═══════════════════════════════════════════════════════════════
 
+#[derive(Clone)]
 pub struct CompiledKernelRaw {
     core: KernelCore,
 }
@@ -552,6 +569,7 @@ impl CompiledKernelRaw {
 // set_inputs marks dependents dirty. eval skips clean steps.
 // ═══════════════════════════════════════════════════════════════
 
+#[derive(Clone)]
 pub struct CompiledKernelPush {
     core: KernelCore,
     node_clean: Vec<bool>,
@@ -625,6 +643,7 @@ impl CompiledKernelPush {
 // then runs ALL steps if dirty.
 // ═══════════════════════════════════════════════════════════════
 
+#[derive(Clone)]
 pub struct CompiledKernelPull {
     core: KernelCore,
     slot_provenance: Vec<crate::kernel::ProvMask>,
@@ -714,6 +733,7 @@ impl CompiledKernelPull {
 // Full optimization.
 // ═══════════════════════════════════════════════════════════════
 
+#[derive(Clone)]
 pub struct CompiledKernelPushPull {
     core: KernelCore,
     node_clean: Vec<bool>,
@@ -809,3 +829,15 @@ impl CompiledKernelPushPull {
 
     kernel_accessors!();
 }
+
+// ── The engine-independent surface (engine_parity.md, step 4) ──────
+
+use crate::compile::select::{Engine, Provenance};
+
+crate::compile::impl_kernel_trait!(CompiledKernelRaw, Engine::Closures(Provenance::Raw));
+crate::compile::impl_kernel_trait!(CompiledKernelPush, Engine::Closures(Provenance::Push));
+crate::compile::impl_kernel_trait!(CompiledKernelPull, Engine::Closures(Provenance::Pull));
+crate::compile::impl_kernel_trait!(
+    CompiledKernelPushPull,
+    Engine::Closures(Provenance::PushPull)
+);

@@ -829,9 +829,9 @@ impl PolydatAssembler {
         let coord_names = resolved.input_names();
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
             match Self::build_p2_layout(&resolved) {
-                Some(r) => r,
+                Ok(r) => r,
                 // Fall back to Phase 1
-                None => {
+                Err(_) => {
                     return Err(Box::new(PolydatKernel::new(
                         resolved.nodes,
                         resolved.wiring,
@@ -878,8 +878,8 @@ impl PolydatAssembler {
         let coord_names = resolved.input_names();
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
             match Self::build_p2_layout(&resolved) {
-                Some(r) => r,
-                None => {
+                Ok(r) => r,
+                Err(_) => {
                     return Err(Box::new(PolydatKernel::new(
                         resolved.nodes,
                         resolved.wiring,
@@ -918,8 +918,8 @@ impl PolydatAssembler {
         let coord_names = resolved.input_names();
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
             match Self::build_p2_layout(&resolved) {
-                Some(r) => r,
-                None => {
+                Ok(r) => r,
+                Err(_) => {
                     return Err(Box::new(PolydatKernel::new(
                         resolved.nodes,
                         resolved.wiring,
@@ -966,8 +966,8 @@ impl PolydatAssembler {
         let coord_names = resolved.input_names();
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
             match Self::build_p2_layout(&resolved) {
-                Some(r) => r,
-                None => {
+                Ok(r) => r,
+                Err(_) => {
                     return Err(Box::new(PolydatKernel::new(
                         resolved.nodes,
                         resolved.wiring,
@@ -1000,9 +1000,9 @@ impl PolydatAssembler {
     /// Returns None if any node lacks a compiled form. Table-kind
     /// output slots are assigned value-table entries in node and port
     /// order (SRD 115 §3, §7).
-    fn build_p2_layout(resolved: &ResolvedDag) -> Option<P2Layout> {
-        if shared_binding_refusal(resolved).is_some() {
-            return None;
+    fn build_p2_layout(resolved: &ResolvedDag) -> Result<P2Layout, String> {
+        if let Some(refusal) = shared_binding_refusal(resolved) {
+            return Err(refusal);
         }
         let layout = slot_layout(resolved);
 
@@ -1010,11 +1010,19 @@ impl PolydatAssembler {
         let mut extras = crate::compile::closures::P2Extras::default();
         for (node_idx, node) in resolved.nodes.iter().enumerate() {
             let entry_base = extras.table_entries.len();
-            compiled_ops.push(node_step_op(
-                node.as_ref(),
-                entry_base,
-                &wire_types_of(resolved, node_idx),
-            )?);
+            compiled_ops.push(
+                node_step_op(
+                    node.as_ref(),
+                    entry_base,
+                    &wire_types_of(resolved, node_idx),
+                )
+                .ok_or_else(|| {
+                    format!(
+                        "node '{}' has no compiled form (docs/design/engine_parity.md)",
+                        node.meta().name
+                    )
+                })?,
+            );
             extras
                 .table_entries
                 .extend(table_entries_of(resolved, &layout, node_idx, entry_base));
@@ -1028,8 +1036,7 @@ impl PolydatAssembler {
             &layout.input_starts,
             extras.table_entries.len(),
             &resolved.cursor_schemas,
-        )
-        .ok()?;
+        )?;
         extras.output_types = resolved
             .output_map
             .iter()
@@ -1053,7 +1060,7 @@ impl PolydatAssembler {
         let output_map = layout.named_outputs(resolved);
         let ref_slots = layout.ref_slot_mask(resolved);
 
-        Some((
+        Ok((
             layout.coord_slots,
             layout.total_slots,
             steps,
@@ -1144,6 +1151,13 @@ impl PolydatAssembler {
     #[cfg(feature = "jit")]
     pub fn try_compile_jit(self) -> Result<crate::compile::jit::JitKernelPushPull, String> {
         let resolved = self.resolve().map_err(|e| format!("{e}"))?;
+        Self::jit_push_pull_from(resolved)
+    }
+
+    #[cfg(feature = "jit")]
+    fn jit_push_pull_from(
+        resolved: ResolvedDag,
+    ) -> Result<crate::compile::jit::JitKernelPushPull, String> {
         let _coord_names = resolved.input_names();
         let (coord_count, total_slots, jit_steps, output_map) = Self::build_jit_layout(&resolved)?;
         let (guard, types) = Self::jit_slot_info(&resolved);
@@ -1185,6 +1199,11 @@ impl PolydatAssembler {
     #[cfg(feature = "jit")]
     pub fn try_compile_jit_raw(self) -> Result<crate::compile::jit::JitKernelRaw, String> {
         let resolved = self.resolve().map_err(|e| format!("{e}"))?;
+        Self::jit_raw_from(resolved)
+    }
+
+    #[cfg(feature = "jit")]
+    fn jit_raw_from(resolved: ResolvedDag) -> Result<crate::compile::jit::JitKernelRaw, String> {
         let _coord_names = resolved.input_names();
         let (coord_count, total_slots, jit_steps, output_map) = Self::build_jit_layout(&resolved)?;
         let (guard, types) = Self::jit_slot_info(&resolved);
@@ -1225,6 +1244,11 @@ impl PolydatAssembler {
     #[cfg(feature = "jit")]
     pub fn try_compile_jit_push(self) -> Result<crate::compile::jit::JitKernelPush, String> {
         let resolved = self.resolve().map_err(|e| format!("{e}"))?;
+        Self::jit_push_from(resolved)
+    }
+
+    #[cfg(feature = "jit")]
+    fn jit_push_from(resolved: ResolvedDag) -> Result<crate::compile::jit::JitKernelPush, String> {
         let _coord_names = resolved.input_names();
         let (coord_count, total_slots, jit_steps, output_map) = Self::build_jit_layout(&resolved)?;
         let deps = slot_layout(&resolved).expand_dependents(
@@ -1253,6 +1277,11 @@ impl PolydatAssembler {
     #[cfg(feature = "jit")]
     pub fn try_compile_jit_pull(self) -> Result<crate::compile::jit::JitKernelPull, String> {
         let resolved = self.resolve().map_err(|e| format!("{e}"))?;
+        Self::jit_pull_from(resolved)
+    }
+
+    #[cfg(feature = "jit")]
+    fn jit_pull_from(resolved: ResolvedDag) -> Result<crate::compile::jit::JitKernelPull, String> {
         let _coord_names = resolved.input_names();
         let (coord_count, total_slots, jit_steps, output_map) = Self::build_jit_layout(&resolved)?;
         let deps = slot_layout(&resolved).expand_dependents(
@@ -1289,10 +1318,7 @@ impl PolydatAssembler {
         let mode = select::select_prov_mode(&analysis);
 
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
-            match Self::build_p2_layout(&resolved) {
-                Some(r) => r,
-                None => return Err("not all nodes support P2 compilation".into()),
-            };
+            Self::build_p2_layout(&resolved)?;
 
         // The state that wraps the engine owns the cycle (SRD 115 §4).
         let engine = match mode {
@@ -1436,6 +1462,10 @@ impl PolydatAssembler {
     /// fallback. JIT-able nodes get native code, others get closures.
     pub fn compile_hybrid(self) -> Result<crate::compile::hybrid::HybridKernel, String> {
         let resolved = self.resolve().map_err(|e| format!("{e}"))?;
+        Self::hybrid_from(resolved)
+    }
+
+    fn hybrid_from(resolved: ResolvedDag) -> Result<crate::compile::hybrid::HybridKernel, String> {
         if let Some(refusal) = shared_binding_refusal(&resolved) {
             return Err(refusal);
         }
@@ -2587,5 +2617,157 @@ pub fn boundary_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatN
         (PortType::Str, PortType::VecI8) => Some(Box::new(C::StrToVecI8::new())),
 
         _ => None,
+    }
+}
+
+// ── The one constructor (engine_parity.md, step 4) ─────────────────
+
+use crate::compile::select::{Engine, KernelError, Provenance};
+use crate::kernel::Kernel;
+
+impl PolydatAssembler {
+    /// Build a kernel on `engine`: the interpreter, the closure tier,
+    /// the hybrid kernel, or pure native code, with the provenance mode
+    /// the engine names. Every engine accepts every program the
+    /// interpreter accepts, or refuses it with a reason naming the node
+    /// or construct ([`KernelError::Refused`]). The older constructors
+    /// (`compile`, `try_compile*`, `compile_hybrid`, `try_compile_jit*`)
+    /// remain as aliases of this one for their engine.
+    pub fn compile_with(self, engine: Engine) -> Result<Box<dyn Kernel>, KernelError> {
+        self.compile_engine_with_log(engine, None)
+    }
+
+    /// [`Self::compile_with`] with the compile event log, which
+    /// receives the assembly events for every engine.
+    pub fn compile_engine_with_log(
+        self,
+        engine: Engine,
+        log: Option<&mut crate::dsl::events::CompileEventLog>,
+    ) -> Result<Box<dyn Kernel>, KernelError> {
+        let refused = |reason: String| KernelError::Refused { engine, reason };
+        match engine {
+            Engine::Interpreter => Ok(Box::new(self.compile_with_log(log)?)),
+            Engine::Closures(prov) => {
+                let resolved = self.resolve_with_log(log)?;
+                Self::closures_from(resolved, prov).map_err(refused)
+            }
+            Engine::Hybrid(prov) => {
+                let resolved = self.resolve_with_log(log)?;
+                let kernel = Self::hybrid_from(resolved).map_err(refused)?;
+                Ok(match prov {
+                    #[cfg(feature = "jit")]
+                    Provenance::Raw => Box::new(kernel.into_raw()),
+                    #[cfg(not(feature = "jit"))]
+                    Provenance::Raw => Box::new(kernel.into_pull()),
+                    Provenance::Pull => Box::new(kernel.into_pull()),
+                    Provenance::Push | Provenance::PushPull | Provenance::Auto => Box::new(kernel),
+                })
+            }
+            Engine::Native(prov) => {
+                #[cfg(feature = "jit")]
+                {
+                    let resolved = self.resolve_with_log(log)?;
+                    Self::native_from(resolved, prov).map_err(refused)
+                }
+                #[cfg(not(feature = "jit"))]
+                {
+                    let _ = (prov, log);
+                    Err(refused(
+                        "this build has no native code (the `jit` feature is off)".into(),
+                    ))
+                }
+            }
+        }
+    }
+
+    /// The closure-tier kernel of a resolved graph in one provenance
+    /// mode, or why the closure tier refuses the graph.
+    fn closures_from(resolved: ResolvedDag, prov: Provenance) -> Result<Box<dyn Kernel>, String> {
+        let prov = match prov {
+            Provenance::Auto => {
+                let analysis =
+                    select::analyze_graph(&resolved.nodes, &resolved.wiring, &resolved.output_map);
+                match select::select_prov_mode(&analysis) {
+                    ProvMode::Raw => Provenance::Raw,
+                    ProvMode::Pull => Provenance::Pull,
+                    ProvMode::PushPull => Provenance::PushPull,
+                }
+            }
+            p => p,
+        };
+        let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
+            Self::build_p2_layout(&resolved)?;
+        let dependents = || {
+            slot_layout(&resolved).expand_dependents(
+                &resolved,
+                &PolydatProgram::compute_dependents(
+                    &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
+                    resolved.input_defs.len(),
+                ),
+            )
+        };
+        Ok(match prov {
+            Provenance::Raw => Box::new(CompiledKernelRaw::new(
+                coord_count,
+                total_slots,
+                steps,
+                output_map,
+                ref_slots,
+                extras,
+            )),
+            Provenance::Push => Box::new(CompiledKernelPush::new(
+                coord_count,
+                total_slots,
+                steps,
+                output_map,
+                dependents(),
+                ref_slots,
+                extras,
+            )),
+            Provenance::Pull => Box::new(CompiledKernelPull::new(
+                coord_count,
+                total_slots,
+                steps,
+                output_map,
+                &dependents(),
+                ref_slots,
+                extras,
+            )),
+            Provenance::PushPull | Provenance::Auto => Box::new(CompiledKernelPushPull::new(
+                coord_count,
+                total_slots,
+                steps,
+                output_map,
+                dependents(),
+                ref_slots,
+                extras,
+            )),
+        })
+    }
+
+    /// The pure native kernel of a resolved graph in one provenance
+    /// mode, or why native code refuses the graph.
+    #[cfg(feature = "jit")]
+    fn native_from(resolved: ResolvedDag, prov: Provenance) -> Result<Box<dyn Kernel>, String> {
+        let prov = match prov {
+            Provenance::Auto => {
+                let analysis =
+                    select::analyze_graph(&resolved.nodes, &resolved.wiring, &resolved.output_map);
+                match select::select_prov_mode(&analysis) {
+                    ProvMode::Raw => Provenance::Raw,
+                    ProvMode::Pull => Provenance::Pull,
+                    ProvMode::PushPull => Provenance::PushPull,
+                }
+            }
+            p => p,
+        };
+        Ok(match prov {
+            Provenance::Raw => Box::new(Self::jit_raw_from(resolved)?),
+            Provenance::Push => Box::new(Self::jit_push_from(resolved)?),
+            Provenance::Pull => Box::new(Self::jit_pull_from(resolved)?),
+            Provenance::PushPull | Provenance::Auto => {
+                Box::new(Self::jit_push_pull_from(resolved)?)
+            }
+        })
     }
 }

@@ -40,8 +40,9 @@ enum HybridStep {
 #[cfg(feature = "jit")]
 struct JitSegment {
     code_fn: unsafe fn(*const u64, *mut u64),
-    /// Keep the JIT module alive so the generated code isn't freed.
-    _module: Box<dyn std::any::Any + Send>,
+    /// The finalized native code, shared by every kernel created from
+    /// one program.
+    _module: crate::compile::jit::JitCode,
 }
 
 /// A closure step's op: pure-scalar u64 closure, or a slot op
@@ -59,11 +60,14 @@ struct ClosureStep {
     scratch_range: (usize, usize),
 }
 
-/// Common fields shared by all hybrid kernel variants.
+/// Common fields shared by all hybrid kernel variants. A clone is a new
+/// state of the same program: the steps and the nodes are shared,
+/// everything else is the clone's own (engine_parity.md, step 4).
+#[derive(Clone)]
 struct HybridCore {
     buffer: Vec<u64>,
     coord_count: usize,
-    steps: Vec<HybridStep>,
+    steps: std::sync::Arc<Vec<HybridStep>>,
     output_map: HashMap<String, usize>,
     gather_buf: Vec<u64>,
     scatter_buf: Vec<u64>,
@@ -90,7 +94,10 @@ struct HybridCore {
     /// The extern inputs, materialized at the start of every run.
     externs: crate::compile::externs::Externs,
     /// Keep source nodes alive so JIT-baked pointers remain valid.
-    _nodes: Vec<Box<dyn PolydatNode>>,
+    _nodes: std::sync::Arc<Vec<Box<dyn PolydatNode>>>,
+    /// The coordinates set through the `Kernel` trait, pending
+    /// evaluation.
+    drive: crate::compile::Drive,
 }
 
 /// Per-slot `Hdl1` mask over the nodes' output ports.
@@ -194,7 +201,8 @@ fn eval_all_hybrid_steps(core: &mut HybridCore) {
     table.set_generation(crate::kernel::begin_root_cycle());
     core.externs.materialize(&mut core.buffer, &mut table);
     let installed = crate::kernel::install_value_table(&mut table);
-    for step in &core.steps {
+    let steps = std::sync::Arc::clone(&core.steps);
+    for step in steps.iter() {
         match step {
             #[cfg(feature = "jit")]
             HybridStep::Jit(seg) => {
@@ -308,6 +316,7 @@ impl HybridCore {
 ///
 /// Every `eval()` call runs all steps unconditionally. Useful as a
 /// baseline and for graphs where inputs change on every cycle.
+#[derive(Clone)]
 pub struct HybridKernelRaw {
     core: HybridCore,
 }
@@ -426,7 +435,7 @@ impl HybridKernelRaw {
 
     /// Store owned nodes to keep JIT-baked pointers valid.
     pub fn retain_nodes(&mut self, nodes: Vec<Box<dyn PolydatNode>>) {
-        self.core._nodes = nodes;
+        self.core._nodes = std::sync::Arc::new(nodes);
     }
 }
 
@@ -441,6 +450,7 @@ impl HybridKernelRaw {
 /// `eval_for_slot()` checks whether the output's transitive input
 /// cone changed before running steps. If nothing in the cone changed,
 /// the cached value is returned without re-evaluation.
+#[derive(Clone)]
 pub struct HybridKernelPull {
     core: HybridCore,
     slot_provenance: Vec<u64>,
@@ -588,7 +598,7 @@ impl HybridKernelPull {
 
     /// Store owned nodes to keep JIT-baked pointers valid.
     pub fn retain_nodes(&mut self, nodes: Vec<Box<dyn PolydatNode>>) {
-        self.core._nodes = nodes;
+        self.core._nodes = std::sync::Arc::new(nodes);
     }
 }
 
@@ -605,6 +615,7 @@ impl HybridKernelPull {
 /// Pull side: `eval_for_slot()` first checks whether the output's cone of
 /// influence changed at all. If not, the cached value is returned without
 /// entering the eval loop.
+#[derive(Clone)]
 pub struct HybridKernelPushPull {
     core: HybridCore,
     step_clean: Vec<bool>,
@@ -689,7 +700,8 @@ impl HybridKernelPushPull {
             .externs
             .materialize(&mut self.core.buffer, &mut table);
         let installed = crate::kernel::install_value_table(&mut table);
-        for (step_idx, step) in self.core.steps.iter().enumerate() {
+        let steps = std::sync::Arc::clone(&self.core.steps);
+        for (step_idx, step) in steps.iter().enumerate() {
             if self.step_clean[step_idx] {
                 continue;
             }
@@ -751,7 +763,8 @@ impl HybridKernelPushPull {
             .externs
             .materialize(&mut self.core.buffer, &mut table);
         let installed = crate::kernel::install_value_table(&mut table);
-        for (step_idx, step) in self.core.steps.iter().enumerate() {
+        let steps = std::sync::Arc::clone(&self.core.steps);
+        for (step_idx, step) in steps.iter().enumerate() {
             if self.step_clean[step_idx] {
                 continue;
             }
@@ -858,7 +871,7 @@ impl HybridKernelPushPull {
 
     /// Store owned nodes to keep JIT-baked pointers valid.
     pub fn retain_nodes(&mut self, nodes: Vec<Box<dyn PolydatNode>>) {
-        self.core._nodes = nodes;
+        self.core._nodes = std::sync::Arc::new(nodes);
     }
 }
 
@@ -1114,7 +1127,7 @@ pub(crate) fn build_hybrid(
                 step_rerun.push(output_slots.iter().any(|&s| handle_mask[s]));
                 steps.push(HybridStep::Jit(JitSegment {
                     code_fn,
-                    _module: Box::new(module),
+                    _module: crate::compile::jit::JitCode::new(module),
                 }));
             }
         }
@@ -1361,7 +1374,7 @@ fn build_pushpull_from_steps(
         core: HybridCore {
             buffer,
             coord_count,
-            steps,
+            steps: std::sync::Arc::new(steps),
             output_map,
             gather_buf: vec![0u64; max_inputs.max(1)],
             scatter_buf: vec![0u64; max_outputs.max(1)],
@@ -1373,7 +1386,8 @@ fn build_pushpull_from_steps(
             output_types,
             step_rerun,
             externs,
-            _nodes: Vec::new(),
+            _nodes: std::sync::Arc::new(Vec::new()),
+            drive: crate::compile::Drive::default(),
         },
         step_clean: vec![false; step_count],
         input_dependents: step_dependents,
@@ -1382,3 +1396,54 @@ fn build_pushpull_from_steps(
         force_run: false,
     })
 }
+
+// ── The engine-independent surface (engine_parity.md, step 4) ──────
+
+#[cfg(feature = "jit")]
+impl HybridKernelRaw {
+    /// Nothing to mark: every run evaluates everything.
+    fn mark_all_dirty(&mut self) {}
+}
+
+impl HybridKernelPull {
+    /// The next evaluation runs whatever the cone guard says.
+    fn mark_all_dirty(&mut self) {
+        self.changed_mask = u64::MAX;
+        self.force_run = true;
+    }
+}
+
+impl HybridKernelPushPull {
+    /// Every step reruns at the next evaluation.
+    fn mark_all_dirty(&mut self) {
+        for c in &mut self.step_clean {
+            *c = false;
+        }
+        self.changed_mask = u64::MAX;
+        self.force_run = true;
+    }
+
+    /// The same program with no provenance: every run evaluates
+    /// everything.
+    #[cfg(feature = "jit")]
+    pub(crate) fn into_raw(self) -> HybridKernelRaw {
+        HybridKernelRaw { core: self.core }
+    }
+
+    /// The same program with the cone guard only.
+    pub(crate) fn into_pull(self) -> HybridKernelPull {
+        HybridKernelPull {
+            core: self.core,
+            slot_provenance: self.slot_provenance,
+            changed_mask: u64::MAX,
+            force_run: false,
+        }
+    }
+}
+
+use crate::compile::select::{Engine, Provenance};
+
+#[cfg(feature = "jit")]
+crate::compile::impl_kernel_trait!(HybridKernelRaw, Engine::Hybrid(Provenance::Raw));
+crate::compile::impl_kernel_trait!(HybridKernelPull, Engine::Hybrid(Provenance::Pull));
+crate::compile::impl_kernel_trait!(HybridKernelPushPull, Engine::Hybrid(Provenance::PushPull));

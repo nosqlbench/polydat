@@ -32,6 +32,7 @@ use crate::ast::{PortType, Value};
 use crate::kernel::{InputDef, ValueTable};
 
 /// One extern input of a compiled kernel.
+#[derive(Clone)]
 pub(crate) struct ExternSlot {
     pub name: String,
     /// First buffer slot; every supported extern is one slot wide.
@@ -44,10 +45,13 @@ pub(crate) struct ExternSlot {
 }
 
 /// The extern inputs of one compiled kernel.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Externs {
     slots: Vec<ExternSlot>,
     by_name: HashMap<String, usize>,
+    /// Every input by name, the coordinates first, as the interpreter
+    /// program lists them.
+    input_names: Vec<String>,
     /// The cursors the program declares (engine_parity.md, step 3):
     /// each is an `Ext` extern plus six scalar ones, and its schema
     /// carries the partitions the compiler resolved at build.
@@ -98,8 +102,14 @@ impl Externs {
         Ok(Self {
             slots,
             by_name,
+            input_names: input_defs.iter().map(|d| d.name.clone()).collect(),
             cursors: cursors.to_vec(),
         })
+    }
+
+    /// Every input by name, the coordinates first.
+    pub(crate) fn input_names(&self) -> &[String] {
+        &self.input_names
     }
 
     /// The cursors the program declares, with their partitions where

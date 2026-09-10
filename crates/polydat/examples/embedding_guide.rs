@@ -8,10 +8,11 @@
 use polydat::ast::Value;
 use polydat::derive_support::Ext;
 use polydat::dsl::compile::{
-    compile_polydat, compile_polydat_to_assembler, compile_polydat_with_libs,
+    compile_polydat, compile_polydat_to_assembler, compile_polydat_with, compile_polydat_with_libs,
     compile_polydat_with_log,
 };
 use polydat::dsl::events::CompileEventLog;
+use polydat::{Engine, Kernel, Provenance};
 
 /// A node the host defines. The attribute registers it at link time
 /// under its function name, so DSL text compiled anywhere in this
@@ -403,47 +404,39 @@ fn section_compiled_kernels() {
     // host_tag and the two extension nodes have closure forms but no
     // native one, so the hybrid kernel must mix engines to run this.
     let src = "input cycle: u64\nh := hash(cycle)\nname := \"user-{h}\"\ntag := host_tag(\"job\", mod(h, 10000))\ncell := geo_cell(to_f64(mod(h, 180)) - 90.0, to_f64(mod(h, 360)) - 180.0, 4)\ntok := cell_token(cell)\ntile j : json := {\"h\": ${h}, \"name\": ${name}, \"tag\": ${tag}, \"cell\": ${tok}}\n";
-    let mut p2 = compile_polydat_to_assembler(src)
-        .unwrap()
-        .try_compile_raw()
-        .unwrap_or_else(|_| panic!("P2"));
-    // Pure native code needs every node to have a native form.
-    match compile_polydat_to_assembler(src).unwrap().try_compile_jit() {
-        Ok(_) => println!("pure P3: compiled"),
-        Err(e) => println!("pure P3 refused: {e}"),
+    // One constructor names the engine; one trait drives whatever it
+    // built. An engine that cannot run the program says so by name.
+    let mut kernels: Vec<Box<dyn Kernel>> = Vec::new();
+    for engine in [
+        Engine::Closures(Provenance::Auto),
+        Engine::Hybrid(Provenance::Auto),
+        Engine::Native(Provenance::Auto),
+    ] {
+        match compile_polydat_with(src, engine) {
+            Ok(k) => kernels.push(k),
+            Err(e) => println!("{e}"),
+        }
     }
-    // The hybrid kernel lowers what it can and runs the rest as closures.
-    let mut hybrid = compile_polydat_to_assembler(src)
+    // The hybrid kernel's plan, the one planning detail it exposes.
+    let hybrid = compile_polydat_to_assembler(src)
         .unwrap()
         .compile_hybrid()
         .expect("hybrid");
     let (native, closures) = hybrid.engine_counts();
     println!("hybrid plan: {native} native segment(s), {closures} closure step(s)");
+    // The interpreter is the oracle; every engine that accepted the
+    // program computes the same values through the same calls.
+    let mut p1 = compile_polydat_with(src, Engine::Interpreter).unwrap();
     for cycle in [0u64, 1] {
-        p2.eval(&[cycle]);
-        // Handle outputs are read through get_value, which copies out;
-        // do that before running another root kernel on this thread.
-        let p2_h = p2.get("h");
-        let p2_j = p2.get_value("j").to_display_string();
-        hybrid.eval(&[cycle]);
-        let hy_h = hybrid.get("h");
-        let hy_j = hybrid.get_value("j").to_display_string();
-        println!("cycle {cycle}: P2 h={p2_h} j={p2_j}");
-        println!(
-            "cycle {cycle}: hybrid agrees: {}",
-            p2_h == hy_h && p2_j == hy_j
-        );
+        p1.set_inputs(&[cycle]);
+        let want = p1.pull("j").to_display_string();
+        println!("cycle {cycle}: j={want}");
+        for k in kernels.iter_mut() {
+            k.set_inputs(&[cycle]);
+            let got = k.pull("j").to_display_string();
+            println!("  {} agrees: {}", k.engine(), got == want);
+        }
     }
-    // The production kernel mixes engines itself; the host never picks.
-    let mut mixed = compile_polydat_to_assembler(src)
-        .unwrap()
-        .compile()
-        .expect("mixed");
-    mixed.set_inputs(&[1]);
-    println!(
-        "production kernel j: {}",
-        mixed.pull("j").to_display_string()
-    );
     println!();
 }
 

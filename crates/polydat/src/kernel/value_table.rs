@@ -72,6 +72,7 @@ pub fn decode_table_handle(handle: u64) -> (u64, u64, usize) {
 
 /// A fixed set of entries, one per table-kind slot of the engine that
 /// owns it.
+#[derive(Clone)]
 pub struct ValueTable {
     entries: Vec<Option<Value>>,
     generation: u64,
