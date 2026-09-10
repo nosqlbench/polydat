@@ -263,6 +263,18 @@ the resulting interval, and writes the partition plus its scalar projections
 into the cursor's external slots. The partition remains fixed for that scope
 activation.
 
+When the `over` value is a literal spec and the cursor's extent is known at
+build, the compiler resolves the partitions itself and records them on the
+cursor's schema (`SourceSchema::partitions`), which the assembler and every
+kernel built from it report through `cursor_schemas`. A clause that denotes
+exactly one partition seeds the cursor's slots at build, so the program runs
+on every engine with no host call. A clause that denotes several is narrowed
+by the host or the traversal runtime through `set_cursor(name, &partition)`,
+which every kernel offers, the interpreter's and the compiled ones alike; it
+writes the seven slots above. A computed `over` value, or an extent known only
+at run time, is resolved through `cursor_over_partitions` on an interpreter
+state as before ([engine parity](engine_parity.md), A3).
+
 Available cursor metadata wires are:
 
 ```text

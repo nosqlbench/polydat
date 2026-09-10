@@ -236,7 +236,7 @@ impl Gen {
     /// One binding from the grammar.
     fn step(&mut self) {
         let u = self.pick(PortType::U64).expect("cycle is always u64");
-        match self.rng.range(42) {
+        match self.rng.range(43) {
             0 => {
                 self.bind(PortType::U64, format!("hash({})", u.name));
             }
@@ -682,6 +682,19 @@ impl Gen {
                 if w.ext.is_none() && w.ty != PortType::Json {
                     let fallback = self.pick(w.ty).expect("the wire itself is a candidate");
                     self.bind(w.ty, format!("default_or({}, {})", w.name, fallback.name));
+                }
+            }
+            41 => {
+                // A cursor whose literal `over` clause denotes one
+                // partition: resolved and seeded at build, so no kernel
+                // needs a host call (engine parity step 3). Its slot is a
+                // partition like any other for the family above.
+                if !self.lines.iter().any(|l| l.starts_with("cursor ")) {
+                    let spec = ["0..50%", "25%..75%", "*", "10%..90%"][self.rng.range(4)];
+                    let name = self.name();
+                    self.lines
+                        .insert(1, format!("cursor {name} = range(0, 1000) over \"{spec}\""));
+                    self.bind_ext("Partition", 0, format!("{name}.cursor"));
                 }
             }
             _ => {

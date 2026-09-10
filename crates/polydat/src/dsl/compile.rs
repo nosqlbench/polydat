@@ -1983,19 +1983,44 @@ impl Compiler {
         //    a concrete `Partition` and writes it into this slot,
         //    so downstream nodes (`mod_in`, `cardinality`, etc.)
         //    can consume it as a `Partition`-typed wire.
+        let mut partitions: Option<Vec<crate::iteration::cursor_partition::Partition>> = None;
         let partition_output = if let Some(over_expr) = decl.over.as_ref() {
             let raw_name = format!("__cursor_{source_name}_over_raw");
             self.compile_binding(asm, std::slice::from_ref(&raw_name), over_expr)
                 .map_err(|e| {
                     format!("cursor '{source_name}': failed to compile `over` expression: {e}")
                 })?;
-            // Allocate the resolved-Partition input slot. Default
-            // is `Value::None` until the executor writes the
-            // resolved value at phase setup.
+            // A literal spec over a known extent resolves now
+            // (engine_parity.md, step 3): the schema carries the
+            // partitions for the host, and a clause that denotes
+            // exactly one partition seeds the cursor's slots, so the
+            // program runs on every engine with no host call. A clause
+            // that denotes several leaves the choice to the host or
+            // the traversal runtime, as before.
+            if let (crate::dsl::ast::Expr::StringLit(spec, _), Some(extent)) =
+                (over_expr, effective_extent)
+            {
+                let open = !matches!(
+                    cursor_kind_for_decl,
+                    crate::iteration::source::CursorKind::Range
+                );
+                let parts = crate::iteration::cursor_partition::resolve_over(
+                    &crate::ast::Value::Str(spec.as_str().into()),
+                    extent,
+                    open,
+                )
+                .map_err(|e| format!("cursor '{source_name}': `over \"{spec}\"`: {e}"))?;
+                partitions = Some(parts);
+            }
+            let seeded: Option<crate::iteration::cursor_partition::Partition> =
+                partitions.as_ref().filter(|p| p.len() == 1).map(|p| p[0]);
+            // Allocate the resolved-Partition input slot. Its default
+            // is the one partition the clause denotes, or `Value::None`
+            // until the host or the traversal runtime narrows it.
             let cursor_input_name = format!("{source_name}__cursor");
             asm.add_input(
                 &cursor_input_name,
-                crate::ast::Value::None,
+                seeded.map_or(crate::ast::Value::None, crate::ast::Value::from_partition),
                 crate::ast::PortType::Ext,
                 crate::kernel::InputKind::ExternalWrite,
             );
@@ -2020,14 +2045,24 @@ impl Compiler {
             // ordinal pair is patched by the executor once the
             // cursor's extent is known).
             use crate::ast::{PortType, Value};
-            let scalar_slots: [(&str, Value, PortType); 6] = [
-                ("idx", Value::U64(0), PortType::U64),
-                ("partition_count", Value::U64(1), PortType::U64),
-                ("start_pct", Value::F64(0.0), PortType::F64),
-                ("end_pct", Value::F64(100.0), PortType::F64),
-                ("start_ordinal", Value::U64(0), PortType::U64),
-                ("end_ordinal", Value::U64(0), PortType::U64),
-            ];
+            let scalar_slots: [(&str, Value, PortType); 6] = match seeded {
+                Some(p) => [
+                    ("idx", Value::U64(p.idx), PortType::U64),
+                    ("partition_count", Value::U64(p.count.max(1)), PortType::U64),
+                    ("start_pct", Value::F64(p.start_pct), PortType::F64),
+                    ("end_pct", Value::F64(p.end_pct), PortType::F64),
+                    ("start_ordinal", Value::U64(p.start_ord), PortType::U64),
+                    ("end_ordinal", Value::U64(p.end_ord), PortType::U64),
+                ],
+                None => [
+                    ("idx", Value::U64(0), PortType::U64),
+                    ("partition_count", Value::U64(1), PortType::U64),
+                    ("start_pct", Value::F64(0.0), PortType::F64),
+                    ("end_pct", Value::F64(100.0), PortType::F64),
+                    ("start_ordinal", Value::U64(0), PortType::U64),
+                    ("end_ordinal", Value::U64(0), PortType::U64),
+                ],
+            };
             for (field, default, port_type) in scalar_slots {
                 let slot = format!("{cursor_input_name}__{field}");
                 asm.add_input(
@@ -2057,6 +2092,7 @@ impl Compiler {
                 extent_limit: self.cursor_limit,
                 cursor_kind: cursor_kind_for_decl.clone(),
                 partition_output,
+                partitions,
             });
 
         // Record deferred extent resolution if the range bounds are not
@@ -2600,6 +2636,10 @@ impl Compiler {
         }
 
         asm.set_context(&self.source_text, &self.context_label);
+        // The cursors, with their partitions resolved at build, reach
+        // every kernel built from this assembler (engine_parity.md,
+        // step 3).
+        asm.set_cursor_schemas(self.cursor_schemas.clone());
         Ok(asm)
     }
 

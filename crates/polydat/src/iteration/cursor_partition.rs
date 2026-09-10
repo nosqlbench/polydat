@@ -2797,14 +2797,19 @@ pub fn cursor_extent(
     schema.extent.unwrap_or(0)
 }
 
-/// Resolve the partitions a cursor's `over` clause denotes, pulling the
-/// raw `over` value from `state`. Returns an empty list for a cursor
-/// without an `over` clause.
+/// Resolve the partitions a cursor's `over` clause denotes: the list the
+/// compiler resolved at build when the clause and the extent were
+/// constant, otherwise the raw `over` value pulled from `state` against
+/// the extent. Returns an empty list for a cursor without an `over`
+/// clause.
 pub fn cursor_over_partitions(
     program: &crate::kernel::PolydatProgram,
     state: &mut crate::kernel::PolydatState,
     schema: &crate::iteration::source::SourceSchema,
 ) -> Result<Vec<Partition>, String> {
+    if let Some(parts) = &schema.partitions {
+        return Ok(parts.clone());
+    }
     let Some(raw) = &schema.partition_output else {
         return Ok(Vec::new());
     };
@@ -2817,6 +2822,26 @@ pub fn cursor_over_partitions(
     resolve_over(&value, extent, open)
 }
 
+/// The inputs narrowing a cursor to one partition writes, by name: the
+/// `<cursor>__cursor` slot and its six scalar projections. This is what
+/// `narrow_cursor` writes on the interpreter and `set_cursor` on every
+/// compiled kernel.
+pub fn cursor_slot_writes(cursor_name: &str, partition: &Partition) -> [(String, Value); 7] {
+    let slot = |suffix: &str| format!("{cursor_name}__cursor{suffix}");
+    [
+        (slot(""), Value::from_partition(*partition)),
+        (slot("__idx"), Value::U64(partition.idx)),
+        (
+            slot("__partition_count"),
+            Value::U64(partition.count.max(1)),
+        ),
+        (slot("__start_pct"), Value::F64(partition.start_pct)),
+        (slot("__end_pct"), Value::F64(partition.end_pct)),
+        (slot("__start_ordinal"), Value::U64(partition.start_ord)),
+        (slot("__end_ordinal"), Value::U64(partition.end_ord)),
+    ]
+}
+
 /// Write one resolved partition into a cursor's `<cursor>__cursor` slot
 /// and its six scalar projection slots. Slots the program does not
 /// declare are skipped.
@@ -2826,19 +2851,11 @@ pub fn narrow_cursor(
     cursor_name: &str,
     partition: &Partition,
 ) {
-    let mut write = |suffix: &str, v: Value| {
-        let slot = format!("{cursor_name}__cursor{suffix}");
+    for (slot, v) in cursor_slot_writes(cursor_name, partition) {
         if let Some(idx) = program.find_input(&slot) {
             state.set_input(idx, v);
         }
-    };
-    write("", Value::from_partition(*partition));
-    write("__idx", Value::U64(partition.idx));
-    write("__partition_count", Value::U64(partition.count.max(1)));
-    write("__start_pct", Value::F64(partition.start_pct));
-    write("__end_pct", Value::F64(partition.end_pct));
-    write("__start_ordinal", Value::U64(partition.start_ord));
-    write("__end_ordinal", Value::U64(partition.end_ord));
+    }
 }
 
 #[cfg(test)]

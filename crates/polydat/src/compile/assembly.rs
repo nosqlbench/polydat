@@ -193,6 +193,8 @@ pub(crate) struct ResolvedDag {
     pub(crate) output_modifiers: HashMap<String, crate::dsl::ast::BindingModifier>,
     /// Names declared with `init` (SRD 11 §"Init Binding Contract").
     pub(crate) const_outputs: std::collections::HashSet<String>,
+    /// The cursors the program declares.
+    pub(crate) cursor_schemas: Vec<crate::iteration::source::SourceSchema>,
 }
 
 impl ResolvedDag {
@@ -500,6 +502,10 @@ pub struct PolydatAssembler {
     /// SRD-105 per-assembler engine-mix override. `None` defers to
     /// the process default ([`crate::compile::cone::default_jit_mode`]).
     pub(crate) jit_mode: Option<crate::compile::cone::JitMode>,
+    /// The cursors the program declares (engine_parity.md, step 3), set
+    /// by the DSL compiler so every kernel built from this assembler
+    /// knows them.
+    cursor_schemas: Vec<crate::iteration::source::SourceSchema>,
 }
 
 /// `(coord_slots, total_slots, steps, named outputs, ref-slot
@@ -550,7 +556,21 @@ impl PolydatAssembler {
             strict_values: false,
             strict_types: false,
             jit_mode: None,
+            cursor_schemas: Vec::new(),
         }
+    }
+
+    /// Record the cursors the program declares, with the partitions the
+    /// compiler resolved for each. Every kernel built from this
+    /// assembler reports them through `cursor_schemas` and narrows one
+    /// through `set_cursor`.
+    pub fn set_cursor_schemas(&mut self, schemas: Vec<crate::iteration::source::SourceSchema>) {
+        self.cursor_schemas = schemas;
+    }
+
+    /// The cursors the program declares.
+    pub fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema] {
+        &self.cursor_schemas
     }
 
     /// Enable strict-wire-mode auto-insertion of value/type assertion
@@ -723,7 +743,8 @@ impl PolydatAssembler {
         crate::compile::cone::extract_jit_cones(&mut resolved, jit_mode);
         let _coord_names = resolved.input_names();
         let modifiers = resolved.output_modifiers.clone();
-        let kernel = PolydatKernel::new_with_inputs(
+        let cursors = std::mem::take(&mut resolved.cursor_schemas);
+        let mut kernel = PolydatKernel::new_with_inputs(
             resolved.nodes,
             resolved.wiring,
             resolved.input_defs,
@@ -738,6 +759,9 @@ impl PolydatAssembler {
             false,
         )
         .map_err(AssemblyError::Other)?;
+        if !cursors.is_empty() {
+            kernel.set_cursor_schemas(cursors);
+        }
         Ok(kernel)
     }
 
@@ -1003,6 +1027,7 @@ impl PolydatAssembler {
             resolved.coord_count,
             &layout.input_starts,
             extras.table_entries.len(),
+            &resolved.cursor_schemas,
         )
         .ok()?;
         extras.output_types = resolved
@@ -1152,6 +1177,7 @@ impl PolydatAssembler {
             resolved.coord_count,
             &layout.input_starts,
             0,
+            &resolved.cursor_schemas,
         )
     }
 
@@ -1923,6 +1949,7 @@ impl PolydatAssembler {
             context: self.context,
             output_modifiers: self.output_modifiers,
             const_outputs: self.const_outputs,
+            cursor_schemas: self.cursor_schemas,
         })
     }
 }

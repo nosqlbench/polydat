@@ -672,6 +672,41 @@ impl PolydatKernel {
         Ok(())
     }
 
+    /// Narrow a cursor to one partition: its `Ext` slot and six scalar
+    /// projections are set, as `cursor_partition::narrow_cursor` does.
+    /// The compiled kernels offer the same call. The partitions a
+    /// cursor's `over` clause denotes are in `program().cursor_schemas()`
+    /// when the compiler could resolve them, or from
+    /// `cursor_partition::cursor_over_partitions` otherwise.
+    pub fn set_cursor(
+        &mut self,
+        name: &str,
+        partition: &crate::iteration::cursor_partition::Partition,
+    ) -> Result<(), String> {
+        if self
+            .program
+            .find_input(&format!("{name}__cursor"))
+            .is_none()
+        {
+            let known: Vec<&str> = self
+                .program
+                .cursor_schemas()
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect();
+            return Err(format!(
+                "no cursor named '{name}' with an `over` clause; this program's cursors are {known:?}"
+            ));
+        }
+        crate::iteration::cursor_partition::narrow_cursor(
+            &self.program,
+            &mut self.state,
+            name,
+            partition,
+        );
+        Ok(())
+    }
+
     /// Mark this kernel as nested inside another kernel's cycle (SRD 115
     /// §4): a traversal activation, a projection body, a materialized
     /// subscope. A nested kernel never resets the thread's cycle arena;

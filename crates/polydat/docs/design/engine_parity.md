@@ -3,9 +3,9 @@
 **Status:** Proposed SRD 116. This document is a review, recorded on
 2026-09-09, of every place the compilation levels differ in anything
 other than performance, and the plan that removes each difference.
-§5 is the plan, §4 the findings it answers. Steps 1 and 2 of the plan
-landed on 2026-09-09 (the landing records are under the steps); the
-rest is proposed.
+§5 is the plan, §4 the findings it answers. Steps 1 through 3 of the
+plan landed on 2026-09-09 (the landing records are under the steps);
+the rest is proposed.
 
 **Ownership.** Polydat owns the feature set, the engines, and the public
 API that names them. A host chooses an engine for speed and for nothing
@@ -96,7 +96,7 @@ name, signature, and meaning as the interpreter kernel.
 | Introspect | `program()`, `input_names`, `output_names`, `get_constant`, `lookup` | `output_names`, `resolve_output`, `coord_count` (counts slots) | same plus `engine_counts` | `output_names`, `resolve_output`, `coord_count` |
 | Share across threads | `into_program()` then `create_state()` per thread | none: compile once per thread | none | none |
 | Traversal | `traverse(i)`, activations, `for_iteration` | none | none | none |
-| Cursors | host `cursor_over_partitions` on the state; activations seed their bodies | none | none | none |
+| Cursors | `cursor_schemas` (with the partitions resolved at build), `set_cursor`; `cursor_over_partitions` for the run-time cases; activations seed their bodies | `cursor_schemas`, `set_cursor` | same | same |
 | Shared bindings | cells, write-through, broadcast | an ordinary input | same | same |
 | Failure of a node | panic enriched with node name and inputs | raw panic from the closure or helper | same | same |
 | Engine selection | `set_jit_mode` (production kernel mixes cones) | `auto_compile_p2` → `P2Engine` | one form | `auto_compile_p3` → `P3Engine` |
@@ -182,6 +182,14 @@ arguments are the fourth cause there. True-up: the u64 kit's setup
 capture and the slot kit's `Value` argument (A1) cover all sixteen.
 
 ### A3. Cursors are an interpreter feature — functional and semantic
+
+*Closed by step 3 for every cursor whose `over` clause is a literal
+spec over an extent known at build; the record below is the state the
+review found. What remains: a cursor whose `over` clause is computed
+or whose extent is known only at run time is resolved by the host
+through `cursor_over_partitions` on an interpreter state, as before,
+and a compiled kernel of such a program runs only after the host
+narrows it with `set_cursor`.*
 
 A `cursor` declaration becomes an `ExternalWrite` input named
 `<name>__cursor` with a `Value::None` default (`dsl/compile.rs`,
@@ -472,6 +480,25 @@ proves it.
      value; a native select between two handles also tripped the
      handle discipline, so `select` over handles stays a closure.
    `shared` is refused on every compiled engine (A10).
+
+   *Step 3 landed 2026-09-09.* The compiler resolves a cursor's `over`
+   clause at build when the clause is a literal spec and the extent is
+   known (`SourceSchema::partitions`), and seeds the cursor's `Ext`
+   slot and six scalar projections when the clause denotes exactly one
+   partition, so such a program runs on every engine with no host
+   call; the ten partition consumers in the matrix now run on the
+   closure tier and in hybrid kernels. The cursors reach every kernel
+   through the assembler (`PolydatAssembler::set_cursor_schemas`) and
+   the extern plumbing: every compiled kernel and the interpreter
+   kernel offer `cursor_schemas` and `set_cursor(name, &Partition)`,
+   which writes the same seven inputs `narrow_cursor` writes.
+   `cursor_over_partitions` returns the resolved list without a pull.
+   `tests/cursor_tiers.rs` is the differential over the partition
+   family with narrowed cursors, and the fuzzer declares seeded
+   cursors. A clause that denotes several partitions is still unset
+   until the host or the traversal runtime narrows it; on the
+   interpreter that reads as `None`, on a compiled kernel as a refusal
+   to run (A12, step 5).
 2. **Close the closure tier.** Setup capture in the u64 kit, the
    `Bytes` handle in both kits, `Value` arguments in the slot kit,
    `Const<Vec<_>>` capture, and the session-static form (A1, A2). Refuse

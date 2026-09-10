@@ -172,6 +172,13 @@ pub struct SourceSchema {
     /// `None` means the cursor was declared without an `over`
     /// clause; the cursor uses its full declared extent.
     pub partition_output: Option<String>,
+    /// The partitions the `over` clause denotes, resolved by the
+    /// compiler when the clause is a literal spec and the extent is
+    /// known at build (engine_parity.md, step 3). A host reads them
+    /// without evaluating anything; `cursor_over_partitions` returns
+    /// them without a pull. `None` when the clause or the extent is
+    /// only known at run time, or the cursor has no `over` clause.
+    pub partitions: Option<Vec<crate::iteration::cursor_partition::Partition>>,
 }
 
 /// Cursor-construction discriminator. Set by the Polydat compiler
@@ -390,6 +397,7 @@ impl RangeSourceFactory {
                 extent_limit: None,
                 cursor_kind: CursorKind::Range,
                 partition_output: None,
+                partitions: None,
             },
         }
     }
@@ -585,6 +593,7 @@ impl ExtendingRangeSourceFactory {
                 cursor_kind: CursorKind::Range,
                 extent_limit: None,
                 partition_output: None,
+                partitions: None,
             },
         }
     }

@@ -810,6 +810,7 @@ mod jit_impl {
             coord_count: plan.boundary_in.len(),
             output_map: sub_output_map,
             output_order: sub_output_order,
+            cursor_schemas: Vec::new(),
             source: String::new(),
             context: member_label.clone(),
             output_modifiers: HashMap::new(),

@@ -160,6 +160,15 @@ then sees a constant, folds it, and the fused native cones in §11 carry
 it as an immediate. Use `set_input` when the value genuinely varies per
 state, such as a per-thread shard label.
 
+A `cursor` declared `over` a literal spec is resolved at build. The
+assembler and every kernel list each cursor with its partitions through
+`cursor_schemas`; a clause that denotes one partition seeds the cursor,
+so the program runs on every engine with no host call; a clause that
+denotes several is narrowed with `set_cursor(name, &partition)`, the
+same call on the interpreter kernel, the closure kernels, and the hybrid
+kernel. [Cursor Partitions](../design/cursor_partitions.md) §7.2 has the
+rules.
+
 ## 4. Share a program across threads
 
 A `PolydatProgram` is immutable once compiled and is shared through an

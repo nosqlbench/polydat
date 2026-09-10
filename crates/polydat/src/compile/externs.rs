@@ -48,6 +48,10 @@ pub(crate) struct ExternSlot {
 pub(crate) struct Externs {
     slots: Vec<ExternSlot>,
     by_name: HashMap<String, usize>,
+    /// The cursors the program declares (engine_parity.md, step 3):
+    /// each is an `Ext` extern plus six scalar ones, and its schema
+    /// carries the partitions the compiler resolved at build.
+    cursors: Vec<crate::iteration::source::SourceSchema>,
 }
 
 impl Externs {
@@ -60,6 +64,7 @@ impl Externs {
         coord_count: usize,
         input_starts: &[usize],
         entry_base: usize,
+        cursors: &[crate::iteration::source::SourceSchema],
     ) -> Result<Self, String> {
         let mut slots = Vec::new();
         let mut by_name = HashMap::new();
@@ -90,7 +95,39 @@ impl Externs {
                 value: def.default.clone(),
             });
         }
-        Ok(Self { slots, by_name })
+        Ok(Self {
+            slots,
+            by_name,
+            cursors: cursors.to_vec(),
+        })
+    }
+
+    /// The cursors the program declares, with their partitions where
+    /// the compiler resolved them.
+    pub(crate) fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema] {
+        &self.cursors
+    }
+
+    /// The writes that narrow cursor `name` to `partition`: its `Ext`
+    /// slot and its six scalar projections, each an extern of this
+    /// kernel. An unknown cursor is an error naming the known ones.
+    pub(crate) fn cursor_writes(
+        &self,
+        name: &str,
+        partition: &crate::iteration::cursor_partition::Partition,
+    ) -> Result<Vec<(String, Value)>, String> {
+        if !self.cursors.iter().any(|c| c.name == name) {
+            let known: Vec<&str> = self.cursors.iter().map(|c| c.name.as_str()).collect();
+            return Err(format!(
+                "no cursor named '{name}'; this program's cursors are {known:?}"
+            ));
+        }
+        Ok(
+            crate::iteration::cursor_partition::cursor_slot_writes(name, partition)
+                .into_iter()
+                .filter(|(slot, _)| self.by_name.contains_key(slot))
+                .collect(),
+        )
     }
 
     /// Renumber the table-kind externs' entries from `base`, in input

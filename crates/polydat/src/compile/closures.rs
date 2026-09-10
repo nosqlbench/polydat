@@ -407,6 +407,27 @@ macro_rules! kernel_accessors {
             self.core.externs.names()
         }
 
+        /// The cursors the program declares, with the partitions the
+        /// compiler resolved where its `over` clause and extent were
+        /// constant, as `PolydatProgram::cursor_schemas` reports them.
+        pub fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema] {
+            self.core.externs.cursor_schemas()
+        }
+
+        /// Narrow a cursor to one partition, as `narrow_cursor` does on
+        /// the interpreter: its `Ext` slot and six scalar projections
+        /// are set as externs.
+        pub fn set_cursor(
+            &mut self,
+            name: &str,
+            partition: &crate::iteration::cursor_partition::Partition,
+        ) -> Result<(), String> {
+            for (slot, value) in self.core.externs.cursor_writes(name, partition)? {
+                self.set_input(&slot, value)?;
+            }
+            Ok(())
+        }
+
         crate::compile::ref_readers!();
     };
 }
