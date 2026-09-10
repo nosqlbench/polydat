@@ -899,13 +899,6 @@ pub struct HybridKernelPushPull {
 }
 
 impl HybridKernelPushPull {
-    /// Whether each cycle is a root cycle (SRD 115 §4). A state that
-    /// owns the cycle and wraps this kernel sets this false.
-    #[cfg(feature = "jit")]
-    pub(crate) fn set_owns_cycle(&mut self, owns: bool) {
-        self.core.owns_cycle = owns;
-    }
-
     /// Set an extern by name, as `PolydatState::set_input` does on the
     /// interpreter. A carrier takes effect at once; a string, JSON, or
     /// extension value is written at the start of the next run. Every
@@ -1787,6 +1780,11 @@ macro_rules! hybrid_drive {
                 let coords = std::mem::take(&mut self.core.drive.coords);
                 self.eval(&coords);
                 self.core.drive.coords = coords;
+            }
+            /// Whether each cycle is a root cycle (SRD 115 §4). A state that
+            /// owns the cycle and wraps this kernel sets this false.
+            pub(crate) fn set_owns_cycle(&mut self, owns: bool) {
+                self.core.owns_cycle = owns;
             }
         }
     };

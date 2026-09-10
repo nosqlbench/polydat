@@ -454,6 +454,9 @@ while let Some(mut act) = stream.advance()? {
   activation 5: verify shard 2 row 265
 ```
 
+`activation_on(index, engine)` on the stream builds the same activation
+on the engine of the host's choice, compiled once per engine and driven
+through the `Kernel` trait, computing what the interpreter's computes.
 `traverse(i)` opens the i-th traversal in the program. Each activation
 exposes its coordinates (`act.coord("shard")`), its cursor slice when
 the body declares a cursor, its cycle count, and `act.cycle(n)`, which

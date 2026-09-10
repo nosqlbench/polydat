@@ -2822,6 +2822,42 @@ pub fn cursor_over_partitions(
     resolve_over(&value, extent, open)
 }
 
+/// [`cursor_extent`] through the [`Kernel`](crate::kernel::Kernel)
+/// trait, for a kernel on any engine.
+pub fn cursor_extent_on(
+    kernel: &mut dyn crate::kernel::Kernel,
+    schema: &crate::iteration::source::SourceSchema,
+) -> u64 {
+    if let Some((start_out, end_out)) = &schema.extent_outputs {
+        let start = kernel.pull(start_out).as_u64();
+        let end = kernel.pull(end_out).as_u64();
+        let extent = end.saturating_sub(start);
+        return schema.extent_limit.map(|l| extent.min(l)).unwrap_or(extent);
+    }
+    schema.extent.unwrap_or(0)
+}
+
+/// [`cursor_over_partitions`] through the [`Kernel`](crate::kernel::Kernel)
+/// trait, for a kernel on any engine.
+pub fn cursor_over_partitions_on(
+    kernel: &mut dyn crate::kernel::Kernel,
+    schema: &crate::iteration::source::SourceSchema,
+) -> Result<Vec<Partition>, String> {
+    if let Some(parts) = &schema.partitions {
+        return Ok(parts.clone());
+    }
+    let Some(raw) = &schema.partition_output else {
+        return Ok(Vec::new());
+    };
+    let value = kernel.pull(raw);
+    let extent = cursor_extent_on(kernel, schema);
+    let open = !matches!(
+        schema.cursor_kind,
+        crate::iteration::source::CursorKind::Range
+    );
+    resolve_over(&value, extent, open)
+}
+
 /// The inputs narrowing a cursor to one partition writes, by name: the
 /// `<cursor>__cursor` slot and its six scalar projections. This is what
 /// `narrow_cursor` writes on the interpreter and `set_cursor` on every

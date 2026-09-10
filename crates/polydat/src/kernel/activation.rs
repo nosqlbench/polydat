@@ -23,7 +23,8 @@ use std::sync::Arc;
 use crate::ast::Value;
 use crate::dsl::traversal::Traversal;
 use crate::iteration::comprehension::runtime::{RuntimeTuple, evaluate_for_iteration};
-use crate::iteration::cursor_partition::{cursor_over_partitions, narrow_cursor};
+use crate::iteration::cursor_partition::{cursor_extent_on, cursor_over_partitions_on};
+use crate::kernel::Kernel;
 
 use super::{PolydatKernel, PolydatProgram};
 
@@ -46,16 +47,18 @@ impl CursorSlice {
 }
 
 /// One child scope of a traversal: the tuple it was activated for, a
-/// state over the body's program, and its cursor slice if the body
-/// declares a cursor.
-pub struct Activation {
+/// fresh kernel over the body's program, and its cursor slice if the
+/// body declares a cursor. The kernel is the interpreter's by default;
+/// [`TraversalStream::activation_on`] builds one on any engine behind
+/// the [`Kernel`] trait (engine parity, step 8).
+pub struct Activation<K = PolydatKernel> {
     /// Position of this activation's tuple in the traversal's dispense
     /// order.
     pub index: u64,
     /// The tuple, in element order.
     pub coords: Vec<(String, Value)>,
-    /// A fresh state over the body's shared program.
-    pub kernel: PolydatKernel,
+    /// A fresh kernel over the body's shared program.
+    pub kernel: K,
     /// The narrowest cursor slice, when the body declares a cursor.
     pub cursor: Option<CursorSlice>,
 }
@@ -71,7 +74,18 @@ impl std::fmt::Debug for Activation {
     }
 }
 
-impl Activation {
+impl std::fmt::Debug for Activation<Box<dyn Kernel>> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Activation")
+            .field("index", &self.index)
+            .field("coords", &self.coords)
+            .field("cursor", &self.cursor)
+            .field("engine", &self.kernel.engine())
+            .finish()
+    }
+}
+
+impl<K> Activation<K> {
     /// Cycles this activation runs under §3.4: the cursor slice length,
     /// or one when the body has no cursor.
     pub fn cycle_count(&self) -> u64 {
@@ -81,6 +95,36 @@ impl Activation {
         }
     }
 
+    /// The value of one coordinate.
+    pub fn coord(&self, name: &str) -> Option<&Value> {
+        self.coords.iter().find(|(n, _)| n == name).map(|(_, v)| v)
+    }
+}
+
+impl Activation<Box<dyn Kernel>> {
+    /// Position the kernel at cycle `i` and return it ready to pull, as
+    /// the interpreter activation's `cycle` does.
+    pub fn cycle(&mut self, i: u64) -> &mut dyn Kernel {
+        self.kernel.set_inputs(&[i]);
+        if let Some(slice) = &self.cursor {
+            let ordinal = slice.start.saturating_add(i);
+            let slot = format!("{}__ordinal", slice.cursor);
+            // A body without the projection has no slot to write.
+            let _ = self.kernel.set_input(&slot, Value::U64(ordinal));
+        }
+        self.kernel.as_mut()
+    }
+
+    /// Run `f` once per cycle, in order.
+    pub fn for_each_cycle(&mut self, mut f: impl FnMut(u64, &mut dyn Kernel)) {
+        for i in 0..self.cycle_count() {
+            let kernel = self.cycle(i);
+            f(i, kernel);
+        }
+    }
+}
+
+impl Activation {
     /// Position the kernel at cycle `i` and return it ready to pull.
     /// The body's `cycle` coordinate is the local index; the cursor's
     /// ordinal slot receives the absolute ordinal.
@@ -102,11 +146,6 @@ impl Activation {
             let kernel = self.cycle(i);
             f(i, kernel);
         }
-    }
-
-    /// The value of one coordinate.
-    pub fn coord(&self, name: &str) -> Option<&Value> {
-        self.coords.iter().find(|(n, _)| n == name).map(|(_, v)| v)
     }
 }
 
@@ -177,6 +216,50 @@ impl TraversalStream {
             cursor,
         })
     }
+
+    /// [`Self::activation`] on `engine` (engine parity, step 8): a fresh
+    /// kernel over the body's program for that engine, compiled once
+    /// per engine and shared by every activation after, driven through
+    /// the [`Kernel`] trait with the same elements, cascade, and cursor
+    /// narrowing. An engine that cannot run the body says so by name.
+    pub fn activation_on(
+        &self,
+        index: usize,
+        engine: crate::Engine,
+    ) -> Result<Activation<Box<dyn Kernel>>, String> {
+        let tuple = self.tuples.get(index).ok_or_else(|| {
+            format!(
+                "activation index {index} is out of range; traversal has {} tuples",
+                self.tuples.len()
+            )
+        })?;
+        let program = self
+            .traversal
+            .program_on(engine)
+            .map_err(|e| e.to_string())?;
+        // An activation runs inside the root's cycle (SRD 115, H5).
+        let mut kernel = program.create_nested_kernel();
+        bind_by_name_on(kernel.as_mut(), tuple)?;
+        bind_by_name_on(kernel.as_mut(), &self.cascade)?;
+        let cursor = narrow_cursors_on(kernel.as_mut())?;
+        Ok(Activation {
+            index: index as u64,
+            coords: tuple.clone(),
+            kernel,
+            cursor,
+        })
+    }
+}
+
+/// Bind the inputs the body declares among `values`, through the trait.
+fn bind_by_name_on(kernel: &mut dyn Kernel, values: &[(String, Value)]) -> Result<(), String> {
+    let declared: std::collections::HashSet<String> = kernel.input_names().into_iter().collect();
+    for (name, value) in values {
+        if declared.contains(name) {
+            kernel.set_input(name, value.clone())?;
+        }
+    }
+    Ok(())
 }
 
 fn bind_by_name(kernel: &mut PolydatKernel, values: &[(String, Value)]) {
@@ -189,13 +272,18 @@ fn bind_by_name(kernel: &mut PolydatKernel, values: &[(String, Value)]) {
 
 /// Resolve every `over` clause in the body and narrow its cursor. Returns
 /// the narrowest slice, or the full extent of the first cursor when none
-/// has an `over` clause.
+/// has an `over` clause. One routine for every engine, through the
+/// trait.
 fn narrow_cursors(kernel: &mut PolydatKernel) -> Result<Option<CursorSlice>, String> {
-    let program = kernel.program().clone();
+    narrow_cursors_on(kernel)
+}
+
+fn narrow_cursors_on(kernel: &mut dyn Kernel) -> Result<Option<CursorSlice>, String> {
+    let schemas: Vec<crate::iteration::source::SourceSchema> = kernel.cursor_schemas().to_vec();
     let mut narrowest: Option<CursorSlice> = None;
-    for schema in program.cursor_schemas() {
+    for schema in &schemas {
         let slice = if schema.partition_output.is_some() {
-            let parts = cursor_over_partitions(&program, kernel.state(), schema)?;
+            let parts = cursor_over_partitions_on(kernel, schema)?;
             let partition = match parts.len() {
                 1 => parts[0],
                 0 => {
@@ -212,15 +300,14 @@ fn narrow_cursors(kernel: &mut PolydatKernel) -> Result<Option<CursorSlice>, Str
                     ));
                 }
             };
-            narrow_cursor(&program, kernel.state(), &schema.name, &partition);
+            kernel.set_cursor(&schema.name, &partition)?;
             CursorSlice {
                 cursor: schema.name.clone(),
                 start: partition.start_ord,
                 end: partition.end_ord,
             }
         } else {
-            let extent =
-                crate::iteration::cursor_partition::cursor_extent(&program, kernel.state(), schema);
+            let extent = cursor_extent_on(kernel, schema);
             CursorSlice {
                 cursor: schema.name.clone(),
                 start: 0,

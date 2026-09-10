@@ -174,6 +174,9 @@ macro_rules! impl_kernel_trait {
             fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema] {
                 self.core.externs.cursor_schemas()
             }
+            fn nest(&mut self) {
+                self.set_owns_cycle(false);
+            }
             fn into_program(
                 mut self: Box<Self>,
             ) -> std::sync::Arc<dyn crate::kernel::KernelProgram> {

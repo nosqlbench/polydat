@@ -12,8 +12,8 @@
 //! externs typed from the parent's manifest. Activation (step 4) only
 //! ever allocates state over that program.
 
-use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::collections::{BTreeSet, HashMap};
+use std::sync::{Arc, Mutex};
 
 use crate::ast::PortType;
 use crate::iteration::comprehension::source::{LiteralValue, Source};
@@ -42,8 +42,76 @@ pub struct Traversal {
     /// Outer wires the body references, with the parent's types. Bound
     /// from the parent at activation.
     pub cascade: Vec<(String, PortType)>,
-    /// The body's program. Compiled once; every activation shares it.
+    /// The body's program on the interpreter. Compiled once; every
+    /// interpreter activation shares it.
     pub program: Arc<PolydatProgram>,
+    /// The body as the parent compiled it, for activations on the other
+    /// engines (engine parity, step 8): compiled once per engine, on the
+    /// first activation that asks.
+    pub body: Arc<BodySource>,
+}
+
+/// A traversal body as its parent compiled it: the child file and the
+/// compiler settings the parent used, so the same body compiles on any
+/// engine, once, keyed by the engine as the interpreter's program is
+/// keyed by the body's position (SRD 113 §5.1).
+pub struct BodySource {
+    pub(crate) file: PolydatFile,
+    pub(crate) source_text: String,
+    pub(crate) source_dir: Option<std::path::PathBuf>,
+    pub(crate) lib_paths: Vec<std::path::PathBuf>,
+    pub(crate) strict: bool,
+    pub(crate) context_label: String,
+    pub(crate) cursor_limit: Option<u64>,
+    pub(crate) pragmas: super::pragmas::PragmaSet,
+    /// The body's program per engine, built on first use.
+    pub(crate) programs: Mutex<HashMap<crate::Engine, Arc<dyn crate::kernel::KernelProgram>>>,
+}
+
+impl BodySource {
+    /// The body's source as the parent lowered it: the implicit `cycle`
+    /// input, one extern per element and per cascaded wire, then the
+    /// body's statements.
+    pub fn source_text(&self) -> &str {
+        &self.source_text
+    }
+}
+
+impl std::fmt::Debug for BodySource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BodySource")
+            .field("context", &self.context_label)
+            .field("statements", &self.file.statements.len())
+            .finish()
+    }
+}
+
+impl Traversal {
+    /// The body's program on `engine`, compiled on the first call for
+    /// that engine and shared by every activation after it, as the
+    /// interpreter's program is (SRD 113 §5.1, §5.2). A body that
+    /// declares a traversal or producer of its own runs on the
+    /// interpreter only, since its activations open those; every other
+    /// engine refuses it by name.
+    pub fn program_on(
+        &self,
+        engine: crate::Engine,
+    ) -> Result<Arc<dyn crate::kernel::KernelProgram>, crate::KernelError> {
+        if engine == crate::Engine::Interpreter {
+            return Ok(self.program.clone());
+        }
+        let mut programs = self
+            .body
+            .programs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(program) = programs.get(&engine) {
+            return Ok(program.clone());
+        }
+        let program = super::compile::Compiler::compile_body_on(&self.body, engine)?.into_program();
+        programs.insert(engine, program.clone());
+        Ok(program)
+    }
 }
 
 /// A producer binding, `name := for ...`, recorded on the program that

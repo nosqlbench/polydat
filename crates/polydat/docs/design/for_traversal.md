@@ -330,6 +330,17 @@ same slice. That is a state-reuse policy, not a compilation concern, and
 Polydat leaves it to the host. Correctness never depends on it; the
 program cache in §5.1 is what Polydat guarantees.
 
+**Engines.** An activation is a kernel like any other, so a host may
+build it on the engine it chose: `TraversalStream::activation_on(index,
+engine)` compiles the body for that engine once, on the first request,
+through the same assembler every engine uses, and every later
+activation on that engine shares the program, as interpreter
+activations share theirs. The activation is driven through the `Kernel`
+trait and computes what the interpreter's activation computes
+([engine parity](engine_parity.md), step 8). The kernel that opens a
+traversal is an interpreter kernel, and so is an activation whose body
+opens a traversal of its own.
+
 **Opening cost.** Opening a traversal evaluates its comprehension. Ranges
 and literal lists evaluate directly. A generator-call source such as
 `partitions("*/4", {total})` evaluates through the constant-expression
@@ -583,6 +594,8 @@ where it has ordinary wired access to everything the scope can see.
    the grammar and real output. `examples/for_producer.rs` and
    `examples/for_traversal.rs` back two new sections of
    `docs/tutorials/illustrations.md`. The README describes the construct in its
-   iteration section and links here.
+. **Activations on every engine.** Done (engine parity, step 8).
+   `TraversalStream::activation_on` and `Traversal::program_on`;
+   `tests/for_engines.rs`.
 
 Each step lands with its tests and leaves the previous surfaces working.

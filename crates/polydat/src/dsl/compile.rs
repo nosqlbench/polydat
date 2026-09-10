@@ -2254,6 +2254,17 @@ impl Compiler {
                     )
                 })?;
             self.tile_events.append(&mut child_compiler.tile_events);
+            let body = super::traversal::BodySource {
+                file: child,
+                source_text: child_compiler.source_text.clone(),
+                source_dir: self.source_dir.clone(),
+                lib_paths: self.polydat_lib_paths.clone(),
+                strict: self.strict,
+                context_label: child_compiler.context_label.clone(),
+                cursor_limit: self.cursor_limit,
+                pragmas: self.pragmas.clone(),
+                programs: std::sync::Mutex::new(std::collections::HashMap::new()),
+            };
             out.push(Traversal {
                 span: f.span,
                 source_text: f.source.text.clone(),
@@ -2261,9 +2272,45 @@ impl Compiler {
                 elements,
                 cascade,
                 program: child_kernel.into_program(),
+                body: std::sync::Arc::new(body),
             });
         }
         Ok(out)
+    }
+
+    /// Compile a traversal body on `engine` (engine parity, step 8): the
+    /// same child file and compiler settings the parent used for the
+    /// interpreter's program, through the assembler. A body with `for`
+    /// statements or producers of its own is refused by name, since
+    /// those open from an interpreter activation.
+    pub(super) fn compile_body_on(
+        body: &super::traversal::BodySource,
+        engine: crate::Engine,
+    ) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
+        use crate::KernelError;
+        let (_, for_stmts, producers) =
+            super::traversal::strip_for_forms(&body.file).map_err(KernelError::Source)?;
+        if !for_stmts.is_empty() || !producers.is_empty() {
+            return Err(KernelError::Refused {
+                engine,
+                reason: format!(
+                    "{}: the body declares a traversal or producer of its own, which opens \
+                     from an interpreter activation (docs/design/engine_parity.md, step 8)",
+                    body.context_label
+                ),
+            });
+        }
+        let _data_base = body.source_dir.as_deref().map(DataBaseDirGuard::set);
+        let mut compiler =
+            Compiler::with_lib_paths(body.source_dir.clone(), body.lib_paths.clone(), body.strict);
+        compiler.source_text = body.source_text.clone();
+        compiler.context_label = body.context_label.clone();
+        compiler.cursor_limit = body.cursor_limit;
+        compiler.pragmas = body.pragmas.clone();
+        let asm = compiler
+            .build_assembler(&body.file)
+            .map_err(KernelError::Source)?;
+        asm.compile_engine_with_log(engine, None)
     }
 
     /// Assemble the parent program: inputs and their passthroughs,

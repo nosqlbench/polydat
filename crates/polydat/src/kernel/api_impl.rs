@@ -227,6 +227,9 @@ impl crate::kernel::Kernel for PolydatKernel {
     fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema] {
         self.program().cursor_schemas()
     }
+    fn nest(&mut self) {
+        self.state().mark_nested();
+    }
     fn into_program(self: Box<Self>) -> std::sync::Arc<dyn crate::kernel::KernelProgram> {
         PolydatKernel::into_program(*self)
     }
@@ -238,6 +241,9 @@ impl crate::kernel::KernelProgram for crate::kernel::PolydatProgram {
     }
     fn create_kernel(self: std::sync::Arc<Self>) -> Box<dyn crate::kernel::Kernel> {
         Box::new(PolydatKernel::from_program(self))
+    }
+    fn create_nested_kernel(self: std::sync::Arc<Self>) -> Box<dyn crate::kernel::Kernel> {
+        Box::new(PolydatKernel::from_program_nested(self))
     }
 }
 

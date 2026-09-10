@@ -4,7 +4,7 @@
 2026-09-09, of every place the compilation levels differ in anything
 other than performance, and the plan that removes each difference.
 §5 is the plan, §4 the findings it answers. Steps 1 through 3 of the
-plan landed on 2026-09-09 and steps 4 through 7 on 2026-09-10 (the landing
+plan landed on 2026-09-09 and steps 4 through 8 on 2026-09-10 (the landing
 records are under the steps); the rest is proposed.
 
 **Ownership.** Polydat owns the feature set, the engines, and the public
@@ -252,6 +252,11 @@ performance guide's ladder keeps measuring the pure kernel, which is
 what it is for.
 
 ### A5. Traversals and producers are a kernel-path feature — functional
+
+*Closed by step 8 for the bodies: an activation runs on any engine
+through `TraversalStream::activation_on`. The parent that opens a
+traversal is an interpreter kernel, and so is an activation whose body
+opens one of its own. The record below is the state the review found.*
 
 A `for` statement or producer compiles only through `compile_polydat*`,
 which builds activation programs and a runtime the host drives with
@@ -713,6 +718,37 @@ proves it.
 8. **Traversals on compiled engines** (A5, second part): activation
    bodies compiled with the host's engine choice behind the `Kernel`
    trait.
+
+   *Step 8 landed 2026-09-10.* A traversal's activations run on any
+   engine. The parent compiles each body once for the interpreter, as
+   before, and now also keeps the body as it lowered it, the child file
+   with the compiler settings (`dsl::traversal::BodySource`);
+   `Traversal::program_on(engine)` compiles that body through the
+   assembler on the first request for an engine and caches the
+   `KernelProgram`, so a body is one program per engine as it is one
+   program per position (SRD 113 §5.1), and
+   `TraversalStream::activation_on(index, engine)` is a fresh nested
+   kernel from that program, driven through the `Kernel` trait: the
+   elements and the cascade bind by name through `set_input`, the
+   cursors narrow through one routine for every engine
+   (`cursor_over_partitions_on`, `cursor_extent_on`, `set_cursor`),
+   which the interpreter's activation now uses too, and `cycle(i)`
+   sets the coordinate and the cursor ordinal as before. `Activation`
+   is generic over its kernel, the interpreter's by default, so every
+   host of the old form is unchanged. A nested kernel is a trait
+   matter now: `KernelProgram::create_nested_kernel` and
+   `Kernel::nest` mark a kernel as running inside the cycle of the
+   kernel that opened it (SRD 115 §4), on every engine. What stays on
+   the interpreter: the parent that opens a traversal, since the
+   comprehension evaluates against its values, and an activation whose
+   body declares a traversal or producer of its own, since its
+   activations open those; the other engines refuse such a body by
+   name. The `polydat` binary still activates on the interpreter.
+   `tests/for_engines.rs` traces every activation and cycle of a sweep
+   and of a partition-sliced cursor body on every engine against the
+   interpreter's, checks one program per engine with the build counter
+   flat across activations, and checks the nested-body refusal and
+   that inner activations of an interpreter activation run anywhere.
 9. **Shared cells on compiled engines** (A10) through `compile::externs`
    materialization and publication.
 10. **Documentation to zero** (A13): `missing_docs` burn-down under CI,

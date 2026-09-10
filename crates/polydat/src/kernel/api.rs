@@ -370,6 +370,12 @@ pub trait Kernel: Send {
     /// compiler resolved where it could.
     fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema];
 
+    /// Make this kernel a nested one: it runs inside the cycle of the
+    /// kernel that opened it (a traversal's activation inside its
+    /// root; SRD 115 §4), and so never begins a root cycle of its own.
+    #[doc(hidden)]
+    fn nest(&mut self);
+
     /// The program this kernel runs, shareable across threads: each
     /// thread creates its own kernel from it with
     /// [`KernelProgram::create_kernel`].
@@ -385,6 +391,14 @@ pub trait KernelProgram: Send + Sync {
 
     /// A kernel of this program for the calling thread.
     fn create_kernel(self: std::sync::Arc<Self>) -> Box<dyn Kernel>;
+
+    /// A kernel of this program that runs inside the cycle of the kernel
+    /// that opened it (SRD 115 §4): [`Self::create_kernel`], nested.
+    fn create_nested_kernel(self: std::sync::Arc<Self>) -> Box<dyn Kernel> {
+        let mut kernel = self.create_kernel();
+        kernel.nest();
+        kernel
+    }
 }
 
 /// A compiled kernel as a shared program: its steps are shared, and a
