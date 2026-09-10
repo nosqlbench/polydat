@@ -65,19 +65,36 @@ fn streams_from_one_wire_advance_independently() {
 
 #[test]
 fn derived_where_filters_and_keeps_the_base_shape() {
-    let mut k = compile("input cycle: u64\nbase := for k in 1..4, limit in 10,20,30\nedges := for base where {k} == 1 || {k} == 3\n");
+    let mut k = compile(
+        "input cycle: u64\nbase := for k in 1..4, limit in 10,20,30\nedges := for base where {k} == 1 || {k} == 3\n",
+    );
     k.set_inputs(&[0]);
     let v = k.pull("edges").clone();
     let s = v.as_streamer().unwrap();
     assert_eq!(s.element_names(), vec!["k", "limit"]);
-    assert!(matches!(s.cardinality(), CardinalityClass::BoundedAtMost(9)));
+    assert!(matches!(
+        s.cardinality(),
+        CardinalityClass::BoundedAtMost(9)
+    ));
     let got = tuples(s.coordinate_stream());
-    assert_eq!(got, vec![vec![1, 10], vec![1, 20], vec![1, 30], vec![3, 10], vec![3, 20], vec![3, 30]]);
+    assert_eq!(
+        got,
+        vec![
+            vec![1, 10],
+            vec![1, 20],
+            vec![1, 30],
+            vec![3, 10],
+            vec![3, 20],
+            vec![3, 30]
+        ]
+    );
 }
 
 #[test]
 fn derived_order_permutes_and_truncates() {
-    let mut k = compile("input cycle: u64\nbase := for k in 1..4, limit in 10,20,30\nlast := for base order reverse_lex/2\n");
+    let mut k = compile(
+        "input cycle: u64\nbase := for k in 1..4, limit in 10,20,30\nlast := for base order reverse_lex/2\n",
+    );
     k.set_inputs(&[0]);
     let v = k.pull("last").clone();
     let got = tuples(v.as_streamer().unwrap().coordinate_stream());
@@ -90,9 +107,27 @@ fn derivations_chain_and_each_wire_is_distinct() {
         "input cycle: u64\nbase := for k in 1..4, limit in 10,20,30\nedges := for base where {k} != 2\ntail := for edges order reverse_lex\n",
     );
     k.set_inputs(&[0]);
-    let base = tuples(k.pull("base").clone().as_streamer().unwrap().coordinate_stream());
-    let edges = tuples(k.pull("edges").clone().as_streamer().unwrap().coordinate_stream());
-    let tail = tuples(k.pull("tail").clone().as_streamer().unwrap().coordinate_stream());
+    let base = tuples(
+        k.pull("base")
+            .clone()
+            .as_streamer()
+            .unwrap()
+            .coordinate_stream(),
+    );
+    let edges = tuples(
+        k.pull("edges")
+            .clone()
+            .as_streamer()
+            .unwrap()
+            .coordinate_stream(),
+    );
+    let tail = tuples(
+        k.pull("tail")
+            .clone()
+            .as_streamer()
+            .unwrap()
+            .coordinate_stream(),
+    );
     assert_eq!(base.len(), 9);
     assert_eq!(edges.len(), 6);
     assert_eq!(tail.len(), 6);
@@ -102,18 +137,32 @@ fn derivations_chain_and_each_wire_is_distinct() {
 
 #[test]
 fn traversal_over_a_derived_producer_resolves_elements() {
-    let k = compile("input cycle: u64\nbase := for k in 1..4, limit in 10,20,30\nedges := for base where {k} == 1\nfor edges {\n    f := u64_add(k, limit)\n}\n");
+    let k = compile(
+        "input cycle: u64\nbase := for k in 1..4, limit in 10,20,30\nedges := for base where {k} == 1\nfor edges {\n    f := u64_add(k, limit)\n}\n",
+    );
     let p = k.program();
     assert_eq!(p.producers().len(), 2);
-    assert_eq!(p.traversals()[0].elements, vec![("k".to_string(), PortType::U64), ("limit".to_string(), PortType::U64)]);
-    assert!(matches!(p.traversals()[0].comprehension, polydat::iteration::comprehension::Comprehension::Filter { .. }));
+    assert_eq!(
+        p.traversals()[0].elements,
+        vec![
+            ("k".to_string(), PortType::U64),
+            ("limit".to_string(), PortType::U64)
+        ]
+    );
+    assert!(matches!(
+        p.traversals()[0].comprehension,
+        polydat::iteration::comprehension::Comprehension::Filter { .. }
+    ));
 }
 
 #[test]
 fn derived_form_over_an_unknown_base_is_an_error() {
-    let err = compile_polydat("input cycle: u64\nedges := for nowhere where {k} == 1\n").unwrap_err();
+    let err =
+        compile_polydat("input cycle: u64\nedges := for nowhere where {k} == 1\n").unwrap_err();
     assert!(err.contains("nowhere"), "{err}");
-    let err = compile_polydat("input cycle: u64\nbase := for k in 1..4\nbad := for base order zigzag\n").unwrap_err();
+    let err =
+        compile_polydat("input cycle: u64\nbase := for k in 1..4\nbad := for base order zigzag\n")
+            .unwrap_err();
     assert!(err.contains("zigzag"), "{err}");
 }
 

@@ -37,12 +37,16 @@ impl DiffKernel {
             let mut asm = compile_polydat_to_assembler(src)
                 .unwrap_or_else(|e| panic!("failed to re-assemble: {e}\nsource:\n{src}"));
             asm.set_jit_mode(polydat::JitMode::Force);
-            let k = asm.compile().unwrap_or_else(|e| {
-                panic!("jit=force compile failed: {e:?}\nsource:\n{src}")
-            });
+            let k = asm
+                .compile()
+                .unwrap_or_else(|e| panic!("jit=force compile failed: {e:?}\nsource:\n{src}"));
             k.program().is_deterministic().then_some(k)
         };
-        Self { base, forced, coords: Vec::new() }
+        Self {
+            base,
+            forced,
+            coords: Vec::new(),
+        }
     }
 
     fn set_inputs(&mut self, coords: &[u64]) {
@@ -428,7 +432,10 @@ fn fair_coin_distribution() {
         ones += v;
     }
     let pct = (ones as f64) / (n as f64) * 100.0;
-    assert!(pct > 45.0 && pct < 55.0, "fair coin ~50% expected, got {pct:.1}%");
+    assert!(
+        pct > 45.0 && pct < 55.0,
+        "fair coin ~50% expected, got {pct:.1}%"
+    );
 }
 
 #[test]
@@ -440,7 +447,10 @@ fn unfair_coin_biased() {
         ones += eval_u64(&mut k, cycle);
     }
     let pct = (ones as f64) / (n as f64) * 100.0;
-    assert!(pct > 85.0 && pct < 95.0, "unfair coin ~90% expected, got {pct:.1}%");
+    assert!(
+        pct > 85.0 && pct < 95.0,
+        "unfair coin ~90% expected, got {pct:.1}%"
+    );
 }
 
 #[test]
@@ -448,12 +458,15 @@ fn select_conditional() {
     let mut k = polydat(
         "cond := fair_coin(hash(cycle))\n\
          t := add(cycle, 1000)\n\
-         out := select(cond, t, cycle)"
+         out := select(cond, t, cycle)",
     );
     for cycle in 0..100 {
         let v = eval_u64(&mut k, cycle);
-        assert!(v == cycle || v == cycle + 1000,
-            "cycle={cycle} gave {v}, expected {cycle} or {}", cycle + 1000);
+        assert!(
+            v == cycle || v == cycle + 1000,
+            "cycle={cycle} gave {v}, expected {cycle} or {}",
+            cycle + 1000
+        );
     }
 }
 
@@ -478,8 +491,10 @@ fn chance_returns_u64_encoded_f64() {
     let one_bits = 1.0f64.to_bits();
     for cycle in 0..100 {
         let v = eval_u64(&mut k, cycle);
-        assert!(v == zero_bits || v == one_bits,
-            "chance should return bits of 0.0 or 1.0, got {v}");
+        assert!(
+            v == zero_bits || v == one_bits,
+            "chance should return bits of 0.0 or 1.0, got {v}"
+        );
     }
 }
 
@@ -519,11 +534,17 @@ fn blend_mix() {
         let at_zero = eval_u64(&mut k_zero, cycle);
         let at_one = eval_u64(&mut k_one, cycle);
         // At mix=0, result should be f64::from_bits(cycle) * 1.0 = cycle as f64 bits
-        assert_eq!(at_zero, f64::from_bits(cycle).to_bits(),
-            "blend at mix=0.0 should pass through first input at cycle={cycle}");
+        assert_eq!(
+            at_zero,
+            f64::from_bits(cycle).to_bits(),
+            "blend at mix=0.0 should pass through first input at cycle={cycle}"
+        );
         // At mix=1, result should be f64::from_bits(cycle+1000) * 1.0
-        assert_eq!(at_one, f64::from_bits(cycle + 1000).to_bits(),
-            "blend at mix=1.0 should pass through second input at cycle={cycle}");
+        assert_eq!(
+            at_one,
+            f64::from_bits(cycle + 1000).to_bits(),
+            "blend at mix=1.0 should pass through second input at cycle={cycle}"
+        );
     }
 }
 
@@ -568,7 +589,10 @@ fn combinations_produces_string() {
     for cycle in 0..100 {
         let s = eval_str(&mut k, cycle);
         assert_eq!(s.len(), 3, "cycle={cycle} gave '{s}' with len {}", s.len());
-        assert!(s.chars().all(|c| c.is_ascii_digit()), "cycle={cycle} gave non-digit '{s}'");
+        assert!(
+            s.chars().all(|c| c.is_ascii_digit()),
+            "cycle={cycle} gave non-digit '{s}'"
+        );
     }
 }
 
@@ -584,13 +608,17 @@ fn number_to_words_known() {
 #[test]
 fn html_encode_decode_roundtrip() {
     let mut k_enc = polydat("s := format_u64(cycle, 10)\nout := html_encode(s)");
-    let mut k_dec = polydat("s := format_u64(cycle, 10)\ne := html_encode(s)\nout := html_decode(e)");
+    let mut k_dec =
+        polydat("s := format_u64(cycle, 10)\ne := html_encode(s)\nout := html_decode(e)");
     for cycle in 0..100 {
         let original = eval_str(&mut k_enc, cycle);
         let roundtrip = eval_str(&mut k_dec, cycle);
         // For plain digit strings, encode/decode should be identity
         let plain = format!("{cycle}");
-        assert_eq!(roundtrip, plain, "roundtrip failed at cycle={cycle}: got '{roundtrip}'");
+        assert_eq!(
+            roundtrip, plain,
+            "roundtrip failed at cycle={cycle}: got '{roundtrip}'"
+        );
         let _ = original; // used to drive encoding
     }
 }
@@ -630,7 +658,12 @@ fn sha256_deterministic() {
     let a = eval_str(&mut k, 42);
     let b = eval_str(&mut k, 42);
     assert_eq!(a, b, "sha256 must be deterministic");
-    assert_eq!(a.len(), 64, "sha256 hex should be 64 chars, got {}", a.len());
+    assert_eq!(
+        a.len(),
+        64,
+        "sha256 hex should be 64 chars, got {}",
+        a.len()
+    );
     // Different input -> different output
     let c = eval_str(&mut k, 43);
     assert_ne!(a, c);
@@ -654,7 +687,10 @@ fn base64_roundtrip() {
         let roundtrip = k.pull("out").as_bytes().to_vec();
         k_orig.set_inputs(&[cycle]);
         let original = k_orig.pull("out").as_bytes().to_vec();
-        assert_eq!(roundtrip, original, "base64 roundtrip failed at cycle={cycle}");
+        assert_eq!(
+            roundtrip, original,
+            "base64 roundtrip failed at cycle={cycle}"
+        );
     }
 }
 
@@ -681,8 +717,14 @@ fn to_timestamp_produces_string() {
     // Use a known epoch millis: 2024-01-01T00:00:00.000Z = 1704067200000
     let mut k = polydat("e := epoch_offset(cycle, 1704067200000)\nout := to_timestamp(e)");
     let s = eval_str(&mut k, 0);
-    assert!(s.contains('-'), "ISO timestamp should contain '-', got '{s}'");
-    assert!(s.contains('T'), "ISO timestamp should contain 'T', got '{s}'");
+    assert!(
+        s.contains('-'),
+        "ISO timestamp should contain '-', got '{s}'"
+    );
+    assert!(
+        s.contains('T'),
+        "ISO timestamp should contain 'T', got '{s}'"
+    );
     assert!(s.contains("2024"), "expected year 2024 in '{s}'");
 }
 
@@ -806,7 +848,10 @@ fn session_start_stable() {
 fn elapsed_millis_nonnegative() {
     let mut k = polydat("out := elapsed_millis()");
     let v = eval_u64(&mut k, 0);
-    assert!(v < 1000, "elapsed_millis should be small right after creation, got {v}");
+    assert!(
+        v < 1000,
+        "elapsed_millis should be small right after creation, got {v}"
+    );
 }
 
 #[test]
@@ -902,7 +947,11 @@ fn json_merge_combines() {
     // json_merge with non-object JSON may panic or produce a defined result.
     // Just verify it compiles.
     let result = compile_polydat(src);
-    assert!(result.is_ok(), "json_merge should compile: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "json_merge should compile: {:?}",
+        result.err()
+    );
 }
 
 // ===========================================================================
@@ -914,7 +963,10 @@ fn first_names_produces_string() {
     let mut k = polydat("out := first_names(hash(cycle))");
     for cycle in 0..10 {
         let s = eval_str(&mut k, cycle);
-        assert!(!s.is_empty(), "first_names should produce non-empty string at cycle={cycle}");
+        assert!(
+            !s.is_empty(),
+            "first_names should produce non-empty string at cycle={cycle}"
+        );
     }
 }
 
@@ -925,7 +977,10 @@ fn full_names_produces_string() {
         let s = eval_str(&mut k, cycle);
         assert!(!s.is_empty(), "full_names should produce non-empty string");
         // Full names typically contain a space
-        assert!(s.contains(' '), "expected space in full name '{s}' at cycle={cycle}");
+        assert!(
+            s.contains(' '),
+            "expected space in full name '{s}' at cycle={cycle}"
+        );
     }
 }
 
@@ -934,9 +989,15 @@ fn state_codes_two_letter() {
     let mut k = polydat("out := state_codes(hash(cycle))");
     for cycle in 0..100 {
         let s = eval_str(&mut k, cycle);
-        assert_eq!(s.len(), 2, "state code should be 2 chars, got '{s}' at cycle={cycle}");
-        assert!(s.chars().all(|c| c.is_ascii_uppercase()),
-            "state code should be uppercase, got '{s}'");
+        assert_eq!(
+            s.len(),
+            2,
+            "state code should be 2 chars, got '{s}' at cycle={cycle}"
+        );
+        assert!(
+            s.chars().all(|c| c.is_ascii_uppercase()),
+            "state code should be uppercase, got '{s}'"
+        );
     }
 }
 
@@ -945,7 +1006,10 @@ fn country_names_nonempty() {
     let mut k = polydat("out := country_names(hash(cycle))");
     for cycle in 0..100 {
         let s = eval_str(&mut k, cycle);
-        assert!(!s.is_empty(), "country_names should be non-empty at cycle={cycle}");
+        assert!(
+            !s.is_empty(),
+            "country_names should be non-empty at cycle={cycle}"
+        );
     }
 }
 
@@ -977,9 +1041,16 @@ fn bytes_from_hash_deterministic() {
 fn to_hex_format() {
     let mut k = polydat("b := u64_to_bytes(cycle)\nout := to_hex(b)");
     let s = eval_str(&mut k, 42);
-    assert_eq!(s.len(), 16, "hex of 8 bytes should be 16 chars, got {}", s.len());
-    assert!(s.chars().all(|c| c.is_ascii_hexdigit()),
-        "hex should contain only hex digits, got '{s}'");
+    assert_eq!(
+        s.len(),
+        16,
+        "hex of 8 bytes should be 16 chars, got {}",
+        s.len()
+    );
+    assert!(
+        s.chars().all(|c| c.is_ascii_hexdigit()),
+        "hex should contain only hex digits, got '{s}'"
+    );
 }
 
 #[test]
@@ -1003,8 +1074,10 @@ fn from_hex_roundtrip() {
 fn type_of_reports_type() {
     let mut k = polydat("out := type_of(cycle)");
     let s = eval_str(&mut k, 42);
-    assert!(s.contains("U64") || s.contains("u64"),
-        "type_of(cycle) should report U64, got '{s}'");
+    assert!(
+        s.contains("U64") || s.contains("u64"),
+        "type_of(cycle) should report U64, got '{s}'"
+    );
 }
 
 #[test]
@@ -1018,7 +1091,10 @@ fn inspect_passthrough() {
 fn debug_repr_produces_string() {
     let mut k = polydat("out := debug_repr(cycle)");
     let s = eval_str(&mut k, 42);
-    assert!(s.contains("42"), "debug_repr should contain the value '42', got '{s}'");
+    assert!(
+        s.contains("42"),
+        "debug_repr should contain the value '42', got '{s}'"
+    );
 }
 
 // ===========================================================================
@@ -1046,7 +1122,10 @@ fn icd_exponential_positive() {
     let mut k = polydat("u := unit_interval(hash(cycle))\nout := icd_exponential(u, 1.0)");
     for cycle in 0..1000 {
         let v = eval_f64(&mut k, cycle);
-        assert!(v >= 0.0, "exponential should be non-negative, got {v} at cycle={cycle}");
+        assert!(
+            v >= 0.0,
+            "exponential should be non-negative, got {v} at cycle={cycle}"
+        );
     }
 }
 
@@ -1070,7 +1149,10 @@ fn dist_uniform_samples() {
     let mut k = polydat("u := unit_interval(hash(cycle))\nout := dist_uniform(u, 10.0, 20.0)");
     for cycle in 0..1000 {
         let v = eval_f64(&mut k, cycle);
-        assert!((10.0..=20.0).contains(&v), "cycle={cycle}: {v} out of [10, 20]");
+        assert!(
+            (10.0..=20.0).contains(&v),
+            "cycle={cycle}: {v} out of [10, 20]"
+        );
     }
 }
 
@@ -1107,7 +1189,10 @@ fn histribution_samples() {
     let mut seen = std::collections::HashSet::new();
     for cycle in 0..1000 {
         let v = eval_u64(&mut k, cycle);
-        assert!(v == 100 || v == 200 || v == 300, "unexpected histribution output: {v}");
+        assert!(
+            v == 100 || v == 200 || v == 300,
+            "unexpected histribution output: {v}"
+        );
         seen.insert(v);
     }
     assert!(seen.contains(&100), "should see label 100");
@@ -1115,11 +1200,15 @@ fn histribution_samples() {
 
 #[test]
 fn dist_empirical_bounded() {
-    let mut k = polydat("f := unit_interval(hash(cycle))\nout := dist_empirical(f, \"10.0 20.0 30.0 40.0 50.0\")");
+    let mut k = polydat(
+        "f := unit_interval(hash(cycle))\nout := dist_empirical(f, \"10.0 20.0 30.0 40.0 50.0\")",
+    );
     for cycle in 0..1000 {
         let v = eval_f64(&mut k, cycle);
-        assert!((10.0..=50.0).contains(&v),
-            "empirical should be in [10, 50], got {v} at cycle={cycle}");
+        assert!(
+            (10.0..=50.0).contains(&v),
+            "empirical should be in [10, 50], got {v} at cycle={cycle}"
+        );
     }
 }
 
@@ -1166,7 +1255,10 @@ fn sin_known_values() {
     let mut k = polydat("f := unit_interval(hash(cycle))\nout := sin(f)");
     for cycle in 0..100 {
         let v = eval_f64(&mut k, cycle);
-        assert!((-1.0..=1.0).contains(&v), "sin out of range: {v} at cycle={cycle}");
+        assert!(
+            (-1.0..=1.0).contains(&v),
+            "sin out of range: {v} at cycle={cycle}"
+        );
     }
     // sin(0) = 0
     let mut k2 = polydat2("f := unit_interval(x)\nout := sin(f)");
@@ -1180,7 +1272,10 @@ fn cos_known_values() {
     let mut k = polydat("f := unit_interval(hash(cycle))\nout := cos(f)");
     for cycle in 0..100 {
         let v = eval_f64(&mut k, cycle);
-        assert!((-1.0..=1.0).contains(&v), "cos out of range: {v} at cycle={cycle}");
+        assert!(
+            (-1.0..=1.0).contains(&v),
+            "cos out of range: {v} at cycle={cycle}"
+        );
     }
     // cos(0) = 1
     let mut k2 = polydat2("f := unit_interval(x)\nout := cos(f)");
@@ -1195,7 +1290,10 @@ fn tan_compiles_and_runs() {
     // unit_interval produces [0,1), tan is well-defined there
     for cycle in 0..100 {
         let v = eval_f64(&mut k, cycle);
-        assert!(v.is_finite(), "tan should be finite for input in [0,1): {v} at cycle={cycle}");
+        assert!(
+            v.is_finite(),
+            "tan should be finite for input in [0,1): {v} at cycle={cycle}"
+        );
     }
 }
 
@@ -1205,8 +1303,10 @@ fn asin_known_values() {
     for cycle in 0..100 {
         let v = eval_f64(&mut k, cycle);
         // asin input [0,1) -> output [0, pi/2)
-        assert!((0.0..=std::f64::consts::FRAC_PI_2 + 0.001).contains(&v),
-            "asin out of expected range: {v} at cycle={cycle}");
+        assert!(
+            (0.0..=std::f64::consts::FRAC_PI_2 + 0.001).contains(&v),
+            "asin out of expected range: {v} at cycle={cycle}"
+        );
     }
 }
 
@@ -1216,8 +1316,10 @@ fn acos_known_values() {
     for cycle in 0..100 {
         let v = eval_f64(&mut k, cycle);
         // acos input [0,1) -> output (0, pi/2]
-        assert!((0.0..=std::f64::consts::FRAC_PI_2 + 0.001).contains(&v),
-            "acos out of expected range: {v} at cycle={cycle}");
+        assert!(
+            (0.0..=std::f64::consts::FRAC_PI_2 + 0.001).contains(&v),
+            "acos out of expected range: {v} at cycle={cycle}"
+        );
     }
 }
 
@@ -1227,8 +1329,10 @@ fn atan_known_values() {
     for cycle in 0..100 {
         let v = eval_f64(&mut k, cycle);
         // atan input [0,1) -> output [0, pi/4)
-        assert!((0.0..std::f64::consts::FRAC_PI_4 + 0.001).contains(&v),
-            "atan out of expected range: {v} at cycle={cycle}");
+        assert!(
+            (0.0..std::f64::consts::FRAC_PI_4 + 0.001).contains(&v),
+            "atan out of expected range: {v} at cycle={cycle}"
+        );
     }
 }
 
@@ -1237,7 +1341,10 @@ fn sqrt_known_values() {
     let mut k = polydat("f := unit_interval(hash(cycle))\nout := sqrt(f)");
     for cycle in 0..100 {
         let v = eval_f64(&mut k, cycle);
-        assert!((0.0..=1.0).contains(&v), "sqrt of [0,1) should be in [0,1]: {v} at cycle={cycle}");
+        assert!(
+            (0.0..=1.0).contains(&v),
+            "sqrt of [0,1) should be in [0,1]: {v} at cycle={cycle}"
+        );
     }
 }
 
@@ -1255,11 +1362,19 @@ fn abs_f64_makes_positive() {
 #[test]
 fn ln_positive_inputs() {
     // unit_interval gives [0,1). Use lerp to map to [0.01, 1.0] to avoid ln(0).
-    let mut k = polydat("h := hash(cycle)\nf := unit_interval(h)\nscaled := lerp(f, 0.01, 1.0)\nout := ln(scaled)");
+    let mut k = polydat(
+        "h := hash(cycle)\nf := unit_interval(h)\nscaled := lerp(f, 0.01, 1.0)\nout := ln(scaled)",
+    );
     for cycle in 0..100 {
         let v = eval_f64(&mut k, cycle);
-        assert!(v.is_finite(), "ln should be finite for positive input: {v} at cycle={cycle}");
-        assert!(v <= 0.001, "ln([0.01, 1.0]) should be <= ~0: {v} at cycle={cycle}");
+        assert!(
+            v.is_finite(),
+            "ln should be finite for positive input: {v} at cycle={cycle}"
+        );
+        assert!(
+            v <= 0.001,
+            "ln([0.01, 1.0]) should be <= ~0: {v} at cycle={cycle}"
+        );
     }
 }
 
@@ -1269,31 +1384,48 @@ fn exp_known_values() {
     for cycle in 0..100 {
         let v = eval_f64(&mut k, cycle);
         // exp([0,1)) -> [1, e)
-        assert!((1.0..std::f64::consts::E + 0.001).contains(&v),
-            "exp out of expected range: {v} at cycle={cycle}");
+        assert!(
+            (1.0..std::f64::consts::E + 0.001).contains(&v),
+            "exp out of expected range: {v} at cycle={cycle}"
+        );
     }
 }
 
 #[test]
 fn atan2_compiles_and_runs() {
     // atan2 takes two f64 wire inputs (y, x)
-    let mut k = polydat("h1 := hash(cycle)\nh2 := hash(h1)\nfy := unit_interval(h1)\nfx := unit_interval(h2)\nout := atan2(fy, fx)");
+    let mut k = polydat(
+        "h1 := hash(cycle)\nh2 := hash(h1)\nfy := unit_interval(h1)\nfx := unit_interval(h2)\nout := atan2(fy, fx)",
+    );
     for cycle in 0..100 {
         let v = eval_f64(&mut k, cycle);
-        assert!(v.is_finite(), "atan2 should produce finite result: {v} at cycle={cycle}");
-        assert!((-std::f64::consts::PI..=std::f64::consts::PI).contains(&v),
-            "atan2 should be in [-pi, pi]: {v} at cycle={cycle}");
+        assert!(
+            v.is_finite(),
+            "atan2 should produce finite result: {v} at cycle={cycle}"
+        );
+        assert!(
+            (-std::f64::consts::PI..=std::f64::consts::PI).contains(&v),
+            "atan2 should be in [-pi, pi]: {v} at cycle={cycle}"
+        );
     }
 }
 
 #[test]
 fn pow_known_values() {
     // pow takes two f64 wire inputs (base, exponent)
-    let mut k = polydat("h1 := hash(cycle)\nh2 := hash(h1)\nbase := unit_interval(h1)\nexponent := unit_interval(h2)\nout := pow(base, exponent)");
+    let mut k = polydat(
+        "h1 := hash(cycle)\nh2 := hash(h1)\nbase := unit_interval(h1)\nexponent := unit_interval(h2)\nout := pow(base, exponent)",
+    );
     for cycle in 0..100 {
         let v = eval_f64(&mut k, cycle);
-        assert!(v.is_finite(), "pow should produce finite result: {v} at cycle={cycle}");
-        assert!(v >= 0.0, "pow of positive base should be non-negative: {v} at cycle={cycle}");
+        assert!(
+            v.is_finite(),
+            "pow should produce finite result: {v} at cycle={cycle}"
+        );
+        assert!(
+            v >= 0.0,
+            "pow of positive base should be non-negative: {v} at cycle={cycle}"
+        );
     }
 }
 
@@ -1351,7 +1483,10 @@ fn to_f64_large_value() {
     let mut k = polydat("out := to_f64(cycle)");
     // Large u64 values lose precision in f64 but should still be a large positive number
     let v = eval_f64(&mut k, u64::MAX);
-    assert!(v > 1e18, "to_f64(u64::MAX) should be a large number, got {v}");
+    assert!(
+        v > 1e18,
+        "to_f64(u64::MAX) should be a large number, got {v}"
+    );
 }
 
 // ===========================================================================
@@ -1587,7 +1722,6 @@ fn f64_mul_by_zero() {
     assert_eq!(eval_f64(&mut k, 42), 0.0);
 }
 
-
 #[test]
 fn f64_add_negative() {
     // -3.0 desugars through UnaryNeg to f64_sub(0.0, 3.0) producing a const -3.0 wire
@@ -1599,7 +1733,10 @@ fn f64_add_negative() {
 fn pow_square_root() {
     let mut k = polydat("a := 9.0\nhalf := 0.5\nout := pow(a, half)");
     let v = eval_f64(&mut k, 0);
-    assert!((v - 3.0).abs() < 1e-10, "pow(9, 0.5) should be ~3.0, got {v}");
+    assert!(
+        (v - 3.0).abs() < 1e-10,
+        "pow(9, 0.5) should be ~3.0, got {v}"
+    );
 }
 
 #[test]
@@ -1663,8 +1800,10 @@ fn checked_mul_normal() {
 fn fp_associativity_not_guaranteed() {
     // (a + b) + c != a + (b + c) in floating point
     // 1e18 + 1.0 - 1e18 should NOT equal 1.0 due to precision loss
-    let mut k = polydat("big := 1000000000000000000.0\none := 1.0\n\
-        sum1 := f64_add(big, one)\nout := f64_sub(sum1, big)");
+    let mut k = polydat(
+        "big := 1000000000000000000.0\none := 1.0\n\
+        sum1 := f64_add(big, one)\nout := f64_sub(sum1, big)",
+    );
     let v = eval_f64(&mut k, 0);
     // In f64, 1e18 + 1.0 == 1e18 (1.0 is below the ULP)
     assert_eq!(v, 0.0, "1e18 + 1 - 1e18 should be 0 due to precision loss");
@@ -1683,7 +1822,9 @@ fn fp_catastrophic_cancellation() {
 fn fp_subnormal_multiplication() {
     // Multiplying very small numbers near subnormal territory
     // Use pow to construct a tiny value since 1e-300 isn't parseable (negative exponent)
-    let mut k = polydat("base := 10.0\nexp := -300.0\ntiny := pow(base, exp)\ntwo := 2.0\nout := f64_mul(tiny, two)");
+    let mut k = polydat(
+        "base := 10.0\nexp := -300.0\ntiny := pow(base, exp)\ntwo := 2.0\nout := f64_mul(tiny, two)",
+    );
     let v = eval_f64(&mut k, 0);
     assert!(v > 0.0, "tiny * 2 should be positive: {v}");
 }
@@ -1715,8 +1856,10 @@ fn fp_nan_from_zero_div_zero() {
 fn fp_nan_propagation_in_add() {
     // NaN + anything = NaN — but we can't easily produce NaN
     // via the DSL. Test via inf - inf instead:
-    let mut k = polydat("big := 1.7976931348623157e308\ntwo := 2.0\n\
-        inf := f64_mul(big, two)\nout := f64_sub(inf, inf)");
+    let mut k = polydat(
+        "big := 1.7976931348623157e308\ntwo := 2.0\n\
+        inf := f64_mul(big, two)\nout := f64_sub(inf, inf)",
+    );
     let v = eval_f64(&mut k, 0);
     assert!(v.is_nan(), "inf - inf should be NaN, got {v}");
 }
@@ -1745,8 +1888,10 @@ fn fp_roundtrip_u64_to_f64_loses_precision_above_2_53() {
     let big = (1u64 << 53) + 1; // 2^53 + 1: not exactly representable
     let result = eval_u64(&mut k, big);
     // The round-trip may lose the +1
-    assert!(result == big || result == big - 1,
-        "2^53+1 may round-trip imprecisely: in={big}, out={result}");
+    assert!(
+        result == big || result == big - 1,
+        "2^53+1 may round-trip imprecisely: in={big}, out={result}"
+    );
 }
 
 #[test]
@@ -1755,7 +1900,10 @@ fn fp_unit_interval_bounds() {
     let mut k = polydat("out := unit_interval(cycle)");
     for &c in &[0u64, 1, 100, u64::MAX / 2, u64::MAX - 1, u64::MAX] {
         let v = eval_f64(&mut k, c);
-        assert!((0.0..=1.0).contains(&v), "unit_interval({c}) = {v}, expected [0, 1]");
+        assert!(
+            (0.0..=1.0).contains(&v),
+            "unit_interval({c}) = {v}, expected [0, 1]"
+        );
     }
 }
 
@@ -1765,20 +1913,30 @@ fn fp_scale_range_bounds() {
     let mut k = polydat("out := scale_range(cycle, -10.0, 10.0)");
     let v0 = eval_f64(&mut k, 0);
     let vmax = eval_f64(&mut k, u64::MAX);
-    assert!((v0 - (-10.0)).abs() < 0.01, "scale_range(0) should be near -10: {v0}");
-    assert!((vmax - 10.0).abs() < 0.01, "scale_range(MAX) should be near 10: {vmax}");
+    assert!(
+        (v0 - (-10.0)).abs() < 0.01,
+        "scale_range(0) should be near -10: {v0}"
+    );
+    assert!(
+        (vmax - 10.0).abs() < 0.01,
+        "scale_range(MAX) should be near 10: {vmax}"
+    );
 }
 
 #[test]
 fn fp_sin_cos_pythagorean() {
     // sin²(x) + cos²(x) = 1 for any x
-    let mut k = polydat("x := to_f64(cycle)\nfactor := 0.1\nscaled := f64_mul(x, factor)\n\
+    let mut k = polydat(
+        "x := to_f64(cycle)\nfactor := 0.1\nscaled := f64_mul(x, factor)\n\
         s := sin(scaled)\nc := cos(scaled)\n\
-        two := 2.0\ns2 := pow(s, two)\nc2 := pow(c, two)\nout := f64_add(s2, c2)");
+        two := 2.0\ns2 := pow(s, two)\nc2 := pow(c, two)\nout := f64_add(s2, c2)",
+    );
     for c in 0..20 {
         let v = eval_f64(&mut k, c);
-        assert!((v - 1.0).abs() < 1e-10,
-            "sin²+cos² at cycle {c} should be 1.0, got {v}");
+        assert!(
+            (v - 1.0).abs() < 1e-10,
+            "sin²+cos² at cycle {c} should be 1.0, got {v}"
+        );
     }
 }
 
@@ -1789,8 +1947,7 @@ fn fp_exp_ln_roundtrip() {
     for c in 1..10 {
         let v = eval_f64(&mut k, c);
         let expected = c as f64 + 1.0;
-        assert!((v - expected).abs() < 1e-10,
-            "exp(ln({expected})) = {v}");
+        assert!((v - expected).abs() < 1e-10, "exp(ln({expected})) = {v}");
     }
 }
 
@@ -1817,9 +1974,15 @@ fn fp_lerp_boundary() {
     // unit_interval(0) = 0.0
     let mut k = polydat("x := unit_interval(cycle)\nout := lerp(x, 10.0, 20.0)");
     let v = eval_f64(&mut k, 0);
-    assert!((v - 10.0).abs() < 0.01, "lerp(0, 10, 20) should be ~10, got {v}");
+    assert!(
+        (v - 10.0).abs() < 0.01,
+        "lerp(0, 10, 20) should be ~10, got {v}"
+    );
     let v = eval_f64(&mut k, u64::MAX);
-    assert!((v - 20.0).abs() < 0.01, "lerp(1, 10, 20) should be ~20, got {v}");
+    assert!(
+        (v - 20.0).abs() < 0.01,
+        "lerp(1, 10, 20) should be ~20, got {v}"
+    );
 }
 
 #[test]
@@ -1827,9 +1990,11 @@ fn fp_lerp_midpoint() {
     // unit_interval(u64::MAX/2) ≈ 0.5
     let mut k = polydat("x := unit_interval(cycle)\nout := lerp(x, 0.0, 100.0)");
     let v = eval_f64(&mut k, u64::MAX / 2);
-    assert!((v - 50.0).abs() < 1.0, "lerp(0.5, 0, 100) should be ~50, got {v}");
+    assert!(
+        (v - 50.0).abs() < 1.0,
+        "lerp(0.5, 0, 100) should be ~50, got {v}"
+    );
 }
-
 
 // ===========================================================================
 // Fourier module: stdlib waveform functions
@@ -1846,7 +2011,10 @@ fn sine_wave_module() {
     // At cycle 5 (quarter period), sin(π/2) = 1
     k.set_inputs(&[5]);
     let v5 = k.pull("out").as_f64();
-    assert!((v5 - 1.0).abs() < 0.1, "sine_wave(5, 20) should be ~1, got {v5}");
+    assert!(
+        (v5 - 1.0).abs() < 0.1,
+        "sine_wave(5, 20) should be ~1, got {v5}"
+    );
 }
 
 #[test]
@@ -1871,7 +2039,10 @@ fn sine_unit_module() {
     for c in 0..20u64 {
         k.set_inputs(&[c]);
         let v = k.pull("out").as_f64();
-        assert!((-0.01..=1.01).contains(&v), "sine_unit({c}) = {v}, expected [0,1]");
+        assert!(
+            (-0.01..=1.01).contains(&v),
+            "sine_unit({c}) = {v}, expected [0,1]"
+        );
     }
 }
 

@@ -143,13 +143,19 @@ impl KernelCore {
                     "H4: slot {slot} should hold a table handle, holds {handle:#x}"
                 );
                 let (_, generation, named) = crate::kernel::decode_table_handle(handle);
-                assert_eq!(named, entry, "H4: slot {slot} names entry {named}; the layout assigned it entry {entry}");
+                assert_eq!(
+                    named, entry,
+                    "H4: slot {slot} names entry {named}; the layout assigned it entry {entry}"
+                );
                 assert_eq!(
                     generation,
                     self.table.generation() & 0xFF_FFFF,
                     "H3: slot {slot} holds a handle from another cycle generation"
                 );
-                assert!(self.table.is_written(entry), "H4: entry {entry} was not written by the run that produced slot {slot}");
+                assert!(
+                    self.table.is_written(entry),
+                    "H4: entry {entry} was not written by the run that produced slot {slot}"
+                );
             }
         }
     }
@@ -216,16 +222,26 @@ fn build_core(
     ref_slots: Vec<bool>,
     extras: P2Extras,
 ) -> KernelCore {
-    let P2Extras { mut table_entries, output_types, handle_slots, externs } = extras;
+    let P2Extras {
+        mut table_entries,
+        output_types,
+        handle_slots,
+        externs,
+    } = extras;
     // Table-kind externs own entries after the nodes' and are checked
     // by the same validator.
     table_entries.extend(externs.table_entries());
     let table_len = table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0);
     let max_inputs = steps.iter().map(|s| s.input_slots.len()).max().unwrap_or(0);
-    let max_outputs = steps.iter().map(|s| s.output_slots.len()).max().unwrap_or(0);
+    let max_outputs = steps
+        .iter()
+        .map(|s| s.output_slots.len())
+        .max()
+        .unwrap_or(0);
     let mut scratch: Vec<ScratchBuf> = Vec::new();
     let mut ref_scratch: Vec<(usize, usize)> = Vec::new();
-    let compiled_steps: Vec<CompiledStep> = steps.into_iter()
+    let compiled_steps: Vec<CompiledStep> = steps
+        .into_iter()
         .map(|step| {
             let start = scratch.len();
             scratch.extend(step.scratch.iter().map(|e| ScratchBuf::new(*e)));
@@ -287,8 +303,9 @@ fn compute_slot_provenance(
     steps: &[CompiledStep],
 ) -> Vec<crate::kernel::ProvMask> {
     let step_count = steps.len();
-    let mut step_prov: Vec<crate::kernel::ProvMask> =
-        (0..step_count).map(|_| crate::kernel::ProvMask::empty()).collect();
+    let mut step_prov: Vec<crate::kernel::ProvMask> = (0..step_count)
+        .map(|_| crate::kernel::ProvMask::empty())
+        .collect();
     for (input_idx, deps) in input_dependents.iter().enumerate() {
         for &step_idx in deps {
             if step_idx < step_count {
@@ -296,8 +313,9 @@ fn compute_slot_provenance(
             }
         }
     }
-    let mut slot_provenance: Vec<crate::kernel::ProvMask> =
-        (0..total_slots).map(|_| crate::kernel::ProvMask::empty()).collect();
+    let mut slot_provenance: Vec<crate::kernel::ProvMask> = (0..total_slots)
+        .map(|_| crate::kernel::ProvMask::empty())
+        .collect();
     for (i, slot) in slot_provenance.iter_mut().enumerate().take(coord_count) {
         slot.set(i);
     }
@@ -315,7 +333,9 @@ fn compute_slot_provenance(
 
 macro_rules! kernel_accessors {
     () => {
-        pub fn coord_count(&self) -> usize { self.core.coord_count }
+        pub fn coord_count(&self) -> usize {
+            self.core.coord_count
+        }
 
         pub fn resolve_output(&self, name: &str) -> Option<usize> {
             self.core.output_map.get(name).copied()
@@ -347,7 +367,12 @@ macro_rules! kernel_accessors {
         /// table (SRD 115 §5), so the caller never holds a handle.
         pub fn get_value(&self, name: &str) -> crate::ast::Value {
             let slot = self.core.output_map[name];
-            let ty = self.core.output_types.get(name).copied().unwrap_or(crate::ast::PortType::U64);
+            let ty = self
+                .core
+                .output_types
+                .get(name)
+                .copied()
+                .unwrap_or(crate::ast::PortType::U64);
             crate::compile::marshal::decode_slot(self.core.buffer[slot], ty, &self.core.table)
         }
 
@@ -465,7 +490,16 @@ impl CompiledKernelRaw {
         ref_slots: Vec<bool>,
         extras: P2Extras,
     ) -> Self {
-        Self { core: build_core(coord_count, total_slots, steps, output_map, ref_slots, extras) }
+        Self {
+            core: build_core(
+                coord_count,
+                total_slots,
+                steps,
+                output_map,
+                ref_slots,
+                extras,
+            ),
+        }
     }
 
     /// Every run evaluates everything; a changed input needs no mark.
@@ -512,7 +546,14 @@ impl CompiledKernelPush {
     ) -> Self {
         let step_count = steps.len();
         Self {
-            core: build_core(coord_count, total_slots, steps, output_map, ref_slots, extras),
+            core: build_core(
+                coord_count,
+                total_slots,
+                steps,
+                output_map,
+                ref_slots,
+                extras,
+            ),
             node_clean: vec![false; step_count],
             input_dependents,
         }
@@ -579,9 +620,16 @@ impl CompiledKernelPull {
         ref_slots: Vec<bool>,
         extras: P2Extras,
     ) -> Self {
-        let core = build_core(coord_count, total_slots, steps, output_map, ref_slots, extras);
-        let slot_provenance = compute_slot_provenance(
-            coord_count, total_slots, input_dependents, &core.steps);
+        let core = build_core(
+            coord_count,
+            total_slots,
+            steps,
+            output_map,
+            ref_slots,
+            extras,
+        );
+        let slot_provenance =
+            compute_slot_provenance(coord_count, total_slots, input_dependents, &core.steps);
         Self {
             core,
             slot_provenance,
@@ -625,9 +673,10 @@ impl CompiledKernelPull {
         self.set_inputs(coords);
         if !self.force_run
             && slot < self.slot_provenance.len()
-            && !self.slot_provenance[slot].intersects(&self.changed_mask) {
-                return self.core.buffer[slot];
-            }
+            && !self.slot_provenance[slot].intersects(&self.changed_mask)
+        {
+            return self.core.buffer[slot];
+        }
         self.force_run = false;
         eval_all_steps(&mut self.core);
         self.core.buffer[slot]
@@ -663,9 +712,16 @@ impl CompiledKernelPushPull {
         extras: P2Extras,
     ) -> Self {
         let step_count = steps.len();
-        let core = build_core(coord_count, total_slots, steps, output_map, ref_slots, extras);
-        let slot_provenance = compute_slot_provenance(
-            coord_count, total_slots, &input_dependents, &core.steps);
+        let core = build_core(
+            coord_count,
+            total_slots,
+            steps,
+            output_map,
+            ref_slots,
+            extras,
+        );
+        let slot_provenance =
+            compute_slot_provenance(coord_count, total_slots, &input_dependents, &core.steps);
         Self {
             core,
             node_clean: vec![false; step_count],
@@ -718,9 +774,10 @@ impl CompiledKernelPushPull {
         self.set_inputs(coords);
         if !self.force_run
             && slot < self.slot_provenance.len()
-            && !self.slot_provenance[slot].intersects(&self.changed_mask) {
-                return self.core.buffer[slot];
-            }
+            && !self.slot_provenance[slot].intersects(&self.changed_mask)
+        {
+            return self.core.buffer[slot];
+        }
         self.force_run = false;
         eval_dirty_steps(&mut self.core, &mut self.node_clean);
         self.core.buffer[slot]

@@ -10,7 +10,8 @@
 //! contracts between every wire connection.
 
 fn main() {
-    let mut kernel = polydat::dsl::compile_polydat(r#"
+    let mut kernel = polydat::dsl::compile_polydat(
+        r#"
         input cycle: u64
 
         // Decompose one coordinate into two dimensions (device, reading).
@@ -24,7 +25,9 @@ fn main() {
         // Convert each independent stream into a unit-interval quantile.
         q_temp := unit_interval(h_temp)
         q_humid := unit_interval(h_humid)
-    "#).expect("compile failed");
+    "#,
+    )
+    .expect("compile failed");
 
     kernel.set_inputs(&[12_345]);
     let d = kernel.pull("device").as_u64();

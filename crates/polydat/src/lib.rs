@@ -143,11 +143,11 @@ extern crate self as polydat;
 
 pub mod ast;
 pub mod binder;
-pub mod kernel;
-pub mod iteration;
 pub mod compile;
-pub mod library;
 pub mod dsl;
+pub mod iteration;
+pub mod kernel;
+pub mod library;
 pub mod viz;
 
 /// Polytile at the host boundary (SRD 114 §5.6): build a tile from
@@ -160,7 +160,8 @@ pub mod tile {
     pub use crate::dsl::lexer::Span;
     pub use crate::dsl::tile::{parse_template, render_template};
     pub use crate::dsl::tile_structural::{
-        template_text_from_value, tile_from_json_text, tile_from_json_value, tile_from_text, ENCODINGS,
+        ENCODINGS, template_text_from_value, tile_from_json_text, tile_from_json_value,
+        tile_from_text,
     };
 }
 
@@ -181,7 +182,7 @@ pub use derive_support::Const;
 
 // SRD-105 — engine-mix surface: the process-default JIT mode and
 // its accessors. `kernel.jit: auto|off|force` maps here.
-pub use compile::cone::{default_jit_mode, set_default_jit_mode, JitMode};
+pub use compile::cone::{JitMode, default_jit_mode, set_default_jit_mode};
 
 // SRD-82 §"Panic reporting: one full render" — host runtimes with
 // their own panic reporting declare it so the eval-panic hook

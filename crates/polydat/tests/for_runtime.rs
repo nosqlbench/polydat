@@ -18,7 +18,11 @@ fn compile(src: &str) -> PolydatKernel {
 }
 
 /// Every (activation index, cycle, output) value of a traversal, in order.
-fn trace(k: &mut PolydatKernel, traversal: usize, outputs: &[&str]) -> Vec<(u64, u64, String, Value)> {
+fn trace(
+    k: &mut PolydatKernel,
+    traversal: usize,
+    outputs: &[&str],
+) -> Vec<(u64, u64, String, Value)> {
     let mut stream = k.traverse(traversal).unwrap();
     let mut out = Vec::new();
     while let Some(mut act) = stream.advance().unwrap() {
@@ -58,7 +62,10 @@ fn elements_and_cascade_bind_into_each_activation() {
     assert_eq!(rows.len(), 18);
     // (k=1, limit=10) → f = 11, g = base + 11
     assert_eq!(rows[0], (0, 0, "f".into(), Value::U64(11)));
-    assert_eq!(rows[1], (0, 0, "g".into(), Value::U64(base.wrapping_add(11))));
+    assert_eq!(
+        rows[1],
+        (0, 0, "g".into(), Value::U64(base.wrapping_add(11)))
+    );
     // Last tuple (k=3, limit=30)
     assert_eq!(rows[16], (8, 0, "f".into(), Value::U64(33)));
 }
@@ -70,7 +77,10 @@ fn t1_two_kernels_over_one_program_agree_exactly() {
     let mut host_b = PolydatKernel_from(&program);
     host_a.set_inputs(&[42]);
     host_b.set_inputs(&[42]);
-    assert_eq!(trace(&mut host_a, 0, &["f", "g"]), trace(&mut host_b, 0, &["f", "g"]));
+    assert_eq!(
+        trace(&mut host_a, 0, &["f", "g"]),
+        trace(&mut host_b, 0, &["f", "g"])
+    );
 }
 
 #[allow(non_snake_case)]
@@ -109,7 +119,9 @@ fn cursor_over_an_element_narrows_and_iterates_its_slice() {
 
 #[test]
 fn a_cursor_without_over_iterates_its_full_extent() {
-    let mut k = compile("input cycle: u64\nfor k in 1..3 {\n    cursor rows = range(0, 5)\n    v := u64_add(k, rows.ordinal)\n}\n");
+    let mut k = compile(
+        "input cycle: u64\nfor k in 1..3 {\n    cursor rows = range(0, 5)\n    v := u64_add(k, rows.ordinal)\n}\n",
+    );
     k.set_inputs(&[0]);
     let rows = trace(&mut k, 0, &["v"]);
     assert_eq!(rows.len(), 10);
@@ -152,13 +164,18 @@ fn fibers_partition_a_traversal_by_index_without_coordination() {
                     for i in (f..n).step_by(fibers) {
                         let mut act = stream.activation(i).unwrap();
                         let index = act.index;
-                        act.for_each_cycle(|c, kernel| out.push((index, c, "g".to_string(), kernel.pull("g").clone())));
+                        act.for_each_cycle(|c, kernel| {
+                            out.push((index, c, "g".to_string(), kernel.pull("g").clone()))
+                        });
                     }
                     out
                 })
             })
             .collect();
-        handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap())
+            .collect()
     });
     parallel.sort_by_key(|(i, c, _, _)| (*i, *c));
     assert_eq!(parallel, sequential);
@@ -166,7 +183,9 @@ fn fibers_partition_a_traversal_by_index_without_coordination() {
 
 #[test]
 fn over_resolving_to_many_partitions_inside_a_body_is_an_error() {
-    let mut k = compile("input cycle: u64\nfor k in 1..3 {\n    cursor rows = range(0, 100) over \"*/4\"\n    v := rows.ordinal\n}\n");
+    let mut k = compile(
+        "input cycle: u64\nfor k in 1..3 {\n    cursor rows = range(0, 100) over \"*/4\"\n    v := rows.ordinal\n}\n",
+    );
     k.set_inputs(&[0]);
     let mut stream = k.traverse(0).unwrap();
     let err = stream.advance().unwrap_err();
@@ -177,13 +196,21 @@ fn over_resolving_to_many_partitions_inside_a_body_is_an_error() {
 fn comprehension_sources_see_the_parents_current_values() {
     // Outer wires reach a source through `{name}` interpolation, the
     // comprehension grammar's reference form.
-    let mut k = compile("input cycle: u64\nextern total: u64 = 100\nfor p in partitions(\"*/2\", {total}) {\n    n := cardinality(p)\n}\n");
+    let mut k = compile(
+        "input cycle: u64\nextern total: u64 = 100\nfor p in partitions(\"*/2\", {total}) {\n    n := cardinality(p)\n}\n",
+    );
     k.set_inputs(&[0]);
     let rows = trace(&mut k, 0, &["n"]);
-    assert_eq!(rows.iter().map(|r| r.3.as_u64()).collect::<Vec<_>>(), vec![50, 50]);
+    assert_eq!(
+        rows.iter().map(|r| r.3.as_u64()).collect::<Vec<_>>(),
+        vec![50, 50]
+    );
     // A different extern value changes the slices without recompiling.
     let idx = k.program().find_input("total").unwrap();
     k.state().set_input(idx, Value::U64(20));
     let rows = trace(&mut k, 0, &["n"]);
-    assert_eq!(rows.iter().map(|r| r.3.as_u64()).collect::<Vec<_>>(), vec![10, 10]);
+    assert_eq!(
+        rows.iter().map(|r| r.3.as_u64()).collect::<Vec<_>>(),
+        vec![10, 10]
+    );
 }

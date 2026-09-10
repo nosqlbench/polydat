@@ -44,7 +44,11 @@ pub struct ExprStub {
 impl ExprStub {
     /// Build a stub from an already-constructed expression.
     pub fn new(name: impl Into<String>, expr: Expr) -> Self {
-        Self { name: name.into(), expr, modifier: BindingModifier::default() }
+        Self {
+            name: name.into(),
+            expr,
+            modifier: BindingModifier::default(),
+        }
     }
 
     /// Build a stub by parsing a single expression from source — the
@@ -114,11 +118,7 @@ impl GraphMatter {
     /// `port_type`) rather than a compile-time generic. The type must be
     /// faithful: an extern that names an in-scope shared cell attaches to
     /// it at subscope build, and the cell's own port type is the contract.
-    pub fn extern_wire_typed(
-        &mut self,
-        name: impl Into<String>,
-        port: PortType,
-    ) -> &mut Self {
+    pub fn extern_wire_typed(&mut self, name: impl Into<String>, port: PortType) -> &mut Self {
         let span = Span { line: 0, col: 0 };
         let default = match port {
             PortType::F64 => Expr::FloatLit(0.0, span),
@@ -172,8 +172,13 @@ impl ScopedExpr {
             .statements(matter.into_statements())
             .build()
             .map_err(|e| format!("scoped-expr matter: {e:?}"))?;
-        let kernel = parent.build_subscope(pm).map_err(|e| format!("scoped-expr subscope: {e:?}"))?;
-        Ok(Self { kernel, output: output.into() })
+        let kernel = parent
+            .build_subscope(pm)
+            .map_err(|e| format!("scoped-expr subscope: {e:?}"))?;
+        Ok(Self {
+            kernel,
+            output: output.into(),
+        })
     }
 
     /// Set a runtime input wire by name before evaluating. No-op for a
@@ -229,8 +234,11 @@ mod tests {
                 assert!(b.modifier.has(WireModifier::Volatile), "must be volatile");
                 // The value is `(<comparison>) as u64` — a grammar-safe
                 // Cast wrapping the parsed comparison, no string round-trip.
-                assert!(matches!(b.value, Expr::Cast(_, PortType::U64, _)),
-                    "value must be a Cast to U64, got {:?}", b.value);
+                assert!(
+                    matches!(b.value, Expr::Cast(_, PortType::U64, _)),
+                    "value must be a Cast to U64, got {:?}",
+                    b.value
+                );
             }
             other => panic!("expected a Binding statement, got {other:?}"),
         }
@@ -243,9 +251,14 @@ mod tests {
             .expect("parse")
             .returning::<f64>()
             .into_statement();
-        let Statement::Binding(b) = stmt else { panic!("expected Binding") };
+        let Statement::Binding(b) = stmt else {
+            panic!("expected Binding")
+        };
         assert!(matches!(b.value, Expr::Cast(_, PortType::F64, _)));
-        assert!(!b.modifier.has(WireModifier::Volatile), "no volatile unless requested");
+        assert!(
+            !b.modifier.has(WireModifier::Volatile),
+            "no volatile unless requested"
+        );
     }
 
     #[test]
@@ -256,16 +269,23 @@ mod tests {
         // sub-context of a parent kernel and evaluates it many times
         // against injected inputs, as truthiness.
         use crate::ast::Value;
-        let parent = crate::dsl::compile_polydat("input cycle: u64\nx := 5")
-            .expect("parent kernel");
+        let parent =
+            crate::dsl::compile_polydat("input cycle: u64\nx := 5").expect("parent kernel");
         let mut matter = GraphMatter::new();
-        matter
-            .extern_wire::<u64>("threshold")
-            .bind(ExprStub::parse("__pred", "threshold > 50")
-                .expect("parse").returning::<u64>().volatile());
-        let mut scoped = ScopedExpr::bind(&parent, "__pred", matter)
-            .expect("bind to parent scope");
-        assert!(scoped.set("threshold", Value::U64(100)).is_true(), "100 > 50 → true");
-        assert!(!scoped.set("threshold", Value::U64(10)).is_true(), "10 > 50 → false");
+        matter.extern_wire::<u64>("threshold").bind(
+            ExprStub::parse("__pred", "threshold > 50")
+                .expect("parse")
+                .returning::<u64>()
+                .volatile(),
+        );
+        let mut scoped = ScopedExpr::bind(&parent, "__pred", matter).expect("bind to parent scope");
+        assert!(
+            scoped.set("threshold", Value::U64(100)).is_true(),
+            "100 > 50 → true"
+        );
+        assert!(
+            !scoped.set("threshold", Value::U64(10)).is_true(),
+            "10 > 50 → false"
+        );
     }
 }

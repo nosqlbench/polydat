@@ -30,8 +30,8 @@
 
 use polydat::ast::PortType;
 use polydat::dsl::ast::{
-    Arg, Binding, BindingModifier, BinOpKind, CallExpr, CursorDecl, Expr,
-    ExternPort, InputDecl, ModuleDef, PolydatFile, Statement, TypedParam,
+    Arg, BinOpKind, Binding, BindingModifier, CallExpr, CursorDecl, Expr, ExternPort, InputDecl,
+    ModuleDef, PolydatFile, Statement, TypedParam,
 };
 use polydat::dsl::compile_polydat;
 use polydat::dsl::lexer::Span;
@@ -80,7 +80,11 @@ fn extract_blocks(md: &str, lang: &str) -> Vec<Block> {
         }
         debug_assert!(closed, "unterminated fence at line {}", idx + 1);
         if is_match {
-            out.push(Block { directives, body, start_line: idx + 1 });
+            out.push(Block {
+                directives,
+                body,
+                start_line: idx + 1,
+            });
         }
     }
     out
@@ -204,7 +208,8 @@ fn programmatic_examples_match_grammar() {
             "builder snippet for `{}` not found verbatim in \
              polydat_grammar_programmatic.md — doc and code have drifted.\n\
              expected substring:\n{}",
-            p.anchor, p.doc_snippet
+            p.anchor,
+            p.doc_snippet
         );
     }
 }
@@ -215,7 +220,11 @@ fn sp() -> Span {
     Span { line: 0, col: 0 }
 }
 fn input(name: &str, ty: &str) -> Statement {
-    Statement::InputDecl(InputDecl { name: name.into(), ty: Some(ty.into()), span: sp() })
+    Statement::InputDecl(InputDecl {
+        name: name.into(),
+        ty: Some(ty.into()),
+        span: sp(),
+    })
 }
 fn id(n: &str) -> Expr {
     Expr::Ident(n.into(), sp())
@@ -269,9 +278,27 @@ fn build_minimal() -> PolydatFile {
 fn build_destructure() -> PolydatFile {
     file(vec![
         input("cycle", "u64"),
-        bind_multi(&["region", "store", "tx"], call("mixed_radix", vec![id("cycle"), int(50), int(200), int(0)])),
-        bind("region_id", call("mod", vec![call("hash", vec![id("region")]), int(10_000)])),
-        bind("store_id", call("mod", vec![call("hash", vec![call("interleave", vec![id("region"), id("store")])]), int(100_000)])),
+        bind_multi(
+            &["region", "store", "tx"],
+            call("mixed_radix", vec![id("cycle"), int(50), int(200), int(0)]),
+        ),
+        bind(
+            "region_id",
+            call("mod", vec![call("hash", vec![id("region")]), int(10_000)]),
+        ),
+        bind(
+            "store_id",
+            call(
+                "mod",
+                vec![
+                    call(
+                        "hash",
+                        vec![call("interleave", vec![id("region"), id("store")])],
+                    ),
+                    int(100_000),
+                ],
+            ),
+        ),
     ])
 }
 
@@ -279,15 +306,29 @@ fn build_tuple_input() -> PolydatFile {
     file(vec![
         input("cycle", "u64"),
         input("thread", "u64"),
-        bind("combined", call("interleave", vec![id("cycle"), id("thread")])),
-        bind("row_key", call("mod", vec![call("hash", vec![id("combined")]), int(1_000_000)])),
+        bind(
+            "combined",
+            call("interleave", vec![id("cycle"), id("thread")]),
+        ),
+        bind(
+            "row_key",
+            call(
+                "mod",
+                vec![call("hash", vec![id("combined")]), int(1_000_000)],
+            ),
+        ),
     ])
 }
 
 fn build_extern() -> PolydatFile {
     file(vec![
         input("cycle", "u64"),
-        Statement::ExternPort(ExternPort { name: "scale".into(), typ: "u64".into(), default: None, span: sp() }),
+        Statement::ExternPort(ExternPort {
+            name: "scale".into(),
+            typ: "u64".into(),
+            default: None,
+            span: sp(),
+        }),
         bind("result", binop(id("cycle"), BinOpKind::Mul, id("scale"))),
     ])
 }
@@ -300,24 +341,63 @@ fn build_cursor_over() -> PolydatFile {
             over: Some(id("p")),
             span: sp(),
         }),
-        bind("i", Expr::FieldAccess { source: "q__cursor".into(), field: "idx".into(), span: sp() }),
-        bind("ratio", binop(Expr::Cast(Box::new(id("i")), PortType::F64, sp()), BinOpKind::Div, flt(100.0))),
+        bind(
+            "i",
+            Expr::FieldAccess {
+                source: "q__cursor".into(),
+                field: "idx".into(),
+                span: sp(),
+            },
+        ),
+        bind(
+            "ratio",
+            binop(
+                Expr::Cast(Box::new(id("i")), PortType::F64, sp()),
+                BinOpKind::Div,
+                flt(100.0),
+            ),
+        ),
     ])
 }
 
 fn build_module() -> PolydatFile {
     let body = vec![
-        bind("pos", call("to_f64", vec![binop(id("input"), BinOpKind::Mod, id("period"))])),
+        bind(
+            "pos",
+            call(
+                "to_f64",
+                vec![binop(id("input"), BinOpKind::Mod, id("period"))],
+            ),
+        ),
         bind("per", call("to_f64", vec![id("period")])),
-        bind("value", call("sin", vec![binop(binop(id("pos"), BinOpKind::Div, id("per")), BinOpKind::Mul, flt(std::f64::consts::TAU))])),
+        bind(
+            "value",
+            call(
+                "sin",
+                vec![binop(
+                    binop(id("pos"), BinOpKind::Div, id("per")),
+                    BinOpKind::Mul,
+                    flt(std::f64::consts::TAU),
+                )],
+            ),
+        ),
     ];
     file(vec![Statement::ModuleDef(ModuleDef {
         name: "sine_wave".into(),
         params: vec![
-            TypedParam { name: "input".into(), typ: "u64".into() },
-            TypedParam { name: "period".into(), typ: "u64".into() },
+            TypedParam {
+                name: "input".into(),
+                typ: "u64".into(),
+            },
+            TypedParam {
+                name: "period".into(),
+                typ: "u64".into(),
+            },
         ],
-        outputs: vec![TypedParam { name: "value".into(), typ: "f64".into() }],
+        outputs: vec![TypedParam {
+            name: "value".into(),
+            typ: "f64".into(),
+        }],
         body,
         span: sp(),
     })])

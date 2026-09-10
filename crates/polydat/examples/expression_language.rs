@@ -9,7 +9,8 @@
 //! intermediate would just be noise.
 
 fn main() {
-    let mut kernel = polydat::dsl::compile_polydat(r#"
+    let mut kernel = polydat::dsl::compile_polydat(
+        r#"
         input cycle: u64
 
         // Nested expressions — no named intermediates needed.
@@ -24,7 +25,9 @@ fn main() {
         // comparison op — polydat's comparison family returns u64,
         // not Bool, by convention.
         bucket := select_u64(u64_lt(user_id, 500000), 0, 1)
-    "#).expect("compile failed");
+    "#,
+    )
+    .expect("compile failed");
 
     println!("cycle  user_id  word     bucket");
     println!("-----  -------  -------  ------");

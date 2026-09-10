@@ -20,8 +20,8 @@
 //!   `tests::diagonal_matches_cantor_enumeration_3x3`.
 
 use super::{
-    EvaluatedInput, MultiIndex, Strategy, Tuple, index_fn_size,
-    index_fn_supports_lookup, lex::lex_multi_indices, multi_index_to_flat,
+    EvaluatedInput, MultiIndex, Strategy, Tuple, index_fn_size, index_fn_supports_lookup,
+    lex::lex_multi_indices, multi_index_to_flat,
 };
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::strategy::StrategyName;
@@ -192,14 +192,18 @@ mod tests {
 
     #[test]
     fn diagonal_2x2() {
-        let idx = IndexFn::Lattice { axis_sizes: vec![2, 2] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![2, 2],
+        };
         let out = diagonal_multi_indices(&idx, None, false);
         assert_eq!(out, vec![vec![0, 0], vec![0, 1], vec![1, 0], vec![1, 1]]);
     }
 
     #[test]
     fn diagonal_3x3_truncated() {
-        let idx = IndexFn::Lattice { axis_sizes: vec![3, 3] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![3, 3],
+        };
         let out = diagonal_multi_indices(&idx, Some(4), false);
         assert_eq!(out.len(), 4);
         assert_eq!(out[0], vec![0, 0]);
@@ -217,33 +221,46 @@ mod tests {
         //   Σ=2: (0,2) (1,1) (2,0)
         //   Σ=3: (1,2) (2,1)
         //   Σ=4: (2,2)
-        let idx = IndexFn::Lattice { axis_sizes: vec![3, 3] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![3, 3],
+        };
         let out = diagonal_multi_indices(&idx, None, false);
         assert_eq!(
             out,
             vec![
                 vec![0, 0],
-                vec![0, 1], vec![1, 0],
-                vec![0, 2], vec![1, 1], vec![2, 0],
-                vec![1, 2], vec![2, 1],
+                vec![0, 1],
+                vec![1, 0],
+                vec![0, 2],
+                vec![1, 1],
+                vec![2, 0],
+                vec![1, 2],
+                vec![2, 1],
                 vec![2, 2],
             ]
         );
         // Defining property: coordinate sums are non-decreasing.
         let sums: Vec<u64> = out.iter().map(|mi| mi.iter().sum()).collect();
-        assert!(sums.windows(2).all(|w| w[0] <= w[1]), "sums not monotone: {sums:?}");
+        assert!(
+            sums.windows(2).all(|w| w[0] <= w[1]),
+            "sums not monotone: {sums:?}"
+        );
     }
 
     #[test]
     fn antidiagonal_2x2() {
-        let idx = IndexFn::Lattice { axis_sizes: vec![2, 2] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![2, 2],
+        };
         let out = diagonal_multi_indices(&idx, None, true);
         assert_eq!(out, vec![vec![1, 1], vec![0, 1], vec![1, 0], vec![0, 0]]);
     }
 
     #[test]
     fn diagonal_3d_first_few() {
-        let idx = IndexFn::Lattice { axis_sizes: vec![3, 3, 3] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![3, 3, 3],
+        };
         let out = diagonal_multi_indices(&idx, Some(4), false);
         assert_eq!(out[0], vec![0, 0, 0]);
         assert_eq!(out[1], vec![0, 0, 1]);

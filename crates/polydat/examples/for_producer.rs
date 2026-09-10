@@ -23,18 +23,26 @@ fn show(label: &str, s: &polydat::iteration::comprehension::StreamerValue) {
             format!("({})", cells.join(","))
         })
         .collect();
-    println!("{label:<8} {:?}  {:>2} tuples  {}", s.cardinality(), tuples.len(), tuples.join(" "));
+    println!(
+        "{label:<8} {:?}  {:>2} tuples  {}",
+        s.cardinality(),
+        tuples.len(),
+        tuples.join(" ")
+    );
 }
 
 fn main() {
-    let mut kernel = polydat::dsl::compile_polydat(r#"
+    let mut kernel = polydat::dsl::compile_polydat(
+        r#"
         input cycle: u64
 
         base    := for k in 1..4, limit in 10,20,30
         corners := for base where {k} == 1 || {k} == 3
         sampled := for base order halton/4
         label   := "plan: {base}"
-    "#).expect("compile failed");
+    "#,
+    )
+    .expect("compile failed");
 
     kernel.set_inputs(&[0]);
     println!("{}", kernel.pull("label").as_str());
@@ -50,5 +58,9 @@ fn main() {
     let b = base.coordinate_stream();
     a.next();
     a.next();
-    println!("after two pulls on a: a has {} left, b has {}", a.count(), b.count());
+    println!(
+        "after two pulls on a: a has {} left, b has {}",
+        a.count(),
+        b.count()
+    );
 }

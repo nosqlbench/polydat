@@ -97,8 +97,7 @@ impl PolydatSetup for ParsedFormat {}
 #[crate::polydat_node(category = Formatting)]
 fn printf(
     format: Const<&str>,
-    #[poly_const(ParsedFormat::from_format_str, from = format)]
-    parsed: &ParsedFormat,
+    #[poly_const(ParsedFormat::from_format_str, from = format)] parsed: &ParsedFormat,
     parts: &[polydat::ast::Value],
 ) -> String {
     parsed.render_with(parts.len(), |i| FmtArg::from(&parts[i]))
@@ -136,7 +135,9 @@ impl ParsedFormat {
     /// the resulting `ParsedFormat` is cached on the struct field
     /// and borrowed by every eval call.
     pub fn from_format_str(fmt: &str) -> Self {
-        Self { segments: parse_format(fmt) }
+        Self {
+            segments: parse_format(fmt),
+        }
     }
 
     /// The parsed form of a format string, interned for the process
@@ -146,8 +147,14 @@ impl ParsedFormat {
     /// string.
     pub fn interned(fmt: &str) -> &'static ParsedFormat {
         use std::sync::RwLock;
-        static FORMATS: RwLock<Option<std::collections::HashMap<String, &'static ParsedFormat>>> = RwLock::new(None);
-        if let Some(p) = FORMATS.read().unwrap().as_ref().and_then(|m| m.get(fmt).copied()) {
+        static FORMATS: RwLock<Option<std::collections::HashMap<String, &'static ParsedFormat>>> =
+            RwLock::new(None);
+        if let Some(p) = FORMATS
+            .read()
+            .unwrap()
+            .as_ref()
+            .and_then(|m| m.get(fmt).copied())
+        {
             return p;
         }
         let mut guard = FORMATS.write().unwrap();
@@ -171,7 +178,12 @@ impl ParsedFormat {
 
     /// Render into any text sink: a `String` at P1, the cycle arena
     /// writer in the compiled helper (SRD 115 §6).
-    pub fn render_into<'a, W: std::fmt::Write>(&self, argc: usize, arg: impl Fn(usize) -> FmtArg<'a>, out: &mut W) {
+    pub fn render_into<'a, W: std::fmt::Write>(
+        &self,
+        argc: usize,
+        arg: impl Fn(usize) -> FmtArg<'a>,
+        out: &mut W,
+    ) {
         for seg in &self.segments {
             match seg {
                 Segment::Literal(s) => {
@@ -314,7 +326,11 @@ fn parse_spec(spec: &str, index: usize) -> FormatSpec {
     let mut pos = 0;
 
     // Check for zero-fill
-    if pos < chars.len() && chars[pos] == '0' && pos + 1 < chars.len() && chars[pos + 1].is_ascii_digit() {
+    if pos < chars.len()
+        && chars[pos] == '0'
+        && pos + 1 < chars.len()
+        && chars[pos + 1].is_ascii_digit()
+    {
         result.fill = '0';
         pos += 1;
     }

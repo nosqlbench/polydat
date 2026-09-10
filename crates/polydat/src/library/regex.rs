@@ -15,8 +15,7 @@ fn regex_replace(
     input: &str,
     pattern: crate::derive_support::Const<&str>,
     replacement: crate::derive_support::Const<&str>,
-    #[poly_const(compile_regex, from = pattern)]
-    re: &Regex,
+    #[poly_const(compile_regex, from = pattern)] re: &Regex,
 ) -> String {
     let _ = pattern;
     re.replace_all(input, replacement.0).into_owned()
@@ -37,16 +36,21 @@ fn compile_regex(pattern: &str) -> Regex {
 fn regex_match(
     input: &str,
     pattern: crate::derive_support::Const<&str>,
-    #[poly_const(compile_regex, from = pattern)]
-    re: &Regex,
+    #[poly_const(compile_regex, from = pattern)] re: &Regex,
 ) -> bool {
     let matched = re.is_match(input);
     if crate::library::debug_nodes_enabled() {
         let snippet: String = input.chars().take(200).collect();
-        let ellipsis = if input.len() > snippet.len() { "…" } else { "" };
+        let ellipsis = if input.len() > snippet.len() {
+            "…"
+        } else {
+            ""
+        };
         crate::library::support::audit::debug(&format!(
             "regex_match: pattern={:?} input.len={} matched={matched} input.snippet={:?}{ellipsis}",
-            re.as_str(), input.len(), snippet,
+            re.as_str(),
+            input.len(),
+            snippet,
         ));
     }
     matched
@@ -58,8 +62,7 @@ fn regex_match(
 fn regex_extract(
     input: &str,
     pattern: crate::derive_support::Const<&str>,
-    #[poly_const(compile_regex, from = pattern)]
-    re: &Regex,
+    #[poly_const(compile_regex, from = pattern)] re: &Regex,
 ) -> String {
     if let Some(caps) = re.captures(input) {
         caps.get(1)
@@ -115,8 +118,7 @@ const PATTERN_REGEX_METACHARS: &[char] = &[
 /// - else if it contains `*` → glob, each `*` → `.*`, `^…$`
 /// - else → literal, `^escape(src)$`
 pub fn promote_pattern(source: &str) -> (String, PatternDialect) {
-    let has_regex_metachar =
-        source.chars().any(|c| PATTERN_REGEX_METACHARS.contains(&c));
+    let has_regex_metachar = source.chars().any(|c| PATTERN_REGEX_METACHARS.contains(&c));
     let has_glob_star = source.contains('*');
     if has_regex_metachar {
         (format!("^(?:{source})$"), PatternDialect::Regex)
@@ -125,7 +127,10 @@ pub fn promote_pattern(source: &str) -> (String, PatternDialect) {
         let pattern = regex::escape(source).replace("\\*", ".*");
         (format!("^{pattern}$"), PatternDialect::Glob)
     } else {
-        (format!("^{}$", regex::escape(source)), PatternDialect::Literal)
+        (
+            format!("^{}$", regex::escape(source)),
+            PatternDialect::Literal,
+        )
     }
 }
 
@@ -133,8 +138,10 @@ pub fn promote_pattern(source: &str) -> (String, PatternDialect) {
 pub fn compile_pattern(source: &str) -> Result<(Regex, PatternDialect), String> {
     let (anchored, dialect) = promote_pattern(source);
     let re = Regex::new(&anchored).map_err(|e| {
-        format!("pattern '{source}' did not compile (dialect={}): {e}",
-            dialect.as_str())
+        format!(
+            "pattern '{source}' did not compile (dialect={}): {e}",
+            dialect.as_str()
+        )
     })?;
     Ok((re, dialect))
 }
@@ -155,8 +162,7 @@ fn compile_promoted(pattern: &str) -> Regex {
 fn pattern_match(
     input: &str,
     pattern: crate::derive_support::Const<&str>,
-    #[poly_const(compile_promoted, from = pattern)]
-    re: &Regex,
+    #[poly_const(compile_promoted, from = pattern)] re: &Regex,
 ) -> bool {
     re.is_match(input)
 }
@@ -200,22 +206,44 @@ mod pattern_tests {
 // Signature declarations for the DSL registry
 // ---------------------------------------------------------------------------
 
-use crate::dsl::registry::{Arity, FuncCategory, FuncSig, ParamSpec};
 use crate::ast::SlotType;
+use crate::dsl::registry::{Arity, FuncCategory, FuncSig, ParamSpec};
 
 /// Signatures for regex nodes.
 pub fn signatures() -> &'static [FuncSig] {
     use FuncCategory as C;
     &[
         FuncSig {
-            name: "regex_replace", category: C::Regex,
-            outputs: 1, description: "regex substitution",
-            identity: None, variadic_ctor: None,
+            name: "regex_replace",
+            category: C::Regex,
+            outputs: 1,
+            description: "regex substitution",
+            identity: None,
+            variadic_ctor: None,
             params: &[
-                ParamSpec { name: "input", slot_type: SlotType::Wire, required: true, example: "cycle", constraint: None },
-                ParamSpec { name: "pattern", slot_type: SlotType::ConstStr, required: true, example: "\"[a-z]+\"",
-                    constraint: Some(crate::dsl::const_constraints::ConstConstraint::StrParser(validate_regex_pattern)) },
-                ParamSpec { name: "replacement", slot_type: SlotType::ConstStr, required: true, example: "\"X\"", constraint: None },
+                ParamSpec {
+                    name: "input",
+                    slot_type: SlotType::Wire,
+                    required: true,
+                    example: "cycle",
+                    constraint: None,
+                },
+                ParamSpec {
+                    name: "pattern",
+                    slot_type: SlotType::ConstStr,
+                    required: true,
+                    example: "\"[a-z]+\"",
+                    constraint: Some(crate::dsl::const_constraints::ConstConstraint::StrParser(
+                        validate_regex_pattern,
+                    )),
+                },
+                ParamSpec {
+                    name: "replacement",
+                    slot_type: SlotType::ConstStr,
+                    required: true,
+                    example: "\"X\"",
+                    constraint: None,
+                },
             ],
             arity: Arity::Fixed,
             commutativity: crate::ast::Commutativity::Positional,
@@ -235,12 +263,16 @@ pub fn signatures() -> &'static [FuncSig] {
 /// Try to build a regex node from a function name and const args.
 ///
 /// Returns `None` if the name is not handled by this module.
-pub(crate) fn build_node(_name: &str, _wires: &[crate::compile::assembly::WireRef], _wire_types: &[crate::ast::PortType], _consts: &[crate::dsl::factory::ConstArg]) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
+pub(crate) fn build_node(
+    _name: &str,
+    _wires: &[crate::compile::assembly::WireRef],
+    _wire_types: &[crate::ast::PortType],
+    _consts: &[crate::dsl::factory::ConstArg],
+) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
     // All regex nodes route via proc-macro-emitted NodeRegistration
     // (regex_match, regex_extract, regex_replace).
     None
 }
-
 
 fn validate_regex_pattern(pattern: &str) -> Result<(), String> {
     regex::Regex::new(pattern)

@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use crate::iteration::comprehension::ast::Comprehension;
-use crate::iteration::comprehension::ir::{compile as compile_to_ir, Program};
+use crate::iteration::comprehension::ir::{Program, compile as compile_to_ir};
 
 use super::coord_stream::CoordinateStream;
 use super::instance::{KernelScope, ScopedKernelInstance};
@@ -81,10 +81,7 @@ impl CompiledComprehension {
     /// Independence: pulling from this stream does NOT
     /// advance any [`CoordinateStream`] obtained from the
     /// same `CompiledComprehension`.
-    pub fn scoped_kernel_stream<K: KernelScope>(
-        &self,
-        parent: K,
-    ) -> ScopedKernelStream<K> {
+    pub fn scoped_kernel_stream<K: KernelScope>(&self, parent: K) -> ScopedKernelStream<K> {
         ScopedKernelStream::new(self.program_arc(), parent)
     }
 
@@ -145,6 +142,9 @@ mod tests {
         // Both streams hold an Arc; count is at least 3 (compiled +
         // two streamers, possibly more if internal clones happen).
         let count = Arc::strong_count(&compiled.program);
-        assert!(count >= 3, "expected shared program across streamers, count = {count}");
+        assert!(
+            count >= 3,
+            "expected shared program across streamers, count = {count}"
+        );
     }
 }

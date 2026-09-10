@@ -12,8 +12,8 @@
 //! edge cases in the lexer/parser/compiler/runtime pipeline,
 //! and scope composition mechanics.
 
-use polydat::dsl::compile::{compile_polydat, compile_polydat_strict};
 use polydat::dsl::ast::BindingModifier;
+use polydat::dsl::compile::{compile_polydat, compile_polydat_strict};
 use polydat::kernel::Construction;
 use polydat::kernel::subcontext::PolydatMatter;
 
@@ -25,37 +25,50 @@ use polydat::kernel::subcontext::PolydatMatter;
 fn empty_source() {
     // Empty source is a valid zero-binding program (no inputs, no outputs)
     let result = compile_polydat("");
-    assert!(result.is_ok(), "empty source should compile as zero-binding program");
+    assert!(
+        result.is_ok(),
+        "empty source should compile as zero-binding program"
+    );
 }
 
 #[test]
 fn whitespace_only() {
     let result = compile_polydat("   \n\n  \t  \n  ");
-    assert!(result.is_ok(), "whitespace-only source should compile as zero-binding program");
+    assert!(
+        result.is_ok(),
+        "whitespace-only source should compile as zero-binding program"
+    );
 }
 
 #[test]
 fn comments_only() {
     let result = compile_polydat("// just a comment\n# another comment\n/* block */");
-    assert!(result.is_ok(), "comments-only source should compile as zero-binding program");
+    assert!(
+        result.is_ok(),
+        "comments-only source should compile as zero-binding program"
+    );
 }
 
 #[test]
 fn unterminated_string() {
-    let result = compile_polydat(r#"
+    let result = compile_polydat(
+        r#"
         input cycle: u64
         s := "unterminated
-    "#);
+    "#,
+    );
     assert!(result.is_err(), "unterminated string should fail");
 }
 
 #[test]
 fn unterminated_block_comment() {
-    let result = compile_polydat(r#"
+    let result = compile_polydat(
+        r#"
         input cycle: u64
         /* never closed
         h := hash(cycle)
-    "#);
+    "#,
+    );
     // The lexer may or may not detect unterminated block comments;
     // it's acceptable to either error or treat the rest as comment.
     // Just verify it doesn't panic.
@@ -71,21 +84,33 @@ fn unexpected_token_at_toplevel() {
 #[test]
 fn duplicate_inputs_declaration() {
     // Second declaration should override, not error
-    let result = compile_polydat(r#"
+    let result = compile_polydat(
+        r#"
         input cycle: u64
         input cycle: u64
         h := hash(cycle)
-    "#);
-    assert!(result.is_ok(), "duplicate inputs should be accepted: {:?}", result.err());
+    "#,
+    );
+    assert!(
+        result.is_ok(),
+        "duplicate inputs should be accepted: {:?}",
+        result.err()
+    );
 }
 
 #[test]
 fn zero_inputs_explicit() {
-    let result = compile_polydat(r#"
+    let result = compile_polydat(
+        r#"
         val := 42
-    "#);
+    "#,
+    );
     // Explicit empty inputs is valid for constant-only programs
-    assert!(result.is_ok(), "explicit empty inputs should work: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "explicit empty inputs should work: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -93,16 +118,26 @@ fn very_long_identifier() {
     let long_name: String = "a".repeat(1000);
     let src = format!("input cycle: u64\n{long_name} := hash(cycle)");
     let result = compile_polydat(&src);
-    assert!(result.is_ok(), "long identifier should work: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "long identifier should work: {:?}",
+        result.err()
+    );
 }
 
 #[test]
 fn unicode_in_string_literal() {
-    let result = compile_polydat(r#"
+    let result = compile_polydat(
+        r#"
         input cycle: u64
         emoji := "hello 🌍 world"
-    "#);
-    assert!(result.is_ok(), "unicode in strings should work: {:?}", result.err());
+    "#,
+    );
+    assert!(
+        result.is_ok(),
+        "unicode in strings should work: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -159,39 +194,50 @@ fn negative_float_literal() {
 
 #[test]
 fn unknown_function_name() {
-    let result = compile_polydat(r#"
+    let result = compile_polydat(
+        r#"
         input cycle: u64
         v := nonexistent_function(cycle)
-    "#);
+    "#,
+    );
     assert!(result.is_err(), "unknown function should fail");
     let err = result.unwrap_err();
-    assert!(err.contains("nonexistent_function"), "error should name the function: {err}");
+    assert!(
+        err.contains("nonexistent_function"),
+        "error should name the function: {err}"
+    );
 }
 
 #[test]
 fn unknown_wire_reference() {
-    let result = compile_polydat(r#"
+    let result = compile_polydat(
+        r#"
         input cycle: u64
         v := hash(undefined_wire)
-    "#);
+    "#,
+    );
     assert!(result.is_err(), "unknown wire should fail");
 }
 
 #[test]
 fn wrong_arity_too_many() {
-    let result = compile_polydat(r#"
+    let result = compile_polydat(
+        r#"
         input cycle: u64
         v := hash(cycle, cycle, cycle)
-    "#);
+    "#,
+    );
     assert!(result.is_err(), "too many args should fail");
 }
 
 #[test]
 fn self_referential_binding() {
-    let result = compile_polydat(r#"
+    let result = compile_polydat(
+        r#"
         input cycle: u64
         x := hash(x)
-    "#);
+    "#,
+    );
     // This should fail: x references itself before being defined
     assert!(result.is_err(), "self-referential binding should fail");
 }
@@ -203,17 +249,20 @@ fn self_referential_binding() {
 #[test]
 fn strict_requires_explicit_inputs() {
     let result = compile_polydat_strict("h := hash(cycle)", None, true);
-    assert!(result.is_err(), "strict mode should require explicit inputs");
+    assert!(
+        result.is_err(),
+        "strict mode should require explicit inputs"
+    );
 }
 
 #[test]
 fn strict_accepts_explicit_inputs() {
-    let result = compile_polydat_strict(
-        "input cycle: u64\nh := hash(cycle)",
-        None,
-        true,
+    let result = compile_polydat_strict("input cycle: u64\nh := hash(cycle)", None, true);
+    assert!(
+        result.is_ok(),
+        "strict with explicit inputs should work: {:?}",
+        result.err()
     );
-    assert!(result.is_ok(), "strict with explicit inputs should work: {:?}", result.err());
 }
 
 // =========================================================================
@@ -230,7 +279,10 @@ fn shared_on_cycle_binding() {
         shared counter := 0
     "#;
     let kernel = compile_polydat(src).unwrap();
-    assert_eq!(kernel.program().output_modifier("counter"), BindingModifier::SHARED);
+    assert_eq!(
+        kernel.program().output_modifier("counter"),
+        BindingModifier::SHARED
+    );
 }
 
 #[test]
@@ -255,8 +307,10 @@ fn const_on_cycle_expr_rejected() {
         const max := mod(hash(cycle), 100)
     "#;
     let err = compile_polydat(src).expect_err("const wired to cycle must be rejected");
-    assert!(err.contains("init contract") || err.contains("const"),
-        "diagnostic should call out the const contract: {err}");
+    assert!(
+        err.contains("init contract") || err.contains("const"),
+        "diagnostic should call out the const contract: {err}"
+    );
 }
 
 #[test]
@@ -266,7 +320,10 @@ fn shared_literal_cell() {
         shared budget := 500
     "#;
     let kernel = compile_polydat(src).unwrap();
-    assert_eq!(kernel.program().output_modifier("budget"), BindingModifier::SHARED);
+    assert_eq!(
+        kernel.program().output_modifier("budget"),
+        BindingModifier::SHARED
+    );
     assert_eq!(kernel.lookup("budget").unwrap().as_u64(), 500);
 }
 
@@ -277,7 +334,10 @@ fn const_literal_fold() {
         const dim := 128
     "#;
     let kernel = compile_polydat(src).unwrap();
-    assert_eq!(kernel.program().output_modifier("dim"), BindingModifier::CONST);
+    assert_eq!(
+        kernel.program().output_modifier("dim"),
+        BindingModifier::CONST
+    );
     assert_eq!(kernel.get_constant("dim").unwrap().as_u64(), 128);
 }
 
@@ -290,9 +350,18 @@ fn mixed_modifiers() {
         plain := mod(hash(cycle), 100)
     "#;
     let kernel = compile_polydat(src).unwrap();
-    assert_eq!(kernel.program().output_modifier("s"), BindingModifier::SHARED);
-    assert_eq!(kernel.program().output_modifier("f"), BindingModifier::CONST);
-    assert_eq!(kernel.program().output_modifier("plain"), BindingModifier::NONE);
+    assert_eq!(
+        kernel.program().output_modifier("s"),
+        BindingModifier::SHARED
+    );
+    assert_eq!(
+        kernel.program().output_modifier("f"),
+        BindingModifier::CONST
+    );
+    assert_eq!(
+        kernel.program().output_modifier("plain"),
+        BindingModifier::NONE
+    );
 }
 
 #[test]
@@ -442,7 +511,14 @@ fn materialize_wiring_from_outer_copies_constants() {
         extern dim: u64
     "#;
     let inner_program = compile_polydat(inner_src).unwrap().program().clone();
-    let mut inner = outer.subscope(PolydatMatter::builder().program(inner_program).build().unwrap()).unwrap();
+    let mut inner = outer
+        .subscope(
+            PolydatMatter::builder()
+                .program(inner_program)
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
 
     // Verify the extern input was populated from outer scope
     let idx = inner.program().find_input("dim").unwrap();
@@ -470,7 +546,14 @@ fn materialize_wiring_from_outer_ignores_nonmatching() {
     "#;
     let inner_program = compile_polydat(inner_src).unwrap().program().clone();
     // Should not panic
-    let _inner = outer.subscope(PolydatMatter::builder().program(inner_program).build().unwrap()).unwrap();
+    let _inner = outer
+        .subscope(
+            PolydatMatter::builder()
+                .program(inner_program)
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
 }
 
 // =========================================================================
@@ -497,8 +580,11 @@ fn deterministic_across_1000_cycles() {
     for i in 0..1000 {
         kernel.set_inputs(&[i]);
         let v = kernel.pull("v").as_u64();
-        assert_eq!(v, first_pass[i as usize],
-            "non-deterministic at cycle {i}: {v} != {}", first_pass[i as usize]);
+        assert_eq!(
+            v, first_pass[i as usize],
+            "non-deterministic at cycle {i}: {v} != {}",
+            first_pass[i as usize]
+        );
     }
 }
 
@@ -593,8 +679,10 @@ fn compiled_kernel_has_source_and_context() {
     "#;
     let kernel = compile_polydat(src).unwrap();
     // Source should contain the original text
-    assert!(kernel.program().source().contains("hash(cycle)"),
-        "source should contain original text");
+    assert!(
+        kernel.program().source().contains("hash(cycle)"),
+        "source should contain original text"
+    );
 }
 
 // =========================================================================
@@ -614,9 +702,8 @@ fn fuzz_random_hash_chains() {
             expr = format!("{func}({expr})");
         }
         let src = format!("input cycle: u64\nresult := mod({expr}, 1000)");
-        let mut kernel = compile_polydat(&src).unwrap_or_else(|e| {
-            panic!("seed {seed}: compile failed: {e}\nsource:\n{src}")
-        });
+        let mut kernel = compile_polydat(&src)
+            .unwrap_or_else(|e| panic!("seed {seed}: compile failed: {e}\nsource:\n{src}"));
         kernel.set_inputs(&[seed]);
         let v = kernel.pull("result").as_u64();
         assert!(v < 1000, "seed {seed}: expected < 1000, got {v}");
@@ -629,12 +716,13 @@ fn fuzz_arithmetic_expressions() {
     let ops = ["+", "-", "*"];
     for op in ops.iter() {
         for a in [0u64, 1, 42, 100, u64::MAX / 2] {
-            let src = format!(
-                "input cycle: u64\nresult := cycle {op} {a}"
-            );
+            let src = format!("input cycle: u64\nresult := cycle {op} {a}");
             let result = compile_polydat(&src);
-            assert!(result.is_ok(),
-                "op={op} a={a}: compile failed: {:?}", result.err());
+            assert!(
+                result.is_ok(),
+                "op={op} a={a}: compile failed: {:?}",
+                result.err()
+            );
             let mut kernel = result.unwrap();
             // Don't test with values that might overflow — just verify it doesn't panic
             kernel.set_inputs(&[10]);
@@ -654,9 +742,8 @@ fn fuzz_many_bindings() {
             src.push_str(&format!("{name} := hash({prev})\n"));
             prev = name;
         }
-        let mut kernel = compile_polydat(&src).unwrap_or_else(|e| {
-            panic!("n={n}: compile failed: {e}\nsource:\n{src}")
-        });
+        let mut kernel = compile_polydat(&src)
+            .unwrap_or_else(|e| panic!("n={n}: compile failed: {e}\nsource:\n{src}"));
         kernel.set_inputs(&[42]);
         let _ = kernel.pull(&prev);
     }
@@ -670,12 +757,9 @@ fn fuzz_multi_output_destructuring() {
         let targets = names.join(", ");
         let dims: Vec<String> = (0..n).map(|i| format!("{}", 10 + i)).collect();
         let dim_args = dims.join(", ");
-        let src = format!(
-            "input cycle: u64\n({targets}) := mixed_radix(cycle, {dim_args})"
-        );
-        let mut kernel = compile_polydat(&src).unwrap_or_else(|e| {
-            panic!("n={n}: compile failed: {e}\nsource:\n{src}")
-        });
+        let src = format!("input cycle: u64\n({targets}) := mixed_radix(cycle, {dim_args})");
+        let mut kernel = compile_polydat(&src)
+            .unwrap_or_else(|e| panic!("n={n}: compile failed: {e}\nsource:\n{src}"));
         kernel.set_inputs(&[12345]);
         for name in &names {
             let _ = kernel.pull(name);
@@ -704,16 +788,20 @@ fn fuzz_wide_graph() {
 
 #[test]
 fn error_includes_line_info() {
-    let result = compile_polydat(r#"
+    let result = compile_polydat(
+        r#"
         input cycle: u64
         h := hash(cycle)
         bad := completely_bogus_function(h)
-    "#);
+    "#,
+    );
     assert!(result.is_err());
     let err = result.unwrap_err();
     // Error should mention the bad function name
-    assert!(err.contains("completely_bogus_function") || err.contains("unknown"),
-        "error should be informative: {err}");
+    assert!(
+        err.contains("completely_bogus_function") || err.contains("unknown"),
+        "error should be informative: {err}"
+    );
 }
 
 // =========================================================================
@@ -814,11 +902,13 @@ fn if_string_cond_picks_f64_branch() {
 /// they should fail with a clear error rather than miscompiling.
 #[test]
 fn string_ordered_comparison_errors() {
-    let result = compile_polydat(r#"
+    let result = compile_polydat(
+        r#"
         input cycle: u64
         s := "LATENCY"
         bad := s < "RECALL"
-    "#);
+    "#,
+    );
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
@@ -837,19 +927,23 @@ fn type_mismatch_error_carries_binding_name() {
     // Manual crafting: most direct path is to attempt unsupported
     // ordered comparison on Strings (compiler returns the binding
     // name in the message).
-    let result = compile_polydat(r#"
+    let result = compile_polydat(
+        r#"
         input cycle: u64
         s := "x"
         my_named_binding := s < "y"
-    "#);
+    "#,
+    );
     assert!(result.is_err());
     let err = result.unwrap_err();
     // The unsupported-comparison error path doesn't go through
     // anon_name (it's raised before nodes are assembled), so this
     // test verifies the friendlier path: a downstream type
     // mismatch carrying an anon node attributable to the binding.
-    assert!(err.contains("String") || err.contains("not supported"),
-        "got: {err}");
+    assert!(
+        err.contains("String") || err.contains("not supported"),
+        "got: {err}"
+    );
 }
 
 /// Type-mismatch errors involving anonymous compiler-generated
@@ -862,11 +956,13 @@ fn type_mismatch_error_names_user_binding_via_prefix() {
     // the LHS String operand triggers a type-mismatch and at
     // least one node in the path is auto-generated by the binding
     // compiler.
-    let result = compile_polydat(r#"
+    let result = compile_polydat(
+        r#"
         input cycle: u64
         s := "LATENCY"
         overscan := s << 2
-    "#);
+    "#,
+    );
     assert!(result.is_err());
     let err = result.unwrap_err();
     // The error must name the user-level binding the failure lives
@@ -930,8 +1026,10 @@ fn if_block_widens_mixed_branches_to_f64() {
     "#;
     let mut kernel = compile_polydat(src).unwrap();
     kernel.set_inputs(&[0]);
-    assert!((kernel.pull("out").as_f64() - 1.0).abs() < 1e-9,
-            "u64 branch should widen to f64 when the other branch is f64");
+    assert!(
+        (kernel.pull("out").as_f64() - 1.0).abs() < 1e-9,
+        "u64 branch should widen to f64 when the other branch is f64"
+    );
 }
 
 /// String branches route through select_str in the block form too.

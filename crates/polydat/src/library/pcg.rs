@@ -41,8 +41,7 @@ const MULT: u64 = 6364136223846793005;
 /// into high-quality pseudo-random output.
 #[inline]
 pub(crate) fn pcg_output(state: u64) -> u64 {
-    let word = ((state >> ((state >> 59) + 5)) ^ state)
-        .wrapping_mul(12605985483714917081);
+    let word = ((state >> ((state >> 59) + 5)) ^ state).wrapping_mul(12605985483714917081);
     (word >> 43) ^ word
 }
 
@@ -163,7 +162,11 @@ pub(crate) fn build_cycle_walk_state(range: u64, seed: u64, stream: u64) -> Cycl
         2 // minimum 2 bits for a balanced Feistel
     } else {
         let b = 64 - (range - 1).leading_zeros();
-        if !b.is_multiple_of(2) { b + 1 } else { b.max(2) }
+        if !b.is_multiple_of(2) {
+            b + 1
+        } else {
+            b.max(2)
+        }
     };
     let half_bits = min_bits / 2;
     let half_mask = (1u64 << half_bits) - 1;
@@ -174,7 +177,12 @@ pub(crate) fn build_cycle_walk_state(range: u64, seed: u64, stream: u64) -> Cycl
         *key = pcg_seek(seed, inc, i as u64 + 1_000_000_000);
     }
 
-    CycleWalkState { half_bits, half_mask, inc, round_keys }
+    CycleWalkState {
+        half_bits,
+        half_mask,
+        inc,
+        round_keys,
+    }
 }
 
 /// `compiled_u64` override — captures the pre-computed Feistel
@@ -228,8 +236,7 @@ fn cycle_walk(
     range: Const<u64>,
     #[poly_default(0u64)] seed: Const<u64>,
     #[poly_default(0u64)] stream: Const<u64>,
-    #[poly_const(build_cycle_walk_state, from = (range, seed, stream))]
-    state: &CycleWalkState,
+    #[poly_const(build_cycle_walk_state, from = (range, seed, stream))] state: &CycleWalkState,
 ) -> u64 {
     let _ = seed;
     let _ = stream;
@@ -245,7 +252,9 @@ fn cycle_walk(
 /// Feistel round function: mix the half-block with a round key.
 #[inline]
 fn feistel_round_fn(half: u64, round_key: u64) -> u64 {
-    let x = half.wrapping_mul(0x9E3779B97F4A7C15).wrapping_add(round_key);
+    let x = half
+        .wrapping_mul(0x9E3779B97F4A7C15)
+        .wrapping_add(round_key);
     let x = ((x >> 32) ^ x).wrapping_mul(0xD6E8FEB86659FD93);
     (x >> 32) ^ x
 }
@@ -355,8 +364,10 @@ mod tests {
         let stepped = pcg_output(state);
 
         let seeked = pcg_seek(seed, inc, n);
-        assert_eq!(stepped, seeked,
-            "seek({n}) must match {n} sequential LCG steps");
+        assert_eq!(
+            stepped, seeked,
+            "seek({n}) must match {n} sequential LCG steps"
+        );
     }
 
     // ----- Pcg node tests -----
@@ -368,7 +379,11 @@ mod tests {
         node.eval(&[Value::U64(100)], &mut out);
         let first = out[0].as_u64();
         node.eval(&[Value::U64(100)], &mut out);
-        assert_eq!(first, out[0].as_u64(), "same position must give same result");
+        assert_eq!(
+            first,
+            out[0].as_u64(),
+            "same position must give same result"
+        );
     }
 
     #[test]
@@ -389,8 +404,11 @@ mod tests {
         let mut out_b = [Value::None];
         a.eval(&[Value::U64(50)], &mut out_a);
         b.eval(&[Value::U64(50)], &mut out_b);
-        assert_ne!(out_a[0].as_u64(), out_b[0].as_u64(),
-            "different seeds should produce different values");
+        assert_ne!(
+            out_a[0].as_u64(),
+            out_b[0].as_u64(),
+            "different seeds should produce different values"
+        );
     }
 
     #[test]
@@ -401,8 +419,11 @@ mod tests {
         let mut out_b = [Value::None];
         a.eval(&[Value::U64(50)], &mut out_a);
         b.eval(&[Value::U64(50)], &mut out_b);
-        assert_ne!(out_a[0].as_u64(), out_b[0].as_u64(),
-            "different streams should produce different values");
+        assert_ne!(
+            out_a[0].as_u64(),
+            out_b[0].as_u64(),
+            "different streams should produce different values"
+        );
     }
 
     #[test]
@@ -414,8 +435,11 @@ mod tests {
             node.eval(&[Value::U64(pos)], &mut eval_out);
             let mut comp_out = [0u64];
             compiled(&[pos], &mut comp_out);
-            assert_eq!(eval_out[0].as_u64(), comp_out[0],
-                "compiled and eval must agree at position {pos}");
+            assert_eq!(
+                eval_out[0].as_u64(),
+                comp_out[0],
+                "compiled and eval must agree at position {pos}"
+            );
         }
     }
 
@@ -430,7 +454,10 @@ mod tests {
         let consts = node.jit_constants();
         assert_eq!(consts.len(), 2);
         assert_eq!(consts[0], 42, "first constant is seed");
-        assert_eq!(consts[1], 7, "second constant is stream (inc = 2*stream+1 derived in body)");
+        assert_eq!(
+            consts[1], 7,
+            "second constant is stream (inc = 2*stream+1 derived in body)"
+        );
     }
 
     // ----- PcgStream node tests -----
@@ -452,8 +479,11 @@ mod tests {
         let mut out_b = [Value::None];
         node.eval(&[Value::U64(50), Value::U64(0)], &mut out_a);
         node.eval(&[Value::U64(50), Value::U64(1)], &mut out_b);
-        assert_ne!(out_a[0].as_u64(), out_b[0].as_u64(),
-            "different stream_ids should produce different values");
+        assert_ne!(
+            out_a[0].as_u64(),
+            out_b[0].as_u64(),
+            "different stream_ids should produce different values"
+        );
     }
 
     #[test]
@@ -467,23 +497,31 @@ mod tests {
             let mut d_out = [Value::None];
             fixed.eval(&[Value::U64(pos)], &mut f_out);
             dynamic.eval(&[Value::U64(pos), Value::U64(5)], &mut d_out);
-            assert_eq!(f_out[0].as_u64(), d_out[0].as_u64(),
-                "PcgStream must match Pcg for same seed/stream at position {pos}");
+            assert_eq!(
+                f_out[0].as_u64(),
+                d_out[0].as_u64(),
+                "PcgStream must match Pcg for same seed/stream at position {pos}"
+            );
         }
     }
 
     #[test]
     fn pcg_stream_compiled_matches_eval() {
         let node = PcgStream::new(99);
-        let compiled = node.compiled_u64().expect("PcgStream must provide compiled_u64");
+        let compiled = node
+            .compiled_u64()
+            .expect("PcgStream must provide compiled_u64");
         for pos in 0..50u64 {
             for stream in 0..5u64 {
                 let mut eval_out = [Value::None];
                 node.eval(&[Value::U64(pos), Value::U64(stream)], &mut eval_out);
                 let mut comp_out = [0u64];
                 compiled(&[pos, stream], &mut comp_out);
-                assert_eq!(eval_out[0].as_u64(), comp_out[0],
-                    "compiled and eval must agree at pos={pos}, stream={stream}");
+                assert_eq!(
+                    eval_out[0].as_u64(),
+                    comp_out[0],
+                    "compiled and eval must agree at pos={pos}, stream={stream}"
+                );
             }
         }
     }
@@ -496,7 +534,11 @@ mod tests {
         let mut out = [Value::None];
         for i in 0..200u64 {
             node.eval(&[Value::U64(i)], &mut out);
-            assert!(out[0].as_u64() < 100, "output {} >= range 100", out[0].as_u64());
+            assert!(
+                out[0].as_u64() < 100,
+                "output {} >= range 100",
+                out[0].as_u64()
+            );
         }
     }
 
@@ -524,8 +566,11 @@ mod tests {
             assert!(v < range, "output {v} out of range [0, {range})");
             assert!(seen.insert(v), "duplicate output {v} at position {i}");
         }
-        assert_eq!(seen.len(), range as usize,
-            "must produce exactly {range} distinct values");
+        assert_eq!(
+            seen.len(),
+            range as usize,
+            "must produce exactly {range} distinct values"
+        );
     }
 
     #[test]
@@ -547,14 +592,19 @@ mod tests {
     #[test]
     fn cycle_walk_compiled_matches_eval() {
         let node = CycleWalk::new(200, 42, 3);
-        let compiled = node.compiled_u64().expect("CycleWalk must provide compiled_u64");
+        let compiled = node
+            .compiled_u64()
+            .expect("CycleWalk must provide compiled_u64");
         for pos in 0..200u64 {
             let mut eval_out = [Value::None];
             node.eval(&[Value::U64(pos)], &mut eval_out);
             let mut comp_out = [0u64];
             compiled(&[pos], &mut comp_out);
-            assert_eq!(eval_out[0].as_u64(), comp_out[0],
-                "compiled and eval must agree at position {pos}");
+            assert_eq!(
+                eval_out[0].as_u64(),
+                comp_out[0],
+                "compiled and eval must agree at position {pos}"
+            );
         }
     }
 

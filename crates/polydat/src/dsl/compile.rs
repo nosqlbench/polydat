@@ -6,7 +6,6 @@
 //! Walks the AST, resolves function names to node constructors, wires
 //! the `PolydatAssembler`, and produces a `PolydatKernel`.
 
-
 use std::path::{Path, PathBuf};
 
 use crate::compile::assembly::{PolydatAssembler, WireRef};
@@ -16,7 +15,7 @@ use crate::dsl::parser;
 use crate::kernel::PolydatKernel;
 
 use crate::dsl::error::DiagnosticReport;
-use crate::dsl::validate::{validate_ast, collect_references};
+use crate::dsl::validate::{collect_references, validate_ast};
 
 use std::collections::HashSet;
 
@@ -50,10 +49,7 @@ pub enum EmbeddingError {
     /// A `{name}` placeholder in the text had no matching
     /// binding in the kernel chain. Produced by
     /// `interpolate_via_kernel` only.
-    UnresolvedPlaceholder {
-        name: String,
-        source: String,
-    },
+    UnresolvedPlaceholder { name: String, source: String },
 
     /// The expression's upstream cone reaches a dynamic input,
     /// but the requested evaluation surface requires
@@ -100,10 +96,7 @@ pub enum EmbeddingError {
     /// Indicates an internal compiler issue or a mismatch
     /// between the wrapper template and the compiler's output
     /// naming.
-    ResultMissing {
-        output_name: String,
-        source: String,
-    },
+    ResultMissing { output_name: String, source: String },
 
     /// A `Value::None` propagated to the expression's output
     /// when the host called a strict accessor (`as_bool` on
@@ -138,7 +131,11 @@ pub enum EmbeddingError {
 impl std::fmt::Display for EmbeddingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            EmbeddingError::Parse { source, message, position } => match position {
+            EmbeddingError::Parse {
+                source,
+                message,
+                position,
+            } => match position {
                 Some(p) => write!(f, "parse error at position {p} in '{source}': {message}"),
                 None => write!(f, "parse error in '{source}': {message}"),
             },
@@ -147,12 +144,19 @@ impl std::fmt::Display for EmbeddingError {
                 "unresolved placeholder '{{{name}}}' in '{source}' — \
                  no matching binding in the kernel chain"
             ),
-            EmbeddingError::LifecycleMismatch { source, dynamic_inputs } => write!(
+            EmbeddingError::LifecycleMismatch {
+                source,
+                dynamic_inputs,
+            } => write!(
                 f,
                 "not a const expression: '{source}' depends on runtime inputs ({})",
                 dynamic_inputs.join(", ")
             ),
-            EmbeddingError::UnknownNode { name, source, suggestion } => match suggestion {
+            EmbeddingError::UnknownNode {
+                name,
+                source,
+                suggestion,
+            } => match suggestion {
                 Some(sug) => write!(
                     f,
                     "unknown function: '{name}' in '{source}'\n\n  Did you mean '{sug}'?"
@@ -163,7 +167,13 @@ impl std::fmt::Display for EmbeddingError {
                      This function is not registered in the Polydat function library."
                 ),
             },
-            EmbeddingError::TypeMismatch { from_node, from_type, to_node, to_type, source } => {
+            EmbeddingError::TypeMismatch {
+                from_node,
+                from_type,
+                to_node,
+                to_type,
+                source,
+            } => {
                 write!(
                     f,
                     "type mismatch in '{source}': cannot connect \
@@ -171,11 +181,18 @@ impl std::fmt::Display for EmbeddingError {
                      input of '{to_node}'"
                 )
             }
-            EmbeddingError::NodeEvalPanic { node_name, message, source } => write!(
+            EmbeddingError::NodeEvalPanic {
+                node_name,
+                message,
+                source,
+            } => write!(
                 f,
                 "node-eval panic in '{source}' (node '{node_name}'): {message}"
             ),
-            EmbeddingError::ResultMissing { output_name, source } => write!(
+            EmbeddingError::ResultMissing {
+                output_name,
+                source,
+            } => write!(
                 f,
                 "compilation completed for '{source}' but output '{output_name}' \
                  is not reachable — internal compiler issue"
@@ -186,7 +203,11 @@ impl std::fmt::Display for EmbeddingError {
                  host called strict accessor `{accessor}`. \
                  Use a non-strict accessor (`try_as_*`) or surface the None to the user."
             ),
-            EmbeddingError::Timeout { source, elapsed_ms, deadline_ms } => write!(
+            EmbeddingError::Timeout {
+                source,
+                elapsed_ms,
+                deadline_ms,
+            } => write!(
                 f,
                 "evaluation of '{source}' exceeded deadline: \
                  {elapsed_ms}ms elapsed, {deadline_ms}ms budget"
@@ -218,15 +239,39 @@ impl From<EmbeddingError> for String {
 /// each top-level binding is a separate module, resolved by name.
 /// Searched as the final fallback after workload-local and --polydat-lib paths.
 pub(super) static STDLIB_MODULES: &[(&str, &str)] = &[
-    ("hashing.polydat", include_str!("../../stdlib/hashing.polydat")),
-    ("strings.polydat", include_str!("../../stdlib/strings.polydat")),
-    ("identity.polydat", include_str!("../../stdlib/identity.polydat")),
-    ("distributions.polydat", include_str!("../../stdlib/distributions.polydat")),
-    ("latency.polydat", include_str!("../../stdlib/latency.polydat")),
-    ("timeseries.polydat", include_str!("../../stdlib/timeseries.polydat")),
+    (
+        "hashing.polydat",
+        include_str!("../../stdlib/hashing.polydat"),
+    ),
+    (
+        "strings.polydat",
+        include_str!("../../stdlib/strings.polydat"),
+    ),
+    (
+        "identity.polydat",
+        include_str!("../../stdlib/identity.polydat"),
+    ),
+    (
+        "distributions.polydat",
+        include_str!("../../stdlib/distributions.polydat"),
+    ),
+    (
+        "latency.polydat",
+        include_str!("../../stdlib/latency.polydat"),
+    ),
+    (
+        "timeseries.polydat",
+        include_str!("../../stdlib/timeseries.polydat"),
+    ),
     ("waves.polydat", include_str!("../../stdlib/waves.polydat")),
-    ("fourier.polydat", include_str!("../../stdlib/fourier.polydat")),
-    ("modeling.polydat", include_str!("../../stdlib/modeling.polydat")),
+    (
+        "fourier.polydat",
+        include_str!("../../stdlib/fourier.polydat"),
+    ),
+    (
+        "modeling.polydat",
+        include_str!("../../stdlib/modeling.polydat"),
+    ),
 ];
 
 /// Return the embedded standard library module sources.
@@ -243,10 +288,14 @@ pub fn compile_polydat(source: &str) -> Result<PolydatKernel, String> {
 /// (SRD 114 §5.6): template text, JSON text, or a parsed JSON value,
 /// via [`crate::tile`]. The tiles are appended as `tile` statements, so
 /// they see every wire the source defines and are wires themselves.
-pub fn compile_polydat_with_tiles(source: &str, tiles: Vec<super::ast::TileDef>) -> Result<PolydatKernel, String> {
+pub fn compile_polydat_with_tiles(
+    source: &str,
+    tiles: Vec<super::ast::TileDef>,
+) -> Result<PolydatKernel, String> {
     let tokens = super::lexer::lex(source)?;
     let mut ast = super::parser::parse(tokens)?;
-    ast.statements.extend(tiles.into_iter().map(Statement::Tile));
+    ast.statements
+        .extend(tiles.into_iter().map(Statement::Tile));
     let options = CompileOptions {
         source_dir: None,
         lib_paths: Vec::new(),
@@ -335,7 +384,10 @@ pub fn compile_polydat_tier1_simd_ordinal(
 ///
 /// When the compiler encounters an unknown function name, it searches
 /// `source_dir` for `.polydat` module files that export a matching binding.
-pub fn compile_polydat_with_path(source: &str, source_dir: Option<&Path>) -> Result<PolydatKernel, String> {
+pub fn compile_polydat_with_path(
+    source: &str,
+    source_dir: Option<&Path>,
+) -> Result<PolydatKernel, String> {
     compile_polydat_strict(source, source_dir, false)
 }
 
@@ -460,7 +512,9 @@ struct DataBaseDirGuard(Option<PathBuf>);
 
 impl DataBaseDirGuard {
     fn set(dir: &Path) -> Self {
-        DataBaseDirGuard(crate::library::datafile::set_data_base_dir(Some(dir.to_path_buf())))
+        DataBaseDirGuard(crate::library::datafile::set_data_base_dir(Some(
+            dir.to_path_buf(),
+        )))
     }
 }
 
@@ -512,7 +566,11 @@ pub fn compile_polydat_with_libs_and_limit(
 /// - Explicit `input ...: u64` declaration (no inference)
 /// - All module arguments must be named (no positional)
 /// - All module inputs must be provided by the caller (no fallthrough to coordinates)
-pub fn compile_polydat_strict(source: &str, source_dir: Option<&Path>, strict: bool) -> Result<PolydatKernel, String> {
+pub fn compile_polydat_strict(
+    source: &str,
+    source_dir: Option<&Path>,
+    strict: bool,
+) -> Result<PolydatKernel, String> {
     let tokens = lexer::lex(source)?;
     let ast = parser::parse(tokens)?;
     compile_ast_strict_with_source(&ast, source_dir, strict, source)
@@ -563,7 +621,11 @@ pub fn compile_ast_with_options(
     } else {
         extend_required_with_const_bindings(&options.required_outputs, ast)
     };
-    let filter = if extended.is_empty() { None } else { Some(extended.as_slice()) };
+    let filter = if extended.is_empty() {
+        None
+    } else {
+        Some(extended.as_slice())
+    };
     let mut compiler = Compiler::with_lib_paths(
         options.source_dir.clone(),
         options.lib_paths.clone(),
@@ -577,7 +639,10 @@ pub fn compile_ast_with_options(
 }
 
 /// Compile with a compile event log for diagnostic inspection.
-pub fn compile_polydat_with_log(source: &str, log: &mut super::events::CompileEventLog) -> Result<PolydatKernel, String> {
+pub fn compile_polydat_with_log(
+    source: &str,
+    log: &mut super::events::CompileEventLog,
+) -> Result<PolydatKernel, String> {
     let tokens = lexer::lex(source)?;
     let ast = parser::parse(tokens)?;
     let pragmas = super::pragmas::collect_from_ast(&ast);
@@ -586,7 +651,10 @@ pub fn compile_polydat_with_log(source: &str, log: &mut super::events::CompileEv
     compiler.source_text = source.to_string();
     compiler.pragmas = pragmas;
     let mut asm = compiler.build_assembler(&ast)?;
-    asm.set_strict_wires(compiler.pragmas.strict_types(), compiler.pragmas.strict_values());
+    asm.set_strict_wires(
+        compiler.pragmas.strict_types(),
+        compiler.pragmas.strict_values(),
+    );
     for e in compiler.tile_events.drain(..) {
         log.push(e);
     }
@@ -615,7 +683,10 @@ pub(crate) fn record_pragma_events(
 ) {
     use super::events::CompileEvent;
     for entry in &set.entries {
-        let known = matches!(entry.name.as_str(), "strict_types" | "strict_values" | "strict");
+        let known = matches!(
+            entry.name.as_str(),
+            "strict_types" | "strict_values" | "strict"
+        );
         if known {
             log.push(CompileEvent::PragmaAcknowledged {
                 name: entry.name.clone(),
@@ -692,12 +763,14 @@ pub fn compile_polydat_checked(source: &str) -> (Result<PolydatKernel, ()>, Diag
 /// cannot grow it without limit. This is what keeps repeated evaluation
 /// of the same range, list, or predicate text compile-free (SRD 113
 /// §5.2).
-static CONST_EXPR_CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, crate::ast::Value>>> =
-    std::sync::OnceLock::new();
+static CONST_EXPR_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<String, crate::ast::Value>>,
+> = std::sync::OnceLock::new();
 const CONST_EXPR_CACHE_CAP: usize = 8192;
 
 pub fn eval_const_expr(source: &str) -> Result<crate::ast::Value, EmbeddingError> {
-    let cache = CONST_EXPR_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let cache =
+        CONST_EXPR_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     if let Ok(map) = cache.lock()
         && let Some(v) = map.get(source)
     {
@@ -727,17 +800,19 @@ fn eval_const_expr_uncached(source: &str) -> Result<crate::ast::Value, Embedding
     // with their provenance string; that string is what we
     // extract.
     let source_for_panic = source_owned.clone();
-    let result = std::panic::catch_unwind(
-        std::panic::AssertUnwindSafe(move || -> Result<crate::ast::Value, EmbeddingError> {
-            let kernel = compile_polydat(&wrapped).map_err(|msg| classify_compile_error(&source_owned, msg))?;
-            kernel.get_constant("out")
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+        move || -> Result<crate::ast::Value, EmbeddingError> {
+            let kernel = compile_polydat(&wrapped)
+                .map_err(|msg| classify_compile_error(&source_owned, msg))?;
+            kernel
+                .get_constant("out")
                 .cloned()
                 .ok_or_else(|| EmbeddingError::LifecycleMismatch {
                     source: source_owned.clone(),
                     dynamic_inputs: Vec::new(),
                 })
-        })
-    );
+        },
+    ));
     match result {
         Ok(r) => r,
         Err(payload) => Err(EmbeddingError::NodeEvalPanic {
@@ -763,14 +838,15 @@ fn classify_compile_error(source: &str, msg: String) -> EmbeddingError {
     }
     // "unknown function: 'foo'" patterns
     if let Some(stripped) = msg.strip_prefix("unknown function: '")
-        && let Some(end) = stripped.find('\'') {
-            let name = stripped[..end].to_string();
-            return EmbeddingError::UnknownNode {
-                name,
-                source: source.to_string(),
-                suggestion: None,
-            };
-        }
+        && let Some(end) = stripped.find('\'')
+    {
+        let name = stripped[..end].to_string();
+        return EmbeddingError::UnknownNode {
+            name,
+            source: source.to_string(),
+            suggestion: None,
+        };
+    }
     // "type mismatch" patterns from the assembler
     if msg.contains("type mismatch") {
         return EmbeddingError::TypeMismatch {
@@ -821,7 +897,9 @@ pub trait HostType: Sized {
 }
 
 impl HostType for bool {
-    fn target_port_type() -> crate::ast::PortType { crate::ast::PortType::Bool }
+    fn target_port_type() -> crate::ast::PortType {
+        crate::ast::PortType::Bool
+    }
     fn from_value(v: crate::ast::Value) -> Result<Self, EmbeddingError> {
         match v {
             crate::ast::Value::Bool(b) => Ok(b),
@@ -842,7 +920,9 @@ impl HostType for bool {
 }
 
 impl HostType for u64 {
-    fn target_port_type() -> crate::ast::PortType { crate::ast::PortType::U64 }
+    fn target_port_type() -> crate::ast::PortType {
+        crate::ast::PortType::U64
+    }
     fn from_value(v: crate::ast::Value) -> Result<Self, EmbeddingError> {
         match v {
             crate::ast::Value::U64(n) => Ok(n),
@@ -862,7 +942,9 @@ impl HostType for u64 {
 }
 
 impl HostType for f64 {
-    fn target_port_type() -> crate::ast::PortType { crate::ast::PortType::F64 }
+    fn target_port_type() -> crate::ast::PortType {
+        crate::ast::PortType::F64
+    }
     fn from_value(v: crate::ast::Value) -> Result<Self, EmbeddingError> {
         match v {
             crate::ast::Value::F64(n) => Ok(n),
@@ -883,7 +965,9 @@ impl HostType for f64 {
 }
 
 impl HostType for String {
-    fn target_port_type() -> crate::ast::PortType { crate::ast::PortType::Str }
+    fn target_port_type() -> crate::ast::PortType {
+        crate::ast::PortType::Str
+    }
     fn from_value(v: crate::ast::Value) -> Result<Self, EmbeddingError> {
         match v {
             crate::ast::Value::Str(s) => Ok(s.to_string()),
@@ -1080,7 +1164,10 @@ fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
 /// Run one of the assembler's str-to-typed coercion nodes over a string
 /// literal at compile time, turning the node's panic diagnostic into a
 /// compile error.
-fn coerce_string_literal(node: Box<dyn crate::ast::PolydatNode>, s: &str) -> Result<crate::ast::Value, String> {
+fn coerce_string_literal(
+    node: Box<dyn crate::ast::PolydatNode>,
+    s: &str,
+) -> Result<crate::ast::Value, String> {
     use crate::ast::Value;
     // The coercion node reports a bad value by panicking with its
     // diagnostic. Silence the default hook so the diagnostic surfaces
@@ -1110,8 +1197,8 @@ fn evaluate_default_expr(
     expr: &crate::dsl::ast::Expr,
     port_type: crate::ast::PortType,
 ) -> Result<crate::ast::Value, String> {
-    use crate::dsl::ast::Expr;
     use crate::ast::{PortType, Value};
+    use crate::dsl::ast::Expr;
     match (expr, port_type) {
         (Expr::IntLit(v, _), PortType::U64) => Ok(Value::U64(*v)),
         (Expr::IntLit(v, _), PortType::F64) => Ok(Value::F64(*v as f64)),
@@ -1205,12 +1292,12 @@ fn infer_auto_extern_type(
     expr: &crate::dsl::ast::Expr,
     asm: &crate::compile::assembly::PolydatAssembler,
 ) -> Option<crate::ast::PortType> {
-    use crate::dsl::ast::{Expr, BinOpKind};
     use crate::ast::PortType;
+    use crate::dsl::ast::{BinOpKind, Expr};
     match expr {
         Expr::StringLit(_, _) => Some(PortType::Str),
-        Expr::IntLit(_, _)    => Some(PortType::U64),
-        Expr::FloatLit(_, _)  => Some(PortType::F64),
+        Expr::IntLit(_, _) => Some(PortType::U64),
+        Expr::FloatLit(_, _) => Some(PortType::F64),
         Expr::Ident(name, _) => {
             if name == "true" || name == "false" {
                 Some(PortType::Bool)
@@ -1259,10 +1346,8 @@ fn infer_auto_extern_type(
             //   binds can declare a `Handle`-typed input slot
             //   without per-source plumbing.
             match call.func.as_str() {
-                "printf" | "concat" | "format" | "str"
-                    => Some(crate::ast::PortType::Str),
-                "dataset_prebuffer" | "const_handle"
-                    => Some(crate::ast::PortType::Handle),
+                "printf" | "concat" | "format" | "str" => Some(crate::ast::PortType::Str),
+                "dataset_prebuffer" | "const_handle" => Some(crate::ast::PortType::Handle),
                 _ => None,
             }
         }
@@ -1287,8 +1372,8 @@ fn infer_auto_extern_type(
 fn try_fold_shared_init(
     expr: &crate::dsl::ast::Expr,
 ) -> Option<(crate::ast::Value, crate::ast::PortType)> {
-    use crate::dsl::ast::Expr;
     use crate::ast::{PortType, Value};
+    use crate::dsl::ast::Expr;
     match expr {
         Expr::IntLit(v, _) => Some((Value::U64(*v), PortType::U64)),
         Expr::FloatLit(v, _) => Some((Value::F64(*v), PortType::F64)),
@@ -1314,16 +1399,15 @@ fn apply_shared_type_annotation(
     let Some(t) = annotation else {
         return Ok((init_value, port_type));
     };
-    let annotated = crate::ast::PortType::from_keyword(t)
-        .ok_or_else(|| format!(
+    let annotated = crate::ast::PortType::from_keyword(t).ok_or_else(|| {
+        format!(
             "shared binding '{name}': unknown type `{t}` in annotation. \
              Recognised types: u64, f64, str, bool."
-        ))?;
+        )
+    })?;
     if annotated == port_type {
         Ok((init_value, annotated))
-    } else if port_type == crate::ast::PortType::U64
-        && annotated == crate::ast::PortType::F64
-    {
+    } else if port_type == crate::ast::PortType::U64 && annotated == crate::ast::PortType::F64 {
         let widened = match init_value {
             crate::ast::Value::U64(v) => crate::ast::Value::F64(v as f64),
             other => other,
@@ -1382,7 +1466,10 @@ pub fn compile_ast(file: &PolydatFile) -> Result<PolydatKernel, String> {
 }
 
 /// Compile a parsed AST with module resolution from a source directory.
-pub fn compile_ast_with_path(file: &PolydatFile, source_dir: Option<&Path>) -> Result<PolydatKernel, String> {
+pub fn compile_ast_with_path(
+    file: &PolydatFile,
+    source_dir: Option<&Path>,
+) -> Result<PolydatKernel, String> {
     compile_ast_strict(file, source_dir, false)
 }
 
@@ -1392,7 +1479,11 @@ pub fn compile_ast_with_path(file: &PolydatFile, source_dir: Option<&Path>) -> R
 /// - Explicit `input ...: u64` declaration (no inference)
 /// - All module arguments must be named (no positional)
 /// - All module inputs must be provided by the caller (no fallthrough)
-pub fn compile_ast_strict(file: &PolydatFile, source_dir: Option<&Path>, strict: bool) -> Result<PolydatKernel, String> {
+pub fn compile_ast_strict(
+    file: &PolydatFile,
+    source_dir: Option<&Path>,
+    strict: bool,
+) -> Result<PolydatKernel, String> {
     let mut compiler = Compiler::new(source_dir.map(|p| p.to_path_buf()), strict);
     compiler.compile(file)
 }
@@ -1543,7 +1634,11 @@ impl Compiler {
         }
     }
 
-    pub(super) fn with_lib_paths(source_dir: Option<PathBuf>, polydat_lib_paths: Vec<PathBuf>, strict: bool) -> Self {
+    pub(super) fn with_lib_paths(
+        source_dir: Option<PathBuf>,
+        polydat_lib_paths: Vec<PathBuf>,
+        strict: bool,
+    ) -> Self {
         Self {
             input_names: Vec::new(),
             all_names: Vec::new(),
@@ -1567,7 +1662,11 @@ impl Compiler {
 
     /// Process a source declaration: create input ports for projections,
     /// passthrough nodes, and record the schema.
-    fn process_cursor(&mut self, asm: &mut PolydatAssembler, decl: &crate::dsl::ast::CursorDecl) -> Result<(), String> {
+    fn process_cursor(
+        &mut self,
+        asm: &mut PolydatAssembler,
+        decl: &crate::dsl::ast::CursorDecl,
+    ) -> Result<(), String> {
         let source_name = &decl.name;
 
         // Cursor-sugar dispatch: any node module can register a
@@ -1584,9 +1683,7 @@ impl Compiler {
         };
 
         // All sources get an "ordinal" projection.
-        let mut projections = vec![
-            ("ordinal".to_string(), crate::ast::PortType::U64),
-        ];
+        let mut projections = vec![("ordinal".to_string(), crate::ast::PortType::U64)];
 
         // Determine extent from constructor args. Three cases per arg:
         //   1. Integer literal → use directly
@@ -1599,7 +1696,8 @@ impl Compiler {
         // routine reads the folded values after compilation and updates
         // the schema's extent in place.
         let mut deferred: Option<(Option<u64>, String, Option<u64>, String)> = None;
-        let mut cursor_kind_for_decl: crate::iteration::source::CursorKind = crate::iteration::source::CursorKind::Range;
+        let mut cursor_kind_for_decl: crate::iteration::source::CursorKind =
+            crate::iteration::source::CursorKind::Range;
         let extent = match &effective_constructor {
             // ── until_*(...) — extending cursors ────────────────
             // Recognise every cursor function whose constructor
@@ -1622,11 +1720,16 @@ impl Compiler {
             // as a named aux output the runtime pulls at phase
             // setup. The CursorKind variant carries the output
             // names so the executor knows how to build the policy.
-            crate::dsl::ast::Expr::Call(call) if matches!(
-                call.func.as_str(),
-                "until_elapsed" | "until_passes" | "until_count"
-                | "until_elapsed_and_passes" | "until_elapsed_or_passes"
-            ) => {
+            crate::dsl::ast::Expr::Call(call)
+                if matches!(
+                    call.func.as_str(),
+                    "until_elapsed"
+                        | "until_passes"
+                        | "until_count"
+                        | "until_elapsed_and_passes"
+                        | "until_elapsed_or_passes"
+                ) =>
+            {
                 let family = call.func.as_str();
                 let expected = match family {
                     "until_elapsed" | "until_passes" | "until_count" => (2usize, 3usize),
@@ -1644,12 +1747,16 @@ impl Compiler {
                 let base_literal = positional_int_lit(&call.args[0]);
                 let base_name = format!("__cursor_extent_{source_name}_end");
                 let start_name = format!("__cursor_extent_{source_name}_start");
-                let _ = self.compile_binding(asm, std::slice::from_ref(&start_name),
-                    &crate::dsl::ast::Expr::IntLit(0, decl.span));
+                let _ = self.compile_binding(
+                    asm,
+                    std::slice::from_ref(&start_name),
+                    &crate::dsl::ast::Expr::IntLit(0, decl.span),
+                );
                 if let crate::dsl::ast::Arg::Positional(expr) = &call.args[0] {
                     self.compile_binding(asm, std::slice::from_ref(&base_name), expr)
-                        .map_err(|e| format!(
-                            "cursor '{source_name}': failed to compile {family} base: {e}"))?;
+                        .map_err(|e| {
+                            format!("cursor '{source_name}': failed to compile {family} base: {e}")
+                        })?;
                 }
                 // Helper closure: compile a positional arg as a
                 // named aux output. Returns the name on success.
@@ -1657,9 +1764,12 @@ impl Compiler {
                     let out_name = format!("__cursor_{suffix}_{source_name}");
                     if let crate::dsl::ast::Arg::Positional(expr) = &call.args[idx] {
                         self.compile_binding(asm, std::slice::from_ref(&out_name), expr)
-                            .map_err(|e| format!(
-                                "cursor '{source_name}': failed to compile \
-                                 {family} arg {idx}: {e}"))?;
+                            .map_err(|e| {
+                                format!(
+                                    "cursor '{source_name}': failed to compile \
+                                 {family} arg {idx}: {e}"
+                                )
+                            })?;
                     }
                     Ok(out_name)
                 };
@@ -1669,7 +1779,9 @@ impl Compiler {
                         let min_ms_name = compile_aux(1, "min_ms")?;
                         let delta_output = if n == 3 {
                             Some(compile_aux(2, "delta")?)
-                        } else { None };
+                        } else {
+                            None
+                        };
                         crate::iteration::source::CursorKind::ExtendingTimed {
                             min_ms_output: min_ms_name,
                             delta_output,
@@ -1679,7 +1791,9 @@ impl Compiler {
                         let min_passes_name = compile_aux(1, "min_passes")?;
                         let delta_output = if n == 3 {
                             Some(compile_aux(2, "delta")?)
-                        } else { None };
+                        } else {
+                            None
+                        };
                         crate::iteration::source::CursorKind::ExtendingPasses {
                             min_passes_output: min_passes_name,
                             delta_output,
@@ -1689,7 +1803,9 @@ impl Compiler {
                         let min_count_name = compile_aux(1, "min_count")?;
                         let delta_output = if n == 3 {
                             Some(compile_aux(2, "delta")?)
-                        } else { None };
+                        } else {
+                            None
+                        };
                         crate::iteration::source::CursorKind::ExtendingCount {
                             min_count_output: min_count_name,
                             delta_output,
@@ -1700,7 +1816,9 @@ impl Compiler {
                         let min_passes_name = compile_aux(2, "min_passes")?;
                         let delta_output = if n == 4 {
                             Some(compile_aux(3, "delta")?)
-                        } else { None };
+                        } else {
+                            None
+                        };
                         crate::iteration::source::CursorKind::ExtendingElapsedAndPasses {
                             min_ms_output: min_ms_name,
                             min_passes_output: min_passes_name,
@@ -1712,7 +1830,9 @@ impl Compiler {
                         let min_passes_name = compile_aux(2, "min_passes")?;
                         let delta_output = if n == 4 {
                             Some(compile_aux(3, "delta")?)
-                        } else { None };
+                        } else {
+                            None
+                        };
                         crate::iteration::source::CursorKind::ExtendingElapsedOrPasses {
                             min_ms_output: min_ms_name,
                             min_passes_output: min_passes_name,
@@ -1753,15 +1873,19 @@ impl Compiler {
                         // a phase that runs zero cycles with no explanation.
                         if let crate::dsl::ast::Arg::Positional(expr) = &call.args[0] {
                             self.compile_binding(asm, std::slice::from_ref(&start_name), expr)
-                                .map_err(|e| format!(
-                                    "cursor '{source_name}': failed to compile range start: {e}"
-                                ))?;
+                                .map_err(|e| {
+                                    format!(
+                                        "cursor '{source_name}': failed to compile range start: {e}"
+                                    )
+                                })?;
                         }
                         if let crate::dsl::ast::Arg::Positional(expr) = &call.args[1] {
                             self.compile_binding(asm, std::slice::from_ref(&end_name), expr)
-                                .map_err(|e| format!(
-                                    "cursor '{source_name}': failed to compile range end: {e}"
-                                ))?;
+                                .map_err(|e| {
+                                    format!(
+                                        "cursor '{source_name}': failed to compile range end: {e}"
+                                    )
+                                })?;
                         }
                         deferred = Some((start_literal, start_name, end_literal, end_name));
                         None
@@ -1782,18 +1906,20 @@ impl Compiler {
 
             // Cursor projection slots are written by cursor advance
             // every cycle — dynamic for init-contract purposes.
-            asm.add_input(&input_name, default_value, *port_type, crate::kernel::InputKind::ExternalWrite);
+            asm.add_input(
+                &input_name,
+                default_value,
+                *port_type,
+                crate::kernel::InputKind::ExternalWrite,
+            );
             self.input_names.push(input_name.clone());
 
-            let passthrough = Box::new(
-                crate::library::identity::PortPassthrough::new(&input_name, *port_type)
-            );
+            let passthrough = Box::new(crate::library::identity::PortPassthrough::new(
+                &input_name,
+                *port_type,
+            ));
             let node_name = format!("{source_name}__{field_name}");
-            asm.add_node(
-                &node_name,
-                passthrough,
-                vec![WireRef::input(&input_name)],
-            );
+            asm.add_node(&node_name, passthrough, vec![WireRef::input(&input_name)]);
             asm.add_output(&node_name, WireRef::node(&node_name));
         }
 
@@ -1804,10 +1930,12 @@ impl Compiler {
         if let Some(sugar) = sugar {
             for aux in sugar.aux_bindings {
                 self.compile_binding(asm, std::slice::from_ref(&aux.name), &aux.value)
-                    .map_err(|e| format!(
-                        "cursor '{source_name}': failed to compile aux binding '{}': {e}",
-                        aux.name,
-                    ))?;
+                    .map_err(|e| {
+                        format!(
+                            "cursor '{source_name}': failed to compile aux binding '{}': {e}",
+                            aux.name,
+                        )
+                    })?;
                 if let Some((field, port_type)) = aux.projection {
                     projections.push((field, port_type));
                     asm.add_output(&aux.name, WireRef::node(&aux.name));
@@ -1835,7 +1963,8 @@ impl Compiler {
         };
 
         let schema_idx = self.cursor_schemas.len();
-        let extent_outputs = deferred.as_ref()
+        let extent_outputs = deferred
+            .as_ref()
             .map(|(_, start, _, end)| (start.clone(), end.clone()));
 
         // SRD 71: if the cursor decl carries an `over <expr>`
@@ -1857,8 +1986,9 @@ impl Compiler {
         let partition_output = if let Some(over_expr) = decl.over.as_ref() {
             let raw_name = format!("__cursor_{source_name}_over_raw");
             self.compile_binding(asm, std::slice::from_ref(&raw_name), over_expr)
-                .map_err(|e| format!(
-                    "cursor '{source_name}': failed to compile `over` expression: {e}"))?;
+                .map_err(|e| {
+                    format!("cursor '{source_name}': failed to compile `over` expression: {e}")
+                })?;
             // Allocate the resolved-Partition input slot. Default
             // is `Value::None` until the executor writes the
             // resolved value at phase setup.
@@ -1870,12 +2000,10 @@ impl Compiler {
                 crate::kernel::InputKind::ExternalWrite,
             );
             self.input_names.push(cursor_input_name.clone());
-            let passthrough = Box::new(
-                crate::library::identity::PortPassthrough::new(
-                    &cursor_input_name,
-                    crate::ast::PortType::Ext,
-                )
-            );
+            let passthrough = Box::new(crate::library::identity::PortPassthrough::new(
+                &cursor_input_name,
+                crate::ast::PortType::Ext,
+            ));
             asm.add_node(
                 &cursor_input_name,
                 passthrough,
@@ -1893,12 +2021,12 @@ impl Compiler {
             // cursor's extent is known).
             use crate::ast::{PortType, Value};
             let scalar_slots: [(&str, Value, PortType); 6] = [
-                ("idx",             Value::U64(0),    PortType::U64),
-                ("partition_count", Value::U64(1),    PortType::U64),
-                ("start_pct",       Value::F64(0.0),  PortType::F64),
-                ("end_pct",         Value::F64(100.0), PortType::F64),
-                ("start_ordinal",   Value::U64(0),    PortType::U64),
-                ("end_ordinal",     Value::U64(0),    PortType::U64),
+                ("idx", Value::U64(0), PortType::U64),
+                ("partition_count", Value::U64(1), PortType::U64),
+                ("start_pct", Value::F64(0.0), PortType::F64),
+                ("end_pct", Value::F64(100.0), PortType::F64),
+                ("start_ordinal", Value::U64(0), PortType::U64),
+                ("end_ordinal", Value::U64(0), PortType::U64),
             ];
             for (field, default, port_type) in scalar_slots {
                 let slot = format!("{cursor_input_name}__{field}");
@@ -1909,9 +2037,9 @@ impl Compiler {
                     crate::kernel::InputKind::ExternalWrite,
                 );
                 self.input_names.push(slot.clone());
-                let pass = Box::new(
-                    crate::library::identity::PortPassthrough::new(&slot, port_type),
-                );
+                let pass = Box::new(crate::library::identity::PortPassthrough::new(
+                    &slot, port_type,
+                ));
                 asm.add_node(&slot, pass, vec![WireRef::input(&slot)]);
                 asm.add_output(&slot, WireRef::node(&slot));
             }
@@ -1920,15 +2048,16 @@ impl Compiler {
             None
         };
 
-        self.cursor_schemas.push(crate::iteration::source::SourceSchema {
-            name: source_name.clone(),
-            projections,
-            extent: effective_extent,
-            extent_outputs,
-            extent_limit: self.cursor_limit,
-            cursor_kind: cursor_kind_for_decl.clone(),
-            partition_output,
-        });
+        self.cursor_schemas
+            .push(crate::iteration::source::SourceSchema {
+                name: source_name.clone(),
+                projections,
+                extent: effective_extent,
+                extent_outputs,
+                extent_limit: self.cursor_limit,
+                cursor_kind: cursor_kind_for_decl.clone(),
+                partition_output,
+            });
 
         // Record deferred extent resolution if the range bounds are not
         // both literals. Post-compile, the outer compile routine will
@@ -1966,7 +2095,10 @@ impl Compiler {
     }
 
     /// Build an assembler with all nodes and wiring, without compiling.
-    pub(super) fn build_assembler(&mut self, file: &PolydatFile) -> Result<PolydatAssembler, String> {
+    pub(super) fn build_assembler(
+        &mut self,
+        file: &PolydatFile,
+    ) -> Result<PolydatAssembler, String> {
         // One assembly path for every entry point: the assembler a host
         // gets from `compile_polydat_to_assembler` is the one the kernel
         // path compiles, externs, shared bindings, and cursors included.
@@ -2008,7 +2140,8 @@ impl Compiler {
         let original = file;
         let file = &parent_file;
         let mut log = log;
-        let mut kernel = self.compile_parent_with_log(file, required_outputs, log.as_deref_mut())?;
+        let mut kernel =
+            self.compile_parent_with_log(file, required_outputs, log.as_deref_mut())?;
         if !for_stmts.is_empty() || !producers.is_empty() {
             let traversals = self.compile_traversals(&for_stmts, &producers, kernel.program())?;
             kernel.set_traversals(traversals, producers);
@@ -2052,14 +2185,17 @@ impl Compiler {
         producers: &[super::traversal::Producer],
         parent: &crate::kernel::PolydatProgram,
     ) -> Result<Vec<super::traversal::Traversal>, String> {
-        use super::traversal::{child_file, element_types, resolve_source, Traversal};
+        use super::traversal::{Traversal, child_file, element_types, resolve_source};
         let mut out = Vec::with_capacity(for_stmts.len());
         for f in for_stmts {
             let comprehension = resolve_source(&f.source, producers)?.clone();
             let mut probe = |expr: &str| self.probe_element_type(expr);
-            let elements = element_types(&comprehension, &mut probe).map_err(|e| format!(
-                "`for {}` at line {}, col {}: {e}", f.source.text, f.span.line, f.span.col
-            ))?;
+            let elements = element_types(&comprehension, &mut probe).map_err(|e| {
+                format!(
+                    "`for {}` at line {}, col {}: {e}",
+                    f.source.text, f.span.line, f.span.col
+                )
+            })?;
             let (child, cascade) = child_file(f, &comprehension, &elements, parent)?;
             let mut child_compiler = Compiler::with_lib_paths(
                 self.source_dir.clone(),
@@ -2075,10 +2211,12 @@ impl Compiler {
             child_compiler.pragmas = self.pragmas.clone();
             let child_kernel = child_compiler
                 .compile_filtered_with_log(&child, None, None)
-                .map_err(|e| format!(
-                    "`for {}` at line {}, col {}: body failed to compile: {e}",
-                    f.source.text, f.span.line, f.span.col
-                ))?;
+                .map_err(|e| {
+                    format!(
+                        "`for {}` at line {}, col {}: body failed to compile: {e}",
+                        f.source.text, f.span.line, f.span.col
+                    )
+                })?;
             self.tile_events.append(&mut child_compiler.tile_events);
             out.push(Traversal {
                 span: f.span,
@@ -2116,14 +2254,17 @@ impl Compiler {
             return Err(
                 "strict mode: no `input` declaration — add `input <name>: <type>` \
                  (or the tuple form `input (a: u64, b: f64)`) to declare graph \
-                 inputs explicitly".into()
+                 inputs explicitly"
+                    .into(),
             );
         }
 
         // If no explicit inputs, infer from unbound references
         if self.input_names.is_empty() {
-            let defined: HashSet<String> = file.statements.iter().flat_map(|stmt| {
-                match stmt {
+            let defined: HashSet<String> = file
+                .statements
+                .iter()
+                .flat_map(|stmt| match stmt {
                     Statement::Binding(b) => b.targets.clone(),
                     Statement::ModuleDef(m) => vec![m.name.clone()],
                     Statement::ExternPort(p) => vec![p.name.clone()],
@@ -2132,19 +2273,26 @@ impl Compiler {
                     Statement::Pragma { .. } => vec![],
                     Statement::For(_) => vec![],
                     Statement::Tile(t) => vec![t.name.clone()],
-                }
-            }).collect();
+                })
+                .collect();
 
             let mut referenced: HashSet<String> = HashSet::new();
             for stmt in &file.statements {
                 let expr = match stmt {
-                    Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) | Statement::Tile(_) => continue,
+                    Statement::InputDecl(_)
+                    | Statement::ModuleDef(_)
+                    | Statement::ExternPort(_)
+                    | Statement::Cursor(_)
+                    | Statement::Pragma { .. }
+                    | Statement::For(_)
+                    | Statement::Tile(_) => continue,
                     Statement::Binding(b) => &b.value,
                 };
                 collect_references(expr, &mut referenced);
             }
 
-            let mut inferred: Vec<String> = referenced.into_iter()
+            let mut inferred: Vec<String> = referenced
+                .into_iter()
                 .filter(|name| !defined.contains(name))
                 .collect();
             inferred.sort();
@@ -2163,10 +2311,13 @@ impl Compiler {
         for input_name in self.input_names.clone() {
             // Mirror the input's (now correctly-typed) slot so the
             // auto-exposed output carries the declared type, not U64.
-            let port_type = asm.input_type(&input_name).unwrap_or(crate::ast::PortType::U64);
-            let passthrough = Box::new(
-                crate::library::identity::PortPassthrough::new(&input_name, port_type)
-            );
+            let port_type = asm
+                .input_type(&input_name)
+                .unwrap_or(crate::ast::PortType::U64);
+            let passthrough = Box::new(crate::library::identity::PortPassthrough::new(
+                &input_name,
+                port_type,
+            ));
             let passthrough_name = format!("__port_{input_name}");
             asm.add_node(
                 &passthrough_name,
@@ -2201,36 +2352,38 @@ impl Compiler {
                             ));
                         }
                         let name = &b.targets[0];
-                        let (init_value, port_type) = try_fold_shared_init(&b.value)
-                            .ok_or_else(|| format!(
-                                "shared binding '{name}' requires a literal initial value \
+                        let (init_value, port_type) =
+                            try_fold_shared_init(&b.value).ok_or_else(|| {
+                                format!(
+                                    "shared binding '{name}' requires a literal initial value \
                                  (number, string, true/false). Computed and cycle-dependent \
                                  expressions don't have a well-defined single init for the \
                                  shared cell. See SRD-16 §\"Non-literal `shared` initializers\"."
-                            ))?;
+                                )
+                            })?;
                         let (init_value, port_type) = apply_shared_type_annotation(
-                            name, b.type_annotation.as_ref(), init_value, port_type,
+                            name,
+                            b.type_annotation.as_ref(),
+                            init_value,
+                            port_type,
                         )?;
-                        asm.add_input(name, init_value, port_type, crate::kernel::InputKind::ExternalWrite);
+                        asm.add_input(
+                            name,
+                            init_value,
+                            port_type,
+                            crate::kernel::InputKind::ExternalWrite,
+                        );
                         self.input_names.push(name.clone());
-                        let passthrough = Box::new(
-                            crate::library::identity::PortPassthrough::new(name, port_type)
-                        );
+                        let passthrough = Box::new(crate::library::identity::PortPassthrough::new(
+                            name, port_type,
+                        ));
                         let passthrough_name = format!("__port_{name}");
-                        asm.add_node(
-                            &passthrough_name,
-                            passthrough,
-                            vec![WireRef::input(name)],
-                        );
+                        asm.add_node(&passthrough_name, passthrough, vec![WireRef::input(name)]);
                         asm.add_output(name, WireRef::node(&passthrough_name));
                         asm.set_output_modifier(name, BindingModifier::SHARED);
                         continue;
                     }
-                    self.compile_binding(
-                        &mut asm,
-                        &b.targets,
-                        &b.value,
-                    )?;
+                    self.compile_binding(&mut asm, &b.targets, &b.value)?;
                     if b.modifier != BindingModifier::NONE {
                         for target in &b.targets {
                             asm.set_output_modifier(target, b.modifier);
@@ -2251,9 +2404,7 @@ impl Compiler {
                         };
                         for target in &b.targets {
                             asm.mark_const_output(target);
-                            if rhs_has_refs
-                                && !asm.input_names().contains(&target.as_str())
-                            {
+                            if rhs_has_refs && !asm.input_names().contains(&target.as_str()) {
                                 // Infer the slot's `PortType` from the
                                 // RHS surface shape so the auto-extern
                                 // lands at the boundary with its
@@ -2299,7 +2450,8 @@ impl Compiler {
                                 //    fallback — every catalog miss
                                 //    at runtime points back to a
                                 //    real registry gap.
-                                let inferred = asm.output_type(target.as_str())
+                                let inferred = asm
+                                    .output_type(target.as_str())
                                     .or_else(|| infer_auto_extern_type(&b.value, &asm))
                                     .unwrap_or(crate::ast::PortType::Ext);
                                 asm.add_input(
@@ -2320,18 +2472,18 @@ impl Compiler {
                     // iteration extern (effectively-const at
                     // scope-init time).
                     let port_type = crate::ast::PortType::from_keyword(port.typ.as_str())
-                        .ok_or_else(|| format!(
-                            "extern '{}': unknown polydat type keyword '{}'. \
+                        .ok_or_else(|| {
+                            format!(
+                                "extern '{}': unknown polydat type keyword '{}'. \
                              Canonical keywords are emitted by PortType::to_keyword \
                              (one per PortType variant).",
-                            port.name, port.typ,
-                        ))?;
+                                port.name, port.typ,
+                            )
+                        })?;
                     let (default_value, kind) = match &port.default {
                         Some(expr) => {
                             let v = evaluate_default_expr(expr, port_type)
-                                .map_err(|e| format!(
-                                    "extern '{}' default: {e}", port.name,
-                                ))?;
+                                .map_err(|e| format!("extern '{}' default: {e}", port.name,))?;
                             (v, crate::kernel::InputKind::ExternalWrite)
                         }
                         None => (
@@ -2341,16 +2493,19 @@ impl Compiler {
                     };
                     asm.add_input(&port.name, default_value, port_type, kind);
                     self.input_names.push(port.name.clone());
-                    let passthrough = Box::new(
-                        crate::library::identity::PortPassthrough::new(&port.name, port_type)
-                    );
+                    let passthrough = Box::new(crate::library::identity::PortPassthrough::new(
+                        &port.name, port_type,
+                    ));
                     let passthrough_name = format!("__port_{}", port.name);
                     asm.add_node(
                         &passthrough_name,
                         passthrough,
                         vec![crate::compile::assembly::WireRef::input(&port.name)],
                     );
-                    asm.add_output(&port.name, crate::compile::assembly::WireRef::node(&passthrough_name));
+                    asm.add_output(
+                        &port.name,
+                        crate::compile::assembly::WireRef::node(&passthrough_name),
+                    );
                 }
                 Statement::Cursor(decl) => {
                     self.process_cursor(&mut asm, decl)?;
@@ -2359,7 +2514,10 @@ impl Compiler {
                 Statement::For(f) => {
                     return Err(format!(
                         "`for {}` at line {}, col {}: {}",
-                        f.source.text, f.span.line, f.span.col, "a `for` traversal compiles through `compile_polydat` and runs through `PolydatKernel::traverse`; the assembler entry point builds one program and cannot carry a traversal (docs/design/engine_parity.md, A5)"
+                        f.source.text,
+                        f.span.line,
+                        f.span.col,
+                        "a `for` traversal compiles through `compile_polydat` and runs through `PolydatKernel::traverse`; the assembler entry point builds one program and cannot carry a traversal (docs/design/engine_parity.md, A5)"
                     ));
                 }
                 Statement::Tile(t) => {
@@ -2409,7 +2567,10 @@ impl Compiler {
                 }
                 for deferred in &self.deferred_extents {
                     if self.all_names.contains(&deferred.start_output) {
-                        asm.add_output(&deferred.start_output, WireRef::node(&deferred.start_output));
+                        asm.add_output(
+                            &deferred.start_output,
+                            WireRef::node(&deferred.start_output),
+                        );
                     }
                     if self.all_names.contains(&deferred.end_output) {
                         asm.add_output(&deferred.end_output, WireRef::node(&deferred.end_output));
@@ -2421,7 +2582,9 @@ impl Compiler {
                 // also by the post-compile deferred-extent
                 // resolution above. DCE-ing them would leave the
                 // cursor's extent unresolvable to descendant scopes.
-                let pruned_aux: Vec<String> = self.all_names.iter()
+                let pruned_aux: Vec<String> = self
+                    .all_names
+                    .iter()
                     .filter(|n| n.starts_with("__cursor_extent_"))
                     .cloned()
                     .collect();
@@ -2453,9 +2616,12 @@ impl Compiler {
                 for e in self.tile_events.drain(..) {
                     log.push(e);
                 }
-                asm.compile_with_log(Some(log)).map_err(|e| format!("{e}"))?
+                asm.compile_with_log(Some(log))
+                    .map_err(|e| format!("{e}"))?
             }
-            _ => asm.compile_strict(self.strict).map_err(|e| format!("{e}"))?,
+            _ => asm
+                .compile_strict(self.strict)
+                .map_err(|e| format!("{e}"))?,
         };
 
         // Retain the parsed AST as live program metadata (SRD-13f
@@ -2466,11 +2632,16 @@ impl Compiler {
 
         // Resolve deferred cursor extents (same logic as in compile()).
         for deferred in &self.deferred_extents {
-            let start = kernel.get_constant(&deferred.start_output).map(|v| v.as_u64());
-            let end = kernel.get_constant(&deferred.end_output).map(|v| v.as_u64());
+            let start = kernel
+                .get_constant(&deferred.start_output)
+                .map(|v| v.as_u64());
+            let end = kernel
+                .get_constant(&deferred.end_output)
+                .map(|v| v.as_u64());
             if let (Some(s), Some(e)) = (start, end) {
                 let resolved_extent = e.saturating_sub(s);
-                let final_extent = self.cursor_limit
+                let final_extent = self
+                    .cursor_limit
                     .map(|limit| resolved_extent.min(limit))
                     .unwrap_or(resolved_extent);
                 if let Some(schema) = self.cursor_schemas.get_mut(deferred.schema_idx) {
@@ -2498,9 +2669,8 @@ mod tests {
         // list's literal text rather than failing the compile — which
         // is what lets list-valued workload params (`limit_values:
         // [25]`) load.
-        let result = compile_polydat(
-            "input cycle: u64\nconst eh_values := [1, 2, 3]\nout := cycle",
-        );
+        let result =
+            compile_polydat("input cycle: u64\nconst eh_values := [1, 2, 3]\nout := cycle");
         assert!(
             result.is_ok(),
             "array-literal binding should compile (binds as a string const), got: {:?}",
@@ -2523,8 +2693,14 @@ mod tests {
             dynamic_inputs: vec!["cycle".to_string()],
         };
         let s = format!("{e}");
-        assert!(s.contains("hash(cycle)"), "display should include source: {s}");
-        assert!(s.contains("cycle"), "display should mention dynamic input: {s}");
+        assert!(
+            s.contains("hash(cycle)"),
+            "display should include source: {s}"
+        );
+        assert!(
+            s.contains("cycle"),
+            "display should mention dynamic input: {s}"
+        );
     }
 
     #[test]
@@ -2665,7 +2841,9 @@ mod tests {
         // lossy. Strict mode must reject.
         let result: Result<bool, _> = eval_const_expr_typed_strict("42");
         match result {
-            Err(EmbeddingError::TypeMismatch { from_type, to_type, .. }) => {
+            Err(EmbeddingError::TypeMismatch {
+                from_type, to_type, ..
+            }) => {
                 assert!(matches!(from_type, crate::ast::PortType::U64));
                 assert!(matches!(to_type, crate::ast::PortType::Bool));
             }
@@ -2925,7 +3103,11 @@ mod tests {
         let (_result, report) = compile_polydat_checked(src);
         assert!(report.has_errors());
         let errors = report.errors();
-        assert!(errors.iter().any(|e| e.message.contains("unknown function")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("unknown function"))
+        );
         assert!(errors.iter().any(|e| e.message.contains("foobar")));
     }
 
@@ -2935,8 +3117,11 @@ mod tests {
         let (_, report) = compile_polydat_checked(src);
         let errors = report.errors();
         let err = errors.iter().find(|e| e.message.contains("hahs")).unwrap();
-        assert!(err.hint.as_ref().unwrap().contains("hash"),
-            "should suggest 'hash', got: {:?}", err.hint);
+        assert!(
+            err.hint.as_ref().unwrap().contains("hash"),
+            "should suggest 'hash', got: {:?}",
+            err.hint
+        );
     }
 
     #[test]
@@ -2967,8 +3152,12 @@ mod tests {
         let src = "input cycle: u64\nh := hash(unknown)";
         let (_, report) = compile_polydat_checked(src);
         assert!(report.has_errors());
-        assert!(report.errors().iter().any(|e|
-            e.message.contains("undefined") && e.message.contains("unknown")));
+        assert!(
+            report
+                .errors()
+                .iter()
+                .any(|e| e.message.contains("undefined") && e.message.contains("unknown"))
+        );
     }
 
     #[test]
@@ -2980,8 +3169,13 @@ mod tests {
         "#;
         let (_, report) = compile_polydat_checked(src);
         let warnings = report.warnings();
-        assert!(warnings.iter().any(|w| w.message.contains("forward reference")),
-            "should warn about forward ref, got: {:?}", warnings);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.message.contains("forward reference")),
+            "should warn about forward ref, got: {:?}",
+            warnings
+        );
     }
 
     #[test]
@@ -2992,8 +3186,12 @@ mod tests {
         "#;
         let (_, report) = compile_polydat_checked(src);
         assert!(report.has_errors());
-        assert!(report.errors().iter().any(|e|
-            e.message.contains("undefined") && e.message.contains("nonexistent")));
+        assert!(
+            report
+                .errors()
+                .iter()
+                .any(|e| e.message.contains("undefined") && e.message.contains("nonexistent"))
+        );
     }
 
     #[test]
@@ -3001,7 +3199,10 @@ mod tests {
         let src = "input cycle: u64\nresult := unknown_func(cycle)";
         let (_, report) = compile_polydat_checked(src);
         let s = report.to_string();
-        assert!(s.contains("unknown_func"), "report should include source context");
+        assert!(
+            s.contains("unknown_func"),
+            "report should include source context"
+        );
     }
 
     #[test]
@@ -3025,8 +3226,14 @@ mod tests {
         let result = compile_polydat_strict(src, None, true);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.contains("strict mode"), "expected strict error, got: {err}");
-        assert!(err.contains("inputs"), "expected inputs mention, got: {err}");
+        assert!(
+            err.contains("strict mode"),
+            "expected strict error, got: {err}"
+        );
+        assert!(
+            err.contains("inputs"),
+            "expected inputs mention, got: {err}"
+        );
     }
 
     #[test]
@@ -3095,7 +3302,10 @@ mod tests {
         assert!(result < 1000, "result={result}");
 
         let outputs = kernel.output_names();
-        assert!(!outputs.contains(&"unrelated"), "unrelated should be pruned");
+        assert!(
+            !outputs.contains(&"unrelated"),
+            "unrelated should be pruned"
+        );
     }
 
     #[test]
@@ -3109,7 +3319,10 @@ mod tests {
         let kernel_all = compile_polydat(src).unwrap();
         let kernel_empty = compile_polydat_with_outputs(src, None, &[], false).unwrap();
 
-        assert_eq!(kernel_all.output_names().len(), kernel_empty.output_names().len());
+        assert_eq!(
+            kernel_all.output_names().len(),
+            kernel_empty.output_names().len()
+        );
     }
 
     #[test]
@@ -3139,8 +3352,10 @@ mod tests {
         kernel.set_inputs(&[0]);
 
         let outputs = kernel.output_names();
-        assert!(outputs.contains(&"side_effect"),
-            "init binding must survive DCE even when unconsumed; got outputs {outputs:?}");
+        assert!(
+            outputs.contains(&"side_effect"),
+            "init binding must survive DCE even when unconsumed; got outputs {outputs:?}"
+        );
         assert_eq!(kernel.pull("side_effect").as_u64(), 42);
     }
 
@@ -3189,8 +3404,10 @@ mod tests {
         assert!(result.is_ok(), "non-strict with DCE should compile");
         // Verify "unused" is actually pruned
         let kernel = result.unwrap();
-        assert!(!kernel.output_names().contains(&"unused"),
-            "unused should be pruned by DCE");
+        assert!(
+            !kernel.output_names().contains(&"unused"),
+            "unused should be pruned by DCE"
+        );
     }
 
     #[test]
@@ -3204,8 +3421,10 @@ mod tests {
         let result = compile_polydat_strict(src, None, true);
         assert!(result.is_err(), "strict should reject implicit coercion");
         let err = result.unwrap_err();
-        assert!(err.contains("coercion") || err.contains("__adapt"),
-            "error should mention coercion: {err}");
+        assert!(
+            err.contains("coercion") || err.contains("__adapt"),
+            "error should mention coercion: {err}"
+        );
     }
 
     #[test]
@@ -3229,7 +3448,11 @@ mod tests {
         "#;
         let required = vec!["id".to_string()];
         let result = compile_polydat_with_outputs(src, None, &required, true);
-        assert!(result.is_ok(), "clean program should pass strict: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "clean program should pass strict: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -3321,11 +3544,19 @@ mod tests {
 
         // 4.0 * 4.0: both operands are FloatLit → f64_mul → returns f64(16.0)
         let v = eval_const_expr("4.0 * 4.0").unwrap();
-        assert!((v.as_f64() - 16.0).abs() < 0.001, "expected 16.0, got {}", v.as_f64());
+        assert!(
+            (v.as_f64() - 16.0).abs() < 0.001,
+            "expected 16.0, got {}",
+            v.as_f64()
+        );
 
         // Mixed: 4 * 4.0 → auto-widen LHS to f64, f64_mul → returns f64(16.0)
         let v = eval_const_expr("4 * 4.0").unwrap();
-        assert!((v.as_f64() - 16.0).abs() < 0.001, "expected 16.0, got {}", v.as_f64());
+        assert!(
+            (v.as_f64() - 16.0).abs() < 0.001,
+            "expected 16.0, got {}",
+            v.as_f64()
+        );
     }
 
     #[test]
@@ -3344,7 +3575,11 @@ mod tests {
     #[test]
     fn eval_const_expr_nested() {
         let v = eval_const_expr("mod(hash(42), 100)").unwrap();
-        assert!(v.as_u64() < 100, "mod(hash(42), 100) should be < 100, got {}", v.as_u64());
+        assert!(
+            v.as_u64() < 100,
+            "mod(hash(42), 100) should be < 100, got {}",
+            v.as_u64()
+        );
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -3367,8 +3602,10 @@ mod tests {
         assert!(prog.const_outputs().contains(&"dim"));
         let &(node_idx, _) = prog.output_map_lookup("dim").expect("dim in output map");
         // After fold, the node has empty wiring (leaf const).
-        assert!(prog.wiring[node_idx].is_empty(),
-            "compile-const init binding 'dim' must fold to a leaf const node");
+        assert!(
+            prog.wiring[node_idx].is_empty(),
+            "compile-const init binding 'dim' must fold to a leaf const node"
+        );
     }
 
     #[test]
@@ -3389,7 +3626,8 @@ mod tests {
             Ok(_) => {} // ideal: kernel built
             Err(e) => assert!(
                 !e.contains("violates the init contract"),
-                "Plan A must accept iteration-extern wires in init bindings; got: {e}"),
+                "Plan A must accept iteration-extern wires in init bindings; got: {e}"
+            ),
         }
     }
 
@@ -3399,12 +3637,16 @@ mod tests {
         // hard structural violation. Plan A must reject.
         let src = "input cycle: u64\n\
                    const bad := hash(cycle)\n";
-        let err = compile_polydat(src).expect_err(
-            "Plan A must reject init binding wired to a coordinate input");
-        assert!(err.contains("init binding 'bad'") && err.contains("init contract"),
-            "diagnostic must name the binding and the contract; got: {err}");
-        assert!(err.contains("cycle") || err.contains("coordinate"),
-            "diagnostic should pinpoint the offending wire; got: {err}");
+        let err = compile_polydat(src)
+            .expect_err("Plan A must reject init binding wired to a coordinate input");
+        assert!(
+            err.contains("init binding 'bad'") && err.contains("init contract"),
+            "diagnostic must name the binding and the contract; got: {err}"
+        );
+        assert!(
+            err.contains("cycle") || err.contains("coordinate"),
+            "diagnostic should pinpoint the offending wire; got: {err}"
+        );
     }
 
     #[test]
@@ -3413,12 +3655,16 @@ mod tests {
         // init bindings must not depend on one.
         let src = "extern session_id: u64 = 0\n\
                    const derived := mod(session_id, 100)\n";
-        let err = compile_polydat(src).expect_err(
-            "Plan A must reject init binding wired to a external-write port");
-        assert!(err.contains("init binding 'derived'") && err.contains("init contract"),
-            "diagnostic must name the binding and the contract; got: {err}");
-        assert!(err.contains("session_id") || err.contains("capture"),
-            "diagnostic should pinpoint the offending wire; got: {err}");
+        let err = compile_polydat(src)
+            .expect_err("Plan A must reject init binding wired to a external-write port");
+        assert!(
+            err.contains("init binding 'derived'") && err.contains("init contract"),
+            "diagnostic must name the binding and the contract; got: {err}"
+        );
+        assert!(
+            err.contains("session_id") || err.contains("capture"),
+            "diagnostic should pinpoint the offending wire; got: {err}"
+        );
     }
 
     #[test]
@@ -3426,10 +3672,12 @@ mod tests {
         // `counter()` is non-deterministic; init bindings must not
         // depend on it.
         let src = "const bad := counter()\n";
-        let err = compile_polydat(src).expect_err(
-            "Plan A must reject init binding wired to a non-deterministic source");
-        assert!(err.contains("init binding 'bad'") && err.contains("init contract"),
-            "diagnostic must name the binding and the contract; got: {err}");
+        let err = compile_polydat(src)
+            .expect_err("Plan A must reject init binding wired to a non-deterministic source");
+        assert!(
+            err.contains("init binding 'bad'") && err.contains("init contract"),
+            "diagnostic must name the binding and the contract; got: {err}"
+        );
     }
 
     #[test]
@@ -3439,8 +3687,8 @@ mod tests {
         // butter case and must keep working.
         let src = "input cycle: u64\n\
                    user_id := mod(hash(cycle), 1000)\n";
-        let _kernel = compile_polydat(src)
-            .expect("non-init bindings wired to cycle must still compile");
+        let _kernel =
+            compile_polydat(src).expect("non-init bindings wired to cycle must still compile");
     }
 
     #[test]
@@ -3455,7 +3703,10 @@ mod tests {
         let init_set = kernel.program().const_outputs();
         assert!(init_set.contains(&"a"), "const 'a' should be tracked");
         assert!(init_set.contains(&"b"), "const 'b' should be tracked");
-        assert!(!init_set.contains(&"c"), "non-const 'c' must not be tracked");
+        assert!(
+            !init_set.contains(&"c"),
+            "non-const 'c' must not be tracked"
+        );
     }
 
     #[test]
@@ -3591,7 +3842,8 @@ mod tests {
         let eval = |src: &str| -> u64 {
             compile_polydat(src)
                 .unwrap_or_else(|e| panic!("compile `{src}`: {e}"))
-                .pull("out").as_u64()
+                .pull("out")
+                .as_u64()
         };
         // Basic && / ||.
         assert_eq!(eval("out := 60 > 50 && 20 > 10"), 1, "both true");
@@ -3600,21 +3852,34 @@ mod tests {
         assert_eq!(eval("out := 40 > 50 || 5 > 10"), 0, "neither");
         // Precedence: && sits below comparison, || below && —
         // `1>0 && 0>1 || 5>0` == `((1>0)&&(0>1)) || (5>0)` == `(1&&0)||1` == 1.
-        assert_eq!(eval("out := 1 > 0 && 0 > 1 || 5 > 0"), 1,
-            "|| binds looser than &&, both below comparison");
+        assert_eq!(
+            eval("out := 1 > 0 && 0 > 1 || 5 > 0"),
+            1,
+            "|| binds looser than &&, both below comparison"
+        );
         // Truthiness: 6 && 1 → both non-zero → 1. Raw bitwise 6 & 1 = 0,
         // so this proves the `!= 0` normalisation, not a bitwise and.
-        assert_eq!(eval("out := 6 && 1"), 1, "non-zero && non-zero → 1 (not bitwise)");
+        assert_eq!(
+            eval("out := 6 && 1"),
+            1,
+            "non-zero && non-zero → 1 (not bitwise)"
+        );
         assert_eq!(eval("out := 6 && 0"), 0, "non-zero && zero → 0");
         assert_eq!(eval("out := 0 || 0"), 0, "zero || zero → 0");
         assert_eq!(eval("out := 0 || 7"), 1, "zero || non-zero → 1");
         // Parentheses override precedence (already supported; locked here).
         assert_eq!(eval("out := (1 + 2) * 3"), 9, "parens: add before mul");
         assert_eq!(eval("out := 1 + 2 * 3"), 7, "no parens: mul binds tighter");
-        assert_eq!(eval("out := 1 > 0 || 0 > 1 && 0 > 1"), 1,
-            "no parens: && tighter → 1 || (0 && 0) = 1");
-        assert_eq!(eval("out := (1 > 0 || 0 > 1) && 0 > 1"), 0,
-            "parens group the ||: (1 || 0) && 0 = 0");
+        assert_eq!(
+            eval("out := 1 > 0 || 0 > 1 && 0 > 1"),
+            1,
+            "no parens: && tighter → 1 || (0 && 0) = 1"
+        );
+        assert_eq!(
+            eval("out := (1 > 0 || 0 > 1) && 0 > 1"),
+            0,
+            "parens group the ||: (1 || 0) && 0 = 0"
+        );
     }
 
     /// SRD-84 Part 1b — `<expr> as <type>` cast: alignment-only type
@@ -3622,16 +3887,26 @@ mod tests {
     /// (atom-binding) precedence, and an error when no fusion exists.
     #[test]
     fn as_cast_type_fusion_and_precedence() {
-        let f64_of = |src: &str| compile_polydat(src)
-            .unwrap_or_else(|e| panic!("compile `{src}`: {e}")).pull("out").as_f64();
-        let u64_of = |src: &str| compile_polydat(src)
-            .unwrap_or_else(|e| panic!("compile `{src}`: {e}")).pull("out").as_u64();
+        let f64_of = |src: &str| {
+            compile_polydat(src)
+                .unwrap_or_else(|e| panic!("compile `{src}`: {e}"))
+                .pull("out")
+                .as_f64()
+        };
+        let u64_of = |src: &str| {
+            compile_polydat(src)
+                .unwrap_or_else(|e| panic!("compile `{src}`: {e}"))
+                .pull("out")
+                .as_u64()
+        };
         // u64 → f64 widening fusion (allowed under `as`).
         assert_eq!(f64_of("out := 5 as f64"), 5.0);
         // Narrowing f64 → u64 is NOT allowed under `as` (ambiguous
         // rounding); the author chooses an explicit conversion.
-        assert!(compile_polydat("out := 7.9 as u64").is_err(),
-            "narrowing f64 → u64 under `as` is rejected");
+        assert!(
+            compile_polydat("out := 7.9 as u64").is_err(),
+            "narrowing f64 → u64 under `as` is rejected"
+        );
         assert_eq!(u64_of("out := f64_to_u64(7.9)"), 7, "explicit truncate");
         assert_eq!(u64_of("out := round_to_u64(7.9)"), 8, "explicit round");
         // Aligned cast is a no-op.
@@ -3641,7 +3916,9 @@ mod tests {
         assert_eq!(f64_of("out := 5 / 2 as f64"), 2.5);
         assert_eq!(f64_of("out := (5 / 2) as f64"), 2.0);
         // No valid fusion → compile error.
-        assert!(compile_polydat("out := \"x\" as f64").is_err(),
-            "str → f64 has no defined fusion → error");
+        assert!(
+            compile_polydat("out := \"x\" as f64").is_err(),
+            "str → f64 has no defined fusion → error"
+        );
     }
 }

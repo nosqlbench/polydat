@@ -17,7 +17,7 @@ use crate::ast::{ReflectedValue, Value};
 use crate::iteration::comprehension::ast::Comprehension;
 use crate::iteration::comprehension::cardinality::CardinalityClass;
 use crate::iteration::comprehension::metadata::Metadata;
-use crate::iteration::comprehension::surfaces::{compile, CompiledComprehension, CoordinateStream};
+use crate::iteration::comprehension::surfaces::{CompiledComprehension, CoordinateStream, compile};
 
 /// A comprehension bound as a value.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -31,7 +31,10 @@ pub struct StreamerValue {
 
 impl StreamerValue {
     pub fn new(text: impl Into<String>, ast: Comprehension) -> Self {
-        Self { text: text.into(), ast }
+        Self {
+            text: text.into(),
+            ast,
+        }
     }
 
     /// Element names in tuple order.
@@ -86,13 +89,16 @@ impl StreamerValue {
     /// Parse canonical comprehension text into a streamer value.
     pub fn parse_text(text: &str) -> Result<Self, String> {
         let legacy = crate::iteration::comprehension::parse::parse_comprehension_text(text)?;
-        let ast = crate::iteration::comprehension::spec::legacy_to_algebra(&legacy).map_err(|e| e.to_string())?;
+        let ast = crate::iteration::comprehension::spec::legacy_to_algebra(&legacy)
+            .map_err(|e| e.to_string())?;
         Ok(Self::new(text, ast))
     }
 }
 
 impl ReflectedValue for StreamerValue {
-    fn type_name(&self) -> &str { "Streamer" }
+    fn type_name(&self) -> &str {
+        "Streamer"
+    }
 
     fn display(&self) -> String {
         format!("for {}", self.text)
@@ -106,7 +112,9 @@ impl ReflectedValue for StreamerValue {
         })
     }
 
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     fn clone_reflected(&self) -> Box<dyn ReflectedValue> {
         Box::new(self.clone())

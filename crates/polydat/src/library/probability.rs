@@ -89,7 +89,10 @@ fn fair_coin(input: u64) -> u64 {
 #[crate::polydat_node(category = Probability)]
 fn unfair_coin(input: u64, p: Const<f64>) -> u64 {
     if !(0.0..=1.0).contains(&*p) {
-        panic!("unfair_coin probability p must be in [0.0, 1.0], got {}", *p);
+        panic!(
+            "unfair_coin probability p must be in [0.0, 1.0], got {}",
+            *p
+        );
     }
     let h = crate::library::hash::splitmix64_u64(input);
     let unit = hash_to_unit(h);
@@ -208,14 +211,18 @@ pub(crate) fn n_of_m_eval(input: u64, n: u64, m: u64) -> u64 {
     let window = input / m;
     let pos = input % m;
     // Hash this position within the window using fast register mix
-    let my_hash = crate::library::hash::splitmix64_u64(window.wrapping_mul(0x517cc1b727220a95) ^ pos.wrapping_mul(0x9e3779b97f4a7c15));
+    let my_hash = crate::library::hash::splitmix64_u64(
+        window.wrapping_mul(0x517cc1b727220a95) ^ pos.wrapping_mul(0x9e3779b97f4a7c15),
+    );
     // Count how many positions in the same window hash lower
     let mut rank: u64 = 0;
     for i in 0..m {
         if i == pos {
             continue;
         }
-        let other_hash = crate::library::hash::splitmix64_u64(window.wrapping_mul(0x517cc1b727220a95) ^ i.wrapping_mul(0x9e3779b97f4a7c15));
+        let other_hash = crate::library::hash::splitmix64_u64(
+            window.wrapping_mul(0x517cc1b727220a95) ^ i.wrapping_mul(0x9e3779b97f4a7c15),
+        );
         if other_hash < my_hash || (other_hash == my_hash && i < pos) {
             rank += 1;
         }
@@ -296,15 +303,24 @@ impl WeightedTable {
         let mut weights = Vec::new();
         for elem in spec.split([';', ',']) {
             let elem = elem.trim();
-            if elem.is_empty() { continue; }
+            if elem.is_empty() {
+                continue;
+            }
             let parts: Vec<&str> = elem.splitn(2, ':').collect();
-            assert_eq!(parts.len(), 2, "one_of_weighted: expected 'value:weight', got '{elem}'");
+            assert_eq!(
+                parts.len(),
+                2,
+                "one_of_weighted: expected 'value:weight', got '{elem}'"
+            );
             values.push(parts[0].to_string());
             let w: f64 = parts[1].parse().expect("one_of_weighted: invalid weight");
             assert!(w > 0.0, "one_of_weighted: weight must be positive, got {w}");
             weights.push(w);
         }
-        assert!(!values.is_empty(), "one_of_weighted: spec must be non-empty");
+        assert!(
+            !values.is_empty(),
+            "one_of_weighted: spec must be non-empty"
+        );
 
         let total: f64 = weights.iter().sum();
         assert!(total > 0.0, "one_of_weighted: total weight must be > 0");
@@ -356,9 +372,10 @@ fn one_of_weighted(
     let h = crate::library::hash::splitmix64_u64(input);
     let unit = hash_to_unit(h);
     // Binary search: find the first cumulative entry >= unit.
-    let idx = match table.cumulative.binary_search_by(|c| {
-        c.partial_cmp(&unit).unwrap()
-    }) {
+    let idx = match table
+        .cumulative
+        .binary_search_by(|c| c.partial_cmp(&unit).unwrap())
+    {
         Ok(i) => i,
         Err(i) => i,
     };
@@ -422,7 +439,11 @@ fn blend(a: u64, b: u64, mix: Const<f64>) -> u64 {
 /// `OutputType::SameAsInput`.
 #[crate::polydat_node(category = Probability)]
 fn default_or(value: Value, fallback: Value) -> Value {
-    if matches!(value, Value::None) { fallback } else { value }
+    if matches!(value, Value::None) {
+        fallback
+    } else {
+        value
+    }
 }
 
 // `default_or` now self-registers via `#[polydat_node]`; the
@@ -442,7 +463,10 @@ mod tests {
         for i in 0..100u64 {
             node.eval(&[Value::U64(i)], &mut out);
             let v = out[0].as_u64();
-            assert!(v == 0 || v == 1, "fair_coin({i}) returned {v}, expected 0 or 1");
+            assert!(
+                v == 0 || v == 1,
+                "fair_coin({i}) returned {v}, expected 0 or 1"
+            );
         }
     }
 
@@ -497,7 +521,11 @@ mod tests {
         let mut out = [Value::None];
         for i in 0..100u64 {
             node.eval(&[Value::U64(i)], &mut out);
-            assert_eq!(out[0].as_u64(), 0, "unfair_coin(p=0.0) should always return 0");
+            assert_eq!(
+                out[0].as_u64(),
+                0,
+                "unfair_coin(p=0.0) should always return 0"
+            );
         }
     }
 
@@ -507,7 +535,11 @@ mod tests {
         let mut out = [Value::None];
         for i in 0..100u64 {
             node.eval(&[Value::U64(i)], &mut out);
-            assert_eq!(out[0].as_u64(), 1, "unfair_coin(p=1.0) should always return 1");
+            assert_eq!(
+                out[0].as_u64(),
+                1,
+                "unfair_coin(p=1.0) should always return 1"
+            );
         }
     }
 
@@ -712,7 +744,11 @@ mod tests {
             let mut e_out = [Value::None];
             node.eval(&[Value::U64(i)], &mut e_out);
 
-            assert_eq!(c_out[0], e_out[0].as_u64(), "compiled/eval mismatch at input {i}");
+            assert_eq!(
+                c_out[0],
+                e_out[0].as_u64(),
+                "compiled/eval mismatch at input {i}"
+            );
         }
     }
 
@@ -927,7 +963,10 @@ mod tests {
             &mut out,
         );
         let result = f64::from_bits(out[0].as_u64());
-        assert!((result - 10.0).abs() < 1e-10, "blend(mix=0) should return a, got {result}");
+        assert!(
+            (result - 10.0).abs() < 1e-10,
+            "blend(mix=0) should return a, got {result}"
+        );
     }
 
     #[test]
@@ -941,7 +980,10 @@ mod tests {
             &mut out,
         );
         let result = f64::from_bits(out[0].as_u64());
-        assert!((result - 20.0).abs() < 1e-10, "blend(mix=1) should return b, got {result}");
+        assert!(
+            (result - 20.0).abs() < 1e-10,
+            "blend(mix=1) should return b, got {result}"
+        );
     }
 
     #[test]
@@ -1025,7 +1067,10 @@ mod tests {
         // each (SRD-80b).
         let node = DefaultOr::new(PortType::Str, PortType::Str);
         let mut out = [Value::None];
-        node.eval(&[Value::Str("alice".into()), Value::Str("fallback".into())], &mut out);
+        node.eval(
+            &[Value::Str("alice".into()), Value::Str("fallback".into())],
+            &mut out,
+        );
         assert_eq!(out[0].as_str(), "alice");
     }
 
@@ -1058,19 +1103,35 @@ mod tests {
 
         let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
         // Add an extern input (defaults to None)
-        asm.add_input("captured_name", Value::None, PortType::Str, crate::kernel::InputKind::ExternalWrite);
+        asm.add_input(
+            "captured_name",
+            Value::None,
+            PortType::Str,
+            crate::kernel::InputKind::ExternalWrite,
+        );
         // Passthrough so the input is a node
-        asm.add_node("__port_captured_name",
+        asm.add_node(
+            "__port_captured_name",
             Box::new(PortPassthrough::new("captured_name", PortType::Str)),
-            vec![WireRef::input("captured_name")]);
+            vec![WireRef::input("captured_name")],
+        );
         // Fallback constant
-        asm.add_node("fallback",
-            Box::new(crate::library::identity::ConstStr::new("anonymous".to_string())),
-            vec![]);
+        asm.add_node(
+            "fallback",
+            Box::new(crate::library::identity::ConstStr::new(
+                "anonymous".to_string(),
+            )),
+            vec![],
+        );
         // default_or wired to extern input + fallback
-        asm.add_node("greeting",
+        asm.add_node(
+            "greeting",
             Box::new(DefaultOr::new(PortType::Str, PortType::Str)),
-            vec![WireRef::node("__port_captured_name"), WireRef::node("fallback")]);
+            vec![
+                WireRef::node("__port_captured_name"),
+                WireRef::node("fallback"),
+            ],
+        );
         asm.add_output("greeting", WireRef::node("greeting"));
 
         let kernel = asm.compile().unwrap();
@@ -1080,20 +1141,32 @@ mod tests {
         // Before any capture: input is None → should get fallback
         state.set_inputs(&[0]);
         let val = state.pull(&program, "greeting");
-        assert_eq!(val.to_display_string(), "anonymous",
-            "unset extern should produce fallback, got: {:?}", val);
+        assert_eq!(
+            val.to_display_string(),
+            "anonymous",
+            "unset extern should produce fallback, got: {:?}",
+            val
+        );
 
         // Set the capture input
         let input_idx = program.find_input("captured_name").unwrap();
         state.set_input(input_idx, Value::Str("alice".into()));
         let val = state.pull(&program, "greeting");
-        assert_eq!(val.to_display_string(), "alice",
-            "set extern should produce captured value, got: {:?}", val);
+        assert_eq!(
+            val.to_display_string(),
+            "alice",
+            "set extern should produce captured value, got: {:?}",
+            val
+        );
 
         // Reset captures → back to None → fallback again
         state.reset_inputs_from(program.coord_count());
         let val = state.pull(&program, "greeting");
-        assert_eq!(val.to_display_string(), "anonymous",
-            "reset extern should produce fallback again, got: {:?}", val);
+        assert_eq!(
+            val.to_display_string(),
+            "anonymous",
+            "reset extern should produce fallback again, got: {:?}",
+            val
+        );
     }
 }

@@ -105,10 +105,7 @@ impl CoordSet {
     }
 
     pub fn is_continuous(&self, name: &str) -> bool {
-        matches!(
-            self.get(name).map(|c| c.kind),
-            Some(CoordKind::Continuous)
-        )
+        matches!(self.get(name).map(|c| c.kind), Some(CoordKind::Continuous))
     }
 
     pub fn contains(&self, name: &str) -> bool {
@@ -187,7 +184,9 @@ mod tests {
 
     #[test]
     fn from_metadata_lattice_all_discrete() {
-        let m = dummy_metadata(Some(IndexFn::Lattice { axis_sizes: vec![3, 4] }));
+        let m = dummy_metadata(Some(IndexFn::Lattice {
+            axis_sizes: vec![3, 4],
+        }));
         let s = CoordSet::from_metadata(&["k".to_string(), "limit".to_string()], &m);
         assert_eq!(s.len(), 2);
         assert!(!s.is_continuous("k"));

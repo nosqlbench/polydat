@@ -12,9 +12,9 @@
 //! materialize_wiring_from_outer, scope_values, shared/final modifiers,
 //! and extern input wiring.
 
-use polydat::dsl::compile::compile_polydat;
-use polydat::dsl::ast::BindingModifier;
 use polydat::ast::Value;
+use polydat::dsl::ast::BindingModifier;
+use polydat::dsl::compile::compile_polydat;
 use polydat::kernel::Construction;
 use polydat::kernel::subcontext::PolydatMatter;
 
@@ -24,18 +24,33 @@ use polydat::kernel::subcontext::PolydatMatter;
 
 #[test]
 fn materialize_wiring_from_outer_wires_constants() {
-    let outer = compile_polydat(r#"
+    let outer = compile_polydat(
+        r#"
         input cycle: u64
         dim := 128
         count := 1000
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
-    let inner_program = compile_polydat(r#"
+    let inner_program = compile_polydat(
+        r#"
         input cycle: u64
         extern dim: u64
         extern count: u64
-    "#).unwrap().program().clone();
-    let mut inner = outer.subscope(PolydatMatter::builder().program(inner_program).build().unwrap()).unwrap();
+    "#,
+    )
+    .unwrap()
+    .program()
+    .clone();
+    let mut inner = outer
+        .subscope(
+            PolydatMatter::builder()
+                .program(inner_program)
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
 
     let dim_idx = inner.program().find_input("dim").unwrap();
     let count_idx = inner.program().find_input("count").unwrap();
@@ -45,17 +60,32 @@ fn materialize_wiring_from_outer_wires_constants() {
 
 #[test]
 fn materialize_wiring_from_outer_only_matches_by_name() {
-    let outer = compile_polydat(r#"
+    let outer = compile_polydat(
+        r#"
         input cycle: u64
         dim := 128
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
     // Inner has an extern named 'offset' — not in outer scope
-    let inner_program = compile_polydat(r#"
+    let inner_program = compile_polydat(
+        r#"
         input cycle: u64
         extern offset: u64
-    "#).unwrap().program().clone();
-    let mut inner = outer.subscope(PolydatMatter::builder().program(inner_program).build().unwrap()).unwrap();
+    "#,
+    )
+    .unwrap()
+    .program()
+    .clone();
+    let mut inner = outer
+        .subscope(
+            PolydatMatter::builder()
+                .program(inner_program)
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
 
     // 'offset' should still be at its default (None for extern)
     let idx = inner.program().find_input("offset").unwrap();
@@ -64,17 +94,32 @@ fn materialize_wiring_from_outer_only_matches_by_name() {
 
 #[test]
 fn materialize_wiring_from_outer_does_not_affect_coordinates() {
-    let outer = compile_polydat(r#"
+    let outer = compile_polydat(
+        r#"
         input cycle: u64
         dim := 128
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
-    let inner_program = compile_polydat(r#"
+    let inner_program = compile_polydat(
+        r#"
         input cycle: u64
         extern dim: u64
         h := hash(cycle)
-    "#).unwrap().program().clone();
-    let mut inner = outer.subscope(PolydatMatter::builder().program(inner_program).build().unwrap()).unwrap();
+    "#,
+    )
+    .unwrap()
+    .program()
+    .clone();
+    let mut inner = outer
+        .subscope(
+            PolydatMatter::builder()
+                .program(inner_program)
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
 
     // Coordinate input should still work normally
     inner.set_inputs(&[42]);
@@ -90,18 +135,33 @@ fn materialize_wiring_from_outer_does_not_affect_coordinates() {
 
 #[test]
 fn scope_values_extracts_bound_inputs() {
-    let outer = compile_polydat(r#"
+    let outer = compile_polydat(
+        r#"
         input cycle: u64
         dim := 128
         count := 500
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
-    let inner_program = compile_polydat(r#"
+    let inner_program = compile_polydat(
+        r#"
         input cycle: u64
         extern dim: u64
         extern count: u64
-    "#).unwrap().program().clone();
-    let inner = outer.subscope(PolydatMatter::builder().program(inner_program).build().unwrap()).unwrap();
+    "#,
+    )
+    .unwrap()
+    .program()
+    .clone();
+    let inner = outer
+        .subscope(
+            PolydatMatter::builder()
+                .program(inner_program)
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
 
     let values = inner.scope_values();
     // Should have entries for dim and count (and possibly cycle default)
@@ -112,23 +172,41 @@ fn scope_values_extracts_bound_inputs() {
 
 #[test]
 fn scope_values_empty_when_no_externs() {
-    let outer = compile_polydat(r#"
+    let outer = compile_polydat(
+        r#"
         input cycle: u64
         dim := 128
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
-    let inner_program = compile_polydat(r#"
+    let inner_program = compile_polydat(
+        r#"
         input cycle: u64
         h := hash(cycle)
-    "#).unwrap().program().clone();
-    let inner = outer.subscope(PolydatMatter::builder().program(inner_program).build().unwrap()).unwrap();
+    "#,
+    )
+    .unwrap()
+    .program()
+    .clone();
+    let inner = outer
+        .subscope(
+            PolydatMatter::builder()
+                .program(inner_program)
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
 
     // Inner has no externs, so scope_values only has coordinate defaults
     let values = inner.scope_values();
     // All values should be the coordinate default (U64(0))
     for (_, val) in &values {
-        assert!(matches!(val, Value::U64(0)),
-            "only coordinate defaults expected, got {:?}", val);
+        assert!(
+            matches!(val, Value::U64(0)),
+            "only coordinate defaults expected, got {:?}",
+            val
+        );
     }
 }
 
@@ -138,25 +216,43 @@ fn scope_values_empty_when_no_externs() {
 
 #[test]
 fn inner_scope_shadows_outer_binding() {
-    let outer = compile_polydat(r#"
+    let outer = compile_polydat(
+        r#"
         input cycle: u64
         dim := 128
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
     assert_eq!(outer.get_constant("dim").unwrap().as_u64(), 128);
 
     // Inner scope redefines dim — should use its own value
-    let inner = compile_polydat(r#"
+    let inner = compile_polydat(
+        r#"
         input cycle: u64
         dim := 256
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
     assert_eq!(inner.get_constant("dim").unwrap().as_u64(), 256);
 
     // Inner scope has no extern for dim — materialize_wiring_from_outer won't wire it
-    let inner2_program = compile_polydat(r#"
+    let inner2_program = compile_polydat(
+        r#"
         input cycle: u64
         dim := 256
-    "#).unwrap().program().clone();
-    let inner2 = outer.subscope(PolydatMatter::builder().program(inner2_program).build().unwrap()).unwrap();
+    "#,
+    )
+    .unwrap()
+    .program()
+    .clone();
+    let inner2 = outer
+        .subscope(
+            PolydatMatter::builder()
+                .program(inner2_program)
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
     // dim is still 256 (inner definition), not 128 (outer)
     assert_eq!(inner2.get_constant("dim").unwrap().as_u64(), 256);
 }
@@ -169,15 +265,21 @@ fn inner_scope_shadows_outer_binding() {
 fn shared_modifier_survives_compilation_pipeline() {
     // Literal-init shared bindings — the only currently-supported
     // shape; non-literal RHS is rejected at compile time.
-    let kernel = compile_polydat(r#"
+    let kernel = compile_polydat(
+        r#"
         input cycle: u64
         shared running_total := 0
         shared error_count := 0
         normal_val := hash(cycle)
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
     let prog = kernel.program();
-    assert_eq!(prog.output_modifier("running_total"), BindingModifier::SHARED);
+    assert_eq!(
+        prog.output_modifier("running_total"),
+        BindingModifier::SHARED
+    );
     assert_eq!(prog.output_modifier("error_count"), BindingModifier::SHARED);
     assert_eq!(prog.output_modifier("normal_val"), BindingModifier::NONE);
 
@@ -188,12 +290,18 @@ fn shared_modifier_survives_compilation_pipeline() {
 
 #[test]
 fn shared_literal_constant_folds() {
-    let kernel = compile_polydat(r#"
+    let kernel = compile_polydat(
+        r#"
         input cycle: u64
         shared budget := 100
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
-    assert_eq!(kernel.program().output_modifier("budget"), BindingModifier::SHARED);
+    assert_eq!(
+        kernel.program().output_modifier("budget"),
+        BindingModifier::SHARED
+    );
     assert_eq!(kernel.lookup("budget").unwrap().as_u64(), 100);
 }
 
@@ -203,12 +311,15 @@ fn shared_literal_constant_folds() {
 
 #[test]
 fn final_modifier_survives_compilation_pipeline() {
-    let kernel = compile_polydat(r#"
+    let kernel = compile_polydat(
+        r#"
         input cycle: u64
         const dataset := "example"
         const dim := 128
         mutable_val := hash(cycle)
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
     let prog = kernel.program();
     assert_eq!(prog.output_modifier("dataset"), BindingModifier::CONST);
@@ -222,12 +333,18 @@ fn final_modifier_survives_compilation_pipeline() {
 
 #[test]
 fn const_literal_constant_folds() {
-    let kernel = compile_polydat(r#"
+    let kernel = compile_polydat(
+        r#"
         input cycle: u64
         const max_dim := 512
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
-    assert_eq!(kernel.program().output_modifier("max_dim"), BindingModifier::CONST);
+    assert_eq!(
+        kernel.program().output_modifier("max_dim"),
+        BindingModifier::CONST
+    );
     assert_eq!(kernel.get_constant("max_dim").unwrap().as_u64(), 512);
 }
 
@@ -316,20 +433,35 @@ fn extern_and_coordinate_mixed() {
 #[test]
 fn full_scope_pipeline_outer_to_inner() {
     // Simulate workload scope → phase scope composition
-    let outer = compile_polydat(r#"
+    let outer = compile_polydat(
+        r#"
         input cycle: u64
         dim := 128
         base_count := 10000
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
     // Inner scope uses outer constants via extern + Polydat wire
-    let inner_program = compile_polydat(r#"
+    let inner_program = compile_polydat(
+        r#"
         input cycle: u64
         extern dim: u64
         extern base_count: u64
         id := hash(cycle) + base_count
-    "#).unwrap().program().clone();
-    let mut inner = outer.subscope(PolydatMatter::builder().program(inner_program).build().unwrap()).unwrap();
+    "#,
+    )
+    .unwrap()
+    .program()
+    .clone();
+    let mut inner = outer
+        .subscope(
+            PolydatMatter::builder()
+                .program(inner_program)
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
 
     // Verify both externs were bound correctly
     inner.set_inputs(&[0]);
@@ -344,25 +476,43 @@ fn full_scope_pipeline_outer_to_inner() {
 
 #[test]
 fn scope_pipeline_with_shared_and_final() {
-    let outer = compile_polydat(r#"
+    let outer = compile_polydat(
+        r#"
         input cycle: u64
         shared error_budget := 100
         const max_dim := 256
         normal := hash(cycle)
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
     let prog = outer.program();
-    assert_eq!(prog.output_modifier("error_budget"), BindingModifier::SHARED);
+    assert_eq!(
+        prog.output_modifier("error_budget"),
+        BindingModifier::SHARED
+    );
     assert_eq!(prog.output_modifier("max_dim"), BindingModifier::CONST);
     assert_eq!(prog.output_modifier("normal"), BindingModifier::NONE);
 
     // Inner scope sees the outer's constants via bind
-    let inner_program = compile_polydat(r#"
+    let inner_program = compile_polydat(
+        r#"
         input cycle: u64
         extern error_budget: u64
         extern max_dim: u64
-    "#).unwrap().program().clone();
-    let mut inner = outer.subscope(PolydatMatter::builder().program(inner_program).build().unwrap()).unwrap();
+    "#,
+    )
+    .unwrap()
+    .program()
+    .clone();
+    let mut inner = outer
+        .subscope(
+            PolydatMatter::builder()
+                .program(inner_program)
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
 
     let eb_idx = inner.program().find_input("error_budget").unwrap();
     let md_idx = inner.program().find_input("max_dim").unwrap();
@@ -394,29 +544,44 @@ fn scope_pipeline_with_shared_and_final() {
 
 #[test]
 fn inner_reads_uniform_across_shared_and_nonshared() {
-    let outer = compile_polydat(r#"
+    let outer = compile_polydat(
+        r#"
         input cycle: u64
         shared shared_x := 1
         plain_y := 2
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
-    let inner_program = compile_polydat(r#"
+    let inner_program = compile_polydat(
+        r#"
         input cycle: u64
         extern shared_x: u64 = 0
         extern plain_y: u64 = 0
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
     let inner_program = inner_program.program().clone();
     let mut inner = outer
-        .subscope(PolydatMatter::builder().program(inner_program).build().unwrap())
+        .subscope(
+            PolydatMatter::builder()
+                .program(inner_program)
+                .build()
+                .unwrap(),
+        )
         .unwrap();
 
     // Both names must resolve through the same input-lookup
     // path. If `shared` were affecting read access, find_input
     // might return None for one or different indices for
     // semantically-equivalent slots.
-    let sx_idx = inner.program().find_input("shared_x")
+    let sx_idx = inner
+        .program()
+        .find_input("shared_x")
         .expect("shared_x must resolve through find_input regardless of `shared` marker");
-    let py_idx = inner.program().find_input("plain_y")
+    let py_idx = inner
+        .program()
+        .find_input("plain_y")
         .expect("plain_y must resolve through find_input the same way");
 
     // Both reads go through the same EngineCore::read_input
@@ -424,18 +589,30 @@ fn inner_reads_uniform_across_shared_and_nonshared() {
     // non-shared wire has its value in the inputs array. The
     // primitive transparently handles both — observable
     // behavior must be identical.
-    assert_eq!(inner.state().get_input(sx_idx).as_u64(), 1,
-        "inner read of `shared` wire must return outer's value uniformly");
-    assert_eq!(inner.state().get_input(py_idx).as_u64(), 2,
-        "inner read of non-shared wire must return outer's value uniformly");
+    assert_eq!(
+        inner.state().get_input(sx_idx).as_u64(),
+        1,
+        "inner read of `shared` wire must return outer's value uniformly"
+    );
+    assert_eq!(
+        inner.state().get_input(py_idx).as_u64(),
+        2,
+        "inner read of non-shared wire must return outer's value uniformly"
+    );
 
     // The higher-level lookup path also goes through
     // read_input. Both names must yield typed values
     // identically — no shared-specific fast path or fallback.
-    assert_eq!(inner.lookup("shared_x").unwrap().as_u64(), 1,
-        "lookup must return shared wire value uniformly");
-    assert_eq!(inner.lookup("plain_y").unwrap().as_u64(), 2,
-        "lookup must return non-shared wire value uniformly");
+    assert_eq!(
+        inner.lookup("shared_x").unwrap().as_u64(),
+        1,
+        "lookup must return shared wire value uniformly"
+    );
+    assert_eq!(
+        inner.lookup("plain_y").unwrap().as_u64(),
+        2,
+        "lookup must return non-shared wire value uniformly"
+    );
 }
 
 // =========================================================================
@@ -444,32 +621,62 @@ fn inner_reads_uniform_across_shared_and_nonshared() {
 
 #[test]
 fn sequential_inner_scopes_are_independent() {
-    let outer = compile_polydat(r#"
+    let outer = compile_polydat(
+        r#"
         input cycle: u64
         seed := 42
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
     // First inner scope
-    let inner1_program = compile_polydat(r#"
+    let inner1_program = compile_polydat(
+        r#"
         input cycle: u64
         extern seed: u64
         h := hash(seed)
-    "#).unwrap().program().clone();
-    let mut inner1 = outer.subscope(PolydatMatter::builder().program(inner1_program).build().unwrap()).unwrap();
+    "#,
+    )
+    .unwrap()
+    .program()
+    .clone();
+    let mut inner1 = outer
+        .subscope(
+            PolydatMatter::builder()
+                .program(inner1_program)
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
     inner1.set_inputs(&[0]);
     let v1 = inner1.pull("h").as_u64();
 
     // Second inner scope — should produce identical result
-    let inner2_program = compile_polydat(r#"
+    let inner2_program = compile_polydat(
+        r#"
         input cycle: u64
         extern seed: u64
         h := hash(seed)
-    "#).unwrap().program().clone();
-    let mut inner2 = outer.subscope(PolydatMatter::builder().program(inner2_program).build().unwrap()).unwrap();
+    "#,
+    )
+    .unwrap()
+    .program()
+    .clone();
+    let mut inner2 = outer
+        .subscope(
+            PolydatMatter::builder()
+                .program(inner2_program)
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
     inner2.set_inputs(&[0]);
     let v2 = inner2.pull("h").as_u64();
 
-    assert_eq!(v1, v2, "identical inner scopes with same outer should be deterministic");
+    assert_eq!(
+        v1, v2,
+        "identical inner scopes with same outer should be deterministic"
+    );
 }
 
 // =========================================================================
@@ -521,28 +728,37 @@ fn extern_kernel_has_source() {
 
 #[test]
 fn extern_default_u64_literal() {
-    let kernel = compile_polydat(r#"
+    let kernel = compile_polydat(
+        r#"
         input cycle: u64
         extern counter: u64 = 42
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
     assert_eq!(kernel.lookup("counter").unwrap().as_u64(), 42);
 }
 
 #[test]
 fn extern_default_u64_zero() {
-    let kernel = compile_polydat(r#"
+    let kernel = compile_polydat(
+        r#"
         input cycle: u64
         extern counter: u64 = 0
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
     assert_eq!(kernel.lookup("counter").unwrap().as_u64(), 0);
 }
 
 #[test]
 fn extern_default_f64_float_literal() {
-    let kernel = compile_polydat(r#"
+    let kernel = compile_polydat(
+        r#"
         input cycle: u64
         extern temperature: f64 = 3.14
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
     assert_eq!(kernel.lookup("temperature").unwrap().as_f64(), 3.14);
 }
 
@@ -550,19 +766,25 @@ fn extern_default_f64_float_literal() {
 fn extern_default_f64_int_literal_widens() {
     // Integer literal in an f64 slot widens to f64 — common YAML
     // convention (`5` rather than `5.0`).
-    let kernel = compile_polydat(r#"
+    let kernel = compile_polydat(
+        r#"
         input cycle: u64
         extern threshold: f64 = 5
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
     assert_eq!(kernel.lookup("threshold").unwrap().as_f64(), 5.0);
 }
 
 #[test]
 fn extern_default_string_literal() {
-    let kernel = compile_polydat(r#"
+    let kernel = compile_polydat(
+        r#"
         input cycle: u64
         extern name: String = "guest"
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
     match kernel.lookup("name").unwrap() {
         Value::Str(s) => assert_eq!(&*s, "guest"),
         other => panic!("expected Str, got {other:?}"),
@@ -574,12 +796,17 @@ fn extern_default_no_default_starts_unset() {
     // No default → input slot is `Value::None` (unset). `lookup`
     // filters None internally, so it returns `None` for unset
     // names — distinguishing them from set-but-zero values.
-    let kernel = compile_polydat(r#"
+    let kernel = compile_polydat(
+        r#"
         input cycle: u64
         extern unset: u64
-    "#).unwrap();
-    assert!(kernel.lookup("unset").is_none(),
-        "unset extern should not resolve via lookup");
+    "#,
+    )
+    .unwrap();
+    assert!(
+        kernel.lookup("unset").is_none(),
+        "unset extern should not resolve via lookup"
+    );
 }
 
 #[test]
@@ -588,10 +815,13 @@ fn extern_default_visible_through_passthrough_output() {
     // surface the default value through `lookup` (the canonical
     // two-tier read). Any caller using `interpolate_via_kernel`
     // or `materialize_wiring_from_outer` against this kernel sees the default.
-    let kernel = compile_polydat(r#"
+    let kernel = compile_polydat(
+        r#"
         input cycle: u64
         extern budget: u64 = 100
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
     let v = kernel.lookup("budget").expect("budget should resolve");
     assert_eq!(v.as_u64(), 100);
@@ -601,42 +831,58 @@ fn extern_default_visible_through_passthrough_output() {
 fn extern_default_function_call_rejected() {
     // Function calls aren't const literals — the compiler must
     // reject them with a clear error.
-    let err = compile_polydat(r#"
+    let err = compile_polydat(
+        r#"
         input cycle: u64
         extern x: u64 = hash(0)
-    "#).expect_err("function call default must error");
-    assert!(err.contains("extern 'x' default"),
-        "error should name the extern: {err}");
-    assert!(err.contains("literal"),
-        "error should explain that literals are required: {err}");
+    "#,
+    )
+    .expect_err("function call default must error");
+    assert!(
+        err.contains("extern 'x' default"),
+        "error should name the extern: {err}"
+    );
+    assert!(
+        err.contains("literal"),
+        "error should explain that literals are required: {err}"
+    );
 }
 
 #[test]
 fn extern_default_identifier_rejected() {
     // Bare identifiers (referencing other bindings) are not
     // const literals.
-    let err = compile_polydat(r#"
+    let err = compile_polydat(
+        r#"
         input cycle: u64
         extern x: u64 = somewhere
-    "#).expect_err("identifier default must error");
+    "#,
+    )
+    .expect_err("identifier default must error");
     assert!(err.contains("extern 'x' default"), "error: {err}");
 }
 
 #[test]
 fn extern_default_type_mismatch_string_for_u64_rejected() {
-    let err = compile_polydat(r#"
+    let err = compile_polydat(
+        r#"
         input cycle: u64
         extern n: u64 = "not a number"
-    "#).expect_err("string default for u64 port must error");
+    "#,
+    )
+    .expect_err("string default for u64 port must error");
     assert!(err.contains("extern 'n' default"), "error: {err}");
 }
 
 #[test]
 fn extern_default_type_mismatch_float_for_u64_rejected() {
-    let err = compile_polydat(r#"
+    let err = compile_polydat(
+        r#"
         input cycle: u64
         extern n: u64 = 1.5
-    "#).expect_err("float default for u64 port must error");
+    "#,
+    )
+    .expect_err("float default for u64 port must error");
     assert!(err.contains("extern 'n' default"), "error: {err}");
 }
 
@@ -647,19 +893,25 @@ fn extern_default_negative_for_u64_rejected_with_clear_message() {
     // literal shape — so the compiler should reject with the
     // same "literal required" message as other non-literal
     // expressions.
-    let err = compile_polydat(r#"
+    let err = compile_polydat(
+        r#"
         input cycle: u64
         extern n: u64 = -5
-    "#).expect_err("negative literal default for u64 must error");
+    "#,
+    )
+    .expect_err("negative literal default for u64 must error");
     assert!(err.contains("extern 'n' default"), "error: {err}");
 }
 
 #[test]
 fn extern_default_bool_true_works() {
-    let kernel = compile_polydat(r#"
+    let kernel = compile_polydat(
+        r#"
         input cycle: u64
         extern enabled: bool = true
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
     match kernel.lookup("enabled").unwrap() {
         Value::Bool(true) => {}
         other => panic!("expected Bool(true), got {other:?}"),
@@ -668,10 +920,13 @@ fn extern_default_bool_true_works() {
 
 #[test]
 fn extern_default_bool_false_works() {
-    let kernel = compile_polydat(r#"
+    let kernel = compile_polydat(
+        r#"
         input cycle: u64
         extern enabled: bool = false
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
     match kernel.lookup("enabled").unwrap() {
         Value::Bool(false) => {}
         other => panic!("expected Bool(false), got {other:?}"),
@@ -690,34 +945,56 @@ fn extern_default_bool_false_works() {
 
 #[test]
 fn shared_init_compiles_to_slot_with_initial_value() {
-    let kernel = compile_polydat(r#"
+    let kernel = compile_polydat(
+        r#"
         input cycle: u64
         shared counter := 0
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
     // Output exists with Shared modifier.
-    assert_eq!(kernel.program().output_modifier("counter"),
-        BindingModifier::SHARED);
+    assert_eq!(
+        kernel.program().output_modifier("counter"),
+        BindingModifier::SHARED
+    );
     // And it's also a real input slot — the compiler created
     // the slot+passthrough pair.
-    assert!(kernel.program().find_input("counter").is_some(),
-        "shared literal-init must create an input slot");
+    assert!(
+        kernel.program().find_input("counter").is_some(),
+        "shared literal-init must create an input slot"
+    );
     // Initial value visible via the canonical lookup path.
     assert_eq!(kernel.lookup("counter").unwrap().as_u64(), 0);
 }
 
 #[test]
 fn shared_inner_write_propagates_to_outer_via_cell() {
-    let outer = compile_polydat(r#"
+    let outer = compile_polydat(
+        r#"
         input cycle: u64
         shared counter := 5
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
-    let inner_program = compile_polydat(r#"
+    let inner_program = compile_polydat(
+        r#"
         input cycle: u64
         extern counter: u64
-    "#).unwrap().program().clone();
-    let mut inner = outer.subscope(PolydatMatter::builder().program(inner_program).build().unwrap()).unwrap();
+    "#,
+    )
+    .unwrap()
+    .program()
+    .clone();
+    let mut inner = outer
+        .subscope(
+            PolydatMatter::builder()
+                .program(inner_program)
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
 
     // Inner's lookup goes through the cell — sees initial 5.
     assert_eq!(inner.lookup("counter").unwrap().as_u64(), 5);
@@ -728,27 +1005,47 @@ fn shared_inner_write_propagates_to_outer_via_cell() {
 
     // Outer's `lookup` is cell-aware — sees inner's write
     // intrinsically, no refresh step needed.
-    assert_eq!(outer.lookup("counter").unwrap().as_u64(), 42,
-        "outer's cell-aware lookup must reflect inner's write");
+    assert_eq!(
+        outer.lookup("counter").unwrap().as_u64(),
+        42,
+        "outer's cell-aware lookup must reflect inner's write"
+    );
 }
 
 #[test]
 fn shared_two_inners_see_each_others_writes_via_cell() {
-    let outer = compile_polydat(r#"
+    let outer = compile_polydat(
+        r#"
         input cycle: u64
         shared budget := 100
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
-    let a_program = compile_polydat(r#"
+    let a_program = compile_polydat(
+        r#"
         input cycle: u64
         extern budget: u64
-    "#).unwrap().program().clone();
-    let b_program = compile_polydat(r#"
+    "#,
+    )
+    .unwrap()
+    .program()
+    .clone();
+    let b_program = compile_polydat(
+        r#"
         input cycle: u64
         extern budget: u64
-    "#).unwrap().program().clone();
-    let mut a = outer.subscope(PolydatMatter::builder().program(a_program).build().unwrap()).unwrap();
-    let b = outer.subscope(PolydatMatter::builder().program(b_program).build().unwrap()).unwrap();
+    "#,
+    )
+    .unwrap()
+    .program()
+    .clone();
+    let mut a = outer
+        .subscope(PolydatMatter::builder().program(a_program).build().unwrap())
+        .unwrap();
+    let b = outer
+        .subscope(PolydatMatter::builder().program(b_program).build().unwrap())
+        .unwrap();
 
     // Both start at 100 — `lookup` reads the cell.
     assert_eq!(a.lookup("budget").unwrap().as_u64(), 100);
@@ -761,8 +1058,11 @@ fn shared_two_inners_see_each_others_writes_via_cell() {
     // B's `lookup` sees A's write intrinsically — no refresh
     // step. The cell is shared between all kernels bound from
     // the same outer.
-    assert_eq!(b.lookup("budget").unwrap().as_u64(), 99,
-        "second inner kernel must see the first's write through the shared cell");
+    assert_eq!(
+        b.lookup("budget").unwrap().as_u64(),
+        99,
+        "second inner kernel must see the first's write through the shared cell"
+    );
 }
 
 #[test]
@@ -776,28 +1076,46 @@ fn shared_last_write_wins_under_concurrent_writers() {
     // no `: String` annotation. The compiler's
     // `try_fold_shared_init` matches `Expr::StringLit` and
     // creates a Str-typed input slot.
-    let outer = compile_polydat(r#"
+    let outer = compile_polydat(
+        r#"
         input cycle: u64
         shared status := "init"
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
-    let a_program = compile_polydat(r#"
+    let a_program = compile_polydat(
+        r#"
         input cycle: u64
         extern status: String
-    "#).unwrap().program().clone();
-    let b_program = compile_polydat(r#"
+    "#,
+    )
+    .unwrap()
+    .program()
+    .clone();
+    let b_program = compile_polydat(
+        r#"
         input cycle: u64
         extern status: String
-    "#).unwrap().program().clone();
-    let mut a = outer.subscope(PolydatMatter::builder().program(a_program).build().unwrap()).unwrap();
-    let mut b = outer.subscope(PolydatMatter::builder().program(b_program).build().unwrap()).unwrap();
+    "#,
+    )
+    .unwrap()
+    .program()
+    .clone();
+    let mut a = outer
+        .subscope(PolydatMatter::builder().program(a_program).build().unwrap())
+        .unwrap();
+    let mut b = outer
+        .subscope(PolydatMatter::builder().program(b_program).build().unwrap())
+        .unwrap();
 
     let a_idx = a.program().find_input("status").unwrap();
     let b_idx = b.program().find_input("status").unwrap();
 
     a.state().set_input(a_idx, Value::Str("from-a".into()));
     b.state().set_input(b_idx, Value::Str("from-b".into()));
-    a.state().set_input(a_idx, Value::Str("from-a-again".into()));
+    a.state()
+        .set_input(a_idx, Value::Str("from-a-again".into()));
 
     // Both kernels see the most recent write through cell-aware
     // `lookup` — no refresh step.
@@ -812,10 +1130,13 @@ fn shared_non_literal_init_rejected() {
     // a shared cell needs a single well-defined initial value
     // and a computed RHS doesn't have one. See SRD-16
     // §"Non-literal `shared` initializers".
-    let err = compile_polydat(r#"
+    let err = compile_polydat(
+        r#"
         input cycle: u64
         shared rolling := hash(cycle)
-    "#).expect_err("non-literal shared const must error");
+    "#,
+    )
+    .expect_err("non-literal shared const must error");
     assert!(err.contains("shared binding 'rolling'"), "error: {err}");
     assert!(err.contains("literal initial value"), "error: {err}");
 }
@@ -861,19 +1182,32 @@ fn const_with_unbound_interpolation_falls_through_to_outer() {
     // shadow. Real value → shadow wins. None → outer's
     // "DEFAULT" passes through. The `set:` desugar from SRD-73
     // works correctly without any change to the desugar itself.
-    let outer = compile_polydat(r#"
+    let outer = compile_polydat(
+        r#"
         input cycle: u64
         const X := "DEFAULT"
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
-    let inner_program = compile_polydat(r#"
+    let inner_program = compile_polydat(
+        r#"
         input cycle: u64
         extern Y: str
         const X := "{Y}"
-    "#).unwrap().program().clone();
-    let inner = outer.subscope(
-        PolydatMatter::builder().program(inner_program).build().unwrap()
-    ).unwrap();
+    "#,
+    )
+    .unwrap()
+    .program()
+    .clone();
+    let inner = outer
+        .subscope(
+            PolydatMatter::builder()
+                .program(inner_program)
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
 
     // No literal "None" text. No empty string. The conditional
     // shadow falls through transparently to the outer DEFAULT.
@@ -906,19 +1240,32 @@ fn three_scope_chain_transitive_fall_through() {
     //               output_cell for const outputs, the wiring value-
     //               copies middle.lookup("X") which is
     //               "WORKLOAD_DEFAULT", NOT the None buffer.)
-    let workload = compile_polydat(r#"
+    let workload = compile_polydat(
+        r#"
         input cycle: u64
         const X := "WORKLOAD_DEFAULT"
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
-    let middle_program = compile_polydat(r#"
+    let middle_program = compile_polydat(
+        r#"
         input cycle: u64
         extern undef_in_middle: str
         const X := "{undef_in_middle}"
-    "#).unwrap().program().clone();
-    let middle = workload.subscope(
-        PolydatMatter::builder().program(middle_program).build().unwrap()
-    ).unwrap();
+    "#,
+    )
+    .unwrap()
+    .program()
+    .clone();
+    let middle = workload
+        .subscope(
+            PolydatMatter::builder()
+                .program(middle_program)
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
 
     // Middle's own lookup demonstrates the inner-to-middle
     // fall-through:
@@ -928,13 +1275,23 @@ fn three_scope_chain_transitive_fall_through() {
         "middle.lookup(X) should fall through to workload default",
     );
 
-    let inner_program = compile_polydat(r#"
+    let inner_program = compile_polydat(
+        r#"
         input cycle: u64
         extern X: str
-    "#).unwrap().program().clone();
-    let inner = middle.subscope(
-        PolydatMatter::builder().program(inner_program).build().unwrap()
-    ).unwrap();
+    "#,
+    )
+    .unwrap()
+    .program()
+    .clone();
+    let inner = middle
+        .subscope(
+            PolydatMatter::builder()
+                .program(inner_program)
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
 
     // Inner's lookup demonstrates the transitive fall-through:
     // the None in middle's const buffer DOES NOT propagate to
@@ -957,13 +1314,18 @@ fn pure_literal_const_does_not_auto_extern() {
     // The Gate 2 invariant in
     // comprehension::synthesis::tests::iter_var_as_final_const
     // is the canonical assertion for this case.
-    let kernel = compile_polydat(r#"
+    let kernel = compile_polydat(
+        r#"
         input cycle: u64
         const x := 42
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
-    assert!(kernel.program().find_input("x").is_none(),
-        "pure-literal const must not get an auto-extern input slot");
+    assert!(
+        kernel.program().find_input("x").is_none(),
+        "pure-literal const must not get an auto-extern input slot"
+    );
     assert_eq!(kernel.get_constant("x").unwrap().as_u64(), 42);
 }
 
@@ -972,20 +1334,33 @@ fn const_with_bound_interpolation_shadows_outer() {
     // Regression guard for the happy path: when the interpolation
     // input IS bound, the const shadows the outer binding as
     // expected. None propagation must not break the normal case.
-    let outer = compile_polydat(r#"
+    let outer = compile_polydat(
+        r#"
         input cycle: u64
         const X := "DEFAULT"
         const Y := "OVERRIDE"
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
-    let inner_program = compile_polydat(r#"
+    let inner_program = compile_polydat(
+        r#"
         input cycle: u64
         extern Y: str
         const X := "{Y}"
-    "#).unwrap().program().clone();
-    let inner = outer.subscope(
-        PolydatMatter::builder().program(inner_program).build().unwrap()
-    ).unwrap();
+    "#,
+    )
+    .unwrap()
+    .program()
+    .clone();
+    let inner = outer
+        .subscope(
+            PolydatMatter::builder()
+                .program(inner_program)
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
 
     // Y is bound by outer ("OVERRIDE"), so the interpolation
     // produces Str("OVERRIDE"), get_constant returns it, and
@@ -1016,43 +1391,72 @@ fn cross_kernel_cell_write_invalidates_full_memoized_chain() {
     // grandparent (cells' defining scope) → reader (same program,
     // the per-fiber main-kernel shape) → writer (extern slots only,
     // the per-op kernel shape).
-    let root = compile_polydat(r#"
+    let root = compile_polydat(
+        r#"
         input cycle: u64
         shared s := 0
         shared a := 0
         shared p := 0
         ready := (s == 1) & (a == 0) & (p == 0)
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
-    let mut reader = root.subscope(
-        PolydatMatter::builder().program(root.program().clone()).build().unwrap()
-    ).unwrap();
+    let mut reader = root
+        .subscope(
+            PolydatMatter::builder()
+                .program(root.program().clone())
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
 
-    let writer_program = compile_polydat(r#"
+    let writer_program = compile_polydat(
+        r#"
         input cycle: u64
         extern s: u64
         extern a: u64
         extern p: u64
-    "#).unwrap().program().clone();
-    let mut writer = reader.subscope(
-        PolydatMatter::builder().program(writer_program).build().unwrap()
-    ).unwrap();
+    "#,
+    )
+    .unwrap()
+    .program()
+    .clone();
+    let mut writer = reader
+        .subscope(
+            PolydatMatter::builder()
+                .program(writer_program)
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
 
     // Establish the memoized pre-write evaluation on the reader.
     assert_eq!(reader.pull("ready"), &Value::U64(0), "pre-write predicate");
 
     // Cross-kernel write through the writer's cell-bound slot.
     use polydat::kernel::Dataflow;
-    writer.set_wire("s", Value::U64(1)).expect("cell-bound write");
+    writer
+        .set_wire("s", Value::U64(1))
+        .expect("cell-bound write");
 
     // The very next pull must observe it — through the whole
     // comparison/AND chain, not just at the root.
-    assert_eq!(reader.pull("ready"), &Value::U64(1),
-        "first post-write pull reads the fresh cell through the full chain");
+    assert_eq!(
+        reader.pull("ready"),
+        &Value::U64(1),
+        "first post-write pull reads the fresh cell through the full chain"
+    );
     // And stay fresh (the dirty signal must not be half-consumed).
-    assert_eq!(reader.pull("ready"), &Value::U64(1), "second post-write pull");
+    assert_eq!(
+        reader.pull("ready"),
+        &Value::U64(1),
+        "second post-write pull"
+    );
 
     // Reverting the cell propagates the same way.
-    writer.set_wire("s", Value::U64(0)).expect("cell-bound write");
+    writer
+        .set_wire("s", Value::U64(0))
+        .expect("cell-bound write");
     assert_eq!(reader.pull("ready"), &Value::U64(0), "revert propagates");
 }

@@ -6,9 +6,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use super::engines::{EngineCore, PolydatState, ProvScanState, RawState};
+use super::{InputDef, WireSource};
 use crate::ast::{PolydatNode, Value};
-use super::{WireSource, InputDef};
-use super::engines::{PolydatState, RawState, ProvScanState, EngineCore};
 use crate::dsl::ast::{PolydatFile, Statement};
 
 /// Evaluation lifecycle classification used by the init-binding
@@ -60,13 +60,15 @@ fn first_dynamic_wire(
                         return format!(
                             "wire on node '{owner}' reaches coordinate input '{}' \
                              (dynamic; changes every cycle)",
-                            def.name);
+                            def.name
+                        );
                     }
                     InputKind::ExternalWrite => {
                         return format!(
                             "wire on node '{owner}' reaches external-write port '{}' \
                              (dynamic; mutated by op execution)",
-                            def.name);
+                            def.name
+                        );
                     }
                     InputKind::IterationExtern => {} // not the offender
                 }
@@ -84,11 +86,13 @@ fn first_dynamic_wire(
                     {
                         return format!(
                             "wire on node '{owner}' reaches non-deterministic \
-                             source '{upstream_name}' (dynamic by construction)");
+                             source '{upstream_name}' (dynamic by construction)"
+                        );
                     }
                     return format!(
                         "wire on node '{owner}' reaches dynamic node \
-                         '{upstream_name}' upstream");
+                         '{upstream_name}' upstream"
+                    );
                 }
             }
         }
@@ -147,7 +151,8 @@ impl ProvMask {
     }
 
     pub fn contains(&self, idx: usize) -> bool {
-        self.words.get(idx / 64)
+        self.words
+            .get(idx / 64)
             .is_some_and(|w| w & (1u64 << (idx % 64)) != 0)
     }
 
@@ -167,7 +172,9 @@ impl ProvMask {
     }
 
     pub fn intersects(&self, other: &Self) -> bool {
-        self.words.iter().zip(other.words.iter())
+        self.words
+            .iter()
+            .zip(other.words.iter())
             .any(|(a, b)| a & b != 0)
     }
 
@@ -178,9 +185,7 @@ impl ProvMask {
     /// Ascending indices of the set bits.
     pub fn iter_ones(&self) -> impl Iterator<Item = usize> + '_ {
         self.words.iter().enumerate().flat_map(|(wi, w)| {
-            (0..64).filter_map(move |b| {
-                (w & (1u64 << b) != 0).then_some(wi * 64 + b)
-            })
+            (0..64).filter_map(move |b| (w & (1u64 << b) != 0).then_some(wi * 64 + b))
         })
     }
 }
@@ -218,7 +223,11 @@ pub fn programs_built() -> u64 {
 /// programs a traversing kernel needs for its whole lifetime, however
 /// many tuples it dispenses.
 pub fn program_count(program: &PolydatProgram) -> usize {
-    1 + program.traversals().iter().map(|t| program_count(&t.program)).sum::<usize>()
+    1 + program
+        .traversals()
+        .iter()
+        .map(|t| program_count(&t.program))
+        .sum::<usize>()
 }
 
 pub struct PolydatProgram {
@@ -339,7 +348,8 @@ impl PolydatProgram {
     ) -> Self {
         PROGRAMS_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let coord_count = input_names.len();
-        let input_defs: Vec<InputDef> = input_names.into_iter()
+        let input_defs: Vec<InputDef> = input_names
+            .into_iter()
             .map(|name| InputDef {
                 name,
                 default: Value::U64(0),
@@ -348,18 +358,25 @@ impl PolydatProgram {
             })
             .collect();
         let inventory = Self::compute_node_inventory(&nodes, &wiring);
-        let input_dependents = Self::compute_dependents(
-            &inventory.input_provenance, input_defs.len());
+        let input_dependents =
+            Self::compute_dependents(&inventory.input_provenance, input_defs.len());
         // No declaration order available — fall back to sorted by node index
         let fallback_order: Vec<String> = {
-            let mut v: Vec<(String, usize, usize)> = output_map.iter()
-                .map(|(n, &(ni, pi))| (n.clone(), ni, pi)).collect();
+            let mut v: Vec<(String, usize, usize)> = output_map
+                .iter()
+                .map(|(n, &(ni, pi))| (n.clone(), ni, pi))
+                .collect();
             v.sort_by_key(|(_, ni, pi)| (*ni, *pi));
             v.into_iter().map(|(n, _, _)| n).collect()
         };
         let output_list = Self::build_output_list(&fallback_order, &output_map);
         Self {
-            nodes, wiring, input_defs, coord_count, output_map, output_list,
+            nodes,
+            wiring,
+            input_defs,
+            coord_count,
+            output_map,
+            output_list,
             input_provenance: inventory.input_provenance,
             input_dependents,
             nondet_nodes: inventory.nondet_nodes,
@@ -394,11 +411,16 @@ impl PolydatProgram {
     ) -> Self {
         PROGRAMS_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let inventory = Self::compute_node_inventory(&nodes, &wiring);
-        let input_dependents = Self::compute_dependents(
-            &inventory.input_provenance, input_defs.len());
+        let input_dependents =
+            Self::compute_dependents(&inventory.input_provenance, input_defs.len());
         let output_list = Self::build_output_list(&output_order, &output_map);
         Self {
-            nodes, wiring, input_defs, coord_count, output_map, output_list,
+            nodes,
+            wiring,
+            input_defs,
+            coord_count,
+            output_map,
+            output_list,
             input_provenance: inventory.input_provenance,
             input_dependents,
             nondet_nodes: inventory.nondet_nodes,
@@ -524,7 +546,9 @@ impl PolydatProgram {
         {
             return;
         }
-        let Some(stmt) = self.binding_ast_for(name) else { return };
+        let Some(stmt) = self.binding_ast_for(name) else {
+            return;
+        };
         let value = match stmt {
             Statement::Binding(b) => &b.value,
             _ => return,
@@ -562,7 +586,11 @@ impl PolydatProgram {
     }
 
     /// Set the binding modifier for a named output.
-    pub(crate) fn set_output_modifier(&mut self, name: &str, modifier: crate::dsl::ast::BindingModifier) {
+    pub(crate) fn set_output_modifier(
+        &mut self,
+        name: &str,
+        modifier: crate::dsl::ast::BindingModifier,
+    ) {
         if modifier != crate::dsl::ast::BindingModifier::NONE {
             self.output_modifiers.insert(name.to_string(), modifier);
         }
@@ -570,13 +598,16 @@ impl PolydatProgram {
 
     /// Query the binding modifier for a named output.
     pub fn output_modifier(&self, name: &str) -> crate::dsl::ast::BindingModifier {
-        self.output_modifiers.get(name).copied()
+        self.output_modifiers
+            .get(name)
+            .copied()
             .unwrap_or(crate::dsl::ast::BindingModifier::NONE)
     }
 
     /// Return all output names that have the `shared` modifier.
     pub fn shared_outputs(&self) -> Vec<&str> {
-        self.output_modifiers.iter()
+        self.output_modifiers
+            .iter()
             .filter(|(_, m)| **m == crate::dsl::ast::BindingModifier::SHARED)
             .map(|(n, _)| n.as_str())
             .collect()
@@ -603,24 +634,30 @@ impl PolydatProgram {
     /// "what's defined here" without listing every inherited
     /// name. Output order matches `output_names`.
     pub fn own_output_names(&self) -> Vec<&str> {
-        self.output_names().into_iter()
+        self.output_names()
+            .into_iter()
             .filter(|name| !self.inherited_outputs.contains(*name))
             .collect()
     }
 
     /// Return all output names that have the `const` modifier.
     pub fn const_outputs(&self) -> Vec<&str> {
-        self.output_modifiers.iter()
+        self.output_modifiers
+            .iter()
             .filter(|(_, m)| **m == crate::dsl::ast::BindingModifier::CONST)
             .map(|(n, _)| n.as_str())
             .collect()
     }
 
     /// The original source text that produced this program.
-    pub fn source(&self) -> &str { &self.source }
+    pub fn source(&self) -> &str {
+        &self.source
+    }
 
     /// Diagnostic context (e.g., "workload.yaml bindings").
-    pub fn context(&self) -> &str { &self.context }
+    pub fn context(&self) -> &str {
+        &self.context
+    }
 
     /// Source schemas declared in this program. The runtime queries
     /// these to discover data sources, their extents, and projections.
@@ -629,7 +666,10 @@ impl PolydatProgram {
     }
 
     /// Set source schemas (called by the compiler after processing source declarations).
-    pub(crate) fn set_cursor_schemas(&mut self, schemas: Vec<crate::iteration::source::SourceSchema>) {
+    pub(crate) fn set_cursor_schemas(
+        &mut self,
+        schemas: Vec<crate::iteration::source::SourceSchema>,
+    ) {
         self.cursor_schemas = schemas;
     }
 
@@ -660,10 +700,9 @@ impl PolydatProgram {
         output_map: &HashMap<String, (usize, usize)>,
     ) -> Vec<(String, usize, usize)> {
         // Use declaration order from the assembler
-        let mut list: Vec<(String, usize, usize)> = output_order.iter()
-            .filter_map(|name| {
-                output_map.get(name).map(|&(ni, pi)| (name.clone(), ni, pi))
-            })
+        let mut list: Vec<(String, usize, usize)> = output_order
+            .iter()
+            .filter_map(|name| output_map.get(name).map(|&(ni, pi)| (name.clone(), ni, pi)))
             .collect();
         // Add any outputs not in the declaration order (shouldn't happen,
         // but defensive against manual assembler use). Sort the
@@ -672,7 +711,8 @@ impl PolydatProgram {
         // and a deterministic tail keeps the canonical-program
         // identity (and therefore checkpoint phase-hash) stable
         // across resume invocations.
-        let mut tail: Vec<(&String, &(usize, usize))> = output_map.iter()
+        let mut tail: Vec<(&String, &(usize, usize))> = output_map
+            .iter()
             .filter(|(name, _)| !output_order.contains(*name))
             .collect();
         tail.sort_by(|a, b| a.0.cmp(b.0));
@@ -748,18 +788,20 @@ impl PolydatProgram {
         wiring: &[Vec<WireSource>],
     ) -> NodeInventory {
         let n = nodes.len();
-        let mut prov: Vec<ProvMask> =
-            (0..n).map(|_| ProvMask::empty()).collect();
-        let mut nondet: Vec<bool> = (0..n).map(|i| {
-            let nullary = wiring[i].is_empty() && nodes[i].meta().ins.is_empty();
-            let declared = matches!(
-                nodes[i].purity(),
-                crate::ast::Purity::Nondeterministic { .. });
-            nullary || declared
-        }).collect();
-        let mut side: Vec<bool> = (0..n).map(|i| matches!(
-            nodes[i].purity(),
-            crate::ast::Purity::SideChannel { .. })).collect();
+        let mut prov: Vec<ProvMask> = (0..n).map(|_| ProvMask::empty()).collect();
+        let mut nondet: Vec<bool> = (0..n)
+            .map(|i| {
+                let nullary = wiring[i].is_empty() && nodes[i].meta().ins.is_empty();
+                let declared = matches!(
+                    nodes[i].purity(),
+                    crate::ast::Purity::Nondeterministic { .. }
+                );
+                nullary || declared
+            })
+            .collect();
+        let mut side: Vec<bool> = (0..n)
+            .map(|i| matches!(nodes[i].purity(), crate::ast::Purity::SideChannel { .. }))
+            .collect();
 
         let mut changed = true;
         while changed {
@@ -805,18 +847,21 @@ impl PolydatProgram {
 
     /// Build an EngineCore (shared by all state constructors).
     fn build_engine_core(&self) -> EngineCore {
-        let buffers: Vec<Vec<Value>> = self.nodes
-            .iter().map(|n| vec![Value::None; n.meta().outs.len()]).collect();
+        let buffers: Vec<Vec<Value>> = self
+            .nodes
+            .iter()
+            .map(|n| vec![Value::None; n.meta().outs.len()])
+            .collect();
         let node_count = self.nodes.len();
-        let inputs: Vec<Value> = self.input_defs.iter()
-            .map(|d| d.default.clone()).collect();
+        let inputs: Vec<Value> = self.input_defs.iter().map(|d| d.default.clone()).collect();
         let input_defaults = inputs.clone();
         let max_inputs = self.wiring.iter().map(|w| w.len()).max().unwrap_or(0);
         let input_count = inputs.len();
         EngineCore {
             buffers,
             node_clean: vec![false; node_count],
-            inputs, input_defaults,
+            inputs,
+            input_defaults,
             shared_cells: vec![None; input_count],
             // SRD-13f Push B.2: cells allocated lazily by
             // `seed_output_cells` (called from kernel
@@ -840,20 +885,17 @@ impl PolydatProgram {
 
     /// Create a new evaluation state for this program.
     pub fn create_state(&self) -> PolydatState {
-        let buffers: Vec<Vec<Value>> = self.nodes
+        let buffers: Vec<Vec<Value>> = self
+            .nodes
             .iter()
             .map(|n| vec![Value::None; n.meta().outs.len()])
             .collect();
         let node_count = self.nodes.len();
 
-        let inputs: Vec<Value> = self.input_defs.iter()
-            .map(|d| d.default.clone()).collect();
+        let inputs: Vec<Value> = self.input_defs.iter().map(|d| d.default.clone()).collect();
         let input_defaults = inputs.clone();
 
-        let max_inputs = self.wiring.iter()
-            .map(|w| w.len())
-            .max()
-            .unwrap_or(0);
+        let max_inputs = self.wiring.iter().map(|w| w.len()).max().unwrap_or(0);
 
         // Nondeterminism contagion (R1.v's intrinsic-volatility
         // carve-out): precomputed by the ONE inventory walker at
@@ -864,7 +906,8 @@ impl PolydatProgram {
         let core = EngineCore {
             buffers,
             node_clean: vec![false; node_count],
-            inputs, input_defaults,
+            inputs,
+            input_defaults,
             shared_cells: vec![None; input_count],
             // SRD-13f Push B.2: cells allocated lazily by
             // `seed_output_cells` (called from kernel
@@ -885,7 +928,9 @@ impl PolydatProgram {
 
     /// Create a raw state (no provenance). For benchmarking.
     pub fn create_raw_state(&self) -> RawState {
-        RawState { core: self.build_engine_core() }
+        RawState {
+            core: self.build_engine_core(),
+        }
     }
 
     /// Create the provenance-scan engine state (for benchmarking).
@@ -903,7 +948,6 @@ impl PolydatProgram {
         self.input_defs.iter().map(|d| d.name.clone()).collect()
     }
 
-
     /// Return the number of coordinate inputs.
     pub fn coord_count(&self) -> usize {
         self.coord_count
@@ -917,7 +961,10 @@ impl PolydatProgram {
     /// Lookup the declared port type of a named input.
     /// Returns `None` if the name isn't an input of this program.
     pub fn input_port_type(&self, name: &str) -> Option<crate::ast::PortType> {
-        self.input_defs.iter().find(|d| d.name == name).map(|d| d.port_type)
+        self.input_defs
+            .iter()
+            .find(|d| d.name == name)
+            .map(|d| d.port_type)
     }
 
     /// Lookup the declared port type of an input by index.
@@ -956,7 +1003,10 @@ impl PolydatProgram {
 
     /// Return all output names in declaration order.
     pub fn output_names(&self) -> Vec<&str> {
-        self.output_list.iter().map(|(n, _, _)| n.as_str()).collect()
+        self.output_list
+            .iter()
+            .map(|(n, _, _)| n.as_str())
+            .collect()
     }
 
     /// Resolve an output name to its (node_index, port_index).
@@ -1080,11 +1130,8 @@ impl PolydatProgram {
         // Inner program might have empty input_defs entirely
         // — that's the "trivial wrapper" case and trivially
         // a subset.
-        let parent_inputs: std::collections::HashSet<&str> = parent
-            .input_defs
-            .iter()
-            .map(|d| d.name.as_str())
-            .collect();
+        let parent_inputs: std::collections::HashSet<&str> =
+            parent.input_defs.iter().map(|d| d.name.as_str()).collect();
         for d in &self.input_defs {
             if !parent_inputs.contains(d.name.as_str()) {
                 return false;
@@ -1160,7 +1207,7 @@ impl PolydatProgram {
     /// (`build_workload_params_kernel`) whose `const` bindings
     /// land in const slots `canonical_hash` covers.
     pub fn instance_hash(&self, ancestors: &[&PolydatProgram]) -> [u8; 32] {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
         h.update(b"PolydatProgram-instance-v1\n");
         h.update(self.canonical_hash());
@@ -1199,7 +1246,8 @@ impl PolydatProgram {
                 mask.union_with(prov);
             }
         }
-        let names: std::collections::BTreeSet<String> = mask.iter_ones()
+        let names: std::collections::BTreeSet<String> = mask
+            .iter_ones()
             .filter_map(|idx| self.input_defs.get(idx))
             .filter(|def| def.kind != super::InputKind::Coordinate)
             .map(|def| def.name.clone())
@@ -1214,7 +1262,8 @@ impl PolydatProgram {
     /// materialize it, and those passthroughs must not read as
     /// "this scope needs the name".
     pub fn owned_extern_closure(&self) -> Vec<String> {
-        let owned: Vec<&str> = self.output_names()
+        let owned: Vec<&str> = self
+            .output_names()
             .into_iter()
             .filter(|n| !self.is_inherited(n))
             .collect();
@@ -1237,23 +1286,22 @@ impl PolydatProgram {
         seed: impl IntoIterator<Item = String>,
         ancestors: &[&PolydatProgram],
     ) -> Vec<String> {
-        let mut unresolved: std::collections::BTreeSet<String> =
-            seed.into_iter().collect();
+        let mut unresolved: std::collections::BTreeSet<String> = seed.into_iter().collect();
         for prog in ancestors {
             if unresolved.is_empty() {
                 break;
             }
             let outputs: std::collections::BTreeSet<&str> =
                 prog.output_names().into_iter().collect();
-            let produced: Vec<String> = unresolved.iter()
+            let produced: Vec<String> = unresolved
+                .iter()
                 .filter(|n| outputs.contains(n.as_str()))
                 .cloned()
                 .collect();
             if produced.is_empty() {
                 continue;
             }
-            let produced_refs: Vec<&str> =
-                produced.iter().map(String::as_str).collect();
+            let produced_refs: Vec<&str> = produced.iter().map(String::as_str).collect();
             let closure = prog.extern_closure(&produced_refs);
             for name in &produced {
                 unresolved.remove(name);
@@ -1264,7 +1312,7 @@ impl PolydatProgram {
     }
 
     pub fn canonical_hash(&self) -> [u8; 32] {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
         h.update(b"PolydatProgram-v1\n");
 
@@ -1312,8 +1360,8 @@ impl PolydatProgram {
             // stable under struct-field reordering.
             if let Some(m) = self.output_modifiers.get(name.as_str()) {
                 h.update(b"  mod:");
-                h.update(if m.is_const()    { b"F" } else { b"-" });
-                h.update(if m.is_shared()   { b"S" } else { b"-" });
+                h.update(if m.is_const() { b"F" } else { b"-" });
+                h.update(if m.is_shared() { b"S" } else { b"-" });
                 h.update(if m.is_volatile() { b"V" } else { b"-" });
                 h.update(b"\n");
             }
@@ -1367,11 +1415,7 @@ impl PolydatProgram {
     /// those nodes' canonical hashes, so the result is a
     /// Merkle-tree summary of the producer's full transitive
     /// dependency cone.
-    fn node_canonical_hash(
-        &self,
-        ni: usize,
-        memo: &mut HashMap<usize, [u8; 32]>,
-    ) -> [u8; 32] {
+    fn node_canonical_hash(&self, ni: usize, memo: &mut HashMap<usize, [u8; 32]>) -> [u8; 32] {
         if let Some(h) = memo.get(&ni) {
             return *h;
         }
@@ -1381,7 +1425,7 @@ impl PolydatProgram {
         // node graph violates that is cheap insurance.
         memo.insert(ni, [0u8; 32]);
 
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
         let meta = self.nodes[ni].meta();
         h.update(b"node:");
@@ -1467,7 +1511,7 @@ impl PolydatProgram {
         m: usize,
         memo: &mut HashMap<usize, [u8; 32]>,
     ) -> [u8; 32] {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
         let meta = sub.members[m].meta();
         h.update(b"node:");
@@ -1498,21 +1542,19 @@ impl PolydatProgram {
                             h.update(b":port:");
                             h.update(p.to_le_bytes().as_ref());
                         }
-                        Some(super::WireSource::Input(i)) => {
-                            match self.wiring[fusion_ni].get(*i) {
-                                Some(super::WireSource::NodeOutput(oj, op)) => {
-                                    h.update(b"node:");
-                                    let (nh, p_eff) = self.port_identity(*oj, *op, memo);
-                                    h.update(nh);
-                                    h.update(b":port:");
-                                    h.update(p_eff.to_le_bytes().as_ref());
-                                }
-                                Some(outer_input @ super::WireSource::Input(_)) => {
-                                    canonical_wire_source(outer_input, self, memo, &mut h);
-                                }
-                                None => h.update(b"unwired"),
+                        Some(super::WireSource::Input(i)) => match self.wiring[fusion_ni].get(*i) {
+                            Some(super::WireSource::NodeOutput(oj, op)) => {
+                                h.update(b"node:");
+                                let (nh, p_eff) = self.port_identity(*oj, *op, memo);
+                                h.update(nh);
+                                h.update(b":port:");
+                                h.update(p_eff.to_le_bytes().as_ref());
                             }
-                        }
+                            Some(outer_input @ super::WireSource::Input(_)) => {
+                                canonical_wire_source(outer_input, self, memo, &mut h);
+                            }
+                            None => h.update(b"unwired"),
+                        },
                         None => h.update(b"unwired"),
                     }
                     h.update(b"\n");
@@ -1543,7 +1585,9 @@ impl PolydatProgram {
     /// Average in-degree (wires per node).
     pub fn avg_degree(&self) -> f64 {
         let n = self.nodes.len();
-        if n == 0 { return 0.0; }
+        if n == 0 {
+            return 0.0;
+        }
         self.wire_count() as f64 / n as f64
     }
 
@@ -1591,12 +1635,10 @@ impl PolydatProgram {
     /// decide whether a force-compiled twin can be compared
     /// value-for-value against the interpreter form.
     pub fn is_deterministic(&self) -> bool {
-        !self.nodes.iter().any(|n| {
-            matches!(
-                n.purity(),
-                crate::ast::Purity::Nondeterministic { .. }
-            )
-        })
+        !self
+            .nodes
+            .iter()
+            .any(|n| matches!(n.purity(), crate::ast::Purity::Nondeterministic { .. }))
     }
 
     pub fn fold_init_constants(&mut self) -> Result<usize, String> {
@@ -1605,7 +1647,10 @@ impl PolydatProgram {
 
     /// Fold init-time constants, emitting diagnostic events to the log.
     /// Returns `Err` for init-binding contract violations (Plan A).
-    pub fn fold_init_constants_with_log(&mut self, log: Option<&mut crate::dsl::events::CompileEventLog>) -> Result<usize, String> {
+    pub fn fold_init_constants_with_log(
+        &mut self,
+        log: Option<&mut crate::dsl::events::CompileEventLog>,
+    ) -> Result<usize, String> {
         self.fold_init_constants_impl(log, false)
     }
 
@@ -1630,12 +1675,14 @@ impl PolydatProgram {
         mut log: Option<&mut crate::dsl::events::CompileEventLog>,
         strict: bool,
     ) -> Result<usize, String> {
-        use crate::library::identity::{ConstExt, ConstU64, ConstStr, ConstHandle};
-        use crate::library::fixed::ConstF64;
         use crate::ast::Value;
+        use crate::library::fixed::ConstF64;
+        use crate::library::identity::{ConstExt, ConstHandle, ConstStr, ConstU64};
 
         let n = self.nodes.len();
-        if n == 0 { return Ok(0); }
+        if n == 0 {
+            return Ok(0);
+        }
 
         // Phase 1: Classify each node by its evaluation lifecycle.
         // Per SRD 11 §"Three Evaluation Lifecycles": every node is
@@ -1655,11 +1702,16 @@ impl PolydatProgram {
             for source in wiring {
                 match source {
                     WireSource::Input(idx) => {
-                        let kind = self.input_defs.get(*idx).map(|d| d.kind)
+                        let kind = self
+                            .input_defs
+                            .get(*idx)
+                            .map(|d| d.kind)
                             .unwrap_or(InputKind::Coordinate);
                         let lc = match kind {
                             InputKind::IterationExtern => EvalLifecycle::ScopeInit,
-                            InputKind::Coordinate | InputKind::ExternalWrite => EvalLifecycle::Dynamic,
+                            InputKind::Coordinate | InputKind::ExternalWrite => {
+                                EvalLifecycle::Dynamic
+                            }
                         };
                         if lc > lifecycle[i] {
                             lifecycle[i] = lc;
@@ -1674,7 +1726,10 @@ impl PolydatProgram {
             // the fold pass leaves them alone and the canonical_hash
             // sees node-type + wiring shape but never the value
             // (workload identity stable across processes).
-            if matches!(self.nodes[i].purity(), crate::ast::Purity::Nondeterministic { .. }) {
+            if matches!(
+                self.nodes[i].purity(),
+                crate::ast::Purity::Nondeterministic { .. }
+            ) {
                 lifecycle[i] = EvalLifecycle::Dynamic;
             }
 
@@ -1699,7 +1754,11 @@ impl PolydatProgram {
             // output.
             if self.output_modifiers.iter().any(|(name, m)| {
                 m.is_volatile()
-                    && self.output_map.get(name).map(|(ni, _)| *ni == i).unwrap_or(false)
+                    && self
+                        .output_map
+                        .get(name)
+                        .map(|(ni, _)| *ni == i)
+                        .unwrap_or(false)
             }) {
                 lifecycle[i] = EvalLifecycle::Dynamic;
             }
@@ -1726,7 +1785,8 @@ impl PolydatProgram {
         // is_init is the compile-const subset. Subsequent fold
         // phases below only operate on CompileConst nodes; ScopeInit
         // nodes are deferred to the scope-activation pass.
-        let mut is_init: Vec<bool> = lifecycle.iter()
+        let mut is_init: Vec<bool> = lifecycle
+            .iter()
             .map(|lc| *lc == EvalLifecycle::CompileConst)
             .collect();
 
@@ -1743,9 +1803,17 @@ impl PolydatProgram {
         // the offending wire. There is no soft fall-through.
         if !self.const_outputs.is_empty() {
             for init_name in &self.const_outputs {
-                let Some((node_idx, _)) = self.output_map.get(init_name) else { continue };
+                let Some((node_idx, _)) = self.output_map.get(init_name) else {
+                    continue;
+                };
                 if lifecycle[*node_idx] == EvalLifecycle::Dynamic {
-                    let offending = first_dynamic_wire(&self.nodes, &self.wiring, &lifecycle, &self.input_defs, *node_idx);
+                    let offending = first_dynamic_wire(
+                        &self.nodes,
+                        &self.wiring,
+                        &lifecycle,
+                        &self.input_defs,
+                        *node_idx,
+                    );
                     return Err(format!(
                         "init binding '{init_name}' violates the init contract: \
                          {offending} \
@@ -1761,7 +1829,9 @@ impl PolydatProgram {
         for i in 0..n {
             let wire_inputs = self.nodes[i].meta().wire_inputs();
             for (port_idx, wire_source) in self.wiring[i].iter().enumerate() {
-                if port_idx >= wire_inputs.len() { break; }
+                if port_idx >= wire_inputs.len() {
+                    break;
+                }
                 if wire_inputs[port_idx].wire_cost != crate::ast::WireCost::Config {
                     continue;
                 }
@@ -1823,7 +1893,9 @@ impl PolydatProgram {
         // producer edges to fixpoint.
         let mut feeds_volatile = vec![false; n];
         for (out_name, node_idx, _port) in self.output_list.iter() {
-            if self.output_modifiers.get(out_name)
+            if self
+                .output_modifiers
+                .get(out_name)
                 .map(|m| m.is_volatile())
                 .unwrap_or(false)
             {
@@ -1834,7 +1906,9 @@ impl PolydatProgram {
         while changed {
             changed = false;
             for i in 0..n {
-                if !feeds_volatile[i] { continue; }
+                if !feeds_volatile[i] {
+                    continue;
+                }
                 for source in &self.wiring[i] {
                     if let WireSource::NodeOutput(upstream, _) = source
                         && !feeds_volatile[*upstream]
@@ -1847,18 +1921,21 @@ impl PolydatProgram {
         }
         for i in 0..n {
             let name = &self.nodes[i].meta().name;
-            let is_nondeterministic = self.wiring[i].is_empty() && !is_init[i]
-                && !name.starts_with("__");
-            if !is_nondeterministic { continue; }
+            let is_nondeterministic =
+                self.wiring[i].is_empty() && !is_init[i] && !name.starts_with("__");
+            if !is_nondeterministic {
+                continue;
+            }
             let consumed_by_volatile = feeds_volatile[i];
             if consumed_by_volatile {
                 continue;
             }
-            let msg = format!(
-                "non-deterministic node '{name}' used without explicit acknowledgment"
-            );
+            let msg =
+                format!("non-deterministic node '{name}' used without explicit acknowledgment");
             if strict {
-                return Err(format!("strict mode: {msg}. Use a deterministic alternative."));
+                return Err(format!(
+                    "strict mode: {msg}. Use a deterministic alternative."
+                ));
             }
             crate::library::support::audit::warn(&msg);
             if let Some(ref mut log) = log {
@@ -1888,10 +1965,14 @@ impl PolydatProgram {
             self.output_map.values().map(|(idx, _)| *idx).collect();
         for i in 0..n {
             let name = &self.nodes[i].meta().name;
-            if name.starts_with("__") { continue; }
+            if name.starts_with("__") {
+                continue;
+            }
             let is_output = output_node_indices.contains(&i);
             let is_consumed = (0..n).any(|j| {
-                self.wiring[j].iter().any(|w| matches!(w, WireSource::NodeOutput(src, _) if *src == i))
+                self.wiring[j]
+                    .iter()
+                    .any(|w| matches!(w, WireSource::NodeOutput(src, _) if *src == i))
             });
             if !is_output && !is_consumed {
                 let msg = format!("binding '{name}' is never referenced");
@@ -1908,7 +1989,9 @@ impl PolydatProgram {
         }
 
         let init_count = is_init.iter().filter(|&&b| b).count();
-        if init_count == 0 { return Ok(0); }
+        if init_count == 0 {
+            return Ok(0);
+        }
 
         // Phase 2: Evaluate init-time nodes.
         let mut state = self.create_state();
@@ -1927,7 +2010,8 @@ impl PolydatProgram {
                 if result.is_err() {
                     let node_name = &self.nodes[i].meta().name;
                     crate::library::support::audit::warn(&format!(
-                        "constant folding: node '{node_name}' panicked during init-time eval — skipping fold"));
+                        "constant folding: node '{node_name}' panicked during init-time eval — skipping fold"
+                    ));
                     is_init[i] = false;
                 }
             }
@@ -1936,10 +2020,14 @@ impl PolydatProgram {
         // Phase 3: Replace init-time nodes with constants.
         let mut folded = 0;
         for i in 0..n {
-            if !is_init[i] { continue; }
+            if !is_init[i] {
+                continue;
+            }
 
             let value = state.core.buffers[i][0].clone();
-            if matches!(value, Value::None) { continue; }
+            if matches!(value, Value::None) {
+                continue;
+            }
 
             let const_node: Box<dyn crate::ast::PolydatNode> = match &value {
                 Value::U64(v) => Box::new(ConstU64::new(*v)),
@@ -1966,7 +2054,8 @@ impl PolydatProgram {
                     // INFO console.
                     crate::library::support::audit::debug(&format!(
                         "fold: replacing init node '{original_name}' with ConstHandle \
-                         (Arc<dyn Any>) — eval will not re-fire post-fold"));
+                         (Arc<dyn Any>) — eval will not re-fire post-fold"
+                    ));
                     Box::new(ConstHandle::new(arc.clone()))
                 }
                 // SRD 71: Ext-typed init values (Partition,
@@ -2088,16 +2177,22 @@ mod canonical_hash_tests {
     fn different_const_value_changes_hash() {
         let a = compile_polydat("const x := 100\n").expect("compile a");
         let b = compile_polydat("const x := 101\n").expect("compile b");
-        assert_ne!(a.program().canonical_hash(), b.program().canonical_hash(),
-            "differing const value must change canonical hash");
+        assert_ne!(
+            a.program().canonical_hash(),
+            b.program().canonical_hash(),
+            "differing const value must change canonical hash"
+        );
     }
 
     #[test]
     fn different_string_value_changes_hash() {
         let a = compile_polydat("const s := \"sift1m\"\n").expect("compile a");
         let b = compile_polydat("const s := \"sift10m\"\n").expect("compile b");
-        assert_ne!(a.program().canonical_hash(), b.program().canonical_hash(),
-            "differing string value must change canonical hash");
+        assert_ne!(
+            a.program().canonical_hash(),
+            b.program().canonical_hash(),
+            "differing string value must change canonical hash"
+        );
     }
 
     #[test]
@@ -2107,8 +2202,11 @@ mod canonical_hash_tests {
         // identity.
         let a = compile_polydat("const foo := 42\n").expect("compile a");
         let b = compile_polydat("const bar := 42\n").expect("compile b");
-        assert_ne!(a.program().canonical_hash(), b.program().canonical_hash(),
-            "renamed output must change canonical hash");
+        assert_ne!(
+            a.program().canonical_hash(),
+            b.program().canonical_hash(),
+            "renamed output must change canonical hash"
+        );
     }
 
     #[test]
@@ -2116,25 +2214,34 @@ mod canonical_hash_tests {
         let a = compile_polydat("const x := 42\n").expect("compile a");
         let b = compile_polydat("# explanatory comment\nconst x := 42\n# trailing comment\n")
             .expect("compile b");
-        assert_eq!(a.program().canonical_hash(), b.program().canonical_hash(),
+        assert_eq!(
+            a.program().canonical_hash(),
+            b.program().canonical_hash(),
             "comment-only edits should not affect canonical hash — \
-             the AST is what's hashed, not the source bytes");
+             the AST is what's hashed, not the source bytes"
+        );
     }
 
     #[test]
     fn whitespace_change_does_not_change_hash() {
         let a = compile_polydat("const x := 42\n").expect("compile a");
         let b = compile_polydat("const  x  :=  42\n\n\n").expect("compile b");
-        assert_eq!(a.program().canonical_hash(), b.program().canonical_hash(),
-            "whitespace-only edits should not affect canonical hash");
+        assert_eq!(
+            a.program().canonical_hash(),
+            b.program().canonical_hash(),
+            "whitespace-only edits should not affect canonical hash"
+        );
     }
 
     #[test]
     fn additional_binding_changes_hash() {
         let a = compile_polydat("const x := 1\n").expect("compile a");
         let b = compile_polydat("const x := 1\nconst y := 2\n").expect("compile b");
-        assert_ne!(a.program().canonical_hash(), b.program().canonical_hash(),
-            "added output must change canonical hash");
+        assert_ne!(
+            a.program().canonical_hash(),
+            b.program().canonical_hash(),
+            "added output must change canonical hash"
+        );
     }
 
     // -----------------------------------------------------------
@@ -2147,12 +2254,13 @@ mod canonical_hash_tests {
         // slot that canonical_hash should cover — even when it's
         // an argument to a function call rather than a top-level
         // `const X := <literal>` binding.
-        let a = compile_polydat("input cycle: u64\nshard := mod(hash(cycle), 8)\n")
-            .expect("a");
-        let b = compile_polydat("input cycle: u64\nshard := mod(hash(cycle), 16)\n")
-            .expect("b");
-        assert_ne!(a.program().canonical_hash(), b.program().canonical_hash(),
-            "literal-arg const value must change canonical hash");
+        let a = compile_polydat("input cycle: u64\nshard := mod(hash(cycle), 8)\n").expect("a");
+        let b = compile_polydat("input cycle: u64\nshard := mod(hash(cycle), 16)\n").expect("b");
+        assert_ne!(
+            a.program().canonical_hash(),
+            b.program().canonical_hash(),
+            "literal-arg const value must change canonical hash"
+        );
     }
 
     #[test]
@@ -2178,9 +2286,11 @@ mod canonical_hash_tests {
         let cp = child.program();
         let h_a = cp.instance_hash(&[parent_a.program().as_ref()]);
         let h_b = cp.instance_hash(&[parent_b.program().as_ref()]);
-        assert_ne!(h_a, h_b,
+        assert_ne!(
+            h_a, h_b,
             "ancestor const-slot edit must change instance_hash even \
-             when the child program is byte-identical");
+             when the child program is byte-identical"
+        );
     }
 
     #[test]
@@ -2250,21 +2360,26 @@ mod canonical_hash_tests {
 
 #[cfg(test)]
 mod ast_metadata_tests {
-    use crate::dsl::compile_polydat;
     use crate::dsl::ast::Statement;
+    use crate::dsl::compile_polydat;
 
     #[test]
     fn retained_ast_is_present_after_compile() {
         let src = "const dataset := \"sift1m\"\ncount := 100\n";
         let k = compile_polydat(src).expect("compile");
-        assert!(k.program().ast().is_some(), "AST should be retained on program");
+        assert!(
+            k.program().ast().is_some(),
+            "AST should be retained on program"
+        );
     }
 
     #[test]
     fn binding_ast_for_finds_init_binding() {
         let src = "const dataset := \"sift1m\"\nratio := 2.5\n";
         let k = compile_polydat(src).expect("compile");
-        let stmt = k.program().binding_ast_for("dataset")
+        let stmt = k
+            .program()
+            .binding_ast_for("dataset")
             .expect("dataset binding should be retrievable");
         match stmt {
             Statement::Binding(b) => assert_eq!(b.targets[0], "dataset"),
@@ -2276,12 +2391,16 @@ mod ast_metadata_tests {
     fn binding_ast_for_finds_cycle_binding() {
         let src = "count := 42\n";
         let k = compile_polydat(src).expect("compile");
-        let stmt = k.program().binding_ast_for("count")
+        let stmt = k
+            .program()
+            .binding_ast_for("count")
             .expect("count binding should be retrievable");
         match stmt {
             Statement::Binding(b) => {
-                assert!(b.targets.iter().any(|t| t == "count"),
-                    "CycleBinding targets should include 'count'");
+                assert!(
+                    b.targets.iter().any(|t| t == "count"),
+                    "CycleBinding targets should include 'count'"
+                );
             }
             other => panic!("expected CycleBinding for 'count', got {other:?}"),
         }
@@ -2302,9 +2421,15 @@ foo := hash(cycle)
 bar := mod(foo, 100)
 ";
         let k = compile_polydat(src).expect("compile");
-        let chain = k.program()
+        let chain = k
+            .program()
             .local_inclusion_chain("bar", &std::collections::HashSet::new());
-        assert_eq!(chain.len(), 2, "expected 2 bindings in chain, got {}", chain.len());
+        assert_eq!(
+            chain.len(),
+            2,
+            "expected 2 bindings in chain, got {}",
+            chain.len()
+        );
         match chain[0] {
             Statement::Binding(b) => assert!(b.targets.iter().any(|t| t == "foo")),
             _ => panic!("expected foo first"),
@@ -2324,7 +2449,8 @@ const seed := 12345
 mixed := hash(seed)
 ";
         let k = compile_polydat(src).expect("compile");
-        let chain = k.program()
+        let chain = k
+            .program()
             .local_inclusion_chain("mixed", &std::collections::HashSet::new());
         // Just `mixed` — `seed` is final, walk stops.
         assert_eq!(chain.len(), 1);
@@ -2345,8 +2471,7 @@ bar := mod(foo, 100)
         let k = compile_polydat(src).expect("compile");
         let mut excluded = std::collections::HashSet::new();
         excluded.insert("foo".to_string());
-        let chain = k.program()
-            .local_inclusion_chain("bar", &excluded);
+        let chain = k.program().local_inclusion_chain("bar", &excluded);
         assert_eq!(chain.len(), 1);
         match chain[0] {
             Statement::Binding(b) => assert!(b.targets.iter().any(|t| t == "bar")),
@@ -2357,7 +2482,8 @@ bar := mod(foo, 100)
     #[test]
     fn local_inclusion_chain_unknown_name_is_empty() {
         let k = compile_polydat("const x := 1\n").expect("compile");
-        let chain = k.program()
+        let chain = k
+            .program()
             .local_inclusion_chain("missing", &std::collections::HashSet::new());
         assert!(chain.is_empty());
     }
@@ -2372,8 +2498,8 @@ bar := mod(foo, 100)
 /// cycle's timestamp.
 #[cfg(test)]
 mod r1v_contagion_tests {
-    use crate::dsl::compile_polydat;
     use crate::ast::Value;
+    use crate::dsl::compile_polydat;
 
     /// Pull `out` from kernel `k` at coordinate `cycle`,
     /// returning the resulting u64.
@@ -2400,16 +2526,20 @@ mod r1v_contagion_tests {
         // falls back to asserting at-least-as-many-calls.
         std::thread::sleep(std::time::Duration::from_millis(2));
         let v1 = pull_u64_at(&mut k, 1, "b");
-        assert!(v1 >= v0,
-            "consumer of volatile producer must re-eval per cycle (v0={v0}, v1={v1})");
+        assert!(
+            v1 >= v0,
+            "consumer of volatile producer must re-eval per cycle (v0={v0}, v1={v1})"
+        );
         // Stronger: if clock advanced at all, the value must
         // reflect the advance. Allow ties only when the clock
         // didn't tick in the sleep window.
         std::thread::sleep(std::time::Duration::from_millis(2));
         let v2 = pull_u64_at(&mut k, 2, "b");
-        assert!(v2 > v0,
+        assert!(
+            v2 > v0,
             "after a 4ms cumulative wait the volatile consumer must reflect the advance \
-             (v0={v0}, v2={v2}) — if this fails, R1.v contagion is broken");
+             (v0={v0}, v2={v2}) — if this fails, R1.v contagion is broken"
+        );
     }
 
     #[test]
@@ -2425,9 +2555,11 @@ mod r1v_contagion_tests {
         let v0 = pull_u64_at(&mut k, 0, "c");
         std::thread::sleep(std::time::Duration::from_millis(4));
         let v1 = pull_u64_at(&mut k, 1, "c");
-        assert!(v1 > v0,
+        assert!(
+            v1 > v0,
             "transitive consumer (chain depth 2) of volatile producer must re-eval \
-             (v0={v0}, v1={v1}) — R1.v contagion must propagate through the chain");
+             (v0={v0}, v1={v1}) — R1.v contagion must propagate through the chain"
+        );
     }
 
     #[test]
@@ -2442,8 +2574,16 @@ mod r1v_contagion_tests {
         let v0 = pull_u64_at(&mut k, 0, "wrapped");
         let v1 = pull_u64_at(&mut k, 1, "wrapped");
         let v2 = pull_u64_at(&mut k, 2, "wrapped");
-        assert_eq!(v1, v0 + 1, "counter must advance per cycle (v0={v0}, v1={v1})");
-        assert_eq!(v2, v1 + 1, "counter must continue advancing (v1={v1}, v2={v2})");
+        assert_eq!(
+            v1,
+            v0 + 1,
+            "counter must advance per cycle (v0={v0}, v1={v1})"
+        );
+        assert_eq!(
+            v2,
+            v1 + 1,
+            "counter must continue advancing (v1={v1}, v2={v2})"
+        );
     }
 
     #[test]
@@ -2456,9 +2596,18 @@ mod r1v_contagion_tests {
                    c := counter()\n";
         let mut k = compile_polydat(src).expect("compile");
         k.set_inputs(&[0]);
-        let a = match k.pull("c") { Value::U64(v) => *v, _ => panic!() };
-        let b = match k.pull("c") { Value::U64(v) => *v, _ => panic!() };
-        let c = match k.pull("c") { Value::U64(v) => *v, _ => panic!() };
+        let a = match k.pull("c") {
+            Value::U64(v) => *v,
+            _ => panic!(),
+        };
+        let b = match k.pull("c") {
+            Value::U64(v) => *v,
+            _ => panic!(),
+        };
+        let c = match k.pull("c") {
+            Value::U64(v) => *v,
+            _ => panic!(),
+        };
         assert_eq!(a, b, "within-cycle reads of a volatile node must agree");
         assert_eq!(b, c, "within-cycle reads of a volatile node must agree");
     }
@@ -2480,16 +2629,31 @@ mod r1v_contagion_tests {
         // instrumentation, so check the former; the implicit
         // claim is that nondeterministic_nodes is precise.
         k.set_inputs(&[42]);
-        let r1 = match k.pull("pure_outer") { Value::U64(v) => *v, _ => panic!() };
-        let r2 = match k.pull("pure_outer") { Value::U64(v) => *v, _ => panic!() };
+        let r1 = match k.pull("pure_outer") {
+            Value::U64(v) => *v,
+            _ => panic!(),
+        };
+        let r2 = match k.pull("pure_outer") {
+            Value::U64(v) => *v,
+            _ => panic!(),
+        };
         assert_eq!(r1, r2);
         // Pure path: same coord → same output.
         k.set_inputs(&[42]);
-        let r3 = match k.pull("pure_outer") { Value::U64(v) => *v, _ => panic!() };
-        assert_eq!(r1, r3, "pure (non-volatile) chain must be coord-deterministic");
+        let r3 = match k.pull("pure_outer") {
+            Value::U64(v) => *v,
+            _ => panic!(),
+        };
+        assert_eq!(
+            r1, r3,
+            "pure (non-volatile) chain must be coord-deterministic"
+        );
         // Different coord → different output.
         k.set_inputs(&[43]);
-        let r4 = match k.pull("pure_outer") { Value::U64(v) => *v, _ => panic!() };
+        let r4 = match k.pull("pure_outer") {
+            Value::U64(v) => *v,
+            _ => panic!(),
+        };
         assert_ne!(r3, r4);
     }
 }

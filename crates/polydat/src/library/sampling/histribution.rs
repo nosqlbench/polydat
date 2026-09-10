@@ -70,8 +70,7 @@ fn parse_histribution_setup(spec: &str) -> ParsedHistribution {
 fn histribution(
     input: u64,
     spec: crate::derive_support::Const<&str>,
-    #[poly_const(parse_histribution_setup, from = spec)]
-    parsed: &ParsedHistribution,
+    #[poly_const(parse_histribution_setup, from = spec)] parsed: &ParsedHistribution,
 ) -> u64 {
     let idx = parsed.table.sample(input) as usize;
     parsed.labels[idx]
@@ -117,8 +116,11 @@ mod tests {
         for i in 0..1000u64 {
             let hashed = xxh3_64(&i.to_le_bytes());
             node.eval(&[Value::U64(hashed)], &mut out);
-            assert!(valid.contains(&out[0].as_u64()),
-                "unexpected outcome: {}", out[0].as_u64());
+            assert!(
+                valid.contains(&out[0].as_u64()),
+                "unexpected outcome: {}",
+                out[0].as_u64()
+            );
         }
     }
 

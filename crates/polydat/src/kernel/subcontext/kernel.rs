@@ -25,8 +25,8 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
-use crate::kernel::{PolydatKernel, SharedCell};
 use crate::ast::{PortType, Value};
+use crate::kernel::{PolydatKernel, SharedCell};
 
 use super::builder::SubcontextBuilder;
 use super::error::{ContractViolation, SourceContext};
@@ -192,7 +192,9 @@ impl<M> ScopeKernel<M> {
     /// API; Phase 4 narrows or removes it once the migration
     /// completes.
     pub fn lock_inner(&self) -> std::sync::MutexGuard<'_, PolydatKernel> {
-        self.inner.lock().expect("ScopeKernel inner kernel poisoned")
+        self.inner
+            .lock()
+            .expect("ScopeKernel inner kernel poisoned")
     }
 
     /// The pull consumers registered with this kernel. Used by
@@ -343,10 +345,15 @@ impl<M> ScopeKernel<M> {
                 continue;
             };
             let value = inner.pull(&wt.source_output).clone();
-            let slot_type = inner.program().input_port_type_by_idx(idx)
+            let slot_type = inner
+                .program()
+                .input_port_type_by_idx(idx)
                 .expect("write-through idx resolved from find_input");
             let value = crate::kernel::state::check_write_through_type(
-                &wt.export_name, &wt.source_output, slot_type, value,
+                &wt.export_name,
+                &wt.source_output,
+                slot_type,
+                value,
             )?;
             pending.push((idx, value));
         }
@@ -365,7 +372,10 @@ impl<M> ScopeKernel<M> {
 /// In Phase 4 once the migration completes, the workload-root
 /// path will produce a `ScopeKernel<RootMarker>` directly from
 /// the workload-load entry point.
-pub(crate) fn wrap_root_kernel(kernel: PolydatKernel, label: impl Into<String>) -> Arc<ScopeKernel<RootMarker>> {
+pub(crate) fn wrap_root_kernel(
+    kernel: PolydatKernel,
+    label: impl Into<String>,
+) -> Arc<ScopeKernel<RootMarker>> {
     let label = label.into();
     let name = ChildName::from_segments([label.clone()]);
     let site = SourceContext::new(label);
@@ -530,13 +540,22 @@ impl<'a> PolydatMatterBuilder<'a> {
     /// Validate and produce typed matter. Errors when zero or
     /// more than one input form is configured.
     pub fn build(self) -> Result<PolydatMatter<'a>, String> {
-        let forms = [self.body.is_some(), self.statements.is_some(), self.program.is_some()];
+        let forms = [
+            self.body.is_some(),
+            self.statements.is_some(),
+            self.program.is_some(),
+        ];
         let count = forms.iter().filter(|x| **x).count();
         if count == 0 {
-            return Err("PolydatMatter::builder: no input form set (use .source / .statements / .program)".into());
+            return Err(
+                "PolydatMatter::builder: no input form set (use .source / .statements / .program)"
+                    .into(),
+            );
         }
         if count > 1 {
-            return Err("PolydatMatter::builder: multiple input forms set; choose exactly one".into());
+            return Err(
+                "PolydatMatter::builder: multiple input forms set; choose exactly one".into(),
+            );
         }
         let label = self.label.unwrap_or_else(|| "(matter)".to_string());
         let inner = if let Some(body) = self.body {

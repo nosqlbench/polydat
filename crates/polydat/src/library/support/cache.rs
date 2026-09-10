@@ -81,7 +81,9 @@ impl<K: Eq + Hash + Clone, V: Clone> Default for OnceCache<K, V> {
 impl<K: Eq + Hash + Clone, V: Clone> OnceCache<K, V> {
     /// Empty cache. Use with `LazyLock`/`OnceLock` for a static.
     pub fn new() -> Self {
-        Self { inner: Mutex::new(HashMap::new()) }
+        Self {
+            inner: Mutex::new(HashMap::new()),
+        }
     }
 
     /// Get the value for `key`, computing it via `init` exactly
@@ -94,11 +96,14 @@ impl<K: Eq + Hash + Clone, V: Clone> OnceCache<K, V> {
     /// install the per-key slot; `init` runs without it,
     /// guarded only by the per-key `OnceLock`.
     pub fn get_or_init<F>(&self, key: K, init: F) -> Result<V, String>
-    where F: FnOnce() -> Result<V, String>
+    where
+        F: FnOnce() -> Result<V, String>,
     {
         let slot: Arc<OnceLock<Result<V, String>>> = {
             let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            map.entry(key).or_insert_with(|| Arc::new(OnceLock::new())).clone()
+            map.entry(key)
+                .or_insert_with(|| Arc::new(OnceLock::new()))
+                .clone()
         };
         slot.get_or_init(init).clone()
     }
@@ -128,18 +133,25 @@ mod tests {
         let cache: OnceCache<&'static str, Arc<String>> = OnceCache::new();
         let calls = AtomicU32::new(0);
 
-        let v1 = cache.get_or_init("k", || {
-            calls.fetch_add(1, Ordering::Relaxed);
-            Ok(Arc::new("loaded".into()))
-        }).unwrap();
-        let v2 = cache.get_or_init("k", || {
-            calls.fetch_add(1, Ordering::Relaxed);
-            Ok(Arc::new("DIFFERENT".into()))
-        }).unwrap();
+        let v1 = cache
+            .get_or_init("k", || {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Ok(Arc::new("loaded".into()))
+            })
+            .unwrap();
+        let v2 = cache
+            .get_or_init("k", || {
+                calls.fetch_add(1, Ordering::Relaxed);
+                Ok(Arc::new("DIFFERENT".into()))
+            })
+            .unwrap();
 
         assert_eq!(*v1, "loaded");
         assert_eq!(*v2, "loaded");
-        assert!(Arc::ptr_eq(&v1, &v2), "second caller should see the cached arc");
+        assert!(
+            Arc::ptr_eq(&v1, &v2),
+            "second caller should see the cached arc"
+        );
         assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 
@@ -152,25 +164,30 @@ mod tests {
         let cache: Arc<OnceCache<&'static str, Arc<String>>> = Arc::new(OnceCache::new());
         let calls = Arc::new(AtomicU32::new(0));
 
-        let handles: Vec<_> = (0..32).map(|_| {
-            let cache = cache.clone();
-            let calls = calls.clone();
-            thread::spawn(move || {
-                cache.get_or_init("hot-key", || {
-                    calls.fetch_add(1, Ordering::Relaxed);
-                    // Tiny stall to widen the race window.
-                    thread::sleep(std::time::Duration::from_millis(5));
-                    Ok(Arc::new("only-once".into()))
+        let handles: Vec<_> = (0..32)
+            .map(|_| {
+                let cache = cache.clone();
+                let calls = calls.clone();
+                thread::spawn(move || {
+                    cache.get_or_init("hot-key", || {
+                        calls.fetch_add(1, Ordering::Relaxed);
+                        // Tiny stall to widen the race window.
+                        thread::sleep(std::time::Duration::from_millis(5));
+                        Ok(Arc::new("only-once".into()))
+                    })
                 })
             })
-        }).collect();
+            .collect();
 
         for h in handles {
             let v = h.join().unwrap().unwrap();
             assert_eq!(*v, "only-once");
         }
-        assert_eq!(calls.load(Ordering::Relaxed), 1,
-            "loader should run exactly once across all concurrent callers");
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            1,
+            "loader should run exactly once across all concurrent callers"
+        );
     }
 
     #[test]
@@ -199,7 +216,10 @@ mod tests {
 
         assert_eq!(r1.unwrap_err(), "nope");
         assert_eq!(r2.unwrap_err(), "nope");
-        assert_eq!(calls.load(Ordering::Relaxed), 1,
-            "second caller must NOT retry; the failure is sticky");
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            1,
+            "second caller must NOT retry; the failure is sticky"
+        );
     }
 }

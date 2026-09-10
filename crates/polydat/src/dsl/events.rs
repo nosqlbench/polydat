@@ -38,11 +38,18 @@ pub enum CompileEvent {
     /// A legacy binding chain was translated to Polydat source.
     LegacyTranslated { name: String, polydat_expr: String },
     /// Type adapter inserted between mismatched ports.
-    TypeAdapterInserted { from_node: String, to_node: String, adapter: String },
+    TypeAdapterInserted {
+        from_node: String,
+        to_node: String,
+        adapter: String,
+    },
     /// Init-time constant folded (SRD 44).
     ConstantFolded { node: String, value: String },
     /// Fusion pattern matched and applied (SRD 36).
-    FusionApplied { pattern: String, nodes_replaced: usize },
+    FusionApplied {
+        pattern: String,
+        nodes_replaced: usize,
+    },
     /// Output declared.
     OutputDeclared { name: String },
     /// Compilation level selected for a node.
@@ -52,11 +59,19 @@ pub enum CompileEvent {
     /// Config wire connected to a cycle-time source (performance warning).
     ConfigWireCycleWarning { node: String, port: String },
     /// Auto-widening type coercion inserted by the compiler.
-    TypeWidening { from: &'static str, to: &'static str, context: String },
+    TypeWidening {
+        from: &'static str,
+        to: &'static str,
+        context: String,
+    },
     /// Warning during compilation.
     Warning { message: String },
     /// Summary of the compiled program.
-    Summary { nodes: usize, outputs: usize, constants_folded: usize },
+    Summary {
+        nodes: usize,
+        outputs: usize,
+        constants_folded: usize,
+    },
     /// A module-level pragma was acknowledged. Recorded once per
     /// recognised `// @pragma: <name>` directive at the top of the
     /// source. Lets `--diagnose` show which graph transforms the
@@ -128,7 +143,9 @@ impl CompileEvent {
             CompileEvent::TileCompiled { .. } => EventLevel::Info,
 
             // Advisory: implicit conversions the user should review
-            CompileEvent::TileHoleTyped { adapter: Some(_), .. } => EventLevel::Advisory,
+            CompileEvent::TileHoleTyped {
+                adapter: Some(_), ..
+            } => EventLevel::Advisory,
             CompileEvent::TypeAdapterInserted { .. } => EventLevel::Advisory,
             CompileEvent::TypeWidening { .. } => EventLevel::Advisory,
             CompileEvent::LegacyTranslated { .. } => EventLevel::Advisory,
@@ -170,12 +187,18 @@ impl CompileEventLog {
     /// Return only advisory-level events (type coercions, widenings).
     /// These are the "module design quality" messages users query with --diagnose.
     pub fn advisories(&self) -> Vec<&CompileEvent> {
-        self.events.iter().filter(|e| e.level() == EventLevel::Advisory).collect()
+        self.events
+            .iter()
+            .filter(|e| e.level() == EventLevel::Advisory)
+            .collect()
     }
 
     /// Return only warning-level events.
     pub fn warnings(&self) -> Vec<&CompileEvent> {
-        self.events.iter().filter(|e| e.level() == EventLevel::Warning).collect()
+        self.events
+            .iter()
+            .filter(|e| e.level() == EventLevel::Warning)
+            .collect()
     }
 
     /// Format all events as human-readable diagnostic lines.

@@ -20,18 +20,18 @@
 //! complex ops are extern calls with zero overhead beyond the call itself.
 
 #[cfg(feature = "jit")]
-mod kernels;
-#[cfg(feature = "jit")]
 mod codegen;
 #[cfg(feature = "jit")]
 pub mod host_isa;
 #[cfg(feature = "jit")]
+mod kernels;
+#[cfg(feature = "jit")]
 pub mod simd;
 
 #[cfg(feature = "jit")]
-pub use kernels::*;
-#[cfg(feature = "jit")]
 pub use codegen::*;
+#[cfg(feature = "jit")]
+pub use kernels::*;
 
 #[cfg(all(test, feature = "jit"))]
 mod tests {
@@ -39,10 +39,10 @@ mod tests {
 
     #[test]
     fn test_inventory_tier_distribution() {
-        use crate::dsl::registry::registry;
-        use crate::dsl::factory::{build_node, ConstArg};
-        use crate::compile::assembly::WireRef;
         use crate::ast::PortType;
+        use crate::compile::assembly::WireRef;
+        use crate::dsl::factory::{ConstArg, build_node};
+        use crate::dsl::registry::registry;
 
         let reg = registry();
         let total = reg.len();
@@ -87,9 +87,18 @@ mod tests {
 
         println!("\n=== COMPILER OPTIMIZATION INVENTORY SUMMARY ===");
         println!("Total Registered Functions: {total}");
-        println!("Phase 3 (Full Native JIT):  {p3_count} ({:.1}%)", (p3_count as f64 / total as f64) * 100.0);
-        println!("Phase 2 (Captured Closure): {p2_count} ({:.1}%)", (p2_count as f64 / total as f64) * 100.0);
-        println!("Phase 1 (Interpreter Cones):{p1_count} ({:.1}%) (unbuilt fallback: {unbuilt})", (p1_count as f64 / total as f64) * 100.0);
+        println!(
+            "Phase 3 (Full Native JIT):  {p3_count} ({:.1}%)",
+            (p3_count as f64 / total as f64) * 100.0
+        );
+        println!(
+            "Phase 2 (Captured Closure): {p2_count} ({:.1}%)",
+            (p2_count as f64 / total as f64) * 100.0
+        );
+        println!(
+            "Phase 1 (Interpreter Cones):{p1_count} ({:.1}%) (unbuilt fallback: {unbuilt})",
+            (p1_count as f64 / total as f64) * 100.0
+        );
         println!("===============================================\n");
     }
 }

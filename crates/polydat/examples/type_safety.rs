@@ -13,7 +13,8 @@
 use polydat::ast::Value;
 
 fn main() {
-    let mut kernel = polydat::dsl::compile_polydat(r#"
+    let mut kernel = polydat::dsl::compile_polydat(
+        r#"
         input cycle: u64
         n := mod(hash(cycle), 1000)             // u64
         p := unit_interval(hash(cycle))         // f64 in [0.0, 1.0)
@@ -23,7 +24,9 @@ fn main() {
         // nodes pick u64 for compactness and fast-path math. So
         // `is_big` below is a u64, not a Bool.
         is_big := u64_gt(n, 500)                // u64 (0 or 1)
-    "#).expect("compile failed");
+    "#,
+    )
+    .expect("compile failed");
 
     kernel.set_inputs(&[42]);
 

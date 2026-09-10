@@ -22,46 +22,74 @@
 // (`u64_add` → `U64Add`, no more `2` suffix).
 
 #[crate::polydat_node(category = Arithmetic, simd = "reg_add_i64", simd_total)]
-fn u64_add(a: u64, b: u64) -> u64 { a.wrapping_add(b) }
+fn u64_add(a: u64, b: u64) -> u64 {
+    a.wrapping_add(b)
+}
 
 #[crate::polydat_node(category = Arithmetic, simd = "reg_sub_i64", simd_total)]
-fn u64_sub(a: u64, b: u64) -> u64 { a.wrapping_sub(b) }
+fn u64_sub(a: u64, b: u64) -> u64 {
+    a.wrapping_sub(b)
+}
 
 #[crate::polydat_node(category = Arithmetic, simd = "reg_mul_i64", simd_total)]
-fn u64_mul(a: u64, b: u64) -> u64 { a.wrapping_mul(b) }
+fn u64_mul(a: u64, b: u64) -> u64 {
+    a.wrapping_mul(b)
+}
 
 #[crate::polydat_node(category = Arithmetic)]
-fn u64_div(a: u64, b: u64) -> u64 { a.checked_div(b).unwrap_or(0) }
+fn u64_div(a: u64, b: u64) -> u64 {
+    a.checked_div(b).unwrap_or(0)
+}
 
 #[crate::polydat_node(category = Arithmetic)]
-fn u64_mod(a: u64, b: u64) -> u64 { if b != 0 { a % b } else { 0 } }
+fn u64_mod(a: u64, b: u64) -> u64 {
+    if b != 0 { a % b } else { 0 }
+}
 
 #[crate::polydat_node(category = Arithmetic)]
-fn u64_and(a: u64, b: u64) -> u64 { a & b }
+fn u64_and(a: u64, b: u64) -> u64 {
+    a & b
+}
 
 #[crate::polydat_node(category = Arithmetic)]
-fn u64_or(a: u64, b: u64) -> u64 { a | b }
+fn u64_or(a: u64, b: u64) -> u64 {
+    a | b
+}
 
 #[crate::polydat_node(category = Arithmetic)]
-fn u64_xor(a: u64, b: u64) -> u64 { a ^ b }
+fn u64_xor(a: u64, b: u64) -> u64 {
+    a ^ b
+}
 
 #[crate::polydat_node(category = Arithmetic)]
-fn u64_shl(a: u64, b: u64) -> u64 { a.wrapping_shl(b as u32) }
+fn u64_shl(a: u64, b: u64) -> u64 {
+    a.wrapping_shl(b as u32)
+}
 
 #[crate::polydat_node(category = Arithmetic)]
-fn u64_shr(a: u64, b: u64) -> u64 { a.wrapping_shr(b as u32) }
+fn u64_shr(a: u64, b: u64) -> u64 {
+    a.wrapping_shr(b as u32)
+}
 
 #[crate::polydat_node(category = Arithmetic)]
-fn u64_not(input: u64) -> u64 { !input }
+fn u64_not(input: u64) -> u64 {
+    !input
+}
 
 #[crate::polydat_node(category = Arithmetic)]
-fn checked_add(a: u64, b: u64) -> u64 { a.checked_add(b).unwrap_or(0) }
+fn checked_add(a: u64, b: u64) -> u64 {
+    a.checked_add(b).unwrap_or(0)
+}
 
 #[crate::polydat_node(category = Arithmetic)]
-fn checked_sub(a: u64, b: u64) -> u64 { a.saturating_sub(b) }
+fn checked_sub(a: u64, b: u64) -> u64 {
+    a.saturating_sub(b)
+}
 
 #[crate::polydat_node(category = Arithmetic)]
-fn checked_mul(a: u64, b: u64) -> u64 { a.checked_mul(b).unwrap_or(0) }
+fn checked_mul(a: u64, b: u64) -> u64 {
+    a.checked_mul(b).unwrap_or(0)
+}
 
 // ---------------------------------------------------------------------------
 // Signature declarations for the DSL registry
@@ -72,8 +100,7 @@ fn checked_mul(a: u64, b: u64) -> u64 { a.checked_mul(b).unwrap_or(0) }
 // hand-maintained signatures()/build_node() and the
 // `register_nodes!` call below it have been retired.
 
-#[cfg(any())]  // dead-code preserved verbatim for diff readability; never compiled
-
+#[cfg(any())] // dead-code preserved verbatim for diff readability; never compiled
 #[cfg(test)]
 mod tests {
     use super::*;

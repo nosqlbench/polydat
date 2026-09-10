@@ -94,7 +94,10 @@ impl Bound {
             Bound::Pct(p) => Some(base_start + ((p / 100.0) * extent as f64).round() as u64),
             Bound::Frac(f) => Some(base_start + (f * extent as f64).round() as u64),
             Bound::Ord(o) => Some(base_start.saturating_add(*o).min(base_end)),
-            Bound::Star | Bound::Fill | Bound::StarSplit(_) | Bound::StarShaped(_)
+            Bound::Star
+            | Bound::Fill
+            | Bound::StarSplit(_)
+            | Bound::StarShaped(_)
             | Bound::Gap(_) => None,
         }
     }
@@ -192,10 +195,7 @@ impl fmt::Display for PartitionOrder {
 pub enum Chunking {
     /// `start..end` form. Single partition spanning the named
     /// boundary, regardless of either endpoint's `Bound` kind.
-    SingleRange {
-        start: Bound,
-        end: Bound,
-    },
+    SingleRange { start: Bound, end: Bound },
     /// Comma-separated delta list. Each entry is the delta
     /// from the running start; a single tail token is allowed
     /// per list and resolves against whatever's left after the
@@ -208,9 +208,7 @@ pub enum Chunking {
     /// Deltas summing to less than the extent (without a tail
     /// token) drop the trailing gap; summing to more is a
     /// resolve-time error.
-    DeltaList {
-        deltas: Vec<Bound>,
-    },
+    DeltaList { deltas: Vec<Bound> },
 }
 
 /// Parsed `cursor=...` argument:
@@ -363,13 +361,11 @@ pub fn parse(input: &str) -> Result<PartitionSpec, String> {
                 // position (always the generation order) and
                 // size, so teach the unambiguous spelling.
                 "ascending" => {
-                    return Err(
-                        "`ascending`: partition order sorts key on partition SIZE, \
+                    return Err("`ascending`: partition order sorts key on partition SIZE, \
                          not ordinal position (position order is always the \
                          generation order — that's `unchanged`). Spell it \
                          `smallest_first`"
-                            .into(),
-                    );
+                        .into());
                 }
                 "descending" => {
                     return Err(
@@ -419,7 +415,11 @@ pub fn parse(input: &str) -> Result<PartitionSpec, String> {
         Some(wt) => Some(parse_window(&clean_part(wt), input)?),
     };
     let chunking = parse_chunking(&clean_part(chunk_tokens), input)?;
-    Ok(PartitionSpec { chunking, window, order })
+    Ok(PartitionSpec {
+        chunking,
+        window,
+        order,
+    })
 }
 
 /// Re-join part tokens and strip the advisory bracket markers.
@@ -582,12 +582,14 @@ fn parse_delta_entry(raw: &str) -> Result<Vec<Bound>, String> {
     // Gap prefix: `~<sized>`.
     if let Some(rest) = raw.strip_prefix('~') {
         if let Some((_, rep)) = rest.split_once('x')
-            && !rep.is_empty() && rep.chars().all(|c| c.is_ascii_digit()) {
-                return Err(format!(
-                    "`~{rest}`: repetition does not apply to gaps — size the gap \
+            && !rep.is_empty()
+            && rep.chars().all(|c| c.is_ascii_digit())
+        {
+            return Err(format!(
+                "`~{rest}`: repetition does not apply to gaps — size the gap \
                      directly (adjacent gaps are one gap)"
-                ));
-            }
+            ));
+        }
         let inner = parse_bound(rest)?;
         if !inner.is_sized() {
             return Err(format!(
@@ -600,24 +602,25 @@ fn parse_delta_entry(raw: &str) -> Result<Vec<Bound>, String> {
     }
     // Finite repetition: `<sized>xN`.
     if let Some((lhs, rhs)) = raw.split_once('x')
-        && !lhs.is_empty() && !rhs.is_empty() && rhs.chars().all(|c| c.is_ascii_digit()) {
-            let n: u64 = rhs
-                .parse()
-                .map_err(|_| format!("invalid repetition count in `{raw}`"))?;
-            if n == 0 {
-                return Err(format!(
-                    "`{raw}`: the repetition count must be >= 1"
-                ));
-            }
-            let b = parse_bound(lhs)?;
-            if !b.is_sized() {
-                return Err(format!(
-                    "`{raw}`: repetition applies to sized deltas (percentage, \
-                     fraction, or ordinal) only"
-                ));
-            }
-            return Ok(vec![b; n as usize]);
+        && !lhs.is_empty()
+        && !rhs.is_empty()
+        && rhs.chars().all(|c| c.is_ascii_digit())
+    {
+        let n: u64 = rhs
+            .parse()
+            .map_err(|_| format!("invalid repetition count in `{raw}`"))?;
+        if n == 0 {
+            return Err(format!("`{raw}`: the repetition count must be >= 1"));
         }
+        let b = parse_bound(lhs)?;
+        if !b.is_sized() {
+            return Err(format!(
+                "`{raw}`: repetition applies to sized deltas (percentage, \
+                     fraction, or ordinal) only"
+            ));
+        }
+        return Ok(vec![b; n as usize]);
+    }
     Ok(vec![parse_bound(raw)?])
 }
 
@@ -718,14 +721,14 @@ fn parse_bound(raw: &str) -> Result<Bound, String> {
     }
     // Decimal-with-dot: fraction form.
     if s.contains('.') {
-        let value: f64 = s
-            .parse()
-            .map_err(|_| format!("invalid decimal `{raw}`"))?;
+        let value: f64 = s.parse().map_err(|_| format!("invalid decimal `{raw}`"))?;
         if !(0.0..=1.0).contains(&value) {
             return Err(format!(
                 "decimal `{raw}` is ambiguous — fractions must be in [0.0, 1.0]; \
                  did you mean `{}%` (percentage), `0.0{}` (fraction), or `{}` (literal ordinal)?",
-                value, raw.replace('.', ""), raw.replace('.', ""),
+                value,
+                raw.replace('.', ""),
+                raw.replace('.', ""),
             ));
         }
         return Ok(Bound::Frac(value));
@@ -797,16 +800,21 @@ fn recipe_ratios(args: &[&str]) -> Result<Vec<f64>, String> {
     if args.is_empty() {
         return Err("ratios:a,b,c,... requires at least one weight".into());
     }
-    args.iter()
-        .map(|a| parse_f64_arg(a, "ratios"))
-        .collect()
+    args.iter().map(|a| parse_f64_arg(a, "ratios")).collect()
 }
 
 fn recipe_mul(args: &[&str]) -> Result<Vec<f64>, String> {
     let (start, ratio) = match args.len() {
         1 => (1.0, parse_f64_arg(args[0], "mul")?),
-        2 => (parse_f64_arg(args[0], "mul")?, parse_f64_arg(args[1], "mul")?),
-        n => return Err(format!("mul:R or mul:S,R expects 1 or 2 arguments; got {n}")),
+        2 => (
+            parse_f64_arg(args[0], "mul")?,
+            parse_f64_arg(args[1], "mul")?,
+        ),
+        n => {
+            return Err(format!(
+                "mul:R or mul:S,R expects 1 or 2 arguments; got {n}"
+            ));
+        }
     };
     if start <= 0.0 {
         return Err(format!("mul:S,R requires S > 0; got {start}"));
@@ -844,7 +852,9 @@ fn recipe_mul(args: &[&str]) -> Result<Vec<f64>, String> {
         }
     }
     if weights.is_empty() {
-        return Err(format!("mul:{start},{ratio} produced no terms — pick a larger start"));
+        return Err(format!(
+            "mul:{start},{ratio} produced no terms — pick a larger start"
+        ));
     }
     Ok(weights)
 }
@@ -1011,7 +1021,10 @@ fn normalise_weights(weights: &[f64]) -> Result<Vec<f64>, String> {
 /// Normalise raw recipe weights to percentage deltas summing
 /// to 100%.
 fn normalise_to_pct(weights: &[f64]) -> Result<Vec<Bound>, String> {
-    Ok(normalise_weights(weights)?.into_iter().map(Bound::Pct).collect())
+    Ok(normalise_weights(weights)?
+        .into_iter()
+        .map(Bound::Pct)
+        .collect())
 }
 
 // =========================================================================
@@ -1085,7 +1098,10 @@ pub fn resolve(
     let dom_extent = dom_end - dom_start;
     // Labelling frame: pct fields and base_extent always
     // describe the full base, regardless of the window.
-    let frame = Frame { base_start, base_extent };
+    let frame = Frame {
+        base_start,
+        base_extent,
+    };
     let mut partitions = match &spec.chunking {
         Chunking::SingleRange { start, end } => {
             let start_ord = start
@@ -1233,9 +1249,7 @@ fn resolve_delta_list(
         let idx = partitions.len() as u64;
         partitions.push(frame.partition(idx, start, end));
     };
-    let boundary = |exact_pos: f64| -> u64 {
-        (dom_start + exact_pos.round() as u64).min(dom_end)
-    };
+    let boundary = |exact_pos: f64| -> u64 { (dom_start + exact_pos.round() as u64).min(dom_end) };
     for (i, delta) in deltas.iter().enumerate() {
         match delta {
             Bound::Star => {
@@ -1305,8 +1319,8 @@ fn resolve_delta_list(
                 let mut cum = 0.0f64;
                 for w in weights {
                     cum += w;
-                    let next = (start + ((cum / 100.0) * remainder as f64).round() as u64)
-                        .min(dom_end);
+                    let next =
+                        (start + ((cum / 100.0) * remainder as f64).round() as u64).min(dom_end);
                     if next == cursor {
                         return Err(format!(
                             "`*/<recipe>` produces an empty partition — weight \
@@ -1385,8 +1399,7 @@ pub fn subdivide_partition(p: &Partition, n: u64) -> Result<Vec<Partition>, Stri
         ));
     }
     let pct_at = |ord: u64| -> f64 {
-        p.start_pct
-            + (ord - p.start_ord) as f64 / card as f64 * (p.end_pct - p.start_pct)
+        p.start_pct + (ord - p.start_ord) as f64 / card as f64 * (p.end_pct - p.start_pct)
     };
     Ok(split_evenly(p.start_ord, p.end_ord, n)
         .into_iter()
@@ -1417,9 +1430,8 @@ pub fn split_evenly(start_ord: u64, end_ord: u64, n: u64) -> Vec<(u64, u64)> {
     debug_assert!(end_ord >= start_ord);
     let span = (end_ord - start_ord) as u128;
     let n_wide = n as u128;
-    let boundary = |i: u64| -> u64 {
-        start_ord + ((i as u128 * span + n_wide / 2) / n_wide) as u64
-    };
+    let boundary =
+        |i: u64| -> u64 { start_ord + ((i as u128 * span + n_wide / 2) / n_wide) as u64 };
     (0..n).map(|i| (boundary(i), boundary(i + 1))).collect()
 }
 
@@ -1444,13 +1456,14 @@ fn pct_of(ordinal: u64, base_start: u64, extent: u64) -> f64 {
 // at their entry points.
 
 impl ReflectedValue for Partition {
-    fn type_name(&self) -> &str { "Partition" }
+    fn type_name(&self) -> &str {
+        "Partition"
+    }
 
     fn display(&self) -> String {
         format!(
             "Partition({}/{} [{}..{}) [{:.2}%..{:.2}%))",
-            self.idx, self.count,
-            self.start_ord, self.end_ord, self.start_pct, self.end_pct,
+            self.idx, self.count, self.start_ord, self.end_ord, self.start_pct, self.end_pct,
         )
     }
 
@@ -1467,7 +1480,9 @@ impl ReflectedValue for Partition {
         })
     }
 
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     fn clone_reflected(&self) -> Box<dyn ReflectedValue> {
         Box::new(*self)
@@ -1475,7 +1490,9 @@ impl ReflectedValue for Partition {
 }
 
 impl ReflectedValue for PartitionSpec {
-    fn type_name(&self) -> &str { "PartitionSpec" }
+    fn type_name(&self) -> &str {
+        "PartitionSpec"
+    }
 
     fn display(&self) -> String {
         let chunking = match &self.chunking {
@@ -1500,7 +1517,9 @@ impl ReflectedValue for PartitionSpec {
         serde_json::Value::String(self.display())
     }
 
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     fn clone_reflected(&self) -> Box<dyn ReflectedValue> {
         Box::new(self.clone())
@@ -1521,22 +1540,32 @@ impl PartitionList {
     }
 
     /// Number of partitions in the list.
-    pub fn len(&self) -> usize { self.0.len() }
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
 
     /// True if the list is empty.
-    pub fn is_empty(&self) -> bool { self.0.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 
     /// Borrow the underlying slice for iteration.
-    pub fn as_slice(&self) -> &[Partition] { &self.0 }
+    pub fn as_slice(&self) -> &[Partition] {
+        &self.0
+    }
 }
 
 impl ReflectedValue for PartitionList {
-    fn type_name(&self) -> &str { "PartitionList" }
+    fn type_name(&self) -> &str {
+        "PartitionList"
+    }
 
     fn display(&self) -> String {
-        let parts: Vec<String> = self.0.iter().map(|p| {
-            format!("[{}..{})", p.start_ord, p.end_ord)
-        }).collect();
+        let parts: Vec<String> = self
+            .0
+            .iter()
+            .map(|p| format!("[{}..{})", p.start_ord, p.end_ord))
+            .collect();
         format!("PartitionList[{}]={}", self.0.len(), parts.join(","))
     }
 
@@ -1544,7 +1573,9 @@ impl ReflectedValue for PartitionList {
         serde_json::Value::Array(self.0.iter().map(|p| p.to_json_value()).collect())
     }
 
-    fn as_any(&self) -> &dyn std::any::Any { self }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 
     fn clone_reflected(&self) -> Box<dyn ReflectedValue> {
         Box::new(self.clone())
@@ -1636,7 +1667,10 @@ mod tests {
     #[test]
     fn parse_bound_fraction_out_of_range_rejected() {
         let err = parse_bound("1.5").unwrap_err();
-        assert!(err.contains("ambiguous"), "diagnostic should explain: {err}");
+        assert!(
+            err.contains("ambiguous"),
+            "diagnostic should explain: {err}"
+        );
     }
 
     #[test]
@@ -1790,22 +1824,25 @@ mod tests {
     fn parse_star_split_alone_is_whole_extent_split() {
         // Degenerate no-head case: the remainder is everything.
         let spec = parse("*/16").unwrap();
-        assert_eq!(
-            spec,
-            PartitionSpec::delta_list(vec![Bound::StarSplit(16)])
-        );
+        assert_eq!(spec, PartitionSpec::delta_list(vec![Bound::StarSplit(16)]));
     }
 
     #[test]
     fn parse_fill_alone_rejected_with_hint() {
         let err = parse("...").unwrap_err();
-        assert!(err.contains("preceding delta") || err.contains("before it"), "diagnostic: {err}");
+        assert!(
+            err.contains("preceding delta") || err.contains("before it"),
+            "diagnostic: {err}"
+        );
     }
 
     #[test]
     fn parse_fill_first_in_list_rejected() {
         let err = parse("...,10%").unwrap_err();
-        assert!(err.contains("before it") || err.contains("last entry"), "diagnostic: {err}");
+        assert!(
+            err.contains("before it") || err.contains("last entry"),
+            "diagnostic: {err}"
+        );
     }
 
     #[test]
@@ -1835,7 +1872,10 @@ mod tests {
         // diagnostic must point at it.
         let err = parse("90%,*/1%").unwrap_err();
         assert!(err.contains("chunk count"), "diagnostic: {err}");
-        assert!(err.contains("1%,..."), "diagnostic should teach the fill form: {err}");
+        assert!(
+            err.contains("1%,..."),
+            "diagnostic should teach the fill form: {err}"
+        );
         let err = parse("90%,*/0.01").unwrap_err();
         assert!(err.contains("chunk count"), "diagnostic: {err}");
     }
@@ -1898,7 +1938,12 @@ mod tests {
         assert_eq!(pcts.len(), 5);
         let expected = [1.0 / 16.0, 4.0 / 16.0, 6.0 / 16.0, 4.0 / 16.0, 1.0 / 16.0];
         for (i, e) in expected.iter().enumerate() {
-            assert!((pcts[i] - e * 100.0).abs() < 1e-9, "term {i}: {} vs {}", pcts[i], e * 100.0);
+            assert!(
+                (pcts[i] - e * 100.0).abs() < 1e-9,
+                "term {i}: {} vs {}",
+                pcts[i],
+                e * 100.0
+            );
         }
     }
 
@@ -1975,7 +2020,10 @@ mod tests {
         let pcts = pcts_of(parse("front_heavy:4").unwrap());
         assert_eq!(pcts.len(), 4);
         for i in 1..pcts.len() {
-            assert!(pcts[i] < pcts[i - 1], "front_heavy should be monotonic-declining");
+            assert!(
+                pcts[i] < pcts[i - 1],
+                "front_heavy should be monotonic-declining"
+            );
         }
     }
 
@@ -1984,7 +2032,10 @@ mod tests {
         let pcts = pcts_of(parse("back_heavy:4").unwrap());
         assert_eq!(pcts.len(), 4);
         for i in 1..pcts.len() {
-            assert!(pcts[i] > pcts[i - 1], "back_heavy should be monotonic-growing");
+            assert!(
+                pcts[i] > pcts[i - 1],
+                "back_heavy should be monotonic-growing"
+            );
         }
     }
 
@@ -1992,7 +2043,10 @@ mod tests {
     fn recipe_unknown_name_rejected() {
         let err = parse("blorp:3").unwrap_err();
         assert!(err.contains("unknown recipe"), "diagnostic: {err}");
-        assert!(err.contains("linear"), "should list supported recipes: {err}");
+        assert!(
+            err.contains("linear"),
+            "should list supported recipes: {err}"
+        );
     }
 
     // ── Resolution ──────────────────────────────────────────
@@ -2113,7 +2167,11 @@ mod tests {
     #[test]
     fn resolve_fill_and_star_split_coincide_at_90_10() {
         let explicit = resolve(
-            &parse("90%,1%,1%,1%,1%,1%,1%,1%,1%,1%,1%").unwrap(), 0, 1000).unwrap();
+            &parse("90%,1%,1%,1%,1%,1%,1%,1%,1%,1%,1%").unwrap(),
+            0,
+            1000,
+        )
+        .unwrap();
         let filled = resolve(&parse("90%,1%,...").unwrap(), 0, 1000).unwrap();
         let split = resolve(&parse("90%,*/10").unwrap(), 0, 1000).unwrap();
         assert_eq!(explicit.len(), 11);
@@ -2130,8 +2188,7 @@ mod tests {
     fn resolve_fill_truncates_final_chunk() {
         // 3 + 2 + 2 + 2 + 1(truncated) over extent 10.
         let parts = resolve(&parse("3,2,...").unwrap(), 0, 10).unwrap();
-        let bounds: Vec<(u64, u64)> =
-            parts.iter().map(|p| (p.start_ord, p.end_ord)).collect();
+        let bounds: Vec<(u64, u64)> = parts.iter().map(|p| (p.start_ord, p.end_ord)).collect();
         assert_eq!(bounds, vec![(0, 3), (3, 5), (5, 7), (7, 9), (9, 10)]);
     }
 
@@ -2158,8 +2215,7 @@ mod tests {
         // boundary rule distributes the slack: 333/334/333,
         // covering the extent exactly.
         let parts = resolve(&parse("linear:3").unwrap(), 0, 1000).unwrap();
-        let bounds: Vec<(u64, u64)> =
-            parts.iter().map(|p| (p.start_ord, p.end_ord)).collect();
+        let bounds: Vec<(u64, u64)> = parts.iter().map(|p| (p.start_ord, p.end_ord)).collect();
         assert_eq!(bounds, vec![(0, 333), (333, 667), (667, 1000)]);
     }
 
@@ -2175,7 +2231,10 @@ mod tests {
             assert_eq!(w[0].end_ord, w[1].start_ord, "contiguous");
         }
         let sizes: Vec<u64> = parts.iter().map(|p| p.cardinality()).collect();
-        assert!(sizes.iter().all(|s| *s == 33 || *s == 34), "sizes: {sizes:?}");
+        assert!(
+            sizes.iter().all(|s| *s == 33 || *s == 34),
+            "sizes: {sizes:?}"
+        );
         assert_eq!(sizes.iter().sum::<u64>(), 100);
     }
 
@@ -2209,7 +2268,12 @@ mod tests {
 
     #[test]
     fn split_evenly_boundaries_monotone_and_exact() {
-        for (start, end, n) in [(0u64, 100u64, 7u64), (5, 5, 1), (0, 3, 3), (1000, 10007, 13)] {
+        for (start, end, n) in [
+            (0u64, 100u64, 7u64),
+            (5, 5, 1),
+            (0, 3, 3),
+            (1000, 10007, 13),
+        ] {
             let chunks = split_evenly(start, end, n);
             assert_eq!(chunks.len(), n as usize);
             assert_eq!(chunks[0].0, start);
@@ -2323,7 +2387,11 @@ mod tests {
     fn parse_window_clause_position_errors() {
         assert!(parse("in 0..50%").unwrap_err().contains("chunking spec"));
         assert!(parse("linear:4 in").unwrap_err().contains("window range"));
-        assert!(parse("linear:2 in 0..50% in 0..10%").unwrap_err().contains("at most one"));
+        assert!(
+            parse("linear:2 in 0..50% in 0..10%")
+                .unwrap_err()
+                .contains("at most one")
+        );
     }
 
     #[test]
@@ -2332,9 +2400,11 @@ mod tests {
         // linear:4 over [20%, 100%) of 1000 → four 200-ordinal
         // partitions starting at 200.
         let parts = resolve(&parse("linear:4 in 20%..100%").unwrap(), 0, 1000).unwrap();
-        let bounds: Vec<(u64, u64)> =
-            parts.iter().map(|p| (p.start_ord, p.end_ord)).collect();
-        assert_eq!(bounds, vec![(200, 400), (400, 600), (600, 800), (800, 1000)]);
+        let bounds: Vec<(u64, u64)> = parts.iter().map(|p| (p.start_ord, p.end_ord)).collect();
+        assert_eq!(
+            bounds,
+            vec![(200, 400), (400, 600), (600, 800), (800, 1000)]
+        );
     }
 
     #[test]
@@ -2362,10 +2432,7 @@ mod tests {
     #[test]
     fn parse_finite_repetition_expands() {
         let spec = parse("1%x3").unwrap();
-        assert_eq!(
-            spec,
-            PartitionSpec::delta_list(vec![Bound::Pct(1.0); 3])
-        );
+        assert_eq!(spec, PartitionSpec::delta_list(vec![Bound::Pct(1.0); 3]));
     }
 
     #[test]
@@ -2431,8 +2498,10 @@ mod tests {
     #[test]
     fn resolve_gap_consumes_without_emitting() {
         let parts = resolve(&parse("10%,~80%,10%").unwrap(), 0, 1000).unwrap();
-        let bounds: Vec<(u64, u64, u64)> =
-            parts.iter().map(|p| (p.idx, p.start_ord, p.end_ord)).collect();
+        let bounds: Vec<(u64, u64, u64)> = parts
+            .iter()
+            .map(|p| (p.idx, p.start_ord, p.end_ord))
+            .collect();
         // Emitted partitions only; idx counts emitted entries.
         assert_eq!(bounds, vec![(0, 0, 100), (1, 900, 1000)]);
     }
@@ -2441,8 +2510,7 @@ mod tests {
     fn resolve_gap_counts_toward_star_remainder() {
         // 10% head + 40% gap leaves 50% for the star.
         let parts = resolve(&parse("10%,~40%,*").unwrap(), 0, 1000).unwrap();
-        let bounds: Vec<(u64, u64)> =
-            parts.iter().map(|p| (p.start_ord, p.end_ord)).collect();
+        let bounds: Vec<(u64, u64)> = parts.iter().map(|p| (p.start_ord, p.end_ord)).collect();
         assert_eq!(bounds, vec![(0, 100), (500, 1000)]);
     }
 
@@ -2470,15 +2538,17 @@ mod tests {
     #[test]
     fn parse_star_linear_rejected_with_canonical_hint() {
         let err = parse("90%,*/linear:4").unwrap_err();
-        assert!(err.contains("*/4"), "diagnostic should point at `*/N`: {err}");
+        assert!(
+            err.contains("*/4"),
+            "diagnostic should point at `*/N`: {err}"
+        );
     }
 
     #[test]
     fn resolve_star_shaped_divides_remainder_by_weights() {
         // Remainder 500, weights 25/75 → [500, 625), [625, 1000).
         let parts = resolve(&parse("50%,*/ratios:1,3").unwrap(), 0, 1000).unwrap();
-        let bounds: Vec<(u64, u64)> =
-            parts.iter().map(|p| (p.start_ord, p.end_ord)).collect();
+        let bounds: Vec<(u64, u64)> = parts.iter().map(|p| (p.start_ord, p.end_ord)).collect();
         assert_eq!(bounds, vec![(0, 500), (500, 625), (625, 1000)]);
     }
 
@@ -2486,8 +2556,7 @@ mod tests {
     fn resolve_star_shaped_alone_covers_extent() {
         let parts = resolve(&parse("*/fib:3").unwrap(), 0, 600).unwrap();
         // fib:3 weights [1, 2, 3] → 100/200/300.
-        let bounds: Vec<(u64, u64)> =
-            parts.iter().map(|p| (p.start_ord, p.end_ord)).collect();
+        let bounds: Vec<(u64, u64)> = parts.iter().map(|p| (p.start_ord, p.end_ord)).collect();
         assert_eq!(bounds, vec![(0, 100), (100, 300), (300, 600)]);
     }
 
@@ -2502,10 +2571,19 @@ mod tests {
 
     #[test]
     fn parse_order_suffix() {
-        assert_eq!(parse("fib:5 largest_first").unwrap().order, PartitionOrder::LargestFirst);
-        assert_eq!(parse("fib:5 smallest_first").unwrap().order, PartitionOrder::SmallestFirst);
+        assert_eq!(
+            parse("fib:5 largest_first").unwrap().order,
+            PartitionOrder::LargestFirst
+        );
+        assert_eq!(
+            parse("fib:5 smallest_first").unwrap().order,
+            PartitionOrder::SmallestFirst
+        );
         assert_eq!(parse("fib:5 random").unwrap().order, PartitionOrder::Random);
-        assert_eq!(parse("fib:5 unchanged").unwrap().order, PartitionOrder::Unchanged);
+        assert_eq!(
+            parse("fib:5 unchanged").unwrap().order,
+            PartitionOrder::Unchanged
+        );
         assert_eq!(parse("fib:5").unwrap().order, PartitionOrder::Unchanged);
     }
 
@@ -2513,7 +2591,10 @@ mod tests {
     fn parse_unknown_order_rejected() {
         let err = parse("fib:5 descend").unwrap_err();
         assert!(err.contains("unknown order"), "diagnostic: {err}");
-        assert!(err.contains("largest_first"), "diagnostic should list options: {err}");
+        assert!(
+            err.contains("largest_first"),
+            "diagnostic should list options: {err}"
+        );
     }
 
     #[test]
@@ -2523,7 +2604,10 @@ mod tests {
         // axis-named spellings.
         let err = parse("fib:5 ascending").unwrap_err();
         assert!(err.contains("smallest_first"), "diagnostic: {err}");
-        assert!(err.contains("SIZE"), "diagnostic should name the axis: {err}");
+        assert!(
+            err.contains("SIZE"),
+            "diagnostic should name the axis: {err}"
+        );
         let err = parse("fib:5 descending").unwrap_err();
         assert!(err.contains("largest_first"), "diagnostic: {err}");
     }
@@ -2556,8 +2640,14 @@ mod tests {
         let mut by_idx = a.clone();
         by_idx.sort_by_key(|p| p.idx);
         let unchanged = resolve(&parse("linear:8").unwrap(), 0, 800).unwrap();
-        assert_eq!(by_idx, unchanged, "shuffle is a permutation of the same partitions");
-        assert_ne!(a, unchanged, "8 elements should not shuffle to identity here");
+        assert_eq!(
+            by_idx, unchanged,
+            "shuffle is a permutation of the same partitions"
+        );
+        assert_ne!(
+            a, unchanged,
+            "8 elements should not shuffle to identity here"
+        );
     }
 
     #[test]
@@ -2581,9 +2671,16 @@ mod tests {
         let parts = resolve(&parse("linear:4 in 20%..100%").unwrap(), 0, 1000).unwrap();
         let p = &parts[0];
         assert_eq!((p.start_ord, p.end_ord), (200, 400));
-        assert!((p.start_pct - 20.0).abs() < 1e-9, "start_pct: {}", p.start_pct);
+        assert!(
+            (p.start_pct - 20.0).abs() < 1e-9,
+            "start_pct: {}",
+            p.start_pct
+        );
         assert!((p.end_pct - 40.0).abs() < 1e-9, "end_pct: {}", p.end_pct);
-        assert_eq!(p.base_extent, 1000, "base_extent is the full base, not the window");
+        assert_eq!(
+            p.base_extent, 1000,
+            "base_extent is the full base, not the window"
+        );
     }
 
     #[test]
@@ -2602,7 +2699,11 @@ mod tests {
         // zero-width entries are correct arithmetic, not an
         // error (contrast with the Form 1 check above).
         let parts = resolve(&parse("mul:0.5").unwrap(), 0, 100).unwrap();
-        assert_eq!(parts.len(), 11, "term count is weight-driven, not extent-driven");
+        assert_eq!(
+            parts.len(),
+            11,
+            "term count is weight-driven, not extent-driven"
+        );
         assert_eq!(parts.last().unwrap().end_ord, 100);
     }
 }
@@ -2624,7 +2725,11 @@ mod tests {
 /// resolved. A `PartitionList` is re-projected element by element.
 /// `Value::None` yields an empty list. Open-extent cursors reject specs,
 /// because they have no extent to resolve against.
-pub fn resolve_over(value: &Value, extent: u64, open_extent: bool) -> Result<Vec<Partition>, String> {
+pub fn resolve_over(
+    value: &Value,
+    extent: u64,
+    open_extent: bool,
+) -> Result<Vec<Partition>, String> {
     let reproject = |p: &Partition| -> Partition {
         if open_extent || p.base_extent == extent || extent == 0 {
             return *p;
@@ -2700,10 +2805,15 @@ pub fn cursor_over_partitions(
     state: &mut crate::kernel::PolydatState,
     schema: &crate::iteration::source::SourceSchema,
 ) -> Result<Vec<Partition>, String> {
-    let Some(raw) = &schema.partition_output else { return Ok(Vec::new()) };
+    let Some(raw) = &schema.partition_output else {
+        return Ok(Vec::new());
+    };
     let value = state.pull(program, raw).clone();
     let extent = cursor_extent(program, state, schema);
-    let open = !matches!(schema.cursor_kind, crate::iteration::source::CursorKind::Range);
+    let open = !matches!(
+        schema.cursor_kind,
+        crate::iteration::source::CursorKind::Range
+    );
     resolve_over(&value, extent, open)
 }
 
@@ -2761,7 +2871,8 @@ mod over_tests {
         let src = "input cycle: u64\ncursor q = range(0, 100) over \"*/4\"\nn := cardinality(q.cursor)\ns := q.cursor.start_ordinal";
         let mut k = crate::dsl::compile_polydat(src).unwrap();
         let program = k.program().clone();
-        let parts = cursor_over_partitions(&program, k.state(), &program.cursor_schemas()[0]).unwrap();
+        let parts =
+            cursor_over_partitions(&program, k.state(), &program.cursor_schemas()[0]).unwrap();
         assert_eq!(parts.len(), 4);
         narrow_cursor(&program, k.state(), "q", &parts[2]);
         k.set_inputs(&[0]);

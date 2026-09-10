@@ -24,9 +24,7 @@ use crate::iteration::comprehension::ast::Comprehension as AlgebraAst;
 /// otherwise YAML.
 pub fn parse_text(text: &str) -> Result<AlgebraAst, TextParseError> {
     let spec = deserialize_spec(text)?;
-    let algebra = spec
-        .into_algebra()
-        .map_err(TextParseError::Convert)?;
+    let algebra = spec.into_algebra().map_err(TextParseError::Convert)?;
     Ok(algebra)
 }
 

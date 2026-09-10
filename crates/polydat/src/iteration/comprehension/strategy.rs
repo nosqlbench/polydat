@@ -192,7 +192,10 @@ mod tests {
             StrategyName::Diagonal,
             StrategyName::Antidiagonal,
         ] {
-            assert!(s.is_lattice_geometric(), "{s:?} should be lattice-geometric");
+            assert!(
+                s.is_lattice_geometric(),
+                "{s:?} should be lattice-geometric"
+            );
         }
     }
 

@@ -38,9 +38,9 @@
 //!   trip the compiler warning and get O(n) per cycle.
 
 use crate::ast::CompiledU64Op;
+use crate::compile::fusion::{DecomposedGraph, DecomposedWire};
 use crate::derive_support::Config;
 use crate::library::sampling::alias::AliasTableU64;
-use crate::compile::fusion::{DecomposedGraph, DecomposedWire};
 
 /// Parse a weighted spec like "alpha:0.3;beta:0.5;gamma:0.2"
 /// into parallel vectors of values and weights.
@@ -49,7 +49,9 @@ fn parse_weighted_str_spec(spec: &str) -> (Vec<String>, Vec<f64>) {
     let mut weights = Vec::new();
     for elem in spec.split([';', ',']) {
         let elem = elem.trim();
-        if elem.is_empty() { continue; }
+        if elem.is_empty() {
+            continue;
+        }
         let parts: Vec<&str> = elem.splitn(2, ':').collect();
         assert_eq!(parts.len(), 2, "expected 'value:weight', got '{elem}'");
         values.push(parts[0].to_string());
@@ -63,7 +65,9 @@ fn parse_weighted_u64_spec(spec: &str) -> (Vec<u64>, Vec<f64>) {
     let mut weights = Vec::new();
     for elem in spec.split([';', ',']) {
         let elem = elem.trim();
-        if elem.is_empty() { continue; }
+        if elem.is_empty() {
+            continue;
+        }
         let parts: Vec<&str> = elem.splitn(2, ':').collect();
         assert_eq!(parts.len(), 2, "expected 'value:weight', got '{elem}'");
         values.push(parts[0].parse::<u64>().expect("invalid value"));
@@ -103,8 +107,7 @@ fn build_weighted_str_cache(spec: &str) -> WeightedStrCache {
 fn weighted_strings(
     input: u64,
     spec: crate::derive_support::Const<&str>,
-    #[poly_const(build_weighted_str_cache, from = spec)]
-    cache: &WeightedStrCache,
+    #[poly_const(build_weighted_str_cache, from = spec)] cache: &WeightedStrCache,
 ) -> String {
     let _ = spec; // value baked into `cache` at construction
     let idx = cache.table.sample(input) as usize;
@@ -140,8 +143,7 @@ fn build_weighted_u64_cache(spec: &str) -> WeightedU64Cache {
 fn weighted_u64(
     input: u64,
     spec: crate::derive_support::Const<&str>,
-    #[poly_const(build_weighted_u64_cache, from = spec)]
-    cache: &WeightedU64Cache,
+    #[poly_const(build_weighted_u64_cache, from = spec)] cache: &WeightedU64Cache,
 ) -> u64 {
     let _ = spec; // value baked into `cache` at construction
     let idx = cache.table.sample(input) as usize;
@@ -187,9 +189,9 @@ fn parse_weighted_pick_spec(spec: &str) -> WeightedPickState {
         if entry.is_empty() {
             continue;
         }
-        let (v, w) = entry
-            .split_once(':')
-            .unwrap_or_else(|| panic!("weighted_pick: malformed entry '{entry}', expected 'value:weight'"));
+        let (v, w) = entry.split_once(':').unwrap_or_else(|| {
+            panic!("weighted_pick: malformed entry '{entry}', expected 'value:weight'")
+        });
         let value: u64 = v
             .trim()
             .parse()
@@ -276,7 +278,11 @@ fn weighted_pick_jit_constants(node: &WeightedPick) -> Vec<u64> {
 /// the macro via `#[polydat_node(decompose = ...)]` so the
 /// FusedNode impl is emitted alongside PolydatNode.
 fn weighted_pick_decompose(node: &WeightedPick) -> DecomposedGraph {
-    let spec: String = node.state.values.iter().zip(node.state.weights.iter())
+    let spec: String = node
+        .state
+        .values
+        .iter()
+        .zip(node.state.weights.iter())
         .map(|(v, w)| format!("{v}:{w}"))
         .collect::<Vec<_>>()
         .join(";");
@@ -298,8 +304,7 @@ fn weighted_pick_decompose(node: &WeightedPick) -> DecomposedGraph {
 fn weighted_pick(
     input: u64,
     spec: crate::derive_support::Const<&str>,
-    #[poly_const(parse_weighted_pick_spec, from = spec)]
-    state: &WeightedPickState,
+    #[poly_const(parse_weighted_pick_spec, from = spec)] state: &WeightedPickState,
 ) -> u64 {
     let _ = spec; // value baked into `state` at construction
     let idx = state.table.sample(input) as usize;
@@ -336,10 +341,7 @@ fn weighted_pick(
 ///
 /// Spec format: `"alpha:0.3;beta:0.5;gamma:0.2"`
 #[crate::polydat_node(category = Weighted)]
-fn dynamic_weighted_select(
-    selector: u64,
-    weights_spec: Config<std::sync::Arc<str>>,
-) -> String {
+fn dynamic_weighted_select(selector: u64, weights_spec: Config<std::sync::Arc<str>>) -> String {
     let spec: &str = weights_spec.0.as_ref();
     let (values, weights) = parse_weighted_str_spec(spec);
     if values.is_empty() {
@@ -411,8 +413,11 @@ mod tests {
         let mut out = [Value::None];
         for i in 0..1000u64 {
             node.eval(&[Value::U64(xxh3_64(&i.to_le_bytes()))], &mut out);
-            assert!(valid.contains(&out[0].as_u64()),
-                "unexpected output {} at seed {i}", out[0].as_u64());
+            assert!(
+                valid.contains(&out[0].as_u64()),
+                "unexpected output {} at seed {i}",
+                out[0].as_u64()
+            );
         }
     }
 
@@ -424,10 +429,15 @@ mod tests {
         let n = 10_000u64;
         for i in 0..n {
             node.eval(&[Value::U64(xxh3_64(&i.to_le_bytes()))], &mut out);
-            if out[0].as_u64() == 1 { count_1 += 1; }
+            if out[0].as_u64() == 1 {
+                count_1 += 1;
+            }
         }
         let ratio = count_1 as f64 / n as f64;
-        assert!(ratio > 0.90, "value 1 (weight 0.99) should dominate, got {ratio}");
+        assert!(
+            ratio > 0.90,
+            "value 1 (weight 0.99) should dominate, got {ratio}"
+        );
     }
 
     #[test]
@@ -458,8 +468,10 @@ mod tests {
         // Each should be roughly 1/3
         for (i, c) in counts.iter().enumerate() {
             let ratio = *c as f64 / n as f64;
-            assert!(ratio > 0.25 && ratio < 0.42,
-                "value at index {i} has ratio {ratio}, expected ~0.33");
+            assert!(
+                ratio > 0.25 && ratio < 0.42,
+                "value at index {i} has ratio {ratio}, expected ~0.33"
+            );
         }
     }
 
@@ -473,8 +485,11 @@ mod tests {
             node.eval(&[Value::U64(input)], &mut eval_out);
             let mut compiled_out = [0u64];
             compiled(&[input], &mut compiled_out);
-            assert_eq!(eval_out[0].as_u64(), compiled_out[0],
-                "eval vs compiled mismatch at seed {i}");
+            assert_eq!(
+                eval_out[0].as_u64(),
+                compiled_out[0],
+                "eval vs compiled mismatch at seed {i}"
+            );
         }
     }
 
@@ -487,7 +502,7 @@ mod tests {
 
         let raw = node.jit_constants();
         assert_eq!(raw.len(), 5); // values_ptr, biases_ptr, primaries_ptr, aliases_ptr, n
-        assert_eq!(raw[4], 3);    // n = 3 entries in the spec
+        assert_eq!(raw[4], 3); // n = 3 entries in the spec
 
         // The values_ptr should match the parsed value list inside state.
         assert_eq!(raw[0], node.state.values.as_ptr() as u64);
@@ -508,8 +523,11 @@ mod tests {
             let mut fused_out = [Value::None];
             fused.eval(&[Value::U64(input)], &mut fused_out);
             let decomposed_out = decomposed.eval(&[Value::U64(input)]);
-            assert_eq!(fused_out[0].as_u64(), decomposed_out[0].as_u64(),
-                "equivalence failed at seed {i}");
+            assert_eq!(
+                fused_out[0].as_u64(),
+                decomposed_out[0].as_u64(),
+                "equivalence failed at seed {i}"
+            );
         }
     }
 
@@ -543,10 +561,17 @@ mod tests {
         let mut out = [Value::None];
         for i in 0..100u64 {
             node.eval(
-                &[Value::U64(xxh3_64(&i.to_le_bytes())), Value::Str(spec.into())],
+                &[
+                    Value::U64(xxh3_64(&i.to_le_bytes())),
+                    Value::Str(spec.into()),
+                ],
                 &mut out,
             );
-            assert!(valid.contains(&out[0].as_str()), "unexpected: {}", out[0].as_str());
+            assert!(
+                valid.contains(&out[0].as_str()),
+                "unexpected: {}",
+                out[0].as_str()
+            );
         }
     }
 
@@ -593,9 +618,16 @@ mod tests {
         let mut log = CompileEventLog::new();
         let _k = crate::dsl::compile::compile_polydat_with_log(source, &mut log).unwrap();
 
-        let warnings: Vec<_> = log.events().iter().filter(|e|
-            matches!(e, crate::dsl::events::CompileEvent::ConfigWireCycleWarning { .. })
-        ).collect();
+        let warnings: Vec<_> = log
+            .events()
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    crate::dsl::events::CompileEvent::ConfigWireCycleWarning { .. }
+                )
+            })
+            .collect();
         assert!(warnings.is_empty(), "init-time config should not warn");
     }
 
@@ -613,52 +645,96 @@ mod tests {
         let mut log = CompileEventLog::new();
         let _k = crate::dsl::compile::compile_polydat_with_log(source, &mut log).unwrap();
 
-        let warnings: Vec<_> = log.events().iter().filter(|e|
-            matches!(e, crate::dsl::events::CompileEvent::ConfigWireCycleWarning { .. })
-        ).collect();
-        assert_eq!(warnings.len(), 1, "cycle-time config should warn: {warnings:?}");
+        let warnings: Vec<_> = log
+            .events()
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    crate::dsl::events::CompileEvent::ConfigWireCycleWarning { .. }
+                )
+            })
+            .collect();
+        assert_eq!(
+            warnings.len(),
+            1,
+            "cycle-time config should warn: {warnings:?}"
+        );
     }
 
     #[test]
     fn dynamic_weighted_select_strict_rejects_cycle_config() {
         // In strict mode, Config wire from cycle source is a hard error.
         use crate::compile::assembly::{PolydatAssembler, WireRef};
-        use crate::library::hash::Hash;
-        use crate::library::convert::U64ToString;
         use crate::dsl::events::CompileEventLog;
+        use crate::library::convert::U64ToString;
+        use crate::library::hash::Hash;
 
         let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
-        asm.add_node("hashed", Box::new(Hash::new()), vec![WireRef::input("cycle")]);
-        asm.add_node("spec", Box::new(U64ToString::default()), vec![WireRef::node("hashed")]);
-        asm.add_node("dws", Box::new(DynamicWeightedSelect::new()), vec![
-            WireRef::node("hashed"),  // selector ← cycle (Data, ok)
-            WireRef::node("spec"),    // weights_spec ← cycle (Config, BAD)
-        ]);
+        asm.add_node(
+            "hashed",
+            Box::new(Hash::new()),
+            vec![WireRef::input("cycle")],
+        );
+        asm.add_node(
+            "spec",
+            Box::new(U64ToString::default()),
+            vec![WireRef::node("hashed")],
+        );
+        asm.add_node(
+            "dws",
+            Box::new(DynamicWeightedSelect::new()),
+            vec![
+                WireRef::node("hashed"), // selector ← cycle (Data, ok)
+                WireRef::node("spec"),   // weights_spec ← cycle (Config, BAD)
+            ],
+        );
         asm.add_output("result", WireRef::node("dws"));
 
         // Non-strict compile: should succeed with warning
         let mut log = CompileEventLog::new();
         let _kernel = asm.compile_with_log(Some(&mut log)).unwrap();
-        let warnings: Vec<_> = log.events().iter().filter(|e|
-            matches!(e, crate::dsl::events::CompileEvent::ConfigWireCycleWarning { .. })
-        ).collect();
+        let warnings: Vec<_> = log
+            .events()
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    crate::dsl::events::CompileEvent::ConfigWireCycleWarning { .. }
+                )
+            })
+            .collect();
         assert_eq!(warnings.len(), 1, "should warn in non-strict");
 
         // Strict compile: rebuild and fold with strict=true
         let mut asm2 = PolydatAssembler::new(vec!["cycle".into()]);
-        asm2.add_node("hashed", Box::new(Hash::new()), vec![WireRef::input("cycle")]);
-        asm2.add_node("spec", Box::new(U64ToString::default()), vec![WireRef::node("hashed")]);
-        asm2.add_node("dws", Box::new(DynamicWeightedSelect::new()), vec![
-            WireRef::node("hashed"),
-            WireRef::node("spec"),
-        ]);
+        asm2.add_node(
+            "hashed",
+            Box::new(Hash::new()),
+            vec![WireRef::input("cycle")],
+        );
+        asm2.add_node(
+            "spec",
+            Box::new(U64ToString::default()),
+            vec![WireRef::node("hashed")],
+        );
+        asm2.add_node(
+            "dws",
+            Box::new(DynamicWeightedSelect::new()),
+            vec![WireRef::node("hashed"), WireRef::node("spec")],
+        );
         asm2.add_output("result", WireRef::node("dws"));
 
         let result = asm2.compile_strict(true);
-        assert!(result.is_err(), "strict mode should reject cycle-time config wire");
+        assert!(
+            result.is_err(),
+            "strict mode should reject cycle-time config wire"
+        );
         let msg = format!("{}", result.unwrap_err());
-        assert!(msg.contains("strict") || msg.contains("config"),
-            "error should mention strict or config: {msg}");
+        assert!(
+            msg.contains("strict") || msg.contains("config"),
+            "error should mention strict or config: {msg}"
+        );
     }
 
     #[test]
@@ -673,7 +749,13 @@ mod tests {
         // Ins: 1 wire + 1 string constant (the spec)
         assert_eq!(meta.ins.len(), 2);
         assert!(matches!(meta.ins[0], Slot::Wire(_)));
-        assert!(matches!(&meta.ins[1], Slot::Const { value: ConstValue::Str(_), .. }));
+        assert!(matches!(
+            &meta.ins[1],
+            Slot::Const {
+                value: ConstValue::Str(_),
+                ..
+            }
+        ));
 
         // Outs: 1 u64
         assert_eq!(meta.outs.len(), 1);

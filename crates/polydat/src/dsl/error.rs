@@ -65,7 +65,11 @@ impl fmt::Display for Diagnostic {
             Severity::Error => "error",
             Severity::Warning => "warning",
         };
-        write!(f, "{}:{}:{}: {}", self.span.line, self.span.col, severity, self.message)?;
+        write!(
+            f,
+            "{}:{}:{}: {}",
+            self.span.line, self.span.col, severity, self.message
+        )?;
 
         if let Some(ref line) = self.source_line {
             write!(f, "\n  | {line}")?;
@@ -108,7 +112,12 @@ impl DiagnosticReport {
         self.diagnostics.push(diag);
     }
 
-    pub fn error_with_hint(&mut self, span: Span, message: impl Into<String>, hint: impl Into<String>) {
+    pub fn error_with_hint(
+        &mut self,
+        span: Span,
+        message: impl Into<String>,
+        hint: impl Into<String>,
+    ) {
         let mut diag = Diagnostic::error(span, message).with_hint(hint);
         if span.line > 0 && span.line <= self.source_lines.len() {
             diag.source_line = Some(self.source_lines[span.line - 1].clone());
@@ -124,7 +133,12 @@ impl DiagnosticReport {
         self.diagnostics.push(diag);
     }
 
-    pub fn warning_with_hint(&mut self, span: Span, message: impl Into<String>, hint: impl Into<String>) {
+    pub fn warning_with_hint(
+        &mut self,
+        span: Span,
+        message: impl Into<String>,
+        hint: impl Into<String>,
+    ) {
         let mut diag = Diagnostic::warning(span, message).with_hint(hint);
         if span.line > 0 && span.line <= self.source_lines.len() {
             diag.source_line = Some(self.source_lines[span.line - 1].clone());
@@ -133,22 +147,32 @@ impl DiagnosticReport {
     }
 
     pub fn has_errors(&self) -> bool {
-        self.diagnostics.iter().any(|d| d.severity == Severity::Error)
+        self.diagnostics
+            .iter()
+            .any(|d| d.severity == Severity::Error)
     }
 
     pub fn errors(&self) -> Vec<&Diagnostic> {
-        self.diagnostics.iter().filter(|d| d.severity == Severity::Error).collect()
+        self.diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Error)
+            .collect()
     }
 
     pub fn warnings(&self) -> Vec<&Diagnostic> {
-        self.diagnostics.iter().filter(|d| d.severity == Severity::Warning).collect()
+        self.diagnostics
+            .iter()
+            .filter(|d| d.severity == Severity::Warning)
+            .collect()
     }
 }
 
 impl fmt::Display for DiagnosticReport {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         for (i, diag) in self.diagnostics.iter().enumerate() {
-            if i > 0 { writeln!(f)?; }
+            if i > 0 {
+                writeln!(f)?;
+            }
             write!(f, "{diag}")?;
         }
         Ok(())

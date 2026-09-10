@@ -84,18 +84,23 @@ fn read_csv_column(filename: &str, column: &str) -> Vec<String> {
         .unwrap_or_else(|e| panic!("csv_field: failed to read '{filename}': {e}"));
     let mut lines = content.lines();
 
-    let header_line = lines.next()
+    let header_line = lines
+        .next()
         .unwrap_or_else(|| panic!("csv_field: '{filename}' is empty"));
     let headers: Vec<&str> = split_csv_line(header_line);
 
     let col_idx = if let Ok(idx) = column.parse::<usize>() {
         idx
     } else {
-        headers.iter().position(|h| h.trim() == column)
-            .unwrap_or_else(|| panic!(
-                "csv_field: column '{column}' not found in '{filename}'. Available: {}",
-                headers.join(", ")
-            ))
+        headers
+            .iter()
+            .position(|h| h.trim() == column)
+            .unwrap_or_else(|| {
+                panic!(
+                    "csv_field: column '{column}' not found in '{filename}'. Available: {}",
+                    headers.join(", ")
+                )
+            })
     };
 
     let mut values = Vec::new();
@@ -126,8 +131,7 @@ fn csv_field(
     ordinal: u64,
     filename: crate::derive_support::Const<&str>,
     column: crate::derive_support::Const<&str>,
-    #[poly_const(read_csv_column, from = (filename, column))]
-    values: &Vec<String>,
+    #[poly_const(read_csv_column, from = (filename, column))] values: &Vec<String>,
 ) -> String {
     let _ = filename;
     let _ = column;
@@ -141,7 +145,8 @@ fn csv_field(
 fn read_csv_data_rows(filename: &str) -> Vec<String> {
     let content = std::fs::read_to_string(resolve_data_path(filename).as_ref())
         .unwrap_or_else(|e| panic!("csv_row: failed to read '{filename}': {e}"));
-    let rows: Vec<String> = content.lines()
+    let rows: Vec<String> = content
+        .lines()
         .skip(1) // skip header
         .filter(|l| !l.trim().is_empty())
         .map(|l| l.to_string())
@@ -157,7 +162,8 @@ fn read_csv_data_rows(filename: &str) -> Vec<String> {
 fn read_csv_row_count(filename: &str) -> u64 {
     let content = std::fs::read_to_string(resolve_data_path(filename).as_ref())
         .unwrap_or_else(|e| panic!("csv_row_count: failed to read '{filename}': {e}"));
-    content.lines()
+    content
+        .lines()
         .skip(1)
         .filter(|l| !l.trim().is_empty())
         .count() as u64
@@ -175,8 +181,7 @@ fn read_csv_row_count(filename: &str) -> u64 {
 fn csv_row(
     ordinal: u64,
     filename: crate::derive_support::Const<&str>,
-    #[poly_const(read_csv_data_rows, from = filename)]
-    rows: &Vec<String>,
+    #[poly_const(read_csv_data_rows, from = filename)] rows: &Vec<String>,
 ) -> String {
     let idx = ordinal as usize % rows.len();
     rows[idx].clone()
@@ -192,8 +197,7 @@ fn csv_row(
 #[crate::polydat_node(category = Data)]
 fn csv_row_count(
     filename: crate::derive_support::Const<&str>,
-    #[poly_const(read_csv_row_count, from = filename)]
-    count: &u64,
+    #[poly_const(read_csv_row_count, from = filename)] count: &u64,
 ) -> u64 {
     *count
 }
@@ -210,10 +214,11 @@ fn read_jsonl_field(filename: &str, path: &str) -> Vec<String> {
     let mut values = Vec::new();
     for (line_num, line) in content.lines().enumerate() {
         let trimmed = line.trim();
-        if trimmed.is_empty() { continue; }
+        if trimmed.is_empty() {
+            continue;
+        }
         let parsed: serde_json::Value = serde_json::from_str(trimmed)
-            .unwrap_or_else(|e| panic!(
-                "jsonl_field: parse error at line {}: {e}", line_num + 1));
+            .unwrap_or_else(|e| panic!("jsonl_field: parse error at line {}: {e}", line_num + 1));
         let val = resolve_json_path(&parsed, path);
         values.push(val);
     }
@@ -239,8 +244,7 @@ fn jsonl_field(
     ordinal: u64,
     filename: crate::derive_support::Const<&str>,
     path: crate::derive_support::Const<&str>,
-    #[poly_const(read_jsonl_field, from = (filename, path))]
-    values: &Vec<String>,
+    #[poly_const(read_jsonl_field, from = (filename, path))] values: &Vec<String>,
 ) -> String {
     let _ = filename;
     let _ = path;
@@ -253,7 +257,8 @@ fn jsonl_field(
 fn read_jsonl_lines(filename: &str) -> Vec<String> {
     let content = std::fs::read_to_string(resolve_data_path(filename).as_ref())
         .unwrap_or_else(|e| panic!("jsonl_row: failed to read '{filename}': {e}"));
-    let rows: Vec<String> = content.lines()
+    let rows: Vec<String> = content
+        .lines()
         .filter(|l| !l.trim().is_empty())
         .map(|l| l.to_string())
         .collect();
@@ -268,9 +273,7 @@ fn read_jsonl_lines(filename: &str) -> Vec<String> {
 fn read_jsonl_row_count(filename: &str) -> u64 {
     let content = std::fs::read_to_string(resolve_data_path(filename).as_ref())
         .unwrap_or_else(|e| panic!("jsonl_row_count: failed to read '{filename}': {e}"));
-    content.lines()
-        .filter(|l| !l.trim().is_empty())
-        .count() as u64
+    content.lines().filter(|l| !l.trim().is_empty()).count() as u64
 }
 
 /// Read an entire JSONL line at a given ordinal as a JSON string.
@@ -284,8 +287,7 @@ fn read_jsonl_row_count(filename: &str) -> u64 {
 fn jsonl_row(
     ordinal: u64,
     filename: crate::derive_support::Const<&str>,
-    #[poly_const(read_jsonl_lines, from = filename)]
-    rows: &Vec<String>,
+    #[poly_const(read_jsonl_lines, from = filename)] rows: &Vec<String>,
 ) -> String {
     let idx = ordinal as usize % rows.len();
     rows[idx].clone()
@@ -300,8 +302,7 @@ fn jsonl_row(
 #[crate::polydat_node(category = Data)]
 fn jsonl_row_count(
     filename: crate::derive_support::Const<&str>,
-    #[poly_const(read_jsonl_row_count, from = filename)]
-    count: &u64,
+    #[poly_const(read_jsonl_row_count, from = filename)] count: &u64,
 ) -> u64 {
     *count
 }
@@ -364,7 +365,10 @@ mod tests {
 
     #[test]
     fn csv_field_by_name() {
-        let path = write_temp_csv("test_csv_field.csv", "name,age,city\nalice,30,paris\nbob,25,london\n");
+        let path = write_temp_csv(
+            "test_csv_field.csv",
+            "name,age,city\nalice,30,paris\nbob,25,london\n",
+        );
         let node = CsvField::new(path, "name".to_string());
         let mut out = [Value::None];
         node.eval(&[Value::U64(0)], &mut out);
@@ -388,13 +392,22 @@ mod tests {
 
         // No base dir: a bare basename does not resolve to the file.
         let prev = set_data_base_dir(None);
-        assert_eq!(resolve_data_path("base_rows.jsonl").as_ref(), "base_rows.jsonl");
+        assert_eq!(
+            resolve_data_path("base_rows.jsonl").as_ref(),
+            "base_rows.jsonl"
+        );
 
         // Base dir set: the basename resolves to the absolute file, and
         // the reader honours it.
         set_data_base_dir(Some(dir.clone()));
-        assert_eq!(resolve_data_path("base_rows.jsonl").as_ref(), file.to_string_lossy());
-        assert_eq!(read_jsonl_field("base_rows.jsonl", "v"), vec!["7".to_string()]);
+        assert_eq!(
+            resolve_data_path("base_rows.jsonl").as_ref(),
+            file.to_string_lossy()
+        );
+        assert_eq!(
+            read_jsonl_field("base_rows.jsonl", "v"),
+            vec!["7".to_string()]
+        );
 
         // Absolute paths pass through untouched even with a base set.
         let abs = file.to_string_lossy().into_owned();
@@ -434,8 +447,10 @@ mod tests {
 
     #[test]
     fn jsonl_field_top_level() {
-        let path = write_temp_csv("test_jsonl_field.jsonl",
-            "{\"name\":\"alice\",\"age\":30}\n{\"name\":\"bob\",\"age\":25}\n");
+        let path = write_temp_csv(
+            "test_jsonl_field.jsonl",
+            "{\"name\":\"alice\",\"age\":30}\n{\"name\":\"bob\",\"age\":25}\n",
+        );
         let node = JsonlField::new(path, "name".to_string());
         let mut out = [Value::None];
         node.eval(&[Value::U64(0)], &mut out);
@@ -446,8 +461,10 @@ mod tests {
 
     #[test]
     fn jsonl_field_nested_path() {
-        let path = write_temp_csv("test_jsonl_nested.jsonl",
-            "{\"user\":{\"name\":\"alice\"}}\n{\"user\":{\"name\":\"bob\"}}\n");
+        let path = write_temp_csv(
+            "test_jsonl_nested.jsonl",
+            "{\"user\":{\"name\":\"alice\"}}\n{\"user\":{\"name\":\"bob\"}}\n",
+        );
         let node = JsonlField::new(path, "user.name".to_string());
         let mut out = [Value::None];
         node.eval(&[Value::U64(0)], &mut out);
@@ -456,8 +473,7 @@ mod tests {
 
     #[test]
     fn jsonl_row_returns_full_json() {
-        let path = write_temp_csv("test_jsonl_row.jsonl",
-            "{\"a\":1}\n{\"b\":2}\n");
+        let path = write_temp_csv("test_jsonl_row.jsonl", "{\"a\":1}\n{\"b\":2}\n");
         let node = JsonlRow::new(path);
         let mut out = [Value::None];
         node.eval(&[Value::U64(0)], &mut out);
@@ -466,8 +482,10 @@ mod tests {
 
     #[test]
     fn jsonl_row_count() {
-        let path = write_temp_csv("test_jsonl_count.jsonl",
-            "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n");
+        let path = write_temp_csv(
+            "test_jsonl_count.jsonl",
+            "{\"a\":1}\n{\"b\":2}\n{\"c\":3}\n",
+        );
         let node = JsonlRowCount::new(path);
         let mut out = [Value::None];
         node.eval(&[], &mut out);

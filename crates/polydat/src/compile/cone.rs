@@ -60,11 +60,7 @@ pub fn default_jit_mode() -> JitMode {
 }
 
 #[cfg(not(feature = "jit"))]
-pub(crate) fn extract_jit_cones(
-    _dag: &mut super::assembly::ResolvedDag,
-    _mode: JitMode,
-) {
-}
+pub(crate) fn extract_jit_cones(_dag: &mut super::assembly::ResolvedDag, _mode: JitMode) {}
 
 #[cfg(feature = "jit")]
 pub(crate) use jit_impl::extract_jit_cones;
@@ -74,7 +70,7 @@ mod jit_impl {
     use super::JitMode;
     use crate::ast::{NodeMeta, PolydatNode, Port, PortType, Purity, Slot, Value};
     use crate::compile::assembly::{PolydatAssembler, ResolvedDag};
-    use crate::compile::jit::{classify_node_typed, JitOp};
+    use crate::compile::jit::{JitOp, classify_node_typed};
     use crate::kernel::{InputDef, InputKind, WireSource};
     use std::collections::HashMap;
 
@@ -163,7 +159,14 @@ mod jit_impl {
             table.set_generation(crate::kernel::cycle_generation());
             let mark = crate::kernel::cycle_arena_mark();
             for (i, v) in inputs.iter().enumerate() {
-                buf[i] = encode_boundary(v, self.in_types[i], i, &self.meta.name, table, self.in_entries[i]);
+                buf[i] = encode_boundary(
+                    v,
+                    self.in_types[i],
+                    i,
+                    &self.meta.name,
+                    table,
+                    self.in_entries[i],
+                );
             }
             let code_fn = self.code_fn;
             let cp = buf.as_ptr();
@@ -268,7 +271,8 @@ mod jit_impl {
     /// cost-model outcomes, not user-facing failures).
     fn audit_skip(member_count: usize, reason: &str) {
         crate::library::support::audit::debug(&format!(
-            "jit cone: leaving a {member_count}-member component on              the interpreter: {reason}"));
+            "jit cone: leaving a {member_count}-member component on              the interpreter: {reason}"
+        ));
     }
 
     /// Marshalable boundary scalars. U64/F64/Bool covers every
@@ -286,7 +290,10 @@ mod jit_impl {
             // SRD 115 §5: byte-string handles marshal in (arena copy)
             // and out (copy to an owned value); table handles marshal
             // through the cycle value table (§3).
-            SlotColor::Hdl1 => matches!(ty.handle_kind(), Some(HandleKind::Bytes | HandleKind::Table)),
+            SlotColor::Hdl1 => matches!(
+                ty.handle_kind(),
+                Some(HandleKind::Bytes | HandleKind::Table)
+            ),
             SlotColor::Imm2 | SlotColor::Ref2 => false,
         }
     }
@@ -301,11 +308,7 @@ mod jit_impl {
             && !matches!(classify_node_typed(node, wire_types), JitOp::Fallback)
             && node.meta().outs.iter().all(|p| scalar_ok(p.typ))
             && wire_types.iter().all(|t| scalar_ok(*t))
-            && node
-                .meta()
-                .wire_inputs()
-                .iter()
-                .all(|p| scalar_ok(p.typ))
+            && node.meta().wire_inputs().iter().all(|p| scalar_ok(p.typ))
     }
 
     /// SRD 11's three evaluation lifecycles, re-derived here so
@@ -322,10 +325,7 @@ mod jit_impl {
         Dynamic,
     }
 
-    fn classify_lifecycles(
-        dag: &ResolvedDag,
-        nodes: &[Box<dyn PolydatNode>],
-    ) -> Vec<Lc> {
+    fn classify_lifecycles(dag: &ResolvedDag, nodes: &[Box<dyn PolydatNode>]) -> Vec<Lc> {
         let n = dag.wiring.len();
         let mut lc = vec![Lc::CompileConst; n];
         for i in 0..n {
@@ -418,7 +418,9 @@ mod jit_impl {
                 continue;
             }
             if nd.accepts_none_inputs()
-                && !dag.wiring[i].iter().all(|src| matches!(src, WireSource::NodeOutput(j, _) if eligible[*j]))
+                && !dag.wiring[i]
+                    .iter()
+                    .all(|src| matches!(src, WireSource::NodeOutput(j, _) if eligible[*j]))
             {
                 continue;
             }
@@ -439,7 +441,9 @@ mod jit_impl {
                 continue;
             }
             for src in &dag.wiring[i] {
-                if let WireSource::NodeOutput(j, _) = src && eligible[*j] {
+                if let WireSource::NodeOutput(j, _) = src
+                    && eligible[*j]
+                {
                     let (a, b) = (find(&mut parent, i), find(&mut parent, *j));
                     parent[a] = b;
                 }
@@ -465,8 +469,10 @@ mod jit_impl {
             }
         }
 
-        let mut nodes_opt: Vec<Option<Box<dyn PolydatNode>>> =
-            std::mem::take(&mut dag.nodes).into_iter().map(Some).collect();
+        let mut nodes_opt: Vec<Option<Box<dyn PolydatNode>>> = std::mem::take(&mut dag.nodes)
+            .into_iter()
+            .map(Some)
+            .collect();
         let mut cones: Vec<(ConePlan, JitConeNode)> = Vec::new();
 
         for root in roots {
@@ -540,11 +546,7 @@ mod jit_impl {
     /// at the members' non-member consumers, routing only through
     /// non-members; reaching a member proves re-entry (a cycle in
     /// the spliced quotient graph).
-    fn component_is_convex(
-        members: &[usize],
-        consumers: &[Vec<usize>],
-        n: usize,
-    ) -> bool {
+    fn component_is_convex(members: &[usize], consumers: &[Vec<usize>], n: usize) -> bool {
         let mut is_member = vec![false; n];
         for &m in members {
             is_member[m] = true;
@@ -587,7 +589,8 @@ mod jit_impl {
         let mut seen_in: HashMap<(u8, usize, usize), usize> = HashMap::new();
         for &m in members {
             let member = nodes[m].as_ref()?;
-            let member_ports: Vec<PortType> = member.meta().wire_inputs().iter().map(|p| p.typ).collect();
+            let member_ports: Vec<PortType> =
+                member.meta().wire_inputs().iter().map(|p| p.typ).collect();
             // A variadic node that inspects `Value`s at P1 lowers with
             // its wire types fixed (SRD 115 §6), so its advertised
             // port types do not bind its wires. Only the lowering
@@ -597,17 +600,18 @@ mod jit_impl {
                 .iter()
                 .map(|src| match src {
                     WireSource::Input(i) => Some(dag.input_defs[*i].port_type),
-                    WireSource::NodeOutput(j, p) => nodes[*j].as_ref().map(|nd| nd.meta().outs[*p].typ),
+                    WireSource::NodeOutput(j, p) => {
+                        nodes[*j].as_ref().map(|nd| nd.meta().outs[*p].typ)
+                    }
                 })
                 .collect::<Option<Vec<_>>>()?;
-            let wires_typed_at_lowering =
-                crate::compile::jit::wires_typed_at_lowering(&classify_node_typed(member.as_ref(), &member_wire_types));
+            let wires_typed_at_lowering = crate::compile::jit::wires_typed_at_lowering(
+                &classify_node_typed(member.as_ref(), &member_wire_types),
+            );
             for (k, src) in dag.wiring[m].iter().enumerate() {
                 let ty = match src {
                     WireSource::Input(i) => dag.input_defs[*i].port_type,
-                    WireSource::NodeOutput(j, p) => {
-                        nodes[*j].as_ref()?.meta().outs[*p].typ
-                    }
+                    WireSource::NodeOutput(j, p) => nodes[*j].as_ref()?.meta().outs[*p].typ,
                 };
                 // Inside a cone every wire is exactly its port's type,
                 // unless the lowering fixed the wire types itself.
@@ -615,9 +619,13 @@ mod jit_impl {
                     && let Some(expected) = member_ports.get(k)
                     && *expected != ty
                 {
-                    audit_skip(members.len(), &format!(
-                        "input [{k}] of `{}` is a {ty:?} wire on a {expected:?} port",
-                        member.meta().name));
+                    audit_skip(
+                        members.len(),
+                        &format!(
+                            "input [{k}] of `{}` is a {ty:?} wire on a {expected:?} port",
+                            member.meta().name
+                        ),
+                    );
                     return None;
                 }
                 let intra = matches!(src, WireSource::NodeOutput(j, _) if is_member(*j));
@@ -625,9 +633,13 @@ mod jit_impl {
                 // boundary, where a None could reach it (see the
                 // eligibility pass); a component split can put it there.
                 if !intra && member.accepts_none_inputs() {
-                    audit_skip(members.len(), &format!(
-                        "`{}` tolerates None inputs and input [{k}] is a boundary wire",
-                        member.meta().name));
+                    audit_skip(
+                        members.len(),
+                        &format!(
+                            "`{}` tolerates None inputs and input [{k}] is a boundary wire",
+                            member.meta().name
+                        ),
+                    );
                     return None;
                 }
                 if intra {
@@ -638,8 +650,10 @@ mod jit_impl {
                     continue;
                 }
                 if !scalar_ok(ty) {
-                    audit_skip(members.len(), &format!(
-                        "boundary input of type {ty:?} is not marshalable"));
+                    audit_skip(
+                        members.len(),
+                        &format!("boundary input of type {ty:?} is not marshalable"),
+                    );
                     return None;
                 }
                 seen_in.insert(key, boundary_in.len());
@@ -651,9 +665,13 @@ mod jit_impl {
         // provenance word) so Pull-variant cones remain reachable
         // without a re-split.
         if boundary_in.len() > 64 {
-            audit_skip(members.len(), &format!(
-                "{} boundary inputs exceeds the 64-input bound (no                  re-split implemented — catchup item B2)",
-                boundary_in.len()));
+            audit_skip(
+                members.len(),
+                &format!(
+                    "{} boundary inputs exceeds the 64-input bound (no                  re-split implemented — catchup item B2)",
+                    boundary_in.len()
+                ),
+            );
             return None;
         }
         // A cone with no boundary inputs is a compile-time
@@ -680,7 +698,9 @@ mod jit_impl {
                 continue;
             }
             for src in wiring {
-                if let WireSource::NodeOutput(j, p) = src && is_member(*j) {
+                if let WireSource::NodeOutput(j, p) = src
+                    && is_member(*j)
+                {
                     note_out(*j, *p);
                 }
             }

@@ -84,14 +84,14 @@ impl Compiler {
         node: &dyn crate::ast::PolydatNode,
         wire_refs: &mut [crate::compile::assembly::WireRef],
     ) -> Result<(), String> {
-        use crate::dsl::registry::registry;
-        #[cfg(feature = "vectordata")]
-        use crate::dsl::registry::DefaultResolver;
-        #[cfg(feature = "vectordata")]
-        use crate::library::identity::ConstStr;
         use crate::ast::PortType;
         #[cfg(feature = "vectordata")]
         use crate::compile::assembly::WireRef;
+        #[cfg(feature = "vectordata")]
+        use crate::dsl::registry::DefaultResolver;
+        use crate::dsl::registry::registry;
+        #[cfg(feature = "vectordata")]
+        use crate::library::identity::ConstStr;
 
         // Find the FuncSig — only some functions opt into auto-promotion.
         let resolver = registry()
@@ -113,7 +113,9 @@ impl Compiler {
                 crate::ast::Slot::Wire(p) => p,
                 crate::ast::Slot::Const { .. } => continue,
             };
-            if wire_idx >= wire_refs.len() { break; }
+            if wire_idx >= wire_refs.len() {
+                break;
+            }
             // Only promote Handle inputs.
             if port.typ == PortType::Handle {
                 let src = &wire_refs[wire_idx];
@@ -156,11 +158,7 @@ impl Compiler {
                         DefaultResolver::Group => {
                             let resolver_node: Box<dyn crate::ast::PolydatNode> =
                                 Box::new(crate::library::vectors::DatasetGroupOpen::new());
-                            asm.add_node(
-                                &resolver_name,
-                                resolver_node,
-                                vec![src.clone()],
-                            );
+                            asm.add_node(&resolver_name, resolver_node, vec![src.clone()]);
                         }
                     }
                     #[cfg(feature = "vectordata")]
@@ -278,7 +276,9 @@ impl Compiler {
                 if !module_inputs.contains(arg_name) {
                     return Err(format!(
                         "module '{}' has no parameter named '{}' — available: {}",
-                        func_name, arg_name, module_inputs.join(", ")
+                        func_name,
+                        arg_name,
+                        module_inputs.join(", ")
                     ));
                 }
             }
@@ -296,26 +296,30 @@ impl Compiler {
             // Literal type checking against declared param types
             for (i, input_name) in module_inputs.iter().enumerate() {
                 if let Some(Some(declared_type)) = module_input_types.get(i)
-                    && let Some(arg) = arg_map.get(input_name) {
-                        let expr = match arg {
-                            Arg::Positional(e) | Arg::Named(_, e) => e,
-                        };
-                        if let Some(lit_type) = literal_type(expr)
-                            && !types_compatible(&lit_type, declared_type) {
-                                return Err(format!(
-                                    "module '{}' parameter '{}' expects {}, got {} literal",
-                                    func_name, input_name, declared_type, lit_type
-                                ));
-                            }
-                        // Wire arguments: type checked when the assembler validates wiring
+                    && let Some(arg) = arg_map.get(input_name)
+                {
+                    let expr = match arg {
+                        Arg::Positional(e) | Arg::Named(_, e) => e,
+                    };
+                    if let Some(lit_type) = literal_type(expr)
+                        && !types_compatible(&lit_type, declared_type)
+                    {
+                        return Err(format!(
+                            "module '{}' parameter '{}' expects {}, got {} literal",
+                            func_name, input_name, declared_type, lit_type
+                        ));
                     }
+                    // Wire arguments: type checked when the assembler validates wiring
+                }
             }
 
             // Output arity check
             if targets.len() > module_outputs.len() {
                 return Err(format!(
                     "module '{}' produces {} outputs: outputs, but {} targets requested",
-                    func_name, module_outputs.len(), targets.len()
+                    func_name,
+                    module_outputs.len(),
+                    targets.len()
                 ));
             }
         }
@@ -332,14 +336,38 @@ impl Compiler {
                     // A producer inside the module (SRD 113 §3.1): bound
                     // under the module prefix as a `streamer` constant and
                     // recorded so this module's tiles can project over it.
-                    let Expr::For(source) = &b.value else { unreachable!() };
+                    let Expr::For(source) = &b.value else {
+                        unreachable!()
+                    };
                     let rewritten = self
-                        .rewrite_for_source(source, &prefix, &module_inputs, &arg_map, &module_stmts)
-                        .map_err(|e| format!("producer '{}' inside module '{}': {e}", b.targets.join(","), func_name))?;
-                    let comprehension = super::traversal::resolve_source(&rewritten, &self.producers_seen)
-                        .map_err(|e| format!("producer '{}' inside module '{}': {e}", b.targets.join(","), func_name))?;
+                        .rewrite_for_source(
+                            source,
+                            &prefix,
+                            &module_inputs,
+                            &arg_map,
+                            &module_stmts,
+                        )
+                        .map_err(|e| {
+                            format!(
+                                "producer '{}' inside module '{}': {e}",
+                                b.targets.join(","),
+                                func_name
+                            )
+                        })?;
+                    let comprehension =
+                        super::traversal::resolve_source(&rewritten, &self.producers_seen)
+                            .map_err(|e| {
+                                format!(
+                                    "producer '{}' inside module '{}': {e}",
+                                    b.targets.join(","),
+                                    func_name
+                                )
+                            })?;
                     let name = format!("{prefix}{}", b.targets.join(","));
-                    let value = crate::iteration::comprehension::StreamerValue::new(rewritten.text.clone(), comprehension.clone());
+                    let value = crate::iteration::comprehension::StreamerValue::new(
+                        rewritten.text.clone(),
+                        comprehension.clone(),
+                    );
                     let call = Expr::Call(CallExpr {
                         func: "streamer".into(),
                         args: vec![Arg::Positional(Expr::StringLit(value.to_json(), b.span))],
@@ -356,12 +384,10 @@ impl Compiler {
                     });
                 }
                 Statement::Binding(b) => {
-                    let prefixed_targets: Vec<String> = b.targets.iter()
-                        .map(|t| format!("{prefix}{t}"))
-                        .collect();
-                    let rewritten = self.rewrite_module_expr(
-                        &b.value, &prefix, &module_inputs, &arg_map,
-                    );
+                    let prefixed_targets: Vec<String> =
+                        b.targets.iter().map(|t| format!("{prefix}{t}")).collect();
+                    let rewritten =
+                        self.rewrite_module_expr(&b.value, &prefix, &module_inputs, &arg_map);
                     self.compile_binding(asm, &prefixed_targets, &rewritten)?;
                 }
                 Statement::ModuleDef(_) | Statement::ExternPort(_) => {} // nested module defs not inlined
@@ -370,7 +396,9 @@ impl Compiler {
                 Statement::For(f) => {
                     return Err(format!(
                         "`for {}` inside module '{}': {}",
-                        f.source.text, func_name, "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
+                        f.source.text,
+                        func_name,
+                        "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
                     ));
                 }
                 Statement::Tile(t) => {
@@ -380,8 +408,16 @@ impl Compiler {
                     let mut tile = t.clone();
                     tile.name = format!("{prefix}{}", t.name);
                     tile.pieces = self
-                        .rewrite_module_pieces(&t.pieces, &prefix, &module_inputs, &arg_map, &module_stmts)
-                        .map_err(|e| format!("tile '{}' inside module '{}': {e}", t.name, func_name))?;
+                        .rewrite_module_pieces(
+                            &t.pieces,
+                            &prefix,
+                            &module_inputs,
+                            &arg_map,
+                            &module_stmts,
+                        )
+                        .map_err(|e| {
+                            format!("tile '{}' inside module '{}': {e}", t.name, func_name)
+                        })?;
                     self.compile_tile(asm, &tile)?;
                 }
             }
@@ -391,23 +427,28 @@ impl Compiler {
         // This makes the target name available as both a wire source
         // (for downstream nodes) and an output.
         for (i, target) in targets.iter().enumerate() {
-            let output_name = module_outputs.get(i).cloned()
+            let output_name = module_outputs
+                .get(i)
+                .cloned()
                 .unwrap_or_else(|| func_name.to_string());
             let prefixed = format!("{prefix}{output_name}");
             // Create a passthrough node named after the target, wired
             // from the module's prefixed output. This makes `target`
             // available as a node name for downstream wiring.
             // Use PortPassthrough which accepts any port type (f64, u64, Str).
-            let out_type = self.output_type_of(asm, &prefixed)
-                .ok_or_else(|| format!(
+            let out_type = self.output_type_of(asm, &prefixed).ok_or_else(|| {
+                format!(
                     "module '{func_name}': declared output '{output_name}' \
                      resolves to internal node '{prefixed}' but that node \
                      is not present in the assembler — module body did not \
                      produce the declared output."
-                ))?;
+                )
+            })?;
             asm.add_node(
                 target,
-                Box::new(crate::library::identity::PortPassthrough::new(target, out_type)),
+                Box::new(crate::library::identity::PortPassthrough::new(
+                    target, out_type,
+                )),
                 vec![WireRef::node(&prefixed)],
             );
             self.all_names.push(target.clone());
@@ -415,7 +456,6 @@ impl Compiler {
 
         Ok(true)
     }
-
 }
 
 /// Parsed `.polydat` files by path, with the modification time they
@@ -423,14 +463,16 @@ impl Compiler {
 /// probe compiler resolving the same library module reuses the parse,
 /// and a file edited between compiles is re-read because its time moved.
 type ParsedFiles = std::collections::HashMap<PathBuf, (std::time::SystemTime, Arc<PolydatFile>)>;
-static PARSED_FILES: std::sync::OnceLock<std::sync::Mutex<ParsedFiles>> = std::sync::OnceLock::new();
+static PARSED_FILES: std::sync::OnceLock<std::sync::Mutex<ParsedFiles>> =
+    std::sync::OnceLock::new();
 
 /// The parsed form of a `.polydat` file, from the cache when its
 /// modification time is unchanged. `None` when the file cannot be read;
 /// `Some(Err)` when it does not parse.
 fn parsed_file(path: &Path) -> Option<Result<Arc<PolydatFile>, String>> {
     let modified = std::fs::metadata(path).ok()?.modified().ok()?;
-    let cache = PARSED_FILES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    let cache =
+        PARSED_FILES.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     if let Ok(map) = cache.lock()
         && let Some((seen, ast)) = map.get(path)
         && *seen == modified
@@ -522,17 +564,45 @@ impl Compiler {
                     h.expr = self.rewrite_module_expr(&h.expr, prefix, module_inputs, arg_map);
                     TilePiece::Hole(h)
                 }
-                TilePiece::Branch { cond, then, otherwise, span } => TilePiece::Branch {
+                TilePiece::Branch {
+                    cond,
+                    then,
+                    otherwise,
+                    span,
+                } => TilePiece::Branch {
                     cond: self.rewrite_module_expr(cond, prefix, module_inputs, arg_map),
-                    then: self.rewrite_module_pieces(then, prefix, module_inputs, arg_map, module_stmts)?,
+                    then: self.rewrite_module_pieces(
+                        then,
+                        prefix,
+                        module_inputs,
+                        arg_map,
+                        module_stmts,
+                    )?,
                     otherwise: match otherwise {
-                        Some(o) => Some(self.rewrite_module_pieces(o, prefix, module_inputs, arg_map, module_stmts)?),
+                        Some(o) => Some(self.rewrite_module_pieces(
+                            o,
+                            prefix,
+                            module_inputs,
+                            arg_map,
+                            module_stmts,
+                        )?),
                         None => None,
                     },
                     span: *span,
                 },
-                TilePiece::Projection { source, sep, body, span } => {
-                    let rewritten = self.rewrite_for_source(source, prefix, module_inputs, arg_map, module_stmts)?;
+                TilePiece::Projection {
+                    source,
+                    sep,
+                    body,
+                    span,
+                } => {
+                    let rewritten = self.rewrite_for_source(
+                        source,
+                        prefix,
+                        module_inputs,
+                        arg_map,
+                        module_stmts,
+                    )?;
                     // Elements shadow module names inside the body.
                     let elements = match &rewritten.kind {
                         ForSourceKind::Comprehension(c) => c.coordinate_names(),
@@ -551,7 +621,13 @@ impl Compiler {
                     TilePiece::Projection {
                         source: rewritten,
                         sep: sep.clone(),
-                        body: self.rewrite_module_pieces(body, prefix, &body_inputs, &body_args, module_stmts)?,
+                        body: self.rewrite_module_pieces(
+                            body,
+                            prefix,
+                            &body_inputs,
+                            &body_args,
+                            module_stmts,
+                        )?,
                         span: *span,
                     }
                 }
@@ -587,12 +663,14 @@ impl Compiler {
         for name in placeholder_names(&text) {
             let replacement = if module_inputs.contains(&name) {
                 match arg_map.get(&name) {
-                    Some(Arg::Positional(Expr::Ident(w, _)) | Arg::Named(_, Expr::Ident(w, _))) => Some(w.clone()),
+                    Some(Arg::Positional(Expr::Ident(w, _)) | Arg::Named(_, Expr::Ident(w, _))) => {
+                        Some(w.clone())
+                    }
                     Some(_) => {
                         return Err(format!(
                             "`for {}` reads module input `{name}` through a placeholder, so the caller must pass a wire for it",
                             source.text
-                        ))
+                        ));
                     }
                     None => None,
                 }
@@ -607,19 +685,41 @@ impl Compiler {
         }
         // A producer the module bound takes the prefix, in the kind and
         // at the head of the text.
-        let renamed = |n: &str| if internal.contains(&n.to_string()) { format!("{prefix}{n}") } else { n.to_string() };
+        let renamed = |n: &str| {
+            if internal.contains(&n.to_string()) {
+                format!("{prefix}{n}")
+            } else {
+                n.to_string()
+            }
+        };
         match &source.kind {
             ForSourceKind::Producer(n) => {
                 let p = renamed(n);
-                Ok(ForSource { text: p.clone(), kind: ForSourceKind::Producer(p), span: source.span })
+                Ok(ForSource {
+                    text: p.clone(),
+                    kind: ForSourceKind::Producer(p),
+                    span: source.span,
+                })
             }
-            ForSourceKind::Derived { base, filter, order } => {
+            ForSourceKind::Derived {
+                base,
+                filter,
+                order,
+            } => {
                 let b = renamed(base);
                 let text = match text.strip_prefix(base.as_str()) {
                     Some(rest) => format!("{b}{rest}"),
                     None => text,
                 };
-                Ok(ForSource { text, kind: ForSourceKind::Derived { base: b, filter: filter.clone(), order: order.clone() }, span: source.span })
+                Ok(ForSource {
+                    text,
+                    kind: ForSourceKind::Derived {
+                        base: b,
+                        filter: filter.clone(),
+                        order: order.clone(),
+                    },
+                    span: source.span,
+                })
             }
             ForSourceKind::Comprehension(_) => {
                 let mut rewritten = super::parser::for_source_from_text(&text, source.span, true)?;
@@ -642,34 +742,58 @@ impl Compiler {
         module_inputs: &[String],
         arg_map: &std::collections::HashMap<String, Arg>,
     ) -> Result<crate::iteration::comprehension::Comprehension, String> {
-        use crate::iteration::comprehension::source::Source;
         use crate::iteration::comprehension::Comprehension as K;
+        use crate::iteration::comprehension::source::Source;
         Ok(match c {
-            K::Clause { name, source: Source::Generator { expr, cardinality_hint } } => {
-                let parsed = super::tile::parse_hole_expr(expr)
-                    .map_err(|e| format!("generator `{expr}` in projection element '{name}': {e}"))?;
+            K::Clause {
+                name,
+                source:
+                    Source::Generator {
+                        expr,
+                        cardinality_hint,
+                    },
+            } => {
+                let parsed = super::tile::parse_hole_expr(expr).map_err(|e| {
+                    format!("generator `{expr}` in projection element '{name}': {e}")
+                })?;
                 let rewritten = self.rewrite_module_expr(&parsed, prefix, module_inputs, arg_map);
                 K::Clause {
                     name: name.clone(),
-                    source: Source::Generator { expr: super::pprint::pp_expr(&rewritten), cardinality_hint: *cardinality_hint },
+                    source: Source::Generator {
+                        expr: super::pprint::pp_expr(&rewritten),
+                        cardinality_hint: *cardinality_hint,
+                    },
                 }
             }
             K::Clause { .. } => c.clone(),
             K::Cartesian { children } => K::Cartesian {
-                children: children.iter().map(|ch| self.rewrite_generators(ch, prefix, module_inputs, arg_map)).collect::<Result<_, _>>()?,
+                children: children
+                    .iter()
+                    .map(|ch| self.rewrite_generators(ch, prefix, module_inputs, arg_map))
+                    .collect::<Result<_, _>>()?,
             },
             K::Zip { children, mode } => K::Zip {
-                children: children.iter().map(|ch| self.rewrite_generators(ch, prefix, module_inputs, arg_map)).collect::<Result<_, _>>()?,
+                children: children
+                    .iter()
+                    .map(|ch| self.rewrite_generators(ch, prefix, module_inputs, arg_map))
+                    .collect::<Result<_, _>>()?,
                 mode: *mode,
             },
             K::Union { children } => K::Union {
-                children: children.iter().map(|ch| self.rewrite_generators(ch, prefix, module_inputs, arg_map)).collect::<Result<_, _>>()?,
+                children: children
+                    .iter()
+                    .map(|ch| self.rewrite_generators(ch, prefix, module_inputs, arg_map))
+                    .collect::<Result<_, _>>()?,
             },
             K::Filter { child, predicate } => K::Filter {
                 child: Box::new(self.rewrite_generators(child, prefix, module_inputs, arg_map)?),
                 predicate: predicate.clone(),
             },
-            K::Order { child, strategy, truncation } => K::Order {
+            K::Order {
+                child,
+                strategy,
+                truncation,
+            } => K::Order {
                 child: Box::new(self.rewrite_generators(child, prefix, module_inputs, arg_map)?),
                 strategy: *strategy,
                 truncation: *truncation,
@@ -705,48 +829,48 @@ impl Compiler {
                 }
             }
             Expr::Call(call) => {
-                let rewritten_args: Vec<Arg> = call.args.iter().map(|arg| {
-                    match arg {
-                        Arg::Positional(e) => Arg::Positional(
-                            self.rewrite_module_expr(e, prefix, module_inputs, arg_map)
-                        ),
+                let rewritten_args: Vec<Arg> = call
+                    .args
+                    .iter()
+                    .map(|arg| match arg {
+                        Arg::Positional(e) => Arg::Positional(self.rewrite_module_expr(
+                            e,
+                            prefix,
+                            module_inputs,
+                            arg_map,
+                        )),
                         Arg::Named(n, e) => Arg::Named(
                             n.clone(),
-                            self.rewrite_module_expr(e, prefix, module_inputs, arg_map)
+                            self.rewrite_module_expr(e, prefix, module_inputs, arg_map),
                         ),
-                    }
-                }).collect();
+                    })
+                    .collect();
                 Expr::Call(CallExpr {
                     func: call.func.clone(),
                     args: rewritten_args,
                     span: call.span,
                 })
             }
-            Expr::ArrayLit(elems, span) => {
-                Expr::ArrayLit(
-                    elems.iter().map(|e| self.rewrite_module_expr(e, prefix, module_inputs, arg_map)).collect(),
-                    *span,
-                )
-            }
-            Expr::BinOp(lhs, op, rhs) => {
-                Expr::BinOp(
-                    Box::new(self.rewrite_module_expr(lhs, prefix, module_inputs, arg_map)),
-                    *op,
-                    Box::new(self.rewrite_module_expr(rhs, prefix, module_inputs, arg_map)),
-                )
-            }
-            Expr::UnaryNeg(inner, span) => {
-                Expr::UnaryNeg(
-                    Box::new(self.rewrite_module_expr(inner, prefix, module_inputs, arg_map)),
-                    *span,
-                )
-            }
-            Expr::UnaryBitNot(inner, span) => {
-                Expr::UnaryBitNot(
-                    Box::new(self.rewrite_module_expr(inner, prefix, module_inputs, arg_map)),
-                    *span,
-                )
-            }
+            Expr::ArrayLit(elems, span) => Expr::ArrayLit(
+                elems
+                    .iter()
+                    .map(|e| self.rewrite_module_expr(e, prefix, module_inputs, arg_map))
+                    .collect(),
+                *span,
+            ),
+            Expr::BinOp(lhs, op, rhs) => Expr::BinOp(
+                Box::new(self.rewrite_module_expr(lhs, prefix, module_inputs, arg_map)),
+                *op,
+                Box::new(self.rewrite_module_expr(rhs, prefix, module_inputs, arg_map)),
+            ),
+            Expr::UnaryNeg(inner, span) => Expr::UnaryNeg(
+                Box::new(self.rewrite_module_expr(inner, prefix, module_inputs, arg_map)),
+                *span,
+            ),
+            Expr::UnaryBitNot(inner, span) => Expr::UnaryBitNot(
+                Box::new(self.rewrite_module_expr(inner, prefix, module_inputs, arg_map)),
+                *span,
+            ),
             other => other.clone(),
         }
     }
@@ -785,7 +909,9 @@ impl Compiler {
             }
             // Then any .polydat in the directory that exports the name.
             for path in polydat_files_in(dir) {
-                let Some(Ok(ast)) = parsed_file(&path) else { continue };
+                let Some(Ok(ast)) = parsed_file(&path) else {
+                    continue;
+                };
                 if let Ok(resolved) = Self::module_from_ast(&ast, name) {
                     self.module_cache.insert(name.to_string(), resolved);
                     return Ok(self.module_cache.get(name));
@@ -824,7 +950,8 @@ impl Compiler {
     pub(super) fn register_local_modules(&mut self, file: &PolydatFile) {
         for stmt in &file.statements {
             if let Statement::ModuleDef(mdef) = stmt {
-                self.module_cache.insert(mdef.name.clone(), Self::resolved_from_def(mdef));
+                self.module_cache
+                    .insert(mdef.name.clone(), Self::resolved_from_def(mdef));
             }
         }
     }
@@ -860,38 +987,40 @@ impl Compiler {
         // Strategy 1: look for a formal ModuleDef with matching name
         for stmt in &ast.statements {
             if let Statement::ModuleDef(mdef) = stmt
-                && mdef.name == target_name {
-                    let inputs: Vec<String> = mdef.params.iter()
-                        .map(|p| p.name.clone())
-                        .collect();
-                    let input_types: Vec<Option<String>> = mdef.params.iter()
-                        .map(|p| Some(p.typ.clone()))
-                        .collect();
-                    let outputs: Vec<String> = mdef.outputs.iter()
-                        .map(|o| o.name.clone())
-                        .collect();
-                    let output_types: Vec<Option<String>> = mdef.outputs.iter()
-                        .map(|o| Some(o.typ.clone()))
-                        .collect();
-                    return Ok(ResolvedModule {
-                        inputs,
-                        input_types,
-                        outputs,
-                        output_types,
-                        is_formal: true,
-                        statements: mdef.body.clone(),
-                    });
-                }
+                && mdef.name == target_name
+            {
+                let inputs: Vec<String> = mdef.params.iter().map(|p| p.name.clone()).collect();
+                let input_types: Vec<Option<String>> =
+                    mdef.params.iter().map(|p| Some(p.typ.clone())).collect();
+                let outputs: Vec<String> = mdef.outputs.iter().map(|o| o.name.clone()).collect();
+                let output_types: Vec<Option<String>> =
+                    mdef.outputs.iter().map(|o| Some(o.typ.clone())).collect();
+                return Ok(ResolvedModule {
+                    inputs,
+                    input_types,
+                    outputs,
+                    output_types,
+                    is_formal: true,
+                    statements: mdef.body.clone(),
+                });
+            }
         }
 
         // Strategy 2: subgraph extraction by binding name
         // Build a map: binding name → (statement index, references)
-        let mut name_to_idx: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut name_to_idx: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         let mut stmt_refs: Vec<HashSet<String>> = Vec::new();
 
         for (i, stmt) in ast.statements.iter().enumerate() {
             let (names, expr) = match stmt {
-                Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) | Statement::Tile(_) => {
+                Statement::InputDecl(_)
+                | Statement::ModuleDef(_)
+                | Statement::ExternPort(_)
+                | Statement::Cursor(_)
+                | Statement::Pragma { .. }
+                | Statement::For(_)
+                | Statement::Tile(_) => {
                     stmt_refs.push(HashSet::new());
                     continue;
                 }
@@ -915,7 +1044,9 @@ impl Compiler {
         let mut needed: HashSet<usize> = HashSet::new();
         let mut worklist = vec![target_idx];
         while let Some(idx) = worklist.pop() {
-            if !needed.insert(idx) { continue; }
+            if !needed.insert(idx) {
+                continue;
+            }
             if idx < stmt_refs.len() {
                 for ref_name in &stmt_refs[idx] {
                     if let Some(&dep_idx) = name_to_idx.get(ref_name) {
@@ -926,7 +1057,10 @@ impl Compiler {
         }
 
         // Extract only the needed statements, preserving order
-        let extracted: Vec<Statement> = ast.statements.iter().enumerate()
+        let extracted: Vec<Statement> = ast
+            .statements
+            .iter()
+            .enumerate()
             .filter(|(i, _)| needed.contains(i))
             .map(|(_, s)| s.clone())
             .collect();
@@ -944,7 +1078,9 @@ impl Compiler {
                     defined.insert(d.name.clone());
                 }
                 Statement::Binding(b) => {
-                    for t in &b.targets { defined.insert(t.clone()); }
+                    for t in &b.targets {
+                        defined.insert(t.clone());
+                    }
                 }
                 Statement::ModuleDef(_) | Statement::ExternPort(_) => {}
                 Statement::Cursor(_) => {}
@@ -955,13 +1091,20 @@ impl Compiler {
         }
         for stmt in &extracted {
             let expr = match stmt {
-                Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) | Statement::Tile(_) => continue,
+                Statement::InputDecl(_)
+                | Statement::ModuleDef(_)
+                | Statement::ExternPort(_)
+                | Statement::Cursor(_)
+                | Statement::Pragma { .. }
+                | Statement::For(_)
+                | Statement::Tile(_) => continue,
                 Statement::Binding(b) => &b.value,
             };
             collect_references(expr, &mut referenced);
         }
 
-        let mut inputs: Vec<String> = referenced.into_iter()
+        let mut inputs: Vec<String> = referenced
+            .into_iter()
             .filter(|name| !defined.contains(name))
             .collect();
         inputs.sort();

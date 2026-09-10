@@ -60,8 +60,14 @@ pub fn parse_clause(s: &str) -> Result<Clause, String> {
     while i + 4 <= bytes.len() {
         let ch = bytes[i];
         match ch {
-            b'(' | b'[' | b'{' => { depth += 1; i += 1; }
-            b')' | b']' | b'}' => { depth -= 1; i += 1; }
+            b'(' | b'[' | b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' | b']' | b'}' => {
+                depth -= 1;
+                i += 1;
+            }
             b' ' if depth == 0
                 && bytes.get(i + 1) == Some(&b'i')
                 && bytes.get(i + 2) == Some(&b'n')
@@ -71,10 +77,14 @@ pub fn parse_clause(s: &str) -> Result<Clause, String> {
                 let rhs = s[i + 4..].trim();
                 return parse_clause_from_sides(lhs, rhs, s);
             }
-            _ => { i += 1; }
+            _ => {
+                i += 1;
+            }
         }
     }
-    Err(format!("invalid for_each clause: '{s}' (expected 'var in expr')"))
+    Err(format!(
+        "invalid for_each clause: '{s}' (expected 'var in expr')"
+    ))
 }
 
 /// Build a `Clause` from already-split `lhs` and `rhs` text.
@@ -126,7 +136,8 @@ fn parse_clause_from_sides(lhs: &str, rhs: &str, whole: &str) -> Result<Clause, 
         if vars.len() != exprs.len() {
             return Err(format!(
                 "parallel-iter clause '{whole}': {} variables but {} expressions",
-                vars.len(), exprs.len()
+                vars.len(),
+                exprs.len()
             ));
         }
         Ok(Clause::parallel_with_mode(mode, vars, exprs))
@@ -143,7 +154,7 @@ fn parse_clause_from_sides(lhs: &str, rhs: &str, whole: &str) -> Result<Clause, 
 fn strip_zip_mode_prefix(rhs: &str) -> Option<(String, ZipMode)> {
     for (prefix, mode) in [
         ("zip_truncate", ZipMode::Truncate),
-        ("zip_cycle",    ZipMode::Cycle),
+        ("zip_cycle", ZipMode::Cycle),
     ] {
         if let Some(rest) = rhs.strip_prefix(prefix) {
             let trimmed = rest.trim_start();
@@ -191,14 +202,22 @@ fn split_paren_group(s: &str) -> Vec<String> {
     while i < bytes.len() {
         let ch = bytes[i];
         match ch {
-            b'(' | b'[' | b'{' => { depth += 1; i += 1; }
-            b')' | b']' | b'}' => { depth -= 1; i += 1; }
+            b'(' | b'[' | b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' | b']' | b'}' => {
+                depth -= 1;
+                i += 1;
+            }
             b',' if depth == 0 => {
                 parts.push(inner[start..i].trim().to_string());
                 start = i + 1;
                 i += 1;
             }
-            _ => { i += 1; }
+            _ => {
+                i += 1;
+            }
         }
     }
     let tail = inner[start..].trim();
@@ -249,9 +268,7 @@ pub fn parse_comprehension_text(text: &str) -> Result<Comprehension, String> {
     // String form: each clause is its own sub-space so the
     // detection rule (repeated names ⇒ Union) sees per-clause
     // boundaries. Same convention `nbrs-workload` uses.
-    let subspaces: Vec<Vec<Clause>> = clauses.into_iter()
-        .map(|c| vec![c])
-        .collect();
+    let subspaces: Vec<Vec<Clause>> = clauses.into_iter().map(|c| vec![c]).collect();
     let mut comp = comprehension_from_subspaces(subspaces);
     if let Some(predicate) = filter {
         comp = comp.with_filter(predicate);
@@ -336,8 +353,14 @@ fn build_order_from_terse(name: &str, n: Option<usize>) -> Result<TraversalOrder
         }),
         "halton" => Ok(TraversalOrder::Halton { count: n }),
         "sobol" => Ok(TraversalOrder::Sobol { count: n }),
-        "lhs" => Ok(TraversalOrder::Lhs { count: n, seed: None }),
-        "custom" => Err("order spec 'custom': use 'custom(<function>)' to name the Polydat function".to_string()),
+        "lhs" => Ok(TraversalOrder::Lhs {
+            count: n,
+            seed: None,
+        }),
+        "custom" => Err(
+            "order spec 'custom': use 'custom(<function>)' to name the Polydat function"
+                .to_string(),
+        ),
         other => Err(format!(
             "order spec: unknown strategy '{other}' — \
              expected one of lex/reverse_lex/diagonal/antidiagonal/extrema/shells/halton/sobol/lhs/custom"
@@ -347,10 +370,18 @@ fn build_order_from_terse(name: &str, n: Option<usize>) -> Result<TraversalOrder
 
 fn build_order_from_keyword(name: &str, body: &str) -> Result<TraversalOrder, String> {
     let args = parse_keyword_args(body)?;
-    let count = args.iter().find_map(|(k, v)| (k == "count").then(|| v.parse::<usize>().ok()).flatten());
-    let depth = args.iter().find_map(|(k, v)| (k == "depth").then(|| v.parse::<usize>().ok()).flatten());
-    let strata = args.iter().find_map(|(k, v)| (k == "strata").then(|| v.parse::<usize>().ok()).flatten());
-    let seed = args.iter().find_map(|(k, v)| (k == "seed").then(|| v.parse::<u64>().ok()).flatten());
+    let count = args
+        .iter()
+        .find_map(|(k, v)| (k == "count").then(|| v.parse::<usize>().ok()).flatten());
+    let depth = args
+        .iter()
+        .find_map(|(k, v)| (k == "depth").then(|| v.parse::<usize>().ok()).flatten());
+    let strata = args
+        .iter()
+        .find_map(|(k, v)| (k == "strata").then(|| v.parse::<usize>().ok()).flatten());
+    let seed = args
+        .iter()
+        .find_map(|(k, v)| (k == "seed").then(|| v.parse::<u64>().ok()).flatten());
 
     match name {
         "lex" => Ok(TraversalOrder::Lex { count }),
@@ -359,13 +390,18 @@ fn build_order_from_keyword(name: &str, body: &str) -> Result<TraversalOrder, St
         "antidiagonal" => Ok(TraversalOrder::Antidiagonal { count }),
         "extrema" => Ok(TraversalOrder::Extrema { strata }),
         "shells" => {
-            let origin = match args.iter().find_map(|(k, v)| (k == "origin").then_some(v.as_str())) {
+            let origin = match args
+                .iter()
+                .find_map(|(k, v)| (k == "origin").then_some(v.as_str()))
+            {
                 Some("outer") | None => ShellOrigin::Outer,
                 Some("center") => ShellOrigin::Center,
                 Some("corner") => ShellOrigin::Corner,
-                Some(other) => return Err(format!(
-                    "order shells: unknown origin '{other}' — expected outer/center/corner"
-                )),
+                Some(other) => {
+                    return Err(format!(
+                        "order shells: unknown origin '{other}' — expected outer/center/corner"
+                    ));
+                }
             };
             Ok(TraversalOrder::Shells { origin, depth })
         }
@@ -375,10 +411,13 @@ fn build_order_from_keyword(name: &str, body: &str) -> Result<TraversalOrder, St
         "space_filling" => {
             // `space_filling(strategy, count=N, seed=N)` —
             // strategy is the first positional arg.
-            let strategy = args.iter()
+            let strategy = args
+                .iter()
                 .find(|(k, _)| k.is_empty())
                 .map(|(_, v)| v.as_str())
-                .ok_or_else(|| "space_filling: missing strategy name (halton/sobol/lhs)".to_string())?;
+                .ok_or_else(|| {
+                    "space_filling: missing strategy name (halton/sobol/lhs)".to_string()
+                })?;
             match strategy {
                 "halton" => Ok(TraversalOrder::Halton { count }),
                 "sobol" => Ok(TraversalOrder::Sobol { count }),
@@ -389,15 +428,14 @@ fn build_order_from_keyword(name: &str, body: &str) -> Result<TraversalOrder, St
             }
         }
         "custom" => {
-            let function = args.iter()
+            let function = args
+                .iter()
                 .find(|(k, _)| k.is_empty())
                 .map(|(_, v)| v.clone())
                 .ok_or_else(|| "custom: missing function name".to_string())?;
             Ok(TraversalOrder::Custom { function })
         }
-        other => Err(format!(
-            "order spec: unknown strategy '{other}'"
-        )),
+        other => Err(format!("order spec: unknown strategy '{other}'")),
     }
 }
 
@@ -414,9 +452,14 @@ fn parse_keyword_args(body: &str) -> Result<Vec<(String, String)>, String> {
     let mut depth: u32 = 0;
     let push = |s: &str, out: &mut Vec<(String, String)>| {
         let trimmed = s.trim();
-        if trimmed.is_empty() { return; }
+        if trimmed.is_empty() {
+            return;
+        }
         let (k, v) = if let Some(eq) = trimmed.find('=') {
-            (trimmed[..eq].trim().to_string(), trimmed[eq + 1..].trim().to_string())
+            (
+                trimmed[..eq].trim().to_string(),
+                trimmed[eq + 1..].trim().to_string(),
+            )
         } else {
             (String::new(), trimmed.to_string())
         };
@@ -426,14 +469,22 @@ fn parse_keyword_args(body: &str) -> Result<Vec<(String, String)>, String> {
     while i < n {
         let ch = bytes[i];
         match ch {
-            b'(' | b'[' | b'{' => { depth = depth.saturating_add(1); i += 1; }
-            b')' | b']' | b'}' => { depth = depth.saturating_sub(1); i += 1; }
+            b'(' | b'[' | b'{' => {
+                depth = depth.saturating_add(1);
+                i += 1;
+            }
+            b')' | b']' | b'}' => {
+                depth = depth.saturating_sub(1);
+                i += 1;
+            }
             b',' if depth == 0 => {
                 push(&body[start..i], &mut out);
                 start = i + 1;
                 i += 1;
             }
-            _ => { i += 1; }
+            _ => {
+                i += 1;
+            }
         }
     }
     push(&body[start..], &mut out);
@@ -465,11 +516,15 @@ pub fn split_at_order(text: &str) -> (String, Option<String>) {
     while i < n {
         let ch = bytes[i];
         match ch {
-            b'(' | b'[' | b'{' => { depth = depth.saturating_add(1); i += 1; }
-            b')' | b']' | b'}' => { depth = depth.saturating_sub(1); i += 1; }
-            b' ' if depth == 0 && text.is_char_boundary(i)
-                && text[i..].starts_with(KEYWORD) =>
-            {
+            b'(' | b'[' | b'{' => {
+                depth = depth.saturating_add(1);
+                i += 1;
+            }
+            b')' | b']' | b'}' => {
+                depth = depth.saturating_sub(1);
+                i += 1;
+            }
+            b' ' if depth == 0 && text.is_char_boundary(i) && text[i..].starts_with(KEYWORD) => {
                 let head = text[..i].to_string();
                 let spec = text[i + KEYWORD.len()..].trim().to_string();
                 if spec.is_empty() {
@@ -477,7 +532,9 @@ pub fn split_at_order(text: &str) -> (String, Option<String>) {
                 }
                 return (head, Some(spec));
             }
-            _ => { i += 1; }
+            _ => {
+                i += 1;
+            }
         }
     }
     (text.to_string(), None)
@@ -501,11 +558,15 @@ pub fn split_at_where(text: &str) -> (String, Option<String>) {
     while i < n {
         let ch = bytes[i];
         match ch {
-            b'(' | b'[' | b'{' => { depth = depth.saturating_add(1); i += 1; }
-            b')' | b']' | b'}' => { depth = depth.saturating_sub(1); i += 1; }
-            b' ' if depth == 0 && text.is_char_boundary(i)
-                && text[i..].starts_with(KEYWORD) =>
-            {
+            b'(' | b'[' | b'{' => {
+                depth = depth.saturating_add(1);
+                i += 1;
+            }
+            b')' | b']' | b'}' => {
+                depth = depth.saturating_sub(1);
+                i += 1;
+            }
+            b' ' if depth == 0 && text.is_char_boundary(i) && text[i..].starts_with(KEYWORD) => {
                 let prefix = text[..i].to_string();
                 let suffix = text[i + KEYWORD.len()..].trim().to_string();
                 if suffix.is_empty() {
@@ -513,7 +574,9 @@ pub fn split_at_where(text: &str) -> (String, Option<String>) {
                 }
                 return (prefix, Some(suffix));
             }
-            _ => { i += 1; }
+            _ => {
+                i += 1;
+            }
         }
     }
     (text.to_string(), None)
@@ -539,7 +602,9 @@ pub fn parse_clause_list(text: &str) -> Result<Vec<Clause>, String> {
     let mut out = Vec::new();
     for part in split_respecting_parens(text) {
         let trimmed = part.trim();
-        if trimmed.is_empty() { continue; }
+        if trimmed.is_empty() {
+            continue;
+        }
         out.push(parse_clause(trimmed)?);
     }
     Ok(out)
@@ -604,8 +669,14 @@ pub fn split_respecting_parens(s: &str) -> Vec<String> {
     while i < bytes.len() {
         let ch = bytes[i];
         match ch {
-            b'(' | b'[' | b'{' => { depth = depth.saturating_add(1); i += 1; }
-            b')' | b']' | b'}' => { depth = depth.saturating_sub(1); i += 1; }
+            b'(' | b'[' | b'{' => {
+                depth = depth.saturating_add(1);
+                i += 1;
+            }
+            b')' | b']' | b'}' => {
+                depth = depth.saturating_sub(1);
+                i += 1;
+            }
             b',' if depth == 0 => {
                 if is_clause_boundary(&s[i + 1..]) {
                     parts.push(s[start..i].to_string());
@@ -616,7 +687,9 @@ pub fn split_respecting_parens(s: &str) -> Vec<String> {
                     i += 1;
                 }
             }
-            _ => { i += 1; }
+            _ => {
+                i += 1;
+            }
         }
     }
     let tail = &s[start..];
@@ -658,14 +731,18 @@ fn is_clause_boundary(tail: &str) -> bool {
     let mut ident_end = 0;
     for (i, c) in trimmed.char_indices() {
         if i == 0 {
-            if !(c.is_ascii_alphabetic() || c == '_') { return false; }
+            if !(c.is_ascii_alphabetic() || c == '_') {
+                return false;
+            }
         } else if !(c.is_ascii_alphanumeric() || c == '_') {
             ident_end = i;
             break;
         }
         ident_end = i + c.len_utf8();
     }
-    if ident_end == 0 { return false; }
+    if ident_end == 0 {
+        return false;
+    }
     let after = &trimmed[ident_end..];
     after.starts_with(" in ")
 }
@@ -726,13 +803,14 @@ mod tests {
     #[test]
     fn parse_clause_list_paren_safe() {
         // The function-call inner comma is preserved; only one clause.
-        let clauses = parse_clause_list(
-            "profile in matching_profiles('{dataset}', '{prefix}')"
-        ).unwrap();
+        let clauses =
+            parse_clause_list("profile in matching_profiles('{dataset}', '{prefix}')").unwrap();
         assert_eq!(clauses.len(), 1);
         assert_eq!(clauses[0].var(), "profile");
-        assert_eq!(clauses[0].expr(),
-            "matching_profiles('{dataset}', '{prefix}')");
+        assert_eq!(
+            clauses[0].expr(),
+            "matching_profiles('{dataset}', '{prefix}')"
+        );
     }
 
     #[test]
@@ -785,9 +863,7 @@ mod tests {
     #[test]
     fn split_at_where_inside_parens_is_ignored() {
         // `where` inside a function call shouldn't split.
-        let (clauses, filter) = split_at_where(
-            "p in pick(profiles, where='ann') where p == 'x'"
-        );
+        let (clauses, filter) = split_at_where("p in pick(profiles, where='ann') where p == 'x'");
         assert_eq!(clauses, "p in pick(profiles, where='ann')");
         assert_eq!(filter, Some("p == 'x'".to_string()));
     }
@@ -802,9 +878,9 @@ mod tests {
 
     #[test]
     fn parse_comprehension_text_with_filter() {
-        let comp = parse_comprehension_text(
-            "k in 10,100, limit in 10,20,30 where k * limit < 1000"
-        ).unwrap();
+        let comp =
+            parse_comprehension_text("k in 10,100, limit in 10,20,30 where k * limit < 1000")
+                .unwrap();
         assert!(comp.is_cartesian());
         assert_eq!(comp.coordinate_names(), vec!["k", "limit"]);
         assert_eq!(comp.filter, Some("k * limit < 1000".to_string()));
@@ -812,9 +888,7 @@ mod tests {
 
     #[test]
     fn parse_comprehension_text_repeated_var_yields_union_with_filter() {
-        let comp = parse_comprehension_text(
-            "k in 1, k in 2 where k > 0"
-        ).unwrap();
+        let comp = parse_comprehension_text("k in 1, k in 2 where k > 0").unwrap();
         assert!(comp.is_union());
         assert_eq!(comp.filter, Some("k > 0".to_string()));
     }
@@ -835,9 +909,7 @@ mod tests {
 
     #[test]
     fn split_at_order_inside_parens_is_ignored() {
-        let (head, order) = split_at_order(
-            "p in pick(profiles, order='ann') order lex"
-        );
+        let (head, order) = split_at_order("p in pick(profiles, order='ann') order lex");
         assert_eq!(head, "p in pick(profiles, order='ann')");
         assert_eq!(order, Some("lex".to_string()));
     }
@@ -853,7 +925,10 @@ mod tests {
             other => panic!("expected Extrema, got {other:?}"),
         }
         match parse_order_spec("shells").unwrap() {
-            TraversalOrder::Shells { origin: ShellOrigin::Outer, depth: None } => {}
+            TraversalOrder::Shells {
+                origin: ShellOrigin::Outer,
+                depth: None,
+            } => {}
             other => panic!("expected Shells outer/None, got {other:?}"),
         }
     }
@@ -865,7 +940,10 @@ mod tests {
             other => panic!("expected Extrema strata=1, got {other:?}"),
         }
         match parse_order_spec("shells/2").unwrap() {
-            TraversalOrder::Shells { origin: ShellOrigin::Outer, depth: Some(2) } => {}
+            TraversalOrder::Shells {
+                origin: ShellOrigin::Outer,
+                depth: Some(2),
+            } => {}
             other => panic!("expected Shells outer/2, got {other:?}"),
         }
         match parse_order_spec("halton/64").unwrap() {
@@ -881,11 +959,17 @@ mod tests {
     #[test]
     fn parse_order_spec_keyword() {
         match parse_order_spec("shells(origin=center, depth=3)").unwrap() {
-            TraversalOrder::Shells { origin: ShellOrigin::Center, depth: Some(3) } => {}
+            TraversalOrder::Shells {
+                origin: ShellOrigin::Center,
+                depth: Some(3),
+            } => {}
             other => panic!("expected Shells center/3, got {other:?}"),
         }
         match parse_order_spec("lhs(count=20, seed=42)").unwrap() {
-            TraversalOrder::Lhs { count: Some(20), seed: Some(42) } => {}
+            TraversalOrder::Lhs {
+                count: Some(20),
+                seed: Some(42),
+            } => {}
             other => panic!("expected Lhs count=20 seed=42, got {other:?}"),
         }
         match parse_order_spec("space_filling(sobol, count=64)").unwrap() {
@@ -902,9 +986,7 @@ mod tests {
 
     #[test]
     fn parse_comprehension_text_with_order() {
-        let comp = parse_comprehension_text(
-            "k in 1..10 where {k} > 3 order extrema/1"
-        ).unwrap();
+        let comp = parse_comprehension_text("k in 1..10 where {k} > 3 order extrema/1").unwrap();
         assert_eq!(comp.filter, Some("{k} > 3".to_string()));
         match comp.order {
             Some(TraversalOrder::Extrema { strata: Some(1) }) => {}
@@ -914,11 +996,12 @@ mod tests {
 
     #[test]
     fn parse_comprehension_text_order_only() {
-        let comp = parse_comprehension_text(
-            "k in 1..10, l in 1..10 order halton/50"
-        ).unwrap();
+        let comp = parse_comprehension_text("k in 1..10, l in 1..10 order halton/50").unwrap();
         assert_eq!(comp.filter, None);
-        assert!(matches!(comp.order, Some(TraversalOrder::Halton { count: Some(50) })));
+        assert!(matches!(
+            comp.order,
+            Some(TraversalOrder::Halton { count: Some(50) })
+        ));
     }
 
     #[test]
@@ -927,10 +1010,7 @@ mod tests {
         // top-level clause list with a repeated var name —
         // each clause becomes its own sub-space, then the
         // detection rule sees the repetition.
-        let subspaces = vec![
-            vec![Clause::new("k", "1")],
-            vec![Clause::new("k", "2")],
-        ];
+        let subspaces = vec![vec![Clause::new("k", "1")], vec![Clause::new("k", "2")]];
         let c = comprehension_from_subspaces(subspaces);
         assert!(c.is_union());
         assert_eq!(c.coordinate_names(), vec!["k"]);
@@ -940,28 +1020,27 @@ mod tests {
 
     #[test]
     fn union_plus_extrema_is_rejected() {
-        let err = parse_comprehension_text(
-            "k in 10, k in 100 order extrema/1"
-        ).unwrap_err();
-        assert!(err.contains("'extrema'") && err.contains("Union"),
-            "wrong message: {err}");
-        assert!(err.contains("Cartesian") || err.contains("lex"),
-            "should hint at remedy: {err}");
+        let err = parse_comprehension_text("k in 10, k in 100 order extrema/1").unwrap_err();
+        assert!(
+            err.contains("'extrema'") && err.contains("Union"),
+            "wrong message: {err}"
+        );
+        assert!(
+            err.contains("Cartesian") || err.contains("lex"),
+            "should hint at remedy: {err}"
+        );
     }
 
     #[test]
     fn union_plus_halton_is_rejected() {
-        let err = parse_comprehension_text(
-            "k in 10, l in 100, k in 200, l in 400 order halton/64"
-        ).unwrap_err();
+        let err = parse_comprehension_text("k in 10, l in 100, k in 200, l in 400 order halton/64")
+            .unwrap_err();
         assert!(err.contains("'halton'") && err.contains("Union"), "{err}");
     }
 
     #[test]
     fn union_plus_shells_is_rejected() {
-        let err = parse_comprehension_text(
-            "k in 10, k in 100 order shells/2"
-        ).unwrap_err();
+        let err = parse_comprehension_text("k in 10, k in 100 order shells/2").unwrap_err();
         assert!(err.contains("'shells'") && err.contains("Union"), "{err}");
     }
 
@@ -969,20 +1048,19 @@ mod tests {
     fn union_plus_lex_is_accepted() {
         // lex is a stable enumeration order with no
         // geometric reasoning — works fine on Union.
-        let comp = parse_comprehension_text(
-            "k in 10, k in 100 order lex"
-        ).unwrap();
+        let comp = parse_comprehension_text("k in 10, k in 100 order lex").unwrap();
         assert!(comp.is_union());
-        assert!(matches!(comp.order, Some(TraversalOrder::Lex { count: None })));
+        assert!(matches!(
+            comp.order,
+            Some(TraversalOrder::Lex { count: None })
+        ));
     }
 
     #[test]
     fn union_plus_custom_is_accepted() {
         // custom is the escape hatch — the user's function
         // decides what ordering means for their Union shape.
-        let comp = parse_comprehension_text(
-            "k in 10, k in 100 order custom(my_fn)"
-        ).unwrap();
+        let comp = parse_comprehension_text("k in 10, k in 100 order custom(my_fn)").unwrap();
         assert!(comp.is_union());
         assert!(matches!(comp.order, Some(TraversalOrder::Custom { .. })));
     }
@@ -991,11 +1069,12 @@ mod tests {
     fn cartesian_plus_extrema_remains_valid() {
         // The rejection is Union-specific; Cartesian +
         // index-space orderings have always been valid.
-        let comp = parse_comprehension_text(
-            "k in 1..10, l in 1..10 order extrema/1"
-        ).unwrap();
+        let comp = parse_comprehension_text("k in 1..10, l in 1..10 order extrema/1").unwrap();
         assert!(comp.is_cartesian());
-        assert!(matches!(comp.order, Some(TraversalOrder::Extrema { strata: Some(1) })));
+        assert!(matches!(
+            comp.order,
+            Some(TraversalOrder::Extrema { strata: Some(1) })
+        ));
     }
 
     #[test]
@@ -1004,23 +1083,37 @@ mod tests {
         // invariant entry point) — verifies every named
         // index-space strategy is named in the error.
         for (label, ord) in [
-            ("reverse_lex",  TraversalOrder::ReverseLex   { count: None }),
-            ("diagonal",     TraversalOrder::Diagonal     { count: None }),
+            ("reverse_lex", TraversalOrder::ReverseLex { count: None }),
+            ("diagonal", TraversalOrder::Diagonal { count: None }),
             ("antidiagonal", TraversalOrder::Antidiagonal { count: None }),
-            ("extrema",      TraversalOrder::Extrema      { strata: None }),
-            ("shells",       TraversalOrder::Shells {
-                origin: ShellOrigin::Outer, depth: None }),
-            ("halton",       TraversalOrder::Halton       { count: None }),
-            ("sobol",        TraversalOrder::Sobol        { count: None }),
-            ("lhs",          TraversalOrder::Lhs          { count: None, seed: None }),
+            ("extrema", TraversalOrder::Extrema { strata: None }),
+            (
+                "shells",
+                TraversalOrder::Shells {
+                    origin: ShellOrigin::Outer,
+                    depth: None,
+                },
+            ),
+            ("halton", TraversalOrder::Halton { count: None }),
+            ("sobol", TraversalOrder::Sobol { count: None }),
+            (
+                "lhs",
+                TraversalOrder::Lhs {
+                    count: None,
+                    seed: None,
+                },
+            ),
         ] {
             let comp = Comprehension::union(vec![
                 vec![Clause::new("k", "10")],
                 vec![Clause::new("k", "20")],
-            ]).with_order(ord);
+            ])
+            .with_order(ord);
             let errs = comp.validate().unwrap_err();
-            assert!(errs.iter().any(|e| e.contains(label)),
-                "{label}: error should name the strategy: {errs:?}");
+            assert!(
+                errs.iter().any(|e| e.contains(label)),
+                "{label}: error should name the strategy: {errs:?}"
+            );
         }
     }
 
@@ -1033,7 +1126,10 @@ mod tests {
         assert_eq!(c.vars, vec!["x".to_string(), "y".to_string()]);
         match &c.source {
             super::super::ast_legacy::ClauseSource::Parallel { exprs, .. } => {
-                assert_eq!(exprs, &vec!["1..10".to_string(), "100..1000..100".to_string()]);
+                assert_eq!(
+                    exprs,
+                    &vec!["1..10".to_string(), "100..1000..100".to_string()]
+                );
             }
             _ => panic!("expected Parallel source"),
         }
@@ -1043,7 +1139,10 @@ mod tests {
     fn parse_clause_parallel_three_vars() {
         let c = parse_clause("(a, b, c) in (1..3, 10..30..10, 100..300..100)").unwrap();
         assert!(c.is_parallel());
-        assert_eq!(c.vars, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+        assert_eq!(
+            c.vars,
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
     }
 
     #[test]
@@ -1093,9 +1192,8 @@ mod tests {
 
     #[test]
     fn parse_clause_list_mixed_parallel_and_single() {
-        let clauses = parse_clause_list(
-            "(x, y) in (1..2, 10..20..10), z in 100..200..100"
-        ).unwrap();
+        let clauses =
+            parse_clause_list("(x, y) in (1..2, 10..20..10), z in 100..200..100").unwrap();
         assert_eq!(clauses.len(), 2);
         assert!(clauses[0].is_parallel());
         assert!(!clauses[1].is_parallel());
@@ -1112,10 +1210,12 @@ mod tests {
 
     fn roundtrip_clause(c: Clause) {
         let text = c.to_string();
-        let reparsed = parse_clause(&text)
-            .unwrap_or_else(|e| panic!("re-parse failed for '{text}': {e}"));
-        assert_eq!(c, reparsed,
-            "round-trip diverged: original={c:?}\n  text='{text}'\n  reparsed={reparsed:?}");
+        let reparsed =
+            parse_clause(&text).unwrap_or_else(|e| panic!("re-parse failed for '{text}': {e}"));
+        assert_eq!(
+            c, reparsed,
+            "round-trip diverged: original={c:?}\n  text='{text}'\n  reparsed={reparsed:?}"
+        );
     }
 
     #[test]
@@ -1129,7 +1229,9 @@ mod tests {
         use super::super::ast_legacy::ZipMode;
         roundtrip_clause(Clause::parallel(["x", "y"], ["fib(8)", "pow2(8)"]));
         roundtrip_clause(Clause::parallel_with_mode(
-            ZipMode::Strict, ["a", "b", "c"], ["1..3", "10..30..10", "100..300..100"]
+            ZipMode::Strict,
+            ["a", "b", "c"],
+            ["1..3", "10..30..10", "100..300..100"],
         ));
     }
 
@@ -1137,10 +1239,14 @@ mod tests {
     fn round_trip_parallel_truncate_and_cycle() {
         use super::super::ast_legacy::ZipMode;
         roundtrip_clause(Clause::parallel_with_mode(
-            ZipMode::Truncate, ["x", "y"], ["fib(8)", "pow2(4)"]
+            ZipMode::Truncate,
+            ["x", "y"],
+            ["fib(8)", "pow2(4)"],
         ));
         roundtrip_clause(Clause::parallel_with_mode(
-            ZipMode::Cycle, ["x", "y"], ["fib(4)", "pow2(8)"]
+            ZipMode::Cycle,
+            ["x", "y"],
+            ["fib(4)", "pow2(8)"],
         ));
     }
 
@@ -1150,8 +1256,10 @@ mod tests {
         let rendered = parsed.to_string();
         let reparsed = parse_comprehension_text(&rendered)
             .unwrap_or_else(|e| panic!("re-parse failed for '{rendered}' (from '{text}'): {e}"));
-        assert_eq!(parsed, reparsed,
-            "round-trip diverged for '{text}':\n  rendered='{rendered}'");
+        assert_eq!(
+            parsed, reparsed,
+            "round-trip diverged for '{text}':\n  rendered='{rendered}'"
+        );
     }
 
     #[test]
@@ -1167,9 +1275,7 @@ mod tests {
     fn round_trip_parallel_iter_through_full_comprehension_text() {
         roundtrip_comprehension_text("(x, y) in (fib(5), pow2(5))");
         roundtrip_comprehension_text("(x, y) in zip_truncate(fib(8), pow2(4))");
-        roundtrip_comprehension_text(
-            "(x, y) in (fib(4), pow2(4)), z in 1..3 order extrema/1"
-        );
+        roundtrip_comprehension_text("(x, y) in (fib(4), pow2(4)), z in 1..3 order extrema/1");
     }
 
     #[test]

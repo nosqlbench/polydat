@@ -108,8 +108,7 @@ fn byte_image_extract(
     image_size: crate::derive_support::Const<u64>,
     slice_size: crate::derive_support::Const<u64>,
     seed: crate::derive_support::Const<u64>,
-    #[poly_const(build_byte_image, from = (image_size, seed))]
-    image: &ByteImage,
+    #[poly_const(build_byte_image, from = (image_size, seed))] image: &ByteImage,
 ) -> Vec<u8> {
     let _ = image_size; // captured in `image`; field kept for workload-author surface
     let _ = seed;
@@ -192,8 +191,7 @@ fn char_image_extract(
     image_size: crate::derive_support::Const<u64>,
     slice_size: crate::derive_support::Const<u64>,
     #[poly_default(0u64)] seed: crate::derive_support::Const<u64>,
-    #[poly_const(build_char_image, from = (charset, image_size, seed))]
-    image: &CharImage,
+    #[poly_const(build_char_image, from = (charset, image_size, seed))] image: &CharImage,
 ) -> String {
     let _ = charset;
     let _ = image_size;
@@ -364,7 +362,10 @@ mod tests {
     fn byte_slice_basic() {
         let node = ByteSlice::new(2, 3);
         let mut out = [Value::None];
-        node.eval(&[Value::Bytes(vec![10u8, 20, 30, 40, 50].into())], &mut out[..]);
+        node.eval(
+            &[Value::Bytes(vec![10u8, 20, 30, 40, 50].into())],
+            &mut out[..],
+        );
         assert_eq!(out[0].as_bytes(), &[30, 40, 50]);
     }
 

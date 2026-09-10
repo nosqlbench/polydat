@@ -11,8 +11,8 @@ use std::time::Instant;
 
 use polydat::ast::{PortType, SlotType, Value};
 use polydat::compile::assembly::WireRef;
-use polydat::compile::jit::{classify_node, compile_jit_raw, JitOp};
-use polydat::dsl::factory::{build_node, ConstArg};
+use polydat::compile::jit::{JitOp, classify_node, compile_jit_raw};
+use polydat::dsl::factory::{ConstArg, build_node};
 use polydat::dsl::registry::registry;
 
 /// One category row of the benchmark table: P1, P2, and P3 latency
@@ -30,11 +30,28 @@ struct BenchResult {
 }
 
 fn get_wire_types_and_vals(name: &str, count: usize) -> (Vec<PortType>, Vec<Value>) {
-    let pt = if name.contains("_str_to") || name.starts_with("str_") || name.contains("string") || name.contains("trim") || name.contains("lower") || name.contains("upper") {
+    let pt = if name.contains("_str_to")
+        || name.starts_with("str_")
+        || name.contains("string")
+        || name.contains("trim")
+        || name.contains("lower")
+        || name.contains("upper")
+    {
         PortType::Str
-    } else if name.contains("f64") || name.contains("f32") || name.contains("sin") || name.contains("cos") || name.contains("tan") || name.contains("lerp") || name.contains("noise") {
+    } else if name.contains("f64")
+        || name.contains("f32")
+        || name.contains("sin")
+        || name.contains("cos")
+        || name.contains("tan")
+        || name.contains("lerp")
+        || name.contains("noise")
+    {
         PortType::F64
-    } else if name.contains("i64") || name.contains("i32") || name.contains("i16") || name.contains("i8") {
+    } else if name.contains("i64")
+        || name.contains("i32")
+        || name.contains("i16")
+        || name.contains("i8")
+    {
         PortType::I64
     } else if name.contains("bool") {
         PortType::Bool
@@ -126,9 +143,11 @@ fn run_all_functions_concurrency_benchmarks() {
         let in_wire_types_probe = in_wire_types.clone();
         let wires_probe = wires.clone();
         let probe_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let test_node = build_node(sig.name, &wires_probe, &in_wire_types_probe, &consts_probe).unwrap();
+            let test_node =
+                build_node(sig.name, &wires_probe, &in_wire_types_probe, &consts_probe).unwrap();
             test_node.eval(&in_vals_probe, &mut test_out);
-        })).is_ok();
+        }))
+        .is_ok();
         if !probe_ok {
             continue;
         }
@@ -139,12 +158,15 @@ fn run_all_functions_concurrency_benchmarks() {
             let in_wire_types_probe = in_wire_types.clone();
             let wires_probe = wires.clone();
             let p2_probe_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let test_node = build_node(sig.name, &wires_probe, &in_wire_types_probe, &consts_probe).unwrap();
+                let test_node =
+                    build_node(sig.name, &wires_probe, &in_wire_types_probe, &consts_probe)
+                        .unwrap();
                 let closure = test_node.compiled_u64().unwrap();
                 let in_buf = [12345u64, 0, 0, 0, 0, 0, 0, 0];
                 let mut out_buf = [0u64; 8];
                 closure(&in_buf, &mut out_buf);
-            })).is_ok();
+            }))
+            .is_ok();
             if !p2_probe_ok {
                 continue;
             }
@@ -168,7 +190,9 @@ fn run_all_functions_concurrency_benchmarks() {
                     let wires_clone = wires.clone();
                     let wire_types_clone = in_wire_types.clone();
                     s.spawn(move || {
-                        let local_node = build_node(sig.name, &wires_clone, &wire_types_clone, &consts_clone).unwrap();
+                        let local_node =
+                            build_node(sig.name, &wires_clone, &wire_types_clone, &consts_clone)
+                                .unwrap();
                         let mut out_vals = vec![Value::None; sig.outputs.max(1)];
                         for _cycle in 0..iters_per_thread {
                             local_node.eval(&in_vals_clone, &mut out_vals);
@@ -195,7 +219,13 @@ fn run_all_functions_concurrency_benchmarks() {
                         let wires_clone = wires.clone();
                         let wire_types_clone = in_wire_types.clone();
                         s.spawn(move || {
-                            let local_node = build_node(sig.name, &wires_clone, &wire_types_clone, &consts_clone).unwrap();
+                            let local_node = build_node(
+                                sig.name,
+                                &wires_clone,
+                                &wire_types_clone,
+                                &consts_clone,
+                            )
+                            .unwrap();
                             let closure = local_node.compiled_u64().unwrap();
                             let in_buf = [12345u64, 0, 0, 0, 0, 0, 0, 0];
                             let mut out_buf = [0u64; 8];
@@ -221,8 +251,18 @@ fn run_all_functions_concurrency_benchmarks() {
         let mut p3_thru = [0.0; 3];
         if p3_eligible {
             let req_inputs = match &p3_op {
-                JitOp::StrConcat | JitOp::U64Add2 | JitOp::U64Sub2 | JitOp::U64Mul2 | JitOp::U64Div2 | JitOp::U64Mod2
-                | JitOp::F64Add | JitOp::F64Sub | JitOp::F64Mul | JitOp::F64Div | JitOp::F64Mod | JitOp::Interleave => 2,
+                JitOp::StrConcat
+                | JitOp::U64Add2
+                | JitOp::U64Sub2
+                | JitOp::U64Mul2
+                | JitOp::U64Div2
+                | JitOp::U64Mod2
+                | JitOp::F64Add
+                | JitOp::F64Sub
+                | JitOp::F64Mul
+                | JitOp::F64Div
+                | JitOp::F64Mod
+                | JitOp::Interleave => 2,
                 _ => in_wire_types.len().max(1),
             };
             let in_slots: Vec<usize> = (0..req_inputs).collect();
@@ -235,9 +275,17 @@ fn run_all_functions_concurrency_benchmarks() {
             let coords = vec![12345u64; in_count];
 
             let compile_probe = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let mut k = compile_jit_raw(in_count, total_slots, steps.clone(), out_map.clone(), Vec::new()).unwrap();
+                let mut k = compile_jit_raw(
+                    in_count,
+                    total_slots,
+                    steps.clone(),
+                    out_map.clone(),
+                    Vec::new(),
+                )
+                .unwrap();
                 k.eval(&coords);
-            })).is_ok();
+            }))
+            .is_ok();
 
             if compile_probe {
                 for (c_idx, &concurrency) in concurrencies.iter().enumerate() {
@@ -248,7 +296,14 @@ fn run_all_functions_concurrency_benchmarks() {
                             let out_map_clone = out_map.clone();
                             let coords_clone = coords.clone();
                             s.spawn(move || {
-                                let mut local_kernel = compile_jit_raw(in_count, total_slots, steps_clone, out_map_clone, Vec::new()).unwrap();
+                                let mut local_kernel = compile_jit_raw(
+                                    in_count,
+                                    total_slots,
+                                    steps_clone,
+                                    out_map_clone,
+                                    Vec::new(),
+                                )
+                                .unwrap();
                                 for _ in 0..iters_per_thread {
                                     local_kernel.eval(&coords_clone);
                                     std::hint::black_box(local_kernel.get("out"));
@@ -281,13 +336,14 @@ fn run_all_functions_concurrency_benchmarks() {
 
         let cat_entry = category_stats.entry(category).or_default();
         cat_entry.push((
-            p1_lat[0], p2_lat[0], p3_lat[0],
-            p1_lat[1], p2_lat[1], p3_lat[1],
-            p1_lat[2], p2_lat[2], p3_lat[2],
+            p1_lat[0], p2_lat[0], p3_lat[0], p1_lat[1], p2_lat[1], p3_lat[1], p1_lat[2], p2_lat[2],
+            p3_lat[2],
         ));
     }
 
-    println!("| Category | P1 (C=1) | P2 (C=1) | P3 (C=1) | P1 (C=4) | P2 (C=4) | P3 (C=4) | P1 (C=16) | P2 (C=16) | P3 (C=16) | Speedup (P3/P1) |");
+    println!(
+        "| Category | P1 (C=1) | P2 (C=1) | P3 (C=1) | P1 (C=4) | P2 (C=4) | P3 (C=4) | P1 (C=16) | P2 (C=16) | P3 (C=16) | Speedup (P3/P1) |"
+    );
     println!("|:---|:---|:---|:---|:---|:---|:---|:---|:---|:---|:---|");
 
     let mut cat_names: Vec<_> = category_stats.keys().cloned().collect();
@@ -311,7 +367,17 @@ fn run_all_functions_concurrency_benchmarks() {
         let speedup = avg_p1_1 / avg_p3_1.max(0.001);
         println!(
             "| **{}** | {:.1}ns | {:.1}ns | {:.1}ns | {:.1}ns | {:.1}ns | {:.1}ns | {:.1}ns | {:.1}ns | {:.1}ns | **{:.1}x** |",
-            cat, avg_p1_1, avg_p2_1, avg_p3_1, avg_p1_4, avg_p2_4, avg_p3_4, avg_p1_16, avg_p2_16, avg_p3_16, speedup
+            cat,
+            avg_p1_1,
+            avg_p2_1,
+            avg_p3_1,
+            avg_p1_4,
+            avg_p2_4,
+            avg_p3_4,
+            avg_p1_16,
+            avg_p2_16,
+            avg_p3_16,
+            speedup
         );
     }
 
@@ -319,15 +385,36 @@ fn run_all_functions_concurrency_benchmarks() {
     println!("|:---|:---|:---|:---|:---|:---|:---|:---|:---|:---|:---|");
     println!(
         "| **OVERALL AVERAGE** | **{:.1}ns** | **{:.1}ns** | **{:.1}ns** | **{:.1}ns** | **{:.1}ns** | **{:.1}ns** | **{:.1}ns** | **{:.1}ns** | **{:.1}ns** | **{:.1}x** |",
-        total_p1_lat[0] / n, total_p2_lat[0] / n, total_p3_lat[0] / n,
-        total_p1_lat[1] / n, total_p2_lat[1] / n, total_p3_lat[1] / n,
-        total_p1_lat[2] / n, total_p2_lat[2] / n, total_p3_lat[2] / n,
+        total_p1_lat[0] / n,
+        total_p2_lat[0] / n,
+        total_p3_lat[0] / n,
+        total_p1_lat[1] / n,
+        total_p2_lat[1] / n,
+        total_p3_lat[1] / n,
+        total_p1_lat[2] / n,
+        total_p2_lat[2] / n,
+        total_p3_lat[2] / n,
         (total_p1_lat[0] / n) / ((total_p3_lat[0] / n).max(0.001))
     );
 
     println!("\n=== AGGREGATE THROUGHPUT SCALING (MOPS/SEC) ===");
-    println!("- Concurrency 1:  P1 = {:.2} Mops/s | P2 = {:.2} Mops/s | P3 = {:.2} Mops/s", total_p1_thru[0] / n, total_p2_thru[0] / n, total_p3_thru[0] / n);
-    println!("- Concurrency 4:  P1 = {:.2} Mops/s | P2 = {:.2} Mops/s | P3 = {:.2} Mops/s", total_p1_thru[1] / n, total_p2_thru[1] / n, total_p3_thru[1] / n);
-    println!("- Concurrency 16: P1 = {:.2} Mops/s | P2 = {:.2} Mops/s | P3 = {:.2} Mops/s", total_p1_thru[2] / n, total_p2_thru[2] / n, total_p3_thru[2] / n);
+    println!(
+        "- Concurrency 1:  P1 = {:.2} Mops/s | P2 = {:.2} Mops/s | P3 = {:.2} Mops/s",
+        total_p1_thru[0] / n,
+        total_p2_thru[0] / n,
+        total_p3_thru[0] / n
+    );
+    println!(
+        "- Concurrency 4:  P1 = {:.2} Mops/s | P2 = {:.2} Mops/s | P3 = {:.2} Mops/s",
+        total_p1_thru[1] / n,
+        total_p2_thru[1] / n,
+        total_p3_thru[1] / n
+    );
+    println!(
+        "- Concurrency 16: P1 = {:.2} Mops/s | P2 = {:.2} Mops/s | P3 = {:.2} Mops/s",
+        total_p1_thru[2] / n,
+        total_p2_thru[2] / n,
+        total_p3_thru[2] / n
+    );
     println!("================================================\n");
 }

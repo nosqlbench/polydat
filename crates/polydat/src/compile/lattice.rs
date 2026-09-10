@@ -73,11 +73,7 @@ pub fn lattice_report(program: &PolydatProgram) -> LatticeReport {
     for i in 0..program.node_count() {
         let node = program.node_ref(i);
         if let Some(sub) = node.fusion_subgraph() {
-            let members: Vec<String> = sub
-                .members
-                .iter()
-                .map(|m| m.meta().name.clone())
-                .collect();
+            let members: Vec<String> = sub.members.iter().map(|m| m.meta().name.clone()).collect();
             fused_nodes += members.len();
             cones.push(ConeEntry {
                 label: node.meta().name.clone(),
@@ -187,7 +183,10 @@ mod tests {
             "fallback node in residue"
         );
         let shown = format!("{rep}");
-        assert!(shown.contains("jit_cone["), "display names the cone: {shown}");
+        assert!(
+            shown.contains("jit_cone["),
+            "display names the cone: {shown}"
+        );
     }
 
     #[test]

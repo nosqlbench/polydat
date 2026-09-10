@@ -28,8 +28,8 @@
 //! concentric-shell depth). See `take_n_strata`.
 
 use super::{
-    EvaluatedInput, MultiIndex, Strategy, Tuple, index_fn_dim,
-    index_fn_supports_lookup, multi_index_to_flat,
+    EvaluatedInput, MultiIndex, Strategy, Tuple, index_fn_dim, index_fn_supports_lookup,
+    multi_index_to_flat,
 };
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::strategy::StrategyName;
@@ -125,10 +125,7 @@ fn naive_extrema_prefix(input: &[Tuple], truncation: Option<u64>) -> Vec<Tuple> 
 /// the n-cube face lattice (Coxeter, *Regular Polytopes*, 3rd ed.,
 /// 1973, §7.2; <https://en.wikipedia.org/wiki/Hypercube>) and
 /// SRD-18d §214 for the worked 3×3×3 example.
-pub(crate) fn extrema_multi_indices(
-    idx: &IndexFn,
-    truncation: Option<u64>,
-) -> Vec<MultiIndex> {
+pub(crate) fn extrema_multi_indices(idx: &IndexFn, truncation: Option<u64>) -> Vec<MultiIndex> {
     if index_fn_dim(idx) == 0 {
         return Vec::new();
     }
@@ -253,7 +250,9 @@ mod tests {
 
     #[test]
     fn extrema_2x2_emits_4_corners() {
-        let idx = IndexFn::Lattice { axis_sizes: vec![2, 2] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![2, 2],
+        };
         let out = extrema_multi_indices(&idx, None);
         assert_eq!(out.len(), 4);
         let mut sorted = out.clone();
@@ -267,7 +266,9 @@ mod tests {
         // k-face counts of a 3-cube (Coxeter, *Regular Polytopes*
         // §7.2): corners 2^3 = 8, edges C(3,1)·2^2 = 12, faces
         // C(3,2)·2 = 6, interior 1; 8+12+6+1 = 27.
-        let idx = IndexFn::Lattice { axis_sizes: vec![3, 3, 3] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![3, 3, 3],
+        };
         assert_eq!(extrema_multi_indices(&idx, Some(1)).len(), 8); // corners
         assert_eq!(extrema_multi_indices(&idx, Some(2)).len(), 20); // + edges
         assert_eq!(extrema_multi_indices(&idx, Some(3)).len(), 26); // + faces
@@ -278,8 +279,14 @@ mod tests {
         assert_eq!(
             extrema_multi_indices(&idx, Some(1)),
             vec![
-                vec![0, 0, 0], vec![0, 0, 2], vec![0, 2, 0], vec![0, 2, 2],
-                vec![2, 0, 0], vec![2, 0, 2], vec![2, 2, 0], vec![2, 2, 2],
+                vec![0, 0, 0],
+                vec![0, 0, 2],
+                vec![0, 2, 0],
+                vec![0, 2, 2],
+                vec![2, 0, 0],
+                vec![2, 0, 2],
+                vec![2, 2, 0],
+                vec![2, 2, 2],
             ]
         );
         // The all-interior point (1,1,1) is the final tuple emitted.
@@ -292,7 +299,9 @@ mod tests {
     #[test]
     fn extrema_3x3_edges_then_center() {
         // 3×3: corners (4) → edges (4) → center (1). `/2` = corners+edges.
-        let idx = IndexFn::Lattice { axis_sizes: vec![3, 3] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![3, 3],
+        };
         assert_eq!(extrema_multi_indices(&idx, Some(1)).len(), 4);
         assert_eq!(extrema_multi_indices(&idx, Some(2)).len(), 8);
         assert_eq!(extrema_multi_indices(&idx, None).len(), 9);
@@ -307,26 +316,34 @@ mod tests {
         // The fix: a partial count over an equidistant corner set must
         // not split it. `extrema/1` over a 2×2 (all four corners one
         // stratum) keeps ALL four, not an arbitrary Lex-first one.
-        let idx = IndexFn::Lattice { axis_sizes: vec![2, 2] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![2, 2],
+        };
         for n in [1u64, 2, 3, 4] {
             let out = extrema_multi_indices(&idx, Some(n));
             assert_eq!(out.len(), 4, "extrema/{n} should keep the whole stratum");
         }
         // 3-axis hypercube: 8 corners, still one stratum.
-        let idx3 = IndexFn::Lattice { axis_sizes: vec![2, 2, 2] };
+        let idx3 = IndexFn::Lattice {
+            axis_sizes: vec![2, 2, 2],
+        };
         assert_eq!(extrema_multi_indices(&idx3, Some(1)).len(), 8);
     }
 
     #[test]
     fn extrema_zero_strata_is_empty() {
-        let idx = IndexFn::Lattice { axis_sizes: vec![2, 2] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![2, 2],
+        };
         assert!(extrema_multi_indices(&idx, Some(0)).is_empty());
     }
 
     #[test]
     fn extrema_1d_partial_keeps_both_endpoints() {
         // {first, last} are equidistant → one stratum; `/1` keeps both.
-        let idx = IndexFn::Lattice { axis_sizes: vec![5] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![5],
+        };
         let out = extrema_multi_indices(&idx, Some(1));
         let mut sorted = out.clone();
         sorted.sort();
@@ -338,7 +355,9 @@ mod tests {
         // 1-D size-5: stratum 0 = endpoints {0,4}, stratum 1 =
         // interior {1,2,3}. `/1` = endpoints; `None` = all 5,
         // endpoints first.
-        let idx = IndexFn::Lattice { axis_sizes: vec![5] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![5],
+        };
         let mut endpoints = extrema_multi_indices(&idx, Some(1));
         endpoints.sort();
         assert_eq!(endpoints, vec![vec![0], vec![4]]);
@@ -348,7 +367,9 @@ mod tests {
 
     #[test]
     fn extrema_3d_8_corners() {
-        let idx = IndexFn::Lattice { axis_sizes: vec![2, 2, 2] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![2, 2, 2],
+        };
         let out = extrema_multi_indices(&idx, None);
         assert_eq!(out.len(), 8);
     }

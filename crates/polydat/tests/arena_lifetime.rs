@@ -34,22 +34,31 @@ fn a_root_cycle_advance_resets_the_arena_and_advances_the_generation() {
 fn a_nested_state_never_resets_the_arena() {
     // A projection body drives a nested state per tuple with its own
     // input writes; none of them may reset the enclosing cycle's arena.
-    let src = "input cycle: u64\ntile t : text := \"@for k in 0..4 sep \\\",\\\" {${k + cycle}}\"\n";
+    let src =
+        "input cycle: u64\ntile t : text := \"@for k in 0..4 sep \\\",\\\" {${k + cycle}}\"\n";
     let mut k = compile_polydat(src).unwrap();
     k.set_inputs(&[10]);
     let g = cycle_generation();
     let h = put_thread_str("held across the render");
     let before = cycle_arena_used();
     assert_eq!(k.pull("t").as_str(), "10,11,12,13");
-    assert!(cycle_arena_used() >= before, "a nested state reset the arena");
-    assert_eq!(cycle_generation(), g, "a nested state advanced the generation");
+    assert!(
+        cycle_arena_used() >= before,
+        "a nested state reset the arena"
+    );
+    assert_eq!(
+        cycle_generation(),
+        g,
+        "a nested state advanced the generation"
+    );
     assert_eq!(resolve_thread_str(h), "held across the render");
 }
 
 #[test]
 fn traversal_activations_run_inside_the_root_cycle() {
     let src = "input cycle: u64\nfor k in 1..3 {\n  y := k * 10\n}\n";
-    let mut root = polydat::kernel::PolydatKernel::over(compile_polydat(src).unwrap().into_program());
+    let mut root =
+        polydat::kernel::PolydatKernel::over(compile_polydat(src).unwrap().into_program());
     root.set_inputs(&[0]);
     let g = cycle_generation();
     let h = put_thread_str("root cycle bytes");
@@ -63,6 +72,10 @@ fn traversal_activations_run_inside_the_root_cycle() {
         }
     }
     assert_eq!(seen, vec![10, 20]);
-    assert_eq!(cycle_generation(), g, "an activation advanced the root's generation");
+    assert_eq!(
+        cycle_generation(),
+        g,
+        "an activation advanced the root's generation"
+    );
     assert_eq!(resolve_thread_str(h), "root cycle bytes");
 }

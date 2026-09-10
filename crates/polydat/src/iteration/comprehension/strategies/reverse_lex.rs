@@ -81,7 +81,9 @@ mod tests {
         EvaluatedInput {
             tuples,
             cardinality: n,
-            index_fn: IndexFn::Lattice { axis_sizes: vec![n] },
+            index_fn: IndexFn::Lattice {
+                axis_sizes: vec![n],
+            },
         }
     }
 
@@ -101,7 +103,9 @@ mod tests {
 
     #[test]
     fn reverse_lex_multi_indices_2d() {
-        let idx = IndexFn::Lattice { axis_sizes: vec![2, 2] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![2, 2],
+        };
         let out = reverse_lex_multi_indices(&idx, None);
         // Lex of 2x2: (0,0), (0,1), (1,0), (1,1). Reverse:
         assert_eq!(out, vec![vec![1, 1], vec![1, 0], vec![0, 1], vec![0, 0]]);
@@ -110,7 +114,9 @@ mod tests {
     #[test]
     fn accepts_discrete_only() {
         use crate::iteration::comprehension::cardinality::{Interval, ProductMeasure};
-        assert!(ReverseLex.accepts_input(Some(&IndexFn::Lattice { axis_sizes: vec![3] })));
+        assert!(ReverseLex.accepts_input(Some(&IndexFn::Lattice {
+            axis_sizes: vec![3]
+        })));
         assert!(!ReverseLex.accepts_input(Some(&IndexFn::Continuous {
             intervals: vec![Interval::closed(0.0, 1.0)],
             measure: ProductMeasure::Uniform,

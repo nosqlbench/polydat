@@ -39,7 +39,11 @@ impl<T: Clone> AliasTable<T> {
     /// internally. All weights must be non-negative; at least one
     /// must be positive.
     pub fn from_weights(outcomes: &[T], weights: &[f64]) -> Self {
-        assert_eq!(outcomes.len(), weights.len(), "outcomes and weights must have equal length");
+        assert_eq!(
+            outcomes.len(),
+            weights.len(),
+            "outcomes and weights must have equal length"
+        );
         let n = outcomes.len();
         assert!(n > 0, "must have at least one outcome");
 
@@ -183,7 +187,11 @@ impl AliasTableU64 {
             biases[i] = 1.0;
         }
 
-        Self { biases, primaries, aliases }
+        Self {
+            biases,
+            primaries,
+            aliases,
+        }
     }
 
     /// Build a uniform table (all outcomes equally weighted).
@@ -261,8 +269,7 @@ fn build_alias_table(weights: &[f64]) -> AliasTableU64 {
 fn alias_sample(
     input: u64,
     weights: Const<Vec<f64>>,
-    #[poly_const(build_alias_table, from = weights)]
-    table: &AliasTableU64,
+    #[poly_const(build_alias_table, from = weights)] table: &AliasTableU64,
 ) -> u64 {
     let _ = weights;
     table.sample(input)

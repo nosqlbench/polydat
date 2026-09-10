@@ -24,13 +24,17 @@ fn render(src: &str, cycle: u64, name: &str) -> String {
 }
 
 fn err(src: &str) -> String {
-    compile_polydat(src).err().unwrap_or_else(|| panic!("expected a compile error\n{src}"))
+    compile_polydat(src)
+        .err()
+        .unwrap_or_else(|| panic!("expected a compile error\n{src}"))
 }
 
 // §4.3 row: json, value position. The wire's type picks the JSON form.
 #[test]
 fn json_value_position_by_wire_type() {
-    let src = format!("{WIRES}tile d : json := {{\"n\": ${{n}}, \"f\": ${{f | .2}}, \"s\": ${{s}}, \"t\": ${{t}}, \"j\": ${{j}}}}\n");
+    let src = format!(
+        "{WIRES}tile d : json := {{\"n\": ${{n}}, \"f\": ${{f | .2}}, \"s\": ${{s}}, \"t\": ${{t}}, \"j\": ${{j}}}}\n"
+    );
     assert_eq!(
         render(&src, 2, "d"),
         "{\"n\": 6, \"f\": 0.50, \"s\": \"a \\\"q\\\" b\", \"t\": 1, \"j\": {\"k\":[1,2]}}"
@@ -44,29 +48,44 @@ fn json_value_position_by_wire_type() {
 // §4.3 row: json, inside a string literal. Any type renders as escaped text.
 #[test]
 fn json_string_position_renders_any_type_as_escaped_text() {
-    let src = format!("{WIRES}tile d : json := {{\"all\": \"${{n}}|${{f | .1}}|${{s}}|${{t}}|${{j}}\"}}\n");
-    assert_eq!(render(&src, 2, "d"), "{\"all\": \"6|0.5|a \\\"q\\\" b|1|{\\\"k\\\":[1,2]}\"}");
+    let src = format!(
+        "{WIRES}tile d : json := {{\"all\": \"${{n}}|${{f | .1}}|${{s}}|${{t}}|${{j}}\"}}\n"
+    );
+    assert_eq!(
+        render(&src, 2, "d"),
+        "{\"all\": \"6|0.5|a \\\"q\\\" b|1|{\\\"k\\\":[1,2]}\"}"
+    );
 }
 
 // §4.3 row: json, object key. Text, escaped.
 #[test]
 fn json_object_key_is_text() {
     let src = format!("{WIRES}tile d : json := {{\"${{s}}\": ${{n}}, \"k-${{n}}\": true}}\n");
-    assert_eq!(render(&src, 1, "d"), "{\"a \\\"q\\\" b\": 3, \"k-3\": true}");
+    assert_eq!(
+        render(&src, 1, "d"),
+        "{\"a \\\"q\\\" b\": 3, \"k-3\": true}"
+    );
 }
 
 // §4.3 row: csv field. Text, quoted when needed.
 #[test]
 fn csv_fields_are_text_quoted_when_needed() {
-    let src = format!("{WIRES}c := \"x,y\"\ntile r : csv := \"${{n}},${{f | .1}},${{s}},${{c}},${{t: bool}}\"\n");
+    let src = format!(
+        "{WIRES}c := \"x,y\"\ntile r : csv := \"${{n}},${{f | .1}},${{s}},${{c}},${{t: bool}}\"\n"
+    );
     assert_eq!(render(&src, 2, "r"), "6,0.5,\"a \"\"q\"\" b\",\"x,y\",true");
 }
 
 // §4.3 row: text anywhere. Display form.
 #[test]
 fn text_encoding_is_display_form() {
-    let src = format!("{WIRES}tile l : text := \"${{n}} ${{f | .2}} ${{s}} ${{t}} ${{t: bool}} ${{j}}\"\n");
-    assert_eq!(render(&src, 2, "l"), "6 0.50 a \"q\" b 1 true {\"k\":[1,2]}");
+    let src = format!(
+        "{WIRES}tile l : text := \"${{n}} ${{f | .2}} ${{s}} ${{t}} ${{t: bool}} ${{j}}\"\n"
+    );
+    assert_eq!(
+        render(&src, 2, "l"),
+        "6 0.50 a \"q\" b 1 true {\"k\":[1,2]}"
+    );
 }
 
 // §4.1: a declared type inserts the catalog adapter. u64 -> f64 widens
@@ -141,17 +160,36 @@ fn projection_body_holes_are_typed_from_elements_and_outer_wires() {
 #[test]
 fn explain_events_report_wire_type_declaration_expectation_and_encoder() {
     let mut log = CompileEventLog::default();
-    let src = format!("{WIRES}tile d : json := {{\"n\": ${{n}}, \"s\": \"x-${{s}}\", \"w\": ${{cycle: f64}}, \"b\": @if t {{ 1 }} @else {{ 0 }}}}\n");
+    let src = format!(
+        "{WIRES}tile d : json := {{\"n\": ${{n}}, \"s\": \"x-${{s}}\", \"w\": ${{cycle: f64}}, \"b\": @if t {{ 1 }} @else {{ 0 }}}}\n"
+    );
     polydat::dsl::compile::compile_polydat_with_log(&src, &mut log).unwrap();
-    let holes: Vec<&CompileEvent> = log.events().iter().filter(|e| matches!(e, CompileEvent::TileHoleTyped { .. })).collect();
+    let holes: Vec<&CompileEvent> = log
+        .events()
+        .iter()
+        .filter(|e| matches!(e, CompileEvent::TileHoleTyped { .. }))
+        .collect();
     assert_eq!(holes.len(), 4, "{holes:?}");
     let find = |h: &str| {
         holes
             .iter()
             .find_map(|e| match e {
-                CompileEvent::TileHoleTyped { hole, wire_type, declared, expectation, encoder, adapter, tile } if hole == h => {
-                    Some((tile.clone(), wire_type.clone(), declared.clone(), expectation.clone(), encoder.clone(), adapter.clone()))
-                }
+                CompileEvent::TileHoleTyped {
+                    hole,
+                    wire_type,
+                    declared,
+                    expectation,
+                    encoder,
+                    adapter,
+                    tile,
+                } if hole == h => Some((
+                    tile.clone(),
+                    wire_type.clone(),
+                    declared.clone(),
+                    expectation.clone(),
+                    encoder.clone(),
+                    adapter.clone(),
+                )),
                 _ => None,
             })
             .unwrap_or_else(|| panic!("no event for hole {h}: {holes:?}"))
@@ -185,5 +223,8 @@ fn explain_events_report_wire_type_declaration_expectation_and_encoder() {
 #[test]
 fn body_holes_reach_every_catalog_adapter() {
     let src = "input cycle: u64\ntile t : json := {\"xs\": [@for k in 1..3 { {\"j\": ${k: json}, \"f\": ${k: f64 | .1}, \"s\": ${k: str}} }]}\n";
-    assert_eq!(render(src, 0, "t"), "{\"xs\": [{\"j\": 1, \"f\": 1.0, \"s\": \"1\"},{\"j\": 2, \"f\": 2.0, \"s\": \"2\"}]}");
+    assert_eq!(
+        render(src, 0, "t"),
+        "{\"xs\": [{\"j\": 1, \"f\": 1.0, \"s\": \"1\"},{\"j\": 2, \"f\": 2.0, \"s\": \"2\"}]}"
+    );
 }

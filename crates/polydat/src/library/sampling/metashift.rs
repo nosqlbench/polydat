@@ -26,7 +26,6 @@
 //! compute `feedback` themselves via [`feedback_for_width_and_bank`] or
 //! [`feedback_for_size`].
 
-
 // -----------------------------------------------------------------
 // LFSR feedback polynomials (one per register width 4..64)
 // -----------------------------------------------------------------
@@ -45,7 +44,10 @@ const FEEDBACK_BANKS: [u64; 61 * BANKS_PER_WIDTH] = include!("metashift_banks.in
 /// for the same width (modulo the number of available banks). Different
 /// banks produce different permutation orderings over the same range.
 pub fn feedback_for_width_and_bank(width: u32, bank: usize) -> u64 {
-    assert!((4..=64).contains(&width), "LFSR width must be 4..64, got {width}");
+    assert!(
+        (4..=64).contains(&width),
+        "LFSR width must be 4..64, got {width}"
+    );
     let base = (width as usize - 4) * BANKS_PER_WIDTH;
     FEEDBACK_BANKS[base + (bank % BANKS_PER_WIDTH)]
 }
@@ -357,9 +359,9 @@ mod tests {
 
     #[test]
     fn width_for_period_table() {
-        assert_eq!(width_for_period(1), 4);   // minimum is 4
-        assert_eq!(width_for_period(15), 4);  // 15 < 2^4
-        assert_eq!(width_for_period(16), 5);  // 16 = 2^4, needs 5 bits
+        assert_eq!(width_for_period(1), 4); // minimum is 4
+        assert_eq!(width_for_period(15), 4); // 15 < 2^4
+        assert_eq!(width_for_period(16), 5); // 16 = 2^4, needs 5 bits
         assert_eq!(width_for_period(31), 5);
         assert_eq!(width_for_period(32), 6);
         assert_eq!(width_for_period(255), 8);

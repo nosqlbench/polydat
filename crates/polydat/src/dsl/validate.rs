@@ -58,7 +58,13 @@ pub(crate) fn validate_ast(file: &PolydatFile, report: &mut DiagnosticReport) {
     // Second pass: validate function calls and collect references
     for stmt in &file.statements {
         let expr = match stmt {
-            Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) | Statement::Tile(_) => continue,
+            Statement::InputDecl(_)
+            | Statement::ModuleDef(_)
+            | Statement::ExternPort(_)
+            | Statement::Cursor(_)
+            | Statement::Pragma { .. }
+            | Statement::For(_)
+            | Statement::Tile(_) => continue,
             Statement::Binding(b) => &b.value,
         };
         validate_expr(expr, &mut referenced, report);
@@ -85,7 +91,8 @@ pub(crate) fn validate_ast(file: &PolydatFile, report: &mut DiagnosticReport) {
         }
     } else {
         // Infer mode: unbound references become coordinates
-        let mut inferred: Vec<String> = referenced.iter()
+        let mut inferred: Vec<String> = referenced
+            .iter()
             .filter(|name| !defined.contains(*name))
             .cloned()
             .collect();
@@ -193,9 +200,13 @@ pub(crate) fn validate_expr(
                 if chars[i] == '{' {
                     i += 1;
                     let start = i;
-                    while i < chars.len() && chars[i] != '}' { i += 1; }
+                    while i < chars.len() && chars[i] != '}' {
+                        i += 1;
+                    }
                     let name: String = chars[start..i].iter().collect();
-                    let is_ident = name.chars().next()
+                    let is_ident = name
+                        .chars()
+                        .next()
                         .map(|c| c.is_alphabetic() || c == '_')
                         .unwrap_or(false);
                     if is_ident {
@@ -229,7 +240,10 @@ pub(crate) fn literal_type(expr: &Expr) -> Option<String> {
 /// type. A `u64` literal may feed an `f64` parameter (widening).
 pub(crate) fn types_compatible(lit_type: &str, declared: &str) -> bool {
     use crate::ast::PortType;
-    match (PortType::from_keyword(lit_type), PortType::from_keyword(declared)) {
+    match (
+        PortType::from_keyword(lit_type),
+        PortType::from_keyword(declared),
+    ) {
         (Some(l), Some(d)) => l == d || (l == PortType::U64 && d == PortType::F64),
         _ => lit_type == declared,
     }
@@ -271,7 +285,9 @@ pub(crate) fn collect_references(expr: &Expr, referenced: &mut HashSet<String>) 
             collect_references(inner, referenced);
         }
         Expr::ArrayLit(elems, _) => {
-            for e in elems { collect_references(e, referenced); }
+            for e in elems {
+                collect_references(e, referenced);
+            }
         }
         Expr::StringLit(s, _) => {
             // Extract {name} references, but only valid identifiers
@@ -283,12 +299,18 @@ pub(crate) fn collect_references(expr: &Expr, referenced: &mut HashSet<String>) 
                 if chars[i] == '{' {
                     i += 1;
                     let start = i;
-                    while i < chars.len() && chars[i] != '}' { i += 1; }
+                    while i < chars.len() && chars[i] != '}' {
+                        i += 1;
+                    }
                     let name: String = chars[start..i].iter().collect();
-                    let is_ident = name.chars().next()
+                    let is_ident = name
+                        .chars()
+                        .next()
                         .map(|c| c.is_alphabetic() || c == '_')
                         .unwrap_or(false);
-                    if is_ident { referenced.insert(name); }
+                    if is_ident {
+                        referenced.insert(name);
+                    }
                     i += 1;
                 } else {
                     i += 1;
@@ -361,12 +383,18 @@ pub(crate) fn simple_edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
     let mut m = vec![vec![0; b.len() + 1]; a.len() + 1];
-    for (i, row) in m.iter_mut().enumerate() { row[0] = i; }
-    for (j, cell) in m[0].iter_mut().enumerate() { *cell = j; }
+    for (i, row) in m.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for (j, cell) in m[0].iter_mut().enumerate() {
+        *cell = j;
+    }
     for i in 1..=a.len() {
         for j in 1..=b.len() {
-            let c = if a[i-1] == b[j-1] { 0 } else { 1 };
-            m[i][j] = (m[i-1][j]+1).min(m[i][j-1]+1).min(m[i-1][j-1]+c);
+            let c = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            m[i][j] = (m[i - 1][j] + 1)
+                .min(m[i][j - 1] + 1)
+                .min(m[i - 1][j - 1] + c);
         }
     }
     m[a.len()][b.len()]

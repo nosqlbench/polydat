@@ -12,10 +12,18 @@
 use crate::iteration::comprehension::ast::Comprehension;
 
 pub fn apply(ast: &Comprehension) -> Option<Comprehension> {
-    let Comprehension::Filter { child: outer_child, predicate: outer_pred } = ast else {
+    let Comprehension::Filter {
+        child: outer_child,
+        predicate: outer_pred,
+    } = ast
+    else {
         return None;
     };
-    let Comprehension::Filter { child: inner_child, predicate: inner_pred } = outer_child.as_ref() else {
+    let Comprehension::Filter {
+        child: inner_child,
+        predicate: inner_pred,
+    } = outer_child.as_ref()
+    else {
         return None;
     };
     let folded = format!("({}) && ({})", inner_pred, outer_pred);

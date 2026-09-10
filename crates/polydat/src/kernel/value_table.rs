@@ -26,8 +26,8 @@
 
 use std::cell::Cell;
 
-use crate::ast::Value;
 use super::arena::{TAG_MASK, TAG_RES};
+use crate::ast::Value;
 
 const KIND_SHIFT: u32 = 56;
 const KIND_MASK: u64 = 0x3F;
@@ -54,7 +54,10 @@ fn kind_of_value(v: &Value) -> u64 {
 /// Assemble a table handle.
 #[inline]
 pub fn encode_table_handle(kind: u64, generation: u64, entry: usize) -> u64 {
-    TAG_RES | ((kind & KIND_MASK) << KIND_SHIFT) | ((generation & GEN_MASK) << GEN_SHIFT) | (entry as u64 & ENTRY_MASK)
+    TAG_RES
+        | ((kind & KIND_MASK) << KIND_SHIFT)
+        | ((generation & GEN_MASK) << GEN_SHIFT)
+        | (entry as u64 & ENTRY_MASK)
 }
 
 /// Take a table handle apart: `(kind, generation, entry)`.
@@ -77,7 +80,10 @@ pub struct ValueTable {
 impl ValueTable {
     /// A table with `len` unwritten entries.
     pub fn new(len: usize) -> Self {
-        Self { entries: (0..len).map(|_| None).collect(), generation: 0 }
+        Self {
+            entries: (0..len).map(|_| None).collect(),
+            generation: 0,
+        }
     }
 
     /// Number of entries.
@@ -151,8 +157,13 @@ impl ValueTable {
         }
         match self.entries.get(entry) {
             Some(Some(v)) => v,
-            Some(None) => panic!("table handle {handle:#x} names entry {entry}, which has not been written this cycle"),
-            None => panic!("table handle {handle:#x} names entry {entry} of a {}-entry table", self.entries.len()),
+            Some(None) => panic!(
+                "table handle {handle:#x} names entry {entry}, which has not been written this cycle"
+            ),
+            None => panic!(
+                "table handle {handle:#x} names entry {entry} of a {}-entry table",
+                self.entries.len()
+            ),
         }
     }
 
@@ -294,7 +305,10 @@ mod tests {
         t.set_generation(5);
         let a = t.write(1, Value::U64(1));
         let b = t.write(1, Value::U64(2));
-        assert_eq!(a, b, "the same entry yields the same handle within a generation");
+        assert_eq!(
+            a, b,
+            "the same entry yields the same handle within a generation"
+        );
         assert_eq!(t.read(b).as_u64(), 2);
         assert!(!t.is_written(0));
     }

@@ -16,7 +16,7 @@ use polydat::iteration::comprehension::ast::Comprehension;
 use polydat::iteration::comprehension::source::{LiteralValue, Source};
 use polydat::iteration::comprehension::strategies::{Tuple, TupleValue};
 use polydat::iteration::comprehension::surfaces::{
-    compile, scope_once, CompiledComprehension, KernelScope,
+    CompiledComprehension, KernelScope, compile, scope_once,
 };
 
 #[derive(Debug, Clone)]

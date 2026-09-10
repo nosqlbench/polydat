@@ -22,7 +22,7 @@ use polydat::iteration::comprehension::optimize::optimize;
 use polydat::iteration::comprehension::source::{LiteralValue, Source};
 use polydat::iteration::comprehension::strategies::TupleValue;
 use polydat::iteration::comprehension::strategy::{StrategyName, ZipMode};
-use polydat::iteration::comprehension::validate::{validate, Mode};
+use polydat::iteration::comprehension::validate::{Mode, validate};
 
 // ---- RNG helper (inline PCG-style) ----
 
@@ -33,10 +33,16 @@ struct Rng {
 
 impl Rng {
     fn new(seed: u64) -> Self {
-        Self { state: seed.wrapping_mul(0x9E37_79B9_7F4A_7C15), inc: 1 }
+        Self {
+            state: seed.wrapping_mul(0x9E37_79B9_7F4A_7C15),
+            inc: 1,
+        }
     }
     fn next_u64(&mut self) -> u64 {
-        self.state = self.state.wrapping_add(self.inc).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        self.state = self
+            .state
+            .wrapping_add(self.inc)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
         let mut z = self.state;
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
@@ -62,7 +68,10 @@ struct AstGen {
 
 impl AstGen {
     fn new(seed: u64) -> Self {
-        Self { rng: Rng::new(seed), axis_counter: 0 }
+        Self {
+            rng: Rng::new(seed),
+            axis_counter: 0,
+        }
     }
 
     fn next_name(&mut self) -> String {
@@ -127,7 +136,11 @@ impl AstGen {
                 let name = self.next_name();
                 Comprehension::clause(
                     name,
-                    Source::IntRange { lo: 0, hi: size, step: 1 },
+                    Source::IntRange {
+                        lo: 0,
+                        hi: size,
+                        step: 1,
+                    },
                 )
             })
             .collect();
@@ -146,9 +159,7 @@ impl AstGen {
         // values for each branch.
         let n = self.rng.range(2, 3) as usize;
         let template = self.generate(depth - 1);
-        let children: Vec<Comprehension> = (0..n)
-            .map(|_| template.clone())
-            .collect();
+        let children: Vec<Comprehension> = (0..n).map(|_| template.clone()).collect();
         Comprehension::union(children)
     }
 
@@ -272,7 +283,10 @@ fn section_92_equivalence_random_asts_depth_2() {
     assert!(tried > 0);
     println!("depth=2: tried={tried}, compared={compared}");
     // We expect most cases to validate and compare.
-    assert!(compared > tried / 2, "too many cases skipped: {compared}/{tried}");
+    assert!(
+        compared > tried / 2,
+        "too many cases skipped: {compared}/{tried}"
+    );
 }
 
 #[test]
@@ -343,7 +357,10 @@ fn generator_smoke_test() {
         shapes_seen.insert(shape_label(&ast));
     }
     // Expect at least a few distinct top-level shapes.
-    assert!(shapes_seen.len() >= 3, "generator too narrow: {shapes_seen:?}");
+    assert!(
+        shapes_seen.len() >= 3,
+        "generator too narrow: {shapes_seen:?}"
+    );
 }
 
 fn shape_label(c: &Comprehension) -> String {

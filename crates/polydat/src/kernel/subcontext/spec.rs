@@ -12,8 +12,8 @@
 //! whichever rules Phase 1 can ground in the existing kernel
 //! semantics, and stubs / TODOs out the rest.
 
-use crate::dsl::ast::BindingModifier;
 use crate::ast::PortType;
+use crate::dsl::ast::BindingModifier;
 
 /// Lifecycle classification for an import — taxonomically what
 /// SRD-13e §1.2 specifies. Drives the spawn-time validation

@@ -11,10 +11,13 @@
 //! via `Arc`.
 
 fn main() {
-    let kernel = polydat::dsl::compile_polydat(r#"
+    let kernel = polydat::dsl::compile_polydat(
+        r#"
         input cycle: u64
         user_id := mod(hash(cycle), 1000000)
-    "#).expect("compile failed");
+    "#,
+    )
+    .expect("compile failed");
 
     let program = kernel.into_program();
     let threads = 2;
@@ -23,14 +26,16 @@ fn main() {
     // collects the result; the determinism contract says all threads
     // produce the same value for the same coord.
     let results: Vec<u64> = std::thread::scope(|s| {
-        let handles: Vec<_> = (0..threads).map(|_| {
-            let program = program.clone();
-            s.spawn(move || {
-                let mut state = program.create_state();
-                state.set_inputs(&[42]);
-                state.pull(&program, "user_id").as_u64()
+        let handles: Vec<_> = (0..threads)
+            .map(|_| {
+                let program = program.clone();
+                s.spawn(move || {
+                    let mut state = program.create_state();
+                    state.set_inputs(&[42]);
+                    state.pull(&program, "user_id").as_u64()
+                })
             })
-        }).collect();
+            .collect();
         handles.into_iter().map(|h| h.join().unwrap()).collect()
     });
 

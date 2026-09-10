@@ -42,9 +42,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::ast::Value;
 use crate::kernel::PolydatKernel;
 use crate::kernel::interp::{interpolate_via_kernel, interpolate_with_lookup};
-use crate::ast::Value;
 
 /// Evaluate a comprehension clause's spec text against a kernel.
 ///
@@ -71,13 +71,14 @@ pub fn evaluate_spec(
 ) -> Result<Vec<Value>, crate::dsl::compile::EmbeddingError> {
     evaluate_spec_internal(spec_text, kernel).map_err(|msg| {
         if let Some(rest) = msg.strip_prefix("interpolation: unresolved placeholder '{")
-            && let Some(end) = rest.find('}') {
-                let name = rest[..end].to_string();
-                return crate::dsl::compile::EmbeddingError::UnresolvedPlaceholder {
-                    name,
-                    source: spec_text.to_string(),
-                };
-            }
+            && let Some(end) = rest.find('}')
+        {
+            let name = rest[..end].to_string();
+            return crate::dsl::compile::EmbeddingError::UnresolvedPlaceholder {
+                name,
+                source: spec_text.to_string(),
+            };
+        }
         crate::dsl::compile::EmbeddingError::Parse {
             source: spec_text.to_string(),
             message: msg,
@@ -86,10 +87,7 @@ pub fn evaluate_spec(
     })
 }
 
-fn evaluate_spec_internal(
-    spec_text: &str,
-    kernel: &PolydatKernel,
-) -> Result<Vec<Value>, String> {
+fn evaluate_spec_internal(spec_text: &str, kernel: &PolydatKernel) -> Result<Vec<Value>, String> {
     if let Some(values) = try_eval_all_cursor(spec_text, kernel)? {
         return Ok(values);
     }
@@ -111,10 +109,12 @@ fn evaluate_spec_internal(
         // resolves against the kernel, or it's a hard error — it
         // is NOT silently bound as its own name-string.
         return match kernel.lookup(spec_text.trim()) {
-            Some(v) => Ok(match crate::iteration::comprehension::source::iteration_interior(&v) {
-                Some(interior) => interior,
-                None => vec![v],
-            }),
+            Some(v) => Ok(
+                match crate::iteration::comprehension::source::iteration_interior(&v) {
+                    Some(interior) => interior,
+                    None => vec![v],
+                },
+            ),
             None => Err(format!(
                 "comprehension source `{src}` did not resolve to a value — no \
                  wire, const, param, or outer iter-var by that name is in scope \
@@ -174,12 +174,12 @@ fn evaluate_spec_internal(
         // canonical place that decision is made — this replaces
         // the former per-type arms (Str→comma-split,
         // PartitionList→unpack, other→wrap).
-        Ok(v) => {
-            Ok(match crate::iteration::comprehension::source::iteration_interior(&v) {
+        Ok(v) => Ok(
+            match crate::iteration::comprehension::source::iteration_interior(&v) {
                 Some(interior) => interior,
                 None => vec![v],
-            })
-        }
+            },
+        ),
         // Fall back to the literal-list parse only when the text
         // is unambiguously a comma-separated list of literals
         // (e.g. `1, 10, 100` — `eval_const_expr` doesn't accept
@@ -250,10 +250,7 @@ fn evaluate_spec_internal(
 /// kernel), a quoted token is a string, numbers/bools are
 /// literals. Returns `Ok(None)` when `text` is not a bracketed
 /// list (so the caller falls through to the other source forms).
-fn try_eval_bracket_list(
-    text: &str,
-    kernel: &PolydatKernel,
-) -> Result<Option<Vec<Value>>, String> {
+fn try_eval_bracket_list(text: &str, kernel: &PolydatKernel) -> Result<Option<Vec<Value>>, String> {
     let t = text.trim();
     if !(t.starts_with('[') && t.ends_with(']') && t.len() >= 2) {
         return Ok(None);
@@ -280,13 +277,15 @@ fn try_eval_bracket_list(
         if spread {
             match crate::iteration::comprehension::source::iteration_interior(&value) {
                 Some(interior) => out.extend(interior),
-                None => return Err(format!(
-                    "list comprehension spread `{expr}…` requires an iterable \
+                None => {
+                    return Err(format!(
+                        "list comprehension spread `{expr}…` requires an iterable \
                      source, but `{expr}` resolved to a scalar \
                      {ty:?}. Use `[{expr}]` to pass it as a single element, \
                      or supply a list.",
-                    ty = value.port_type(),
-                )),
+                        ty = value.port_type(),
+                    ));
+                }
             }
         } else {
             out.push(value);
@@ -304,15 +303,16 @@ fn try_eval_bracket_list(
 fn eval_element_value(expr: &str, kernel: &PolydatKernel) -> Result<Value, String> {
     let e = expr.trim();
     if is_single_bare_ident(e) {
-        return kernel.lookup(e).ok_or_else(|| format!(
-            "list element `{e}` did not resolve to a value — no wire, const, \
+        return kernel.lookup(e).ok_or_else(|| {
+            format!(
+                "list element `{e}` did not resolve to a value — no wire, const, \
              param, or outer iter-var by that name is in scope here. \
              If you meant the literal string \"{e}\", quote it: `\"{e}\"`."
-        ));
+            )
+        });
     }
-    crate::dsl::compile::eval_const_expr(e).map_err(|err| format!(
-        "list element `{e}` failed to evaluate: {err}"
-    ))
+    crate::dsl::compile::eval_const_expr(e)
+        .map_err(|err| format!("list element `{e}` failed to evaluate: {err}"))
 }
 
 /// True when `text` is exactly one bare identifier
@@ -321,7 +321,9 @@ fn eval_element_value(expr: &str, kernel: &PolydatKernel) -> Result<Value, Strin
 /// kernel (SRD-18f Stage 2); the keyword literals are values.
 fn is_single_bare_ident(text: &str) -> bool {
     let t = text.trim();
-    if t == "true" || t == "false" { return false; }
+    if t == "true" || t == "false" {
+        return false;
+    }
     let mut chars = t.chars();
     match chars.next() {
         Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
@@ -332,12 +334,34 @@ fn is_single_bare_ident(text: &str) -> bool {
 
 fn looks_like_literal_list(text: &str) -> bool {
     let trimmed = text.trim();
-    if trimmed.is_empty() { return false; }
-    !trimmed.chars().any(|c| matches!(
-        c,
-        '(' | ')' | '[' | ']' | '{' | '}' | '\'' | '"'
-        | '+' | '*' | '/' | '%' | '=' | '<' | '>' | '!' | '&' | '|' | '~' | '^' | '?'
-    ))
+    if trimmed.is_empty() {
+        return false;
+    }
+    !trimmed.chars().any(|c| {
+        matches!(
+            c,
+            '(' | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '\''
+                | '"'
+                | '+'
+                | '*'
+                | '/'
+                | '%'
+                | '='
+                | '<'
+                | '>'
+                | '!'
+                | '&'
+                | '|'
+                | '~'
+                | '^'
+                | '?'
+        )
+    })
 }
 
 /// Pre-evaluate a clause's spec text at synthesis time, using
@@ -377,14 +401,18 @@ pub fn pre_evaluate_clause(
         if let Some(pv) = probes.get(name) {
             return Ok(crate::iteration::comprehension::source::strip_string_tokens(pv));
         }
-        if let Some(v) = parent_kernel.get_constant(name).cloned()
+        if let Some(v) = parent_kernel
+            .get_constant(name)
+            .cloned()
             .or_else(|| parent_kernel.get_input(name))
             .filter(|v| !matches!(v, Value::None))
         {
-            return Ok(match crate::iteration::comprehension::source::iteration_interior(&v) {
-                Some(interior) => interior,
-                None => vec![v],
-            });
+            return Ok(
+                match crate::iteration::comprehension::source::iteration_interior(&v) {
+                    Some(interior) => interior,
+                    None => vec![v],
+                },
+            );
         }
         if let Some(s) = workload_params.get(name) {
             return Ok(crate::iteration::comprehension::source::strip_string_tokens(s));
@@ -400,16 +428,15 @@ pub fn pre_evaluate_clause(
         text = text.replace(&format!("{{{var}}}"), probe_value);
     }
 
-    let interpolated = interpolate_with_lookup(
-        &text,
-        |name| {
-            parent_kernel.get_constant(name).cloned()
-                .or_else(|| parent_kernel.get_input(name))
-                .filter(|v| !matches!(v, Value::None))
-                .map(|v| v.to_display_string())
-                .or_else(|| workload_params.get(name).cloned())
-        },
-    )?;
+    let interpolated = interpolate_with_lookup(&text, |name| {
+        parent_kernel
+            .get_constant(name)
+            .cloned()
+            .or_else(|| parent_kernel.get_input(name))
+            .filter(|v| !matches!(v, Value::None))
+            .map(|v| v.to_display_string())
+            .or_else(|| workload_params.get(name).cloned())
+    })?;
 
     // Push 3: range operator on the pre-evaluation path too.
     if let Some(values) = try_eval_range(&interpolated)? {
@@ -448,7 +475,9 @@ pub fn pre_evaluate_clause(
         // partition.
         Ok(ref v) if v.as_partition_list().is_some() => {
             let list = v.as_partition_list().unwrap();
-            return Ok(list.as_slice().iter()
+            return Ok(list
+                .as_slice()
+                .iter()
                 .map(|p| Value::from_partition(*p))
                 .collect());
         }
@@ -523,8 +552,12 @@ fn try_eval_all_cursor(
     kernel: &PolydatKernel,
 ) -> Result<Option<Vec<Value>>, String> {
     let trimmed = spec_text.trim();
-    let Some(stripped) = trimmed.strip_prefix("all(") else { return Ok(None); };
-    let Some(arg) = stripped.strip_suffix(')') else { return Ok(None); };
+    let Some(stripped) = trimmed.strip_prefix("all(") else {
+        return Ok(None);
+    };
+    let Some(arg) = stripped.strip_suffix(')') else {
+        return Ok(None);
+    };
     let cursor_name = arg.trim();
     if cursor_name.is_empty() || !is_valid_ident(cursor_name) {
         return Ok(None);
@@ -532,18 +565,30 @@ fn try_eval_all_cursor(
 
     let start_key = format!("__cursor_extent_{cursor_name}_start");
     let end_key = format!("__cursor_extent_{cursor_name}_end");
-    let start = kernel.lookup(&start_key)
-        .and_then(|v| match v { Value::U64(n) => Some(n), _ => None })
-        .ok_or_else(|| format!(
-            "all({cursor_name}): cursor '{cursor_name}' has no resolvable extent — \
+    let start = kernel
+        .lookup(&start_key)
+        .and_then(|v| match v {
+            Value::U64(n) => Some(n),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            format!(
+                "all({cursor_name}): cursor '{cursor_name}' has no resolvable extent — \
              check that the cursor is declared at or above this scope and that \
              its range arguments are init-resolvable. Looked for output '{start_key}'."
-        ))?;
-    let end = kernel.lookup(&end_key)
-        .and_then(|v| match v { Value::U64(n) => Some(n), _ => None })
-        .ok_or_else(|| format!(
-            "all({cursor_name}): missing auxiliary output '{end_key}' on the parent kernel."
-        ))?;
+            )
+        })?;
+    let end = kernel
+        .lookup(&end_key)
+        .and_then(|v| match v {
+            Value::U64(n) => Some(n),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            format!(
+                "all({cursor_name}): missing auxiliary output '{end_key}' on the parent kernel."
+            )
+        })?;
 
     if end < start {
         return Err(format!(
@@ -608,10 +653,7 @@ fn try_eval_range(text: &str) -> Result<Option<Vec<Value>>, String> {
                     i += 1;
                 }
             }
-            '.' if depth == 0
-                && i + 1 < chars.len()
-                && chars[i + 1] == '.' =>
-            {
+            '.' if depth == 0 && i + 1 < chars.len() && chars[i + 1] == '.' => {
                 let inclusive = i + 2 < chars.len() && chars[i + 2] == '=';
                 splits.push((i, inclusive));
                 i += if inclusive { 3 } else { 2 };
@@ -667,7 +709,9 @@ fn try_eval_range(text: &str) -> Result<Option<Vec<Value>>, String> {
         None => None,
     };
 
-    Ok(Some(expand_range(start_val, end_val, step_val, inclusive, trimmed)?))
+    Ok(Some(expand_range(
+        start_val, end_val, step_val, inclusive, trimmed,
+    )?))
 }
 
 fn eval_range_segment(text: &str, what: &str) -> Result<Value, String> {
@@ -704,9 +748,9 @@ fn expand_range(
     };
     let to_i64 = |v: &Value| -> Result<i64, String> {
         match v {
-            Value::U64(n) => i64::try_from(*n).map_err(|_| format!(
-                "range expression '{src}': bound {n} exceeds signed 64-bit range"
-            )),
+            Value::U64(n) => i64::try_from(*n).map_err(|_| {
+                format!("range expression '{src}': bound {n} exceeds signed 64-bit range")
+            }),
             Value::F64(f) => {
                 if f.fract() == 0.0 && *f >= i64::MIN as f64 && *f <= i64::MAX as f64 {
                     Ok(*f as i64)
@@ -744,8 +788,16 @@ fn expand_range(
         let mut cur = s;
         let cmp = |x: f64| -> bool {
             if st > 0.0 {
-                if inclusive { x <= e + 1e-12 } else { x < e - 1e-12 }
-            } else if inclusive { x >= e - 1e-12 } else { x > e + 1e-12 }
+                if inclusive {
+                    x <= e + 1e-12
+                } else {
+                    x < e - 1e-12
+                }
+            } else if inclusive {
+                x >= e - 1e-12
+            } else {
+                x > e + 1e-12
+            }
         };
         while cmp(cur) {
             out.push(Value::F64(cur));
@@ -764,14 +816,22 @@ fn expand_range(
     if st == 0 {
         return Err(format!("range expression '{src}': step is zero"));
     }
-    if st > 0 && s > e { return Ok(Vec::new()); }
-    if st < 0 && s < e { return Ok(Vec::new()); }
+    if st > 0 && s > e {
+        return Ok(Vec::new());
+    }
+    if st < 0 && s < e {
+        return Ok(Vec::new());
+    }
     let mut out = Vec::new();
     let mut cur = s;
     let cmp = |x: i64| -> bool {
         if st > 0 {
             if inclusive { x <= e } else { x < e }
-        } else if inclusive { x >= e } else { x > e }
+        } else if inclusive {
+            x >= e
+        } else {
+            x > e
+        }
     };
     while cmp(cur) {
         if cur < 0 {
@@ -880,9 +940,9 @@ fn split_args_top_level(args: &str) -> Vec<&str> {
 /// expected-form context for the user.
 fn parse_u64_arg(text: &str, what: &str) -> Result<u64, String> {
     let trimmed = text.trim();
-    trimmed.parse::<u64>().map_err(|_| format!(
-        "{what}: expected non-negative integer, got '{trimmed}'"
-    ))
+    trimmed
+        .parse::<u64>()
+        .map_err(|_| format!("{what}: expected non-negative integer, got '{trimmed}'"))
 }
 
 /// Parse a single argument as either u64 or f64. Returns the
@@ -890,9 +950,9 @@ fn parse_u64_arg(text: &str, what: &str) -> Result<u64, String> {
 /// check `.fract() == 0.0`).
 fn parse_num_arg(text: &str, what: &str) -> Result<f64, String> {
     let trimmed = text.trim();
-    trimmed.parse::<f64>().map_err(|_| format!(
-        "{what}: expected numeric, got '{trimmed}'"
-    ))
+    trimmed
+        .parse::<f64>()
+        .map_err(|_| format!("{what}: expected numeric, got '{trimmed}'"))
 }
 
 // ============================================================
@@ -911,87 +971,112 @@ fn try_eval_generator(text: &str) -> Result<Option<Vec<Value>>, String> {
     match name {
         "fib" => {
             if arg_list.len() != 1 {
-                return Err(format!("fib(n): expected 1 argument, got {}", arg_list.len()));
+                return Err(format!(
+                    "fib(n): expected 1 argument, got {}",
+                    arg_list.len()
+                ));
             }
             let n = parse_u64_arg(arg_list[0], "fib(n)")?;
             Ok(Some(generate_fib_n(n)))
         }
         "fib_until" => {
             if arg_list.len() != 1 {
-                return Err(format!("fib_until(max): expected 1 argument, got {}", arg_list.len()));
+                return Err(format!(
+                    "fib_until(max): expected 1 argument, got {}",
+                    arg_list.len()
+                ));
             }
             let max = parse_u64_arg(arg_list[0], "fib_until(max)")?;
             Ok(Some(generate_fib_until(max)))
         }
         "pow2" => {
             if arg_list.len() != 1 {
-                return Err(format!("pow2(n): expected 1 argument, got {}", arg_list.len()));
+                return Err(format!(
+                    "pow2(n): expected 1 argument, got {}",
+                    arg_list.len()
+                ));
             }
             let n = parse_u64_arg(arg_list[0], "pow2(n)")?;
             Ok(Some(generate_pow2_n(n)))
         }
         "pow2_until" => {
             if arg_list.len() != 1 {
-                return Err(format!("pow2_until(max): expected 1 argument, got {}", arg_list.len()));
+                return Err(format!(
+                    "pow2_until(max): expected 1 argument, got {}",
+                    arg_list.len()
+                ));
             }
             let max = parse_u64_arg(arg_list[0], "pow2_until(max)")?;
             Ok(Some(generate_pow2_until(max)))
         }
         "binomial" => {
             if arg_list.len() != 1 {
-                return Err(format!("binomial(n): expected 1 argument, got {}", arg_list.len()));
+                return Err(format!(
+                    "binomial(n): expected 1 argument, got {}",
+                    arg_list.len()
+                ));
             }
             let n = parse_u64_arg(arg_list[0], "binomial(n)")?;
             Ok(Some(generate_binomial(n)))
         }
         "geometric" => {
             if arg_list.len() != 3 {
-                return Err(format!("geometric(start, factor, n): expected 3 args, got {}",
-                    arg_list.len()));
+                return Err(format!(
+                    "geometric(start, factor, n): expected 3 args, got {}",
+                    arg_list.len()
+                ));
             }
-            let start  = parse_num_arg(arg_list[0], "geometric.start")?;
+            let start = parse_num_arg(arg_list[0], "geometric.start")?;
             let factor = parse_num_arg(arg_list[1], "geometric.factor")?;
-            let n      = parse_u64_arg(arg_list[2], "geometric.n")?;
+            let n = parse_u64_arg(arg_list[2], "geometric.n")?;
             Ok(Some(generate_geometric(start, factor, n)))
         }
         "geometric_until" => {
             if arg_list.len() != 3 {
-                return Err(format!("geometric_until(start, factor, max): expected 3 args, got {}",
-                    arg_list.len()));
+                return Err(format!(
+                    "geometric_until(start, factor, max): expected 3 args, got {}",
+                    arg_list.len()
+                ));
             }
-            let start  = parse_num_arg(arg_list[0], "geometric_until.start")?;
+            let start = parse_num_arg(arg_list[0], "geometric_until.start")?;
             let factor = parse_num_arg(arg_list[1], "geometric_until.factor")?;
-            let max    = parse_num_arg(arg_list[2], "geometric_until.max")?;
+            let max = parse_num_arg(arg_list[2], "geometric_until.max")?;
             Ok(Some(generate_geometric_until(start, factor, max)))
         }
         "linear_starts" => {
             if arg_list.len() != 3 {
-                return Err(format!("linear_starts(start, end, n): expected 3 args, got {}",
-                    arg_list.len()));
+                return Err(format!(
+                    "linear_starts(start, end, n): expected 3 args, got {}",
+                    arg_list.len()
+                ));
             }
             let start = parse_num_arg(arg_list[0], "linear_starts.start")?;
-            let end   = parse_num_arg(arg_list[1], "linear_starts.end")?;
-            let n     = parse_u64_arg(arg_list[2], "linear_starts.n")?;
+            let end = parse_num_arg(arg_list[1], "linear_starts.end")?;
+            let n = parse_u64_arg(arg_list[2], "linear_starts.n")?;
             Ok(Some(generate_linear_points(start, end, n, false)))
         }
         "linear_steps" => {
             if arg_list.len() != 3 {
-                return Err(format!("linear_steps(start, end, n): expected 3 args, got {}",
-                    arg_list.len()));
+                return Err(format!(
+                    "linear_steps(start, end, n): expected 3 args, got {}",
+                    arg_list.len()
+                ));
             }
             let start = parse_num_arg(arg_list[0], "linear_steps.start")?;
-            let end   = parse_num_arg(arg_list[1], "linear_steps.end")?;
-            let n     = parse_u64_arg(arg_list[2], "linear_steps.n")?;
+            let end = parse_num_arg(arg_list[1], "linear_steps.end")?;
+            let n = parse_u64_arg(arg_list[2], "linear_steps.n")?;
             Ok(Some(generate_linear_points(start, end, n, true)))
         }
         "log_steps" => {
             if arg_list.len() != 3 {
-                return Err(format!("log_steps(start, end, n): expected 3 args, got {}",
-                    arg_list.len()));
+                return Err(format!(
+                    "log_steps(start, end, n): expected 3 args, got {}",
+                    arg_list.len()
+                ));
             }
             let start = parse_num_arg(arg_list[0], "log_steps.start")?;
-            let end   = parse_num_arg(arg_list[1], "log_steps.end")?;
-            let n     = parse_u64_arg(arg_list[2], "log_steps.n")?;
+            let end = parse_num_arg(arg_list[1], "log_steps.end")?;
+            let n = parse_u64_arg(arg_list[2], "log_steps.n")?;
             Ok(Some(generate_log_steps(start, end, n)?))
         }
         _ => Ok(None),
@@ -1000,7 +1085,9 @@ fn try_eval_generator(text: &str) -> Result<Option<Vec<Value>>, String> {
 
 /// First `n` Fibonacci numbers: 1, 1, 2, 3, 5, 8, ...
 fn generate_fib_n(n: u64) -> Vec<Value> {
-    if n == 0 { return Vec::new(); }
+    if n == 0 {
+        return Vec::new();
+    }
     let mut out = Vec::with_capacity(n as usize);
     let (mut a, mut b): (u64, u64) = (1, 1);
     for _ in 0..n {
@@ -1032,7 +1119,9 @@ fn generate_fib_until(max: u64) -> Vec<Value> {
 fn generate_pow2_n(n: u64) -> Vec<Value> {
     let mut out = Vec::with_capacity(n as usize);
     for i in 0..n {
-        if i >= 64 { break; }  // 2^64 overflows u64
+        if i >= 64 {
+            break;
+        } // 2^64 overflows u64
         out.push(Value::U64(1u64 << i));
     }
     out
@@ -1043,9 +1132,14 @@ fn generate_pow2_until(max: u64) -> Vec<Value> {
     let mut out = Vec::new();
     let mut v: u64 = 1;
     loop {
-        if v > max { break; }
+        if v > max {
+            break;
+        }
         out.push(Value::U64(v));
-        v = match v.checked_mul(2) { Some(x) => x, None => break };
+        v = match v.checked_mul(2) {
+            Some(x) => x,
+            None => break,
+        };
     }
     out
 }
@@ -1084,7 +1178,9 @@ fn generate_binomial(n: u64) -> Vec<Value> {
     out.push(Value::U64(1));
     for k in 1..=n {
         c = c * (n - k + 1) as u128 / k as u128;
-        if c > u64::MAX as u128 { break; }
+        if c > u64::MAX as u128 {
+            break;
+        }
         out.push(Value::U64(c as u64));
     }
     out
@@ -1137,8 +1233,13 @@ fn try_eval_partition_call(
                 // iter-var type-detects as `ext`; real values arrive at
                 // runtime dispatch.
                 let placeholder = crate::iteration::cursor_partition::Partition {
-                    idx: 0, count: 1, start_ord: 0, end_ord: 1,
-                    start_pct: 0.0, end_pct: 100.0, base_extent: 1,
+                    idx: 0,
+                    count: 1,
+                    start_ord: 0,
+                    end_ord: 1,
+                    start_pct: 0.0,
+                    end_pct: 100.0,
+                    base_extent: 1,
                 };
                 return Ok(Some(vec![Value::from_partition(placeholder)]));
             };
@@ -1207,10 +1308,7 @@ fn try_eval_partition_call(
                 let strip = |s: &str| -> String {
                     let s = s.trim();
                     let b = s.as_bytes();
-                    if b.len() >= 2
-                        && (b[0] == b'\'' || b[0] == b'"')
-                        && b[b.len() - 1] == b[0]
-                    {
+                    if b.len() >= 2 && (b[0] == b'\'' || b[0] == b'"') && b[b.len() - 1] == b[0] {
                         s[1..s.len() - 1].to_string()
                     } else {
                         s.to_string()
@@ -1283,15 +1381,23 @@ fn try_eval_param_partitions(
         // Pre-eval probe: the param value isn't installed yet. Return one
         // placeholder so the clause's iter-var type-detects as `ext`.
         let placeholder = crate::iteration::cursor_partition::Partition {
-            idx: 0, count: 1, start_ord: 0, end_ord: 1,
-            start_pct: 0.0, end_pct: 100.0, base_extent: 1,
+            idx: 0,
+            count: 1,
+            start_ord: 0,
+            end_ord: 1,
+            start_pct: 0.0,
+            end_pct: 100.0,
+            base_extent: 1,
         };
         return Ok(Some(vec![Value::from_partition(placeholder)]));
     };
     // Already a resolved PartitionList → unpack directly.
     if let Some(list) = value.as_partition_list() {
         return Ok(Some(
-            list.as_slice().iter().map(|p| Value::from_partition(*p)).collect(),
+            list.as_slice()
+                .iter()
+                .map(|p| Value::from_partition(*p))
+                .collect(),
         ));
     }
     // Otherwise it must be a spec string — desugar it per the SRD-71 grammar.
@@ -1303,8 +1409,12 @@ fn try_eval_param_partitions(
             value.to_display_string(),
         ));
     };
-    desugar_partition_spec(spec, 100, &format!("comprehension source `{ident}.partitions`"))
-        .map(Some)
+    desugar_partition_spec(
+        spec,
+        100,
+        &format!("comprehension source `{ident}.partitions`"),
+    )
+    .map(Some)
 }
 
 /// Parse + resolve a partition spec string into its unpacked partition
@@ -1328,8 +1438,7 @@ fn desugar_partition_spec(spec: &str, extent: u64, ctx: &str) -> Result<Vec<Valu
 fn resolve_partition_spec_arg(arg: &str, kernel: &PolydatKernel) -> Result<String, String> {
     let a = arg.trim();
     if a.len() >= 2
-        && ((a.starts_with('"') && a.ends_with('"'))
-            || (a.starts_with('\'') && a.ends_with('\'')))
+        && ((a.starts_with('"') && a.ends_with('"')) || (a.starts_with('\'') && a.ends_with('\'')))
     {
         return Ok(a[1..a.len() - 1].to_string());
     }
@@ -1359,24 +1468,40 @@ fn resolve_partition_spec_arg(arg: &str, kernel: &PolydatKernel) -> Result<Strin
 /// `Partition` into sub-partitions is `subdivide(p, n)` in the
 /// partition stdlib (SRD 71).
 fn generate_linear_points(start: f64, end: f64, n: u64, inclusive: bool) -> Vec<Value> {
-    if n == 0 { return Vec::new(); }
-    let denom = if inclusive { (n.saturating_sub(1)).max(1) as f64 } else { n as f64 };
+    if n == 0 {
+        return Vec::new();
+    }
+    let denom = if inclusive {
+        (n.saturating_sub(1)).max(1) as f64
+    } else {
+        n as f64
+    };
     let step = (end - start) / denom;
-    (0..n).map(|i| Value::F64(start + step * i as f64)).collect()
+    (0..n)
+        .map(|i| Value::F64(start + step * i as f64))
+        .collect()
 }
 
 /// `n` log-spaced points from `start` to `end` (inclusive).
 /// Both bounds must be positive (log undefined otherwise).
 fn generate_log_steps(start: f64, end: f64, n: u64) -> Result<Vec<Value>, String> {
     if start <= 0.0 || end <= 0.0 {
-        return Err(format!("log_steps: bounds must be positive, got start={start}, end={end}"));
+        return Err(format!(
+            "log_steps: bounds must be positive, got start={start}, end={end}"
+        ));
     }
-    if n == 0 { return Ok(Vec::new()); }
-    if n == 1 { return Ok(vec![Value::F64(start)]); }
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    if n == 1 {
+        return Ok(vec![Value::F64(start)]);
+    }
     let log_s = start.ln();
     let log_e = end.ln();
     let step = (log_e - log_s) / (n - 1) as f64;
-    Ok((0..n).map(|i| Value::F64((log_s + step * i as f64).exp())).collect())
+    Ok((0..n)
+        .map(|i| Value::F64((log_s + step * i as f64).exp()))
+        .collect())
 }
 
 // ============================================================
@@ -1398,27 +1523,36 @@ fn try_eval_setop(text: &str, kernel: &PolydatKernel) -> Result<Option<Vec<Value
     match name {
         "concat" => {
             let mut out = Vec::new();
-            for a in &arg_texts { out.extend(recursively_evaluate(a)?); }
+            for a in &arg_texts {
+                out.extend(recursively_evaluate(a)?);
+            }
             Ok(Some(out))
         }
         "unique" => {
             let mut out: Vec<Value> = Vec::new();
             for a in &arg_texts {
                 for v in recursively_evaluate(a)? {
-                    if !out.contains(&v) { out.push(v); }
+                    if !out.contains(&v) {
+                        out.push(v);
+                    }
                 }
             }
             Ok(Some(out))
         }
         "intersect" => {
-            if arg_texts.is_empty() { return Ok(Some(Vec::new())); }
+            if arg_texts.is_empty() {
+                return Ok(Some(Vec::new()));
+            }
             let first = recursively_evaluate(arg_texts[0])?;
             let mut out: Vec<Value> = Vec::new();
             for v in first {
                 let mut in_all = true;
                 for a in &arg_texts[1..] {
                     let other = recursively_evaluate(a)?;
-                    if !other.contains(&v) { in_all = false; break; }
+                    if !other.contains(&v) {
+                        in_all = false;
+                        break;
+                    }
                 }
                 if in_all && !out.contains(&v) {
                     out.push(v);
@@ -1428,38 +1562,51 @@ fn try_eval_setop(text: &str, kernel: &PolydatKernel) -> Result<Option<Vec<Value
         }
         "subtract" => {
             if arg_texts.len() != 2 {
-                return Err(format!("subtract(a, b): expected 2 args, got {}", arg_texts.len()));
+                return Err(format!(
+                    "subtract(a, b): expected 2 args, got {}",
+                    arg_texts.len()
+                ));
             }
             let a = recursively_evaluate(arg_texts[0])?;
             let b = recursively_evaluate(arg_texts[1])?;
             Ok(Some(a.into_iter().filter(|v| !b.contains(v)).collect()))
         }
         "interleave" => {
-            let lists: Result<Vec<Vec<Value>>, String> = arg_texts.iter()
-                .map(|a| recursively_evaluate(a)).collect();
+            let lists: Result<Vec<Vec<Value>>, String> =
+                arg_texts.iter().map(|a| recursively_evaluate(a)).collect();
             let lists = lists?;
             let mut out = Vec::new();
             let max_len = lists.iter().map(|l| l.len()).max().unwrap_or(0);
             for i in 0..max_len {
                 for l in &lists {
-                    if let Some(v) = l.get(i) { out.push(v.clone()); }
+                    if let Some(v) = l.get(i) {
+                        out.push(v.clone());
+                    }
                 }
             }
             Ok(Some(out))
         }
         "cycle" => {
             if arg_texts.len() != 2 {
-                return Err(format!("cycle(a, n): expected 2 args, got {}", arg_texts.len()));
+                return Err(format!(
+                    "cycle(a, n): expected 2 args, got {}",
+                    arg_texts.len()
+                ));
             }
             let a = recursively_evaluate(arg_texts[0])?;
             let n = parse_u64_arg(arg_texts[1], "cycle.n")?;
             let mut out = Vec::with_capacity(a.len() * n as usize);
-            for _ in 0..n { out.extend(a.iter().cloned()); }
+            for _ in 0..n {
+                out.extend(a.iter().cloned());
+            }
             Ok(Some(out))
         }
         "reverse" => {
             if arg_texts.len() != 1 {
-                return Err(format!("reverse(a): expected 1 arg, got {}", arg_texts.len()));
+                return Err(format!(
+                    "reverse(a): expected 1 arg, got {}",
+                    arg_texts.len()
+                ));
             }
             let mut a = recursively_evaluate(arg_texts[0])?;
             a.reverse();
@@ -1467,7 +1614,10 @@ fn try_eval_setop(text: &str, kernel: &PolydatKernel) -> Result<Option<Vec<Value
         }
         "take" => {
             if arg_texts.len() != 2 {
-                return Err(format!("take(a, n): expected 2 args, got {}", arg_texts.len()));
+                return Err(format!(
+                    "take(a, n): expected 2 args, got {}",
+                    arg_texts.len()
+                ));
             }
             let a = recursively_evaluate(arg_texts[0])?;
             let n = parse_u64_arg(arg_texts[1], "take.n")?;
@@ -1475,7 +1625,10 @@ fn try_eval_setop(text: &str, kernel: &PolydatKernel) -> Result<Option<Vec<Value
         }
         "skip" => {
             if arg_texts.len() != 2 {
-                return Err(format!("skip(a, n): expected 2 args, got {}", arg_texts.len()));
+                return Err(format!(
+                    "skip(a, n): expected 2 args, got {}",
+                    arg_texts.len()
+                ));
             }
             let a = recursively_evaluate(arg_texts[0])?;
             let n = parse_u64_arg(arg_texts[1], "skip.n")?;
@@ -1518,27 +1671,35 @@ fn try_eval_sequencer(text: &str, kernel: &PolydatKernel) -> Result<Option<Vec<V
         2 => {
             let items = evaluate_spec(arg_texts[0], kernel)?;
             let raw_ratios = evaluate_spec(arg_texts[1], kernel)?;
-            let ratios: Result<Vec<usize>, String> = raw_ratios.iter().map(|v| match v {
-                Value::U64(n) => Ok(*n as usize),
-                other => Err(format!("{name}: ratio must be non-negative integer, got {other:?}")),
-            }).collect();
+            let ratios: Result<Vec<usize>, String> = raw_ratios
+                .iter()
+                .map(|v| match v {
+                    Value::U64(n) => Ok(*n as usize),
+                    other => Err(format!(
+                        "{name}: ratio must be non-negative integer, got {other:?}"
+                    )),
+                })
+                .collect();
             (items, ratios?)
         }
-        _ => return Err(format!(
-            "{name}: expected `(items, ratios)` or `(\"r1:item1, r2:item2, ...\")`; got {} args",
-            arg_texts.len()
-        )),
+        _ => {
+            return Err(format!(
+                "{name}: expected `(items, ratios)` or `(\"r1:item1, r2:item2, ...\")`; got {} args",
+                arg_texts.len()
+            ));
+        }
     };
 
     if items.len() != ratios.len() {
         return Err(format!(
             "{name}: items.len() ({}) != ratios.len() ({})",
-            items.len(), ratios.len(),
+            items.len(),
+            ratios.len(),
         ));
     }
     Ok(Some(match name {
-        "bucket"       => seq_bucket(&items, &ratios),
-        "concat_seq"   => seq_concat(&items, &ratios),
+        "bucket" => seq_bucket(&items, &ratios),
+        "concat_seq" => seq_concat(&items, &ratios),
         "interval_seq" => seq_interval(&items, &ratios),
         _ => unreachable!(),
     }))
@@ -1551,20 +1712,23 @@ fn try_eval_sequencer(text: &str, kernel: &PolydatKernel) -> Result<Option<Vec<V
 fn parse_ratio_prefix_shorthand(text: &str) -> Result<(Vec<Value>, Vec<usize>), String> {
     // The arg might be a literal `"3:a, 1:b"` (with quotes
     // in the source) or already-stripped `3:a, 1:b`.
-    let stripped = text.trim()
+    let stripped = text
+        .trim()
         .trim_start_matches(['"', '\''])
         .trim_end_matches(['"', '\'']);
     let mut items = Vec::new();
     let mut ratios = Vec::new();
     for part in stripped.split(',') {
         let part = part.trim();
-        if part.is_empty() { continue; }
-        let (r, i) = part.split_once(':').ok_or_else(|| format!(
-            "ratio-prefix shorthand: missing ':' in '{part}'"
-        ))?;
-        let ratio: usize = r.trim().parse().map_err(|_| format!(
-            "ratio-prefix shorthand: ratio '{r}' is not a non-negative integer"
-        ))?;
+        if part.is_empty() {
+            continue;
+        }
+        let (r, i) = part
+            .split_once(':')
+            .ok_or_else(|| format!("ratio-prefix shorthand: missing ':' in '{part}'"))?;
+        let ratio: usize = r.trim().parse().map_err(|_| {
+            format!("ratio-prefix shorthand: ratio '{r}' is not a non-negative integer")
+        })?;
         ratios.push(ratio);
         items.push(parse_one_value(i.trim()));
     }
@@ -1572,10 +1736,18 @@ fn parse_ratio_prefix_shorthand(text: &str) -> Result<(Vec<Value>, Vec<usize>), 
 }
 
 fn parse_one_value(s: &str) -> Value {
-    if let Ok(n) = s.parse::<u64>() { return Value::U64(n); }
-    if let Ok(f) = s.parse::<f64>() { return Value::F64(f); }
-    if s == "true"  { return Value::Bool(true); }
-    if s == "false" { return Value::Bool(false); }
+    if let Ok(n) = s.parse::<u64>() {
+        return Value::U64(n);
+    }
+    if let Ok(f) = s.parse::<f64>() {
+        return Value::F64(f);
+    }
+    if s == "true" {
+        return Value::Bool(true);
+    }
+    if s == "false" {
+        return Value::Bool(false);
+    }
     Value::Str(s.to_string().into())
 }
 
@@ -1594,7 +1766,9 @@ fn seq_bucket(items: &[Value], ratios: &[usize]) -> Vec<Value> {
                 emitted_any = true;
             }
         }
-        if !emitted_any { break; }
+        if !emitted_any {
+            break;
+        }
     }
     out
 }
@@ -1605,7 +1779,9 @@ fn seq_concat(items: &[Value], ratios: &[usize]) -> Vec<Value> {
     let total: usize = ratios.iter().sum();
     let mut out = Vec::with_capacity(total);
     for (item, &r) in items.iter().zip(ratios.iter()) {
-        for _ in 0..r { out.push(item.clone()); }
+        for _ in 0..r {
+            out.push(item.clone());
+        }
     }
     out
 }
@@ -1617,7 +1793,9 @@ fn seq_concat(items: &[Value], ratios: &[usize]) -> Vec<Value> {
 /// build_interval_lut.
 fn seq_interval(items: &[Value], ratios: &[usize]) -> Vec<Value> {
     let total: usize = ratios.iter().sum();
-    if total == 0 { return Vec::new(); }
+    if total == 0 {
+        return Vec::new();
+    }
     let mut emitted: Vec<usize> = vec![0; items.len()];
     let mut out = Vec::with_capacity(total);
     for slot in 0..total {
@@ -1689,7 +1867,13 @@ where
 {
     let mut out = Vec::new();
     enumerate_into(
-        canonical, parent, clauses, filter, 0, &Vec::new(), &mut out,
+        canonical,
+        parent,
+        clauses,
+        filter,
+        0,
+        &Vec::new(),
+        &mut out,
         &mut on_empty_clause,
     )?;
     Ok(out)
@@ -1737,11 +1921,15 @@ where
                 Value::Bool(b) => b,
                 Value::U64(n) => n != 0,
                 Value::F64(n) => n != 0.0,
-                other => return Err(format!(
-                    "comprehension filter '{predicate}': expected bool/u64/f64, got {other:?}"
-                )),
+                other => {
+                    return Err(format!(
+                        "comprehension filter '{predicate}': expected bool/u64/f64, got {other:?}"
+                    ));
+                }
             };
-            if keep { out.push(prefix.to_vec()); }
+            if keep {
+                out.push(prefix.to_vec());
+            }
         } else {
             out.push(prefix.to_vec());
         }
@@ -1769,7 +1957,13 @@ where
                 let mut next_prefix = prefix.to_vec();
                 next_prefix.push((var.to_string(), value));
                 enumerate_into(
-                    canonical, parent, clauses, filter, idx + 1, &next_prefix, out,
+                    canonical,
+                    parent,
+                    clauses,
+                    filter,
+                    idx + 1,
+                    &next_prefix,
+                    out,
                     on_empty_clause,
                 )?;
             }
@@ -1784,9 +1978,9 @@ where
                 "({}) in {}({})",
                 clause.vars.join(", "),
                 match mode {
-                    ZipMode::Strict   => "",
+                    ZipMode::Strict => "",
                     ZipMode::Truncate => "zip_truncate",
-                    ZipMode::Cycle    => "zip_cycle",
+                    ZipMode::Cycle => "zip_cycle",
                 },
                 exprs.join(", "),
             );
@@ -1817,8 +2011,11 @@ where
                     // Reject empty columns under Cycle — there's
                     // no value to repeat. Fall through to the
                     // empty-clause callback below by using len=0.
-                    if lens.contains(&0) { 0 }
-                    else { *lens.iter().max().unwrap() }
+                    if lens.contains(&0) {
+                        0
+                    } else {
+                        *lens.iter().max().unwrap()
+                    }
                 }
             };
             if len == 0 {
@@ -1830,12 +2027,21 @@ where
                 for (var, col) in clause.vars.iter().zip(columns.iter()) {
                     // Cycle: index modulo column length so shorter
                     // columns repeat; Strict / Truncate: direct.
-                    let i = if matches!(mode, ZipMode::Cycle) { step % col.len() }
-                            else { step };
+                    let i = if matches!(mode, ZipMode::Cycle) {
+                        step % col.len()
+                    } else {
+                        step
+                    };
                     next_prefix.push((var.clone(), col[i].clone()));
                 }
                 enumerate_into(
-                    canonical, parent, clauses, filter, idx + 1, &next_prefix, out,
+                    canonical,
+                    parent,
+                    clauses,
+                    filter,
+                    idx + 1,
+                    &next_prefix,
+                    out,
                     on_empty_clause,
                 )?;
             }
@@ -1859,7 +2065,10 @@ mod tests {
     use super::*;
 
     fn h(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     fn interpolate(
@@ -1868,7 +2077,10 @@ mod tests {
         workload_params: &HashMap<String, String>,
     ) -> Result<String, String> {
         interpolate_with_lookup(text, |name| {
-            bindings.get(name).or_else(|| workload_params.get(name)).cloned()
+            bindings
+                .get(name)
+                .or_else(|| workload_params.get(name))
+                .cloned()
         })
     }
 
@@ -1889,10 +2101,7 @@ mod tests {
 
     #[test]
     fn nested_placeholder_resolves_inside_out() {
-        let params = h(&[
-            ("k_1_limits", "1,2,4,8"),
-            ("k_10_limits", "10,20,30"),
-        ]);
+        let params = h(&[("k_1_limits", "1,2,4,8"), ("k_10_limits", "10,20,30")]);
         let bindings = h(&[("k", "1")]);
         let out = interpolate("{k_{k}_limits}", &bindings, &params).unwrap();
         assert_eq!(out, "1,2,4,8");
@@ -1960,21 +2169,19 @@ mod tests {
 
     #[test]
     fn kernel_resolves_via_get_constant() {
-        let kernel = crate::dsl::compile::compile_polydat(
-            "const dataset := \"example\"\n"
-        ).unwrap();
+        let kernel =
+            crate::dsl::compile::compile_polydat("const dataset := \"example\"\n").unwrap();
         let out = interpolate_via_kernel("path/{dataset}/data", &kernel).unwrap();
         assert_eq!(out, "path/example/data");
     }
 
     #[test]
     fn kernel_resolves_via_get_input() {
-        let parent = crate::dsl::compile::compile_polydat(
-            "const k_values := \"1, 10\"\n"
-        ).unwrap();
-        let child_program = crate::dsl::compile::compile_polydat(
-            "extern k_values: String\n"
-        ).unwrap().program().clone();
+        let parent = crate::dsl::compile::compile_polydat("const k_values := \"1, 10\"\n").unwrap();
+        let child_program = crate::dsl::compile::compile_polydat("extern k_values: String\n")
+            .unwrap()
+            .program()
+            .clone();
         let child = parent.materialize_subscope(child_program, &[]);
         let out = interpolate_via_kernel("values={k_values}", &child).unwrap();
         assert_eq!(out, "values=1, 10");
@@ -1982,10 +2189,10 @@ mod tests {
 
     #[test]
     fn kernel_unresolved_name_errors() {
-        let kernel = crate::dsl::compile::compile_polydat(
-            "const x := 1\n"
-        ).unwrap();
-        let err = interpolate_via_kernel("hello {nope}", &kernel).unwrap_err().to_string();
+        let kernel = crate::dsl::compile::compile_polydat("const x := 1\n").unwrap();
+        let err = interpolate_via_kernel("hello {nope}", &kernel)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("unresolved"));
         assert!(err.contains("nope"));
     }
@@ -1993,8 +2200,9 @@ mod tests {
     #[test]
     fn kernel_nested_template_iterates_to_fixed_point() {
         let kernel = crate::dsl::compile::compile_polydat(
-            "const k := \"1\"\nconst k_1_limits := \"1, 2, 4, 8\"\n"
-        ).unwrap();
+            "const k := \"1\"\nconst k_1_limits := \"1, 2, 4, 8\"\n",
+        )
+        .unwrap();
         let out = interpolate_via_kernel("{k_{k}_limits}", &kernel).unwrap();
         assert_eq!(out, "1, 2, 4, 8");
     }
@@ -2008,12 +2216,15 @@ mod tests {
     #[test]
     fn parse_list_mixed_types() {
         let v = parse_list_with_types("1, 1.5, true, hello");
-        assert_eq!(v, vec![
-            Value::U64(1),
-            Value::F64(1.5),
-            Value::Bool(true),
-            Value::Str("hello".to_string().into()),
-        ]);
+        assert_eq!(
+            v,
+            vec![
+                Value::U64(1),
+                Value::F64(1.5),
+                Value::Bool(true),
+                Value::Str("hello".to_string().into()),
+            ]
+        );
     }
 
     #[test]
@@ -2025,30 +2236,42 @@ mod tests {
         // test we synthesize them directly.
         let kernel = crate::dsl::compile::compile_polydat(
             "const __cursor_extent_row_start := 0\n\
-             const __cursor_extent_row_end := 5\n"
-        ).unwrap();
+             const __cursor_extent_row_end := 5\n",
+        )
+        .unwrap();
         let values = evaluate_spec("all(row)", &kernel).unwrap();
-        assert_eq!(values, vec![
-            Value::U64(0), Value::U64(1), Value::U64(2), Value::U64(3), Value::U64(4),
-        ]);
+        assert_eq!(
+            values,
+            vec![
+                Value::U64(0),
+                Value::U64(1),
+                Value::U64(2),
+                Value::U64(3),
+                Value::U64(4),
+            ]
+        );
     }
 
     #[test]
     fn all_cursor_non_zero_start() {
         let kernel = crate::dsl::compile::compile_polydat(
             "const __cursor_extent_data_start := 100\n\
-             const __cursor_extent_data_end := 103\n"
-        ).unwrap();
+             const __cursor_extent_data_end := 103\n",
+        )
+        .unwrap();
         let values = evaluate_spec("all(data)", &kernel).unwrap();
-        assert_eq!(values, vec![Value::U64(100), Value::U64(101), Value::U64(102)]);
+        assert_eq!(
+            values,
+            vec![Value::U64(100), Value::U64(101), Value::U64(102)]
+        );
     }
 
     #[test]
     fn all_cursor_missing_extent_errors() {
-        let kernel = crate::dsl::compile::compile_polydat(
-            "const unrelated := 1\n"
-        ).unwrap();
-        let err = evaluate_spec("all(no_such_cursor)", &kernel).unwrap_err().to_string();
+        let kernel = crate::dsl::compile::compile_polydat("const unrelated := 1\n").unwrap();
+        let err = evaluate_spec("all(no_such_cursor)", &kernel)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("all(no_such_cursor)"));
         assert!(err.contains("no resolvable extent"));
     }
@@ -2067,10 +2290,16 @@ mod tests {
         // layers downstream).
         let kernel = crate::dsl::compile::compile_polydat(
             "const __cursor_extent_row_start := 0\n\
-             const __cursor_extent_row_end := 5\n"
-        ).unwrap();
-        let err = evaluate_spec("all(row, 5)", &kernel).unwrap_err().to_string();
-        assert!(err.contains("all(row, 5)"), "error must mention the failing spec, got: {err}");
+             const __cursor_extent_row_end := 5\n",
+        )
+        .unwrap();
+        let err = evaluate_spec("all(row, 5)", &kernel)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("all(row, 5)"),
+            "error must mention the failing spec, got: {err}"
+        );
         assert!(
             err.contains("failed to evaluate") || err.contains("unknown function"),
             "error must explain the eval failure, got: {err}"
@@ -2105,9 +2334,9 @@ mod tests {
             "matching_profiles('nonexistent_dataset_xyz_qqq', 'label_')",
             &kernel,
         );
-        let err = result.expect_err(
-            "missing dataset must surface as Err, not silent literal-list fallback"
-        ).to_string();
+        let err = result
+            .expect_err("missing dataset must surface as Err, not silent literal-list fallback")
+            .to_string();
         // Doesn't matter which exact error string we get from
         // the catalog layer — the test guards the *contract*:
         // the spec text appears in the error, the failure is
@@ -2129,9 +2358,13 @@ mod tests {
         // commas. This guards the broader contract that
         // protected the dataset-resolution case above.
         let kernel = crate::dsl::compile::compile_polydat("const unrelated := 1\n").unwrap();
-        let err = evaluate_spec("nonexistent_func('a', 'b', 'c')", &kernel).unwrap_err().to_string();
-        assert!(err.contains("failed to evaluate") || err.contains("unknown"),
-            "expected a clean eval-failure error, got: {err}");
+        let err = evaluate_spec("nonexistent_func('a', 'b', 'c')", &kernel)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("failed to evaluate") || err.contains("unknown"),
+            "expected a clean eval-failure error, got: {err}"
+        );
     }
 
     #[test]
@@ -2147,11 +2380,14 @@ mod tests {
         assert_eq!(values, vec![Value::U64(1), Value::U64(10), Value::U64(100)]);
 
         let names = evaluate_spec("foo, bar, baz", &kernel).unwrap();
-        assert_eq!(names, vec![
-            Value::Str("foo".into()),
-            Value::Str("bar".into()),
-            Value::Str("baz".into()),
-        ]);
+        assert_eq!(
+            names,
+            vec![
+                Value::Str("foo".into()),
+                Value::Str("bar".into()),
+                Value::Str("baz".into()),
+            ]
+        );
     }
 
     #[test]
@@ -2160,43 +2396,48 @@ mod tests {
         // the compiler-side change that emits
         // __cursor_extent_<name>_{start,end} as final bindings
         // even in the literal-args case.
-        let kernel = crate::dsl::compile::compile_polydat(
-            "cursor row = range(0, 50)\n"
-        ).unwrap();
+        let kernel = crate::dsl::compile::compile_polydat("cursor row = range(0, 50)\n").unwrap();
         let start = kernel.lookup("__cursor_extent_row_start");
         let end = kernel.lookup("__cursor_extent_row_end");
-        assert_eq!(start, Some(Value::U64(0)),
-            "expected start=0, got {start:?}");
-        assert_eq!(end, Some(Value::U64(50)),
-            "expected end=50, got {end:?}");
+        assert_eq!(
+            start,
+            Some(Value::U64(0)),
+            "expected start=0, got {start:?}"
+        );
+        assert_eq!(end, Some(Value::U64(50)), "expected end=50, got {end:?}");
     }
 
     #[test]
     fn all_cursor_with_real_cursor_decl_works() {
-        let kernel = crate::dsl::compile::compile_polydat(
-            "cursor row = range(0, 5)\n"
-        ).unwrap();
+        let kernel = crate::dsl::compile::compile_polydat("cursor row = range(0, 5)\n").unwrap();
         let values = evaluate_spec("all(row)", &kernel).unwrap();
-        assert_eq!(values, vec![
-            Value::U64(0), Value::U64(1), Value::U64(2), Value::U64(3), Value::U64(4),
-        ]);
+        assert_eq!(
+            values,
+            vec![
+                Value::U64(0),
+                Value::U64(1),
+                Value::U64(2),
+                Value::U64(3),
+                Value::U64(4),
+            ]
+        );
     }
 
     #[test]
     fn all_cursor_ignores_whitespace() {
         let kernel = crate::dsl::compile::compile_polydat(
             "const __cursor_extent_row_start := 0\n\
-             const __cursor_extent_row_end := 3\n"
-        ).unwrap();
+             const __cursor_extent_row_end := 3\n",
+        )
+        .unwrap();
         let values = evaluate_spec("  all( row )  ", &kernel).unwrap();
         assert_eq!(values.len(), 3);
     }
 
     #[test]
     fn evaluate_spec_resolves_against_kernel() {
-        let kernel = crate::dsl::compile::compile_polydat(
-            "const k_values := \"1, 10, 100\"\n"
-        ).unwrap();
+        let kernel =
+            crate::dsl::compile::compile_polydat("const k_values := \"1, 10, 100\"\n").unwrap();
         let v = evaluate_spec("{k_values}", &kernel).unwrap();
         assert_eq!(v, vec![Value::U64(1), Value::U64(10), Value::U64(100)]);
     }
@@ -2206,9 +2447,8 @@ mod tests {
         // SRD-18f Stage 2: a bare identifier source is a direct
         // wire/param reference — resolves identically to the
         // braced `{name}` interpolation form.
-        let kernel = crate::dsl::compile::compile_polydat(
-            "const k_values := \"1, 10, 100\"\n"
-        ).unwrap();
+        let kernel =
+            crate::dsl::compile::compile_polydat("const k_values := \"1, 10, 100\"\n").unwrap();
         let bare = evaluate_spec("k_values", &kernel).unwrap();
         let braced = evaluate_spec("{k_values}", &kernel).unwrap();
         assert_eq!(bare, braced);
@@ -2221,7 +2461,9 @@ mod tests {
         // resolve is a hard error (not silently bound as its own
         // name-string), and the message points at the fix.
         let kernel = crate::dsl::compile::compile_polydat("\n").unwrap();
-        let err = evaluate_spec("nonexistent", &kernel).unwrap_err().to_string();
+        let err = evaluate_spec("nonexistent", &kernel)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("did not resolve"), "got: {err}");
         assert!(err.contains("quote it"), "should hint quoting: {err}");
     }
@@ -2230,9 +2472,7 @@ mod tests {
     fn bracket_list_spread_and_no_peel() {
         // `[xs…]` destructures (peels one level); `[xs]` binds the
         // whole value once.
-        let kernel = crate::dsl::compile::compile_polydat(
-            "const xs := \"1, 2, 3\"\n"
-        ).unwrap();
+        let kernel = crate::dsl::compile::compile_polydat("const xs := \"1, 2, 3\"\n").unwrap();
         // spread → peel the string's tokens
         let spread = evaluate_spec("[xs…]", &kernel).unwrap();
         assert_eq!(spread, vec![Value::U64(1), Value::U64(2), Value::U64(3)]);
@@ -2243,13 +2483,17 @@ mod tests {
 
     #[test]
     fn bracket_list_mixes_refs_literals_and_spread() {
-        let kernel = crate::dsl::compile::compile_polydat(
-            "const mid := \"7, 8\"\n"
-        ).unwrap();
+        let kernel = crate::dsl::compile::compile_polydat("const mid := \"7, 8\"\n").unwrap();
         let v = evaluate_spec("[1, mid…, \"x\"]", &kernel).unwrap();
-        assert_eq!(v, vec![
-            Value::U64(1), Value::U64(7), Value::U64(8), Value::Str("x".into()),
-        ]);
+        assert_eq!(
+            v,
+            vec![
+                Value::U64(1),
+                Value::U64(7),
+                Value::U64(8),
+                Value::Str("x".into()),
+            ]
+        );
     }
 
     // ── SRD-71: partition-list unpacking ─────────────────────
@@ -2265,8 +2509,10 @@ mod tests {
         let v = evaluate_spec("partitions(\"linear:3\")", &kernel).unwrap();
         assert_eq!(v.len(), 3, "expected 3 partitions, got {}", v.len());
         for value in &v {
-            assert!(value.as_partition().is_some(),
-                "every iter value should be a Partition, got {value:?}");
+            assert!(
+                value.as_partition().is_some(),
+                "every iter value should be a Partition, got {value:?}"
+            );
         }
     }
 
@@ -2293,11 +2539,14 @@ mod tests {
             &kernel,
             &HashMap::new(),
             &HashMap::new(),
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(v.len(), 4);
         for value in &v {
-            assert!(value.as_partition().is_some(),
-                "pre_evaluate_clause must unpack PartitionList, got {value:?}");
+            assert!(
+                value.as_partition().is_some(),
+                "pre_evaluate_clause must unpack PartitionList, got {value:?}"
+            );
         }
     }
 
@@ -2310,8 +2559,13 @@ mod tests {
         // PortType::Ext and downstream `over <iter-var>` clauses
         // see the right shape.
         let p = crate::iteration::cursor_partition::Partition {
-            idx: 0, count: 1, start_ord: 0, end_ord: 10,
-            start_pct: 0.0, end_pct: 100.0, base_extent: 10,
+            idx: 0,
+            count: 1,
+            start_ord: 0,
+            end_ord: 10,
+            start_pct: 0.0,
+            end_pct: 100.0,
+            base_extent: 10,
         };
         let v = Value::from_partition(p);
         assert_eq!(value_to_polydat_type_name(&v), "ext");
@@ -2326,45 +2580,74 @@ mod tests {
     #[test]
     fn range_half_open_integer() {
         let v = evaluate_spec("1..5", &empty_kernel()).unwrap();
-        assert_eq!(v, vec![
-            Value::U64(1), Value::U64(2), Value::U64(3), Value::U64(4),
-        ]);
+        assert_eq!(
+            v,
+            vec![Value::U64(1), Value::U64(2), Value::U64(3), Value::U64(4),]
+        );
     }
 
     #[test]
     fn range_inclusive_integer() {
         let v = evaluate_spec("1..=5", &empty_kernel()).unwrap();
-        assert_eq!(v, vec![
-            Value::U64(1), Value::U64(2), Value::U64(3),
-            Value::U64(4), Value::U64(5),
-        ]);
+        assert_eq!(
+            v,
+            vec![
+                Value::U64(1),
+                Value::U64(2),
+                Value::U64(3),
+                Value::U64(4),
+                Value::U64(5),
+            ]
+        );
     }
 
     #[test]
     fn range_with_step() {
         let v = evaluate_spec("0..100..10", &empty_kernel()).unwrap();
-        assert_eq!(v, vec![
-            Value::U64(0), Value::U64(10), Value::U64(20),
-            Value::U64(30), Value::U64(40), Value::U64(50),
-            Value::U64(60), Value::U64(70), Value::U64(80),
-            Value::U64(90),
-        ]);
+        assert_eq!(
+            v,
+            vec![
+                Value::U64(0),
+                Value::U64(10),
+                Value::U64(20),
+                Value::U64(30),
+                Value::U64(40),
+                Value::U64(50),
+                Value::U64(60),
+                Value::U64(70),
+                Value::U64(80),
+                Value::U64(90),
+            ]
+        );
     }
 
     #[test]
     fn range_inclusive_with_step() {
         let v = evaluate_spec("0..=100..25", &empty_kernel()).unwrap();
-        assert_eq!(v, vec![
-            Value::U64(0), Value::U64(25), Value::U64(50),
-            Value::U64(75), Value::U64(100),
-        ]);
+        assert_eq!(
+            v,
+            vec![
+                Value::U64(0),
+                Value::U64(25),
+                Value::U64(50),
+                Value::U64(75),
+                Value::U64(100),
+            ]
+        );
     }
 
     #[test]
     fn range_float_step() {
         let v = evaluate_spec("0.0..=1.0..0.25", &empty_kernel()).unwrap();
         assert_eq!(v.len(), 5, "got {v:?}");
-        if let [Value::F64(a), Value::F64(b), Value::F64(c), Value::F64(d), Value::F64(e)] = v.as_slice() {
+        if let [
+            Value::F64(a),
+            Value::F64(b),
+            Value::F64(c),
+            Value::F64(d),
+            Value::F64(e),
+        ] = v.as_slice()
+        {
             assert!((a - 0.0).abs() < 1e-12);
             assert!((b - 0.25).abs() < 1e-12);
             assert!((c - 0.5).abs() < 1e-12);
@@ -2395,21 +2678,31 @@ mod tests {
         assert!(v.is_empty(), "1K..1K with positive step → empty");
 
         let v = evaluate_spec("0..1K..200", &empty_kernel()).unwrap();
-        assert_eq!(v, vec![
-            Value::U64(0), Value::U64(200), Value::U64(400),
-            Value::U64(600), Value::U64(800),
-        ]);
+        assert_eq!(
+            v,
+            vec![
+                Value::U64(0),
+                Value::U64(200),
+                Value::U64(400),
+                Value::U64(600),
+                Value::U64(800),
+            ]
+        );
     }
 
     #[test]
     fn range_zero_step_errors() {
-        let err = evaluate_spec("1..10..0", &empty_kernel()).unwrap_err().to_string();
+        let err = evaluate_spec("1..10..0", &empty_kernel())
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("step is zero"), "{err}");
     }
 
     #[test]
     fn range_too_many_dotdot_errors() {
-        let err = evaluate_spec("1..2..3..4", &empty_kernel()).unwrap_err().to_string();
+        let err = evaluate_spec("1..2..3..4", &empty_kernel())
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("more than two `..`"), "{err}");
     }
 
@@ -2427,20 +2720,29 @@ mod tests {
 
     #[test]
     fn range_step_with_inclusive_separator_errors() {
-        let err = evaluate_spec("1..10..=2", &empty_kernel()).unwrap_err().to_string();
+        let err = evaluate_spec("1..10..=2", &empty_kernel())
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("step delimiter cannot be `..=`"), "{err}");
     }
 
     #[test]
     fn range_with_kernel_referenced_bounds() {
-        let kernel = crate::dsl::compile::compile_polydat(
-            "const lo := 5\nconst hi := 12\n"
-        ).unwrap();
+        let kernel =
+            crate::dsl::compile::compile_polydat("const lo := 5\nconst hi := 12\n").unwrap();
         let v = evaluate_spec("{lo}..{hi}", &kernel).unwrap();
-        assert_eq!(v, vec![
-            Value::U64(5), Value::U64(6), Value::U64(7),
-            Value::U64(8), Value::U64(9), Value::U64(10), Value::U64(11),
-        ]);
+        assert_eq!(
+            v,
+            vec![
+                Value::U64(5),
+                Value::U64(6),
+                Value::U64(7),
+                Value::U64(8),
+                Value::U64(9),
+                Value::U64(10),
+                Value::U64(11),
+            ]
+        );
     }
 
     // ── SRD-18c Layer 3 / SRD-18e Push 7: named generators ──
@@ -2448,48 +2750,88 @@ mod tests {
     #[test]
     fn fib_n_first_eight() {
         let v = evaluate_spec("fib(8)", &empty_kernel()).unwrap();
-        assert_eq!(v, vec![
-            Value::U64(1), Value::U64(1), Value::U64(2), Value::U64(3),
-            Value::U64(5), Value::U64(8), Value::U64(13), Value::U64(21),
-        ]);
+        assert_eq!(
+            v,
+            vec![
+                Value::U64(1),
+                Value::U64(1),
+                Value::U64(2),
+                Value::U64(3),
+                Value::U64(5),
+                Value::U64(8),
+                Value::U64(13),
+                Value::U64(21),
+            ]
+        );
     }
 
     #[test]
     fn fib_until_50() {
         let v = evaluate_spec("fib_until(50)", &empty_kernel()).unwrap();
-        assert_eq!(v, vec![
-            Value::U64(1), Value::U64(1), Value::U64(2), Value::U64(3),
-            Value::U64(5), Value::U64(8), Value::U64(13), Value::U64(21),
-            Value::U64(34),
-        ]);
+        assert_eq!(
+            v,
+            vec![
+                Value::U64(1),
+                Value::U64(1),
+                Value::U64(2),
+                Value::U64(3),
+                Value::U64(5),
+                Value::U64(8),
+                Value::U64(13),
+                Value::U64(21),
+                Value::U64(34),
+            ]
+        );
     }
 
     #[test]
     fn pow2_n_six() {
         let v = evaluate_spec("pow2(6)", &empty_kernel()).unwrap();
-        assert_eq!(v, vec![
-            Value::U64(1), Value::U64(2), Value::U64(4),
-            Value::U64(8), Value::U64(16), Value::U64(32),
-        ]);
+        assert_eq!(
+            v,
+            vec![
+                Value::U64(1),
+                Value::U64(2),
+                Value::U64(4),
+                Value::U64(8),
+                Value::U64(16),
+                Value::U64(32),
+            ]
+        );
     }
 
     #[test]
     fn pow2_until_100() {
         let v = evaluate_spec("pow2_until(100)", &empty_kernel()).unwrap();
-        assert_eq!(v, vec![
-            Value::U64(1), Value::U64(2), Value::U64(4),
-            Value::U64(8), Value::U64(16), Value::U64(32), Value::U64(64),
-        ]);
+        assert_eq!(
+            v,
+            vec![
+                Value::U64(1),
+                Value::U64(2),
+                Value::U64(4),
+                Value::U64(8),
+                Value::U64(16),
+                Value::U64(32),
+                Value::U64(64),
+            ]
+        );
     }
 
     #[test]
     fn binomial_n_5() {
         // C(5,0..5) = 1, 5, 10, 10, 5, 1
         let v = evaluate_spec("binomial(5)", &empty_kernel()).unwrap();
-        assert_eq!(v, vec![
-            Value::U64(1), Value::U64(5), Value::U64(10),
-            Value::U64(10), Value::U64(5), Value::U64(1),
-        ]);
+        assert_eq!(
+            v,
+            vec![
+                Value::U64(1),
+                Value::U64(5),
+                Value::U64(10),
+                Value::U64(10),
+                Value::U64(5),
+                Value::U64(1),
+            ]
+        );
     }
 
     #[test]
@@ -2510,26 +2852,44 @@ mod tests {
     fn linear_starts_half_open_5_points() {
         let v = evaluate_spec("linear_starts(0, 100, 5)", &empty_kernel()).unwrap();
         // (100-0)/5 = 20 step. 0, 20, 40, 60, 80.
-        if let [Value::F64(a), Value::F64(b), Value::F64(c), Value::F64(d), Value::F64(e)] = v.as_slice() {
+        if let [
+            Value::F64(a),
+            Value::F64(b),
+            Value::F64(c),
+            Value::F64(d),
+            Value::F64(e),
+        ] = v.as_slice()
+        {
             assert!((a - 0.0).abs() < 1e-12);
             assert!((b - 20.0).abs() < 1e-12);
             assert!((c - 40.0).abs() < 1e-12);
             assert!((d - 60.0).abs() < 1e-12);
             assert!((e - 80.0).abs() < 1e-12);
-        } else { panic!("got {v:?}"); }
+        } else {
+            panic!("got {v:?}");
+        }
     }
 
     #[test]
     fn linear_steps_inclusive_5_points() {
         let v = evaluate_spec("linear_steps(0, 100, 5)", &empty_kernel()).unwrap();
         // 0, 25, 50, 75, 100
-        if let [Value::F64(a), Value::F64(b), Value::F64(c), Value::F64(d), Value::F64(e)] = v.as_slice() {
+        if let [
+            Value::F64(a),
+            Value::F64(b),
+            Value::F64(c),
+            Value::F64(d),
+            Value::F64(e),
+        ] = v.as_slice()
+        {
             assert!((a - 0.0).abs() < 1e-12);
             assert!((b - 25.0).abs() < 1e-12);
             assert!((c - 50.0).abs() < 1e-12);
             assert!((d - 75.0).abs() < 1e-12);
             assert!((e - 100.0).abs() < 1e-12);
-        } else { panic!("got {v:?}"); }
+        } else {
+            panic!("got {v:?}");
+        }
     }
 
     #[test]
@@ -2541,12 +2901,16 @@ mod tests {
             assert!((b - 10.0).abs() < 1e-9);
             assert!((c - 100.0).abs() < 1e-9);
             assert!((d - 1000.0).abs() < 1e-9);
-        } else { panic!("got {v:?}"); }
+        } else {
+            panic!("got {v:?}");
+        }
     }
 
     #[test]
     fn log_steps_rejects_non_positive_bounds() {
-        let err = evaluate_spec("log_steps(0, 100, 5)", &empty_kernel()).unwrap_err().to_string();
+        let err = evaluate_spec("log_steps(0, 100, 5)", &empty_kernel())
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("must be positive"), "{err}");
     }
 
@@ -2555,29 +2919,48 @@ mod tests {
     #[test]
     fn concat_two_ranges() {
         let v = evaluate_spec("concat(1..4, 10..13)", &empty_kernel()).unwrap();
-        assert_eq!(v, vec![
-            Value::U64(1), Value::U64(2), Value::U64(3),
-            Value::U64(10), Value::U64(11), Value::U64(12),
-        ]);
+        assert_eq!(
+            v,
+            vec![
+                Value::U64(1),
+                Value::U64(2),
+                Value::U64(3),
+                Value::U64(10),
+                Value::U64(11),
+                Value::U64(12),
+            ]
+        );
     }
 
     #[test]
     fn unique_dedupes_first_occurrence() {
         let v = evaluate_spec("unique(1..4, 3..6)", &empty_kernel()).unwrap();
         // 1,2,3 (from first) + 4,5 (from second; 3 already present)
-        assert_eq!(v, vec![
-            Value::U64(1), Value::U64(2), Value::U64(3),
-            Value::U64(4), Value::U64(5),
-        ]);
+        assert_eq!(
+            v,
+            vec![
+                Value::U64(1),
+                Value::U64(2),
+                Value::U64(3),
+                Value::U64(4),
+                Value::U64(5),
+            ]
+        );
     }
 
     #[test]
     fn intersect_keeps_only_common_values() {
         let v = evaluate_spec("intersect(1..10, 5..15)", &empty_kernel()).unwrap();
-        assert_eq!(v, vec![
-            Value::U64(5), Value::U64(6), Value::U64(7),
-            Value::U64(8), Value::U64(9),
-        ]);
+        assert_eq!(
+            v,
+            vec![
+                Value::U64(5),
+                Value::U64(6),
+                Value::U64(7),
+                Value::U64(8),
+                Value::U64(9),
+            ]
+        );
     }
 
     #[test]
@@ -2590,28 +2973,42 @@ mod tests {
     #[test]
     fn interleave_round_robin_two_lists() {
         let v = evaluate_spec("interleave(1..4, 10..13)", &empty_kernel()).unwrap();
-        assert_eq!(v, vec![
-            Value::U64(1), Value::U64(10), Value::U64(2),
-            Value::U64(11), Value::U64(3), Value::U64(12),
-        ]);
+        assert_eq!(
+            v,
+            vec![
+                Value::U64(1),
+                Value::U64(10),
+                Value::U64(2),
+                Value::U64(11),
+                Value::U64(3),
+                Value::U64(12),
+            ]
+        );
     }
 
     #[test]
     fn cycle_repeats_n_times() {
         let v = evaluate_spec("cycle(1..3, 3)", &empty_kernel()).unwrap();
-        assert_eq!(v, vec![
-            Value::U64(1), Value::U64(2),
-            Value::U64(1), Value::U64(2),
-            Value::U64(1), Value::U64(2),
-        ]);
+        assert_eq!(
+            v,
+            vec![
+                Value::U64(1),
+                Value::U64(2),
+                Value::U64(1),
+                Value::U64(2),
+                Value::U64(1),
+                Value::U64(2),
+            ]
+        );
     }
 
     #[test]
     fn reverse_inverts_list() {
         let v = evaluate_spec("reverse(1..5)", &empty_kernel()).unwrap();
-        assert_eq!(v, vec![
-            Value::U64(4), Value::U64(3), Value::U64(2), Value::U64(1),
-        ]);
+        assert_eq!(
+            v,
+            vec![Value::U64(4), Value::U64(3), Value::U64(2), Value::U64(1),]
+        );
     }
 
     #[test]
@@ -2645,7 +3042,9 @@ mod tests {
         // Two-arg form: items list + ratios list.
         let v = evaluate_spec(
             "bucket(concat('ann', 'scan', 'fetch'), concat(3, 1, 2))",
-            &empty_kernel()).unwrap();
+            &empty_kernel(),
+        )
+        .unwrap();
         // Wait — concat doesn't make sense with these args (mixed types).
         // Use the literal form via the Polydat list parser.
         let _ = v;
@@ -2657,16 +3056,23 @@ mod tests {
         // Bucket sequencer round-robins; each "tick" pulls
         // one from each remaining bucket. Total = 6.
         assert_eq!(v.len(), 6);
-        let strs: Vec<&str> = v.iter().filter_map(|v| match v {
-            Value::Str(s) => Some(&**s), _ => None,
-        }).collect();
+        let strs: Vec<&str> = v
+            .iter()
+            .filter_map(|v| match v {
+                Value::Str(s) => Some(&**s),
+                _ => None,
+            })
+            .collect();
         // First tick: ann, scan, fetch (one from each).
         // Then ann (3 left), fetch (2 left). Next: ann, fetch.
         // Then ann. Total: ann*3, scan*1, fetch*2.
-        let counts = strs.iter().fold(std::collections::HashMap::<&str, usize>::new(), |mut m, s| {
-            *m.entry(s).or_insert(0) += 1;
-            m
-        });
+        let counts = strs.iter().fold(
+            std::collections::HashMap::<&str, usize>::new(),
+            |mut m, s| {
+                *m.entry(s).or_insert(0) += 1;
+                m
+            },
+        );
         assert_eq!(counts.get("ann"), Some(&3));
         assert_eq!(counts.get("scan"), Some(&1));
         assert_eq!(counts.get("fetch"), Some(&2));
@@ -2674,15 +3080,22 @@ mod tests {
 
     #[test]
     fn concat_seq_emits_contiguous_runs() {
-        let v = evaluate_spec("concat_seq(\"2:warmup, 3:bench, 1:cooldown\")", &empty_kernel()).unwrap();
-        let strs: Vec<String> = v.iter().filter_map(|v| match v {
-            Value::Str(s) => Some(s.to_string()), _ => None,
-        }).collect();
-        assert_eq!(strs, vec![
-            "warmup", "warmup",
-            "bench", "bench", "bench",
-            "cooldown",
-        ]);
+        let v = evaluate_spec(
+            "concat_seq(\"2:warmup, 3:bench, 1:cooldown\")",
+            &empty_kernel(),
+        )
+        .unwrap();
+        let strs: Vec<String> = v
+            .iter()
+            .filter_map(|v| match v {
+                Value::Str(s) => Some(s.to_string()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            strs,
+            vec!["warmup", "warmup", "bench", "bench", "bench", "cooldown",]
+        );
     }
 
     #[test]
@@ -2690,13 +3103,20 @@ mod tests {
         let v = evaluate_spec("interval_seq(\"3:read, 1:write\")", &empty_kernel()).unwrap();
         // Total length 4. write should appear once,
         // somewhere in the middle (not bunched at edges).
-        let strs: Vec<String> = v.iter().filter_map(|v| match v {
-            Value::Str(s) => Some(s.to_string()), _ => None,
-        }).collect();
+        let strs: Vec<String> = v
+            .iter()
+            .filter_map(|v| match v {
+                Value::Str(s) => Some(s.to_string()),
+                _ => None,
+            })
+            .collect();
         assert_eq!(strs.len(), 4);
-        let writes: Vec<usize> = strs.iter().enumerate()
+        let writes: Vec<usize> = strs
+            .iter()
+            .enumerate()
             .filter(|(_, s)| *s == "write")
-            .map(|(i, _)| i).collect();
+            .map(|(i, _)| i)
+            .collect();
         assert_eq!(writes.len(), 1, "expected exactly one write: {strs:?}");
     }
 

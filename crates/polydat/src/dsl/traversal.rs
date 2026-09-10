@@ -21,8 +21,8 @@ use crate::iteration::comprehension::{Comprehension, StreamerValue};
 use crate::kernel::PolydatProgram;
 
 use super::ast::{
-    Arg, Binding, BindingModifier, CallExpr, Expr, ExternPort, ForSource, ForSourceKind, ForStmt, InputDecl,
-    PolydatFile, Statement,
+    Arg, Binding, BindingModifier, CallExpr, Expr, ExternPort, ForSource, ForSourceKind, ForStmt,
+    InputDecl, PolydatFile, Statement,
 };
 use super::lexer::Span;
 
@@ -64,7 +64,9 @@ pub struct Producer {
 /// calls carrying the resolved comprehension, so the wire exists with a
 /// `Streamer` value on it (SRD 113 §3.1). Derivations resolve against
 /// producers bound earlier in the file, in document order.
-pub fn strip_for_forms(file: &PolydatFile) -> Result<(PolydatFile, Vec<ForStmt>, Vec<Producer>), String> {
+pub fn strip_for_forms(
+    file: &PolydatFile,
+) -> Result<(PolydatFile, Vec<ForStmt>, Vec<Producer>), String> {
     let mut parent = Vec::with_capacity(file.statements.len());
     let mut fors = Vec::new();
     let mut producers: Vec<Producer> = Vec::new();
@@ -72,7 +74,9 @@ pub fn strip_for_forms(file: &PolydatFile) -> Result<(PolydatFile, Vec<ForStmt>,
         match stmt {
             Statement::For(f) => fors.push(f.clone()),
             Statement::Binding(b) if matches!(b.value, Expr::For(_)) => {
-                let Expr::For(source) = &b.value else { unreachable!() };
+                let Expr::For(source) = &b.value else {
+                    unreachable!()
+                };
                 let comprehension = resolve_source(source, &producers)?;
                 let name = b.targets.join(",");
                 let value = StreamerValue::new(source.text.clone(), comprehension.clone());
@@ -124,15 +128,22 @@ pub fn resolve_source(source: &ForSource, producers: &[Producer]) -> Result<Comp
     match &source.kind {
         ForSourceKind::Comprehension(c) => Ok(c.clone()),
         ForSourceKind::Producer(name) => find(name),
-        ForSourceKind::Derived { base, filter, order } => {
+        ForSourceKind::Derived {
+            base,
+            filter,
+            order,
+        } => {
             let mut c = find(base)?;
             if let Some(pred) = filter {
                 c = Comprehension::filter(c, pred.clone());
             }
             if let Some(spec) = order {
-                let (strategy, truncation) = parse_order(spec).map_err(|e| format!(
-                    "`for {}` at line {}, col {}: {e}", source.text, source.span.line, source.span.col
-                ))?;
+                let (strategy, truncation) = parse_order(spec).map_err(|e| {
+                    format!(
+                        "`for {}` at line {}, col {}: {e}",
+                        source.text, source.span.line, source.span.col
+                    )
+                })?;
                 c = Comprehension::order(c, strategy, truncation);
             }
             Ok(c)
@@ -143,13 +154,22 @@ pub fn resolve_source(source: &ForSource, producers: &[Producer]) -> Result<Comp
 /// Parse an `order` spec such as `halton/5` into the algebra's strategy
 /// and truncation by running it through the comprehension parser on a
 /// one-clause carrier.
-fn parse_order(spec: &str) -> Result<(crate::iteration::comprehension::StrategyName, Option<u64>), String> {
+fn parse_order(
+    spec: &str,
+) -> Result<(crate::iteration::comprehension::StrategyName, Option<u64>), String> {
     let carrier = format!("__o in 0..1 order {spec}");
     let legacy = crate::iteration::comprehension::parse::parse_comprehension_text(&carrier)?;
-    let algebra = crate::iteration::comprehension::spec::legacy_to_algebra(&legacy).map_err(|e| e.to_string())?;
+    let algebra = crate::iteration::comprehension::spec::legacy_to_algebra(&legacy)
+        .map_err(|e| e.to_string())?;
     match algebra {
-        Comprehension::Order { strategy, truncation, .. } => Ok((strategy, truncation)),
-        other => Err(format!("order spec `{spec}` did not produce an ordering (got {other:?})")),
+        Comprehension::Order {
+            strategy,
+            truncation,
+            ..
+        } => Ok((strategy, truncation)),
+        other => Err(format!(
+            "order spec `{spec}` did not produce an ordering (got {other:?})"
+        )),
     }
 }
 
@@ -235,10 +255,14 @@ fn source_type(
         Source::WorkloadParamList { .. } => Ok(PortType::Str),
         Source::Generator { expr, .. } => {
             let head = expr.trim();
-            if head.starts_with("partitions(") || head.starts_with("subdivide(") || head.ends_with(".partitions") {
+            if head.starts_with("partitions(")
+                || head.starts_with("subdivide(")
+                || head.ends_with(".partitions")
+            {
                 return Ok(PortType::Ext);
             }
-            probe(head).map_err(|e| format!("element '{name}': cannot type generator `{head}`: {e}"))
+            probe(head)
+                .map_err(|e| format!("element '{name}': cannot type generator `{head}`: {e}"))
         }
     }
 }
@@ -287,7 +311,12 @@ fn tile_references(pieces: &[super::ast::TilePiece], out: &mut BTreeSet<String>)
             TilePiece::Static(_) => {}
             TilePiece::Hole(h) => collect_expr_refs(&h.expr, out),
             TilePiece::Projection { body, .. } => tile_references(body, out),
-            TilePiece::Branch { cond, then, otherwise, .. } => {
+            TilePiece::Branch {
+                cond,
+                then,
+                otherwise,
+                ..
+            } => {
                 collect_expr_refs(cond, out);
                 tile_references(then, out);
                 if let Some(o) = otherwise {
@@ -381,7 +410,11 @@ pub fn child_file(
     let span = f.span;
     let mut statements = Vec::with_capacity(f.body.len() + elements.len() + cascade.len() + 1);
     if !f.body.iter().any(|s| matches!(s, Statement::InputDecl(_))) {
-        statements.push(Statement::InputDecl(InputDecl { name: "cycle".into(), ty: Some("u64".into()), span }));
+        statements.push(Statement::InputDecl(InputDecl {
+            name: "cycle".into(),
+            ty: Some("u64".into()),
+            span,
+        }));
     }
     for (name, ty) in elements {
         statements.push(Statement::ExternPort(ExternPort {

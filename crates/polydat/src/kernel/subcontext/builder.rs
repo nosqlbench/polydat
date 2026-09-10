@@ -15,11 +15,11 @@ use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::ast::PortType;
 use crate::dsl::ast::{Arg, CallExpr, Expr, ExternPort, PolydatFile, Statement};
 use crate::dsl::compile::{compile_ast, compile_ast_with_libs};
-use crate::dsl::lexer::{lex, Span};
+use crate::dsl::lexer::{Span, lex};
 use crate::dsl::parser::parse;
-use crate::ast::PortType;
 
 use super::error::{ContractViolation, SourceContext};
 use super::kernel::{Child, ScopeKernel};
@@ -236,8 +236,7 @@ impl<P> SubcontextBuilder<P> {
         // `init <name> = ...` and `extern <name>` so the magic-
         // extern injector skips them). These are the result-wire
         // exports we'll declare to the parent for Rule 2.
-        let mut local_decls: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut local_decls: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut result_lhs: Vec<String> = Vec::new();
         for stmt in &file.statements {
             match stmt {
@@ -264,8 +263,7 @@ impl<P> SubcontextBuilder<P> {
         // economy — only what's referenced gets a slot) and
         // (b) hard-error detection for the SRD-66 "user-written
         // body :=" case.
-        let mut free_idents: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut free_idents: std::collections::HashSet<String> = std::collections::HashSet::new();
         for stmt in &file.statements {
             collect_free_idents(stmt, &mut free_idents);
         }
@@ -408,11 +406,8 @@ impl<P> SubcontextBuilder<P> {
             .iter()
             .map(|s| (*s).to_string())
             .collect();
-        let parent_inputs: std::collections::HashSet<String> = parent_inner
-            .program()
-            .input_names()
-            .into_iter()
-            .collect();
+        let parent_inputs: std::collections::HashSet<String> =
+            parent_inner.program().input_names().into_iter().collect();
 
         for imp in &imports {
             if !parent_outputs.contains(&imp.name) && !parent_inputs.contains(&imp.name) {
@@ -447,7 +442,10 @@ impl<P> SubcontextBuilder<P> {
         //   export, registered locally (no rewrite).
         drop(parent_inner);
         let in_scope_cells = parent.shared_cells_in_scope();
-        let in_scope_cells_by_name: std::collections::HashMap<&str, &super::kernel::SharedCellInScope> = in_scope_cells
+        let in_scope_cells_by_name: std::collections::HashMap<
+            &str,
+            &super::kernel::SharedCellInScope,
+        > = in_scope_cells
             .iter()
             .map(|c| (c.name.as_str(), c))
             .collect();
@@ -698,7 +696,11 @@ impl<P> SubcontextBuilder<P> {
                     wt.export_name
                 )));
             }
-            if kernel.program().output_map_lookup(&wt.source_output).is_none() {
+            if kernel
+                .program()
+                .output_map_lookup(&wt.source_output)
+                .is_none()
+            {
                 return Err(ContractViolation::Compile(format!(
                     "Rule 2 write-through rewrite produced no `{}` output — \
                      the rewritten binding did not surface as a kernel output",
@@ -768,8 +770,9 @@ fn collect_expr_idents(expr: &Expr, out: &mut std::collections::HashSet<String>)
             collect_expr_idents(b, out);
         }
         Expr::For(_) => {}
-        Expr::UnaryNeg(e, _) | Expr::UnaryBitNot(e, _)
-        | Expr::Cast(e, _, _) => collect_expr_idents(e, out),
+        Expr::UnaryNeg(e, _) | Expr::UnaryBitNot(e, _) | Expr::Cast(e, _, _) => {
+            collect_expr_idents(e, out)
+        }
         Expr::FieldAccess { source, .. } => {
             // Source-field projections reference a source name,
             // not a wire — but the magic-extern set is a closed

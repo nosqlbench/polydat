@@ -68,13 +68,32 @@ impl RoundTripFinding {
 /// only ever a lint-coverage improvement — omission under-lints, never
 /// mis-lints, because classification still comes from the catalog.
 const LINTABLE_TYPES: [PortType; 26] = [
-    PortType::U64, PortType::F64, PortType::U32, PortType::I32,
-    PortType::I64, PortType::F32, PortType::U8, PortType::I8,
-    PortType::U16, PortType::I16, PortType::F16, PortType::U128,
-    PortType::I128, PortType::Bool, PortType::Str, PortType::Bytes,
-    PortType::Json, PortType::Ext, PortType::Handle,
-    PortType::VecF32, PortType::VecI32, PortType::VecF64,
-    PortType::VecI64, PortType::VecF16, PortType::VecI16, PortType::VecI8,
+    PortType::U64,
+    PortType::F64,
+    PortType::U32,
+    PortType::I32,
+    PortType::I64,
+    PortType::F32,
+    PortType::U8,
+    PortType::I8,
+    PortType::U16,
+    PortType::I16,
+    PortType::F16,
+    PortType::U128,
+    PortType::I128,
+    PortType::Bool,
+    PortType::Str,
+    PortType::Bytes,
+    PortType::Json,
+    PortType::Ext,
+    PortType::Handle,
+    PortType::VecF32,
+    PortType::VecI32,
+    PortType::VecF64,
+    PortType::VecI64,
+    PortType::VecF16,
+    PortType::VecI16,
+    PortType::VecI8,
 ];
 
 /// Conversion-node registry: node meta-name → (from, to), enumerated
@@ -195,9 +214,10 @@ fn source_type(
 ) -> Option<PortType> {
     match ws {
         WireSource::Input(c) => input_defs.get(*c).map(|d| d.port_type),
-        WireSource::NodeOutput(n, p) => {
-            nodes.get(*n).and_then(|nd| nd.meta().outs.get(*p)).map(|o| o.typ)
-        }
+        WireSource::NodeOutput(n, p) => nodes
+            .get(*n)
+            .and_then(|nd| nd.meta().outs.get(*p))
+            .map(|o| o.typ),
     }
 }
 
@@ -220,10 +240,16 @@ mod tests {
         let mut asm = PolydatAssembler::new(vec![]);
         asm.set_strict_wires(false, true);
         asm.add_input("x", Value::U64(0), PortType::U64, InputKind::Coordinate);
-        asm.add_node("to_text", conv(PortType::U64, PortType::Str),
-            vec![WireRef::Input("x".into())]);
-        asm.add_node("back", conv(PortType::Str, PortType::U64),
-            vec![WireRef::Node("to_text".into(), 0)]);
+        asm.add_node(
+            "to_text",
+            conv(PortType::U64, PortType::Str),
+            vec![WireRef::Input("x".into())],
+        );
+        asm.add_node(
+            "back",
+            conv(PortType::Str, PortType::U64),
+            vec![WireRef::Node("to_text".into(), 0)],
+        );
         asm.add_output("y", WireRef::node("back"));
         match asm.compile() {
             Err(AssemblyError::Other(msg)) => {
@@ -239,10 +265,16 @@ mod tests {
     fn default_mode_warns_but_compiles() {
         let mut asm = PolydatAssembler::new(vec![]);
         asm.add_input("x", Value::U64(0), PortType::U64, InputKind::Coordinate);
-        asm.add_node("to_text", conv(PortType::U64, PortType::Str),
-            vec![WireRef::Input("x".into())]);
-        asm.add_node("back", conv(PortType::Str, PortType::U64),
-            vec![WireRef::Node("to_text".into(), 0)]);
+        asm.add_node(
+            "to_text",
+            conv(PortType::U64, PortType::Str),
+            vec![WireRef::Input("x".into())],
+        );
+        asm.add_node(
+            "back",
+            conv(PortType::Str, PortType::U64),
+            vec![WireRef::Node("to_text".into(), 0)],
+        );
         asm.add_output("y", WireRef::node("back"));
         asm.compile().expect("non-strict compile must succeed");
     }
@@ -253,10 +285,16 @@ mod tests {
         let mut asm = PolydatAssembler::new(vec![]);
         asm.set_strict_wires(false, true);
         asm.add_input("x", Value::U64(0), PortType::U64, InputKind::Coordinate);
-        asm.add_node("to_json", conv(PortType::U64, PortType::Json),
-            vec![WireRef::Input("x".into())]);
-        asm.add_node("back", conv(PortType::Json, PortType::U64),
-            vec![WireRef::Node("to_json".into(), 0)]);
+        asm.add_node(
+            "to_json",
+            conv(PortType::U64, PortType::Json),
+            vec![WireRef::Input("x".into())],
+        );
+        asm.add_node(
+            "back",
+            conv(PortType::Json, PortType::U64),
+            vec![WireRef::Node("to_json".into(), 0)],
+        );
         asm.add_output("y", WireRef::node("back"));
         asm.compile().expect("Json hand-off must be sanctioned");
     }
@@ -267,9 +305,17 @@ mod tests {
     fn parse_from_text_origin_is_clean() {
         let mut asm = PolydatAssembler::new(vec![]);
         asm.set_strict_wires(false, true);
-        asm.add_input("s", Value::Str("1".into()), PortType::Str, InputKind::Coordinate);
-        asm.add_node("parse", conv(PortType::Str, PortType::U64),
-            vec![WireRef::Input("s".into())]);
+        asm.add_input(
+            "s",
+            Value::Str("1".into()),
+            PortType::Str,
+            InputKind::Coordinate,
+        );
+        asm.add_node(
+            "parse",
+            conv(PortType::Str, PortType::U64),
+            vec![WireRef::Input("s".into())],
+        );
         asm.add_output("y", WireRef::node("parse"));
         asm.compile().expect("parsing a text origin is legitimate");
     }

@@ -23,17 +23,11 @@ use crate::iteration::comprehension::strategy::StrategyName;
 pub fn apply(ast: &Comprehension) -> Option<Comprehension> {
     match ast {
         // I1 — singleton union
-        Comprehension::Union { children } if children.len() == 1 => {
-            Some(children[0].clone())
-        }
+        Comprehension::Union { children } if children.len() == 1 => Some(children[0].clone()),
         // I2 — singleton cartesian
-        Comprehension::Cartesian { children } if children.len() == 1 => {
-            Some(children[0].clone())
-        }
+        Comprehension::Cartesian { children } if children.len() == 1 => Some(children[0].clone()),
         // I3 — singleton zip
-        Comprehension::Zip { children, .. } if children.len() == 1 => {
-            Some(children[0].clone())
-        }
+        Comprehension::Zip { children, .. } if children.len() == 1 => Some(children[0].clone()),
         // I4 — trivially-true filter
         Comprehension::Filter { child, predicate } if is_trivially_true(predicate) => {
             Some((**child).clone())

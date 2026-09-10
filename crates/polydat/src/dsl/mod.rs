@@ -3,28 +3,28 @@
 
 //! Polydat DSL: lexer, parser, and AST for `.polydat` kernel definition files.
 
-pub mod lexer;
 pub mod ast;
-pub mod parser;
 pub mod compile;
-pub mod error;
-pub mod registry;
-pub mod events;
 pub mod const_constraints;
-pub mod pragmas;
 pub mod cursor_sugar;
-pub mod pprint;
-pub mod transform;
-pub mod tile;
-pub mod tile_lower;
-pub mod tile_structural;
-pub mod traversal;
+pub mod error;
+pub mod events;
+pub mod factories;
 /// External-facing factory module. Made `pub` (was `pub(crate)`) so
 /// crates that host polydat nodes outside the polydat crate
 /// (host runtimes) can reach `ConstArg`, `compile_ctx`,
 /// and `build_node` from their `register_nodes!` invocations.
 pub mod factory;
-pub mod factories;
+pub mod lexer;
+pub mod parser;
+pub mod pprint;
+pub mod pragmas;
+pub mod registry;
+pub mod tile;
+pub mod tile_lower;
+pub mod tile_structural;
+pub mod transform;
+pub mod traversal;
 pub(crate) mod validate;
 
 /// Grammar-based free-name extraction — the canonical way for
@@ -35,10 +35,15 @@ pub mod stub;
 
 /// Re-exported for external crates that register Polydat nodes via `register_nodes!`.
 pub use factory::ConstArg;
-mod modules;
 mod binding;
+mod modules;
 
-pub use compile::{compile_polydat, compile_polydat_checked, compile_polydat_with_options, compile_ast_with_options, CompileOptions, compile_polydat_with_path, compile_polydat_strict, compile_polydat_with_outputs, compile_polydat_with_libs, compile_polydat_with_libs_and_limit, eval_const_expr};
+pub use compile::{
+    CompileOptions, compile_ast_with_options, compile_polydat, compile_polydat_checked,
+    compile_polydat_strict, compile_polydat_with_libs, compile_polydat_with_libs_and_limit,
+    compile_polydat_with_options, compile_polydat_with_outputs, compile_polydat_with_path,
+    eval_const_expr,
+};
 
 /// Collect identifier references from an `Expr` tree into `out`.
 ///
@@ -51,10 +56,7 @@ pub use compile::{compile_polydat, compile_polydat_checked, compile_polydat_with
 /// synthesizer) use this to discover transitive wire refs from
 /// a binding's RHS without depending on the private `validate`
 /// module.
-pub fn collect_expr_references(
-    expr: &ast::Expr,
-    out: &mut std::collections::HashSet<String>,
-) {
+pub fn collect_expr_references(expr: &ast::Expr, out: &mut std::collections::HashSet<String>) {
     validate::collect_references(expr, out);
 }
 

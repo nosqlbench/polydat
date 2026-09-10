@@ -4,7 +4,7 @@
 //! Variate sampling methods.
 
 pub mod alias;
+pub mod histribution;
 pub mod icd;
 pub mod lut;
 pub mod metashift;
-pub mod histribution;

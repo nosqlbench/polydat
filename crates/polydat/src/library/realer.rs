@@ -53,10 +53,12 @@ fn parse_name_weight_csv(csv: &str) -> (Vec<String>, Vec<f64>) {
         if parts.len() >= 2 {
             let name = parts[0].trim().to_string();
             if let Ok(w) = parts[1].trim().parse::<f64>()
-                && !name.is_empty() && w > 0.0 {
-                    names.push(name);
-                    weights.push(w);
-                }
+                && !name.is_empty()
+                && w > 0.0
+            {
+                names.push(name);
+                weights.push(w);
+            }
         }
     }
     (names, weights)
@@ -176,7 +178,8 @@ fn last_names_data() -> &'static UniformNameSampler {
     static CELL: OnceLock<UniformNameSampler> = OnceLock::new();
     CELL.get_or_init(|| {
         UniformNameSampler::new(
-            crate::library::random::LASTNAMES.lines()
+            crate::library::random::LASTNAMES
+                .lines()
                 .filter(|l| !l.is_empty())
                 .map(|l| l.to_string())
                 .collect(),
@@ -284,9 +287,14 @@ mod tests {
         for i in 0..10_000u64 {
             let h = xxh3_64(&i.to_le_bytes());
             node.eval(&[Value::U64(h)], &mut out);
-            if out[0].as_str() == "Mary" { mary_count += 1; }
+            if out[0].as_str() == "Mary" {
+                mary_count += 1;
+            }
         }
-        assert!(mary_count > 50, "Mary should appear frequently, got {mary_count}");
+        assert!(
+            mary_count > 50,
+            "Mary should appear frequently, got {mary_count}"
+        );
     }
 
     #[test]

@@ -120,7 +120,10 @@ fn module_string_parameters_spell_str_like_inputs_and_externs() {
     assert_eq!(k.pull("a").as_str(), "hi there");
     // A literal of the wrong kind is still refused, in the keyword the
     // author will recognise.
-    let e = compile_polydat("input cycle: u64\nf(name: str) -> (line: str) := {\n line := name\n}\na := f(7)\n").unwrap_err();
+    let e = compile_polydat(
+        "input cycle: u64\nf(name: str) -> (line: str) := {\n line := name\n}\na := f(7)\n",
+    )
+    .unwrap_err();
     assert!(e.contains("expects str, got u64"), "{e}");
 }
 
@@ -131,9 +134,14 @@ fn library_directory_files_are_parsed_once_and_reread_when_modified() {
     std::fs::create_dir_all(&dir).unwrap();
     // A file whose name is not the module's, so resolution scans the directory.
     let path = dir.join("helpers.polydat");
-    std::fs::write(&path, "twice(n: u64) -> (out: u64) := {\n    out := n * 2\n}\n").unwrap();
+    std::fs::write(
+        &path,
+        "twice(n: u64) -> (out: u64) := {\n    out := n * 2\n}\n",
+    )
+    .unwrap();
     let program = "input cycle: u64\nr := twice(cycle)\n";
-    let compile = || compile_polydat_with_libs(program, None, vec![dir.clone()], &[], false, "cache test");
+    let compile =
+        || compile_polydat_with_libs(program, None, vec![dir.clone()], &[], false, "cache test");
     let mut k = compile().unwrap();
     k.set_inputs(&[4]);
     assert_eq!(k.pull("r").as_u64(), 8);
@@ -142,9 +150,18 @@ fn library_directory_files_are_parsed_once_and_reread_when_modified() {
     k.set_inputs(&[5]);
     assert_eq!(k.pull("r").as_u64(), 10);
     // An edit with a later modification time is seen on the next compile.
-    std::fs::write(&path, "twice(n: u64) -> (out: u64) := {\n    out := n * 3\n}\n").unwrap();
+    std::fs::write(
+        &path,
+        "twice(n: u64) -> (out: u64) := {\n    out := n * 3\n}\n",
+    )
+    .unwrap();
     let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
-    std::fs::File::options().write(true).open(&path).unwrap().set_modified(later).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_modified(later)
+        .unwrap();
     let mut k = compile().unwrap();
     k.set_inputs(&[4]);
     assert_eq!(k.pull("r").as_u64(), 12);

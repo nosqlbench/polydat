@@ -22,7 +22,7 @@ use std::sync::Arc;
 
 use crate::ast::Value;
 use crate::dsl::traversal::Traversal;
-use crate::iteration::comprehension::runtime::{evaluate_for_iteration, RuntimeTuple};
+use crate::iteration::comprehension::runtime::{RuntimeTuple, evaluate_for_iteration};
 use crate::iteration::cursor_partition::{cursor_over_partitions, narrow_cursor};
 
 use super::{PolydatKernel, PolydatProgram};
@@ -158,17 +158,24 @@ impl TraversalStream {
     /// position. Fibers partition a traversal by calling this over
     /// disjoint index ranges.
     pub fn activation(&self, index: usize) -> Result<Activation, String> {
-        let tuple = self
-            .tuples
-            .get(index)
-            .ok_or_else(|| format!("activation index {index} is out of range; traversal has {} tuples", self.tuples.len()))?;
+        let tuple = self.tuples.get(index).ok_or_else(|| {
+            format!(
+                "activation index {index} is out of range; traversal has {} tuples",
+                self.tuples.len()
+            )
+        })?;
         let program = self.traversal.program.clone();
         // An activation runs inside the root's cycle (SRD 115, H5).
         let mut kernel = PolydatKernel::from_program_nested(program);
         bind_by_name(&mut kernel, tuple);
         bind_by_name(&mut kernel, &self.cascade);
         let cursor = narrow_cursors(&mut kernel)?;
-        Ok(Activation { index: index as u64, coords: tuple.clone(), kernel, cursor })
+        Ok(Activation {
+            index: index as u64,
+            coords: tuple.clone(),
+            kernel,
+            cursor,
+        })
     }
 }
 
@@ -191,20 +198,34 @@ fn narrow_cursors(kernel: &mut PolydatKernel) -> Result<Option<CursorSlice>, Str
             let parts = cursor_over_partitions(&program, kernel.state(), schema)?;
             let partition = match parts.len() {
                 1 => parts[0],
-                0 => return Err(format!(
-                    "cursor '{}': its `over` value resolved to no partitions", schema.name
-                )),
-                n => return Err(format!(
-                    "cursor '{}': its `over` value resolved to {n} partitions; inside a traversal, bind the list \
+                0 => {
+                    return Err(format!(
+                        "cursor '{}': its `over` value resolved to no partitions",
+                        schema.name
+                    ));
+                }
+                n => {
+                    return Err(format!(
+                        "cursor '{}': its `over` value resolved to {n} partitions; inside a traversal, bind the list \
                      with an enclosing `for p in ...` and declare the cursor `over p`",
-                    schema.name
-                )),
+                        schema.name
+                    ));
+                }
             };
             narrow_cursor(&program, kernel.state(), &schema.name, &partition);
-            CursorSlice { cursor: schema.name.clone(), start: partition.start_ord, end: partition.end_ord }
+            CursorSlice {
+                cursor: schema.name.clone(),
+                start: partition.start_ord,
+                end: partition.end_ord,
+            }
         } else {
-            let extent = crate::iteration::cursor_partition::cursor_extent(&program, kernel.state(), schema);
-            CursorSlice { cursor: schema.name.clone(), start: 0, end: extent }
+            let extent =
+                crate::iteration::cursor_partition::cursor_extent(&program, kernel.state(), schema);
+            CursorSlice {
+                cursor: schema.name.clone(),
+                start: 0,
+                end: extent,
+            }
         };
         narrowest = Some(match narrowest {
             Some(prev) if prev.len() <= slice.len() => prev,
@@ -229,11 +250,12 @@ impl PolydatKernel {
     /// this kernel now and bound into every activation.
     pub fn traverse(&mut self, index: usize) -> Result<TraversalStream, String> {
         let program = self.program().clone();
-        let traversal = program
-            .traversals()
-            .get(index)
-            .cloned()
-            .ok_or_else(|| format!("no traversal at index {index}; the program declares {}", program.traversals().len()))?;
+        let traversal = program.traversals().get(index).cloned().ok_or_else(|| {
+            format!(
+                "no traversal at index {index}; the program declares {}",
+                program.traversals().len()
+            )
+        })?;
 
         // Snapshot the cascade: pull each outer wire the body imports.
         let mut cascade = Vec::with_capacity(traversal.cascade.len());
@@ -259,10 +281,26 @@ impl PolydatKernel {
         bind_by_name(&mut canonical_kernel, &cascade);
         let canonical = Arc::new(canonical_kernel);
         let params: HashMap<String, String> = HashMap::new();
-        let tuples = evaluate_for_iteration(&traversal.comprehension, &parent, &canonical, &params, |_| Ok(()))
-            .map_err(|e| format!("`for {}` at line {}, col {}: {e}", traversal.source_text, traversal.span.line, traversal.span.col))?;
+        let tuples = evaluate_for_iteration(
+            &traversal.comprehension,
+            &parent,
+            &canonical,
+            &params,
+            |_| Ok(()),
+        )
+        .map_err(|e| {
+            format!(
+                "`for {}` at line {}, col {}: {e}",
+                traversal.source_text, traversal.span.line, traversal.span.col
+            )
+        })?;
 
-        Ok(TraversalStream { traversal, tuples, cascade, next: 0 })
+        Ok(TraversalStream {
+            traversal,
+            tuples,
+            cascade,
+            next: 0,
+        })
     }
 
     /// Open every top-level traversal, in document order.

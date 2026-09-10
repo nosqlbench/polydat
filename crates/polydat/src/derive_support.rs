@@ -93,15 +93,23 @@ pub trait Wire: Sized + 'static {
 impl Wire for u64 {
     const PORT: PortType = PortType::U64;
     const JIT: Option<JitType> = Some(JitType::U64);
-    fn extract(v: &Value) -> Self { v.as_u64() }
-    fn inject(self) -> Value { Value::U64(self) }
+    fn extract(v: &Value) -> Self {
+        v.as_u64()
+    }
+    fn inject(self) -> Value {
+        Value::U64(self)
+    }
 }
 
 impl Wire for u32 {
     const PORT: PortType = PortType::U32;
     const JIT: Option<JitType> = Some(JitType::U64);
-    fn extract(v: &Value) -> Self { v.as_u64() as u32 }
-    fn inject(self) -> Value { Value::U64(self as u64) }
+    fn extract(v: &Value) -> Self {
+        v.as_u64() as u32
+    }
+    fn inject(self) -> Value {
+        Value::U64(self as u64)
+    }
 }
 
 impl Wire for i32 {
@@ -111,30 +119,46 @@ impl Wire for i32 {
     // storage convention) plus the legacy bit-stuffed `Value::U64`
     // form during the alignment migration — same precedent as
     // `Wire<bool>` accepting `U64(n != 0)`.
-    fn extract(v: &Value) -> Self { v.as_i64() as i32 }
-    fn inject(self) -> Value { Value::I64(self as i64) }
+    fn extract(v: &Value) -> Self {
+        v.as_i64() as i32
+    }
+    fn inject(self) -> Value {
+        Value::I64(self as i64)
+    }
 }
 
 impl Wire for i64 {
     const PORT: PortType = PortType::I64;
     const JIT: Option<JitType> = Some(JitType::I64);
     // Lenient extract: see `Wire<i32>` note above.
-    fn extract(v: &Value) -> Self { v.as_i64() }
-    fn inject(self) -> Value { Value::I64(self) }
+    fn extract(v: &Value) -> Self {
+        v.as_i64()
+    }
+    fn inject(self) -> Value {
+        Value::I64(self)
+    }
 }
 
 impl Wire for u8 {
     const PORT: PortType = PortType::U8;
     const JIT: Option<JitType> = Some(JitType::U64);
-    fn extract(v: &Value) -> Self { v.as_u64() as u8 }
-    fn inject(self) -> Value { Value::U64(self as u64) }
+    fn extract(v: &Value) -> Self {
+        v.as_u64() as u8
+    }
+    fn inject(self) -> Value {
+        Value::U64(self as u64)
+    }
 }
 
 impl Wire for u16 {
     const PORT: PortType = PortType::U16;
     const JIT: Option<JitType> = Some(JitType::U64);
-    fn extract(v: &Value) -> Self { v.as_u64() as u16 }
-    fn inject(self) -> Value { Value::U64(self as u64) }
+    fn extract(v: &Value) -> Self {
+        v.as_u64() as u16
+    }
+    fn inject(self) -> Value {
+        Value::U64(self as u64)
+    }
 }
 
 impl Wire for i8 {
@@ -143,15 +167,23 @@ impl Wire for i8 {
     // Lenient extract through as_i64 (honest I64 or legacy
     // stuffed U64), narrowed by truncation — sign survives
     // because the storage convention is sign-extension.
-    fn extract(v: &Value) -> Self { v.as_i64() as i8 }
-    fn inject(self) -> Value { Value::I64(self as i64) }
+    fn extract(v: &Value) -> Self {
+        v.as_i64() as i8
+    }
+    fn inject(self) -> Value {
+        Value::I64(self as i64)
+    }
 }
 
 impl Wire for i16 {
     const PORT: PortType = PortType::I16;
     const JIT: Option<JitType> = Some(JitType::I64);
-    fn extract(v: &Value) -> Self { v.as_i64() as i16 }
-    fn inject(self) -> Value { Value::I64(self as i64) }
+    fn extract(v: &Value) -> Self {
+        v.as_i64() as i16
+    }
+    fn inject(self) -> Value {
+        Value::I64(self as i64)
+    }
 }
 
 impl Wire for u128 {
@@ -160,15 +192,23 @@ impl Wire for u128 {
     // JIT slot; the two-slot ABI is a Phase-5 concern
     // (type_system_alignment.md §8.1).
     const JIT: Option<JitType> = None;
-    fn extract(v: &Value) -> Self { v.as_u128() }
-    fn inject(self) -> Value { Value::U128(crate::ast::Bits128::from_u128(self)) }
+    fn extract(v: &Value) -> Self {
+        v.as_u128()
+    }
+    fn inject(self) -> Value {
+        Value::U128(crate::ast::Bits128::from_u128(self))
+    }
 }
 
 impl Wire for i128 {
     const PORT: PortType = PortType::I128;
     const JIT: Option<JitType> = None;
-    fn extract(v: &Value) -> Self { v.as_i128() }
-    fn inject(self) -> Value { Value::I128(crate::ast::Bits128::from_i128(self)) }
+    fn extract(v: &Value) -> Self {
+        v.as_i128()
+    }
+    fn inject(self) -> Value {
+        Value::I128(crate::ast::Bits128::from_i128(self))
+    }
 }
 
 // ── 128-bit register words (type_system_alignment.md §8.4 L2) ──
@@ -182,7 +222,9 @@ impl Wire for i128 {
 impl Wire for crate::ast::Bits128 {
     const PORT: PortType = PortType::Reg128;
     const JIT: Option<JitType> = None;
-    fn extract(v: &Value) -> Self { v.as_reg_bits() }
+    fn extract(v: &Value) -> Self {
+        v.as_reg_bits()
+    }
     fn inject(self) -> Value {
         Value::Reg128(self, crate::ast::RegLanes::Raw)
     }
@@ -193,7 +235,9 @@ macro_rules! impl_wire_reg {
         impl Wire for $arr {
             const PORT: PortType = PortType::$port;
             const JIT: Option<JitType> = None;
-            fn extract(v: &Value) -> Self { v.as_reg_bits().$to() }
+            fn extract(v: &Value) -> Self {
+                v.as_reg_bits().$to()
+            }
             fn inject(self) -> Value {
                 Value::Reg128(
                     crate::ast::Bits128::$from(self),
@@ -215,15 +259,23 @@ impl_wire_reg!([f64; 2], RegF64x2, F64x2, lanes_f64, from_lanes_f64);
 impl Wire for f64 {
     const PORT: PortType = PortType::F64;
     const JIT: Option<JitType> = Some(JitType::F64);
-    fn extract(v: &Value) -> Self { v.as_f64() }
-    fn inject(self) -> Value { Value::F64(self) }
+    fn extract(v: &Value) -> Self {
+        v.as_f64()
+    }
+    fn inject(self) -> Value {
+        Value::F64(self)
+    }
 }
 
 impl Wire for f32 {
     const PORT: PortType = PortType::F32;
     const JIT: Option<JitType> = Some(JitType::U64);
-    fn extract(v: &Value) -> Self { f32::from_bits(v.as_u64() as u32) }
-    fn inject(self) -> Value { Value::U64(self.to_bits() as u64) }
+    fn extract(v: &Value) -> Self {
+        f32::from_bits(v.as_u64() as u32)
+    }
+    fn inject(self) -> Value {
+        Value::U64(self.to_bits() as u64)
+    }
 }
 
 impl Wire for half::f16 {
@@ -231,8 +283,12 @@ impl Wire for half::f16 {
     const JIT: Option<JitType> = Some(JitType::U64);
     // Same bit-stuffing convention as f32: the binary16 pattern
     // rides the low 16 bits of the u64 carrier.
-    fn extract(v: &Value) -> Self { half::f16::from_bits(v.as_u64() as u16) }
-    fn inject(self) -> Value { Value::U64(self.to_bits() as u64) }
+    fn extract(v: &Value) -> Self {
+        half::f16::from_bits(v.as_u64() as u16)
+    }
+    fn inject(self) -> Value {
+        Value::U64(self.to_bits() as u64)
+    }
 }
 
 impl Wire for bool {
@@ -244,10 +300,13 @@ impl Wire for bool {
             Value::U64(n) => *n != 0,
             other => panic!(
                 "Wire<bool>::extract: type-checker routed {other:?} \
-                 to a Bool slot"),
+                 to a Bool slot"
+            ),
         }
     }
-    fn inject(self) -> Value { Value::Bool(self) }
+    fn inject(self) -> Value {
+        Value::Bool(self)
+    }
 }
 
 impl Wire for String {
@@ -262,11 +321,12 @@ impl Wire for String {
         // `Value`-typed (PolyWire) arg instead.
         match v {
             Value::Str(s) => s.to_string(),
-            other => panic!(
-                "Wire<String>::extract: expected Str, got {other:?}"),
+            other => panic!("Wire<String>::extract: expected Str, got {other:?}"),
         }
     }
-    fn inject(self) -> Value { Value::Str(self.into()) }
+    fn inject(self) -> Value {
+        Value::Str(self.into())
+    }
 }
 
 /// `Arc<str>` — zero-copy shared string handle. Reading
@@ -281,11 +341,12 @@ impl Wire for std::sync::Arc<str> {
     fn extract(v: &Value) -> Self {
         match v {
             Value::Str(s) => s.clone(),
-            other => panic!(
-                "Wire<Arc<str>>::extract: expected Str, got {other:?}"),
+            other => panic!("Wire<Arc<str>>::extract: expected Str, got {other:?}"),
         }
     }
-    fn inject(self) -> Value { Value::Str(self) }
+    fn inject(self) -> Value {
+        Value::Str(self)
+    }
 }
 
 /// `Arc<dyn Any + Send + Sync>` — opaque Handle wire. The body
@@ -300,11 +361,12 @@ impl Wire for std::sync::Arc<dyn std::any::Any + Send + Sync> {
     fn extract(v: &Value) -> Self {
         match v {
             Value::Handle(arc) => arc.clone(),
-            other => panic!(
-                "Wire<Arc<dyn Any>>::extract: expected Handle, got {other:?}"),
+            other => panic!("Wire<Arc<dyn Any>>::extract: expected Handle, got {other:?}"),
         }
     }
-    fn inject(self) -> Value { Value::Handle(self) }
+    fn inject(self) -> Value {
+        Value::Handle(self)
+    }
 }
 
 /// `Box<dyn ReflectedValue>` — Ext (adapter-typed) wire with
@@ -317,11 +379,12 @@ impl Wire for Box<dyn ReflectedValue> {
     fn extract(v: &Value) -> Self {
         match v {
             Value::Ext(b) => b.clone_reflected(),
-            other => panic!(
-                "Wire<Box<dyn ReflectedValue>>::extract: expected Ext, got {other:?}"),
+            other => panic!("Wire<Box<dyn ReflectedValue>>::extract: expected Ext, got {other:?}"),
         }
     }
-    fn inject(self) -> Value { Value::Ext(self) }
+    fn inject(self) -> Value {
+        Value::Ext(self)
+    }
 }
 
 // ── Bytes ──────────────────────────────────────────────────────
@@ -335,7 +398,9 @@ impl Wire for Arc<[u8]> {
             other => panic!("Wire<Arc<[u8]>>::extract: expected Bytes, got {other:?}"),
         }
     }
-    fn inject(self) -> Value { Value::Bytes(self) }
+    fn inject(self) -> Value {
+        Value::Bytes(self)
+    }
 }
 
 impl Wire for Vec<u8> {
@@ -347,7 +412,9 @@ impl Wire for Vec<u8> {
             other => panic!("Wire<Vec<u8>>::extract: expected Bytes, got {other:?}"),
         }
     }
-    fn inject(self) -> Value { Value::Bytes(self.into()) }
+    fn inject(self) -> Value {
+        Value::Bytes(self.into())
+    }
 }
 
 // ── Json ───────────────────────────────────────────────────────
@@ -361,7 +428,9 @@ impl Wire for Arc<serde_json::Value> {
             other => panic!("Wire<Arc<Json>>::extract: expected Json, got {other:?}"),
         }
     }
-    fn inject(self) -> Value { Value::Json(self) }
+    fn inject(self) -> Value {
+        Value::Json(self)
+    }
 }
 
 // ── Typed-element vectors ──────────────────────────────────────
@@ -375,13 +444,20 @@ macro_rules! impl_wire_vec {
                 match v {
                     Value::$variant(arc) => arc.clone(),
                     other => panic!(
-                        concat!("Wire<SliceArc<", stringify!($elem),
-                                ">>::extract: expected ", stringify!($variant),
-                                ", got {:?}"),
-                        other),
+                        concat!(
+                            "Wire<SliceArc<",
+                            stringify!($elem),
+                            ">>::extract: expected ",
+                            stringify!($variant),
+                            ", got {:?}"
+                        ),
+                        other
+                    ),
                 }
             }
-            fn inject(self) -> Value { Value::$variant(self) }
+            fn inject(self) -> Value {
+                Value::$variant(self)
+            }
         }
 
         impl Wire for Vec<$elem> {
@@ -391,10 +467,15 @@ macro_rules! impl_wire_vec {
                 match v {
                     Value::$variant(arc) => arc.as_slice().to_vec(),
                     other => panic!(
-                        concat!("Wire<Vec<", stringify!($elem),
-                                ">>::extract: expected ", stringify!($variant),
-                                ", got {:?}"),
-                        other),
+                        concat!(
+                            "Wire<Vec<",
+                            stringify!($elem),
+                            ">>::extract: expected ",
+                            stringify!($variant),
+                            ", got {:?}"
+                        ),
+                        other
+                    ),
                 }
             }
             fn inject(self) -> Value {
@@ -443,11 +524,15 @@ pub struct Ext<T>(pub T);
 
 impl<T> std::ops::Deref for Ext<T> {
     type Target = T;
-    fn deref(&self) -> &T { &self.0 }
+    fn deref(&self) -> &T {
+        &self.0
+    }
 }
 
 impl<T> std::ops::DerefMut for Ext<T> {
-    fn deref_mut(&mut self) -> &mut T { &mut self.0 }
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
 }
 
 impl<T: ReflectedValue + Clone + 'static> Wire for Ext<T> {
@@ -463,7 +548,8 @@ impl<T: ReflectedValue + Clone + 'static> Wire for Ext<T> {
                         "Wire<Ext<{}>>::extract: ReflectedValue downcast failed; \
                          got runtime type {:?}",
                         std::any::type_name::<T>(),
-                        boxed.type_name()),
+                        boxed.type_name()
+                    ),
                 }
             }
             other => panic!("Wire<Ext>::extract: expected Ext, got {other:?}"),
@@ -504,7 +590,9 @@ pub struct DynamicOutputs<T>(pub Vec<T>);
 
 impl<T> std::ops::Deref for DynamicOutputs<T> {
     type Target = Vec<T>;
-    fn deref(&self) -> &Vec<T> { &self.0 }
+    fn deref(&self) -> &Vec<T> {
+        &self.0
+    }
 }
 
 // ── Config<T> — wire arg marked as config-cost ────────────────
@@ -523,7 +611,9 @@ pub struct Config<T>(pub T);
 
 impl<T> std::ops::Deref for Config<T> {
     type Target = T;
-    fn deref(&self) -> &T { &self.0 }
+    fn deref(&self) -> &T {
+        &self.0
+    }
 }
 
 impl<T: Wire> Wire for Config<T> {
@@ -531,8 +621,12 @@ impl<T: Wire> Wire for Config<T> {
     const JIT: Option<JitType> = T::JIT;
     const RESOLVER: Option<crate::dsl::registry::DefaultResolver> = T::RESOLVER;
     const WIRE_COST: crate::ast::WireCost = crate::ast::WireCost::Config;
-    fn extract(v: &Value) -> Self { Config(T::extract(v)) }
-    fn inject(self) -> Value { self.0.inject() }
+    fn extract(v: &Value) -> Self {
+        Config(T::extract(v))
+    }
+    fn inject(self) -> Value {
+        self.0.inject()
+    }
 }
 
 // ── Resolved<R, T> — Handle wire with SRD-53 auto-resolver ────
@@ -566,7 +660,9 @@ pub struct Resolved<R: ResolverKind, T: 'static + Send + Sync> {
 
 impl<R: ResolverKind, T: 'static + Send + Sync> std::ops::Deref for Resolved<R, T> {
     type Target = T;
-    fn deref(&self) -> &T { &self.inner }
+    fn deref(&self) -> &T {
+        &self.inner
+    }
 }
 
 impl<R: ResolverKind, T: 'static + Send + Sync> Resolved<R, T> {
@@ -574,10 +670,15 @@ impl<R: ResolverKind, T: 'static + Send + Sync> Resolved<R, T> {
     /// and programmatic graph assembly that bypasses the DSL
     /// auto-resolver.
     pub fn from_arc(inner: std::sync::Arc<T>) -> Self {
-        Self { inner, _r: std::marker::PhantomData }
+        Self {
+            inner,
+            _r: std::marker::PhantomData,
+        }
     }
     /// Borrow the inner Arc.
-    pub fn as_arc(&self) -> &std::sync::Arc<T> { &self.inner }
+    pub fn as_arc(&self) -> &std::sync::Arc<T> {
+        &self.inner
+    }
 }
 
 /// Marker trait that names a kind of source-string auto-resolver
@@ -604,17 +705,23 @@ impl<R: ResolverKind, T: 'static + Send + Sync> Wire for Resolved<R, T> {
     fn extract(v: &Value) -> Self {
         match v {
             Value::Handle(arc) => {
-                let inner = arc.clone().downcast::<T>()
-                    .unwrap_or_else(|_| panic!(
+                let inner = arc.clone().downcast::<T>().unwrap_or_else(|_| {
+                    panic!(
                         "Wire<Resolved<_, {}>>::extract: Handle downcast failed",
-                        std::any::type_name::<T>()));
-                Resolved { inner, _r: std::marker::PhantomData }
+                        std::any::type_name::<T>()
+                    )
+                });
+                Resolved {
+                    inner,
+                    _r: std::marker::PhantomData,
+                }
             }
-            other => panic!(
-                "Wire<Resolved>::extract: expected Handle, got {other:?}"),
+            other => panic!("Wire<Resolved>::extract: expected Handle, got {other:?}"),
         }
     }
-    fn inject(self) -> Value { Value::Handle(self.inner) }
+    fn inject(self) -> Value {
+        Value::Handle(self.inner)
+    }
 }
 
 // =====================================================================
@@ -686,8 +793,7 @@ impl<C: ConstSource> ConstSource for Vec<C> {
     fn extract(arg: &ConstArg) -> Self {
         match arg {
             ConstArg::List(items) => items.iter().map(C::extract).collect(),
-            other => panic!(
-                "ConstSource<Vec<_>>::extract: expected List, got {other:?}"),
+            other => panic!("ConstSource<Vec<_>>::extract: expected List, got {other:?}"),
         }
     }
 }
@@ -744,11 +850,15 @@ pub struct Const<T>(pub T);
 
 impl<T> std::ops::Deref for Const<T> {
     type Target = T;
-    fn deref(&self) -> &T { &self.0 }
+    fn deref(&self) -> &T {
+        &self.0
+    }
 }
 
 impl<T> std::ops::DerefMut for Const<T> {
-    fn deref_mut(&mut self) -> &mut T { &mut self.0 }
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
 }
 
 /// SRD-80 PR B.6 — construction-time setup contract for nodes

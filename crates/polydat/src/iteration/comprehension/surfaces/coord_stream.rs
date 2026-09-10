@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use crate::iteration::comprehension::ir::{interpret, Program, TupleStream};
+use crate::iteration::comprehension::ir::{Program, TupleStream, interpret};
 use crate::iteration::comprehension::strategies::Tuple;
 
 /// First-order coordinate stream. Each `advance()` yields one

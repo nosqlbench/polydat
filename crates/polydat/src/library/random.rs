@@ -100,9 +100,7 @@ fn random_f64(
     category = Probability,
     purity = Nondeterministic("thread-local PRNG"),
 )]
-fn random_bytes(
-    #[poly_default(8u64)] size: crate::derive_support::Const<u64>,
-) -> Vec<u8> {
+fn random_bytes(#[poly_default(8u64)] size: crate::derive_support::Const<u64>) -> Vec<u8> {
     let sz = *size as usize;
     let mut buf = Vec::with_capacity(sz);
     while buf.len() < sz {
@@ -138,9 +136,7 @@ fn random_string(
     category = Probability,
     purity = Nondeterministic("thread-local PRNG"),
 )]
-fn random_bool(
-    #[poly_default(0.5f64)] probability: crate::derive_support::Const<f64>,
-) -> bool {
+fn random_bool(#[poly_default(0.5f64)] probability: crate::derive_support::Const<f64>) -> bool {
     let threshold = (probability.clamp(0.0, 1.0) * u64::MAX as f64) as u64;
     next_u64() < threshold
 }
@@ -174,7 +170,11 @@ fn hashed_lorem_extract(
     let extract_len = min_len + ((input as usize) % len_range);
     let max_offset = LOREM_IPSUM.len().saturating_sub(extract_len);
     let h2 = xxh3_64(&input.to_le_bytes());
-    let offset = if max_offset > 0 { (h2 as usize) % (max_offset + 1) } else { 0 };
+    let offset = if max_offset > 0 {
+        (h2 as usize) % (max_offset + 1)
+    } else {
+        0
+    };
     let end = (offset + extract_len).min(LOREM_IPSUM.len());
     // Align to char boundaries
     let start = LOREM_IPSUM.floor_char_boundary(offset);
@@ -215,8 +215,7 @@ impl HashedLines {
 fn hashed_line_to_string(
     input: u64,
     source: crate::derive_support::Const<&str>,
-    #[poly_const(HashedLines::split_lines, from = source)]
-    lines: &HashedLines,
+    #[poly_const(HashedLines::split_lines, from = source)] lines: &HashedLines,
 ) -> String {
     let _ = source;
     let idx = (input as usize) % lines.0.len();
@@ -225,13 +224,21 @@ fn hashed_line_to_string(
 
 impl HashedLineToString {
     /// From bundled first names.
-    pub fn names() -> Self { Self::new(NAMES.to_string()) }
+    pub fn names() -> Self {
+        Self::new(NAMES.to_string())
+    }
     /// From bundled last names.
-    pub fn lastnames() -> Self { Self::new(LASTNAMES.to_string()) }
+    pub fn lastnames() -> Self {
+        Self::new(LASTNAMES.to_string())
+    }
     /// From bundled careers.
-    pub fn careers() -> Self { Self::new(CAREERS.to_string()) }
+    pub fn careers() -> Self {
+        Self::new(CAREERS.to_string())
+    }
     /// From bundled company names.
-    pub fn companies() -> Self { Self::new(COMPANIES.to_string()) }
+    pub fn companies() -> Self {
+        Self::new(COMPANIES.to_string())
+    }
 }
 
 fn parse_charset(spec: &str) -> Vec<char> {
@@ -240,7 +247,9 @@ fn parse_charset(spec: &str) -> Vec<char> {
     let mut i = 0;
     while i < spec_chars.len() {
         if i + 2 < spec_chars.len() && spec_chars[i + 1] == '-' {
-            for c in spec_chars[i]..=spec_chars[i + 2] { chars.push(c); }
+            for c in spec_chars[i]..=spec_chars[i + 2] {
+                chars.push(c);
+            }
             i += 3;
         } else {
             chars.push(spec_chars[i]);

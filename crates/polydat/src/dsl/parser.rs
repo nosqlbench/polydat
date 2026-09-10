@@ -41,7 +41,7 @@
 //! No special runtime support is needed beyond `printf`.
 
 use crate::dsl::ast::*;
-use crate::dsl::lexer::{Token, TokenKind, Span};
+use crate::dsl::lexer::{Span, Token, TokenKind};
 
 /// Parser state.
 struct Parser {
@@ -76,7 +76,10 @@ impl Parser {
         } else {
             Err(format!(
                 "expected {:?}, got {:?} at line {}, col {}",
-                expected, self.peek(), self.span().line, self.span().col
+                expected,
+                self.peek(),
+                self.span().line,
+                self.span().col
             ))
         }
     }
@@ -115,7 +118,9 @@ impl Parser {
             }
             _ => Err(format!(
                 "expected identifier, got {:?} at line {}, col {}",
-                self.peek(), self.span().line, self.span().col
+                self.peek(),
+                self.span().line,
+                self.span().col
             )),
         }
     }
@@ -161,7 +166,9 @@ pub fn parse_expression(tokens: Vec<Token>) -> Result<Expr, String> {
         let span = parser.span();
         return Err(format!(
             "expected end of expression at line {}, col {}, got {:?}",
-            span.line, span.col, parser.peek()
+            span.line,
+            span.col,
+            parser.peek()
         ));
     }
     Ok(expr)
@@ -196,10 +203,14 @@ fn parse_statement_into(p: &mut Parser, out: &mut Vec<Statement>) -> Result<(), 
                 out.push(parse_cycle_binding(p)?);
             }
         }
-        _ => return Err(format!(
-            "unexpected token {:?} at line {}, col {}",
-            p.peek(), p.span().line, p.span().col
-        )),
+        _ => {
+            return Err(format!(
+                "unexpected token {:?} at line {}, col {}",
+                p.peek(),
+                p.span().line,
+                p.span().col
+            ));
+        }
     }
     Ok(())
 }
@@ -217,7 +228,12 @@ fn parse_for_statement(p: &mut Parser) -> Result<Statement, String> {
     let span = p.span();
     let text = match p.peek().clone() {
         TokenKind::For(text) => text,
-        other => return Err(format!("expected `for`, got {other:?} at line {}, col {}", span.line, span.col)),
+        other => {
+            return Err(format!(
+                "expected `for`, got {other:?} at line {}, col {}",
+                span.line, span.col
+            ));
+        }
     };
     p.advance();
     let source = for_source_from_text(&text, span, true)?;
@@ -261,13 +277,19 @@ fn parse_tile(p: &mut Parser) -> Result<Statement, String> {
                     options.open = expect_string(p, "delims open")?;
                     options.close = expect_string(p, "delims close")?;
                     if options.open.is_empty() || options.close.is_empty() {
-                        return Err(format!("tile '{name}' at line {}, col {}: delimiters must not be empty", span.line, span.col));
+                        return Err(format!(
+                            "tile '{name}' at line {}, col {}: delimiters must not be empty",
+                            span.line, span.col
+                        ));
                     }
                 }
                 "sigil" => {
                     options.sigil = expect_string(p, "sigil")?;
                     if options.sigil.is_empty() {
-                        return Err(format!("tile '{name}' at line {}, col {}: sigil must not be empty", span.line, span.col));
+                        return Err(format!(
+                            "tile '{name}' at line {}, col {}: sigil must not be empty",
+                            span.line, span.col
+                        ));
                     }
                 }
                 "strict" => options.strict = true,
@@ -276,7 +298,7 @@ fn parse_tile(p: &mut Parser) -> Result<Statement, String> {
                     return Err(format!(
                         "tile '{name}' at line {}, col {}: unknown option '{other}'; options are delims, sigil, strict, instring",
                         span.line, span.col
-                    ))
+                    ));
                 }
             }
             if matches!(p.peek(), TokenKind::Comma) {
@@ -310,7 +332,7 @@ fn parse_tile(p: &mut Parser) -> Result<Statement, String> {
             return Err(format!(
                 "tile '{name}' at line {}, col {}: expected a body (a `{{ }}` or `[ ]` block, `<<< >>>` heredoc, or string), got {other:?}",
                 span.line, span.col
-            ))
+            ));
         }
     };
     if let Some(enc) = &encoding
@@ -323,7 +345,15 @@ fn parse_tile(p: &mut Parser) -> Result<Statement, String> {
     }
     let pieces = super::tile::parse_template(&body, &options, span)
         .map_err(|e| format!("tile '{name}': {e}"))?;
-    Ok(Statement::Tile(TileDef { name, encoding, options, body_kind, body, pieces, span }))
+    Ok(Statement::Tile(TileDef {
+        name,
+        encoding,
+        options,
+        body_kind,
+        body,
+        pieces,
+        span,
+    }))
 }
 
 /// `name := polytile(...)` or `name := polytile_json(...)`: a tile
@@ -349,7 +379,12 @@ fn parse_polytile_binding(p: &mut Parser) -> Result<Statement, String> {
     p.expect(&TokenKind::ColonEq)?;
     let func = p.expect_ident()?;
     p.expect(&TokenKind::LParen)?;
-    let at = |what: &str| format!("{func} for '{name}' at line {}, col {}: {what}", span.line, span.col);
+    let at = |what: &str| {
+        format!(
+            "{func} for '{name}' at line {}, col {}: {what}",
+            span.line, span.col
+        )
+    };
     let encoding = if func == "polytile" {
         let e = expect_string(p, "the encoding").map_err(|m| at(&m))?;
         if !matches!(p.peek(), TokenKind::Comma) {
@@ -360,7 +395,8 @@ fn parse_polytile_binding(p: &mut Parser) -> Result<Statement, String> {
     } else {
         None
     };
-    let body = expect_string(p, "the template body (a string or a `<<< >>>` heredoc)").map_err(|m| at(&m))?;
+    let body = expect_string(p, "the template body (a string or a `<<< >>>` heredoc)")
+        .map_err(|m| at(&m))?;
     let mut options = TileOptions::default();
     while matches!(p.peek(), TokenKind::Comma) {
         p.advance();
@@ -368,7 +404,8 @@ fn parse_polytile_binding(p: &mut Parser) -> Result<Statement, String> {
             break;
         }
         let key = p.expect_ident()?;
-        p.expect(&TokenKind::Colon).map_err(|_| at(&format!("option `{key}` needs `: \"value\"`")))?;
+        p.expect(&TokenKind::Colon)
+            .map_err(|_| at(&format!("option `{key}` needs `: \"value\"`")))?;
         match key.as_str() {
             "open" => options.open = expect_string(p, "open").map_err(|m| at(&m))?,
             "close" => options.close = expect_string(p, "close").map_err(|m| at(&m))?,
@@ -381,7 +418,11 @@ fn parse_polytile_binding(p: &mut Parser) -> Result<Statement, String> {
                 let v = p.expect_ident().map_err(|m| at(&m))?;
                 options.in_string = v == "true";
             }
-            other => return Err(at(&format!("unknown option '{other}'; options are open, close, sigil, strict, instring"))),
+            other => {
+                return Err(at(&format!(
+                    "unknown option '{other}'; options are open, close, sigil, strict, instring"
+                )));
+            }
         }
     }
     p.expect(&TokenKind::RParen).map_err(|m| at(&m))?;
@@ -403,21 +444,36 @@ fn expect_string(p: &mut Parser, what: &str) -> Result<String, String> {
         }
         other => Err(format!(
             "expected a string for {what}, got {other:?} at line {}, col {}",
-            p.span().line, p.span().col
+            p.span().line,
+            p.span().col
         )),
     }
 }
 
 /// Classify and parse the text after `for`.
-pub(crate) fn for_source_from_text(text: &str, span: Span, allow_producer: bool) -> Result<ForSource, String> {
+pub(crate) fn for_source_from_text(
+    text: &str,
+    span: Span,
+    allow_producer: bool,
+) -> Result<ForSource, String> {
     if text.is_empty() {
-        return Err(format!("`for` at line {}, col {} has no comprehension", span.line, span.col));
+        return Err(format!(
+            "`for` at line {}, col {} has no comprehension",
+            span.line, span.col
+        ));
     }
     let is_ident = text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        && text.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+        && text
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
     if is_ident {
         if allow_producer {
-            return Ok(ForSource { text: text.to_string(), kind: ForSourceKind::Producer(text.to_string()), span });
+            return Ok(ForSource {
+                text: text.to_string(),
+                kind: ForSourceKind::Producer(text.to_string()),
+                span,
+            });
         }
         return Err(format!(
             "`for {text}` at line {}, col {}: a producer expression needs comprehension text such as `k in 1..10`, \
@@ -434,11 +490,18 @@ pub(crate) fn for_source_from_text(text: &str, span: Span, allow_producer: bool)
         let base = base.trim();
         let base_is_ident = !base.is_empty()
             && base.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-            && base.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+            && base
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
         if base_is_ident && (filter.is_some() || order.is_some()) {
             return Ok(ForSource {
                 text: text.to_string(),
-                kind: ForSourceKind::Derived { base: base.to_string(), filter, order },
+                kind: ForSourceKind::Derived {
+                    base: base.to_string(),
+                    filter,
+                    order,
+                },
                 span,
             });
         }
@@ -447,7 +510,11 @@ pub(crate) fn for_source_from_text(text: &str, span: Span, allow_producer: bool)
         .map_err(|e| format!("`for {text}` at line {}, col {}: {e}", span.line, span.col))?;
     let algebra = crate::iteration::comprehension::spec::legacy_to_algebra(&legacy)
         .map_err(|e| format!("`for {text}` at line {}, col {}: {e}", span.line, span.col))?;
-    Ok(ForSource { text: text.to_string(), kind: ForSourceKind::Comprehension(algebra), span })
+    Ok(ForSource {
+        text: text.to_string(),
+        kind: ForSourceKind::Comprehension(algebra),
+        span,
+    })
 }
 
 fn parse_pragma(p: &mut Parser) -> Result<Statement, String> {
@@ -463,7 +530,9 @@ fn is_module_def(p: &Parser) -> bool {
     // The param name accepts plain idents AND the soft keyword
     // `input` (canonical for cycle-driven modules — see
     // `nbrs/stdlib/modeling.polydat`).
-    if p.pos + 4 >= p.tokens.len() { return false; }
+    if p.pos + 4 >= p.tokens.len() {
+        return false;
+    }
     let third_is_param_name = matches!(
         &p.tokens[p.pos + 2].kind,
         TokenKind::Ident(_) | TokenKind::Input,
@@ -486,7 +555,10 @@ fn parse_module_def(p: &mut Parser) -> Result<Statement, String> {
         let pname = p.expect_ident()?;
         p.expect(&TokenKind::Colon)?;
         let ptype = p.expect_ident()?;
-        params.push(TypedParam { name: pname, typ: ptype });
+        params.push(TypedParam {
+            name: pname,
+            typ: ptype,
+        });
         if matches!(p.peek(), TokenKind::Comma) {
             p.advance();
         }
@@ -501,7 +573,10 @@ fn parse_module_def(p: &mut Parser) -> Result<Statement, String> {
         let oname = p.expect_ident()?;
         p.expect(&TokenKind::Colon)?;
         let otype = p.expect_ident()?;
-        outputs.push(TypedParam { name: oname, typ: otype });
+        outputs.push(TypedParam {
+            name: oname,
+            typ: otype,
+        });
         if matches!(p.peek(), TokenKind::Comma) {
             p.advance();
         }
@@ -544,7 +619,12 @@ fn parse_extern_port(p: &mut Parser) -> Result<Statement, String> {
         None
     };
 
-    Ok(Statement::ExternPort(ExternPort { name, typ, default, span }))
+    Ok(Statement::ExternPort(ExternPort {
+        name,
+        typ,
+        default,
+        span,
+    }))
 }
 
 /// Parse an `input` declaration. Two surface forms, both emit one
@@ -620,7 +700,12 @@ fn parse_cursor_decl(p: &mut Parser) -> Result<Statement, String> {
     } else {
         None
     };
-    Ok(Statement::Cursor(CursorDecl { name, constructor, over, span }))
+    Ok(Statement::Cursor(CursorDecl {
+        name,
+        constructor,
+        over,
+        span,
+    }))
 }
 
 /// `<modifier>* name := expr` where each modifier ∈ {const,
@@ -633,15 +718,16 @@ fn parse_modified_binding(p: &mut Parser) -> Result<Statement, String> {
 
     loop {
         let m = match p.peek() {
-            TokenKind::Const    => WireModifier::Const,
-            TokenKind::Shared   => WireModifier::Shared,
+            TokenKind::Const => WireModifier::Const,
+            TokenKind::Shared => WireModifier::Shared,
             TokenKind::Volatile => WireModifier::Volatile,
             _ => break,
         };
         if collected.contains(&m) {
             return Err(format!(
                 "duplicate `{m:?}` modifier at line {}, col {}",
-                p.span().line, p.span().col,
+                p.span().line,
+                p.span().col,
             ));
         }
         collected.push(m);
@@ -649,9 +735,7 @@ fn parse_modified_binding(p: &mut Parser) -> Result<Statement, String> {
     }
 
     let modifier = BindingModifier::try_from_iter(collected)
-        .map_err(|e| format!(
-            "{e} at line {}, col {}", start_span.line, start_span.col,
-        ))?;
+        .map_err(|e| format!("{e} at line {}, col {}", start_span.line, start_span.col,))?;
 
     match p.peek() {
         // Soft keywords (`input`, `cursor`, `over`) and regular
@@ -659,13 +743,13 @@ fn parse_modified_binding(p: &mut Parser) -> Result<Statement, String> {
         // soft-keyword recognition lives in `expect_ident`; this
         // guard just dispatches to the binding-with-modifier
         // path when the upcoming token can serve as an ident.
-        TokenKind::Ident(_)
-        | TokenKind::Input
-        | TokenKind::Cursor
-        | TokenKind::Over => parse_cycle_binding_with_modifier(p, modifier),
+        TokenKind::Ident(_) | TokenKind::Input | TokenKind::Cursor | TokenKind::Over => {
+            parse_cycle_binding_with_modifier(p, modifier)
+        }
         _ => Err(format!(
             "expected binding name after modifiers at line {}, col {}",
-            p.span().line, p.span().col
+            p.span().line,
+            p.span().col
         )),
     }
 }
@@ -675,7 +759,10 @@ fn parse_cycle_binding(p: &mut Parser) -> Result<Statement, String> {
     parse_cycle_binding_with_modifier(p, BindingModifier::NONE)
 }
 
-fn parse_cycle_binding_with_modifier(p: &mut Parser, modifier: BindingModifier) -> Result<Statement, String> {
+fn parse_cycle_binding_with_modifier(
+    p: &mut Parser,
+    modifier: BindingModifier,
+) -> Result<Statement, String> {
     let span = p.span();
     let name = p.expect_ident()?;
     // Optional type annotation — `shared name: f64 := expr`. Pins the
@@ -774,30 +861,34 @@ fn parse_expr_bp(p: &mut Parser, min_bp: u8) -> Result<Expr, String> {
 
     loop {
         let op = match p.peek() {
-            TokenKind::PipePipe  => Some((BinOpKind::Or,     1,  2)),
-            TokenKind::AmpAmp    => Some((BinOpKind::And,    3,  4)),
-            TokenKind::EqEq      => Some((BinOpKind::Eq,     5,  6)),
-            TokenKind::BangEq    => Some((BinOpKind::Ne,     5,  6)),
-            TokenKind::Lt        => Some((BinOpKind::Lt,     7,  8)),
-            TokenKind::Gt        => Some((BinOpKind::Gt,     7,  8)),
-            TokenKind::LtEq      => Some((BinOpKind::Le,     7,  8)),
-            TokenKind::GtEq      => Some((BinOpKind::Ge,     7,  8)),
-            TokenKind::Pipe      => Some((BinOpKind::BitOr,  9, 10)),
-            TokenKind::Caret     => Some((BinOpKind::BitXor,11, 12)),
-            TokenKind::Ampersand => Some((BinOpKind::BitAnd,13, 14)),
-            TokenKind::ShiftLeft => Some((BinOpKind::Shl,   15, 16)),
-            TokenKind::ShiftRight=> Some((BinOpKind::Shr,   15, 16)),
-            TokenKind::Plus      => Some((BinOpKind::Add,   17, 18)),
-            TokenKind::Minus     => Some((BinOpKind::Sub,   17, 18)),
-            TokenKind::Star      => Some((BinOpKind::Mul,   19, 20)),
-            TokenKind::Slash     => Some((BinOpKind::Div,   19, 20)),
-            TokenKind::Percent   => Some((BinOpKind::Mod,   19, 20)),
-            TokenKind::StarStar  => Some((BinOpKind::Pow,   22, 21)), // right-associative
+            TokenKind::PipePipe => Some((BinOpKind::Or, 1, 2)),
+            TokenKind::AmpAmp => Some((BinOpKind::And, 3, 4)),
+            TokenKind::EqEq => Some((BinOpKind::Eq, 5, 6)),
+            TokenKind::BangEq => Some((BinOpKind::Ne, 5, 6)),
+            TokenKind::Lt => Some((BinOpKind::Lt, 7, 8)),
+            TokenKind::Gt => Some((BinOpKind::Gt, 7, 8)),
+            TokenKind::LtEq => Some((BinOpKind::Le, 7, 8)),
+            TokenKind::GtEq => Some((BinOpKind::Ge, 7, 8)),
+            TokenKind::Pipe => Some((BinOpKind::BitOr, 9, 10)),
+            TokenKind::Caret => Some((BinOpKind::BitXor, 11, 12)),
+            TokenKind::Ampersand => Some((BinOpKind::BitAnd, 13, 14)),
+            TokenKind::ShiftLeft => Some((BinOpKind::Shl, 15, 16)),
+            TokenKind::ShiftRight => Some((BinOpKind::Shr, 15, 16)),
+            TokenKind::Plus => Some((BinOpKind::Add, 17, 18)),
+            TokenKind::Minus => Some((BinOpKind::Sub, 17, 18)),
+            TokenKind::Star => Some((BinOpKind::Mul, 19, 20)),
+            TokenKind::Slash => Some((BinOpKind::Div, 19, 20)),
+            TokenKind::Percent => Some((BinOpKind::Mod, 19, 20)),
+            TokenKind::StarStar => Some((BinOpKind::Pow, 22, 21)), // right-associative
             _ => None,
         };
 
-        let Some((op_kind, l_bp, r_bp)) = op else { break; };
-        if l_bp < min_bp { break; }
+        let Some((op_kind, l_bp, r_bp)) = op else {
+            break;
+        };
+        if l_bp < min_bp {
+            break;
+        }
 
         p.advance(); // consume operator token
         let rhs = parse_expr_bp(p, r_bp)?;
@@ -816,13 +907,11 @@ fn parse_postfix_as(p: &mut Parser, mut expr: Expr) -> Result<Expr, String> {
         p.advance(); // consume `as`
         let ty_name = match p.peek() {
             TokenKind::Ident(name) => name.clone(),
-            other => return Err(format!(
-                "expected a type name after `as`, found {other:?}")),
+            other => return Err(format!("expected a type name after `as`, found {other:?}")),
         };
         p.advance(); // consume the type name
         let port_type = crate::ast::PortType::from_keyword(&ty_name)
-            .ok_or_else(|| format!(
-                "unknown type `{ty_name}` in `... as {ty_name}` cast"))?;
+            .ok_or_else(|| format!("unknown type `{ty_name}` in `... as {ty_name}` cast"))?;
         expr = Expr::Cast(Box::new(expr), port_type, span);
     }
     Ok(expr)
@@ -859,7 +948,9 @@ fn parse_if_block(p: &mut Parser, span: Span) -> Result<Expr, String> {
             "expected `{{` to open the then-branch of an `if` expression, got {:?} at line {}, col {}. \
              Block form is `if <cond> {{ <then> }} else {{ <else> }}`; the call form `if(cond, a, b)` \
              is also accepted.",
-            p.peek(), p.span().line, p.span().col
+            p.peek(),
+            p.span().line,
+            p.span().col
         ));
     }
     p.advance();
@@ -867,13 +958,17 @@ fn parse_if_block(p: &mut Parser, span: Span) -> Result<Expr, String> {
     p.expect(&TokenKind::RBrace)?;
 
     match p.peek().clone() {
-        TokenKind::Ident(word) if word == "else" => { p.advance(); }
+        TokenKind::Ident(word) if word == "else" => {
+            p.advance();
+        }
         other => {
             return Err(format!(
                 "expected `else` after the then-branch of an `if` expression, got {:?} at line {}, col {}. \
                  `else` is required: a Polydat expression always produces a value, so there is no \
                  result for the false path without it.",
-                other, p.span().line, p.span().col
+                other,
+                p.span().line,
+                p.span().col
             ));
         }
     }
@@ -894,7 +989,9 @@ fn parse_if_block(p: &mut Parser, span: Span) -> Result<Expr, String> {
         other => {
             return Err(format!(
                 "expected `{{` or `if` after `else`, got {:?} at line {}, col {}",
-                other, p.span().line, p.span().col
+                other,
+                p.span().line,
+                p.span().col
             ));
         }
     };
@@ -947,9 +1044,7 @@ fn parse_atom(p: &mut Parser) -> Result<Expr, String> {
             p.advance();
             Ok(Expr::FloatLit(v, span))
         }
-        TokenKind::LBracket => {
-            parse_array_lit(p)
-        }
+        TokenKind::LBracket => parse_array_lit(p),
         TokenKind::For(text) => {
             p.advance();
             let source = for_source_from_text(&text, span, false)?;
@@ -1014,7 +1109,9 @@ fn parse_atom(p: &mut Parser) -> Result<Expr, String> {
         }
         _ => Err(format!(
             "expected expression, got {:?} at line {}, col {}",
-            p.peek(), span.line, span.col
+            p.peek(),
+            span.line,
+            span.col
         )),
     }
 }
@@ -1059,7 +1156,10 @@ fn parse_interpolated_string(s: String, span: Span) -> Expr {
         None => return Expr::StringLit(s, span), // unbalanced — leave alone
     };
 
-    if !segments.iter().any(|seg| matches!(seg, Segment::Placeholder(_))) {
+    if !segments
+        .iter()
+        .any(|seg| matches!(seg, Segment::Placeholder(_)))
+    {
         return Expr::StringLit(s, span);
     }
 
@@ -1092,7 +1192,11 @@ fn parse_interpolated_string(s: String, span: Span) -> Expr {
     for e in placeholder_exprs {
         args.push(Arg::Positional(e));
     }
-    Expr::Call(CallExpr { func: "printf".into(), args, span })
+    Expr::Call(CallExpr {
+        func: "printf".into(),
+        args,
+        span,
+    })
 }
 
 /// One piece of an interpolated string after segmentation.
@@ -1221,7 +1325,11 @@ fn parse_field_chain(p: &mut Parser, base: String, span: Span) -> Result<Expr, S
         source = format!("{source}__{field}");
         field = p.expect_ident()?;
     }
-    Ok(Expr::FieldAccess { source, field, span })
+    Ok(Expr::FieldAccess {
+        source,
+        field,
+        span,
+    })
 }
 
 /// Parse `name(args...)` — the name has already been consumed.
@@ -1325,8 +1433,10 @@ mod tests {
     fn parse_modifiers_in_any_order_yields_same_set() {
         let m1 = cycle_modifier_of(&parse_str("const shared x := 42"));
         let m2 = cycle_modifier_of(&parse_str("shared const x := 42"));
-        assert_eq!(m1, m2,
-            "ordering shouldn't matter: `const shared` and `shared const` collapse to the same set");
+        assert_eq!(
+            m1, m2,
+            "ordering shouldn't matter: `const shared` and `shared const` collapse to the same set"
+        );
         assert!(m1.is_const() && m1.is_shared());
     }
 
@@ -1339,8 +1449,10 @@ mod tests {
     #[test]
     fn parse_rejects_const_volatile_combo() {
         let err = parse_str_err("const volatile x := 42");
-        assert!(err.contains("const") && err.contains("volatile"),
-            "error should name the conflicting keywords: {err}");
+        assert!(
+            err.contains("const") && err.contains("volatile"),
+            "error should name the conflicting keywords: {err}"
+        );
     }
 
     #[test]
@@ -1353,7 +1465,10 @@ mod tests {
     #[test]
     fn parse_rejects_duplicate_modifier() {
         let err = parse_str_err("const const x := 42");
-        assert!(err.contains("duplicate"), "error should call out duplicate: {err}");
+        assert!(
+            err.contains("duplicate"),
+            "error should call out duplicate: {err}"
+        );
     }
 
     /// End-to-end: compile a tiny Polydat source with a `volatile`
@@ -1362,9 +1477,7 @@ mod tests {
     /// somehow filters the binding out of the output set.
     #[test]
     fn volatile_binding_compiles_to_named_output() {
-        let kernel = crate::dsl::compile_polydat(
-            "volatile y := 42\n"
-        ).expect("compile volatile y");
+        let kernel = crate::dsl::compile_polydat("volatile y := 42\n").expect("compile volatile y");
         let names = kernel.program().output_names();
         assert!(names.contains(&"y"), "output names: {names:?}");
         let m = kernel.program().output_modifier("y");
@@ -1441,7 +1554,10 @@ mod tests {
         // `input ()` is malformed — to declare zero inputs, omit the line.
         let tokens = crate::dsl::lexer::lex("input ()").unwrap();
         let err = parse(tokens).unwrap_err();
-        assert!(err.contains("empty"), "error should mention empty tuple: {err}");
+        assert!(
+            err.contains("empty"),
+            "error should mention empty tuple: {err}"
+        );
     }
 
     #[test]
@@ -1504,15 +1620,13 @@ mod tests {
     fn parse_named_args() {
         let f = parse_str("const lut := dist_normal(mean: 72.0, stddev: 5.0)");
         match &f.statements[0] {
-            Statement::Binding(b) => {
-                match &b.value {
-                    Expr::Call(c) => {
-                        assert!(matches!(&c.args[0], Arg::Named(n, _) if n == "mean"));
-                        assert!(matches!(&c.args[1], Arg::Named(n, _) if n == "stddev"));
-                    }
-                    _ => panic!("expected call"),
+            Statement::Binding(b) => match &b.value {
+                Expr::Call(c) => {
+                    assert!(matches!(&c.args[0], Arg::Named(n, _) if n == "mean"));
+                    assert!(matches!(&c.args[1], Arg::Named(n, _) if n == "stddev"));
                 }
-            }
+                _ => panic!("expected call"),
+            },
             _ => panic!("expected const binding"),
         }
     }
@@ -1714,12 +1828,10 @@ mod tests {
     fn parse_array_lit() {
         let f = parse_str("const weights := [60.0, 20.0, 15.0, 5.0]");
         match &f.statements[0] {
-            Statement::Binding(b) => {
-                match &b.value {
-                    Expr::ArrayLit(elems, _) => assert_eq!(elems.len(), 4),
-                    _ => panic!("expected array lit"),
-                }
-            }
+            Statement::Binding(b) => match &b.value {
+                Expr::ArrayLit(elems, _) => assert_eq!(elems.len(), 4),
+                _ => panic!("expected array lit"),
+            },
             _ => panic!("expected const binding"),
         }
     }
@@ -1728,22 +1840,20 @@ mod tests {
     fn parse_nested_call() {
         let f = parse_str("x := hash(interleave(a, b))");
         match &f.statements[0] {
-            Statement::Binding(b) => {
-                match &b.value {
-                    Expr::Call(c) => {
-                        assert_eq!(c.func, "hash");
-                        assert_eq!(c.args.len(), 1);
-                        match &c.args[0] {
-                            Arg::Positional(Expr::Call(inner)) => {
-                                assert_eq!(inner.func, "interleave");
-                                assert_eq!(inner.args.len(), 2);
-                            }
-                            _ => panic!("expected nested call"),
+            Statement::Binding(b) => match &b.value {
+                Expr::Call(c) => {
+                    assert_eq!(c.func, "hash");
+                    assert_eq!(c.args.len(), 1);
+                    match &c.args[0] {
+                        Arg::Positional(Expr::Call(inner)) => {
+                            assert_eq!(inner.func, "interleave");
+                            assert_eq!(inner.args.len(), 2);
                         }
+                        _ => panic!("expected nested call"),
                     }
-                    _ => panic!("expected call"),
                 }
-            }
+                _ => panic!("expected call"),
+            },
             _ => panic!("expected binding"),
         }
     }
@@ -1770,16 +1880,14 @@ mod tests {
     fn parse_mixed_positional_named() {
         let f = parse_str("const lut := dist_normal(72.0, 5.0, resolution: 2000)");
         match &f.statements[0] {
-            Statement::Binding(b) => {
-                match &b.value {
-                    Expr::Call(c) => {
-                        assert!(matches!(&c.args[0], Arg::Positional(_)));
-                        assert!(matches!(&c.args[1], Arg::Positional(_)));
-                        assert!(matches!(&c.args[2], Arg::Named(n, _) if n == "resolution"));
-                    }
-                    _ => panic!("expected call"),
+            Statement::Binding(b) => match &b.value {
+                Expr::Call(c) => {
+                    assert!(matches!(&c.args[0], Arg::Positional(_)));
+                    assert!(matches!(&c.args[1], Arg::Positional(_)));
+                    assert!(matches!(&c.args[2], Arg::Named(n, _) if n == "resolution"));
                 }
-            }
+                _ => panic!("expected call"),
+            },
             _ => panic!("expected const binding"),
         }
     }
@@ -1788,15 +1896,13 @@ mod tests {
     fn parse_simple_addition() {
         let f = parse_str("y := a + b");
         match &f.statements[0] {
-            Statement::Binding(b) => {
-                match &b.value {
-                    Expr::BinOp(lhs, BinOpKind::Add, rhs) => {
-                        assert!(matches!(**lhs, Expr::Ident(ref s, _) if s == "a"));
-                        assert!(matches!(**rhs, Expr::Ident(ref s, _) if s == "b"));
-                    }
-                    _ => panic!("expected BinOp Add, got {:?}", b.value),
+            Statement::Binding(b) => match &b.value {
+                Expr::BinOp(lhs, BinOpKind::Add, rhs) => {
+                    assert!(matches!(**lhs, Expr::Ident(ref s, _) if s == "a"));
+                    assert!(matches!(**rhs, Expr::Ident(ref s, _) if s == "b"));
                 }
-            }
+                _ => panic!("expected BinOp Add, got {:?}", b.value),
+            },
             _ => panic!("expected cycle binding"),
         }
     }
@@ -1806,21 +1912,19 @@ mod tests {
         // `a + b * c` should parse as `a + (b * c)`
         let f = parse_str("y := a + b * c");
         match &f.statements[0] {
-            Statement::Binding(b) => {
-                match &b.value {
-                    Expr::BinOp(lhs, BinOpKind::Add, rhs) => {
-                        assert!(matches!(**lhs, Expr::Ident(ref s, _) if s == "a"));
-                        match &**rhs {
-                            Expr::BinOp(rl, BinOpKind::Mul, rr) => {
-                                assert!(matches!(**rl, Expr::Ident(ref s, _) if s == "b"));
-                                assert!(matches!(**rr, Expr::Ident(ref s, _) if s == "c"));
-                            }
-                            _ => panic!("expected inner Mul"),
+            Statement::Binding(b) => match &b.value {
+                Expr::BinOp(lhs, BinOpKind::Add, rhs) => {
+                    assert!(matches!(**lhs, Expr::Ident(ref s, _) if s == "a"));
+                    match &**rhs {
+                        Expr::BinOp(rl, BinOpKind::Mul, rr) => {
+                            assert!(matches!(**rl, Expr::Ident(ref s, _) if s == "b"));
+                            assert!(matches!(**rr, Expr::Ident(ref s, _) if s == "c"));
                         }
+                        _ => panic!("expected inner Mul"),
                     }
-                    _ => panic!("expected outer Add"),
                 }
-            }
+                _ => panic!("expected outer Add"),
+            },
             _ => panic!("expected cycle binding"),
         }
     }
@@ -1846,14 +1950,16 @@ mod tests {
         }
     }
 
-
     /// Helper: unwrap a binding's value as the `if` call the block form desugars to.
     fn if_call(src: &str) -> CallExpr {
         let f = parse_str(src);
         match &f.statements[0] {
             Statement::Binding(b) => match &b.value {
                 Expr::Call(c) => {
-                    assert_eq!(c.func, "if", "block form must desugar to the `if` intrinsic");
+                    assert_eq!(
+                        c.func, "if",
+                        "block form must desugar to the `if` intrinsic"
+                    );
                     assert_eq!(c.args.len(), 3, "if intrinsic takes (cond, then, else)");
                     c.clone()
                 }
@@ -1883,10 +1989,20 @@ mod tests {
     #[test]
     fn if_block_accepts_expressions_in_condition_and_branches() {
         let c = if_call("y := if segments > 0 { total / segments } else { 0 }");
-        assert!(matches!(&c.args[0], Arg::Positional(Expr::BinOp(_, BinOpKind::Gt, _))),
-                "condition should parse as a full expression");
-        assert!(matches!(&c.args[1], Arg::Positional(Expr::BinOp(_, BinOpKind::Div, _))),
-                "then-branch should parse as a full expression");
+        assert!(
+            matches!(
+                &c.args[0],
+                Arg::Positional(Expr::BinOp(_, BinOpKind::Gt, _))
+            ),
+            "condition should parse as a full expression"
+        );
+        assert!(
+            matches!(
+                &c.args[1],
+                Arg::Positional(Expr::BinOp(_, BinOpKind::Div, _))
+            ),
+            "then-branch should parse as a full expression"
+        );
     }
 
     #[test]
@@ -1896,8 +2012,14 @@ mod tests {
         match &c.args[2] {
             Arg::Positional(Expr::Call(inner)) => {
                 assert_eq!(inner.func, "if");
-                assert!(matches!(&inner.args[1], Arg::Positional(Expr::IntLit(2, _))));
-                assert!(matches!(&inner.args[2], Arg::Positional(Expr::IntLit(3, _))));
+                assert!(matches!(
+                    &inner.args[1],
+                    Arg::Positional(Expr::IntLit(2, _))
+                ));
+                assert!(matches!(
+                    &inner.args[2],
+                    Arg::Positional(Expr::IntLit(3, _))
+                ));
             }
             other => panic!("expected nested if in else position, got {:?}", other),
         }
@@ -1930,27 +2052,33 @@ mod tests {
         // Every Polydat expression yields a value, so a one-armed if has no result
         // on the false path. The error must say that rather than failing cryptically.
         let err = parse_str_err("y := if c { a }");
-        assert!(err.contains("else"), "error should name the missing else: {}", err);
+        assert!(
+            err.contains("else"),
+            "error should name the missing else: {}",
+            err
+        );
     }
 
     #[test]
     fn if_block_reports_a_missing_brace_helpfully() {
         let err = parse_str_err("y := if c a else b");
-        assert!(err.contains("if <cond>"), "error should show the block form: {}", err);
+        assert!(
+            err.contains("if <cond>"),
+            "error should show the block form: {}",
+            err
+        );
     }
 
     #[test]
     fn parse_unary_negation() {
         let f = parse_str("y := -x");
         match &f.statements[0] {
-            Statement::Binding(b) => {
-                match &b.value {
-                    Expr::UnaryNeg(inner, _) => {
-                        assert!(matches!(**inner, Expr::Ident(ref s, _) if s == "x"));
-                    }
-                    _ => panic!("expected UnaryNeg"),
+            Statement::Binding(b) => match &b.value {
+                Expr::UnaryNeg(inner, _) => {
+                    assert!(matches!(**inner, Expr::Ident(ref s, _) if s == "x"));
                 }
-            }
+                _ => panic!("expected UnaryNeg"),
+            },
             _ => panic!("expected cycle binding"),
         }
     }
@@ -1960,19 +2088,17 @@ mod tests {
         // `sin(cycle * 0.25)` — infix inside function args
         let f = parse_str("y := sin(cycle * 0.25)");
         match &f.statements[0] {
-            Statement::Binding(b) => {
-                match &b.value {
-                    Expr::Call(c) => {
-                        assert_eq!(c.func, "sin");
-                        assert_eq!(c.args.len(), 1);
-                        match &c.args[0] {
-                            Arg::Positional(Expr::BinOp(_, BinOpKind::Mul, _)) => {}
-                            _ => panic!("expected Mul inside sin() arg"),
-                        }
+            Statement::Binding(b) => match &b.value {
+                Expr::Call(c) => {
+                    assert_eq!(c.func, "sin");
+                    assert_eq!(c.args.len(), 1);
+                    match &c.args[0] {
+                        Arg::Positional(Expr::BinOp(_, BinOpKind::Mul, _)) => {}
+                        _ => panic!("expected Mul inside sin() arg"),
                     }
-                    _ => panic!("expected call"),
                 }
-            }
+                _ => panic!("expected call"),
+            },
             _ => panic!("expected cycle binding"),
         }
     }
@@ -1982,21 +2108,19 @@ mod tests {
         // `a ** b ** c` should parse as `a ** (b ** c)` (right-associative)
         let f = parse_str("y := a ** b ** c");
         match &f.statements[0] {
-            Statement::Binding(b) => {
-                match &b.value {
-                    Expr::BinOp(lhs, BinOpKind::Pow, rhs) => {
-                        assert!(matches!(**lhs, Expr::Ident(ref s, _) if s == "a"));
-                        match &**rhs {
-                            Expr::BinOp(rl, BinOpKind::Pow, rr) => {
-                                assert!(matches!(**rl, Expr::Ident(ref s, _) if s == "b"));
-                                assert!(matches!(**rr, Expr::Ident(ref s, _) if s == "c"));
-                            }
-                            _ => panic!("expected inner Pow"),
+            Statement::Binding(b) => match &b.value {
+                Expr::BinOp(lhs, BinOpKind::Pow, rhs) => {
+                    assert!(matches!(**lhs, Expr::Ident(ref s, _) if s == "a"));
+                    match &**rhs {
+                        Expr::BinOp(rl, BinOpKind::Pow, rr) => {
+                            assert!(matches!(**rl, Expr::Ident(ref s, _) if s == "b"));
+                            assert!(matches!(**rr, Expr::Ident(ref s, _) if s == "c"));
                         }
+                        _ => panic!("expected inner Pow"),
                     }
-                    _ => panic!("expected outer Pow"),
                 }
-            }
+                _ => panic!("expected outer Pow"),
+            },
             _ => panic!("expected cycle binding"),
         }
     }
@@ -2006,17 +2130,13 @@ mod tests {
         // `-sin(x)` — unary negation of a function call
         let f = parse_str("y := -sin(x)");
         match &f.statements[0] {
-            Statement::Binding(b) => {
-                match &b.value {
-                    Expr::UnaryNeg(inner, _) => {
-                        match &**inner {
-                            Expr::Call(c) => assert_eq!(c.func, "sin"),
-                            _ => panic!("expected Call inside UnaryNeg"),
-                        }
-                    }
-                    _ => panic!("expected UnaryNeg"),
-                }
-            }
+            Statement::Binding(b) => match &b.value {
+                Expr::UnaryNeg(inner, _) => match &**inner {
+                    Expr::Call(c) => assert_eq!(c.func, "sin"),
+                    _ => panic!("expected Call inside UnaryNeg"),
+                },
+                _ => panic!("expected UnaryNeg"),
+            },
             _ => panic!("expected cycle binding"),
         }
     }
@@ -2036,15 +2156,13 @@ mod tests {
         // `x ** 2.0` parses as BinOp(x, Pow, 2.0)
         let f = parse_str("y := x ** 2.0");
         match &f.statements[0] {
-            Statement::Binding(b) => {
-                match &b.value {
-                    Expr::BinOp(lhs, BinOpKind::Pow, rhs) => {
-                        assert!(matches!(**lhs, Expr::Ident(ref s, _) if s == "x"));
-                        assert!(matches!(**rhs, Expr::FloatLit(v, _) if v == 2.0));
-                    }
-                    _ => panic!("expected BinOp Pow, got {:?}", b.value),
+            Statement::Binding(b) => match &b.value {
+                Expr::BinOp(lhs, BinOpKind::Pow, rhs) => {
+                    assert!(matches!(**lhs, Expr::Ident(ref s, _) if s == "x"));
+                    assert!(matches!(**rhs, Expr::FloatLit(v, _) if v == 2.0));
                 }
-            }
+                _ => panic!("expected BinOp Pow, got {:?}", b.value),
+            },
             _ => panic!("expected cycle binding"),
         }
     }
@@ -2054,15 +2172,13 @@ mod tests {
         // `a ^ b` parses as BinOp(a, BitXor, b)
         let f = parse_str("y := a ^ b");
         match &f.statements[0] {
-            Statement::Binding(b) => {
-                match &b.value {
-                    Expr::BinOp(lhs, BinOpKind::BitXor, rhs) => {
-                        assert!(matches!(**lhs, Expr::Ident(ref s, _) if s == "a"));
-                        assert!(matches!(**rhs, Expr::Ident(ref s, _) if s == "b"));
-                    }
-                    _ => panic!("expected BinOp BitXor, got {:?}", b.value),
+            Statement::Binding(b) => match &b.value {
+                Expr::BinOp(lhs, BinOpKind::BitXor, rhs) => {
+                    assert!(matches!(**lhs, Expr::Ident(ref s, _) if s == "a"));
+                    assert!(matches!(**rhs, Expr::Ident(ref s, _) if s == "b"));
                 }
-            }
+                _ => panic!("expected BinOp BitXor, got {:?}", b.value),
+            },
             _ => panic!("expected cycle binding"),
         }
     }
@@ -2093,15 +2209,13 @@ mod tests {
         // `a << 4` parses as BinOp(a, Shl, 4)
         let f = parse_str("y := a << 4");
         match &f.statements[0] {
-            Statement::Binding(b) => {
-                match &b.value {
-                    Expr::BinOp(lhs, BinOpKind::Shl, rhs) => {
-                        assert!(matches!(**lhs, Expr::Ident(ref s, _) if s == "a"));
-                        assert!(matches!(**rhs, Expr::IntLit(4, _)));
-                    }
-                    _ => panic!("expected BinOp Shl, got {:?}", b.value),
+            Statement::Binding(b) => match &b.value {
+                Expr::BinOp(lhs, BinOpKind::Shl, rhs) => {
+                    assert!(matches!(**lhs, Expr::Ident(ref s, _) if s == "a"));
+                    assert!(matches!(**rhs, Expr::IntLit(4, _)));
                 }
-            }
+                _ => panic!("expected BinOp Shl, got {:?}", b.value),
+            },
             _ => panic!("expected cycle binding"),
         }
     }
@@ -2192,14 +2306,12 @@ mod tests {
         // `!x` parses as UnaryBitNot(x)
         let f = parse_str("y := !x");
         match &f.statements[0] {
-            Statement::Binding(b) => {
-                match &b.value {
-                    Expr::UnaryBitNot(inner, _) => {
-                        assert!(matches!(**inner, Expr::Ident(ref s, _) if s == "x"));
-                    }
-                    _ => panic!("expected UnaryBitNot, got {:?}", b.value),
+            Statement::Binding(b) => match &b.value {
+                Expr::UnaryBitNot(inner, _) => {
+                    assert!(matches!(**inner, Expr::Ident(ref s, _) if s == "x"));
                 }
-            }
+                _ => panic!("expected UnaryBitNot, got {:?}", b.value),
+            },
             _ => panic!("expected cycle binding"),
         }
     }

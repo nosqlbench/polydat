@@ -9,10 +9,12 @@
 
 use std::collections::HashMap;
 
-use crate::compile::closures::{CompiledKernelRaw, CompiledKernelPush, CompiledKernelPull, CompiledKernelPushPull};
-use crate::compile::select::{self, GraphAnalysis, ProvMode, P2Engine};
-use crate::kernel::{PolydatKernel, PolydatProgram, WireSource};
 use crate::ast::{PolydatNode, PortType};
+use crate::compile::closures::{
+    CompiledKernelPull, CompiledKernelPush, CompiledKernelPushPull, CompiledKernelRaw,
+};
+use crate::compile::select::{self, GraphAnalysis, P2Engine, ProvMode};
+use crate::kernel::{PolydatKernel, PolydatProgram, WireSource};
 use crate::library::convert::{F64ToString, U64ToF64, U64ToString};
 use crate::library::json::JsonToStr;
 
@@ -78,26 +80,58 @@ impl std::fmt::Display for AssemblyError {
             AssemblyError::UnknownWire(name) => {
                 write!(f, "unknown wire: '{name}'\n\n")?;
                 writeln!(f, "  No node output or coordinate named '{name}' exists.")?;
-                write!(f, "  Check spelling, or add a node that produces this output.")
+                write!(
+                    f,
+                    "  Check spelling, or add a node that produces this output."
+                )
             }
             AssemblyError::TypeMismatch {
-                from_node, from_port, from_type, to_node, to_port, to_type,
+                from_node,
+                from_port,
+                from_type,
+                to_node,
+                to_port,
+                to_type,
             } => {
-                writeln!(f, "type mismatch: cannot connect {from_type} output to {to_type} input")?;
+                writeln!(
+                    f,
+                    "type mismatch: cannot connect {from_type} output to {to_type} input"
+                )?;
                 writeln!(f)?;
-                writeln!(f, "  {from_node} [{from_port}]  ──({from_type})──▶  {to_node} [{to_port}] expects {to_type}")?;
+                writeln!(
+                    f,
+                    "  {from_node} [{from_port}]  ──({from_type})──▶  {to_node} [{to_port}] expects {to_type}"
+                )?;
                 writeln!(f)?;
                 // Suggest auto-adapters that exist
                 let suggestion = match (from_type, to_type) {
-                    (PortType::U64, PortType::Str) => Some("This should auto-convert. If you see this, file a bug."),
-                    (PortType::F64, PortType::Str) => Some("This should auto-convert. If you see this, file a bug."),
-                    (PortType::U64, PortType::F64) => Some("This should auto-convert. If you see this, file a bug."),
-                    (PortType::U64, PortType::Bytes) => Some("Add u64_to_bytes() between them to convert."),
-                    (PortType::Str, PortType::Bytes) => Some("String cannot be directly used as bytes."),
-                    (PortType::U64, PortType::Json) => Some("Add to_json() between them to wrap as JSON."),
-                    (PortType::Str, PortType::Json) => Some("Add str_to_json() to parse the string as JSON."),
-                    (PortType::Bytes, PortType::Str) => Some("Add to_hex() or to_base64() to convert bytes to string."),
-                    (PortType::Bytes, PortType::U64) => Some("Bytes cannot be directly converted to u64."),
+                    (PortType::U64, PortType::Str) => {
+                        Some("This should auto-convert. If you see this, file a bug.")
+                    }
+                    (PortType::F64, PortType::Str) => {
+                        Some("This should auto-convert. If you see this, file a bug.")
+                    }
+                    (PortType::U64, PortType::F64) => {
+                        Some("This should auto-convert. If you see this, file a bug.")
+                    }
+                    (PortType::U64, PortType::Bytes) => {
+                        Some("Add u64_to_bytes() between them to convert.")
+                    }
+                    (PortType::Str, PortType::Bytes) => {
+                        Some("String cannot be directly used as bytes.")
+                    }
+                    (PortType::U64, PortType::Json) => {
+                        Some("Add to_json() between them to wrap as JSON.")
+                    }
+                    (PortType::Str, PortType::Json) => {
+                        Some("Add str_to_json() to parse the string as JSON.")
+                    }
+                    (PortType::Bytes, PortType::Str) => {
+                        Some("Add to_hex() or to_base64() to convert bytes to string.")
+                    }
+                    (PortType::Bytes, PortType::U64) => {
+                        Some("Bytes cannot be directly converted to u64.")
+                    }
                     _ => None,
                 };
                 if let Some(hint) = suggestion {
@@ -111,10 +145,17 @@ impl std::fmt::Display for AssemblyError {
             }
             AssemblyError::CycleDetected => {
                 write!(f, "cycle detected in DAG\n\n")?;
-                writeln!(f, "  The graph contains a loop. Polydat graphs must be acyclic")?;
+                writeln!(
+                    f,
+                    "  The graph contains a loop. Polydat graphs must be acyclic"
+                )?;
                 write!(f, "  (data flows in one direction only).")
             }
-            AssemblyError::ArityMismatch { node_name, expected, got } => {
+            AssemblyError::ArityMismatch {
+                node_name,
+                expected,
+                got,
+            } => {
                 write!(f, "wrong number of inputs for '{node_name}'\n\n")?;
                 writeln!(f, "  Expected {expected} input(s), but got {got}.")?;
                 if *got < *expected {
@@ -157,8 +198,10 @@ pub(crate) struct ResolvedDag {
 impl ResolvedDag {
     /// Coordinate input names (for P2/P3 kernels that use positional u64 buffers).
     fn input_names(&self) -> Vec<String> {
-        self.input_defs[..self.coord_count].iter()
-            .map(|d| d.name.clone()).collect()
+        self.input_defs[..self.coord_count]
+            .iter()
+            .map(|d| d.name.clone())
+            .collect()
     }
 }
 
@@ -195,7 +238,12 @@ fn slot_layout(resolved: &ResolvedDag) -> SlotLayout {
         }
         port_offsets.push(po);
     }
-    SlotLayout { input_starts, coord_slots, port_offsets, total_slots: next }
+    SlotLayout {
+        input_starts,
+        coord_slots,
+        port_offsets,
+        total_slots: next,
+    }
 }
 
 /// Compiled-op selection for one node: pure-scalar `compiled_u64`
@@ -209,7 +257,10 @@ fn node_step_op(
     node: &dyn crate::ast::PolydatNode,
     entry_base: usize,
     wire_types: &[PortType],
-) -> Option<(crate::compile::closures::StepOp, Vec<crate::ast::ScratchElem>)> {
+) -> Option<(
+    crate::compile::closures::StepOp,
+    Vec<crate::ast::ScratchElem>,
+)> {
     if let Some(op) = table_copy_op(node, entry_base) {
         return Some((crate::compile::closures::StepOp::U64(op), Vec::new()));
     }
@@ -222,9 +273,8 @@ fn node_step_op(
     if let Some(op) = identity_op(node) {
         return Some((crate::compile::closures::StepOp::U64(op), Vec::new()));
     }
-    node.compiled_slot().map(|kit| {
-        (crate::compile::closures::StepOp::Slot(kit.op), kit.scratch)
-    })
+    node.compiled_slot()
+        .map(|kit| (crate::compile::closures::StepOp::Slot(kit.op), kit.scratch))
 }
 
 /// The compiled form of a copy step (`identity`, or the compiler's own
@@ -234,10 +284,16 @@ fn node_step_op(
 /// re-enters the value rather than forwarding the upstream handle: the
 /// value is read from the installed table and written to this step's
 /// entry. Copies of every other color remain plain slot copies.
-pub(crate) fn table_copy_op(node: &dyn crate::ast::PolydatNode, entry_base: usize) -> Option<crate::ast::CompiledU64Op> {
+pub(crate) fn table_copy_op(
+    node: &dyn crate::ast::PolydatNode,
+    entry_base: usize,
+) -> Option<crate::ast::CompiledU64Op> {
     let meta = node.meta();
     let is_copy = meta.name == "identity" || meta.name.starts_with("__port_");
-    if !is_copy || meta.outs.len() != 1 || meta.outs[0].typ.handle_kind() != Some(crate::ast::HandleKind::Table) {
+    if !is_copy
+        || meta.outs.len() != 1
+        || meta.outs[0].typ.handle_kind() != Some(crate::ast::HandleKind::Table)
+    {
         return None;
     }
     Some(Box::new(move |inputs: &[u64], outputs: &mut [u64]| {
@@ -259,7 +315,9 @@ pub(crate) fn identity_op(node: &dyn crate::ast::PolydatNode) -> Option<crate::a
     if meta.outs[0].typ.slot_color() == crate::ast::SlotColor::Ref2 {
         return None;
     }
-    Some(Box::new(|inputs: &[u64], outputs: &mut [u64]| outputs.copy_from_slice(inputs)))
+    Some(Box::new(|inputs: &[u64], outputs: &mut [u64]| {
+        outputs.copy_from_slice(inputs)
+    }))
 }
 
 /// The `(slot, entry)` pairs of a node's table-kind output ports,
@@ -396,11 +454,7 @@ impl SlotLayout {
     /// bits stay coherent under multi-slot inputs (every slot of
     /// one input shares that input's dependents). Identity for
     /// all-scalar inputs.
-    fn expand_dependents(
-        &self,
-        resolved: &ResolvedDag,
-        deps: &[Vec<usize>],
-    ) -> Vec<Vec<usize>> {
+    fn expand_dependents(&self, resolved: &ResolvedDag, deps: &[Vec<usize>]) -> Vec<Vec<usize>> {
         let mut out = Vec::with_capacity(self.coord_slots);
         for (i, d) in resolved.input_defs.iter().enumerate() {
             for _ in 0..d.port_type.slot_width() {
@@ -474,7 +528,8 @@ impl PolydatAssembler {
     /// Create a new assembler with the given coordinate names.
     pub fn new(input_names: Vec<String>) -> Self {
         let coord_count = input_names.len();
-        let input_defs: Vec<crate::kernel::InputDef> = input_names.into_iter()
+        let input_defs: Vec<crate::kernel::InputDef> = input_names
+            .into_iter()
             .map(|name| crate::kernel::InputDef {
                 name,
                 default: crate::ast::Value::U64(0),
@@ -568,7 +623,13 @@ impl PolydatAssembler {
     /// §"Effectively-Const Nodes"): `IterationExtern` for slots
     /// populated by `materialize_wiring_from_outer`, `ExternalWrite` for slots
     /// written by capture extraction.
-    pub fn add_input(&mut self, name: impl Into<String>, default: crate::ast::Value, port_type: crate::ast::PortType, kind: crate::kernel::InputKind) -> &mut Self {
+    pub fn add_input(
+        &mut self,
+        name: impl Into<String>,
+        default: crate::ast::Value,
+        port_type: crate::ast::PortType,
+        kind: crate::kernel::InputKind,
+    ) -> &mut Self {
         self.input_defs.push(crate::kernel::InputDef {
             name: name.into(),
             default,
@@ -598,7 +659,8 @@ impl PolydatAssembler {
     /// ports; callers surface the absence as a loud diagnostic
     /// rather than silently substituting a default.
     pub fn node_output_type(&self, name: &str) -> Option<crate::ast::PortType> {
-        self.nodes.iter()
+        self.nodes
+            .iter()
             .find(|n| n.name == name)
             .and_then(|n| n.node.meta().outs.first())
             .map(|p| p.typ)
@@ -613,7 +675,8 @@ impl PolydatAssembler {
     ///
     /// Returns the first output port's `PortType` if the node exists.
     pub fn output_type(&self, name: &str) -> Option<PortType> {
-        self.nodes.iter()
+        self.nodes
+            .iter()
             .find(|pn| pn.name == name)
             .and_then(|pn| pn.node.meta().outs.first())
             .map(|port| port.typ)
@@ -621,7 +684,8 @@ impl PolydatAssembler {
 
     /// Look up the port type of a graph input by name.
     pub fn input_type(&self, name: &str) -> Option<PortType> {
-        self.input_defs.iter()
+        self.input_defs
+            .iter()
             .find(|d| d.name == name)
             .map(|d| d.port_type)
     }
@@ -633,7 +697,9 @@ impl PolydatAssembler {
     pub fn wire_type(&self, wire: &WireRef) -> Option<PortType> {
         match wire {
             WireRef::Input(name) => self.input_type(name),
-            WireRef::Node(name, port_idx) => self.nodes.iter()
+            WireRef::Node(name, port_idx) => self
+                .nodes
+                .iter()
                 .find(|pn| &pn.name == name)
                 .and_then(|pn| pn.node.meta().outs.get(*port_idx))
                 .map(|p| p.typ),
@@ -646,8 +712,12 @@ impl PolydatAssembler {
     }
 
     /// Compile with diagnostic event logging.
-    pub fn compile_with_log(self, mut log: Option<&mut crate::dsl::events::CompileEventLog>) -> Result<PolydatKernel, AssemblyError> {
-        let jit_mode = self.jit_mode
+    pub fn compile_with_log(
+        self,
+        mut log: Option<&mut crate::dsl::events::CompileEventLog>,
+    ) -> Result<PolydatKernel, AssemblyError> {
+        let jit_mode = self
+            .jit_mode
             .unwrap_or_else(crate::compile::cone::default_jit_mode);
         let mut resolved = self.resolve_with_log(log.as_deref_mut())?;
         crate::compile::cone::extract_jit_cones(&mut resolved, jit_mode);
@@ -666,7 +736,8 @@ impl PolydatAssembler {
             &resolved.context,
             log,
             false,
-        ).map_err(AssemblyError::Other)?;
+        )
+        .map_err(AssemblyError::Other)?;
         Ok(kernel)
     }
 
@@ -676,18 +747,24 @@ impl PolydatAssembler {
         if !strict {
             return self.compile();
         }
-        let jit_mode = self.jit_mode
+        let jit_mode = self
+            .jit_mode
             .unwrap_or_else(crate::compile::cone::default_jit_mode);
         let mut resolved = self.resolve()?;
         let _coord_names = resolved.input_names();
 
         // Strict: reject implicit type coercions (auto-inserted adapter nodes)
         // Adapters have names starting with "__" and containing type conversion hints
-        let adapter_count = resolved.nodes.iter()
+        let adapter_count = resolved
+            .nodes
+            .iter()
             .filter(|n| {
                 let name = &n.meta().name;
-                name.starts_with("__adapt_") || name.starts_with("__u64_to_") || name.starts_with("__f64_to_")
-                    || name.starts_with("__bool_to_") || name.starts_with("__str_to_")
+                name.starts_with("__adapt_")
+                    || name.starts_with("__u64_to_")
+                    || name.starts_with("__f64_to_")
+                    || name.starts_with("__bool_to_")
+                    || name.starts_with("__str_to_")
             })
             .count();
         if adapter_count > 0 {
@@ -712,7 +789,8 @@ impl PolydatAssembler {
             &resolved.context,
             None,
             true,
-        ).map_err(AssemblyError::Other)?;
+        )
+        .map_err(AssemblyError::Other)?;
         Ok(kernel)
     }
 
@@ -729,9 +807,16 @@ impl PolydatAssembler {
             match Self::build_p2_layout(&resolved) {
                 Some(r) => r,
                 // Fall back to Phase 1
-                None => return Err(Box::new(PolydatKernel::new(
-                    resolved.nodes, resolved.wiring, coord_names, resolved.output_map,
-                    &resolved.source, &resolved.context))),
+                None => {
+                    return Err(Box::new(PolydatKernel::new(
+                        resolved.nodes,
+                        resolved.wiring,
+                        coord_names,
+                        resolved.output_map,
+                        &resolved.source,
+                        &resolved.context,
+                    )));
+                }
             };
         let dependents = slot_layout(&resolved).expand_dependents(
             &resolved,
@@ -741,7 +826,13 @@ impl PolydatAssembler {
             ),
         );
         Ok(CompiledKernelPushPull::new(
-            coord_count, total_slots, steps, output_map, dependents, ref_slots, extras,
+            coord_count,
+            total_slots,
+            steps,
+            output_map,
+            dependents,
+            ref_slots,
+            extras,
         ))
     }
 
@@ -749,32 +840,71 @@ impl PolydatAssembler {
     pub fn try_compile_raw(self) -> Result<CompiledKernelRaw, Box<PolydatKernel>> {
         let resolved = match self.resolve() {
             Ok(r) => r,
-            Err(_) => return Err(Box::new(PolydatKernel::new(vec![], vec![], vec![], HashMap::new(), "", "(fallback)"))),
+            Err(_) => {
+                return Err(Box::new(PolydatKernel::new(
+                    vec![],
+                    vec![],
+                    vec![],
+                    HashMap::new(),
+                    "",
+                    "(fallback)",
+                )));
+            }
         };
         let coord_names = resolved.input_names();
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
             match Self::build_p2_layout(&resolved) {
                 Some(r) => r,
-                None => return Err(Box::new(PolydatKernel::new(
-                    resolved.nodes, resolved.wiring, coord_names, resolved.output_map,
-                    &resolved.source, &resolved.context))),
+                None => {
+                    return Err(Box::new(PolydatKernel::new(
+                        resolved.nodes,
+                        resolved.wiring,
+                        coord_names,
+                        resolved.output_map,
+                        &resolved.source,
+                        &resolved.context,
+                    )));
+                }
             };
-        Ok(CompiledKernelRaw::new(coord_count, total_slots, steps, output_map, ref_slots, extras))
+        Ok(CompiledKernelRaw::new(
+            coord_count,
+            total_slots,
+            steps,
+            output_map,
+            ref_slots,
+            extras,
+        ))
     }
 
     /// Phase 2 compilation with push-side provenance only (no cone guard).
     pub fn try_compile_push(self) -> Result<CompiledKernelPush, Box<PolydatKernel>> {
         let resolved = match self.resolve() {
             Ok(r) => r,
-            Err(_) => return Err(Box::new(PolydatKernel::new(vec![], vec![], vec![], HashMap::new(), "", "(fallback)"))),
+            Err(_) => {
+                return Err(Box::new(PolydatKernel::new(
+                    vec![],
+                    vec![],
+                    vec![],
+                    HashMap::new(),
+                    "",
+                    "(fallback)",
+                )));
+            }
         };
         let coord_names = resolved.input_names();
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
             match Self::build_p2_layout(&resolved) {
                 Some(r) => r,
-                None => return Err(Box::new(PolydatKernel::new(
-                    resolved.nodes, resolved.wiring, coord_names, resolved.output_map,
-                    &resolved.source, &resolved.context))),
+                None => {
+                    return Err(Box::new(PolydatKernel::new(
+                        resolved.nodes,
+                        resolved.wiring,
+                        coord_names,
+                        resolved.output_map,
+                        &resolved.source,
+                        &resolved.context,
+                    )));
+                }
             };
         let dependents = slot_layout(&resolved).expand_dependents(
             &resolved,
@@ -783,22 +913,46 @@ impl PolydatAssembler {
                 resolved.input_defs.len(),
             ),
         );
-        Ok(CompiledKernelPush::new(coord_count, total_slots, steps, output_map, dependents, ref_slots, extras))
+        Ok(CompiledKernelPush::new(
+            coord_count,
+            total_slots,
+            steps,
+            output_map,
+            dependents,
+            ref_slots,
+            extras,
+        ))
     }
 
     /// Phase 2 compilation with pull-side cone guard only (no per-node skip).
     pub fn try_compile_pull(self) -> Result<CompiledKernelPull, Box<PolydatKernel>> {
         let resolved = match self.resolve() {
             Ok(r) => r,
-            Err(_) => return Err(Box::new(PolydatKernel::new(vec![], vec![], vec![], HashMap::new(), "", "(fallback)"))),
+            Err(_) => {
+                return Err(Box::new(PolydatKernel::new(
+                    vec![],
+                    vec![],
+                    vec![],
+                    HashMap::new(),
+                    "",
+                    "(fallback)",
+                )));
+            }
         };
         let coord_names = resolved.input_names();
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
             match Self::build_p2_layout(&resolved) {
                 Some(r) => r,
-                None => return Err(Box::new(PolydatKernel::new(
-                    resolved.nodes, resolved.wiring, coord_names, resolved.output_map,
-                    &resolved.source, &resolved.context))),
+                None => {
+                    return Err(Box::new(PolydatKernel::new(
+                        resolved.nodes,
+                        resolved.wiring,
+                        coord_names,
+                        resolved.output_map,
+                        &resolved.source,
+                        &resolved.context,
+                    )));
+                }
             };
         let dependents = slot_layout(&resolved).expand_dependents(
             &resolved,
@@ -807,24 +961,36 @@ impl PolydatAssembler {
                 resolved.input_defs.len(),
             ),
         );
-        Ok(CompiledKernelPull::new(coord_count, total_slots, steps, output_map, &dependents, ref_slots, extras))
+        Ok(CompiledKernelPull::new(
+            coord_count,
+            total_slots,
+            steps,
+            output_map,
+            &dependents,
+            ref_slots,
+            extras,
+        ))
     }
 
     /// Shared: extract P2 compiled steps + slot layout from resolved DAG.
     /// Returns None if any node lacks a compiled form. Table-kind
     /// output slots are assigned value-table entries in node and port
     /// order (SRD 115 §3, §7).
-    fn build_p2_layout(
-        resolved: &ResolvedDag,
-    ) -> Option<P2Layout> {
+    fn build_p2_layout(resolved: &ResolvedDag) -> Option<P2Layout> {
         let layout = slot_layout(resolved);
 
         let mut compiled_ops = Vec::with_capacity(resolved.nodes.len());
         let mut extras = crate::compile::closures::P2Extras::default();
         for (node_idx, node) in resolved.nodes.iter().enumerate() {
             let entry_base = extras.table_entries.len();
-            compiled_ops.push(node_step_op(node.as_ref(), entry_base, &wire_types_of(resolved, node_idx))?);
-            extras.table_entries.extend(table_entries_of(resolved, &layout, node_idx, entry_base));
+            compiled_ops.push(node_step_op(
+                node.as_ref(),
+                entry_base,
+                &wire_types_of(resolved, node_idx),
+            )?);
+            extras
+                .table_entries
+                .extend(table_entries_of(resolved, &layout, node_idx, entry_base));
         }
         extras.handle_slots = layout.handle_slot_mask(resolved);
         // Externs take the entries after the nodes'; the core seeds and
@@ -859,14 +1025,19 @@ impl PolydatAssembler {
         let output_map = layout.named_outputs(resolved);
         let ref_slots = layout.ref_slot_mask(resolved);
 
-        Some((layout.coord_slots, layout.total_slots, steps, output_map, ref_slots, extras))
+        Some((
+            layout.coord_slots,
+            layout.total_slots,
+            steps,
+            output_map,
+            ref_slots,
+            extras,
+        ))
     }
 
     /// Shared: resolve nodes to JIT steps + slot layout.
     #[cfg(feature = "jit")]
-    pub(crate) fn build_jit_layout(resolved: &ResolvedDag)
-        -> Result<JitLayout, String>
-    {
+    pub(crate) fn build_jit_layout(resolved: &ResolvedDag) -> Result<JitLayout, String> {
         let layout = slot_layout(resolved);
 
         // P3 corollary (jit_boundary.md slot-state axioms): a
@@ -880,21 +1051,27 @@ impl PolydatAssembler {
                         return Err(format!(
                             "node '{}' has a Ref2-colored output ({}); pure-P3 \
                              kernels carry no reference slots",
-                            node.meta().name, out.typ
+                            node.meta().name,
+                            out.typ
                         ));
                     }
                     // SRD 115: a handle slot marshals across a boundary
                     // through the arena (byte strings) or the cycle
                     // value table (everything else), and raw readers
                     // refuse it; it is legal in a pure-P3 layout.
-                    crate::ast::SlotColor::Hdl1 | crate::ast::SlotColor::Imm1 | crate::ast::SlotColor::Imm2 => {}
+                    crate::ast::SlotColor::Hdl1
+                    | crate::ast::SlotColor::Imm1
+                    | crate::ast::SlotColor::Imm2 => {}
                 }
             }
         }
 
         let mut jit_steps = Vec::new();
         for (node_idx, node) in resolved.nodes.iter().enumerate() {
-            let jit_op = crate::compile::jit::classify_node_typed(node.as_ref(), &wire_types_of(resolved, node_idx));
+            let jit_op = crate::compile::jit::classify_node_typed(
+                node.as_ref(),
+                &wire_types_of(resolved, node_idx),
+            );
             jit_steps.push((
                 jit_op,
                 layout.input_slots(resolved, node_idx),
@@ -902,12 +1079,20 @@ impl PolydatAssembler {
             ));
         }
 
-        if jit_steps.iter().any(|(op, _, _)| matches!(op, crate::compile::jit::JitOp::Fallback)) {
+        if jit_steps
+            .iter()
+            .any(|(op, _, _)| matches!(op, crate::compile::jit::JitOp::Fallback))
+        {
             return Err("some nodes cannot be JIT-compiled".into());
         }
 
         let output_map = layout.named_outputs(resolved);
-        Ok((layout.coord_slots, layout.total_slots, jit_steps, output_map))
+        Ok((
+            layout.coord_slots,
+            layout.total_slots,
+            jit_steps,
+            output_map,
+        ))
     }
 
     /// The slots a pure-P3 kernel's raw readers must refuse and the
@@ -939,7 +1124,15 @@ impl PolydatAssembler {
             ),
         );
         let externs = Self::externs_of(&resolved)?;
-        let mut k = crate::compile::jit::compile_jit_push_pull(coord_count, total_slots, jit_steps, output_map, resolved.nodes, deps, externs)?;
+        let mut k = crate::compile::jit::compile_jit_push_pull(
+            coord_count,
+            total_slots,
+            jit_steps,
+            output_map,
+            resolved.nodes,
+            deps,
+            externs,
+        )?;
         k.set_slot_info(guard, types);
         Ok(k)
     }
@@ -948,7 +1141,12 @@ impl PolydatAssembler {
     /// gives them; table-kind entries are numbered by the kernel.
     fn externs_of(resolved: &ResolvedDag) -> Result<crate::compile::externs::Externs, String> {
         let layout = slot_layout(resolved);
-        crate::compile::externs::Externs::new(&resolved.input_defs, resolved.coord_count, &layout.input_starts, 0)
+        crate::compile::externs::Externs::new(
+            &resolved.input_defs,
+            resolved.coord_count,
+            &layout.input_starts,
+            0,
+        )
     }
 
     /// Phase 3 JIT: raw (no provenance).
@@ -959,7 +1157,14 @@ impl PolydatAssembler {
         let (coord_count, total_slots, jit_steps, output_map) = Self::build_jit_layout(&resolved)?;
         let (guard, types) = Self::jit_slot_info(&resolved);
         let externs = Self::externs_of(&resolved)?;
-        let mut k = crate::compile::jit::compile_jit_raw_with(coord_count, total_slots, jit_steps, output_map, resolved.nodes, externs)?;
+        let mut k = crate::compile::jit::compile_jit_raw_with(
+            coord_count,
+            total_slots,
+            jit_steps,
+            output_map,
+            resolved.nodes,
+            externs,
+        )?;
         k.set_slot_info(guard, types);
         Ok(k)
     }
@@ -999,7 +1204,15 @@ impl PolydatAssembler {
         );
         let (guard, types) = Self::jit_slot_info(&resolved);
         let externs = Self::externs_of(&resolved)?;
-        let mut k = crate::compile::jit::compile_jit_push(coord_count, total_slots, jit_steps, output_map, resolved.nodes, deps, externs)?;
+        let mut k = crate::compile::jit::compile_jit_push(
+            coord_count,
+            total_slots,
+            jit_steps,
+            output_map,
+            resolved.nodes,
+            deps,
+            externs,
+        )?;
         k.set_slot_info(guard, types);
         Ok(k)
     }
@@ -1019,7 +1232,15 @@ impl PolydatAssembler {
         );
         let (guard, types) = Self::jit_slot_info(&resolved);
         let externs = Self::externs_of(&resolved)?;
-        let mut k = crate::compile::jit::compile_jit_pull(coord_count, total_slots, jit_steps, output_map, resolved.nodes, &deps, externs)?;
+        let mut k = crate::compile::jit::compile_jit_pull(
+            coord_count,
+            total_slots,
+            jit_steps,
+            output_map,
+            resolved.nodes,
+            &deps,
+            externs,
+        )?;
         k.set_slot_info(guard, types);
         Ok(k)
     }
@@ -1031,7 +1252,8 @@ impl PolydatAssembler {
     pub fn auto_compile_p2(self) -> Result<(P2Engine, GraphAnalysis), String> {
         let resolved = self.resolve().map_err(|e| format!("{e}"))?;
         let _coord_names = resolved.input_names();
-        let analysis = select::analyze_graph(&resolved.nodes, &resolved.wiring, &resolved.output_map);
+        let analysis =
+            select::analyze_graph(&resolved.nodes, &resolved.wiring, &resolved.output_map);
         let mode = select::select_prov_mode(&analysis);
 
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
@@ -1043,7 +1265,14 @@ impl PolydatAssembler {
         // The state that wraps the engine owns the cycle (SRD 115 §4).
         let engine = match mode {
             ProvMode::Raw => {
-                let mut k = CompiledKernelRaw::new(coord_count, total_slots, steps, output_map, ref_slots, extras);
+                let mut k = CompiledKernelRaw::new(
+                    coord_count,
+                    total_slots,
+                    steps,
+                    output_map,
+                    ref_slots,
+                    extras,
+                );
                 k.set_owns_cycle(false);
                 P2Engine::Raw(k)
             }
@@ -1055,7 +1284,15 @@ impl PolydatAssembler {
                         resolved.input_defs.len(),
                     ),
                 );
-                let mut k = CompiledKernelPull::new(coord_count, total_slots, steps, output_map, &deps, ref_slots, extras);
+                let mut k = CompiledKernelPull::new(
+                    coord_count,
+                    total_slots,
+                    steps,
+                    output_map,
+                    &deps,
+                    ref_slots,
+                    extras,
+                );
                 k.set_owns_cycle(false);
                 P2Engine::Pull(k)
             }
@@ -1067,7 +1304,15 @@ impl PolydatAssembler {
                         resolved.input_defs.len(),
                     ),
                 );
-                let mut k = CompiledKernelPushPull::new(coord_count, total_slots, steps, output_map, deps, ref_slots, extras);
+                let mut k = CompiledKernelPushPull::new(
+                    coord_count,
+                    total_slots,
+                    steps,
+                    output_map,
+                    deps,
+                    ref_slots,
+                    extras,
+                );
                 k.set_owns_cycle(false);
                 P2Engine::PushPull(k)
             }
@@ -1080,17 +1325,24 @@ impl PolydatAssembler {
     pub fn auto_compile_p3(self) -> Result<(select::P3Engine, GraphAnalysis), String> {
         let resolved = self.resolve().map_err(|e| format!("{e}"))?;
         let _coord_names = resolved.input_names();
-        let analysis = select::analyze_graph(&resolved.nodes, &resolved.wiring, &resolved.output_map);
+        let analysis =
+            select::analyze_graph(&resolved.nodes, &resolved.wiring, &resolved.output_map);
         let mode = select::select_prov_mode(&analysis);
 
-        let (coord_count, total_slots, jit_steps, output_map) =
-            Self::build_jit_layout(&resolved)?;
+        let (coord_count, total_slots, jit_steps, output_map) = Self::build_jit_layout(&resolved)?;
 
         let engine = match mode {
             ProvMode::Raw => {
                 let (guard, types) = Self::jit_slot_info(&resolved);
                 let externs = Self::externs_of(&resolved)?;
-                let mut k = crate::compile::jit::compile_jit_raw_with(coord_count, total_slots, jit_steps, output_map, resolved.nodes, externs)?;
+                let mut k = crate::compile::jit::compile_jit_raw_with(
+                    coord_count,
+                    total_slots,
+                    jit_steps,
+                    output_map,
+                    resolved.nodes,
+                    externs,
+                )?;
                 k.set_slot_info(guard, types);
                 k.set_owns_cycle(false);
                 select::P3Engine::Raw(k)
@@ -1105,7 +1357,15 @@ impl PolydatAssembler {
                 );
                 let (guard, types) = Self::jit_slot_info(&resolved);
                 let externs = Self::externs_of(&resolved)?;
-                let mut k = crate::compile::jit::compile_jit_pull(coord_count, total_slots, jit_steps, output_map, resolved.nodes, &deps, externs)?;
+                let mut k = crate::compile::jit::compile_jit_pull(
+                    coord_count,
+                    total_slots,
+                    jit_steps,
+                    output_map,
+                    resolved.nodes,
+                    &deps,
+                    externs,
+                )?;
                 k.set_slot_info(guard, types);
                 k.set_owns_cycle(false);
                 select::P3Engine::Pull(k)
@@ -1120,7 +1380,15 @@ impl PolydatAssembler {
                 );
                 let (guard, types) = Self::jit_slot_info(&resolved);
                 let externs = Self::externs_of(&resolved)?;
-                let mut k = crate::compile::jit::compile_jit_push_pull(coord_count, total_slots, jit_steps, output_map, resolved.nodes, deps, externs)?;
+                let mut k = crate::compile::jit::compile_jit_push_pull(
+                    coord_count,
+                    total_slots,
+                    jit_steps,
+                    output_map,
+                    resolved.nodes,
+                    deps,
+                    externs,
+                )?;
                 k.set_slot_info(guard, types);
                 k.set_owns_cycle(false);
                 select::P3Engine::PushPull(k)
@@ -1140,7 +1408,8 @@ impl PolydatAssembler {
         let layout = slot_layout(&resolved);
 
         let output_map = layout.named_outputs(&resolved);
-        let input_widths: Vec<usize> = resolved.input_defs
+        let input_widths: Vec<usize> = resolved
+            .input_defs
             .iter()
             .map(|d| d.port_type.slot_width())
             .collect();
@@ -1170,7 +1439,10 @@ impl PolydatAssembler {
         self.resolve_with_log(None)
     }
 
-    fn resolve_with_log(self, mut log: Option<&mut crate::dsl::events::CompileEventLog>) -> Result<ResolvedDag, AssemblyError> {
+    fn resolve_with_log(
+        self,
+        mut log: Option<&mut crate::dsl::events::CompileEventLog>,
+    ) -> Result<ResolvedDag, AssemblyError> {
         // Build name → index map for nodes
         let mut name_to_idx: HashMap<String, usize> = HashMap::new();
         for (i, pn) in self.nodes.iter().enumerate() {
@@ -1271,7 +1543,8 @@ impl PolydatAssembler {
                 // escapes, and `^`-anchored regexes never match
                 // inside `create_statement` columns.
                 let node_name_for_typing = &all_nodes[node_idx].node.meta().name;
-                let skip_type_check = UNTYPED_VARIADIC_NODES.contains(&node_name_for_typing.as_str());
+                let skip_type_check =
+                    UNTYPED_VARIADIC_NODES.contains(&node_name_for_typing.as_str());
 
                 if skip_type_check || source_type == expected_type {
                     node_wiring.push(source);
@@ -1340,11 +1613,9 @@ impl PolydatAssembler {
                 let sink_port = &all_nodes[node_idx].node.meta().wire_inputs()[port_idx];
                 if let Some(constraint) = sink_port.constraint {
                     let last_source = node_wiring.last().expect("wire just pushed").clone();
-                    if strict_values && !value_constraint_proven(
-                        &all_nodes,
-                        &last_source,
-                        &constraint,
-                    ) {
+                    if strict_values
+                        && !value_constraint_proven(&all_nodes, &last_source, &constraint)
+                    {
                         let assert_name = format!("__assert_v_{assertion_count}");
                         assertion_count += 1;
                         let assert_idx = all_nodes.len();
@@ -1357,8 +1628,7 @@ impl PolydatAssembler {
                             log.push(crate::dsl::events::CompileEvent::AssertionInserted {
                                 from_node: from_name,
                                 to_node: all_nodes[node_idx].name.clone(),
-                                kind: format!("{:?} value-assert {:?}",
-                                    expected_type, &constraint),
+                                kind: format!("{:?} value-assert {:?}", expected_type, &constraint),
                             });
                         }
 
@@ -1380,8 +1650,7 @@ impl PolydatAssembler {
 
                         // Replace the just-pushed source with the
                         // assertion's output.
-                        *node_wiring.last_mut().unwrap() =
-                            WireSource::NodeOutput(assert_idx, 0);
+                        *node_wiring.last_mut().unwrap() = WireSource::NodeOutput(assert_idx, 0);
                     } else if let Some(ref mut log) = log {
                         let from_name = match wire_ref {
                             WireRef::Input(n) => n.clone(),
@@ -1431,16 +1700,15 @@ impl PolydatAssembler {
                 let mut output_nodes: Vec<usize> = Vec::new();
                 for wire_ref in self.outputs.values() {
                     if let WireRef::Node(node_name, _) = wire_ref
-                        && let Some(&idx) = all_name_to_idx.get(node_name) {
-                            output_nodes.push(idx);
-                        }
+                        && let Some(&idx) = all_name_to_idx.get(node_name)
+                    {
+                        output_nodes.push(idx);
+                    }
                 }
 
                 // Convert to Option<Box<dyn PolydatNode>> for the fusion pass.
-                let mut opt_nodes: Vec<Option<Box<dyn PolydatNode>>> = all_nodes
-                    .into_iter()
-                    .map(|pn| Some(pn.node))
-                    .collect();
+                let mut opt_nodes: Vec<Option<Box<dyn PolydatNode>>> =
+                    all_nodes.into_iter().map(|pn| Some(pn.node)).collect();
 
                 let fused_count = crate::compile::fusion::apply_fusions(
                     &mut opt_nodes,
@@ -1450,12 +1718,13 @@ impl PolydatAssembler {
                     &output_nodes,
                 );
                 if fused_count > 0
-                    && let Some(ref mut log) = log {
-                        log.push(crate::dsl::events::CompileEvent::FusionApplied {
-                            pattern: "subgraph".into(),
-                            nodes_replaced: fused_count,
-                        });
-                    }
+                    && let Some(ref mut log) = log
+                {
+                    log.push(crate::dsl::events::CompileEvent::FusionApplied {
+                        pattern: "subgraph".into(),
+                        nodes_replaced: fused_count,
+                    });
+                }
 
                 // Convert back, rebuilding PendingNode wrappers.
                 // Fused-away nodes (None) get placeholder names.
@@ -1468,7 +1737,11 @@ impl PolydatAssembler {
                             .find(|&(_, &idx)| idx == i)
                             .map(|(n, _)| n.clone())
                             .unwrap_or_else(|| format!("__removed_{i}")),
-                        node: opt.unwrap_or_else(|| Box::new(crate::library::identity::Identity::new(crate::ast::PortType::U64))),
+                        node: opt.unwrap_or_else(|| {
+                            Box::new(crate::library::identity::Identity::new(
+                                crate::ast::PortType::U64,
+                            ))
+                        }),
                         inputs: vec![], // wiring is in resolved_wiring
                     })
                     .collect();
@@ -1488,9 +1761,10 @@ impl PolydatAssembler {
             // Seed with output nodes
             for wire_ref in self.outputs.values() {
                 if let WireRef::Node(node_name, _) = wire_ref
-                    && let Some(&idx) = all_name_to_idx.get(node_name) {
-                        worklist.push(idx);
-                    }
+                    && let Some(&idx) = all_name_to_idx.get(node_name)
+                {
+                    worklist.push(idx);
+                }
             }
             // Side-effecting nodes are pinned alive regardless
             // of reachability from a declared output. `log_info`
@@ -1502,21 +1776,25 @@ impl PolydatAssembler {
             // any wiring shape (passthrough, captured-but-unused,
             // synthesised wrapper, etc.).
             for (idx, pn) in all_nodes.iter().enumerate() {
-                if matches!(pn.node.meta().name.as_str(),
-                    "log_debug" | "log_info" | "log_warn" | "log_error")
-                {
+                if matches!(
+                    pn.node.meta().name.as_str(),
+                    "log_debug" | "log_info" | "log_warn" | "log_error"
+                ) {
                     worklist.push(idx);
                 }
             }
             // Walk backward through wiring
             while let Some(idx) = worklist.pop() {
-                if reachable[idx] { continue; }
+                if reachable[idx] {
+                    continue;
+                }
                 reachable[idx] = true;
                 for source in &resolved_wiring[idx] {
                     if let WireSource::NodeOutput(upstream, _) = source
-                        && !reachable[*upstream] {
-                            worklist.push(*upstream);
-                        }
+                        && !reachable[*upstream]
+                    {
+                        worklist.push(*upstream);
+                    }
                 }
             }
         }
@@ -1527,7 +1805,9 @@ impl PolydatAssembler {
         let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); node_count];
 
         for (node_idx, wiring) in resolved_wiring.iter().enumerate() {
-            if !reachable[node_idx] { continue; }
+            if !reachable[node_idx] {
+                continue;
+            }
             for source in wiring {
                 if let WireSource::NodeOutput(upstream, _) = source {
                     in_degree[node_idx] += 1;
@@ -1560,10 +1840,8 @@ impl PolydatAssembler {
             old_to_new[old_idx] = new_idx;
         }
 
-        let mut sorted_nodes: Vec<Option<Box<dyn PolydatNode>>> = all_nodes
-            .into_iter()
-            .map(|pn| Some(pn.node))
-            .collect();
+        let mut sorted_nodes: Vec<Option<Box<dyn PolydatNode>>> =
+            all_nodes.into_iter().map(|pn| Some(pn.node)).collect();
 
         let final_nodes: Vec<Box<dyn PolydatNode>> = sorted_order
             .iter()
@@ -1610,7 +1888,9 @@ impl PolydatAssembler {
         // hard error under strict-values mode, matching the SRD 15
         // strict-wire constraint discipline.
         for f in crate::compile::roundtrip_lint::lint_type_round_trips(
-            &final_nodes, &final_wiring, &self.input_defs,
+            &final_nodes,
+            &final_wiring,
+            &self.input_defs,
         ) {
             if strict_values {
                 return Err(AssemblyError::Other(f.message()));
@@ -1673,9 +1953,7 @@ fn value_constraint_proven(
             // Conservative — any `__assert_v_*` upstream counts as
             // proof. A fancier analysis would compare constraint
             // shapes; for now, idempotency is good enough.
-            if meta.name.starts_with("__assert_v_")
-                || meta.name.starts_with("assert_")
-            {
+            if meta.name.starts_with("__assert_v_") || meta.name.starts_with("assert_") {
                 return true;
             }
             false
@@ -1701,9 +1979,7 @@ fn assertion_skip_reason(
             let meta = all_nodes[*idx].node.meta();
             if meta.wire_inputs().is_empty() {
                 "constant source already validated".into()
-            } else if meta.name.starts_with("__assert_v_")
-                || meta.name.starts_with("assert_")
-            {
+            } else if meta.name.starts_with("__assert_v_") || meta.name.starts_with("assert_") {
                 "upstream assertion".into()
             } else {
                 "no skip rule matched".into()
@@ -1763,16 +2039,13 @@ pub(crate) const UNTYPED_VARIADIC_NODES: &[&str] = &[
 
 pub fn auto_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>> {
     use crate::library::convert::{
-        BoolToStr, BoolToU64,
-        U32ToU64, U32ToI64, U32ToF64, U32ToString,
-        I32ToI64, I32ToF64, I32ToString,
-        I64ToF64, I64ToString,
-        F32ToF64, F32ToString,
+        BoolToStr, BoolToU64, F32ToF64, F32ToString, I32ToF64, I32ToI64, I32ToString, I64ToF64,
+        I64ToString, U32ToF64, U32ToI64, U32ToString, U32ToU64,
     };
     use crate::library::polyfill as P;
-    use crate::library::polyfill_narrow as N;
     use crate::library::polyfill_128 as W;
     use crate::library::polyfill_complete as C;
+    use crate::library::polyfill_narrow as N;
     match (from, to) {
         // ── Numeric widening (lossless) ─────────────────────────
         (PortType::U64, PortType::F64) => Some(Box::new(U64ToF64::new())),
@@ -1785,14 +2058,14 @@ pub fn auto_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>
         (PortType::F32, PortType::F64) => Some(Box::new(F32ToF64::new())),
 
         // ── X → Str (every type renders as a string) ────────────
-        (PortType::U64, PortType::Str)  => Some(Box::new(U64ToString::new())),
-        (PortType::F64, PortType::Str)  => Some(Box::new(F64ToString::new())),
+        (PortType::U64, PortType::Str) => Some(Box::new(U64ToString::new())),
+        (PortType::F64, PortType::Str) => Some(Box::new(F64ToString::new())),
         (PortType::Bool, PortType::Str) => Some(Box::new(BoolToStr::new())),
         (PortType::Json, PortType::Str) => Some(Box::new(JsonToStr::new())),
-        (PortType::U32, PortType::Str)  => Some(Box::new(U32ToString::new())),
-        (PortType::I32, PortType::Str)  => Some(Box::new(I32ToString::new())),
-        (PortType::I64, PortType::Str)  => Some(Box::new(I64ToString::new())),
-        (PortType::F32, PortType::Str)  => Some(Box::new(F32ToString::new())),
+        (PortType::U32, PortType::Str) => Some(Box::new(U32ToString::new())),
+        (PortType::I32, PortType::Str) => Some(Box::new(I32ToString::new())),
+        (PortType::I64, PortType::Str) => Some(Box::new(I64ToString::new())),
+        (PortType::F32, PortType::Str) => Some(Box::new(F32ToString::new())),
 
         // ── Bool ↔ numeric (always-defined; 1/0 mapping) ────────
         (PortType::Bool, PortType::U64) => Some(Box::new(BoolToU64::new())),
@@ -1801,7 +2074,9 @@ pub fn auto_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>
         (PortType::Bool, PortType::I32) => Some(Box::new(P::BoolToI32::new())),
         (PortType::Bool, PortType::F64) => Some(Box::new(P::BoolToF64::new())),
         (PortType::Bool, PortType::F32) => Some(Box::new(P::BoolToF32::new())),
-        (PortType::U64, PortType::Bool) => Some(Box::new(crate::library::convert::U64ToBool::new())),
+        (PortType::U64, PortType::Bool) => {
+            Some(Box::new(crate::library::convert::U64ToBool::new()))
+        }
         (PortType::U32, PortType::Bool) => Some(Box::new(P::U32ToBool::new())),
         (PortType::I64, PortType::Bool) => Some(Box::new(P::I64ToBool::new())),
         (PortType::I32, PortType::Bool) => Some(Box::new(P::I32ToBool::new())),
@@ -1809,12 +2084,12 @@ pub fn auto_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>
         (PortType::F32, PortType::Bool) => Some(Box::new(P::F32ToBool::new())),
 
         // ── X → Bytes (little-endian serialize, always-defined) ─
-        (PortType::U64, PortType::Bytes)  => Some(Box::new(P::U64ToBytes::new())),
-        (PortType::U32, PortType::Bytes)  => Some(Box::new(P::U32ToBytes::new())),
-        (PortType::I64, PortType::Bytes)  => Some(Box::new(P::I64ToBytes::new())),
-        (PortType::I32, PortType::Bytes)  => Some(Box::new(P::I32ToBytes::new())),
-        (PortType::F64, PortType::Bytes)  => Some(Box::new(P::F64ToBytes::new())),
-        (PortType::F32, PortType::Bytes)  => Some(Box::new(P::F32ToBytes::new())),
+        (PortType::U64, PortType::Bytes) => Some(Box::new(P::U64ToBytes::new())),
+        (PortType::U32, PortType::Bytes) => Some(Box::new(P::U32ToBytes::new())),
+        (PortType::I64, PortType::Bytes) => Some(Box::new(P::I64ToBytes::new())),
+        (PortType::I32, PortType::Bytes) => Some(Box::new(P::I32ToBytes::new())),
+        (PortType::F64, PortType::Bytes) => Some(Box::new(P::F64ToBytes::new())),
+        (PortType::F32, PortType::Bytes) => Some(Box::new(P::F32ToBytes::new())),
         (PortType::Bool, PortType::Bytes) => Some(Box::new(P::BoolToBytes::new())),
         (PortType::VecF32, PortType::Bytes) => Some(Box::new(P::VecF32ToBytes::new())),
         (PortType::VecI32, PortType::Bytes) => Some(Box::new(P::VecI32ToBytes::new())),
@@ -1822,10 +2097,10 @@ pub fn auto_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>
         // ── X → Json (integer / bool wraps; F* and VecF32 are
         //              boundary-only because non-finite floats
         //              aren't representable in JSON) ────────────
-        (PortType::U64, PortType::Json)  => Some(Box::new(P::U64ToJson::new())),
-        (PortType::U32, PortType::Json)  => Some(Box::new(P::U32ToJson::new())),
-        (PortType::I64, PortType::Json)  => Some(Box::new(P::I64ToJson::new())),
-        (PortType::I32, PortType::Json)  => Some(Box::new(P::I32ToJson::new())),
+        (PortType::U64, PortType::Json) => Some(Box::new(P::U64ToJson::new())),
+        (PortType::U32, PortType::Json) => Some(Box::new(P::U32ToJson::new())),
+        (PortType::I64, PortType::Json) => Some(Box::new(P::I64ToJson::new())),
+        (PortType::I32, PortType::Json) => Some(Box::new(P::I32ToJson::new())),
         (PortType::Bool, PortType::Json) => Some(Box::new(P::BoolToJson::new())),
         (PortType::VecI32, PortType::Json) => Some(Box::new(P::VecI32ToJson::new())),
 
@@ -1836,17 +2111,17 @@ pub fn auto_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>
         // Lossless widenings + Display renders + Bool maps + LE
         // byte / JSON wraps, mirroring the u32/i32/f32 rows.
         // (type_system_alignment.md §8.1)
-        (PortType::U8, PortType::U64)  => Some(Box::new(N::U8ToU64::new())),
-        (PortType::U8, PortType::U32)  => Some(Box::new(N::U8ToU32::new())),
-        (PortType::U8, PortType::U16)  => Some(Box::new(N::U8ToU16::new())),
-        (PortType::U8, PortType::F64)  => Some(Box::new(N::U8ToF64::new())),
+        (PortType::U8, PortType::U64) => Some(Box::new(N::U8ToU64::new())),
+        (PortType::U8, PortType::U32) => Some(Box::new(N::U8ToU32::new())),
+        (PortType::U8, PortType::U16) => Some(Box::new(N::U8ToU16::new())),
+        (PortType::U8, PortType::F64) => Some(Box::new(N::U8ToF64::new())),
         (PortType::U16, PortType::U64) => Some(Box::new(N::U16ToU64::new())),
         (PortType::U16, PortType::U32) => Some(Box::new(N::U16ToU32::new())),
         (PortType::U16, PortType::F64) => Some(Box::new(N::U16ToF64::new())),
-        (PortType::I8, PortType::I64)  => Some(Box::new(N::I8ToI64::new())),
-        (PortType::I8, PortType::I32)  => Some(Box::new(N::I8ToI32::new())),
-        (PortType::I8, PortType::I16)  => Some(Box::new(N::I8ToI16::new())),
-        (PortType::I8, PortType::F64)  => Some(Box::new(N::I8ToF64::new())),
+        (PortType::I8, PortType::I64) => Some(Box::new(N::I8ToI64::new())),
+        (PortType::I8, PortType::I32) => Some(Box::new(N::I8ToI32::new())),
+        (PortType::I8, PortType::I16) => Some(Box::new(N::I8ToI16::new())),
+        (PortType::I8, PortType::F64) => Some(Box::new(N::I8ToF64::new())),
         (PortType::I16, PortType::I64) => Some(Box::new(N::I16ToI64::new())),
         (PortType::I16, PortType::I32) => Some(Box::new(N::I16ToI32::new())),
         (PortType::I16, PortType::F64) => Some(Box::new(N::I16ToF64::new())),
@@ -1854,40 +2129,40 @@ pub fn auto_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>
         (PortType::F16, PortType::F64) => Some(Box::new(N::F16ToF64::new())),
         // Totality fills: unsigned → strictly-larger signed, and
         // narrow int → f32 (exact, magnitude ≤ 2^24). All class A.
-        (PortType::U8, PortType::I16)  => Some(Box::new(N::U8ToI16::new())),
-        (PortType::U8, PortType::I32)  => Some(Box::new(N::U8ToI32::new())),
-        (PortType::U8, PortType::I64)  => Some(Box::new(N::U8ToI64::new())),
-        (PortType::U8, PortType::F32)  => Some(Box::new(N::U8ToF32::new())),
+        (PortType::U8, PortType::I16) => Some(Box::new(N::U8ToI16::new())),
+        (PortType::U8, PortType::I32) => Some(Box::new(N::U8ToI32::new())),
+        (PortType::U8, PortType::I64) => Some(Box::new(N::U8ToI64::new())),
+        (PortType::U8, PortType::F32) => Some(Box::new(N::U8ToF32::new())),
         (PortType::U16, PortType::I32) => Some(Box::new(N::U16ToI32::new())),
         (PortType::U16, PortType::I64) => Some(Box::new(N::U16ToI64::new())),
         (PortType::U16, PortType::F32) => Some(Box::new(N::U16ToF32::new())),
-        (PortType::I8, PortType::F32)  => Some(Box::new(N::I8ToF32::new())),
+        (PortType::I8, PortType::F32) => Some(Box::new(N::I8ToF32::new())),
         (PortType::I16, PortType::F32) => Some(Box::new(N::I16ToF32::new())),
-        (PortType::U8, PortType::F16)  => Some(Box::new(N::U8ToF16::new())),
-        (PortType::I8, PortType::F16)  => Some(Box::new(N::I8ToF16::new())),
-        (PortType::U8, PortType::Str)  => Some(Box::new(N::U8ToString::new())),
+        (PortType::U8, PortType::F16) => Some(Box::new(N::U8ToF16::new())),
+        (PortType::I8, PortType::F16) => Some(Box::new(N::I8ToF16::new())),
+        (PortType::U8, PortType::Str) => Some(Box::new(N::U8ToString::new())),
         (PortType::U16, PortType::Str) => Some(Box::new(N::U16ToString::new())),
-        (PortType::I8, PortType::Str)  => Some(Box::new(N::I8ToString::new())),
+        (PortType::I8, PortType::Str) => Some(Box::new(N::I8ToString::new())),
         (PortType::I16, PortType::Str) => Some(Box::new(N::I16ToString::new())),
         (PortType::F16, PortType::Str) => Some(Box::new(N::F16ToString::new())),
-        (PortType::Bool, PortType::U8)  => Some(Box::new(N::BoolToU8::new())),
+        (PortType::Bool, PortType::U8) => Some(Box::new(N::BoolToU8::new())),
         (PortType::Bool, PortType::U16) => Some(Box::new(N::BoolToU16::new())),
-        (PortType::Bool, PortType::I8)  => Some(Box::new(N::BoolToI8::new())),
+        (PortType::Bool, PortType::I8) => Some(Box::new(N::BoolToI8::new())),
         (PortType::Bool, PortType::I16) => Some(Box::new(N::BoolToI16::new())),
         (PortType::Bool, PortType::F16) => Some(Box::new(N::BoolToF16::new())),
-        (PortType::U8, PortType::Bool)  => Some(Box::new(N::U8ToBool::new())),
+        (PortType::U8, PortType::Bool) => Some(Box::new(N::U8ToBool::new())),
         (PortType::U16, PortType::Bool) => Some(Box::new(N::U16ToBool::new())),
-        (PortType::I8, PortType::Bool)  => Some(Box::new(N::I8ToBool::new())),
+        (PortType::I8, PortType::Bool) => Some(Box::new(N::I8ToBool::new())),
         (PortType::I16, PortType::Bool) => Some(Box::new(N::I16ToBool::new())),
         (PortType::F16, PortType::Bool) => Some(Box::new(N::F16ToBool::new())),
-        (PortType::U8, PortType::Bytes)  => Some(Box::new(N::U8ToBytes::new())),
+        (PortType::U8, PortType::Bytes) => Some(Box::new(N::U8ToBytes::new())),
         (PortType::U16, PortType::Bytes) => Some(Box::new(N::U16ToBytes::new())),
-        (PortType::I8, PortType::Bytes)  => Some(Box::new(N::I8ToBytes::new())),
+        (PortType::I8, PortType::Bytes) => Some(Box::new(N::I8ToBytes::new())),
         (PortType::I16, PortType::Bytes) => Some(Box::new(N::I16ToBytes::new())),
         (PortType::F16, PortType::Bytes) => Some(Box::new(N::F16ToBytes::new())),
-        (PortType::U8, PortType::Json)  => Some(Box::new(N::U8ToJson::new())),
+        (PortType::U8, PortType::Json) => Some(Box::new(N::U8ToJson::new())),
         (PortType::U16, PortType::Json) => Some(Box::new(N::U16ToJson::new())),
-        (PortType::I8, PortType::Json)  => Some(Box::new(N::I8ToJson::new())),
+        (PortType::I8, PortType::Json) => Some(Box::new(N::I8ToJson::new())),
         (PortType::I16, PortType::Json) => Some(Box::new(N::I16ToJson::new())),
 
         // ── 128-bit integers (cranelift I128) ───────────────────
@@ -1901,13 +2176,13 @@ pub fn auto_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>
         // into the 128-bit carriers (unsigned → both signednesses,
         // signed → i128), `bool` widens to both, and the nonzero
         // test `128 → bool` is total. All class A.
-        (PortType::U8, PortType::U128)  => Some(Box::new(W::U8ToU128::new())),
-        (PortType::U8, PortType::I128)  => Some(Box::new(W::U8ToI128::new())),
+        (PortType::U8, PortType::U128) => Some(Box::new(W::U8ToU128::new())),
+        (PortType::U8, PortType::I128) => Some(Box::new(W::U8ToI128::new())),
         (PortType::U16, PortType::U128) => Some(Box::new(W::U16ToU128::new())),
         (PortType::U16, PortType::I128) => Some(Box::new(W::U16ToI128::new())),
         (PortType::U32, PortType::U128) => Some(Box::new(W::U32ToU128::new())),
         (PortType::U32, PortType::I128) => Some(Box::new(W::U32ToI128::new())),
-        (PortType::I8, PortType::I128)  => Some(Box::new(W::I8ToI128::new())),
+        (PortType::I8, PortType::I128) => Some(Box::new(W::I8ToI128::new())),
         (PortType::I16, PortType::I128) => Some(Box::new(W::I16ToI128::new())),
         (PortType::I32, PortType::I128) => Some(Box::new(W::I32ToI128::new())),
         (PortType::Bool, PortType::U128) => Some(Box::new(W::BoolToU128::new())),
@@ -2003,11 +2278,11 @@ pub fn boundary_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatN
     if let Some(adapter) = auto_adapter(from, to) {
         return Some(adapter);
     }
-    use crate::library::convert::{StrToBool, StrToU64, StrToF64};
+    use crate::library::convert::{StrToBool, StrToF64, StrToU64};
     use crate::library::polyfill as P;
-    use crate::library::polyfill_narrow as N;
     use crate::library::polyfill_128 as W;
     use crate::library::polyfill_complete as C;
+    use crate::library::polyfill_narrow as N;
     match (from, to) {
         // ── Numeric narrowings + non-widening casts ─────────────
         (PortType::U64, PortType::U32) => Some(Box::new(P::U64ToU32::new())),
@@ -2034,40 +2309,40 @@ pub fn boundary_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatN
         (PortType::F32, PortType::I32) => Some(Box::new(P::F32ToI32::new())),
 
         // ── Str → X parsers (boundary-only: panic on unparseable)
-        (PortType::Str, PortType::Bool)   => Some(Box::new(StrToBool::new())),
-        (PortType::Str, PortType::U64)    => Some(Box::new(StrToU64::new())),
-        (PortType::Str, PortType::F64)    => Some(Box::new(StrToF64::new())),
-        (PortType::Str, PortType::U32)    => Some(Box::new(P::StrToU32::new())),
-        (PortType::Str, PortType::I64)    => Some(Box::new(P::StrToI64::new())),
-        (PortType::Str, PortType::I32)    => Some(Box::new(P::StrToI32::new())),
-        (PortType::Str, PortType::F32)    => Some(Box::new(P::StrToF32::new())),
-        (PortType::Str, PortType::Bytes)  => Some(Box::new(P::StrToBytes::new())),
-        (PortType::Str, PortType::Json)   => Some(Box::new(P::StrToJson::new())),
+        (PortType::Str, PortType::Bool) => Some(Box::new(StrToBool::new())),
+        (PortType::Str, PortType::U64) => Some(Box::new(StrToU64::new())),
+        (PortType::Str, PortType::F64) => Some(Box::new(StrToF64::new())),
+        (PortType::Str, PortType::U32) => Some(Box::new(P::StrToU32::new())),
+        (PortType::Str, PortType::I64) => Some(Box::new(P::StrToI64::new())),
+        (PortType::Str, PortType::I32) => Some(Box::new(P::StrToI32::new())),
+        (PortType::Str, PortType::F32) => Some(Box::new(P::StrToF32::new())),
+        (PortType::Str, PortType::Bytes) => Some(Box::new(P::StrToBytes::new())),
+        (PortType::Str, PortType::Json) => Some(Box::new(P::StrToJson::new())),
         (PortType::Str, PortType::VecF32) => Some(Box::new(P::StrToVecF32::new())),
         (PortType::Str, PortType::VecI32) => Some(Box::new(P::StrToVecI32::new())),
 
         // ── Bytes → X (length-checked, little-endian) ───────────
-        (PortType::Bytes, PortType::U64)    => Some(Box::new(P::BytesToU64::new())),
-        (PortType::Bytes, PortType::U32)    => Some(Box::new(P::BytesToU32::new())),
-        (PortType::Bytes, PortType::I64)    => Some(Box::new(P::BytesToI64::new())),
-        (PortType::Bytes, PortType::I32)    => Some(Box::new(P::BytesToI32::new())),
-        (PortType::Bytes, PortType::F64)    => Some(Box::new(P::BytesToF64::new())),
-        (PortType::Bytes, PortType::F32)    => Some(Box::new(P::BytesToF32::new())),
-        (PortType::Bytes, PortType::Bool)   => Some(Box::new(P::BytesToBool::new())),
-        (PortType::Bytes, PortType::Str)    => Some(Box::new(P::BytesToStr::new())),
-        (PortType::Bytes, PortType::Json)   => Some(Box::new(P::BytesToJson::new())),
+        (PortType::Bytes, PortType::U64) => Some(Box::new(P::BytesToU64::new())),
+        (PortType::Bytes, PortType::U32) => Some(Box::new(P::BytesToU32::new())),
+        (PortType::Bytes, PortType::I64) => Some(Box::new(P::BytesToI64::new())),
+        (PortType::Bytes, PortType::I32) => Some(Box::new(P::BytesToI32::new())),
+        (PortType::Bytes, PortType::F64) => Some(Box::new(P::BytesToF64::new())),
+        (PortType::Bytes, PortType::F32) => Some(Box::new(P::BytesToF32::new())),
+        (PortType::Bytes, PortType::Bool) => Some(Box::new(P::BytesToBool::new())),
+        (PortType::Bytes, PortType::Str) => Some(Box::new(P::BytesToStr::new())),
+        (PortType::Bytes, PortType::Json) => Some(Box::new(P::BytesToJson::new())),
         (PortType::Bytes, PortType::VecF32) => Some(Box::new(P::BytesToVecF32::new())),
         (PortType::Bytes, PortType::VecI32) => Some(Box::new(P::BytesToVecI32::new())),
 
         // ── Json → X (shape-checked) ────────────────────────────
-        (PortType::Json, PortType::U64)    => Some(Box::new(P::JsonToU64::new())),
-        (PortType::Json, PortType::U32)    => Some(Box::new(P::JsonToU32::new())),
-        (PortType::Json, PortType::I64)    => Some(Box::new(P::JsonToI64::new())),
-        (PortType::Json, PortType::I32)    => Some(Box::new(P::JsonToI32::new())),
-        (PortType::Json, PortType::F64)    => Some(Box::new(P::JsonToF64::new())),
-        (PortType::Json, PortType::F32)    => Some(Box::new(P::JsonToF32::new())),
-        (PortType::Json, PortType::Bool)   => Some(Box::new(P::JsonToBool::new())),
-        (PortType::Json, PortType::Bytes)  => Some(Box::new(P::JsonToBytes::new())),
+        (PortType::Json, PortType::U64) => Some(Box::new(P::JsonToU64::new())),
+        (PortType::Json, PortType::U32) => Some(Box::new(P::JsonToU32::new())),
+        (PortType::Json, PortType::I64) => Some(Box::new(P::JsonToI64::new())),
+        (PortType::Json, PortType::I32) => Some(Box::new(P::JsonToI32::new())),
+        (PortType::Json, PortType::F64) => Some(Box::new(P::JsonToF64::new())),
+        (PortType::Json, PortType::F32) => Some(Box::new(P::JsonToF32::new())),
+        (PortType::Json, PortType::Bool) => Some(Box::new(P::JsonToBool::new())),
+        (PortType::Json, PortType::Bytes) => Some(Box::new(P::JsonToBytes::new())),
         (PortType::Json, PortType::VecF32) => Some(Box::new(P::JsonToVecF32::new())),
         (PortType::Json, PortType::VecI32) => Some(Box::new(P::JsonToVecI32::new())),
 
@@ -2075,7 +2350,7 @@ pub fn boundary_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatN
         (PortType::F64, PortType::Json) => Some(Box::new(P::F64ToJson::new())),
         (PortType::F32, PortType::Json) => Some(Box::new(P::F32ToJson::new())),
         (PortType::VecF32, PortType::Json) => Some(Box::new(P::VecF32ToJson::new())),
-        (PortType::VecF32, PortType::Str)  => Some(Box::new(P::VecF32ToStr::new())),
+        (PortType::VecF32, PortType::Str) => Some(Box::new(P::VecF32ToStr::new())),
 
         // ── Vec ↔ Vec (lossy round) ─────────────────────────────
         (PortType::VecF32, PortType::VecI32) => Some(Box::new(P::VecF32ToVecI32::new())),
@@ -2083,19 +2358,19 @@ pub fn boundary_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatN
         // ── Narrow cranelift widths (u8/i8/u16/i16/f16) ─────────
         // Range-checked narrowings + parsers + shape-checked
         // extractors, mirroring the u32/i32/f32 rows.
-        (PortType::U64, PortType::U8)  => Some(Box::new(N::U64ToU8::new())),
-        (PortType::U32, PortType::U8)  => Some(Box::new(N::U32ToU8::new())),
-        (PortType::U16, PortType::U8)  => Some(Box::new(N::U16ToU8::new())),
-        (PortType::I64, PortType::U8)  => Some(Box::new(N::I64ToU8::new())),
-        (PortType::F64, PortType::U8)  => Some(Box::new(N::F64ToU8::new())),
+        (PortType::U64, PortType::U8) => Some(Box::new(N::U64ToU8::new())),
+        (PortType::U32, PortType::U8) => Some(Box::new(N::U32ToU8::new())),
+        (PortType::U16, PortType::U8) => Some(Box::new(N::U16ToU8::new())),
+        (PortType::I64, PortType::U8) => Some(Box::new(N::I64ToU8::new())),
+        (PortType::F64, PortType::U8) => Some(Box::new(N::F64ToU8::new())),
         (PortType::U64, PortType::U16) => Some(Box::new(N::U64ToU16::new())),
         (PortType::U32, PortType::U16) => Some(Box::new(N::U32ToU16::new())),
         (PortType::I64, PortType::U16) => Some(Box::new(N::I64ToU16::new())),
         (PortType::F64, PortType::U16) => Some(Box::new(N::F64ToU16::new())),
-        (PortType::I64, PortType::I8)  => Some(Box::new(N::I64ToI8::new())),
-        (PortType::I32, PortType::I8)  => Some(Box::new(N::I32ToI8::new())),
-        (PortType::U64, PortType::I8)  => Some(Box::new(N::U64ToI8::new())),
-        (PortType::F64, PortType::I8)  => Some(Box::new(N::F64ToI8::new())),
+        (PortType::I64, PortType::I8) => Some(Box::new(N::I64ToI8::new())),
+        (PortType::I32, PortType::I8) => Some(Box::new(N::I32ToI8::new())),
+        (PortType::U64, PortType::I8) => Some(Box::new(N::U64ToI8::new())),
+        (PortType::F64, PortType::I8) => Some(Box::new(N::F64ToI8::new())),
         (PortType::I64, PortType::I16) => Some(Box::new(N::I64ToI16::new())),
         (PortType::I32, PortType::I16) => Some(Box::new(N::I32ToI16::new())),
         (PortType::U64, PortType::I16) => Some(Box::new(N::U64ToI16::new())),
@@ -2103,19 +2378,19 @@ pub fn boundary_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatN
         (PortType::F64, PortType::F16) => Some(Box::new(N::F64ToF16::new())),
         (PortType::F32, PortType::F16) => Some(Box::new(N::F32ToF16::new())),
         (PortType::U64, PortType::F16) => Some(Box::new(N::U64ToF16::new())),
-        (PortType::Str, PortType::U8)  => Some(Box::new(N::StrToU8::new())),
+        (PortType::Str, PortType::U8) => Some(Box::new(N::StrToU8::new())),
         (PortType::Str, PortType::U16) => Some(Box::new(N::StrToU16::new())),
-        (PortType::Str, PortType::I8)  => Some(Box::new(N::StrToI8::new())),
+        (PortType::Str, PortType::I8) => Some(Box::new(N::StrToI8::new())),
         (PortType::Str, PortType::I16) => Some(Box::new(N::StrToI16::new())),
         (PortType::Str, PortType::F16) => Some(Box::new(N::StrToF16::new())),
-        (PortType::Bytes, PortType::U8)  => Some(Box::new(N::BytesToU8::new())),
+        (PortType::Bytes, PortType::U8) => Some(Box::new(N::BytesToU8::new())),
         (PortType::Bytes, PortType::U16) => Some(Box::new(N::BytesToU16::new())),
-        (PortType::Bytes, PortType::I8)  => Some(Box::new(N::BytesToI8::new())),
+        (PortType::Bytes, PortType::I8) => Some(Box::new(N::BytesToI8::new())),
         (PortType::Bytes, PortType::I16) => Some(Box::new(N::BytesToI16::new())),
         (PortType::Bytes, PortType::F16) => Some(Box::new(N::BytesToF16::new())),
-        (PortType::Json, PortType::U8)  => Some(Box::new(N::JsonToU8::new())),
+        (PortType::Json, PortType::U8) => Some(Box::new(N::JsonToU8::new())),
         (PortType::Json, PortType::U16) => Some(Box::new(N::JsonToU16::new())),
-        (PortType::Json, PortType::I8)  => Some(Box::new(N::JsonToI8::new())),
+        (PortType::Json, PortType::I8) => Some(Box::new(N::JsonToI8::new())),
         (PortType::Json, PortType::I16) => Some(Box::new(N::JsonToI16::new())),
         (PortType::Json, PortType::F16) => Some(Box::new(N::JsonToF16::new())),
         // f16 → Json panics on non-finite (same as f32 → Json).

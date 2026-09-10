@@ -32,7 +32,7 @@ use crate::iteration::comprehension::parse::{
     comprehension_from_subspaces, parse_clause_list, parse_order_spec,
 };
 
-use super::legacy_convert::{legacy_to_algebra, ConvertError};
+use super::legacy_convert::{ConvertError, legacy_to_algebra};
 
 /// The friendly, serde-deserializable comprehension surface.
 ///
@@ -190,12 +190,11 @@ impl ForSpec {
                 // (matches `parse_comprehension_text`'s
                 // convention so the union-detection rule sees
                 // per-clause boundaries).
-                let clauses = parse_clause_list(&text).map_err(|message| {
-                    SpecConvertError::ParseClause {
+                let clauses =
+                    parse_clause_list(&text).map_err(|message| SpecConvertError::ParseClause {
                         input: text.clone(),
                         message,
-                    }
-                })?;
+                    })?;
                 Ok(clauses.into_iter().map(|c| vec![c]).collect())
             }
             ForSpec::ClauseList(entries) => {
@@ -337,7 +336,12 @@ mod tests {
         let algebra = spec.into_algebra().unwrap();
         // Order wraps Filter wraps Cartesian
         match algebra {
-            AlgebraAst::Order { child, strategy: StrategyName::Lex, truncation: Some(20), .. } => {
+            AlgebraAst::Order {
+                child,
+                strategy: StrategyName::Lex,
+                truncation: Some(20),
+                ..
+            } => {
                 assert!(matches!(*child, AlgebraAst::Filter { .. }));
             }
             other => panic!("expected Order(Lex, Some(20)) wrapping Filter, got {other:?}"),

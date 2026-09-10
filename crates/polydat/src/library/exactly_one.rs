@@ -48,7 +48,11 @@ fn exactly_one_value(body: Value) -> String {
         // long Json arrays so the trace stays scannable.
         let body_disp = body.to_display_string();
         let snippet: String = body_disp.chars().take(400).collect();
-        let ellipsis = if body_disp.len() > snippet.len() { "…" } else { "" };
+        let ellipsis = if body_disp.len() > snippet.len() {
+            "…"
+        } else {
+            ""
+        };
         eprintln!(
             "[DEBUG] exactly_one_value: body.variant={:?} body.len={} snippet={}{ellipsis}",
             body.port_type(),
@@ -60,8 +64,13 @@ fn exactly_one_value(body: Value) -> String {
         // Already-scalar values pass through unchanged. They came
         // from a body projection that already collapsed the row ×
         // column structure.
-        Value::Str(_) | Value::Bool(_) | Value::U64(_) | Value::I64(_)
-        | Value::U128(_) | Value::I128(_) | Value::F64(_) => body.clone(),
+        Value::Str(_)
+        | Value::Bool(_)
+        | Value::U64(_)
+        | Value::I64(_)
+        | Value::U128(_)
+        | Value::I128(_)
+        | Value::F64(_) => body.clone(),
 
         // Typed vector carriers: the structural shape is "1 row × 1
         // column" iff the slice has exactly one element.
@@ -147,8 +156,7 @@ fn exactly_one_value(body: Value) -> String {
 
         // Other carriers pass through (already collapsed).
         // Register words render via their view's display form.
-        Value::Bytes(_) | Value::Ext(_) | Value::Handle(_)
-        | Value::Reg128(_, _) => body.clone(),
+        Value::Bytes(_) | Value::Ext(_) | Value::Handle(_) | Value::Reg128(_, _) => body.clone(),
     };
     // Render to String for the declared Str output port. Non-Str
     // leaves render via the Value display form (Bool → "true"/"false",
@@ -218,12 +226,12 @@ fn unwrap_unary_json(j: &serde_json::Value) -> Value {
             } else if let Some(f) = n.as_f64() {
                 Value::F64(f)
             } else {
-                panic!("exactly_one_value: numeric leaf is not representable as u64, i64, or f64: {n}")
+                panic!(
+                    "exactly_one_value: numeric leaf is not representable as u64, i64, or f64: {n}"
+                )
             }
         }
-        J::Null => panic!(
-            "exactly_one_value: leaf cell is null; expected a non-null value"
-        ),
+        J::Null => panic!("exactly_one_value: leaf cell is null; expected a non-null value"),
         // Nested structural leaf — the body has more than two
         // levels of nesting. Not a unary shape per the SRD; the
         // diagnostic names what was found.

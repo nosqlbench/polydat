@@ -52,30 +52,39 @@
 //! coords[0..C) | ports[0..P) | node_buffers[...]
 //! ```
 
-mod program;
-mod engines;
-mod state;
-mod scope;
-mod manifest;
+pub mod activation;
 mod api;
 mod api_impl;
-mod opt;
-pub mod interp;
-pub mod subcontext;
 pub mod arena;
+mod engines;
+pub mod interp;
+mod manifest;
+mod opt;
+mod program;
+mod scope;
+mod state;
+pub mod subcontext;
 pub mod value_table;
-pub mod activation;
 pub use activation::{Activation, CursorSlice, TraversalStream};
 
-pub use value_table::{ValueTable, TableInstallation, install_value_table, with_value_table, with_current_value_table, current_table_value, encode_table_handle, decode_table_handle, decode_arg, read_table_json, write_table_entry};
-pub use arena::{CycleArena, ArenaMark, ArenaWriter, with_cycle_arena, begin_root_cycle, TAG_STATIC, TAG_ARENA, TAG_RES, TAG_MASK, cycle_generation, cycle_arena_used, cycle_arena_mark, cycle_arena_release, encode_arena_handle, decode_arena_handle, StaticInterner, resolve_thread_str, resolve_thread_bytes, put_thread_str, put_thread_bytes};
-pub use program::*;
-pub use engines::*;
-pub use state::*;
-pub use scope::{ScopeCoord, format_scope_coordinate_path};
-pub use manifest::{extract_manifest, ManifestEntry};
 pub use api::{Construction, Dataflow, Metadata, WireKey, WriteError};
+pub use arena::{
+    ArenaMark, ArenaWriter, CycleArena, StaticInterner, TAG_ARENA, TAG_MASK, TAG_RES, TAG_STATIC,
+    begin_root_cycle, cycle_arena_mark, cycle_arena_release, cycle_arena_used, cycle_generation,
+    decode_arena_handle, encode_arena_handle, put_thread_bytes, put_thread_str,
+    resolve_thread_bytes, resolve_thread_str, with_cycle_arena,
+};
+pub use engines::*;
+pub use manifest::{ManifestEntry, extract_manifest};
 pub use opt::KernelOptLevel;
+pub use program::*;
+pub use scope::{ScopeCoord, format_scope_coordinate_path};
+pub use state::*;
+pub use value_table::{
+    TableInstallation, ValueTable, current_table_value, decode_arg, decode_table_handle,
+    encode_table_handle, install_value_table, read_table_json, with_current_value_table,
+    with_value_table, write_table_entry,
+};
 
 use crate::ast::Value;
 
@@ -149,16 +158,33 @@ mod tests {
     fn capture_inputs_persist_across_set_inputs() {
         // Program with 1 coordinate (cycle) + 2 capture inputs
         let program = Arc::new(PolydatProgram::with_inputs(
-            vec![], vec![],
+            vec![],
+            vec![],
             vec![
-                InputDef { name: "cycle".into(), default: Value::U64(0), port_type: crate::ast::PortType::U64, kind: InputKind::Coordinate },
-                InputDef { name: "balance".into(), default: Value::F64(0.0), port_type: crate::ast::PortType::F64, kind: InputKind::ExternalWrite },
-                InputDef { name: "auth_token".into(), default: Value::Str("anonymous".into()), port_type: crate::ast::PortType::Str, kind: InputKind::ExternalWrite },
+                InputDef {
+                    name: "cycle".into(),
+                    default: Value::U64(0),
+                    port_type: crate::ast::PortType::U64,
+                    kind: InputKind::Coordinate,
+                },
+                InputDef {
+                    name: "balance".into(),
+                    default: Value::F64(0.0),
+                    port_type: crate::ast::PortType::F64,
+                    kind: InputKind::ExternalWrite,
+                },
+                InputDef {
+                    name: "auth_token".into(),
+                    default: Value::Str("anonymous".into()),
+                    port_type: crate::ast::PortType::Str,
+                    kind: InputKind::ExternalWrite,
+                },
             ],
             1, // coord_count
             HashMap::new(),
             Vec::new(),
-            "", "(test)",
+            "",
+            "(test)",
         ));
         let mut state = program.create_state();
 
@@ -181,15 +207,27 @@ mod tests {
     #[test]
     fn reset_inputs_restores_capture_defaults() {
         let program = Arc::new(PolydatProgram::with_inputs(
-            vec![], vec![],
+            vec![],
+            vec![],
             vec![
-                InputDef { name: "cycle".into(), default: Value::U64(0), port_type: crate::ast::PortType::U64, kind: InputKind::Coordinate },
-                InputDef { name: "token".into(), default: Value::Str("anon".into()), port_type: crate::ast::PortType::Str, kind: InputKind::ExternalWrite },
+                InputDef {
+                    name: "cycle".into(),
+                    default: Value::U64(0),
+                    port_type: crate::ast::PortType::U64,
+                    kind: InputKind::Coordinate,
+                },
+                InputDef {
+                    name: "token".into(),
+                    default: Value::Str("anon".into()),
+                    port_type: crate::ast::PortType::Str,
+                    kind: InputKind::ExternalWrite,
+                },
             ],
             1,
             HashMap::new(),
             Vec::new(),
-            "", "(test)",
+            "",
+            "(test)",
         ));
         let mut state = program.create_state();
 
@@ -204,15 +242,27 @@ mod tests {
     #[test]
     fn invalidate_all_resets_everything() {
         let program = Arc::new(PolydatProgram::with_inputs(
-            vec![], vec![],
+            vec![],
+            vec![],
             vec![
-                InputDef { name: "cycle".into(), default: Value::U64(0), port_type: crate::ast::PortType::U64, kind: InputKind::Coordinate },
-                InputDef { name: "token".into(), default: Value::Str("anon".into()), port_type: crate::ast::PortType::Str, kind: InputKind::ExternalWrite },
+                InputDef {
+                    name: "cycle".into(),
+                    default: Value::U64(0),
+                    port_type: crate::ast::PortType::U64,
+                    kind: InputKind::Coordinate,
+                },
+                InputDef {
+                    name: "token".into(),
+                    default: Value::Str("anon".into()),
+                    port_type: crate::ast::PortType::Str,
+                    kind: InputKind::ExternalWrite,
+                },
             ],
             1,
             HashMap::new(),
             Vec::new(),
-            "", "(test)",
+            "",
+            "(test)",
         ));
         let mut state = program.create_state();
 
@@ -229,21 +279,32 @@ mod tests {
         // base=42, seed=hash(base) should both be folded
         // user_id=hash(cycle) should NOT be folded (depends on coordinate)
         use crate::dsl::compile::compile_polydat;
-        let mut k = compile_polydat("input cycle: u64\nbase := 42\nseed := hash(base)\nuser_id := hash(cycle)").unwrap();
+        let mut k = compile_polydat(
+            "input cycle: u64\nbase := 42\nseed := hash(base)\nuser_id := hash(cycle)",
+        )
+        .unwrap();
 
         // seed should be constant across cycles
         k.set_inputs(&[0]);
         let seed_0 = k.pull("seed").clone();
         k.set_inputs(&[1]);
         let seed_1 = k.pull("seed").clone();
-        assert_eq!(seed_0.as_u64(), seed_1.as_u64(), "seed should be constant (folded)");
+        assert_eq!(
+            seed_0.as_u64(),
+            seed_1.as_u64(),
+            "seed should be constant (folded)"
+        );
 
         // user_id should vary
         k.set_inputs(&[0]);
         let uid_0 = k.pull("user_id").clone();
         k.set_inputs(&[1]);
         let uid_1 = k.pull("user_id").clone();
-        assert_ne!(uid_0.as_u64(), uid_1.as_u64(), "user_id should vary per cycle");
+        assert_ne!(
+            uid_0.as_u64(),
+            uid_1.as_u64(),
+            "user_id should vary per cycle"
+        );
     }
 
     #[test]
@@ -285,7 +346,9 @@ mod tests {
     }
 
     impl crate::ast::PolydatNode for ConfigWireTestNode {
-        fn meta(&self) -> &crate::ast::NodeMeta { &self.meta }
+        fn meta(&self) -> &crate::ast::NodeMeta {
+            &self.meta
+        }
         fn eval(&self, inputs: &[Value], outputs: &mut [Value]) {
             let config = inputs[0].as_u64();
             let data = inputs[1].as_u64();
@@ -299,17 +362,22 @@ mod tests {
         //      cycle → hash → config_test.data_input
         // Config wire fed by init-time constant → no warning
         use crate::compile::assembly::{PolydatAssembler, WireRef};
-        use crate::library::identity::ConstU64;
-        use crate::library::hash::Hash;
         use crate::dsl::events::CompileEventLog;
+        use crate::library::hash::Hash;
+        use crate::library::identity::ConstU64;
 
         let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
         asm.add_node("config_val", Box::new(ConstU64::new(42)), vec![]);
-        asm.add_node("hashed", Box::new(Hash::new()), vec![WireRef::input("cycle")]);
-        asm.add_node("test_node", Box::new(ConfigWireTestNode::new()), vec![
-            WireRef::node("config_val"),
-            WireRef::node("hashed"),
-        ]);
+        asm.add_node(
+            "hashed",
+            Box::new(Hash::new()),
+            vec![WireRef::input("cycle")],
+        );
+        asm.add_node(
+            "test_node",
+            Box::new(ConfigWireTestNode::new()),
+            vec![WireRef::node("config_val"), WireRef::node("hashed")],
+        );
         asm.add_output("result", WireRef::node("test_node"));
 
         let mut log = CompileEventLog::new();
@@ -317,10 +385,20 @@ mod tests {
         let _program = k.into_program();
 
         // Check: no ConfigWireCycleWarning in events
-        let warnings: Vec<_> = log.events().iter().filter(|e|
-            matches!(e, crate::dsl::events::CompileEvent::ConfigWireCycleWarning { .. })
-        ).collect();
-        assert!(warnings.is_empty(), "no warning expected when config wire is init-time: {warnings:?}");
+        let warnings: Vec<_> = log
+            .events()
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    crate::dsl::events::CompileEvent::ConfigWireCycleWarning { .. }
+                )
+            })
+            .collect();
+        assert!(
+            warnings.is_empty(),
+            "no warning expected when config wire is init-time: {warnings:?}"
+        );
     }
 
     #[test]
@@ -329,24 +407,43 @@ mod tests {
         //      cycle → config_test.data_input
         // Config wire fed by cycle-time node → should warn
         use crate::compile::assembly::{PolydatAssembler, WireRef};
-        use crate::library::hash::Hash;
         use crate::dsl::events::CompileEventLog;
+        use crate::library::hash::Hash;
 
         let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
-        asm.add_node("hashed", Box::new(Hash::new()), vec![WireRef::input("cycle")]);
-        asm.add_node("test_node", Box::new(ConfigWireTestNode::new()), vec![
-            WireRef::node("hashed"),   // config_param ← cycle-time!
-            WireRef::input("cycle"),   // data_input ← cycle
-        ]);
+        asm.add_node(
+            "hashed",
+            Box::new(Hash::new()),
+            vec![WireRef::input("cycle")],
+        );
+        asm.add_node(
+            "test_node",
+            Box::new(ConfigWireTestNode::new()),
+            vec![
+                WireRef::node("hashed"), // config_param ← cycle-time!
+                WireRef::input("cycle"), // data_input ← cycle
+            ],
+        );
         asm.add_output("result", WireRef::node("test_node"));
 
         let mut log = CompileEventLog::new();
         let _k = asm.compile_with_log(Some(&mut log)).unwrap();
 
-        let warnings: Vec<_> = log.events().iter().filter(|e|
-            matches!(e, crate::dsl::events::CompileEvent::ConfigWireCycleWarning { .. })
-        ).collect();
-        assert_eq!(warnings.len(), 1, "expected exactly one config wire warning: {warnings:?}");
+        let warnings: Vec<_> = log
+            .events()
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    crate::dsl::events::CompileEvent::ConfigWireCycleWarning { .. }
+                )
+            })
+            .collect();
+        assert_eq!(
+            warnings.len(),
+            1,
+            "expected exactly one config wire warning: {warnings:?}"
+        );
     }
 
     #[test]
@@ -357,18 +454,29 @@ mod tests {
         use crate::dsl::events::CompileEventLog;
 
         let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
-        asm.add_node("test_node", Box::new(ConfigWireTestNode::new()), vec![
-            WireRef::input("cycle"),   // config_param ← coordinate!
-            WireRef::input("cycle"),   // data_input ← cycle
-        ]);
+        asm.add_node(
+            "test_node",
+            Box::new(ConfigWireTestNode::new()),
+            vec![
+                WireRef::input("cycle"), // config_param ← coordinate!
+                WireRef::input("cycle"), // data_input ← cycle
+            ],
+        );
         asm.add_output("result", WireRef::node("test_node"));
 
         let mut log = CompileEventLog::new();
         let _k = asm.compile_with_log(Some(&mut log)).unwrap();
 
-        let warnings: Vec<_> = log.events().iter().filter(|e|
-            matches!(e, crate::dsl::events::CompileEvent::ConfigWireCycleWarning { .. })
-        ).collect();
+        let warnings: Vec<_> = log
+            .events()
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    crate::dsl::events::CompileEvent::ConfigWireCycleWarning { .. }
+                )
+            })
+            .collect();
         assert_eq!(warnings.len(), 1, "config wire from coordinate should warn");
     }
 
@@ -378,23 +486,34 @@ mod tests {
         //      cycle → config_test.data_input           (cycle-time, ok for Data wire)
         // Only the data wire is cycle-time → no warning
         use crate::compile::assembly::{PolydatAssembler, WireRef};
-        use crate::library::identity::ConstU64;
         use crate::dsl::events::CompileEventLog;
+        use crate::library::identity::ConstU64;
 
         let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
         asm.add_node("config_val", Box::new(ConstU64::new(10)), vec![]);
-        asm.add_node("test_node", Box::new(ConfigWireTestNode::new()), vec![
-            WireRef::node("config_val"),  // config_param ← constant
-            WireRef::input("cycle"),      // data_input ← cycle (Data wire, ok)
-        ]);
+        asm.add_node(
+            "test_node",
+            Box::new(ConfigWireTestNode::new()),
+            vec![
+                WireRef::node("config_val"), // config_param ← constant
+                WireRef::input("cycle"),     // data_input ← cycle (Data wire, ok)
+            ],
+        );
         asm.add_output("result", WireRef::node("test_node"));
 
         let mut log = CompileEventLog::new();
         let _k = asm.compile_with_log(Some(&mut log)).unwrap();
 
-        let warnings: Vec<_> = log.events().iter().filter(|e|
-            matches!(e, crate::dsl::events::CompileEvent::ConfigWireCycleWarning { .. })
-        ).collect();
+        let warnings: Vec<_> = log
+            .events()
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    crate::dsl::events::CompileEvent::ConfigWireCycleWarning { .. }
+                )
+            })
+            .collect();
         assert!(warnings.is_empty(), "data wire from cycle should not warn");
     }
 
@@ -406,21 +525,31 @@ mod tests {
         //   cycle → hash → outer.data_input
         // inner is fully init-time → its output feeds outer's config wire → no warning
         use crate::compile::assembly::{PolydatAssembler, WireRef};
-        use crate::library::identity::ConstU64;
-        use crate::library::hash::Hash;
         use crate::dsl::events::CompileEventLog;
+        use crate::library::hash::Hash;
+        use crate::library::identity::ConstU64;
 
         let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
         asm.add_node("a", Box::new(ConstU64::new(5)), vec![]);
         asm.add_node("b", Box::new(ConstU64::new(3)), vec![]);
-        asm.add_node("inner", Box::new(ConfigWireTestNode::new()), vec![
-            WireRef::node("a"), WireRef::node("b"),
-        ]);
-        asm.add_node("hashed", Box::new(Hash::new()), vec![WireRef::input("cycle")]);
-        asm.add_node("outer", Box::new(ConfigWireTestNode::new()), vec![
-            WireRef::node("inner"),  // config_param ← init-time (5+3)
-            WireRef::node("hashed"), // data_input ← cycle-time
-        ]);
+        asm.add_node(
+            "inner",
+            Box::new(ConfigWireTestNode::new()),
+            vec![WireRef::node("a"), WireRef::node("b")],
+        );
+        asm.add_node(
+            "hashed",
+            Box::new(Hash::new()),
+            vec![WireRef::input("cycle")],
+        );
+        asm.add_node(
+            "outer",
+            Box::new(ConfigWireTestNode::new()),
+            vec![
+                WireRef::node("inner"),  // config_param ← init-time (5+3)
+                WireRef::node("hashed"), // data_input ← cycle-time
+            ],
+        );
         asm.add_output("result", WireRef::node("outer"));
 
         let mut log = CompileEventLog::new();
@@ -428,10 +557,20 @@ mod tests {
 
         // inner's config wire from constant is fine. outer's config wire
         // from init-time inner output is also fine.
-        let warnings: Vec<_> = log.events().iter().filter(|e|
-            matches!(e, crate::dsl::events::CompileEvent::ConfigWireCycleWarning { .. })
-        ).collect();
-        assert!(warnings.is_empty(), "init-time derived config should not warn: {warnings:?}");
+        let warnings: Vec<_> = log
+            .events()
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    crate::dsl::events::CompileEvent::ConfigWireCycleWarning { .. }
+                )
+            })
+            .collect();
+        assert!(
+            warnings.is_empty(),
+            "init-time derived config should not warn: {warnings:?}"
+        );
     }
 
     #[test]
@@ -442,30 +581,49 @@ mod tests {
         //   cycle → outer.data_input
         // mixer depends on cycle → its output is cycle-time → outer's config wire warns
         use crate::compile::assembly::{PolydatAssembler, WireRef};
-        use crate::library::identity::ConstU64;
         use crate::dsl::events::CompileEventLog;
+        use crate::library::identity::ConstU64;
 
         let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
         asm.add_node("five", Box::new(ConstU64::new(5)), vec![]);
-        asm.add_node("mixer", Box::new(ConfigWireTestNode::new()), vec![
-            WireRef::node("five"),     // config_param ← init
-            WireRef::input("cycle"),   // data_input ← cycle
-        ]);
-        asm.add_node("outer", Box::new(ConfigWireTestNode::new()), vec![
-            WireRef::node("mixer"),    // config_param ← cycle-tainted!
-            WireRef::input("cycle"),   // data_input
-        ]);
+        asm.add_node(
+            "mixer",
+            Box::new(ConfigWireTestNode::new()),
+            vec![
+                WireRef::node("five"),   // config_param ← init
+                WireRef::input("cycle"), // data_input ← cycle
+            ],
+        );
+        asm.add_node(
+            "outer",
+            Box::new(ConfigWireTestNode::new()),
+            vec![
+                WireRef::node("mixer"),  // config_param ← cycle-tainted!
+                WireRef::input("cycle"), // data_input
+            ],
+        );
         asm.add_output("result", WireRef::node("outer"));
 
         let mut log = CompileEventLog::new();
         let _k = asm.compile_with_log(Some(&mut log)).unwrap();
 
-        let warnings: Vec<_> = log.events().iter().filter(|e|
-            matches!(e, crate::dsl::events::CompileEvent::ConfigWireCycleWarning { .. })
-        ).collect();
+        let warnings: Vec<_> = log
+            .events()
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    crate::dsl::events::CompileEvent::ConfigWireCycleWarning { .. }
+                )
+            })
+            .collect();
         // outer's config from cycle-tainted mixer should warn.
         // mixer's config from constant should NOT warn.
-        assert_eq!(warnings.len(), 1, "exactly one warning for outer's config: {warnings:?}");
+        assert_eq!(
+            warnings.len(),
+            1,
+            "exactly one warning for outer's config: {warnings:?}"
+        );
     }
 
     #[test]
@@ -478,7 +636,9 @@ mod tests {
         let v = k.pull("out");
         // sin(1.0) ≈ 0.8414709848078965
         let f = v.as_f64();
-        assert!((f - 0.8414709848078965).abs() < 0.001,
-            "sin(1) should be ~0.841, got {f}");
+        assert!(
+            (f - 0.8414709848078965).abs() < 0.001,
+            "sin(1) should be ~0.841, got {f}"
+        );
     }
 }

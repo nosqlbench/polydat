@@ -30,9 +30,8 @@
 //! concern.
 
 use crate::dsl::ast::{
-    Arg, BindingModifier, CallExpr, Binding, Expr, PolydatFile,
-    ModuleDef, Statement, BinOpKind, ExternPort, CursorDecl, WireModifier, ForStmt,
-    TileBodyKind, TileDef, TileOptions,
+    Arg, BinOpKind, Binding, BindingModifier, CallExpr, CursorDecl, Expr, ExternPort, ForStmt,
+    ModuleDef, PolydatFile, Statement, TileBodyKind, TileDef, TileOptions, WireModifier,
 };
 
 /// Pretty-print a full file: every statement, separated by
@@ -71,7 +70,11 @@ fn pp_tile(t: &TileDef) -> String {
     let defaults = TileOptions::default();
     let mut opts = Vec::new();
     if t.options.open != defaults.open || t.options.close != defaults.close {
-        opts.push(format!("delims \"{}\" \"{}\"", escape_string(&t.options.open), escape_string(&t.options.close)));
+        opts.push(format!(
+            "delims \"{}\" \"{}\"",
+            escape_string(&t.options.open),
+            escape_string(&t.options.close)
+        ));
     }
     if t.options.sigil != defaults.sigil {
         opts.push(format!("sigil \"{}\"", escape_string(&t.options.sigil)));
@@ -112,7 +115,12 @@ fn pp_for_stmt(f: &ForStmt, indent: usize) -> String {
         });
         body.push('\n');
     }
-    format!("for {} {{\n{}{}}}", f.source.text, body, "    ".repeat(indent))
+    format!(
+        "for {} {{\n{}{}}}",
+        f.source.text,
+        body,
+        "    ".repeat(indent)
+    )
 }
 
 /// Pretty-print an expression. Always emits parens around
@@ -176,10 +184,14 @@ fn pp_cursor(c: &CursorDecl) -> String {
 }
 
 fn pp_module_def(m: &ModuleDef) -> String {
-    let params: Vec<String> = m.params.iter()
+    let params: Vec<String> = m
+        .params
+        .iter()
         .map(|p| format!("{}: {}", p.name, p.typ))
         .collect();
-    let outputs: Vec<String> = m.outputs.iter()
+    let outputs: Vec<String> = m
+        .outputs
+        .iter()
         .map(|p| format!("{}: {}", p.name, p.typ))
         .collect();
     let mut body = String::new();
@@ -188,7 +200,13 @@ fn pp_module_def(m: &ModuleDef) -> String {
         body.push_str(&pp_statement(s));
         body.push('\n');
     }
-    format!("{}({}) -> ({}) := {{\n{}}}", m.name, params.join(", "), outputs.join(", "), body)
+    format!(
+        "{}({}) -> ({}) := {{\n{}}}",
+        m.name,
+        params.join(", "),
+        outputs.join(", "),
+        body
+    )
 }
 
 fn pp_call(c: &CallExpr) -> String {
@@ -205,9 +223,15 @@ fn pp_arg(arg: &Arg) -> String {
 
 fn pp_modifier_prefix(m: BindingModifier) -> String {
     let mut parts: Vec<&str> = Vec::new();
-    if m.has(WireModifier::Const)    { parts.push("const"); }
-    if m.has(WireModifier::Shared)   { parts.push("shared"); }
-    if m.has(WireModifier::Volatile) { parts.push("volatile"); }
+    if m.has(WireModifier::Const) {
+        parts.push("const");
+    }
+    if m.has(WireModifier::Shared) {
+        parts.push("shared");
+    }
+    if m.has(WireModifier::Volatile) {
+        parts.push("volatile");
+    }
     parts.join(" ")
 }
 

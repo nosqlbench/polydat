@@ -230,7 +230,9 @@ vec_to_bytes!(f64 f64, i64 i64, i16 i16, i8 i8);
 #[crate::polydat_node(category = Conversions)]
 fn __vec_f16_to_bytes(elems: &[half::f16]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(elems.len() * 2);
-    for &v in elems { buf.extend_from_slice(&v.to_bits().to_le_bytes()); }
+    for &v in elems {
+        buf.extend_from_slice(&v.to_bits().to_le_bytes());
+    }
     buf
 }
 
@@ -255,7 +257,10 @@ bytes_to_vec!(f64 f64, i64 i64, i16 i16, i8 i8);
 #[crate::polydat_node(category = Conversions)]
 fn __bytes_to_vec_f16(b: &[u8]) -> Vec<half::f16> {
     if b.len() % 2 != 0 {
-        panic!("__bytes_to_vec_f16: byte length {} is not a multiple of 2", b.len());
+        panic!(
+            "__bytes_to_vec_f16: byte length {} is not a multiple of 2",
+            b.len()
+        );
     }
     b.chunks_exact(2)
         .map(|c| half::f16::from_bits(u16::from_le_bytes(c.try_into().unwrap())))
@@ -280,18 +285,29 @@ vec_int_to_json!(i64 i64, i16 i16, i8 i8);
 
 #[crate::polydat_node(category = Conversions)]
 fn __vec_f64_to_json(elems: &[f64]) -> Arc<serde_json::Value> {
-    let arr: Vec<serde_json::Value> = elems.iter().map(|&v| serde_json::Value::Number(
-        serde_json::Number::from_f64(v)
-            .unwrap_or_else(|| panic!("__vec_f64_to_json: non-finite element {v}")))).collect();
+    let arr: Vec<serde_json::Value> = elems
+        .iter()
+        .map(|&v| {
+            serde_json::Value::Number(
+                serde_json::Number::from_f64(v)
+                    .unwrap_or_else(|| panic!("__vec_f64_to_json: non-finite element {v}")),
+            )
+        })
+        .collect();
     Arc::new(serde_json::Value::Array(arr))
 }
 #[crate::polydat_node(category = Conversions)]
 fn __vec_f16_to_json(elems: &[half::f16]) -> Arc<serde_json::Value> {
-    let arr: Vec<serde_json::Value> = elems.iter().map(|&v| {
-        let f = v.to_f64();
-        serde_json::Value::Number(serde_json::Number::from_f64(f)
-            .unwrap_or_else(|| panic!("__vec_f16_to_json: non-finite element {f}")))
-    }).collect();
+    let arr: Vec<serde_json::Value> = elems
+        .iter()
+        .map(|&v| {
+            let f = v.to_f64();
+            serde_json::Value::Number(
+                serde_json::Number::from_f64(f)
+                    .unwrap_or_else(|| panic!("__vec_f16_to_json: non-finite element {f}")),
+            )
+        })
+        .collect();
     Arc::new(serde_json::Value::Array(arr))
 }
 
@@ -313,18 +329,29 @@ vec_int_to_str!(i32 i32, i64 i64, i16 i16, i8 i8);
 
 #[crate::polydat_node(category = Conversions)]
 fn __vec_f64_to_str(elems: &[f64]) -> String {
-    let arr: Vec<serde_json::Value> = elems.iter().map(|&v| serde_json::Value::Number(
-        serde_json::Number::from_f64(v)
-            .unwrap_or_else(|| panic!("__vec_f64_to_str: non-finite element {v}")))).collect();
+    let arr: Vec<serde_json::Value> = elems
+        .iter()
+        .map(|&v| {
+            serde_json::Value::Number(
+                serde_json::Number::from_f64(v)
+                    .unwrap_or_else(|| panic!("__vec_f64_to_str: non-finite element {v}")),
+            )
+        })
+        .collect();
     serde_json::Value::Array(arr).to_string()
 }
 #[crate::polydat_node(category = Conversions)]
 fn __vec_f16_to_str(elems: &[half::f16]) -> String {
-    let arr: Vec<serde_json::Value> = elems.iter().map(|&v| {
-        let f = v.to_f64();
-        serde_json::Value::Number(serde_json::Number::from_f64(f)
-            .unwrap_or_else(|| panic!("__vec_f16_to_str: non-finite element {f}")))
-    }).collect();
+    let arr: Vec<serde_json::Value> = elems
+        .iter()
+        .map(|&v| {
+            let f = v.to_f64();
+            serde_json::Value::Number(
+                serde_json::Number::from_f64(f)
+                    .unwrap_or_else(|| panic!("__vec_f16_to_str: non-finite element {f}")),
+            )
+        })
+        .collect();
     serde_json::Value::Array(arr).to_string()
 }
 
@@ -350,15 +377,29 @@ json_to_vec_int!(i64 i64, i16 i16, i8 i8);
 
 #[crate::polydat_node(category = Conversions)]
 fn __json_to_vec_f64(j: &serde_json::Value) -> Vec<f64> {
-    let arr = j.as_array().unwrap_or_else(|| panic!("__json_to_vec_f64: JSON value is not an array"));
-    arr.iter().map(|e| e.as_f64()
-        .unwrap_or_else(|| panic!("__json_to_vec_f64: element {e:?} is not a number"))).collect()
+    let arr = j
+        .as_array()
+        .unwrap_or_else(|| panic!("__json_to_vec_f64: JSON value is not an array"));
+    arr.iter()
+        .map(|e| {
+            e.as_f64()
+                .unwrap_or_else(|| panic!("__json_to_vec_f64: element {e:?} is not a number"))
+        })
+        .collect()
 }
 #[crate::polydat_node(category = Conversions)]
 fn __json_to_vec_f16(j: &serde_json::Value) -> Vec<half::f16> {
-    let arr = j.as_array().unwrap_or_else(|| panic!("__json_to_vec_f16: JSON value is not an array"));
-    arr.iter().map(|e| half::f16::from_f64(e.as_f64()
-        .unwrap_or_else(|| panic!("__json_to_vec_f16: element {e:?} is not a number")))).collect()
+    let arr = j
+        .as_array()
+        .unwrap_or_else(|| panic!("__json_to_vec_f16: JSON value is not an array"));
+    arr.iter()
+        .map(|e| {
+            half::f16::from_f64(
+                e.as_f64()
+                    .unwrap_or_else(|| panic!("__json_to_vec_f16: element {e:?} is not a number")),
+            )
+        })
+        .collect()
 }
 
 /// `Str → VecX` for integer lanes (parse JSON array, range-check).
@@ -389,18 +430,30 @@ fn __str_to_vec_f64(input: &str) -> Vec<f64> {
     let raw = input.trim();
     let parsed: serde_json::Value = serde_json::from_str(raw)
         .unwrap_or_else(|e| panic!("__str_to_vec_f64: cannot parse {raw:?} as JSON array: {e}"));
-    let arr = parsed.as_array()
+    let arr = parsed
+        .as_array()
         .unwrap_or_else(|| panic!("__str_to_vec_f64: parsed JSON is not an array: {raw:?}"));
-    arr.iter().map(|e| e.as_f64()
-        .unwrap_or_else(|| panic!("__str_to_vec_f64: element {e:?} is not a number in {raw:?}"))).collect()
+    arr.iter()
+        .map(|e| {
+            e.as_f64().unwrap_or_else(|| {
+                panic!("__str_to_vec_f64: element {e:?} is not a number in {raw:?}")
+            })
+        })
+        .collect()
 }
 #[crate::polydat_node(category = Conversions)]
 fn __str_to_vec_f16(input: &str) -> Vec<half::f16> {
     let raw = input.trim();
     let parsed: serde_json::Value = serde_json::from_str(raw)
         .unwrap_or_else(|e| panic!("__str_to_vec_f16: cannot parse {raw:?} as JSON array: {e}"));
-    let arr = parsed.as_array()
+    let arr = parsed
+        .as_array()
         .unwrap_or_else(|| panic!("__str_to_vec_f16: parsed JSON is not an array: {raw:?}"));
-    arr.iter().map(|e| half::f16::from_f64(e.as_f64()
-        .unwrap_or_else(|| panic!("__str_to_vec_f16: element {e:?} is not a number in {raw:?}")))).collect()
+    arr.iter()
+        .map(|e| {
+            half::f16::from_f64(e.as_f64().unwrap_or_else(|| {
+                panic!("__str_to_vec_f16: element {e:?} is not a number in {raw:?}")
+            }))
+        })
+        .collect()
 }

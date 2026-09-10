@@ -45,7 +45,10 @@ pub enum Comprehension {
 
     /// Lockstep combinator per spec §3.3. Children must be
     /// discrete (V7) and have disjoint name sets (V1).
-    Zip { children: Vec<Comprehension>, mode: ZipMode },
+    Zip {
+        children: Vec<Comprehension>,
+        mode: ZipMode,
+    },
 
     /// Concatenation combinator per spec §3.4. Children must
     /// share an identical tuple shape (V2) and all be discrete
@@ -55,18 +58,28 @@ pub enum Comprehension {
     /// Selection modifier per spec §3.5. Predicate is a GK
     /// boolean expression; names must close over the child's
     /// coordinates plus the parent scope (V3).
-    Filter { child: Box<Comprehension>, predicate: String },
+    Filter {
+        child: Box<Comprehension>,
+        predicate: String,
+    },
 
     /// Permutation modifier per spec §3.6. `strategy` must
     /// accept the child's IndexFn (V4); `truncation` limits the
     /// dispensed count.
-    Order { child: Box<Comprehension>, strategy: StrategyName, truncation: Option<u64> },
+    Order {
+        child: Box<Comprehension>,
+        strategy: StrategyName,
+        truncation: Option<u64>,
+    },
 }
 
 impl Comprehension {
     /// Construct a leaf clause.
     pub fn clause<S: Into<String>>(name: S, source: Source) -> Self {
-        Comprehension::Clause { name: name.into(), source }
+        Comprehension::Clause {
+            name: name.into(),
+            source,
+        }
     }
 
     /// Construct a cartesian over the supplied children.
@@ -87,16 +100,19 @@ impl Comprehension {
 
     /// Construct a filter wrapping `child` with `predicate`.
     pub fn filter<S: Into<String>>(child: Comprehension, predicate: S) -> Self {
-        Comprehension::Filter { child: Box::new(child), predicate: predicate.into() }
+        Comprehension::Filter {
+            child: Box::new(child),
+            predicate: predicate.into(),
+        }
     }
 
     /// Construct an order node wrapping `child`.
-    pub fn order(
-        child: Comprehension,
-        strategy: StrategyName,
-        truncation: Option<u64>,
-    ) -> Self {
-        Comprehension::Order { child: Box::new(child), strategy, truncation }
+    pub fn order(child: Comprehension, strategy: StrategyName, truncation: Option<u64>) -> Self {
+        Comprehension::Order {
+            child: Box::new(child),
+            strategy,
+            truncation,
+        }
     }
 
     /// Compute the comprehension's coordinate name set,
@@ -193,15 +209,20 @@ impl Comprehension {
                 if seen.insert(name.clone()) {
                     let spec_text = match source {
                         Source::IntRange { lo, hi, step } => {
-                            if *step == 1 { format!("{lo}..{hi}") }
-                            else { format!("{lo}..{hi}..{step}") }
+                            if *step == 1 {
+                                format!("{lo}..{hi}")
+                            } else {
+                                format!("{lo}..{hi}..{step}")
+                            }
                         }
                         Source::Literal { values } if values.len() == 1 => {
                             literal_value_text(&values[0])
                         }
-                        Source::Literal { values } => {
-                            values.iter().map(literal_value_text).collect::<Vec<_>>().join(", ")
-                        }
+                        Source::Literal { values } => values
+                            .iter()
+                            .map(literal_value_text)
+                            .collect::<Vec<_>>()
+                            .join(", "),
                         Source::Generator { expr, .. } => expr.clone(),
                         Source::WorkloadParamList { name, .. } => format!("{{{name}}}"),
                         Source::ContinuousInterval { interval, .. } => {
@@ -210,8 +231,11 @@ impl Comprehension {
                             // prints "1", round-tripping a continuous `[1.0,5.0)`
                             // to "1..5", which `parse_source` would re-classify as
                             // an INTEGER range (typing the iter-var `U64`).
-                            if interval.hi_open { format!("{:?}..{:?}", interval.lo, interval.hi) }
-                            else { format!("{:?}..={:?}", interval.lo, interval.hi) }
+                            if interval.hi_open {
+                                format!("{:?}..{:?}", interval.lo, interval.hi)
+                            } else {
+                                format!("{:?}..={:?}", interval.lo, interval.hi)
+                            }
                         }
                         Source::Distribution { .. } => "<distribution>".to_string(),
                     };
@@ -276,7 +300,10 @@ impl Comprehension {
 
     /// `true` if this node is a modifier (`filter` or `order`).
     pub fn is_modifier(&self) -> bool {
-        matches!(self, Comprehension::Filter { .. } | Comprehension::Order { .. })
+        matches!(
+            self,
+            Comprehension::Filter { .. } | Comprehension::Order { .. }
+        )
     }
 
     /// Iterate this node's direct operand children. Returns
@@ -284,9 +311,9 @@ impl Comprehension {
     pub fn children(&self) -> Box<dyn Iterator<Item = &Comprehension> + '_> {
         match self {
             Comprehension::Clause { .. } => Box::new(std::iter::empty()),
-            Comprehension::Cartesian { children } | Comprehension::Zip { children, .. } | Comprehension::Union { children } => {
-                Box::new(children.iter())
-            }
+            Comprehension::Cartesian { children }
+            | Comprehension::Zip { children, .. }
+            | Comprehension::Union { children } => Box::new(children.iter()),
             Comprehension::Filter { child, .. } | Comprehension::Order { child, .. } => {
                 Box::new(std::iter::once(child.as_ref()))
             }
@@ -304,11 +331,7 @@ impl Comprehension {
     /// O(log N) for balanced trees. Bounds the operator stack
     /// per spec §9.3.
     pub fn depth(&self) -> usize {
-        1 + self
-            .children()
-            .map(|c| c.depth())
-            .max()
-            .unwrap_or(0)
+        1 + self.children().map(|c| c.depth()).max().unwrap_or(0)
     }
 }
 
@@ -333,8 +356,7 @@ fn literal_value_text(v: &super::source::LiteralValue) -> String {
         }
         LiteralValue::Bool(b) => b.to_string(),
         LiteralValue::String(s) => {
-            let bare_ok = !s.is_empty()
-                && s.chars().all(|c| c.is_alphanumeric() || c == '_');
+            let bare_ok = !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_');
             if bare_ok {
                 s.clone()
             } else {
@@ -379,7 +401,12 @@ mod tests {
         let c = Comprehension::clause(
             "ef",
             Source::ContinuousInterval {
-                interval: Interval { lo: 1.0, hi: 5.0, lo_open: false, hi_open: true },
+                interval: Interval {
+                    lo: 1.0,
+                    hi: 5.0,
+                    lo_open: false,
+                    hi_open: true,
+                },
                 measure: ProductMeasure::Uniform,
             },
         );
@@ -400,7 +427,10 @@ mod tests {
         // a Generator whose free name is the workload param.
         let bare = Comprehension::clause(
             "eh",
-            Source::Generator { expr: "eh_values".into(), cardinality_hint: None },
+            Source::Generator {
+                expr: "eh_values".into(),
+                cardinality_hint: None,
+            },
         );
         let got: Vec<String> = bare.referenced_source_names().into_iter().collect();
         assert_eq!(got, vec!["eh_values"]);
@@ -410,7 +440,10 @@ mod tests {
         // but its argument IS.
         let call = Comprehension::clause(
             "nbo",
-            Source::Generator { expr: "concat(nbo_v_values)".into(), cardinality_hint: None },
+            Source::Generator {
+                expr: "concat(nbo_v_values)".into(),
+                cardinality_hint: None,
+            },
         );
         let got: Vec<String> = call.referenced_source_names().into_iter().collect();
         assert_eq!(got, vec!["nbo_v_values"]);
@@ -419,7 +452,10 @@ mod tests {
         // its name directly.
         let wpl = Comprehension::clause(
             "p",
-            Source::WorkloadParamList { name: "profiles".into(), len_hint: None },
+            Source::WorkloadParamList {
+                name: "profiles".into(),
+                len_hint: None,
+            },
         );
         let got: Vec<String> = wpl.referenced_source_names().into_iter().collect();
         assert_eq!(got, vec!["profiles"]);

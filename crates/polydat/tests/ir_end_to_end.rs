@@ -46,10 +46,7 @@ fn dispense_naive(ast: Comprehension) -> Vec<Vec<(String, TupleValue)>> {
 
 #[test]
 fn cartesian_dispense_length() {
-    let ast = Comprehension::cartesian(vec![
-        clause("a", &[1, 2, 3]),
-        clause("b", &[10, 20]),
-    ]);
+    let ast = Comprehension::cartesian(vec![clause("a", &[1, 2, 3]), clause("b", &[10, 20])]);
     let tuples = dispense(ast);
     assert_eq!(tuples.len(), 6);
 }
@@ -126,7 +123,10 @@ fn zip_strict_dispense() {
 #[test]
 fn order_truncate_caps_output() {
     let ast = Comprehension::order(
-        Comprehension::cartesian(vec![clause("k", &[1, 2, 3, 4, 5]), clause("l", &[10, 20, 30])]),
+        Comprehension::cartesian(vec![
+            clause("k", &[1, 2, 3, 4, 5]),
+            clause("l", &[10, 20, 30]),
+        ]),
         StrategyName::Lex,
         Some(7),
     );

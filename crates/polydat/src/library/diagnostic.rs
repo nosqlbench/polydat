@@ -109,10 +109,8 @@ fn fft_analyze(
     signal: f64,
     #[poly_default("fft.jsonl")] filename: crate::derive_support::Const<&str>,
     #[poly_default(256u64)] window_size: crate::derive_support::Const<u64>,
-    #[poly_const(fft_buffer, from = window_size)]
-    buffer: &std::sync::Mutex<Vec<f64>>,
-    #[poly_const(fft_output, from = filename)]
-    output: &std::sync::Mutex<FftOutput>,
+    #[poly_const(fft_buffer, from = window_size)] buffer: &std::sync::Mutex<Vec<f64>>,
+    #[poly_const(fft_output, from = filename)] output: &std::sync::Mutex<FftOutput>,
 ) -> u64 {
     let _ = filename; // const value stashed in `output` at setup; not used at eval
     let window = (*window_size).max(2) as usize;
@@ -147,7 +145,8 @@ fn fft_analyze(
         if let Ok(mut out) = output.lock() {
             if !out.open_attempted {
                 out.open_attempted = true;
-                out.writer = std::fs::File::create(&out.path).ok()
+                out.writer = std::fs::File::create(&out.path)
+                    .ok()
                     .map(std::io::BufWriter::new);
             }
             if let Some(ref mut writer) = out.writer {
@@ -252,12 +251,16 @@ mod tests {
         // Verify the JSONL file was written
         let contents = std::fs::read_to_string(path).unwrap();
         assert!(!contents.is_empty(), "JSONL file should not be empty");
-        let line: serde_json::Value = serde_json::from_str(contents.lines().next().unwrap()).unwrap();
+        let line: serde_json::Value =
+            serde_json::from_str(contents.lines().next().unwrap()).unwrap();
         assert_eq!(line["window_size"], 4);
         // DC component of constant 1.0 signal should be ~1.0/4 * 4 = 1.0
         // Actually our normalization divides by n, so DC = sum/n = 1.0
         let dc = line["dc"].as_f64().unwrap();
-        assert!((dc - 1.0).abs() < 0.001, "DC component of constant signal should be ~1.0, got {dc}");
+        assert!(
+            (dc - 1.0).abs() < 0.001,
+            "DC component of constant signal should be ~1.0, got {dc}"
+        );
 
         // Clean up
         let _ = std::fs::remove_file(path);

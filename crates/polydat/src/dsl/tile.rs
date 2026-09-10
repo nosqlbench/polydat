@@ -9,13 +9,22 @@
 use crate::ast::PortType;
 
 use super::ast::{Expr, TileHole, TileOptions, TilePiece};
-use super::lexer::{lex, Span};
+use super::lexer::{Span, lex};
 use super::parser::{for_source_from_text, parse_expression};
 
 /// Parse a tile body into pieces under `opts`. `span` is the tile
 /// statement's position, used for diagnostics.
-pub fn parse_template(text: &str, opts: &TileOptions, span: Span) -> Result<Vec<TilePiece>, String> {
-    let mut p = TemplateParser { chars: text.chars().collect(), pos: 0, opts, span };
+pub fn parse_template(
+    text: &str,
+    opts: &TileOptions,
+    span: Span,
+) -> Result<Vec<TilePiece>, String> {
+    let mut p = TemplateParser {
+        chars: text.chars().collect(),
+        pos: 0,
+        opts,
+        span,
+    };
     let pieces = p.pieces(false)?;
     if p.pos < p.chars.len() {
         return Err(p.err("unexpected `}` closing a block that was never opened"));
@@ -123,7 +132,10 @@ impl TemplateParser<'_> {
         let mut format = None;
         if let Some(idx) = rfind_top_level(&body, '|')
             && !body[..idx].ends_with('|')
-            && body[idx + 1..].trim().chars().all(|c| c.is_ascii_alphanumeric() || ".<>^-+#0_".contains(c))
+            && body[idx + 1..]
+                .trim()
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || ".<>^-+#0_".contains(c))
             && !body[idx + 1..].trim().is_empty()
         {
             format = Some(body[idx + 1..].trim().to_string());
@@ -155,7 +167,14 @@ impl TemplateParser<'_> {
             self.err(&format!("hole `{text}`: {e}"))
         })?;
         let _ = start;
-        Ok(TileHole { text, expr, decl_type, format, raw, span: self.span })
+        Ok(TileHole {
+            text,
+            expr,
+            decl_type,
+            format,
+            raw,
+            span: self.span,
+        })
     }
 
     /// Consume up to and including the close delimiter at bracket depth
@@ -203,7 +222,12 @@ impl TemplateParser<'_> {
         let source = for_source_from_text(source_text.trim(), self.span, true)
             .map_err(|e| self.err(&format!("projection: {e}")))?;
         let body = self.block()?;
-        Ok(TilePiece::Projection { source, sep, body, span: self.span })
+        Ok(TilePiece::Projection {
+            source,
+            sep,
+            body,
+            span: self.span,
+        })
     }
 
     /// `@if cond { body } [@else { body }]`. Positioned at the sigil.
@@ -211,7 +235,8 @@ impl TemplateParser<'_> {
         self.take(&self.opts.sigil.clone());
         self.take("if");
         let header = self.header_until_brace(HeaderKind::If)?;
-        let cond = parse_hole_expr(header.trim()).map_err(|e| self.err(&format!("branch condition `{}`: {e}", header.trim())))?;
+        let cond = parse_hole_expr(header.trim())
+            .map_err(|e| self.err(&format!("branch condition `{}`: {e}", header.trim())))?;
         let then = self.block()?;
         let save = self.pos;
         self.skip_ws();
@@ -224,7 +249,12 @@ impl TemplateParser<'_> {
             self.pos = save;
             None
         };
-        Ok(TilePiece::Branch { cond, then, otherwise, span: self.span })
+        Ok(TilePiece::Branch {
+            cond,
+            then,
+            otherwise,
+            span: self.span,
+        })
     }
 
     /// Text up to a `{` at bracket depth zero that is not a `{name}`
@@ -240,14 +270,21 @@ impl TemplateParser<'_> {
             if let Some(q) = quote {
                 buf.push(c);
                 self.pos += 1;
-                if c == q { quote = None; }
+                if c == q {
+                    quote = None;
+                }
                 continue;
             }
             // A hole cannot appear in a directive header; a delimiter
             // here means the block never came. (Delimiters that begin
             // with `{` are checked as blocks below instead.)
-            if depth == 0 && !self.opts.open.starts_with('{') && self.starts_with(&self.opts.open.clone()) {
-                return Err(self.err("directive has no `{` block; a hole cannot appear in a directive header"));
+            if depth == 0
+                && !self.opts.open.starts_with('{')
+                && self.starts_with(&self.opts.open.clone())
+            {
+                return Err(self.err(
+                    "directive has no `{` block; a hole cannot appear in a directive header",
+                ));
             }
             if depth == 0 && c == '{' {
                 // `{name}` is an interpolation placeholder only when it
@@ -261,13 +298,19 @@ impl TemplateParser<'_> {
                 const HEADER_PUNCT: &str = "<>=!+-*/%.,()[]&|?:";
                 let placeholder = placeholder_len(&self.chars, self.pos).is_some_and(|len| {
                     let before = buf.chars().last().is_some_and(|b| HEADER_PUNCT.contains(b));
-                    let after = self.chars.get(self.pos + len).is_some_and(|a| HEADER_PUNCT.contains(*a));
+                    let after = self
+                        .chars
+                        .get(self.pos + len)
+                        .is_some_and(|a| HEADER_PUNCT.contains(*a));
                     if before || after {
                         return true;
                     }
                     let rest: String = self.chars[self.pos + len..].iter().collect();
                     let rest = rest.trim_start();
-                    if rest.is_empty() || rest.starts_with(&self.opts.sigil) || rest.starts_with(&self.opts.open) {
+                    if rest.is_empty()
+                        || rest.starts_with(&self.opts.sigil)
+                        || rest.starts_with(&self.opts.open)
+                    {
                         return false;
                     }
                     if rest.starts_with(|c: char| HEADER_PUNCT.contains(c) && !"()[]".contains(c)) {
@@ -351,7 +394,9 @@ fn header_complete(kind: HeaderKind, header: &str) -> bool {
         HeaderKind::If => parse_hole_expr(h).is_ok(),
         HeaderKind::For => {
             let dangling = h.ends_with(|c: char| "<>=!+-*/%&|,(".contains(c))
-                || ["where", "order", "in", "&&", "||"].iter().any(|kw| h.ends_with(kw));
+                || ["where", "order", "in", "&&", "||"]
+                    .iter()
+                    .any(|kw| h.ends_with(kw));
             if dangling {
                 return false;
             }
@@ -391,7 +436,9 @@ fn rfind_top_level(s: &str, needle: char) -> Option<usize> {
     let mut found = None;
     for (i, c) in s.char_indices() {
         if let Some(q) = quote {
-            if c == q { quote = None; }
+            if c == q {
+                quote = None;
+            }
             continue;
         }
         match c {
@@ -424,13 +471,17 @@ pub fn render_template(pieces: &[TilePiece], opts: &TileOptions) -> String {
     let mut out = String::new();
     for piece in pieces {
         match piece {
-            TilePiece::Static(s) => out.push_str(&s.replace(&opts.open, &format!("{}{}", opts.open, opts.open))),
+            TilePiece::Static(s) => {
+                out.push_str(&s.replace(&opts.open, &format!("{}{}", opts.open, opts.open)))
+            }
             TilePiece::Hole(h) => {
                 out.push_str(&opts.open);
                 out.push_str(&h.text);
                 out.push_str(&opts.close);
             }
-            TilePiece::Projection { source, sep, body, .. } => {
+            TilePiece::Projection {
+                source, sep, body, ..
+            } => {
                 out.push_str(&opts.sigil);
                 out.push_str("for ");
                 out.push_str(&source.text);
@@ -441,7 +492,12 @@ pub fn render_template(pieces: &[TilePiece], opts: &TileOptions) -> String {
                 out.push_str(&render_template(body, opts));
                 out.push_str(" }");
             }
-            TilePiece::Branch { cond, then, otherwise, .. } => {
+            TilePiece::Branch {
+                cond,
+                then,
+                otherwise,
+                ..
+            } => {
                 out.push_str(&opts.sigil);
                 out.push_str("if ");
                 out.push_str(&super::pprint::pp_expr(cond));

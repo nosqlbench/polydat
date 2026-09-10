@@ -21,13 +21,14 @@
 //!
 //! The same tests run natively in the ordinary suite.
 
+use polydat::JitMode;
 use polydat::ast::Value;
 use polydat::dsl::compile::compile_polydat_to_assembler;
 use polydat::kernel::{
-    begin_root_cycle, cycle_arena_mark, cycle_arena_release, cycle_arena_used, put_thread_bytes, put_thread_str,
-    resolve_thread_bytes, resolve_thread_str, with_current_value_table, with_value_table, ArenaWriter, ValueTable,
+    ArenaWriter, ValueTable, begin_root_cycle, cycle_arena_mark, cycle_arena_release,
+    cycle_arena_used, put_thread_bytes, put_thread_str, resolve_thread_bytes, resolve_thread_str,
+    with_current_value_table, with_value_table,
 };
-use polydat::JitMode;
 use std::fmt::Write as _;
 
 /// A resolved string stays valid, at the same address, while the arena
@@ -104,9 +105,15 @@ fn mark_release_and_reset_bound_the_arena() {
 fn the_value_table_installation_nests_and_restores() {
     let mut outer = ValueTable::new(2);
     outer.set_generation(7);
-    let h = outer.write(0, Value::Json(std::sync::Arc::new(serde_json::json!({"k": 1}))));
+    let h = outer.write(
+        0,
+        Value::Json(std::sync::Arc::new(serde_json::json!({"k": 1}))),
+    );
     with_value_table(&mut outer, || {
-        assert_eq!(with_current_value_table(|t| t.read(h)).to_display_string(), "{\"k\":1}");
+        assert_eq!(
+            with_current_value_table(|t| t.read(h)).to_display_string(),
+            "{\"k\":1}"
+        );
         let mut inner = ValueTable::new(1);
         inner.set_generation(9);
         let hi = inner.write(0, Value::U64(5));
@@ -120,9 +127,16 @@ fn the_value_table_installation_nests_and_restores() {
             with_value_table(&mut failing, || panic!("unwind through the installation"));
         }));
         assert!(r.is_err());
-        assert_eq!(with_current_value_table(|t| t.len()), 2, "restored on unwind");
+        assert_eq!(
+            with_current_value_table(|t| t.len()),
+            2,
+            "restored on unwind"
+        );
     });
-    assert!(std::panic::catch_unwind(|| with_current_value_table(|t| t.len())).is_err(), "nothing installed after");
+    assert!(
+        std::panic::catch_unwind(|| with_current_value_table(|t| t.len())).is_err(),
+        "nothing installed after"
+    );
     outer.set_generation(8);
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| outer.read(h))).is_err());
 }
@@ -148,7 +162,11 @@ fn p2_handle_closures_agree_with_the_interpreter() {
         for (i, out) in outputs.iter().enumerate() {
             let got = p2.get_value(out);
             assert_eq!(got.port_type(), want[i].port_type(), "{out} at {c}");
-            assert_eq!(got.to_display_string(), want[i].to_display_string(), "{out} at {c}");
+            assert_eq!(
+                got.to_display_string(),
+                want[i].to_display_string(),
+                "{out} at {c}"
+            );
         }
     }
 }
@@ -161,7 +179,10 @@ fn p2_projection_tiles_run_nested_kernels_inside_the_cycle() {
     let mut p1 = compile_polydat_to_assembler(src).unwrap();
     p1.set_jit_mode(JitMode::Off);
     let mut p1 = p1.compile().unwrap();
-    let mut p2 = compile_polydat_to_assembler(src).unwrap().try_compile_raw().unwrap_or_else(|_| panic!("P2"));
+    let mut p2 = compile_polydat_to_assembler(src)
+        .unwrap()
+        .try_compile_raw()
+        .unwrap_or_else(|_| panic!("P2"));
     for c in 0..2u64 {
         p1.set_inputs(&[c]);
         let want = p1.pull("t").to_display_string();

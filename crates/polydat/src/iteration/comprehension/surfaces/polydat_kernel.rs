@@ -19,9 +19,9 @@
 
 use std::sync::Arc;
 
+use crate::ast::Value;
 use crate::iteration::comprehension::strategies::{Tuple, TupleValue};
 use crate::kernel::PolydatKernel;
-use crate::ast::Value;
 
 use super::instance::KernelScope;
 

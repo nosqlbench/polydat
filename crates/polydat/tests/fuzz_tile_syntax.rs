@@ -24,7 +24,9 @@ use polydat::dsl::tile::{parse_template, render_template};
 struct Rng(u64);
 
 impl Rng {
-    fn new(seed: u64) -> Self { Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1)) }
+    fn new(seed: u64) -> Self {
+        Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1))
+    }
     fn next_u64(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
@@ -32,26 +34,73 @@ impl Rng {
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^ (z >> 31)
     }
-    fn range(&mut self, n: usize) -> usize { if n == 0 { 0 } else { (self.next_u64() as usize) % n } }
-    fn coin(&mut self, pct: usize) -> bool { self.range(100) < pct }
-    fn pick<'a>(&mut self, items: &[&'a str]) -> &'a str { items[self.range(items.len())] }
+    fn range(&mut self, n: usize) -> usize {
+        if n == 0 {
+            0
+        } else {
+            (self.next_u64() as usize) % n
+        }
+    }
+    fn coin(&mut self, pct: usize) -> bool {
+        self.range(100) < pct
+    }
+    fn pick<'a>(&mut self, items: &[&'a str]) -> &'a str {
+        items[self.range(items.len())]
+    }
 }
 
 /// The shape the generator emitted, for comparison against the parse.
 #[derive(Debug, Clone, PartialEq)]
 enum Shape {
     Static,
-    Hole { typed: bool, formatted: bool, raw: bool },
-    Projection { sep: bool, body: Vec<Shape> },
-    Branch { has_else: bool, then: Vec<Shape>, otherwise: Vec<Shape> },
+    Hole {
+        typed: bool,
+        formatted: bool,
+        raw: bool,
+    },
+    Projection {
+        sep: bool,
+        body: Vec<Shape>,
+    },
+    Branch {
+        has_else: bool,
+        then: Vec<Shape>,
+        otherwise: Vec<Shape>,
+    },
 }
 
-const DELIMS: &[(&str, &str)] = &[("${", "}"), ("<%", "%>"), ("{{", "}}"), ("[[", "]]"), ("<<", ">>"), ("$(", ")")];
+const DELIMS: &[(&str, &str)] = &[
+    ("${", "}"),
+    ("<%", "%>"),
+    ("{{", "}}"),
+    ("[[", "]]"),
+    ("<<", ">>"),
+    ("$(", ")"),
+];
 const SIGILS: &[&str] = &["@", "#", "%%", "::"];
 const TYPES: &[&str] = &["u64", "f64", "str", "bool", "i64", "json"];
 const FORMATS: &[&str] = &[".2", "05", ">8", "<4", ".3", "x"];
-const EXPRS: &[&str] = &["cycle", "hash(cycle)", "a + b", "mod(x, 10)", "hashed_id(input: cycle, bound: 10)", "\"quoted } text\"", "if x > 1 { 1 } else { 2 }", "temp_c + s", "k"];
-const STATIC_WORDS: &[&str] = &["plain", "INSERT INTO t", "\"key\": ", "a,b,c", " { nested } ", "50% off", "x=1;", "tail "];
+const EXPRS: &[&str] = &[
+    "cycle",
+    "hash(cycle)",
+    "a + b",
+    "mod(x, 10)",
+    "hashed_id(input: cycle, bound: 10)",
+    "\"quoted } text\"",
+    "if x > 1 { 1 } else { 2 }",
+    "temp_c + s",
+    "k",
+];
+const STATIC_WORDS: &[&str] = &[
+    "plain",
+    "INSERT INTO t",
+    "\"key\": ",
+    "a,b,c",
+    " { nested } ",
+    "50% off",
+    "x=1;",
+    "tail ",
+];
 
 struct Gen {
     rng: Rng,
@@ -72,7 +121,17 @@ impl Gen {
             _ => Some("csv"),
         };
         let in_string = rng.coin(10);
-        Gen { rng, opts: TileOptions { open: open.into(), close: close.into(), sigil: sigil.into(), strict, in_string }, encoding }
+        Gen {
+            rng,
+            opts: TileOptions {
+                open: open.into(),
+                close: close.into(),
+                sigil: sigil.into(),
+                strict,
+                in_string,
+            },
+            encoding,
+        }
     }
 
     /// Static text that never contains the open delimiter, the sigil
@@ -91,7 +150,9 @@ impl Gen {
             s.push_str(&format!("{}{}", self.opts.open, self.opts.open));
             s.push_str("lit ");
         }
-        s.replace(&self.opts.open, "").replace(&format!("{}for", self.opts.sigil), "").replace(&format!("{}if", self.opts.sigil), "")
+        s.replace(&self.opts.open, "")
+            .replace(&format!("{}for", self.opts.sigil), "")
+            .replace(&format!("{}if", self.opts.sigil), "")
             + if s.is_empty() { "z" } else { "" }
     }
 
@@ -110,7 +171,14 @@ impl Gen {
         if raw {
             inner.push('!');
         }
-        (format!("{}{}{}", self.opts.open, inner, self.opts.close), Shape::Hole { typed, formatted, raw })
+        (
+            format!("{}{}{}", self.opts.open, inner, self.opts.close),
+            Shape::Hole {
+                typed,
+                formatted,
+                raw,
+            },
+        )
     }
 
     fn comprehension(&mut self) -> String {
@@ -148,17 +216,28 @@ impl Gen {
                         if sep { " sep \", \"" } else { "" },
                         body
                     ));
-                    shapes.push(Shape::Projection { sep, body: body_shapes });
+                    shapes.push(Shape::Projection {
+                        sep,
+                        body: body_shapes,
+                    });
                 }
                 _ => {
                     let (then, then_shapes) = self.pieces(depth - 1);
                     let has_else = self.rng.coin(50);
-                    let (otherwise, else_shapes) = if has_else { self.pieces(depth - 1) } else { (String::new(), Vec::new()) };
+                    let (otherwise, else_shapes) = if has_else {
+                        self.pieces(depth - 1)
+                    } else {
+                        (String::new(), Vec::new())
+                    };
                     text.push_str(&format!("{}if x > 1 {{{}}}", self.opts.sigil, then));
                     if has_else {
                         text.push_str(&format!(" {}else {{{}}}", self.opts.sigil, otherwise));
                     }
-                    shapes.push(Shape::Branch { has_else, then: then_shapes, otherwise: else_shapes });
+                    shapes.push(Shape::Branch {
+                        has_else,
+                        then: then_shapes,
+                        otherwise: else_shapes,
+                    });
                 }
             }
         }
@@ -175,7 +254,10 @@ impl Gen {
         let defaults = TileOptions::default();
         let mut opts = Vec::new();
         if self.opts.open != defaults.open || self.opts.close != defaults.close {
-            opts.push(format!("delims \"{}\" \"{}\"", self.opts.open, self.opts.close));
+            opts.push(format!(
+                "delims \"{}\" \"{}\"",
+                self.opts.open, self.opts.close
+            ));
         }
         if self.opts.sigil != defaults.sigil {
             opts.push(format!("sigil \"{}\"", self.opts.sigil));
@@ -204,7 +286,9 @@ impl Gen {
         } else {
             shapes
         };
-        let src = format!("input cycle: u64\nsweep := for k in 1..3\n{header} := {body_form}\nx := hash(cycle)\n");
+        let src = format!(
+            "input cycle: u64\nsweep := for k in 1..3\n{header} := {body_form}\nx := hash(cycle)\n"
+        );
         (src, shapes)
     }
 }
@@ -220,8 +304,19 @@ fn normalize(shapes: &[Shape]) -> Vec<Shape> {
     let mut out: Vec<Shape> = Vec::new();
     for s in shapes {
         let s = match s {
-            Shape::Projection { sep, body } => Shape::Projection { sep: *sep, body: normalize(body) },
-            Shape::Branch { has_else, then, otherwise } => Shape::Branch { has_else: *has_else, then: normalize(then), otherwise: normalize(otherwise) },
+            Shape::Projection { sep, body } => Shape::Projection {
+                sep: *sep,
+                body: normalize(body),
+            },
+            Shape::Branch {
+                has_else,
+                then,
+                otherwise,
+            } => Shape::Branch {
+                has_else: *has_else,
+                then: normalize(then),
+                otherwise: normalize(otherwise),
+            },
             other => other.clone(),
         };
         if matches!(s, Shape::Static) && matches!(out.last(), Some(Shape::Static)) {
@@ -237,9 +332,18 @@ fn shapes_of(pieces: &[TilePiece]) -> Vec<Shape> {
         .iter()
         .map(|p| match p {
             TilePiece::Static(_) => Shape::Static,
-            TilePiece::Hole(h) => Shape::Hole { typed: h.decl_type.is_some(), formatted: h.format.is_some(), raw: h.raw },
-            TilePiece::Projection { sep, body, .. } => Shape::Projection { sep: sep.is_some(), body: shapes_of(body) },
-            TilePiece::Branch { then, otherwise, .. } => Shape::Branch {
+            TilePiece::Hole(h) => Shape::Hole {
+                typed: h.decl_type.is_some(),
+                formatted: h.format.is_some(),
+                raw: h.raw,
+            },
+            TilePiece::Projection { sep, body, .. } => Shape::Projection {
+                sep: sep.is_some(),
+                body: shapes_of(body),
+            },
+            TilePiece::Branch {
+                then, otherwise, ..
+            } => Shape::Branch {
                 has_else: otherwise.is_some(),
                 then: shapes_of(then),
                 otherwise: otherwise.as_ref().map(|o| shapes_of(o)).unwrap_or_default(),
@@ -255,28 +359,48 @@ fn strip_statics(shapes: &[Shape]) -> Vec<Shape> {
         .iter()
         .filter(|s| !matches!(s, Shape::Static))
         .map(|s| match s {
-            Shape::Projection { sep, body } => Shape::Projection { sep: *sep, body: strip_statics(body) },
-            Shape::Branch { has_else, then, otherwise } => Shape::Branch { has_else: *has_else, then: strip_statics(then), otherwise: strip_statics(otherwise) },
+            Shape::Projection { sep, body } => Shape::Projection {
+                sep: *sep,
+                body: strip_statics(body),
+            },
+            Shape::Branch {
+                has_else,
+                then,
+                otherwise,
+            } => Shape::Branch {
+                has_else: *has_else,
+                then: strip_statics(then),
+                otherwise: strip_statics(otherwise),
+            },
             other => other.clone(),
         })
         .collect()
 }
 
 fn panic_text(p: &Box<dyn std::any::Any + Send>) -> String {
-    p.downcast_ref::<&str>().map(|s| s.to_string())
+    p.downcast_ref::<&str>()
+        .map(|s| s.to_string())
         .or_else(|| p.downcast_ref::<String>().cloned())
         .unwrap_or_else(|| "<non-string panic>".into())
 }
 
 fn cryptic(msg: &str) -> bool {
     let m = msg.to_lowercase();
-    msg.trim().is_empty() || m.contains("panic") || m.contains("index out of bounds") || m.contains("unreachable")
+    msg.trim().is_empty()
+        || m.contains("panic")
+        || m.contains("index out of bounds")
+        || m.contains("unreachable")
 }
 
 fn run_wellformed_pass(seed: u64, iterations: usize) -> Vec<String> {
     const MAX: usize = 8;
     let mut failures = Vec::new();
-    let repro = |i: usize| format!("reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test -p polydat --test fuzz_tile_syntax wellformed", i + 1);
+    let repro = |i: usize| {
+        format!(
+            "reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test -p polydat --test fuzz_tile_syntax wellformed",
+            i + 1
+        )
+    };
     let mut rng = Rng::new(seed);
     for i in 0..iterations {
         if failures.len() >= MAX {
@@ -296,7 +420,11 @@ fn run_wellformed_pass(seed: u64, iterations: usize) -> Vec<String> {
                 continue;
             }
         };
-        let Some(Statement::Tile(t)) = parsed.statements.iter().find(|s| matches!(s, Statement::Tile(_))) else {
+        let Some(Statement::Tile(t)) = parsed
+            .statements
+            .iter()
+            .find(|s| matches!(s, Statement::Tile(_)))
+        else {
             failures.push(format!("[seed {seed:#x}] iteration {i}: no tile statement parsed.\n  source:\n{source}\n  {}", repro(i)));
             continue;
         };
@@ -359,18 +487,27 @@ fn run_wellformed_pass(seed: u64, iterations: usize) -> Vec<String> {
 
 fn mutate(rng: &mut Rng, src: &str) -> String {
     let mut chars: Vec<char> = src.chars().collect();
-    const INSERT: &[char] = &['{', '}', '$', '%', '<', '>', '@', '#', '"', '\'', '(', ')', '|', ':', '!', ' ', '\n', 't', 'i', 'l', 'e', 'f', 'o', 'r'];
+    const INSERT: &[char] = &[
+        '{', '}', '$', '%', '<', '>', '@', '#', '"', '\'', '(', ')', '|', ':', '!', ' ', '\n', 't',
+        'i', 'l', 'e', 'f', 'o', 'r',
+    ];
     for _ in 0..(1 + rng.range(4)) {
-        if chars.is_empty() { break; }
+        if chars.is_empty() {
+            break;
+        }
         let at = rng.range(chars.len());
         match rng.range(4) {
-            0 => { chars.remove(at); }
+            0 => {
+                chars.remove(at);
+            }
             1 => chars.insert(at, INSERT[rng.range(INSERT.len())]),
             2 => chars[at] = INSERT[rng.range(INSERT.len())],
             _ => {
                 let end = (at + 1 + rng.range(10)).min(chars.len());
                 let slice: Vec<char> = chars[at..end].to_vec();
-                for (k, c) in slice.into_iter().enumerate() { chars.insert(end + k, c); }
+                for (k, c) in slice.into_iter().enumerate() {
+                    chars.insert(end + k, c);
+                }
             }
         }
     }
@@ -380,7 +517,12 @@ fn mutate(rng: &mut Rng, src: &str) -> String {
 fn run_mutation_pass(seed: u64, iterations: usize) -> Vec<String> {
     const MAX: usize = 8;
     let mut failures = Vec::new();
-    let repro = |i: usize| format!("reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test -p polydat --test fuzz_tile_syntax mutated", i + 1);
+    let repro = |i: usize| {
+        format!(
+            "reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test -p polydat --test fuzz_tile_syntax mutated",
+            i + 1
+        )
+    };
     let mut rng = Rng::new(seed ^ 0x71E5_71E5);
     for i in 0..iterations {
         if failures.len() >= MAX {
@@ -393,14 +535,25 @@ fn run_mutation_pass(seed: u64, iterations: usize) -> Vec<String> {
         let outcome = std::panic::catch_unwind(|| {
             let parsed = parse(&source)?;
             let printed = pp_file(&parsed);
-            parse(&printed).map_err(|e| format!("printed form of a parsed mutant does not parse: {e}\n  printed:\n{printed}"))?;
+            parse(&printed).map_err(|e| {
+                format!(
+                    "printed form of a parsed mutant does not parse: {e}\n  printed:\n{printed}"
+                )
+            })?;
             polydat::dsl::compile_polydat(&source)
         });
         match outcome {
-            Err(p) => failures.push(format!("[seed {seed:#x}] iteration {i}: panic on mutant: {}\n  source:\n{source}\n  {}", panic_text(&p), repro(i))),
+            Err(p) => failures.push(format!(
+                "[seed {seed:#x}] iteration {i}: panic on mutant: {}\n  source:\n{source}\n  {}",
+                panic_text(&p),
+                repro(i)
+            )),
             Ok(Err(e)) => {
                 if cryptic(&e) || e.contains("printed form of a parsed mutant") {
-                    failures.push(format!("[seed {seed:#x}] iteration {i}: {e}\n  source:\n{source}\n  {}", repro(i)));
+                    failures.push(format!(
+                        "[seed {seed:#x}] iteration {i}: {e}\n  source:\n{source}\n  {}",
+                        repro(i)
+                    ));
                 }
             }
             Ok(Ok(_)) => {}
@@ -410,7 +563,10 @@ fn run_mutation_pass(seed: u64, iterations: usize) -> Vec<String> {
 }
 
 fn env_u64(name: &str, default: u64) -> u64 {
-    std::env::var(name).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+    std::env::var(name)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }
 
 #[test]
@@ -418,7 +574,12 @@ fn wellformed_tiles_parse_print_and_are_declined() {
     let seed = env_u64("FUZZ_SEED", 0x7113_5EED);
     let iterations = env_u64("FUZZ_ITERATIONS", 400) as usize;
     let failures = run_wellformed_pass(seed, iterations);
-    assert!(failures.is_empty(), "fuzz invariants violated ({} failures):\n\n{}", failures.len(), failures.join("\n---\n"));
+    assert!(
+        failures.is_empty(),
+        "fuzz invariants violated ({} failures):\n\n{}",
+        failures.len(),
+        failures.join("\n---\n")
+    );
 }
 
 #[test]
@@ -426,34 +587,117 @@ fn mutated_tiles_never_panic() {
     let seed = env_u64("FUZZ_SEED", 0x7113_5EED);
     let iterations = env_u64("FUZZ_ITERATIONS", 600) as usize;
     let failures = run_mutation_pass(seed, iterations);
-    assert!(failures.is_empty(), "fuzz invariants violated ({} failures):\n\n{}", failures.len(), failures.join("\n---\n"));
+    assert!(
+        failures.is_empty(),
+        "fuzz invariants violated ({} failures):\n\n{}",
+        failures.len(),
+        failures.join("\n---\n")
+    );
 }
 
 #[test]
 fn generator_smoke() {
     let mut rng = Rng::new(11);
-    let (mut holes, mut typed, mut formatted, mut raw, mut projections, mut branches, mut custom, mut heredoc, mut block, mut escapes) = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    let (
+        mut holes,
+        mut typed,
+        mut formatted,
+        mut raw,
+        mut projections,
+        mut branches,
+        mut custom,
+        mut heredoc,
+        mut block,
+        mut escapes,
+    ) = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     for _ in 0..200 {
         let mut g = Gen::new(rng.next_u64());
         let (src, shapes) = g.program();
-        fn walk(shapes: &[Shape], holes: &mut i32, typed: &mut i32, formatted: &mut i32, raw: &mut i32, projections: &mut i32, branches: &mut i32) {
+        fn walk(
+            shapes: &[Shape],
+            holes: &mut i32,
+            typed: &mut i32,
+            formatted: &mut i32,
+            raw: &mut i32,
+            projections: &mut i32,
+            branches: &mut i32,
+        ) {
             for s in shapes {
                 match s {
                     Shape::Static => {}
-                    Shape::Hole { typed: t, formatted: f, raw: r } => { *holes += 1; if *t { *typed += 1 }; if *f { *formatted += 1 }; if *r { *raw += 1 } }
-                    Shape::Projection { body, .. } => { *projections += 1; walk(body, holes, typed, formatted, raw, projections, branches) }
-                    Shape::Branch { then, otherwise, .. } => { *branches += 1; walk(then, holes, typed, formatted, raw, projections, branches); walk(otherwise, holes, typed, formatted, raw, projections, branches) }
+                    Shape::Hole {
+                        typed: t,
+                        formatted: f,
+                        raw: r,
+                    } => {
+                        *holes += 1;
+                        if *t {
+                            *typed += 1
+                        };
+                        if *f {
+                            *formatted += 1
+                        };
+                        if *r {
+                            *raw += 1
+                        }
+                    }
+                    Shape::Projection { body, .. } => {
+                        *projections += 1;
+                        walk(body, holes, typed, formatted, raw, projections, branches)
+                    }
+                    Shape::Branch {
+                        then, otherwise, ..
+                    } => {
+                        *branches += 1;
+                        walk(then, holes, typed, formatted, raw, projections, branches);
+                        walk(
+                            otherwise,
+                            holes,
+                            typed,
+                            formatted,
+                            raw,
+                            projections,
+                            branches,
+                        )
+                    }
                 }
             }
         }
-        walk(&shapes, &mut holes, &mut typed, &mut formatted, &mut raw, &mut projections, &mut branches);
-        if src.contains("delims") || src.contains("sigil") { custom += 1; }
-        if src.contains("<<<") { heredoc += 1; }
-        if src.contains(":= {") { block += 1; }
-        if src.contains("lit ") { escapes += 1; }
+        walk(
+            &shapes,
+            &mut holes,
+            &mut typed,
+            &mut formatted,
+            &mut raw,
+            &mut projections,
+            &mut branches,
+        );
+        if src.contains("delims") || src.contains("sigil") {
+            custom += 1;
+        }
+        if src.contains("<<<") {
+            heredoc += 1;
+        }
+        if src.contains(":= {") {
+            block += 1;
+        }
+        if src.contains("lit ") {
+            escapes += 1;
+        }
     }
-    assert!(holes > 100 && typed > 20 && formatted > 20 && raw > 10 && projections > 20 && branches > 20 && custom > 50 && heredoc > 20 && block > 10 && escapes > 5,
-        "generator coverage too thin: holes={holes} typed={typed} formatted={formatted} raw={raw} projections={projections} branches={branches} custom={custom} heredoc={heredoc} block={block} escapes={escapes}");
+    assert!(
+        holes > 100
+            && typed > 20
+            && formatted > 20
+            && raw > 10
+            && projections > 20
+            && branches > 20
+            && custom > 50
+            && heredoc > 20
+            && block > 10
+            && escapes > 5,
+        "generator coverage too thin: holes={holes} typed={typed} formatted={formatted} raw={raw} projections={projections} branches={branches} custom={custom} heredoc={heredoc} block={block} escapes={escapes}"
+    );
 }
 
 #[test]
@@ -468,15 +712,25 @@ fn superfuzz_tile_syntax() {
         all.extend(run_wellformed_pass(seed, iterations));
         all.extend(run_mutation_pass(seed, iterations));
         if k % 8 == 7 {
-            eprintln!("superfuzz: {}/{seeds} seeds swept, {} violation(s) so far", k + 1, all.len());
+            eprintln!(
+                "superfuzz: {}/{seeds} seeds swept, {} violation(s) so far",
+                k + 1,
+                all.len()
+            );
         }
     }
     let mut report = all.join("\n---\n");
     if report.len() > 30_000 {
         let mut cut = 30_000;
-        while !report.is_char_boundary(cut) { cut -= 1; }
+        while !report.is_char_boundary(cut) {
+            cut -= 1;
+        }
         report.truncate(cut);
         report.push_str("\n… (report truncated)");
     }
-    assert!(all.is_empty(), "superfuzz invariants violated ({} failures):\n\n{report}", all.len());
+    assert!(
+        all.is_empty(),
+        "superfuzz invariants violated ({} failures):\n\n{report}",
+        all.len()
+    );
 }

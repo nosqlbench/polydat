@@ -74,7 +74,10 @@ impl FusedNode for ScaleRange {
     fn decomposed(&self) -> DecomposedGraph {
         use crate::library::sampling::icd::UnitInterval;
         let mut g = DecomposedGraph::new(1);
-        let ui = g.add_node(Box::new(UnitInterval::new()), vec![DecomposedWire::Input(0)]);
+        let ui = g.add_node(
+            Box::new(UnitInterval::new()),
+            vec![DecomposedWire::Input(0)],
+        );
         let lerp = g.add_node(
             Box::new(Lerp::new(self.min, self.max)),
             vec![DecomposedWire::Node(ui, 0)],
@@ -163,10 +166,7 @@ fn remap(
 /// plumbs `#[constraint(PositiveFiniteF64)]` onto const
 /// args (current support is wire-only).
 #[crate::polydat_node(category = Interpolation)]
-fn quantize(
-    input: f64,
-    #[poly_default(1.0f64)] step: crate::derive_support::Const<f64>,
-) -> f64 {
+fn quantize(input: f64, #[poly_default(1.0f64)] step: crate::derive_support::Const<f64>) -> f64 {
     (input / *step).round() * *step
 }
 

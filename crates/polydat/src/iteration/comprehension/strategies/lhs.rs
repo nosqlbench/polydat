@@ -160,7 +160,9 @@ mod tests {
 
     #[test]
     fn lhs_per_axis_stratification_2d_discrete() {
-        let idx = IndexFn::Lattice { axis_sizes: vec![10, 10] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![10, 10],
+        };
         let out = lhs_multi_indices(&idx, Some(5));
         assert_eq!(out.len(), 5);
 
@@ -206,8 +208,7 @@ mod tests {
         assert_eq!(out.len(), n as usize);
         let expected: std::collections::BTreeSet<u64> = (0..n).collect();
         for axis in 0..3 {
-            let got: std::collections::BTreeSet<u64> =
-                out.iter().map(|mi| mi[axis]).collect();
+            let got: std::collections::BTreeSet<u64> = out.iter().map(|mi| mi[axis]).collect();
             assert_eq!(
                 got, expected,
                 "axis {axis}: LHS strata must be a permutation of 0..{n}"
@@ -217,7 +218,9 @@ mod tests {
 
     #[test]
     fn deterministic() {
-        let idx = IndexFn::Lattice { axis_sizes: vec![20, 20] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![20, 20],
+        };
         let a = lhs_multi_indices(&idx, Some(10));
         let b = lhs_multi_indices(&idx, Some(10));
         assert_eq!(a, b);

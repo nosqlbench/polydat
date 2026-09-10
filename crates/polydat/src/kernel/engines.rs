@@ -5,12 +5,12 @@
 //! P1 engine types — PolydatState (dependent-list), RawState (no provenance),
 //! and ProvScanState (provenance-scan).
 
-use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::ast::Value;
 use super::WireSource;
 use super::program::PolydatProgram;
+use crate::ast::Value;
 
 /// Cached lookup of the `NBRS_DIRTY_DEBUG` env var. Called from
 /// the per-cycle hot path (`PolydatState::set_input`); reading the
@@ -97,11 +97,7 @@ impl SharedCellInner {
     /// bit position within that word. Callers must allocate
     /// `(word, bit)` via `EngineCore::allocate_cell_bit` —
     /// the bit is not reusable for the cell's lifetime.
-    pub fn new(
-        initial: Value,
-        scope_intent_dirty: Arc<AtomicU64>,
-        bit: u8,
-    ) -> Self {
+    pub fn new(initial: Value, scope_intent_dirty: Arc<AtomicU64>, bit: u8) -> Self {
         debug_assert!(
             bit < 64,
             "bit-within-word {bit} must be < 64; the allocator splits >64-bit \
@@ -321,7 +317,8 @@ fn enrich_eval_panic(
     inputs: &[Value],
 ) -> String {
     let original = payload
-        .downcast_ref::<&'static str>().map(|s| (*s).to_string())
+        .downcast_ref::<&'static str>()
+        .map(|s| (*s).to_string())
         .or_else(|| payload.downcast_ref::<String>().cloned())
         .unwrap_or_else(|| "<non-string panic payload>".into());
     // A payload that already carries node context came from a
@@ -335,25 +332,36 @@ fn enrich_eval_panic(
             .map(|loc| format!("\n  ↳ panicked at {loc}"))
             .unwrap_or_default()
     };
-    let node_name = program.nodes.get(node_idx)
+    let node_name = program
+        .nodes
+        .get(node_idx)
         .map(|n| n.meta().name.to_string())
         .unwrap_or_else(|| format!("<unknown node #{node_idx}>"));
-    let mut output_names: Vec<&str> = program.output_map_iter()
+    let mut output_names: Vec<&str> = program
+        .output_map_iter()
         .filter_map(|(name, (n_idx, _))| {
-            if *n_idx == node_idx { Some(name.as_str()) } else { None }
+            if *n_idx == node_idx {
+                Some(name.as_str())
+            } else {
+                None
+            }
         })
         .collect();
     output_names.sort();
     let outputs_label = if output_names.is_empty() {
         "no declared output".to_string()
     } else {
-        format!("output{} {}",
+        format!(
+            "output{} {}",
             if output_names.len() == 1 { "" } else { "s" },
-            output_names.join(", "))
+            output_names.join(", ")
+        )
     };
     let mut input_label = String::new();
     for (i, v) in inputs.iter().enumerate() {
-        if i > 0 { input_label.push_str(", "); }
+        if i > 0 {
+            input_label.push_str(", ");
+        }
         input_label.push_str(&format!("[{i}]={}", format_value_for_diag(v)));
     }
     format!(
@@ -527,16 +535,17 @@ impl EngineCore {
     /// with no cell-bound deps (the common case).
     fn build_cell_cone(&self, program: &PolydatProgram, node_idx: usize) -> CellCone {
         let empty = crate::kernel::ProvMask::empty();
-        let prov = program.input_provenance
-            .get(node_idx)
-            .unwrap_or(&empty);
+        let prov = program.input_provenance.get(node_idx).unwrap_or(&empty);
         let mut groups: Vec<CellConeGroup> = Vec::new();
         // Iterate set bits of `prov` directly: each bit is an
         // input slot that flows into this node transitively.
         for input_idx in prov.iter_ones() {
-            let Some(Some(cell)) = self.shared_cells.get(input_idx) else { continue; };
+            let Some(Some(cell)) = self.shared_cells.get(input_idx) else {
+                continue;
+            };
             // Group by Arc-pointer identity of scope_intent_dirty.
-            let group_idx = groups.iter()
+            let group_idx = groups
+                .iter()
                 .position(|g| Arc::ptr_eq(&g.intent_dirty, &cell.scope_intent_dirty));
             let i = match group_idx {
                 Some(i) => i,
@@ -569,11 +578,7 @@ impl EngineCore {
     /// (one Acquire load + AND per scope group) early-outs
     /// when nothing in the scope is dirty; per-cell drill-down
     /// runs only on set bits.
-    fn check_cell_clean(
-        &mut self,
-        program: &PolydatProgram,
-        node_idx: usize,
-    ) -> bool {
+    fn check_cell_clean(&mut self, program: &PolydatProgram, node_idx: usize) -> bool {
         // Lazy build the cone metadata.
         if self.cell_cones.len() <= node_idx {
             self.cell_cones.resize_with(node_idx + 1, || None);
@@ -593,9 +598,13 @@ impl EngineCore {
             for group in &cone.groups {
                 let intent = group.intent_dirty.load(Ordering::Acquire);
                 let masked = intent & group.interest_mask;
-                if masked == 0 { continue; }
+                if masked == 0 {
+                    continue;
+                }
                 for entry in &group.cells {
-                    if masked & (1u64 << entry.bit) == 0 { continue; }
+                    if masked & (1u64 << entry.bit) == 0 {
+                        continue;
+                    }
                     let Some(Some(cell)) = self.shared_cells.get(entry.input_slot) else {
                         continue;
                     };
@@ -637,7 +646,8 @@ impl EngineCore {
                 dirty_mask.set(slot);
             }
             for node_idx in 0..program.nodes.len() {
-                if program.input_provenance
+                if program
+                    .input_provenance
                     .get(node_idx)
                     .is_some_and(|prov| prov.intersects(&dirty_mask))
                 {
@@ -751,20 +761,16 @@ impl EngineCore {
         // fires the hook again — now unsuppressed — so the one
         // message that prints is the enriched one.
         let guard = EvalPanicCaptureGuard::arm();
-        let payload = std::panic::catch_unwind(
-            std::panic::AssertUnwindSafe(|| {
-                program.nodes[node_idx].eval(
-                    &self.input_scratch[..input_count],
-                    &mut self.buffers[node_idx],
-                );
-            })
-        );
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            program.nodes[node_idx].eval(
+                &self.input_scratch[..input_count],
+                &mut self.buffers[node_idx],
+            );
+        }));
         drop(guard);
         if let Err(e) = payload {
-            let enriched = enrich_eval_panic(
-                e, program, node_idx,
-                &self.input_scratch[..input_count],
-            );
+            let enriched =
+                enrich_eval_panic(e, program, node_idx, &self.input_scratch[..input_count]);
             if PANIC_REPORTING_DOWNSTREAM.load(std::sync::atomic::Ordering::Relaxed) {
                 RERAISE_SHORT.with(|c| c.set(true));
             }
@@ -775,7 +781,8 @@ impl EngineCore {
 
     /// Pull a named output.
     pub fn pull(&mut self, program: &PolydatProgram, output_name: &str) -> &Value {
-        let (node_idx, port_idx) = *program.output_map
+        let (node_idx, port_idx) = *program
+            .output_map
             .get(output_name)
             .unwrap_or_else(|| panic!("unknown output variate: {output_name}"));
         self.eval_node(program, node_idx);
@@ -810,24 +817,30 @@ impl EngineCore {
     /// exist before it can attach to its input slot.
     pub(crate) fn seed_output_cells(&mut self, program: &PolydatProgram) {
         let n = program.output_names().len();
-        if self.output_cells.len() == n { return; }
+        if self.output_cells.len() == n {
+            return;
+        }
         // Two-pass to avoid borrowing `self` immutably (for
         // buffer lookups) while also borrowing it mutably (for
         // `make_shared_cell`). First collect initial values,
         // then construct the cells.
-        let initials: Vec<Value> = (0..n).map(|i| {
-            let name = &program.output_list()[i].0;
-            let (node_idx, port_idx) = program.output_map[name];
-            // Defensive bounds-check: some construction paths
-            // (raw state, partial programs) may not populate
-            // buffers for every node referenced in the output
-            // map. Seed with `Value::None` rather than panic.
-            self.buffers.get(node_idx)
-                .and_then(|b| b.get(port_idx))
-                .cloned()
-                .unwrap_or(Value::None)
-        }).collect();
-        self.output_cells = initials.into_iter()
+        let initials: Vec<Value> = (0..n)
+            .map(|i| {
+                let name = &program.output_list()[i].0;
+                let (node_idx, port_idx) = program.output_map[name];
+                // Defensive bounds-check: some construction paths
+                // (raw state, partial programs) may not populate
+                // buffers for every node referenced in the output
+                // map. Seed with `Value::None` rather than panic.
+                self.buffers
+                    .get(node_idx)
+                    .and_then(|b| b.get(port_idx))
+                    .cloned()
+                    .unwrap_or(Value::None)
+            })
+            .collect();
+        self.output_cells = initials
+            .into_iter()
             .map(|init| Some(self.make_shared_cell(init)))
             .collect();
     }
@@ -873,7 +886,12 @@ impl PolydatState {
         input_dependents: Vec<Vec<usize>>,
         nondeterministic_nodes: Vec<usize>,
     ) -> Self {
-        Self { core, input_dependents, nondeterministic_nodes, nested: false }
+        Self {
+            core,
+            input_dependents,
+            nondeterministic_nodes,
+            nested: false,
+        }
     }
 
     /// Mark this state as nested: it runs inside a root state's cycle
@@ -1085,8 +1103,12 @@ impl PolydatState {
     /// activation kernel already evaluated, so each fiber doesn't
     /// re-fire the eval at first pull.
     pub fn seed_node_buffer(&mut self, node_idx: usize, port_idx: usize, value: Value) {
-        if node_idx >= self.core.buffers.len() { return; }
-        if port_idx >= self.core.buffers[node_idx].len() { return; }
+        if node_idx >= self.core.buffers.len() {
+            return;
+        }
+        if port_idx >= self.core.buffers[node_idx].len() {
+            return;
+        }
         self.core.buffers[node_idx][port_idx] = value;
         self.core.node_clean[node_idx] = true;
     }
@@ -1095,7 +1117,9 @@ impl PolydatState {
     /// pass to extract a pre-pulled init binding value from one
     /// state and seed it into another.
     pub fn node_buffer(&self, node_idx: usize, port_idx: usize) -> Option<&Value> {
-        self.core.buffers.get(node_idx)
+        self.core
+            .buffers
+            .get(node_idx)
             .and_then(|ports| ports.get(port_idx))
     }
 
@@ -1124,7 +1148,8 @@ impl PolydatState {
     /// Create a memoized accessor for a named subset of outputs.
     /// Resolves names to indices once; subsequent access uses indices only.
     pub fn accessor(program: &PolydatProgram, names: &[&str]) -> OutputAccessor {
-        let indices: Vec<usize> = names.iter()
+        let indices: Vec<usize> = names
+            .iter()
             .filter_map(|n| program.output_index(n))
             .collect();
         OutputAccessor { indices }
@@ -1146,12 +1171,17 @@ pub struct OutputAccessor {
 
 impl OutputAccessor {
     /// Pull all outputs in this accessor from the given state.
-    pub fn pull_all<'a>(&self, state: &'a mut PolydatState, program: &PolydatProgram) -> Vec<&'a Value> {
+    pub fn pull_all<'a>(
+        &self,
+        state: &'a mut PolydatState,
+        program: &PolydatProgram,
+    ) -> Vec<&'a Value> {
         for &idx in &self.indices {
             let (node_idx, _) = program.resolve_output_by_index(idx);
             state.core.eval_node(program, node_idx);
         }
-        self.indices.iter()
+        self.indices
+            .iter()
             .map(|&idx| {
                 let (ni, pi) = program.resolve_output_by_index(idx);
                 &state.core.buffers[ni][pi]
@@ -1222,7 +1252,11 @@ impl ProvScanState {
         input_provenance: Vec<crate::kernel::ProvMask>,
         nondeterministic_nodes: Vec<usize>,
     ) -> Self {
-        Self { core, input_provenance, nondeterministic_nodes }
+        Self {
+            core,
+            input_provenance,
+            nondeterministic_nodes,
+        }
     }
 
     /// Set new input values and invalidate affected nodes.
@@ -1269,32 +1303,52 @@ mod panic_enrichment_tests {
         let mut k = compile_polydat_with_libs(
             "extern x: u64\n\
              doubled := mul(x, 2)\n",
-            None, vec![], &[], false, "test_workload",
-        ).expect("compile");
+            None,
+            vec![],
+            &[],
+            false,
+            "test_workload",
+        )
+        .expect("compile");
         let idx = k.program().find_input("x").unwrap();
-        k.state().set_input(idx, crate::ast::Value::Str("oops".into()));
-        let result = std::panic::catch_unwind(
-            std::panic::AssertUnwindSafe(|| { k.pull("doubled"); })
-        );
+        k.state()
+            .set_input(idx, crate::ast::Value::Str("oops".into()));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            k.pull("doubled");
+        }));
         let err = result.expect_err("pull should panic on type mismatch");
-        let msg = err.downcast_ref::<String>().cloned()
+        let msg = err
+            .downcast_ref::<String>()
+            .cloned()
             .or_else(|| err.downcast_ref::<&'static str>().map(|s| (*s).to_string()))
             .expect("panic payload should be a String");
-        assert!(msg.contains("expected U64"),
-            "missing original panic body in: {msg}");
-        assert!(msg.contains("`mul`"),
-            "missing node name in enriched message: {msg}");
-        assert!(msg.contains("doubled"),
-            "missing output binding in enriched message: {msg}");
-        assert!(msg.contains("test_workload"),
-            "missing program context in enriched message: {msg}");
-        assert!(msg.contains("\"oops\""),
-            "missing input snapshot in enriched message: {msg}");
+        assert!(
+            msg.contains("expected U64"),
+            "missing original panic body in: {msg}"
+        );
+        assert!(
+            msg.contains("`mul`"),
+            "missing node name in enriched message: {msg}"
+        );
+        assert!(
+            msg.contains("doubled"),
+            "missing output binding in enriched message: {msg}"
+        );
+        assert!(
+            msg.contains("test_workload"),
+            "missing program context in enriched message: {msg}"
+        );
+        assert!(
+            msg.contains("\"oops\""),
+            "missing input snapshot in enriched message: {msg}"
+        );
         // The suppression hook must have captured the ORIGINAL
         // panic site (Value::as_u64 in ast.rs) — not the
         // re-raise site in engines.rs.
-        assert!(msg.contains("panicked at") && msg.contains("ast.rs"),
-            "missing original panic location in enriched message: {msg}");
+        assert!(
+            msg.contains("panicked at") && msg.contains("ast.rs"),
+            "missing original panic location in enriched message: {msg}"
+        );
         // Surface the full enriched message in `cargo test --
         // --nocapture` runs so the format is easy to eyeball.
         eprintln!("== enriched message ==\n{msg}\n======================");

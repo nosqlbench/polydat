@@ -109,7 +109,10 @@ mod tests {
         let p = Program::new(vec![
             push_clause("a"),
             push_clause("b"),
-            Op::Zip { n: 2, mode: ZipMode::Strict },
+            Op::Zip {
+                n: 2,
+                mode: ZipMode::Strict,
+            },
             push_clause("c"),
             Op::Cartesian { n: 2 },
             Op::Dispense,
@@ -119,10 +122,7 @@ mod tests {
 
     #[test]
     fn round_trip_serde() {
-        let p = Program::new(vec![
-            push_clause("a"),
-            Op::Dispense,
-        ]);
+        let p = Program::new(vec![push_clause("a"), Op::Dispense]);
         let json = serde_json::to_string(&p).unwrap();
         let back: Program = serde_json::from_str(&json).unwrap();
         assert_eq!(p, back);

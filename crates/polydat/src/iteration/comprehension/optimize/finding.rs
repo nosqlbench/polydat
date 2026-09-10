@@ -51,7 +51,10 @@ pub enum Reduction {
     Replace { with: Comprehension },
     /// Rewrite via a tagged R-rule. The `witness` is the new
     /// AST; `rule` is the catalog identifier.
-    Rewrite { rule: RuleId, witness: Comprehension },
+    Rewrite {
+        rule: RuleId,
+        witness: Comprehension,
+    },
 }
 
 /// Strict-improvement vector along the (compute, memory)

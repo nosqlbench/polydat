@@ -41,9 +41,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Instant;
 
-use criterion::{
-    BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main,
-};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 
 use polydat::ast::Value;
 use polydat::compile::assembly::{PolydatAssembler, WireRef};
@@ -203,15 +201,11 @@ fn bench_pull_clean_one_scope(c: &mut Criterion) {
             kernel.state().attach_shared_cell(i, cell);
         }
         warm_up(&mut kernel);
-        group.bench_with_input(
-            BenchmarkId::from_parameter(n_cells),
-            &n_cells,
-            |b, _| {
-                b.iter(|| {
-                    black_box(kernel.pull("out"));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(n_cells), &n_cells, |b, _| {
+            b.iter(|| {
+                black_box(kernel.pull("out"));
+            });
+        });
     }
     group.finish();
 }
@@ -237,17 +231,13 @@ fn bench_pull_dirty_one_cell(c: &mut Criterion) {
         }
         warm_up(&mut kernel);
         let mut v = 0u64;
-        group.bench_with_input(
-            BenchmarkId::from_parameter(n_cells),
-            &n_cells,
-            |b, _| {
-                b.iter(|| {
-                    cells[0].publish(Value::U64(v));
-                    v = v.wrapping_add(1);
-                    black_box(kernel.pull("out"));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(n_cells), &n_cells, |b, _| {
+            b.iter(|| {
+                cells[0].publish(Value::U64(v));
+                v = v.wrapping_add(1);
+                black_box(kernel.pull("out"));
+            });
+        });
     }
     group.finish();
 }
@@ -272,15 +262,11 @@ fn bench_pull_clean_multi_scope(c: &mut Criterion) {
             kernel.state().attach_shared_cell(i, cell);
         }
         warm_up(&mut kernel);
-        group.bench_with_input(
-            BenchmarkId::from_parameter(n_scopes),
-            &n_scopes,
-            |b, _| {
-                b.iter(|| {
-                    black_box(kernel.pull("out"));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(n_scopes), &n_scopes, |b, _| {
+            b.iter(|| {
+                black_box(kernel.pull("out"));
+            });
+        });
     }
     group.finish();
 }
@@ -304,9 +290,8 @@ fn bench_pull_clean_wide_spill(c: &mut Criterion) {
         // Arc<AtomicU64> per 64 cells. Allocate the words
         // up front and dole out bits.
         let n_words = n_cells.div_ceil(64);
-        let words: Vec<Arc<AtomicU64>> = (0..n_words)
-            .map(|_| Arc::new(AtomicU64::new(0)))
-            .collect();
+        let words: Vec<Arc<AtomicU64>> =
+            (0..n_words).map(|_| Arc::new(AtomicU64::new(0))).collect();
         for i in 0..n_cells {
             let word_idx = i / 64;
             let bit = (i % 64) as u8;
@@ -314,15 +299,11 @@ fn bench_pull_clean_wide_spill(c: &mut Criterion) {
             kernel.state().attach_shared_cell(i, cell);
         }
         warm_up(&mut kernel);
-        group.bench_with_input(
-            BenchmarkId::from_parameter(n_cells),
-            &n_cells,
-            |b, _| {
-                b.iter(|| {
-                    black_box(kernel.pull("out"));
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::from_parameter(n_cells), &n_cells, |b, _| {
+            b.iter(|| {
+                black_box(kernel.pull("out"));
+            });
+        });
     }
     group.finish();
 }

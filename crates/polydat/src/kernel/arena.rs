@@ -31,9 +31,9 @@ use std::sync::RwLock;
 
 /// Handle Tag constants
 pub const TAG_STATIC: u64 = 0b00 << 62;
-pub const TAG_ARENA: u64  = 0b01 << 62;
-pub const TAG_RES: u64    = 0b10 << 62;
-pub const TAG_MASK: u64   = 0b11 << 62;
+pub const TAG_ARENA: u64 = 0b01 << 62;
+pub const TAG_RES: u64 = 0b10 << 62;
+pub const TAG_MASK: u64 = 0b11 << 62;
 
 /// Chunk size and the offset split: `offset = chunk << CHUNK_SHIFT | position`.
 const CHUNK_SHIFT: u32 = 16;
@@ -68,7 +68,12 @@ impl Default for CycleArena {
 
 impl CycleArena {
     pub fn new() -> Self {
-        Self { chunks: vec![vec![0u8; CHUNK_SIZE]], chunk: 0, cursor: 0, total: 0 }
+        Self {
+            chunks: vec![vec![0u8; CHUNK_SIZE]],
+            chunk: 0,
+            cursor: 0,
+            total: 0,
+        }
     }
 
     /// Reset at a cycle boundary: back to the first chunk, chunks kept.
@@ -88,7 +93,11 @@ impl CycleArena {
     /// The current position, to release back to.
     #[inline]
     pub fn mark(&self) -> ArenaMark {
-        ArenaMark { chunk: self.chunk, cursor: self.cursor, total: self.total }
+        ArenaMark {
+            chunk: self.chunk,
+            cursor: self.cursor,
+            total: self.total,
+        }
     }
 
     /// Release back to `mark`. Bytes past it are dead: every handle into
@@ -185,7 +194,11 @@ impl CycleArena {
     #[inline]
     fn arena_slice(&self, handle: u64) -> &[u8] {
         let (offset, len) = decode_arena_handle(handle);
-        let (chunk, start, len) = ((offset as usize) >> CHUNK_SHIFT, (offset as usize) & POSITION_MASK, len as usize);
+        let (chunk, start, len) = (
+            (offset as usize) >> CHUNK_SHIFT,
+            (offset as usize) & POSITION_MASK,
+            len as usize,
+        );
         debug_assert!(start + len <= self.chunks[chunk].len());
         // SAFETY: the range was allocated by `place` within this chunk and
         // chunks never move or shrink within a cycle.
@@ -354,7 +367,11 @@ impl ArenaWriter {
     /// Open a writer at the arena's cursor.
     pub fn new() -> Self {
         let (chunk, start) = with_cycle_arena(|a| (a.chunk, a.cursor));
-        ArenaWriter { chunk, start, len: 0 }
+        ArenaWriter {
+            chunk,
+            start,
+            len: 0,
+        }
     }
 
     /// Append bytes.
@@ -364,7 +381,13 @@ impl ArenaWriter {
         }
         with_cycle_arena(|a| {
             let contiguous = a.chunk == self.chunk && a.cursor == self.start + self.len;
-            if contiguous && self.start + self.len + bytes.len() <= a.chunks[self.chunk].len().min(CHUNK_SIZE).max(self.start + self.len) {
+            if contiguous
+                && self.start + self.len + bytes.len()
+                    <= a.chunks[self.chunk]
+                        .len()
+                        .min(CHUNK_SIZE)
+                        .max(self.start + self.len)
+            {
                 let dest = a.alloc_bytes(bytes.len());
                 dest.copy_from_slice(bytes);
                 self.len += bytes.len();
@@ -389,7 +412,10 @@ impl ArenaWriter {
                     }
                 }
                 // SAFETY: fresh bytes past the copied prefix.
-                unsafe { a.fresh(chunk, start + self.len, bytes.len()).copy_from_slice(bytes) };
+                unsafe {
+                    a.fresh(chunk, start + self.len, bytes.len())
+                        .copy_from_slice(bytes)
+                };
                 self.chunk = chunk;
                 self.start = start;
                 self.len = new_len;
@@ -409,7 +435,10 @@ impl ArenaWriter {
 
     /// Close the writer and return the handle of what it wrote.
     pub fn finish(self) -> u64 {
-        encode_arena_handle(((self.chunk << CHUNK_SHIFT) | self.start) as u32, self.len as u32)
+        encode_arena_handle(
+            ((self.chunk << CHUNK_SHIFT) | self.start) as u32,
+            self.len as u32,
+        )
     }
 }
 
@@ -449,11 +478,19 @@ static STATIC_STRINGS: RwLock<Option<StaticTable>> = RwLock::new(None);
 impl StaticInterner {
     /// Intern a string and return its static handle.
     pub fn intern(s: &str) -> u64 {
-        if let Some(id) = STATIC_STRINGS.read().unwrap().as_ref().and_then(|t| t.index.get(s).copied()) {
+        if let Some(id) = STATIC_STRINGS
+            .read()
+            .unwrap()
+            .as_ref()
+            .and_then(|t| t.index.get(s).copied())
+        {
             return TAG_STATIC | u64::from(id);
         }
         let mut guard = STATIC_STRINGS.write().unwrap();
-        let table = guard.get_or_insert_with(|| StaticTable { entries: Vec::new(), index: std::collections::HashMap::new() });
+        let table = guard.get_or_insert_with(|| StaticTable {
+            entries: Vec::new(),
+            index: std::collections::HashMap::new(),
+        });
         if let Some(&id) = table.index.get(s) {
             return TAG_STATIC | u64::from(id);
         }
@@ -480,12 +517,20 @@ impl StaticInterner {
             return None;
         }
         let id = handle as u32;
-        STATIC_STRINGS.read().unwrap().as_ref().and_then(|t| t.entries.get(id as usize).copied())
+        STATIC_STRINGS
+            .read()
+            .unwrap()
+            .as_ref()
+            .and_then(|t| t.entries.get(id as usize).copied())
     }
 
     /// Number of distinct strings interned so far.
     pub fn len() -> usize {
-        STATIC_STRINGS.read().unwrap().as_ref().map_or(0, |t| t.entries.len())
+        STATIC_STRINGS
+            .read()
+            .unwrap()
+            .as_ref()
+            .map_or(0, |t| t.entries.len())
     }
 }
 

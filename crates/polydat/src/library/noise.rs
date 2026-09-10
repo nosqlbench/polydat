@@ -114,7 +114,8 @@ pub(crate) fn perlin_2d_algo(perm: &PermTable, x: f64, y: f64) -> f64 {
             .wrapping_add(1),
     );
 
-    lerp(v,
+    lerp(
+        v,
         lerp(u, grad2d(aa, xf, yf), grad2d(ba, xf - 1.0, yf)),
         lerp(u, grad2d(ab, xf, yf - 1.0), grad2d(bb, xf - 1.0, yf - 1.0)),
     )
@@ -209,8 +210,7 @@ fn perlin_1d(
     input: u64,
     seed: crate::derive_support::Const<u64>,
     frequency: crate::derive_support::Const<f64>,
-    #[poly_const(PermTable::new, from = seed)]
-    perm: &PermTable,
+    #[poly_const(PermTable::new, from = seed)] perm: &PermTable,
 ) -> f64 {
     perlin_1d_algo(perm, input as f64 * *frequency)
 }
@@ -221,8 +221,7 @@ fn perlin_2d(
     y: u64,
     seed: crate::derive_support::Const<u64>,
     frequency: crate::derive_support::Const<f64>,
-    #[poly_const(PermTable::new, from = seed)]
-    perm: &PermTable,
+    #[poly_const(PermTable::new, from = seed)] perm: &PermTable,
 ) -> f64 {
     perlin_2d_algo(perm, x as f64 * *frequency, y as f64 * *frequency)
 }
@@ -233,8 +232,7 @@ fn simplex_2d(
     y: u64,
     seed: crate::derive_support::Const<u64>,
     frequency: crate::derive_support::Const<f64>,
-    #[poly_const(PermTable::new, from = seed)]
-    perm: &PermTable,
+    #[poly_const(PermTable::new, from = seed)] perm: &PermTable,
 ) -> f64 {
     simplex_2d_algo(perm, x as f64 * *frequency, y as f64 * *frequency)
 }
@@ -265,7 +263,13 @@ pub(crate) fn fbm_1d(perm: &PermTable, base_x: f64, frequency: f64, octaves: u32
     total / max_amp
 }
 
-pub(crate) fn fbm_2d(perm: &PermTable, base_x: f64, base_y: f64, frequency: f64, octaves: u32) -> f64 {
+pub(crate) fn fbm_2d(
+    perm: &PermTable,
+    base_x: f64,
+    base_y: f64,
+    frequency: f64,
+    octaves: u32,
+) -> f64 {
     let mut total = 0.0;
     let mut freq = frequency;
     let mut amp = 1.0;
@@ -282,10 +286,18 @@ pub(crate) fn fbm_2d(perm: &PermTable, base_x: f64, base_y: f64, frequency: f64,
 }
 
 fn fractal_noise_1d_jit_constants(node: &FractalNoise1d) -> Vec<u64> {
-    vec![node.perm.perm.as_ptr() as u64, node.frequency.to_bits(), node.octaves]
+    vec![
+        node.perm.perm.as_ptr() as u64,
+        node.frequency.to_bits(),
+        node.octaves,
+    ]
 }
 fn fractal_noise_2d_jit_constants(node: &FractalNoise2d) -> Vec<u64> {
-    vec![node.perm.perm.as_ptr() as u64, node.frequency.to_bits(), node.octaves]
+    vec![
+        node.perm.perm.as_ptr() as u64,
+        node.frequency.to_bits(),
+        node.octaves,
+    ]
 }
 
 /// 1D fractal Brownian motion: layered Perlin noise with decreasing
@@ -298,8 +310,7 @@ fn fractal_noise_1d(
     seed: crate::derive_support::Const<u64>,
     frequency: crate::derive_support::Const<f64>,
     #[poly_default(4u64)] octaves: crate::derive_support::Const<u64>,
-    #[poly_const(PermTable::new, from = seed)]
-    perm: &PermTable,
+    #[poly_const(PermTable::new, from = seed)] perm: &PermTable,
 ) -> f64 {
     fbm_1d(perm, input as f64, *frequency, *octaves as u32)
 }
@@ -314,8 +325,7 @@ fn fractal_noise_2d(
     seed: crate::derive_support::Const<u64>,
     frequency: crate::derive_support::Const<f64>,
     #[poly_default(4u64)] octaves: crate::derive_support::Const<u64>,
-    #[poly_const(PermTable::new, from = seed)]
-    perm: &PermTable,
+    #[poly_const(PermTable::new, from = seed)] perm: &PermTable,
 ) -> f64 {
     fbm_2d(perm, x as f64, y as f64, *frequency, *octaves as u32)
 }
@@ -346,7 +356,9 @@ mod tests {
         for i in 101..200u64 {
             node.eval(&[Value::U64(i)], &mut curr);
             let diff = (curr[0].as_f64() - prev[0].as_f64()).abs();
-            if diff > 0.5 { large_jumps += 1; }
+            if diff > 0.5 {
+                large_jumps += 1;
+            }
             prev[0] = curr[0].clone();
         }
         // With frequency 0.01, adjacent samples should rarely jump more than 0.5
@@ -404,7 +416,9 @@ mod tests {
         for i in 101..150u64 {
             node.eval(&[Value::U64(i), Value::U64(100)], &mut curr);
             let diff = (curr[0].as_f64() - prev[0].as_f64()).abs();
-            if diff > 0.5 { large_jumps += 1; }
+            if diff > 0.5 {
+                large_jumps += 1;
+            }
             prev[0] = curr[0].clone();
         }
         assert!(large_jumps < 5, "too many large jumps: {large_jumps}");
@@ -457,8 +471,10 @@ mod tests {
             f_prev = f_out[0].as_f64();
         }
         // FBM should have more total variation (higher frequency detail)
-        assert!(f_changes > s_changes * 0.8,
-            "FBM should have comparable or more detail: single={s_changes}, fbm={f_changes}");
+        assert!(
+            f_changes > s_changes * 0.8,
+            "FBM should have comparable or more detail: single={s_changes}, fbm={f_changes}"
+        );
     }
 
     #[test]

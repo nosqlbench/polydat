@@ -6,12 +6,15 @@
 //! bad values fail at compile time with the program's diagnostic.
 
 use polydat::dsl::transform::{assign_values, parse_assignment};
-use polydat::dsl::{compile_ast_with_options, CompileOptions};
+use polydat::dsl::{CompileOptions, compile_ast_with_options};
 
 fn compile(src: &str, assigns: &[(&str, &str)]) -> Result<polydat::kernel::PolydatKernel, String> {
     let tokens = polydat::dsl::lexer::lex(src)?;
     let mut ast = polydat::dsl::parser::parse(tokens)?;
-    let pairs: Vec<(String, String)> = assigns.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect();
+    let pairs: Vec<(String, String)> = assigns
+        .iter()
+        .map(|(n, v)| (n.to_string(), v.to_string()))
+        .collect();
     assign_values(&mut ast, &pairs)?;
     compile_ast_with_options(&ast, src, &CompileOptions::default(), None)
 }
@@ -20,7 +23,16 @@ const SRC: &str = "input cycle: u64\ninput seed: u64\nextern interval_ms: u64 = 
 
 #[test]
 fn string_text_fuses_to_declared_extern_types() {
-    let mut k = compile(SRC, &[("interval_ms", "60000"), ("label", "run-1"), ("scale", "2.5"), ("on", "true")]).unwrap();
+    let mut k = compile(
+        SRC,
+        &[
+            ("interval_ms", "60000"),
+            ("label", "run-1"),
+            ("scale", "2.5"),
+            ("on", "true"),
+        ],
+    )
+    .unwrap();
     k.set_inputs(&[3, 4]);
     assert_eq!(k.pull("ts").as_u64(), 3 * 60000 + 4);
     assert_eq!(k.pull("out").as_str(), "run-1:2.5:true");
@@ -49,7 +61,10 @@ fn unknown_name_is_rejected_with_declared_names() {
 
 #[test]
 fn assignment_text_parses_and_validates_names() {
-    assert_eq!(parse_assignment("a_b=1 2").unwrap(), ("a_b".to_string(), "1 2".to_string()));
+    assert_eq!(
+        parse_assignment("a_b=1 2").unwrap(),
+        ("a_b".to_string(), "1 2".to_string())
+    );
     assert!(parse_assignment("noequals").is_err());
     assert!(parse_assignment("bad-name=1").is_err());
 }

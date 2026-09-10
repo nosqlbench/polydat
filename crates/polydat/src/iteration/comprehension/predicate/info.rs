@@ -164,7 +164,9 @@ pub struct PerAxisMap<T> {
 
 impl<T> PerAxisMap<T> {
     pub fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     pub fn insert<K: Into<String>>(&mut self, key: K, value: T) {

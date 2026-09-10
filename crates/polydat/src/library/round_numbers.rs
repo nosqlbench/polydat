@@ -413,11 +413,21 @@ mod tests {
     #[test]
     fn all_fifteen_registered_under_math() {
         for name in [
-            "floor_base10", "ceiling_base10", "closest_base10",
-            "floor_decade", "ceiling_decade", "closest_decade",
-            "floor_fibonacci", "ceiling_fibonacci", "closest_fibonacci",
-            "floor_binomial", "ceiling_binomial", "closest_binomial",
-            "round_floor", "round_ceiling", "round_nearest",
+            "floor_base10",
+            "ceiling_base10",
+            "closest_base10",
+            "floor_decade",
+            "ceiling_decade",
+            "closest_decade",
+            "floor_fibonacci",
+            "ceiling_fibonacci",
+            "closest_fibonacci",
+            "floor_binomial",
+            "ceiling_binomial",
+            "closest_binomial",
+            "round_floor",
+            "round_ceiling",
+            "round_nearest",
         ] {
             let sig = crate::dsl::registry::lookup(name)
                 .unwrap_or_else(|| panic!("node '{name}' not registered"));

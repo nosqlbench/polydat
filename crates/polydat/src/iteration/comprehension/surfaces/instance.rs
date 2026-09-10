@@ -76,7 +76,9 @@ mod tests {
 
     #[test]
     fn mock_kernel_scope() {
-        let parent = MockKernel { name: "phase_x".into() };
+        let parent = MockKernel {
+            name: "phase_x".into(),
+        };
         let coords = Tuple::new().with("k", TupleValue::I64(42));
         let scoped = parent.scope(&coords);
         assert_eq!(scoped.parent_name, "phase_x");

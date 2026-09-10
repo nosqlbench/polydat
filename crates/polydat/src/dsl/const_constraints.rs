@@ -71,31 +71,41 @@ impl ConstConstraint {
                 let v = arg.as_u64();
                 if v < *min || v > *max {
                     Err(format!("{param_name} must be in [{min}, {max}], got {v}"))
-                } else { Ok(()) }
+                } else {
+                    Ok(())
+                }
             }
             ConstConstraint::RangeF64 { min, max } => {
                 let v = arg.as_f64();
                 if !(*min..=*max).contains(&v) {
                     Err(format!("{param_name} must be in [{min}, {max}], got {v}"))
-                } else { Ok(()) }
+                } else {
+                    Ok(())
+                }
             }
             ConstConstraint::AllowedU64(allowed) => {
                 let v = arg.as_u64();
                 if !allowed.contains(&v) {
                     Err(format!("{param_name} must be one of {allowed:?}, got {v}"))
-                } else { Ok(()) }
+                } else {
+                    Ok(())
+                }
             }
             ConstConstraint::NonZeroU64 => {
                 let v = arg.as_u64();
                 if v == 0 {
                     Err(format!("{param_name} must be non-zero"))
-                } else { Ok(()) }
+                } else {
+                    Ok(())
+                }
             }
             ConstConstraint::NonEmptyStr => {
                 let s = arg.as_str();
                 if s.trim().is_empty() {
                     Err(format!("{param_name} must be non-empty"))
-                } else { Ok(()) }
+                } else {
+                    Ok(())
+                }
             }
             ConstConstraint::StrParser(f) => {
                 let s = arg.as_str();
@@ -104,14 +114,20 @@ impl ConstConstraint {
             ConstConstraint::PositiveFiniteF64 => {
                 let v = arg.as_f64();
                 if !v.is_finite() || v <= 0.0 {
-                    Err(format!("{param_name} must be a positive finite f64, got {v}"))
-                } else { Ok(()) }
+                    Err(format!(
+                        "{param_name} must be a positive finite f64, got {v}"
+                    ))
+                } else {
+                    Ok(())
+                }
             }
             ConstConstraint::FiniteF64 => {
                 let v = arg.as_f64();
                 if !v.is_finite() {
                     Err(format!("{param_name} must be a finite f64, got {v}"))
-                } else { Ok(()) }
+                } else {
+                    Ok(())
+                }
             }
         }
     }

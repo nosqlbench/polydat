@@ -25,13 +25,19 @@
 // the function's identifier.
 
 #[crate::polydat_node(category = Conversions)]
-fn __u64_to_string(input: u64) -> String { input.to_string() }
+fn __u64_to_string(input: u64) -> String {
+    input.to_string()
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __f64_to_string(input: f64) -> String { input.to_string() }
+fn __f64_to_string(input: f64) -> String {
+    input.to_string()
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __u64_to_f64(input: u64) -> f64 { input as f64 }
+fn __u64_to_f64(input: u64) -> f64 {
+    input as f64
+}
 
 #[crate::polydat_node(category = Conversions)]
 fn __bool_to_str(input: bool) -> String {
@@ -44,42 +50,66 @@ fn __bool_to_u64(input: bool) -> u64 {
 }
 
 #[crate::polydat_node(category = Conversions)]
-fn __u64_to_bool(input: u64) -> bool { input != 0 }
+fn __u64_to_bool(input: u64) -> bool {
+    input != 0
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __u32_to_u64(input: u32) -> u64 { input as u64 }
+fn __u32_to_u64(input: u32) -> u64 {
+    input as u64
+}
 
 // Totality fill: every u32 fits in i64 (lossless), so the widening
 // is class A — see type_system.md §3.3 / adapter_catalog_invariants.
 #[crate::polydat_node(category = Conversions)]
-fn __u32_to_i64(input: u32) -> i64 { input as i64 }
+fn __u32_to_i64(input: u32) -> i64 {
+    input as i64
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __i32_to_i64(input: i32) -> i64 { input as i64 }
+fn __i32_to_i64(input: i32) -> i64 {
+    input as i64
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __f32_to_f64(input: f32) -> f64 { input as f64 }
+fn __f32_to_f64(input: f32) -> f64 {
+    input as f64
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __i32_to_f64(input: i32) -> f64 { input as f64 }
+fn __i32_to_f64(input: i32) -> f64 {
+    input as f64
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __u32_to_f64(input: u32) -> f64 { input as f64 }
+fn __u32_to_f64(input: u32) -> f64 {
+    input as f64
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __i64_to_f64(input: i64) -> f64 { input as f64 }
+fn __i64_to_f64(input: i64) -> f64 {
+    input as f64
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __i32_to_string(input: i32) -> String { input.to_string() }
+fn __i32_to_string(input: i32) -> String {
+    input.to_string()
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __i64_to_string(input: i64) -> String { input.to_string() }
+fn __i64_to_string(input: i64) -> String {
+    input.to_string()
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __f32_to_string(input: f32) -> String { input.to_string() }
+fn __f32_to_string(input: f32) -> String {
+    input.to_string()
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __u32_to_string(input: u32) -> String { input.to_string() }
+fn __u32_to_string(input: u32) -> String {
+    input.to_string()
+}
 
 // =================================================================
 // Explicit narrowing casts (F64→U64) — workload-callable
@@ -97,14 +127,22 @@ fn __u32_to_string(input: u32) -> String { input.to_string() }
 /// `floor_decade(...)`) into a u64-typed cell or port.
 #[crate::polydat_node(category = Conversions)]
 fn trunc_u64(input: f64) -> u64 {
-    if input.is_nan() { 0 } else { input.trunc().max(0.0).min(u64::MAX as f64) as u64 }
+    if input.is_nan() {
+        0
+    } else {
+        input.trunc().max(0.0).min(u64::MAX as f64) as u64
+    }
 }
 
 /// Round an `f64` half-away-from-zero into a `u64` (saturating;
 /// NaN → 0). Rounding twin of [`trunc_u64`].
 #[crate::polydat_node(category = Conversions)]
 fn round_u64(input: f64) -> u64 {
-    if input.is_nan() { 0 } else { input.round().max(0.0).min(u64::MAX as f64) as u64 }
+    if input.is_nan() {
+        0
+    } else {
+        input.round().max(0.0).min(u64::MAX as f64) as u64
+    }
 }
 
 // =================================================================
@@ -167,10 +205,14 @@ fn __str_to_bool(input: &str) -> bool {
     match raw.to_ascii_lowercase().as_str() {
         "true" | "1" => true,
         "false" | "0" => false,
-        _ => panic!("{}", coercion_diagnostic(
-            raw, "a boolean",
-            "__str_to_bool expected case-insensitive true/false or 1/0",
-        )),
+        _ => panic!(
+            "{}",
+            coercion_diagnostic(
+                raw,
+                "a boolean",
+                "__str_to_bool expected case-insensitive true/false or 1/0",
+            )
+        ),
     }
 }
 
@@ -178,7 +220,10 @@ fn __str_to_bool(input: &str) -> bool {
 fn __str_to_u64(input: &str) -> u64 {
     let raw = input.trim();
     raw.parse::<u64>().unwrap_or_else(|e| {
-        panic!("{}", coercion_diagnostic(raw, "a whole number", &format!("__str_to_u64: {e}")))
+        panic!(
+            "{}",
+            coercion_diagnostic(raw, "a whole number", &format!("__str_to_u64: {e}"))
+        )
     })
 }
 
@@ -186,7 +231,10 @@ fn __str_to_u64(input: &str) -> u64 {
 fn __str_to_f64(input: &str) -> f64 {
     let raw = input.trim();
     raw.parse::<f64>().unwrap_or_else(|e| {
-        panic!("{}", coercion_diagnostic(raw, "a number", &format!("__str_to_f64: {e}")))
+        panic!(
+            "{}",
+            coercion_diagnostic(raw, "a number", &format!("__str_to_f64: {e}"))
+        )
     })
 }
 
@@ -206,13 +254,19 @@ fn __str_to_f64(input: &str) -> f64 {
 ///
 /// JIT level: P2 (compiled_u64 via f64::from_bits truncation).
 #[crate::polydat_node(category = Conversions)]
-fn f64_to_u64(input: f64) -> u64 { input as u64 }
+fn f64_to_u64(input: f64) -> u64 {
+    input as u64
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn round_to_u64(input: f64) -> u64 { input.round() as u64 }
+fn round_to_u64(input: f64) -> u64 {
+    input.round() as u64
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn floor_to_u64(input: f64) -> u64 { input.floor() as u64 }
+fn floor_to_u64(input: f64) -> u64 {
+    input.floor() as u64
+}
 
 /// Ceiling f64 to u64 (round toward positive infinity).
 ///
@@ -224,7 +278,9 @@ fn floor_to_u64(input: f64) -> u64 { input.floor() as u64 }
 ///
 /// JIT level: P2 (compiled_u64 via f64::from_bits + ceil).
 #[crate::polydat_node(category = Conversions)]
-fn ceil_to_u64(input: f64) -> u64 { input.ceil() as u64 }
+fn ceil_to_u64(input: f64) -> u64 {
+    input.ceil() as u64
+}
 
 /// Discretize: bin a continuous f64 into N equal-width buckets.
 ///
@@ -278,11 +334,21 @@ fn format_u64(
 }
 
 impl FormatU64 {
-    pub fn decimal() -> Self { Self::new(10) }
-    pub fn hex() -> Self { Self::new(16) }
-    pub fn octal() -> Self { Self::new(8) }
-    pub fn binary() -> Self { Self::new(2) }
-    pub fn with_radix(radix: u32) -> Self { Self::new(radix as u64) }
+    pub fn decimal() -> Self {
+        Self::new(10)
+    }
+    pub fn hex() -> Self {
+        Self::new(16)
+    }
+    pub fn octal() -> Self {
+        Self::new(8)
+    }
+    pub fn binary() -> Self {
+        Self::new(2)
+    }
+    pub fn with_radix(radix: u32) -> Self {
+        Self::new(radix as u64)
+    }
 }
 
 // SRD-80 PR B.5 — `format_f64` and `zero_pad_u64` migrated to
@@ -299,7 +365,10 @@ impl FormatU64 {
 ///
 /// Signature: `format_f64(input: f64, precision: u64) -> (String)`
 #[crate::polydat_node(category = Conversions)]
-fn format_f64(input: f64, #[poly_default(2)] precision: crate::derive_support::Const<u64>) -> String {
+fn format_f64(
+    input: f64,
+    #[poly_default(2)] precision: crate::derive_support::Const<u64>,
+) -> String {
     format!("{:.prec$}", input, prec = *precision as usize)
 }
 
@@ -307,7 +376,10 @@ fn format_f64(input: f64, #[poly_default(2)] precision: crate::derive_support::C
 ///
 /// Signature: `zero_pad_u64(input: u64, width: u64) -> (String)`
 #[crate::polydat_node(category = Conversions)]
-fn zero_pad_u64(input: u64, #[poly_default(10)] width: crate::derive_support::Const<u64>) -> String {
+fn zero_pad_u64(
+    input: u64,
+    #[poly_default(10)] width: crate::derive_support::Const<u64>,
+) -> String {
     format!("{:0>width$}", input, width = *width as usize)
 }
 
@@ -338,12 +410,19 @@ pub fn signatures() -> &'static [FuncSig] {
 
 /// Convert u64 integer value to f64. SRD-80 PR B.14 migration.
 #[crate::polydat_node(category = Conversions)]
-fn to_f64(input: u64) -> f64 { input as f64 }
+fn to_f64(input: u64) -> f64 {
+    input as f64
+}
 
 /// Try to build a conversion node from a function name and const args.
 ///
 /// Returns `None` if the name is not handled by this module.
-pub(crate) fn build_node(_name: &str, _wires: &[crate::compile::assembly::WireRef], _wire_types: &[crate::ast::PortType], _consts: &[crate::dsl::factory::ConstArg]) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
+pub(crate) fn build_node(
+    _name: &str,
+    _wires: &[crate::compile::assembly::WireRef],
+    _wire_types: &[crate::ast::PortType],
+    _consts: &[crate::dsl::factory::ConstArg],
+) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
     // `unit_interval` / `clamp_f64` route via macro-emitted
     // NodeRegistration per SRD-80b Phase E (sampling/icd.rs).
     // `to_f64` / `f64_to_u64` / `round_to_u64` / `floor_to_u64` /
@@ -353,7 +432,6 @@ pub(crate) fn build_node(_name: &str, _wires: &[crate::compile::assembly::WireRe
     // NodeRegistration per SRD-80 PR B.5.
     None
 }
-
 
 /// Assembly-time constant validation. See SRD 15 §"Const Constraint Metadata".
 ///
@@ -608,10 +686,14 @@ mod tests {
         let node = StrToBool::new();
         let mut out = [Value::None];
         for (input, expected) in [
-            ("true", true), ("false", false),
-            ("True", true), ("False", false),
-            ("TRUE", true), ("FALSE", false),
-            ("1", true), ("0", false),
+            ("true", true),
+            ("false", false),
+            ("True", true),
+            ("False", false),
+            ("TRUE", true),
+            ("FALSE", false),
+            ("1", true),
+            ("0", false),
         ] {
             node.eval(&[Value::Str(input.into())], &mut out);
             assert_eq!(out[0].as_bool(), expected, "input={input:?}");

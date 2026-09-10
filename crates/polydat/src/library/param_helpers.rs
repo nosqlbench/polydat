@@ -110,7 +110,10 @@ fn in_range(
 #[crate::polydat_node(category = Arithmetic)]
 fn is_one_of(input: u64, allowed: crate::derive_support::Const<Vec<u64>>) -> u64 {
     if !allowed.contains(&input) {
-        panic!("is_one_of: value {input} not in allowed set {:?}", allowed.0);
+        panic!(
+            "is_one_of: value {input} not in allowed set {:?}",
+            allowed.0
+        );
     }
     input
 }
@@ -121,8 +124,7 @@ fn is_one_of(input: u64, allowed: crate::derive_support::Const<Vec<u64>>) -> u64
 
 /// Build a Regex from a pattern, panicking on invalid input.
 fn compile_matches_regex(pattern: &str) -> Regex {
-    Regex::new(pattern)
-        .unwrap_or_else(|e| panic!("matches: invalid regex {pattern:?}: {e}"))
+    Regex::new(pattern).unwrap_or_else(|e| panic!("matches: invalid regex {pattern:?}: {e}"))
 }
 
 /// Assert that a string value matches a regex pattern.
@@ -131,11 +133,13 @@ fn compile_matches_regex(pattern: &str) -> Regex {
 fn matches(
     input: &str,
     pattern: crate::derive_support::Const<&str>,
-    #[poly_const(compile_matches_regex, from = pattern)]
-    re: &Regex,
+    #[poly_const(compile_matches_regex, from = pattern)] re: &Regex,
 ) -> String {
     if !re.is_match(input) {
-        panic!("matches: value {input:?} does not match pattern {:?}", pattern.0);
+        panic!(
+            "matches: value {input:?} does not match pattern {:?}",
+            pattern.0
+        );
     }
     input.to_string()
 }
@@ -147,7 +151,6 @@ fn matches(
 use crate::dsl::registry::FuncSig;
 
 pub fn signatures() -> &'static [FuncSig] {
-
     &[
         // `required` / `this_or` migrated to `#[polydat_node]` via the
         // `Option<T>` combinator (SRD-80b Phase C).
@@ -159,7 +162,8 @@ pub fn signatures() -> &'static [FuncSig] {
 
 pub(crate) fn build_node(
     name: &str,
-    _wires: &[crate::compile::assembly::WireRef], _wire_types: &[crate::ast::PortType],
+    _wires: &[crate::compile::assembly::WireRef],
+    _wire_types: &[crate::ast::PortType],
     consts: &[crate::dsl::factory::ConstArg],
 ) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
     let _ = name;
@@ -180,12 +184,16 @@ pub(crate) fn validate_node(
             let hi = consts.get(1).map(|c| c.as_u64()).unwrap_or(u64::MAX);
             if lo > hi {
                 Err(format!("lo ({lo}) must be <= hi ({hi})"))
-            } else { Ok(()) }
+            } else {
+                Ok(())
+            }
         }
         "is_one_of" => {
             if consts.is_empty() {
                 Err("at least one allowed value required".into())
-            } else { Ok(()) }
+            } else {
+                Ok(())
+            }
         }
         _ => Ok(()),
     }

@@ -36,7 +36,8 @@ fn json_tile_encodes_by_wire_type_and_position() {
 
 #[test]
 fn declared_type_wins_over_wire_type() {
-    let src = "input cycle: u64\ntile t : json := {\"as_text\": ${cycle: str}, \"as_num\": ${cycle}}\n";
+    let src =
+        "input cycle: u64\ntile t : json := {\"as_text\": ${cycle: str}, \"as_num\": ${cycle}}\n";
     assert_eq!(render(src, 9, "t"), "{\"as_text\": \"9\", \"as_num\": 9}");
 }
 
@@ -62,7 +63,10 @@ fn branches_select_by_condition() {
 #[test]
 fn projection_over_an_inline_comprehension_with_element_and_outer_wires() {
     let src = "input cycle: u64\nbase := cycle * 100\ntile t : json := {\"samples\": [@for s in 0..3 {{\"n\": ${s}, \"v\": ${base + s}}}]}\n";
-    assert_eq!(render(src, 2, "t"), "{\"samples\": [{\"n\": 0, \"v\": 200},{\"n\": 1, \"v\": 201},{\"n\": 2, \"v\": 202}]}");
+    assert_eq!(
+        render(src, 2, "t"),
+        "{\"samples\": [{\"n\": 0, \"v\": 200},{\"n\": 1, \"v\": 201},{\"n\": 2, \"v\": 202}]}"
+    );
     let parsed: serde_json::Value = serde_json::from_str(&render(src, 2, "t")).unwrap();
     assert_eq!(parsed["samples"].as_array().unwrap().len(), 3);
 }
@@ -75,14 +79,18 @@ fn projection_over_a_producer_with_a_separator_and_two_elements() {
 
 #[test]
 fn projection_inside_a_string_position_escapes() {
-    let src = "input cycle: u64\ntile t : json := {\"list\": \"@for w in x,y sep \\\"|\\\" {${w}}\"}\n";
+    let src =
+        "input cycle: u64\ntile t : json := {\"list\": \"@for w in x,y sep \\\"|\\\" {${w}}\"}\n";
     assert_eq!(render(src, 0, "t"), "{\"list\": \"x|y\"}");
 }
 
 #[test]
 fn splicing_inlines_an_earlier_tile() {
     let src = "input cycle: u64\ntile inner : json := {\"n\": ${cycle}}\ntile outer : json := {\"wrapped\": ${inner}, \"again\": ${inner}}\n";
-    assert_eq!(render(src, 4, "outer"), "{\"wrapped\": {\"n\": 4}, \"again\": {\"n\": 4}}");
+    assert_eq!(
+        render(src, 4, "outer"),
+        "{\"wrapped\": {\"n\": 4}, \"again\": {\"n\": 4}}"
+    );
 }
 
 #[test]
@@ -125,7 +133,10 @@ fn splicing_across_encodings_keeps_the_inner_encoding() {
     // A json tile carried inside a text tile renders as json: its
     // strings stay quoted and its projection keeps the `,` separator.
     let src = "input cycle: u64\nword := \"ok\"\ntile doc : json := {\"w\": ${word}, \"xs\": [@for i in 0..2 { ${i} }]}\ntile stmt : text := \"INSERT ${cycle} '${doc!}'\"\n";
-    assert_eq!(render(src, 3, "stmt"), "INSERT 3 '{\"w\": \"ok\", \"xs\": [0,1]}'");
+    assert_eq!(
+        render(src, 3, "stmt"),
+        "INSERT 3 '{\"w\": \"ok\", \"xs\": [0,1]}'"
+    );
     // Without `!` the inner text is a string value of the outer encoding.
     let src = "input cycle: u64\ntile inner : text := \"a \\\"b\\\"\"\ntile outer : json := {\"body\": ${inner}}\n";
     assert_eq!(render(src, 3, "outer"), "{\"body\": \"a \\\"b\\\"\"}");
@@ -140,7 +151,8 @@ fn directive_blocks_trim_padding_and_bare_word_blocks_are_blocks() {
 
 #[test]
 fn cycle_inside_a_projection_body_is_the_program_cycle() {
-    let src = "input cycle: u64\ntile t : text := \"@for s in 0..3 sep \\\",\\\" {${cycle + s}}\"\n";
+    let src =
+        "input cycle: u64\ntile t : text := \"@for s in 0..3 sep \\\",\\\" {${cycle + s}}\"\n";
     assert_eq!(render(src, 4, "t"), "4,5,6");
     assert_eq!(render(src, 10, "t"), "10,11,12");
 }

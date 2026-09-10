@@ -159,7 +159,9 @@ mod tests {
             push_clause("a"),
             push_clause("b"),
             Op::Cartesian { n: 2 },
-            Op::Filter { predicate: "true".into() },
+            Op::Filter {
+                predicate: "true".into(),
+            },
             Op::Dispense,
         ]);
         let b = check_bounds(&p);
@@ -193,7 +195,10 @@ mod tests {
         let p = Program::new(vec![
             push_clause("a"),
             push_clause("b"),
-            Op::Zip { n: 2, mode: ZipMode::Cycle },
+            Op::Zip {
+                n: 2,
+                mode: ZipMode::Cycle,
+            },
             Op::Dispense,
         ]);
         let b = check_bounds(&p);

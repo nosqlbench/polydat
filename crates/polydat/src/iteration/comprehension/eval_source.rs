@@ -62,11 +62,11 @@
 
 use std::sync::Arc;
 
+use crate::ast::Value;
 use crate::iteration::comprehension::cardinality::ProductMeasure;
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::source::{LiteralValue, Source};
 use crate::kernel::PolydatKernel;
-use crate::ast::Value;
 
 /// Result of evaluating one clause's source.
 ///
@@ -131,7 +131,11 @@ impl std::fmt::Display for EvalError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             EvalError::NeedsContext => f.write_str("source evaluation needs a kernel context"),
-            EvalError::EvalFailed { var, source, message } => {
+            EvalError::EvalFailed {
+                var,
+                source,
+                message,
+            } => {
                 write!(f, "source '{var} in {source}': {message}")
             }
         }
@@ -206,7 +210,9 @@ impl SourceEval for Source {
                     // over a Lattice axis) still get useful
                     // behavior because the lookup is by index,
                     // not by value.
-                    index_fn: IndexFn::Lattice { axis_sizes: vec![n] },
+                    index_fn: IndexFn::Lattice {
+                        axis_sizes: vec![n],
+                    },
                 })
             }
             Source::IntRange { lo, hi, step } => {
@@ -221,7 +227,9 @@ impl SourceEval for Source {
                 Ok(EvaluatedSource {
                     values: vals,
                     cardinality: n,
-                    index_fn: IndexFn::Lattice { axis_sizes: vec![n] },
+                    index_fn: IndexFn::Lattice {
+                        axis_sizes: vec![n],
+                    },
                 })
             }
             Source::Generator { .. } | Source::WorkloadParamList { .. } => {
@@ -234,12 +242,13 @@ impl SourceEval for Source {
                 let kernel = ctx
                     .parent
                     .materialize_subscope(ctx.canonical.program().clone(), ctx.prefix);
-                let vals = crate::iteration::comprehension::eval::evaluate_spec(&spec_text, &kernel)
-                    .map_err(|e| EvalError::EvalFailed {
-                        var: ctx.var_name.to_string(),
-                        source: spec_text,
-                        message: e.to_string(),
-                    })?;
+                let vals =
+                    crate::iteration::comprehension::eval::evaluate_spec(&spec_text, &kernel)
+                        .map_err(|e| EvalError::EvalFailed {
+                            var: ctx.var_name.to_string(),
+                            source: spec_text,
+                            message: e.to_string(),
+                        })?;
                 let n = vals.len() as u64;
                 let index_fn = classify_observed_values(&vals);
                 Ok(EvaluatedSource {
@@ -288,7 +297,9 @@ impl SourceEval for Source {
 /// the shape is declared from args without expansion.
 fn classify_observed_values(vals: &[Value]) -> IndexFn {
     let n = vals.len() as u64;
-    IndexFn::Lattice { axis_sizes: vec![n] }
+    IndexFn::Lattice {
+        axis_sizes: vec![n],
+    }
 }
 
 fn literal_to_value(lv: &LiteralValue) -> Value {
@@ -309,7 +320,11 @@ mod tests {
     #[test]
     fn literal_evaluates_without_context() {
         let s = Source::Literal {
-            values: vec![LiteralValue::Int(1), LiteralValue::Int(2), LiteralValue::Int(3)],
+            values: vec![
+                LiteralValue::Int(1),
+                LiteralValue::Int(2),
+                LiteralValue::Int(3),
+            ],
         };
         assert_eq!(s.eval_class(), EvalClass::Static);
         let ev = s.evaluate(None).unwrap();
@@ -320,7 +335,11 @@ mod tests {
 
     #[test]
     fn int_range_evaluates_without_context() {
-        let s = Source::IntRange { lo: 0, hi: 10, step: 2 };
+        let s = Source::IntRange {
+            lo: 0,
+            hi: 10,
+            step: 2,
+        };
         assert_eq!(s.eval_class(), EvalClass::Static);
         let ev = s.evaluate(None).unwrap();
         // 0, 2, 4, 6, 8 = 5 values

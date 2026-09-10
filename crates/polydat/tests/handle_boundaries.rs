@@ -9,9 +9,9 @@
 
 #![cfg(feature = "jit")]
 
-use polydat::dsl::compile::compile_polydat_to_assembler;
-use polydat::kernel::{cycle_arena_used, PolydatKernel};
 use polydat::JitMode;
+use polydat::dsl::compile::compile_polydat_to_assembler;
+use polydat::kernel::{PolydatKernel, cycle_arena_used};
 
 fn kernel(src: &str, mode: JitMode) -> PolydatKernel {
     let mut asm = compile_polydat_to_assembler(src).unwrap_or_else(|e| panic!("{e}\n{src}"));
@@ -22,7 +22,10 @@ fn kernel(src: &str, mode: JitMode) -> PolydatKernel {
 /// The names of the fused cones in a program, each listing its members.
 fn cones(k: &PolydatKernel) -> Vec<String> {
     let p = k.program();
-    (0..p.node_count()).map(|i| p.node_meta(i).name.clone()).filter(|n| n.starts_with("jit_cone[")).collect()
+    (0..p.node_count())
+        .map(|i| p.node_meta(i).name.clone())
+        .filter(|n| n.starts_with("jit_cone["))
+        .collect()
 }
 
 /// P1 and forced-cone renderings of `outputs` agree over `cycles`, and
@@ -32,7 +35,10 @@ fn agree(src: &str, outputs: &[&str], cycles: u64, fused: &[&str]) {
     let mut p3 = kernel(src, JitMode::Force);
     let names = cones(&p3);
     for member in fused {
-        assert!(names.iter().any(|c| c.contains(member)), "`{member}` was not fused; cones: {names:?}\n{src}");
+        assert!(
+            names.iter().any(|c| c.contains(member)),
+            "`{member}` was not fused; cones: {names:?}\n{src}"
+        );
     }
     for c in 0..cycles {
         p1.set_inputs(&[c]);
@@ -41,16 +47,35 @@ fn agree(src: &str, outputs: &[&str], cycles: u64, fused: &[&str]) {
             let a = p1.pull(out).clone();
             let b = p3.pull(out).clone();
             assert_eq!(a.port_type(), b.port_type(), "{out} at cycle {c}: type");
-            assert_eq!(a.to_display_string(), b.to_display_string(), "{out} at cycle {c}\n{src}");
+            assert_eq!(
+                a.to_display_string(),
+                b.to_display_string(),
+                "{out} at cycle {c}\n{src}"
+            );
         }
     }
 }
 
 #[test]
 fn scalar_to_string_conversions_run_in_cones() {
-    agree("input cycle: u64\nh := hash(cycle)\ns := __u64_to_string(h)\n", &["s"], 6, &["__u64_to_string"]);
-    agree("input cycle: u64\nf := to_f64(hash(cycle)) / 7.0\ns := __f64_to_string(f)\n", &["s"], 6, &["__f64_to_string"]);
-    agree("input cycle: u64\nb := u64_gt(hash(cycle), 1000)\ns := __bool_to_str(b)\n", &["s"], 6, &["__bool_to_str"]);
+    agree(
+        "input cycle: u64\nh := hash(cycle)\ns := __u64_to_string(h)\n",
+        &["s"],
+        6,
+        &["__u64_to_string"],
+    );
+    agree(
+        "input cycle: u64\nf := to_f64(hash(cycle)) / 7.0\ns := __f64_to_string(f)\n",
+        &["s"],
+        6,
+        &["__f64_to_string"],
+    );
+    agree(
+        "input cycle: u64\nb := u64_gt(hash(cycle), 1000)\ns := __bool_to_str(b)\n",
+        &["s"],
+        6,
+        &["__bool_to_str"],
+    );
 }
 
 #[test]
@@ -97,13 +122,21 @@ fn a_str_boundary_input_enters_the_arena_and_the_cone_eval_releases_it() {
     // it was, and the root cycle advance resets it to zero regardless.
     let src = "input cycle: u64\nw := \"w{cycle}\"\nu := str_upper(w)\n";
     let mut p3 = kernel(src, JitMode::Force);
-    assert!(cones(&p3).iter().any(|c| c.contains("str_upper")), "{:?}", cones(&p3));
+    assert!(
+        cones(&p3).iter().any(|c| c.contains("str_upper")),
+        "{:?}",
+        cones(&p3)
+    );
     p3.set_inputs(&[7]);
     let mark = cycle_arena_used();
     assert_eq!(p3.pull("u").as_str(), "W7");
     assert_eq!(cycle_arena_used(), mark, "the cone released what it took");
     p3.set_inputs(&[8]);
-    assert_eq!(cycle_arena_used(), 0, "the root cycle advance reclaimed the arena");
+    assert_eq!(
+        cycle_arena_used(),
+        0,
+        "the root cycle advance reclaimed the arena"
+    );
     assert_eq!(p3.pull("u").as_str(), "W8");
 }
 
@@ -114,12 +147,17 @@ fn an_untyped_variadic_edge_keeps_the_node_on_p1() {
     let src = "input cycle: u64\nh := hash(cycle)\nc := str_concat(h, h)\n";
     agree(src, &["c"], 4, &[]);
     let p3 = kernel(src, JitMode::Force);
-    assert!(!cones(&p3).iter().any(|c| c.contains("str_concat")), "{:?}", cones(&p3));
+    assert!(
+        !cones(&p3).iter().any(|c| c.contains("str_concat")),
+        "{:?}",
+        cones(&p3)
+    );
 }
 
 #[test]
 fn a_non_decimal_format_u64_stays_on_p1_and_agrees() {
-    let src = "input cycle: u64\nh := hash(cycle)\nd := format_u64(h, 10)\nx := format_u64(h, 16)\n";
+    let src =
+        "input cycle: u64\nh := hash(cycle)\nd := format_u64(h, 10)\nx := format_u64(h, 16)\n";
     agree(src, &["d", "x"], 4, &["format_u64"]);
     let mut p3 = kernel(src, JitMode::Force);
     p3.set_inputs(&[1]);

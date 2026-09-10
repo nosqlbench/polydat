@@ -268,8 +268,14 @@ fn tiers() {
     let mut cones = compile_polydat_to_assembler(src).unwrap();
     cones.set_jit_mode(polydat::JitMode::Force);
     let mut cones = cones.compile().unwrap();
-    let mut p2 = compile_polydat_to_assembler(src).unwrap().try_compile_raw().unwrap_or_else(|_| panic!("P2 closures"));
-    let mut p3 = compile_polydat_to_assembler(src).unwrap().try_compile_jit().expect("pure P3");
+    let mut p2 = compile_polydat_to_assembler(src)
+        .unwrap()
+        .try_compile_raw()
+        .unwrap_or_else(|_| panic!("P2 closures"));
+    let mut p3 = compile_polydat_to_assembler(src)
+        .unwrap()
+        .try_compile_jit()
+        .expect("pure P3");
     for cycle in [0u64, 1] {
         p1.set_inputs(&[cycle]);
         let a = p1.pull("doc").to_display_string();
@@ -280,9 +286,18 @@ fn tiers() {
         p3.eval(&[cycle]);
         let d = p3.get_value("doc").to_display_string();
         println!("cycle {cycle} P1:    {a}");
-        println!("cycle {cycle} cones: {}", if b == a { "identical" } else { &b });
-        println!("cycle {cycle} P2:    {}", if c == a { "identical" } else { &c });
-        println!("cycle {cycle} P3:    {}", if d == a { "identical" } else { &d });
+        println!(
+            "cycle {cycle} cones: {}",
+            if b == a { "identical" } else { &b }
+        );
+        println!(
+            "cycle {cycle} P2:    {}",
+            if c == a { "identical" } else { &c }
+        );
+        println!(
+            "cycle {cycle} P3:    {}",
+            if d == a { "identical" } else { &d }
+        );
     }
     println!();
 }
@@ -290,14 +305,19 @@ fn tiers() {
 /// A host that already holds the template as a parsed JSON value hands
 /// it in without going through source text at all.
 fn host_boundary() {
-    use polydat::tile::{compile_polydat_with_tiles, tile_from_json_value, Span, TileOptions};
+    use polydat::tile::{Span, TileOptions, compile_polydat_with_tiles, tile_from_json_value};
 
     let template = serde_json::json!({
         "id": "${cycle}",
         "points": [ "@for s in 0..3", { "n": "${s}", "v": "${cycle + s}" } ]
     });
-    let tile = tile_from_json_value("doc", &template, &TileOptions::default(), Span { line: 0, col: 0 })
-        .expect("structural template");
+    let tile = tile_from_json_value(
+        "doc",
+        &template,
+        &TileOptions::default(),
+        Span { line: 0, col: 0 },
+    )
+    .expect("structural template");
     let mut kernel = compile_polydat_with_tiles("input cycle: u64\n", vec![tile]).expect("compile");
     kernel.set_inputs(&[4]);
     println!("== 10. A tile from a parsed JSON value ==");

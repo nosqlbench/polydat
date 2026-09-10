@@ -23,15 +23,14 @@
 //! conversion onward.
 
 use crate::iteration::comprehension::ast::Comprehension as AlgebraAst;
-use crate::iteration::comprehension::strategy::{StrategyName, ZipMode as AlgebraZipMode};
 use crate::iteration::comprehension::ast_legacy::{
-    Clause as LegacyClause, ClauseSource as LegacyClauseSource,
-    Comprehension as LegacyAst, ComprehensionMode as LegacyMode,
-    Subspace as LegacySubspace, TraversalOrder as LegacyOrder,
+    Clause as LegacyClause, ClauseSource as LegacyClauseSource, Comprehension as LegacyAst,
+    ComprehensionMode as LegacyMode, Subspace as LegacySubspace, TraversalOrder as LegacyOrder,
     ZipMode as LegacyZipMode,
 };
+use crate::iteration::comprehension::strategy::{StrategyName, ZipMode as AlgebraZipMode};
 
-use super::source_parser::{parse_source, SourceParseError};
+use super::source_parser::{SourceParseError, parse_source};
 
 /// Errors produced when converting a legacy AST to algebra.
 #[derive(Debug, Clone, PartialEq)]
@@ -57,16 +56,19 @@ pub enum ConvertError {
 impl std::fmt::Display for ConvertError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ConvertError::SourceParse { clause_var, source, cause } => write!(
+            ConvertError::SourceParse {
+                clause_var,
+                source,
+                cause,
+            } => write!(
                 f,
                 "clause {clause_var:?} source {source:?} failed to parse: {cause}"
             ),
             ConvertError::EmptyComprehension => f.write_str("comprehension has no clauses"),
             ConvertError::EmptyUnionSubspace => f.write_str("union has empty sub-space"),
-            ConvertError::ParallelArityMismatch { vars, exprs } => write!(
-                f,
-                "parallel clause vars={vars} != exprs={exprs}"
-            ),
+            ConvertError::ParallelArityMismatch { vars, exprs } => {
+                write!(f, "parallel clause vars={vars} != exprs={exprs}")
+            }
             ConvertError::CustomOrderingRemoved { function } => write!(
                 f,
                 "custom ordering {function:?} is no longer supported (spec §3.6)"
@@ -168,12 +170,10 @@ fn convert_clause(clause: &LegacyClause) -> Result<AlgebraAst, ConvertError> {
                 .single_var()
                 .unwrap_or_else(|| clause.first_var())
                 .to_string();
-            let source = parse_source(source_str).map_err(|cause| {
-                ConvertError::SourceParse {
-                    clause_var: var.clone(),
-                    source: source_str.clone(),
-                    cause,
-                }
+            let source = parse_source(source_str).map_err(|cause| ConvertError::SourceParse {
+                clause_var: var.clone(),
+                source: source_str.clone(),
+                cause,
             })?;
             Ok(AlgebraAst::clause(var, source))
         }
@@ -189,12 +189,10 @@ fn convert_clause(clause: &LegacyClause) -> Result<AlgebraAst, ConvertError> {
             // wrap in a Zip with the converted mode.
             let mut children = Vec::with_capacity(clause.vars.len());
             for (var, expr) in clause.vars.iter().zip(exprs.iter()) {
-                let source = parse_source(expr).map_err(|cause| {
-                    ConvertError::SourceParse {
-                        clause_var: var.clone(),
-                        source: expr.clone(),
-                        cause,
-                    }
+                let source = parse_source(expr).map_err(|cause| ConvertError::SourceParse {
+                    clause_var: var.clone(),
+                    source: expr.clone(),
+                    cause,
                 })?;
                 children.push(AlgebraAst::clause(var.clone(), source));
             }
@@ -222,7 +220,9 @@ fn convert_order(order: &LegacyOrder) -> Result<(StrategyName, Option<u64>), Con
         LegacyOrder::Lex { count } => (StrategyName::Lex, count.map(|n| n as u64)),
         LegacyOrder::ReverseLex { count } => (StrategyName::ReverseLex, count.map(|n| n as u64)),
         LegacyOrder::Diagonal { count } => (StrategyName::Diagonal, count.map(|n| n as u64)),
-        LegacyOrder::Antidiagonal { count } => (StrategyName::Antidiagonal, count.map(|n| n as u64)),
+        LegacyOrder::Antidiagonal { count } => {
+            (StrategyName::Antidiagonal, count.map(|n| n as u64))
+        }
         LegacyOrder::Extrema { strata } => (StrategyName::Extrema, strata.map(|n| n as u64)),
         LegacyOrder::Shells { depth, .. } => (StrategyName::Shells, depth.map(|n| n as u64)),
         LegacyOrder::Halton { count } => (StrategyName::Halton, count.map(|n| n as u64)),
@@ -257,7 +257,14 @@ mod tests {
         match algebra {
             AlgebraAst::Clause { name, source } => {
                 assert_eq!(name, "k");
-                assert!(matches!(source, Source::IntRange { lo: 1, hi: 10, step: 1 }));
+                assert!(matches!(
+                    source,
+                    Source::IntRange {
+                        lo: 1,
+                        hi: 10,
+                        step: 1
+                    }
+                ));
             }
             other => panic!("expected Clause, got {other:?}"),
         }
@@ -283,7 +290,11 @@ mod tests {
                         assert_eq!(name, "k");
                         assert!(matches!(
                             source,
-                            Source::IntRange { lo: 1, hi: 10, step: 1 }
+                            Source::IntRange {
+                                lo: 1,
+                                hi: 10,
+                                step: 1
+                            }
                         ));
                     }
                     other => panic!("expected Clause, got {other:?}"),
@@ -327,7 +338,11 @@ mod tests {
         };
         let algebra = legacy_to_algebra(&legacy).unwrap();
         match algebra {
-            AlgebraAst::Order { strategy: StrategyName::Lex, truncation: Some(5), .. } => {}
+            AlgebraAst::Order {
+                strategy: StrategyName::Lex,
+                truncation: Some(5),
+                ..
+            } => {}
             other => panic!("expected Order(Lex, Some(5)), got {other:?}"),
         }
     }
@@ -401,7 +416,10 @@ mod tests {
         // After the singleton-cartesian elide, the Zip
         // surfaces at the top level.
         match algebra {
-            AlgebraAst::Zip { children, mode: AlgebraZipMode::Strict } => {
+            AlgebraAst::Zip {
+                children,
+                mode: AlgebraZipMode::Strict,
+            } => {
                 assert_eq!(children.len(), 2);
             }
             other => panic!("expected Zip, got {other:?}"),

@@ -10,7 +10,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use polydat::dsl::compile_polydat;
-use polydat::kernel::{program_count, programs_built, PolydatKernel};
+use polydat::kernel::{PolydatKernel, program_count, programs_built};
 
 /// The build counter is process-wide and the test harness runs tests
 /// on several threads, so tests that read it hold this lock to keep
@@ -18,7 +18,9 @@ use polydat::kernel::{program_count, programs_built, PolydatKernel};
 static SERIAL: Mutex<()> = Mutex::new(());
 
 fn serial() -> MutexGuard<'static, ()> {
-    SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    SERIAL
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 const THREE_LEVELS: &str = "input cycle: u64\n\
@@ -52,7 +54,10 @@ fn compiling_three_levels_builds_exactly_four_programs() {
 
 /// Walk every level of the three-level traversal, counting innermost
 /// activations and checking they share the leaf program.
-fn walk_three_levels(k: &mut PolydatKernel, leaf_program: &Arc<polydat::kernel::PolydatProgram>) -> (u64, u64) {
+fn walk_three_levels(
+    k: &mut PolydatKernel,
+    leaf_program: &Arc<polydat::kernel::PolydatProgram>,
+) -> (u64, u64) {
     let mut leaves = 0u64;
     let mut checksum = 0u64;
     let mut outer = k.traverse(0).unwrap();
@@ -80,7 +85,11 @@ fn activating_thousands_of_tuples_builds_no_programs() {
     let _serial = serial();
     let mut k = compile_polydat(THREE_LEVELS).unwrap();
     k.set_inputs(&[0]);
-    let leaf_program = k.program().traversals()[0].program.traversals()[0].program.traversals()[0].program.clone();
+    let leaf_program = k.program().traversals()[0].program.traversals()[0]
+        .program
+        .traversals()[0]
+        .program
+        .clone();
 
     // Opening a traversal whose source is a generator call evaluates
     // that call once through the constant-expression path, which is
@@ -95,7 +104,12 @@ fn activating_thousands_of_tuples_builds_no_programs() {
     let after = programs_built();
     assert_eq!(leaves, 4 * 20 * 50);
     assert_eq!(again, checksum);
-    assert_eq!(after, before, "activation must not compile: {} programs were built", after - before);
+    assert_eq!(
+        after,
+        before,
+        "activation must not compile: {} programs were built",
+        after - before
+    );
 }
 
 #[test]
@@ -112,7 +126,11 @@ fn opening_a_generator_sourced_traversal_compiles_its_source_once() {
     // The `partitions(...)` source evaluates through the cached
     // constant-expression path: at most a couple of programs on the
     // first open, none on the second.
-    assert!(after_first - before <= 2, "first open built {} programs", after_first - before);
+    assert!(
+        after_first - before <= 2,
+        "first open built {} programs",
+        after_first - before
+    );
     assert_eq!(after_second, after_first, "re-opening must not compile");
 }
 
@@ -170,11 +188,19 @@ fn activation_cost_is_flat_across_the_tuple_index() {
         let _ = program.create_state();
     }
     let alloc = start.elapsed().as_nanos() as f64 / 500.0;
-    eprintln!("activation ns: first 500 = {head:.0}, last 500 = {tail:.0}, bare state allocation = {alloc:.0}");
+    eprintln!(
+        "activation ns: first 500 = {head:.0}, last 500 = {tail:.0}, bare state allocation = {alloc:.0}"
+    );
     // Flatness: the last block costs no more than twice the first, and
     // the state allocation is the dominant term of each.
-    assert!(tail <= head * 2.0, "activation cost grew with index: head {head:.0} ns, tail {tail:.0} ns");
-    assert!(alloc <= head, "state allocation {alloc:.0} ns should not exceed a full activation {head:.0} ns");
+    assert!(
+        tail <= head * 2.0,
+        "activation cost grew with index: head {head:.0} ns, tail {tail:.0} ns"
+    );
+    assert!(
+        alloc <= head,
+        "state allocation {alloc:.0} ns should not exceed a full activation {head:.0} ns"
+    );
 }
 
 #[test]
@@ -199,5 +225,10 @@ fn producers_and_derivations_do_not_add_programs_per_tuple() {
             act.cycle(0).pull("f");
         }
     }
-    assert_eq!(programs_built(), before, "{} programs were built", programs_built() - before);
+    assert_eq!(
+        programs_built(),
+        before,
+        "{} programs were built",
+        programs_built() - before
+    );
 }

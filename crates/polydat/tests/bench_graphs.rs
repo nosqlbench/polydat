@@ -51,7 +51,11 @@ fn generate_layered(n: usize) -> String {
     let mut s = String::new();
     let mut count = 0usize;
 
-    writeln!(s, "// Benchmark: {n}-node layered DAG (degree~3, width={width}, layers={layers})").unwrap();
+    writeln!(
+        s,
+        "// Benchmark: {n}-node layered DAG (degree~3, width={width}, layers={layers})"
+    )
+    .unwrap();
     writeln!(s, "input cycle: u64\n").unwrap();
 
     // Layer 0: seed nodes from cycle
@@ -70,11 +74,15 @@ fn generate_layered(n: usize) -> String {
         let layer_base = layer * width;
         let prev_base = (layer - 1) * width;
         let prev_count = width.min(n.saturating_sub(prev_base));
-        if prev_count == 0 { break; }
+        if prev_count == 0 {
+            break;
+        }
 
         for j in 0..width {
             let idx = layer_base + j;
-            if idx >= n { break; }
+            if idx >= n {
+                break;
+            }
 
             // Pick a predecessor: rotate through prev layer with offset
             // This creates ~2-3 fan-in because each prev node is used
@@ -107,7 +115,11 @@ fn generate_dense(n: usize) -> String {
     let mut s = String::new();
     let mut count = 0usize;
 
-    writeln!(s, "// Benchmark: {n}-node dense DAG (degree~6, width={width}, layers={layers})").unwrap();
+    writeln!(
+        s,
+        "// Benchmark: {n}-node dense DAG (degree~6, width={width}, layers={layers})"
+    )
+    .unwrap();
     writeln!(s, "input cycle: u64\n").unwrap();
 
     // Layer 0: seed nodes
@@ -127,7 +139,9 @@ fn generate_dense(n: usize) -> String {
         let layer_base = layer * width;
         let prev_base = (layer - 1) * width;
         let prev_count = width.min(n.saturating_sub(prev_base));
-        if prev_count == 0 { break; }
+        if prev_count == 0 {
+            break;
+        }
 
         // Reduce effective source count to force high reuse
         // Each of ~(prev_count/3) sources feeds ~6 successors
@@ -135,7 +149,9 @@ fn generate_dense(n: usize) -> String {
 
         for j in 0..width {
             let idx = layer_base + j;
-            if idx >= n { break; }
+            if idx >= n {
+                break;
+            }
 
             // Map many successors to few sources
             let src = prev_base + (j % source_count);
@@ -198,14 +214,16 @@ mod tests {
         let mut asm = polydat::dsl::compile::compile_polydat_to_assembler(src)
             .unwrap_or_else(|e| panic!("assemble failed: {e}"));
         asm.set_jit_mode(polydat::JitMode::Off);
-        let k = asm.compile()
+        let k = asm
+            .compile()
             .unwrap_or_else(|e| panic!("compile failed: {e:?}"));
         let p = k.program();
-        assert!(p.output_names().contains(&"out"),
-            "missing 'out' output");
-        assert!(p.node_count() >= expected_min_nodes,
+        assert!(p.output_names().contains(&"out"), "missing 'out' output");
+        assert!(
+            p.node_count() >= expected_min_nodes,
             "expected >= {expected_min_nodes} nodes, got {}",
-            p.node_count());
+            p.node_count()
+        );
     }
 
     fn compile_and_eval(src: &str) {
@@ -216,70 +234,108 @@ mod tests {
         for cycle in [0u64, 1, 42, 999] {
             state.set_inputs(&[cycle]);
             let v = state.pull(&p, "out");
-            assert!(!matches!(v, polydat::ast::Value::None),
-                "output should not be None at cycle={cycle}");
+            assert!(
+                !matches!(v, polydat::ast::Value::None),
+                "output should not be None at cycle={cycle}"
+            );
         }
     }
 
     // --- Chain (low connectivity) ---
 
     #[test]
-    fn chain_10_compiles() { compile_and_verify(&generate_chain(10), 9); }
+    fn chain_10_compiles() {
+        compile_and_verify(&generate_chain(10), 9);
+    }
 
     #[test]
-    fn chain_100_compiles() { compile_and_verify(&generate_chain(100), 90); }
+    fn chain_100_compiles() {
+        compile_and_verify(&generate_chain(100), 90);
+    }
 
     #[test]
-    fn chain_1000_compiles() { compile_and_verify(&generate_chain(1000), 900); }
+    fn chain_1000_compiles() {
+        compile_and_verify(&generate_chain(1000), 900);
+    }
 
     #[test]
-    fn chain_10_evals() { compile_and_eval(&generate_chain(10)); }
+    fn chain_10_evals() {
+        compile_and_eval(&generate_chain(10));
+    }
 
     #[test]
-    fn chain_100_evals() { compile_and_eval(&generate_chain(100)); }
+    fn chain_100_evals() {
+        compile_and_eval(&generate_chain(100));
+    }
 
     #[test]
-    fn chain_1000_evals() { compile_and_eval(&generate_chain(1000)); }
+    fn chain_1000_evals() {
+        compile_and_eval(&generate_chain(1000));
+    }
 
     // --- Layered (medium connectivity) ---
 
     #[test]
-    fn layered_10_compiles() { compile_and_verify(&generate_layered(10), 9); }
+    fn layered_10_compiles() {
+        compile_and_verify(&generate_layered(10), 9);
+    }
 
     #[test]
-    fn layered_100_compiles() { compile_and_verify(&generate_layered(100), 90); }
+    fn layered_100_compiles() {
+        compile_and_verify(&generate_layered(100), 90);
+    }
 
     #[test]
-    fn layered_1000_compiles() { compile_and_verify(&generate_layered(1000), 900); }
+    fn layered_1000_compiles() {
+        compile_and_verify(&generate_layered(1000), 900);
+    }
 
     #[test]
-    fn layered_10_evals() { compile_and_eval(&generate_layered(10)); }
+    fn layered_10_evals() {
+        compile_and_eval(&generate_layered(10));
+    }
 
     #[test]
-    fn layered_100_evals() { compile_and_eval(&generate_layered(100)); }
+    fn layered_100_evals() {
+        compile_and_eval(&generate_layered(100));
+    }
 
     #[test]
-    fn layered_1000_evals() { compile_and_eval(&generate_layered(1000)); }
+    fn layered_1000_evals() {
+        compile_and_eval(&generate_layered(1000));
+    }
 
     // --- Dense (high connectivity) ---
 
     #[test]
-    fn dense_10_compiles() { compile_and_verify(&generate_dense(10), 9); }
+    fn dense_10_compiles() {
+        compile_and_verify(&generate_dense(10), 9);
+    }
 
     #[test]
-    fn dense_100_compiles() { compile_and_verify(&generate_dense(100), 90); }
+    fn dense_100_compiles() {
+        compile_and_verify(&generate_dense(100), 90);
+    }
 
     #[test]
-    fn dense_1000_compiles() { compile_and_verify(&generate_dense(1000), 900); }
+    fn dense_1000_compiles() {
+        compile_and_verify(&generate_dense(1000), 900);
+    }
 
     #[test]
-    fn dense_10_evals() { compile_and_eval(&generate_dense(10)); }
+    fn dense_10_evals() {
+        compile_and_eval(&generate_dense(10));
+    }
 
     #[test]
-    fn dense_100_evals() { compile_and_eval(&generate_dense(100)); }
+    fn dense_100_evals() {
+        compile_and_eval(&generate_dense(100));
+    }
 
     #[test]
-    fn dense_1000_evals() { compile_and_eval(&generate_dense(1000)); }
+    fn dense_1000_evals() {
+        compile_and_eval(&generate_dense(1000));
+    }
 
     // --- Generate files ---
 

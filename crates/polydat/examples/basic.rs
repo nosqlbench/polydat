@@ -4,12 +4,15 @@
 //! Basic usage: compile a Polydat Kernel from DSL source and pull values.
 
 fn main() {
-    let mut kernel = polydat::dsl::compile_polydat(r#"
+    let mut kernel = polydat::dsl::compile_polydat(
+        r#"
         input cycle: u64
         hashed := hash(cycle)
         user_id := mod(hashed, 1000000)
         bucket := mod(hashed, 64)
-    "#).expect("compile failed");
+    "#,
+    )
+    .expect("compile failed");
 
     println!("cycle  user_id  bucket");
     println!("-----  -------  ------");

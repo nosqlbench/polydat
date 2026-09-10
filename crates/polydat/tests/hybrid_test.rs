@@ -17,7 +17,11 @@ use polydat::library::identity::Identity;
 #[test]
 fn hybrid_simple_identity() {
     let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
-    asm.add_node("id", Box::new(Identity::new(polydat::ast::PortType::U64)), vec![WireRef::input("cycle")]);
+    asm.add_node(
+        "id",
+        Box::new(Identity::new(polydat::ast::PortType::U64)),
+        vec![WireRef::input("cycle")],
+    );
     asm.add_output("out", WireRef::node("id"));
 
     let mut kernel = asm.compile_hybrid().unwrap();
@@ -45,16 +49,21 @@ fn hybrid_mixed_jit_and_closure() {
     let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
 
     // MixedRadix: not JIT-able → closure
-    asm.add_node("decompose", Box::new(MixedRadix::new(vec![100, 0])),
-        vec![WireRef::input("cycle")]);
+    asm.add_node(
+        "decompose",
+        Box::new(MixedRadix::new(vec![100, 0])),
+        vec![WireRef::input("cycle")],
+    );
 
     // Hash: JIT-able
-    asm.add_node("h", Box::new(Hash::new()),
-        vec![WireRef::node_port("decompose", 0)]);
+    asm.add_node(
+        "h",
+        Box::new(Hash::new()),
+        vec![WireRef::node_port("decompose", 0)],
+    );
 
     // Mod: JIT-able
-    asm.add_node("code", Box::new(Mod::new(10000)),
-        vec![WireRef::node("h")]);
+    asm.add_node("code", Box::new(Mod::new(10000)), vec![WireRef::node("h")]);
 
     asm.add_output("tenant", WireRef::node_port("decompose", 0));
     asm.add_output("code", WireRef::node("code"));
@@ -89,16 +98,31 @@ fn hybrid_multi_output() {
     let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
 
     // MixedRadix (closure) → two outputs → each hashed (JIT) → modded (JIT)
-    asm.add_node("decompose", Box::new(MixedRadix::new(vec![100, 1000, 0])),
-        vec![WireRef::input("cycle")]);
-    asm.add_node("h0", Box::new(Hash::new()),
-        vec![WireRef::node_port("decompose", 0)]);
-    asm.add_node("h1", Box::new(Hash::new()),
-        vec![WireRef::node_port("decompose", 1)]);
-    asm.add_node("code0", Box::new(Mod::new(10000)),
-        vec![WireRef::node("h0")]);
-    asm.add_node("code1", Box::new(Mod::new(100000)),
-        vec![WireRef::node("h1")]);
+    asm.add_node(
+        "decompose",
+        Box::new(MixedRadix::new(vec![100, 1000, 0])),
+        vec![WireRef::input("cycle")],
+    );
+    asm.add_node(
+        "h0",
+        Box::new(Hash::new()),
+        vec![WireRef::node_port("decompose", 0)],
+    );
+    asm.add_node(
+        "h1",
+        Box::new(Hash::new()),
+        vec![WireRef::node_port("decompose", 1)],
+    );
+    asm.add_node(
+        "code0",
+        Box::new(Mod::new(10000)),
+        vec![WireRef::node("h0")],
+    );
+    asm.add_node(
+        "code1",
+        Box::new(Mod::new(100000)),
+        vec![WireRef::node("h1")],
+    );
 
     asm.add_output("c0", WireRef::node("code0"));
     asm.add_output("c1", WireRef::node("code1"));
@@ -114,12 +138,13 @@ fn hybrid_multi_output() {
 fn hybrid_interleave_plus_hash() {
     // Interleave is not JIT-able, but Hash and Mod are
     let mut asm = PolydatAssembler::new(vec!["a".into(), "b".into()]);
-    asm.add_node("mixed", Box::new(Interleave::new()),
-        vec![WireRef::input("a"), WireRef::input("b")]);
-    asm.add_node("h", Box::new(Hash::new()),
-        vec![WireRef::node("mixed")]);
-    asm.add_node("result", Box::new(Mod::new(1000)),
-        vec![WireRef::node("h")]);
+    asm.add_node(
+        "mixed",
+        Box::new(Interleave::new()),
+        vec![WireRef::input("a"), WireRef::input("b")],
+    );
+    asm.add_node("h", Box::new(Hash::new()), vec![WireRef::node("mixed")]);
+    asm.add_node("result", Box::new(Mod::new(1000)), vec![WireRef::node("h")]);
     asm.add_output("out", WireRef::node("result"));
 
     let mut kernel = asm.compile_hybrid().unwrap();

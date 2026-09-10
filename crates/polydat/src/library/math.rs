@@ -14,49 +14,79 @@
 // (e.g. `f64_add` → `F64Add`, `abs_f64` → `AbsF64`).
 
 #[crate::polydat_node(category = Math)]
-fn sin(input: f64) -> f64 { input.sin() }
+fn sin(input: f64) -> f64 {
+    input.sin()
+}
 
 #[crate::polydat_node(category = Math)]
-fn cos(input: f64) -> f64 { input.cos() }
+fn cos(input: f64) -> f64 {
+    input.cos()
+}
 
 #[crate::polydat_node(category = Math)]
-fn tan(input: f64) -> f64 { input.tan() }
+fn tan(input: f64) -> f64 {
+    input.tan()
+}
 
 #[crate::polydat_node(category = Math)]
-fn asin(input: f64) -> f64 { input.asin() }
+fn asin(input: f64) -> f64 {
+    input.asin()
+}
 
 #[crate::polydat_node(category = Math)]
-fn acos(input: f64) -> f64 { input.acos() }
+fn acos(input: f64) -> f64 {
+    input.acos()
+}
 
 #[crate::polydat_node(category = Math)]
-fn atan(input: f64) -> f64 { input.atan() }
+fn atan(input: f64) -> f64 {
+    input.atan()
+}
 
 #[crate::polydat_node(category = Math)]
-fn sqrt(input: f64) -> f64 { input.sqrt() }
+fn sqrt(input: f64) -> f64 {
+    input.sqrt()
+}
 
 #[crate::polydat_node(category = Math)]
-fn abs_f64(input: f64) -> f64 { input.abs() }
+fn abs_f64(input: f64) -> f64 {
+    input.abs()
+}
 
 #[crate::polydat_node(category = Math)]
-fn ln(input: f64) -> f64 { input.ln() }
+fn ln(input: f64) -> f64 {
+    input.ln()
+}
 
 #[crate::polydat_node(category = Math)]
-fn exp(input: f64) -> f64 { input.exp() }
+fn exp(input: f64) -> f64 {
+    input.exp()
+}
 
 #[crate::polydat_node(category = Math, simd = "reg_add_f64", simd_total)]
-fn f64_add(a: f64, b: f64) -> f64 { a + b }
+fn f64_add(a: f64, b: f64) -> f64 {
+    a + b
+}
 
 #[crate::polydat_node(category = Math, simd = "reg_sub_f64", simd_total)]
-fn f64_sub(a: f64, b: f64) -> f64 { a - b }
+fn f64_sub(a: f64, b: f64) -> f64 {
+    a - b
+}
 
 #[crate::polydat_node(category = Math, simd = "reg_mul_f64", simd_total)]
-fn f64_mul(a: f64, b: f64) -> f64 { a * b }
+fn f64_mul(a: f64, b: f64) -> f64 {
+    a * b
+}
 
 #[crate::polydat_node(category = Math)]
-fn f64_div(a: f64, b: f64) -> f64 { if b != 0.0 { a / b } else { 0.0 } }
+fn f64_div(a: f64, b: f64) -> f64 {
+    if b != 0.0 { a / b } else { 0.0 }
+}
 
 #[crate::polydat_node(category = Math)]
-fn f64_mod(a: f64, b: f64) -> f64 { if b != 0.0 { a % b } else { 0.0 } }
+fn f64_mod(a: f64, b: f64) -> f64 {
+    if b != 0.0 { a % b } else { 0.0 }
+}
 
 // --- Binary f64 math functions ---
 
@@ -71,7 +101,9 @@ fn f64_mod(a: f64, b: f64) -> f64 { if b != 0.0 { a % b } else { 0.0 } }
 /// JIT level: P2.
 /// Two-argument arc tangent. SRD-80 PR B.7 migration.
 #[crate::polydat_node(category = Math)]
-fn atan2(y: f64, x: f64) -> f64 { y.atan2(x) }
+fn atan2(y: f64, x: f64) -> f64 {
+    y.atan2(x)
+}
 
 /// Power: base^exponent. SRD-80 PR B.7 migration.
 ///
@@ -79,7 +111,9 @@ fn atan2(y: f64, x: f64) -> f64 { y.atan2(x) }
 /// the function signature); workloads that bound that param by
 /// position keep working unchanged.
 #[crate::polydat_node(category = Math)]
-fn pow(base: f64, exponent: f64) -> f64 { base.powf(exponent) }
+fn pow(base: f64, exponent: f64) -> f64 {
+    base.powf(exponent)
+}
 
 // ---------------------------------------------------------------------------
 // SRD-80 PR B.7 — every node in this module registers
@@ -89,7 +123,6 @@ fn pow(base: f64, exponent: f64) -> f64 { base.powf(exponent) }
 // the migration diff stays readable; remove on next pass.
 
 #[cfg(any())]
-
 #[cfg(test)]
 mod tests {
     use super::*;

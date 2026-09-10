@@ -92,7 +92,13 @@ pub struct TileOptions {
 
 impl Default for TileOptions {
     fn default() -> Self {
-        Self { open: "${".into(), close: "}".into(), sigil: "@".into(), strict: false, in_string: false }
+        Self {
+            open: "${".into(),
+            close: "}".into(),
+            sigil: "@".into(),
+            strict: false,
+            in_string: false,
+        }
     }
 }
 
@@ -301,9 +307,15 @@ impl BindingModifier {
 
     /// Single-modifier convenience constants. Tests reach for
     /// these to express their intent compactly.
-    pub const CONST:    Self = Self { bits: Self::bit(WireModifier::Const) };
-    pub const SHARED:   Self = Self { bits: Self::bit(WireModifier::Shared) };
-    pub const VOLATILE: Self = Self { bits: Self::bit(WireModifier::Volatile) };
+    pub const CONST: Self = Self {
+        bits: Self::bit(WireModifier::Const),
+    };
+    pub const SHARED: Self = Self {
+        bits: Self::bit(WireModifier::Shared),
+    };
+    pub const VOLATILE: Self = Self {
+        bits: Self::bit(WireModifier::Volatile),
+    };
 
     /// `true` iff `m` is set.
     pub const fn has(&self, m: WireModifier) -> bool {
@@ -324,7 +336,9 @@ impl BindingModifier {
     /// parser uses this after collecting tokens. Rejects the
     /// contradictory `const` + `volatile` combo with a clear
     /// error.
-    pub fn try_from_iter<I: IntoIterator<Item = WireModifier>>(items: I) -> Result<Self, &'static str> {
+    pub fn try_from_iter<I: IntoIterator<Item = WireModifier>>(
+        items: I,
+    ) -> Result<Self, &'static str> {
         let mut out = Self::NONE;
         for m in items {
             out.insert(m);
@@ -356,15 +370,24 @@ impl BindingModifier {
     /// pattern-match on individual flags. Mechanically derive
     /// from `has(...)` so adding a new modifier is one variant
     /// + one bit assignment + (optionally) one accessor.
-    #[inline] pub const fn is_const(&self)    -> bool { self.has(WireModifier::Const) }
-    #[inline] pub const fn is_shared(&self)   -> bool { self.has(WireModifier::Shared) }
-    #[inline] pub const fn is_volatile(&self) -> bool { self.has(WireModifier::Volatile) }
+    #[inline]
+    pub const fn is_const(&self) -> bool {
+        self.has(WireModifier::Const)
+    }
+    #[inline]
+    pub const fn is_shared(&self) -> bool {
+        self.has(WireModifier::Shared)
+    }
+    #[inline]
+    pub const fn is_volatile(&self) -> bool {
+        self.has(WireModifier::Volatile)
+    }
 
     /// Compile-time bit index for a modifier.
     const fn bit(m: WireModifier) -> u8 {
         match m {
-            WireModifier::Const    => 1 << 0,
-            WireModifier::Shared   => 1 << 1,
+            WireModifier::Const => 1 << 0,
+            WireModifier::Shared => 1 << 1,
             WireModifier::Volatile => 1 << 2,
         }
     }
@@ -515,7 +538,7 @@ pub enum BinOpKind {
 #[derive(Debug, Clone)]
 pub struct TypedParam {
     pub name: String,
-    pub typ: String,  // "u64", "f64", "String", "bytes", etc.
+    pub typ: String, // "u64", "f64", "String", "bytes", etc.
 }
 
 /// A formal module definition with typed interface.
@@ -578,54 +601,59 @@ mod modifier_tests {
 
     #[test]
     fn from_iter_collects_combinations() {
-        let m = BindingModifier::try_from_iter(
-            [WireModifier::Const, WireModifier::Shared]
-        ).expect("const+shared is valid");
+        let m = BindingModifier::try_from_iter([WireModifier::Const, WireModifier::Shared])
+            .expect("const+shared is valid");
         assert!(m.is_const() && m.is_shared());
         assert!(!m.is_volatile());
 
-        let m = BindingModifier::try_from_iter(
-            [WireModifier::Shared, WireModifier::Volatile]
-        ).expect("shared+volatile is valid");
+        let m = BindingModifier::try_from_iter([WireModifier::Shared, WireModifier::Volatile])
+            .expect("shared+volatile is valid");
         assert!(m.is_shared() && m.is_volatile());
     }
 
     #[test]
     fn from_iter_rejects_const_plus_volatile() {
-        let err = BindingModifier::try_from_iter(
-            [WireModifier::Const, WireModifier::Volatile]
-        ).expect_err("const+volatile must be rejected");
-        assert!(err.contains("const") && err.contains("volatile"),
-            "error should name both keywords: {err}");
+        let err = BindingModifier::try_from_iter([WireModifier::Const, WireModifier::Volatile])
+            .expect_err("const+volatile must be rejected");
+        assert!(
+            err.contains("const") && err.contains("volatile"),
+            "error should name both keywords: {err}"
+        );
     }
 
     #[test]
     fn from_iter_rejects_const_shared_volatile() {
         // Triple combination subsumes the contradiction.
-        let err = BindingModifier::try_from_iter(
-            [WireModifier::Const, WireModifier::Shared, WireModifier::Volatile]
-        ).expect_err("triple combo includes the contradictory pair");
+        let err = BindingModifier::try_from_iter([
+            WireModifier::Const,
+            WireModifier::Shared,
+            WireModifier::Volatile,
+        ])
+        .expect_err("triple combo includes the contradictory pair");
         assert!(err.contains("const") && err.contains("volatile"));
     }
 
     #[test]
     fn iter_yields_modifiers_in_stable_order() {
-        let m = BindingModifier::try_from_iter(
-            [WireModifier::Volatile, WireModifier::Shared]
-        ).unwrap();
+        let m =
+            BindingModifier::try_from_iter([WireModifier::Volatile, WireModifier::Shared]).unwrap();
         // Insertion order was Volatile, Shared — but iter yields
         // in fixed declaration order: Const, Shared, Volatile.
         let collected: Vec<_> = m.iter().collect();
-        assert_eq!(collected, vec![WireModifier::Shared, WireModifier::Volatile]);
+        assert_eq!(
+            collected,
+            vec![WireModifier::Shared, WireModifier::Volatile]
+        );
     }
 
     #[test]
     fn equality_distinguishes_combinations() {
         let const_only = BindingModifier::CONST;
-        let const_shared = BindingModifier::try_from_iter(
-            [WireModifier::Const, WireModifier::Shared]
-        ).unwrap();
-        assert_ne!(const_only, const_shared,
-            "const-only must not equal const+shared");
+        let const_shared =
+            BindingModifier::try_from_iter([WireModifier::Const, WireModifier::Shared]).unwrap();
+        assert_ne!(
+            const_only, const_shared,
+            "const-only must not equal const+shared"
+        );
     }
 }

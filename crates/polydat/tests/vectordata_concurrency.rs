@@ -13,9 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Read a specific vector index single-threaded and return its string.
 fn read_vector_single(source: &str, index: u64) -> String {
-    let src = format!(
-        "input cycle: u64\nvec := vector_at(cycle, \"{source}\")"
-    );
+    let src = format!("input cycle: u64\nvec := vector_at(cycle, \"{source}\")");
     let mut kernel = compile_polydat(&src).unwrap();
     kernel.set_inputs(&[index]);
     kernel.pull("vec").to_display_string()
@@ -29,10 +27,14 @@ fn concurrent_reads_match_sequential() {
     let test_indices: Vec<u64> = vec![0, 1, 100, 1000, 5000, 7847, 10000, 50000, 83000];
 
     // Phase 1: sequential baseline — read each index once
-    let baseline: Vec<(u64, String)> = test_indices.iter()
+    let baseline: Vec<(u64, String)> = test_indices
+        .iter()
         .map(|&idx| {
             let val = read_vector_single(source, idx);
-            assert!(!val.starts_with("[]"), "index {idx} returned empty vector in sequential read");
+            assert!(
+                !val.starts_with("[]"),
+                "index {idx} returned empty vector in sequential read"
+            );
             (idx, val)
         })
         .collect();
@@ -48,9 +50,7 @@ fn concurrent_reads_match_sequential() {
         let baseline = baseline.clone();
         let source = source.to_string();
         handles.push(std::thread::spawn(move || {
-            let src = format!(
-                "input cycle: u64\nvec := vector_at(cycle, \"{source}\")"
-            );
+            let src = format!("input cycle: u64\nvec := vector_at(cycle, \"{source}\")");
             let mut kernel = compile_polydat(&src).unwrap();
 
             let mut mismatches = Vec::new();
@@ -74,13 +74,17 @@ fn concurrent_reads_match_sequential() {
     for handle in handles {
         let mismatches = handle.join().unwrap();
         for (tid, idx, actual_len, expected_len) in &mismatches {
-            eprintln!("MISMATCH thread={tid} index={idx} actual_len={actual_len} expected_len={expected_len}");
+            eprintln!(
+                "MISMATCH thread={tid} index={idx} actual_len={actual_len} expected_len={expected_len}"
+            );
         }
         total_mismatches += mismatches.len();
     }
 
-    assert_eq!(total_mismatches, 0,
-        "{total_mismatches} mismatches across {thread_count} threads x {iterations} iterations");
+    assert_eq!(
+        total_mismatches, 0,
+        "{total_mismatches} mismatches across {thread_count} threads x {iterations} iterations"
+    );
 }
 
 /// Stress test: shared kernel, concurrent fiber-like eval.
@@ -90,9 +94,7 @@ fn concurrent_reads_match_sequential() {
 #[ignore] // requires example dataset
 fn shared_kernel_concurrent_eval() {
     let source = "example:label_01";
-    let src = format!(
-        "input cycle: u64\nvec := vector_at(cycle, \"{source}\")"
-    );
+    let src = format!("input cycle: u64\nvec := vector_at(cycle, \"{source}\")");
     let kernel = compile_polydat(&src).unwrap();
     let program = kernel.into_program();
 
@@ -133,9 +135,7 @@ fn shared_kernel_concurrent_eval() {
 /// reading vectors concurrently — same as the activity executor.
 /// Helper: compile kernel on a blocking thread to avoid nested runtime.
 fn compile_shared_program(source: &str) -> Arc<polydat::kernel::PolydatProgram> {
-    let src = format!(
-        "input cycle: u64\nvec := vector_at(cycle, \"{source}\")"
-    );
+    let src = format!("input cycle: u64\nvec := vector_at(cycle, \"{source}\")");
     let kernel = compile_polydat(&src).unwrap();
     kernel.into_program()
 }
@@ -178,7 +178,10 @@ fn threadpool_100_tasks_shared_kernel() {
     let total = total_reads.load(Ordering::Relaxed);
     let empties = empty_count.load(Ordering::Relaxed);
     eprintln!("100-task threadpool: {total} reads, {empties} empty");
-    assert_eq!(empties, 0, "{empties} empty vectors in 100-task test ({total} total reads)");
+    assert_eq!(
+        empties, 0,
+        "{empties} empty vectors in 100-task test ({total} total reads)"
+    );
 }
 
 /// Stress test with interleaved sleep to simulate I/O latency.
@@ -222,7 +225,10 @@ fn interleaved_reads_with_sleep() {
     let total = total_reads.load(Ordering::Relaxed);
     let empties = empty_count.load(Ordering::Relaxed);
     eprintln!("interleaved: {total} reads, {empties} empty");
-    assert_eq!(empties, 0, "{empties} empty vectors in interleaved test ({total} total reads)");
+    assert_eq!(
+        empties, 0,
+        "{empties} empty vectors in interleaved test ({total} total reads)"
+    );
 }
 
 /// Stress test: many threads hitting different indices simultaneously.
@@ -248,9 +254,7 @@ fn high_contention_reads() {
             let wrong_dim_count = &wrong_dim_count;
             let total_reads = &total_reads;
             s.spawn(move || {
-                let src = format!(
-                    "input cycle: u64\nvec := vector_at(cycle, \"{source}\")"
-                );
+                let src = format!("input cycle: u64\nvec := vector_at(cycle, \"{source}\")");
                 let mut kernel = compile_polydat(&src).unwrap();
                 for i in 0..reads_per_thread {
                     let idx = (i * 7 + 13) as u64 % 83775; // spread across dataset
@@ -277,5 +281,8 @@ fn high_contention_reads() {
 
     eprintln!("total reads: {total}, empty: {empties}, wrong dim: {wrong}");
     assert_eq!(empties, 0, "{empties} empty vectors out of {total} reads");
-    assert_eq!(wrong, 0, "{wrong} wrong-dimension vectors out of {total} reads");
+    assert_eq!(
+        wrong, 0,
+        "{wrong} wrong-dimension vectors out of {total} reads"
+    );
 }

@@ -23,9 +23,7 @@
 //! - Predicate's `Factorization` is `PerAxis(_)`.
 
 use crate::iteration::comprehension::ast::Comprehension;
-use crate::iteration::comprehension::predicate::{
-    CoordSet, Factorization, PredicateInfo,
-};
+use crate::iteration::comprehension::predicate::{CoordSet, Factorization, PredicateInfo};
 
 /// R5's predicate-analyzer interface — accepts a closure so
 /// the optimizer (which doesn't depend on predicate internals)
@@ -37,7 +35,10 @@ where
     let Comprehension::Filter { child, predicate } = ast else {
         return None;
     };
-    let Comprehension::Cartesian { children: cart_children } = child.as_ref() else {
+    let Comprehension::Cartesian {
+        children: cart_children,
+    } = child.as_ref()
+    else {
         return None;
     };
 
@@ -93,7 +94,9 @@ where
     if !any_change {
         return None;
     }
-    Some(Comprehension::Cartesian { children: new_children })
+    Some(Comprehension::Cartesian {
+        children: new_children,
+    })
 }
 
 #[cfg(test)]
@@ -115,7 +118,8 @@ mod tests {
     fn r5_pushes_per_axis_filter_into_one_child() {
         // filter(cartesian(k, limit), "{k} > 5")
         // → cartesian(filter(k, "{k} > 5"), limit)
-        let cart = Comprehension::cartesian(vec![clause("k", &[1, 5, 10]), clause("limit", &[100, 200])]);
+        let cart =
+            Comprehension::cartesian(vec![clause("k", &[1, 5, 10]), clause("limit", &[100, 200])]);
         let ast = Comprehension::filter(cart, "{k} > 5");
         let result = apply(&ast, &analyze).unwrap();
         match result {
@@ -124,7 +128,9 @@ mod tests {
                 // k-child wrapped in filter
                 assert!(matches!(&children[0], Comprehension::Filter { .. }));
                 // limit-child unwrapped
-                assert!(matches!(&children[1], Comprehension::Clause { name, .. } if name == "limit"));
+                assert!(
+                    matches!(&children[1], Comprehension::Clause { name, .. } if name == "limit")
+                );
             }
             other => panic!("expected Cartesian, got {other:?}"),
         }
@@ -134,7 +140,10 @@ mod tests {
     fn r5_pushes_per_axis_conjunction_to_both_children() {
         // filter(cartesian(k, limit), "{k} > 5 && {limit} < 200")
         // → cartesian(filter(k, "{k} > 5"), filter(limit, "{limit} < 200"))
-        let cart = Comprehension::cartesian(vec![clause("k", &[1, 5, 10]), clause("limit", &[100, 200, 300])]);
+        let cart = Comprehension::cartesian(vec![
+            clause("k", &[1, 5, 10]),
+            clause("limit", &[100, 200, 300]),
+        ]);
         let ast = Comprehension::filter(cart, "{k} > 5 && {limit} < 200");
         let result = apply(&ast, &analyze).unwrap();
         match result {
@@ -150,7 +159,8 @@ mod tests {
     fn r5_does_not_fire_for_cross_axis_predicate() {
         // filter(cartesian(k, limit), "{k} * {limit} > 100")
         // — cross-axis; analyzer marks Conjunctive, R5 doesn't fire.
-        let cart = Comprehension::cartesian(vec![clause("k", &[1, 5, 10]), clause("limit", &[10, 100])]);
+        let cart =
+            Comprehension::cartesian(vec![clause("k", &[1, 5, 10]), clause("limit", &[10, 100])]);
         let ast = Comprehension::filter(cart, "{k} * {limit} > 100");
         assert_eq!(apply(&ast, &analyze), None);
     }

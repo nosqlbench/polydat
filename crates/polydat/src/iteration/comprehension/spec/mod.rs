@@ -63,10 +63,10 @@ pub mod serde_form;
 pub mod source_parser;
 pub mod text;
 
-pub use legacy_convert::{legacy_to_algebra, ConvertError};
-pub use serde_form::{parse_inline, ComprehensionSpec, ForSpec, SpecConvertError};
-pub use source_parser::{parse_source, SourceParseError};
-pub use text::{parse_text, TextParseError};
+pub use legacy_convert::{ConvertError, legacy_to_algebra};
+pub use serde_form::{ComprehensionSpec, ForSpec, SpecConvertError, parse_inline};
+pub use source_parser::{SourceParseError, parse_source};
+pub use text::{TextParseError, parse_text};
 
 // Leaf grammar utilities — re-exported here so external
 // consumers (nbrs-workload, nbrs-runtime) reach the polydat

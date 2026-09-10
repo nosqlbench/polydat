@@ -25,8 +25,8 @@ pub mod interpreter;
 pub mod op;
 pub mod program;
 
-pub use bounds::{check_bounds, Bound, ResourceBound};
+pub use bounds::{Bound, ResourceBound, check_bounds};
 pub use compile::compile;
-pub use interpreter::{interpret, TupleStream};
+pub use interpreter::{TupleStream, interpret};
 pub use op::{Op, OrderStreamingKind};
 pub use program::Program;

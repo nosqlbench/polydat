@@ -177,7 +177,10 @@ fn reg_gather_f32(v: &[f32], offset: u64) -> [f32; 4] {
 #[crate::polydat_node(category = Conversions)]
 fn vec_to_reg_f32(v: &[f32]) -> [f32; 4] {
     if v.len() != 4 {
-        panic!("vec_to_reg_f32: expected exactly 4 elements, got {}", v.len());
+        panic!(
+            "vec_to_reg_f32: expected exactly 4 elements, got {}",
+            v.len()
+        );
     }
     [v[0], v[1], v[2], v[3]]
 }
@@ -422,7 +425,11 @@ mod tests {
         // bit-level constructor: 0xFFFF as i16 = -1 in every lane
         assert_eq!(r.as_reg_bits().lanes_i16(), [-1; 8]);
 
-        let lane = eval2(&RegLaneF32::new(), f32x4([1.0, 2.0, 3.0, 4.0]), Value::U64(2));
+        let lane = eval2(
+            &RegLaneF32::new(),
+            f32x4([1.0, 2.0, 3.0, 4.0]),
+            Value::U64(2),
+        );
         assert_eq!(lane, Value::F64(3.0));
 
         let mut out = [Value::None];
@@ -579,16 +586,14 @@ mod tests {
                             let slot = p3.resolve_output("out").unwrap();
                             p3.eval(&[cycle]);
                             let got = Bits128([p3.get_slot(slot), p3.get_slot(slot + 1)]);
-                            assert_eq!(
-                                got, want,
-                                "P3 reg_{op}_{fam} mismatch at cycle={cycle}"
-                            );
+                            assert_eq!(got, want, "P3 reg_{op}_{fam} mismatch at cycle={cycle}");
                         }
                         Err(e) => {
                             // Host cranelift declined the vector
                             // lowering — hybrid must still agree.
                             eprintln!("reg_{op}_{fam}: pure-P3 declined ({e}); checking hybrid");
-                            let asm = crate::dsl::compile::compile_polydat_to_assembler(&src).unwrap();
+                            let asm =
+                                crate::dsl::compile::compile_polydat_to_assembler(&src).unwrap();
                             let mut hy = asm.compile_hybrid().unwrap();
                             let slot = hy.resolve_output("out").unwrap();
                             hy.eval(&[cycle]);

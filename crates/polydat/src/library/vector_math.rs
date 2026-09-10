@@ -213,7 +213,9 @@ fn hash_vec(seed: u64, dim: u64) -> Vec<f32> {
     let dim = dim as usize;
     let mut out = Vec::with_capacity(dim);
     for i in 0..dim {
-        let h = crate::library::hash::splitmix64_u64(seed.wrapping_add((i as u64).wrapping_mul(0x9e3779b97f4a7c15)));
+        let h = crate::library::hash::splitmix64_u64(
+            seed.wrapping_add((i as u64).wrapping_mul(0x9e3779b97f4a7c15)),
+        );
         out.push((h as f64 / u64::MAX as f64 * 2.0 - 1.0) as f32);
     }
     out
@@ -311,7 +313,11 @@ mod tests {
         let dists: Vec<f32> = (0..10).map(|j| (j as f32).exp()).collect();
         let mut out = [Value::None];
         LidMle::new().eval(&[vecv(dists), Value::F64(10.0)], &mut out);
-        assert!((out[0].as_f64() - 0.2).abs() < 1e-4, "got {}", out[0].as_f64());
+        assert!(
+            (out[0].as_f64() - 0.2).abs() < 1e-4,
+            "got {}",
+            out[0].as_f64()
+        );
 
         // Fewer than 2 distances → degenerate → 0.0.
         let mut out = [Value::None];
@@ -327,9 +333,17 @@ mod tests {
         // [0, e, e^2] with k=3 → r_k=e^2 (ln=2), only r_2=e (ln=1) valid →
         // 1 term, logsum=1 → d̂ = 1.0.
         let mut out = [Value::None];
-        let d: Vec<f32> = vec![0.0, std::f32::consts::E, std::f32::consts::E * std::f32::consts::E];
+        let d: Vec<f32> = vec![
+            0.0,
+            std::f32::consts::E,
+            std::f32::consts::E * std::f32::consts::E,
+        ];
         LidMle::new().eval(&[vecv(d), Value::F64(3.0)], &mut out);
-        assert!((out[0].as_f64() - 1.0).abs() < 1e-4, "got {}", out[0].as_f64());
+        assert!(
+            (out[0].as_f64() - 1.0).abs() < 1e-4,
+            "got {}",
+            out[0].as_f64()
+        );
     }
 
     #[test]

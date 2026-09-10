@@ -81,8 +81,12 @@ fn clamp_f64(
 /// Rational approximation of the standard normal quantile function.
 /// Accurate to ~1e-9 for p in (1e-15, 1-1e-15).
 fn probit(p: f64) -> f64 {
-    if p <= 0.0 { return f64::NEG_INFINITY; }
-    if p >= 1.0 { return f64::INFINITY; }
+    if p <= 0.0 {
+        return f64::NEG_INFINITY;
+    }
+    if p >= 1.0 {
+        return f64::INFINITY;
+    }
 
     let t = if p < 0.5 {
         (-2.0 * p.ln()).sqrt()
@@ -97,8 +101,7 @@ fn probit(p: f64) -> f64 {
     let d2 = 0.189269;
     let d3 = 0.001308;
 
-    let result = t - (c0 + c1 * t + c2 * t * t)
-        / (1.0 + d1 * t + d2 * t * t + d3 * t * t * t);
+    let result = t - (c0 + c1 * t + c2 * t * t) / (1.0 + d1 * t + d2 * t * t + d3 * t * t * t);
 
     if p < 0.5 { -result } else { result }
 }
@@ -139,16 +142,19 @@ fn ln_gamma(x: f64) -> f64 {
 
 /// Regularized incomplete beta function I_x(a, b) via series expansion.
 fn regularized_beta(x: f64, a: f64, b: f64) -> f64 {
-    if x <= 0.0 { return 0.0; }
-    if x >= 1.0 { return 1.0; }
+    if x <= 0.0 {
+        return 0.0;
+    }
+    if x >= 1.0 {
+        return 1.0;
+    }
 
     // Use symmetry relation for better convergence when x > 0.5
     if x > (a + 1.0) / (a + b + 2.0) {
         return 1.0 - regularized_beta(1.0 - x, b, a);
     }
 
-    let ln_prefix = ln_gamma(a + b) - ln_gamma(a) - ln_gamma(b)
-        + a * x.ln() + b * (1.0 - x).ln();
+    let ln_prefix = ln_gamma(a + b) - ln_gamma(a) - ln_gamma(b) + a * x.ln() + b * (1.0 - x).ln();
     let prefix = ln_prefix.exp();
 
     // Series expansion: I_x(a,b) = (x^a * (1-x)^b) / (a * B(a,b)) * sum
@@ -167,8 +173,12 @@ fn regularized_beta(x: f64, a: f64, b: f64) -> f64 {
 
 /// Inverse regularized beta via bisection.
 fn inv_regularized_beta(p: f64, a: f64, b: f64) -> f64 {
-    if p <= 0.0 { return 0.0; }
-    if p >= 1.0 { return 1.0; }
+    if p <= 0.0 {
+        return 0.0;
+    }
+    if p >= 1.0 {
+        return 1.0;
+    }
 
     let mut lo = 0.0_f64;
     let mut hi = 1.0_f64;
@@ -185,8 +195,12 @@ fn inv_regularized_beta(p: f64, a: f64, b: f64) -> f64 {
 
 /// Regularized lower incomplete gamma function P(a, x) via series.
 fn regularized_gamma_p(a: f64, x: f64) -> f64 {
-    if x <= 0.0 { return 0.0; }
-    if x > a + 50.0 { return 1.0; } // far in the tail
+    if x <= 0.0 {
+        return 0.0;
+    }
+    if x > a + 50.0 {
+        return 1.0;
+    } // far in the tail
 
     let mut sum = 1.0 / a;
     let mut term = 1.0 / a;
@@ -202,8 +216,12 @@ fn regularized_gamma_p(a: f64, x: f64) -> f64 {
 
 /// Inverse regularized gamma P via bisection.
 fn inv_regularized_gamma_p(p: f64, a: f64) -> f64 {
-    if p <= 0.0 { return 0.0; }
-    if p >= 1.0 { return f64::INFINITY; }
+    if p <= 0.0 {
+        return 0.0;
+    }
+    if p >= 1.0 {
+        return f64::INFINITY;
+    }
 
     // Bracket: upper bound heuristic
     let mut hi = a.max(1.0);
@@ -387,8 +405,12 @@ pub fn dist_geometric_lut(prob: f64, resolution: usize) -> LutF64 {
     let ln_q = (1.0 - prob).ln();
     LutF64::from_fn(
         |p| {
-            if p <= 0.0 { return 1.0; }
-            if p >= 1.0 { return f64::INFINITY; }
+            if p <= 0.0 {
+                return 1.0;
+            }
+            if p >= 1.0 {
+                return f64::INFINITY;
+            }
             ((1.0 - p).ln() / ln_q).ceil().max(1.0)
         },
         resolution,
@@ -429,7 +451,11 @@ pub fn dist_empirical_weighted_lut(values: &[f64], weights: &[f64], resolution: 
     assert!(!values.is_empty());
 
     // Sort by value, accumulate CDF
-    let mut pairs: Vec<(f64, f64)> = values.iter().copied().zip(weights.iter().copied()).collect();
+    let mut pairs: Vec<(f64, f64)> = values
+        .iter()
+        .copied()
+        .zip(weights.iter().copied())
+        .collect();
     pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
 
     let total: f64 = pairs.iter().map(|(_, w)| w).sum();
@@ -442,15 +468,13 @@ pub fn dist_empirical_weighted_lut(values: &[f64], weights: &[f64], resolution: 
 
     // Inverse CDF by binary search
     LutF64::from_fn(
-        |p| {
-            match cdf_points.binary_search_by(|&(cp, _)| cp.partial_cmp(&p).unwrap()) {
-                Ok(idx) => cdf_points[idx].1,
-                Err(idx) => {
-                    if idx >= cdf_points.len() {
-                        cdf_points.last().unwrap().1
-                    } else {
-                        cdf_points[idx].1
-                    }
+        |p| match cdf_points.binary_search_by(|&(cp, _)| cp.partial_cmp(&p).unwrap()) {
+            Ok(idx) => cdf_points[idx].1,
+            Err(idx) => {
+                if idx >= cdf_points.len() {
+                    cdf_points.last().unwrap().1
+                } else {
+                    cdf_points[idx].1
                 }
             }
         },
@@ -485,8 +509,7 @@ fn dist_normal(
     input: f64,
     mean: Const<f64>,
     stddev: Const<f64>,
-    #[poly_const(build_normal_lut, from = (mean, stddev))]
-    lut: &LutF64,
+    #[poly_const(build_normal_lut, from = (mean, stddev))] lut: &LutF64,
 ) -> f64 {
     let _ = mean;
     let _ = stddev;
@@ -505,8 +528,7 @@ fn icd_normal(
     input: f64,
     mean: Const<f64>,
     stddev: Const<f64>,
-    #[poly_const(build_normal_lut, from = (mean, stddev))]
-    lut: &LutF64,
+    #[poly_const(build_normal_lut, from = (mean, stddev))] lut: &LutF64,
 ) -> f64 {
     let _ = mean;
     let _ = stddev;
@@ -526,8 +548,7 @@ fn dist_exponential_jit_constants(node: &DistExponential) -> Vec<u64> {
 fn dist_exponential(
     input: f64,
     rate: Const<f64>,
-    #[poly_const(build_exponential_lut, from = rate)]
-    lut: &LutF64,
+    #[poly_const(build_exponential_lut, from = rate)] lut: &LutF64,
 ) -> f64 {
     let _ = rate;
     lut.sample(input)
@@ -542,8 +563,7 @@ fn icd_exponential_jit_constants(node: &IcdExponential) -> Vec<u64> {
 fn icd_exponential(
     input: f64,
     rate: Const<f64>,
-    #[poly_const(build_exponential_lut, from = rate)]
-    lut: &LutF64,
+    #[poly_const(build_exponential_lut, from = rate)] lut: &LutF64,
 ) -> f64 {
     let _ = rate;
     lut.sample(input)
@@ -563,8 +583,7 @@ fn dist_uniform(
     input: f64,
     min: Const<f64>,
     max: Const<f64>,
-    #[poly_const(build_uniform_lut, from = (min, max))]
-    lut: &LutF64,
+    #[poly_const(build_uniform_lut, from = (min, max))] lut: &LutF64,
 ) -> f64 {
     let _ = min;
     let _ = max;
@@ -585,8 +604,7 @@ fn dist_pareto(
     input: f64,
     scale: Const<f64>,
     shape: Const<f64>,
-    #[poly_const(build_pareto_lut, from = (scale, shape))]
-    lut: &LutF64,
+    #[poly_const(build_pareto_lut, from = (scale, shape))] lut: &LutF64,
 ) -> f64 {
     let _ = scale;
     let _ = shape;
@@ -607,8 +625,7 @@ fn dist_zipf(
     input: f64,
     n: Const<u64>,
     exponent: Const<f64>,
-    #[poly_const(build_zipf_lut, from = (n, exponent))]
-    lut: &LutF64,
+    #[poly_const(build_zipf_lut, from = (n, exponent))] lut: &LutF64,
 ) -> f64 {
     let _ = n;
     let _ = exponent;
@@ -705,8 +722,11 @@ mod tests {
     fn beta_symmetric_at_half() {
         // Beta(2, 2) is symmetric around 0.5
         let lut = dist_beta_lut(2.0, 2.0, 1000);
-        assert!((lut.sample(0.5) - 0.5).abs() < 0.1,
-            "beta(2,2) median={}, expected ~0.5", lut.sample(0.5));
+        assert!(
+            (lut.sample(0.5) - 0.5).abs() < 0.1,
+            "beta(2,2) median={}, expected ~0.5",
+            lut.sample(0.5)
+        );
     }
 
     #[test]
@@ -746,7 +766,10 @@ mod tests {
         // Low ranks should be much more common
         let lut = dist_zipf_lut(100, 1.0, 1000);
         let low_quantile = lut.sample(0.5);
-        assert!(low_quantile < 20.0, "median of Zipf(100,1) should be low, got {low_quantile}");
+        assert!(
+            low_quantile < 20.0,
+            "median of Zipf(100,1) should be low, got {low_quantile}"
+        );
     }
 
     #[test]
@@ -754,7 +777,10 @@ mod tests {
         // Poisson(5): mean and median ≈ 5
         let lut = dist_poisson_lut(5.0, 1000);
         let median = lut.sample(0.5);
-        assert!((median - 5.0).abs() < 1.0, "poisson median={median}, expected ~5");
+        assert!(
+            (median - 5.0).abs() < 1.0,
+            "poisson median={median}, expected ~5"
+        );
     }
 
     #[test]
@@ -779,7 +805,10 @@ mod tests {
         // Binomial(20, 0.5): mean = 10
         let lut = dist_binomial_lut(20, 0.5, 1000);
         let median = lut.sample(0.5);
-        assert!((median - 10.0).abs() < 1.5, "binomial median={median}, expected ~10");
+        assert!(
+            (median - 10.0).abs() < 1.5,
+            "binomial median={median}, expected ~10"
+        );
     }
 
     #[test]
@@ -793,7 +822,10 @@ mod tests {
         // Geometric(0.5): mean = 1/p = 2
         let lut = dist_geometric_lut(0.5, 1000);
         let median = lut.sample(0.5);
-        assert!((median - 1.0).abs() < 1.0, "geometric median={median}, expected ~1-2");
+        assert!(
+            (median - 1.0).abs() < 1.0,
+            "geometric median={median}, expected ~1-2"
+        );
     }
 
     #[test]

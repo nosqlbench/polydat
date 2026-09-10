@@ -3,7 +3,7 @@
 
 //! Identity and constant nodes.
 
-use crate::ast::{PolydatNode, NodeMeta, Port, PortType, Slot, Value};
+use crate::ast::{NodeMeta, PolydatNode, Port, PortType, Slot, Value};
 
 /// Passthrough: output equals input. SRD-80 PR B.8 — polymorphic
 /// via PolyWire. The runtime port type is resolved by the
@@ -62,7 +62,9 @@ impl PolydatNode for PortPassthrough {
         if self.meta.outs[0].typ.slot_color() == crate::ast::SlotColor::Ref2 {
             return None;
         }
-        Some(Box::new(|inputs: &[u64], outputs: &mut [u64]| outputs.copy_from_slice(inputs)))
+        Some(Box::new(|inputs: &[u64], outputs: &mut [u64]| {
+            outputs.copy_from_slice(inputs)
+        }))
     }
 }
 
@@ -203,7 +205,9 @@ impl ConstExt {
 }
 
 impl PolydatNode for ConstExt {
-    fn meta(&self) -> &NodeMeta { &self.meta }
+    fn meta(&self) -> &NodeMeta {
+        &self.meta
+    }
 
     fn eval(&self, _inputs: &[Value], outputs: &mut [Value]) {
         outputs[0] = Value::Ext(self.value.clone());

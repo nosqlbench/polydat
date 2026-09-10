@@ -21,6 +21,6 @@
 //!   streams, with burst-resumable ordered scalar drain.
 
 pub mod comprehension;
-pub mod source;
 pub mod cursor_partition;
 pub mod simd_ordinal;
+pub mod source;

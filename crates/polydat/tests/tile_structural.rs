@@ -8,7 +8,8 @@
 
 use polydat::dsl::compile_polydat;
 use polydat::tile::{
-    compile_polydat_with_tiles, tile_from_json_text, tile_from_json_value, tile_from_text, Span, TileOptions,
+    Span, TileOptions, compile_polydat_with_tiles, tile_from_json_text, tile_from_json_value,
+    tile_from_text,
 };
 
 const PROGRAM: &str = "input cycle: u64\n\
@@ -79,7 +80,13 @@ fn structural_and_textual_forms_render_the_same_document() {
 #[test]
 fn host_builds_a_tile_from_a_parsed_json_value() {
     let value: serde_json::Value = serde_json::from_str(STRUCTURAL).unwrap();
-    let tile = tile_from_json_value("doc", &value, &TileOptions::default(), Span { line: 0, col: 0 }).unwrap();
+    let tile = tile_from_json_value(
+        "doc",
+        &value,
+        &TileOptions::default(),
+        Span { line: 0, col: 0 },
+    )
+    .unwrap();
     assert_eq!(tile.encoding.as_deref(), Some("json"));
     let mut k = compile_polydat_with_tiles(PROGRAM, vec![tile]).unwrap();
     k.set_inputs(&[3]);
@@ -92,8 +99,21 @@ fn host_builds_a_tile_from_a_parsed_json_value() {
 
 #[test]
 fn host_builds_tiles_from_json_text_and_template_text() {
-    let json = tile_from_json_text("doc", r#"{"n": "${cycle}", "s": "${cycle: str}"}"#, &TileOptions::default(), Span { line: 0, col: 0 }).unwrap();
-    let text = tile_from_text("line", "text", "n=${cycle} doc=${doc!}", &TileOptions::default(), Span { line: 0, col: 0 }).unwrap();
+    let json = tile_from_json_text(
+        "doc",
+        r#"{"n": "${cycle}", "s": "${cycle: str}"}"#,
+        &TileOptions::default(),
+        Span { line: 0, col: 0 },
+    )
+    .unwrap();
+    let text = tile_from_text(
+        "line",
+        "text",
+        "n=${cycle} doc=${doc!}",
+        &TileOptions::default(),
+        Span { line: 0, col: 0 },
+    )
+    .unwrap();
     let mut k = compile_polydat_with_tiles("input cycle: u64\n", vec![json, text]).unwrap();
     k.set_inputs(&[7]);
     assert_eq!(k.pull("doc").as_str(), "{\"n\": 7, \"s\": \"7\"}");
@@ -121,17 +141,25 @@ fn heredoc_string_literals_work_as_ordinary_strings_too() {
 
 #[test]
 fn structural_errors_name_the_problem() {
-    let err = compile_polydat("input cycle: u64\ndoc := polytile_json(\"{\\\"a\\\": \\\"@for s in 0..4\\\"}\")\n").unwrap_err();
+    let err = compile_polydat(
+        "input cycle: u64\ndoc := polytile_json(\"{\\\"a\\\": \\\"@for s in 0..4\\\"}\")\n",
+    )
+    .unwrap_err();
     assert!(err.contains("outside a directive position"), "{err}");
-    let err = compile_polydat("input cycle: u64\ndoc := polytile_json(\"{\\\"a\\\": [\\\"@else\\\", 1]}\")\n").unwrap_err();
+    let err = compile_polydat(
+        "input cycle: u64\ndoc := polytile_json(\"{\\\"a\\\": [\\\"@else\\\", 1]}\")\n",
+    )
+    .unwrap_err();
     assert!(err.contains("without a leading"), "{err}");
-    let err = compile_polydat("input cycle: u64\ndoc := polytile_json(\"not json\")\n").unwrap_err();
+    let err =
+        compile_polydat("input cycle: u64\ndoc := polytile_json(\"not json\")\n").unwrap_err();
     assert!(err.contains("not JSON"), "{err}");
     let err = compile_polydat("input cycle: u64\ndoc := polytile(\"yaml\", \"x\")\n").unwrap_err();
     assert!(err.contains("unknown encoding 'yaml'"), "{err}");
     let err = compile_polydat("input cycle: u64\ndoc := polytile(\"json\", cycle)\n").unwrap_err();
     assert!(err.contains("template body"), "{err}");
-    let err = compile_polydat("input cycle: u64\ndoc := polytile(\"json\", \"${missing}\")\n").unwrap_err();
+    let err = compile_polydat("input cycle: u64\ndoc := polytile(\"json\", \"${missing}\")\n")
+        .unwrap_err();
     assert!(err.contains("missing"), "{err}");
 }
 
@@ -147,10 +175,16 @@ fn a_hole_in_a_key_and_static_members_beside_a_projection() {
 
 #[test]
 fn pretty_printer_reproduces_a_host_tile_as_a_tile_statement() {
-    let tokens = polydat::dsl::lexer::lex("input cycle: u64\ndoc := polytile_json(\"{\\\"n\\\": \\\"${cycle}\\\"}\")\n").unwrap();
+    let tokens = polydat::dsl::lexer::lex(
+        "input cycle: u64\ndoc := polytile_json(\"{\\\"n\\\": \\\"${cycle}\\\"}\")\n",
+    )
+    .unwrap();
     let file = polydat::dsl::parser::parse(tokens).unwrap();
     let printed = polydat::dsl::pprint::pp_file(&file);
-    assert!(printed.contains("tile doc : json := {\"n\": ${cycle}}"), "{printed}");
+    assert!(
+        printed.contains("tile doc : json := {\"n\": ${cycle}}"),
+        "{printed}"
+    );
     // And the printed form compiles to the same output.
     assert_eq!(render(&printed, 9, "doc"), "{\"n\": 9}");
 }
@@ -169,10 +203,15 @@ fn directive_members_beside_static_members_carry_their_own_commas() {
         ("b", 0, serde_json::json!({"k1": 1, "k2": 2, "fixed": 1})),
         ("c", 0, serde_json::json!({"fixed": 1})),
         ("d", 0, serde_json::json!({"fixed": 1, "last": 2})),
-        ("d", 1, serde_json::json!({"fixed": 1, "on": true, "last": 2})),
+        (
+            "d",
+            1,
+            serde_json::json!({"fixed": 1, "on": true, "last": 2}),
+        ),
     ] {
         let text = render(src, cycle, name);
-        let doc: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{name} at cycle {cycle} is not JSON: {e}\n{text}"));
+        let doc: serde_json::Value = serde_json::from_str(&text)
+            .unwrap_or_else(|e| panic!("{name} at cycle {cycle} is not JSON: {e}\n{text}"));
         assert_eq!(doc, expect, "{name} at cycle {cycle}: {text}");
     }
 }

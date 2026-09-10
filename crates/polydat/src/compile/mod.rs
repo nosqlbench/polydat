@@ -31,22 +31,22 @@
 //!   (feature-gated on `jit`).
 
 pub mod assembly;
-pub mod roundtrip_lint;
-pub mod fusion;
-pub mod select;
 pub mod closures;
+pub mod cone;
+#[cfg(all(test, feature = "jit"))]
+mod cone_tests;
+pub(crate) mod externs;
+pub mod fusion;
 pub mod hybrid;
 #[cfg(feature = "jit")]
 pub mod jit;
-pub mod cone;
-pub(crate) mod marshal;
-pub(crate) mod externs;
 pub mod lattice;
+pub(crate) mod marshal;
+pub mod roundtrip_lint;
+pub mod select;
 pub mod simd_plan;
 #[cfg(feature = "jit")]
 pub mod simd_tier1;
-#[cfg(all(test, feature = "jit"))]
-mod cone_tests;
 
 /// Axiom S2 typed accessors, shared by the P2 and hybrid kernel
 /// types (both expose `self.core.ref_entry(slot)`). Each returns

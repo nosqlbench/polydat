@@ -109,7 +109,10 @@ impl Externs {
     /// `(slot, entry)` for every table-kind extern, for the kernel's
     /// H4 validator list.
     pub(crate) fn table_entries(&self) -> Vec<(usize, usize)> {
-        self.slots.iter().filter_map(|s| s.entry.map(|e| (s.slot, e))).collect()
+        self.slots
+            .iter()
+            .filter_map(|s| s.entry.map(|e| (s.slot, e)))
+            .collect()
     }
 
     /// The slots that hold handles, for a native verifier's list of
@@ -169,10 +172,17 @@ impl Externs {
     /// type; `Value::None` clears it to unset. A carrier is written
     /// into `buffer` now; a handle kind is written at the next run.
     /// Returns the extern's first slot, for the caller's dirty marking.
-    pub(crate) fn set(&mut self, name: &str, value: Value, buffer: &mut [u64]) -> Result<usize, String> {
+    pub(crate) fn set(
+        &mut self,
+        name: &str,
+        value: Value,
+        buffer: &mut [u64],
+    ) -> Result<usize, String> {
         let Some(&i) = self.by_name.get(name) else {
             let known: Vec<&str> = self.slots.iter().map(|s| s.name.as_str()).collect();
-            return Err(format!("no extern named '{name}'; this kernel's externs are {known:?}"));
+            return Err(format!(
+                "no extern named '{name}'; this kernel's externs are {known:?}"
+            ));
         };
         let s = &mut self.slots[i];
         if value != Value::None && value.port_type() != s.ty {

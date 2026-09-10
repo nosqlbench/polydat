@@ -189,9 +189,11 @@ impl Comprehension {
             Comprehension::Zip { children, mode } => zip_metadata(children, *mode),
             Comprehension::Union { children } => union_metadata(children),
             Comprehension::Filter { child, .. } => filter_metadata(child),
-            Comprehension::Order { child, strategy, truncation } => {
-                order_metadata(child, *strategy, *truncation)
-            }
+            Comprehension::Order {
+                child,
+                strategy,
+                truncation,
+            } => order_metadata(child, *strategy, *truncation),
         }
     }
 }
@@ -200,7 +202,9 @@ fn clause_metadata(source: &Source) -> Metadata {
     let cardinality = source.cardinality();
     let (index_addressable, natural_order) = match &cardinality {
         CardinalityClass::Bounded(n) => (
-            Some(IndexFn::Lattice { axis_sizes: vec![*n] }),
+            Some(IndexFn::Lattice {
+                axis_sizes: vec![*n],
+            }),
             NaturalOrder::Lex,
         ),
         CardinalityClass::Continuous { intervals, measure } => (
@@ -237,7 +241,10 @@ fn cartesian_metadata(children: &[Comprehension]) -> Metadata {
         combine_cartesian_index_fn(&child_meta)
     };
 
-    let natural_order = if matches!(cardinality, CardinalityClass::Continuous { .. } | CardinalityClass::Hybrid(_)) {
+    let natural_order = if matches!(
+        cardinality,
+        CardinalityClass::Continuous { .. } | CardinalityClass::Hybrid(_)
+    ) {
         NaturalOrder::PendingSampling
     } else {
         NaturalOrder::Lex
@@ -357,16 +364,13 @@ fn order_metadata(
         StrategyName::Lex => (
             child_meta.index_addressable, // inherit through Lex
             NaturalOrder::Lex,
-            child_meta.materialization,   // counter wrapper at most
+            child_meta.materialization, // counter wrapper at most
         ),
         non_lex => {
             // R2 (Phase 6) rewrites this into an indexed_order
             // IR opcode; AST-level metadata stops here.
-            let working_set_size = strategy_working_set(
-                non_lex,
-                &child_meta.index_addressable,
-                truncation,
-            );
+            let working_set_size =
+                strategy_working_set(non_lex, &child_meta.index_addressable, truncation);
             (
                 None,
                 NaturalOrder::Strategy(non_lex),
@@ -419,7 +423,10 @@ fn combine_cartesian_cardinality(children: &[Metadata]) -> CardinalityClass {
                 discrete_axes.push(0);
             }
             CardinalityClass::Continuous { intervals, measure }
-            | CardinalityClass::ContinuousAtMost { intervals, measure_at_most: measure } => {
+            | CardinalityClass::ContinuousAtMost {
+                intervals,
+                measure_at_most: measure,
+            } => {
                 has_continuous = true;
                 continuous_intervals.extend(intervals.iter().cloned());
                 continuous_measures.push(measure.clone());
@@ -501,7 +508,9 @@ fn combine_cartesian_index_fn(children: &[Metadata]) -> Option<IndexFn> {
     }
 
     if all_discrete {
-        Some(IndexFn::Lattice { axis_sizes: discrete_axes })
+        Some(IndexFn::Lattice {
+            axis_sizes: discrete_axes,
+        })
     } else if all_continuous {
         Some(IndexFn::Continuous {
             intervals: continuous_intervals,
@@ -713,16 +722,16 @@ fn lattice_dim(idx: &IndexFn) -> usize {
 
 fn index_fn_cardinality(idx: &IndexFn) -> u64 {
     match idx {
-        IndexFn::Lattice { axis_sizes } => {
-            axis_sizes.iter().copied().fold(1u64, |a, b| a.saturating_mul(b))
-        }
+        IndexFn::Lattice { axis_sizes } => axis_sizes
+            .iter()
+            .copied()
+            .fold(1u64, |a, b| a.saturating_mul(b)),
         IndexFn::Lockstep { length } => *length,
-        IndexFn::Modular { axis_sizes } => {
-            axis_sizes.iter().copied().max().unwrap_or(0)
-        }
-        IndexFn::Concatenation { segment_sizes } => {
-            segment_sizes.iter().copied().fold(0u64, |a, b| a.saturating_add(b))
-        }
+        IndexFn::Modular { axis_sizes } => axis_sizes.iter().copied().max().unwrap_or(0),
+        IndexFn::Concatenation { segment_sizes } => segment_sizes
+            .iter()
+            .copied()
+            .fold(0u64, |a, b| a.saturating_add(b)),
         // Continuous index has no integer cardinality.
         IndexFn::Continuous { .. } | IndexFn::Hybrid { .. } => 0,
     }
@@ -767,7 +776,9 @@ fn walk_source_refs(c: &Comprehension, out: &mut Vec<String>) {
         Comprehension::Clause { source, .. } => {
             extract_source_refs(source, out);
         }
-        Comprehension::Cartesian { children } | Comprehension::Zip { children, .. } | Comprehension::Union { children } => {
+        Comprehension::Cartesian { children }
+        | Comprehension::Zip { children, .. }
+        | Comprehension::Union { children } => {
             for c in children {
                 walk_source_refs(c, out);
             }
@@ -788,17 +799,18 @@ fn extract_source_refs(source: &Source, out: &mut Vec<String>) {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'{'
-            && let Some(close) = s[i + 1..].find('}') {
-                let name = s[i + 1..i + 1 + close].trim();
-                if !name.is_empty()
-                    && name.chars().all(|c| c.is_alphanumeric() || c == '_')
-                    && !out.contains(&name.to_string())
-                {
-                    out.push(name.to_string());
-                }
-                i += close + 2;
-                continue;
+            && let Some(close) = s[i + 1..].find('}')
+        {
+            let name = s[i + 1..i + 1 + close].trim();
+            if !name.is_empty()
+                && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+                && !out.contains(&name.to_string())
+            {
+                out.push(name.to_string());
             }
+            i += close + 2;
+            continue;
+        }
         i += 1;
     }
 }
@@ -833,7 +845,9 @@ mod tests {
         assert_eq!(m.cardinality, CardinalityClass::Bounded(3));
         assert_eq!(
             m.index_addressable,
-            Some(IndexFn::Lattice { axis_sizes: vec![3] })
+            Some(IndexFn::Lattice {
+                axis_sizes: vec![3]
+            })
         );
         assert_eq!(m.natural_order, NaturalOrder::Lex);
         assert_eq!(m.materialization, Materialization::Streaming);
@@ -843,26 +857,33 @@ mod tests {
     fn clause_metadata_for_continuous_source() {
         let m = continuous_clause("alpha").metadata();
         assert!(matches!(m.cardinality, CardinalityClass::Continuous { .. }));
-        assert!(matches!(m.index_addressable, Some(IndexFn::Continuous { .. })));
+        assert!(matches!(
+            m.index_addressable,
+            Some(IndexFn::Continuous { .. })
+        ));
         assert_eq!(m.natural_order, NaturalOrder::PendingSampling);
         assert_eq!(m.materialization, Materialization::Streaming);
     }
 
     #[test]
     fn cartesian_metadata_combines_lattice_axes() {
-        let c = Comprehension::cartesian(vec![clause("k", &[1, 2]), clause("limit", &[10, 20, 30])]);
+        let c =
+            Comprehension::cartesian(vec![clause("k", &[1, 2]), clause("limit", &[10, 20, 30])]);
         let m = c.metadata();
         assert_eq!(m.cardinality, CardinalityClass::Bounded(6));
         assert_eq!(
             m.index_addressable,
-            Some(IndexFn::Lattice { axis_sizes: vec![2, 3] })
+            Some(IndexFn::Lattice {
+                axis_sizes: vec![2, 3]
+            })
         );
         assert_eq!(m.natural_order, NaturalOrder::Lex);
     }
 
     #[test]
     fn cartesian_metadata_for_hybrid() {
-        let c = Comprehension::cartesian(vec![clause("k", &[1, 2, 3, 4]), continuous_clause("theta")]);
+        let c =
+            Comprehension::cartesian(vec![clause("k", &[1, 2, 3, 4]), continuous_clause("theta")]);
         let m = c.metadata();
         match m.cardinality {
             CardinalityClass::Hybrid(h) => {
@@ -920,7 +941,9 @@ mod tests {
         // shorter child cardinality = 3 → barrier size 3
         assert_eq!(
             m.materialization,
-            Materialization::BoundedBarrier { working_set_size: 3 }
+            Materialization::BoundedBarrier {
+                working_set_size: 3
+            }
         );
     }
 
@@ -933,14 +956,17 @@ mod tests {
         assert_eq!(m.cardinality, CardinalityClass::Bounded(4));
         assert_eq!(
             m.index_addressable,
-            Some(IndexFn::Concatenation { segment_sizes: vec![2, 2] })
+            Some(IndexFn::Concatenation {
+                segment_sizes: vec![2, 2]
+            })
         );
         assert_eq!(m.natural_order, NaturalOrder::Sequential);
     }
 
     #[test]
     fn filter_destroys_addressability() {
-        let inner = Comprehension::cartesian(vec![clause("k", &[1, 2]), clause("limit", &[10, 20])]);
+        let inner =
+            Comprehension::cartesian(vec![clause("k", &[1, 2]), clause("limit", &[10, 20])]);
         let filtered = Comprehension::filter(inner, "{k} > 0");
         let m = filtered.metadata();
         assert_eq!(m.cardinality, CardinalityClass::BoundedAtMost(4));
@@ -949,7 +975,8 @@ mod tests {
 
     #[test]
     fn lex_order_inherits_addressability() {
-        let inner = Comprehension::cartesian(vec![clause("k", &[1, 2]), clause("limit", &[10, 20])]);
+        let inner =
+            Comprehension::cartesian(vec![clause("k", &[1, 2]), clause("limit", &[10, 20])]);
         let ordered = Comprehension::order(inner, StrategyName::Lex, Some(2));
         let m = ordered.metadata();
         assert_eq!(m.cardinality, CardinalityClass::Bounded(2));
@@ -959,7 +986,8 @@ mod tests {
 
     #[test]
     fn non_lex_order_drops_ast_level_addressability() {
-        let inner = Comprehension::cartesian(vec![clause("k", &[1, 2]), clause("limit", &[10, 20])]);
+        let inner =
+            Comprehension::cartesian(vec![clause("k", &[1, 2]), clause("limit", &[10, 20])]);
         let ordered = Comprehension::order(inner, StrategyName::Halton, Some(2));
         let m = ordered.metadata();
         assert!(m.index_addressable.is_none());
@@ -969,19 +997,24 @@ mod tests {
         }
         assert_eq!(
             m.materialization,
-            Materialization::BoundedBarrier { working_set_size: 2 }
+            Materialization::BoundedBarrier {
+                working_set_size: 2
+            }
         );
     }
 
     #[test]
     fn continuous_sampling_yields_bounded_cardinality() {
-        let inner = Comprehension::cartesian(vec![continuous_clause("alpha"), continuous_clause("beta")]);
+        let inner =
+            Comprehension::cartesian(vec![continuous_clause("alpha"), continuous_clause("beta")]);
         let ordered = Comprehension::order(inner, StrategyName::Halton, Some(100));
         let m = ordered.metadata();
         assert_eq!(m.cardinality, CardinalityClass::Bounded(100));
         assert_eq!(
             m.materialization,
-            Materialization::BoundedBarrier { working_set_size: 100 }
+            Materialization::BoundedBarrier {
+                working_set_size: 100
+            }
         );
     }
 
@@ -1002,7 +1035,9 @@ mod tests {
 
     #[test]
     fn has_continuous_axis_classifier() {
-        let lat = IndexFn::Lattice { axis_sizes: vec![3, 4] };
+        let lat = IndexFn::Lattice {
+            axis_sizes: vec![3, 4],
+        };
         assert!(!lat.has_continuous_axis());
 
         let cont = IndexFn::Continuous {
@@ -1014,12 +1049,24 @@ mod tests {
 
     #[test]
     fn multi_axis_lattice_classifier() {
-        assert!(IndexFn::Lattice { axis_sizes: vec![3, 4] }.is_multi_axis_lattice());
-        assert!(!IndexFn::Lattice { axis_sizes: vec![3] }.is_multi_axis_lattice());
-        assert!(!IndexFn::Continuous {
-            intervals: vec![Interval::closed(0.0, 1.0), Interval::closed(0.0, 1.0)],
-            measure: ProductMeasure::Uniform,
-        }
-        .is_multi_axis_lattice());
+        assert!(
+            IndexFn::Lattice {
+                axis_sizes: vec![3, 4]
+            }
+            .is_multi_axis_lattice()
+        );
+        assert!(
+            !IndexFn::Lattice {
+                axis_sizes: vec![3]
+            }
+            .is_multi_axis_lattice()
+        );
+        assert!(
+            !IndexFn::Continuous {
+                intervals: vec![Interval::closed(0.0, 1.0), Interval::closed(0.0, 1.0)],
+                measure: ProductMeasure::Uniform,
+            }
+            .is_multi_axis_lattice()
+        );
     }
 }

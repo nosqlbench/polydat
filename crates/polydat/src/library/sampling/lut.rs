@@ -12,7 +12,7 @@
 //! runtime, querying is a single array index + lerp — no branching on
 //! distribution type, no function pointer call per sample.
 
-use crate::ast::{CompiledU64Op, PolydatNode, NodeMeta, Port, PortType, Slot, Value};
+use crate::ast::{CompiledU64Op, NodeMeta, PolydatNode, Port, PortType, Slot, Value};
 
 /// A pre-computed interpolating lookup table mapping [0, 1] → f64.
 ///
@@ -191,11 +191,19 @@ impl crate::derive_support::PolydatSetup for LutF64 {}
 /// Parse a free-form spec ("1.0 2.5 7" or "1.0,2.5,7") into a
 /// sorted `LutF64`. Single-call setup invoked by the macro.
 fn parse_empirical_lut(spec: &str) -> LutF64 {
-    let mut values: Vec<f64> = spec.split([' ', ',', ';'])
+    let mut values: Vec<f64> = spec
+        .split([' ', ',', ';'])
         .filter(|s| !s.trim().is_empty())
-        .map(|s| s.trim().parse::<f64>().expect("invalid empirical data point"))
+        .map(|s| {
+            s.trim()
+                .parse::<f64>()
+                .expect("invalid empirical data point")
+        })
         .collect();
-    assert!(values.len() >= 2, "empirical distribution needs at least 2 data points");
+    assert!(
+        values.len() >= 2,
+        "empirical distribution needs at least 2 data points"
+    );
     values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     LutF64::from_values(&values)
 }
@@ -214,8 +222,7 @@ fn dist_empirical_jit_constants(node: &DistEmpirical) -> Vec<u64> {
 fn dist_empirical(
     input: f64,
     spec: crate::derive_support::Const<&str>,
-    #[poly_const(parse_empirical_lut, from = spec)]
-    table: &LutF64,
+    #[poly_const(parse_empirical_lut, from = spec)] table: &LutF64,
 ) -> f64 {
     table.sample(input)
 }

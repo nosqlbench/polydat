@@ -34,17 +34,17 @@ use super::ir::compile as compile_to_ir;
 
 pub mod compiled;
 pub mod coord_stream;
-pub mod polydat_kernel;
 pub mod instance;
+pub mod polydat_kernel;
 pub mod scope_once;
 pub mod scoped_stream;
 
 pub use compiled::CompiledComprehension;
 pub use coord_stream::CoordinateStream;
-pub use polydat_kernel::{
-    polydat_value_to_tuple_value, tuple_value_to_polydat_value, PolydatKernelScope,
-};
 pub use instance::{KernelScope, ScopedKernelInstance};
+pub use polydat_kernel::{
+    PolydatKernelScope, polydat_value_to_tuple_value, tuple_value_to_polydat_value,
+};
 pub use scope_once::scope_once;
 pub use scoped_stream::ScopedKernelStream;
 

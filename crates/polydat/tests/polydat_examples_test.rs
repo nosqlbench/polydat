@@ -14,19 +14,22 @@ use polydat::dsl::events::{CompileEvent, CompileEventLog};
 fn compile_with_events(source: &str) -> (polydat::kernel::PolydatKernel, CompileEventLog) {
     let mut log = CompileEventLog::new();
 
-    let tokens = polydat::dsl::lexer::lex(source)
-        .unwrap_or_else(|e| panic!("lex failed: {e}"));
-    let ast = polydat::dsl::parser::parse(tokens)
-        .unwrap_or_else(|e| panic!("parse failed: {e}"));
-    log.push(CompileEvent::Parsed { statements: ast.statements.len() });
+    let tokens = polydat::dsl::lexer::lex(source).unwrap_or_else(|e| panic!("lex failed: {e}"));
+    let ast = polydat::dsl::parser::parse(tokens).unwrap_or_else(|e| panic!("parse failed: {e}"));
+    log.push(CompileEvent::Parsed {
+        statements: ast.statements.len(),
+    });
 
-    let asm = compile_polydat_to_assembler(source)
-        .unwrap_or_else(|e| panic!("compile failed: {e}"));
+    let asm =
+        compile_polydat_to_assembler(source).unwrap_or_else(|e| panic!("compile failed: {e}"));
     for name in asm.output_names() {
-        log.push(CompileEvent::OutputDeclared { name: name.to_string() });
+        log.push(CompileEvent::OutputDeclared {
+            name: name.to_string(),
+        });
     }
 
-    let kernel = asm.compile_with_log(Some(&mut log))
+    let kernel = asm
+        .compile_with_log(Some(&mut log))
         .unwrap_or_else(|e| panic!("assembly failed: {e}"));
 
     let program = kernel.program();
@@ -50,8 +53,7 @@ fn compile_with_events(source: &str) -> (polydat::kernel::PolydatKernel, Compile
 
 fn load_polydat(name: &str) -> String {
     let path = format!("tests/examples/polydat/{name}");
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read {path}: {e}"))
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read {path}: {e}"))
 }
 
 fn has_event(log: &CompileEventLog, pred: impl Fn(&CompileEvent) -> bool) -> bool {
@@ -68,10 +70,22 @@ fn constant_folding_compiles_and_folds() {
     let (mut kernel, log) = compile_with_events(&source);
 
     // Should have folded base and seed
-    assert!(has_event(&log, |e| matches!(e, CompileEvent::ConstantFolded { node, .. } if node == "const_u64")),
-        "base (const_u64 42) should be folded\n{}", log.format());
-    assert!(has_event(&log, |e| matches!(e, CompileEvent::ConstantFolded { node, .. } if node == "hash")),
-        "seed (hash of base) should be folded\n{}", log.format());
+    assert!(
+        has_event(
+            &log,
+            |e| matches!(e, CompileEvent::ConstantFolded { node, .. } if node == "const_u64")
+        ),
+        "base (const_u64 42) should be folded\n{}",
+        log.format()
+    );
+    assert!(
+        has_event(
+            &log,
+            |e| matches!(e, CompileEvent::ConstantFolded { node, .. } if node == "hash")
+        ),
+        "seed (hash of base) should be folded\n{}",
+        log.format()
+    );
 
     // user_id should vary per cycle (not folded)
     kernel.set_inputs(&[0]);
@@ -151,7 +165,10 @@ fn string_generation_compiles() {
         let code = kernel.pull("code").to_display_string();
         let decimal = kernel.pull("decimal").to_display_string();
         let hex = kernel.pull("hex").to_display_string();
-        assert!(!code.is_empty(), "combinations should produce output: {code}");
+        assert!(
+            !code.is_empty(),
+            "combinations should produce output: {code}"
+        );
         assert!(!decimal.is_empty());
         assert!(!hex.is_empty());
     }
@@ -174,10 +191,16 @@ fn distributions_compiles() {
         kernel.set_inputs(&[cycle]);
         normal_sum += kernel.pull("normal").as_f64();
         let outcome = kernel.pull("outcome").as_u64();
-        assert!(valid_outcomes.contains(&outcome), "unexpected outcome: {outcome}");
+        assert!(
+            valid_outcomes.contains(&outcome),
+            "unexpected outcome: {outcome}"
+        );
     }
     let mean = normal_sum / 1000.0;
-    assert!((mean - 100.0).abs() < 10.0, "normal mean should be ~100, got {mean}");
+    assert!(
+        (mean - 100.0).abs() < 10.0,
+        "normal mean should be ~100, got {mean}"
+    );
 
     eprintln!("{}", log.format());
 }
@@ -194,10 +217,14 @@ fn weighted_selection_compiles() {
     let mut heads = 0u64;
     for cycle in 0..1000 {
         kernel.set_inputs(&[cycle]);
-        if kernel.pull("coin").as_u64() == 1 { heads += 1; }
+        if kernel.pull("coin").as_u64() == 1 {
+            heads += 1;
+        }
         let color = kernel.pull("color").to_display_string();
-        assert!(["red", "blue", "green"].contains(&color.as_str()),
-            "unexpected color: {color}");
+        assert!(
+            ["red", "blue", "green"].contains(&color.as_str()),
+            "unexpected color: {color}"
+        );
         let tier = kernel.pull("tier").as_u64();
         assert!((1..=3).contains(&tier), "unexpected tier: {tier}");
     }
@@ -218,10 +245,16 @@ fn datetime_context_compiles() {
 
     kernel.set_inputs(&[0]);
     let ts = kernel.pull("ts").to_display_string();
-    assert!(ts.contains("2024"), "timestamp should contain year 2024: {ts}");
+    assert!(
+        ts.contains("2024"),
+        "timestamp should contain year 2024: {ts}"
+    );
 
     let wall = kernel.pull("wall").as_u64();
-    assert!(wall > 1_700_000_000_000, "wall clock should be recent: {wall}");
+    assert!(
+        wall > 1_700_000_000_000,
+        "wall clock should be recent: {wall}"
+    );
 
     let tid = kernel.pull("tid").as_u64();
     assert!(tid > 0, "thread_id should be positive: {tid}");
@@ -250,7 +283,10 @@ fn math_trig_compiles() {
         assert!((-1.0..=1.0).contains(&sine), "sin: {sine}");
         assert!((-1.0..=1.0).contains(&cosine), "cos: {cosine}");
         assert!((0.0..=1.0).contains(&root), "sqrt: {root}");
-        assert!((1.0..std::f64::consts::E + 0.01).contains(&exp), "exp: {exp}");
+        assert!(
+            (1.0..std::f64::consts::E + 0.01).contains(&exp),
+            "exp: {exp}"
+        );
         assert!((-100.0..=100.0).contains(&scaled), "scaled: {scaled}");
         assert!((-50.0..=50.0).contains(&clamped), "clamped: {clamped}");
     }
@@ -319,7 +355,10 @@ fn real_data_compiles() {
 
         assert!(!fname.is_empty(), "first_names should produce output");
         assert!(!fullname.is_empty(), "full_names should produce output");
-        assert!(fullname.contains(' '), "full_names should have space: {fullname}");
+        assert!(
+            fullname.contains(' '),
+            "full_names should have space: {fullname}"
+        );
         assert_eq!(state.len(), 2, "state_codes should be 2 chars: {state}");
         assert!(!country.is_empty(), "country_names should produce output");
     }
@@ -339,8 +378,10 @@ fn empirical_dist_compiles() {
     for cycle in 0..1000 {
         kernel.set_inputs(&[cycle]);
         let v = kernel.pull("latency").as_f64();
-        assert!((0.5..=100.0).contains(&v),
-            "empirical should be in [0.5, 100.0]: {v} at cycle={cycle}");
+        assert!(
+            (0.5..=100.0).contains(&v),
+            "empirical should be in [0.5, 100.0]: {v} at cycle={cycle}"
+        );
     }
 
     eprintln!("{}", log.format());
@@ -361,11 +402,16 @@ fn all_polydat_examples_compile() {
             let name = path.file_name().unwrap().to_str().unwrap();
             let source = std::fs::read_to_string(&path).unwrap();
             let (kernel, log) = compile_with_events(&source);
-            assert!(kernel.program().node_count() > 0,
-                "{name}: should produce at least one node");
+            assert!(
+                kernel.program().node_count() > 0,
+                "{name}: should produce at least one node"
+            );
             eprintln!("--- {name} ---\n{}\n", log.format());
             count += 1;
         }
     }
-    assert!(count >= 10, "expected at least 10 .polydat examples, found {count}");
+    assert!(
+        count >= 10,
+        "expected at least 10 .polydat examples, found {count}"
+    );
 }

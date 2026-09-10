@@ -62,7 +62,11 @@ pub fn header(format: EmitFormat, names: &[&str]) -> Option<String> {
 /// Render one row without touching the buffer.
 pub fn render_row(format: EmitFormat, names: &[&str], values: &[Value]) -> String {
     match format {
-        EmitFormat::Text => values.iter().map(|v| v.to_display_string()).collect::<Vec<_>>().join("\n"),
+        EmitFormat::Text => values
+            .iter()
+            .map(|v| v.to_display_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
         EmitFormat::Map => names
             .iter()
             .zip(values)
@@ -104,7 +108,11 @@ pub fn take_rows() -> Vec<String> {
 #[crate::polydat_node(category = Diagnostic, purity = SideChannel(Other), variadic_min = 0)]
 fn emit_row(format: Const<&str>, names: Const<&str>, values: &[Value]) -> u64 {
     let fmt = EmitFormat::parse(&format).unwrap_or(EmitFormat::Map);
-    let names: Vec<&str> = names.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+    let names: Vec<&str> = names
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
     let row = render_row(fmt, &names, values);
     ROWS.with(|r| r.borrow_mut().push(row));
     values.len() as u64
@@ -117,7 +125,11 @@ mod tests {
 
     #[test]
     fn csv_quotes_only_when_needed() {
-        let vals = [Value::U64(1), Value::Str("a,b".into()), Value::Str("plain".into())];
+        let vals = [
+            Value::U64(1),
+            Value::Str("a,b".into()),
+            Value::Str("plain".into()),
+        ];
         let row = render_row(EmitFormat::Csv, &["x", "y", "z"], &vals);
         assert_eq!(row, "1,\"a,b\",plain");
     }
@@ -126,7 +138,10 @@ mod tests {
     fn map_and_jsonl_shapes() {
         let vals = [Value::U64(7), Value::F64(1.5)];
         assert_eq!(render_row(EmitFormat::Map, &["a", "b"], &vals), "a=7 b=1.5");
-        assert_eq!(render_row(EmitFormat::Jsonl, &["a", "b"], &vals), r#"{"a":7,"b":1.5}"#);
+        assert_eq!(
+            render_row(EmitFormat::Jsonl, &["a", "b"], &vals),
+            r#"{"a":7,"b":1.5}"#
+        );
     }
 
     #[test]

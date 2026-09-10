@@ -24,7 +24,9 @@ pub fn apply_tile_defaults(file: &mut PolydatFile, defaults: &TileOptions) -> Re
         for stmt in statements.iter_mut() {
             match stmt {
                 Statement::Tile(t) => {
-                    let untouched = t.options.open == stock.open && t.options.close == stock.close && t.options.sigil == stock.sigil;
+                    let untouched = t.options.open == stock.open
+                        && t.options.close == stock.close
+                        && t.options.sigil == stock.sigil;
                     if !untouched {
                         continue;
                     }
@@ -57,7 +59,10 @@ pub fn apply_tile_defaults(file: &mut PolydatFile, defaults: &TileOptions) -> Re
 ///
 /// The transform is order preserving and leaves every other statement
 /// untouched.
-pub fn assign_values(file: &mut PolydatFile, assignments: &[(String, String)]) -> Result<(), String> {
+pub fn assign_values(
+    file: &mut PolydatFile,
+    assignments: &[(String, String)],
+) -> Result<(), String> {
     for (name, raw) in assignments {
         let mut found = false;
         for stmt in file.statements.iter_mut() {
@@ -92,7 +97,11 @@ pub fn assign_values(file: &mut PolydatFile, assignments: &[(String, String)]) -
                 .collect();
             return Err(format!(
                 "cannot assign '{name}': no extern or input by that name; declared: {}",
-                if declared.is_empty() { "(none)".to_string() } else { declared.join(", ") }
+                if declared.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    declared.join(", ")
+                }
             ));
         }
     }

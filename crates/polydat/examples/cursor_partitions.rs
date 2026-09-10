@@ -10,19 +10,29 @@ use polydat::iteration::cursor_partition::{cursor_over_partitions, narrow_cursor
 
 fn main() {
     // 1. Resolve a partition spec against a domain.
-    let mut k = compile_polydat(r#"
+    let mut k = compile_polydat(
+        r#"
         input cycle: u64
         parts := partitions("20%,30%,*", 1000000)
-    "#).expect("compile");
+    "#,
+    )
+    .expect("compile");
     k.set_inputs(&[0]);
     let list = k.pull("parts").as_partition_list().expect("list").clone();
     for p in list.0.iter() {
-        println!("p{}  [{:>7}, {:>7})  {:>6} ordinals", p.idx, p.start_ord, p.end_ord, p.end_ord - p.start_ord);
+        println!(
+            "p{}  [{:>7}, {:>7})  {:>6} ordinals",
+            p.idx,
+            p.start_ord,
+            p.end_ord,
+            p.end_ord - p.start_ord
+        );
     }
     println!();
 
     // 2. One fiber narrows its cursor to one partition.
-    let mut k = compile_polydat(r#"
+    let mut k = compile_polydat(
+        r#"
         input cycle: u64
         cursor q = range(0, 1000000) over "20%,30%,*"
         start := q.cursor.start_ordinal
@@ -31,7 +41,9 @@ fn main() {
         slot  := mod_in(cycle, q.cursor)
         row   := mod(hash(slot), 1000000)
         sub   := subdivide(q.cursor, 4)
-    "#).expect("compile2");
+    "#,
+    )
+    .expect("compile2");
 
     // The host resolves the `over` spec and hands fiber 1 its partition.
     let program = k.program().clone();

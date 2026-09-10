@@ -72,7 +72,11 @@ fn emit(ast: &Comprehension, ops: &mut Vec<Op>) {
                 predicate: predicate.clone(),
             });
         }
-        Comprehension::Order { child, strategy, truncation } => {
+        Comprehension::Order {
+            child,
+            strategy,
+            truncation,
+        } => {
             emit(child, ops);
             ops.push(order_op(child, *strategy, *truncation));
         }

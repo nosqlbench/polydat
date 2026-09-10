@@ -72,10 +72,13 @@ impl ParsedCombinations {
 fn combinations(
     input: u64,
     pattern: crate::derive_support::Const<&str>,
-    #[poly_const(ParsedCombinations::from_pattern, from = pattern)]
-    parsed: &ParsedCombinations,
+    #[poly_const(ParsedCombinations::from_pattern, from = pattern)] parsed: &ParsedCombinations,
 ) -> String {
-    let mut remainder = if parsed.modulus > 0 { input % parsed.modulus } else { input };
+    let mut remainder = if parsed.modulus > 0 {
+        input % parsed.modulus
+    } else {
+        input
+    };
     let mut result = String::with_capacity(parsed.segments.len() * 2);
     for seg in &parsed.segments {
         match seg {
@@ -141,18 +144,39 @@ fn number_to_words(input: u64) -> String {
 }
 
 const ONES: [&str; 20] = [
-    "zero", "one", "two", "three", "four", "five", "six", "seven",
-    "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen",
-    "fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
+    "nineteen",
 ];
 
 const TENS: [&str; 10] = [
-    "", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy",
-    "eighty", "ninety",
+    "", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
 ];
 
 const SCALES: [&str; 7] = [
-    "", "thousand", "million", "billion", "trillion", "quadrillion",
+    "",
+    "thousand",
+    "million",
+    "billion",
+    "trillion",
+    "quadrillion",
     "quintillion",
 ];
 
@@ -225,8 +249,8 @@ fn append_chunk_to_words(buf: &mut String, n: u32) {
 // Signature declarations for the DSL registry
 // ---------------------------------------------------------------------------
 
-use crate::dsl::registry::{Arity, FuncCategory, FuncSig, ParamSpec};
 use crate::ast::SlotType;
+use crate::dsl::registry::{Arity, FuncCategory, FuncSig, ParamSpec};
 
 /// Signatures for string generation nodes.
 pub fn signatures() -> &'static [FuncSig] {
@@ -239,13 +263,28 @@ pub fn signatures() -> &'static [FuncSig] {
         // `#[polydat_node]` per SRD-80 PR B.4.
         // `char_buf` migrated to `#[polydat_node]` per SRD-80 PR B.6.
         FuncSig {
-            name: "file_line_at", category: C::String, outputs: 1,
+            name: "file_line_at",
+            category: C::String,
+            outputs: 1,
             description: "select a line from a file by index",
             help: "Read a file at construction time and return a line at cycle-time index.\nIndex wraps modulo line count so every u64 input is valid.\nFile path is a const string argument.\nParameters:\n  index    — u64 wire input\n  filename — ConstStr path to file\nExample: file_line_at(mod(hash(cycle), 1000), \"words.txt\")",
-            identity: None, variadic_ctor: None,
+            identity: None,
+            variadic_ctor: None,
             params: &[
-                ParamSpec { name: "index", slot_type: SlotType::Wire, required: true, example: "cycle", constraint: None },
-                ParamSpec { name: "filename", slot_type: SlotType::ConstStr, required: true, example: "\"test.csv\"", constraint: None },
+                ParamSpec {
+                    name: "index",
+                    slot_type: SlotType::Wire,
+                    required: true,
+                    example: "cycle",
+                    constraint: None,
+                },
+                ParamSpec {
+                    name: "filename",
+                    slot_type: SlotType::ConstStr,
+                    required: true,
+                    example: "\"test.csv\"",
+                    constraint: None,
+                },
             ],
             arity: Arity::Fixed,
             commutativity: crate::ast::Commutativity::Positional,
@@ -289,11 +328,22 @@ fn hashed_uuid(input: u64) -> String {
     bytes[8] = (bytes[8] & 0x3F) | 0x80;
     format!(
         "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3],
-        bytes[4], bytes[5],
-        bytes[6], bytes[7],
-        bytes[8], bytes[9],
-        bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
+        bytes[0],
+        bytes[1],
+        bytes[2],
+        bytes[3],
+        bytes[4],
+        bytes[5],
+        bytes[6],
+        bytes[7],
+        bytes[8],
+        bytes[9],
+        bytes[10],
+        bytes[11],
+        bytes[12],
+        bytes[13],
+        bytes[14],
+        bytes[15],
     )
 }
 
@@ -319,14 +369,20 @@ fn expand_charset(charset: &str) -> Vec<char> {
     let mut i = 0;
     while i < chars_vec.len() {
         if i + 2 < chars_vec.len() && chars_vec[i + 1] == '-' {
-            for c in chars_vec[i]..=chars_vec[i + 2] { result.push(c); }
+            for c in chars_vec[i]..=chars_vec[i + 2] {
+                result.push(c);
+            }
             i += 3;
         } else {
             result.push(chars_vec[i]);
             i += 1;
         }
     }
-    if result.is_empty() { ('a'..='z').collect() } else { result }
+    if result.is_empty() {
+        ('a'..='z').collect()
+    } else {
+        result
+    }
 }
 
 /// Generate a deterministic string of a given length from a
@@ -336,8 +392,7 @@ fn char_buf(
     seed: u64,
     charset: crate::derive_support::Const<&str>,
     length: u64,
-    #[poly_const(expand_charset, from = charset)]
-    chars: &Vec<char>,
+    #[poly_const(expand_charset, from = charset)] chars: &Vec<char>,
 ) -> String {
     let n = chars.len();
     let len = length as usize;
@@ -383,8 +438,7 @@ fn read_file_lines(filename: &str) -> Vec<String> {
 fn file_line_at(
     index: u64,
     filename: crate::derive_support::Const<&str>,
-    #[poly_const(read_file_lines, from = filename)]
-    lines: &Vec<String>,
+    #[poly_const(read_file_lines, from = filename)] lines: &Vec<String>,
 ) -> String {
     let _ = filename;
     let idx = index as usize;
@@ -462,10 +516,14 @@ fn str_upper(input: String) -> String {
 /// Try to build a string node from a function name and const args.
 ///
 /// Returns `None` if the name is not handled by this module.
-pub(crate) fn build_node(_name: &str, _wires: &[crate::compile::assembly::WireRef], _wire_types: &[crate::ast::PortType], _consts: &[crate::dsl::factory::ConstArg]) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
+pub(crate) fn build_node(
+    _name: &str,
+    _wires: &[crate::compile::assembly::WireRef],
+    _wire_types: &[crate::ast::PortType],
+    _consts: &[crate::dsl::factory::ConstArg],
+) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
     None
 }
-
 
 crate::register_nodes!(signatures, build_node);
 #[cfg(test)]
@@ -564,7 +622,10 @@ mod tests {
     fn number_to_words_thousands() {
         assert_eq!(u64_to_words(1000), "one thousand");
         assert_eq!(u64_to_words(1001), "one thousand one");
-        assert_eq!(u64_to_words(12345), "twelve thousand three hundred forty-five");
+        assert_eq!(
+            u64_to_words(12345),
+            "twelve thousand three hundred forty-five"
+        );
     }
 
     #[test]
@@ -608,14 +669,25 @@ mod tests {
         #[derive(Debug, Clone)]
         struct Tag(u64);
         impl crate::ast::ReflectedValue for Tag {
-            fn type_name(&self) -> &str { "Tag" }
-            fn display(&self) -> String { format!("tag#{}", self.0) }
-            fn clone_reflected(&self) -> Box<dyn crate::ast::ReflectedValue> { Box::new(self.clone()) }
-            fn as_any(&self) -> &dyn std::any::Any { self }
+            fn type_name(&self) -> &str {
+                "Tag"
+            }
+            fn display(&self) -> String {
+                format!("tag#{}", self.0)
+            }
+            fn clone_reflected(&self) -> Box<dyn crate::ast::ReflectedValue> {
+                Box::new(self.clone())
+            }
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
         }
         let node = StrConcat::new(2);
         let mut out = [Value::None];
-        node.eval(&[Value::Str("x".into()), Value::Ext(Box::new(Tag(7)))], &mut out);
+        node.eval(
+            &[Value::Str("x".into()), Value::Ext(Box::new(Tag(7)))],
+            &mut out,
+        );
         assert_eq!(out[0].as_str(), "xtag#7");
     }
 

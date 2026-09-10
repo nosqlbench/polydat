@@ -71,9 +71,20 @@ impl JitCore {
     /// the ones the code owns, carriers are seeded now, and every run
     /// materializes the handle kinds.
     pub(super) fn set_externs(&mut self, mut externs: crate::compile::externs::Externs) {
-        externs.renumber_entries(self.table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0));
+        externs.renumber_entries(
+            self.table_entries
+                .iter()
+                .map(|&(_, e)| e + 1)
+                .max()
+                .unwrap_or(0),
+        );
         self.table_entries.extend(externs.table_entries());
-        let table_len = self.table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0);
+        let table_len = self
+            .table_entries
+            .iter()
+            .map(|&(_, e)| e + 1)
+            .max()
+            .unwrap_or(0);
         self.table = crate::kernel::ValueTable::new(table_len);
         externs.seed(&mut self.buffer);
         self.externs = externs;
@@ -97,7 +108,9 @@ impl JitCore {
         self.table.set_generation(generation);
         // Extern handles belong to this run (H3, H4).
         self.externs.materialize(&mut self.buffer, &mut self.table);
-        crate::kernel::with_value_table(&mut self.table, || super::codegen::invoke_with_catch(native));
+        crate::kernel::with_value_table(&mut self.table, || {
+            super::codegen::invoke_with_catch(native)
+        });
         self.validate_table();
     }
 
@@ -116,13 +129,19 @@ impl JitCore {
                     "H4: slot {slot} should hold a table handle, holds {handle:#x}"
                 );
                 let (_, generation, named) = crate::kernel::decode_table_handle(handle);
-                assert_eq!(named, entry, "H4: slot {slot} names entry {named}; the layout assigned it entry {entry}");
+                assert_eq!(
+                    named, entry,
+                    "H4: slot {slot} names entry {named}; the layout assigned it entry {entry}"
+                );
                 assert_eq!(
                     generation,
                     self.table.generation() & 0xFF_FFFF,
                     "H3: slot {slot} holds a handle from another cycle generation"
                 );
-                assert!(self.table.is_written(entry), "H4: entry {entry} was not written by the run that produced slot {slot}");
+                assert!(
+                    self.table.is_written(entry),
+                    "H4: entry {entry} was not written by the run that produced slot {slot}"
+                );
             }
         }
     }
@@ -142,8 +161,7 @@ pub(super) fn compute_jit_slot_provenance(
     input_dependents: &[Vec<usize>],
 ) -> Vec<ProvMask> {
     let step_count = step_output_slots.len();
-    let mut step_prov: Vec<ProvMask> =
-        (0..step_count).map(|_| ProvMask::empty()).collect();
+    let mut step_prov: Vec<ProvMask> = (0..step_count).map(|_| ProvMask::empty()).collect();
     for (input_slot, deps) in input_dependents.iter().enumerate() {
         for &step_idx in deps {
             if step_idx < step_count {
@@ -151,8 +169,7 @@ pub(super) fn compute_jit_slot_provenance(
             }
         }
     }
-    let mut slot_prov: Vec<ProvMask> =
-        (0..buffer_len).map(|_| ProvMask::empty()).collect();
+    let mut slot_prov: Vec<ProvMask> = (0..buffer_len).map(|_| ProvMask::empty()).collect();
     for (i, slot) in slot_prov.iter_mut().enumerate().take(coord_count) {
         slot.set(i);
     }
@@ -169,7 +186,9 @@ pub(super) fn compute_jit_slot_provenance(
 macro_rules! jit_accessors {
     () => {
         /// Returns the number of coordinate inputs this kernel accepts.
-        pub fn coord_count(&self) -> usize { self.core.coord_count }
+        pub fn coord_count(&self) -> usize {
+            self.core.coord_count
+        }
 
         /// Returns the buffer slot index for the named output, if present.
         pub fn resolve_output(&self, name: &str) -> Option<usize> {
@@ -206,13 +225,22 @@ macro_rules! jit_accessors {
         /// (SRD 115 §5), so the caller never holds a handle.
         pub fn get_value(&self, name: &str) -> crate::ast::Value {
             let slot = self.core.output_map[name];
-            let ty = self.core.output_types.get(name).copied().unwrap_or(crate::ast::PortType::U64);
+            let ty = self
+                .core
+                .output_types
+                .get(name)
+                .copied()
+                .unwrap_or(crate::ast::PortType::U64);
             crate::compile::marshal::decode_slot(self.core.buffer[slot], ty, &self.core.table)
         }
 
         /// Record the slots raw readers must refuse and each output's
         /// port type. Called by the assembler after construction.
-        pub(crate) fn set_slot_info(&mut self, guard_slots: Vec<bool>, output_types: HashMap<String, crate::ast::PortType>) {
+        pub(crate) fn set_slot_info(
+            &mut self,
+            guard_slots: Vec<bool>,
+            output_types: HashMap<String, crate::ast::PortType>,
+        ) {
             self.core.guard_slots = guard_slots;
             self.core.output_types = output_types;
         }
@@ -270,8 +298,8 @@ impl JitKernelRaw {
         let code_fn = self.code_fn;
         let buf_ptr_const = self.core.buffer.as_ptr();
         let buf_ptr_mut = self.core.buffer.as_mut_ptr();
-        self.core.run(move || {
-            unsafe { (code_fn)(buf_ptr_const, buf_ptr_mut); }
+        self.core.run(move || unsafe {
+            (code_fn)(buf_ptr_const, buf_ptr_mut);
         });
     }
 
@@ -333,8 +361,8 @@ impl JitKernelPush {
         let buf_const = self.core.buffer.as_ptr();
         let buf_mut = self.core.buffer.as_mut_ptr();
         let clean_mut = self.node_clean.as_mut_ptr();
-        self.core.run(move || {
-            unsafe { (code_fn)(buf_const, buf_mut, clean_mut); }
+        self.core.run(move || unsafe {
+            (code_fn)(buf_const, buf_mut, clean_mut);
         });
     }
 
@@ -388,8 +416,8 @@ impl JitKernelPull {
         let code_fn = self.code_fn;
         let buf_const = self.core.buffer.as_ptr();
         let buf_mut = self.core.buffer.as_mut_ptr();
-        self.core.run(move || {
-            unsafe { (code_fn)(buf_const, buf_mut); }
+        self.core.run(move || unsafe {
+            (code_fn)(buf_const, buf_mut);
         });
     }
 
@@ -400,15 +428,16 @@ impl JitKernelPull {
         self.set_inputs(coords);
         if !self.force_run
             && slot < self.slot_provenance.len()
-            && !self.slot_provenance[slot].intersects(&self.changed_mask) {
+            && !self.slot_provenance[slot].intersects(&self.changed_mask)
+        {
             return self.core.buffer[slot];
         }
         self.force_run = false;
         let code_fn = self.code_fn;
         let buf_const = self.core.buffer.as_ptr();
         let buf_mut = self.core.buffer.as_mut_ptr();
-        self.core.run(move || {
-            unsafe { (code_fn)(buf_const, buf_mut); }
+        self.core.run(move || unsafe {
+            (code_fn)(buf_const, buf_mut);
         });
         self.core.buffer[slot]
     }
@@ -468,8 +497,8 @@ impl JitKernelPushPull {
         let buf_const = self.core.buffer.as_ptr();
         let buf_mut = self.core.buffer.as_mut_ptr();
         let clean_mut = self.node_clean.as_mut_ptr();
-        self.core.run(move || {
-            unsafe { (code_fn)(buf_const, buf_mut, clean_mut); }
+        self.core.run(move || unsafe {
+            (code_fn)(buf_const, buf_mut, clean_mut);
         });
     }
 
@@ -480,7 +509,8 @@ impl JitKernelPushPull {
         self.set_inputs(coords);
         if !self.force_run
             && slot < self.slot_provenance.len()
-            && !self.slot_provenance[slot].intersects(&self.changed_mask) {
+            && !self.slot_provenance[slot].intersects(&self.changed_mask)
+        {
             return self.core.buffer[slot];
         }
         self.force_run = false;
@@ -488,8 +518,8 @@ impl JitKernelPushPull {
         let buf_const = self.core.buffer.as_ptr();
         let buf_mut = self.core.buffer.as_mut_ptr();
         let clean_mut = self.node_clean.as_mut_ptr();
-        self.core.run(move || {
-            unsafe { (code_fn)(buf_const, buf_mut, clean_mut); }
+        self.core.run(move || unsafe {
+            (code_fn)(buf_const, buf_mut, clean_mut);
         });
         self.core.buffer[slot]
     }

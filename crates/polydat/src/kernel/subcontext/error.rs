@@ -75,10 +75,7 @@ impl SourceContext {
 pub enum ContractViolation {
     /// Rule 1 — Import resolution: an artifact import has no
     /// matching parent export.
-    UnboundImport {
-        import: String,
-        site: SourceContext,
-    },
+    UnboundImport { import: String, site: SourceContext },
     /// Rule 1 — Type mismatch on import.
     Type {
         import: String,
@@ -95,10 +92,7 @@ pub enum ContractViolation {
     },
     /// Rule 2 — Final-shadow on export: a child can't redefine
     /// an immutable parent export.
-    FinalShadow {
-        export: String,
-        site: SourceContext,
-    },
+    FinalShadow { export: String, site: SourceContext },
     /// Rule 2 — Shared write-through rewrite was required but
     /// could not be performed.
     ///
@@ -165,7 +159,11 @@ impl std::fmt::Display for ContractViolation {
                 "type mismatch on import `{import}`: required {required:?}, parent exports {parent_export:?} at {}",
                 site.display()
             ),
-            Self::Modifier { import, detail, site } => write!(
+            Self::Modifier {
+                import,
+                detail,
+                site,
+            } => write!(
                 f,
                 "modifier mismatch on import `{import}`: {detail} at {}",
                 site.display()

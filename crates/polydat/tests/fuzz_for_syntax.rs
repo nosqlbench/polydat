@@ -33,7 +33,9 @@ use polydat::dsl::pprint::pp_file;
 struct Rng(u64);
 
 impl Rng {
-    fn new(seed: u64) -> Self { Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1)) }
+    fn new(seed: u64) -> Self {
+        Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1))
+    }
     fn next_u64(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
@@ -41,9 +43,19 @@ impl Rng {
         z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^ (z >> 31)
     }
-    fn range(&mut self, n: usize) -> usize { if n == 0 { 0 } else { (self.next_u64() as usize) % n } }
-    fn coin(&mut self, pct: usize) -> bool { self.range(100) < pct }
-    fn pick<'a>(&mut self, items: &[&'a str]) -> &'a str { items[self.range(items.len())] }
+    fn range(&mut self, n: usize) -> usize {
+        if n == 0 {
+            0
+        } else {
+            (self.next_u64() as usize) % n
+        }
+    }
+    fn coin(&mut self, pct: usize) -> bool {
+        self.range(100) < pct
+    }
+    fn pick<'a>(&mut self, items: &[&'a str]) -> &'a str {
+        items[self.range(items.len())]
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -67,13 +79,27 @@ struct Gen {
 }
 
 const STRATEGIES: &[&str] = &[
-    "lex", "reverse_lex", "diagonal", "antidiagonal", "extrema", "shells", "halton", "sobol", "lhs",
+    "lex",
+    "reverse_lex",
+    "diagonal",
+    "antidiagonal",
+    "extrema",
+    "shells",
+    "halton",
+    "sobol",
+    "lhs",
 ];
 const CMP: &[&str] = &["==", "!=", "<", ">", "<=", ">="];
 const WORDS: &[&str] = &["load", "verify", "read", "warm", "cold"];
 
 impl Gen {
-    fn new(seed: u64) -> Self { Gen { rng: Rng::new(seed), counter: 0, producers: Vec::new() } }
+    fn new(seed: u64) -> Self {
+        Gen {
+            rng: Rng::new(seed),
+            counter: 0,
+            producers: Vec::new(),
+        }
+    }
 
     fn name(&mut self, prefix: &str) -> String {
         self.counter += 1;
@@ -89,18 +115,35 @@ impl Gen {
             }
             1 => {
                 let n = 2 + self.rng.range(4);
-                (0..n).map(|i| (i * 10 + self.rng.range(10)).to_string()).collect::<Vec<_>>().join(",")
+                (0..n)
+                    .map(|i| (i * 10 + self.rng.range(10)).to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
             }
             2 => {
                 let n = 2 + self.rng.range(3);
-                (0..n).map(|_| self.rng.pick(WORDS).to_string()).collect::<Vec<_>>().join(",")
+                (0..n)
+                    .map(|_| self.rng.pick(WORDS).to_string())
+                    .collect::<Vec<_>>()
+                    .join(",")
             }
-            3 => format!("partitions(\"*/{}\", {})", 2 + self.rng.range(6), 100 * (1 + self.rng.range(1000))),
-            4 => format!("partitions('{}%,{}%,*')", 10 + self.rng.range(30), 10 + self.rng.range(30)),
+            3 => format!(
+                "partitions(\"*/{}\", {})",
+                2 + self.rng.range(6),
+                100 * (1 + self.rng.range(1000))
+            ),
+            4 => format!(
+                "partitions('{}%,{}%,*')",
+                10 + self.rng.range(30),
+                10 + self.rng.range(30)
+            ),
             5 => format!("{}..{}", 1 + self.rng.range(3), 5 + self.rng.range(20)),
             _ => {
                 let n = 2 + self.rng.range(3);
-                (0..n).map(|i| format!("{}.{}", i, self.rng.range(10))).collect::<Vec<_>>().join(",")
+                (0..n)
+                    .map(|i| format!("{}.{}", i, self.rng.range(10)))
+                    .collect::<Vec<_>>()
+                    .join(",")
             }
         }
     }
@@ -139,7 +182,11 @@ impl Gen {
             if self.rng.coin(40) {
                 let b = names[self.rng.range(names.len())].clone();
                 let join = if self.rng.coin(50) { "&&" } else { "||" };
-                pred = format!("{pred} {join} {{{b}}} {} {}", self.rng.pick(CMP), self.rng.range(50));
+                pred = format!(
+                    "{pred} {join} {{{b}}} {} {}",
+                    self.rng.pick(CMP),
+                    self.rng.range(50)
+                );
             }
             text.push_str(&format!(" where {pred}"));
         }
@@ -156,9 +203,18 @@ impl Gen {
 
     /// A random body statement that references the scope's element
     /// names. `depth` bounds nesting of further `for` blocks.
-    fn body_statement(&mut self, names: &[String], depth: usize, out: &mut Vec<Expected>) -> String {
+    fn body_statement(
+        &mut self,
+        names: &[String],
+        depth: usize,
+        out: &mut Vec<Expected>,
+    ) -> String {
         let pick = |g: &mut Gen| -> String {
-            if names.is_empty() || g.rng.coin(30) { "cycle".into() } else { names[g.rng.range(names.len())].clone() }
+            if names.is_empty() || g.rng.coin(30) {
+                "cycle".into()
+            } else {
+                names[g.rng.range(names.len())].clone()
+            }
         };
         match self.rng.range(9) {
             0 | 1 => {
@@ -176,13 +232,19 @@ impl Gen {
             4 => format!("const c{} := {}", self.counter, self.rng.range(1000)),
             5 => {
                 let a = pick(self);
-                format!("cursor rows{} = range(0, {}) over {a}", self.counter, 100 + self.rng.range(1000))
+                format!(
+                    "cursor rows{} = range(0, {}) over {a}",
+                    self.counter,
+                    100 + self.rng.range(1000)
+                )
             }
             6 => {
                 // Producer binding inside a body.
                 let c = self.comprehension();
                 let n = self.name("prod");
-                out.push(Expected::Producer { names: c.names.clone() });
+                out.push(Expected::Producer {
+                    names: c.names.clone(),
+                });
                 self.producers.push((n.clone(), c.names.clone()));
                 format!("{n} := for {}", c.text)
             }
@@ -200,7 +262,9 @@ impl Gen {
         let use_producer = !self.producers.is_empty() && self.rng.coin(30);
         let (head, names) = if use_producer {
             let (p, names) = self.producers[self.rng.range(self.producers.len())].clone();
-            out.push(Expected::TraversalOverProducer { producer: p.clone() });
+            out.push(Expected::TraversalOverProducer {
+                producer: p.clone(),
+            });
             if self.rng.coin(40) {
                 // A derived head: `for base where ... order ... {`.
                 (self.derivation_text(&p, &names), names)
@@ -209,7 +273,9 @@ impl Gen {
             }
         } else {
             let c = self.comprehension();
-            out.push(Expected::Traversal { names: c.names.clone() });
+            out.push(Expected::Traversal {
+                names: c.names.clone(),
+            });
             (c.text, c.names)
         };
         let n = 1 + self.rng.range(4);
@@ -219,9 +285,19 @@ impl Gen {
             body.push(self.body_statement(&names, depth, out));
         }
         self.producers.truncate(saved);
-        let comment = if self.rng.coin(25) { " // traverse" } else { "" };
+        let comment = if self.rng.coin(25) {
+            " // traverse"
+        } else {
+            ""
+        };
         let brace = if self.rng.coin(20) { "{" } else { " {" };
-        format!("for {head}{brace}{comment}\n{}\n}}", body.iter().map(|s| format!("    {s}")).collect::<Vec<_>>().join("\n"))
+        format!(
+            "for {head}{brace}{comment}\n{}\n}}",
+            body.iter()
+                .map(|s| format!("    {s}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
     }
 
     /// `base where <pred>`, `base order <spec>`, or both, over a
@@ -231,7 +307,11 @@ impl Gen {
         let which = self.rng.range(3);
         if which != 1 && !names.is_empty() {
             let a = names[self.rng.range(names.len())].clone();
-            text.push_str(&format!(" where {{{a}}} {} {}", self.rng.pick(CMP), self.rng.range(50)));
+            text.push_str(&format!(
+                " where {{{a}}} {} {}",
+                self.rng.pick(CMP),
+                self.rng.range(50)
+            ));
         }
         if which != 0 || names.is_empty() {
             let strat = self.rng.pick(STRATEGIES);
@@ -258,7 +338,9 @@ impl Gen {
                 0 => {
                     let c = self.comprehension();
                     let name = self.name("sweep");
-                    out.push(Expected::Producer { names: c.names.clone() });
+                    out.push(Expected::Producer {
+                        names: c.names.clone(),
+                    });
                     self.producers.push((name.clone(), c.names.clone()));
                     let comment = if self.rng.coin(25) { "   # sweep" } else { "" };
                     lines.push(format!("{name} := for {}{comment}", c.text));
@@ -312,14 +394,24 @@ fn collect_for_forms(stmts: &[Statement], out: &mut Vec<Expected>) {
         match s {
             Statement::Binding(b) => {
                 if let Expr::For(src) = &b.value {
-                    out.push(Expected::Producer { names: src.element_names() });
+                    out.push(Expected::Producer {
+                        names: src.element_names(),
+                    });
                 }
             }
             Statement::For(f) => {
                 match &f.source.kind {
-                    ForSourceKind::Producer(p) => out.push(Expected::TraversalOverProducer { producer: p.clone() }),
-                    ForSourceKind::Derived { base, .. } => out.push(Expected::TraversalOverProducer { producer: base.clone() }),
-                    ForSourceKind::Comprehension(_) => out.push(Expected::Traversal { names: f.source.element_names() }),
+                    ForSourceKind::Producer(p) => out.push(Expected::TraversalOverProducer {
+                        producer: p.clone(),
+                    }),
+                    ForSourceKind::Derived { base, .. } => {
+                        out.push(Expected::TraversalOverProducer {
+                            producer: base.clone(),
+                        })
+                    }
+                    ForSourceKind::Comprehension(_) => out.push(Expected::Traversal {
+                        names: f.source.element_names(),
+                    }),
                 }
                 collect_for_forms(&f.body, out);
             }
@@ -332,13 +424,17 @@ fn same(a: &Expected, b: &Expected) -> bool {
     match (a, b) {
         (Expected::Producer { names: x }, Expected::Producer { names: y }) => x == y,
         (Expected::Traversal { names: x }, Expected::Traversal { names: y }) => x == y,
-        (Expected::TraversalOverProducer { producer: x }, Expected::TraversalOverProducer { producer: y }) => x == y,
+        (
+            Expected::TraversalOverProducer { producer: x },
+            Expected::TraversalOverProducer { producer: y },
+        ) => x == y,
         _ => false,
     }
 }
 
 fn panic_text(p: &Box<dyn std::any::Any + Send>) -> String {
-    p.downcast_ref::<&str>().map(|s| s.to_string())
+    p.downcast_ref::<&str>()
+        .map(|s| s.to_string())
         .or_else(|| p.downcast_ref::<String>().cloned())
         .unwrap_or_else(|| "<non-string panic>".into())
 }
@@ -355,14 +451,21 @@ fn count_lowered(p: &polydat::kernel::PolydatProgram, n: &mut usize) {
 
 fn cryptic(msg: &str) -> bool {
     let m = msg.to_lowercase();
-    msg.trim().is_empty() || m.contains("panic") || m.contains("index out of bounds") || m.contains("unreachable")
+    msg.trim().is_empty()
+        || m.contains("panic")
+        || m.contains("index out of bounds")
+        || m.contains("unreachable")
 }
 
 fn run_wellformed_pass(seed: u64, iterations: usize) -> Vec<String> {
     const MAX: usize = 8;
     let mut failures = Vec::new();
-    let repro = |i: usize| format!(
-        "reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test -p polydat --test fuzz_for_syntax wellformed", i + 1);
+    let repro = |i: usize| {
+        format!(
+            "reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test -p polydat --test fuzz_for_syntax wellformed",
+            i + 1
+        )
+    };
     let mut rng = Rng::new(seed);
     for i in 0..iterations {
         if failures.len() >= MAX {
@@ -434,7 +537,11 @@ fn run_wellformed_pass(seed: u64, iterations: usize) -> Vec<String> {
                     failures.push(format!("[seed {seed:#x}] iteration {i}: compiler error is cryptic or does not name the for form: {e}\n  source:\n{source}\n  {}", repro(i)));
                 }
             }
-            Err(p) => failures.push(format!("[seed {seed:#x}] iteration {i}: compiler panicked: {}\n  source:\n{source}\n  {}", panic_text(&p), repro(i))),
+            Err(p) => failures.push(format!(
+                "[seed {seed:#x}] iteration {i}: compiler panicked: {}\n  source:\n{source}\n  {}",
+                panic_text(&p),
+                repro(i)
+            )),
         }
 
         // Invariant 5: a compiled program's traversals activate and cycle
@@ -470,7 +577,11 @@ fn run_wellformed_pass(seed: u64, iterations: usize) -> Vec<String> {
 /// Activate every traversal of `k` (recursing into activations' own
 /// traversals), running at most a few activations and cycles of each,
 /// and append every pulled output's display form to `trace`.
-fn run_traversals_bounded(k: &mut polydat::kernel::PolydatKernel, depth: usize, trace: &mut Vec<String>) -> Result<(), String> {
+fn run_traversals_bounded(
+    k: &mut polydat::kernel::PolydatKernel,
+    depth: usize,
+    trace: &mut Vec<String>,
+) -> Result<(), String> {
     const MAX_ACTIVATIONS: usize = 6;
     const MAX_CYCLES: u64 = 3;
     if depth > 4 {
@@ -479,13 +590,22 @@ fn run_traversals_bounded(k: &mut polydat::kernel::PolydatKernel, depth: usize, 
     let n = k.program().traversals().len();
     for t in 0..n {
         let stream = k.traverse(t)?;
-        let outputs: Vec<String> = stream.traversal().program.own_output_names().iter().map(|s| s.to_string()).collect();
+        let outputs: Vec<String> = stream
+            .traversal()
+            .program
+            .own_output_names()
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         for a in 0..stream.len().min(MAX_ACTIVATIONS) {
             let mut act = stream.activation(a)?;
             for c in 0..act.cycle_count().min(MAX_CYCLES) {
                 let kernel = act.cycle(c);
                 for name in &outputs {
-                    trace.push(format!("{t}/{a}/{c} {name}={}", kernel.pull(name).to_display_string()));
+                    trace.push(format!(
+                        "{t}/{a}/{c} {name}={}",
+                        kernel.pull(name).to_display_string()
+                    ));
                 }
             }
             act.cycle(0);
@@ -499,19 +619,28 @@ fn run_traversals_bounded(k: &mut polydat::kernel::PolydatKernel, depth: usize, 
 fn mutate(rng: &mut Rng, src: &str) -> String {
     let mut chars: Vec<char> = src.chars().collect();
     let edits = 1 + rng.range(4);
-    const INSERT: &[char] = &['{', '}', '(', ')', '[', ']', ',', '"', '\'', '.', 'f', 'o', 'r', ' ', '\n', '=', ':', '/', '#', '<', '&', '|', '_', '0'];
+    const INSERT: &[char] = &[
+        '{', '}', '(', ')', '[', ']', ',', '"', '\'', '.', 'f', 'o', 'r', ' ', '\n', '=', ':', '/',
+        '#', '<', '&', '|', '_', '0',
+    ];
     for _ in 0..edits {
-        if chars.is_empty() { break; }
+        if chars.is_empty() {
+            break;
+        }
         let at = rng.range(chars.len());
         match rng.range(4) {
-            0 => { chars.remove(at); }
+            0 => {
+                chars.remove(at);
+            }
             1 => chars.insert(at, INSERT[rng.range(INSERT.len())]),
             2 => chars[at] = INSERT[rng.range(INSERT.len())],
             _ => {
                 // Duplicate a slice: exercises repeated `for` and unbalanced braces.
                 let end = (at + 1 + rng.range(12)).min(chars.len());
                 let slice: Vec<char> = chars[at..end].to_vec();
-                for (k, c) in slice.into_iter().enumerate() { chars.insert(end + k, c); }
+                for (k, c) in slice.into_iter().enumerate() {
+                    chars.insert(end + k, c);
+                }
             }
         }
     }
@@ -521,8 +650,12 @@ fn mutate(rng: &mut Rng, src: &str) -> String {
 fn run_mutation_pass(seed: u64, iterations: usize) -> Vec<String> {
     const MAX: usize = 8;
     let mut failures = Vec::new();
-    let repro = |i: usize| format!(
-        "reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test -p polydat --test fuzz_for_syntax mutated", i + 1);
+    let repro = |i: usize| {
+        format!(
+            "reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test -p polydat --test fuzz_for_syntax mutated",
+            i + 1
+        )
+    };
     let mut rng = Rng::new(seed ^ 0x5EED_F0F0);
     for i in 0..iterations {
         if failures.len() >= MAX {
@@ -538,14 +671,25 @@ fn run_mutation_pass(seed: u64, iterations: usize) -> Vec<String> {
             let parsed = parse(&source)?;
             let printed = pp_file(&parsed);
             // A parse that succeeds must print to something that parses.
-            parse(&printed).map_err(|e| format!("printed form of a parsed mutant does not parse: {e}\n  printed:\n{printed}"))?;
+            parse(&printed).map_err(|e| {
+                format!(
+                    "printed form of a parsed mutant does not parse: {e}\n  printed:\n{printed}"
+                )
+            })?;
             polydat::dsl::compile_polydat(&source)
         });
         match outcome {
-            Err(p) => failures.push(format!("[seed {seed:#x}] iteration {i}: panic on mutant: {}\n  source:\n{source}\n  {}", panic_text(&p), repro(i))),
+            Err(p) => failures.push(format!(
+                "[seed {seed:#x}] iteration {i}: panic on mutant: {}\n  source:\n{source}\n  {}",
+                panic_text(&p),
+                repro(i)
+            )),
             Ok(Err(e)) => {
                 if cryptic(&e) || e.contains("printed form of a parsed mutant") {
-                    failures.push(format!("[seed {seed:#x}] iteration {i}: {e}\n  source:\n{source}\n  {}", repro(i)));
+                    failures.push(format!(
+                        "[seed {seed:#x}] iteration {i}: {e}\n  source:\n{source}\n  {}",
+                        repro(i)
+                    ));
                 }
             }
             Ok(Ok(k)) => {
@@ -567,7 +711,10 @@ fn run_mutation_pass(seed: u64, iterations: usize) -> Vec<String> {
 }
 
 fn env_u64(name: &str, default: u64) -> u64 {
-    std::env::var(name).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+    std::env::var(name)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }
 
 #[test]
@@ -575,7 +722,12 @@ fn wellformed_for_programs_parse_print_and_are_declined() {
     let seed = env_u64("FUZZ_SEED", 0xF0A_5EED);
     let iterations = env_u64("FUZZ_ITERATIONS", 400) as usize;
     let failures = run_wellformed_pass(seed, iterations);
-    assert!(failures.is_empty(), "fuzz invariants violated ({} failures):\n\n{}", failures.len(), failures.join("\n---\n"));
+    assert!(
+        failures.is_empty(),
+        "fuzz invariants violated ({} failures):\n\n{}",
+        failures.len(),
+        failures.join("\n---\n")
+    );
 }
 
 #[test]
@@ -583,7 +735,12 @@ fn mutated_for_programs_never_panic() {
     let seed = env_u64("FUZZ_SEED", 0xF0A_5EED);
     let iterations = env_u64("FUZZ_ITERATIONS", 600) as usize;
     let failures = run_mutation_pass(seed, iterations);
-    assert!(failures.is_empty(), "fuzz invariants violated ({} failures):\n\n{}", failures.len(), failures.join("\n---\n"));
+    assert!(
+        failures.is_empty(),
+        "fuzz invariants violated ({} failures):\n\n{}",
+        failures.len(),
+        failures.join("\n---\n")
+    );
 }
 
 #[test]
@@ -591,7 +748,15 @@ fn generator_smoke() {
     // The generator itself must produce every form across a modest
     // sample, or the fuzz above is weaker than it looks.
     let mut rng = Rng::new(7);
-    let (mut producers, mut traversals, mut over_producer, mut nested, mut wheres, mut orders, mut zips) = (0, 0, 0, 0, 0, 0, 0);
+    let (
+        mut producers,
+        mut traversals,
+        mut over_producer,
+        mut nested,
+        mut wheres,
+        mut orders,
+        mut zips,
+    ) = (0, 0, 0, 0, 0, 0, 0);
     let mut derived = 0;
     for _ in 0..200 {
         let mut g = Gen::new(rng.next_u64());
@@ -603,14 +768,35 @@ fn generator_smoke() {
                 Expected::TraversalOverProducer { .. } => over_producer += 1,
             }
         }
-        if src.matches("for ").count() > 1 && src.contains("    for ") { nested += 1; }
-        if src.contains(" where ") { wheres += 1; }
-        if src.contains(" order ") { orders += 1; }
-        if src.contains("zip_") || src.contains(") in (") { zips += 1; }
-        if src.contains(":= for sweep") || src.contains("for sweep") && (src.contains(" where ") || src.contains(" order ")) { derived += 1; }
+        if src.matches("for ").count() > 1 && src.contains("    for ") {
+            nested += 1;
+        }
+        if src.contains(" where ") {
+            wheres += 1;
+        }
+        if src.contains(" order ") {
+            orders += 1;
+        }
+        if src.contains("zip_") || src.contains(") in (") {
+            zips += 1;
+        }
+        if src.contains(":= for sweep")
+            || src.contains("for sweep") && (src.contains(" where ") || src.contains(" order "))
+        {
+            derived += 1;
+        }
     }
-    assert!(producers > 20 && traversals > 20 && over_producer > 5 && nested > 5 && wheres > 20 && orders > 20 && zips > 5 && derived > 5,
-        "generator coverage too thin: producers={producers} traversals={traversals} over_producer={over_producer} nested={nested} wheres={wheres} orders={orders} zips={zips} derived={derived}");
+    assert!(
+        producers > 20
+            && traversals > 20
+            && over_producer > 5
+            && nested > 5
+            && wheres > 20
+            && orders > 20
+            && zips > 5
+            && derived > 5,
+        "generator coverage too thin: producers={producers} traversals={traversals} over_producer={over_producer} nested={nested} wheres={wheres} orders={orders} zips={zips} derived={derived}"
+    );
 }
 
 /// Manual deep sweep. Run with `-- --ignored`.
@@ -626,15 +812,25 @@ fn superfuzz_for_syntax() {
         all.extend(run_wellformed_pass(seed, iterations));
         all.extend(run_mutation_pass(seed, iterations));
         if k % 8 == 7 {
-            eprintln!("superfuzz: {}/{seeds} seeds swept, {} violation(s) so far", k + 1, all.len());
+            eprintln!(
+                "superfuzz: {}/{seeds} seeds swept, {} violation(s) so far",
+                k + 1,
+                all.len()
+            );
         }
     }
     let mut report = all.join("\n---\n");
     if report.len() > 30_000 {
         let mut cut = 30_000;
-        while !report.is_char_boundary(cut) { cut -= 1; }
+        while !report.is_char_boundary(cut) {
+            cut -= 1;
+        }
         report.truncate(cut);
         report.push_str("\n… (report truncated)");
     }
-    assert!(all.is_empty(), "superfuzz invariants violated ({} failures):\n\n{report}", all.len());
+    assert!(
+        all.is_empty(),
+        "superfuzz invariants violated ({} failures):\n\n{report}",
+        all.len()
+    );
 }

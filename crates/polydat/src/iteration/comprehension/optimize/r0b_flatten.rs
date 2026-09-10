@@ -17,7 +17,10 @@ use crate::iteration::comprehension::ast::Comprehension;
 pub fn apply(ast: &Comprehension) -> Option<Comprehension> {
     match ast {
         Comprehension::Union { children } => {
-            if children.iter().any(|c| matches!(c, Comprehension::Union { .. })) {
+            if children
+                .iter()
+                .any(|c| matches!(c, Comprehension::Union { .. }))
+            {
                 let mut flat = Vec::with_capacity(children.len());
                 for child in children {
                     match child {
@@ -33,7 +36,10 @@ pub fn apply(ast: &Comprehension) -> Option<Comprehension> {
             }
         }
         Comprehension::Cartesian { children } => {
-            if children.iter().any(|c| matches!(c, Comprehension::Cartesian { .. })) {
+            if children
+                .iter()
+                .any(|c| matches!(c, Comprehension::Cartesian { .. }))
+            {
                 let mut flat = Vec::with_capacity(children.len());
                 for child in children {
                     match child {

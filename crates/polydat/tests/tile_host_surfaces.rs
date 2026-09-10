@@ -9,10 +9,10 @@
 use std::process::Command;
 
 use polydat::dsl::ast::TileOptions;
+use polydat::dsl::compile::compile_ast;
 use polydat::dsl::compile::compile_polydat_with_log;
 use polydat::dsl::events::{CompileEvent, CompileEventLog};
 use polydat::dsl::transform::apply_tile_defaults;
-use polydat::dsl::compile::compile_ast;
 
 #[test]
 fn tile_defaults_transform_rereads_untouched_tiles_only() {
@@ -23,7 +23,13 @@ fn tile_defaults_transform_rereads_untouched_tiles_only() {
     let mut ast = polydat::dsl::parser::parse(tokens).unwrap();
     // Before the transform, `a` reads `${keep}` as a hole and fails.
     assert!(compile_ast(&ast).is_err());
-    let defaults = TileOptions { open: "<%".into(), close: "%>".into(), sigil: "#".into(), strict: false, in_string: false };
+    let defaults = TileOptions {
+        open: "<%".into(),
+        close: "%>".into(),
+        sigil: "#".into(),
+        strict: false,
+        in_string: false,
+    };
     apply_tile_defaults(&mut ast, &defaults).unwrap();
     let mut k = compile_ast(&ast).unwrap();
     k.set_inputs(&[3]);
@@ -46,11 +52,28 @@ fn a_tile_inside_a_module_body_inlines_with_the_call() {
          first := make_card(cycle, \"one\")\n\
          second := make_card(cycle + 10, \"two\")\n",
     );
-    let (ok, stdout, stderr) = run_binary(&["run", path.to_str().unwrap(), "--cycles", "1", "--emit", "jsonl", "--outputs", "first,second", "-q"]);
+    let (ok, stdout, stderr) = run_binary(&[
+        "run",
+        path.to_str().unwrap(),
+        "--cycles",
+        "1",
+        "--emit",
+        "jsonl",
+        "--outputs",
+        "first,second",
+        "-q",
+    ]);
     assert!(ok, "{stderr}");
-    let row: serde_json::Value = serde_json::from_str(stdout.lines().find(|l| l.starts_with('{')).unwrap()).unwrap();
-    assert_eq!(row["first"], "{\"n\": 0, \"twice\": 0, \"label\": \"one\", \"big\": false}");
-    assert_eq!(row["second"], "{\"n\": 10, \"twice\": 20, \"label\": \"two\", \"big\": true}");
+    let row: serde_json::Value =
+        serde_json::from_str(stdout.lines().find(|l| l.starts_with('{')).unwrap()).unwrap();
+    assert_eq!(
+        row["first"],
+        "{\"n\": 0, \"twice\": 0, \"label\": \"one\", \"big\": false}"
+    );
+    assert_eq!(
+        row["second"],
+        "{\"n\": 10, \"twice\": 20, \"label\": \"two\", \"big\": true}"
+    );
 }
 
 #[test]
@@ -68,10 +91,24 @@ fn a_module_tile_projection_reads_module_wires() {
          r := make_row(top)\n\
          expect := hash_range(top + 1, 50)\n",
     );
-    let (ok, stdout, stderr) = run_binary(&["run", path.to_str().unwrap(), "--cycles", "1", "--emit", "jsonl", "--outputs", "r,expect", "-q"]);
+    let (ok, stdout, stderr) = run_binary(&[
+        "run",
+        path.to_str().unwrap(),
+        "--cycles",
+        "1",
+        "--emit",
+        "jsonl",
+        "--outputs",
+        "r,expect",
+        "-q",
+    ]);
     assert!(ok, "{stderr}");
-    let row: serde_json::Value = serde_json::from_str(stdout.lines().find(|l| l.starts_with('{')).unwrap()).unwrap();
-    let g: u64 = row["expect"].as_str().map(|s| s.parse().unwrap()).unwrap_or_else(|| row["expect"].as_u64().unwrap());
+    let row: serde_json::Value =
+        serde_json::from_str(stdout.lines().find(|l| l.starts_with('{')).unwrap()).unwrap();
+    let g: u64 = row["expect"]
+        .as_str()
+        .map(|s| s.parse().unwrap())
+        .unwrap_or_else(|| row["expect"].as_u64().unwrap());
     assert_eq!(row["r"], format!("{},{}", g + 2, g + 4));
     // A `{name}` placeholder for a module input needs a wire, not an expression.
     let path = write_temp(
@@ -97,9 +134,24 @@ fn the_compile_log_describes_each_tile_skeleton() {
         .events()
         .iter()
         .find_map(|e| match e {
-            CompileEvent::TileCompiled { tile, encoding, statics, static_bytes, holes, branches, projections, bodies } if tile == "doc" => {
-                Some((encoding.clone(), *statics, *static_bytes, *holes, *branches, *projections, bodies.clone()))
-            }
+            CompileEvent::TileCompiled {
+                tile,
+                encoding,
+                statics,
+                static_bytes,
+                holes,
+                branches,
+                projections,
+                bodies,
+            } if tile == "doc" => Some((
+                encoding.clone(),
+                *statics,
+                *static_bytes,
+                *holes,
+                *branches,
+                *projections,
+                bodies.clone(),
+            )),
             _ => None,
         })
         .expect("a TileCompiled event");
@@ -111,20 +163,32 @@ fn the_compile_log_describes_each_tile_skeleton() {
     assert_eq!(shape.5, 1);
     assert_eq!(shape.6.len(), 1);
     assert!(shape.6[0].contains("extern i: u64"), "{}", shape.6[0]);
-    assert!(log.format().contains("tile 'doc' (json)"), "{}", log.format());
+    assert!(
+        log.format().contains("tile 'doc' (json)"),
+        "{}",
+        log.format()
+    );
 }
 
 #[test]
 fn the_text_emit_format_writes_values_as_they_are() {
     use polydat::ast::Value;
-    use polydat::library::emit::{header, render_row, EmitFormat};
+    use polydat::library::emit::{EmitFormat, header, render_row};
     assert_eq!(EmitFormat::parse("text"), Some(EmitFormat::Text));
     assert!(header(EmitFormat::Text, &["doc"]).is_none());
-    assert_eq!(render_row(EmitFormat::Text, &["doc"], &[Value::Str("{\"a\": 1}".into())]), "{\"a\": 1}");
+    assert_eq!(
+        render_row(
+            EmitFormat::Text,
+            &["doc"],
+            &[Value::Str("{\"a\": 1}".into())]
+        ),
+        "{\"a\": 1}"
+    );
 }
 
 fn write_temp(name: &str, contents: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("polydat-tile-host-{}-{}", std::process::id(), name));
+    let dir =
+        std::env::temp_dir().join(format!("polydat-tile-host-{}-{}", std::process::id(), name));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("program.polydat");
     std::fs::write(&path, contents).unwrap();
@@ -132,20 +196,49 @@ fn write_temp(name: &str, contents: &str) -> std::path::PathBuf {
 }
 
 fn run_binary(args: &[&str]) -> (bool, String, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_polydat")).args(args).output().expect("polydat binary runs");
-    (out.status.success(), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
+    let out = Command::new(env!("CARGO_BIN_EXE_polydat"))
+        .args(args)
+        .output()
+        .expect("polydat binary runs");
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
 }
 
 #[test]
 fn the_binary_emits_a_tile_per_cycle() {
-    let path = write_temp("emit", "input cycle: u64\nn := cycle * 2\ntile doc : json := {\"cycle\": ${cycle}, \"n\": ${n}}\n");
-    let (ok, stdout, stderr) = run_binary(&["run", path.to_str().unwrap(), "--cycles", "3", "--emit", "tile:doc", "-q"]);
+    let path = write_temp(
+        "emit",
+        "input cycle: u64\nn := cycle * 2\ntile doc : json := {\"cycle\": ${cycle}, \"n\": ${n}}\n",
+    );
+    let (ok, stdout, stderr) = run_binary(&[
+        "run",
+        path.to_str().unwrap(),
+        "--cycles",
+        "3",
+        "--emit",
+        "tile:doc",
+        "-q",
+    ]);
     assert!(ok, "{stderr}");
     let lines: Vec<&str> = stdout.lines().filter(|l| !l.starts_with("DBG")).collect();
-    assert_eq!(lines, vec!["{\"cycle\": 0, \"n\": 0}", "{\"cycle\": 1, \"n\": 2}", "{\"cycle\": 2, \"n\": 4}"], "{stdout}");
+    assert_eq!(
+        lines,
+        vec![
+            "{\"cycle\": 0, \"n\": 0}",
+            "{\"cycle\": 1, \"n\": 2}",
+            "{\"cycle\": 2, \"n\": 4}"
+        ],
+        "{stdout}"
+    );
     let (ok, _, stderr) = run_binary(&["run", path.to_str().unwrap(), "--emit", "tile:nope", "-q"]);
     assert!(!ok);
-    assert!(stderr.contains("no tile or output named 'nope'"), "{stderr}");
+    assert!(
+        stderr.contains("no tile or output named 'nope'"),
+        "{stderr}"
+    );
     let (ok, _, stderr) = run_binary(&["run", path.to_str().unwrap(), "--emit", "yaml", "-q"]);
     assert!(!ok);
     assert!(stderr.contains("tile:<name>"), "{stderr}");
@@ -158,32 +251,78 @@ fn the_binary_applies_tile_delimiters_and_sigil_as_a_transform() {
         "input cycle: u64\ntile page : text := \"cycle <%cycle%> #if cycle { live } #else { zero } {{ keep }} ${keep}\"\n",
     );
     let (ok, stdout, stderr) = run_binary(&[
-        "run", path.to_str().unwrap(), "--cycles", "2", "--emit", "tile:page", "-q",
-        "--tile-delims", "<%", "%>", "--tile-sigil", "#",
+        "run",
+        path.to_str().unwrap(),
+        "--cycles",
+        "2",
+        "--emit",
+        "tile:page",
+        "-q",
+        "--tile-delims",
+        "<%",
+        "%>",
+        "--tile-sigil",
+        "#",
     ]);
     assert!(ok, "{stderr}");
     let lines: Vec<&str> = stdout.lines().filter(|l| !l.starts_with("DBG")).collect();
-    assert_eq!(lines, vec!["cycle 0 zero {{ keep }} ${keep}", "cycle 1 live {{ keep }} ${keep}"], "{stdout}");
+    assert_eq!(
+        lines,
+        vec![
+            "cycle 0 zero {{ keep }} ${keep}",
+            "cycle 1 live {{ keep }} ${keep}"
+        ],
+        "{stdout}"
+    );
     // Without the defaults the same program is an error at `${keep}`.
     let (ok, _, stderr) = run_binary(&["run", path.to_str().unwrap(), "--emit", "tile:page", "-q"]);
     assert!(!ok);
     assert!(stderr.contains("keep"), "{stderr}");
     // `explain tiles` narrates the skeleton and the holes.
-    let (ok, stdout, stderr) = run_binary(&["explain", path.to_str().unwrap(), "tiles", "--tile-delims", "<%", "%>", "--tile-sigil", "#"]);
+    let (ok, stdout, stderr) = run_binary(&[
+        "explain",
+        path.to_str().unwrap(),
+        "tiles",
+        "--tile-delims",
+        "<%",
+        "%>",
+        "--tile-sigil",
+        "#",
+    ]);
     assert!(ok, "{stderr}");
-    assert!(stdout.contains("page") && stdout.contains("static run") && stdout.contains("${cycle}"), "{stdout}");
+    assert!(
+        stdout.contains("page") && stdout.contains("static run") && stdout.contains("${cycle}"),
+        "{stdout}"
+    );
 }
 
 #[test]
 fn the_toy_definition_emits_a_json_document_per_reading() {
     // SRD 114 step 8: the toy test definition's load statement carries a
     // document rendered by a tile inside the traversal body.
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples").join("toy_test_definition.polydat");
-    let (ok, stdout, stderr) = run_binary(&["run", path.to_str().unwrap(), "--cycles", "1", "--emit", "tile:doc", "-q"]);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("examples")
+        .join("toy_test_definition.polydat");
+    let (ok, stdout, stderr) = run_binary(&[
+        "run",
+        path.to_str().unwrap(),
+        "--cycles",
+        "1",
+        "--emit",
+        "tile:doc",
+        "-q",
+    ]);
     assert!(ok, "{stderr}");
-    let text: String = stdout.lines().filter(|l| !l.starts_with("DBG")).collect::<Vec<_>>().join("\n");
+    let text: String = stdout
+        .lines()
+        .filter(|l| !l.starts_with("DBG"))
+        .collect::<Vec<_>>()
+        .join("\n");
     // Sixteen activations, one document each; every one is valid JSON.
-    let docs: Vec<serde_json::Value> = serde_json::Deserializer::from_str(&text).into_iter().map(|d| d.unwrap()).collect();
+    let docs: Vec<serde_json::Value> = serde_json::Deserializer::from_str(&text)
+        .into_iter()
+        .map(|d| d.unwrap())
+        .collect();
     assert_eq!(docs.len(), 16, "{text}");
     let first = &docs[0];
     assert_eq!(first["meta"]["schema"], 3);
@@ -194,9 +333,20 @@ fn the_toy_definition_emits_a_json_document_per_reading() {
     assert_eq!(first["samples"].as_array().unwrap().len(), 4);
     assert_eq!(first["flagged"], false);
     // The load statement carries the same document raw.
-    let (ok, stdout, stderr) = run_binary(&["run", path.to_str().unwrap(), "--cycles", "1", "--emit", "jsonl", "--outputs", "phase,stmt", "-q"]);
+    let (ok, stdout, stderr) = run_binary(&[
+        "run",
+        path.to_str().unwrap(),
+        "--cycles",
+        "1",
+        "--emit",
+        "jsonl",
+        "--outputs",
+        "phase,stmt",
+        "-q",
+    ]);
     assert!(ok, "{stderr}");
-    let row: serde_json::Value = serde_json::from_str(stdout.lines().find(|l| l.starts_with('{')).unwrap()).unwrap();
+    let row: serde_json::Value =
+        serde_json::from_str(stdout.lines().find(|l| l.starts_with('{')).unwrap()).unwrap();
     assert_eq!(row["phase"], "load");
     let stmt = row["stmt"].as_str().unwrap();
     assert!(stmt.starts_with("INSERT INTO toy.readings (tenant_id, device_id, ts, doc) VALUES (607535, 'd9ac876f-bb3a-4bc7-b9f8-382893178079', 1700000000000, '{"), "{stmt}");
@@ -207,5 +357,8 @@ fn the_toy_definition_emits_a_json_document_per_reading() {
     // `explain tiles` sees the body's tiles.
     let (ok, stdout, stderr) = run_binary(&["explain", path.to_str().unwrap(), "tiles"]);
     assert!(ok, "{stderr}");
-    assert!(stdout.contains("doc") && stdout.contains("${tenant_id}") && stdout.contains("load"), "{stdout}");
+    assert!(
+        stdout.contains("doc") && stdout.contains("${tenant_id}") && stdout.contains("load"),
+        "{stdout}"
+    );
 }

@@ -41,44 +41,68 @@
 // (none of these have JitOp variants) is unaffected.
 
 #[crate::polydat_node(category = Comparison)]
-fn u64_eq(a: u64, b: u64) -> u64 { if a == b { 1 } else { 0 } }
+fn u64_eq(a: u64, b: u64) -> u64 {
+    if a == b { 1 } else { 0 }
+}
 
 #[crate::polydat_node(category = Comparison)]
-fn u64_ne(a: u64, b: u64) -> u64 { if a != b { 1 } else { 0 } }
+fn u64_ne(a: u64, b: u64) -> u64 {
+    if a != b { 1 } else { 0 }
+}
 
 #[crate::polydat_node(category = Comparison)]
-fn u64_lt(a: u64, b: u64) -> u64 { if a <  b { 1 } else { 0 } }
+fn u64_lt(a: u64, b: u64) -> u64 {
+    if a < b { 1 } else { 0 }
+}
 
 #[crate::polydat_node(category = Comparison)]
-fn u64_gt(a: u64, b: u64) -> u64 { if a >  b { 1 } else { 0 } }
+fn u64_gt(a: u64, b: u64) -> u64 {
+    if a > b { 1 } else { 0 }
+}
 
 #[crate::polydat_node(category = Comparison)]
-fn u64_le(a: u64, b: u64) -> u64 { if a <= b { 1 } else { 0 } }
+fn u64_le(a: u64, b: u64) -> u64 {
+    if a <= b { 1 } else { 0 }
+}
 
 #[crate::polydat_node(category = Comparison)]
-fn u64_ge(a: u64, b: u64) -> u64 { if a >= b { 1 } else { 0 } }
+fn u64_ge(a: u64, b: u64) -> u64 {
+    if a >= b { 1 } else { 0 }
+}
 
 // f64 comparisons follow IEEE 754 — NaN compares unequal to
 // itself and is neither <, >, <=, nor >=. Tests for NaN should
 // use `a != a`.
 
 #[crate::polydat_node(category = Comparison)]
-fn f64_eq(a: f64, b: f64) -> u64 { if a == b { 1 } else { 0 } }
+fn f64_eq(a: f64, b: f64) -> u64 {
+    if a == b { 1 } else { 0 }
+}
 
 #[crate::polydat_node(category = Comparison)]
-fn f64_ne(a: f64, b: f64) -> u64 { if a != b { 1 } else { 0 } }
+fn f64_ne(a: f64, b: f64) -> u64 {
+    if a != b { 1 } else { 0 }
+}
 
 #[crate::polydat_node(category = Comparison)]
-fn f64_lt(a: f64, b: f64) -> u64 { if a <  b { 1 } else { 0 } }
+fn f64_lt(a: f64, b: f64) -> u64 {
+    if a < b { 1 } else { 0 }
+}
 
 #[crate::polydat_node(category = Comparison)]
-fn f64_gt(a: f64, b: f64) -> u64 { if a >  b { 1 } else { 0 } }
+fn f64_gt(a: f64, b: f64) -> u64 {
+    if a > b { 1 } else { 0 }
+}
 
 #[crate::polydat_node(category = Comparison)]
-fn f64_le(a: f64, b: f64) -> u64 { if a <= b { 1 } else { 0 } }
+fn f64_le(a: f64, b: f64) -> u64 {
+    if a <= b { 1 } else { 0 }
+}
 
 #[crate::polydat_node(category = Comparison)]
-fn f64_ge(a: f64, b: f64) -> u64 { if a >= b { 1 } else { 0 } }
+fn f64_ge(a: f64, b: f64) -> u64 {
+    if a >= b { 1 } else { 0 }
+}
 
 // ---------------------------------------------------------------------------
 // Selection nodes (the desugar target for `if(cond, a, b)`)
@@ -170,14 +194,17 @@ static SIGS: &[FuncSig] = &[
     // `#[polydat_node]` per SRD-80 PR B.13 (PR B.6 for str).
 ];
 
-pub fn signatures() -> &'static [FuncSig] { SIGS }
+pub fn signatures() -> &'static [FuncSig] {
+    SIGS
+}
 
 // `cmp_sig` / `cmp_f64_sig` retired with the cmp_u64_*/cmp_f64_*
 // migration (SRD-80 PR B.7).
 
 pub(crate) fn build_node(
     _name: &str,
-    _wires: &[crate::compile::assembly::WireRef], _wire_types: &[crate::ast::PortType],
+    _wires: &[crate::compile::assembly::WireRef],
+    _wire_types: &[crate::ast::PortType],
     _consts: &[crate::dsl::factory::ConstArg],
 ) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
     None
@@ -198,22 +225,59 @@ mod tests {
 
     #[test]
     fn u64_lt_gt_eq_basics() {
-        assert_eq!(run(&U64Lt::new(), vec![Value::U64(1), Value::U64(2)]).as_u64(), 1);
-        assert_eq!(run(&U64Lt::new(), vec![Value::U64(2), Value::U64(2)]).as_u64(), 0);
-        assert_eq!(run(&U64Gt::new(), vec![Value::U64(3), Value::U64(2)]).as_u64(), 1);
-        assert_eq!(run(&U64Eq::new(), vec![Value::U64(5), Value::U64(5)]).as_u64(), 1);
-        assert_eq!(run(&U64Ne::new(), vec![Value::U64(5), Value::U64(5)]).as_u64(), 0);
-        assert_eq!(run(&U64Le::new(), vec![Value::U64(2), Value::U64(2)]).as_u64(), 1);
-        assert_eq!(run(&U64Ge::new(), vec![Value::U64(2), Value::U64(2)]).as_u64(), 1);
+        assert_eq!(
+            run(&U64Lt::new(), vec![Value::U64(1), Value::U64(2)]).as_u64(),
+            1
+        );
+        assert_eq!(
+            run(&U64Lt::new(), vec![Value::U64(2), Value::U64(2)]).as_u64(),
+            0
+        );
+        assert_eq!(
+            run(&U64Gt::new(), vec![Value::U64(3), Value::U64(2)]).as_u64(),
+            1
+        );
+        assert_eq!(
+            run(&U64Eq::new(), vec![Value::U64(5), Value::U64(5)]).as_u64(),
+            1
+        );
+        assert_eq!(
+            run(&U64Ne::new(), vec![Value::U64(5), Value::U64(5)]).as_u64(),
+            0
+        );
+        assert_eq!(
+            run(&U64Le::new(), vec![Value::U64(2), Value::U64(2)]).as_u64(),
+            1
+        );
+        assert_eq!(
+            run(&U64Ge::new(), vec![Value::U64(2), Value::U64(2)]).as_u64(),
+            1
+        );
     }
 
     #[test]
     fn f64_comparisons_basics() {
-        assert_eq!(run(&F64Lt::new(), vec![Value::F64(0.1), Value::F64(0.2)]).as_u64(), 1);
-        assert_eq!(run(&F64Gt::new(), vec![Value::F64(0.2), Value::F64(0.1)]).as_u64(), 1);
-        assert_eq!(run(&F64Eq::new(), vec![Value::F64(0.1), Value::F64(0.1)]).as_u64(), 1);
+        assert_eq!(
+            run(&F64Lt::new(), vec![Value::F64(0.1), Value::F64(0.2)]).as_u64(),
+            1
+        );
+        assert_eq!(
+            run(&F64Gt::new(), vec![Value::F64(0.2), Value::F64(0.1)]).as_u64(),
+            1
+        );
+        assert_eq!(
+            run(&F64Eq::new(), vec![Value::F64(0.1), Value::F64(0.1)]).as_u64(),
+            1
+        );
         // NaN: f64_eq of NaN with itself is 0 (IEEE 754).
-        assert_eq!(run(&F64Eq::new(), vec![Value::F64(f64::NAN), Value::F64(f64::NAN)]).as_u64(), 0);
+        assert_eq!(
+            run(
+                &F64Eq::new(),
+                vec![Value::F64(f64::NAN), Value::F64(f64::NAN)]
+            )
+            .as_u64(),
+            0
+        );
     }
 
     #[test]
@@ -228,20 +292,35 @@ mod tests {
     #[test]
     fn select_f64_picks_by_cond() {
         let mut outs = vec![Value::F64(0.0)];
-        SelectF64::new().eval(&[Value::U64(1), Value::F64(0.5), Value::F64(1.05)], &mut outs);
+        SelectF64::new().eval(
+            &[Value::U64(1), Value::F64(0.5), Value::F64(1.05)],
+            &mut outs,
+        );
         assert_eq!(outs[0].as_f64(), 0.5);
-        SelectF64::new().eval(&[Value::U64(0), Value::F64(0.5), Value::F64(1.05)], &mut outs);
+        SelectF64::new().eval(
+            &[Value::U64(0), Value::F64(0.5), Value::F64(1.05)],
+            &mut outs,
+        );
         assert_eq!(outs[0].as_f64(), 1.05);
     }
 
     #[test]
     fn str_eq_ne_basics() {
         let mut out = vec![Value::U64(0)];
-        StrEq::new().eval(&[Value::Str("LATENCY".into()), Value::Str("LATENCY".into())], &mut out);
+        StrEq::new().eval(
+            &[Value::Str("LATENCY".into()), Value::Str("LATENCY".into())],
+            &mut out,
+        );
         assert_eq!(out[0].as_u64(), 1);
-        StrEq::new().eval(&[Value::Str("LATENCY".into()), Value::Str("RECALL".into())], &mut out);
+        StrEq::new().eval(
+            &[Value::Str("LATENCY".into()), Value::Str("RECALL".into())],
+            &mut out,
+        );
         assert_eq!(out[0].as_u64(), 0);
-        StrNe::new().eval(&[Value::Str("LATENCY".into()), Value::Str("RECALL".into())], &mut out);
+        StrNe::new().eval(
+            &[Value::Str("LATENCY".into()), Value::Str("RECALL".into())],
+            &mut out,
+        );
         assert_eq!(out[0].as_u64(), 1);
         StrNe::new().eval(&[Value::Str("a".into()), Value::Str("a".into())], &mut out);
         assert_eq!(out[0].as_u64(), 0);
@@ -251,12 +330,20 @@ mod tests {
     fn select_str_picks_by_cond() {
         let mut out = vec![Value::Str(String::new().into())];
         SelectStr::default().eval(
-            &[Value::U64(1), Value::Str("yes".into()), Value::Str("no".into())],
+            &[
+                Value::U64(1),
+                Value::Str("yes".into()),
+                Value::Str("no".into()),
+            ],
             &mut out,
         );
         assert_eq!(out[0].as_str(), "yes");
         SelectStr::default().eval(
-            &[Value::U64(0), Value::Str("yes".into()), Value::Str("no".into())],
+            &[
+                Value::U64(0),
+                Value::Str("yes".into()),
+                Value::Str("no".into()),
+            ],
             &mut out,
         );
         assert_eq!(out[0].as_str(), "no");

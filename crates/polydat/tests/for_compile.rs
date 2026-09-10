@@ -55,7 +55,9 @@ fn generator_call_sources_take_the_node_return_type() {
 
 #[test]
 fn body_is_a_child_program_with_iteration_externs() {
-    let k = compile("input cycle: u64\nfor k in 1..4, limit in 10,20,30 {\n    f := hash(k)\n    g := u64_add(limit, k)\n}\n");
+    let k = compile(
+        "input cycle: u64\nfor k in 1..4, limit in 10,20,30 {\n    f := hash(k)\n    g := u64_add(limit, k)\n}\n",
+    );
     let parent = k.program();
     assert_eq!(parent.traversals().len(), 1);
     let t = &parent.traversals()[0];
@@ -63,7 +65,9 @@ fn body_is_a_child_program_with_iteration_externs() {
     let child = &t.program;
     // Elements are typed externs of iteration kind; `cycle` is the coordinate.
     for name in ["k", "limit"] {
-        let idx = child.find_input(name).unwrap_or_else(|| panic!("child lacks {name}"));
+        let idx = child
+            .find_input(name)
+            .unwrap_or_else(|| panic!("child lacks {name}"));
         assert_eq!(child.input_kind(idx), Some(InputKind::IterationExtern));
         assert_eq!(child.input_port_type(name), Some(PortType::U64));
     }
@@ -99,12 +103,21 @@ fn outer_wires_cascade_with_the_parents_types() {
 
 #[test]
 fn traversal_over_a_producer_resolves_its_comprehension() {
-    let k = compile("input cycle: u64\nsweep := for k in 1..4, limit in 10,20,30 order halton/5\nfor sweep {\n    f := hash(k)\n    g := u64_add(limit, k)\n}\n");
+    let k = compile(
+        "input cycle: u64\nsweep := for k in 1..4, limit in 10,20,30 order halton/5\nfor sweep {\n    f := hash(k)\n    g := u64_add(limit, k)\n}\n",
+    );
     let p = k.program();
     assert_eq!(p.producers().len(), 1);
     assert_eq!(p.producers()[0].name, "sweep");
-    assert_eq!(elements(p, 0), vec![("k".to_string(), PortType::U64), ("limit".to_string(), PortType::U64)]);
-    let err = compile_polydat("input cycle: u64\nfor nowhere {\n    f := hash(cycle)\n}\n").unwrap_err();
+    assert_eq!(
+        elements(p, 0),
+        vec![
+            ("k".to_string(), PortType::U64),
+            ("limit".to_string(), PortType::U64)
+        ]
+    );
+    let err =
+        compile_polydat("input cycle: u64\nfor nowhere {\n    f := hash(cycle)\n}\n").unwrap_err();
     assert!(err.contains("no producer named 'nowhere'"), "{err}");
 }
 
@@ -123,34 +136,49 @@ fn nested_bodies_compile_to_nested_programs_once_each() {
     let level3 = &level2.traversals()[0].program;
     assert!(level3.traversals().is_empty());
     // Cascade reaches through levels: `mid` from level 2, `outer` from level 1.
-    assert_eq!(level2.traversals()[0].cascade, vec![("mid".to_string(), PortType::U64)]);
-    assert_eq!(level1.traversals()[0].cascade, vec![("outer".to_string(), PortType::U64)]);
+    assert_eq!(
+        level2.traversals()[0].cascade,
+        vec![("mid".to_string(), PortType::U64)]
+    );
+    assert_eq!(
+        level1.traversals()[0].cascade,
+        vec![("outer".to_string(), PortType::U64)]
+    );
     // Three programs exist however many tuples the traversal would dispense.
     assert!(level3.output_names().contains(&"leaf"));
 }
 
 #[test]
 fn body_type_errors_are_reported_at_compile_time() {
-    let err = compile_polydat("input cycle: u64\nfor name in load,verify {\n    x := u64_add(name, 1)\n}\n").unwrap_err();
+    let err = compile_polydat(
+        "input cycle: u64\nfor name in load,verify {\n    x := u64_add(name, 1)\n}\n",
+    )
+    .unwrap_err();
     assert!(err.contains("for name in load,verify"), "{err}");
     assert!(err.contains("body failed to compile"), "{err}");
 }
 
 #[test]
 fn unknown_outer_name_is_an_error_in_the_body() {
-    let err = compile_polydat("input cycle: u64\nfor k in 1..4 {\n    x := hash(missing)\n}\n").unwrap_err();
+    let err = compile_polydat("input cycle: u64\nfor k in 1..4 {\n    x := hash(missing)\n}\n")
+        .unwrap_err();
     assert!(err.contains("missing"), "{err}");
 }
 
 #[test]
 fn body_may_not_declare_another_coordinate() {
-    let err = compile_polydat("input cycle: u64\nfor k in 1..4 {\n    input other: u64\n    x := hash(other)\n}\n").unwrap_err();
+    let err = compile_polydat(
+        "input cycle: u64\nfor k in 1..4 {\n    input other: u64\n    x := hash(other)\n}\n",
+    )
+    .unwrap_err();
     assert!(err.contains("cannot declare input 'other'"), "{err}");
 }
 
 #[test]
 fn a_body_with_a_cursor_over_an_element_compiles() {
-    let k = compile("input cycle: u64\nfor p in partitions(\"*/4\", 1000) {\n    cursor rows = range(0, 1000) over p\n    row := mod_in(cycle, rows.cursor)\n}\n");
+    let k = compile(
+        "input cycle: u64\nfor p in partitions(\"*/4\", 1000) {\n    cursor rows = range(0, 1000) over p\n    row := mod_in(cycle, rows.cursor)\n}\n",
+    );
     let child = &k.program().traversals()[0].program;
     assert_eq!(child.cursor_schemas().len(), 1);
     assert!(child.output_names().contains(&"row"));

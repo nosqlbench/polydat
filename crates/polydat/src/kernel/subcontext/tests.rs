@@ -7,12 +7,12 @@
 
 use std::sync::Arc;
 
-use crate::dsl::compile::compile_polydat;
 use crate::ast::PortType;
+use crate::dsl::compile::compile_polydat;
 
 use super::builder::SubcontextBuilder;
 use super::error::{ContractViolation, SourceContext};
-use super::kernel::{wrap_root_kernel, RootMarker, ScopeKernel};
+use super::kernel::{RootMarker, ScopeKernel, wrap_root_kernel};
 use super::module::{BodyFragment, ScopeModule};
 use super::name::ChildName;
 use super::pull::{NamedPullConsumer, PullConsumer};
@@ -140,7 +140,9 @@ fn finalize_rejects_import_with_no_matching_parent_name() {
     let mut b = parent.subcontext_builder();
     b.context(SourceContext::new("rule1-direct"));
     b.import(ImportSpec::extern_("nonexistent", PortType::U64));
-    b.body(BodyFragment::PolydatSource("input cycle: u64\nx := 5\n".to_string()));
+    b.body(BodyFragment::PolydatSource(
+        "input cycle: u64\nx := 5\n".to_string(),
+    ));
     let err = b.finalize().expect_err("should reject");
     match err {
         ContractViolation::UnboundImport { import, .. } => {
@@ -165,7 +167,10 @@ fn spawn_records_named_child() {
         .spawn(name.clone(), module)
         .expect("spawn should succeed");
 
-    assert!(parent.has_child(&name), "parent registry should record `p1`");
+    assert!(
+        parent.has_child(&name),
+        "parent registry should record `p1`"
+    );
 }
 
 #[test]
@@ -175,13 +180,17 @@ fn duplicate_spawn_errors() {
     let module1 = {
         let mut b = parent.clone().subcontext_builder();
         b.context(SourceContext::for_phase("dup"));
-        b.body(BodyFragment::PolydatSource("input cycle: u64\na := 1\n".to_string()));
+        b.body(BodyFragment::PolydatSource(
+            "input cycle: u64\na := 1\n".to_string(),
+        ));
         b.finalize().expect("first finalize")
     };
     let module2 = {
         let mut b = parent.clone().subcontext_builder();
         b.context(SourceContext::for_phase("dup-again"));
-        b.body(BodyFragment::PolydatSource("input cycle: u64\nb := 2\n".to_string()));
+        b.body(BodyFragment::PolydatSource(
+            "input cycle: u64\nb := 2\n".to_string(),
+        ));
         b.finalize().expect("second finalize")
     };
 
@@ -211,13 +220,17 @@ fn release_child_allows_respawn() {
     let module1 = {
         let mut b = parent.clone().subcontext_builder();
         b.context(SourceContext::for_phase("rel"));
-        b.body(BodyFragment::PolydatSource("input cycle: u64\na := 1\n".to_string()));
+        b.body(BodyFragment::PolydatSource(
+            "input cycle: u64\na := 1\n".to_string(),
+        ));
         b.finalize().expect("first finalize")
     };
     let module2 = {
         let mut b = parent.clone().subcontext_builder();
         b.context(SourceContext::for_phase("rel-again"));
-        b.body(BodyFragment::PolydatSource("input cycle: u64\na := 1\n".to_string()));
+        b.body(BodyFragment::PolydatSource(
+            "input cycle: u64\na := 1\n".to_string(),
+        ));
         b.finalize().expect("second finalize")
     };
 
@@ -326,9 +339,7 @@ fn parent_shared_export_collision_rewrites_to_cell_write() {
     assert_eq!(wts[0].export_name, "X");
     assert_eq!(wts[0].source_output, "__write_X");
     // The synthetic output is in the program.
-    assert!(module
-        .program()
-        .output_names().contains(&"__write_X"));
+    assert!(module.program().output_names().contains(&"__write_X"));
     // The export name surfaced as an input slot (so spawn's
     // materialize_wiring_from_outer can attach the parent's cell).
     assert!(module.program().find_input("X").is_some());
@@ -341,7 +352,9 @@ fn parent_shared_export_collision_rewrites_to_cell_write() {
     // Pre-commit: parent's cell still carries the literal init.
     assert_eq!(parent.lock_inner().lookup("X"), Some(Value::U64(0)));
 
-    child.commit_write_throughs().expect("type-stable write-through");
+    child
+        .commit_write_throughs()
+        .expect("type-stable write-through");
 
     // Post-commit: the parent's `lookup("X")` reads through the
     // shared cell (cell-aware) and surfaces `42`.
@@ -385,7 +398,9 @@ fn parent_shared_export_collision_propagates_through_siblings() {
 
     // Writer fires; cell now carries 7. Reader observes it
     // via its own cell-bound input slot.
-    writer.commit_write_throughs().expect("type-stable write-through");
+    writer
+        .commit_write_throughs()
+        .expect("type-stable write-through");
 
     // Reader's `flag` slot is bound to the same cell; pulling
     // `seen` resolves to the cell value.
@@ -466,7 +481,8 @@ CREATE VIRTUAL TABLE system_views.indexes (
     );
 
     // A pattern that DOES match — the fix the workload needs.
-    let fixed_pattern = r"(?im)^\s*(?:CREATE\s+)?(?:VIRTUAL\s+)?TABLE\s+system_views\.sai_column_indexes\s*\(";
+    let fixed_pattern =
+        r"(?im)^\s*(?:CREATE\s+)?(?:VIRTUAL\s+)?TABLE\s+system_views\.sai_column_indexes\s*\(";
     let fixed = Regex::new(fixed_pattern).expect("fixed regex compiles");
     assert!(
         fixed.is_match(realistic_describe),
@@ -499,8 +515,8 @@ CREATE VIRTUAL TABLE system_views.indexes (
 /// describe-keyspace bodies are multi-row.
 #[test]
 fn describe_keyspace_body_is_multirow_not_unary() {
-    use crate::library::exactly_one::ExactlyOneValue;
     use crate::ast::PolydatNode;
+    use crate::library::exactly_one::ExactlyOneValue;
 
     let multi_row_body = Value::Json(std::sync::Arc::new(serde_json::json!([
         {"keyspace_name": "system_views", "type": "keyspace", "name": "system_views",
@@ -557,9 +573,8 @@ fn workload_emulation_shared_cell_through_op_template_chain() {
     // 1. Workload-root carrying the shared cell. Mirror of the
     //    `shared has_sai_column_indexes := false` declaration
     //    in the workload bindings block.
-    let workload_canonical = compile_polydat(
-        "input cycle: u64\nshared has_match := false\n"
-    ).expect("workload-root compile");
+    let workload_canonical = compile_polydat("input cycle: u64\nshared has_match := false\n")
+        .expect("workload-root compile");
 
     // 2. Detect-phase op-template program built via Source
     //    matter. The result-binding's LHS `has_match` collides
@@ -576,7 +591,7 @@ fn workload_emulation_shared_cell_through_op_template_chain() {
         .source("input cycle: u64\n".to_string())
         .result_bindings(
             "has_match := log_info(regex_match(\
-             exactly_one_value(body), \"hello\"))\n"
+             exactly_one_value(body), \"hello\"))\n",
         )
         .build()
         .expect("detect matter");
@@ -613,10 +628,15 @@ fn workload_emulation_shared_cell_through_op_template_chain() {
     // 4. Feed the magic `body` extern with a JSON value whose
     //    leaf string matches the regex. Mirrors what the
     //    activity's ResultDispenser does at end-of-op.
-    let body_idx = detect_fiber.program().find_input("body").expect("body slot");
+    let body_idx = detect_fiber
+        .program()
+        .find_input("body")
+        .expect("body slot");
     detect_fiber.state().set_input(
         body_idx,
-        Value::Json(std::sync::Arc::new(serde_json::json!([{"col": "hello world"}]))),
+        Value::Json(std::sync::Arc::new(
+            serde_json::json!([{"col": "hello world"}]),
+        )),
     );
 
     // 5. Run the detect fiber's per-cycle write-through commit.
@@ -624,7 +644,9 @@ fn workload_emulation_shared_cell_through_op_template_chain() {
     //    writes Bool through the cell-bound input slot for
     //    `has_match`. Single-register semantics: the cell IS
     //    the slot's register.
-    detect_fiber.commit_write_throughs().expect("type-stable write-through");
+    detect_fiber
+        .commit_write_throughs()
+        .expect("type-stable write-through");
 
     // 5. Verify the cell observed the write — root reads via
     //    its own input slot, which is the same Arc<Mutex<…>>
@@ -643,9 +665,7 @@ fn workload_emulation_shared_cell_through_op_template_chain() {
     //    receives the cell via cascade.
     let consumer_matter = super::PolydatMatter::builder()
         .label("consumer_op")
-        .source(
-            "input cycle: u64\nextern has_match: bool\nseen := has_match\n".to_string()
-        )
+        .source("input cycle: u64\nextern has_match: bool\nseen := has_match\n".to_string())
         .build()
         .expect("consumer matter");
     let consumer_canonical = workload_canonical
@@ -727,14 +747,14 @@ fn log_info_preserves_bool_type_through_result_binding_cell() {
     // the Bool flows through unchanged and lands in the cell.
     use super::CompileOptions;
 
-    let root = compile_polydat(
-        "input cycle: u64\nshared has_match := false\n"
-    ).expect("root compile");
+    let root =
+        compile_polydat("input cycle: u64\nshared has_match := false\n").expect("root compile");
 
     // Phase scope (silent intermediate — body never names has_match).
-    let phase_program = compile_polydat(
-        "input cycle: u64\nlocal := cycle\n"
-    ).expect("phase compile").program().clone();
+    let phase_program = compile_polydat("input cycle: u64\nlocal := cycle\n")
+        .expect("phase compile")
+        .program()
+        .clone();
     let phase_kernel = root.materialize_subscope(phase_program, &[]);
 
     // Op-template: result-binding wraps regex_match with log_info.
@@ -759,7 +779,9 @@ fn log_info_preserves_bool_type_through_result_binding_cell() {
         .options(opts)
         .build()
         .expect("matter build");
-    let kernel = phase_kernel.build_subscope(matter).expect("op-template build");
+    let kernel = phase_kernel
+        .build_subscope(matter)
+        .expect("op-template build");
 
     let mut kernel = kernel;
     // Feed the body magic-extern with a unary JSON value whose
@@ -768,9 +790,13 @@ fn log_info_preserves_bool_type_through_result_binding_cell() {
     let body_idx = kernel.program().find_input("body").expect("body slot");
     kernel.state().set_input(
         body_idx,
-        Value::Json(std::sync::Arc::new(serde_json::json!([{"col": "hello world"}]))),
+        Value::Json(std::sync::Arc::new(
+            serde_json::json!([{"col": "hello world"}]),
+        )),
     );
-    kernel.commit_write_throughs().expect("type-stable write-through");
+    kernel
+        .commit_write_throughs()
+        .expect("type-stable write-through");
 
     // The cell value must be Bool, not Str — the type the
     // shared declaration uses and the type downstream `pick`
@@ -810,16 +836,16 @@ fn build_kernel_under_parent_full_sees_live_parents_cells() {
     use super::CompileOptions;
 
     // Workload root with a `shared` cell.
-    let root = compile_polydat(
-        "input cycle: u64\nshared has_sai_column_indexes := false\n"
-    ).expect("root compile");
+    let root = compile_polydat("input cycle: u64\nshared has_sai_column_indexes := false\n")
+        .expect("root compile");
 
     // Phase scope built under root via the typed subscope path
     // — the canonical activity-layer path. Phase body never
     // names the shared wire; the cell rides as transit.
-    let phase_program = compile_polydat(
-        "input cycle: u64\nlocal := cycle\n"
-    ).expect("phase compile").program().clone();
+    let phase_program = compile_polydat("input cycle: u64\nlocal := cycle\n")
+        .expect("phase compile")
+        .program()
+        .clone();
     let phase_kernel = root.materialize_subscope(phase_program, &[]);
 
     // Op-template kernel built under the phase via the typed
@@ -848,18 +874,23 @@ fn build_kernel_under_parent_full_sees_live_parents_cells() {
         .options(opts)
         .build()
         .expect("matter build");
-    let mut kernel = phase_kernel.build_subscope(matter).expect("op-template build");
+    let mut kernel = phase_kernel
+        .build_subscope(matter)
+        .expect("op-template build");
 
     // Per-cycle commit propagates the result-binding's value
     // back through the cell. Root observes the write — proves
     // Rule 2 saw the transitively-inherited shared cell at
     // finalize and baked the write-through onto the program.
-    kernel.commit_write_throughs().expect("type-stable write-through");
+    kernel
+        .commit_write_throughs()
+        .expect("type-stable write-through");
     // Polydat comparison ops produce U64(1) for true; the cell-
     // bound input slot snapshots whatever the source pulled.
     // The assertion is "cell observed a non-init write" — the
     // shape (U64 vs Bool) is incidental to this test.
-    let observed = root.lookup("has_sai_column_indexes")
+    let observed = root
+        .lookup("has_sai_column_indexes")
         .expect("root cell should be set");
     assert!(
         !matches!(observed, Value::Bool(false)),
@@ -885,41 +916,44 @@ fn shared_cell_cascade_survives_for_iteration_through_silent_intermediates() {
     use crate::kernel::PolydatKernel;
     use std::sync::Arc;
 
-    let root_kernel = compile_polydat(
-        "input cycle: u64\nshared flag := 0\n"
-    ).expect("root compile");
+    let root_kernel =
+        compile_polydat("input cycle: u64\nshared flag := 0\n").expect("root compile");
 
     // Scenario: synthesised via for_iteration (the comprehension
     // code path).
-    let scenario_canon = compile_polydat(
-        "input cycle: u64\nlocal := cycle\n"
-    ).expect("scenario compile");
-    let scenario = PolydatKernel::for_iteration(
-        &Arc::new(scenario_canon),
-        &Arc::new(root_kernel),
-        &[],
-    );
+    let scenario_canon =
+        compile_polydat("input cycle: u64\nlocal := cycle\n").expect("scenario compile");
+    let scenario =
+        PolydatKernel::for_iteration(&Arc::new(scenario_canon), &Arc::new(root_kernel), &[]);
 
     // for_each scope: iter-var only.
-    let foreach_program = compile_polydat(
-        "input cycle: u64\nextern profile: String\n"
-    ).expect("for_each compile").program().clone();
+    let foreach_program = compile_polydat("input cycle: u64\nextern profile: String\n")
+        .expect("for_each compile")
+        .program()
+        .clone();
     let mut foreach = scenario.materialize_subscope(foreach_program, &[]);
-    let pidx = foreach.program().find_input("profile").expect("profile slot");
+    let pidx = foreach
+        .program()
+        .find_input("profile")
+        .expect("profile slot");
     foreach.state().set_input(pidx, Value::Str("p0".into()));
 
     // Phase op: writes through the shared cell.
     let leaf_program = compile_polydat(
         "input cycle: u64\n\
          extern flag: u64\n\
-         __write_flag := 7\n"
-    ).expect("leaf compile").program().clone();
+         __write_flag := 7\n",
+    )
+    .expect("leaf compile")
+    .program()
+    .clone();
     let mut leaf = foreach.materialize_subscope(leaf_program, &[]);
     leaf.set_write_throughs(vec![crate::kernel::KernelWriteThrough {
         export_name: "flag".to_string(),
         source_output: "__write_flag".to_string(),
     }]);
-    leaf.commit_write_throughs().expect("type-stable write-through");
+    leaf.commit_write_throughs()
+        .expect("type-stable write-through");
 
     assert_eq!(
         leaf.get_input("flag"),
@@ -931,12 +965,17 @@ fn shared_cell_cascade_survives_for_iteration_through_silent_intermediates() {
     // chain should observe the write too. This proves the
     // cell handle (not just the local snapshot) carried the
     // value.
-    let reader_program = compile_polydat(
-        "input cycle: u64\nextern flag: u64\nseen := flag\n"
-    ).expect("reader compile").program().clone();
+    let reader_program = compile_polydat("input cycle: u64\nextern flag: u64\nseen := flag\n")
+        .expect("reader compile")
+        .program()
+        .clone();
     let mut reader = foreach.materialize_subscope(reader_program, &[]);
     let seen = reader.pull("seen").clone();
-    assert_eq!(seen, Value::U64(7), "sibling reader should observe write through cell");
+    assert_eq!(
+        seen,
+        Value::U64(7),
+        "sibling reader should observe write through cell"
+    );
 }
 
 #[test]
@@ -956,9 +995,8 @@ fn shared_cell_cascade_survives_legacy_bind_program_under_parent_chain() {
     // input slots + transit cells), so the activity layer's
     // existing call sites pick the fix up automatically.
     // Workload root: `shared X := <literal>`.
-    let root_kernel = compile_polydat(
-        "input cycle: u64\nshared counter := 0\n"
-    ).expect("root compile");
+    let root_kernel =
+        compile_polydat("input cycle: u64\nshared counter := 0\n").expect("root compile");
 
     // Scenario kernel: body never names `counter`. Built via
     // the typed subscope path — exactly how the activity layer
@@ -976,8 +1014,11 @@ fn shared_cell_cascade_survives_legacy_bind_program_under_parent_chain() {
     let leaf_program = compile_polydat(
         "input cycle: u64\n\
          extern counter: u64\n\
-         __write_counter := 42\n"
-    ).expect("leaf compile").program().clone();
+         __write_counter := 42\n",
+    )
+    .expect("leaf compile")
+    .program()
+    .clone();
     let mut leaf = mid.materialize_subscope(leaf_program, &[]);
 
     // Verify the leaf's `counter` input slot is wired to
@@ -988,7 +1029,8 @@ fn shared_cell_cascade_survives_legacy_bind_program_under_parent_chain() {
         export_name: "counter".to_string(),
         source_output: "__write_counter".to_string(),
     }]);
-    leaf.commit_write_throughs().expect("type-stable write-through");
+    leaf.commit_write_throughs()
+        .expect("type-stable write-through");
 
     assert_eq!(
         root_kernel.lookup("counter"),
@@ -1037,7 +1079,8 @@ fn parent_shared_cell_cascades_to_grandchild_through_silent_intermediate() {
         b.body(BodyFragment::PolydatSource(
             "input cycle: u64\nflag := 9\n".to_string(),
         ));
-        b.finalize().expect("leaf finalize — Rule 2 must see root's cell through mid")
+        b.finalize()
+            .expect("leaf finalize — Rule 2 must see root's cell through mid")
     };
     let leaf = mid
         .spawn(ChildName::phase("leaf"), leaf_module)
@@ -1054,7 +1097,8 @@ fn parent_shared_cell_cascades_to_grandchild_through_silent_intermediate() {
     // Pre-commit: root's cell still carries the literal init.
     assert_eq!(root.lock_inner().lookup("flag"), Some(Value::U64(0)));
 
-    leaf.commit_write_throughs().expect("type-stable write-through");
+    leaf.commit_write_throughs()
+        .expect("type-stable write-through");
 
     // Post-commit: leaf wrote through the cell handle that
     // ultimately lives at root. Root observes the value.
@@ -1109,8 +1153,8 @@ fn build_kernel_under_parent_threads_compile_options() {
     // `compile_polydat_with_libs` directly produce byte-identical
     // kernels via the builder. Verify the bridge accepts a
     // non-default options struct and produces a working kernel.
-    let parent_kernel = compile_polydat("input cycle: u64\nconst n := 5\n")
-        .expect("parent compile");
+    let parent_kernel =
+        compile_polydat("input cycle: u64\nconst n := 5\n").expect("parent compile");
 
     let opts = super::builder::CompileOptions {
         workload_dir: None,
@@ -1175,18 +1219,28 @@ fn add_result_bindings_injects_only_referenced_magic_externs() {
     let parent = parent_kernel();
     let mut b = parent.subcontext_builder();
     b.context(SourceContext::new("rb-closure"));
-    b.body(BodyFragment::PolydatSource("input cycle: u64\n".to_string()));
+    b.body(BodyFragment::PolydatSource(
+        "input cycle: u64\n".to_string(),
+    ));
     b.add_result_bindings("started_with_x := regex_match(body, \"^x\")\n")
         .expect("add_result_bindings");
     let module = b.finalize().expect("finalize");
-    assert!(module.program().find_input("body").is_some(),
-        "body input slot should be present");
-    assert!(module.program().find_input("count").is_none(),
-        "count slot should be absent (not referenced)");
-    assert!(module.program().find_input("ok").is_none(),
-        "ok slot should be absent (not referenced)");
-    assert!(module.program().output_names().contains(&"started_with_x"),
-        "result LHS should surface as an output");
+    assert!(
+        module.program().find_input("body").is_some(),
+        "body input slot should be present"
+    );
+    assert!(
+        module.program().find_input("count").is_none(),
+        "count slot should be absent (not referenced)"
+    );
+    assert!(
+        module.program().find_input("ok").is_none(),
+        "ok slot should be absent (not referenced)"
+    );
+    assert!(
+        module.program().output_names().contains(&"started_with_x"),
+        "result LHS should surface as an output"
+    );
 }
 
 #[test]
@@ -1205,16 +1259,24 @@ fn add_result_bindings_diagnostic_force_allocates_unreferenced_magic_externs() {
         kernel_opt: crate::kernel::KernelOptLevel::Diagnostic,
         ..Default::default()
     });
-    b.body(BodyFragment::PolydatSource("input cycle: u64\n".to_string()));
+    b.body(BodyFragment::PolydatSource(
+        "input cycle: u64\n".to_string(),
+    ));
     b.add_result_bindings("started_with_x := regex_match(body, \"^x\")\n")
         .expect("add_result_bindings");
     let module = b.finalize().expect("finalize");
-    assert!(module.program().find_input("body").is_some(),
-        "body slot present (referenced)");
-    assert!(module.program().find_input("count").is_some(),
-        "count slot present under Diagnostic (force-allocated)");
-    assert!(module.program().find_input("ok").is_some(),
-        "ok slot present under Diagnostic (force-allocated)");
+    assert!(
+        module.program().find_input("body").is_some(),
+        "body slot present (referenced)"
+    );
+    assert!(
+        module.program().find_input("count").is_some(),
+        "count slot present under Diagnostic (force-allocated)"
+    );
+    assert!(
+        module.program().find_input("ok").is_some(),
+        "ok slot present under Diagnostic (force-allocated)"
+    );
 }
 
 #[test]
@@ -1233,7 +1295,9 @@ fn add_result_bindings_rule2_writethrough_to_parent_shared() {
 
     let mut b = parent.clone().subcontext_builder();
     b.context(SourceContext::new("rb-rule2"));
-    b.body(BodyFragment::PolydatSource("input cycle: u64\n".to_string()));
+    b.body(BodyFragment::PolydatSource(
+        "input cycle: u64\n".to_string(),
+    ));
     // Use a numeric expression on a magic extern so the test
     // exercises both the closure-binding economy AND Rule 2.
     // RHS uses `count` which the magic-extern injector adds as
@@ -1247,10 +1311,14 @@ fn add_result_bindings_rule2_writethrough_to_parent_shared() {
     assert_eq!(wts.len(), 1, "expected one write-through binding");
     assert_eq!(wts[0].export_name, "count_seen");
     assert_eq!(wts[0].source_output, "__write_count_seen");
-    assert!(module.program().find_input("count_seen").is_some(),
-        "count_seen input slot should be present (cell-bound)");
-    assert!(module.program().find_input("count").is_some(),
-        "count magic-extern slot should be present (referenced)");
+    assert!(
+        module.program().find_input("count_seen").is_some(),
+        "count_seen input slot should be present (cell-bound)"
+    );
+    assert!(
+        module.program().find_input("count").is_some(),
+        "count magic-extern slot should be present (referenced)"
+    );
 }
 
 #[test]
@@ -1261,7 +1329,9 @@ fn add_result_bindings_rejects_reassignment_of_magic_wire() {
     let parent = parent_kernel();
     let mut b = parent.subcontext_builder();
     b.context(SourceContext::new("rb-reassign"));
-    b.body(BodyFragment::PolydatSource("input cycle: u64\n".to_string()));
+    b.body(BodyFragment::PolydatSource(
+        "input cycle: u64\n".to_string(),
+    ));
     let err = match b.add_result_bindings("body := \"oops\"\n") {
         Ok(_) => panic!("reassigning body must error"),
         Err(e) => e,
@@ -1282,9 +1352,12 @@ fn add_result_bindings_empty_source_is_noop() {
     let parent = parent_kernel();
     let mut b = parent.subcontext_builder();
     b.context(SourceContext::new("rb-empty"));
-    b.body(BodyFragment::PolydatSource("input cycle: u64\n".to_string()));
+    b.body(BodyFragment::PolydatSource(
+        "input cycle: u64\n".to_string(),
+    ));
     b.add_result_bindings("").expect("empty source is a no-op");
-    b.add_result_bindings("   \n   \n").expect("whitespace-only source is a no-op");
+    b.add_result_bindings("   \n   \n")
+        .expect("whitespace-only source is a no-op");
     let module = b.finalize().expect("finalize");
     assert!(module.program().find_input("body").is_none());
 }
@@ -1303,8 +1376,8 @@ fn add_result_bindings_empty_source_is_noop() {
 fn l2f_silent_fall_through_when_strict_off() {
     use crate::ast::Value;
     use crate::kernel::subcontext::PolydatMatter;
-    let outer = compile_polydat("input cycle: u64\nconst X := \"outer-value\"\n")
-        .expect("outer compile");
+    let outer =
+        compile_polydat("input cycle: u64\nconst X := \"outer-value\"\n").expect("outer compile");
 
     let opts = super::CompileOptions {
         workload_dir: None,
@@ -1328,7 +1401,8 @@ fn l2f_silent_fall_through_when_strict_off() {
         .options(opts)
         .build()
         .expect("matter build");
-    let inner = outer.build_subscope(inner_matter)
+    let inner = outer
+        .build_subscope(inner_matter)
         .expect("strict off: silent fall-through is permitted");
 
     // The conditional shadow rule says inner.lookup("X") should
@@ -1336,8 +1410,10 @@ fn l2f_silent_fall_through_when_strict_off() {
     // get_constant filters, lookup falls through to extern slot
     // wired from outer at materialize_wiring_from_outer time).
     match inner.lookup("X") {
-        Some(Value::Str(s)) => assert_eq!(&*s, "outer-value",
-            "conditional shadow must reveal outer's value when inner const yields None"),
+        Some(Value::Str(s)) => assert_eq!(
+            &*s, "outer-value",
+            "conditional shadow must reveal outer's value when inner const yields None"
+        ),
         other => panic!("expected outer's Str value via fall-through, got {other:?}"),
     }
 }
@@ -1349,13 +1425,13 @@ fn l2f_silent_fall_through_when_strict_off() {
 #[test]
 fn l2f_strict_rejects_silent_fall_through() {
     use crate::kernel::subcontext::PolydatMatter;
-    let outer = compile_polydat("input cycle: u64\nconst X := \"outer-value\"\n")
-        .expect("outer compile");
+    let outer =
+        compile_polydat("input cycle: u64\nconst X := \"outer-value\"\n").expect("outer compile");
 
     let opts = super::CompileOptions {
         workload_dir: None,
         polydat_lib_paths: Vec::new(),
-        strict: true,  // ← the L2.f hardening trigger
+        strict: true, // ← the L2.f hardening trigger
         required_outputs: Vec::new(),
         context_label: Some("inner-strict".to_string()),
         cursor_limit: None,
@@ -1367,12 +1443,15 @@ fn l2f_strict_rejects_silent_fall_through() {
         .options(opts)
         .build()
         .expect("matter build");
-    let err = outer.build_subscope(inner_matter)
+    let err = outer
+        .build_subscope(inner_matter)
         .expect_err("strict on: silent fall-through must be rejected");
     match err {
         ContractViolation::StrictNonePropagation { bindings, .. } => {
-            assert!(bindings.iter().any(|b| b == "X"),
-                "diagnostic must name the offending binding 'X', got {bindings:?}");
+            assert!(
+                bindings.iter().any(|b| b == "X"),
+                "diagnostic must name the offending binding 'X', got {bindings:?}"
+            );
         }
         other => panic!("expected StrictNonePropagation, got {other:?}"),
     }

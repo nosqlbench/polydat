@@ -5,8 +5,8 @@
 
 // SRD-80 PR B.11 — alias the upstream digest types so the
 // macro-generated `Sha256` / `Md5` structs don't collide.
-use sha2::{Sha256 as Sha2_256, Digest as Sha2Digest};
 use md5::Md5 as Md5Hasher;
+use sha2::{Digest as Sha2Digest, Sha256 as Sha2_256};
 
 // SRD-80 PR B.11 — digest and base-encoding nodes migrated to
 // `#[polydat_node]` with native Rust types for Bytes:

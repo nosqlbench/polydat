@@ -11,8 +11,8 @@
 //! function returning `Option<Result<...>>`.  The top-level `build_node` here
 //! tries each module in turn and falls back to the registry for variadic nodes.
 
-use crate::compile::assembly::WireRef;
 use crate::ast::PolydatNode;
+use crate::compile::assembly::WireRef;
 use crate::library::identity::ConstU64;
 
 use crate::dsl::registry;
@@ -42,25 +42,38 @@ pub enum ConstArg {
 impl ConstArg {
     /// Return the value as a `u64`, or 0 if incompatible.
     pub fn as_u64(&self) -> u64 {
-        match self { ConstArg::Int(v) => *v, _ => 0 }
+        match self {
+            ConstArg::Int(v) => *v,
+            _ => 0,
+        }
     }
 
     /// Return the value as an `f64`, or 0.0 if incompatible.
     ///
     /// Integer literals are widened to f64.
     pub fn as_f64(&self) -> f64 {
-        match self { ConstArg::Float(v) => *v, ConstArg::Int(v) => *v as f64, _ => 0.0 }
+        match self {
+            ConstArg::Float(v) => *v,
+            ConstArg::Int(v) => *v as f64,
+            _ => 0.0,
+        }
     }
 
     /// Return the value as a `&str`, or `""` if incompatible.
     pub fn as_str(&self) -> &str {
-        match self { ConstArg::Str(s) => s, _ => "" }
+        match self {
+            ConstArg::Str(s) => s,
+            _ => "",
+        }
     }
 
     /// Return the value as a float slice, or `&[]` if incompatible.
     #[allow(dead_code)]
     pub fn as_float_array(&self) -> &[f64] {
-        match self { ConstArg::FloatArray(v) => v, _ => &[] }
+        match self {
+            ConstArg::FloatArray(v) => v,
+            _ => &[],
+        }
     }
 }
 
@@ -131,7 +144,9 @@ pub fn build_node(
         // constants before the constructor panics.
         let sigs = (reg.signatures)();
         let owning_sig = sigs.iter().find(|s| s.name == func);
-        if owning_sig.is_none() { continue; }
+        if owning_sig.is_none() {
+            continue;
+        }
         let sig = owning_sig.unwrap();
 
         // Pass 1: walk declared `ParamSpec.constraint`s and run
@@ -169,17 +184,20 @@ pub fn build_node(
 
     // --- Registry variadic fallback ---
     if let Some(sig) = registry::lookup(func)
-        && sig.is_variadic() {
-            if wires.is_empty() {
-                if let Some(id) = sig.identity {
-                    return Ok(Box::new(ConstU64::new(id)));
-                }
-                return Err(format!("variadic function '{func}' requires at least one input"));
+        && sig.is_variadic()
+    {
+        if wires.is_empty() {
+            if let Some(id) = sig.identity {
+                return Ok(Box::new(ConstU64::new(id)));
             }
-            if let Some(ctor) = sig.variadic_ctor {
-                return Ok(ctor(wires.len()));
-            }
+            return Err(format!(
+                "variadic function '{func}' requires at least one input"
+            ));
         }
+        if let Some(ctor) = sig.variadic_ctor {
+            return Ok(ctor(wires.len()));
+        }
+    }
 
     let mut msg = format!("unknown function: '{func}'\n");
     if let Some(suggestion) = registry::suggest_function(func) {

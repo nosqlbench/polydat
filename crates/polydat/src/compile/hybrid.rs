@@ -94,7 +94,11 @@ struct HybridCore {
 }
 
 /// Per-slot `Hdl1` mask over the nodes' output ports.
-fn handle_slot_mask_of(nodes: &[Box<dyn PolydatNode>], port_offsets: &[Vec<usize>], total_slots: usize) -> Vec<bool> {
+fn handle_slot_mask_of(
+    nodes: &[Box<dyn PolydatNode>],
+    port_offsets: &[Vec<usize>],
+    total_slots: usize,
+) -> Vec<bool> {
     let mut mask = vec![false; total_slots];
     for (node_idx, node) in nodes.iter().enumerate() {
         for (p, out) in node.meta().outs.iter().enumerate() {
@@ -134,9 +138,19 @@ impl HybridCore {
                 "H4: slot {slot} should hold a table handle, holds {handle:#x}"
             );
             let (_, generation, named) = crate::kernel::decode_table_handle(handle);
-            assert_eq!(named, entry, "H4: slot {slot} names entry {named}; the layout assigned it entry {entry}");
-            assert_eq!(generation, self.table.generation() & 0xFF_FFFF, "H3: slot {slot} holds a handle from another cycle generation");
-            assert!(self.table.is_written(entry), "H4: entry {entry} was not written by the run that produced slot {slot}");
+            assert_eq!(
+                named, entry,
+                "H4: slot {slot} names entry {named}; the layout assigned it entry {entry}"
+            );
+            assert_eq!(
+                generation,
+                self.table.generation() & 0xFF_FFFF,
+                "H3: slot {slot} holds a handle from another cycle generation"
+            );
+            assert!(
+                self.table.is_written(entry),
+                "H4: entry {entry} was not written by the run that produced slot {slot}"
+            );
         }
     }
 
@@ -193,9 +207,9 @@ fn eval_all_hybrid_steps(core: &mut HybridCore) {
                 let code_fn = seg.code_fn;
                 let buf_const = core.buffer.as_ptr();
                 let buf_mut = core.buffer.as_mut_ptr();
-                crate::compile::jit::invoke_with_catch(move || {
-                        unsafe { (code_fn)(buf_const, buf_mut); }
-                    });
+                crate::compile::jit::invoke_with_catch(move || unsafe {
+                    (code_fn)(buf_const, buf_mut);
+                });
             }
             HybridStep::Closure(cs) => {
                 for (i, &slot) in cs.input_slots.iter().enumerate() {
@@ -244,7 +258,11 @@ fn compute_hybrid_slot_provenance(
         }
     }
     let mut slot_provenance = vec![0u64; total_slots];
-    for (i, slot) in slot_provenance.iter_mut().enumerate().take(coord_count.min(64)) {
+    for (i, slot) in slot_provenance
+        .iter_mut()
+        .enumerate()
+        .take(coord_count.min(64))
+    {
         *slot = 1u64 << i;
     }
     for (step_idx, step) in steps.iter().enumerate() {
@@ -272,7 +290,11 @@ impl HybridCore {
     /// How many steps run as native segments and how many as closures:
     /// what the per-node engine choice decided for this graph.
     fn engine_counts(&self) -> (usize, usize) {
-        let closures = self.steps.iter().filter(|s| matches!(s, HybridStep::Closure(_))).count();
+        let closures = self
+            .steps
+            .iter()
+            .filter(|s| matches!(s, HybridStep::Closure(_)))
+            .count();
         (self.steps.len() - closures, closures)
     }
 
@@ -343,7 +365,12 @@ impl HybridKernelRaw {
     /// (SRD 115 §5), so the caller never holds a handle.
     pub fn get_value(&self, name: &str) -> crate::ast::Value {
         let slot = self.core.output_map[name];
-        let ty = self.core.output_types.get(name).copied().unwrap_or(crate::ast::PortType::U64);
+        let ty = self
+            .core
+            .output_types
+            .get(name)
+            .copied()
+            .unwrap_or(crate::ast::PortType::U64);
         crate::compile::marshal::decode_slot(self.core.buffer[slot], ty, &self.core.table)
     }
 
@@ -353,11 +380,15 @@ impl HybridKernelRaw {
     }
 
     /// Number of coordinate inputs.
-    pub fn coord_count(&self) -> usize { self.core.coord_count }
+    pub fn coord_count(&self) -> usize {
+        self.core.coord_count
+    }
 
     /// The number of native segments and of closure steps in this
     /// kernel, in that order: what the per-node engine choice decided.
-    pub fn engine_counts(&self) -> (usize, usize) { self.core.engine_counts() }
+    pub fn engine_counts(&self) -> (usize, usize) {
+        self.core.engine_counts()
+    }
 
     /// Resolve an output name to its buffer slot.
     pub fn resolve_output(&self, name: &str) -> Option<usize> {
@@ -424,9 +455,10 @@ impl HybridKernelPull {
         self.set_inputs(coords);
         if !self.force_run
             && slot < self.slot_provenance.len()
-            && self.slot_provenance[slot] & self.changed_mask == 0 {
-                return self.core.buffer[slot];
-            }
+            && self.slot_provenance[slot] & self.changed_mask == 0
+        {
+            return self.core.buffer[slot];
+        }
         self.force_run = false;
         eval_all_hybrid_steps(&mut self.core);
         self.core.buffer[slot]
@@ -471,7 +503,12 @@ impl HybridKernelPull {
     /// (SRD 115 §5), so the caller never holds a handle.
     pub fn get_value(&self, name: &str) -> crate::ast::Value {
         let slot = self.core.output_map[name];
-        let ty = self.core.output_types.get(name).copied().unwrap_or(crate::ast::PortType::U64);
+        let ty = self
+            .core
+            .output_types
+            .get(name)
+            .copied()
+            .unwrap_or(crate::ast::PortType::U64);
         crate::compile::marshal::decode_slot(self.core.buffer[slot], ty, &self.core.table)
     }
 
@@ -481,11 +518,15 @@ impl HybridKernelPull {
     }
 
     /// Number of coordinate inputs.
-    pub fn coord_count(&self) -> usize { self.core.coord_count }
+    pub fn coord_count(&self) -> usize {
+        self.core.coord_count
+    }
 
     /// The number of native segments and of closure steps in this
     /// kernel, in that order: what the per-node engine choice decided.
-    pub fn engine_counts(&self) -> (usize, usize) { self.core.engine_counts() }
+    pub fn engine_counts(&self) -> (usize, usize) {
+        self.core.engine_counts()
+    }
 
     /// Resolve an output name to its buffer slot.
     pub fn resolve_output(&self, name: &str) -> Option<usize> {
@@ -575,19 +616,23 @@ impl HybridKernelPushPull {
         // handle closures write through it as the segments' helpers do.
         let mut table = std::mem::take(&mut self.core.table);
         table.set_generation(crate::kernel::begin_root_cycle());
-        self.core.externs.materialize(&mut self.core.buffer, &mut table);
+        self.core
+            .externs
+            .materialize(&mut self.core.buffer, &mut table);
         let installed = crate::kernel::install_value_table(&mut table);
         for (step_idx, step) in self.core.steps.iter().enumerate() {
-            if self.step_clean[step_idx] { continue; }
+            if self.step_clean[step_idx] {
+                continue;
+            }
             match step {
                 #[cfg(feature = "jit")]
                 HybridStep::Jit(seg) => {
                     let code_fn = seg.code_fn;
                     let buf_const = self.core.buffer.as_ptr();
                     let buf_mut = self.core.buffer.as_mut_ptr();
-                    crate::compile::jit::invoke_with_catch(move || {
-                            unsafe { (code_fn)(buf_const, buf_mut); }
-                        });
+                    crate::compile::jit::invoke_with_catch(move || unsafe {
+                        (code_fn)(buf_const, buf_mut);
+                    });
                 }
                 HybridStep::Closure(cs) => {
                     for (i, &slot) in cs.input_slots.iter().enumerate() {
@@ -624,27 +669,32 @@ impl HybridKernelPushPull {
         self.set_inputs(coords);
         if !self.force_run
             && slot < self.slot_provenance.len()
-            && self.slot_provenance[slot] & self.changed_mask == 0 {
-                return self.core.buffer[slot];
-            }
+            && self.slot_provenance[slot] & self.changed_mask == 0
+        {
+            return self.core.buffer[slot];
+        }
         self.force_run = false;
         // The table is installed around every step, closures included, so
         // handle closures write through it as the segments' helpers do.
         let mut table = std::mem::take(&mut self.core.table);
         table.set_generation(crate::kernel::begin_root_cycle());
-        self.core.externs.materialize(&mut self.core.buffer, &mut table);
+        self.core
+            .externs
+            .materialize(&mut self.core.buffer, &mut table);
         let installed = crate::kernel::install_value_table(&mut table);
         for (step_idx, step) in self.core.steps.iter().enumerate() {
-            if self.step_clean[step_idx] { continue; }
+            if self.step_clean[step_idx] {
+                continue;
+            }
             match step {
                 #[cfg(feature = "jit")]
                 HybridStep::Jit(seg) => {
                     let code_fn = seg.code_fn;
                     let buf_const = self.core.buffer.as_ptr();
                     let buf_mut = self.core.buffer.as_mut_ptr();
-                    crate::compile::jit::invoke_with_catch(move || {
-                            unsafe { (code_fn)(buf_const, buf_mut); }
-                        });
+                    crate::compile::jit::invoke_with_catch(move || unsafe {
+                        (code_fn)(buf_const, buf_mut);
+                    });
                 }
                 HybridStep::Closure(cs) => {
                     for (i, &slot) in cs.input_slots.iter().enumerate() {
@@ -699,7 +749,12 @@ impl HybridKernelPushPull {
     /// (SRD 115 §5), so the caller never holds a handle.
     pub fn get_value(&self, name: &str) -> crate::ast::Value {
         let slot = self.core.output_map[name];
-        let ty = self.core.output_types.get(name).copied().unwrap_or(crate::ast::PortType::U64);
+        let ty = self
+            .core
+            .output_types
+            .get(name)
+            .copied()
+            .unwrap_or(crate::ast::PortType::U64);
         crate::compile::marshal::decode_slot(self.core.buffer[slot], ty, &self.core.table)
     }
 
@@ -709,11 +764,15 @@ impl HybridKernelPushPull {
     }
 
     /// Number of coordinate inputs.
-    pub fn coord_count(&self) -> usize { self.core.coord_count }
+    pub fn coord_count(&self) -> usize {
+        self.core.coord_count
+    }
 
     /// The number of native segments and of closure steps in this
     /// kernel, in that order: what the per-node engine choice decided.
-    pub fn engine_counts(&self) -> (usize, usize) { self.core.engine_counts() }
+    pub fn engine_counts(&self) -> (usize, usize) {
+        self.core.engine_counts()
+    }
 
     /// Resolve an output name to its buffer slot.
     pub fn resolve_output(&self, name: &str) -> Option<usize> {
@@ -831,7 +890,8 @@ pub(crate) fn build_hybrid(
     let mut step_rerun: Vec<bool> = Vec::new();
 
     // Classify each node
-    let classifications: Vec<(JitOp, Vec<usize>, Vec<usize>)> = nodes.iter()
+    let classifications: Vec<(JitOp, Vec<usize>, Vec<usize>)> = nodes
+        .iter()
         .enumerate()
         .map(|(node_idx, node)| {
             // Classified with the wire types known (SRD 115 §6.1), as
@@ -840,14 +900,22 @@ pub(crate) fn build_hybrid(
             let wire_types: Vec<crate::ast::PortType> = wiring[node_idx]
                 .iter()
                 .map(|src| match src {
-                    WireSource::Input(c) => input_types.get(*c).copied().unwrap_or(crate::ast::PortType::U64),
+                    WireSource::Input(c) => input_types
+                        .get(*c)
+                        .copied()
+                        .unwrap_or(crate::ast::PortType::U64),
                     WireSource::NodeOutput(j, p) => nodes[*j].meta().outs[*p].typ,
                 })
                 .collect();
             let jit_op = jit::classify_node_typed(node.as_ref(), &wire_types);
 
             let input_slots = flatten_input_slots(
-                wiring, nodes, node_idx, port_offsets, input_starts, input_widths,
+                wiring,
+                nodes,
+                node_idx,
+                port_offsets,
+                input_starts,
+                input_widths,
             );
             let output_slots = flatten_output_slots(nodes, node_idx, port_offsets);
 
@@ -873,14 +941,23 @@ pub(crate) fn build_hybrid(
             let wire_types: Vec<crate::ast::PortType> = wiring[i]
                 .iter()
                 .map(|src| match src {
-                    WireSource::Input(c) => input_types.get(*c).copied().unwrap_or(crate::ast::PortType::U64),
+                    WireSource::Input(c) => input_types
+                        .get(*c)
+                        .copied()
+                        .unwrap_or(crate::ast::PortType::U64),
                     WireSource::NodeOutput(j, p) => nodes[*j].meta().outs[*p].typ,
                 })
                 .collect();
             // A copy of a table handle re-enters the value (axiom H4),
             // so it owns an entry like a handle closure does.
             let table_op = crate::compile::assembly::table_copy_op(node.as_ref(), entry_base)
-                .or_else(|| if node.compiled_u64().is_some() { None } else { node.compiled_handle(entry_base, &wire_types) });
+                .or_else(|| {
+                    if node.compiled_u64().is_some() {
+                        None
+                    } else {
+                        node.compiled_handle(entry_base, &wire_types)
+                    }
+                });
             let op = if let Some(op) = table_op {
                 let mut slot = output_slots.iter().copied();
                 for port in &node.meta().outs {
@@ -904,9 +981,12 @@ pub(crate) fn build_hybrid(
                 // Axiom S9(a): map this step's Ref output pairs to
                 // its scratch entries (port order — S3 contract).
                 let starts = flatten_ref_output_starts(nodes, i, port_offsets);
-                assert_eq!(starts.len(), kit.scratch.len(),
+                assert_eq!(
+                    starts.len(),
+                    kit.scratch.len(),
                     "slot-op scratch/Ref-output mismatch on '{}'",
-                    node.meta().name);
+                    node.meta().name
+                );
                 for (k, &slot) in starts.iter().enumerate() {
                     ref_scratch.push((slot, scratch_start + k));
                 }
@@ -931,24 +1011,33 @@ pub(crate) fn build_hybrid(
             while i < classifications.len() && !matches!(classifications[i].0, JitOp::Fallback) {
                 i += 1;
             }
-            let batch: Vec<(JitOp, Vec<usize>, Vec<usize>)> = classifications[batch_start..i].to_vec();
+            let batch: Vec<(JitOp, Vec<usize>, Vec<usize>)> =
+                classifications[batch_start..i].to_vec();
 
             // Compile the batch to native code
             let empty_map = HashMap::new();
-            let _jit_kernel = jit::compile_jit_raw(coord_count, total_slots, batch, empty_map, Vec::new())?;
+            let _jit_kernel =
+                jit::compile_jit_raw(coord_count, total_slots, batch, empty_map, Vec::new())?;
 
             // For now, compile each JIT-able node as its own JIT segment.
             // Batching multiple nodes into one segment is a future optimization.
             for (jit_op, input_slots, output_slots) in &classifications[batch_start..i] {
-                let single_batch = vec![(jit_op.clone(), input_slots.clone(), output_slots.clone())];
+                let single_batch =
+                    vec![(jit_op.clone(), input_slots.clone(), output_slots.clone())];
                 // Table-kind slots are numbered across every segment
                 // so the kernel's one value table serves them all
                 // (SRD 115 §3).
                 // Slots closures fill with handles or Ref pairs are
                 // handle slots to the H1 verifier: a segment may only
                 // load, store, and pass them.
-                let guarded_slots: Vec<usize> = ref_slots.iter().enumerate().filter(|(_, r)| **r).map(|(s, _)| s).collect();
-                let (code_fn, module, entries) = jit::compile_jit_entry(&single_batch, table_entries.len(), &guarded_slots)?;
+                let guarded_slots: Vec<usize> = ref_slots
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| **r)
+                    .map(|(s, _)| s)
+                    .collect();
+                let (code_fn, module, entries) =
+                    jit::compile_jit_entry(&single_batch, table_entries.len(), &guarded_slots)?;
                 table_entries.extend(entries);
                 step_rerun.push(output_slots.iter().any(|&s| handle_mask[s]));
                 steps.push(HybridStep::Jit(JitSegment {
@@ -961,9 +1050,23 @@ pub(crate) fn build_hybrid(
 
     let output_types = output_types_of(nodes, port_offsets, input_starts, input_types, &output_map);
     build_pushpull_from_steps(
-        steps, scratch, ref_scratch, ref_slots, wiring, nodes, coord_count,
-        total_slots, output_map, max_inputs, max_outputs, input_starts,
-        input_widths, table_entries, output_types, step_rerun, externs,
+        steps,
+        scratch,
+        ref_scratch,
+        ref_slots,
+        wiring,
+        nodes,
+        coord_count,
+        total_slots,
+        output_map,
+        max_inputs,
+        max_outputs,
+        input_starts,
+        input_widths,
+        table_entries,
+        output_types,
+        step_rerun,
+        externs,
     )
 }
 
@@ -987,7 +1090,15 @@ fn output_types_of(
     }
     output_map
         .iter()
-        .map(|(name, slot)| (name.clone(), slot_types.get(slot).copied().unwrap_or(crate::ast::PortType::U64)))
+        .map(|(name, slot)| {
+            (
+                name.clone(),
+                slot_types
+                    .get(slot)
+                    .copied()
+                    .unwrap_or(crate::ast::PortType::U64),
+            )
+        })
         .collect()
 }
 
@@ -1018,7 +1129,12 @@ pub(crate) fn build_hybrid(
 
     for (node_idx, node) in nodes.iter().enumerate() {
         let input_slots = flatten_input_slots(
-            wiring, nodes, node_idx, port_offsets, input_starts, input_widths,
+            wiring,
+            nodes,
+            node_idx,
+            port_offsets,
+            input_starts,
+            input_widths,
         );
         let output_slots = flatten_output_slots(nodes, node_idx, port_offsets);
 
@@ -1032,14 +1148,23 @@ pub(crate) fn build_hybrid(
         let wire_types: Vec<crate::ast::PortType> = wiring[node_idx]
             .iter()
             .map(|src| match src {
-                WireSource::Input(c) => input_types.get(*c).copied().unwrap_or(crate::ast::PortType::U64),
+                WireSource::Input(c) => input_types
+                    .get(*c)
+                    .copied()
+                    .unwrap_or(crate::ast::PortType::U64),
                 WireSource::NodeOutput(j, p) => nodes[*j].meta().outs[*p].typ,
             })
             .collect();
         // A copy of a table handle re-enters the value (axiom H4), so
         // it owns an entry like a handle closure does.
-        let table_op = crate::compile::assembly::table_copy_op(node.as_ref(), entry_base)
-            .or_else(|| if node.compiled_u64().is_some() { None } else { node.compiled_handle(entry_base, &wire_types) });
+        let table_op =
+            crate::compile::assembly::table_copy_op(node.as_ref(), entry_base).or_else(|| {
+                if node.compiled_u64().is_some() {
+                    None
+                } else {
+                    node.compiled_handle(entry_base, &wire_types)
+                }
+            });
         let op = if let Some(op) = table_op {
             let mut slot = output_slots.iter().copied();
             for port in &node.meta().outs {
@@ -1063,9 +1188,12 @@ pub(crate) fn build_hybrid(
             // Axiom S9(a): map this step's Ref output pairs to
             // its scratch entries (port order — S3 contract).
             let starts = flatten_ref_output_starts(nodes, node_idx, port_offsets);
-            assert_eq!(starts.len(), kit.scratch.len(),
+            assert_eq!(
+                starts.len(),
+                kit.scratch.len(),
                 "slot-op scratch/Ref-output mismatch on '{}'",
-                node.meta().name);
+                node.meta().name
+            );
             for (k, &slot) in starts.iter().enumerate() {
                 ref_scratch.push((slot, scratch_start + k));
             }
@@ -1084,9 +1212,23 @@ pub(crate) fn build_hybrid(
 
     let output_types = output_types_of(nodes, port_offsets, input_starts, input_types, &output_map);
     build_pushpull_from_steps(
-        steps, scratch, ref_scratch, ref_slots, wiring, nodes, coord_count,
-        total_slots, output_map, max_inputs, max_outputs, input_starts,
-        input_widths, table_entries, output_types, step_rerun, externs,
+        steps,
+        scratch,
+        ref_scratch,
+        ref_slots,
+        wiring,
+        nodes,
+        coord_count,
+        total_slots,
+        output_map,
+        max_inputs,
+        max_outputs,
+        input_starts,
+        input_widths,
+        table_entries,
+        output_types,
+        step_rerun,
+        externs,
     )
 }
 
@@ -1130,8 +1272,8 @@ fn build_pushpull_from_steps(
     // slot-indexed dirty tracking / changed-mask bits stay coherent under
     // multi-slot inputs (§8.4 layer 1). Identity for all-scalar inputs.
     let node_provenance = crate::kernel::PolydatProgram::compute_provenance(nodes, wiring);
-    let input_dependents = crate::kernel::PolydatProgram::compute_dependents(
-        &node_provenance, input_widths.len());
+    let input_dependents =
+        crate::kernel::PolydatProgram::compute_dependents(&node_provenance, input_widths.len());
     let step_dependents: Vec<Vec<usize>> = input_widths
         .iter()
         .enumerate()
@@ -1140,9 +1282,8 @@ fn build_pushpull_from_steps(
         })
         .collect();
 
-    let slot_provenance = compute_hybrid_slot_provenance(
-        coord_count, total_slots, &step_dependents, &steps,
-    );
+    let slot_provenance =
+        compute_hybrid_slot_provenance(coord_count, total_slots, &step_dependents, &steps);
 
     Ok(HybridKernelPushPull {
         core: HybridCore {

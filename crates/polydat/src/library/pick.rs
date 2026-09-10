@@ -19,8 +19,7 @@ use crate::ast::Value;
 
 /// Static guidance suffix appended to every `pick` panic, per
 /// SRD-66 §"Diagnostic guidance".
-const PICK_HINT: &str =
-    "\n  hint: did the probe phase that sets these booleans run before \
+const PICK_HINT: &str = "\n  hint: did the probe phase that sets these booleans run before \
 this phase? Check scenario-tree DFS order or declare a `detect_*` \
 phase ahead of consumers.";
 
@@ -34,15 +33,23 @@ phase ahead of consumers.";
 #[crate::polydat_node(category = Comparison, variadic_min = 1)]
 fn pick(selectors: &[bool], values: &[Value]) -> Value {
     let n = selectors.len();
-    debug_assert_eq!(n, values.len(),
+    debug_assert_eq!(
+        n,
+        values.len(),
         "pick arity mismatch at eval: selectors={} values={}",
-        n, values.len());
+        n,
+        values.len()
+    );
 
     if crate::library::debug_nodes_enabled() {
-        let sels: Vec<String> = selectors.iter().enumerate()
+        let sels: Vec<String> = selectors
+            .iter()
+            .enumerate()
             .map(|(i, s)| format!("b{i}={s}"))
             .collect();
-        let vals: Vec<String> = values.iter().enumerate()
+        let vals: Vec<String> = values
+            .iter()
+            .enumerate()
             .map(|(i, v)| format!("v{i}={}", v.to_display_string()))
             .collect();
         crate::library::support::audit::debug(&format!(
@@ -54,7 +61,9 @@ fn pick(selectors: &[bool], values: &[Value]) -> Value {
 
     let mut matched: Vec<usize> = Vec::new();
     for (i, &sel) in selectors.iter().enumerate() {
-        if sel { matched.push(i); }
+        if sel {
+            matched.push(i);
+        }
     }
 
     if matched.is_empty() {

@@ -154,18 +154,30 @@ impl Clause {
     ) -> Self {
         let vars: Vec<String> = vars.into_iter().map(Into::into).collect();
         let exprs: Vec<String> = exprs.into_iter().map(Into::into).collect();
-        assert_eq!(vars.len(), exprs.len(),
-            "Clause::parallel: vars and exprs must have equal length");
-        assert!(vars.len() >= 2,
-            "Clause::parallel: parallel form requires ≥ 2 variables (use Clause::new for single-var)");
-        Self { vars, source: ClauseSource::Parallel { mode, exprs } }
+        assert_eq!(
+            vars.len(),
+            exprs.len(),
+            "Clause::parallel: vars and exprs must have equal length"
+        );
+        assert!(
+            vars.len() >= 2,
+            "Clause::parallel: parallel form requires ≥ 2 variables (use Clause::new for single-var)"
+        );
+        Self {
+            vars,
+            source: ClauseSource::Parallel { mode, exprs },
+        }
     }
 
     /// Single-var convenience: returns the lone variable
     /// name when the clause is single-var. `None` for
     /// parallel-iter forms — those have multiple names.
     pub fn single_var(&self) -> Option<&str> {
-        if self.vars.len() == 1 { Some(&self.vars[0]) } else { None }
+        if self.vars.len() == 1 {
+            Some(&self.vars[0])
+        } else {
+            None
+        }
     }
 
     /// Single-source convenience: returns the lone source
@@ -228,14 +240,13 @@ impl Clause {
     /// declaration, runner param-ref scan).
     pub fn scalar_bindings(&self) -> Vec<(&str, &str)> {
         match &self.source {
-            ClauseSource::Single(s) => {
-                self.vars.iter().map(|v| (v.as_str(), s.as_str())).collect()
-            }
-            ClauseSource::Parallel { exprs, .. } => {
-                self.vars.iter().zip(exprs.iter())
-                    .map(|(v, e)| (v.as_str(), e.as_str()))
-                    .collect()
-            }
+            ClauseSource::Single(s) => self.vars.iter().map(|v| (v.as_str(), s.as_str())).collect(),
+            ClauseSource::Parallel { exprs, .. } => self
+                .vars
+                .iter()
+                .zip(exprs.iter())
+                .map(|(v, e)| (v.as_str(), e.as_str()))
+                .collect(),
         }
     }
 }
@@ -255,9 +266,9 @@ impl fmt::Display for Clause {
                 write!(f, "({}) in ", self.vars.join(", "))?;
                 let inner = exprs.join(", ");
                 match mode {
-                    ZipMode::Strict   => write!(f, "({inner})"),
+                    ZipMode::Strict => write!(f, "({inner})"),
                     ZipMode::Truncate => write!(f, "zip_truncate({inner})"),
-                    ZipMode::Cycle    => write!(f, "zip_cycle({inner})"),
+                    ZipMode::Cycle => write!(f, "zip_cycle({inner})"),
                 }
             }
         }
@@ -296,30 +307,46 @@ pub struct Subspace {
 }
 
 impl Subspace {
-    pub fn new(clauses: Vec<Clause>) -> Self { Self { clauses } }
-    pub fn is_empty(&self) -> bool { self.clauses.is_empty() }
-    pub fn len(&self) -> usize { self.clauses.len() }
-    pub fn iter(&self) -> std::slice::Iter<'_, Clause> { self.clauses.iter() }
+    pub fn new(clauses: Vec<Clause>) -> Self {
+        Self { clauses }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.clauses.is_empty()
+    }
+    pub fn len(&self) -> usize {
+        self.clauses.len()
+    }
+    pub fn iter(&self) -> std::slice::Iter<'_, Clause> {
+        self.clauses.iter()
+    }
 }
 
 impl<'a> IntoIterator for &'a Subspace {
     type Item = &'a Clause;
     type IntoIter = std::slice::Iter<'a, Clause>;
-    fn into_iter(self) -> Self::IntoIter { self.clauses.iter() }
+    fn into_iter(self) -> Self::IntoIter {
+        self.clauses.iter()
+    }
 }
 
 impl From<Vec<Clause>> for Subspace {
-    fn from(clauses: Vec<Clause>) -> Self { Self { clauses } }
+    fn from(clauses: Vec<Clause>) -> Self {
+        Self { clauses }
+    }
 }
 
 impl std::ops::Index<usize> for Subspace {
     type Output = Clause;
-    fn index(&self, i: usize) -> &Clause { &self.clauses[i] }
+    fn index(&self, i: usize) -> &Clause {
+        &self.clauses[i]
+    }
 }
 
 impl std::ops::Deref for Subspace {
     type Target = [Clause];
-    fn deref(&self) -> &[Clause] { &self.clauses }
+    fn deref(&self) -> &[Clause] {
+        &self.clauses
+    }
 }
 
 /// Traversal order for emitted tuples. See SRD-18d.
@@ -335,17 +362,32 @@ pub enum TraversalOrder {
     /// Lexicographic, rightmost varies fastest. Equivalent to
     /// no `order` clause at all; included so consumers can
     /// represent "explicitly default" if needed.
-    Lex { #[serde(default, skip_serializing_if = "Option::is_none")] count: Option<usize> },
+    Lex {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<usize>,
+    },
     /// Lexicographic, leftmost varies fastest.
-    ReverseLex { #[serde(default, skip_serializing_if = "Option::is_none")] count: Option<usize> },
+    ReverseLex {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<usize>,
+    },
     /// Sort by sum-of-indices ascending; ties broken by lex.
-    Diagonal { #[serde(default, skip_serializing_if = "Option::is_none")] count: Option<usize> },
+    Diagonal {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<usize>,
+    },
     /// Sort by sum-of-indices descending.
-    Antidiagonal { #[serde(default, skip_serializing_if = "Option::is_none")] count: Option<usize> },
+    Antidiagonal {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<usize>,
+    },
     /// All-extrema first, stratified by interior count.
     /// `strata = Some(N)` keeps the first N strata; `Some(1)` =
     /// corners only.
-    Extrema { #[serde(default, skip_serializing_if = "Option::is_none")] strata: Option<usize> },
+    Extrema {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        strata: Option<usize>,
+    },
     /// Concentric L∞ shells from a chosen origin.
     Shells {
         #[serde(default)]
@@ -354,9 +396,15 @@ pub enum TraversalOrder {
         depth: Option<usize>,
     },
     /// Halton low-discrepancy sequence.
-    Halton { #[serde(default, skip_serializing_if = "Option::is_none")] count: Option<usize> },
+    Halton {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<usize>,
+    },
     /// Sobol low-discrepancy sequence.
-    Sobol { #[serde(default, skip_serializing_if = "Option::is_none")] count: Option<usize> },
+    Sobol {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<usize>,
+    },
     /// Latin Hypercube samples.
     Lhs {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -429,9 +477,7 @@ impl Comprehension {
 
     pub fn union(subspaces: Vec<Vec<Clause>>) -> Self {
         Self {
-            mode: ComprehensionMode::Union(
-                subspaces.into_iter().map(Subspace::new).collect()
-            ),
+            mode: ComprehensionMode::Union(subspaces.into_iter().map(Subspace::new).collect()),
             filter: None,
             order: None,
         }
@@ -583,9 +629,7 @@ impl Comprehension {
                 }
                 for (i, sub) in subspaces.iter().enumerate() {
                     if sub.is_empty() {
-                        errors.push(format!(
-                            "Union sub-space #{i} has no clauses"
-                        ));
+                        errors.push(format!("Union sub-space #{i} has no clauses"));
                     }
                 }
             }
@@ -593,7 +637,11 @@ impl Comprehension {
         if let Err(e) = check_order_for_mode(&self.mode, &self.order) {
             errors.push(e);
         }
-        if errors.is_empty() { Ok(()) } else { Err(errors) }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
     }
 }
 
@@ -609,8 +657,12 @@ pub(crate) fn check_order_for_mode(
     mode: &ComprehensionMode,
     order: &Option<TraversalOrder>,
 ) -> Result<(), String> {
-    let ComprehensionMode::Union(_) = mode else { return Ok(()); };
-    let Some(order) = order else { return Ok(()); };
+    let ComprehensionMode::Union(_) = mode else {
+        return Ok(());
+    };
+    let Some(order) = order else {
+        return Ok(());
+    };
     let strategy_name = match order {
         TraversalOrder::Lex { .. } => return Ok(()),
         TraversalOrder::Custom { .. } => return Ok(()),
@@ -648,11 +700,14 @@ impl fmt::Display for Comprehension {
                 write!(f, "{}", parts.join(", "))?;
             }
             ComprehensionMode::Union(subspaces) => {
-                let parts: Vec<String> = subspaces.iter().map(|sub| {
-                    let inner: Vec<String> = sub.clauses.iter()
-                        .map(|c| c.to_string()).collect();
-                    inner.join(", ")
-                }).collect();
+                let parts: Vec<String> = subspaces
+                    .iter()
+                    .map(|sub| {
+                        let inner: Vec<String> =
+                            sub.clauses.iter().map(|c| c.to_string()).collect();
+                        inner.join(", ")
+                    })
+                    .collect();
                 write!(f, "{}", parts.join(" | "))?;
             }
         }
@@ -691,7 +746,9 @@ fn format_order(order: &TraversalOrder) -> String {
         TraversalOrder::Sobol { count } => format!("sobol{}", count_suffix(*count)),
         TraversalOrder::Lhs { count, seed } => {
             let mut s = format!("lhs{}", count_suffix(*count));
-            if let Some(k) = seed { s.push_str(&format!(" seed={k}")); }
+            if let Some(k) = seed {
+                s.push_str(&format!(" seed={k}"));
+            }
             s
         }
         TraversalOrder::Custom { function } => format!("custom({function})"),
@@ -733,9 +790,10 @@ mod tests {
 
     #[test]
     fn single_clause_cartesian_is_the_simple_form() {
-        let c = Comprehension::cartesian(vec![
-            Clause::new("profile", "matching_profiles('{dataset}', '{prefix}')"),
-        ]);
+        let c = Comprehension::cartesian(vec![Clause::new(
+            "profile",
+            "matching_profiles('{dataset}', '{prefix}')",
+        )]);
         assert_eq!(c.coordinate_names(), vec!["profile"]);
         assert_eq!(c.clause_count(), 1);
     }
@@ -768,17 +826,13 @@ mod tests {
 
     #[test]
     fn display_parallel_clause_truncate() {
-        let c = Clause::parallel_with_mode(
-            ZipMode::Truncate, ["x", "y"], ["fib(8)", "pow2(4)"]
-        );
+        let c = Clause::parallel_with_mode(ZipMode::Truncate, ["x", "y"], ["fib(8)", "pow2(4)"]);
         assert_eq!(c.to_string(), "(x, y) in zip_truncate(fib(8), pow2(4))");
     }
 
     #[test]
     fn display_parallel_clause_cycle() {
-        let c = Clause::parallel_with_mode(
-            ZipMode::Cycle, ["x", "y"], ["1..4", "10..20..10"]
-        );
+        let c = Clause::parallel_with_mode(ZipMode::Cycle, ["x", "y"], ["1..4", "10..20..10"]);
         assert_eq!(c.to_string(), "(x, y) in zip_cycle(1..4, 10..20..10)");
     }
 
@@ -823,47 +877,60 @@ mod tests {
     fn validate_rejects_empty_cartesian() {
         let c = Comprehension::cartesian(vec![]);
         let errs = c.validate().unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("no clauses")), "got: {errs:?}");
+        assert!(
+            errs.iter().any(|e| e.contains("no clauses")),
+            "got: {errs:?}"
+        );
     }
 
     #[test]
     fn validate_rejects_empty_union() {
         let c = Comprehension::union(vec![]);
         let errs = c.validate().unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("no sub-spaces")), "got: {errs:?}");
+        assert!(
+            errs.iter().any(|e| e.contains("no sub-spaces")),
+            "got: {errs:?}"
+        );
     }
 
     #[test]
     fn validate_rejects_empty_subspace_inside_union() {
         let c = Comprehension::union(vec![
             vec![Clause::new("k", "10")],
-            vec![],  // empty sub-space
+            vec![], // empty sub-space
         ]);
         let errs = c.validate().unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("Union sub-space #1 has no clauses")),
-            "got: {errs:?}");
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("Union sub-space #1 has no clauses")),
+            "got: {errs:?}"
+        );
     }
 
     #[test]
     fn validate_rejects_cartesian_name_collision() {
         let c = Comprehension::cartesian(vec![
             Clause::new("k", "10"),
-            Clause::new("k", "20"),  // same name in Cartesian
+            Clause::new("k", "20"), // same name in Cartesian
         ]);
         let errs = c.validate().unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("repeats variable name 'k'")),
-            "got: {errs:?}");
+        assert!(
+            errs.iter().any(|e| e.contains("repeats variable name 'k'")),
+            "got: {errs:?}"
+        );
     }
 
     #[test]
     fn validate_rejects_cartesian_collision_with_parallel_clause() {
         let c = Comprehension::cartesian(vec![
             Clause::parallel(["x", "y"], ["1..10", "10..100..10"]),
-            Clause::new("y", "100"),  // conflicts with parallel-group y
+            Clause::new("y", "100"), // conflicts with parallel-group y
         ]);
         let errs = c.validate().unwrap_err();
-        assert!(errs.iter().any(|e| e.contains("repeats variable name 'y'")),
-            "got: {errs:?}");
+        assert!(
+            errs.iter().any(|e| e.contains("repeats variable name 'y'")),
+            "got: {errs:?}"
+        );
     }
 
     #[test]
@@ -883,7 +950,9 @@ mod tests {
             vec![Clause::new("k", "10"), Clause::new("limit", "10,20")],
             vec![Clause::new("k", "100"), Clause::new("limit", "100,200")],
         ]);
-        assert_eq!(c.to_string(),
-            "k in 10, limit in 10,20 | k in 100, limit in 100,200");
+        assert_eq!(
+            c.to_string(),
+            "k in 10, limit in 10,20 | k in 100, limit in 100,200"
+        );
     }
 }

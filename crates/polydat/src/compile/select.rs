@@ -8,10 +8,10 @@
 //! The resulting kernel has the selected optimizations baked in with
 //! no runtime strategy branching.
 
-use std::collections::HashMap;
-use crate::compile::closures::{CompiledKernelRaw, CompiledKernelPull, CompiledKernelPushPull};
-use crate::kernel::WireSource;
 use crate::ast::PolydatNode;
+use crate::compile::closures::{CompiledKernelPull, CompiledKernelPushPull, CompiledKernelRaw};
+use crate::kernel::WireSource;
+use std::collections::HashMap;
 
 /// Which provenance optimization the compiler selected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,11 +62,26 @@ pub fn analyze_graph(
     }
 
     let max_cone = output_cone_sizes.iter().map(|(_, s)| *s).max().unwrap_or(0);
-    let avg_cone: f64 = if output_cone_sizes.is_empty() { 0.0 }
-        else { output_cone_sizes.iter().map(|(_, s)| *s as f64).sum::<f64>() / output_cone_sizes.len() as f64 };
+    let avg_cone: f64 = if output_cone_sizes.is_empty() {
+        0.0
+    } else {
+        output_cone_sizes
+            .iter()
+            .map(|(_, s)| *s as f64)
+            .sum::<f64>()
+            / output_cone_sizes.len() as f64
+    };
 
-    let max_cone_ratio = if total_nodes > 0 { max_cone as f64 / total_nodes as f64 } else { 1.0 };
-    let avg_cone_ratio = if total_nodes > 0 { avg_cone / total_nodes as f64 } else { 1.0 };
+    let max_cone_ratio = if total_nodes > 0 {
+        max_cone as f64 / total_nodes as f64
+    } else {
+        1.0
+    };
+    let avg_cone_ratio = if total_nodes > 0 {
+        avg_cone / total_nodes as f64
+    } else {
+        1.0
+    };
 
     // Count distinct inputs
     let mut max_input = 0usize;
@@ -94,14 +109,17 @@ fn compute_cone_size(node_idx: usize, wiring: &[Vec<WireSource>]) -> usize {
     let mut stack = vec![node_idx];
     let mut count = 0;
     while let Some(idx) = stack.pop() {
-        if idx >= visited.len() || visited[idx] { continue; }
+        if idx >= visited.len() || visited[idx] {
+            continue;
+        }
         visited[idx] = true;
         count += 1;
         for source in &wiring[idx] {
             if let WireSource::NodeOutput(upstream, _) = source
-                && !visited[*upstream] {
-                    stack.push(*upstream);
-                }
+                && !visited[*upstream]
+            {
+                stack.push(*upstream);
+            }
         }
     }
     count

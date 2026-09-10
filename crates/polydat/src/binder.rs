@@ -94,10 +94,7 @@ pub enum Binder {
     /// payload bound as Bytes. The slot supplies the field's
     /// entire value with the lvalue type declared by the
     /// protocol.
-    Single {
-        field: String,
-        slot: BinderSlot,
-    },
+    Single { field: String, slot: BinderSlot },
 }
 
 /// One slot in a binder.
@@ -149,10 +146,13 @@ impl Binder {
     /// single).
     pub fn slots(&self) -> Vec<(String, &BinderSlot)> {
         match self {
-            Binder::Positional { slots, .. } => slots.iter().enumerate()
+            Binder::Positional { slots, .. } => slots
+                .iter()
+                .enumerate()
                 .map(|(i, s)| (format!("[{i}]"), s))
                 .collect(),
-            Binder::Named { slots, .. } => slots.iter()
+            Binder::Named { slots, .. } => slots
+                .iter()
                 .map(|(name, s)| (format!(":{name}"), s))
                 .collect(),
             Binder::Single { slot, .. } => vec![(String::new(), slot)],
@@ -217,7 +217,8 @@ pub fn verify_against_kernel(
         // op-template binding outputs). Fall back to input
         // (coordinate / extern wires the program declared as
         // typed input slots).
-        kernel.output_port_type(name)
+        kernel
+            .output_port_type(name)
             .or_else(|| kernel.input_port_type(name))
     });
     if violations.is_empty() {
@@ -284,10 +285,13 @@ fn check_compatibility(
         return Some(format!(
             "binder names wire `{wire}` (lvalue type {lvalue}) but the \
              wire is not declared in the kernel's Polydat context — this \
-             binder names a wire that doesn't exist."));
+             binder names a wire that doesn't exist."
+        ));
     };
 
-    if rv == lvalue { return None; }
+    if rv == lvalue {
+        return None;
+    }
 
     // Caller-licensed fusion: the slot was tagged `allow_fusion`.
     // The rvalue→lvalue strict rule is intentionally skipped for
@@ -304,7 +308,9 @@ fn check_compatibility(
     // rather than implicit in polydat's rule. Strict-mode
     // adapters that DO want polydat to reject `Str + non-Str`
     // simply leave `allow_fusion: false`.
-    if allow_fusion { return None; }
+    if allow_fusion {
+        return None;
+    }
 
     // Strict path. The only way the rvalue is OK is if it
     // structurally matches the lvalue. Bail with a clear
@@ -321,7 +327,8 @@ fn check_compatibility(
          intends to license polydat to fuse types at this slot — \
          spell the bind-point with the `:*` wildcard suffix \
          (e.g. `{{{wire}:*}}` in place of `{{{wire}}}`) so the binder \
-         slot's `allow_fusion` flag is set."))
+         slot's `allow_fusion` flag is set."
+    ))
 }
 
 /// Conservative structural match for the non-text-natural case.
@@ -333,7 +340,7 @@ fn structurally_compatible(rv: PortType, lv: PortType) -> bool {
     match (rv, lv) {
         (PortType::VecF32, PortType::VecF32) => true,
         (PortType::VecI32, PortType::VecI32) => true,
-        (PortType::Bytes,  PortType::Bytes)  => true,
+        (PortType::Bytes, PortType::Bytes) => true,
         // Numeric widening — both sides are scalar numerics
         // (none of these is text-natural, so this branch is
         // about within-numeric compatibility).
@@ -350,9 +357,8 @@ mod tests {
     use std::collections::HashMap;
 
     fn wire_lookup(types: &[(&str, PortType)]) -> impl Fn(&str) -> Option<PortType> {
-        let map: HashMap<String, PortType> = types.iter()
-            .map(|(n, t)| (n.to_string(), *t))
-            .collect();
+        let map: HashMap<String, PortType> =
+            types.iter().map(|(n, t)| (n.to_string(), *t)).collect();
         move |name: &str| map.get(name).copied()
     }
 
@@ -361,15 +367,26 @@ mod tests {
         let binder = Binder::Positional {
             field: "prepared".into(),
             slots: vec![
-                BinderSlot { wire: "id".into(),  lvalue_type: PortType::Str, allow_fusion: false },
-                BinderSlot { wire: "vec".into(), lvalue_type: PortType::VecF32, allow_fusion: false },
+                BinderSlot {
+                    wire: "id".into(),
+                    lvalue_type: PortType::Str,
+                    allow_fusion: false,
+                },
+                BinderSlot {
+                    wire: "vec".into(),
+                    lvalue_type: PortType::VecF32,
+                    allow_fusion: false,
+                },
             ],
         };
-        let v = verify_binders(&[binder], wire_lookup(&[
-            ("id",  PortType::Str),
-            ("vec", PortType::VecF32),
-        ]));
-        assert!(v.is_empty(), "matched-type binder should verify clean: {v:?}");
+        let v = verify_binders(
+            &[binder],
+            wire_lookup(&[("id", PortType::Str), ("vec", PortType::VecF32)]),
+        );
+        assert!(
+            v.is_empty(),
+            "matched-type binder should verify clean: {v:?}"
+        );
     }
 
     /// The load-bearing case: a wire holding VecF32 is bound
@@ -380,18 +397,24 @@ mod tests {
     fn vec_f32_wire_into_non_text_non_vector_lvalue_is_rejected() {
         let binder = Binder::Positional {
             field: "prepared".into(),
-            slots: vec![
-                BinderSlot { wire: "vec".into(), lvalue_type: PortType::Bytes, allow_fusion: false },
-            ],
+            slots: vec![BinderSlot {
+                wire: "vec".into(),
+                lvalue_type: PortType::Bytes,
+                allow_fusion: false,
+            }],
         };
-        let v = verify_binders(&[binder], wire_lookup(&[
-            ("vec", PortType::VecF32),
-        ]));
+        let v = verify_binders(&[binder], wire_lookup(&[("vec", PortType::VecF32)]));
         assert_eq!(v.len(), 1);
-        assert!(v[0].message.contains("vec_f32"),
-            "diagnostic should name rvalue: {}", v[0].message);
-        assert!(v[0].message.contains("bytes") || v[0].message.contains("Bytes"),
-            "diagnostic should name lvalue: {}", v[0].message);
+        assert!(
+            v[0].message.contains("vec_f32"),
+            "diagnostic should name rvalue: {}",
+            v[0].message
+        );
+        assert!(
+            v[0].message.contains("bytes") || v[0].message.contains("Bytes"),
+            "diagnostic should name lvalue: {}",
+            v[0].message
+        );
         assert_eq!(v[0].rvalue_type, Some(PortType::VecF32));
         assert_eq!(v[0].lvalue_type, PortType::Bytes);
     }
@@ -407,15 +430,18 @@ mod tests {
     fn strict_rejects_non_str_rvalue_into_str_lvalue() {
         let strict_binder = Binder::Positional {
             field: "prepared".into(),
-            slots: vec![
-                BinderSlot { wire: "vec".into(), lvalue_type: PortType::Str, allow_fusion: false },
-            ],
+            slots: vec![BinderSlot {
+                wire: "vec".into(),
+                lvalue_type: PortType::Str,
+                allow_fusion: false,
+            }],
         };
-        let v = verify_binders(&[strict_binder], wire_lookup(&[
-            ("vec", PortType::VecF32),
-        ]));
-        assert_eq!(v.len(), 1,
-            "strict (allow_fusion=false) should reject VecF32→Str: {v:?}");
+        let v = verify_binders(&[strict_binder], wire_lookup(&[("vec", PortType::VecF32)]));
+        assert_eq!(
+            v.len(),
+            1,
+            "strict (allow_fusion=false) should reject VecF32→Str: {v:?}"
+        );
     }
 
     /// Caller-side opt-in: the same rvalue/lvalue pair is
@@ -428,16 +454,26 @@ mod tests {
         let fusing_binder = Binder::Positional {
             field: "prepared".into(),
             slots: vec![
-                BinderSlot { wire: "vec".into(), lvalue_type: PortType::Str, allow_fusion: true },
-                BinderSlot { wire: "num".into(), lvalue_type: PortType::Json, allow_fusion: true },
+                BinderSlot {
+                    wire: "vec".into(),
+                    lvalue_type: PortType::Str,
+                    allow_fusion: true,
+                },
+                BinderSlot {
+                    wire: "num".into(),
+                    lvalue_type: PortType::Json,
+                    allow_fusion: true,
+                },
             ],
         };
-        let v = verify_binders(&[fusing_binder], wire_lookup(&[
-            ("vec", PortType::VecF32),
-            ("num", PortType::F64),
-        ]));
-        assert!(v.is_empty(),
-            "allow_fusion=true should accept any rvalue into any lvalue: {v:?}");
+        let v = verify_binders(
+            &[fusing_binder],
+            wire_lookup(&[("vec", PortType::VecF32), ("num", PortType::F64)]),
+        );
+        assert!(
+            v.is_empty(),
+            "allow_fusion=true should accept any rvalue into any lvalue: {v:?}"
+        );
     }
 
     /// Unknown wire → loud error, no silent skipping. A binder
@@ -448,30 +484,45 @@ mod tests {
     fn unknown_wire_in_binder_is_loud_error() {
         let binder = Binder::Positional {
             field: "prepared".into(),
-            slots: vec![
-                BinderSlot { wire: "nonexistent".into(), lvalue_type: PortType::Str, allow_fusion: false },
-            ],
+            slots: vec![BinderSlot {
+                wire: "nonexistent".into(),
+                lvalue_type: PortType::Str,
+                allow_fusion: false,
+            }],
         };
         let v = verify_binders(&[binder], wire_lookup(&[]));
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].rvalue_type, None);
-        assert!(v[0].message.contains("not declared"),
-            "diagnostic should call out the unknown wire: {}", v[0].message);
+        assert!(
+            v[0].message.contains("not declared"),
+            "diagnostic should call out the unknown wire: {}",
+            v[0].message
+        );
     }
 
     /// Named binder: same rules, keyed-by-name diagnostics.
     #[test]
     fn named_binder_violations_carry_name_label() {
         let mut slots = BTreeMap::new();
-        slots.insert("vec_param".into(),
-            BinderSlot { wire: "v".into(), lvalue_type: PortType::I64, allow_fusion: false });
-        let binder = Binder::Named { field: "prepared".into(), slots };
-        let v = verify_binders(&[binder], wire_lookup(&[
-            ("v", PortType::VecF32),
-        ]));
+        slots.insert(
+            "vec_param".into(),
+            BinderSlot {
+                wire: "v".into(),
+                lvalue_type: PortType::I64,
+                allow_fusion: false,
+            },
+        );
+        let binder = Binder::Named {
+            field: "prepared".into(),
+            slots,
+        };
+        let v = verify_binders(&[binder], wire_lookup(&[("v", PortType::VecF32)]));
         assert_eq!(v.len(), 1);
-        assert_eq!(v[0].slot_label, ":vec_param",
-            "named-slot diagnostic should carry the name: {:?}", v[0]);
+        assert_eq!(
+            v[0].slot_label, ":vec_param",
+            "named-slot diagnostic should carry the name: {:?}",
+            v[0]
+        );
     }
 
     /// Single-value binder: one slot, slot label empty.
@@ -479,14 +530,19 @@ mod tests {
     fn single_binder_violation_is_locatable() {
         let binder = Binder::Single {
             field: "body".into(),
-            slot: BinderSlot { wire: "payload".into(), lvalue_type: PortType::Bytes, allow_fusion: false },
+            slot: BinderSlot {
+                wire: "payload".into(),
+                lvalue_type: PortType::Bytes,
+                allow_fusion: false,
+            },
         };
-        let v = verify_binders(&[binder], wire_lookup(&[
-            ("payload", PortType::VecF32),
-        ]));
+        let v = verify_binders(&[binder], wire_lookup(&[("payload", PortType::VecF32)]));
         assert_eq!(v.len(), 1);
-        assert_eq!(v[0].slot_label, "",
-            "single-slot label is empty: {:?}", v[0]);
+        assert_eq!(
+            v[0].slot_label, "",
+            "single-slot label is empty: {:?}",
+            v[0]
+        );
         assert_eq!(v[0].field, "body");
     }
 
@@ -497,15 +553,26 @@ mod tests {
         let binder = Binder::Positional {
             field: "prepared".into(),
             slots: vec![
-                BinderSlot { wire: "a".into(), lvalue_type: PortType::U64, allow_fusion: false },
-                BinderSlot { wire: "b".into(), lvalue_type: PortType::F64, allow_fusion: false },
+                BinderSlot {
+                    wire: "a".into(),
+                    lvalue_type: PortType::U64,
+                    allow_fusion: false,
+                },
+                BinderSlot {
+                    wire: "b".into(),
+                    lvalue_type: PortType::F64,
+                    allow_fusion: false,
+                },
             ],
         };
-        let v = verify_binders(&[binder], wire_lookup(&[
-            ("a", PortType::U32),
-            ("b", PortType::F32),
-        ]));
-        assert!(v.is_empty(), "widening U32→U64 / F32→F64 should verify clean: {v:?}");
+        let v = verify_binders(
+            &[binder],
+            wire_lookup(&[("a", PortType::U32), ("b", PortType::F32)]),
+        );
+        assert!(
+            v.is_empty(),
+            "widening U32→U64 / F32→F64 should verify clean: {v:?}"
+        );
     }
 
     /// Per-slot `allow_fusion: true` skips the strict
@@ -518,15 +585,19 @@ mod tests {
     fn allow_fusion_skips_strict_check_for_wired_slot() {
         let strict_binder = Binder::Positional {
             field: "prepared".into(),
-            slots: vec![
-                BinderSlot { wire: "x".into(), lvalue_type: PortType::I32, allow_fusion: false },
-            ],
+            slots: vec![BinderSlot {
+                wire: "x".into(),
+                lvalue_type: PortType::I32,
+                allow_fusion: false,
+            }],
         };
         let fusing_binder = Binder::Positional {
             field: "prepared".into(),
-            slots: vec![
-                BinderSlot { wire: "x".into(), lvalue_type: PortType::I32, allow_fusion: true },
-            ],
+            slots: vec![BinderSlot {
+                wire: "x".into(),
+                lvalue_type: PortType::I32,
+                allow_fusion: true,
+            }],
         };
         let lookup = wire_lookup(&[("x", PortType::Str)]);
         // Strict: rejected (Str into I32, not text-natural).
@@ -534,8 +605,10 @@ mod tests {
         assert_eq!(strict.len(), 1, "strict slot should reject: {strict:?}");
         // Fusing: accepted; same rvalue/lvalue pair.
         let fusing = verify_binders(&[fusing_binder], &lookup);
-        assert!(fusing.is_empty(),
-            "allow_fusion=true should skip strict rule: {fusing:?}");
+        assert!(
+            fusing.is_empty(),
+            "allow_fusion=true should skip strict rule: {fusing:?}"
+        );
     }
 
     /// `allow_fusion: true` does NOT silence the unknown-wire
@@ -546,14 +619,19 @@ mod tests {
     fn allow_fusion_still_reports_unknown_wires() {
         let binder = Binder::Positional {
             field: "prepared".into(),
-            slots: vec![
-                BinderSlot { wire: "ghost".into(), lvalue_type: PortType::I32, allow_fusion: true },
-            ],
+            slots: vec![BinderSlot {
+                wire: "ghost".into(),
+                lvalue_type: PortType::I32,
+                allow_fusion: true,
+            }],
         };
         let v = verify_binders(&[binder], wire_lookup(&[]));
         assert_eq!(v.len(), 1, "unknown wire must fire even with fusion: {v:?}");
-        assert!(v[0].message.contains("not declared"),
-            "expected unknown-wire diagnostic: {}", v[0].message);
+        assert!(
+            v[0].message.contains("not declared"),
+            "expected unknown-wire diagnostic: {}",
+            v[0].message
+        );
     }
 
     /// Multiple violations across binders are all reported.
@@ -561,20 +639,27 @@ mod tests {
     fn all_violations_across_binders_are_reported() {
         let b1 = Binder::Positional {
             field: "f1".into(),
-            slots: vec![
-                BinderSlot { wire: "a".into(), lvalue_type: PortType::Bytes, allow_fusion: false },
-            ],
+            slots: vec![BinderSlot {
+                wire: "a".into(),
+                lvalue_type: PortType::Bytes,
+                allow_fusion: false,
+            }],
         };
         let b2 = Binder::Positional {
             field: "f2".into(),
-            slots: vec![
-                BinderSlot { wire: "b".into(), lvalue_type: PortType::VecF32, allow_fusion: false },
-            ],
+            slots: vec![BinderSlot {
+                wire: "b".into(),
+                lvalue_type: PortType::VecF32,
+                allow_fusion: false,
+            }],
         };
-        let v = verify_binders(&[b1, b2], wire_lookup(&[
-            ("a", PortType::VecF32),  // VecF32 → Bytes : reject
-            ("b", PortType::Str),     // Str → VecF32 : reject (str-detour-into-non-text)
-        ]));
+        let v = verify_binders(
+            &[b1, b2],
+            wire_lookup(&[
+                ("a", PortType::VecF32), // VecF32 → Bytes : reject
+                ("b", PortType::Str),    // Str → VecF32 : reject (str-detour-into-non-text)
+            ]),
+        );
         assert_eq!(v.len(), 2, "both violations expected: {v:?}");
     }
 }

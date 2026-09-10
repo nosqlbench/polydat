@@ -82,7 +82,11 @@ fn count_of(partition: Ext<Partition>) -> u64 {
 #[crate::polydat_node(category = Arithmetic)]
 fn mod_in(n: u64, partition: Ext<Partition>) -> u64 {
     let card = partition.cardinality();
-    if card == 0 { partition.start_ord } else { partition.start_ord + (n % card) }
+    if card == 0 {
+        partition.start_ord
+    } else {
+        partition.start_ord + (n % card)
+    }
 }
 
 /// `at(p, i)` — bounds-checked `p.start_ord + i`. Use when
@@ -272,7 +276,14 @@ mod tests {
         let node = ClampIn::new();
         let mut out = [Value::None];
         let p = Value::from_partition(fixture(0, 100, 200));
-        for (n, expected) in [(50, 100), (100, 100), (150, 150), (199, 199), (200, 199), (1000, 199)] {
+        for (n, expected) in [
+            (50, 100),
+            (100, 100),
+            (150, 150),
+            (199, 199),
+            (200, 199),
+            (1000, 199),
+        ] {
             node.eval(&[Value::U64(n), p.clone()], &mut out);
             assert_eq!(out[0].as_u64(), expected, "clamp_in({n}) over [100, 200)");
         }
@@ -287,7 +298,10 @@ mod tests {
         for seed in 0..32u64 {
             node.eval(&[p.clone(), Value::U64(seed)], &mut out);
             let v = out[0].as_u64();
-            assert!((100..200).contains(&v), "random_in(seed={seed}) = {v} outside [100, 200)");
+            assert!(
+                (100..200).contains(&v),
+                "random_in(seed={seed}) = {v} outside [100, 200)"
+            );
             first.push(v);
         }
         // Deterministic: same seeds, same ordinals.
@@ -303,14 +317,20 @@ mod tests {
     fn random_in_zero_cardinality_returns_start() {
         let node = RandomIn::new();
         let mut out = [Value::None];
-        node.eval(&[Value::from_partition(fixture(0, 100, 100)), Value::U64(7)], &mut out);
+        node.eval(
+            &[Value::from_partition(fixture(0, 100, 100)), Value::U64(7)],
+            &mut out,
+        );
         assert_eq!(out[0].as_u64(), 100);
     }
 
-
     #[test]
     fn partition_at_and_count_index_a_list_by_position() {
-        let list = Value::Ext(Box::new(PartitionList::new(vec![fixture(0, 0, 10), fixture(1, 10, 25), fixture(2, 25, 100)])));
+        let list = Value::Ext(Box::new(PartitionList::new(vec![
+            fixture(0, 0, 10),
+            fixture(1, 10, 25),
+            fixture(2, 25, 100),
+        ])));
         let mut out = [Value::None];
         PartitionCount::new().eval(std::slice::from_ref(&list), &mut out);
         assert_eq!(out[0], Value::U64(3));
@@ -364,7 +384,10 @@ mod tests {
     fn subdivide_finer_than_cardinality_panics() {
         let node = Subdivide::new();
         let mut out = [Value::None];
-        node.eval(&[Value::from_partition(fixture(0, 0, 5)), Value::U64(10)], &mut out);
+        node.eval(
+            &[Value::from_partition(fixture(0, 0, 5)), Value::U64(10)],
+            &mut out,
+        );
     }
 
     #[test]
@@ -372,7 +395,10 @@ mod tests {
     fn subdivide_zero_count_panics() {
         let node = Subdivide::new();
         let mut out = [Value::None];
-        node.eval(&[Value::from_partition(fixture(0, 0, 100)), Value::U64(0)], &mut out);
+        node.eval(
+            &[Value::from_partition(fixture(0, 0, 100)), Value::U64(0)],
+            &mut out,
+        );
     }
 
     #[test]

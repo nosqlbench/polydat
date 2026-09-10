@@ -64,16 +64,16 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::ast::Value;
+use crate::dsl::compile::eval_const_expr;
 use crate::iteration::comprehension::ast::Comprehension;
 use crate::iteration::comprehension::eval_source::{EvalContext, SourceEval};
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::source::Source;
 use crate::iteration::comprehension::strategies::{EvaluatedInput, Tuple, TupleValue};
 use crate::iteration::comprehension::strategy::StrategyName;
-use crate::dsl::compile::eval_const_expr;
 use crate::kernel::PolydatKernel;
 use crate::kernel::interp::interpolate_via_kernel;
-use crate::ast::Value;
 
 /// Runtime tuple type — polydat-Value-based to preserve Ext
 /// typing (Partition / Json / etc.) through the iteration
@@ -110,11 +110,18 @@ pub struct EmptyClause<'a> {
 pub enum RuntimeError {
     /// Source evaluation failed (interpolation error,
     /// eval_const_expr error, unsupported source shape, etc.).
-    SourceEval { var: String, source: String, message: String },
+    SourceEval {
+        var: String,
+        source: String,
+        message: String,
+    },
     /// Filter predicate evaluation failed.
     FilterEval { predicate: String, message: String },
     /// Strategy application failed.
-    OrderEval { strategy: StrategyName, message: String },
+    OrderEval {
+        strategy: StrategyName,
+        message: String,
+    },
     /// V4 (spec §5) violation — strategy rejects the input's
     /// addressing shape at invocation time (spec §10.7.8).
     StrategyRejectsInput {
@@ -131,7 +138,11 @@ pub enum RuntimeError {
 impl std::fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RuntimeError::SourceEval { var, source, message } => {
+            RuntimeError::SourceEval {
+                var,
+                source,
+                message,
+            } => {
                 write!(f, "for_each clause '{var} in {source}': {message}")
             }
             RuntimeError::FilterEval { predicate, message } => {
@@ -292,7 +303,11 @@ fn literal(text: &str) -> Option<Scalar> {
     }
     // A bare word compares as text, matching the interpolated form
     // `load == load` a kernel evaluation would see for string elements.
-    if !text.is_empty() && text.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+    if !text.is_empty()
+        && text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
         return Some(Scalar::Str(text.to_string()));
     }
     None
@@ -300,7 +315,9 @@ fn literal(text: &str) -> Option<Scalar> {
 
 fn scalar_eq(a: &Scalar, b: &Scalar) -> bool {
     match (a, b) {
-        (Scalar::Int(x), Scalar::Float(y)) | (Scalar::Float(y), Scalar::Int(x)) => (*x as f64) == *y,
+        (Scalar::Int(x), Scalar::Float(y)) | (Scalar::Float(y), Scalar::Int(x)) => {
+            (*x as f64) == *y
+        }
         _ => a == b,
     }
 }
@@ -318,7 +335,8 @@ fn scalar_cmp(a: &Scalar, b: &Scalar) -> Option<std::cmp::Ordering> {
 
 fn curly(text: &str) -> Option<String> {
     let inner = text.strip_prefix('{')?.strip_suffix('}')?;
-    (!inner.is_empty() && inner.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')).then(|| inner.to_string())
+    (!inner.is_empty() && inner.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        .then(|| inner.to_string())
 }
 
 /// Split at a top-level binary token, respecting brackets and quotes.
@@ -333,7 +351,9 @@ fn split_top(s: &str, sep: &str) -> Option<Vec<String>> {
     while i < bytes.len() {
         let c = bytes[i];
         if let Some(q) = quote {
-            if c == q { quote = None; }
+            if c == q {
+                quote = None;
+            }
         } else {
             match c {
                 '"' | '\'' => quote = Some(c),
@@ -363,11 +383,16 @@ fn split_op<'a>(s: &'a str, op: &str) -> Option<(&'a str, &'a str)> {
     let chars: Vec<(usize, char)> = s.char_indices().collect();
     for (k, &(idx, c)) in chars.iter().enumerate() {
         if let Some(q) = quote {
-            if c == q { quote = None; }
+            if c == q {
+                quote = None;
+            }
             continue;
         }
         match c {
-            '"' | '\'' => { quote = Some(c); continue; }
+            '"' | '\'' => {
+                quote = Some(c);
+                continue;
+            }
             '(' | '[' | '{' => depth += 1,
             ')' | ']' | '}' => depth -= 1,
             _ => {}
@@ -425,7 +450,11 @@ where
                 let inner = self.evaluate_node(child, prefix)?;
                 self.apply_filter(inner, predicate)
             }
-            Comprehension::Order { child, strategy, truncation } => {
+            Comprehension::Order {
+                child,
+                strategy,
+                truncation,
+            } => {
                 let inner = self.evaluate_node(child, prefix)?;
                 // A continuous source has no tuples of its own; an order
                 // strategy with a truncation samples that many points
@@ -453,35 +482,45 @@ where
             canonical: &self.canonical,
             prefix,
         };
-        let evaluated =
-            source
-                .evaluate(Some(&ctx))
-                .map_err(|e| match e {
-                    crate::iteration::comprehension::eval_source::EvalError::EvalFailed {
-                        var,
-                        source,
-                        message,
-                    } => RuntimeError::SourceEval { var, source, message },
-                    crate::iteration::comprehension::eval_source::EvalError::NeedsContext => {
-                        RuntimeError::UnsupportedShape(format!(
-                            "clause '{name}': source requires kernel context but evaluator \
+        let evaluated = source.evaluate(Some(&ctx)).map_err(|e| match e {
+            crate::iteration::comprehension::eval_source::EvalError::EvalFailed {
+                var,
+                source,
+                message,
+            } => RuntimeError::SourceEval {
+                var,
+                source,
+                message,
+            },
+            crate::iteration::comprehension::eval_source::EvalError::NeedsContext => {
+                RuntimeError::UnsupportedShape(format!(
+                    "clause '{name}': source requires kernel context but evaluator \
                              provided none — internal bug in runtime walker"
-                        ))
-                    }
-                })?;
+                ))
+            }
+        })?;
 
         if evaluated.values.is_empty() {
             let spec_text = source_display_text(source);
-            (self.on_empty)(EmptyClause { var: name, spec_expr: spec_text.as_deref() })
-                .map_err(RuntimeError::EmptyPolicy)?;
-            return Ok(EvaluatedNode { tuples: Vec::new(), index_fn: Some(evaluated.index_fn) });
+            (self.on_empty)(EmptyClause {
+                var: name,
+                spec_expr: spec_text.as_deref(),
+            })
+            .map_err(RuntimeError::EmptyPolicy)?;
+            return Ok(EvaluatedNode {
+                tuples: Vec::new(),
+                index_fn: Some(evaluated.index_fn),
+            });
         }
         let tuples: Vec<RuntimeTuple> = evaluated
             .values
             .into_iter()
             .map(|v| vec![(name.to_string(), v)])
             .collect();
-        Ok(EvaluatedNode { tuples, index_fn: Some(evaluated.index_fn) })
+        Ok(EvaluatedNode {
+            tuples,
+            index_fn: Some(evaluated.index_fn),
+        })
     }
 
     fn evaluate_cartesian(
@@ -492,7 +531,9 @@ where
         if children.is_empty() {
             return Ok(EvaluatedNode {
                 tuples: vec![Vec::new()],
-                index_fn: Some(IndexFn::Lattice { axis_sizes: vec![1] }),
+                index_fn: Some(IndexFn::Lattice {
+                    axis_sizes: vec![1],
+                }),
             });
         }
         let mut child_index_fns: Vec<Option<IndexFn>> = Vec::with_capacity(children.len());
@@ -514,7 +555,10 @@ where
         } else {
             combine_cartesian_index_fn(&child_index_fns)
         };
-        Ok(EvaluatedNode { tuples: result_tuples, index_fn: combined })
+        Ok(EvaluatedNode {
+            tuples: result_tuples,
+            index_fn: combined,
+        })
     }
 
     fn evaluate_cartesian_rec(
@@ -615,9 +659,9 @@ where
             tuples.push(bindings);
         }
         let index_fn = match mode {
-            ZipMode::Strict | ZipMode::Truncate => {
-                Some(IndexFn::Lockstep { length: iter_count as u64 })
-            }
+            ZipMode::Strict | ZipMode::Truncate => Some(IndexFn::Lockstep {
+                length: iter_count as u64,
+            }),
             ZipMode::Cycle => Some(IndexFn::Modular {
                 axis_sizes: lengths.iter().map(|n| *n as u64).collect(),
             }),
@@ -671,7 +715,10 @@ where
                 .parent
                 .materialize_subscope(self.canonical.program().clone(), &tuple);
             let interpolated = interpolate_via_kernel(predicate, &kernel).map_err(|e| {
-                RuntimeError::FilterEval { predicate: predicate.to_string(), message: e.to_string() }
+                RuntimeError::FilterEval {
+                    predicate: predicate.to_string(),
+                    message: e.to_string(),
+                }
             })?;
             let result = eval_const_expr(&interpolated).map_err(|e| RuntimeError::FilterEval {
                 predicate: predicate.to_string(),
@@ -685,7 +732,7 @@ where
                     return Err(RuntimeError::FilterEval {
                         predicate: predicate.to_string(),
                         message: format!("expected bool/u64/f64, got {other:?}"),
-                    })
+                    });
                 }
             };
             if keep {
@@ -693,7 +740,10 @@ where
             }
         }
         // Filter destroys the bijection per spec §10.7.2.
-        Ok(EvaluatedNode { tuples: out, index_fn: None })
+        Ok(EvaluatedNode {
+            tuples: out,
+            index_fn: None,
+        })
     }
 
     /// Sample `truncation` points from continuous intervals with a
@@ -725,12 +775,12 @@ where
             StrategyName::Sobol => sobol_multi_indices(&index_fn, Some(n)),
             StrategyName::Lhs => lhs_multi_indices(&index_fn, Some(n)),
             StrategyName::Shuffle => shuffle_multi_indices(&index_fn, Some(n)),
-            other => {
-                return Err(RuntimeError::OrderEval {
-                    strategy: other,
-                    message: "a continuous source needs a sampling strategy: halton, sobol, lhs, or shuffle".into(),
-                })
-            }
+            other => return Err(RuntimeError::OrderEval {
+                strategy: other,
+                message:
+                    "a continuous source needs a sampling strategy: halton, sobol, lhs, or shuffle"
+                        .into(),
+            }),
         };
         let scale = (1u64 << 53) as f64;
         let tuples = points
@@ -742,13 +792,19 @@ where
                         let iv = &intervals[axis.min(intervals.len().saturating_sub(1))];
                         let frac = (*u as f64) / scale;
                         let x = iv.lo + frac * (iv.hi - iv.lo);
-                        let name = names.get(axis).cloned().unwrap_or_else(|| format!("axis{axis}"));
+                        let name = names
+                            .get(axis)
+                            .cloned()
+                            .unwrap_or_else(|| format!("axis{axis}"));
                         (name, Value::F64(x))
                     })
                     .collect::<RuntimeTuple>()
             })
             .collect();
-        Ok(EvaluatedNode { tuples, index_fn: None })
+        Ok(EvaluatedNode {
+            tuples,
+            index_fn: None,
+        })
     }
 
     fn apply_order(
@@ -758,9 +814,9 @@ where
         truncation: Option<u64>,
     ) -> Result<EvaluatedNode, RuntimeError> {
         use crate::iteration::comprehension::strategies::{
-            antidiagonal::Antidiagonal, diagonal::Diagonal, extrema::Extrema, halton::Halton,
-            lex::Lex, lhs::Lhs, reverse_lex::ReverseLex, shells::Shells, shuffle::Shuffle,
-            sobol::Sobol, Strategy,
+            Strategy, antidiagonal::Antidiagonal, diagonal::Diagonal, extrema::Extrema,
+            halton::Halton, lex::Lex, lhs::Lhs, reverse_lex::ReverseLex, shells::Shells,
+            shuffle::Shuffle, sobol::Sobol,
         };
         use crate::iteration::comprehension::surfaces::polydat_value_to_tuple_value;
 
@@ -814,10 +870,9 @@ where
         // accepts None and reaches here; every other strategy
         // requires Some(_) and reached here only because the
         // walker provided one.
-        let index_fn = input
-            .index_fn
-            .clone()
-            .unwrap_or(IndexFn::Lattice { axis_sizes: vec![algebra_tuples.len() as u64] });
+        let index_fn = input.index_fn.clone().unwrap_or(IndexFn::Lattice {
+            axis_sizes: vec![algebra_tuples.len() as u64],
+        });
         let cardinality = algebra_tuples.len() as u64;
         let evaluated_input = EvaluatedInput {
             tuples: algebra_tuples.clone(),
@@ -850,17 +905,28 @@ where
         // Order may produce a different index_fn (e.g., Lex
         // preserves; non-Lex destroys), but downstream
         // consumers of evaluate_for_iteration only read tuples.
-        Ok(EvaluatedNode { tuples: out, index_fn: None })
+        Ok(EvaluatedNode {
+            tuples: out,
+            index_fn: None,
+        })
     }
 }
 
 /// The intervals of a comprehension whose every clause is continuous,
 /// in coordinate order; `None` when any clause is discrete or the shape
 /// is not a plain product of clauses.
-pub(crate) fn continuous_axes(c: &Comprehension) -> Option<Vec<crate::iteration::comprehension::cardinality::Interval>> {
+pub(crate) fn continuous_axes(
+    c: &Comprehension,
+) -> Option<Vec<crate::iteration::comprehension::cardinality::Interval>> {
     match c {
-        Comprehension::Clause { source: Source::ContinuousInterval { interval, .. }, .. } => Some(vec![interval.clone()]),
-        Comprehension::Clause { source: Source::Distribution { support, .. }, .. } => Some(vec![support.clone()]),
+        Comprehension::Clause {
+            source: Source::ContinuousInterval { interval, .. },
+            ..
+        } => Some(vec![interval.clone()]),
+        Comprehension::Clause {
+            source: Source::Distribution { support, .. },
+            ..
+        } => Some(vec![support.clone()]),
         Comprehension::Clause { .. } => None,
         Comprehension::Cartesian { children } => {
             let mut out = Vec::new();
@@ -870,7 +936,9 @@ pub(crate) fn continuous_axes(c: &Comprehension) -> Option<Vec<crate::iteration:
             Some(out)
         }
         Comprehension::Filter { child, .. } => continuous_axes(child),
-        Comprehension::Zip { .. } | Comprehension::Union { .. } | Comprehension::Order { .. } => None,
+        Comprehension::Zip { .. } | Comprehension::Union { .. } | Comprehension::Order { .. } => {
+            None
+        }
     }
 }
 
@@ -937,13 +1005,17 @@ mod tests {
     fn int_range_yields_values() {
         let comp = Comprehension::Clause {
             name: "k".into(),
-            source: Source::IntRange { lo: 1, hi: 5, step: 1 },
+            source: Source::IntRange {
+                lo: 1,
+                hi: 5,
+                step: 1,
+            },
         };
         let parent = empty_kernel();
         let canonical = empty_kernel();
         let params = HashMap::new();
-        let tuples = evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(()))
-            .unwrap();
+        let tuples =
+            evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(())).unwrap();
         assert_eq!(tuples.len(), 4);
         assert_eq!(tuples[0][0].1, Value::U64(1));
         assert_eq!(tuples[3][0].1, Value::U64(4));
@@ -960,8 +1032,8 @@ mod tests {
         let parent = empty_kernel();
         let canonical = empty_kernel();
         let params = HashMap::new();
-        let tuples = evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(()))
-            .unwrap();
+        let tuples =
+            evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(())).unwrap();
         assert_eq!(tuples.len(), 2);
     }
 
@@ -970,18 +1042,26 @@ mod tests {
         let comp = Comprehension::cartesian(vec![
             Comprehension::Clause {
                 name: "x".into(),
-                source: Source::IntRange { lo: 1, hi: 3, step: 1 },
+                source: Source::IntRange {
+                    lo: 1,
+                    hi: 3,
+                    step: 1,
+                },
             },
             Comprehension::Clause {
                 name: "y".into(),
-                source: Source::IntRange { lo: 10, hi: 30, step: 10 },
+                source: Source::IntRange {
+                    lo: 10,
+                    hi: 30,
+                    step: 10,
+                },
             },
         ]);
         let parent = empty_kernel();
         let canonical = empty_kernel();
         let params = HashMap::new();
-        let tuples = evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(()))
-            .unwrap();
+        let tuples =
+            evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(())).unwrap();
         // 2 × 2 = 4
         assert_eq!(tuples.len(), 4);
     }
@@ -991,7 +1071,9 @@ mod tests {
         let comp = Comprehension::union(vec![
             Comprehension::Clause {
                 name: "k".into(),
-                source: Source::Literal { values: vec![LiteralValue::Int(1)] },
+                source: Source::Literal {
+                    values: vec![LiteralValue::Int(1)],
+                },
             },
             Comprehension::Clause {
                 name: "k".into(),
@@ -1003,8 +1085,8 @@ mod tests {
         let parent = empty_kernel();
         let canonical = empty_kernel();
         let params = HashMap::new();
-        let tuples = evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(()))
-            .unwrap();
+        let tuples =
+            evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(())).unwrap();
         assert_eq!(tuples.len(), 3);
     }
 
@@ -1013,15 +1095,19 @@ mod tests {
         let comp = Comprehension::filter(
             Comprehension::Clause {
                 name: "k".into(),
-                source: Source::IntRange { lo: 1, hi: 6, step: 1 },
+                source: Source::IntRange {
+                    lo: 1,
+                    hi: 6,
+                    step: 1,
+                },
             },
             "{k} > 3",
         );
         let parent = empty_kernel();
         let canonical = canonical_with_k();
         let params = HashMap::new();
-        let tuples = evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(()))
-            .unwrap();
+        let tuples =
+            evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(())).unwrap();
         // 1..6 = [1,2,3,4,5]; filter > 3 keeps [4, 5]
         assert_eq!(tuples.len(), 2);
     }
@@ -1031,7 +1117,11 @@ mod tests {
         let comp = Comprehension::order(
             Comprehension::Clause {
                 name: "k".into(),
-                source: Source::IntRange { lo: 1, hi: 100, step: 1 },
+                source: Source::IntRange {
+                    lo: 1,
+                    hi: 100,
+                    step: 1,
+                },
             },
             StrategyName::Lex,
             Some(5),
@@ -1039,8 +1129,8 @@ mod tests {
         let parent = empty_kernel();
         let canonical = empty_kernel();
         let params = HashMap::new();
-        let tuples = evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(()))
-            .unwrap();
+        let tuples =
+            evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(())).unwrap();
         assert_eq!(tuples.len(), 5);
     }
 
@@ -1083,8 +1173,8 @@ mod tests {
         let parent = empty_kernel();
         let canonical = empty_kernel();
         let params = HashMap::new();
-        let tuples = evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(()))
-            .unwrap();
+        let tuples =
+            evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(())).unwrap();
         // 3x3 lattice → 4 corners (interior count 0) via the indexed form.
         assert_eq!(tuples.len(), 4);
         // Each corner pairs an extreme k with an extreme limit.

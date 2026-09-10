@@ -119,5 +119,8 @@ fn polydat_hashing_provenance() {
     assert!(b < 1000);
     assert!(c < 1000);
     // At least one pair should differ
-    assert!(a != b || b != c, "chained hashes should produce different values");
+    assert!(
+        a != b || b != c,
+        "chained hashes should produce different values"
+    );
 }

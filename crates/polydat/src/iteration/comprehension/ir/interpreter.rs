@@ -61,9 +61,18 @@ pub fn interpret(program: &Program) -> BoxedStream {
             }
             Op::OrderStreaming { kind, truncation } => {
                 let inner = stack.pop().expect("OrderStreaming on empty stack");
-                stack.push(Box::new(OrderStreamingStream::new(inner, *kind, *truncation)));
+                stack.push(Box::new(OrderStreamingStream::new(
+                    inner,
+                    *kind,
+                    *truncation,
+                )));
             }
-            Op::OrderMaterialize { strategy, truncation, indexed, input_index_fn } => {
+            Op::OrderMaterialize {
+                strategy,
+                truncation,
+                indexed,
+                input_index_fn,
+            } => {
                 let inner = stack.pop().expect("OrderMaterialize on empty stack");
                 stack.push(Box::new(OrderMaterializeStream::new(
                     inner,
@@ -83,7 +92,11 @@ pub fn interpret(program: &Program) -> BoxedStream {
 }
 
 fn pop_n(stack: &mut Vec<BoxedStream>, n: usize) -> Vec<BoxedStream> {
-    assert!(stack.len() >= n, "stack underflow: needed {n}, have {}", stack.len());
+    assert!(
+        stack.len() >= n,
+        "stack underflow: needed {n}, have {}",
+        stack.len()
+    );
     let split_at = stack.len() - n;
     stack.split_off(split_at)
 }
@@ -101,8 +114,15 @@ struct ClauseStream {
 }
 
 enum ClauseState {
-    LiteralList { values: Vec<LiteralValue>, pos: usize },
-    IntRange { current: i64, hi: i64, step: i64 },
+    LiteralList {
+        values: Vec<LiteralValue>,
+        pos: usize,
+    },
+    IntRange {
+        current: i64,
+        hi: i64,
+        step: i64,
+    },
     Exhausted,
 }
 
@@ -386,7 +406,10 @@ struct UnionStream {
 
 impl UnionStream {
     fn new(children: Vec<BoxedStream>) -> Self {
-        Self { children, active_idx: 0 }
+        Self {
+            children,
+            active_idx: 0,
+        }
     }
 }
 
@@ -441,7 +464,11 @@ struct OrderStreamingStream {
 
 impl OrderStreamingStream {
     fn new(inner: BoxedStream, _kind: OrderStreamingKind, truncation: Option<u64>) -> Self {
-        Self { inner, truncation, emitted: 0 }
+        Self {
+            inner,
+            truncation,
+            emitted: 0,
+        }
     }
 }
 
@@ -504,12 +531,11 @@ impl OrderMaterializeStream {
             buf.push(t);
         }
         let cardinality = buf.len() as u64;
-        let index_fn = self
-            .input_index_fn
-            .clone()
-            .unwrap_or(crate::iteration::comprehension::metadata::IndexFn::Lattice {
+        let index_fn = self.input_index_fn.clone().unwrap_or(
+            crate::iteration::comprehension::metadata::IndexFn::Lattice {
                 axis_sizes: vec![cardinality],
-            });
+            },
+        );
         let input = crate::iteration::comprehension::strategies::EvaluatedInput {
             tuples: buf,
             cardinality,
@@ -670,9 +696,15 @@ fn compare(a: &TupleValue, kind: CmpKind, b: &TupleValue) -> bool {
     let ord = match (a, b) {
         (TupleValue::I64(a), TupleValue::I64(b)) => a.cmp(b),
         (TupleValue::U64(a), TupleValue::U64(b)) => a.cmp(b),
-        (TupleValue::F64(a), TupleValue::F64(b)) => a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal),
-        (TupleValue::I64(a), TupleValue::F64(b)) => (*a as f64).partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal),
-        (TupleValue::F64(a), TupleValue::I64(b)) => a.partial_cmp(&(*b as f64)).unwrap_or(std::cmp::Ordering::Equal),
+        (TupleValue::F64(a), TupleValue::F64(b)) => {
+            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+        }
+        (TupleValue::I64(a), TupleValue::F64(b)) => (*a as f64)
+            .partial_cmp(b)
+            .unwrap_or(std::cmp::Ordering::Equal),
+        (TupleValue::F64(a), TupleValue::I64(b)) => a
+            .partial_cmp(&(*b as f64))
+            .unwrap_or(std::cmp::Ordering::Equal),
         (TupleValue::Str(a), TupleValue::Str(b)) => a.cmp(b),
         (TupleValue::Bool(a), TupleValue::Bool(b)) => a.cmp(b),
         _ => return false,
@@ -712,8 +744,7 @@ fn parse_literal(s: &str) -> Option<LiteralValue> {
         return Some(LiteralValue::Bool(false));
     }
     if s.len() >= 2
-        && ((s.starts_with('"') && s.ends_with('"'))
-            || (s.starts_with('\'') && s.ends_with('\'')))
+        && ((s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')))
     {
         return Some(LiteralValue::String(s[1..s.len() - 1].to_string()));
     }
@@ -743,7 +774,10 @@ fn split_top_level(s: &str, sep: &str) -> Option<Vec<String>> {
             b')' | b']' | b'}' => depth -= 1,
             _ => {}
         }
-        if depth == 0 && i + sep_bytes.len() <= bytes.len() && &bytes[i..i + sep_bytes.len()] == sep_bytes {
+        if depth == 0
+            && i + sep_bytes.len() <= bytes.len()
+            && &bytes[i..i + sep_bytes.len()] == sep_bytes
+        {
             parts.push(s[last..i].trim().to_string());
             last = i + sep_bytes.len();
             i = last;
@@ -769,7 +803,10 @@ fn split_top_level_op<'a>(s: &'a str, op: &str) -> Option<(&'a str, &'a str)> {
             b')' | b']' | b'}' => depth -= 1,
             _ => {}
         }
-        if depth == 0 && i + op_bytes.len() <= bytes.len() && &bytes[i..i + op_bytes.len()] == op_bytes {
+        if depth == 0
+            && i + op_bytes.len() <= bytes.len()
+            && &bytes[i..i + op_bytes.len()] == op_bytes
+        {
             if op.len() == 1 {
                 let next = bytes.get(i + 1).copied();
                 if next == Some(b'=') {

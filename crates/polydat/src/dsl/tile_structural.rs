@@ -27,14 +27,22 @@ fn check_encoding(name: &str, encoding: &str) -> Result<(), String> {
     if ENCODINGS.contains(&encoding) {
         Ok(())
     } else {
-        Err(format!("tile '{name}': unknown encoding '{encoding}'; encodings are json, text, csv"))
+        Err(format!(
+            "tile '{name}': unknown encoding '{encoding}'; encodings are json, text, csv"
+        ))
     }
 }
 
 /// A tile from template text a host holds: the body of a `tile`
 /// statement without the statement. `text` may be multi-line; it is
 /// taken exactly, as a heredoc body is.
-pub fn tile_from_text(name: &str, encoding: &str, text: &str, options: &TileOptions, span: Span) -> Result<TileDef, String> {
+pub fn tile_from_text(
+    name: &str,
+    encoding: &str,
+    text: &str,
+    options: &TileOptions,
+    span: Span,
+) -> Result<TileDef, String> {
     check_encoding(name, encoding)?;
     let pieces = parse_template(text, options, span).map_err(|e| format!("tile '{name}': {e}"))?;
     Ok(TileDef {
@@ -50,16 +58,27 @@ pub fn tile_from_text(name: &str, encoding: &str, text: &str, options: &TileOpti
 
 /// A tile from a structural template in JSON text (§3). The encoding is
 /// `json`.
-pub fn tile_from_json_text(name: &str, json: &str, options: &TileOptions, span: Span) -> Result<TileDef, String> {
-    let value: Value =
-        serde_json::from_str(json).map_err(|e| format!("tile '{name}': structural template is not JSON: {e}"))?;
+pub fn tile_from_json_text(
+    name: &str,
+    json: &str,
+    options: &TileOptions,
+    span: Span,
+) -> Result<TileDef, String> {
+    let value: Value = serde_json::from_str(json)
+        .map_err(|e| format!("tile '{name}': structural template is not JSON: {e}"))?;
     tile_from_json_value(name, &value, options, span)
 }
 
 /// A tile from a structural template a host has already parsed (§3).
 /// The encoding is `json`.
-pub fn tile_from_json_value(name: &str, value: &Value, options: &TileOptions, span: Span) -> Result<TileDef, String> {
-    let body = template_text_from_value(value, options).map_err(|e| format!("tile '{name}': {e}"))?;
+pub fn tile_from_json_value(
+    name: &str,
+    value: &Value,
+    options: &TileOptions,
+    span: Span,
+) -> Result<TileDef, String> {
+    let body =
+        template_text_from_value(value, options).map_err(|e| format!("tile '{name}': {e}"))?;
     let pieces = parse_template(&body, options, span).map_err(|e| format!("tile '{name}': {e}"))?;
     Ok(TileDef {
         name: name.to_string(),
@@ -76,7 +95,10 @@ pub fn tile_from_json_value(name: &str, value: &Value, options: &TileOptions, sp
 /// The text is what an author would have written in a `tile ... : json`
 /// block for the same document.
 pub fn template_text_from_value(value: &Value, options: &TileOptions) -> Result<String, String> {
-    let mut t = Textualizer { opts: options, out: String::new() };
+    let mut t = Textualizer {
+        opts: options,
+        out: String::new(),
+    };
     t.value(value)?;
     Ok(t.out)
 }
@@ -144,8 +166,12 @@ impl Textualizer<'_> {
                 self.opts.sigil, self.opts.sigil
             ));
         }
-        let pieces = parse_template(s, self.opts, Span { line: 0, col: 0 }).map_err(|e| format!("in string `{s}`: {e}"))?;
-        if pieces.iter().any(|p| matches!(p, TilePiece::Projection { .. } | TilePiece::Branch { .. })) {
+        let pieces = parse_template(s, self.opts, Span { line: 0, col: 0 })
+            .map_err(|e| format!("in string `{s}`: {e}"))?;
+        if pieces
+            .iter()
+            .any(|p| matches!(p, TilePiece::Projection { .. } | TilePiece::Branch { .. }))
+        {
             return Err(format!(
                 "string `{s}` contains a directive; in the structural form directives are arrays and object keys"
             ));
@@ -167,7 +193,10 @@ impl Textualizer<'_> {
                 TilePiece::Static(text) => {
                     let escaped = serde_json::to_string(text).expect("string serializes");
                     let inner = &escaped[1..escaped.len() - 1];
-                    self.out.push_str(&inner.replace(&self.opts.open, &format!("{}{}", self.opts.open, self.opts.open)));
+                    self.out.push_str(&inner.replace(
+                        &self.opts.open,
+                        &format!("{}{}", self.opts.open, self.opts.open),
+                    ));
                 }
                 TilePiece::Hole(h) => {
                     self.out.push_str(&self.opts.open);
@@ -183,21 +212,28 @@ impl Textualizer<'_> {
 
     fn array(&mut self, items: &[Value]) -> Result<(), String> {
         self.out.push('[');
-        match items.first().and_then(|f| f.as_str()).and_then(|s| self.directive(s)) {
+        match items
+            .first()
+            .and_then(|f| f.as_str())
+            .and_then(|s| self.directive(s))
+        {
             Some(Directive::For(header)) => {
-                self.out.push_str(&format!("{}for {header} {{ ", self.opts.sigil));
+                self.out
+                    .push_str(&format!("{}for {header} {{ ", self.opts.sigil));
                 self.items(&items[1..])?;
                 self.out.push_str(" }");
             }
             Some(Directive::If(cond)) => {
-                let split = items[1..]
-                    .iter()
-                    .position(|v| v.as_str().is_some_and(|s| matches!(self.directive(s), Some(Directive::Else))));
+                let split = items[1..].iter().position(|v| {
+                    v.as_str()
+                        .is_some_and(|s| matches!(self.directive(s), Some(Directive::Else)))
+                });
                 let (then, otherwise) = match split {
                     Some(i) => (&items[1..1 + i], Some(&items[2 + i..])),
                     None => (&items[1..], None),
                 };
-                self.out.push_str(&format!("{}if {cond} {{ ", self.opts.sigil));
+                self.out
+                    .push_str(&format!("{}if {cond} {{ ", self.opts.sigil));
                 self.items(then)?;
                 self.out.push_str(" }");
                 if let Some(o) = otherwise {
@@ -206,7 +242,12 @@ impl Textualizer<'_> {
                     self.out.push_str(" }");
                 }
             }
-            Some(Directive::Else) => return Err(format!("`{}else` without a leading `{}if`", self.opts.sigil, self.opts.sigil)),
+            Some(Directive::Else) => {
+                return Err(format!(
+                    "`{}else` without a leading `{}if`",
+                    self.opts.sigil, self.opts.sigil
+                ));
+            }
             None => self.items(items)?,
         }
         self.out.push(']');
@@ -241,7 +282,9 @@ impl Textualizer<'_> {
             let is_directive = directive.is_some();
             let has_before = emitted_static;
             // Any later member other than this directive's own `@else`.
-            let has_after = entries[i + 1..].iter().any(|(k, _)| !matches!(self.directive(k), Some(Directive::Else)));
+            let has_after = entries[i + 1..]
+                .iter()
+                .any(|(k, _)| !matches!(self.directive(k), Some(Directive::Else)));
             let comma = match (is_directive, has_before, has_after) {
                 (false, _, _) => Comma::Between,
                 (true, true, _) => Comma::Leading,
@@ -254,7 +297,8 @@ impl Textualizer<'_> {
             match directive {
                 Some(Directive::For(header)) => {
                     // A member projection: the value's members, per tuple.
-                    self.out.push_str(&format!("{}for {header}", self.opts.sigil));
+                    self.out
+                        .push_str(&format!("{}for {header}", self.opts.sigil));
                     if matches!(comma, Comma::Leading | Comma::Trailing) {
                         self.out.push_str(" sep \"\"");
                     }
@@ -263,7 +307,8 @@ impl Textualizer<'_> {
                     self.out.push_str(" }");
                 }
                 Some(Directive::If(cond)) => {
-                    self.out.push_str(&format!("{}if {cond} {{ ", self.opts.sigil));
+                    self.out
+                        .push_str(&format!("{}if {cond} {{ ", self.opts.sigil));
                     self.members(key, value, comma)?;
                     self.out.push_str(" }");
                     if let Some((next_key, next_value)) = entries.get(i + 1)
@@ -276,7 +321,10 @@ impl Textualizer<'_> {
                     }
                 }
                 Some(Directive::Else) => {
-                    return Err(format!("`{}else` key without a preceding `{}if` key", self.opts.sigil, self.opts.sigil))
+                    return Err(format!(
+                        "`{}else` key without a preceding `{}if` key",
+                        self.opts.sigil, self.opts.sigil
+                    ));
                 }
                 None => {
                     self.string(key, true)?;
@@ -295,7 +343,9 @@ impl Textualizer<'_> {
     /// with the separator the position calls for.
     fn members(&mut self, key: &str, value: &Value, comma: Comma) -> Result<(), String> {
         let Some(obj) = value.as_object() else {
-            return Err(format!("the value under directive key `{key}` must be an object of members"));
+            return Err(format!(
+                "the value under directive key `{key}` must be an object of members"
+            ));
         };
         if matches!(comma, Comma::Leading) {
             self.out.push_str(", ");
@@ -326,20 +376,34 @@ mod tests {
 
     #[test]
     fn strings_classify_as_value_string_or_static() {
-        assert_eq!(text(r#"{"ts": "${ts}", "name": "row-${row}", "s": "${ts: str}", "k": "plain"}"#),
-            r#"{"ts": ${ts}, "name": "row-${row}", "s": "${ts: str}", "k": "plain"}"#);
+        assert_eq!(
+            text(r#"{"ts": "${ts}", "name": "row-${row}", "s": "${ts: str}", "k": "plain"}"#),
+            r#"{"ts": ${ts}, "name": "row-${row}", "s": "${ts: str}", "k": "plain"}"#
+        );
     }
 
     #[test]
     fn directive_arrays_and_objects_become_blocks() {
-        assert_eq!(text(r#"["@for s in 0..4", {"n": "${s}"}]"#), r#"[@for s in 0..4 { {"n": ${s}} }]"#);
-        assert_eq!(text(r#"["@if v", 1, "@else", 2]"#), r#"[@if v { 1 } @else { 2 }]"#);
-        assert_eq!(text(r#"{"@for t in a,b": {"${t}": true}}"#), r#"{@for t in a,b { "${t}": true }}"#);
+        assert_eq!(
+            text(r#"["@for s in 0..4", {"n": "${s}"}]"#),
+            r#"[@for s in 0..4 { {"n": ${s}} }]"#
+        );
+        assert_eq!(
+            text(r#"["@if v", 1, "@else", 2]"#),
+            r#"[@if v { 1 } @else { 2 }]"#
+        );
+        assert_eq!(
+            text(r#"{"@for t in a,b": {"${t}": true}}"#),
+            r#"{@for t in a,b { "${t}": true }}"#
+        );
     }
 
     #[test]
     fn scalars_and_escapes_pass_through() {
-        assert_eq!(text(r#"{"a": null, "b": true, "c": 1.5, "d": "q\"uote ${x}"}"#), r#"{"a": null, "b": true, "c": 1.5, "d": "q\"uote ${x}"}"#);
+        assert_eq!(
+            text(r#"{"a": null, "b": true, "c": 1.5, "d": "q\"uote ${x}"}"#),
+            r#"{"a": null, "b": true, "c": 1.5, "d": "q\"uote ${x}"}"#
+        );
     }
 
     #[test]

@@ -15,9 +15,9 @@
 //! pure Polydat metadata — name, port type, binding modifier — all
 //! of which already have homes in `kernel` / `node` / `dsl`.
 
+use crate::ast::PortType;
 use crate::dsl::ast::BindingModifier;
 use crate::kernel::PolydatProgram;
-use crate::ast::PortType;
 
 /// One entry in a program's output manifest: typed, modifier-
 /// aware view of a single output name.
@@ -37,7 +37,11 @@ pub fn extract_manifest(program: &PolydatProgram) -> Vec<ManifestEntry> {
             let (ni, pi) = program.resolve_output_by_index(i);
             let port_type = program.node_meta(ni).outs[pi].typ;
             let modifier = program.output_modifier(&name);
-            ManifestEntry { name, port_type, modifier }
+            ManifestEntry {
+                name,
+                port_type,
+                modifier,
+            }
         })
         .collect()
 }

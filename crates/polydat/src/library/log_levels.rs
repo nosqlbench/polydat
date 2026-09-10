@@ -38,25 +38,41 @@ fn log_at(level: crate::library::support::audit::LogLevel, fn_name: &str, value:
 
 #[crate::polydat_node(category = Diagnostic, purity = SideChannel(LogBuffer))]
 fn log_debug(value: Value) -> Value {
-    log_at(crate::library::support::audit::LogLevel::Debug, "log_debug", &value);
+    log_at(
+        crate::library::support::audit::LogLevel::Debug,
+        "log_debug",
+        &value,
+    );
     value
 }
 
 #[crate::polydat_node(category = Diagnostic, purity = SideChannel(LogBuffer))]
 fn log_info(value: Value) -> Value {
-    log_at(crate::library::support::audit::LogLevel::Info, "log_info", &value);
+    log_at(
+        crate::library::support::audit::LogLevel::Info,
+        "log_info",
+        &value,
+    );
     value
 }
 
 #[crate::polydat_node(category = Diagnostic, purity = SideChannel(LogBuffer))]
 fn log_warn(value: Value) -> Value {
-    log_at(crate::library::support::audit::LogLevel::Warn, "log_warn", &value);
+    log_at(
+        crate::library::support::audit::LogLevel::Warn,
+        "log_warn",
+        &value,
+    );
     value
 }
 
 #[crate::polydat_node(category = Diagnostic, purity = SideChannel(LogBuffer))]
 fn log_error(value: Value) -> Value {
-    log_at(crate::library::support::audit::LogLevel::Error, "log_error", &value);
+    log_at(
+        crate::library::support::audit::LogLevel::Error,
+        "log_error",
+        &value,
+    );
     value
 }
 
@@ -126,6 +142,11 @@ mod tests {
         use crate::ast::{Purity, SideChannelSink};
         let node = LogInfo::new(PortType::U64);
         let p = node.purity();
-        assert!(matches!(p, Purity::SideChannel { sink: SideChannelSink::LogBuffer }));
+        assert!(matches!(
+            p,
+            Purity::SideChannel {
+                sink: SideChannelSink::LogBuffer
+            }
+        ));
     }
 }

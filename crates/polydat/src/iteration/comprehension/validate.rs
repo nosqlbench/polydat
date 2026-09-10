@@ -45,14 +45,12 @@ use super::strategy::{StrategyName, ZipMode};
 /// `Permissive` (default) enforces V1-V9 as errors and surfaces
 /// degenerate-composition warnings non-blockingly. `Strict`
 /// promotes those warnings to errors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Mode {
     #[default]
     Permissive,
     Strict,
 }
-
 
 /// Result of a validation pass.
 #[derive(Debug, Clone)]
@@ -65,10 +63,16 @@ pub struct ValidationReport {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ValidationError {
     /// V1 — cartesian or zip children share a name.
-    V1DuplicateName { combinator: &'static str, name: String },
+    V1DuplicateName {
+        combinator: &'static str,
+        name: String,
+    },
 
     /// V2 — union children disagree on tuple shape.
-    V2ShapeMismatch { expected: Vec<String>, actual: Vec<String> },
+    V2ShapeMismatch {
+        expected: Vec<String>,
+        actual: Vec<String>,
+    },
 
     /// V3 — filter predicate references a name neither in the
     /// child's coordinates nor in the parent scope. Parser-time
@@ -109,10 +113,7 @@ pub enum ValidationError {
     /// V7 — zip cardinality contract violated. Three sub-cases:
     /// Strict-mode mismatch, mixed-class children, or any
     /// continuous child.
-    V7ZipCardinality {
-        mode: ZipMode,
-        reason: String,
-    },
+    V7ZipCardinality { mode: ZipMode, reason: String },
 
     /// V8 — continuous source requires explicit sampling OR
     /// source declares a non-integrable measure.
@@ -159,7 +160,9 @@ pub enum ValidationWarning {
 /// accumulate into the returned [`ValidationReport`]. In
 /// `Strict` mode, the first warning is promoted to an error.
 pub fn validate(c: &Comprehension, mode: Mode) -> Result<ValidationReport, ValidationError> {
-    let mut report = ValidationReport { warnings: Vec::new() };
+    let mut report = ValidationReport {
+        warnings: Vec::new(),
+    };
     visit(c, &mut report)?;
     if mode == Mode::Strict
         && let Some(_warning) = report.warnings.first()
@@ -193,9 +196,11 @@ fn visit(c: &Comprehension, report: &mut ValidationReport) -> Result<(), Validat
         Comprehension::Zip { children, mode } => visit_zip(children, *mode, report),
         Comprehension::Union { children } => visit_union(children, report),
         Comprehension::Filter { child, predicate } => visit_filter(child, predicate, report),
-        Comprehension::Order { child, strategy, truncation } => {
-            visit_order(child, *strategy, *truncation, report)
-        }
+        Comprehension::Order {
+            child,
+            strategy,
+            truncation,
+        } => visit_order(child, *strategy, *truncation, report),
     }
 }
 
@@ -224,9 +229,11 @@ fn visit_cartesian(
 ) -> Result<(), ValidationError> {
     check_disjoint_names("cartesian", children)?;
     if children.len() == 1 {
-        report.warnings.push(ValidationWarning::SingletonCombinator {
-            combinator: "cartesian",
-        });
+        report
+            .warnings
+            .push(ValidationWarning::SingletonCombinator {
+                combinator: "cartesian",
+            });
     }
     Ok(())
 }
@@ -253,9 +260,9 @@ fn visit_zip(
     }
 
     if children.len() == 1 {
-        report.warnings.push(ValidationWarning::SingletonCombinator {
-            combinator: "zip",
-        });
+        report
+            .warnings
+            .push(ValidationWarning::SingletonCombinator { combinator: "zip" });
     }
 
     // V6: Strict/Truncate require bounded children. We can
@@ -300,18 +307,17 @@ fn visit_union(
         for sibling in &children[1..] {
             let actual = sibling.coordinate_names();
             if actual != expected {
-                return Err(ValidationError::V2ShapeMismatch {
-                    expected,
-                    actual,
-                });
+                return Err(ValidationError::V2ShapeMismatch { expected, actual });
             }
         }
     }
 
     if children.len() == 1 {
-        report.warnings.push(ValidationWarning::SingletonCombinator {
-            combinator: "union",
-        });
+        report
+            .warnings
+            .push(ValidationWarning::SingletonCombinator {
+                combinator: "union",
+            });
     }
     Ok(())
 }
@@ -350,7 +356,9 @@ fn visit_filter(
     if trimmed.eq_ignore_ascii_case("true") {
         report.warnings.push(ValidationWarning::TriviallyTrueFilter);
     } else if trimmed.eq_ignore_ascii_case("false") {
-        report.warnings.push(ValidationWarning::TriviallyFalseFilter);
+        report
+            .warnings
+            .push(ValidationWarning::TriviallyFalseFilter);
     }
 
     let _ = child;
@@ -482,10 +490,7 @@ fn check_strategy_input_shape(
             | StrategyName::Antidiagonal => {
                 return Err(ValidationError::V4InputShape {
                     strategy,
-                    reason: format!(
-                        "{} does not accept continuous input",
-                        strategy.as_str()
-                    ),
+                    reason: format!("{} does not accept continuous input", strategy.as_str()),
                 });
             }
             StrategyName::Lex => unreachable!("Lex handled above"),
@@ -498,7 +503,9 @@ fn check_strategy_input_shape(
                 if matches!(strategy, StrategyName::Lhs) {
                     report.warnings.push(ValidationWarning::LhsDegenerate);
                 } else {
-                    report.warnings.push(ValidationWarning::DegenerateGeometric { strategy });
+                    report
+                        .warnings
+                        .push(ValidationWarning::DegenerateGeometric { strategy });
                 }
             }
         }
@@ -511,7 +518,9 @@ fn check_strategy_input_shape(
         match idx {
             IndexFn::Lattice { axis_sizes } => {
                 if axis_sizes.len() < 2 {
-                    report.warnings.push(ValidationWarning::DegenerateGeometric { strategy });
+                    report
+                        .warnings
+                        .push(ValidationWarning::DegenerateGeometric { strategy });
                 }
             }
             // Concatenation (union) is V4-rejected for lattice-
@@ -529,7 +538,9 @@ fn check_strategy_input_shape(
             // strategies in 1-D collapse degenerately, but per
             // §5.8 we allow with warning rather than rejecting.
             IndexFn::Lockstep { .. } | IndexFn::Modular { .. } => {
-                report.warnings.push(ValidationWarning::DegenerateGeometric { strategy });
+                report
+                    .warnings
+                    .push(ValidationWarning::DegenerateGeometric { strategy });
             }
             // Unreachable: continuous handled above.
             IndexFn::Continuous { .. } | IndexFn::Hybrid { .. } => unreachable!(),
@@ -576,10 +587,7 @@ fn check_disjoint_names(
     for child in children {
         for name in child.coordinate_names() {
             if seen.contains(&name) {
-                return Err(ValidationError::V1DuplicateName {
-                    combinator,
-                    name,
-                });
+                return Err(ValidationError::V1DuplicateName { combinator, name });
             }
             seen.push(name);
         }
@@ -590,9 +598,9 @@ fn check_disjoint_names(
 fn contains_continuous_source(c: &Comprehension) -> bool {
     match c {
         Comprehension::Clause { source, .. } => source.is_continuous(),
-        Comprehension::Cartesian { children } | Comprehension::Zip { children, .. } | Comprehension::Union { children } => {
-            children.iter().any(contains_continuous_source)
-        }
+        Comprehension::Cartesian { children }
+        | Comprehension::Zip { children, .. }
+        | Comprehension::Union { children } => children.iter().any(contains_continuous_source),
         Comprehension::Filter { child, .. } | Comprehension::Order { child, .. } => {
             contains_continuous_source(child)
         }
@@ -619,14 +627,15 @@ fn extract_interpolated_names(predicate: &str) -> Vec<String> {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'{'
-            && let Some(close) = predicate[i + 1..].find('}') {
-                let name = predicate[i + 1..i + 1 + close].trim();
-                if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
-                    out.push(name.to_string());
-                }
-                i += close + 2;
-                continue;
+            && let Some(close) = predicate[i + 1..].find('}')
+        {
+            let name = predicate[i + 1..i + 1 + close].trim();
+            if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                out.push(name.to_string());
             }
+            i += close + 2;
+            continue;
+        }
         i += 1;
     }
     out
@@ -635,8 +644,8 @@ fn extract_interpolated_names(predicate: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::iteration::comprehension::source::{LiteralValue, Source};
     use crate::iteration::comprehension::cardinality::{Interval, ProductMeasure};
+    use crate::iteration::comprehension::source::{LiteralValue, Source};
 
     fn clause(name: &str, vs: &[i64]) -> Comprehension {
         Comprehension::clause(
@@ -663,7 +672,10 @@ mod tests {
         let result = validate(&bad, Mode::Permissive);
         assert!(matches!(
             result,
-            Err(ValidationError::V1DuplicateName { combinator: "cartesian", .. })
+            Err(ValidationError::V1DuplicateName {
+                combinator: "cartesian",
+                ..
+            })
         ));
     }
 
@@ -680,7 +692,10 @@ mod tests {
             Comprehension::cartesian(vec![clause("limit", &[100]), clause("k", &[100])]),
         ]);
         let result = validate(&bad, Mode::Permissive);
-        assert!(matches!(result, Err(ValidationError::V2ShapeMismatch { .. })));
+        assert!(matches!(
+            result,
+            Err(ValidationError::V2ShapeMismatch { .. })
+        ));
     }
 
     #[test]
@@ -695,40 +710,36 @@ mod tests {
     #[test]
     fn v4_rejects_lattice_geometric_over_union() {
         let bad = Comprehension::order(
-            Comprehension::union(vec![
-                clause("k", &[1, 2, 3]),
-                clause("k", &[10, 20, 30]),
-            ]),
+            Comprehension::union(vec![clause("k", &[1, 2, 3]), clause("k", &[10, 20, 30])]),
             StrategyName::Extrema,
             Some(2),
         );
         assert!(matches!(
             validate(&bad, Mode::Permissive),
-            Err(ValidationError::V4InputShape { strategy: StrategyName::Extrema, .. })
+            Err(ValidationError::V4InputShape {
+                strategy: StrategyName::Extrema,
+                ..
+            })
         ));
     }
 
     #[test]
     fn v4_lattice_geometric_over_1axis_warns_not_errors() {
-        let degenerate = Comprehension::order(
-            clause("k", &[1, 2, 3]),
-            StrategyName::Extrema,
-            Some(2),
-        );
+        let degenerate =
+            Comprehension::order(clause("k", &[1, 2, 3]), StrategyName::Extrema, Some(2));
         let report = validate(&degenerate, Mode::Permissive).unwrap();
         assert!(report.warnings.iter().any(|w| matches!(
             w,
-            ValidationWarning::DegenerateGeometric { strategy: StrategyName::Extrema }
+            ValidationWarning::DegenerateGeometric {
+                strategy: StrategyName::Extrema
+            }
         )));
     }
 
     #[test]
     fn v4_strict_mode_promotes_warning() {
-        let degenerate = Comprehension::order(
-            clause("k", &[1, 2, 3]),
-            StrategyName::Extrema,
-            Some(2),
-        );
+        let degenerate =
+            Comprehension::order(clause("k", &[1, 2, 3]), StrategyName::Extrema, Some(2));
         assert!(validate(&degenerate, Mode::Strict).is_err());
     }
 
@@ -775,7 +786,12 @@ mod tests {
         let bad = Comprehension::clause(
             "x",
             Source::ContinuousInterval {
-                interval: Interval { lo: 0.0, hi: f64::INFINITY, lo_open: false, hi_open: true },
+                interval: Interval {
+                    lo: 0.0,
+                    hi: f64::INFINITY,
+                    lo_open: false,
+                    hi_open: true,
+                },
                 measure: ProductMeasure::Uniform,
             },
         );
@@ -804,7 +820,9 @@ mod tests {
         let report = validate(&degenerate, Mode::Permissive).unwrap();
         assert!(report.warnings.iter().any(|w| matches!(
             w,
-            ValidationWarning::SingletonCombinator { combinator: "cartesian" }
+            ValidationWarning::SingletonCombinator {
+                combinator: "cartesian"
+            }
         )));
     }
 
@@ -812,7 +830,12 @@ mod tests {
     fn trivially_true_filter_warns() {
         let degenerate = Comprehension::filter(clause("k", &[1, 2]), "true");
         let report = validate(&degenerate, Mode::Permissive).unwrap();
-        assert!(report.warnings.iter().any(|w| matches!(w, ValidationWarning::TriviallyTrueFilter)));
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|w| matches!(w, ValidationWarning::TriviallyTrueFilter))
+        );
     }
 
     #[test]
@@ -822,6 +845,9 @@ mod tests {
             extract_interpolated_names("{k} * {limit} <= 1000"),
             vec!["k", "limit"]
         );
-        assert_eq!(extract_interpolated_names("no refs here"), Vec::<String>::new());
+        assert_eq!(
+            extract_interpolated_names("no refs here"),
+            Vec::<String>::new()
+        );
     }
 }

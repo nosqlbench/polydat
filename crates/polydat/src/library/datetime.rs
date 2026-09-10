@@ -11,18 +11,23 @@
 /// Example: `EpochScale(1000)` treats input as seconds → millis.
 /// Scale a u64 to epoch milliseconds. SRD-80 PR B.13 migration.
 #[crate::polydat_node(category = Datetime)]
-fn epoch_scale(
-    input: u64,
-    #[poly_default(1u64)] factor: crate::derive_support::Const<u64>,
-) -> u64 {
+fn epoch_scale(input: u64, #[poly_default(1u64)] factor: crate::derive_support::Const<u64>) -> u64 {
     input.wrapping_mul(*factor)
 }
 
 impl EpochScale {
-    pub fn millis() -> Self { Self::new(1) }
-    pub fn seconds() -> Self { Self::new(1_000) }
-    pub fn minutes() -> Self { Self::new(60_000) }
-    pub fn hours() -> Self { Self::new(3_600_000) }
+    pub fn millis() -> Self {
+        Self::new(1)
+    }
+    pub fn seconds() -> Self {
+        Self::new(1_000)
+    }
+    pub fn minutes() -> Self {
+        Self::new(60_000)
+    }
+    pub fn hours() -> Self {
+        Self::new(3_600_000)
+    }
 }
 
 /// Add a base epoch offset to a u64 value. SRD-80 PR B.13 migration.
@@ -36,9 +41,13 @@ fn epoch_offset(
 
 impl EpochOffset {
     /// 2024-01-01T00:00:00Z in epoch millis.
-    pub fn from_2024() -> Self { Self::new(1_704_067_200_000) }
+    pub fn from_2024() -> Self {
+        Self::new(1_704_067_200_000)
+    }
     /// 2025-01-01T00:00:00Z in epoch millis.
-    pub fn from_2025() -> Self { Self::new(1_735_689_600_000) }
+    pub fn from_2025() -> Self {
+        Self::new(1_735_689_600_000)
+    }
 }
 
 /// Format an epoch-millis u64 as an ISO-8601-like timestamp string.
@@ -80,9 +89,24 @@ fn is_leap_year(y: u64) -> bool {
 
 fn days_in_month(y: u64, m: u64) -> u64 {
     match m {
-        1 => 31, 2 => if is_leap_year(y) { 29 } else { 28 },
-        3 => 31, 4 => 30, 5 => 31, 6 => 30,
-        7 => 31, 8 => 31, 9 => 30, 10 => 31, 11 => 30, 12 => 31,
+        1 => 31,
+        2 => {
+            if is_leap_year(y) {
+                29
+            } else {
+                28
+            }
+        }
+        3 => 31,
+        4 => 30,
+        5 => 31,
+        6 => 30,
+        7 => 31,
+        8 => 31,
+        9 => 30,
+        10 => 31,
+        11 => 30,
+        12 => 31,
         _ => 30,
     }
 }
@@ -102,14 +126,18 @@ fn decompose_epoch_ms(epoch_ms: u64) -> (u64, u64, u64, u64, u64, u64, u64) {
     let mut year = 1970u64;
     loop {
         let days_in_year = if is_leap_year(year) { 366 } else { 365 };
-        if days < days_in_year { break; }
+        if days < days_in_year {
+            break;
+        }
         days -= days_in_year;
         year += 1;
     }
     let mut month = 1u64;
     loop {
         let dim = days_in_month(year, month);
-        if days < dim { break; }
+        if days < dim {
+            break;
+        }
         days -= dim;
         month += 1;
     }
@@ -131,7 +159,6 @@ use crate::dsl::registry::FuncSig;
 
 /// Signatures for datetime nodes.
 pub fn signatures() -> &'static [FuncSig] {
-
     &[
         // `epoch_scale` migrated to `#[polydat_node]` per SRD-80 PR B.13.
         // `epoch_offset` migrated to `#[polydat_node]` per SRD-80 PR B.13.
@@ -143,10 +170,14 @@ pub fn signatures() -> &'static [FuncSig] {
 /// Try to build a datetime node from a function name and const args.
 ///
 /// Returns `None` if the name is not handled by this module.
-pub(crate) fn build_node(_name: &str, _wires: &[crate::compile::assembly::WireRef], _wire_types: &[crate::ast::PortType], _consts: &[crate::dsl::factory::ConstArg]) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
+pub(crate) fn build_node(
+    _name: &str,
+    _wires: &[crate::compile::assembly::WireRef],
+    _wire_types: &[crate::ast::PortType],
+    _consts: &[crate::dsl::factory::ConstArg],
+) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
     None
 }
-
 
 crate::register_nodes!(signatures, build_node);
 #[cfg(test)]
@@ -208,8 +239,11 @@ mod tests {
         // 2024-03-15T14:30:45.123Z
         // Manually: days from epoch to 2024-03-15 = 19797
         // 19797 * 86400000 + 14*3600000 + 30*60000 + 45*1000 + 123
-        let epoch = 19797u64 * MILLIS_PER_DAY + 14 * MILLIS_PER_HOUR
-            + 30 * MILLIS_PER_MIN + 45 * MILLIS_PER_SEC + 123;
+        let epoch = 19797u64 * MILLIS_PER_DAY
+            + 14 * MILLIS_PER_HOUR
+            + 30 * MILLIS_PER_MIN
+            + 45 * MILLIS_PER_SEC
+            + 123;
         node.eval(&[Value::U64(epoch)], &mut out);
         assert_eq!(out[0].as_u64(), 2024);
         assert_eq!(out[1].as_u64(), 3);

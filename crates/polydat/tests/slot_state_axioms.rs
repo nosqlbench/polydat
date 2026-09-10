@@ -84,8 +84,16 @@ fn s5_skip_engines_match_raw_oracle() {
 
         assert_eq!(push.read_vec_f32(vsum), &want_vsum[..], "push ref @ {i}");
         assert_eq!(pull.read_vec_f32(vsum), &want_vsum[..], "pull ref @ {i}");
-        assert_eq!(pushpull.read_vec_f32(vsum), &want_vsum[..], "pushpull ref @ {i}");
-        assert_eq!(hybrid.read_vec_f32(vsum), &want_vsum[..], "hybrid ref @ {i}");
+        assert_eq!(
+            pushpull.read_vec_f32(vsum),
+            &want_vsum[..],
+            "pushpull ref @ {i}"
+        );
+        assert_eq!(
+            hybrid.read_vec_f32(vsum),
+            &want_vsum[..],
+            "hybrid ref @ {i}"
+        );
     }
 }
 
@@ -194,7 +202,6 @@ fn s10_from_raw_parts_tripwire() {
     );
 }
 
-
 /// Registry `lookup` returns a real `&'static` into the link-time
 /// inventory — same address across calls — proving it does not
 /// allocate (and leak) per call. Regression guard for the Miri
@@ -205,7 +212,10 @@ fn lookup_does_not_allocate_per_call() {
     use polydat::dsl::registry::lookup;
     let a = lookup("hash").expect("hash registered") as *const _;
     let b = lookup("hash").expect("hash registered") as *const _;
-    assert_eq!(a, b, "lookup must return a stable &'static, not a fresh leak");
+    assert_eq!(
+        a, b,
+        "lookup must return a stable &'static, not a fresh leak"
+    );
 }
 
 /// SRD 115 §2, axioms H1 and H2: the non-scalar types have their own
@@ -214,7 +224,13 @@ fn lookup_does_not_allocate_per_call() {
 #[test]
 fn hdl1_is_the_color_of_handle_types() {
     use polydat::ast::{HandleKind, PortType, SlotColor};
-    for ty in [PortType::Str, PortType::Bytes, PortType::Json, PortType::Ext, PortType::Handle] {
+    for ty in [
+        PortType::Str,
+        PortType::Bytes,
+        PortType::Json,
+        PortType::Ext,
+        PortType::Handle,
+    ] {
         assert_eq!(ty.slot_color(), SlotColor::Hdl1, "{ty:?}");
         assert_eq!(ty.slot_width(), 1, "{ty:?}");
     }
@@ -223,7 +239,14 @@ fn hdl1_is_the_color_of_handle_types() {
     assert_eq!(PortType::Json.handle_kind(), Some(HandleKind::Table));
     assert_eq!(PortType::Ext.handle_kind(), Some(HandleKind::Table));
     assert_eq!(PortType::Handle.handle_kind(), Some(HandleKind::Table));
-    for ty in [PortType::U64, PortType::F64, PortType::Bool, PortType::I64, PortType::U8, PortType::F32] {
+    for ty in [
+        PortType::U64,
+        PortType::F64,
+        PortType::Bool,
+        PortType::I64,
+        PortType::U8,
+        PortType::F32,
+    ] {
         assert_eq!(ty.slot_color(), SlotColor::Imm1, "{ty:?}");
         assert_eq!(ty.handle_kind(), None, "{ty:?}");
     }
@@ -240,8 +263,13 @@ fn hdl1_is_the_color_of_handle_types() {
 #[cfg(feature = "jit")]
 #[test]
 fn pure_p3_layout_admits_handle_outputs_and_guards_their_slots() {
-    let asm = compile_polydat_to_assembler("input cycle: u64\nh := hash(cycle)\nj := __u64_to_json(h)\ns := __u64_to_string(h)\n").unwrap();
-    let mut k = asm.try_compile_jit().expect("handle outputs lay out; every node here has a lowering");
+    let asm = compile_polydat_to_assembler(
+        "input cycle: u64\nh := hash(cycle)\nj := __u64_to_json(h)\ns := __u64_to_string(h)\n",
+    )
+    .unwrap();
+    let mut k = asm
+        .try_compile_jit()
+        .expect("handle outputs lay out; every node here has a lowering");
     k.eval_for_slot(&[3], k.resolve_output("h").unwrap());
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| k.get("s")));
     assert!(r.is_err(), "a raw read of a handle slot must be refused");

@@ -179,7 +179,9 @@ mod tests {
         EvaluatedInput {
             tuples,
             cardinality: n,
-            index_fn: IndexFn::Lattice { axis_sizes: vec![n] },
+            index_fn: IndexFn::Lattice {
+                axis_sizes: vec![n],
+            },
         }
     }
 
@@ -209,7 +211,9 @@ mod tests {
 
     #[test]
     fn shuffle_multi_indices_produces_unique_discrete() {
-        let idx = IndexFn::Lattice { axis_sizes: vec![3, 4] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![3, 4],
+        };
         let out = shuffle_multi_indices(&idx, Some(10));
         assert_eq!(out.len(), 10);
         let mut seen = std::collections::HashSet::new();
@@ -224,7 +228,9 @@ mod tests {
 
     #[test]
     fn shuffle_multi_indices_full_lattice() {
-        let idx = IndexFn::Lattice { axis_sizes: vec![2, 2] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![2, 2],
+        };
         let out = shuffle_multi_indices(&idx, None);
         assert_eq!(out.len(), 4);
         let mut sorted = out.clone();
@@ -247,7 +253,9 @@ mod tests {
 
     #[test]
     fn accepts_any_non_none() {
-        assert!(Shuffle.accepts_input(Some(&IndexFn::Lattice { axis_sizes: vec![3] })));
+        assert!(Shuffle.accepts_input(Some(&IndexFn::Lattice {
+            axis_sizes: vec![3]
+        })));
         assert!(!Shuffle.accepts_input(None));
     }
 }

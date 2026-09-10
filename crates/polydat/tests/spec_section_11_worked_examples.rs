@@ -40,10 +40,7 @@ fn dispense(ast: &Comprehension) -> Vec<Vec<(String, TupleValue)>> {
 
 #[test]
 fn spec_11_1_single_cartesian_basic_dispense() {
-    let ast = Comprehension::cartesian(vec![
-        clause("k", &[1, 2, 3]),
-        clause("profile", &[10, 20]),
-    ]);
+    let ast = Comprehension::cartesian(vec![clause("k", &[1, 2, 3]), clause("profile", &[10, 20])]);
     let m = ast.metadata();
     // §11.1: cardinality = Bounded(10 × len(profiles)).
     assert!(matches!(
@@ -64,7 +61,10 @@ fn spec_11_1_single_cartesian_basic_dispense() {
 
 #[test]
 fn spec_11_2_filter_then_extrema_truncated() {
-    let cart = Comprehension::cartesian(vec![clause("k", &[1, 5, 10]), clause("limit", &[10, 50, 100])]);
+    let cart = Comprehension::cartesian(vec![
+        clause("k", &[1, 5, 10]),
+        clause("limit", &[10, 50, 100]),
+    ]);
     let filtered = Comprehension::filter(cart, "true");
     // SRD-18d §214: `extrema/k` truncates by *strata* (interior
     // count), not by tuple count. `extrema/1` keeps the first stratum
@@ -82,7 +82,8 @@ fn spec_11_2_filter_then_extrema_truncated() {
 fn spec_11_3_union_of_sub_spaces() {
     // Two sub-spaces, each producing tuples (k, limit).
     let sub_a = Comprehension::cartesian(vec![clause("k", &[10]), clause("limit", &[10, 50, 100])]);
-    let sub_b = Comprehension::cartesian(vec![clause("k", &[100]), clause("limit", &[100, 200, 500])]);
+    let sub_b =
+        Comprehension::cartesian(vec![clause("k", &[100]), clause("limit", &[100, 200, 500])]);
     let ast = Comprehension::union(vec![sub_a, sub_b]);
     let tuples = dispense(&ast);
     // 1×3 + 1×3 = 6 tuples.
@@ -93,8 +94,14 @@ fn spec_11_3_union_of_sub_spaces() {
 
 #[test]
 fn spec_11_4_union_with_outer_lex_truncation() {
-    let sub_a = Comprehension::cartesian(vec![clause("k", &[10]), clause("limit", &[10, 20, 30, 40, 50])]);
-    let sub_b = Comprehension::cartesian(vec![clause("k", &[100]), clause("limit", &[100, 200, 300, 400, 500])]);
+    let sub_a = Comprehension::cartesian(vec![
+        clause("k", &[10]),
+        clause("limit", &[10, 20, 30, 40, 50]),
+    ]);
+    let sub_b = Comprehension::cartesian(vec![
+        clause("k", &[100]),
+        clause("limit", &[100, 200, 300, 400, 500]),
+    ]);
     let outer = Comprehension::order(
         Comprehension::union(vec![sub_a, sub_b]),
         StrategyName::Lex,
@@ -110,7 +117,8 @@ fn spec_11_4_union_with_outer_lex_truncation() {
 #[test]
 fn spec_11_5_halton_over_union() {
     let sub_a = Comprehension::cartesian(vec![clause("k", &[10]), clause("limit", &[10, 20, 30])]);
-    let sub_b = Comprehension::cartesian(vec![clause("k", &[100]), clause("limit", &[100, 200, 300])]);
+    let sub_b =
+        Comprehension::cartesian(vec![clause("k", &[100]), clause("limit", &[100, 200, 300])]);
     let ast = Comprehension::order(
         Comprehension::union(vec![sub_a, sub_b]),
         StrategyName::Halton,
@@ -286,7 +294,7 @@ fn spec_11_12_dependent_source_loses_addressability() {
 #[test]
 fn spec_11_13_three_surfaces_from_one_comprehension() {
     use polydat::iteration::comprehension::strategies::Tuple;
-    use polydat::iteration::comprehension::surfaces::{compile as surfaces_compile, KernelScope};
+    use polydat::iteration::comprehension::surfaces::{KernelScope, compile as surfaces_compile};
 
     #[derive(Clone)]
     struct K(&'static str);
@@ -321,7 +329,10 @@ fn dispense_bound_matches_simple_cartesian() {
     let ast = Comprehension::cartesian(vec![clause("a", &[1, 2, 3]), clause("b", &[10, 20])]);
     let prog = compile(&optimize(ast));
     let bound = check_bounds(&prog);
-    assert!(bound.barriers.is_empty(), "fully-streaming cartesian has no barriers");
+    assert!(
+        bound.barriers.is_empty(),
+        "fully-streaming cartesian has no barriers"
+    );
     assert!(bound.stack_depth >= 2);
 }
 

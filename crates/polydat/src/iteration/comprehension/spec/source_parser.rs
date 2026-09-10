@@ -73,7 +73,9 @@ pub fn parse_source(text: &str) -> Result<Source, SourceParseError> {
     }
     if trimmed.len() >= 2 && trimmed.starts_with('\'') && trimmed.ends_with('\'') {
         let inner = &trimmed[1..trimmed.len() - 1];
-        return Ok(Source::Literal { values: vec![LiteralValue::String(inner.to_string())] });
+        return Ok(Source::Literal {
+            values: vec![LiteralValue::String(inner.to_string())],
+        });
     }
 
     // List comprehension sugar `[…]` (SRD-18f Stage 2).
@@ -116,7 +118,9 @@ pub fn parse_source(text: &str) -> Result<Source, SourceParseError> {
     // literal value (the comprehension dispenses exactly one
     // tuple).
     if let Some(value) = try_parse_bare_scalar(trimmed) {
-        return Ok(Source::Literal { values: vec![value] });
+        return Ok(Source::Literal {
+            values: vec![value],
+        });
     }
 
     // Bare comma-separated list — the legacy grammar accepts
@@ -148,11 +152,31 @@ pub fn parse_source(text: &str) -> Result<Source, SourceParseError> {
 /// as the legacy `looks_like_literal_list` in
 /// `polydat::iteration::comprehension::eval`.
 fn looks_like_bare_value_list(text: &str) -> bool {
-    !text.chars().any(|c| matches!(
-        c,
-        '(' | ')' | '[' | ']' | '{' | '}' | '\'' | '"'
-        | '+' | '*' | '/' | '%' | '=' | '<' | '>' | '!' | '&' | '|' | '~' | '^' | '?'
-    ))
+    !text.chars().any(|c| {
+        matches!(
+            c,
+            '(' | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '\''
+                | '"'
+                | '+'
+                | '*'
+                | '/'
+                | '%'
+                | '='
+                | '<'
+                | '>'
+                | '!'
+                | '&'
+                | '|'
+                | '~'
+                | '^'
+                | '?'
+        )
+    })
 }
 
 /// Detect dynamic-placeholder text like `{a_{b}_c}` (nested
@@ -187,10 +211,7 @@ fn parse_literal_list(inner: &str) -> Result<Source, SourceParseError> {
         return Ok(Source::Literal { values: Vec::new() });
     }
 
-    let values: Vec<LiteralValue> = parts
-        .iter()
-        .map(|s| parse_literal_value(s))
-        .collect();
+    let values: Vec<LiteralValue> = parts.iter().map(|s| parse_literal_value(s)).collect();
 
     Ok(Source::Literal { values })
 }
@@ -202,7 +223,11 @@ fn parse_literal_list(inner: &str) -> Result<Source, SourceParseError> {
 /// spread makes the list eval-time (`Source::Generator`).
 /// SRD-18f Stage 2.
 fn bracket_is_pure_literal(inner: &str) -> bool {
-    let elems: Vec<&str> = inner.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+    let elems: Vec<&str> = inner
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect();
     if elems.is_empty() {
         return true; // `[]` is a (degenerate) literal list
     }
@@ -228,9 +253,7 @@ fn parse_literal_value(s: &str) -> LiteralValue {
         return LiteralValue::Bool(false);
     }
     // Quoted string
-    if (s.starts_with('"') && s.ends_with('"'))
-        || (s.starts_with('\'') && s.ends_with('\''))
-    {
+    if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
         let inner = &s[1..s.len() - 1];
         return LiteralValue::String(inner.to_string());
     }
@@ -310,9 +333,7 @@ fn strip_curly(s: &str) -> Option<String> {
     if s.starts_with('{') && s.ends_with('}') {
         let inner = &s[1..s.len() - 1];
         let trimmed = inner.trim();
-        if !trimmed.is_empty()
-            && trimmed.chars().all(|c| c.is_alphanumeric() || c == '_')
-        {
+        if !trimmed.is_empty() && trimmed.chars().all(|c| c.is_alphanumeric() || c == '_') {
             return Some(trimmed.to_string());
         }
     }
@@ -331,9 +352,7 @@ fn try_parse_bare_scalar(s: &str) -> Option<LiteralValue> {
     if s.eq_ignore_ascii_case("false") {
         return Some(LiteralValue::Bool(false));
     }
-    if (s.starts_with('"') && s.ends_with('"'))
-        || (s.starts_with('\'') && s.ends_with('\''))
-    {
+    if (s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')) {
         let inner = &s[1..s.len() - 1];
         return Some(LiteralValue::String(inner.to_string()));
     }
@@ -347,7 +366,9 @@ fn try_parse_bare_scalar(s: &str) -> Option<LiteralValue> {
 }
 
 fn looks_like_function_call(s: &str) -> bool {
-    let Some(open) = s.find('(') else { return false; };
+    let Some(open) = s.find('(') else {
+        return false;
+    };
     if !s.ends_with(')') {
         return false;
     }
@@ -408,7 +429,14 @@ mod tests {
     #[test]
     fn int_range_exclusive() {
         let s = parse_source("1..10").unwrap();
-        assert!(matches!(s, Source::IntRange { lo: 1, hi: 10, step: 1 }));
+        assert!(matches!(
+            s,
+            Source::IntRange {
+                lo: 1,
+                hi: 10,
+                step: 1
+            }
+        ));
     }
 
     #[test]
@@ -417,11 +445,14 @@ mod tests {
         let s = parse_source(r#""rerank_def, rerank_1x, rerank_2x""#).unwrap();
         match s {
             Source::Literal { values } => {
-                assert_eq!(values, vec![
-                    LiteralValue::String("rerank_def".into()),
-                    LiteralValue::String("rerank_1x".into()),
-                    LiteralValue::String("rerank_2x".into()),
-                ]);
+                assert_eq!(
+                    values,
+                    vec![
+                        LiteralValue::String("rerank_def".into()),
+                        LiteralValue::String("rerank_1x".into()),
+                        LiteralValue::String("rerank_2x".into()),
+                    ]
+                );
             }
             other => panic!("expected striped Literal, got {other:?}"),
         }
@@ -433,7 +464,10 @@ mod tests {
         let s = parse_source("'rerank_def, rerank_1x'").unwrap();
         match s {
             Source::Literal { values } => {
-                assert_eq!(values, vec![LiteralValue::String("rerank_def, rerank_1x".into())]);
+                assert_eq!(
+                    values,
+                    vec![LiteralValue::String("rerank_def, rerank_1x".into())]
+                );
             }
             other => panic!("expected atomic Literal, got {other:?}"),
         }
@@ -442,13 +476,27 @@ mod tests {
     #[test]
     fn int_range_inclusive() {
         let s = parse_source("1..=10").unwrap();
-        assert!(matches!(s, Source::IntRange { lo: 1, hi: 11, step: 1 }));
+        assert!(matches!(
+            s,
+            Source::IntRange {
+                lo: 1,
+                hi: 11,
+                step: 1
+            }
+        ));
     }
 
     #[test]
     fn int_range_with_step() {
         let s = parse_source("0..100 step 10").unwrap();
-        assert!(matches!(s, Source::IntRange { lo: 0, hi: 100, step: 10 }));
+        assert!(matches!(
+            s,
+            Source::IntRange {
+                lo: 0,
+                hi: 100,
+                step: 10
+            }
+        ));
     }
 
     #[test]
@@ -481,7 +529,10 @@ mod tests {
     #[test]
     fn bracket_with_spread_defers_to_generator() {
         let s = parse_source("[xs…]").unwrap();
-        assert!(matches!(s, Source::Generator { .. }), "spread list must defer: {s:?}");
+        assert!(
+            matches!(s, Source::Generator { .. }),
+            "spread list must defer: {s:?}"
+        );
     }
 
     #[test]

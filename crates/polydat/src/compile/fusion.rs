@@ -12,8 +12,8 @@
 
 use std::borrow::Cow;
 
-use crate::kernel::WireSource;
 use crate::ast::{Commutativity, ConstValue, PolydatNode};
+use crate::kernel::WireSource;
 
 // ---------------------------------------------------------------------------
 // Pattern types
@@ -73,7 +73,11 @@ impl FusionPattern {
         inputs: Vec<FusionPattern>,
         bind: impl Into<Cow<'static, str>>,
     ) -> Self {
-        FusionPattern::Node { op, inputs, bind: bind.into() }
+        FusionPattern::Node {
+            op,
+            inputs,
+            bind: bind.into(),
+        }
     }
 
     /// Convenience: `any(bind)`.
@@ -237,10 +241,14 @@ fn try_match(
             let matched = match_inputs(inputs, node_wiring, &node.commutativity(), view)?;
 
             let mut result = matched;
-            result.constants.push((bind.to_string(), node.jit_constants()));
+            result
+                .constants
+                .push((bind.to_string(), node.jit_constants()));
 
             // Also capture typed constants from the slot model.
-            let typed: Vec<ConstValue> = node.meta().const_slots()
+            let typed: Vec<ConstValue> = node
+                .meta()
+                .const_slots()
                 .iter()
                 .map(|c| c.1.clone())
                 .collect();
@@ -252,7 +260,12 @@ fn try_match(
             Some(result)
         }
 
-        FusionPattern::VariadicNode { op, child_pattern, bind, min_children } => {
+        FusionPattern::VariadicNode {
+            op,
+            child_pattern,
+            bind,
+            min_children,
+        } => {
             let node_idx = match source {
                 WireSource::NodeOutput(idx, 0) => *idx,
                 _ => return None,
@@ -287,8 +300,12 @@ fn try_match(
             }
 
             // Capture the variadic node's own constants.
-            result.constants.push((bind.to_string(), node.jit_constants()));
-            let typed: Vec<ConstValue> = node.meta().const_slots()
+            result
+                .constants
+                .push((bind.to_string(), node.jit_constants()));
+            let typed: Vec<ConstValue> = node
+                .meta()
+                .const_slots()
                 .iter()
                 .map(|c| c.1.clone())
                 .collect();
@@ -390,8 +407,7 @@ fn try_groups_match(
     ) -> Option<MatchResult> {
         if group_idx >= groups.len() {
             // All groups assigned — try matching with this mapping.
-            let reordered: Vec<&WireSource> =
-                index_map.iter().map(|&i| &wires[i]).collect();
+            let reordered: Vec<&WireSource> = index_map.iter().map(|&i| &wires[i]).collect();
             return match_ordered(patterns, &reordered, view);
         }
 
@@ -424,7 +440,9 @@ fn permutations(items: &[usize]) -> Vec<Vec<usize>> {
     }
     let mut result = Vec::new();
     for (i, &item) in items.iter().enumerate() {
-        let rest: Vec<usize> = items.iter().enumerate()
+        let rest: Vec<usize> = items
+            .iter()
+            .enumerate()
             .filter(|(j, _)| *j != i)
             .map(|(_, &v)| v)
             .collect();
@@ -467,10 +485,7 @@ pub fn apply_fusions(
         // Compute consumer counts for the external-consumer guard.
         let consumer_counts = compute_consumer_counts(nodes, wiring);
 
-        let view = NodeView {
-            nodes,
-            wiring,
-        };
+        let view = NodeView { nodes, wiring };
 
         // Try each rule against each node.
         let mut best_match: Option<(usize, MatchResult, &FusionRule)> = None;
@@ -607,9 +622,7 @@ fn apply_single_fusion(
 
     // Update name map: remove names for consumed interior nodes.
     // Keep the root node's name(s) so downstream references still resolve.
-    name_to_idx.retain(|_, &mut idx| {
-        !result.consumed_nodes.contains(&idx) || idx == root_idx
-    });
+    name_to_idx.retain(|_, &mut idx| !result.consumed_nodes.contains(&idx) || idx == root_idx);
 
     // Rewire any downstream nodes that referenced consumed interior
     // nodes. This shouldn't happen if the consumer guard passed, but
@@ -627,7 +640,7 @@ fn apply_single_fusion(
 /// equivalence property tests that exercise the fused node's
 /// `decomposed()` contract against random inputs.
 pub fn default_rules() -> Vec<FusionRule> {
-    use crate::library::hash::{HashRange, HashInterval};
+    use crate::library::hash::{HashInterval, HashRange};
     use crate::library::lerp::ScaleRange;
 
     vec![
@@ -639,9 +652,11 @@ pub fn default_rules() -> Vec<FusionRule> {
             name: "hash_mod_to_hash_range",
             pattern: FusionPattern::node(
                 "mod",
-                vec![
-                    FusionPattern::node("hash", vec![FusionPattern::any("x")], "hash_node"),
-                ],
+                vec![FusionPattern::node(
+                    "hash",
+                    vec![FusionPattern::any("x")],
+                    "hash_node",
+                )],
                 "mod_node",
             ),
             replacement: |m| {
@@ -650,7 +665,6 @@ pub fn default_rules() -> Vec<FusionRule> {
             },
             input_bindings: &["x"],
         },
-
         // lerp(unit_interval(hash(x)), lo, hi) → hash_interval(x, lo, hi)
         //
         // Single hash + scaled float in one step.
@@ -658,19 +672,15 @@ pub fn default_rules() -> Vec<FusionRule> {
             name: "hash_unit_lerp_to_hash_interval",
             pattern: FusionPattern::node(
                 "lerp",
-                vec![
-                    FusionPattern::node(
-                        "unit_interval",
-                        vec![
-                            FusionPattern::node(
-                                "hash",
-                                vec![FusionPattern::any("x")],
-                                "hash_node",
-                            ),
-                        ],
-                        "ui_node",
-                    ),
-                ],
+                vec![FusionPattern::node(
+                    "unit_interval",
+                    vec![FusionPattern::node(
+                        "hash",
+                        vec![FusionPattern::any("x")],
+                        "hash_node",
+                    )],
+                    "ui_node",
+                )],
                 "lerp_node",
             ),
             replacement: |m| {
@@ -681,7 +691,6 @@ pub fn default_rules() -> Vec<FusionRule> {
             },
             input_bindings: &["x"],
         },
-
         // scale_range fusion: unit_interval(x) fed into lerp(t, lo, hi)
         // → scale_range(x, lo, hi)
         //
@@ -690,13 +699,11 @@ pub fn default_rules() -> Vec<FusionRule> {
             name: "unit_lerp_to_scale_range",
             pattern: FusionPattern::node(
                 "lerp",
-                vec![
-                    FusionPattern::node(
-                        "unit_interval",
-                        vec![FusionPattern::any("x")],
-                        "ui_node",
-                    ),
-                ],
+                vec![FusionPattern::node(
+                    "unit_interval",
+                    vec![FusionPattern::any("x")],
+                    "ui_node",
+                )],
                 "lerp_node",
             ),
             replacement: |m| {
@@ -743,11 +750,7 @@ impl DecomposedGraph {
     }
 
     /// Add a node and return its index.
-    pub fn add_node(
-        &mut self,
-        node: Box<dyn PolydatNode>,
-        wires: Vec<DecomposedWire>,
-    ) -> usize {
+    pub fn add_node(&mut self, node: Box<dyn PolydatNode>, wires: Vec<DecomposedWire>) -> usize {
         let idx = self.nodes.len();
         self.nodes.push((node, wires));
         idx
@@ -810,8 +813,8 @@ pub trait FusedNode: PolydatNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compile::assembly::{PolydatAssembler, WireRef};
     use crate::ast::Value;
+    use crate::compile::assembly::{PolydatAssembler, WireRef};
     use crate::library::arithmetic::Mod;
     use crate::library::hash::Hash;
 
@@ -894,7 +897,7 @@ mod tests {
             let inputs: Vec<Value> = (0..input_count)
                 .map(|port| {
                     let v = xxhash_rust::xxh3::xxh3_64(
-                        &(seed.wrapping_mul(31).wrapping_add(port as u64)).to_le_bytes()
+                        &(seed.wrapping_mul(31).wrapping_add(port as u64)).to_le_bytes(),
                     );
                     // Use the port type from the fused node's metadata.
                     match fused.meta().wire_inputs()[port].typ {
@@ -913,12 +916,15 @@ mod tests {
             let decomposed_outputs = decomposed.eval(&inputs);
 
             // Compare each output.
-            for (port_idx, (fused_val, decomposed_val)) in
-                fused_outputs.iter().zip(decomposed_outputs.iter()).enumerate()
+            for (port_idx, (fused_val, decomposed_val)) in fused_outputs
+                .iter()
+                .zip(decomposed_outputs.iter())
+                .enumerate()
             {
                 match (&fused_val, &decomposed_val) {
                     (Value::U64(a), Value::U64(b)) => {
-                        assert_eq!(a, b,
+                        assert_eq!(
+                            a, b,
                             "equivalence failed: seed={seed} port={port_idx} fused={a} decomposed={b}"
                         );
                     }
@@ -926,7 +932,8 @@ mod tests {
                         // Allow tiny floating point differences from operation reordering.
                         let diff = (a - b).abs();
                         let tolerance = 1e-10 * a.abs().max(b.abs()).max(1.0);
-                        assert!(diff <= tolerance,
+                        assert!(
+                            diff <= tolerance,
                             "equivalence failed: seed={seed} port={port_idx} fused={a} decomposed={b} diff={diff}"
                         );
                     }
@@ -1001,9 +1008,15 @@ mod tests {
 
         // Build a graph: sum(a, b, c) where a, b, c are coordinates
         let mut asm = PolydatAssembler::new(vec!["a".into(), "b".into(), "c".into()]);
-        asm.add_node("s", Box::new(Sum::new(3)), vec![
-            WireRef::input("a"), WireRef::input("b"), WireRef::input("c"),
-        ]);
+        asm.add_node(
+            "s",
+            Box::new(Sum::new(3)),
+            vec![
+                WireRef::input("a"),
+                WireRef::input("b"),
+                WireRef::input("c"),
+            ],
+        );
         asm.add_output("out", WireRef::node("s"));
 
         let mut kernel = asm.compile().unwrap();
@@ -1015,18 +1028,24 @@ mod tests {
 
     #[test]
     fn typed_constants_captured_in_match() {
-        use crate::library::hash::HashRange;
         use crate::ast::ConstValue;
+        use crate::library::hash::HashRange;
 
         // Build: hash_range(cycle, 100)
         let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
-        asm.add_node("hr", Box::new(HashRange::new(100)), vec![WireRef::input("cycle")]);
+        asm.add_node(
+            "hr",
+            Box::new(HashRange::new(100)),
+            vec![WireRef::input("cycle")],
+        );
         asm.add_output("out", WireRef::node("hr"));
 
         // Manually test pattern matching on the resolved graph.
         // HashRange has slots: [Wire("input"), Const("max", U64, 100)]
         let node = HashRange::new(100);
-        let typed: Vec<ConstValue> = node.meta().const_slots()
+        let typed: Vec<ConstValue> = node
+            .meta()
+            .const_slots()
             .iter()
             .map(|c| c.1.clone())
             .collect();
@@ -1040,9 +1059,10 @@ mod tests {
         let mut m = MatchResult::new();
         m.wires.push(("x".to_string(), WireSource::Input(0)));
         m.constants.push(("mod_node".to_string(), vec![42]));
-        m.typed_constants.push(("mod_node".to_string(), vec![
-            crate::ast::ConstValue::U64(42),
-        ]));
+        m.typed_constants.push((
+            "mod_node".to_string(),
+            vec![crate::ast::ConstValue::U64(42)],
+        ));
 
         assert_eq!(m.const_u64("mod_node"), 42);
         assert_eq!(m.typed_consts("mod_node").len(), 1);

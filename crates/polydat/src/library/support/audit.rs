@@ -39,7 +39,8 @@ static LOG_FN: OnceLock<LogFn> = OnceLock::new();
 /// flow through its own logger alongside the rest of the run output.
 /// Subsequent calls are no-ops.
 pub fn set_log_fn<F>(f: F)
-where F: Fn(LogLevel, &str) + Send + Sync + 'static
+where
+    F: Fn(LogLevel, &str) + Send + Sync + 'static,
 {
     let _ = LOG_FN.set(Box::new(f));
 }
@@ -54,8 +55,8 @@ pub fn log(level: LogLevel, msg: &str) {
         let tag = match level {
             LogLevel::Trace => "TRC",
             LogLevel::Debug => "DBG",
-            LogLevel::Info  => "INF",
-            LogLevel::Warn  => "WRN",
+            LogLevel::Info => "INF",
+            LogLevel::Warn => "WRN",
             LogLevel::Error => "ERR",
         };
         eprintln!("{tag} {msg}");
@@ -63,10 +64,18 @@ pub fn log(level: LogLevel, msg: &str) {
 }
 
 /// Convenience helpers for callsite ergonomics.
-pub fn debug(msg: &str) { log(LogLevel::Debug, msg); }
-pub fn info(msg: &str)  { log(LogLevel::Info,  msg); }
-pub fn warn(msg: &str)  { log(LogLevel::Warn,  msg); }
-pub fn error(msg: &str) { log(LogLevel::Error, msg); }
+pub fn debug(msg: &str) {
+    log(LogLevel::Debug, msg);
+}
+pub fn info(msg: &str) {
+    log(LogLevel::Info, msg);
+}
+pub fn warn(msg: &str) {
+    log(LogLevel::Warn, msg);
+}
+pub fn error(msg: &str) {
+    log(LogLevel::Error, msg);
+}
 
 /// Record that `dataset_prebuffer(...)` was invoked. Emitted at
 /// the top of `do_dataset_prebuffer` *unconditionally* — fires
@@ -93,7 +102,9 @@ pub fn record_prebuffered(source: &str, profile: &str, facet: &str) {
 /// (`uniform`, `ivvec32`, `generic-typed`, …) for at-a-glance
 /// debugging.
 pub fn record_opened(source: &str, profile: &str, facet: &str, kind: &str) {
-    debug(&format!("vectordata: opened {source}:{profile}/{facet} (kind={kind})"));
+    debug(&format!(
+        "vectordata: opened {source}:{profile}/{facet} (kind={kind})"
+    ));
 }
 
 /// One-line summary at the end of `dataset_prebuffer`. Pairs

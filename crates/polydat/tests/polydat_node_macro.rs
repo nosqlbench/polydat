@@ -140,10 +140,14 @@ fn macro_slot_type_is_wire_for_every_generated_input() {
 fn macro_registered_node_appears_in_runtime_registry() {
     let sigs = polydat::dsl::registry::registry();
     let names: Vec<&'static str> = sigs.iter().map(|s| s.name).collect();
-    assert!(names.contains(&"macro_pilot_double"),
-        "macro-registered `macro_pilot_double` MUST appear in registry");
-    assert!(names.contains(&"macro_pilot_str_eq"),
-        "macro-registered `macro_pilot_str_eq` MUST appear in registry");
+    assert!(
+        names.contains(&"macro_pilot_double"),
+        "macro-registered `macro_pilot_double` MUST appear in registry"
+    );
+    assert!(
+        names.contains(&"macro_pilot_str_eq"),
+        "macro-registered `macro_pilot_str_eq` MUST appear in registry"
+    );
     assert!(names.contains(&"macro_pilot_format"));
     assert!(names.contains(&"macro_pilot_not"));
 }
@@ -153,10 +157,22 @@ fn macro_registered_node_carries_attribute_specified_category() {
     use polydat::dsl::registry::FuncCategory;
     let sigs = polydat::dsl::registry::registry();
     let find = |n: &str| sigs.iter().find(|s| s.name == n).cloned();
-    assert_eq!(find("macro_pilot_double").unwrap().category, FuncCategory::Math);
-    assert_eq!(find("macro_pilot_str_eq").unwrap().category, FuncCategory::Comparison);
-    assert_eq!(find("macro_pilot_format").unwrap().category, FuncCategory::String);
-    assert_eq!(find("macro_pilot_not").unwrap().category, FuncCategory::Diagnostic);
+    assert_eq!(
+        find("macro_pilot_double").unwrap().category,
+        FuncCategory::Math
+    );
+    assert_eq!(
+        find("macro_pilot_str_eq").unwrap().category,
+        FuncCategory::Comparison
+    );
+    assert_eq!(
+        find("macro_pilot_format").unwrap().category,
+        FuncCategory::String
+    );
+    assert_eq!(
+        find("macro_pilot_not").unwrap().category,
+        FuncCategory::Diagnostic
+    );
 }
 
 #[test]
@@ -170,7 +186,9 @@ fn macro_registered_node_resolves_via_registry_lookup() {
 #[test]
 fn macro_registered_funcsig_params_match_function_signature() {
     let sigs = polydat::dsl::registry::registry();
-    let sig = sigs.iter().find(|s| s.name == "macro_pilot_str_eq")
+    let sig = sigs
+        .iter()
+        .find(|s| s.name == "macro_pilot_str_eq")
         .expect("macro_pilot_str_eq registered");
     assert_eq!(sig.params.len(), 2, "two args ⇒ two ParamSpec entries");
     assert_eq!(sig.params[0].name, "a");
@@ -181,7 +199,6 @@ fn macro_registered_funcsig_params_match_function_signature() {
 }
 
 // ── PR B.5 — Const<T> args + #[poly_default(VAL)] ──
-
 
 // Pilot 5 — single Const<u64> with no default. Wire u64 input
 // gets shifted by the captured const offset.
@@ -200,11 +217,7 @@ fn macro_pilot_prefix(value: u64, prefix: Const<&str>) -> String {
 // Pilot 7 — multiple consts + default. Optional `scale` falls
 // back to `1` when the workload doesn't supply it.
 #[polydat::polydat_node(category = Math)]
-fn macro_pilot_affine(
-    x: u64,
-    intercept: Const<u64>,
-    #[poly_default(1)] scale: Const<u64>,
-) -> u64 {
+fn macro_pilot_affine(x: u64, intercept: Const<u64>, #[poly_default(1)] scale: Const<u64>) -> u64 {
     (x * *scale) + *intercept
 }
 
@@ -217,7 +230,9 @@ fn macro_pilot_scale_or_zero(x: u64, factor: Const<f64>, enable: Const<bool>) ->
 #[test]
 fn macro_const_arg_slot_type_in_funcsig() {
     let sigs = polydat::dsl::registry::registry();
-    let sig = sigs.iter().find(|s| s.name == "macro_pilot_shift")
+    let sig = sigs
+        .iter()
+        .find(|s| s.name == "macro_pilot_shift")
         .expect("macro_pilot_shift registered");
     assert_eq!(sig.params.len(), 2, "wire + const = 2 params");
     assert!(matches!(sig.params[0].slot_type, SlotType::Wire));
@@ -229,7 +244,10 @@ fn macro_const_arg_slot_type_in_funcsig() {
 #[test]
 fn macro_const_str_slot_type_in_funcsig() {
     let sigs = polydat::dsl::registry::registry();
-    let sig = sigs.iter().find(|s| s.name == "macro_pilot_prefix").unwrap();
+    let sig = sigs
+        .iter()
+        .find(|s| s.name == "macro_pilot_prefix")
+        .unwrap();
     assert!(matches!(sig.params[0].slot_type, SlotType::Wire));
     assert!(matches!(sig.params[1].slot_type, SlotType::ConstStr));
 }
@@ -237,18 +255,24 @@ fn macro_const_str_slot_type_in_funcsig() {
 #[test]
 fn macro_poly_default_marks_param_optional() {
     let sigs = polydat::dsl::registry::registry();
-    let sig = sigs.iter().find(|s| s.name == "macro_pilot_affine").unwrap();
+    let sig = sigs
+        .iter()
+        .find(|s| s.name == "macro_pilot_affine")
+        .unwrap();
     assert_eq!(sig.params.len(), 3);
     assert!(sig.params[0].required, "x is a required wire");
-    assert!(sig.params[1].required, "intercept has no default → required");
+    assert!(
+        sig.params[1].required,
+        "intercept has no default → required"
+    );
     assert!(!sig.params[2].required, "scale has poly_default → optional");
 }
 
 #[test]
 fn macro_const_node_constructed_via_runtime_factory_with_const_value() {
+    use polydat::ast::PortType;
     use polydat::dsl::factory::ConstArg;
     use polydat::dsl::registry::registry;
-    use polydat::ast::PortType;
 
     // Walk the inventory'd NodeRegistration entries until we
     // find the one that handles "macro_pilot_shift", invoke
@@ -275,8 +299,8 @@ fn macro_const_node_constructed_via_runtime_factory_with_const_value() {
 
 #[test]
 fn macro_const_str_node_uses_captured_value_at_eval_time() {
-    use polydat::dsl::factory::ConstArg;
     use polydat::ast::PortType;
+    use polydat::dsl::factory::ConstArg;
     for entry in inventory::iter::<polydat::dsl::registry::NodeRegistration>() {
         if let Some(result) = (entry.build)(
             "macro_pilot_prefix",
@@ -296,8 +320,8 @@ fn macro_const_str_node_uses_captured_value_at_eval_time() {
 
 #[test]
 fn macro_poly_default_fallback_used_when_const_absent() {
-    use polydat::dsl::factory::ConstArg;
     use polydat::ast::PortType;
+    use polydat::dsl::factory::ConstArg;
     for entry in inventory::iter::<polydat::dsl::registry::NodeRegistration>() {
         if let Some(result) = (entry.build)(
             "macro_pilot_affine",
@@ -317,8 +341,8 @@ fn macro_poly_default_fallback_used_when_const_absent() {
 
 #[test]
 fn macro_poly_default_overridden_when_const_supplied() {
-    use polydat::dsl::factory::ConstArg;
     use polydat::ast::PortType;
+    use polydat::dsl::factory::ConstArg;
     for entry in inventory::iter::<polydat::dsl::registry::NodeRegistration>() {
         if let Some(result) = (entry.build)(
             "macro_pilot_affine",
@@ -350,7 +374,10 @@ fn macro_missing_required_const_returns_error() {
                 Ok(_) => panic!("missing required const ⇒ Err expected"),
                 Err(e) => e,
             };
-            assert!(err.contains("offset"), "error must mention missing arg name");
+            assert!(
+                err.contains("offset"),
+                "error must mention missing arg name"
+            );
             return;
         }
     }
@@ -359,8 +386,8 @@ fn macro_missing_required_const_returns_error() {
 
 #[test]
 fn macro_mixed_const_types_evaluate_correctly() {
-    use polydat::dsl::factory::ConstArg;
     use polydat::ast::PortType;
+    use polydat::dsl::factory::ConstArg;
     for entry in inventory::iter::<polydat::dsl::registry::NodeRegistration>() {
         if let Some(result) = (entry.build)(
             "macro_pilot_scale_or_zero",
@@ -402,8 +429,7 @@ impl PrecomputedScale {
 fn macro_pilot_setup(
     input: u64,
     seed: polydat::derive_support::Const<&str>,
-    #[poly_const(PrecomputedScale::from_seed, from = seed)]
-    scaled: &PrecomputedScale,
+    #[poly_const(PrecomputedScale::from_seed, from = seed)] scaled: &PrecomputedScale,
 ) -> u64 {
     input * scaled.factor
 }
@@ -433,7 +459,9 @@ fn macro_u32_round_trip() {
     assert_eq!(out[0].as_u64(), 14);
     if let Slot::Wire(ref p) = node.meta().ins[0] {
         assert_eq!(p.typ, PortType::U32);
-    } else { panic!(); }
+    } else {
+        panic!();
+    }
 }
 
 #[test]
@@ -471,7 +499,9 @@ fn macro_pilot_vec_f32_passthrough(input: &[f32]) -> Vec<f32> {
 }
 
 #[polydat::polydat_node(category = Diagnostic)]
-fn macro_pilot_vec_i32_slicearc_in_out(input: polydat::ast::SliceArc<i32>) -> polydat::ast::SliceArc<i32> {
+fn macro_pilot_vec_i32_slicearc_in_out(
+    input: polydat::ast::SliceArc<i32>,
+) -> polydat::ast::SliceArc<i32> {
     input
 }
 
@@ -481,14 +511,18 @@ fn macro_vec_f32_borrow_to_owned_round_trip() {
     let node = MacroPilotVecF32Passthrough::default();
     if let Slot::Wire(ref p) = node.meta().ins[0] {
         assert_eq!(p.typ, PortType::VecF32);
-    } else { panic!(); }
+    } else {
+        panic!();
+    }
     assert_eq!(node.meta().outs[0].typ, PortType::VecF32);
     let payload: SliceArc<f32> = SliceArc::from_vec(vec![1.0, 2.0, 3.0]);
     let mut out = [Value::None];
     node.eval(&[Value::VecF32(payload)], &mut out);
     if let Value::VecF32(arc) = &out[0] {
         assert_eq!(arc.as_slice(), &[2.0, 4.0, 6.0]);
-    } else { panic!(); }
+    } else {
+        panic!();
+    }
 }
 
 #[test]
@@ -500,12 +534,18 @@ fn macro_vec_i32_slicearc_zero_copy() {
     node.eval(&[Value::VecI32(payload)], &mut out);
     if let Value::VecI32(arc) = &out[0] {
         assert_eq!(arc.as_slice(), &[10, 20, 30]);
-    } else { panic!(); }
+    } else {
+        panic!();
+    }
 }
 
 #[test]
 fn macro_vec_disables_jit() {
-    assert!(MacroPilotVecF32Passthrough::default().compiled_u64().is_none());
+    assert!(
+        MacroPilotVecF32Passthrough::default()
+            .compiled_u64()
+            .is_none()
+    );
 }
 
 // ── PR B.11 — Wrapper types (Bytes, Json, Handle) ──
@@ -546,7 +586,9 @@ fn macro_bytes_arg_emits_bytes_porttype() {
     let node = MacroPilotBytesPassthrough::default();
     if let polydat::ast::Slot::Wire(ref p) = node.meta().ins[0] {
         assert_eq!(p.typ, PortType::Bytes);
-    } else { panic!(); }
+    } else {
+        panic!();
+    }
     assert_eq!(node.meta().outs[0].typ, PortType::Bytes);
 }
 
@@ -559,7 +601,9 @@ fn macro_bytes_arc_passthrough_eval() {
     node.eval(&[Value::Bytes(payload.clone())], &mut out);
     if let Value::Bytes(b) = &out[0] {
         assert_eq!(&**b, &[1, 2, 3, 4]);
-    } else { panic!(); }
+    } else {
+        panic!();
+    }
 }
 
 #[test]
@@ -571,7 +615,9 @@ fn macro_bytes_borrow_and_vec_round_trip() {
     node.eval(&[Value::Bytes(payload)], &mut out);
     if let Value::Bytes(b) = &out[0] {
         assert_eq!(&**b, &[10, 20, 30]);
-    } else { panic!(); }
+    } else {
+        panic!();
+    }
 }
 
 #[test]
@@ -581,7 +627,9 @@ fn macro_json_borrow_input_to_string_output() {
     let node = MacroPilotJsonToString::default();
     if let polydat::ast::Slot::Wire(ref p) = node.meta().ins[0] {
         assert_eq!(p.typ, PortType::Json);
-    } else { panic!(); }
+    } else {
+        panic!();
+    }
     let j = Arc::new(serde_json::json!({"hello": "world"}));
     let mut out = [Value::None];
     node.eval(&[Value::Json(j)], &mut out);
@@ -595,14 +643,18 @@ fn macro_handle_passthrough_with_downcast() {
     let node = MacroPilotHandlePassthrough::default();
     if let polydat::ast::Slot::Wire(ref p) = node.meta().ins[0] {
         assert_eq!(p.typ, PortType::Handle);
-    } else { panic!(); }
+    } else {
+        panic!();
+    }
     let h: Arc<TestHandle> = Arc::new(TestHandle { value: 42 });
     let mut out = [Value::None];
     node.eval(&[Value::Handle(h.clone())], &mut out);
     if let Value::Handle(arc) = &out[0] {
         let downcast: Arc<TestHandle> = arc.clone().downcast().unwrap();
         assert_eq!(downcast.value, 42);
-    } else { panic!(); }
+    } else {
+        panic!();
+    }
 }
 
 #[test]
@@ -610,7 +662,11 @@ fn macro_wrapper_types_disable_jit() {
     use polydat::ast::PolydatNode;
     // Json and Handle types are not JIT-eligible (SRD-111 supports String and Bytes via arena handles)
     assert!(MacroPilotJsonToString::default().compiled_u64().is_none());
-    assert!(MacroPilotHandlePassthrough::default().compiled_u64().is_none());
+    assert!(
+        MacroPilotHandlePassthrough::default()
+            .compiled_u64()
+            .is_none()
+    );
 }
 
 // ── PR B.10 — Multi-output via tuple return ──
@@ -663,8 +719,8 @@ fn macro_tuple_return_writes_each_output_in_order() {
     let node = MacroPilotDivmod::default();
     let mut out = [Value::None, Value::None];
     node.eval(&[Value::U64(17), Value::U64(5)], &mut out);
-    assert_eq!(out[0], Value::U64(3));   // 17 / 5
-    assert_eq!(out[1], Value::U64(2));   // 17 % 5
+    assert_eq!(out[0], Value::U64(3)); // 17 / 5
+    assert_eq!(out[1], Value::U64(2)); // 17 % 5
 }
 
 #[test]
@@ -687,9 +743,15 @@ fn macro_tuple_return_with_mixed_types() {
 fn macro_tuple_return_funcsig_outputs_count_matches_arity() {
     use polydat::dsl::registry::registry;
     let sigs = registry();
-    let sig = sigs.iter().find(|s| s.name == "macro_pilot_divmod").unwrap();
+    let sig = sigs
+        .iter()
+        .find(|s| s.name == "macro_pilot_divmod")
+        .unwrap();
     assert_eq!(sig.outputs, 2);
-    let sig2 = sigs.iter().find(|s| s.name == "macro_pilot_div_with_flag").unwrap();
+    let sig2 = sigs
+        .iter()
+        .find(|s| s.name == "macro_pilot_div_with_flag")
+        .unwrap();
     assert_eq!(sig2.outputs, 2);
 }
 
@@ -700,7 +762,8 @@ fn macro_tuple_return_jit_round_trip() {
     // support. divmod is (u64, u64) — both JIT-eligible —
     // so a `compiled_u64()` closure is now emitted.
     let node = MacroPilotDivmod::default();
-    let compiled = node.compiled_u64()
+    let compiled = node
+        .compiled_u64()
         .expect("u64×u64→(u64,u64) is JIT-eligible after PR B.15");
     let mut out = [0u64; 2];
     compiled(&[17, 5], &mut out);
@@ -759,8 +822,7 @@ fn macro_variadic_product_identity_1() {
     let mut out = [Value::None];
     MacroPilotProduct::new(0).eval(&[], &mut out);
     assert_eq!(out[0], Value::U64(1));
-    MacroPilotProduct::new(3).eval(
-        &[Value::U64(2), Value::U64(3), Value::U64(4)], &mut out);
+    MacroPilotProduct::new(3).eval(&[Value::U64(2), Value::U64(3), Value::U64(4)], &mut out);
     assert_eq!(out[0], Value::U64(24));
 }
 
@@ -771,7 +833,11 @@ fn macro_variadic_str_concat_jit_ineligible() {
     assert!(node.compiled_u64().is_none(), "&[&str] is not JIT-eligible");
     let mut out = [Value::None];
     node.eval(
-        &[Value::Str("a".into()), Value::Str("b".into()), Value::Str("c".into())],
+        &[
+            Value::Str("a".into()),
+            Value::Str("b".into()),
+            Value::Str("c".into()),
+        ],
         &mut out,
     );
     assert_eq!(out[0].as_str(), "abc");
@@ -791,7 +857,9 @@ fn macro_variadic_u64_jit_works_via_compiled_u64() {
 fn macro_variadic_funcsig_declares_variadic_arity() {
     use polydat::dsl::registry::{Arity, registry};
     let sigs = registry();
-    let sig = sigs.iter().find(|s| s.name == "macro_pilot_sum")
+    let sig = sigs
+        .iter()
+        .find(|s| s.name == "macro_pilot_sum")
         .expect("variadic sum registered");
     assert!(matches!(sig.arity, Arity::VariadicWires { .. }));
     assert_eq!(sig.identity, Some(0));
@@ -811,16 +879,15 @@ fn macro_variadic_funcsig_carries_variadic_ctor() {
 
 #[test]
 fn macro_variadic_constructs_via_runtime_factory_with_wires_slice() {
-    use polydat::compile::assembly::WireRef;
     use polydat::ast::PortType;
-    let wires = [WireRef::input("a"), WireRef::input("b"), WireRef::input("c")];
+    use polydat::compile::assembly::WireRef;
+    let wires = [
+        WireRef::input("a"),
+        WireRef::input("b"),
+        WireRef::input("c"),
+    ];
     for entry in inventory::iter::<polydat::dsl::registry::NodeRegistration>() {
-        if let Some(result) = (entry.build)(
-            "macro_pilot_sum",
-            &wires,
-            &[PortType::U64; 3],
-            &[],
-        ) {
+        if let Some(result) = (entry.build)("macro_pilot_sum", &wires, &[PortType::U64; 3], &[]) {
             let node = result.expect("build succeeds with 3 wires");
             assert_eq!(node.meta().ins.len(), 3);
             return;
@@ -850,7 +917,11 @@ fn macro_polywire_arg_emits_runtime_typed_meta() {
     let node = MacroPilotPolywirePassthrough::new(PortType::U64);
     let meta = node.meta();
     assert!(matches!(meta.ins[0], Slot::Wire(ref p) if p.typ == PortType::U64));
-    assert_eq!(meta.outs[0].typ, PortType::U64, "SameAsInput → output tracks input");
+    assert_eq!(
+        meta.outs[0].typ,
+        PortType::U64,
+        "SameAsInput → output tracks input"
+    );
 }
 
 #[test]
@@ -871,7 +942,10 @@ fn macro_polywire_construction_with_different_runtime_types() {
         assert_eq!(node.meta().ins[0].slot_type(), SlotType::Wire);
         // Find the wire's actual port type via the meta.
         if let Slot::Wire(ref port) = node.meta().ins[0] {
-            assert_eq!(port.typ, pt, "port type tracks construction-time runtime type");
+            assert_eq!(
+                port.typ, pt,
+                "port type tracks construction-time runtime type"
+            );
         }
     }
 }
@@ -880,8 +954,11 @@ fn macro_polywire_construction_with_different_runtime_types() {
 fn macro_polywire_to_primitive_return_fixes_output_type() {
     use polydat::ast::PortType;
     let node = MacroPilotPolywireToType::new(PortType::F64);
-    assert_eq!(node.meta().outs[0].typ, PortType::Str,
-        "primitive return → fixed PortType regardless of input");
+    assert_eq!(
+        node.meta().outs[0].typ,
+        PortType::Str,
+        "primitive return → fixed PortType regardless of input"
+    );
     let mut out = [Value::None];
     node.eval(&[Value::F64(3.14)], &mut out);
     assert_eq!(out[0], Value::Str("f64".into()));
@@ -891,20 +968,28 @@ fn macro_polywire_to_primitive_return_fixes_output_type() {
 fn macro_polywire_funcsig_output_type_is_same_as_input() {
     use polydat::dsl::registry::{OutputType, registry};
     let sigs = registry();
-    let sig = sigs.iter().find(|s| s.name == "macro_pilot_polywire_passthrough")
+    let sig = sigs
+        .iter()
+        .find(|s| s.name == "macro_pilot_polywire_passthrough")
         .expect("PolyWire passthrough registered");
-    assert!(matches!(sig.output_type, OutputType::SameAsInput(0)),
-        "FuncSig.output_type must be SameAsInput(0) for Value → Value");
+    assert!(
+        matches!(sig.output_type, OutputType::SameAsInput(0)),
+        "FuncSig.output_type must be SameAsInput(0) for Value → Value"
+    );
 }
 
 #[test]
 fn macro_polywire_funcsig_output_type_is_fixed_when_return_is_primitive() {
     use polydat::dsl::registry::{OutputType, registry};
     let sigs = registry();
-    let sig = sigs.iter().find(|s| s.name == "macro_pilot_polywire_to_type")
+    let sig = sigs
+        .iter()
+        .find(|s| s.name == "macro_pilot_polywire_to_type")
         .expect("PolyWire → primitive registered");
-    assert!(matches!(sig.output_type, OutputType::Fixed),
-        "FuncSig.output_type must be Fixed when return is a primitive");
+    assert!(
+        matches!(sig.output_type, OutputType::Fixed),
+        "FuncSig.output_type must be Fixed when return is a primitive"
+    );
 }
 
 #[test]
@@ -912,8 +997,10 @@ fn macro_polywire_node_disables_jit() {
     use polydat::ast::PolydatNode;
     use polydat::ast::PortType;
     let node = MacroPilotPolywirePassthrough::new(PortType::U64);
-    assert!(node.compiled_u64().is_none(),
-        "PolyWire is not a u64-buffer carrier; JIT must be disabled");
+    assert!(
+        node.compiled_u64().is_none(),
+        "PolyWire is not a u64-buffer carrier; JIT must be disabled"
+    );
     assert_eq!(node.jit_constants(), Vec::<u64>::new());
 }
 
@@ -924,7 +1011,7 @@ fn macro_polywire_constructs_via_runtime_factory_with_wire_types() {
         if let Some(result) = (entry.build)(
             "macro_pilot_polywire_passthrough",
             &[],
-            &[PortType::Bool],   // assembler-resolved upstream wire type
+            &[PortType::Bool], // assembler-resolved upstream wire type
             &[],
         ) {
             let node = result.expect("build succeeds with wire type provided");
@@ -945,10 +1032,15 @@ fn macro_polywire_constructs_via_runtime_factory_with_wire_types() {
 #[test]
 fn macro_setup_arg_does_not_appear_in_funcsig() {
     let sigs = polydat::dsl::registry::registry();
-    let sig = sigs.iter().find(|s| s.name == "macro_pilot_setup")
+    let sig = sigs
+        .iter()
+        .find(|s| s.name == "macro_pilot_setup")
         .expect("macro_pilot_setup registered");
-    assert_eq!(sig.params.len(), 2,
-        "wire + const = 2 params; setup arg is macro-internal and absent");
+    assert_eq!(
+        sig.params.len(),
+        2,
+        "wire + const = 2 params; setup arg is macro-internal and absent"
+    );
     assert_eq!(sig.params[0].name, "input");
     assert_eq!(sig.params[1].name, "seed");
 }
@@ -983,18 +1075,21 @@ fn macro_pilot_string_passthrough(s: String) -> String {
 }
 
 // JIT-INELIGIBLE: Setup<T> arg. Macro must skip JIT emission.
-pub struct SetupPilotState { pub doubled: u64 }
+pub struct SetupPilotState {
+    pub doubled: u64,
+}
 
 impl SetupPilotState {
-    pub fn from_seed(seed: u64) -> Self { Self { doubled: seed * 2 } }
+    pub fn from_seed(seed: u64) -> Self {
+        Self { doubled: seed * 2 }
+    }
 }
 
 #[polydat::polydat_node(category = Math)]
 fn macro_pilot_with_setup(
     input: u64,
     seed: Const<u64>,
-    #[poly_const(SetupPilotState::from_seed, from = seed)]
-    state: &SetupPilotState,
+    #[poly_const(SetupPilotState::from_seed, from = seed)] state: &SetupPilotState,
 ) -> u64 {
     input + state.doubled
 }
@@ -1010,7 +1105,8 @@ fn macro_pilot_no_jit(input: u64) -> u64 {
 fn macro_jit_eligible_node_emits_compiled_u64() {
     use polydat::ast::PolydatNode;
     let node = MacroPilotAddConst::new(100);
-    let compiled = node.compiled_u64()
+    let compiled = node
+        .compiled_u64()
         .expect("Phase-2 closure must be emitted for u64+Const<u64>→u64");
     let inputs = [42u64];
     let mut outputs = [0u64];
@@ -1030,7 +1126,8 @@ fn macro_jit_eligible_node_emits_jit_constants_in_decl_order() {
 fn macro_jit_f64_wire_args_bit_reinterpret_through_u64_buffer() {
     use polydat::ast::PolydatNode;
     let node = MacroPilotF64Lt::default();
-    let compiled = node.compiled_u64()
+    let compiled = node
+        .compiled_u64()
         .expect("f64+f64→bool must emit Phase-2 closure");
     // Pack f64 inputs as their u64 bit reps.
     let inputs = [3.5f64.to_bits(), 7.5f64.to_bits()];
@@ -1048,8 +1145,11 @@ fn macro_jit_const_f64_encoded_as_bits_in_jit_constants() {
     use polydat::ast::PolydatNode;
     let node = MacroPilotF64Scaled::new(2.5);
     let consts = node.jit_constants();
-    assert_eq!(consts, vec![2.5f64.to_bits()],
-        "f64 const must be bit-reinterpreted for Phase-3 classifier");
+    assert_eq!(
+        consts,
+        vec![2.5f64.to_bits()],
+        "f64 const must be bit-reinterpreted for Phase-3 classifier"
+    );
 }
 
 #[test]
@@ -1060,7 +1160,11 @@ fn macro_jit_f64_return_writes_bit_pattern_to_u64_buffer() {
     let inputs = [4.0f64.to_bits()];
     let mut outputs = [0u64];
     compiled(&inputs, &mut outputs);
-    assert_eq!(f64::from_bits(outputs[0]), 10.0, "4.0 * 2.5 = 10.0 via JIT buffer");
+    assert_eq!(
+        f64::from_bits(outputs[0]),
+        10.0,
+        "4.0 * 2.5 = 10.0 via JIT buffer"
+    );
 }
 
 #[test]
@@ -1068,30 +1172,42 @@ fn macro_jit_string_arg_node_emits_compiled_u64_via_arena() {
     use polydat::ast::PolydatNode;
     let node = MacroPilotStringPassthrough::default();
     // Under SRD-111, String wire arguments emit Phase-2 compiled_u64 via CycleArena
-    assert!(node.compiled_u64().is_some(),
-        "String arg is JIT-eligible under SRD-111 via CycleArena");
+    assert!(
+        node.compiled_u64().is_some(),
+        "String arg is JIT-eligible under SRD-111 via CycleArena"
+    );
 }
 
 #[test]
 fn macro_jit_ineligible_setup_arg_node_skips_compiled_u64() {
     use polydat::ast::PolydatNode;
     let node = MacroPilotWithSetup::new(5);
-    assert!(node.compiled_u64().is_none(),
-        "Setup<T> arg makes node JIT-ineligible (derived state not in u64 buffer)");
+    assert!(
+        node.compiled_u64().is_none(),
+        "Setup<T> arg makes node JIT-ineligible (derived state not in u64 buffer)"
+    );
     // Const-only arg, but JIT is disabled due to Setup presence,
     // so jit_constants should NOT expose state through that path.
-    assert_eq!(node.jit_constants(), Vec::<u64>::new(),
-        "Setup-bearing node also skips jit_constants (no Phase-3 dispatch)");
+    assert_eq!(
+        node.jit_constants(),
+        Vec::<u64>::new(),
+        "Setup-bearing node also skips jit_constants (no Phase-3 dispatch)"
+    );
 }
 
 #[test]
 fn macro_no_jit_attr_blocks_emission_even_when_types_qualify() {
     use polydat::ast::PolydatNode;
     let node = MacroPilotNoJit::default();
-    assert!(node.compiled_u64().is_none(),
-        "no_jit attr blocks Phase-2 emission even for qualifying type signature");
-    assert_eq!(node.jit_constants(), Vec::<u64>::new(),
-        "no_jit attr blocks jit_constants emission too");
+    assert!(
+        node.compiled_u64().is_none(),
+        "no_jit attr blocks Phase-2 emission even for qualifying type signature"
+    );
+    assert_eq!(
+        node.jit_constants(),
+        Vec::<u64>::new(),
+        "no_jit attr blocks jit_constants emission too"
+    );
 }
 
 #[test]
@@ -1105,8 +1221,11 @@ fn macro_jit_path_and_eval_path_produce_same_result() {
     let compiled = node.compiled_u64().unwrap();
     let mut jit_out = [0u64];
     compiled(&[7], &mut jit_out);
-    assert_eq!(eval_out[0], Value::U64(jit_out[0]),
-        "eval and compiled_u64 MUST be observationally identical");
+    assert_eq!(
+        eval_out[0],
+        Value::U64(jit_out[0]),
+        "eval and compiled_u64 MUST be observationally identical"
+    );
 }
 
 #[test]
@@ -1115,13 +1234,17 @@ fn macro_setup_arg_node_eval_still_works_with_inline_body() {
     let node = MacroPilotWithSetup::new(5);
     let mut out = [Value::None];
     node.eval(&[Value::U64(10)], &mut out);
-    assert_eq!(out[0], Value::U64(20), "10 + (5*2) = 20 — eval path works for JIT-ineligible");
+    assert_eq!(
+        out[0],
+        Value::U64(20),
+        "10 + (5*2) = 20 — eval path works for JIT-ineligible"
+    );
 }
 
 #[test]
 fn macro_setup_computed_once_at_construction_and_borrowed_at_eval() {
-    use polydat::dsl::factory::ConstArg;
     use polydat::ast::PortType;
+    use polydat::dsl::factory::ConstArg;
     for entry in inventory::iter::<polydat::dsl::registry::NodeRegistration>() {
         if let Some(result) = (entry.build)(
             "macro_pilot_setup",
@@ -1145,8 +1268,8 @@ fn macro_setup_computed_once_at_construction_and_borrowed_at_eval() {
 
 #[test]
 fn macro_const_bool_false_takes_disable_branch() {
-    use polydat::dsl::factory::ConstArg;
     use polydat::ast::PortType;
+    use polydat::dsl::factory::ConstArg;
     for entry in inventory::iter::<polydat::dsl::registry::NodeRegistration>() {
         if let Some(result) = (entry.build)(
             "macro_pilot_scale_or_zero",

@@ -59,18 +59,18 @@ const BITS: u32 = 32;
 /// (`V_i = 2^(32-i)`) handled in `direction_numbers`, so index 0
 /// here is Sobol dimension 2.
 pub const JOE_KUO_INIT: &[(u32, u32, &[u32])] = &[
-    (1, 0, &[1]),                  // d=2
-    (2, 1, &[1, 3]),               // d=3
-    (3, 1, &[1, 3, 1]),            // d=4
-    (3, 2, &[1, 1, 1]),            // d=5
-    (4, 1, &[1, 1, 3, 3]),         // d=6
-    (4, 4, &[1, 3, 5, 13]),        // d=7
-    (5, 2, &[1, 1, 5, 5, 17]),     // d=8
-    (5, 4, &[1, 1, 5, 5, 5]),      // d=9
-    (5, 7, &[1, 1, 7, 11, 19]),    // d=10
-    (5, 11, &[1, 1, 5, 1, 1]),     // d=11
-    (5, 13, &[1, 1, 1, 3, 11]),    // d=12
-    (5, 14, &[1, 3, 5, 5, 31]),    // d=13
+    (1, 0, &[1]),               // d=2
+    (2, 1, &[1, 3]),            // d=3
+    (3, 1, &[1, 3, 1]),         // d=4
+    (3, 2, &[1, 1, 1]),         // d=5
+    (4, 1, &[1, 1, 3, 3]),      // d=6
+    (4, 4, &[1, 3, 5, 13]),     // d=7
+    (5, 2, &[1, 1, 5, 5, 17]),  // d=8
+    (5, 4, &[1, 1, 5, 5, 5]),   // d=9
+    (5, 7, &[1, 1, 7, 11, 19]), // d=10
+    (5, 11, &[1, 1, 5, 1, 1]),  // d=11
+    (5, 13, &[1, 1, 1, 3, 11]), // d=12
+    (5, 14, &[1, 3, 5, 5, 31]), // d=13
 ];
 
 /// Highest Sobol dimension the embedded [`JOE_KUO_INIT`] table
@@ -290,11 +290,21 @@ mod tests {
         // True 1-D Sobol prefix (Sobol' 1967; Antonov-Saleev Gray-code
         // recurrence): 1/2, 3/4, 1/4, 3/8, 7/8, 5/8, 1/8.
         let one_d = [
-            1.0 / 2.0, 3.0 / 4.0, 1.0 / 4.0, 3.0 / 8.0, 7.0 / 8.0, 5.0 / 8.0, 1.0 / 8.0,
+            1.0 / 2.0,
+            3.0 / 4.0,
+            1.0 / 4.0,
+            3.0 / 8.0,
+            7.0 / 8.0,
+            5.0 / 8.0,
+            1.0 / 8.0,
         ];
         for (k, want) in one_d.iter().enumerate() {
             let got = point(k as u64 + 1, 1)[0];
-            assert!((got - want).abs() < 1e-12, "1-D Sobol x_{} = {got}, want {want}", k + 1);
+            assert!(
+                (got - want).abs() < 1e-12,
+                "1-D Sobol x_{} = {got}, want {want}",
+                k + 1
+            );
         }
 
         // The published Joe-Kuo 2-D Sobol points (dims 1 & 2):
@@ -310,8 +320,18 @@ mod tests {
         ];
         for (k, (wx, wy)) in two_d.iter().enumerate() {
             let p = point(k as u64 + 1, 2);
-            assert!((p[0] - wx).abs() < 1e-12, "2-D Sobol x_{}.0 = {}, want {wx}", k + 1, p[0]);
-            assert!((p[1] - wy).abs() < 1e-12, "2-D Sobol x_{}.1 = {}, want {wy}", k + 1, p[1]);
+            assert!(
+                (p[0] - wx).abs() < 1e-12,
+                "2-D Sobol x_{}.0 = {}, want {wx}",
+                k + 1,
+                p[0]
+            );
+            assert!(
+                (p[1] - wy).abs() < 1e-12,
+                "2-D Sobol x_{}.1 = {}, want {wy}",
+                k + 1,
+                p[1]
+            );
         }
     }
 
@@ -327,15 +347,21 @@ mod tests {
     fn rejects_more_axes_than_table_supports() {
         // 14 axes > MAX_SOBOL_DIM (13): Sobol must decline so the
         // validation layer errors rather than the strategy degrading.
-        let too_many = IndexFn::Lattice { axis_sizes: vec![4; MAX_SOBOL_DIM + 1] };
+        let too_many = IndexFn::Lattice {
+            axis_sizes: vec![4; MAX_SOBOL_DIM + 1],
+        };
         assert!(!Sobol.accepts_input(Some(&too_many)));
-        let ok = IndexFn::Lattice { axis_sizes: vec![4; MAX_SOBOL_DIM] };
+        let ok = IndexFn::Lattice {
+            axis_sizes: vec![4; MAX_SOBOL_DIM],
+        };
         assert!(Sobol.accepts_input(Some(&ok)));
     }
 
     #[test]
     fn deterministic() {
-        let idx = IndexFn::Lattice { axis_sizes: vec![20, 20] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![20, 20],
+        };
         let a = sobol_multi_indices(&idx, Some(10));
         let b = sobol_multi_indices(&idx, Some(10));
         assert_eq!(a, b);
@@ -343,7 +369,9 @@ mod tests {
 
     #[test]
     fn produces_unique_discrete() {
-        let idx = IndexFn::Lattice { axis_sizes: vec![50, 50] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![50, 50],
+        };
         let out = sobol_multi_indices(&idx, Some(20));
         assert_eq!(out.len(), 20);
         let mut seen = std::collections::HashSet::new();

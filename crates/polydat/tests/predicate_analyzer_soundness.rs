@@ -18,7 +18,7 @@
 //! PCG for deterministic tuple generation.
 
 use polydat::iteration::comprehension::predicate::{
-    analyze, CoordSet, Determinism, Factorization, OpaqueReason, RangeConstraint,
+    CoordSet, Determinism, Factorization, OpaqueReason, RangeConstraint, analyze,
 };
 
 // Borrow the strategy-layer PCG for deterministic tuple
@@ -31,14 +31,19 @@ struct TestRng {
 }
 impl TestRng {
     fn new(seed: u64) -> Self {
-        Self { state: seed, inc: 1, pos: 0 }
+        Self {
+            state: seed,
+            inc: 1,
+            pos: 0,
+        }
     }
     fn next_u64(&mut self) -> u64 {
         // Tiny inline PCG-equivalent for tuple generation.
         // Doesn't have to match polydat's exact PCG — just
         // needs to be deterministic and well-mixed.
         self.pos = self.pos.wrapping_add(1);
-        let mut z = self.state
+        let mut z = self
+            .state
             .wrapping_add(self.inc.wrapping_mul(self.pos))
             .wrapping_mul(0x9E37_79B9_7F4A_7C15);
         z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -93,9 +98,17 @@ fn soundness_per_axis_gt() {
         let k = rng.next_in(-50, 50);
         let original = k > 10;
         let from_range = match range {
-            RangeConstraint::Bounded { lo: Some(lo), lo_inclusive, .. } => match lo {
+            RangeConstraint::Bounded {
+                lo: Some(lo),
+                lo_inclusive,
+                ..
+            } => match lo {
                 polydat::iteration::comprehension::predicate::info::ConstValue::Int(lv) => {
-                    if *lo_inclusive { k >= *lv } else { k > *lv }
+                    if *lo_inclusive {
+                        k >= *lv
+                    } else {
+                        k > *lv
+                    }
                 }
                 _ => panic!(),
             },
@@ -182,18 +195,28 @@ fn soundness_per_axis_conjunction_disjoint_axes() {
         let k_ok = match k_range {
             RangeConstraint::Bounded {
                 lo: Some(polydat::iteration::comprehension::predicate::info::ConstValue::Int(lv)),
-                lo_inclusive, ..
+                lo_inclusive,
+                ..
             } => {
-                if *lo_inclusive { k >= *lv } else { k > *lv }
+                if *lo_inclusive {
+                    k >= *lv
+                } else {
+                    k > *lv
+                }
             }
             _ => panic!(),
         };
         let l_ok = match l_range {
             RangeConstraint::Bounded {
                 hi: Some(polydat::iteration::comprehension::predicate::info::ConstValue::Int(hv)),
-                hi_inclusive, ..
+                hi_inclusive,
+                ..
             } => {
-                if *hi_inclusive { limit <= *hv } else { limit < *hv }
+                if *hi_inclusive {
+                    limit <= *hv
+                } else {
+                    limit < *hv
+                }
             }
             _ => panic!(),
         };
@@ -208,9 +231,11 @@ fn cross_axis_not_factored_as_per_axis() {
     // would be unsound.)
     let coords = CoordSet::all_discrete(["k", "limit"]);
     let info = analyze("{k} == {limit}", &coords);
-    assert!(!matches!(info.factorization, Factorization::PerAxis(_)),
+    assert!(
+        !matches!(info.factorization, Factorization::PerAxis(_)),
         "cross-axis predicate must NOT be PerAxis, got {:?}",
-        info.factorization);
+        info.factorization
+    );
 }
 
 #[test]

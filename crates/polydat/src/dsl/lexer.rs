@@ -220,7 +220,10 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
         // Arithmetic operator `/` (not a comment start)
         if c == '/' {
             let span = Span { line, col };
-            tokens.push(Token { kind: TokenKind::Slash, span });
+            tokens.push(Token {
+                kind: TokenKind::Slash,
+                span,
+            });
             pos += 1;
             col += 1;
             continue;
@@ -238,9 +241,13 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
         // `doc := polytile("json", <<< ... >>>)`.
         if !tile_pending
             && chars[pos..].starts_with(&['<', '<', '<'])
-            && let Some((body, _, consumed, newlines, end_col)) = capture_tile_body(&chars, pos, col)?
+            && let Some((body, _, consumed, newlines, end_col)) =
+                capture_tile_body(&chars, pos, col)?
         {
-            tokens.push(Token { kind: TokenKind::StringLit(body), span });
+            tokens.push(Token {
+                kind: TokenKind::StringLit(body),
+                span,
+            });
             pos += consumed;
             if newlines > 0 {
                 line += newlines;
@@ -253,13 +260,21 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
 
         // Two-character operators
         if c == ':' && pos + 1 < chars.len() && chars[pos + 1] == '=' {
-            tokens.push(Token { kind: TokenKind::ColonEq, span });
+            tokens.push(Token {
+                kind: TokenKind::ColonEq,
+                span,
+            });
             pos += 2;
             col += 2;
             if tile_pending {
                 tile_pending = false;
-                if let Some((body, kind, consumed, newlines, end_col)) = capture_tile_body(&chars, pos, col)? {
-                    tokens.push(Token { kind: TokenKind::TileBody(body, kind), span: Span { line, col } });
+                if let Some((body, kind, consumed, newlines, end_col)) =
+                    capture_tile_body(&chars, pos, col)?
+                {
+                    tokens.push(Token {
+                        kind: TokenKind::TileBody(body, kind),
+                        span: Span { line, col },
+                    });
                     pos += consumed;
                     if newlines > 0 {
                         line += newlines;
@@ -272,7 +287,10 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
             continue;
         }
         if c == '-' && pos + 1 < chars.len() && chars[pos + 1] == '>' {
-            tokens.push(Token { kind: TokenKind::Arrow, span });
+            tokens.push(Token {
+                kind: TokenKind::Arrow,
+                span,
+            });
             pos += 2;
             col += 2;
             continue;
@@ -285,7 +303,10 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
             let start = pos;
 
             // Check for hex: 0x...
-            if pos + 1 < chars.len() && chars[pos] == '0' && (chars[pos + 1] == 'x' || chars[pos + 1] == 'X') {
+            if pos + 1 < chars.len()
+                && chars[pos] == '0'
+                && (chars[pos + 1] == 'x' || chars[pos + 1] == 'X')
+            {
                 pos += 2;
                 col += 2;
                 let hex_start = pos;
@@ -294,9 +315,16 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
                     col += 1;
                 }
                 let hex: String = chars[hex_start..pos].iter().collect();
-                let val = u64::from_str_radix(&hex, 16)
-                    .map_err(|e| format!("invalid hex literal at line {}, col {}: {e}", span.line, span.col))?;
-                tokens.push(Token { kind: TokenKind::IntLit(val), span });
+                let val = u64::from_str_radix(&hex, 16).map_err(|e| {
+                    format!(
+                        "invalid hex literal at line {}, col {}: {e}",
+                        span.line, span.col
+                    )
+                })?;
+                tokens.push(Token {
+                    kind: TokenKind::IntLit(val),
+                    span,
+                });
                 continue;
             }
 
@@ -307,7 +335,11 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
 
             // Check for float
             let mut is_float = false;
-            if pos < chars.len() && chars[pos] == '.' && pos + 1 < chars.len() && chars[pos + 1].is_ascii_digit() {
+            if pos < chars.len()
+                && chars[pos] == '.'
+                && pos + 1 < chars.len()
+                && chars[pos + 1].is_ascii_digit()
+            {
                 is_float = true;
                 pos += 1;
                 col += 1;
@@ -361,9 +393,11 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
 
             if is_float {
                 let num: String = chars[start..pos - suffix_len_consumed(suffix_consumed)]
-                    .iter().collect();
-                let mut val: f64 = num.parse()
-                    .map_err(|e| format!("invalid float at line {}, col {}: {e}", span.line, span.col))?;
+                    .iter()
+                    .collect();
+                let mut val: f64 = num.parse().map_err(|e| {
+                    format!("invalid float at line {}, col {}: {e}", span.line, span.col)
+                })?;
                 if let Some((mult, is_sub)) = suffix_consumed {
                     if is_sub {
                         val /= mult as f64;
@@ -375,22 +409,34 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
                 // result is exactly integral (`1.5G` →
                 // 1_500_000_000 → U64) — matches SRD-18c
                 // §"Layer 6" type-resolution rule.
-                if suffix_consumed.is_some() && val.fract() == 0.0
-                    && val >= 0.0 && val <= u64::MAX as f64 {
+                if suffix_consumed.is_some()
+                    && val.fract() == 0.0
+                    && val >= 0.0
+                    && val <= u64::MAX as f64
+                {
                     tokens.push(Token {
                         kind: TokenKind::IntLit(val as u64),
                         span,
                     });
                 } else {
-                    tokens.push(Token { kind: TokenKind::FloatLit(val), span });
+                    tokens.push(Token {
+                        kind: TokenKind::FloatLit(val),
+                        span,
+                    });
                 }
             } else {
                 // Skip trailing underscore separators in int literals
                 let num_end = pos - suffix_len_consumed(suffix_consumed);
-                let num: String = chars[start..num_end].iter()
-                    .filter(|c| **c != '_').collect();
-                let val: u64 = num.parse()
-                    .map_err(|e| format!("invalid integer at line {}, col {}: {e}", span.line, span.col))?;
+                let num: String = chars[start..num_end]
+                    .iter()
+                    .filter(|c| **c != '_')
+                    .collect();
+                let val: u64 = num.parse().map_err(|e| {
+                    format!(
+                        "invalid integer at line {}, col {}: {e}",
+                        span.line, span.col
+                    )
+                })?;
                 match suffix_consumed {
                     Some((mult, true)) => {
                         // Sub-unit suffix on integer →
@@ -402,16 +448,22 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
                         });
                     }
                     Some((mult, false)) => {
-                        let v = val.checked_mul(mult).ok_or_else(|| format!(
-                            "integer literal with SI suffix overflows u64 at line {}, col {}",
-                            span.line, span.col))?;
+                        let v = val.checked_mul(mult).ok_or_else(|| {
+                            format!(
+                                "integer literal with SI suffix overflows u64 at line {}, col {}",
+                                span.line, span.col
+                            )
+                        })?;
                         tokens.push(Token {
                             kind: TokenKind::IntLit(v),
                             span,
                         });
                     }
                     None => {
-                        tokens.push(Token { kind: TokenKind::IntLit(val), span });
+                        tokens.push(Token {
+                            kind: TokenKind::IntLit(val),
+                            span,
+                        });
                     }
                 }
             }
@@ -420,84 +472,260 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
 
         // Single-character tokens
         match c {
-            '(' => { tokens.push(Token { kind: TokenKind::LParen, span }); pos += 1; col += 1; continue; }
-            ')' => { tokens.push(Token { kind: TokenKind::RParen, span }); pos += 1; col += 1; continue; }
-            '[' => { tokens.push(Token { kind: TokenKind::LBracket, span }); pos += 1; col += 1; continue; }
-            ']' => { tokens.push(Token { kind: TokenKind::RBracket, span }); pos += 1; col += 1; continue; }
-            '{' => { tokens.push(Token { kind: TokenKind::LBrace, span }); pos += 1; col += 1; continue; }
-            '}' => { tokens.push(Token { kind: TokenKind::RBrace, span }); pos += 1; col += 1; continue; }
-            ',' => { tokens.push(Token { kind: TokenKind::Comma, span }); pos += 1; col += 1; continue; }
+            '(' => {
+                tokens.push(Token {
+                    kind: TokenKind::LParen,
+                    span,
+                });
+                pos += 1;
+                col += 1;
+                continue;
+            }
+            ')' => {
+                tokens.push(Token {
+                    kind: TokenKind::RParen,
+                    span,
+                });
+                pos += 1;
+                col += 1;
+                continue;
+            }
+            '[' => {
+                tokens.push(Token {
+                    kind: TokenKind::LBracket,
+                    span,
+                });
+                pos += 1;
+                col += 1;
+                continue;
+            }
+            ']' => {
+                tokens.push(Token {
+                    kind: TokenKind::RBracket,
+                    span,
+                });
+                pos += 1;
+                col += 1;
+                continue;
+            }
+            '{' => {
+                tokens.push(Token {
+                    kind: TokenKind::LBrace,
+                    span,
+                });
+                pos += 1;
+                col += 1;
+                continue;
+            }
+            '}' => {
+                tokens.push(Token {
+                    kind: TokenKind::RBrace,
+                    span,
+                });
+                pos += 1;
+                col += 1;
+                continue;
+            }
+            ',' => {
+                tokens.push(Token {
+                    kind: TokenKind::Comma,
+                    span,
+                });
+                pos += 1;
+                col += 1;
+                continue;
+            }
             '=' => {
                 if pos + 1 < chars.len() && chars[pos + 1] == '=' {
-                    tokens.push(Token { kind: TokenKind::EqEq, span });
-                    pos += 2; col += 2;
+                    tokens.push(Token {
+                        kind: TokenKind::EqEq,
+                        span,
+                    });
+                    pos += 2;
+                    col += 2;
                 } else {
-                    tokens.push(Token { kind: TokenKind::Eq, span });
-                    pos += 1; col += 1;
+                    tokens.push(Token {
+                        kind: TokenKind::Eq,
+                        span,
+                    });
+                    pos += 1;
+                    col += 1;
                 }
                 continue;
             }
-            ':' => { tokens.push(Token { kind: TokenKind::Colon, span }); pos += 1; col += 1; continue; }
-            '+' => { tokens.push(Token { kind: TokenKind::Plus, span }); pos += 1; col += 1; continue; }
-            '-' => { tokens.push(Token { kind: TokenKind::Minus, span }); pos += 1; col += 1; continue; }
+            ':' => {
+                tokens.push(Token {
+                    kind: TokenKind::Colon,
+                    span,
+                });
+                pos += 1;
+                col += 1;
+                continue;
+            }
+            '+' => {
+                tokens.push(Token {
+                    kind: TokenKind::Plus,
+                    span,
+                });
+                pos += 1;
+                col += 1;
+                continue;
+            }
+            '-' => {
+                tokens.push(Token {
+                    kind: TokenKind::Minus,
+                    span,
+                });
+                pos += 1;
+                col += 1;
+                continue;
+            }
             '*' => {
                 if pos + 1 < chars.len() && chars[pos + 1] == '*' {
-                    tokens.push(Token { kind: TokenKind::StarStar, span });
-                    pos += 2; col += 2;
+                    tokens.push(Token {
+                        kind: TokenKind::StarStar,
+                        span,
+                    });
+                    pos += 2;
+                    col += 2;
                 } else {
-                    tokens.push(Token { kind: TokenKind::Star, span });
-                    pos += 1; col += 1;
+                    tokens.push(Token {
+                        kind: TokenKind::Star,
+                        span,
+                    });
+                    pos += 1;
+                    col += 1;
                 }
                 continue;
             }
-            '%' => { tokens.push(Token { kind: TokenKind::Percent, span }); pos += 1; col += 1; continue; }
-            '^' => { tokens.push(Token { kind: TokenKind::Caret, span }); pos += 1; col += 1; continue; }
+            '%' => {
+                tokens.push(Token {
+                    kind: TokenKind::Percent,
+                    span,
+                });
+                pos += 1;
+                col += 1;
+                continue;
+            }
+            '^' => {
+                tokens.push(Token {
+                    kind: TokenKind::Caret,
+                    span,
+                });
+                pos += 1;
+                col += 1;
+                continue;
+            }
             '<' => {
                 if pos + 1 < chars.len() && chars[pos + 1] == '<' {
-                    tokens.push(Token { kind: TokenKind::ShiftLeft, span });
-                    pos += 2; col += 2;
+                    tokens.push(Token {
+                        kind: TokenKind::ShiftLeft,
+                        span,
+                    });
+                    pos += 2;
+                    col += 2;
                 } else if pos + 1 < chars.len() && chars[pos + 1] == '=' {
-                    tokens.push(Token { kind: TokenKind::LtEq, span });
-                    pos += 2; col += 2;
+                    tokens.push(Token {
+                        kind: TokenKind::LtEq,
+                        span,
+                    });
+                    pos += 2;
+                    col += 2;
                 } else {
-                    tokens.push(Token { kind: TokenKind::Lt, span });
-                    pos += 1; col += 1;
+                    tokens.push(Token {
+                        kind: TokenKind::Lt,
+                        span,
+                    });
+                    pos += 1;
+                    col += 1;
                 }
                 continue;
             }
             '>' => {
                 if pos + 1 < chars.len() && chars[pos + 1] == '>' {
-                    tokens.push(Token { kind: TokenKind::ShiftRight, span });
-                    pos += 2; col += 2;
+                    tokens.push(Token {
+                        kind: TokenKind::ShiftRight,
+                        span,
+                    });
+                    pos += 2;
+                    col += 2;
                 } else if pos + 1 < chars.len() && chars[pos + 1] == '=' {
-                    tokens.push(Token { kind: TokenKind::GtEq, span });
-                    pos += 2; col += 2;
+                    tokens.push(Token {
+                        kind: TokenKind::GtEq,
+                        span,
+                    });
+                    pos += 2;
+                    col += 2;
                 } else {
-                    tokens.push(Token { kind: TokenKind::Gt, span });
-                    pos += 1; col += 1;
+                    tokens.push(Token {
+                        kind: TokenKind::Gt,
+                        span,
+                    });
+                    pos += 1;
+                    col += 1;
                 }
                 continue;
             }
-            '.' => { tokens.push(Token { kind: TokenKind::Dot, span }); pos += 1; col += 1; continue; }
+            '.' => {
+                tokens.push(Token {
+                    kind: TokenKind::Dot,
+                    span,
+                });
+                pos += 1;
+                col += 1;
+                continue;
+            }
             '&' => {
                 if pos + 1 < chars.len() && chars[pos + 1] == '&' {
-                    tokens.push(Token { kind: TokenKind::AmpAmp, span }); pos += 2; col += 2; continue;
+                    tokens.push(Token {
+                        kind: TokenKind::AmpAmp,
+                        span,
+                    });
+                    pos += 2;
+                    col += 2;
+                    continue;
                 }
-                tokens.push(Token { kind: TokenKind::Ampersand, span }); pos += 1; col += 1; continue;
+                tokens.push(Token {
+                    kind: TokenKind::Ampersand,
+                    span,
+                });
+                pos += 1;
+                col += 1;
+                continue;
             }
             '|' => {
                 if pos + 1 < chars.len() && chars[pos + 1] == '|' {
-                    tokens.push(Token { kind: TokenKind::PipePipe, span }); pos += 2; col += 2; continue;
+                    tokens.push(Token {
+                        kind: TokenKind::PipePipe,
+                        span,
+                    });
+                    pos += 2;
+                    col += 2;
+                    continue;
                 }
-                tokens.push(Token { kind: TokenKind::Pipe, span }); pos += 1; col += 1; continue;
+                tokens.push(Token {
+                    kind: TokenKind::Pipe,
+                    span,
+                });
+                pos += 1;
+                col += 1;
+                continue;
             }
             '!' => {
                 if pos + 1 < chars.len() && chars[pos + 1] == '=' {
-                    tokens.push(Token { kind: TokenKind::BangEq, span });
-                    pos += 2; col += 2;
+                    tokens.push(Token {
+                        kind: TokenKind::BangEq,
+                        span,
+                    });
+                    pos += 2;
+                    col += 2;
                 } else {
-                    tokens.push(Token { kind: TokenKind::Bang, span });
-                    pos += 1; col += 1;
+                    tokens.push(Token {
+                        kind: TokenKind::Bang,
+                        span,
+                    });
+                    pos += 1;
+                    col += 1;
                 }
                 continue;
             }
@@ -519,7 +747,10 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
                         't' => s.push('\t'),
                         '\\' => s.push('\\'),
                         c if c == quote => s.push(c),
-                        other => { s.push('\\'); s.push(other); }
+                        other => {
+                            s.push('\\');
+                            s.push(other);
+                        }
                     }
                 } else {
                     s.push(chars[pos]);
@@ -531,9 +762,15 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
                 pos += 1; // skip closing quote
                 col += 1;
             } else {
-                return Err(format!("unterminated string at line {}, col {}", span.line, span.col));
+                return Err(format!(
+                    "unterminated string at line {}, col {}",
+                    span.line, span.col
+                ));
             }
-            tokens.push(Token { kind: TokenKind::StringLit(s), span });
+            tokens.push(Token {
+                kind: TokenKind::StringLit(s),
+                span,
+            });
             continue;
         }
 
@@ -562,7 +799,10 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
                     let (text, consumed) = capture_for_text(&chars, pos);
                     pos += consumed;
                     col += consumed;
-                    tokens.push(Token { kind: TokenKind::For(text), span });
+                    tokens.push(Token {
+                        kind: TokenKind::For(text),
+                        span,
+                    });
                     continue;
                 }
                 _ => TokenKind::Ident(word),
@@ -571,10 +811,16 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
             continue;
         }
 
-        return Err(format!("unexpected character '{}' at line {}, col {}", c, line, col));
+        return Err(format!(
+            "unexpected character '{}' at line {}, col {}",
+            c, line, col
+        ));
     }
 
-    tokens.push(Token { kind: TokenKind::Eof, span: Span { line, col } });
+    tokens.push(Token {
+        kind: TokenKind::Eof,
+        span: Span { line, col },
+    });
     Ok(tokens)
 }
 
@@ -589,7 +835,11 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
 /// the body.
 type TileBodyCapture = (String, crate::dsl::ast::TileBodyKind, usize, usize, usize);
 
-fn capture_tile_body(chars: &[char], start: usize, start_col: usize) -> Result<Option<TileBodyCapture>, String> {
+fn capture_tile_body(
+    chars: &[char],
+    start: usize,
+    start_col: usize,
+) -> Result<Option<TileBodyCapture>, String> {
     use crate::dsl::ast::TileBodyKind;
     let mut pos = start;
     let mut col = start_col;
@@ -653,7 +903,9 @@ fn capture_tile_body(chars: &[char], start: usize, start_col: usize) -> Result<O
             let text_start = pos;
             loop {
                 if pos + 2 >= chars.len() {
-                    return Err("unterminated tile body: heredoc never closed with `>>>`".to_string());
+                    return Err(
+                        "unterminated tile body: heredoc never closed with `>>>`".to_string()
+                    );
                 }
                 if chars[pos..].starts_with(&['>', '>', '>']) {
                     break;
@@ -679,7 +931,13 @@ fn capture_tile_body(chars: &[char], start: usize, start_col: usize) -> Result<O
         _ => return Ok(None),
     }
     let text: String = chars[body_start..pos].iter().collect();
-    Ok(Some((dedent_block(&text), kind, pos - start, newlines, col)))
+    Ok(Some((
+        dedent_block(&text),
+        kind,
+        pos - start,
+        newlines,
+        col,
+    )))
 }
 
 /// A block body keeps the author's layout but not the indentation of
@@ -703,7 +961,11 @@ fn dedent_block(text: &str) -> String {
     out.push_str(first);
     for line in rest {
         out.push('\n');
-        let skip = line.chars().take_while(|c| *c == ' ' || *c == '\t').count().min(indent);
+        let skip = line
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .count()
+            .min(indent);
         out.push_str(&line.chars().skip(skip).collect::<String>());
     }
     out
@@ -847,7 +1109,11 @@ fn suffix_len_consumed(suffix: Option<(u64, bool)>) -> usize {
         // pair, so we re-derive: binary multipliers (powers
         // of 2 from 2^10 up) take 2 chars, others take 1.
         Some((m, _)) => {
-            if m.is_power_of_two() && m >= (1 << 10) { 2 } else { 1 }
+            if m.is_power_of_two() && m >= (1 << 10) {
+                2
+            } else {
+                1
+            }
         }
         None => 0,
     }
@@ -1094,8 +1360,14 @@ mod tests {
         assert!(matches!(tokens[0].kind, TokenKind::IntLit(1_000)));
         assert!(matches!(tokens[1].kind, TokenKind::IntLit(1_000_000)));
         assert!(matches!(tokens[2].kind, TokenKind::IntLit(1_000_000_000)));
-        assert!(matches!(tokens[3].kind, TokenKind::IntLit(1_000_000_000_000)));
-        assert!(matches!(tokens[4].kind, TokenKind::IntLit(1_000_000_000_000_000)));
+        assert!(matches!(
+            tokens[3].kind,
+            TokenKind::IntLit(1_000_000_000_000)
+        ));
+        assert!(matches!(
+            tokens[4].kind,
+            TokenKind::IntLit(1_000_000_000_000_000)
+        ));
     }
 
     #[test]
@@ -1104,8 +1376,14 @@ mod tests {
         assert!(matches!(tokens[0].kind, TokenKind::IntLit(1024)));
         assert!(matches!(tokens[1].kind, TokenKind::IntLit(1_048_576)));
         assert!(matches!(tokens[2].kind, TokenKind::IntLit(1_073_741_824)));
-        assert!(matches!(tokens[3].kind, TokenKind::IntLit(1_099_511_627_776)));
-        assert!(matches!(tokens[4].kind, TokenKind::IntLit(1_125_899_906_842_624)));
+        assert!(matches!(
+            tokens[3].kind,
+            TokenKind::IntLit(1_099_511_627_776)
+        ));
+        assert!(matches!(
+            tokens[4].kind,
+            TokenKind::IntLit(1_125_899_906_842_624)
+        ));
     }
 
     #[test]
@@ -1114,15 +1392,20 @@ mod tests {
         let tokens = lex("5m 5u 5n").unwrap();
         assert!(matches!(tokens[0].kind, TokenKind::FloatLit(v) if (v - 0.005).abs() < 1e-12));
         assert!(matches!(tokens[1].kind, TokenKind::FloatLit(v) if (v - 0.000_005).abs() < 1e-15));
-        assert!(matches!(tokens[2].kind, TokenKind::FloatLit(v) if (v - 0.000_000_005).abs() < 1e-18));
+        assert!(
+            matches!(tokens[2].kind, TokenKind::FloatLit(v) if (v - 0.000_000_005).abs() < 1e-18)
+        );
     }
 
     #[test]
     fn lex_si_float_base_with_decimal_suffix() {
         // 1.5K = 1500, integral → IntLit per SRD-18c §"Layer 6"
         let tokens = lex("1.5K").unwrap();
-        assert!(matches!(tokens[0].kind, TokenKind::IntLit(1_500)),
-            "1.5K should be IntLit(1500), got {:?}", tokens[0].kind);
+        assert!(
+            matches!(tokens[0].kind, TokenKind::IntLit(1_500)),
+            "1.5K should be IntLit(1500), got {:?}",
+            tokens[0].kind
+        );
     }
 
     #[test]
@@ -1168,10 +1451,13 @@ mod tests {
         // We just verify the IntLits at positions 0, 3, 6.
         // (Positions depend on how `..` is tokenized today;
         // we walk the IntLits.)
-        let int_lits: Vec<u64> = tokens.iter().filter_map(|t| match &t.kind {
-            TokenKind::IntLit(v) => Some(*v),
-            _ => None,
-        }).collect();
+        let int_lits: Vec<u64> = tokens
+            .iter()
+            .filter_map(|t| match &t.kind {
+                TokenKind::IntLit(v) => Some(*v),
+                _ => None,
+            })
+            .collect();
         assert_eq!(int_lits, vec![1_000, 1_000_000, 100_000]);
     }
 

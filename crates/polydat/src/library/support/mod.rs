@@ -9,5 +9,5 @@
 //! co-located here so the library's internal dependency
 //! footprint stays visible.
 
-pub mod cache;
 pub mod audit;
+pub mod cache;

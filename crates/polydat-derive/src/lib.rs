@@ -92,10 +92,10 @@
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
-use quote::{quote, format_ident};
+use quote::{format_ident, quote};
 use syn::{
-    parse_macro_input, FnArg, Ident, ItemFn, Meta, Pat, ReturnType, Token, Type,
-    parse::Parser, punctuated::Punctuated,
+    FnArg, Ident, ItemFn, Meta, Pat, ReturnType, Token, Type, parse::Parser, parse_macro_input,
+    punctuated::Punctuated,
 };
 
 /// `#[polydat_node]` — derive a polydat node from a typed Rust
@@ -170,10 +170,7 @@ pub fn polydat_node(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// the function; substitutes that parameter throughout args /
 /// return / body and emits a generate() call per instantiation
 /// with a type-derived struct-name suffix.
-fn instantiate_and_generate(
-    func: ItemFn,
-    attrs: NodeAttrs,
-) -> syn::Result<TokenStream2> {
+fn instantiate_and_generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
     let generics = &func.sig.generics;
     // Exactly one type parameter is required. (Lifetimes and
     // const params are not supported for instantiation.)
@@ -258,7 +255,11 @@ fn type_suffix(ty: &Type) -> String {
             capitalize_next = true;
         }
     }
-    if out.is_empty() { "Inst".to_string() } else { out }
+    if out.is_empty() {
+        "Inst".to_string()
+    } else {
+        out
+    }
 }
 
 /// syn visitor that substitutes a single named type parameter
@@ -273,10 +274,12 @@ struct TypeSubst {
 impl syn::visit_mut::VisitMut for TypeSubst {
     fn visit_type_mut(&mut self, ty: &mut Type) {
         if let Type::Path(p) = ty
-            && p.qself.is_none() && p.path.is_ident(&self.type_param) {
-                *ty = self.concrete.clone();
-                return;
-            }
+            && p.qself.is_none()
+            && p.path.is_ident(&self.type_param)
+        {
+            *ty = self.concrete.clone();
+            return;
+        }
         syn::visit_mut::visit_type_mut(self, ty);
     }
 }
@@ -413,15 +416,22 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
     for item in items {
         match item {
             Meta::Path(p) => {
-                let key = p.get_ident()
-                    .ok_or_else(|| syn::Error::new_spanned(
-                        &p,
-                        "#[polydat_node] flag keys must be bare identifiers",
-                    ))?
+                let key = p
+                    .get_ident()
+                    .ok_or_else(|| {
+                        syn::Error::new_spanned(
+                            &p,
+                            "#[polydat_node] flag keys must be bare identifiers",
+                        )
+                    })?
                     .clone();
                 match key.to_string().as_str() {
-                    "no_jit" => { no_jit = true; }
-                    "simd_total" => { simd_total = true; }
+                    "no_jit" => {
+                        no_jit = true;
+                    }
+                    "simd_total" => {
+                        simd_total = true;
+                    }
                     other => {
                         return Err(syn::Error::new_spanned(
                             &key,
@@ -434,11 +444,15 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                 }
             }
             Meta::NameValue(nv) => {
-                let key = nv.path.get_ident()
-                    .ok_or_else(|| syn::Error::new_spanned(
-                        &nv.path,
-                        "#[polydat_node] parameter keys must be bare identifiers",
-                    ))?
+                let key = nv
+                    .path
+                    .get_ident()
+                    .ok_or_else(|| {
+                        syn::Error::new_spanned(
+                            &nv.path,
+                            "#[polydat_node] parameter keys must be bare identifiers",
+                        )
+                    })?
                     .clone();
                 match key.to_string().as_str() {
                     "category" => {
@@ -449,12 +463,17 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                                  (a polydat `FuncCategory` variant name).",
                             ));
                         };
-                        category = Some(p.path.get_ident()
-                            .ok_or_else(|| syn::Error::new_spanned(
-                                &nv.value,
-                                "`category` value must be a single identifier.",
-                            ))?
-                            .clone());
+                        category = Some(
+                            p.path
+                                .get_ident()
+                                .ok_or_else(|| {
+                                    syn::Error::new_spanned(
+                                        &nv.value,
+                                        "`category` value must be a single identifier.",
+                                    )
+                                })?
+                                .clone(),
+                        );
                     }
                     "compiled_u64" => {
                         let syn::Expr::Path(p) = &nv.value else {
@@ -509,8 +528,10 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                     }
                     "simd" => {
                         let syn::Expr::Lit(syn::ExprLit {
-                            lit: syn::Lit::Str(name), ..
-                        }) = &nv.value else {
+                            lit: syn::Lit::Str(name),
+                            ..
+                        }) = &nv.value
+                        else {
                             return Err(syn::Error::new_spanned(
                                 &nv.value,
                                 "`simd` value must be the string name of a register-typed node.",
@@ -531,15 +552,24 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                                  variant ident (Positional / AllCommutative / ...).",
                             ));
                         };
-                        commutativity = Some(p.path.get_ident()
-                            .ok_or_else(|| syn::Error::new_spanned(
-                                &nv.value,
-                                "`commutativity` value must be a single identifier.",
-                            ))?
-                            .clone());
+                        commutativity = Some(
+                            p.path
+                                .get_ident()
+                                .ok_or_else(|| {
+                                    syn::Error::new_spanned(
+                                        &nv.value,
+                                        "`commutativity` value must be a single identifier.",
+                                    )
+                                })?
+                                .clone(),
+                        );
                     }
                     "variadic_min" => {
-                        let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(n), .. }) = &nv.value else {
+                        let syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Int(n),
+                            ..
+                        }) = &nv.value
+                        else {
                             return Err(syn::Error::new_spanned(
                                 &nv.value,
                                 "`variadic_min` value must be an integer literal.",
@@ -571,7 +601,11 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                         // the adapter's registered name; the node function
                         // name must start with `<name>_` (validated in the
                         // macro entry point where the fn ident is in hand).
-                        let syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) = &nv.value else {
+                        let syn::Expr::Lit(syn::ExprLit {
+                            lit: syn::Lit::Str(s),
+                            ..
+                        }) = &nv.value
+                        else {
                             return Err(syn::Error::new_spanned(
                                 &nv.value,
                                 "`adapter` value must be a string literal \
@@ -600,11 +634,15 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                 }
             }
             Meta::List(list) => {
-                let key = list.path.get_ident()
-                    .ok_or_else(|| syn::Error::new_spanned(
-                        &list.path,
-                        "#[polydat_node] list-form keys must be bare identifiers",
-                    ))?
+                let key = list
+                    .path
+                    .get_ident()
+                    .ok_or_else(|| {
+                        syn::Error::new_spanned(
+                            &list.path,
+                            "#[polydat_node] list-form keys must be bare identifiers",
+                        )
+                    })?
                     .clone();
                 match key.to_string().as_str() {
                     "output_names" => {
@@ -645,10 +683,12 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
         }
     }
 
-    let category = category.ok_or_else(|| syn::Error::new(
-        proc_macro2::Span::call_site(),
-        "#[polydat_node] requires `category = <FuncCategory variant>`.",
-    ))?;
+    let category = category.ok_or_else(|| {
+        syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "#[polydat_node] requires `category = <FuncCategory variant>`.",
+        )
+    })?;
 
     if simd_total && simd.is_none() {
         return Err(syn::Error::new(
@@ -760,12 +800,12 @@ impl VariadicElement {
         // str_concat). The body deals with type coercion via
         // its own dispatch on the Value variant.
         match self {
-            VariadicElement::U64           => quote!(polydat::ast::PortType::U64),
-            VariadicElement::F64           => quote!(polydat::ast::PortType::F64),
-            VariadicElement::Bool          => quote!(polydat::ast::PortType::Bool),
-            VariadicElement::BorrowedStr   => quote!(polydat::ast::PortType::Str),
-            VariadicElement::OwnedString   => quote!(polydat::ast::PortType::Str),
-            VariadicElement::Value         => quote!(polydat::ast::PortType::Str),
+            VariadicElement::U64 => quote!(polydat::ast::PortType::U64),
+            VariadicElement::F64 => quote!(polydat::ast::PortType::F64),
+            VariadicElement::Bool => quote!(polydat::ast::PortType::Bool),
+            VariadicElement::BorrowedStr => quote!(polydat::ast::PortType::Str),
+            VariadicElement::OwnedString => quote!(polydat::ast::PortType::Str),
+            VariadicElement::Value => quote!(polydat::ast::PortType::Str),
         }
     }
 
@@ -773,12 +813,14 @@ impl VariadicElement {
     /// element type. Used to build the per-call slice in eval().
     fn extract_from_value(self) -> TokenStream2 {
         match self {
-            VariadicElement::U64           => quote!(|v: &polydat::ast::Value| v.as_u64()),
-            VariadicElement::F64           => quote!(|v: &polydat::ast::Value| v.as_f64()),
-            VariadicElement::Bool          => quote!(|v: &polydat::ast::Value| v.as_bool()),
-            VariadicElement::BorrowedStr   => quote!(|v: &polydat::ast::Value| v.as_str()),
-            VariadicElement::OwnedString   => quote!(|v: &polydat::ast::Value| v.as_str().to_string()),
-            VariadicElement::Value         => quote!(|v: &polydat::ast::Value| v.clone()),
+            VariadicElement::U64 => quote!(|v: &polydat::ast::Value| v.as_u64()),
+            VariadicElement::F64 => quote!(|v: &polydat::ast::Value| v.as_f64()),
+            VariadicElement::Bool => quote!(|v: &polydat::ast::Value| v.as_bool()),
+            VariadicElement::BorrowedStr => quote!(|v: &polydat::ast::Value| v.as_str()),
+            VariadicElement::OwnedString => {
+                quote!(|v: &polydat::ast::Value| v.as_str().to_string())
+            }
+            VariadicElement::Value => quote!(|v: &polydat::ast::Value| v.clone()),
         }
     }
 }
@@ -811,10 +853,10 @@ impl ConstShape {
     /// Token stream for the `SlotType::Const*` variant.
     fn slot_type_tokens(self) -> TokenStream2 {
         match self {
-            ConstShape::U64  => quote!(polydat::ast::SlotType::ConstU64),
-            ConstShape::F64  => quote!(polydat::ast::SlotType::ConstF64),
+            ConstShape::U64 => quote!(polydat::ast::SlotType::ConstU64),
+            ConstShape::F64 => quote!(polydat::ast::SlotType::ConstF64),
             ConstShape::Bool => quote!(polydat::ast::SlotType::ConstU64),
-            ConstShape::Str  => quote!(polydat::ast::SlotType::ConstStr),
+            ConstShape::Str => quote!(polydat::ast::SlotType::ConstStr),
         }
     }
 
@@ -824,10 +866,10 @@ impl ConstShape {
     /// directly.
     fn field_type_tokens(self) -> TokenStream2 {
         match self {
-            ConstShape::U64  => quote!(u64),
-            ConstShape::F64  => quote!(f64),
+            ConstShape::U64 => quote!(u64),
+            ConstShape::F64 => quote!(f64),
             ConstShape::Bool => quote!(bool),
-            ConstShape::Str  => quote!(String),
+            ConstShape::Str => quote!(String),
         }
     }
 
@@ -835,10 +877,10 @@ impl ConstShape {
     /// `c` is the `ConstArg` binding in scope at the call site.
     fn extract_from_const_arg(self, c: TokenStream2) -> TokenStream2 {
         match self {
-            ConstShape::U64  => quote!(#c.as_u64()),
-            ConstShape::F64  => quote!(#c.as_f64()),
+            ConstShape::U64 => quote!(#c.as_u64()),
+            ConstShape::F64 => quote!(#c.as_f64()),
             ConstShape::Bool => quote!(#c.as_u64() != 0),
-            ConstShape::Str  => quote!(#c.as_str().to_string()),
+            ConstShape::Str => quote!(#c.as_str().to_string()),
         }
     }
 
@@ -848,10 +890,10 @@ impl ConstShape {
     /// stored field (e.g. `&self.pattern` or `self.seed`).
     fn wrap_as_const(self, field_ref: TokenStream2) -> TokenStream2 {
         match self {
-            ConstShape::U64  => quote!(polydat::derive_support::Const(#field_ref)),
-            ConstShape::F64  => quote!(polydat::derive_support::Const(#field_ref)),
+            ConstShape::U64 => quote!(polydat::derive_support::Const(#field_ref)),
+            ConstShape::F64 => quote!(polydat::derive_support::Const(#field_ref)),
             ConstShape::Bool => quote!(polydat::derive_support::Const(#field_ref)),
-            ConstShape::Str  => quote!(polydat::derive_support::Const(#field_ref.as_str())),
+            ConstShape::Str => quote!(polydat::derive_support::Const(#field_ref.as_str())),
         }
     }
 }
@@ -903,9 +945,15 @@ impl JitType {
     /// values (limb pairs).
     fn width(self) -> usize {
         match self {
-            JitType::U128 | JitType::I128 | JitType::RegRaw
-            | JitType::RegI8x16 | JitType::RegI16x8 | JitType::RegI32x4
-            | JitType::RegI64x2 | JitType::RegF16x8 | JitType::RegF32x4
+            JitType::U128
+            | JitType::I128
+            | JitType::RegRaw
+            | JitType::RegI8x16
+            | JitType::RegI16x8
+            | JitType::RegI32x4
+            | JitType::RegI64x2
+            | JitType::RegF16x8
+            | JitType::RegF32x4
             | JitType::RegF64x2 => 2,
             _ => 1,
         }
@@ -922,23 +970,23 @@ impl JitType {
         let i1 = syn::Index::from(idx + 1);
         let limbs = quote!(polydat::ast::Bits128([inputs[#i], inputs[#i1]]));
         match self {
-            JitType::U64  => quote!(inputs[#i]),
-            JitType::I64  => quote!(inputs[#i] as i64),
-            JitType::F64  => quote!(f64::from_bits(inputs[#i])),
+            JitType::U64 => quote!(inputs[#i]),
+            JitType::I64 => quote!(inputs[#i] as i64),
+            JitType::F64 => quote!(f64::from_bits(inputs[#i])),
             JitType::Bool => quote!(inputs[#i] != 0),
-            JitType::U8   => quote!(inputs[#i] as u8),
-            JitType::U16  => quote!(inputs[#i] as u16),
-            JitType::U32  => quote!(inputs[#i] as u32),
-            JitType::I8   => quote!((inputs[#i] as i64) as i8),
-            JitType::I16  => quote!((inputs[#i] as i64) as i16),
-            JitType::I32  => quote!((inputs[#i] as i64) as i32),
-            JitType::F32  => quote!(f32::from_bits(inputs[#i] as u32)),
-            JitType::F16  => quote!(polydat::half::f16::from_bits(inputs[#i] as u16)),
-            JitType::Str   => quote!(polydat::kernel::resolve_thread_str(inputs[#i]).into()),
+            JitType::U8 => quote!(inputs[#i] as u8),
+            JitType::U16 => quote!(inputs[#i] as u16),
+            JitType::U32 => quote!(inputs[#i] as u32),
+            JitType::I8 => quote!((inputs[#i] as i64) as i8),
+            JitType::I16 => quote!((inputs[#i] as i64) as i16),
+            JitType::I32 => quote!((inputs[#i] as i64) as i32),
+            JitType::F32 => quote!(f32::from_bits(inputs[#i] as u32)),
+            JitType::F16 => quote!(polydat::half::f16::from_bits(inputs[#i] as u16)),
+            JitType::Str => quote!(polydat::kernel::resolve_thread_str(inputs[#i]).into()),
             JitType::Bytes => quote!(polydat::kernel::resolve_thread_bytes(inputs[#i]).into()),
             JitType::U128 => quote!((#limbs).as_u128()),
             JitType::I128 => quote!((#limbs).as_i128()),
-            JitType::RegRaw   => limbs,
+            JitType::RegRaw => limbs,
             JitType::RegI8x16 => quote!((#limbs).lanes_i8()),
             JitType::RegI16x8 => quote!((#limbs).lanes_i16()),
             JitType::RegI32x4 => quote!((#limbs).lanes_i32()),
@@ -962,28 +1010,44 @@ impl JitType {
             }}
         };
         match self {
-            JitType::U64  => quote!(outputs[#o] = #result;),
-            JitType::I64  => quote!(outputs[#o] = (#result) as u64;),
-            JitType::F64  => quote!(outputs[#o] = (#result).to_bits();),
+            JitType::U64 => quote!(outputs[#o] = #result;),
+            JitType::I64 => quote!(outputs[#o] = (#result) as u64;),
+            JitType::F64 => quote!(outputs[#o] = (#result).to_bits();),
             JitType::Bool => quote!(outputs[#o] = if #result { 1 } else { 0 };),
-            JitType::U8 | JitType::U16 | JitType::U32
-                => quote!(outputs[#o] = (#result) as u64;),
-            JitType::I8 | JitType::I16 | JitType::I32
-                => quote!(outputs[#o] = ((#result) as i64) as u64;),
-            JitType::F32  => quote!(outputs[#o] = (#result).to_bits() as u64;),
-            JitType::F16  => quote!(outputs[#o] = (#result).to_bits() as u64;),
-            JitType::Str  => quote!(outputs[#o] = polydat::kernel::put_thread_str((#result).as_ref());),
-            JitType::Bytes => quote!(outputs[#o] = polydat::kernel::put_thread_bytes((#result).as_ref());),
+            JitType::U8 | JitType::U16 | JitType::U32 => quote!(outputs[#o] = (#result) as u64;),
+            JitType::I8 | JitType::I16 | JitType::I32 => {
+                quote!(outputs[#o] = ((#result) as i64) as u64;)
+            }
+            JitType::F32 => quote!(outputs[#o] = (#result).to_bits() as u64;),
+            JitType::F16 => quote!(outputs[#o] = (#result).to_bits() as u64;),
+            JitType::Str => {
+                quote!(outputs[#o] = polydat::kernel::put_thread_str((#result).as_ref());)
+            }
+            JitType::Bytes => {
+                quote!(outputs[#o] = polydat::kernel::put_thread_bytes((#result).as_ref());)
+            }
             JitType::U128 => write_limbs(quote!(polydat::ast::Bits128::from_u128(#result))),
             JitType::I128 => write_limbs(quote!(polydat::ast::Bits128::from_i128(#result))),
-            JitType::RegRaw   => write_limbs(quote!(#result)),
+            JitType::RegRaw => write_limbs(quote!(#result)),
             JitType::RegI8x16 => write_limbs(quote!(polydat::ast::Bits128::from_lanes_i8(#result))),
-            JitType::RegI16x8 => write_limbs(quote!(polydat::ast::Bits128::from_lanes_i16(#result))),
-            JitType::RegI32x4 => write_limbs(quote!(polydat::ast::Bits128::from_lanes_i32(#result))),
-            JitType::RegI64x2 => write_limbs(quote!(polydat::ast::Bits128::from_lanes_i64(#result))),
-            JitType::RegF16x8 => write_limbs(quote!(polydat::ast::Bits128::from_lanes_f16(#result))),
-            JitType::RegF32x4 => write_limbs(quote!(polydat::ast::Bits128::from_lanes_f32(#result))),
-            JitType::RegF64x2 => write_limbs(quote!(polydat::ast::Bits128::from_lanes_f64(#result))),
+            JitType::RegI16x8 => {
+                write_limbs(quote!(polydat::ast::Bits128::from_lanes_i16(#result)))
+            }
+            JitType::RegI32x4 => {
+                write_limbs(quote!(polydat::ast::Bits128::from_lanes_i32(#result)))
+            }
+            JitType::RegI64x2 => {
+                write_limbs(quote!(polydat::ast::Bits128::from_lanes_i64(#result)))
+            }
+            JitType::RegF16x8 => {
+                write_limbs(quote!(polydat::ast::Bits128::from_lanes_f16(#result)))
+            }
+            JitType::RegF32x4 => {
+                write_limbs(quote!(polydat::ast::Bits128::from_lanes_f32(#result)))
+            }
+            JitType::RegF64x2 => {
+                write_limbs(quote!(polydat::ast::Bits128::from_lanes_f64(#result)))
+            }
         }
     }
 
@@ -996,23 +1060,27 @@ impl JitType {
     /// as a `u64` for `jit_constants()` (Phase-3 classifier).
     fn const_field_as_u64(self, field_ref: TokenStream2) -> TokenStream2 {
         match self {
-            JitType::U64  => quote!(#field_ref),
-            JitType::I64  => quote!((#field_ref) as u64),
-            JitType::F64  => quote!((#field_ref).to_bits()),
+            JitType::U64 => quote!(#field_ref),
+            JitType::I64 => quote!((#field_ref) as u64),
+            JitType::F64 => quote!((#field_ref).to_bits()),
             JitType::Bool => quote!(if #field_ref { 1 } else { 0 }),
-            JitType::U8 | JitType::U16 | JitType::U32
-                => quote!((#field_ref) as u64),
-            JitType::I8 | JitType::I16 | JitType::I32
-                => quote!(((#field_ref) as i64) as u64),
-            JitType::F32 | JitType::F16
-                => quote!((#field_ref).to_bits() as u64),
-            JitType::Str | JitType::Bytes
-                => quote!(polydat::kernel::StaticInterner::intern((#field_ref).as_ref())),
+            JitType::U8 | JitType::U16 | JitType::U32 => quote!((#field_ref) as u64),
+            JitType::I8 | JitType::I16 | JitType::I32 => quote!(((#field_ref) as i64) as u64),
+            JitType::F32 | JitType::F16 => quote!((#field_ref).to_bits() as u64),
+            JitType::Str | JitType::Bytes => {
+                quote!(polydat::kernel::StaticInterner::intern((#field_ref).as_ref()))
+            }
             // ConstShape has no 128-bit / register forms, so these
             // never appear in const position.
-            JitType::U128 | JitType::I128 | JitType::RegRaw
-            | JitType::RegI8x16 | JitType::RegI16x8 | JitType::RegI32x4
-            | JitType::RegI64x2 | JitType::RegF16x8 | JitType::RegF32x4
+            JitType::U128
+            | JitType::I128
+            | JitType::RegRaw
+            | JitType::RegI8x16
+            | JitType::RegI16x8
+            | JitType::RegI32x4
+            | JitType::RegI64x2
+            | JitType::RegF16x8
+            | JitType::RegF32x4
             | JitType::RegF64x2 => {
                 unreachable!("128-bit/register types have no const shape")
             }
@@ -1024,10 +1092,10 @@ impl JitType {
 /// or `None` if the shape can't live in the u64 buffer.
 fn const_shape_to_jit_type(s: ConstShape) -> Option<JitType> {
     match s {
-        ConstShape::U64  => Some(JitType::U64),
-        ConstShape::F64  => Some(JitType::F64),
+        ConstShape::U64 => Some(JitType::U64),
+        ConstShape::F64 => Some(JitType::F64),
         ConstShape::Bool => Some(JitType::Bool),
-        ConstShape::Str  => Some(JitType::Str),
+        ConstShape::Str => Some(JitType::Str),
     }
 }
 
@@ -1036,17 +1104,17 @@ fn const_shape_to_jit_type(s: ConstShape) -> Option<JitType> {
 fn wire_type_to_jit_type(ty: &Type) -> Option<JitType> {
     let s = type_to_string(ty);
     match s.as_str() {
-        "u64"  => Some(JitType::U64),
-        "i64"  => Some(JitType::I64),
-        "f64"  => Some(JitType::F64),
+        "u64" => Some(JitType::U64),
+        "i64" => Some(JitType::I64),
+        "f64" => Some(JitType::F64),
         "bool" => Some(JitType::Bool),
-        "u8"   => Some(JitType::U8),
-        "u16"  => Some(JitType::U16),
-        "u32"  => Some(JitType::U32),
-        "i8"   => Some(JitType::I8),
-        "i16"  => Some(JitType::I16),
-        "i32"  => Some(JitType::I32),
-        "f32"  => Some(JitType::F32),
+        "u8" => Some(JitType::U8),
+        "u16" => Some(JitType::U16),
+        "u32" => Some(JitType::U32),
+        "i8" => Some(JitType::I8),
+        "i16" => Some(JitType::I16),
+        "i32" => Some(JitType::I32),
+        "f32" => Some(JitType::F32),
         "u128" => Some(JitType::U128),
         "i128" => Some(JitType::I128),
         "String" | "& str" | "&str" => Some(JitType::Str),
@@ -1061,8 +1129,9 @@ fn wire_type_to_jit_type(ty: &Type) -> Option<JitType> {
                 "Arc<str>" | "std::sync::Arc<str>" => Some(JitType::Str),
                 "Arc<[u8]>" | "std::sync::Arc<[u8]>" => Some(JitType::Bytes),
                 "half::f16" | "f16" => Some(JitType::F16),
-                "Bits128" | "crate::ast::Bits128" | "polydat::ast::Bits128"
-                | "ast::Bits128" => Some(JitType::RegRaw),
+                "Bits128" | "crate::ast::Bits128" | "polydat::ast::Bits128" | "ast::Bits128" => {
+                    Some(JitType::RegRaw)
+                }
                 "[i8;16]" => Some(JitType::RegI8x16),
                 "[i16;8]" => Some(JitType::RegI16x8),
                 "[i32;4]" => Some(JitType::RegI32x4),
@@ -1083,18 +1152,28 @@ fn wire_type_to_jit_type(ty: &Type) -> Option<JitType> {
 /// generic argument resolving to a primitive type the macro
 /// supports.
 fn classify_type(ty: &Type) -> Option<ConstShape> {
-    let syn::Type::Path(p) = ty else { return None; };
+    let syn::Type::Path(p) = ty else {
+        return None;
+    };
     let last = p.path.segments.last()?;
-    if last.ident != "Const" { return None; }
-    let syn::PathArguments::AngleBracketed(args) = &last.arguments else { return None; };
+    if last.ident != "Const" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return None;
+    };
     let inner = args.args.iter().find_map(|a| {
-        if let syn::GenericArgument::Type(t) = a { Some(t) } else { None }
+        if let syn::GenericArgument::Type(t) = a {
+            Some(t)
+        } else {
+            None
+        }
     })?;
     let s = type_to_string(inner);
     match s.as_str() {
-        "u64"            => Some(ConstShape::U64),
-        "f64"            => Some(ConstShape::F64),
-        "bool"           => Some(ConstShape::Bool),
+        "u64" => Some(ConstShape::U64),
+        "f64" => Some(ConstShape::F64),
+        "bool" => Some(ConstShape::Bool),
         "& str" | "&str" => Some(ConstShape::Str),
         _ => None,
     }
@@ -1107,27 +1186,47 @@ fn classify_type(ty: &Type) -> Option<ConstShape> {
 /// signature using `Const<Vec<u64>>` doesn't get misclassified.
 fn classify_const_vec(ty: &Type) -> Option<ConstShape> {
     // Outer must be Const<...>.
-    let syn::Type::Path(p) = ty else { return None; };
+    let syn::Type::Path(p) = ty else {
+        return None;
+    };
     let last = p.path.segments.last()?;
-    if last.ident != "Const" { return None; }
-    let syn::PathArguments::AngleBracketed(args) = &last.arguments else { return None; };
+    if last.ident != "Const" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return None;
+    };
     let inner = args.args.iter().find_map(|a| {
-        if let syn::GenericArgument::Type(t) = a { Some(t) } else { None }
+        if let syn::GenericArgument::Type(t) = a {
+            Some(t)
+        } else {
+            None
+        }
     })?;
     // Inner must be Vec<X>.
-    let syn::Type::Path(vp) = inner else { return None; };
+    let syn::Type::Path(vp) = inner else {
+        return None;
+    };
     let vlast = vp.path.segments.last()?;
-    if vlast.ident != "Vec" { return None; }
-    let syn::PathArguments::AngleBracketed(vargs) = &vlast.arguments else { return None; };
+    if vlast.ident != "Vec" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(vargs) = &vlast.arguments else {
+        return None;
+    };
     let velem = vargs.args.iter().find_map(|a| {
-        if let syn::GenericArgument::Type(t) = a { Some(t) } else { None }
+        if let syn::GenericArgument::Type(t) = a {
+            Some(t)
+        } else {
+            None
+        }
     })?;
     let s = type_to_string(velem);
     match s.as_str() {
-        "u64"            => Some(ConstShape::U64),
-        "f64"            => Some(ConstShape::F64),
-        "bool"           => Some(ConstShape::Bool),
-        "String"         => Some(ConstShape::Str),
+        "u64" => Some(ConstShape::U64),
+        "f64" => Some(ConstShape::F64),
+        "bool" => Some(ConstShape::Bool),
+        "String" => Some(ConstShape::Str),
         "& str" | "&str" => Some(ConstShape::Str),
         _ => None,
     }
@@ -1139,12 +1238,22 @@ fn classify_const_vec(ty: &Type) -> Option<ConstShape> {
 /// function's `Const<Vec<C>>` arg to compute the output port
 /// count at construction time.
 fn classify_dynamic_outputs(ty: &Type) -> Option<Type> {
-    let syn::Type::Path(p) = ty else { return None; };
+    let syn::Type::Path(p) = ty else {
+        return None;
+    };
     let last = p.path.segments.last()?;
-    if last.ident != "DynamicOutputs" { return None; }
-    let syn::PathArguments::AngleBracketed(args) = &last.arguments else { return None; };
+    if last.ident != "DynamicOutputs" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return None;
+    };
     args.args.iter().find_map(|a| {
-        if let syn::GenericArgument::Type(t) = a { Some(t.clone()) } else { None }
+        if let syn::GenericArgument::Type(t) = a {
+            Some(t.clone())
+        } else {
+            None
+        }
     })
 }
 
@@ -1155,7 +1264,9 @@ fn classify_dynamic_outputs(ty: &Type) -> Option<Type> {
 /// the declared param list.
 fn parse_poly_default(attrs: &[syn::Attribute]) -> syn::Result<Option<syn::Expr>> {
     for attr in attrs {
-        if !attr.path().is_ident("poly_default") { continue; }
+        if !attr.path().is_ident("poly_default") {
+            continue;
+        }
         let expr: syn::Expr = attr.parse_args()?;
         return Ok(Some(expr));
     }
@@ -1169,7 +1280,9 @@ fn parse_poly_default(attrs: &[syn::Attribute]) -> syn::Result<Option<syn::Expr>
 /// to auto-insert assertion nodes upstream.
 fn parse_wire_constraint(attrs: &[syn::Attribute]) -> syn::Result<Option<Ident>> {
     for attr in attrs {
-        if !attr.path().is_ident("constraint") { continue; }
+        if !attr.path().is_ident("constraint") {
+            continue;
+        }
         let variant: Ident = attr.parse_args()?;
         return Ok(Some(variant));
     }
@@ -1191,7 +1304,9 @@ fn parse_wire_constraint(attrs: &[syn::Attribute]) -> syn::Result<Option<Ident>>
 ///     `Const<T>` arg declared in the same function signature.
 fn parse_poly_const(attrs: &[syn::Attribute]) -> syn::Result<Option<(syn::Expr, Vec<syn::Ident>)>> {
     for attr in attrs {
-        if !attr.path().is_ident("poly_const") { continue; }
+        if !attr.path().is_ident("poly_const") {
+            continue;
+        }
         let parser = |input: syn::parse::ParseStream| -> syn::Result<(syn::Expr, Vec<syn::Ident>)> {
             let fn_expr: syn::Expr = input.parse()?;
             let _comma: Token![,] = input.parse()?;
@@ -1239,8 +1354,12 @@ fn parse_poly_const(attrs: &[syn::Attribute]) -> syn::Result<Option<(syn::Expr, 
 /// `Some(inner_t)` on match, `None` otherwise. Used for the
 /// PR B.6 setup-arg dispatch.
 fn classify_borrowed(ty: &Type) -> Option<Type> {
-    let syn::Type::Reference(r) = ty else { return None; };
-    if r.mutability.is_some() { return None; }
+    let syn::Type::Reference(r) = ty else {
+        return None;
+    };
+    if r.mutability.is_some() {
+        return None;
+    }
     Some((*r.elem).clone())
 }
 
@@ -1249,8 +1368,14 @@ fn classify_borrowed(ty: &Type) -> Option<Type> {
 /// being `Value`, so both `Value` and `polydat::ast::Value`
 /// (and any other fully-qualified path ending in `Value`) work.
 fn classify_polywire(ty: &Type) -> bool {
-    let syn::Type::Path(p) = ty else { return false; };
-    p.path.segments.last().map(|s| s.ident == "Value").unwrap_or(false)
+    let syn::Type::Path(p) = ty else {
+        return false;
+    };
+    p.path
+        .segments
+        .last()
+        .map(|s| s.ident == "Value")
+        .unwrap_or(false)
 }
 
 /// SRD-80 PR B.11/B.13 — structural classifier for the
@@ -1270,7 +1395,13 @@ enum WrapperWire {
     /// macro emits the matching `PortType::Vec*`; the Wire impls in
     /// derive_support are autogenerated from a macro_rules!
     /// expansion per element type.
-    VecF32, VecI32, VecF64, VecI64, VecF16, VecI16, VecI8,
+    VecF32,
+    VecI32,
+    VecF64,
+    VecI64,
+    VecF16,
+    VecI16,
+    VecI8,
 }
 
 fn classify_wrapper_wire(ty: &Type) -> Option<WrapperWire> {
@@ -1351,10 +1482,16 @@ fn classify_wrapper_wire(ty: &Type) -> Option<WrapperWire> {
 }
 
 fn strip_arc(ty: &Type) -> Option<&Type> {
-    let syn::Type::Path(p) = ty else { return None; };
+    let syn::Type::Path(p) = ty else {
+        return None;
+    };
     let last = p.path.segments.last()?;
-    if last.ident != "Arc" { return None; }
-    let syn::PathArguments::AngleBracketed(args) = &last.arguments else { return None; };
+    if last.ident != "Arc" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return None;
+    };
     args.args.iter().find_map(|a| match a {
         syn::GenericArgument::Type(t) => Some(t),
         _ => None,
@@ -1362,7 +1499,11 @@ fn strip_arc(ty: &Type) -> Option<&Type> {
 }
 
 fn last_segment_is(p: &syn::TypePath, name: &str) -> bool {
-    p.path.segments.last().map(|s| s.ident == name).unwrap_or(false)
+    p.path
+        .segments
+        .last()
+        .map(|s| s.ident == name)
+        .unwrap_or(false)
 }
 
 fn path_contains_segment(p: &syn::TypePath, name: &str) -> bool {
@@ -1381,9 +1522,15 @@ fn extract_handle_inner(ty: &Type) -> Option<Type> {
 /// inputs on opt-in nodes; `Option<T>` wires are the canonical
 /// opt-in shape.
 fn is_option_arg(ty: &Type) -> bool {
-    let syn::Type::Path(p) = ty else { return false; };
-    let Some(last) = p.path.segments.last() else { return false; };
-    if last.ident != "Option" { return false; }
+    let syn::Type::Path(p) = ty else {
+        return false;
+    };
+    let Some(last) = p.path.segments.last() else {
+        return false;
+    };
+    if last.ident != "Option" {
+        return false;
+    }
     matches!(&last.arguments,
         syn::PathArguments::AngleBracketed(args)
             if args.args.iter().any(|a| matches!(a, syn::GenericArgument::Type(_))))
@@ -1410,7 +1557,10 @@ enum BorrowWire {
     /// vector borrow. Variant tracked separately so we can emit
     /// the right `Value::Vec*` arm; element type is recovered
     /// from the syntactic recognition.
-    Vec(&'static str /* variant name */, TokenStream2 /* PortType expr */),
+    Vec(
+        &'static str, /* variant name */
+        TokenStream2, /* PortType expr */
+    ),
 }
 
 /// `Ext<T>` for some `T`: an extension value that rides a table
@@ -1423,8 +1573,12 @@ fn is_ext_wire(ty: &Type) -> bool {
 }
 
 fn is_borrow_wire_shape(ty: &Type) -> Option<BorrowWire> {
-    let syn::Type::Reference(r) = ty else { return None; };
-    if r.mutability.is_some() { return None; }
+    let syn::Type::Reference(r) = ty else {
+        return None;
+    };
+    if r.mutability.is_some() {
+        return None;
+    }
     match &*r.elem {
         // `&str`
         syn::Type::Path(p) if p.path.is_ident("str") => Some(BorrowWire::Str),
@@ -1451,8 +1605,11 @@ fn is_borrow_wire_shape(ty: &Type) -> Option<BorrowWire> {
         }
         // `&serde_json::Value` — recognise by last segment `Value`
         // alongside `serde_json` somewhere in the path.
-        syn::Type::Path(p) if last_segment_is(p, "Value")
-            && path_contains_segment(p, "serde_json") => Some(BorrowWire::Json),
+        syn::Type::Path(p)
+            if last_segment_is(p, "Value") && path_contains_segment(p, "serde_json") =>
+        {
+            Some(BorrowWire::Json)
+        }
         _ => None,
     }
 }
@@ -1498,7 +1655,7 @@ fn borrow_extract_tokens(shape: BorrowWire, input_expr: TokenStream2) -> TokenSt
 /// Token stream for the static `PortType` of a borrow-shape wire.
 fn borrow_port_type(shape: &BorrowWire) -> TokenStream2 {
     match shape {
-        BorrowWire::Str  => quote!(polydat::ast::PortType::Str),
+        BorrowWire::Str => quote!(polydat::ast::PortType::Str),
         BorrowWire::Bytes => quote!(polydat::ast::PortType::Bytes),
         BorrowWire::Json => quote!(polydat::ast::PortType::Json),
         BorrowWire::Vec(_, port_expr) => port_expr.clone(),
@@ -1521,7 +1678,9 @@ fn classify_vec_wire(ty: &Type) -> Option<WrapperWire> {
         return None;
     };
 
-    let syn::Type::Path(p) = &elem else { return None; };
+    let syn::Type::Path(p) = &elem else {
+        return None;
+    };
     let last = p.path.segments.last()?;
     // f16 lives in the `half` crate, so the element path can
     // be `f16`, `half::f16`, etc. — match by last segment.
@@ -1538,10 +1697,16 @@ fn classify_vec_wire(ty: &Type) -> Option<WrapperWire> {
 }
 
 fn strip_vec(ty: &Type) -> Option<&Type> {
-    let syn::Type::Path(p) = ty else { return None; };
+    let syn::Type::Path(p) = ty else {
+        return None;
+    };
     let last = p.path.segments.last()?;
-    if last.ident != "Vec" { return None; }
-    let syn::PathArguments::AngleBracketed(args) = &last.arguments else { return None; };
+    if last.ident != "Vec" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return None;
+    };
     args.args.iter().find_map(|a| match a {
         syn::GenericArgument::Type(t) => Some(t),
         _ => None,
@@ -1549,10 +1714,16 @@ fn strip_vec(ty: &Type) -> Option<&Type> {
 }
 
 fn strip_slice_arc(ty: &Type) -> Option<&Type> {
-    let syn::Type::Path(p) = ty else { return None; };
+    let syn::Type::Path(p) = ty else {
+        return None;
+    };
     let last = p.path.segments.last()?;
-    if last.ident != "SliceArc" { return None; }
-    let syn::PathArguments::AngleBracketed(args) = &last.arguments else { return None; };
+    if last.ident != "SliceArc" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return None;
+    };
     args.args.iter().find_map(|a| match a {
         syn::GenericArgument::Type(t) => Some(t),
         _ => None,
@@ -1560,9 +1731,15 @@ fn strip_slice_arc(ty: &Type) -> Option<&Type> {
 }
 
 fn strip_borrowed_slice(ty: &Type) -> Option<&Type> {
-    let syn::Type::Reference(r) = ty else { return None; };
-    if r.mutability.is_some() { return None; }
-    let syn::Type::Slice(slc) = &*r.elem else { return None; };
+    let syn::Type::Reference(r) = ty else {
+        return None;
+    };
+    if r.mutability.is_some() {
+        return None;
+    }
+    let syn::Type::Slice(slc) = &*r.elem else {
+        return None;
+    };
     Some(&slc.elem)
 }
 
@@ -1572,9 +1749,15 @@ fn strip_borrowed_slice(ty: &Type) -> Option<&Type> {
 /// unsupported element type). Structural match — works regardless
 /// of how the inner type is written (`Value` / `polydat::ast::Value`).
 fn classify_variadic(ty: &Type) -> Option<VariadicElement> {
-    let syn::Type::Reference(r) = ty else { return None; };
-    if r.mutability.is_some() { return None; }
-    let syn::Type::Slice(s) = &*r.elem else { return None; };
+    let syn::Type::Reference(r) = ty else {
+        return None;
+    };
+    if r.mutability.is_some() {
+        return None;
+    }
+    let syn::Type::Slice(s) = &*r.elem else {
+        return None;
+    };
 
     // `&[&str]` — element is a Type::Reference to a path "str".
     if let syn::Type::Reference(inner_r) = &*s.elem
@@ -1586,18 +1769,22 @@ fn classify_variadic(ty: &Type) -> Option<VariadicElement> {
     }
 
     // Bare-path element types — match by last path segment ident.
-    let syn::Type::Path(p) = &*s.elem else { return None; };
+    let syn::Type::Path(p) = &*s.elem else {
+        return None;
+    };
     let last = p.path.segments.last()?;
-    if !last.arguments.is_empty() { return None; }
+    if !last.arguments.is_empty() {
+        return None;
+    }
     match last.ident.to_string().as_str() {
-        "u64"    => Some(VariadicElement::U64),
+        "u64" => Some(VariadicElement::U64),
         // NOTE: `&[f64]` is deliberately NOT variadic — it is the
         // `VecF64` vector wire, uniform with every other lane
         // element (`&[f32]`/`&[i32]`/…). A variadic run of f64
         // wires would need an explicit `Variadic<f64>` spelling.
-        "bool"   => Some(VariadicElement::Bool),
+        "bool" => Some(VariadicElement::Bool),
         "String" => Some(VariadicElement::OwnedString),
-        "Value"  => Some(VariadicElement::Value),
+        "Value" => Some(VariadicElement::Value),
         _ => None,
     }
 }
@@ -1612,10 +1799,16 @@ fn classify_variadic(ty: &Type) -> Option<VariadicElement> {
 /// emission time, so we don't pin its shape here — any E that
 /// satisfies `Into<String>` (including `String` itself) is fine.
 fn classify_result_return(ty: &Type) -> Option<Type> {
-    let syn::Type::Path(p) = ty else { return None; };
+    let syn::Type::Path(p) = ty else {
+        return None;
+    };
     let last = p.path.segments.last()?;
-    if last.ident != "Result" { return None; }
-    let syn::PathArguments::AngleBracketed(args) = &last.arguments else { return None; };
+    if last.ident != "Result" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return None;
+    };
     // Two args expected: <Ok, Err>. Tolerate `Result<T>` (rare alias)
     // by requiring at least one type arg.
     let mut tys = args.args.iter().filter_map(|a| match a {
@@ -1703,14 +1896,15 @@ fn generate(
                     ArgKind::PolyWire
                 } else if let Some((setup_fn, source_args)) = setup_attr {
                     // `#[poly_const(...)]` requires `&T` arg type.
-                    let inner_ty = classify_borrowed(&declared_ty)
-                        .ok_or_else(|| syn::Error::new_spanned(
+                    let inner_ty = classify_borrowed(&declared_ty).ok_or_else(|| {
+                        syn::Error::new_spanned(
                             &declared_ty,
                             "#[poly_const(...)] requires the argument type to be \
                              a borrow `&T` — the macro stores the computed `T` \
                              in a struct field and hands the body a borrow each \
                              eval.",
-                        ))?;
+                        )
+                    })?;
                     if default_value.is_some() {
                         return Err(syn::Error::new_spanned(
                             pat_ty,
@@ -1719,7 +1913,11 @@ fn generate(
                              Const arg, not on the derived setup arg.",
                         ));
                     }
-                    ArgKind::Setup(Box::new(SetupSpec { inner_ty, setup_fn, source_args }))
+                    ArgKind::Setup(Box::new(SetupSpec {
+                        inner_ty,
+                        setup_fn,
+                        source_args,
+                    }))
                 } else if let Some(inner) = classify_const_vec(&declared_ty) {
                     // SRD-80b Phase C — `Const<Vec<C>>` variadic
                     // workload-list. `poly_default` doesn't apply
@@ -1759,7 +1957,13 @@ fn generate(
                         }
                     }
                 };
-                args.push(ClassifiedArg { name: ident, declared_ty, kind, default_value, wire_constraint });
+                args.push(ClassifiedArg {
+                    name: ident,
+                    declared_ty,
+                    kind,
+                    default_value,
+                    wire_constraint,
+                });
             }
         }
     }
@@ -1769,8 +1973,16 @@ fn generate(
     // allowed per node and it must be the last const arg in
     // declaration order. Validate before emission.
     {
-        let const_vec_positions: Vec<usize> = args.iter().enumerate()
-            .filter_map(|(i, a)| if matches!(a.kind, ArgKind::ConstVec(_)) { Some(i) } else { None })
+        let const_vec_positions: Vec<usize> = args
+            .iter()
+            .enumerate()
+            .filter_map(|(i, a)| {
+                if matches!(a.kind, ArgKind::ConstVec(_)) {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
             .collect();
         if const_vec_positions.len() > 1 {
             return Err(syn::Error::new_spanned(
@@ -1829,8 +2041,8 @@ fn generate(
     let wire_port_type_for = |ty: &Type| -> syn::Result<TokenStream2> {
         if let Some(kind) = classify_wrapper_wire(ty) {
             return Ok(match kind {
-                WrapperWire::Bytes  => quote!(polydat::ast::PortType::Bytes),
-                WrapperWire::Json   => quote!(polydat::ast::PortType::Json),
+                WrapperWire::Bytes => quote!(polydat::ast::PortType::Bytes),
+                WrapperWire::Json => quote!(polydat::ast::PortType::Json),
                 WrapperWire::Handle => quote!(polydat::ast::PortType::Handle),
                 WrapperWire::VecF32 => quote!(polydat::ast::PortType::VecF32),
                 WrapperWire::VecI32 => quote!(polydat::ast::PortType::VecI32),
@@ -1838,7 +2050,7 @@ fn generate(
                 WrapperWire::VecI64 => quote!(polydat::ast::PortType::VecI64),
                 WrapperWire::VecF16 => quote!(polydat::ast::PortType::VecF16),
                 WrapperWire::VecI16 => quote!(polydat::ast::PortType::VecI16),
-                WrapperWire::VecI8  => quote!(polydat::ast::PortType::VecI8),
+                WrapperWire::VecI8 => quote!(polydat::ast::PortType::VecI8),
             });
         }
         if let Some(borrow) = is_borrow_wire_shape(ty) {
@@ -1897,10 +2109,12 @@ fn generate(
             ArgKind::Const(shape) => {
                 let field_name = &a.name;
                 let const_value_ctor = match shape {
-                    ConstShape::U64  => quote!(polydat::ast::ConstValue::U64(#field_name)),
-                    ConstShape::F64  => quote!(polydat::ast::ConstValue::F64(#field_name)),
-                    ConstShape::Bool => quote!(polydat::ast::ConstValue::U64(if #field_name { 1 } else { 0 })),
-                    ConstShape::Str  => quote!(polydat::ast::ConstValue::Str(#field_name.clone())),
+                    ConstShape::U64 => quote!(polydat::ast::ConstValue::U64(#field_name)),
+                    ConstShape::F64 => quote!(polydat::ast::ConstValue::F64(#field_name)),
+                    ConstShape::Bool => {
+                        quote!(polydat::ast::ConstValue::U64(if #field_name { 1 } else { 0 }))
+                    }
+                    ConstShape::Str => quote!(polydat::ast::ConstValue::Str(#field_name.clone())),
                 };
                 slot_exprs.push(quote! {
                     polydat::ast::Slot::Const {
@@ -1965,7 +2179,8 @@ fn generate(
     }
     // For each variadic arg, also emit a runtime loop that
     // appends N slots to the `Slot` vec.
-    let variadic_slot_extends: Vec<TokenStream2> = args.iter()
+    let variadic_slot_extends: Vec<TokenStream2> = args
+        .iter()
         .filter_map(|a| match &a.kind {
             ArgKind::Variadic(elem) => {
                 let name_str = a.name.to_string();
@@ -1988,7 +2203,8 @@ fn generate(
     // per declared arg (Wire and Const). Setup args don't
     // appear in the FuncSig surface — they're macro-internal
     // derived state.
-    let param_specs: Vec<TokenStream2> = args.iter()
+    let param_specs: Vec<TokenStream2> = args
+        .iter()
         .filter_map(|a| {
             let name_str = a.name.to_string();
             // Variadic args declare `required: false` — they accept
@@ -1999,7 +2215,9 @@ fn generate(
                 _ => a.default_value.is_none(),
             };
             let slot_type = match &a.kind {
-                ArgKind::Wire | ArgKind::PolyWire | ArgKind::Variadic(_) => quote!(polydat::ast::SlotType::Wire),
+                ArgKind::Wire | ArgKind::PolyWire | ArgKind::Variadic(_) => {
+                    quote!(polydat::ast::SlotType::Wire)
+                }
                 ArgKind::Const(shape) => shape.slot_type_tokens(),
                 ArgKind::ConstVec(inner) => inner.slot_type_tokens(),
                 ArgKind::Setup(_) => return None,
@@ -2037,7 +2255,9 @@ fn generate(
     // to be fully resolvable at construction.
     let fallible_inner_ty: Option<Type> = classify_result_return(&declared_ret_ty);
     let is_fallible = fallible_inner_ty.is_some();
-    let ret_ty = fallible_inner_ty.clone().unwrap_or_else(|| declared_ret_ty.clone());
+    let ret_ty = fallible_inner_ty
+        .clone()
+        .unwrap_or_else(|| declared_ret_ty.clone());
     let ret_is_polywire = classify_polywire(&ret_ty);
 
     if is_fallible {
@@ -2073,7 +2293,8 @@ fn generate(
     // drives the output port count at construction.
     let dynamic_outputs_inner: Option<Type> = classify_dynamic_outputs(&ret_ty);
     let dynamic_outputs_count_arg: Option<syn::Ident> = if dynamic_outputs_inner.is_some() {
-        let const_vec_args: Vec<&syn::Ident> = args.iter()
+        let const_vec_args: Vec<&syn::Ident> = args
+            .iter()
             .filter_map(|a| match &a.kind {
                 ArgKind::ConstVec(_) => Some(&a.name),
                 _ => None,
@@ -2110,7 +2331,8 @@ fn generate(
     // output port type tracks the first PolyWire arg's runtime
     // port type (SameAsInput). Otherwise it's the primitive's
     // fixed PortType.
-    let first_polywire_idx: Option<usize> = args.iter()
+    let first_polywire_idx: Option<usize> = args
+        .iter()
         .enumerate()
         .find(|(_, a)| matches!(a.kind, ArgKind::PolyWire))
         .map(|(i, _)| i);
@@ -2118,7 +2340,8 @@ fn generate(
     // Per-output port-type token streams, indexed positionally.
     // Single-output → 1-element vec; tuple → N elements.
     let output_port_types: Vec<TokenStream2> = if let Some(elems) = &tuple_ret_elems {
-        elems.iter()
+        elems
+            .iter()
             .map(wire_port_type_for)
             .collect::<syn::Result<Vec<_>>>()?
     } else if ret_is_polywire {
@@ -2131,7 +2354,10 @@ fn generate(
         if let Some(polywire_arg) = args.iter().find(|a| matches!(a.kind, ArgKind::PolyWire)) {
             let pt_ident = format_ident!("{}_type", polywire_arg.name);
             vec![quote!(#pt_ident)]
-        } else if args.iter().any(|a| matches!(&a.kind, ArgKind::Variadic(VariadicElement::Value))) {
+        } else if args
+            .iter()
+            .any(|a| matches!(&a.kind, ArgKind::Variadic(VariadicElement::Value)))
+        {
             vec![quote!(polydat::ast::PortType::U64)]
         } else {
             return Err(syn::Error::new_spanned(
@@ -2162,7 +2388,8 @@ fn generate(
                     format!(
                         "tuple return has {} elements but `output_names(...)` \
                          lists {}; lengths must match.",
-                        elems.len(), names.len(),
+                        elems.len(),
+                        names.len(),
                     ),
                 ));
             }
@@ -2183,20 +2410,23 @@ fn generate(
     // single fixed-output nodes; None for tuple / polymorphic /
     // dynamic shapes (the DSL type inference then falls back to
     // its heuristic).
-    let output_port_field: TokenStream2 = if tuple_ret_elems.is_some()
-        || ret_is_polywire
-        || dynamic_outputs_inner.is_some()
-    {
-        quote!(None)
-    } else {
-        let pt = &output_port_types[0];
-        quote!(Some(#pt))
-    };
+    let output_port_field: TokenStream2 =
+        if tuple_ret_elems.is_some() || ret_is_polywire || dynamic_outputs_inner.is_some() {
+            quote!(None)
+        } else {
+            let pt = &output_port_types[0];
+            quote!(Some(#pt))
+        };
 
-    let output_count = if dynamic_outputs_inner.is_some() { 0 } else { output_port_types.len() };
+    let output_count = if dynamic_outputs_inner.is_some() {
+        0
+    } else {
+        output_port_types.len()
+    };
     // SRD-80b: `0` in the FuncSig signals "dynamic, determined at
     // compile time" (existing FuncSig convention from the doc).
-    let output_count_lit = syn::LitInt::new(&output_count.to_string(), proc_macro2::Span::call_site());
+    let output_count_lit =
+        syn::LitInt::new(&output_count.to_string(), proc_macro2::Span::call_site());
 
     // When return is `Value`, prefer SameAsInput dispatch
     // against a singleton PolyWire arg; for the split-halves
@@ -2216,7 +2446,8 @@ fn generate(
     // reflected in `meta.ins.len()`); Const → owned-typed field;
     // ConstVec → Vec<inner>; Setup → field of the borrowed
     // inner type.
-    let struct_fields: Vec<TokenStream2> = args.iter()
+    let struct_fields: Vec<TokenStream2> = args
+        .iter()
         .filter_map(|a| match &a.kind {
             ArgKind::Wire | ArgKind::PolyWire | ArgKind::Variadic(_) => None,
             ArgKind::Const(shape) => {
@@ -2243,7 +2474,8 @@ fn generate(
     // parameter that names the runtime port type the assembler
     // resolved for the upstream wire. Setup args are computed
     // inside new(), not parameters.
-    let new_params: Vec<TokenStream2> = args.iter()
+    let new_params: Vec<TokenStream2> = args
+        .iter()
         .filter_map(|a| match &a.kind {
             ArgKind::Wire => None,
             ArgKind::Const(shape) => {
@@ -2277,7 +2509,10 @@ fn generate(
     // the inputs at the midpoint at eval time. Used by `pick`'s
     // `(b0,...,bN,v0,...,vN)` workload syntax per SRD-66.
     let has_variadic = args.iter().any(|a| matches!(a.kind, ArgKind::Variadic(_)));
-    let variadic_count = args.iter().filter(|a| matches!(a.kind, ArgKind::Variadic(_))).count();
+    let variadic_count = args
+        .iter()
+        .filter(|a| matches!(a.kind, ArgKind::Variadic(_)))
+        .count();
     if variadic_count > 2 {
         return Err(syn::Error::new_spanned(
             &func.sig,
@@ -2289,7 +2524,8 @@ fn generate(
     // Positional index of each Variadic arg in declaration
     // order, used by `arg_bindings` to slice `inputs` at the
     // midpoint in split-halves mode.
-    let variadic_positions: std::collections::HashMap<String, usize> = args.iter()
+    let variadic_positions: std::collections::HashMap<String, usize> = args
+        .iter()
         .filter(|a| matches!(a.kind, ArgKind::Variadic(_)))
         .enumerate()
         .map(|(i, a)| (a.name.to_string(), i))
@@ -2316,11 +2552,14 @@ fn generate(
         /// typically wants `&Vec<C>` or `&[C]`.
         VecValues,
     }
-    let const_shape_by_name: std::collections::HashMap<String, ConstSourceShape> = args.iter()
+    let const_shape_by_name: std::collections::HashMap<String, ConstSourceShape> = args
+        .iter()
         .filter_map(|a| match &a.kind {
-            ArgKind::Const(ConstShape::Str) => Some((a.name.to_string(), ConstSourceShape::ScalarStr)),
-            ArgKind::Const(_)               => Some((a.name.to_string(), ConstSourceShape::ScalarValue)),
-            ArgKind::ConstVec(_)            => Some((a.name.to_string(), ConstSourceShape::VecValues)),
+            ArgKind::Const(ConstShape::Str) => {
+                Some((a.name.to_string(), ConstSourceShape::ScalarStr))
+            }
+            ArgKind::Const(_) => Some((a.name.to_string(), ConstSourceShape::ScalarValue)),
+            ArgKind::ConstVec(_) => Some((a.name.to_string(), ConstSourceShape::VecValues)),
             _ => None,
         })
         .collect();
@@ -2328,9 +2567,14 @@ fn generate(
     // Setup pre-compute lines, emitted at the top of `new()`
     // BEFORE `Self { ... }` so they can borrow the const
     // locals before those values are moved into self.
-    let setup_precomputes: Vec<TokenStream2> = args.iter()
+    let setup_precomputes: Vec<TokenStream2> = args
+        .iter()
         .filter_map(|a| match &a.kind {
-            ArgKind::Wire | ArgKind::Const(_) | ArgKind::ConstVec(_) | ArgKind::PolyWire | ArgKind::Variadic(_) => None,
+            ArgKind::Wire
+            | ArgKind::Const(_)
+            | ArgKind::ConstVec(_)
+            | ArgKind::PolyWire
+            | ArgKind::Variadic(_) => None,
             ArgKind::Setup(spec) => {
                 let n = &a.name;
                 let setup_fn = &spec.setup_fn;
@@ -2344,28 +2588,34 @@ fn generate(
                 for src in &spec.source_args {
                     let shape = const_shape_by_name.get(&src.to_string());
                     let expr = match shape {
-                        Some(ConstSourceShape::ScalarStr)   => quote!(#src.as_str()),
+                        Some(ConstSourceShape::ScalarStr) => quote!(#src.as_str()),
                         Some(ConstSourceShape::ScalarValue) => quote!(#src),
                         // ConstVec source: pass a borrow of the
                         // Vec. Setup fn signatures like
                         // `fn build(w: &Vec<f64>)` or
                         // `fn build(w: &[f64])` both work via
                         // Deref / unsized coercion.
-                        Some(ConstSourceShape::VecValues)   => quote!(&#src),
+                        Some(ConstSourceShape::VecValues) => quote!(&#src),
                         None => {
-                            err = Some(syn::Error::new(
-                                src.span(),
-                                format!(
-                                    "#[poly_const(... from = ... {src} ...)] — \
+                            err = Some(
+                                syn::Error::new(
+                                    src.span(),
+                                    format!(
+                                        "#[poly_const(... from = ... {src} ...)] — \
                                      `{src}` is not declared as a `Const<T>` \
-                                     arg in the same function signature."),
-                            ).to_compile_error());
+                                     arg in the same function signature."
+                                    ),
+                                )
+                                .to_compile_error(),
+                            );
                             break;
                         }
                     };
                     src_exprs.push(expr);
                 }
-                if let Some(e) = err { return Some(e); }
+                if let Some(e) = err {
+                    return Some(e);
+                }
                 let call = quote!(#setup_fn( #( #src_exprs ),* ));
                 Some(quote! {
                     let #n = #call;
@@ -2377,7 +2627,8 @@ fn generate(
     // Self { ... } field-init list. Const args use field-name
     // shorthand; Setup args use the local computed above.
     // Wire/PolyWire contribute nothing (no field).
-    let new_field_inits: Vec<TokenStream2> = args.iter()
+    let new_field_inits: Vec<TokenStream2> = args
+        .iter()
         .filter_map(|a| match &a.kind {
             ArgKind::Wire | ArgKind::PolyWire | ArgKind::Variadic(_) => None,
             ArgKind::Const(_) | ArgKind::ConstVec(_) | ArgKind::Setup(_) => {
@@ -2392,7 +2643,8 @@ fn generate(
     // so the user's body code sees the wrapper type matching
     // its function signature.
     let mut wire_idx = 0usize;
-    let arg_bindings: Vec<TokenStream2> = args.iter()
+    let arg_bindings: Vec<TokenStream2> = args
+        .iter()
         .map(|a| {
             let n = &a.name;
             match &a.kind {
@@ -2475,9 +2727,15 @@ fn generate(
                     let slice_expr = if is_split_halves {
                         let pos = variadic_positions[&a.name.to_string()];
                         if pos == 0 {
-                            quote!({ let __half = inputs.len() / 2; &inputs[..__half] })
+                            quote!({
+                                let __half = inputs.len() / 2;
+                                &inputs[..__half]
+                            })
                         } else {
-                            quote!({ let __half = inputs.len() / 2; &inputs[__half..] })
+                            quote!({
+                                let __half = inputs.len() / 2;
+                                &inputs[__half..]
+                            })
                         }
                     } else {
                         quote!(inputs)
@@ -2510,7 +2768,8 @@ fn generate(
     // extractor — this consumes the tail of the consts slice
     // (only one ConstVec arg per function, enforced earlier).
     let mut const_idx_for_extract = 0usize;
-    let const_extracts: Vec<TokenStream2> = args.iter()
+    let const_extracts: Vec<TokenStream2> = args
+        .iter()
         .filter_map(|a| match &a.kind {
             ArgKind::Wire | ArgKind::Setup(_) | ArgKind::PolyWire | ArgKind::Variadic(_) => None,
             ArgKind::Const(shape) => {
@@ -2533,7 +2792,8 @@ fn generate(
                     }
                     None => {
                         let msg = format!(
-                            "missing required const arg '{n}' for function '{func_name_str}'");
+                            "missing required const arg '{n}' for function '{func_name_str}'"
+                        );
                         quote!(return Some(Err(#msg.to_string())))
                     }
                 };
@@ -2567,7 +2827,8 @@ fn generate(
     // Names to pass to `Self::new(...)` from the build closure,
     // in declaration order. Const → `<name>`; PolyWire →
     // `<name>_type` (the local extracted from `wire_types`).
-    let mut new_call_args: Vec<TokenStream2> = args.iter()
+    let mut new_call_args: Vec<TokenStream2> = args
+        .iter()
         .filter_map(|a| match &a.kind {
             ArgKind::Wire | ArgKind::Setup(_) | ArgKind::Variadic(_) => None,
             ArgKind::Const(_) | ArgKind::ConstVec(_) => {
@@ -2613,12 +2874,14 @@ fn generate(
         let mut out = Vec::new();
         for a in &args {
             match &a.kind {
-                ArgKind::Wire => { wire_idx += 1; }
+                ArgKind::Wire => {
+                    wire_idx += 1;
+                }
                 ArgKind::Variadic(_) => {
                     // Variadic args consume the REMAINDER of the
                     // wire slots. Only one variadic arg supported
                     // in this PR.
-                    wire_idx += 0;  // no positional increment
+                    wire_idx += 0; // no positional increment
                 }
                 ArgKind::PolyWire => {
                     let pt_ident = format_ident!("{}_type", a.name);
@@ -2626,7 +2889,8 @@ fn generate(
                     let n_str = a.name.to_string();
                     let err = format!(
                         "polywire arg '{n_str}' for '{func_name_str}': assembler \
-                         did not resolve a port type at wire index {wire_idx}");
+                         did not resolve a port type at wire index {wire_idx}"
+                    );
                     out.push(quote! {
                         let #pt_ident: polydat::ast::PortType = match _wire_types.get(#i) {
                             Some(t) => *t,
@@ -2654,11 +2918,15 @@ fn generate(
         // Borrow shapes (`&str`, `&[u8]`, ...) don't impl `Wire`,
         // and `PolyWire` is excluded by ArgKind; only the
         // owned-type wire args contribute resolver intent.
-        let wire_tys: Vec<&Type> = args.iter()
+        let wire_tys: Vec<&Type> = args
+            .iter()
             .filter_map(|a| match &a.kind {
-                ArgKind::Wire if is_borrow_wire_shape(&a.declared_ty).is_none()
-                    && classify_wrapper_wire(&a.declared_ty) != Some(WrapperWire::Handle)
-                    => Some(&a.declared_ty),
+                ArgKind::Wire
+                    if is_borrow_wire_shape(&a.declared_ty).is_none()
+                        && classify_wrapper_wire(&a.declared_ty) != Some(WrapperWire::Handle) =>
+                {
+                    Some(&a.declared_ty)
+                }
                 _ => None,
             })
             .collect();
@@ -2793,12 +3061,12 @@ fn generate(
     // when every element is JIT-eligible. The compiled_u64
     // closure destructures the result and writes each element
     // to its `outputs[i]` slot via the matching JitType.
-    let tuple_ret_jit_types: Option<Vec<JitType>> = tuple_ret_elems.as_ref()
-        .and_then(|elems| {
-            elems.iter()
-                .map(wire_type_to_jit_type)
-                .collect::<Option<Vec<_>>>()
-        });
+    let tuple_ret_jit_types: Option<Vec<JitType>> = tuple_ret_elems.as_ref().and_then(|elems| {
+        elems
+            .iter()
+            .map(wire_type_to_jit_type)
+            .collect::<Option<Vec<_>>>()
+    });
 
     let jit_eligible = !is_fallible
         && arg_jit_types.is_some()
@@ -2843,22 +3111,20 @@ fn generate(
         Slice(&'static str),
         Const,
     }
-    let slot_arg_reads: Option<Vec<SlotArgRead>> = if has_setup
-        || tuple_ret_elems.is_some()
-        || is_fallible
-    {
-        None
-    } else {
-        args.iter()
-            .map(|a| match &a.kind {
-                ArgKind::Wire => wire_type_to_jit_type(&a.declared_ty)
-                    .map(SlotArgRead::Jit)
-                    .or_else(|| slice_arg_elem(&a.declared_ty).map(SlotArgRead::Slice)),
-                ArgKind::Const(_) => Some(SlotArgRead::Const),
-                _ => None,
-            })
-            .collect()
-    };
+    let slot_arg_reads: Option<Vec<SlotArgRead>> =
+        if has_setup || tuple_ret_elems.is_some() || is_fallible {
+            None
+        } else {
+            args.iter()
+                .map(|a| match &a.kind {
+                    ArgKind::Wire => wire_type_to_jit_type(&a.declared_ty)
+                        .map(SlotArgRead::Jit)
+                        .or_else(|| slice_arg_elem(&a.declared_ty).map(SlotArgRead::Slice)),
+                    ArgKind::Const(_) => Some(SlotArgRead::Const),
+                    _ => None,
+                })
+                .collect()
+        };
     let has_slice_shape = slot_arg_reads
         .as_ref()
         .map(|v| v.iter().any(|r| matches!(r, SlotArgRead::Slice(_))))
@@ -2942,11 +3208,7 @@ fn generate(
         })
     };
     let handle_plan: Option<(Vec<HandleArg>, HandleRet)> = (|| {
-        if attrs.no_jit
-            || is_fallible
-            || dynamic_outputs_inner.is_some()
-            || is_split_halves
-        {
+        if attrs.no_jit || is_fallible || dynamic_outputs_inner.is_some() || is_split_halves {
             return None;
         }
         let ret_shape = classify_ret_shape()?;
@@ -3005,7 +3267,11 @@ fn generate(
 
     // A fallible body ran once at construction; its cached value is
     // what every run writes. The shape decides which kit carries it.
-    let fallible_ret: Option<HandleRet> = if is_fallible && !attrs.no_jit { classify_ret_shape() } else { None };
+    let fallible_ret: Option<HandleRet> = if is_fallible && !attrs.no_jit {
+        classify_ret_shape()
+    } else {
+        None
+    };
 
     // The write of `result` (typed `ret_ty`) into `outputs`, by shape.
     // Table kinds take the entries from `__entry_base` in port order,
@@ -3020,8 +3286,12 @@ fn generate(
                 outputs[0] = polydat::kernel::write_table_entry(__entry_base, <#ret_ty as polydat::derive_support::Wire>::inject(result));
             },
             HandleRet::Tuple(elems) => {
-                let types = tuple_ret_elems.as_ref().expect("a tuple shape comes from a tuple return");
-                let locals: Vec<Ident> = (0..elems.len()).map(|i| format_ident!("__r_{}", i)).collect();
+                let types = tuple_ret_elems
+                    .as_ref()
+                    .expect("a tuple shape comes from a tuple return");
+                let locals: Vec<Ident> = (0..elems.len())
+                    .map(|i| format_ident!("__r_{}", i))
+                    .collect();
                 let mut table_k = 0usize;
                 let writes: Vec<TokenStream2> = elems.iter().enumerate()
                     .map(|(i, e)| {
@@ -3059,7 +3329,9 @@ fn generate(
         for (a, shape) in args.iter().zip(shapes.iter()) {
             let n = &a.name;
             match shape {
-                HandleArg::Const(_) | HandleArg::ConstVec => captures.push(quote!(let #n = self.#n.clone();)),
+                HandleArg::Const(_) | HandleArg::ConstVec => {
+                    captures.push(quote!(let #n = self.#n.clone();))
+                }
                 _ => {}
             }
         }
@@ -3067,7 +3339,9 @@ fn generate(
             if let (HandleArg::Setup, ArgKind::Setup(spec)) = (shape, &a.kind) {
                 let n = &a.name;
                 let setup_fn = &spec.setup_fn;
-                let src_exprs: Vec<TokenStream2> = spec.source_args.iter()
+                let src_exprs: Vec<TokenStream2> = spec
+                    .source_args
+                    .iter()
                     .map(|src| match const_shape_by_name.get(&src.to_string()) {
                         Some(ConstSourceShape::ScalarStr) => quote!(#src.as_str()),
                         Some(ConstSourceShape::ScalarValue) => quote!(#src),
@@ -3176,10 +3450,10 @@ fn generate(
         quote!()
     };
 
-    let emit_compiled_u64 = attrs.compiled_u64_override.is_some()
-        || (jit_eligible && !attrs.no_jit);
-    let emit_jit_constants = attrs.jit_constants_override.is_some()
-        || (jit_eligible && !attrs.no_jit);
+    let emit_compiled_u64 =
+        attrs.compiled_u64_override.is_some() || (jit_eligible && !attrs.no_jit);
+    let emit_jit_constants =
+        attrs.jit_constants_override.is_some() || (jit_eligible && !attrs.no_jit);
 
     // Body sharing: extract the function body into a private
     // associated fn `__polydat_body` when JIT is emitted. Both
@@ -3197,7 +3471,8 @@ fn generate(
 
     // Body-fn parameter list — every arg in its DECLARED form
     // (wire as bare type, const as `Const<T>`, setup as `&T`).
-    let body_params: Vec<TokenStream2> = args.iter()
+    let body_params: Vec<TokenStream2> = args
+        .iter()
         .map(|a| {
             let n = &a.name;
             let t = &a.declared_ty;
@@ -3241,7 +3516,10 @@ fn generate(
     // (`&str`, `&[u8]`, etc.) from a node body is unusual but
     // supported: the borrow's `into()` already exists for the
     // canonical `Value` constructor; we emit that directly.
-    let output_assign = |idx_lit: TokenStream2, elem_ty: &Type, local: TokenStream2| -> TokenStream2 {
+    let output_assign = |idx_lit: TokenStream2,
+                         elem_ty: &Type,
+                         local: TokenStream2|
+     -> TokenStream2 {
         if classify_wrapper_wire(elem_ty) == Some(WrapperWire::Handle) {
             quote! {
                 outputs[#idx_lit] = polydat::ast::Value::handle(#local);
@@ -3318,7 +3596,9 @@ fn generate(
             match borrow {
                 BorrowWire::Str => quote!(polydat::ast::Value::Str((__elem).into())),
                 BorrowWire::Bytes => quote!(polydat::ast::Value::Bytes((__elem).into())),
-                BorrowWire::Json => quote!(polydat::ast::Value::Json(::std::sync::Arc::new((__elem).clone()))),
+                BorrowWire::Json => quote!(polydat::ast::Value::Json(::std::sync::Arc::new(
+                    (__elem).clone()
+                ))),
                 BorrowWire::Vec(variant, _) => {
                     let v = syn::Ident::new(variant, proc_macro2::Span::call_site());
                     quote!(polydat::ast::Value::#v(polydat::ast::SliceArc::from_vec((__elem).to_vec())))
@@ -3336,7 +3616,9 @@ fn generate(
         let locals: Vec<Ident> = (0..elems.len())
             .map(|i| format_ident!("__r_{}", i))
             .collect();
-        let writes: Vec<TokenStream2> = elems.iter().enumerate()
+        let writes: Vec<TokenStream2> = elems
+            .iter()
+            .enumerate()
             .map(|(i, elem_ty)| {
                 let local = &locals[i];
                 let idx = syn::Index::from(i);
@@ -3415,7 +3697,8 @@ fn generate(
         let jit_types = arg_jit_types.as_ref().unwrap();
         let mut wire_buf_idx = 0usize;
 
-        let captures: Vec<TokenStream2> = args.iter()
+        let captures: Vec<TokenStream2> = args
+            .iter()
             .filter_map(|a| match &a.kind {
                 ArgKind::Wire | ArgKind::Variadic(_) => None,
                 ArgKind::Const(_) => {
@@ -3428,7 +3711,9 @@ fn generate(
             })
             .collect();
 
-        let arg_reads: Vec<TokenStream2> = args.iter().zip(jit_types.iter())
+        let arg_reads: Vec<TokenStream2> = args
+            .iter()
+            .zip(jit_types.iter())
             .map(|(a, jt)| {
                 let n = &a.name;
                 let _ = jt;
@@ -3470,7 +3755,9 @@ fn generate(
             // Per-element write at the element's slot OFFSET (the
             // prefix sum of preceding element widths — §8.4 L1).
             let mut out_off = 0usize;
-            let writes: Vec<TokenStream2> = tuple_jits.iter().enumerate()
+            let writes: Vec<TokenStream2> = tuple_jits
+                .iter()
+                .enumerate()
                 .map(|(i, jt)| {
                     let local = &locals[i];
                     let w = jt.write_to_u64_buffer_at(out_off, quote!(#local));
@@ -3519,7 +3806,8 @@ fn generate(
                 _ => unreachable!(),
             }
         };
-        let captures: Vec<TokenStream2> = args.iter()
+        let captures: Vec<TokenStream2> = args
+            .iter()
             .filter_map(|a| match &a.kind {
                 ArgKind::Const(_) => {
                     let n = &a.name;
@@ -3529,7 +3817,9 @@ fn generate(
             })
             .collect();
         let mut off = 0usize;
-        let arg_reads: Vec<TokenStream2> = args.iter().zip(reads_spec.iter())
+        let arg_reads: Vec<TokenStream2> = args
+            .iter()
+            .zip(reads_spec.iter())
             .map(|(a, spec)| {
                 let n = &a.name;
                 match spec {
@@ -3611,7 +3901,8 @@ fn generate(
             }
         }
     } else if emit_jit_constants {
-        let const_encodings: Vec<TokenStream2> = args.iter()
+        let const_encodings: Vec<TokenStream2> = args
+            .iter()
             .filter_map(|a| match &a.kind {
                 ArgKind::Const(shape) => {
                     let jt = const_shape_to_jit_type(*shape)?;
@@ -3668,9 +3959,7 @@ fn generate(
                 )
             })?;
             let arg = c.args.first().ok_or_else(|| {
-                syn::Error::new_spanned(
-                    c,
-                    "purity call-form requires one argument.")
+                syn::Error::new_spanned(c, "purity call-form requires one argument.")
             })?;
             match head_ident.to_string().as_str() {
                 "SideChannel" => quote! {
@@ -3685,12 +3974,15 @@ fn generate(
                         polydat::ast::Purity::Nondeterministic { reason: #arg }
                     }
                 },
-                other => return Err(syn::Error::new_spanned(
-                    head_ident,
-                    format!(
-                        "purity call-form head `{other}` not recognized. \
-                         Use `SideChannel(<sink>)` or `Nondeterministic(<reason>)`."),
-                )),
+                other => {
+                    return Err(syn::Error::new_spanned(
+                        head_ident,
+                        format!(
+                            "purity call-form head `{other}` not recognized. \
+                         Use `SideChannel(<sink>)` or `Nondeterministic(<reason>)`."
+                        ),
+                    ));
+                }
             }
         }
         Some(other) => {
@@ -3774,9 +4066,9 @@ fn generate(
         // as PAIRS count; the FuncSig advertises 2× as total
         // wires so the assembler enforces the right floor.
         let min_wires = match (&attrs.variadic_min, is_split_halves) {
-            (Some(v), true)  => quote!(2 * (#v)),
+            (Some(v), true) => quote!(2 * (#v)),
             (Some(v), false) => quote!(#v),
-            (None, _)        => quote!(0),
+            (None, _) => quote!(0),
         };
         quote!(polydat::dsl::registry::Arity::VariadicWires { min_wires: #min_wires })
     } else if has_const_vec {
@@ -3802,13 +4094,18 @@ fn generate(
     //   * runs the body once inside try_new, captures Ok into the
     //     cache, propagates Err via Into<String>,
     //   * makes eval read the cached value (no per-eval body call).
-    let (ctor_emission, eval_emission, build_call_emission): (TokenStream2, TokenStream2, TokenStream2) = if is_fallible {
+    let (ctor_emission, eval_emission, build_call_emission): (
+        TokenStream2,
+        TokenStream2,
+        TokenStream2,
+    ) = if is_fallible {
         // body-arg pass list. In try_new() Const args arrive as
         // their `field_type_tokens()` form (String for Str, raw
         // primitive otherwise) and need wrapping as `Const<T>` for
         // the body's declared signature. Setup args are locals
         // produced by `setup_precomputes` — body takes `&local`.
-        let body_arg_passes: Vec<TokenStream2> = args.iter()
+        let body_arg_passes: Vec<TokenStream2> = args
+            .iter()
             .map(|a| {
                 let n = &a.name;
                 match &a.kind {
@@ -4013,9 +4310,16 @@ fn to_camel_case(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut up = true;
     for c in s.chars() {
-        if c == '_' { up = true; continue; }
-        if up { out.extend(c.to_uppercase()); up = false; }
-        else { out.push(c); }
+        if c == '_' {
+            up = true;
+            continue;
+        }
+        if up {
+            out.extend(c.to_uppercase());
+            up = false;
+        } else {
+            out.push(c);
+        }
     }
     out
 }

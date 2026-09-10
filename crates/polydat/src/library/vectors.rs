@@ -37,12 +37,12 @@ use std::sync::{Arc, LazyLock};
 
 use crate::library::support::cache::OnceCache;
 
-use crate::ast::{PolydatNode, NodeMeta, Port, PortType, Slot, Value};
+use crate::ast::{NodeMeta, PolydatNode, Port, PortType, Slot, Value};
 use vectordata::TestDataGroup;
 use vectordata::TestDataView;
-use vectordata::io::{VectorReader, VvecReader};
-use vectordata::catalog::sources::CatalogSources;
 use vectordata::catalog::resolver::Catalog;
+use vectordata::catalog::sources::CatalogSources;
+use vectordata::io::{VectorReader, VvecReader};
 
 /// Global cache for loaded dataset groups keyed by source string.
 /// Ensures each dataset is loaded exactly once regardless of how many
@@ -126,13 +126,13 @@ pub(crate) fn load_dataset_group(source: &str) -> Result<Arc<TestDataGroup>, Str
     DATASET_CACHE.get_or_init(dataset_name.to_string(), || {
         run_blocking_io(|| {
             let catalog = Catalog::of(&CatalogSources::new().configure_default());
-            catalog.open(dataset_name)
+            catalog
+                .open(dataset_name)
                 .map(Arc::new)
                 .map_err(|e| format!("failed to load dataset '{dataset_name}': {e}"))
         })
     })
 }
-
 
 // =================================================================
 // Dataset handles — loaded once at node construction, shared via Arc
@@ -147,7 +147,6 @@ pub(crate) struct UniformDataset<T: Send + Sync + 'static> {
     dim: usize,
 }
 
-
 /// Cache-aware loader for uniform vector facets.
 /// Returns a shared `Arc<UniformDataset<T>>`, creating and caching it
 /// on first access. Subsequent loads for the same (source, profile, facet)
@@ -156,12 +155,15 @@ fn load_uniform_facet<T: Send + Sync + 'static>(
     source: &str,
     profile: &str,
     facet: &str,
-    open_fn: impl FnOnce(&dyn TestDataView) -> std::result::Result<Arc<dyn VectorReader<T>>, vectordata::Error>,
+    open_fn: impl FnOnce(
+        &dyn TestDataView,
+    ) -> std::result::Result<Arc<dyn VectorReader<T>>, vectordata::Error>,
 ) -> Result<Arc<UniformDataset<T>>, String> {
     let key = (source.to_string(), profile.to_string(), facet.to_string());
     let any = FACET_CACHE.get_or_init(key, || {
         let group = load_dataset_group(source)?;
-        let view = group.profile(profile)
+        let view = group
+            .profile(profile)
             .ok_or_else(|| format!("profile '{profile}' not found in '{source}'"))?;
         // Audit: log the open *before* `open_fn` runs so the
         // line appears even if the open errors. Inside
@@ -176,10 +178,12 @@ fn load_uniform_facet<T: Send + Sync + 'static>(
         let arc: Arc<UniformDataset<T>> = Arc::new(UniformDataset { reader, count, dim });
         Ok(arc as Arc<dyn std::any::Any + Send + Sync>)
     })?;
-    any.downcast::<UniformDataset<T>>()
-        .map_err(|_| format!(
+    any.downcast::<UniformDataset<T>>().map_err(|_| {
+        format!(
             "facet cache type mismatch for '{source}:{profile}/{facet}' — \
-             this should be impossible; please file a bug."))
+             this should be impossible; please file a bug."
+        )
+    })
 }
 
 // Type aliases for backward compatibility
@@ -195,11 +199,12 @@ impl F32Dataset {
                 "query" => view.query_vectors(),
                 "neighbor_distances" => view.neighbor_distances(),
                 "filtered_neighbor_distances" => view.prefiltered_neighbor_distances(),
-                other => Err(vectordata::Error::MissingFacet(format!("unknown f32 facet: '{other}'"))),
+                other => Err(vectordata::Error::MissingFacet(format!(
+                    "unknown f32 facet: '{other}'"
+                ))),
             }
         })
     }
-
 }
 
 impl I32Dataset {
@@ -209,11 +214,12 @@ impl I32Dataset {
             match facet_name.as_str() {
                 "neighbor_indices" => view.neighbor_indices(),
                 "filtered_neighbor_indices" => view.prefiltered_neighbor_indices(),
-                other => Err(vectordata::Error::MissingFacet(format!("unknown i32 facet: '{other}'"))),
+                other => Err(vectordata::Error::MissingFacet(format!(
+                    "unknown i32 facet: '{other}'"
+                ))),
             }
         })
     }
-
 }
 
 // =================================================================
@@ -271,7 +277,10 @@ pub(crate) enum DatasetHandle {
     /// read directly by accessors (they use `source` to re-open
     /// via `DATASET_CACHE`, which has the same group cached);
     /// the field's purpose is the lifetime extension.
-    Prebuffered { _group: Arc<TestDataGroup>, source: String },
+    Prebuffered {
+        _group: Arc<TestDataGroup>,
+        source: String,
+    },
 }
 
 impl DatasetHandle {
@@ -284,9 +293,7 @@ impl DatasetHandle {
             "neighbor_indices" | "filtered_neighbor_indices" => {
                 I32Dataset::load(source, profile, facet).map(DatasetHandle::I32)
             }
-            "metadata_results" => {
-                Ivvec32Dataset::load(source, profile).map(DatasetHandle::Ivvec32)
-            }
+            "metadata_results" => Ivvec32Dataset::load(source, profile).map(DatasetHandle::Ivvec32),
             // Anything else routes through GenericFacetDataset (typed
             // scalar reader), which covers metadata_content,
             // metadata_predicates, and any future scalar facet.
@@ -351,9 +358,7 @@ fn dataset_open(source: &str, facet: &str) -> Arc<DatasetHandle> {
     match DatasetHandle::open(source, facet) {
         Ok(h) => Arc::new(h),
         Err(e) => {
-            let msg = format!(
-                "dataset_open: failed to resolve '{source}' facet='{facet}': {e}"
-            );
+            let msg = format!("dataset_open: failed to resolve '{source}' facet='{facet}': {e}");
             crate::library::support::audit::error(&msg);
             panic!("{msg}");
         }
@@ -375,9 +380,7 @@ fn dataset_group_open(source: &str) -> Arc<DatasetHandle> {
     match DatasetHandle::open_group(source) {
         Ok(h) => Arc::new(h),
         Err(e) => {
-            let msg = format!(
-                "dataset_group_open: failed to resolve '{source}': {e}"
-            );
+            let msg = format!("dataset_group_open: failed to resolve '{source}': {e}");
             crate::library::support::audit::error(&msg);
             panic!("{msg}");
         }
@@ -472,15 +475,13 @@ macro_rules! handle_indexed_node {
 impl DatasetHandle {
     fn resolve_facet<'a>(&'a self, facet: &str) -> std::borrow::Cow<'a, DatasetHandle> {
         match self {
-            DatasetHandle::Prebuffered { source, .. } => {
-                match DatasetHandle::open(source, facet) {
-                    Ok(opened) => std::borrow::Cow::Owned(opened),
-                    Err(e) => panic!(
-                        "DatasetHandle::resolve_facet: failed to open \
+            DatasetHandle::Prebuffered { source, .. } => match DatasetHandle::open(source, facet) {
+                Ok(opened) => std::borrow::Cow::Owned(opened),
+                Err(e) => panic!(
+                    "DatasetHandle::resolve_facet: failed to open \
                          '{facet}' from prebuffered '{source}': {e}"
-                    ),
-                }
-            }
+                ),
+            },
             _ => std::borrow::Cow::Borrowed(self),
         }
     }
@@ -543,10 +544,7 @@ fn ivvec32_vec_at(h: &DatasetHandle, index: usize) -> Value {
 /// that don't support zero-copy (HTTP-backed, or merkle-cached
 /// storage that hasn't been promoted to mmap yet); that path
 /// allocates one `Vec<T>` per cycle.
-fn slice_arc_from_uniform<T>(
-    d: &Arc<UniformDataset<T>>,
-    index: usize,
-) -> crate::ast::SliceArc<T>
+fn slice_arc_from_uniform<T>(d: &Arc<UniformDataset<T>>, index: usize) -> crate::ast::SliceArc<T>
 where
     T: Send + Sync + Copy + 'static,
 {
@@ -587,10 +585,7 @@ fn dataset_handle_kind(h: &DatasetHandle) -> &'static str {
 fn group_of(handle: &DatasetHandle) -> &TestDataGroup {
     match handle {
         DatasetHandle::Group(g) => g.as_ref(),
-        other => panic!(
-            "expected Group handle, got {}",
-            dataset_handle_kind(other)
-        ),
+        other => panic!("expected Group handle, got {}", dataset_handle_kind(other)),
     }
 }
 
@@ -859,23 +854,32 @@ pub(crate) struct Ivvec32Dataset {
 
 impl Ivvec32Dataset {
     fn load(source: &str, profile: &str) -> Result<Arc<Self>, String> {
-        let key = (source.to_string(), profile.to_string(), "metadata_results".to_string());
+        let key = (
+            source.to_string(),
+            profile.to_string(),
+            "metadata_results".to_string(),
+        );
         let any = FACET_CACHE.get_or_init(key, || {
             let group = load_dataset_group(source)?;
-            let view = group.profile(profile)
+            let view = group
+                .profile(profile)
                 .ok_or_else(|| format!("profile '{profile}' not found in '{source}'"))?;
-            crate::library::support::audit::record_opened(source, profile, "metadata_results", "ivvec32");
+            crate::library::support::audit::record_opened(
+                source,
+                profile,
+                "metadata_results",
+                "ivvec32",
+            );
             let reader = run_blocking_io(|| view.metadata_results())
                 .map_err(|e| format!("failed to access metadata_results from '{source}': {e}"))?;
             let count = reader.count();
             let arc: Arc<Self> = Arc::new(Self { reader, count });
             Ok(arc as Arc<dyn std::any::Any + Send + Sync>)
         })?;
-        any.downcast::<Self>()
-            .map_err(|_| format!(
-                "facet cache type mismatch for '{source}:{profile}/metadata_results'"))
+        any.downcast::<Self>().map_err(|_| {
+            format!("facet cache type mismatch for '{source}:{profile}/metadata_results'")
+        })
     }
-
 }
 
 handle_indexed_node!(
@@ -1016,22 +1020,26 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     loop {
         match (ai.peek().copied(), bi.peek().copied()) {
             (None, None) => return std::cmp::Ordering::Equal,
-            (None, _)    => return std::cmp::Ordering::Less,
-            (_, None)    => return std::cmp::Ordering::Greater,
+            (None, _) => return std::cmp::Ordering::Less,
+            (_, None) => return std::cmp::Ordering::Greater,
             (Some(ac), Some(bc)) => {
                 if ac.is_ascii_digit() && bc.is_ascii_digit() {
                     let mut na: u64 = 0;
                     while let Some(c) = ai.peek().copied()
                         && c.is_ascii_digit()
                     {
-                        na = na.saturating_mul(10).saturating_add((c as u8 - b'0') as u64);
+                        na = na
+                            .saturating_mul(10)
+                            .saturating_add((c as u8 - b'0') as u64);
                         ai.next();
                     }
                     let mut nb: u64 = 0;
                     while let Some(c) = bi.peek().copied()
                         && c.is_ascii_digit()
                     {
-                        nb = nb.saturating_mul(10).saturating_add((c as u8 - b'0') as u64);
+                        nb = nb
+                            .saturating_mul(10)
+                            .saturating_add((c as u8 - b'0') as u64);
                         bi.next();
                     }
                     match na.cmp(&nb) {
@@ -1040,7 +1048,10 @@ fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
                     }
                 } else {
                     match ac.cmp(&bc) {
-                        std::cmp::Ordering::Equal => { ai.next(); bi.next(); }
+                        std::cmp::Ordering::Equal => {
+                            ai.next();
+                            bi.next();
+                        }
                         non_eq => return non_eq,
                     }
                 }
@@ -1144,9 +1155,9 @@ fn profile_partitions(
 ) -> crate::derive_support::Ext<crate::iteration::cursor_partition::PartitionList> {
     let group: &TestDataGroup = group_of(&group);
     let parts = build_profile_partitions(group, pattern);
-    crate::derive_support::Ext(
-        crate::iteration::cursor_partition::PartitionList::new(parts),
-    )
+    crate::derive_support::Ext(crate::iteration::cursor_partition::PartitionList::new(
+        parts,
+    ))
 }
 
 /// Build the cumulative size-tier partitions for the profiles of `group`
@@ -1171,7 +1182,8 @@ fn masked_profile_tiers(group: &TestDataGroup, pattern: &str) -> Vec<(String, u6
         .iter()
         .filter(|n| re.is_match(n))
         .filter_map(|n| {
-            group.profile(n)
+            group
+                .profile(n)
                 .and_then(|v| v.base_count())
                 .filter(|&c| c > 0)
                 .map(|c| (n.clone(), c))
@@ -1192,7 +1204,13 @@ pub(crate) fn build_profile_partitions(
         .collect();
     let base_extent = masked.last().copied().unwrap_or(0);
     let count = masked.len() as u64;
-    let pct = |o: u64| if base_extent == 0 { 0.0 } else { (o as f64 / base_extent as f64) * 100.0 };
+    let pct = |o: u64| {
+        if base_extent == 0 {
+            0.0
+        } else {
+            (o as f64 / base_extent as f64) * 100.0
+        }
+    };
     let mut parts: Vec<crate::iteration::cursor_partition::Partition> =
         Vec::with_capacity(masked.len());
     let mut prev: u64 = 0;
@@ -1329,7 +1347,8 @@ fn do_dataset_prebuffer_inner(source: &str) -> Result<Arc<DatasetHandle>, String
         Some(v) => v,
         None => {
             crate::library::support::audit::error(&format!(
-                "dataset_prebuffer: profile '{profile}' not found in '{source}'"));
+                "dataset_prebuffer: profile '{profile}' not found in '{source}'"
+            ));
             return Ok(Arc::new(DatasetHandle::Prebuffered {
                 _group: group_for_handle,
                 source: source.to_string(),
@@ -1364,13 +1383,16 @@ fn do_dataset_prebuffer_inner(source: &str) -> Result<Arc<DatasetHandle>, String
         // Skip facets with unrecognised element types (vectordata's
         // own default impl skips these — they're not data facets the
         // typed reader would touch).
-        if view.facet_element_type(&name).is_err() { continue; }
+        if view.facet_element_type(&name).is_err() {
+            continue;
+        }
 
         let storage = match run_blocking_io(|| view.open_facet_storage(&name)) {
             Ok(s) => s,
             Err(e) => {
                 crate::library::support::audit::warn(&format!(
-                    "dataset_prebuffer: open '{name}' for prebuffer failed: {e}"));
+                    "dataset_prebuffer: open '{name}' for prebuffer failed: {e}"
+                ));
                 continue;
             }
         };
@@ -1380,9 +1402,9 @@ fn do_dataset_prebuffer_inner(source: &str) -> Result<Arc<DatasetHandle>, String
         // the trait bound on `prebuffer_with_progress`.
         // The `DownloadProgress` type is `pub(crate)` upstream
         // (vectordata 1.0.2) so we can't name it ourselves.
-        let prebuf_source  = source.to_string();
+        let prebuf_source = source.to_string();
         let prebuf_profile = profile.to_string();
-        let prebuf_facet   = name.clone();
+        let prebuf_facet = name.clone();
         let mut last_done: u64 = 0;
         let facet_start = std::time::Instant::now();
         let mut last_log_at = facet_start;
@@ -1393,44 +1415,46 @@ fn do_dataset_prebuffer_inner(source: &str) -> Result<Arc<DatasetHandle>, String
         // panics with "Cannot drop a runtime in a context where
         // blocking is not allowed". Same pattern as
         // `load_dataset_group` and `load_uniform_facet`.
-        let prebuf_result = run_blocking_io(|| storage.prebuffer_with_progress(|p| {
-            // Per-facet throttle: ~1 Hz for the first 10s of this
-            // facet's download, then once per 10s, so a gigabyte-sized
-            // facet doesn't spew thousands of progress lines.
-            let now = std::time::Instant::now();
-            let interval = if now.duration_since(facet_start)
-                < std::time::Duration::from_secs(10)
-            {
-                std::time::Duration::from_secs(1)
-            } else {
-                std::time::Duration::from_secs(10)
-            };
-            let since_last = now.duration_since(last_log_at);
-            if since_last < interval {
-                return;
-            }
-            last_log_at = now;
-            let total_b   = p.total_bytes();
-            let done_b    = p.downloaded_bytes();
-            let total_c   = p.total_chunks();
-            let done_c    = p.completed_chunks();
-            let pct       = p.fraction() * 100.0;
-            // Throughput over the actual gap between log lines, so the
-            // rate reads correctly whichever interval is in force.
-            let delta_mb  = (done_b.saturating_sub(last_done)) as f64 / (1024.0 * 1024.0);
-            let rate_mb_s = delta_mb / since_last.as_secs_f64().max(0.001);
-            last_done = done_b;
-            crate::library::support::audit::info(&format!(
-                "prebuffer: progress {prebuf_source}:{prebuf_profile}/{prebuf_facet} \
+        let prebuf_result = run_blocking_io(|| {
+            storage.prebuffer_with_progress(|p| {
+                // Per-facet throttle: ~1 Hz for the first 10s of this
+                // facet's download, then once per 10s, so a gigabyte-sized
+                // facet doesn't spew thousands of progress lines.
+                let now = std::time::Instant::now();
+                let interval =
+                    if now.duration_since(facet_start) < std::time::Duration::from_secs(10) {
+                        std::time::Duration::from_secs(1)
+                    } else {
+                        std::time::Duration::from_secs(10)
+                    };
+                let since_last = now.duration_since(last_log_at);
+                if since_last < interval {
+                    return;
+                }
+                last_log_at = now;
+                let total_b = p.total_bytes();
+                let done_b = p.downloaded_bytes();
+                let total_c = p.total_chunks();
+                let done_c = p.completed_chunks();
+                let pct = p.fraction() * 100.0;
+                // Throughput over the actual gap between log lines, so the
+                // rate reads correctly whichever interval is in force.
+                let delta_mb = (done_b.saturating_sub(last_done)) as f64 / (1024.0 * 1024.0);
+                let rate_mb_s = delta_mb / since_last.as_secs_f64().max(0.001);
+                last_done = done_b;
+                crate::library::support::audit::info(&format!(
+                    "prebuffer: progress {prebuf_source}:{prebuf_profile}/{prebuf_facet} \
                  {pct:5.1}% ({done_c}/{total_c} chunks, \
                  {done_mb:.1}/{total_mb:.1} MB, {rate_mb_s:.1} MB/s)",
-                done_mb  = done_b  as f64 / (1024.0 * 1024.0),
-                total_mb = total_b as f64 / (1024.0 * 1024.0),
-            ));
-        }));
+                    done_mb = done_b as f64 / (1024.0 * 1024.0),
+                    total_mb = total_b as f64 / (1024.0 * 1024.0),
+                ));
+            })
+        });
         if let Err(e) = prebuf_result {
             crate::library::support::audit::warn(&format!(
-                "dataset_prebuffer: download error for '{source}' facet '{name}': {e}"));
+                "dataset_prebuffer: download error for '{source}' facet '{name}': {e}"
+            ));
             continue;
         }
         facet_count = facet_count.saturating_add(1);
@@ -1460,7 +1484,8 @@ impl GenericFacetDataset {
         let key = (source.to_string(), profile.to_string(), facet.to_string());
         let any = FACET_CACHE.get_or_init(key, || {
             let group = load_dataset_group(source)?;
-            let gv = group.generic_view(profile)
+            let gv = group
+                .generic_view(profile)
                 .ok_or_else(|| format!("profile '{profile}' not found in '{source}'"))?;
             crate::library::support::audit::record_opened(source, profile, facet, "generic-typed");
             let reader = run_blocking_io(|| gv.open_facet_typed::<i64>(facet))
@@ -1470,12 +1495,13 @@ impl GenericFacetDataset {
             Ok(arc as Arc<dyn std::any::Any + Send + Sync>)
         })?;
         any.downcast::<Self>()
-            .map_err(|_| format!(
-                "facet cache type mismatch for '{source}:{profile}/{facet}'"))
+            .map_err(|_| format!("facet cache type mismatch for '{source}:{profile}/{facet}'"))
     }
 
     fn get_scalar(&self, index: usize) -> i64 {
-        if self.count == 0 { return 0; }
+        if self.count == 0 {
+            return 0;
+        }
         self.reader.get_value(index % self.count).unwrap_or(0)
     }
 
@@ -1525,8 +1551,8 @@ handle_metadata_node!(
 // Signature declarations for the DSL registry
 // ---------------------------------------------------------------------------
 
-use crate::dsl::registry::{Arity, DefaultResolver, FuncCategory, FuncSig, ParamSpec};
 use crate::ast::SlotType;
+use crate::dsl::registry::{Arity, DefaultResolver, FuncCategory, FuncSig, ParamSpec};
 
 // Macros to keep the bulk of the registry compact and consistent.
 // Per SRD 53 §"Source-string call-site sugar": each handle-taking
@@ -1536,12 +1562,28 @@ use crate::ast::SlotType;
 macro_rules! sig_handle_indexed {
     ($name:literal, $resolver:expr, $desc:literal, $help:literal) => {
         FuncSig {
-            name: $name, category: FuncCategory::RealData, outputs: 1,
-            description: $desc, help: $help,
-            identity: None, variadic_ctor: None,
+            name: $name,
+            category: FuncCategory::RealData,
+            outputs: 1,
+            description: $desc,
+            help: $help,
+            identity: None,
+            variadic_ctor: None,
             params: &[
-                ParamSpec { name: "handle", slot_type: SlotType::Wire, required: true, example: "base", constraint: None },
-                ParamSpec { name: "index", slot_type: SlotType::Wire, required: true, example: "cycle", constraint: None },
+                ParamSpec {
+                    name: "handle",
+                    slot_type: SlotType::Wire,
+                    required: true,
+                    example: "base",
+                    constraint: None,
+                },
+                ParamSpec {
+                    name: "index",
+                    slot_type: SlotType::Wire,
+                    required: true,
+                    example: "cycle",
+                    constraint: None,
+                },
             ],
             arity: Arity::Fixed,
             commutativity: crate::ast::Commutativity::Positional,
@@ -1557,12 +1599,20 @@ macro_rules! sig_handle_indexed {
 macro_rules! sig_handle_metadata {
     ($name:literal, $resolver:expr, $desc:literal, $help:literal) => {
         FuncSig {
-            name: $name, category: FuncCategory::RealData, outputs: 1,
-            description: $desc, help: $help,
-            identity: None, variadic_ctor: None,
-            params: &[
-                ParamSpec { name: "handle", slot_type: SlotType::Wire, required: true, example: "base", constraint: None },
-            ],
+            name: $name,
+            category: FuncCategory::RealData,
+            outputs: 1,
+            description: $desc,
+            help: $help,
+            identity: None,
+            variadic_ctor: None,
+            params: &[ParamSpec {
+                name: "handle",
+                slot_type: SlotType::Wire,
+                required: true,
+                example: "base",
+                constraint: None,
+            }],
             arity: Arity::Fixed,
             commutativity: crate::ast::Commutativity::Positional,
             default_resolver: Some($resolver),
@@ -1582,70 +1632,128 @@ pub fn signatures() -> &'static [FuncSig] {
     use FuncCategory as C;
     &[
         // ===== Per-cycle facet accessors (typed-vector outputs) =====
-        sig_handle_indexed!("vector_at", DefaultResolver::Facet("base"),
+        sig_handle_indexed!(
+            "vector_at",
+            DefaultResolver::Facet("base"),
             "access f32 vector by index",
-            "Read an f32 vector from a facet handle as a typed VecF32.\nAuto-promotes a string source via dataset_open(_,\"base\").\nExample: vector_at(base, cycle)"),
-        sig_handle_indexed!("query_vector_at", DefaultResolver::Facet("query"),
+            "Read an f32 vector from a facet handle as a typed VecF32.\nAuto-promotes a string source via dataset_open(_,\"base\").\nExample: vector_at(base, cycle)"
+        ),
+        sig_handle_indexed!(
+            "query_vector_at",
+            DefaultResolver::Facet("query"),
             "access query vector by index",
-            "Alias for vector_at over a query-facet handle.\nAuto-promotes a string source via dataset_open(_,\"query\")."),
-        sig_handle_indexed!("neighbor_indices_at", DefaultResolver::Facet("neighbor_indices"),
+            "Alias for vector_at over a query-facet handle.\nAuto-promotes a string source via dataset_open(_,\"query\")."
+        ),
+        sig_handle_indexed!(
+            "neighbor_indices_at",
+            DefaultResolver::Facet("neighbor_indices"),
             "ground-truth neighbor indices for a query",
-            "Read ground-truth k-nearest neighbor indices for a query as a\ntyped VecI32. Auto-promotes a string source via\ndataset_open(_,\"neighbor_indices\")."),
-        sig_handle_indexed!("neighbor_distances_at", DefaultResolver::Facet("neighbor_distances"),
+            "Read ground-truth k-nearest neighbor indices for a query as a\ntyped VecI32. Auto-promotes a string source via\ndataset_open(_,\"neighbor_indices\")."
+        ),
+        sig_handle_indexed!(
+            "neighbor_distances_at",
+            DefaultResolver::Facet("neighbor_distances"),
             "ground-truth neighbor distances for a query",
-            "Read ground-truth distances for a query's k-nearest neighbors\nas a typed VecF32."),
-        sig_handle_indexed!("filtered_neighbor_indices_at", DefaultResolver::Facet("filtered_neighbor_indices"),
+            "Read ground-truth distances for a query's k-nearest neighbors\nas a typed VecF32."
+        ),
+        sig_handle_indexed!(
+            "filtered_neighbor_indices_at",
+            DefaultResolver::Facet("filtered_neighbor_indices"),
             "filtered ground-truth neighbor indices",
-            "Read filtered ground-truth indices for a query as a typed VecI32.\nUsed for filtered-ANN recall verification."),
-        sig_handle_indexed!("filtered_neighbor_distances_at", DefaultResolver::Facet("filtered_neighbor_distances"),
+            "Read filtered ground-truth indices for a query as a typed VecI32.\nUsed for filtered-ANN recall verification."
+        ),
+        sig_handle_indexed!(
+            "filtered_neighbor_distances_at",
+            DefaultResolver::Facet("filtered_neighbor_distances"),
             "filtered ground-truth neighbor distances",
-            "Read filtered ground-truth distances for a query as a typed VecF32."),
-        sig_handle_indexed!("metadata_results_len_at", DefaultResolver::Facet("metadata_results"),
+            "Read filtered ground-truth distances for a query as a typed VecF32."
+        ),
+        sig_handle_indexed!(
+            "metadata_results_len_at",
+            DefaultResolver::Facet("metadata_results"),
             "length of metadata indices for a query",
-            "Return the per-record matching-base count for a query without\nloading the full index list (reads only the 4-byte header)."),
-        sig_handle_indexed!("metadata_results_at", DefaultResolver::Facet("metadata_results"),
+            "Return the per-record matching-base count for a query without\nloading the full index list (reads only the 4-byte header)."
+        ),
+        sig_handle_indexed!(
+            "metadata_results_at",
+            DefaultResolver::Facet("metadata_results"),
             "matching base ordinals for a query predicate",
-            "Variable-length list of base vector ordinals matching a query's\npredicate."),
-        sig_handle_indexed!("metadata_value_at", DefaultResolver::Facet("metadata_content"),
+            "Variable-length list of base vector ordinals matching a query's\npredicate."
+        ),
+        sig_handle_indexed!(
+            "metadata_value_at",
+            DefaultResolver::Facet("metadata_content"),
             "scalar metadata value per base vector",
-            "Read a metadata value for a base vector by ordinal.\nReads from the metadata_content facet."),
-        sig_handle_indexed!("predicate_value_at", DefaultResolver::Facet("metadata_predicates"),
+            "Read a metadata value for a base vector by ordinal.\nReads from the metadata_content facet."
+        ),
+        sig_handle_indexed!(
+            "predicate_value_at",
+            DefaultResolver::Facet("metadata_predicates"),
             "scalar predicate value per query",
-            "Read a predicate value for a query by ordinal.\nReads from the metadata_predicates facet."),
-
+            "Read a predicate value for a query by ordinal.\nReads from the metadata_predicates facet."
+        ),
         // ===== Per-handle metadata =====
-        sig_handle_metadata!("vector_dim", DefaultResolver::Facet("base"),
+        sig_handle_metadata!(
+            "vector_dim",
+            DefaultResolver::Facet("base"),
             "vector dimensionality of a facet handle",
-            "Return the per-record element count (dimension) of a vector facet."),
-        sig_handle_metadata!("vector_count", DefaultResolver::Facet("base"),
+            "Return the per-record element count (dimension) of a vector facet."
+        ),
+        sig_handle_metadata!(
+            "vector_count",
+            DefaultResolver::Facet("base"),
             "record count of a facet handle",
-            "Return the number of records in a facet handle (base vectors,\nquery vectors, ...). Auto-promotes a string source via\ndataset_open(_,\"base\")."),
-        sig_handle_metadata!("query_count", DefaultResolver::Facet("query"),
+            "Return the number of records in a facet handle (base vectors,\nquery vectors, ...). Auto-promotes a string source via\ndataset_open(_,\"base\")."
+        ),
+        sig_handle_metadata!(
+            "query_count",
+            DefaultResolver::Facet("query"),
             "record count of a query-facet handle",
-            "Same as vector_count but defaults to dataset_open(_,\"query\")\nfor string sources."),
-        sig_handle_metadata!("neighbor_count", DefaultResolver::Facet("neighbor_indices"),
+            "Same as vector_count but defaults to dataset_open(_,\"query\")\nfor string sources."
+        ),
+        sig_handle_metadata!(
+            "neighbor_count",
+            DefaultResolver::Facet("neighbor_indices"),
             "ground-truth neighbors per query (maxk)",
-            "Return the per-record neighbor count (k) of a neighbor-indices handle."),
-        sig_handle_metadata!("metadata_results_count", DefaultResolver::Facet("metadata_results"),
+            "Return the per-record neighbor count (k) of a neighbor-indices handle."
+        ),
+        sig_handle_metadata!(
+            "metadata_results_count",
+            DefaultResolver::Facet("metadata_results"),
             "number of predicate result sets",
-            "Return the record count of a metadata-indices handle."),
-        sig_handle_metadata!("metadata_content_count", DefaultResolver::Facet("metadata_content"),
+            "Return the record count of a metadata-indices handle."
+        ),
+        sig_handle_metadata!(
+            "metadata_content_count",
+            DefaultResolver::Facet("metadata_content"),
             "number of metadata content records",
-            "Return the record count of a metadata-content handle."),
-
+            "Return the record count of a metadata-content handle."
+        ),
         // ===== Group-level (Group handle) =====
-        sig_handle_metadata!("dataset_distance_function", DefaultResolver::Group,
+        sig_handle_metadata!(
+            "dataset_distance_function",
+            DefaultResolver::Group,
             "dataset distance/similarity function name",
-            "Return the distance function declared in the dataset metadata\n('COSINE','EUCLIDEAN','DOT_PRODUCT','MANHATTAN'). Group-level."),
-        sig_handle_metadata!("dataset_facets", DefaultResolver::Group,
+            "Return the distance function declared in the dataset metadata\n('COSINE','EUCLIDEAN','DOT_PRODUCT','MANHATTAN'). Group-level."
+        ),
+        sig_handle_metadata!(
+            "dataset_facets",
+            DefaultResolver::Group,
             "list available facets in default profile",
-            "Comma-separated facet names available in the group's default profile."),
-        sig_handle_metadata!("dataset_profile_count", DefaultResolver::Group,
+            "Comma-separated facet names available in the group's default profile."
+        ),
+        sig_handle_metadata!(
+            "dataset_profile_count",
+            DefaultResolver::Group,
             "total number of profiles in a dataset",
-            "Number of profiles defined in the dataset group."),
-        sig_handle_metadata!("dataset_profile_names", DefaultResolver::Group,
+            "Number of profiles defined in the dataset group."
+        ),
+        sig_handle_metadata!(
+            "dataset_profile_names",
+            DefaultResolver::Group,
             "comma-separated list of profile names",
-            "All profile names in canonical sort order (by base_count)."),
+            "All profile names in canonical sort order (by base_count)."
+        ),
         // `matching_profiles`, `dataset_profile_name_at`,
         // `profile_base_count`, and `profile_facets` are now
         // `#[polydat_node]`-emitted; they register their FuncSig
@@ -1657,11 +1765,20 @@ pub fn signatures() -> &'static [FuncSig] {
 
         // ===== Side-effect resolver =====
         FuncSig {
-            name: "dataset_prebuffer", category: C::RealData, outputs: 1,
+            name: "dataset_prebuffer",
+            category: C::RealData,
+            outputs: 1,
             description: "eagerly download dataset facets to local cache",
             help: "Downloads all facets for a dataset to the local cache. Returns 0\n(side-effect resolver). Subsequent loads use fast local mmap access.\nKept on a string source — typically called once per workload at\ninit time.\nExample: const _pb := dataset_prebuffer(\"example\")",
-            identity: None, variadic_ctor: None,
-            params: &[ParamSpec { name: "source", slot_type: SlotType::Wire, required: true, example: "\"test\"", constraint: None }],
+            identity: None,
+            variadic_ctor: None,
+            params: &[ParamSpec {
+                name: "source",
+                slot_type: SlotType::Wire,
+                required: true,
+                example: "\"test\"",
+                constraint: None,
+            }],
             arity: Arity::Fixed,
             commutativity: crate::ast::Commutativity::Positional,
             default_resolver: None,
@@ -1678,7 +1795,12 @@ pub fn signatures() -> &'static [FuncSig] {
 /// Returns `None` if the name is not handled by this module.
 /// All functions in this module are feature-gated on `vectordata`.
 #[cfg(feature = "vectordata")]
-pub(crate) fn build_node(name: &str, _wires: &[crate::compile::assembly::WireRef], _wire_types: &[crate::ast::PortType], _consts: &[crate::dsl::factory::ConstArg]) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
+pub(crate) fn build_node(
+    name: &str,
+    _wires: &[crate::compile::assembly::WireRef],
+    _wire_types: &[crate::ast::PortType],
+    _consts: &[crate::dsl::factory::ConstArg],
+) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
     // Every dataset function in this module now takes its
     // `source` (and any other previously-const string params)
     // as a Wire input, so `consts` is unused — the spec arrives
@@ -1689,30 +1811,72 @@ pub(crate) fn build_node(name: &str, _wires: &[crate::compile::assembly::WireRef
     match name {
         // `dataset_open` and `dataset_group_open` register through
         // their `#[polydat_node]`-emitted NodeRegistration entries.
-        "vector_at" => Some(Ok(Box::new(VectorAt::new()) as Box<dyn crate::ast::PolydatNode>)),
-        "query_vector_at" => Some(Ok(Box::new(QueryVectorAt::new()) as Box<dyn crate::ast::PolydatNode>)),
-        "neighbor_indices_at" => Some(Ok(Box::new(NeighborIndicesAt::new()) as Box<dyn crate::ast::PolydatNode>)),
-        "neighbor_distances_at" => Some(Ok(Box::new(NeighborDistancesAt::new()) as Box<dyn crate::ast::PolydatNode>)),
-        "filtered_neighbor_indices_at" => Some(Ok(Box::new(FilteredNeighborIndicesAt::new()) as Box<dyn crate::ast::PolydatNode>)),
-        "filtered_neighbor_distances_at" => Some(Ok(Box::new(FilteredNeighborDistancesAt::new()) as Box<dyn crate::ast::PolydatNode>)),
-        "dataset_distance_function" => Some(Ok(Box::new(DatasetDistanceFunction::new()) as Box<dyn crate::ast::PolydatNode>)),
-        "vector_dim" => Some(Ok(Box::new(VectorDim::new()) as Box<dyn crate::ast::PolydatNode>)),
-        "vector_count" => Some(Ok(Box::new(VectorCount::new()) as Box<dyn crate::ast::PolydatNode>)),
-        "query_count" => Some(Ok(Box::new(QueryCount::new()) as Box<dyn crate::ast::PolydatNode>)),
-        "neighbor_count" => Some(Ok(Box::new(NeighborCount::new()) as Box<dyn crate::ast::PolydatNode>)),
-        "metadata_results_len_at" => Some(Ok(Box::new(MetadataResultsLenAt::new()) as Box<dyn crate::ast::PolydatNode>)),
-        "metadata_results_at" => Some(Ok(Box::new(MetadataResultsAt::new()) as Box<dyn crate::ast::PolydatNode>)),
-        "metadata_results_count" => Some(Ok(Box::new(MetadataResultsCount::new()) as Box<dyn crate::ast::PolydatNode>)),
-        "dataset_facets" => Some(Ok(Box::new(DatasetFacets::new()) as Box<dyn crate::ast::PolydatNode>)),
-        "dataset_profile_count" => Some(Ok(Box::new(DatasetProfileCount::new()) as Box<dyn crate::ast::PolydatNode>)),
-        "dataset_profile_names" => Some(Ok(Box::new(DatasetProfileNames::new()) as Box<dyn crate::ast::PolydatNode>)),
+        "vector_at" => Some(Ok(
+            Box::new(VectorAt::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
+        "query_vector_at" => Some(Ok(
+            Box::new(QueryVectorAt::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
+        "neighbor_indices_at" => Some(Ok(
+            Box::new(NeighborIndicesAt::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
+        "neighbor_distances_at" => Some(Ok(
+            Box::new(NeighborDistancesAt::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
+        "filtered_neighbor_indices_at" => Some(Ok(
+            Box::new(FilteredNeighborIndicesAt::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
+        "filtered_neighbor_distances_at" => Some(Ok(
+            Box::new(FilteredNeighborDistancesAt::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
+        "dataset_distance_function" => Some(Ok(
+            Box::new(DatasetDistanceFunction::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
+        "vector_dim" => Some(Ok(
+            Box::new(VectorDim::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
+        "vector_count" => Some(Ok(
+            Box::new(VectorCount::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
+        "query_count" => Some(Ok(
+            Box::new(QueryCount::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
+        "neighbor_count" => Some(Ok(
+            Box::new(NeighborCount::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
+        "metadata_results_len_at" => Some(Ok(
+            Box::new(MetadataResultsLenAt::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
+        "metadata_results_at" => Some(Ok(
+            Box::new(MetadataResultsAt::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
+        "metadata_results_count" => Some(Ok(
+            Box::new(MetadataResultsCount::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
+        "dataset_facets" => Some(Ok(
+            Box::new(DatasetFacets::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
+        "dataset_profile_count" => Some(Ok(
+            Box::new(DatasetProfileCount::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
+        "dataset_profile_names" => Some(Ok(
+            Box::new(DatasetProfileNames::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
         // `matching_profiles`, `dataset_profile_name_at`,
         // `profile_base_count`, `profile_facets` register
         // through the `#[polydat_node]`-emitted NodeRegistration.
-        "dataset_prebuffer" => Some(Ok(Box::new(DatasetPrebuffer::new()) as Box<dyn crate::ast::PolydatNode>)),
-        "metadata_value_at" => Some(Ok(Box::new(MetadataValueAt::new()) as Box<dyn crate::ast::PolydatNode>)),
-        "predicate_value_at" => Some(Ok(Box::new(PredicateValueAt::new()) as Box<dyn crate::ast::PolydatNode>)),
-        "metadata_content_count" => Some(Ok(Box::new(MetadataContentCount::new()) as Box<dyn crate::ast::PolydatNode>)),
+        "dataset_prebuffer" => Some(Ok(
+            Box::new(DatasetPrebuffer::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
+        "metadata_value_at" => Some(Ok(
+            Box::new(MetadataValueAt::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
+        "predicate_value_at" => Some(Ok(
+            Box::new(PredicateValueAt::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
+        "metadata_content_count" => Some(Ok(
+            Box::new(MetadataContentCount::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
         _ => None,
     }
 }
@@ -1758,7 +1922,9 @@ fn vectordata_sugar(
     use crate::dsl::compile::positional_str_lit;
     use crate::dsl::cursor_sugar::{AuxBinding, CursorSugar};
 
-    let Expr::Call(call) = constructor else { return Ok(None); };
+    let Expr::Call(call) = constructor else {
+        return Ok(None);
+    };
 
     let (dataset, profile, facet) = match call.func.as_str() {
         "vectordata_source" => {

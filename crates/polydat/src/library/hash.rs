@@ -107,7 +107,10 @@ impl FusedNode for HashRange {
         use crate::library::arithmetic::Mod;
         let mut g = DecomposedGraph::new(1);
         let h = g.add_node(Box::new(Hash::new()), vec![DecomposedWire::Input(0)]);
-        let m = g.add_node(Box::new(Mod::new(self.max)), vec![DecomposedWire::Node(h, 0)]);
+        let m = g.add_node(
+            Box::new(Mod::new(self.max)),
+            vec![DecomposedWire::Node(h, 0)],
+        );
         g.set_outputs(vec![DecomposedWire::Node(m, 0)]);
         g
     }
@@ -136,7 +139,10 @@ impl FusedNode for HashInterval {
         use crate::library::sampling::icd::UnitInterval;
         let mut g = DecomposedGraph::new(1);
         let h = g.add_node(Box::new(Hash::new()), vec![DecomposedWire::Input(0)]);
-        let ui = g.add_node(Box::new(UnitInterval::new()), vec![DecomposedWire::Node(h, 0)]);
+        let ui = g.add_node(
+            Box::new(UnitInterval::new()),
+            vec![DecomposedWire::Node(h, 0)],
+        );
         let lerp = g.add_node(
             Box::new(Lerp::new(self.min, self.max)),
             vec![DecomposedWire::Node(ui, 0)],
@@ -158,7 +164,11 @@ mod tests {
         node.eval(&[Value::U64(42)], &mut out);
         let first = out[0].as_u64();
         node.eval(&[Value::U64(42)], &mut out);
-        assert_eq!(first, out[0].as_u64(), "same input must produce same output");
+        assert_eq!(
+            first,
+            out[0].as_u64(),
+            "same input must produce same output"
+        );
     }
 
     #[test]

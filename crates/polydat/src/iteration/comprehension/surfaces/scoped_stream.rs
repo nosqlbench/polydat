@@ -39,7 +39,10 @@ pub struct ScopedKernelStream<K: KernelScope> {
 impl<K: KernelScope> ScopedKernelStream<K> {
     pub(crate) fn new(program: Arc<Program>, parent: K) -> Self {
         let coord_stream = CoordinateStream::new(program);
-        Self { coord_stream, parent }
+        Self {
+            coord_stream,
+            parent,
+        }
     }
 
     /// Pull the next scoped instance. Internally:

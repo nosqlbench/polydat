@@ -22,8 +22,8 @@
 //! via `eval(&[Value], &mut [Value])`.
 
 use std::fmt;
-use std::sync::Arc;
 use std::ops::Deref;
+use std::sync::Arc;
 
 /// Arc-managed typed slice. Holds a borrow into a parent Arc'd
 /// owner — typically either an owned backing buffer (`Arc<[T]>`)
@@ -75,7 +75,11 @@ impl<T: Send + Sync + 'static> SliceArc<T> {
         let ptr = arc.as_ptr();
         let len = arc.len();
         let owner: Arc<dyn std::any::Any + Send + Sync> = Arc::new(OwnedSlice(arc));
-        Self { _owner: owner, ptr, len }
+        Self {
+            _owner: owner,
+            ptr,
+            len,
+        }
     }
 
     /// Build from a `&[T]` borrowed from `owner`'s data.
@@ -88,17 +92,13 @@ impl<T: Send + Sync + 'static> SliceArc<T> {
     /// this — typical use is mmap-backed readers where the slice
     /// is a view into a memory-mapped page kept alive by the
     /// dataset Arc.
-    pub unsafe fn from_borrowed(
-        owner: Arc<dyn std::any::Any + Send + Sync>,
-        slice: &[T],
-    ) -> Self {
+    pub unsafe fn from_borrowed(owner: Arc<dyn std::any::Any + Send + Sync>, slice: &[T]) -> Self {
         Self {
             _owner: owner,
             ptr: slice.as_ptr(),
             len: slice.len(),
         }
     }
-
 }
 
 impl<T: 'static> SliceArc<T> {
@@ -468,13 +468,19 @@ pub trait ReflectedValue: Send + Sync + std::fmt::Debug {
     }
 
     /// Try to represent as u64.
-    fn try_as_u64(&self) -> Option<u64> { None }
+    fn try_as_u64(&self) -> Option<u64> {
+        None
+    }
 
     /// Try to represent as f64.
-    fn try_as_f64(&self) -> Option<f64> { None }
+    fn try_as_f64(&self) -> Option<f64> {
+        None
+    }
 
     /// Try to represent as bytes.
-    fn try_as_bytes(&self) -> Option<&[u8]> { None }
+    fn try_as_bytes(&self) -> Option<&[u8]> {
+        None
+    }
 
     /// Downcast to the concrete type. Only works when the consuming
     /// code has the concrete type in scope (same crate or shared dep).
@@ -819,7 +825,9 @@ impl Value {
                 s.push('[');
                 let mut first = true;
                 for v in arc.iter() {
-                    if !first { s.push(','); }
+                    if !first {
+                        s.push(',');
+                    }
                     first = false;
                     use std::fmt::Write;
                     let _ = write!(&mut s, "{v:?}");
@@ -832,7 +840,9 @@ impl Value {
                 s.push('[');
                 let mut first = true;
                 for v in arc.iter() {
-                    if !first { s.push(','); }
+                    if !first {
+                        s.push(',');
+                    }
                     first = false;
                     use std::fmt::Write;
                     let _ = write!(&mut s, "{v}");
@@ -845,7 +855,9 @@ impl Value {
                 s.push('[');
                 let mut first = true;
                 for v in arc.iter() {
-                    if !first { s.push(','); }
+                    if !first {
+                        s.push(',');
+                    }
                     first = false;
                     use std::fmt::Write;
                     let _ = write!(&mut s, "{v:?}");
@@ -858,7 +870,9 @@ impl Value {
                 s.push('[');
                 let mut first = true;
                 for v in arc.iter() {
-                    if !first { s.push(','); }
+                    if !first {
+                        s.push(',');
+                    }
                     first = false;
                     use std::fmt::Write;
                     let _ = write!(&mut s, "{v}");
@@ -871,7 +885,9 @@ impl Value {
                 s.push('[');
                 let mut first = true;
                 for v in arc.iter() {
-                    if !first { s.push(','); }
+                    if !first {
+                        s.push(',');
+                    }
                     first = false;
                     use std::fmt::Write;
                     // Render as the f32 widening so the JSON form
@@ -889,7 +905,9 @@ impl Value {
                 s.push('[');
                 let mut first = true;
                 for v in arc.iter() {
-                    if !first { s.push(','); }
+                    if !first {
+                        s.push(',');
+                    }
                     first = false;
                     use std::fmt::Write;
                     let _ = write!(&mut s, "{v}");
@@ -902,7 +920,9 @@ impl Value {
                 s.push('[');
                 let mut first = true;
                 for v in arc.iter() {
-                    if !first { s.push(','); }
+                    if !first {
+                        s.push(',');
+                    }
                     first = false;
                     use std::fmt::Write;
                     let _ = write!(&mut s, "{v}");
@@ -953,47 +973,81 @@ impl Value {
             Value::Reg128(b, view) => match view {
                 RegLanes::Raw => serde_json::Value::String(format!("{:032x}", b.as_u128())),
                 RegLanes::I8x16 => serde_json::Value::Array(
-                    b.lanes_i8().iter().map(|i| serde_json::Value::from(*i as i32)).collect()),
+                    b.lanes_i8()
+                        .iter()
+                        .map(|i| serde_json::Value::from(*i as i32))
+                        .collect(),
+                ),
                 RegLanes::I16x8 => serde_json::Value::Array(
-                    b.lanes_i16().iter().map(|i| serde_json::Value::from(*i as i32)).collect()),
+                    b.lanes_i16()
+                        .iter()
+                        .map(|i| serde_json::Value::from(*i as i32))
+                        .collect(),
+                ),
                 RegLanes::I32x4 => serde_json::Value::Array(
-                    b.lanes_i32().iter().map(|i| serde_json::Value::from(*i)).collect()),
+                    b.lanes_i32()
+                        .iter()
+                        .map(|i| serde_json::Value::from(*i))
+                        .collect(),
+                ),
                 RegLanes::I64x2 => serde_json::Value::Array(
-                    b.lanes_i64().iter().map(|i| serde_json::Value::from(*i)).collect()),
+                    b.lanes_i64()
+                        .iter()
+                        .map(|i| serde_json::Value::from(*i))
+                        .collect(),
+                ),
                 RegLanes::F16x8 => serde_json::Value::Array(
-                    b.lanes_f16().iter().map(|f| serde_json::json!(f.to_f32())).collect()),
+                    b.lanes_f16()
+                        .iter()
+                        .map(|f| serde_json::json!(f.to_f32()))
+                        .collect(),
+                ),
                 RegLanes::F32x4 => serde_json::Value::Array(
-                    b.lanes_f32().iter().map(|f| serde_json::json!(*f)).collect()),
+                    b.lanes_f32()
+                        .iter()
+                        .map(|f| serde_json::json!(*f))
+                        .collect(),
+                ),
                 RegLanes::F64x2 => serde_json::Value::Array(
-                    b.lanes_f64().iter().map(|f| serde_json::json!(*f)).collect()),
+                    b.lanes_f64()
+                        .iter()
+                        .map(|f| serde_json::json!(*f))
+                        .collect(),
+                ),
             },
             Value::F64(v) => serde_json::json!(*v),
             Value::Bool(v) => serde_json::Value::from(*v),
             Value::Str(v) => serde_json::Value::from(&**v),
-            Value::Bytes(v) => serde_json::Value::from(v.iter().map(|b| format!("{b:02x}")).collect::<String>()),
+            Value::Bytes(v) => {
+                serde_json::Value::from(v.iter().map(|b| format!("{b:02x}")).collect::<String>())
+            }
             Value::Json(v) => (**v).clone(),
             Value::Ext(v) => v.to_json_value(),
             Value::Handle(_) => serde_json::Value::Null,
-            Value::VecF32(arc) => serde_json::Value::Array(
-                arc.iter().map(|f| serde_json::json!(*f)).collect()
-            ),
-            Value::VecI32(arc) => serde_json::Value::Array(
-                arc.iter().map(|i| serde_json::Value::from(*i)).collect()
-            ),
-            Value::VecF64(arc) => serde_json::Value::Array(
-                arc.iter().map(|f| serde_json::json!(*f)).collect()
-            ),
-            Value::VecI64(arc) => serde_json::Value::Array(
-                arc.iter().map(|i| serde_json::Value::from(*i)).collect()
-            ),
+            Value::VecF32(arc) => {
+                serde_json::Value::Array(arc.iter().map(|f| serde_json::json!(*f)).collect())
+            }
+            Value::VecI32(arc) => {
+                serde_json::Value::Array(arc.iter().map(|i| serde_json::Value::from(*i)).collect())
+            }
+            Value::VecF64(arc) => {
+                serde_json::Value::Array(arc.iter().map(|f| serde_json::json!(*f)).collect())
+            }
+            Value::VecI64(arc) => {
+                serde_json::Value::Array(arc.iter().map(|i| serde_json::Value::from(*i)).collect())
+            }
             Value::VecF16(arc) => serde_json::Value::Array(
-                arc.iter().map(|f| serde_json::json!(f.to_f32())).collect()
+                arc.iter().map(|f| serde_json::json!(f.to_f32())).collect(),
             ),
             Value::VecI16(arc) => serde_json::Value::Array(
-                arc.iter().map(|i| serde_json::Value::from(*i as i32)).collect()
+                arc.iter()
+                    .map(|i| serde_json::Value::from(*i as i32))
+                    .collect(),
             ),
             Value::VecI8(arc) => serde_json::Value::Array(
-                arc.iter().map(|i| serde_json::Value::from(*i as i32)).collect()
+                arc.iter()
+                    .map(|i| serde_json::Value::from(*i as i32))
+                    .collect(),
             ),
             Value::None => serde_json::Value::Null,
         }
@@ -1187,19 +1241,19 @@ impl PortType {
     /// canonical keyword and the round-trip closure to update.
     pub fn to_keyword(&self) -> &'static str {
         match self {
-            Self::U64    => "u64",
-            Self::F64    => "f64",
-            Self::U32    => "u32",
-            Self::I32    => "i32",
-            Self::I64    => "i64",
-            Self::F32    => "f32",
-            Self::U8     => "u8",
-            Self::I8     => "i8",
-            Self::U16    => "u16",
-            Self::I16    => "i16",
-            Self::F16    => "f16",
-            Self::U128   => "u128",
-            Self::I128   => "i128",
+            Self::U64 => "u64",
+            Self::F64 => "f64",
+            Self::U32 => "u32",
+            Self::I32 => "i32",
+            Self::I64 => "i64",
+            Self::F32 => "f32",
+            Self::U8 => "u8",
+            Self::I8 => "i8",
+            Self::U16 => "u16",
+            Self::I16 => "i16",
+            Self::F16 => "f16",
+            Self::U128 => "u128",
+            Self::I128 => "i128",
             Self::Reg128 => "reg128",
             Self::RegI8x16 => "reg_i8x16",
             Self::RegI16x8 => "reg_i16x8",
@@ -1208,11 +1262,11 @@ impl PortType {
             Self::RegF16x8 => "reg_f16x8",
             Self::RegF32x4 => "reg_f32x4",
             Self::RegF64x2 => "reg_f64x2",
-            Self::Bool   => "bool",
-            Self::Str    => "str",
-            Self::Bytes  => "bytes",
-            Self::Json   => "json",
-            Self::Ext    => "ext",
+            Self::Bool => "bool",
+            Self::Str => "str",
+            Self::Bytes => "bytes",
+            Self::Json => "json",
+            Self::Ext => "ext",
             Self::Handle => "handle",
             Self::VecF32 => "vec_f32",
             Self::VecI32 => "vec_i32",
@@ -1220,7 +1274,7 @@ impl PortType {
             Self::VecI64 => "vec_i64",
             Self::VecF16 => "vec_f16",
             Self::VecI16 => "vec_i16",
-            Self::VecI8  => "vec_i8",
+            Self::VecI8 => "vec_i8",
         }
     }
 
@@ -1238,40 +1292,40 @@ impl PortType {
     /// any source `to_keyword` emits.
     pub fn from_keyword(name: &str) -> Option<Self> {
         match name {
-            "u64"                 => Some(Self::U64),
-            "f64"                 => Some(Self::F64),
-            "u32"                 => Some(Self::U32),
-            "i32"                 => Some(Self::I32),
-            "i64"                 => Some(Self::I64),
-            "f32"                 => Some(Self::F32),
-            "u8"                  => Some(Self::U8),
-            "i8"                  => Some(Self::I8),
-            "u16"                 => Some(Self::U16),
-            "i16"                 => Some(Self::I16),
-            "f16"                 => Some(Self::F16),
-            "u128"                => Some(Self::U128),
-            "i128"                => Some(Self::I128),
-            "reg128"              => Some(Self::Reg128),
-            "reg_i8x16"           => Some(Self::RegI8x16),
-            "reg_i16x8"           => Some(Self::RegI16x8),
-            "reg_i32x4"           => Some(Self::RegI32x4),
-            "reg_i64x2"           => Some(Self::RegI64x2),
-            "reg_f16x8"           => Some(Self::RegF16x8),
-            "reg_f32x4"           => Some(Self::RegF32x4),
-            "reg_f64x2"           => Some(Self::RegF64x2),
-            "bool"                => Some(Self::Bool),
+            "u64" => Some(Self::U64),
+            "f64" => Some(Self::F64),
+            "u32" => Some(Self::U32),
+            "i32" => Some(Self::I32),
+            "i64" => Some(Self::I64),
+            "f32" => Some(Self::F32),
+            "u8" => Some(Self::U8),
+            "i8" => Some(Self::I8),
+            "u16" => Some(Self::U16),
+            "i16" => Some(Self::I16),
+            "f16" => Some(Self::F16),
+            "u128" => Some(Self::U128),
+            "i128" => Some(Self::I128),
+            "reg128" => Some(Self::Reg128),
+            "reg_i8x16" => Some(Self::RegI8x16),
+            "reg_i16x8" => Some(Self::RegI16x8),
+            "reg_i32x4" => Some(Self::RegI32x4),
+            "reg_i64x2" => Some(Self::RegI64x2),
+            "reg_f16x8" => Some(Self::RegF16x8),
+            "reg_f32x4" => Some(Self::RegF32x4),
+            "reg_f64x2" => Some(Self::RegF64x2),
+            "bool" => Some(Self::Bool),
             "str" | "Str" | "String" => Some(Self::Str),
-            "bytes"               => Some(Self::Bytes),
-            "json" | "Json"       => Some(Self::Json),
-            "ext"  | "Ext"        => Some(Self::Ext),
-            "handle"              => Some(Self::Handle),
-            "vec_f32"             => Some(Self::VecF32),
-            "vec_i32"             => Some(Self::VecI32),
-            "vec_f64"             => Some(Self::VecF64),
-            "vec_i64"             => Some(Self::VecI64),
-            "vec_f16"             => Some(Self::VecF16),
-            "vec_i16"             => Some(Self::VecI16),
-            "vec_i8"              => Some(Self::VecI8),
+            "bytes" => Some(Self::Bytes),
+            "json" | "Json" => Some(Self::Json),
+            "ext" | "Ext" => Some(Self::Ext),
+            "handle" => Some(Self::Handle),
+            "vec_f32" => Some(Self::VecF32),
+            "vec_i32" => Some(Self::VecI32),
+            "vec_f64" => Some(Self::VecF64),
+            "vec_i64" => Some(Self::VecI64),
+            "vec_f16" => Some(Self::VecF16),
+            "vec_i16" => Some(Self::VecI16),
+            "vec_i8" => Some(Self::VecI8),
             _ => None,
         }
     }
@@ -1285,14 +1339,24 @@ impl PortType {
             // 128-bit immediates: two slots of limb DATA —
             // register words and 128-bit integers are values,
             // never addresses.
-            Self::U128 | Self::I128
-            | Self::Reg128 | Self::RegI8x16 | Self::RegI16x8
-            | Self::RegI32x4 | Self::RegI64x2 | Self::RegF16x8
-            | Self::RegF32x4 | Self::RegF64x2 => SlotColor::Imm2,
+            Self::U128
+            | Self::I128
+            | Self::Reg128
+            | Self::RegI8x16
+            | Self::RegI16x8
+            | Self::RegI32x4
+            | Self::RegI64x2
+            | Self::RegF16x8
+            | Self::RegF32x4
+            | Self::RegF64x2 => SlotColor::Imm2,
             // Heap slices: a (ptr, len) reference pair viewing
             // kernel-owned scratch (§8.4 layer 3).
-            Self::VecF32 | Self::VecI32 | Self::VecF64
-            | Self::VecI64 | Self::VecF16 | Self::VecI16
+            Self::VecF32
+            | Self::VecI32
+            | Self::VecF64
+            | Self::VecI64
+            | Self::VecF16
+            | Self::VecI16
             | Self::VecI8 => SlotColor::Ref2,
             // Non-scalar values (SRD 115 §2): one slot holding a
             // handle that names the value in the static interner,
@@ -1593,10 +1657,7 @@ pub enum Slot {
     /// A runtime wire input carrying a value each cycle.
     Wire(Port),
     /// An assembly-time constant, baked into the node at construction.
-    Const {
-        name: String,
-        value: ConstValue,
-    },
+    Const { name: String, value: ConstValue },
 }
 
 impl Slot {
@@ -1609,31 +1670,48 @@ impl Slot {
     }
 
     /// Create a wire slot.
-    pub fn wire(port: Port) -> Self { Slot::Wire(port) }
+    pub fn wire(port: Port) -> Self {
+        Slot::Wire(port)
+    }
 
     /// Create a u64 constant slot.
     pub fn const_u64(name: impl Into<String>, v: u64) -> Self {
-        Slot::Const { name: name.into(), value: ConstValue::U64(v) }
+        Slot::Const {
+            name: name.into(),
+            value: ConstValue::U64(v),
+        }
     }
 
     /// Create an f64 constant slot.
     pub fn const_f64(name: impl Into<String>, v: f64) -> Self {
-        Slot::Const { name: name.into(), value: ConstValue::F64(v) }
+        Slot::Const {
+            name: name.into(),
+            value: ConstValue::F64(v),
+        }
     }
 
     /// Create a string constant slot.
     pub fn const_str(name: impl Into<String>, v: impl Into<String>) -> Self {
-        Slot::Const { name: name.into(), value: ConstValue::Str(v.into()) }
+        Slot::Const {
+            name: name.into(),
+            value: ConstValue::Str(v.into()),
+        }
     }
 
     /// Create a `Vec<u64>` constant slot.
     pub fn const_vec_u64(name: impl Into<String>, v: Vec<u64>) -> Self {
-        Slot::Const { name: name.into(), value: ConstValue::VecU64(v) }
+        Slot::Const {
+            name: name.into(),
+            value: ConstValue::VecU64(v),
+        }
     }
 
     /// Create a `Vec<f64>` constant slot.
     pub fn const_vec_f64(name: impl Into<String>, v: Vec<f64>) -> Self {
-        Slot::Const { name: name.into(), value: ConstValue::VecF64(v) }
+        Slot::Const {
+            name: name.into(),
+            value: ConstValue::VecF64(v),
+        }
     }
 }
 
@@ -1642,8 +1720,7 @@ impl Slot {
 /// Used by the fusion pattern matcher to recognize equivalent
 /// subgraphs regardless of operand order, and by future passes
 /// (e.g., canonical ordering, common subexpression elimination).
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Commutativity {
     /// Input order matters. No permutations attempted during
     /// pattern matching. This is the default for unary nodes and
@@ -1673,7 +1750,6 @@ pub enum Commutativity {
     Groups(Vec<Vec<usize>>),
 }
 
-
 /// Metadata describing a node's interface: its input slots and output ports.
 ///
 /// Generated per-node-type and queryable at runtime for assembly-time
@@ -1692,23 +1768,30 @@ pub struct NodeMeta {
 impl NodeMeta {
     /// Wire-only input ports extracted from `ins`.
     pub fn wire_inputs(&self) -> Vec<&Port> {
-        self.ins.iter().filter_map(|s| match s {
-            Slot::Wire(p) => Some(p),
-            Slot::Const { .. } => None,
-        }).collect()
+        self.ins
+            .iter()
+            .filter_map(|s| match s {
+                Slot::Wire(p) => Some(p),
+                Slot::Const { .. } => None,
+            })
+            .collect()
     }
 
     /// Constant names and values extracted from `ins`.
     pub fn const_slots(&self) -> Vec<(&str, &ConstValue)> {
-        self.ins.iter().filter_map(|s| match s {
-            Slot::Const { name, value } => Some((name.as_str(), value)),
-            Slot::Wire(_) => None,
-        }).collect()
+        self.ins
+            .iter()
+            .filter_map(|s| match s {
+                Slot::Const { name, value } => Some((name.as_str(), value)),
+                Slot::Wire(_) => None,
+            })
+            .collect()
     }
 
     /// Encode all constants from `ins` to JIT u64 representation.
     pub fn jit_constants_from_slots(&self) -> Vec<u64> {
-        self.const_slots().iter()
+        self.const_slots()
+            .iter()
             .flat_map(|(_, v)| v.to_jit_u64s())
             .collect()
     }
@@ -1817,8 +1900,7 @@ impl ScratchBuf {
 /// step's scratch buffers: slice inputs arrive as `(ptr, len)`
 /// slot pairs in `inputs`; vector outputs are written into
 /// scratch and their `(ptr, len)` into `outputs`.
-pub type CompiledSlotOp =
-    Box<dyn Fn(&[u64], &mut [u64], &mut [ScratchBuf]) + Send + Sync>;
+pub type CompiledSlotOp = Box<dyn Fn(&[u64], &mut [u64], &mut [ScratchBuf]) + Send + Sync>;
 
 /// A slot-compiled node's closure plus its scratch declaration
 /// (one [`ScratchElem`] per vector-producing output, in port
@@ -2034,7 +2116,11 @@ pub trait PolydatNode: Send + Sync {
     /// Default: `None` (no handle-slot form). The `#[polydat_node]`
     /// macro emits this for nodes with a JSON, polymorphic, or
     /// variadic port whose other shapes fit the buffer.
-    fn compiled_handle(&self, _entry_base: usize, _wire_types: &[PortType]) -> Option<CompiledU64Op> {
+    fn compiled_handle(
+        &self,
+        _entry_base: usize,
+        _wire_types: &[PortType],
+    ) -> Option<CompiledU64Op> {
         None
     }
 
@@ -2156,7 +2242,9 @@ mod purity_tests {
     }
 
     impl PolydatNode for DefaultPureNode {
-        fn meta(&self) -> &NodeMeta { &self.meta }
+        fn meta(&self) -> &NodeMeta {
+            &self.meta
+        }
         fn eval(&self, _inputs: &[Value], outputs: &mut [Value]) {
             outputs[0] = Value::U64(42);
         }
@@ -2168,10 +2256,14 @@ mod purity_tests {
     }
 
     impl PolydatNode for SideChannelNode {
-        fn meta(&self) -> &NodeMeta { &self.meta }
+        fn meta(&self) -> &NodeMeta {
+            &self.meta
+        }
         fn eval(&self, _inputs: &[Value], _outputs: &mut [Value]) {}
         fn purity(&self) -> Purity {
-            Purity::SideChannel { sink: SideChannelSink::Stderr }
+            Purity::SideChannel {
+                sink: SideChannelSink::Stderr,
+            }
         }
     }
 
@@ -2181,10 +2273,14 @@ mod purity_tests {
     }
 
     impl PolydatNode for StatefulNode {
-        fn meta(&self) -> &NodeMeta { &self.meta }
+        fn meta(&self) -> &NodeMeta {
+            &self.meta
+        }
         fn eval(&self, _inputs: &[Value], _outputs: &mut [Value]) {}
         fn purity(&self) -> Purity {
-            Purity::Nondeterministic { reason: "test fixture" }
+            Purity::Nondeterministic {
+                reason: "test fixture",
+            }
         }
     }
 
@@ -2258,9 +2354,12 @@ mod value_size_probe {
             "Value grew past the 40-byte envelope: {}",
             std::mem::size_of::<super::Value>()
         );
-        assert_eq!(std::mem::align_of::<super::Value>(), 8,
+        assert_eq!(
+            std::mem::align_of::<super::Value>(),
+            8,
             "Value alignment must stay 8 — a 16-aligned payload \
-             (raw u128/i128?) snuck in");
+             (raw u128/i128?) snuck in"
+        );
     }
 }
 
@@ -2346,7 +2445,9 @@ impl<'a> ValueRef<'a> {
             ValueRef::F64(v) => serde_json::json!(*v),
             ValueRef::Bool(v) => serde_json::Value::from(*v),
             ValueRef::Str(s) => serde_json::Value::from(*s),
-            ValueRef::Bytes(b) => serde_json::Value::from(b.iter().map(|b| format!("{b:02x}")).collect::<String>()),
+            ValueRef::Bytes(b) => {
+                serde_json::Value::from(b.iter().map(|b| format!("{b:02x}")).collect::<String>())
+            }
             ValueRef::Json(j) => (*j).clone(),
             ValueRef::None => Value::None.to_json_value(),
             ValueRef::Other(v) => v.to_json_value(),

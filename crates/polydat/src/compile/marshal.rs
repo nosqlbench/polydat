@@ -31,7 +31,10 @@ pub(crate) fn encode_slot(v: &Value, table: &mut ValueTable, entry: Option<usize
         Value::Bytes(b) => crate::kernel::put_thread_bytes(b),
         Value::Json(_) | Value::Ext(_) | Value::Handle(_) => {
             let entry = entry.unwrap_or_else(|| {
-                panic!("a {:?} boundary value has no value-table entry assigned (SRD 115 §3)", v.port_type())
+                panic!(
+                    "a {:?} boundary value has no value-table entry assigned (SRD 115 §3)",
+                    v.port_type()
+                )
             });
             table.write(entry, v.clone())
         }
@@ -81,7 +84,9 @@ pub(crate) fn type_of_code(code: u8) -> PortType {
 pub(crate) fn arg_value(code: u8, bits: u64) -> Value {
     let ty = type_of_code(code);
     match ty.handle_kind() {
-        Some(crate::ast::HandleKind::Table) => crate::kernel::with_current_value_table(|t| t.read(bits)),
+        Some(crate::ast::HandleKind::Table) => {
+            crate::kernel::with_current_value_table(|t| t.read(bits))
+        }
         _ => decode_slot(bits, ty, &ValueTable::new(0)),
     }
 }
@@ -125,8 +130,12 @@ pub(crate) fn decode_slot(bits: u64, ty: PortType, table: &ValueTable) -> Value 
         PortType::F64 => Value::F64(f64::from_bits(bits)),
         PortType::Bool => Value::Bool(bits != 0),
         PortType::I64 => Value::I64(bits as i64),
-        PortType::Str => Value::Str(std::sync::Arc::from(crate::kernel::resolve_thread_str(bits))),
-        PortType::Bytes => Value::Bytes(std::sync::Arc::from(crate::kernel::resolve_thread_bytes(bits))),
+        PortType::Str => Value::Str(std::sync::Arc::from(crate::kernel::resolve_thread_str(
+            bits,
+        ))),
+        PortType::Bytes => Value::Bytes(std::sync::Arc::from(crate::kernel::resolve_thread_bytes(
+            bits,
+        ))),
         PortType::Json | PortType::Ext | PortType::Handle => table.read(bits),
         _ => Value::U64(bits),
     }

@@ -77,7 +77,9 @@ fn json_object(parts: &[Value]) -> std::sync::Arc<serde_json::Value> {
 /// The merge `json_object` performs, over borrowed views (SRD 115
 /// §6.1), so both tiers run one body: P1 views its `Value` inputs, the
 /// compiled helper views its slots.
-pub(crate) fn json_object_of_refs<'a>(parts: impl IntoIterator<Item = ValueRef<'a>>) -> serde_json::Value {
+pub(crate) fn json_object_of_refs<'a>(
+    parts: impl IntoIterator<Item = ValueRef<'a>>,
+) -> serde_json::Value {
     let mut merged = serde_json::Map::new();
     for v in parts {
         if let ValueRef::Json(serde_json::Value::Object(map)) = v {
@@ -95,7 +97,9 @@ pub(crate) fn json_object_of(parts: &[Value]) -> serde_json::Value {
 }
 
 /// The array `json_array` builds, over borrowed views.
-pub(crate) fn json_array_of_refs<'a>(elems: impl IntoIterator<Item = ValueRef<'a>>) -> serde_json::Value {
+pub(crate) fn json_array_of_refs<'a>(
+    elems: impl IntoIterator<Item = ValueRef<'a>>,
+) -> serde_json::Value {
     serde_json::Value::Array(elems.into_iter().map(|v| json_of_ref(v)).collect())
 }
 
@@ -219,9 +223,7 @@ fn json_field(
     input: &serde_json::Value,
     key: crate::derive_support::Const<&str>,
 ) -> std::sync::Arc<serde_json::Value> {
-    std::sync::Arc::new(
-        input.get(*key).cloned().unwrap_or(serde_json::Value::Null)
-    )
+    std::sync::Arc::new(input.get(*key).cloned().unwrap_or(serde_json::Value::Null))
 }
 
 // =================================================================
@@ -319,10 +321,14 @@ fn walk_json_leaves<W: std::fmt::Write>(j: &serde_json::Value, out: &mut W, firs
         J::Bool(b) => leaf(out, if *b { "true" } else { "false" }),
         J::Null => {}
         J::Array(arr) => {
-            for item in arr { walk_json_leaves(item, out, first); }
+            for item in arr {
+                walk_json_leaves(item, out, first);
+            }
         }
         J::Object(obj) => {
-            for value in obj.values() { walk_json_leaves(value, out, first); }
+            for value in obj.values() {
+                walk_json_leaves(value, out, first);
+            }
         }
     }
 }
@@ -359,10 +365,7 @@ fn walk_json_leaves<W: std::fmt::Write>(j: &serde_json::Value, out: &mut W, firs
 /// fallback ("empty vector, no panic") stays intact; `column`
 /// is a const string with no default (required workload arg).
 #[crate::polydat_node(category = Json)]
-fn body_column_i32(
-    body: Value,
-    column: crate::derive_support::Const<&str>,
-) -> Vec<i32> {
+fn body_column_i32(body: Value, column: crate::derive_support::Const<&str>) -> Vec<i32> {
     let json = match &body {
         Value::Json(j) => j,
         _ => return Vec::new(),
@@ -376,11 +379,10 @@ fn body_column_i32(
 /// across CQL / HTTP / stdout drivers.
 fn extract_column_i32(json: &serde_json::Value, column: &str) -> Vec<i32> {
     match json {
-        serde_json::Value::Array(rows) => {
-            rows.iter()
-                .filter_map(|row| json_value_as_i32(row.get(column)?))
-                .collect()
-        }
+        serde_json::Value::Array(rows) => rows
+            .iter()
+            .filter_map(|row| json_value_as_i32(row.get(column)?))
+            .collect(),
         serde_json::Value::Object(obj) => {
             // Two shapes can land here: an envelope object with a
             // `rows` array (preferred), or a single row object
@@ -388,7 +390,8 @@ fn extract_column_i32(json: &serde_json::Value, column: &str) -> Vec<i32> {
             // Try envelope first to match the common
             // `{rows: [...]}` shape adapters use.
             if let Some(serde_json::Value::Array(rows)) = obj.get("rows") {
-                return rows.iter()
+                return rows
+                    .iter()
                     .filter_map(|row| json_value_as_i32(row.get(column)?))
                     .collect();
             }
@@ -408,13 +411,14 @@ fn extract_column_i32(json: &serde_json::Value, column: &str) -> Vec<i32> {
 /// behaviour rather than silently dropping rows.
 fn json_value_as_i32(v: &serde_json::Value) -> Option<i32> {
     match v {
-        serde_json::Value::Number(n) => {
-            n.as_i64().map(|i| i.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
-                .or_else(|| n.as_u64().map(|u| u.min(i32::MAX as u64) as i32))
-                .or_else(|| n.as_f64().and_then(|f| {
-                    if f.is_finite() { Some(f as i32) } else { None }
-                }))
-        }
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .map(|i| i.clamp(i32::MIN as i64, i32::MAX as i64) as i32)
+            .or_else(|| n.as_u64().map(|u| u.min(i32::MAX as u64) as i32))
+            .or_else(|| {
+                n.as_f64()
+                    .and_then(|f| if f.is_finite() { Some(f as i32) } else { None })
+            }),
         serde_json::Value::String(s) => s.trim().parse::<i32>().ok(),
         _ => None,
     }
@@ -440,17 +444,16 @@ fn normalize_vector(vector: &str) -> String {
     if !trimmed.starts_with('[') || !trimmed.ends_with(']') {
         return vector.to_string();
     }
-    let inner = &trimmed[1..trimmed.len()-1];
-    let values: Vec<f64> = inner.split(',')
+    let inner = &trimmed[1..trimmed.len() - 1];
+    let values: Vec<f64> = inner
+        .split(',')
         .filter_map(|v| v.trim().parse::<f64>().ok())
         .collect();
     let norm = values.iter().map(|v| v * v).sum::<f64>().sqrt();
     if norm < 1e-15 {
         return vector.to_string();
     }
-    let normalized: Vec<String> = values.iter()
-        .map(|v| format!("{}", v / norm))
-        .collect();
+    let normalized: Vec<String> = values.iter().map(|v| format!("{}", v / norm)).collect();
     format!("[{}]", normalized.join(","))
 }
 
@@ -552,7 +555,9 @@ mod tests {
         let node = BodyColumnI32::new(PortType::Json, "key".to_string());
         let mut out = [Value::None];
         node.eval(&[body], &mut out);
-        let Value::VecI32(slice) = &out[0] else { panic!("expected VecI32, got {:?}", out[0]) };
+        let Value::VecI32(slice) = &out[0] else {
+            panic!("expected VecI32, got {:?}", out[0])
+        };
         assert_eq!(slice.as_slice(), &[4, 17, 42]);
     }
 
@@ -570,7 +575,9 @@ mod tests {
         let node = BodyColumnI32::new(PortType::Json, "id".to_string());
         let mut out = [Value::None];
         node.eval(&[body], &mut out);
-        let Value::VecI32(slice) = &out[0] else { panic!("expected VecI32") };
+        let Value::VecI32(slice) = &out[0] else {
+            panic!("expected VecI32")
+        };
         assert_eq!(slice.as_slice(), &[1, 7, 13]);
     }
 
@@ -586,7 +593,9 @@ mod tests {
         let node = BodyColumnI32::new(PortType::Json, "key".to_string());
         let mut out = [Value::None];
         node.eval(&[body], &mut out);
-        let Value::VecI32(slice) = &out[0] else { panic!("expected VecI32") };
+        let Value::VecI32(slice) = &out[0] else {
+            panic!("expected VecI32")
+        };
         assert_eq!(slice.as_slice(), &[1, 3]);
     }
 
@@ -601,7 +610,9 @@ mod tests {
         let node = BodyColumnI32::new(PortType::Json, "key".to_string());
         let mut out = [Value::None];
         node.eval(&[body], &mut out);
-        let Value::VecI32(slice) = &out[0] else { panic!("expected VecI32") };
+        let Value::VecI32(slice) = &out[0] else {
+            panic!("expected VecI32")
+        };
         assert_eq!(slice.as_slice(), &[42, -7]);
     }
 
@@ -611,7 +622,9 @@ mod tests {
         let node = BodyColumnI32::new(PortType::Json, "key".to_string());
         let mut out = [Value::None];
         node.eval(&[body], &mut out);
-        let Value::VecI32(slice) = &out[0] else { panic!("expected VecI32") };
+        let Value::VecI32(slice) = &out[0] else {
+            panic!("expected VecI32")
+        };
         assert!(slice.as_slice().is_empty());
     }
 
@@ -623,7 +636,9 @@ mod tests {
         let node = BodyColumnI32::new(PortType::Json, "key".to_string());
         let mut out = [Value::None];
         node.eval(&[Value::Str("not json".into())], &mut out);
-        let Value::VecI32(slice) = &out[0] else { panic!("expected VecI32") };
+        let Value::VecI32(slice) = &out[0] else {
+            panic!("expected VecI32")
+        };
         assert!(slice.as_slice().is_empty());
     }
 
@@ -668,9 +683,13 @@ mod tests {
         // The workload's intended regex (with the CREATE-prefix
         // fix) matches the flattened text.
         let pat = regex::Regex::new(
-            r"(?im)^\s*(?:CREATE\s+)?(?:VIRTUAL\s+)?TABLE\s+system_views\.sai_column_indexes\s*\("
-        ).unwrap();
-        assert!(pat.is_match(&text), "regex should match the flattened schema text");
+            r"(?im)^\s*(?:CREATE\s+)?(?:VIRTUAL\s+)?TABLE\s+system_views\.sai_column_indexes\s*\(",
+        )
+        .unwrap();
+        assert!(
+            pat.is_match(&text),
+            "regex should match the flattened schema text"
+        );
     }
 
     /// Helper: drive `json_with(key, value)` through one eval and
@@ -815,7 +834,12 @@ mod tests {
     fn json_field_basic() {
         let node = JsonField::new("name".to_string());
         let mut out = [Value::None];
-        node.eval(&[Value::Json(std::sync::Arc::new(json!({"name": "Alice", "age": 30})))], &mut out);
+        node.eval(
+            &[Value::Json(std::sync::Arc::new(
+                json!({"name": "Alice", "age": 30}),
+            ))],
+            &mut out,
+        );
         assert_eq!(out[0].as_json(), &json!("Alice"));
     }
 
@@ -823,7 +847,10 @@ mod tests {
     fn json_field_missing() {
         let node = JsonField::new("missing".to_string());
         let mut out = [Value::None];
-        node.eval(&[Value::Json(std::sync::Arc::new(json!({"name": "Alice"})))], &mut out);
+        node.eval(
+            &[Value::Json(std::sync::Arc::new(json!({"name": "Alice"})))],
+            &mut out,
+        );
         assert!(out[0].as_json().is_null());
     }
 
@@ -839,7 +866,10 @@ mod tests {
     fn json_pretty_print() {
         let node = JsonToStrPretty::default();
         let mut out = [Value::None];
-        node.eval(&[Value::Json(std::sync::Arc::new(json!({"a": 1})))], &mut out);
+        node.eval(
+            &[Value::Json(std::sync::Arc::new(json!({"a": 1})))],
+            &mut out,
+        );
         let s = out[0].as_str();
         assert!(s.contains('\n'), "pretty print should have newlines");
     }

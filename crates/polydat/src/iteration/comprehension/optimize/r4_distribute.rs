@@ -24,7 +24,10 @@ pub fn apply(ast: &Comprehension) -> Option<Comprehension> {
     let Comprehension::Filter { child, predicate } = ast else {
         return None;
     };
-    let Comprehension::Union { children: union_children } = child.as_ref() else {
+    let Comprehension::Union {
+        children: union_children,
+    } = child.as_ref()
+    else {
         return None;
     };
     let distributed: Vec<Comprehension> = union_children
@@ -34,7 +37,9 @@ pub fn apply(ast: &Comprehension) -> Option<Comprehension> {
             predicate: predicate.clone(),
         })
         .collect();
-    Some(Comprehension::Union { children: distributed })
+    Some(Comprehension::Union {
+        children: distributed,
+    })
 }
 
 #[cfg(test)]
@@ -64,7 +69,9 @@ mod tests {
             Comprehension::Union { children } => {
                 assert_eq!(children.len(), 2);
                 for child in &children {
-                    assert!(matches!(child, Comprehension::Filter { predicate, .. } if predicate == "{limit} > 1"));
+                    assert!(
+                        matches!(child, Comprehension::Filter { predicate, .. } if predicate == "{limit} > 1")
+                    );
                 }
             }
             other => panic!("expected Union, got {other:?}"),
@@ -76,10 +83,7 @@ mod tests {
         let a = clause("x", &[1]);
         let b = clause("x", &[2]);
         let c = clause("x", &[3]);
-        let ast = Comprehension::filter(
-            Comprehension::union(vec![a, b, c]),
-            "true",
-        );
+        let ast = Comprehension::filter(Comprehension::union(vec![a, b, c]), "true");
         let result = apply(&ast).unwrap();
         match result {
             Comprehension::Union { children } => {
@@ -92,7 +96,10 @@ mod tests {
                     };
                     let expected_value = (i + 1) as i64;
                     match inner {
-                        Comprehension::Clause { source: Source::Literal { values }, .. } => {
+                        Comprehension::Clause {
+                            source: Source::Literal { values },
+                            ..
+                        } => {
                             assert_eq!(values[0], LiteralValue::Int(expected_value));
                         }
                         other => panic!("unexpected inner {other:?}"),

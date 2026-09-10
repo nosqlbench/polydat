@@ -4,10 +4,13 @@
 //! Multi-threaded usage: shared PolydatProgram, per-thread PolydatState.
 
 fn main() {
-    let kernel = polydat::dsl::compile_polydat(r#"
+    let kernel = polydat::dsl::compile_polydat(
+        r#"
         input cycle: u64
         user_id := mod(hash(cycle), 1000000)
-    "#).expect("compile failed");
+    "#,
+    )
+    .expect("compile failed");
 
     // The program is immutable and shared via Arc.
     let program = kernel.into_program();

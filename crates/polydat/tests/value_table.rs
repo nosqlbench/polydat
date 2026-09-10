@@ -12,10 +12,12 @@
 
 #![cfg(feature = "jit")]
 
+use polydat::JitMode;
 use polydat::ast::Value;
 use polydat::dsl::compile::compile_polydat_to_assembler;
-use polydat::kernel::{cycle_arena_used, with_current_value_table, with_value_table, PolydatKernel, ValueTable};
-use polydat::JitMode;
+use polydat::kernel::{
+    PolydatKernel, ValueTable, cycle_arena_used, with_current_value_table, with_value_table,
+};
 
 fn kernel(src: &str, mode: JitMode) -> PolydatKernel {
     let mut asm = compile_polydat_to_assembler(src).unwrap_or_else(|e| panic!("{e}\n{src}"));
@@ -25,7 +27,10 @@ fn kernel(src: &str, mode: JitMode) -> PolydatKernel {
 
 fn cones(k: &PolydatKernel) -> Vec<String> {
     let p = k.program();
-    (0..p.node_count()).map(|i| p.node_meta(i).name.clone()).filter(|n| n.starts_with("jit_cone[")).collect()
+    (0..p.node_count())
+        .map(|i| p.node_meta(i).name.clone())
+        .filter(|n| n.starts_with("jit_cone["))
+        .collect()
 }
 
 fn agree(src: &str, outputs: &[&str], cycles: u64, fused: &[&str]) {
@@ -33,7 +38,10 @@ fn agree(src: &str, outputs: &[&str], cycles: u64, fused: &[&str]) {
     let mut p3 = kernel(src, JitMode::Force);
     let names = cones(&p3);
     for member in fused {
-        assert!(names.iter().any(|c| c.contains(member)), "`{member}` was not fused; cones: {names:?}\n{src}");
+        assert!(
+            names.iter().any(|c| c.contains(member)),
+            "`{member}` was not fused; cones: {names:?}\n{src}"
+        );
     }
     for c in 0..cycles {
         p1.set_inputs(&[c]);
@@ -41,22 +49,50 @@ fn agree(src: &str, outputs: &[&str], cycles: u64, fused: &[&str]) {
         for out in outputs {
             let a = p1.pull(out).clone();
             let b = p3.pull(out).clone();
-            assert_eq!(a.port_type(), b.port_type(), "{out} at cycle {c}: type\n{src}");
-            assert_eq!(a.to_display_string(), b.to_display_string(), "{out} at cycle {c}\n{src}");
+            assert_eq!(
+                a.port_type(),
+                b.port_type(),
+                "{out} at cycle {c}: type\n{src}"
+            );
+            assert_eq!(
+                a.to_display_string(),
+                b.to_display_string(),
+                "{out} at cycle {c}\n{src}"
+            );
         }
     }
 }
 
 #[test]
 fn json_conversions_run_natively_through_the_table() {
-    agree("input cycle: u64\nh := hash(cycle)\nj := __u64_to_json(h)\n", &["j"], 6, &["__u64_to_json"]);
-    agree("input cycle: u64\nb := u64_gt(hash(cycle), 1000)\nj := __bool_to_json(b)\n", &["j"], 6, &["__bool_to_json"]);
-    agree("input cycle: u64\nf := to_f64(hash(cycle)) / 3.0\nj := __f64_to_json(f)\n", &["j"], 6, &["__f64_to_json"]);
+    agree(
+        "input cycle: u64\nh := hash(cycle)\nj := __u64_to_json(h)\n",
+        &["j"],
+        6,
+        &["__u64_to_json"],
+    );
+    agree(
+        "input cycle: u64\nb := u64_gt(hash(cycle), 1000)\nj := __bool_to_json(b)\n",
+        &["j"],
+        6,
+        &["__bool_to_json"],
+    );
+    agree(
+        "input cycle: u64\nf := to_f64(hash(cycle)) / 3.0\nj := __f64_to_json(f)\n",
+        &["j"],
+        6,
+        &["__f64_to_json"],
+    );
     // `to_json` takes a polymorphic `Value` port, which the macro marks
     // None-tolerant, and a cone excludes None-tolerant nodes so the
     // kernel's None short-circuit stays uniform (SRD-74). It stays on
     // P1 and still agrees.
-    agree("input cycle: u64\nh := hash(cycle)\nj := to_json(h)\n", &["j"], 6, &[]);
+    agree(
+        "input cycle: u64\nh := hash(cycle)\nj := to_json(h)\n",
+        &["j"],
+        6,
+        &[],
+    );
 }
 
 #[test]
@@ -68,7 +104,10 @@ fn a_json_value_chains_natively_to_text_and_back_to_p1() {
     let mut p3 = kernel(src, JitMode::Force);
     p3.set_inputs(&[2]);
     let j = p3.pull("j").clone();
-    assert!(matches!(j, Value::Json(_)), "the boundary decoded a Json value, got {j:?}");
+    assert!(
+        matches!(j, Value::Json(_)),
+        "the boundary decoded a Json value, got {j:?}"
+    );
     assert_eq!(p3.pull("s").as_str(), j.to_display_string());
 }
 
@@ -93,8 +132,15 @@ fn a_cone_eval_releases_its_table_entries_and_arena_bytes() {
     let s = k.pull("s").clone();
     let txt = k.pull("txt").clone();
     let j_text = k.pull("j").to_display_string();
-    assert_eq!(cycle_arena_used(), before, "the cone released the arena bytes it took");
-    assert!(std::panic::catch_unwind(|| with_current_value_table(|t| t.len())).is_err(), "no table stays installed");
+    assert_eq!(
+        cycle_arena_used(),
+        before,
+        "the cone released the arena bytes it took"
+    );
+    assert!(
+        std::panic::catch_unwind(|| with_current_value_table(|t| t.len())).is_err(),
+        "no table stays installed"
+    );
     // The copied-out values are whole and stay valid after the next
     // cycle has reused the storage they came from (axiom H6).
     k.set_inputs(&[2]);
@@ -124,7 +170,10 @@ fn a_pure_p3_kernel_owns_a_fixed_table_and_replaces_entries_in_place() {
         k.eval(&[c]);
         let h = k.get("h");
         assert_eq!(k.get_value("j").to_display_string(), h.to_string());
-        assert_eq!(k.get_value("k").to_display_string(), if h > 7 { "true" } else { "false" });
+        assert_eq!(
+            k.get_value("k").to_display_string(),
+            if h > 7 { "true" } else { "false" }
+        );
         assert_eq!(k.get_value("s").as_str(), h.to_string());
     }
     // Repeating the same coordinates keeps the handle-producing steps
@@ -158,13 +207,18 @@ fn an_ext_value_round_trips_through_a_table_as_itself() {
 
 #[test]
 fn every_handle_kind_round_trips_through_its_store() {
-    use polydat::kernel::{put_thread_bytes, put_thread_str, resolve_thread_bytes, resolve_thread_str};
+    use polydat::kernel::{
+        put_thread_bytes, put_thread_str, resolve_thread_bytes, resolve_thread_str,
+    };
     let s = put_thread_str("copied into the arena");
     assert_eq!(resolve_thread_str(s), "copied into the arena");
     let b = put_thread_bytes(&[1, 2, 3]);
     assert_eq!(resolve_thread_bytes(b), &[1, 2, 3]);
     let mut table = ValueTable::new(2);
-    let j = table.write(0, Value::Json(std::sync::Arc::new(serde_json::json!({"k": [1, 2]}))));
+    let j = table.write(
+        0,
+        Value::Json(std::sync::Arc::new(serde_json::json!({"k": [1, 2]}))),
+    );
     assert_eq!(table.read(j).to_display_string(), "{\"k\":[1,2]}");
     let h = table.write(1, Value::Handle(std::sync::Arc::new(42u32)));
     assert!(matches!(table.read(h), Value::Handle(_)));
@@ -182,9 +236,14 @@ fn a_handle_from_another_generation_is_refused() {
     assert_eq!(table.read(h).as_u64(), 9);
     table.set_generation(2);
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| table.read(h)));
-    assert!(r.is_err(), "a handle written in generation 1 must not read in generation 2");
+    assert!(
+        r.is_err(),
+        "a handle written in generation 1 must not read in generation 2"
+    );
     // An entry outside the table is refused too: the layout fixed the
     // count, and native code cannot grow it.
-    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| table.write(1, Value::U64(0))));
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        table.write(1, Value::U64(0))
+    }));
     assert!(r.is_err());
 }

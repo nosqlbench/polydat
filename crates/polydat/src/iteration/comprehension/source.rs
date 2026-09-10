@@ -42,7 +42,10 @@ pub enum Source {
     /// Generator function call expressed as a Polydat source string.
     /// Resolved at clause construction; cardinality may be
     /// `Unbounded` if the generator is open-ended.
-    Generator { expr: String, cardinality_hint: Option<u64> },
+    Generator {
+        expr: String,
+        cardinality_hint: Option<u64>,
+    },
 
     /// Reference to a workload-level parameter that resolves to
     /// a list of values. Cardinality is the parameter's
@@ -52,7 +55,10 @@ pub enum Source {
     /// Real interval (continuous source). Combined with a
     /// `measure` to form a `Continuous` cardinality.
     /// Integrability is checked at parse via V8.
-    ContinuousInterval { interval: Interval, measure: ProductMeasure },
+    ContinuousInterval {
+        interval: Interval,
+        measure: ProductMeasure,
+    },
 
     /// Named continuous distribution. The distribution carries
     /// its own support; the `support` field records the
@@ -97,7 +103,9 @@ impl Source {
                     CardinalityClass::Bounded(n)
                 }
             }
-            Source::Generator { cardinality_hint, .. } => match cardinality_hint {
+            Source::Generator {
+                cardinality_hint, ..
+            } => match cardinality_hint {
                 Some(n) => CardinalityClass::Bounded(*n),
                 None => CardinalityClass::Unbounded,
             },
@@ -166,7 +174,12 @@ pub fn iteration_interior(v: &crate::ast::Value) -> Option<Vec<crate::ast::Value
     match v {
         Value::VecF32(s) => Some(s.as_slice().iter().map(|x| Value::F64(*x as f64)).collect()),
         Value::VecF64(s) => Some(s.as_slice().iter().map(|x| Value::F64(*x)).collect()),
-        Value::VecF16(s) => Some(s.as_slice().iter().map(|x| Value::F64(x.to_f64())).collect()),
+        Value::VecF16(s) => Some(
+            s.as_slice()
+                .iter()
+                .map(|x| Value::F64(x.to_f64()))
+                .collect(),
+        ),
         // Signed lanes peel to the honest signed carrier — a
         // VecI64 holding -5 iterates as I64(-5), not the unsigned
         // bit-reinterpretation (type_system_alignment.md §5).
@@ -177,12 +190,17 @@ pub fn iteration_interior(v: &crate::ast::Value) -> Option<Vec<crate::ast::Value
         // A JSON array peels to its elements (each carried as a
         // Json value); a non-array JSON is an iteration scalar.
         Value::Json(j) => j.as_array().map(|arr| {
-            arr.iter().map(|e| Value::Json(std::sync::Arc::new(e.clone()))).collect()
+            arr.iter()
+                .map(|e| Value::Json(std::sync::Arc::new(e.clone())))
+                .collect()
         }),
         // Ext carrying a PartitionList peels into its partitions
         // (SRD-71). Other Ext values are opaque scalars.
         Value::Ext(_) => v.as_partition_list().map(|list| {
-            list.as_slice().iter().map(|p| Value::from_partition(*p)).collect()
+            list.as_slice()
+                .iter()
+                .map(|p| Value::from_partition(*p))
+                .collect()
         }),
         // Lane-typed register views peel like the Vec* family
         // (a reg_f32x4 is a fixed-width typed vector); the Raw
@@ -192,21 +210,49 @@ pub fn iteration_interior(v: &crate::ast::Value) -> Option<Vec<crate::ast::Value
             use crate::ast::RegLanes;
             match view {
                 RegLanes::Raw => None,
-                RegLanes::I8x16 => Some(b.lanes_i8().iter().map(|x| Value::I64(*x as i64)).collect()),
-                RegLanes::I16x8 => Some(b.lanes_i16().iter().map(|x| Value::I64(*x as i64)).collect()),
-                RegLanes::I32x4 => Some(b.lanes_i32().iter().map(|x| Value::I64(*x as i64)).collect()),
+                RegLanes::I8x16 => {
+                    Some(b.lanes_i8().iter().map(|x| Value::I64(*x as i64)).collect())
+                }
+                RegLanes::I16x8 => Some(
+                    b.lanes_i16()
+                        .iter()
+                        .map(|x| Value::I64(*x as i64))
+                        .collect(),
+                ),
+                RegLanes::I32x4 => Some(
+                    b.lanes_i32()
+                        .iter()
+                        .map(|x| Value::I64(*x as i64))
+                        .collect(),
+                ),
                 RegLanes::I64x2 => Some(b.lanes_i64().iter().map(|x| Value::I64(*x)).collect()),
-                RegLanes::F16x8 => Some(b.lanes_f16().iter().map(|x| Value::F64(x.to_f64())).collect()),
-                RegLanes::F32x4 => Some(b.lanes_f32().iter().map(|x| Value::F64(*x as f64)).collect()),
+                RegLanes::F16x8 => Some(
+                    b.lanes_f16()
+                        .iter()
+                        .map(|x| Value::F64(x.to_f64()))
+                        .collect(),
+                ),
+                RegLanes::F32x4 => Some(
+                    b.lanes_f32()
+                        .iter()
+                        .map(|x| Value::F64(*x as f64))
+                        .collect(),
+                ),
                 RegLanes::F64x2 => Some(b.lanes_f64().iter().map(|x| Value::F64(*x)).collect()),
             }
         }
         // A string's interior is its comprehension tokens.
         Value::Str(s) => Some(strip_string_tokens(s)),
         // Iteration scalars — relaxed wraps, `[v…]` errors.
-        Value::U64(_) | Value::I64(_) | Value::U128(_) | Value::I128(_)
-        | Value::F64(_) | Value::Bool(_)
-        | Value::Bytes(_) | Value::Handle(_) | Value::None => None,
+        Value::U64(_)
+        | Value::I64(_)
+        | Value::U128(_)
+        | Value::I128(_)
+        | Value::F64(_)
+        | Value::Bool(_)
+        | Value::Bytes(_)
+        | Value::Handle(_)
+        | Value::None => None,
     }
 }
 
@@ -264,38 +310,58 @@ mod tests {
         // SRD-18f §3.2: separators are comma / semicolon / ws;
         // colons (and dots, dashes) stay in-token.
         let got = strip_string_tokens("a:1, b:2; c:3 d:4");
-        assert_eq!(got, vec![
-            Value::Str("a:1".into()), Value::Str("b:2".into()),
-            Value::Str("c:3".into()), Value::Str("d:4".into()),
-        ]);
+        assert_eq!(
+            got,
+            vec![
+                Value::Str("a:1".into()),
+                Value::Str("b:2".into()),
+                Value::Str("c:3".into()),
+                Value::Str("d:4".into()),
+            ]
+        );
     }
 
     #[test]
     fn string_tokens_are_typed_like_literals() {
         // Floats survive (dot retained), ints type as U64.
-        assert_eq!(strip_string_tokens("1, 2, 3"),
-            vec![Value::U64(1), Value::U64(2), Value::U64(3)]);
-        assert_eq!(strip_string_tokens("1.5, 2.5"),
-            vec![Value::F64(1.5), Value::F64(2.5)]);
+        assert_eq!(
+            strip_string_tokens("1, 2, 3"),
+            vec![Value::U64(1), Value::U64(2), Value::U64(3)]
+        );
+        assert_eq!(
+            strip_string_tokens("1.5, 2.5"),
+            vec![Value::F64(1.5), Value::F64(2.5)]
+        );
     }
 
     #[test]
     fn single_token_string_degenerates_to_singleton() {
-        assert_eq!(strip_string_tokens("OTHER"), vec![Value::Str("OTHER".into())]);
+        assert_eq!(
+            strip_string_tokens("OTHER"),
+            vec![Value::Str("OTHER".into())]
+        );
     }
 
     #[test]
     fn iteration_interior_string_is_its_tokens() {
         let v = Value::Str("x, y, z".into());
-        assert_eq!(iteration_interior(&v),
-            Some(vec![Value::Str("x".into()), Value::Str("y".into()), Value::Str("z".into())]));
+        assert_eq!(
+            iteration_interior(&v),
+            Some(vec![
+                Value::Str("x".into()),
+                Value::Str("y".into()),
+                Value::Str("z".into())
+            ])
+        );
     }
 
     #[test]
     fn iteration_interior_vector_peels_to_elements() {
         let v = Value::VecI32(crate::ast::SliceArc::from_vec(vec![10, 20, 30]));
-        assert_eq!(iteration_interior(&v),
-            Some(vec![Value::I64(10), Value::I64(20), Value::I64(30)]));
+        assert_eq!(
+            iteration_interior(&v),
+            Some(vec![Value::I64(10), Value::I64(20), Value::I64(30)])
+        );
     }
 
     #[test]
@@ -304,8 +370,10 @@ mod tests {
         // iterate as their signed values, not the unsigned
         // bit-reinterpretation (type_system_alignment.md §5).
         let v = Value::VecI64(crate::ast::SliceArc::from_vec(vec![-5_i64, 7]));
-        assert_eq!(iteration_interior(&v),
-            Some(vec![Value::I64(-5), Value::I64(7)]));
+        assert_eq!(
+            iteration_interior(&v),
+            Some(vec![Value::I64(-5), Value::I64(7)])
+        );
     }
 
     #[test]
@@ -318,39 +386,61 @@ mod tests {
     #[test]
     fn literal_cardinality_is_list_length() {
         let s = Source::Literal {
-            values: vec![LiteralValue::Int(1), LiteralValue::Int(2), LiteralValue::Int(3)],
+            values: vec![
+                LiteralValue::Int(1),
+                LiteralValue::Int(2),
+                LiteralValue::Int(3),
+            ],
         };
         assert!(matches!(s.cardinality(), CardinalityClass::Bounded(3)));
     }
 
     #[test]
     fn int_range_step_1() {
-        let s = Source::IntRange { lo: 1, hi: 10, step: 1 };
+        let s = Source::IntRange {
+            lo: 1,
+            hi: 10,
+            step: 1,
+        };
         assert!(matches!(s.cardinality(), CardinalityClass::Bounded(9)));
     }
 
     #[test]
     fn int_range_with_step() {
-        let s = Source::IntRange { lo: 0, hi: 10, step: 2 };
+        let s = Source::IntRange {
+            lo: 0,
+            hi: 10,
+            step: 2,
+        };
         // 0,2,4,6,8 = 5 values
         assert!(matches!(s.cardinality(), CardinalityClass::Bounded(5)));
     }
 
     #[test]
     fn int_range_empty() {
-        let s = Source::IntRange { lo: 5, hi: 5, step: 1 };
+        let s = Source::IntRange {
+            lo: 5,
+            hi: 5,
+            step: 1,
+        };
         assert!(matches!(s.cardinality(), CardinalityClass::Bounded(0)));
     }
 
     #[test]
     fn generator_without_hint_is_unbounded() {
-        let s = Source::Generator { expr: "live_query()".into(), cardinality_hint: None };
+        let s = Source::Generator {
+            expr: "live_query()".into(),
+            cardinality_hint: None,
+        };
         assert!(matches!(s.cardinality(), CardinalityClass::Unbounded));
     }
 
     #[test]
     fn generator_with_hint_is_bounded() {
-        let s = Source::Generator { expr: "first_100()".into(), cardinality_hint: Some(100) };
+        let s = Source::Generator {
+            expr: "first_100()".into(),
+            cardinality_hint: Some(100),
+        };
         assert!(matches!(s.cardinality(), CardinalityClass::Bounded(100)));
     }
 
@@ -375,12 +465,20 @@ mod tests {
     fn distribution_source_classification() {
         let s = Source::Distribution {
             distribution: MeasureName::Normal,
-            support: Interval { lo: f64::NEG_INFINITY, hi: f64::INFINITY, lo_open: true, hi_open: true },
+            support: Interval {
+                lo: f64::NEG_INFINITY,
+                hi: f64::INFINITY,
+                lo_open: true,
+                hi_open: true,
+            },
             params: vec![0.0, 1.0],
         };
         assert!(s.is_continuous());
         match s.cardinality() {
-            CardinalityClass::Continuous { measure: ProductMeasure::Named(MeasureName::Normal), .. } => {}
+            CardinalityClass::Continuous {
+                measure: ProductMeasure::Named(MeasureName::Normal),
+                ..
+            } => {}
             other => panic!("expected Continuous with Named(Normal), got {other:?}"),
         }
     }

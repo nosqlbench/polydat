@@ -207,11 +207,7 @@ mod tests {
             "median is robust to one outlier, got {}",
             out[0].as_f64()
         );
-        assert_eq!(
-            out[1].as_u64(),
-            0,
-            "one outlier breaks strict steady-state"
-        );
+        assert_eq!(out[1].as_u64(), 0, "one outlier breaks strict steady-state");
     }
 
     /// Viability floor: below `min_samples` the signal is never

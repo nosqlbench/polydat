@@ -144,7 +144,11 @@ fn ceil_to_multiple(value: u64, multiple: u64) -> u64 {
 /// with zero-sized multiples). JIT P3.
 #[crate::polydat_node(category = Arithmetic)]
 fn multiples_at_least(value: u64, multiple: u64) -> u64 {
-    if multiple == 0 { 0 } else { value.div_ceil(multiple) }
+    if multiple == 0 {
+        0
+    } else {
+        value.div_ceil(multiple)
+    }
 }
 
 /// "Set-or-get" memoizer: returns `current` if non-zero,
@@ -359,11 +363,15 @@ pub fn signatures() -> &'static [FuncSig] {
 
 /// No hand-built arithmetic nodes remain — construction goes
 /// through the proc-macro registration (see [`signatures`]).
-pub(crate) fn build_node(name: &str, _wires: &[crate::compile::assembly::WireRef], _wire_types: &[crate::ast::PortType], consts: &[crate::dsl::factory::ConstArg]) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
+pub(crate) fn build_node(
+    name: &str,
+    _wires: &[crate::compile::assembly::WireRef],
+    _wire_types: &[crate::ast::PortType],
+    consts: &[crate::dsl::factory::ConstArg],
+) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
     let _ = (name, consts);
     None
 }
-
 
 /// Assembly-time constant validation. See SRD 15 §"Const Constraint Metadata".
 ///
@@ -378,7 +386,11 @@ pub(crate) fn validate_node(
 ) -> Result<(), String> {
     match name {
         "mixed_radix" => {
-            for (i, c) in consts.iter().enumerate().take(consts.len().saturating_sub(1)) {
+            for (i, c) in consts
+                .iter()
+                .enumerate()
+                .take(consts.len().saturating_sub(1))
+            {
                 if c.as_u64() == 0 {
                     return Err(format!("radix {i} must be non-zero"));
                 }
@@ -555,7 +567,8 @@ mod tests {
             let from_trait = node.jit_constants();
             let from_slots = node.meta().jit_constants_from_slots();
             assert_eq!(
-                from_trait, from_slots,
+                from_trait,
+                from_slots,
                 "constant mismatch for node '{}': trait={from_trait:?}, slots={from_slots:?}",
                 node.meta().name,
             );
@@ -598,8 +611,11 @@ mod tests {
     #[test]
     fn ceil_to_multiple_zero_multiple_is_soft_no_op() {
         let n = CeilToMultiple::default();
-        assert_eq!(run_binary(&n, 42, 0), 42,
-            "multiple=0 must not trap; passes value through");
+        assert_eq!(
+            run_binary(&n, 42, 0),
+            42,
+            "multiple=0 must not trap; passes value through"
+        );
     }
 
     // ── multiples_at_least ────────────────────────────────
@@ -675,12 +691,23 @@ mod tests {
         // whenever m > 0 and the multiplication doesn't overflow.
         let ceil = CeilToMultiple::default();
         let count = MultiplesAtLeast::default();
-        for (v, m) in [(0u64, 100), (1, 100), (50, 100), (100, 100),
-                       (101, 100), (10000, 7), (10000, 64), (12345, 256)] {
+        for (v, m) in [
+            (0u64, 100),
+            (1, 100),
+            (50, 100),
+            (100, 100),
+            (101, 100),
+            (10000, 7),
+            (10000, 64),
+            (12345, 256),
+        ] {
             let c_val = run_binary(&ceil, v, m);
             let n_val = run_binary(&count, v, m);
-            assert_eq!(c_val, n_val * m,
-                "invariant violated for (v={v}, m={m}): ceil={c_val}, count={n_val}");
+            assert_eq!(
+                c_val,
+                n_val * m,
+                "invariant violated for (v={v}, m={m}): ceil={c_val}, count={n_val}"
+            );
         }
     }
 
@@ -705,7 +732,8 @@ mod tests {
             let old_count = node.meta().wire_inputs().len();
             let new_count = node.meta().wire_inputs().len();
             assert_eq!(
-                old_count, new_count,
+                old_count,
+                new_count,
                 "wire input count mismatch for '{}': inputs={old_count}, wire_inputs()={new_count}",
                 node.meta().name,
             );

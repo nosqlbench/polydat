@@ -177,7 +177,10 @@ fn two_input_interleave() {
     kernel.set_inputs(&[10, 5]);
     let v2 = kernel.pull("result").as_u64();
     assert!(v2 < 1000);
-    assert_ne!(v1, v2, "interleave(5,10) should differ from interleave(10,5)");
+    assert_ne!(
+        v1, v2,
+        "interleave(5,10) should differ from interleave(10,5)"
+    );
 }
 
 /// Pull-through memoization: pulling the same output twice in the
@@ -214,7 +217,10 @@ fn context_change_invalidates() {
     kernel.set_inputs(&[2]);
     let v2 = kernel.pull("result").as_u64();
 
-    assert_ne!(v1, v2, "different coordinates must produce different hashes");
+    assert_ne!(
+        v1, v2,
+        "different coordinates must produce different hashes"
+    );
 }
 
 /// Assembly error: unknown wire reference

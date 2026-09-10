@@ -10,8 +10,8 @@
 //! exclusively through these three traits — `state()` /
 //! `state_ref()` / `program()` are kernel-internal hooks.
 
-use crate::kernel::{Dataflow, PolydatKernel, Metadata, Construction};
 use crate::ast::{PortType, Value};
+use crate::kernel::{Construction, Dataflow, Metadata, PolydatKernel};
 
 impl Metadata for PolydatKernel {
     #[inline]
@@ -26,7 +26,11 @@ impl Metadata for PolydatKernel {
 
     #[inline]
     fn output_names(&self) -> Vec<String> {
-        self.program().output_names().iter().map(|s| s.to_string()).collect()
+        self.program()
+            .output_names()
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
     }
 
     #[inline]
@@ -51,7 +55,11 @@ impl Metadata for PolydatKernel {
 }
 
 impl Dataflow for PolydatKernel {
-    fn set_wire_idx(&mut self, idx: usize, value: Value) -> Result<(), crate::kernel::api::WriteError> {
+    fn set_wire_idx(
+        &mut self,
+        idx: usize,
+        value: Value,
+    ) -> Result<(), crate::kernel::api::WriteError> {
         use crate::kernel::api::WriteError;
 
         // Look up the slot's declared port type. An out-of-range
@@ -61,10 +69,15 @@ impl Dataflow for PolydatKernel {
         // metadata.
         let slot_type = match self.program().input_port_type_by_idx(idx) {
             Some(t) => t,
-            None => return Err(WriteError::UnknownWire { key: format!("wire[{idx}]") }),
+            None => {
+                return Err(WriteError::UnknownWire {
+                    key: format!("wire[{idx}]"),
+                });
+            }
         };
 
-        let slot_name = self.program()
+        let slot_name = self
+            .program()
             .input_name_by_idx(idx)
             .map(|s| s.to_string())
             .unwrap_or_else(|| format!("wire[{idx}]"));
@@ -130,7 +143,9 @@ impl Construction for PolydatKernel {
                 // path. The `PolydatFile` AST root takes the statements
                 // verbatim; the same options surface as the source
                 // path.
-                let file = crate::dsl::ast::PolydatFile { statements: s.statements };
+                let file = crate::dsl::ast::PolydatFile {
+                    statements: s.statements,
+                };
                 crate::dsl::compile::compile_ast_with_libs(
                     &file,
                     s.options.workload_dir.as_deref(),
@@ -170,9 +185,7 @@ mod tests {
     /// Indexed wire access works.
     #[test]
     fn dataflow_indexed_set_get() {
-        let mut k = compile_polydat(
-            "input cycle: u64\nconst x := 7\n"
-        ).unwrap();
+        let mut k = compile_polydat("input cycle: u64\nconst x := 7\n").unwrap();
         // cycle is index 0
         k.set_wire(0_usize, Value::U64(42)).expect("typed write");
         assert_eq!(k.get_wire(0_usize), Some(Value::U64(42)));
@@ -181,9 +194,7 @@ mod tests {
     /// Named wire access resolves through metadata.
     #[test]
     fn dataflow_named_set_get() {
-        let mut k = compile_polydat(
-            "input cycle: u64\nextern n: u64\n"
-        ).unwrap();
+        let mut k = compile_polydat("input cycle: u64\nextern n: u64\n").unwrap();
         k.set_wire("n", Value::U64(5)).expect("typed write");
         match k.get_wire("n") {
             Some(Value::U64(5)) => {}
@@ -194,9 +205,7 @@ mod tests {
     /// String key works alongside &str.
     #[test]
     fn dataflow_string_key() {
-        let mut k = compile_polydat(
-            "input cycle: u64\nextern n: u64\n"
-        ).unwrap();
+        let mut k = compile_polydat("input cycle: u64\nextern n: u64\n").unwrap();
         let name = String::from("n");
         k.set_wire(&name, Value::U64(99)).expect("typed write");
         assert_eq!(k.get_wire(name.clone()), Some(Value::U64(99)));
@@ -207,7 +216,10 @@ mod tests {
     fn dataflow_unknown_name_safe() {
         let mut k = compile_polydat("input cycle: u64\n").unwrap();
         let err = k.set_wire("nonexistent", Value::U64(1)).unwrap_err();
-        assert!(matches!(err, crate::kernel::api::WriteError::UnknownWire { .. }));
+        assert!(matches!(
+            err,
+            crate::kernel::api::WriteError::UnknownWire { .. }
+        ));
         assert!(k.get_wire("nonexistent").is_none());
     }
 
@@ -221,15 +233,19 @@ mod tests {
     /// pair for testing the diagnostic.
     #[test]
     fn dataflow_type_mismatch_rejected() {
-        let mut k = compile_polydat(
-            "input cycle: u64\nextern n: u64\n"
-        ).unwrap();
-        let err = k.set_wire(
-            "n",
-            Value::VecF32(crate::ast::SliceArc::from_vec(vec![1.0_f32, 2.0])),
-        ).unwrap_err();
+        let mut k = compile_polydat("input cycle: u64\nextern n: u64\n").unwrap();
+        let err = k
+            .set_wire(
+                "n",
+                Value::VecF32(crate::ast::SliceArc::from_vec(vec![1.0_f32, 2.0])),
+            )
+            .unwrap_err();
         match err {
-            crate::kernel::api::WriteError::TypeMismatch { slot, expected, got } => {
+            crate::kernel::api::WriteError::TypeMismatch {
+                slot,
+                expected,
+                got,
+            } => {
                 assert_eq!(slot, "n");
                 assert_eq!(expected, PortType::U64);
                 assert_eq!(got, PortType::VecF32);
@@ -258,12 +274,11 @@ mod tests {
     /// through the boundary auto-adapter rather than rejecting.
     #[test]
     fn dataflow_healable_mismatch_adapts() {
-        let mut k = compile_polydat(
-            "input cycle: u64\nextern x: f64\n"
-        ).unwrap();
+        let mut k = compile_polydat("input cycle: u64\nextern x: f64\n").unwrap();
         // u64 → f64 has an auto-adapter (lossless widening); the
         // typed-write API should accept this transparently.
-        k.set_wire("x", Value::U64(42)).expect("u64→f64 boundary adapter");
+        k.set_wire("x", Value::U64(42))
+            .expect("u64→f64 boundary adapter");
         match k.get_wire("x") {
             Some(Value::F64(42.0)) => {}
             other => panic!("expected adapted F64(42.0), got {other:?}"),
@@ -275,18 +290,15 @@ mod tests {
     /// type (per none_semantics.md).
     #[test]
     fn dataflow_none_passes_through_any_slot() {
-        let mut k = compile_polydat(
-            "input cycle: u64\nextern n: u64\n"
-        ).unwrap();
+        let mut k = compile_polydat("input cycle: u64\nextern n: u64\n").unwrap();
         k.set_wire("n", Value::None).expect("None always permitted");
     }
 
     /// Metadata trait surfaces names + types.
     #[test]
     fn metadata_listings() {
-        let k = compile_polydat(
-            "input (cycle: u64, thread: u64)\nextern n: u64\nconst x := 7\n"
-        ).unwrap();
+        let k = compile_polydat("input (cycle: u64, thread: u64)\nextern n: u64\nconst x := 7\n")
+            .unwrap();
         let inputs: Vec<String> = k.input_names();
         assert!(inputs.iter().any(|s| s == "cycle"));
         assert!(inputs.iter().any(|s| s == "n"));
@@ -315,8 +327,8 @@ mod tests {
             .options(root_opts)
             .build()
             .expect("matter build");
-        let root = <PolydatKernel as Construction>::root(root_matter)
-            .expect("root from source matter");
+        let root =
+            <PolydatKernel as Construction>::root(root_matter).expect("root from source matter");
 
         let sub_opts = crate::kernel::subcontext::CompileOptions {
             workload_dir: None,
@@ -349,8 +361,8 @@ mod tests {
             .program(program)
             .build()
             .expect("matter build");
-        let mut root = <PolydatKernel as Construction>::root(matter)
-            .expect("root from program matter");
+        let mut root =
+            <PolydatKernel as Construction>::root(matter).expect("root from program matter");
         root.set_wire("n", Value::U64(13)).expect("set_wire");
         assert_eq!(root.get_wire("n"), Some(Value::U64(13)));
     }
@@ -364,7 +376,10 @@ mod tests {
             .program(template.program().clone())
             .build()
         {
-            Err(msg) => assert!(msg.contains("multiple"), "expected multiple-forms error, got: {msg}"),
+            Err(msg) => assert!(
+                msg.contains("multiple"),
+                "expected multiple-forms error, got: {msg}"
+            ),
             Ok(_) => panic!("multiple forms must error"),
         }
     }
@@ -373,7 +388,10 @@ mod tests {
     #[test]
     fn builder_rejects_empty() {
         match crate::kernel::subcontext::PolydatMatter::builder().build() {
-            Err(msg) => assert!(msg.contains("no input form"), "expected no-form error, got: {msg}"),
+            Err(msg) => assert!(
+                msg.contains("no input form"),
+                "expected no-form error, got: {msg}"
+            ),
             Ok(_) => panic!("empty matter must error"),
         }
     }

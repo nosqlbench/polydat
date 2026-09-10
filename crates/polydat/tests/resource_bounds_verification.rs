@@ -35,10 +35,7 @@ fn bounds_for(ast: Comprehension) -> polydat::iteration::comprehension::ir::Reso
 
 #[test]
 fn cartesian_only_has_no_barriers() {
-    let ast = Comprehension::cartesian(vec![
-        clause("a", &[1, 2, 3]),
-        clause("b", &[10, 20]),
-    ]);
+    let ast = Comprehension::cartesian(vec![clause("a", &[1, 2, 3]), clause("b", &[10, 20])]);
     let b = bounds_for(ast);
     assert!(b.barriers.is_empty());
     assert_eq!(b.total_barrier_working_set(), Some(0));
@@ -46,10 +43,7 @@ fn cartesian_only_has_no_barriers() {
 
 #[test]
 fn union_only_has_no_barriers() {
-    let ast = Comprehension::union(vec![
-        clause("k", &[1, 2]),
-        clause("k", &[10, 20]),
-    ]);
+    let ast = Comprehension::union(vec![clause("k", &[1, 2]), clause("k", &[10, 20])]);
     let b = bounds_for(ast);
     assert!(b.barriers.is_empty());
 }
@@ -96,7 +90,11 @@ fn order_halton_has_barrier_sized_by_truncation() {
 
 #[test]
 fn order_shuffle_has_barrier_sized_by_truncation() {
-    let ast = Comprehension::order(clause("k", &[1, 2, 3, 4, 5]), StrategyName::Shuffle, Some(3));
+    let ast = Comprehension::order(
+        clause("k", &[1, 2, 3, 4, 5]),
+        StrategyName::Shuffle,
+        Some(3),
+    );
     let b = bounds_for(ast);
     assert_eq!(b.barriers.len(), 1);
     assert_eq!(b.barriers[0].working_set_size, Some(3));
@@ -105,7 +103,10 @@ fn order_shuffle_has_barrier_sized_by_truncation() {
 #[test]
 fn zip_cycle_has_barrier_with_unknown_ir_layer_size() {
     let ast = Comprehension::zip(
-        vec![clause("k", &[1, 2, 3, 4, 5]), clause("color", &[100, 200, 300])],
+        vec![
+            clause("k", &[1, 2, 3, 4, 5]),
+            clause("color", &[100, 200, 300]),
+        ],
         ZipMode::Cycle,
     );
     let b = bounds_for(ast);
@@ -119,7 +120,11 @@ fn zip_cycle_has_barrier_with_unknown_ir_layer_size() {
 #[test]
 fn two_orders_two_barriers() {
     let ast = Comprehension::order(
-        Comprehension::order(clause("k", &[1, 2, 3, 4, 5]), StrategyName::Shuffle, Some(3)),
+        Comprehension::order(
+            clause("k", &[1, 2, 3, 4, 5]),
+            StrategyName::Shuffle,
+            Some(3),
+        ),
         StrategyName::Halton,
         Some(2),
     );

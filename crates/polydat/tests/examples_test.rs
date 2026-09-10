@@ -9,9 +9,7 @@
 //! by direct parsing of the .polydat files.
 
 use polydat::compile::assembly::{PolydatAssembler, WireRef};
-use polydat::library::arithmetic::{
-    Add, Div, Interleave, MixedRadix, Mod,
-};
+use polydat::library::arithmetic::{Add, Div, Interleave, MixedRadix, Mod};
 use polydat::library::hash::{Hash, HashRange};
 
 // ---------------------------------------------------------------
@@ -24,8 +22,16 @@ use polydat::library::hash::{Hash, HashRange};
 
 fn build_hello_world() -> polydat::kernel::PolydatKernel {
     let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
-    asm.add_node("hashed", Box::new(Hash::new()), vec![WireRef::input("cycle")]);
-    asm.add_node("user_id", Box::new(Mod::new(1_000_000)), vec![WireRef::node("hashed")]);
+    asm.add_node(
+        "hashed",
+        Box::new(Hash::new()),
+        vec![WireRef::input("cycle")],
+    );
+    asm.add_node(
+        "user_id",
+        Box::new(Mod::new(1_000_000)),
+        vec![WireRef::node("hashed")],
+    );
     asm.add_output("user_id", WireRef::node("user_id"));
     asm.compile().unwrap()
 }
@@ -79,27 +85,57 @@ fn hello_world_dispersed() {
 fn build_cartesian_space() -> polydat::kernel::PolydatKernel {
     let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
 
-    asm.add_node("decompose", Box::new(MixedRadix::new(vec![50, 200, 0])),
-        vec![WireRef::input("cycle")]);
+    asm.add_node(
+        "decompose",
+        Box::new(MixedRadix::new(vec![50, 200, 0])),
+        vec![WireRef::input("cycle")],
+    );
 
-    asm.add_node("region_h", Box::new(Hash::new()),
-        vec![WireRef::node_port("decompose", 0)]);
-    asm.add_node("region_code", Box::new(Mod::new(10000)),
-        vec![WireRef::node("region_h")]);
+    asm.add_node(
+        "region_h",
+        Box::new(Hash::new()),
+        vec![WireRef::node_port("decompose", 0)],
+    );
+    asm.add_node(
+        "region_code",
+        Box::new(Mod::new(10000)),
+        vec![WireRef::node("region_h")],
+    );
 
-    asm.add_node("rs_interleave", Box::new(Interleave::new()),
-        vec![WireRef::node_port("decompose", 0), WireRef::node_port("decompose", 1)]);
-    asm.add_node("store_h", Box::new(Hash::new()),
-        vec![WireRef::node("rs_interleave")]);
-    asm.add_node("store_code", Box::new(Mod::new(100000)),
-        vec![WireRef::node("store_h")]);
+    asm.add_node(
+        "rs_interleave",
+        Box::new(Interleave::new()),
+        vec![
+            WireRef::node_port("decompose", 0),
+            WireRef::node_port("decompose", 1),
+        ],
+    );
+    asm.add_node(
+        "store_h",
+        Box::new(Hash::new()),
+        vec![WireRef::node("rs_interleave")],
+    );
+    asm.add_node(
+        "store_code",
+        Box::new(Mod::new(100000)),
+        vec![WireRef::node("store_h")],
+    );
 
-    asm.add_node("st_interleave", Box::new(Interleave::new()),
-        vec![WireRef::node("store_h"), WireRef::node_port("decompose", 2)]);
-    asm.add_node("tx_h", Box::new(Hash::new()),
-        vec![WireRef::node("st_interleave")]);
-    asm.add_node("tx_id", Box::new(Mod::new(1_000_000_000)),
-        vec![WireRef::node("tx_h")]);
+    asm.add_node(
+        "st_interleave",
+        Box::new(Interleave::new()),
+        vec![WireRef::node("store_h"), WireRef::node_port("decompose", 2)],
+    );
+    asm.add_node(
+        "tx_h",
+        Box::new(Hash::new()),
+        vec![WireRef::node("st_interleave")],
+    );
+    asm.add_node(
+        "tx_id",
+        Box::new(Mod::new(1_000_000_000)),
+        vec![WireRef::node("tx_h")],
+    );
 
     asm.add_output("region", WireRef::node_port("decompose", 0));
     asm.add_output("store", WireRef::node_port("decompose", 1));
@@ -167,24 +203,48 @@ fn cartesian_codes_bounded() {
 fn build_shared_computation() -> polydat::kernel::PolydatKernel {
     let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
 
-    asm.add_node("user_h", Box::new(Hash::new()),
-        vec![WireRef::input("cycle")]);
-    asm.add_node("user_id", Box::new(Mod::new(10_000_000)),
-        vec![WireRef::node("user_h")]);
-    asm.add_node("user_bucket", Box::new(Mod::new(64)),
-        vec![WireRef::node("user_h")]);
-    asm.add_node("user_shard", Box::new(Mod::new(16)),
-        vec![WireRef::node("user_h")]);
+    asm.add_node(
+        "user_h",
+        Box::new(Hash::new()),
+        vec![WireRef::input("cycle")],
+    );
+    asm.add_node(
+        "user_id",
+        Box::new(Mod::new(10_000_000)),
+        vec![WireRef::node("user_h")],
+    );
+    asm.add_node(
+        "user_bucket",
+        Box::new(Mod::new(64)),
+        vec![WireRef::node("user_h")],
+    );
+    asm.add_node(
+        "user_shard",
+        Box::new(Mod::new(16)),
+        vec![WireRef::node("user_h")],
+    );
 
-    asm.add_node("name_h", Box::new(Hash::new()),
-        vec![WireRef::node("user_h")]);
-    asm.add_node("name_idx", Box::new(Mod::new(50000)),
-        vec![WireRef::node("name_h")]);
+    asm.add_node(
+        "name_h",
+        Box::new(Hash::new()),
+        vec![WireRef::node("user_h")],
+    );
+    asm.add_node(
+        "name_idx",
+        Box::new(Mod::new(50000)),
+        vec![WireRef::node("name_h")],
+    );
 
-    asm.add_node("age_h", Box::new(Hash::new()),
-        vec![WireRef::node("name_h")]);
-    asm.add_node("account_age_days", Box::new(Mod::new(3650)),
-        vec![WireRef::node("age_h")]);
+    asm.add_node(
+        "age_h",
+        Box::new(Hash::new()),
+        vec![WireRef::node("name_h")],
+    );
+    asm.add_node(
+        "account_age_days",
+        Box::new(Mod::new(3650)),
+        vec![WireRef::node("age_h")],
+    );
 
     asm.add_output("user_id", WireRef::node("user_id"));
     asm.add_output("user_bucket", WireRef::node("user_bucket"));
@@ -204,8 +264,12 @@ fn shared_bucket_shard_consistent() {
         k.set_inputs(&[cycle]);
         let bucket = k.pull("user_bucket").as_u64();
         let shard = k.pull("user_shard").as_u64();
-        assert_eq!(shard, bucket % 16,
-            "cycle {cycle}: shard={shard} != bucket%16={}", bucket % 16);
+        assert_eq!(
+            shard,
+            bucket % 16,
+            "cycle {cycle}: shard={shard} != bucket%16={}",
+            bucket % 16
+        );
     }
 }
 
@@ -238,7 +302,10 @@ fn shared_chained_hashes_differ() {
             break;
         }
     }
-    assert!(!all_same, "chained hashes should produce different field values");
+    assert!(
+        !all_same,
+        "chained hashes should produce different field values"
+    );
 }
 
 // ---------------------------------------------------------------
@@ -256,23 +323,44 @@ fn shared_chained_hashes_differ() {
 fn build_multi_coordinate() -> polydat::kernel::PolydatKernel {
     let mut asm = PolydatAssembler::new(vec!["cycle".into(), "thread".into()]);
 
-    asm.add_node("combined", Box::new(Interleave::new()),
-        vec![WireRef::input("cycle"), WireRef::input("thread")]);
-    asm.add_node("row_h", Box::new(Hash::new()),
-        vec![WireRef::node("combined")]);
+    asm.add_node(
+        "combined",
+        Box::new(Interleave::new()),
+        vec![WireRef::input("cycle"), WireRef::input("thread")],
+    );
+    asm.add_node(
+        "row_h",
+        Box::new(Hash::new()),
+        vec![WireRef::node("combined")],
+    );
 
-    asm.add_node("thread_h", Box::new(Hash::new()),
-        vec![WireRef::input("thread")]);
-    asm.add_node("partition", Box::new(Mod::new(256)),
-        vec![WireRef::node("thread_h")]);
+    asm.add_node(
+        "thread_h",
+        Box::new(Hash::new()),
+        vec![WireRef::input("thread")],
+    );
+    asm.add_node(
+        "partition",
+        Box::new(Mod::new(256)),
+        vec![WireRef::node("thread_h")],
+    );
 
-    asm.add_node("row_key", Box::new(Mod::new(1_000_000)),
-        vec![WireRef::node("row_h")]);
+    asm.add_node(
+        "row_key",
+        Box::new(Mod::new(1_000_000)),
+        vec![WireRef::node("row_h")],
+    );
 
-    asm.add_node("value_h", Box::new(Hash::new()),
-        vec![WireRef::node("row_h")]);
-    asm.add_node("value", Box::new(Mod::new(1000)),
-        vec![WireRef::node("value_h")]);
+    asm.add_node(
+        "value_h",
+        Box::new(Hash::new()),
+        vec![WireRef::node("row_h")],
+    );
+    asm.add_node(
+        "value",
+        Box::new(Mod::new(1000)),
+        vec![WireRef::node("value_h")],
+    );
 
     asm.add_output("partition", WireRef::node("partition"));
     asm.add_output("row_key", WireRef::node("row_key"));
@@ -304,7 +392,10 @@ fn multi_coord_different_threads_different_partitions() {
     let p1 = k.pull("partition").as_u64();
     // Not strictly guaranteed to differ, but for two small inputs
     // through a good hash + mod 256, collision is very unlikely.
-    assert_ne!(p0, p1, "different threads should usually get different partitions");
+    assert_ne!(
+        p0, p1,
+        "different threads should usually get different partitions"
+    );
 }
 
 #[test]
@@ -314,7 +405,10 @@ fn multi_coord_same_cycle_different_thread_different_row() {
     let r0 = k.pull("row_key").as_u64();
     k.set_inputs(&[100, 1]);
     let r1 = k.pull("row_key").as_u64();
-    assert_ne!(r0, r1, "interleave should make (cycle,thread) order-dependent");
+    assert_ne!(
+        r0, r1,
+        "interleave should make (cycle,thread) order-dependent"
+    );
 }
 
 #[test]
@@ -347,34 +441,70 @@ fn multi_coord_bounded() {
 fn build_hashing_provenance() -> polydat::kernel::PolydatKernel {
     let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
 
-    asm.add_node("decompose", Box::new(MixedRadix::new(vec![100, 0])),
-        vec![WireRef::input("cycle")]);
+    asm.add_node(
+        "decompose",
+        Box::new(MixedRadix::new(vec![100, 0])),
+        vec![WireRef::input("cycle")],
+    );
 
     // Pattern 1: direct hash
-    asm.add_node("tenant_h", Box::new(Hash::new()),
-        vec![WireRef::node_port("decompose", 0)]);
-    asm.add_node("tenant_id", Box::new(Mod::new(10000)),
-        vec![WireRef::node("tenant_h")]);
+    asm.add_node(
+        "tenant_h",
+        Box::new(Hash::new()),
+        vec![WireRef::node_port("decompose", 0)],
+    );
+    asm.add_node(
+        "tenant_id",
+        Box::new(Mod::new(10000)),
+        vec![WireRef::node("tenant_h")],
+    );
 
     // Pattern 2: combined hash
-    asm.add_node("td_interleave", Box::new(Interleave::new()),
-        vec![WireRef::node_port("decompose", 0), WireRef::node_port("decompose", 1)]);
-    asm.add_node("device_h", Box::new(Hash::new()),
-        vec![WireRef::node("td_interleave")]);
-    asm.add_node("device_id", Box::new(Mod::new(100000)),
-        vec![WireRef::node("device_h")]);
+    asm.add_node(
+        "td_interleave",
+        Box::new(Interleave::new()),
+        vec![
+            WireRef::node_port("decompose", 0),
+            WireRef::node_port("decompose", 1),
+        ],
+    );
+    asm.add_node(
+        "device_h",
+        Box::new(Hash::new()),
+        vec![WireRef::node("td_interleave")],
+    );
+    asm.add_node(
+        "device_id",
+        Box::new(Mod::new(100000)),
+        vec![WireRef::node("device_h")],
+    );
 
     // Pattern 3: chained hash
-    asm.add_node("field_a", Box::new(Mod::new(1000)),
-        vec![WireRef::node("tenant_h")]);
-    asm.add_node("chain_1", Box::new(Hash::new()),
-        vec![WireRef::node("tenant_h")]);
-    asm.add_node("field_b", Box::new(Mod::new(1000)),
-        vec![WireRef::node("chain_1")]);
-    asm.add_node("chain_2", Box::new(Hash::new()),
-        vec![WireRef::node("chain_1")]);
-    asm.add_node("field_c", Box::new(Mod::new(1000)),
-        vec![WireRef::node("chain_2")]);
+    asm.add_node(
+        "field_a",
+        Box::new(Mod::new(1000)),
+        vec![WireRef::node("tenant_h")],
+    );
+    asm.add_node(
+        "chain_1",
+        Box::new(Hash::new()),
+        vec![WireRef::node("tenant_h")],
+    );
+    asm.add_node(
+        "field_b",
+        Box::new(Mod::new(1000)),
+        vec![WireRef::node("chain_1")],
+    );
+    asm.add_node(
+        "chain_2",
+        Box::new(Hash::new()),
+        vec![WireRef::node("chain_1")],
+    );
+    asm.add_node(
+        "field_c",
+        Box::new(Mod::new(1000)),
+        vec![WireRef::node("chain_2")],
+    );
 
     asm.add_output("tenant_id", WireRef::node("tenant_id"));
     asm.add_output("device_id", WireRef::node("device_id"));
@@ -463,30 +593,66 @@ fn provenance_same_tenant_same_fields() {
 fn build_timeseries() -> polydat::kernel::PolydatKernel {
     let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
 
-    asm.add_node("decompose", Box::new(MixedRadix::new(vec![100, 1000, 0])),
-        vec![WireRef::input("cycle")]);
+    asm.add_node(
+        "decompose",
+        Box::new(MixedRadix::new(vec![100, 1000, 0])),
+        vec![WireRef::input("cycle")],
+    );
 
-    asm.add_node("tenant_h", Box::new(Hash::new()),
-        vec![WireRef::node_port("decompose", 0)]);
-    asm.add_node("tenant_code", Box::new(Mod::new(10000)),
-        vec![WireRef::node("tenant_h")]);
+    asm.add_node(
+        "tenant_h",
+        Box::new(Hash::new()),
+        vec![WireRef::node_port("decompose", 0)],
+    );
+    asm.add_node(
+        "tenant_code",
+        Box::new(Mod::new(10000)),
+        vec![WireRef::node("tenant_h")],
+    );
 
-    asm.add_node("td_interleave", Box::new(Interleave::new()),
-        vec![WireRef::node_port("decompose", 0), WireRef::node_port("decompose", 1)]);
-    asm.add_node("device_h", Box::new(Hash::new()),
-        vec![WireRef::node("td_interleave")]);
-    asm.add_node("device_seq", Box::new(Mod::new(100000)),
-        vec![WireRef::node("device_h")]);
+    asm.add_node(
+        "td_interleave",
+        Box::new(Interleave::new()),
+        vec![
+            WireRef::node_port("decompose", 0),
+            WireRef::node_port("decompose", 1),
+        ],
+    );
+    asm.add_node(
+        "device_h",
+        Box::new(Hash::new()),
+        vec![WireRef::node("td_interleave")],
+    );
+    asm.add_node(
+        "device_seq",
+        Box::new(Mod::new(100000)),
+        vec![WireRef::node("device_h")],
+    );
 
-    asm.add_node("time_bucket", Box::new(Div::new(1000)),
-        vec![WireRef::node_port("decompose", 2)]);
-    asm.add_node("timestamp", Box::new(Add::new(1_710_000_000_000)),
-        vec![WireRef::node_port("decompose", 2)]);
+    asm.add_node(
+        "time_bucket",
+        Box::new(Div::new(1000)),
+        vec![WireRef::node_port("decompose", 2)],
+    );
+    asm.add_node(
+        "timestamp",
+        Box::new(Add::new(1_710_000_000_000)),
+        vec![WireRef::node_port("decompose", 2)],
+    );
 
-    asm.add_node("dr_interleave", Box::new(Interleave::new()),
-        vec![WireRef::node("device_h"), WireRef::node_port("decompose", 2)]);
-    asm.add_node("reading_h", Box::new(HashRange::new(1_000_000)),
-        vec![WireRef::node("dr_interleave")]);
+    asm.add_node(
+        "dr_interleave",
+        Box::new(Interleave::new()),
+        vec![
+            WireRef::node("device_h"),
+            WireRef::node_port("decompose", 2),
+        ],
+    );
+    asm.add_node(
+        "reading_h",
+        Box::new(HashRange::new(1_000_000)),
+        vec![WireRef::node("dr_interleave")],
+    );
 
     asm.add_output("tenant", WireRef::node_port("decompose", 0));
     asm.add_output("device", WireRef::node_port("decompose", 1));
@@ -525,7 +691,10 @@ fn timeseries_same_tenant_across_devices() {
     k.set_inputs(&[105]); // tenant=5, device=1
     let tc_d1 = k.pull("tenant_code").as_u64();
 
-    assert_eq!(tc_d0, tc_d1, "same tenant across devices → same tenant_code");
+    assert_eq!(
+        tc_d0, tc_d1,
+        "same tenant across devices → same tenant_code"
+    );
 }
 
 #[test]
@@ -540,7 +709,10 @@ fn timeseries_different_tenant_same_device() {
     k.set_inputs(&[6]); // tenant=6, device=0
     let ds2 = k.pull("device_seq").as_u64();
 
-    assert_ne!(ds1, ds2, "different tenant, same device → different device_seq");
+    assert_ne!(
+        ds1, ds2,
+        "different tenant, same device → different device_seq"
+    );
 }
 
 #[test]

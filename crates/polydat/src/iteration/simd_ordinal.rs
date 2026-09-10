@@ -792,9 +792,12 @@ mod tests {
         check_shape!(u32, 4, |o| o as u32, |x: u32| x
             .wrapping_mul(11)
             .wrapping_add(9));
-        check_shape!(i32, 4, |o: u64| i32::try_from(o).expect("ordinal fits") - 20, |x: i32| x
-            .wrapping_mul(11)
-            .wrapping_add(9));
+        check_shape!(
+            i32,
+            4,
+            |o: u64| i32::try_from(o).expect("ordinal fits") - 20,
+            |x: i32| x.wrapping_mul(11).wrapping_add(9)
+        );
         check_shape!(u64, 2, |o| o, |x: u64| x.wrapping_mul(13).wrapping_add(3));
         check_shape!(i64, 2, |o| o as i64 - 20, |x: i64| x
             .wrapping_mul(13)

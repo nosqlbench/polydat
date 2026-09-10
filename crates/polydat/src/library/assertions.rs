@@ -30,8 +30,8 @@
 //! — these nodes are also user-callable from Polydat source for ad-hoc
 //! guards.
 
+use crate::ast::{NodeMeta, PolydatNode, Port, PortType, Slot, Value};
 use crate::dsl::const_constraints::ConstConstraint;
-use crate::ast::{PolydatNode, NodeMeta, Port, PortType, Slot, Value};
 
 // =========================================================================
 // Type assertions: one per PortType
@@ -146,10 +146,17 @@ fn value_matches(v: &Value, typ: PortType) -> bool {
         (Value::U128(_), PortType::U128) => true,
         (Value::I128(_), PortType::I128) => true,
         // Register views are free bitcasts of one another.
-        (Value::Reg128(_, _),
-            PortType::Reg128 | PortType::RegI8x16 | PortType::RegI16x8
-            | PortType::RegI32x4 | PortType::RegI64x2
-            | PortType::RegF16x8 | PortType::RegF32x4 | PortType::RegF64x2) => true,
+        (
+            Value::Reg128(_, _),
+            PortType::Reg128
+            | PortType::RegI8x16
+            | PortType::RegI16x8
+            | PortType::RegI32x4
+            | PortType::RegI64x2
+            | PortType::RegF16x8
+            | PortType::RegF32x4
+            | PortType::RegF64x2,
+        ) => true,
         // Ext is opaque; we accept any concrete reflection.
         (Value::Ext(_), PortType::Ext) => true,
         _ => false,

@@ -15,7 +15,9 @@ fn render(src: &str, cycle: u64, name: &str) -> String {
 }
 
 fn err(src: &str) -> String {
-    compile_polydat(src).err().unwrap_or_else(|| panic!("expected a compile error\n{src}"))
+    compile_polydat(src)
+        .err()
+        .unwrap_or_else(|| panic!("expected a compile error\n{src}"))
 }
 
 #[test]
@@ -69,7 +71,10 @@ fn generator_call_sources_compile_to_wires_of_the_scope() {
     let text = k.pull("t").as_str().to_string();
     let parts: Vec<&str> = text.split(' ').collect();
     assert_eq!(parts.len(), 2, "{text}");
-    assert!(parts[0].starts_with("0:") && parts[1].starts_with("1:"), "{text}");
+    assert!(
+        parts[0].starts_with("0:") && parts[1].starts_with("1:"),
+        "{text}"
+    );
     assert_eq!(parts[0][2..], parts[1][2..]);
 }
 

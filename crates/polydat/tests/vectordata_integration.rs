@@ -14,16 +14,19 @@
 
 #![cfg(feature = "vectordata")]
 
-use polydat::dsl::compile_polydat;
 use polydat::ast::Value;
+use polydat::dsl::compile_polydat;
 
 #[test]
 #[ignore]
 fn vector_at_produces_100d_vector() {
-    let mut k = compile_polydat(r#"
+    let mut k = compile_polydat(
+        r#"
         input cycle: u64
         vec := vector_at("glove-100", cycle)
-    "#).expect("compile failed");
+    "#,
+    )
+    .expect("compile failed");
 
     k.set_inputs(&[0]);
     let val = k.pull("vec").clone();
@@ -38,28 +41,41 @@ fn vector_at_produces_100d_vector() {
 #[test]
 #[ignore]
 fn vector_at_display_renders_json_array() {
-    let mut k = compile_polydat(r#"
+    let mut k = compile_polydat(
+        r#"
         input cycle: u64
         vec := vector_at("glove-100", cycle)
-    "#).expect("compile failed");
+    "#,
+    )
+    .expect("compile failed");
 
     k.set_inputs(&[0]);
     let s = k.pull("vec").to_display_string();
-    assert!(s.starts_with('['), "should be a JSON array: {}", &s[..60.min(s.len())]);
+    assert!(
+        s.starts_with('['),
+        "should be a JSON array: {}",
+        &s[..60.min(s.len())]
+    );
     assert!(s.ends_with(']'));
     // glove-100 vectors have 100 dimensions → 99 commas
     let commas = s.chars().filter(|c| *c == ',').count();
-    assert_eq!(commas, 99, "glove-100 should have 100 dimensions (99 commas), got {commas}");
+    assert_eq!(
+        commas, 99,
+        "glove-100 should have 100 dimensions (99 commas), got {commas}"
+    );
 }
 
 #[test]
 #[ignore]
 fn vector_count_and_dim() {
-    let mut k = compile_polydat(r#"
+    let mut k = compile_polydat(
+        r#"
         input cycle: u64
         count := vector_count("glove-100")
         dim := vector_dim("glove-100")
-    "#).expect("compile failed");
+    "#,
+    )
+    .expect("compile failed");
 
     k.set_inputs(&[0]);
     let count = k.pull("count").as_u64();
@@ -72,23 +88,33 @@ fn vector_count_and_dim() {
 #[test]
 #[ignore]
 fn query_vector_at_produces_vec_f32() {
-    let mut k = compile_polydat(r#"
+    let mut k = compile_polydat(
+        r#"
         input cycle: u64
         qvec := query_vector_at("glove-100", cycle)
-    "#).expect("compile failed");
+    "#,
+    )
+    .expect("compile failed");
 
     k.set_inputs(&[0]);
     let val = k.pull("qvec").clone();
-    assert!(matches!(val, Value::VecF32(_)), "expected VecF32, got {:?}", val);
+    assert!(
+        matches!(val, Value::VecF32(_)),
+        "expected VecF32, got {:?}",
+        val
+    );
 }
 
 #[test]
 #[ignore]
 fn neighbor_indices_at_produces_vec_i32() {
-    let mut k = compile_polydat(r#"
+    let mut k = compile_polydat(
+        r#"
         input cycle: u64
         neighbors := neighbor_indices_at("glove-100", cycle)
-    "#).expect("compile failed");
+    "#,
+    )
+    .expect("compile failed");
 
     k.set_inputs(&[0]);
     let val = k.pull("neighbors").clone();
@@ -103,10 +129,13 @@ fn neighbor_indices_at_produces_vec_i32() {
 #[test]
 #[ignore]
 fn vector_at_deterministic() {
-    let mut k = compile_polydat(r#"
+    let mut k = compile_polydat(
+        r#"
         input cycle: u64
         vec := vector_at("glove-100", cycle)
-    "#).expect("compile failed");
+    "#,
+    )
+    .expect("compile failed");
 
     k.set_inputs(&[42]);
     let a = k.pull("vec").clone();

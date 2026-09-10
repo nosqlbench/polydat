@@ -84,7 +84,9 @@ pub enum TupleValue {
 
 impl Tuple {
     pub fn new() -> Self {
-        Self { bindings: Vec::new() }
+        Self {
+            bindings: Vec::new(),
+        }
     }
 
     pub fn with<K: Into<String>>(mut self, key: K, value: TupleValue) -> Self {
@@ -253,16 +255,16 @@ pub fn index_fn_supports_lookup(idx: &IndexFn) -> bool {
 /// dependency.
 pub(crate) fn index_fn_size(idx: &IndexFn) -> u64 {
     match idx {
-        IndexFn::Lattice { axis_sizes } => {
-            axis_sizes.iter().copied().fold(1u64, |a, b| a.saturating_mul(b))
-        }
+        IndexFn::Lattice { axis_sizes } => axis_sizes
+            .iter()
+            .copied()
+            .fold(1u64, |a, b| a.saturating_mul(b)),
         IndexFn::Lockstep { length } => *length,
-        IndexFn::Modular { axis_sizes } => {
-            axis_sizes.iter().copied().max().unwrap_or(0)
-        }
-        IndexFn::Concatenation { segment_sizes } => {
-            segment_sizes.iter().copied().fold(0u64, |a, b| a.saturating_add(b))
-        }
+        IndexFn::Modular { axis_sizes } => axis_sizes.iter().copied().max().unwrap_or(0),
+        IndexFn::Concatenation { segment_sizes } => segment_sizes
+            .iter()
+            .copied()
+            .fold(0u64, |a, b| a.saturating_add(b)),
         IndexFn::Continuous { .. } | IndexFn::Hybrid { .. } => 0,
     }
 }
@@ -292,25 +294,42 @@ mod tests {
     fn for_name_dispatches_to_correct_strategy() {
         assert_eq!(for_name(StrategyName::Lex).name(), StrategyName::Lex);
         assert_eq!(for_name(StrategyName::Halton).name(), StrategyName::Halton);
-        assert_eq!(for_name(StrategyName::Extrema).name(), StrategyName::Extrema);
+        assert_eq!(
+            for_name(StrategyName::Extrema).name(),
+            StrategyName::Extrema
+        );
     }
 
     #[test]
     fn index_fn_size_lattice() {
-        let idx = IndexFn::Lattice { axis_sizes: vec![3, 4, 5] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![3, 4, 5],
+        };
         assert_eq!(index_fn_size(&idx), 60);
     }
 
     #[test]
     fn index_fn_size_concatenation() {
-        let idx = IndexFn::Concatenation { segment_sizes: vec![10, 20, 30] };
+        let idx = IndexFn::Concatenation {
+            segment_sizes: vec![10, 20, 30],
+        };
         assert_eq!(index_fn_size(&idx), 60);
     }
 
     #[test]
     fn index_fn_dim_classifies_correctly() {
-        assert_eq!(index_fn_dim(&IndexFn::Lattice { axis_sizes: vec![3, 4] }), 2);
+        assert_eq!(
+            index_fn_dim(&IndexFn::Lattice {
+                axis_sizes: vec![3, 4]
+            }),
+            2
+        );
         assert_eq!(index_fn_dim(&IndexFn::Lockstep { length: 10 }), 1);
-        assert_eq!(index_fn_dim(&IndexFn::Concatenation { segment_sizes: vec![1, 2, 3] }), 3);
+        assert_eq!(
+            index_fn_dim(&IndexFn::Concatenation {
+                segment_sizes: vec![1, 2, 3]
+            }),
+            3
+        );
     }
 }

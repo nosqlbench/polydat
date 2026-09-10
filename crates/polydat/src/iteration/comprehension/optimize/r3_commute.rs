@@ -18,10 +18,19 @@ use crate::iteration::comprehension::ast::Comprehension;
 use crate::iteration::comprehension::strategy::StrategyName;
 
 pub fn apply(ast: &Comprehension) -> Option<Comprehension> {
-    let Comprehension::Order { child, strategy: StrategyName::Lex, truncation: None } = ast else {
+    let Comprehension::Order {
+        child,
+        strategy: StrategyName::Lex,
+        truncation: None,
+    } = ast
+    else {
         return None;
     };
-    let Comprehension::Filter { child: filter_child, predicate } = child.as_ref() else {
+    let Comprehension::Filter {
+        child: filter_child,
+        predicate,
+    } = child.as_ref()
+    else {
         return None;
     };
     Some(Comprehension::Filter {
@@ -58,7 +67,11 @@ mod tests {
             Comprehension::Filter { child, predicate } => {
                 assert_eq!(predicate, "{k} > 0");
                 match child.as_ref() {
-                    Comprehension::Order { strategy: StrategyName::Lex, truncation: None, .. } => {}
+                    Comprehension::Order {
+                        strategy: StrategyName::Lex,
+                        truncation: None,
+                        ..
+                    } => {}
                     other => panic!("expected order(Lex, None) inside, got {other:?}"),
                 }
             }

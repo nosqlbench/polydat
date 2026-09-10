@@ -14,7 +14,8 @@
 fn main() {
     // Path to the stdlib module shipped with the crate.
     let stdlib = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("stdlib").join("identity.polydat");
+        .join("stdlib")
+        .join("identity.polydat");
 
     let mut kernel = polydat::dsl::compile_polydat_with_libs(
         r#"
@@ -28,7 +29,8 @@ fn main() {
         &[],                  // required_outputs — empty: compile everything
         false,                // strict
         "library_and_loader example",
-    ).expect("compile failed");
+    )
+    .expect("compile failed");
 
     println!("library loaded from: {}", stdlib.display());
     for c in 0..5u64 {

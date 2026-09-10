@@ -16,9 +16,7 @@
 //!   coordinate is least significant and varies fastest. Cross-checked
 //!   in `tests::lex_multi_indices_is_mixed_radix_order`.
 
-use super::{
-    EvaluatedInput, MultiIndex, Strategy, Tuple, index_fn_dim, index_fn_size,
-};
+use super::{EvaluatedInput, MultiIndex, Strategy, Tuple, index_fn_dim, index_fn_size};
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::strategy::StrategyName;
 
@@ -117,13 +115,19 @@ mod tests {
         // Knuth TAOCP 4A §7.2.1.1: mixed-radix order, rightmost axis
         // least significant. A 2×3 lattice enumerates as
         // (0,0)(0,1)(0,2)(1,0)(1,1)(1,2).
-        let idx = IndexFn::Lattice { axis_sizes: vec![2, 3] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![2, 3],
+        };
         let out = lex_multi_indices(&idx, None);
         assert_eq!(
             out,
             vec![
-                vec![0, 0], vec![0, 1], vec![0, 2],
-                vec![1, 0], vec![1, 1], vec![1, 2],
+                vec![0, 0],
+                vec![0, 1],
+                vec![0, 2],
+                vec![1, 0],
+                vec![1, 1],
+                vec![1, 2],
             ]
         );
     }
@@ -140,7 +144,9 @@ mod tests {
     #[test]
     fn lex_multi_indices_2d() {
         // 2x3 lattice — Lex emits (0,0), (0,1), (0,2), (1,0), (1,1), (1,2).
-        let idx = IndexFn::Lattice { axis_sizes: vec![2, 3] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![2, 3],
+        };
         let result = lex_multi_indices(&idx, None);
         assert_eq!(result.len(), 6);
         assert_eq!(result[0], vec![0, 0]);
@@ -153,7 +159,9 @@ mod tests {
 
     #[test]
     fn lex_multi_indices_respects_truncation() {
-        let idx = IndexFn::Lattice { axis_sizes: vec![3, 3] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![3, 3],
+        };
         let result = lex_multi_indices(&idx, Some(4));
         assert_eq!(result.len(), 4);
         assert_eq!(result[3], vec![1, 0]);
@@ -162,6 +170,8 @@ mod tests {
     #[test]
     fn accepts_anything() {
         assert!(Lex.accepts_input(None));
-        assert!(Lex.accepts_input(Some(&IndexFn::Lattice { axis_sizes: vec![3] })));
+        assert!(Lex.accepts_input(Some(&IndexFn::Lattice {
+            axis_sizes: vec![3]
+        })));
     }
 }

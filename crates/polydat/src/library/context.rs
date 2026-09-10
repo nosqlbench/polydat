@@ -25,7 +25,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::ast::{PolydatNode, NodeMeta, Port, Slot, SlotType, Value};
+use crate::ast::{NodeMeta, PolydatNode, Port, Slot, SlotType, Value};
 
 /// Current wall-clock time in epoch milliseconds.
 ///
@@ -66,10 +66,7 @@ fn session_start_millis_jit_constants(node: &SessionStartMillis) -> Vec<u64> {
     purity = Nondeterministic("session start time captured from system clock"),
     jit_constants = session_start_millis_jit_constants,
 )]
-fn session_start_millis(
-    #[poly_const(capture_epoch_millis, from = ())]
-    start: &u64,
-) -> u64 {
+fn session_start_millis(#[poly_const(capture_epoch_millis, from = ())] start: &u64) -> u64 {
     *start
 }
 
@@ -85,10 +82,7 @@ fn elapsed_millis_jit_constants(node: &ElapsedMillis) -> Vec<u64> {
     purity = Nondeterministic("monotonic elapsed time from system clock"),
     jit_constants = elapsed_millis_jit_constants,
 )]
-fn elapsed_millis(
-    #[poly_const(capture_epoch_millis, from = ())]
-    start: &u64,
-) -> u64 {
+fn elapsed_millis(#[poly_const(capture_epoch_millis, from = ())] start: &u64) -> u64 {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -127,10 +121,12 @@ fn thread_id() -> u64 {
 #[crate::polydat_node(category = Context)]
 fn env(name: Const<&str>) -> Result<String, String> {
     let var = name.0;
-    std::env::var(var).map_err(|_| format!(
-        "env('{var}'): environment variable not set; \
+    std::env::var(var).map_err(|_| {
+        format!(
+            "env('{var}'): environment variable not set; \
          use env_or('{var}', '<default>') if a fallback is acceptable",
-    ))
+        )
+    })
 }
 
 /// Environment variable read with default, frozen at construction.
@@ -143,8 +139,7 @@ fn env(name: Const<&str>) -> Result<String, String> {
 fn env_or(
     name: Const<&str>,
     default: Const<&str>,
-    #[poly_const(capture_env_opt, from = name)]
-    captured: &Option<String>,
+    #[poly_const(capture_env_opt, from = name)] captured: &Option<String>,
 ) -> String {
     match captured {
         Some(v) => v.clone(),
@@ -162,10 +157,7 @@ fn capture_env_opt(name: &str) -> Option<String> {
 ///
 /// Signature: `tmp_dir() -> str`.
 #[crate::polydat_node(category = Context)]
-fn tmp_dir(
-    #[poly_const(capture_tmp_dir, from = ())]
-    path: &String,
-) -> String {
+fn tmp_dir(#[poly_const(capture_tmp_dir, from = ())] path: &String) -> String {
     path.clone()
 }
 
@@ -188,8 +180,7 @@ fn capture_tmp_dir() -> String {
 )]
 fn counter(
     #[poly_default(0u64)] start: Const<u64>,
-    #[poly_const(AtomicU64::new, from = start)]
-    count: &AtomicU64,
+    #[poly_const(AtomicU64::new, from = start)] count: &AtomicU64,
 ) -> u64 {
     count.fetch_add(1, Ordering::Relaxed)
 }
@@ -231,7 +222,9 @@ impl CursorLimit {
 }
 
 impl PolydatNode for CursorLimit {
-    fn meta(&self) -> &NodeMeta { &self.meta }
+    fn meta(&self) -> &NodeMeta {
+        &self.meta
+    }
     fn eval(&self, inputs: &[Value], outputs: &mut [Value]) {
         // Pure passthrough — the limit is enforced by the cursor system,
         // not by the node evaluation. The node exists to be visible in
@@ -251,34 +244,52 @@ use crate::dsl::registry::{Arity, FuncCategory, FuncSig, ParamSpec};
 /// Signature for the cursor-limit passthrough.
 pub fn signatures() -> &'static [FuncSig] {
     use FuncCategory as C;
-    &[
-        FuncSig {
-            name: "limit", category: C::Context, outputs: 1,
-            description: "cursor limit — clamps extent for smoke testing",
-            help: "Passes through the input value unchanged. Inserted by the compiler\n\
+    &[FuncSig {
+        name: "limit",
+        category: C::Context,
+        outputs: 1,
+        description: "cursor limit — clamps extent for smoke testing",
+        help: "Passes through the input value unchanged. Inserted by the compiler\n\
                    when the `limit` activity parameter is present. The max_items value\n\
                    is used by the cursor system to stop advancing early.\n\
                    Parameters:\n  input — cursor wire (u64)\n  max_items — maximum items to yield\n\
                    Example: row = limit(row, 100)  // stop after 100 items",
-            identity: None, variadic_ctor: None,
-            params: &[
-                ParamSpec { name: "input", slot_type: SlotType::Wire, required: true, example: "row", constraint: None },
-                ParamSpec { name: "max_items", slot_type: SlotType::ConstU64, required: true, example: "100", constraint: None },
-            ],
-            arity: Arity::Fixed,
-            commutativity: crate::ast::Commutativity::Positional,
-            default_resolver: None,
-            output_type: crate::dsl::registry::OutputType::Fixed,
-            // Hand registration: no static return-port declaration;
-            // type inference falls back to the name heuristic.
-            output_port: None,
-        },
-    ]
+        identity: None,
+        variadic_ctor: None,
+        params: &[
+            ParamSpec {
+                name: "input",
+                slot_type: SlotType::Wire,
+                required: true,
+                example: "row",
+                constraint: None,
+            },
+            ParamSpec {
+                name: "max_items",
+                slot_type: SlotType::ConstU64,
+                required: true,
+                example: "100",
+                constraint: None,
+            },
+        ],
+        arity: Arity::Fixed,
+        commutativity: crate::ast::Commutativity::Positional,
+        default_resolver: None,
+        output_type: crate::dsl::registry::OutputType::Fixed,
+        // Hand registration: no static return-port declaration;
+        // type inference falls back to the name heuristic.
+        output_port: None,
+    }]
 }
 
 /// Build the cursor-limit node by name. Other context nodes
 /// register via the `#[polydat_node]` macro's inventory hook.
-pub(crate) fn build_node(name: &str, _wires: &[crate::compile::assembly::WireRef], _wire_types: &[crate::ast::PortType], consts: &[crate::dsl::factory::ConstArg]) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
+pub(crate) fn build_node(
+    name: &str,
+    _wires: &[crate::compile::assembly::WireRef],
+    _wire_types: &[crate::ast::PortType],
+    consts: &[crate::dsl::factory::ConstArg],
+) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
     match name {
         "limit" => {
             let max_items = consts.first().map(|c| c.as_u64()).unwrap_or(u64::MAX);
@@ -352,35 +363,50 @@ mod tests {
     /// tests order-dependent.
     fn unique_var(tag: &str) -> String {
         use std::time::{SystemTime, UNIX_EPOCH};
-        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         format!("__NBRS_TEST_{tag}_{nanos:x}")
     }
 
     #[test]
     fn env_captures_value_at_construction() {
         let var = unique_var("ENV");
-        unsafe { std::env::set_var(&var, "captured-value"); }
+        unsafe {
+            std::env::set_var(&var, "captured-value");
+        }
         let node = Env::try_new(var.clone()).expect("env should read the set var");
         // Mutating the env after construction must NOT change the
         // node's output — the value is frozen at construction.
-        unsafe { std::env::set_var(&var, "later-value"); }
+        unsafe {
+            std::env::set_var(&var, "later-value");
+        }
         let mut out = [Value::None];
         node.eval(&[], &mut out);
         assert_eq!(out[0].as_str().to_string(), "captured-value");
-        unsafe { std::env::remove_var(&var); }
+        unsafe {
+            std::env::remove_var(&var);
+        }
     }
 
     #[test]
     fn env_errors_when_var_unset() {
         let var = unique_var("ENV_MISSING");
-        unsafe { std::env::remove_var(&var); }
+        unsafe {
+            std::env::remove_var(&var);
+        }
         match Env::try_new(var.clone()) {
             Ok(_) => panic!("Env::try_new should fail when the var is unset"),
             Err(err) => {
-                assert!(err.contains(&var),
-                    "error should name the missing var: {err}");
-                assert!(err.contains("env_or"),
-                    "error should suggest env_or as the defaulted alternative: {err}");
+                assert!(
+                    err.contains(&var),
+                    "error should name the missing var: {err}"
+                );
+                assert!(
+                    err.contains("env_or"),
+                    "error should suggest env_or as the defaulted alternative: {err}"
+                );
             }
         }
     }
@@ -388,7 +414,9 @@ mod tests {
     #[test]
     fn env_or_uses_default_when_var_unset() {
         let var = unique_var("ENV_OR_MISSING");
-        unsafe { std::env::remove_var(&var); }
+        unsafe {
+            std::env::remove_var(&var);
+        }
         let node = EnvOr::new(var.clone(), "fallback".to_string());
         let mut out = [Value::None];
         node.eval(&[], &mut out);
@@ -398,25 +426,38 @@ mod tests {
     #[test]
     fn env_or_uses_var_value_when_set() {
         let var = unique_var("ENV_OR_SET");
-        unsafe { std::env::set_var(&var, "real-value"); }
+        unsafe {
+            std::env::set_var(&var, "real-value");
+        }
         let node = EnvOr::new(var.clone(), "fallback".to_string());
         let mut out = [Value::None];
         node.eval(&[], &mut out);
         assert_eq!(out[0].as_str().to_string(), "real-value");
-        unsafe { std::env::remove_var(&var); }
+        unsafe {
+            std::env::remove_var(&var);
+        }
     }
 
     #[test]
     fn env_or_captures_at_construction_not_each_eval() {
         let var = unique_var("ENV_OR_FROZEN");
-        unsafe { std::env::set_var(&var, "first"); }
+        unsafe {
+            std::env::set_var(&var, "first");
+        }
         let node = EnvOr::new(var.clone(), "ignored-default".to_string());
-        unsafe { std::env::set_var(&var, "second"); }
+        unsafe {
+            std::env::set_var(&var, "second");
+        }
         let mut out = [Value::None];
         node.eval(&[], &mut out);
-        assert_eq!(out[0].as_str().to_string(), "first",
-            "env_or must freeze its value at construction; later env mutations are invisible");
-        unsafe { std::env::remove_var(&var); }
+        assert_eq!(
+            out[0].as_str().to_string(),
+            "first",
+            "env_or must freeze its value at construction; later env mutations are invisible"
+        );
+        unsafe {
+            std::env::remove_var(&var);
+        }
     }
 
     #[test]
@@ -443,12 +484,14 @@ mod tests {
     #[test]
     fn env_or_compiles_through_dsl() {
         let var = unique_var("DSL_ENV_OR");
-        unsafe { std::env::set_var(&var, "x-value"); }
-        let src = format!(
-            "v := env_or(\"{var}\", \"fallback\")\n",
-        );
+        unsafe {
+            std::env::set_var(&var, "x-value");
+        }
+        let src = format!("v := env_or(\"{var}\", \"fallback\")\n",);
         let kernel = crate::dsl::compile_polydat(&src).expect("compile env_or");
-        unsafe { std::env::remove_var(&var); }
+        unsafe {
+            std::env::remove_var(&var);
+        }
         // The output should be the captured value. We can't read
         // the kernel's outputs directly without an eval pass; the
         // shape check (compiled cleanly, registered in DSL) is
@@ -464,10 +507,13 @@ mod tests {
         // — no new syntax needed for the resumable-test-fixture
         // workload's path composition.
         let src = "path := \"{tmp_dir()}/data\"\n";
-        let kernel = crate::dsl::compile_polydat(src)
-            .expect("compile tmp_dir() interpolated in a string");
+        let kernel =
+            crate::dsl::compile_polydat(src).expect("compile tmp_dir() interpolated in a string");
         let names = kernel.program().output_names();
-        assert!(names.contains(&"path"), "expected output 'path' in {names:?}");
+        assert!(
+            names.contains(&"path"),
+            "expected output 'path' in {names:?}"
+        );
     }
 
     #[test]
@@ -478,9 +524,11 @@ mod tests {
         // canonical form. Confirm the expression compiles.
         let src = "extern phase_start: u64 = 0\n\
                    volatile te := current_epoch_millis() - phase_start\n";
-        let k = crate::dsl::compile_polydat(src)
-            .expect("clock-minus-injected-origin must compile");
-        assert!(k.program().output_names().contains(&"te"),
-            "expected output 'te' in {:?}", k.program().output_names());
+        let k = crate::dsl::compile_polydat(src).expect("clock-minus-injected-origin must compile");
+        assert!(
+            k.program().output_names().contains(&"te"),
+            "expected output 'te' in {:?}",
+            k.program().output_names()
+        );
     }
 }

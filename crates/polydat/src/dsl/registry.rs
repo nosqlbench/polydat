@@ -229,13 +229,30 @@ impl FuncCategory {
     /// Canonical ordering for display (same order as the enum definition).
     pub fn display_order() -> &'static [Self] {
         &[
-            Self::Hashing, Self::Arithmetic, Self::Comparison, Self::Variadic,
-            Self::Conversions, Self::Distributions, Self::Datetime,
-            Self::Encoding, Self::Interpolation, Self::Math, Self::Probability,
-            Self::Weighted, Self::Formatting, Self::String,
-            Self::Json, Self::ByteBuffers, Self::Digest, Self::Noise,
-            Self::Regex, Self::Permutation, Self::RealData,
-            Self::Context, Self::Diagnostic, Self::Data,
+            Self::Hashing,
+            Self::Arithmetic,
+            Self::Comparison,
+            Self::Variadic,
+            Self::Conversions,
+            Self::Distributions,
+            Self::Datetime,
+            Self::Encoding,
+            Self::Interpolation,
+            Self::Math,
+            Self::Probability,
+            Self::Weighted,
+            Self::Formatting,
+            Self::String,
+            Self::Json,
+            Self::ByteBuffers,
+            Self::Digest,
+            Self::Noise,
+            Self::Regex,
+            Self::Permutation,
+            Self::RealData,
+            Self::Context,
+            Self::Diagnostic,
+            Self::Data,
         ]
     }
 }
@@ -274,7 +291,10 @@ pub struct ParamSpec {
 impl ParamSpec {
     /// Convenience: chainable on a literal to attach a constraint.
     /// Used by node modules that want to keep the literal compact.
-    pub const fn with_constraint(mut self, c: crate::dsl::const_constraints::ConstConstraint) -> Self {
+    pub const fn with_constraint(
+        mut self,
+        c: crate::dsl::const_constraints::ConstConstraint,
+    ) -> Self {
         self.constraint = Some(c);
         self
     }
@@ -283,8 +303,7 @@ impl ParamSpec {
 /// Arity specification for a function signature.
 ///
 /// Describes which parts of the parameter list are fixed vs repeatable.
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub enum Arity {
     /// Exactly the parameters declared in `params`.
     #[default]
@@ -299,7 +318,6 @@ pub enum Arity {
         min_repeats: usize,
     },
 }
-
 
 /// Output-type contract for a registered function.
 ///
@@ -399,7 +417,8 @@ impl FuncSig {
 
     /// Constant parameter names and whether they're required.
     pub fn const_param_info(&self) -> Vec<(&'static str, bool)> {
-        self.params.iter()
+        self.params
+            .iter()
             .filter(|p| p.slot_type.is_const())
             .map(|p| (p.name, p.required))
             .collect()
@@ -453,14 +472,14 @@ pub fn registry() -> Vec<FuncSig> {
 /// Return functions grouped by category in display order.
 pub fn by_category() -> Vec<(FuncCategory, Vec<FuncSig>)> {
     let reg = registry();
-    let mut groups: std::collections::HashMap<FuncCategory, Vec<FuncSig>> = std::collections::HashMap::new();
+    let mut groups: std::collections::HashMap<FuncCategory, Vec<FuncSig>> =
+        std::collections::HashMap::new();
     for sig in reg {
         groups.entry(sig.category).or_default().push(sig);
     }
-    FuncCategory::display_order().iter()
-        .filter_map(|cat| {
-            groups.remove(cat).map(|funcs| (*cat, funcs))
-        })
+    FuncCategory::display_order()
+        .iter()
+        .filter_map(|cat| groups.remove(cat).map(|funcs| (*cat, funcs)))
         .collect()
 }
 
@@ -470,10 +489,9 @@ pub fn suggest_function(name: &str) -> Option<&'static str> {
     let mut best: Option<(&str, usize)> = None;
     for sig in &reg {
         let dist = edit_distance(name, sig.name);
-        if dist <= 3
-            && (best.is_none() || dist < best.unwrap().1) {
-                best = Some((sig.name, dist));
-            }
+        if dist <= 3 && (best.is_none() || dist < best.unwrap().1) {
+            best = Some((sig.name, dist));
+        }
     }
     best.map(|(name, _)| name)
 }
@@ -502,8 +520,12 @@ fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
     let mut matrix = vec![vec![0usize; b.len() + 1]; a.len() + 1];
-    for (i, row) in matrix.iter_mut().enumerate() { row[0] = i; }
-    for (j, cell) in matrix[0].iter_mut().enumerate() { *cell = j; }
+    for (i, row) in matrix.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for (j, cell) in matrix[0].iter_mut().enumerate() {
+        *cell = j;
+    }
     for i in 1..=a.len() {
         for j in 1..=b.len() {
             let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
@@ -558,8 +580,11 @@ mod tests {
         let reg = registry();
         for sig in &reg {
             // Just verify the category display name is non-empty
-            assert!(!sig.category.display_name().is_empty(),
-                "function '{}' has no category display name", sig.name);
+            assert!(
+                !sig.category.display_name().is_empty(),
+                "function '{}' has no category display name",
+                sig.name
+            );
         }
     }
 
@@ -568,7 +593,11 @@ mod tests {
         let grouped = by_category();
         let total: usize = grouped.iter().map(|(_, funcs)| funcs.len()).sum();
         let reg = registry();
-        assert_eq!(total, reg.len(), "by_category must cover all registered functions");
+        assert_eq!(
+            total,
+            reg.len(),
+            "by_category must cover all registered functions"
+        );
     }
 
     #[test]
@@ -591,10 +620,21 @@ mod tests {
     #[test]
     fn arithmetic_params_populated() {
         // Verify key arithmetic functions have params.
-        for name in &["add", "mul", "div", "mod", "clamp", "interleave", "mixed_radix"] {
+        for name in &[
+            "add",
+            "mul",
+            "div",
+            "mod",
+            "clamp",
+            "interleave",
+            "mixed_radix",
+        ] {
             let sig = lookup(name).unwrap_or_else(|| panic!("missing '{name}'"));
-            assert!(!sig.params.is_empty(),
-                "function '{}' should have params populated", name);
+            assert!(
+                !sig.params.is_empty(),
+                "function '{}' should have params populated",
+                name
+            );
         }
     }
 
@@ -602,8 +642,11 @@ mod tests {
     fn variadic_params_populated() {
         for name in &["sum", "product", "min", "max"] {
             let sig = lookup(name).unwrap_or_else(|| panic!("missing '{name}'"));
-            assert!(matches!(sig.arity, Arity::VariadicWires { .. }),
-                "function '{}' should have VariadicWires arity", name);
+            assert!(
+                matches!(sig.arity, Arity::VariadicWires { .. }),
+                "function '{}' should have VariadicWires arity",
+                name
+            );
         }
     }
 
@@ -618,10 +661,15 @@ mod tests {
         // params without the const-vec entry) duplicated the macro
         // registration under the same name and was removed.
         let sig = lookup("mixed_radix").unwrap();
-        assert!(matches!(sig.arity, Arity::VariadicConsts { min_consts: 0 }),
-            "mixed_radix should be VariadicConsts, got {:?}", sig.arity);
-        assert!(matches!(sig.params[0].slot_type, SlotType::Wire),
-            "first param is the u64 wire input");
+        assert!(
+            matches!(sig.arity, Arity::VariadicConsts { min_consts: 0 }),
+            "mixed_radix should be VariadicConsts, got {:?}",
+            sig.arity
+        );
+        assert!(
+            matches!(sig.params[0].slot_type, SlotType::Wire),
+            "first param is the u64 wire input"
+        );
     }
 
     #[test]
@@ -636,7 +684,10 @@ mod tests {
         // format ConstStr and the arity is variadic — both still
         // hold.
         let sig = lookup("printf").unwrap();
-        assert!(!sig.params.is_empty(), "printf must have at least the format param");
+        assert!(
+            !sig.params.is_empty(),
+            "printf must have at least the format param"
+        );
         assert!(matches!(sig.params[0].slot_type, SlotType::ConstStr));
         assert!(matches!(sig.arity, Arity::VariadicWires { .. }));
     }

@@ -18,10 +18,20 @@
 use crate::iteration::comprehension::ast::Comprehension;
 
 pub fn apply(ast: &Comprehension) -> Option<Comprehension> {
-    let Comprehension::Order { child: outer_child, strategy: outer_strat, truncation: outer_trunc } = ast else {
+    let Comprehension::Order {
+        child: outer_child,
+        strategy: outer_strat,
+        truncation: outer_trunc,
+    } = ast
+    else {
         return None;
     };
-    let Comprehension::Order { child: inner_child, truncation: None, .. } = outer_child.as_ref() else {
+    let Comprehension::Order {
+        child: inner_child,
+        truncation: None,
+        ..
+    } = outer_child.as_ref()
+    else {
         return None;
     };
     Some(Comprehension::Order {
@@ -53,7 +63,11 @@ mod tests {
         let o2 = Comprehension::order(o1, StrategyName::Halton, Some(2));
         let result = apply(&o2).unwrap();
         match result {
-            Comprehension::Order { child, strategy: StrategyName::Halton, truncation: Some(2) } => {
+            Comprehension::Order {
+                child,
+                strategy: StrategyName::Halton,
+                truncation: Some(2),
+            } => {
                 assert_eq!(&*child, &inner);
             }
             other => panic!("expected Order(Halton, Some(2)) → clause, got {other:?}"),

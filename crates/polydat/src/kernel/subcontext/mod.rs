@@ -102,13 +102,9 @@ mod tests;
 
 pub use builder::{CompileOptions, SubcontextBuilder};
 pub use error::{ContractViolation, SourceContext};
-pub use kernel::{
-    Child, PolydatMatter, PolydatMatterBuilder, RootMarker,
-};
 pub(crate) use kernel::PolydatMatterInner;
-pub use kernel::{
-    ScopeKernel, SharedCellInScope,
-};
+pub use kernel::{Child, PolydatMatter, PolydatMatterBuilder, RootMarker};
+pub use kernel::{ScopeKernel, SharedCellInScope};
 pub use module::{BodyFragment, ScopeContract, ScopeModule};
 pub use name::ChildName;
 pub use pull::{NamedPullConsumer, PullConsumer, RegisteredPullConsumer};

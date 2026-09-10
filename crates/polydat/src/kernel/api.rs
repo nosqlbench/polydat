@@ -69,7 +69,11 @@ impl std::fmt::Display for WriteError {
             WriteError::UnknownWire { key } => {
                 write!(f, "unknown wire '{key}': no input slot by this name")
             }
-            WriteError::TypeMismatch { slot, expected, got } => {
+            WriteError::TypeMismatch {
+                slot,
+                expected,
+                got,
+            } => {
                 write!(
                     f,
                     "type mismatch writing to slot '{slot}': expected {expected:?}, got {got:?} (no auto-adapter available)"
@@ -80,8 +84,14 @@ impl std::fmt::Display for WriteError {
                 // convention. Point the author at the explicit
                 // helpers rather than leaving them to guess.
                 if matches!(got, PortType::VecF32 | PortType::VecI32)
-                    && !matches!(expected, PortType::VecF32 | PortType::VecI32
-                        | PortType::Str | PortType::Bytes | PortType::Json)
+                    && !matches!(
+                        expected,
+                        PortType::VecF32
+                            | PortType::VecI32
+                            | PortType::Str
+                            | PortType::Bytes
+                            | PortType::Json
+                    )
                 {
                     write!(
                         f,
@@ -137,7 +147,9 @@ impl WireKey for usize {
         Some(self)
     }
     #[inline]
-    fn describe(&self) -> String { format!("wire[{self}]") }
+    fn describe(&self) -> String {
+        format!("wire[{self}]")
+    }
 }
 
 impl WireKey for &str {
@@ -146,7 +158,9 @@ impl WireKey for &str {
         metadata.find_input(self)
     }
     #[inline]
-    fn describe(&self) -> String { (*self).to_string() }
+    fn describe(&self) -> String {
+        (*self).to_string()
+    }
 }
 
 impl WireKey for String {
@@ -155,7 +169,9 @@ impl WireKey for String {
         metadata.find_input(&self)
     }
     #[inline]
-    fn describe(&self) -> String { self.clone() }
+    fn describe(&self) -> String {
+        self.clone()
+    }
 }
 
 impl WireKey for &String {
@@ -164,7 +180,9 @@ impl WireKey for &String {
         metadata.find_input(self)
     }
     #[inline]
-    fn describe(&self) -> String { (*self).clone() }
+    fn describe(&self) -> String {
+        (*self).clone()
+    }
 }
 
 /// Read-only metadata about a Polydat context: structural shape,
@@ -285,6 +303,5 @@ pub trait Construction: Sized {
     /// Polydat matter. The parent supervises: cell cascade, Rule 2
     /// rewrites, scope-coordinate threading, init-binding
     /// contract checks all flow from `self` into the child.
-    fn subscope(&self, matter: super::subcontext::PolydatMatter<'_>)
-        -> Result<Self, Self::Error>;
+    fn subscope(&self, matter: super::subcontext::PolydatMatter<'_>) -> Result<Self, Self::Error>;
 }

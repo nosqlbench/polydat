@@ -7,7 +7,7 @@
 
 use polydat::iteration::comprehension::ast::Comprehension;
 use polydat::iteration::comprehension::optimize::{
-    analyze_reducibility, optimize, ComplexityOrdering, RuleId,
+    ComplexityOrdering, RuleId, analyze_reducibility, optimize,
 };
 use polydat::iteration::comprehension::source::{LiteralValue, Source};
 use polydat::iteration::comprehension::strategy::{StrategyName, ZipMode};
@@ -27,8 +27,14 @@ fn spec_section_11_5_filter_distribution_shrinking() {
     // sub-predicate. R4 distributes the filter; R5 pushes
     // per-axis into each cartesian.
     let union = Comprehension::union(vec![
-        Comprehension::cartesian(vec![clause("k", &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]), clause("x", &[1, 2, 3])]),
-        Comprehension::cartesian(vec![clause("k", &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]), clause("x", &[11, 12, 13])]),
+        Comprehension::cartesian(vec![
+            clause("k", &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+            clause("x", &[1, 2, 3]),
+        ]),
+        Comprehension::cartesian(vec![
+            clause("k", &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+            clause("x", &[11, 12, 13]),
+        ]),
     ]);
     let filtered = Comprehension::filter(union, "{k} > 5");
 
@@ -40,11 +46,15 @@ fn spec_section_11_5_filter_distribution_shrinking() {
             assert_eq!(children.len(), 2);
             for child in &children {
                 match child {
-                    Comprehension::Cartesian { children: cart_kids } => {
+                    Comprehension::Cartesian {
+                        children: cart_kids,
+                    } => {
                         // k child should be wrapped in filter.
                         assert!(matches!(&cart_kids[0], Comprehension::Filter { .. }));
                         // x child should be unwrapped.
-                        assert!(matches!(&cart_kids[1], Comprehension::Clause { name, .. } if name == "x"));
+                        assert!(
+                            matches!(&cart_kids[1], Comprehension::Clause { name, .. } if name == "x")
+                        );
                     }
                     other => panic!("expected Cartesian in union child, got {other:?}"),
                 }
@@ -59,13 +69,18 @@ fn optimizer_eliminates_redundant_inner_order() {
     // R7: inner untruncated order is redundant; outer wins.
     // Then R0a eliminates the now-redundant outer Lex/None
     // wrapper if applicable.
-    let inner_order = Comprehension::order(clause("k", &[1, 2, 3, 4, 5]), StrategyName::Shuffle, None);
+    let inner_order =
+        Comprehension::order(clause("k", &[1, 2, 3, 4, 5]), StrategyName::Shuffle, None);
     let outer_order = Comprehension::order(inner_order, StrategyName::Halton, Some(3));
 
     let optimized = optimize(outer_order);
 
     match optimized {
-        Comprehension::Order { child, strategy: StrategyName::Halton, truncation: Some(3) } => {
+        Comprehension::Order {
+            child,
+            strategy: StrategyName::Halton,
+            truncation: Some(3),
+        } => {
             assert!(matches!(&*child, Comprehension::Clause { .. }));
         }
         other => panic!("expected Order(Halton, Some(3)) wrapping a Clause, got {other:?}"),
@@ -115,7 +130,10 @@ fn optimizer_is_idempotent_on_random_ast() {
     // §10.6.2: optimize(optimize(C)) == optimize(C).
     let messy = Comprehension::filter(
         Comprehension::union(vec![
-            Comprehension::cartesian(vec![Comprehension::cartesian(vec![clause("a", &[1])]), clause("b", &[2])]),
+            Comprehension::cartesian(vec![
+                Comprehension::cartesian(vec![clause("a", &[1])]),
+                clause("b", &[2]),
+            ]),
             Comprehension::cartesian(vec![clause("a", &[3]), clause("b", &[4])]),
         ]),
         "{a} > 0",
@@ -153,7 +171,10 @@ fn optimizer_preserves_coordinate_names() {
     // After full optimization, the coordinate set is
     // preserved — no axis disappears.
     let original = Comprehension::filter(
-        Comprehension::cartesian(vec![clause("k", &[1, 2, 3, 4, 5]), clause("limit", &[10, 20, 30])]),
+        Comprehension::cartesian(vec![
+            clause("k", &[1, 2, 3, 4, 5]),
+            clause("limit", &[10, 20, 30]),
+        ]),
         "{k} > 2 && {limit} < 25",
     );
     let original_coords = original.coordinate_names();
@@ -175,7 +196,10 @@ fn zip_does_not_flatten() {
     // A zip whose children include another zip would be a
     // parse error in practice; we just verify the optimizer
     // doesn't try to flatten if it ever sees this shape.
-    let inner_zip = Comprehension::zip(vec![clause("a", &[1, 2]), clause("b", &[3, 4])], ZipMode::Strict);
+    let inner_zip = Comprehension::zip(
+        vec![clause("a", &[1, 2]), clause("b", &[3, 4])],
+        ZipMode::Strict,
+    );
     // Wrapping inner_zip inside another zip is technically
     // V1-rejected (V1: disjoint names is fine, but the
     // result's shape becomes weird) — for this test we just

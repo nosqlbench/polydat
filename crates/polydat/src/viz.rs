@@ -55,30 +55,39 @@ pub fn polydat_to_dot(source: &str) -> Result<String, String> {
             // Register nodes (INPUTS / OUTPUTS): record with labeled ports
             if node.outputs.is_empty() && !node.inputs.is_empty() {
                 // OUTPUTS register: input ports only (bottom of graph)
-                let ports: Vec<String> = node.inputs.iter()
+                let ports: Vec<String> = node
+                    .inputs
+                    .iter()
                     .map(|name| format!("<i_{name}> {name}"))
                     .collect();
                 dot.push_str(&format!(
                     "    {} [label=\"{{ {{ {} }} | {} }}\", fillcolor=\"#0f3460\", \
                      fontcolor=\"#4ecca3\", color=\"#4ecca3\", penwidth=2];\n",
-                    node.id, ports.join(" | "), dot_escape(&node.label),
+                    node.id,
+                    ports.join(" | "),
+                    dot_escape(&node.label),
                 ));
             } else if !node.outputs.is_empty() && node.inputs.is_empty() {
                 // INPUTS register: output ports only (top of graph)
-                let ports: Vec<String> = node.outputs.iter()
+                let ports: Vec<String> = node
+                    .outputs
+                    .iter()
                     .map(|name| format!("<o_{name}> {name}"))
                     .collect();
                 dot.push_str(&format!(
                     "    {} [label=\"{{ {} | {{ {} }} }}\", fillcolor=\"#0f3460\", \
                      fontcolor=\"#4da6ff\", color=\"#4da6ff\", penwidth=2];\n",
-                    node.id, dot_escape(&node.label), ports.join(" | "),
+                    node.id,
+                    dot_escape(&node.label),
+                    ports.join(" | "),
                 ));
             } else {
                 // Fallback
                 dot.push_str(&format!(
                     "    {} [label=\"{}\", shape=oval, fillcolor=\"#16213e\", \
                      fontcolor=\"#4da6ff\", color=\"#4da6ff\"];\n",
-                    node.id, dot_escape(&node.label)
+                    node.id,
+                    dot_escape(&node.label)
                 ));
             }
         } else {
@@ -86,7 +95,9 @@ pub fn polydat_to_dot(source: &str) -> Result<String, String> {
             let input_ports = if node.inputs.is_empty() {
                 String::new()
             } else {
-                let ports: Vec<String> = node.inputs.iter()
+                let ports: Vec<String> = node
+                    .inputs
+                    .iter()
                     .map(|name| format!("<i_{name}> {name}"))
                     .collect();
                 format!("{{ {} }} | ", ports.join(" | "))
@@ -95,7 +106,9 @@ pub fn polydat_to_dot(source: &str) -> Result<String, String> {
             let output_ports = if node.outputs.is_empty() {
                 String::new()
             } else {
-                let ports: Vec<String> = node.outputs.iter()
+                let ports: Vec<String> = node
+                    .outputs
+                    .iter()
                     .map(|name| format!("<o_{name}> {name}"))
                     .collect();
                 format!(" | {{ {} }}", ports.join(" | "))
@@ -150,10 +163,17 @@ pub fn polydat_to_mermaid(source: &str) -> Result<String, String> {
         let label = if edge.from_port.is_empty() && edge.to_port.is_empty() {
             String::new()
         } else {
-            let port_name = if !edge.from_port.is_empty() { &edge.from_port } else { &edge.to_port };
+            let port_name = if !edge.from_port.is_empty() {
+                &edge.from_port
+            } else {
+                &edge.to_port
+            };
             format!("|{}|", port_name)
         };
-        lines.push(format!("    {} -->{} {}", edge.from_node, label, edge.to_node));
+        lines.push(format!(
+            "    {} -->{} {}",
+            edge.from_node, label, edge.to_node
+        ));
     }
 
     lines.push("    classDef coord fill:#16213e,stroke:#4da6ff,color:#4da6ff".into());
@@ -176,7 +196,8 @@ pub fn polydat_to_svg(source: &str) -> Result<String, String> {
 
     // Parse DOT through layout-rs
     let mut parser = layout::gv::DotParser::new(&dot_source);
-    let graph = parser.process()
+    let graph = parser
+        .process()
         .map_err(|e| format!("DOT parse error: {e}"))?;
 
     // Build visual graph from parsed DOT
@@ -232,13 +253,21 @@ fn build_graph(source: &str) -> Result<(Vec<VizNode>, Vec<VizEdge>), String> {
         let mut refs: HashSet<String> = HashSet::new();
         for stmt in &ast.statements {
             let expr = match stmt {
-                Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) | Statement::Tile(_) => continue,
+                Statement::InputDecl(_)
+                | Statement::ModuleDef(_)
+                | Statement::ExternPort(_)
+                | Statement::Cursor(_)
+                | Statement::Pragma { .. }
+                | Statement::For(_)
+                | Statement::Tile(_) => continue,
                 Statement::Binding(b) => &b.value,
             };
             collect_expr_idents(expr, &mut refs);
         }
         for name in refs {
-            if !defined_names.contains(&name) { input_names.push(name); }
+            if !defined_names.contains(&name) {
+                input_names.push(name);
+            }
         }
         input_names.sort();
     }
@@ -247,12 +276,19 @@ fn build_graph(source: &str) -> Result<(Vec<VizNode>, Vec<VizEdge>), String> {
     let mut consumed: HashSet<String> = HashSet::new();
     for stmt in &ast.statements {
         let expr = match stmt {
-            Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) | Statement::Tile(_) => continue,
+            Statement::InputDecl(_)
+            | Statement::ModuleDef(_)
+            | Statement::ExternPort(_)
+            | Statement::Cursor(_)
+            | Statement::Pragma { .. }
+            | Statement::For(_)
+            | Statement::Tile(_) => continue,
             Statement::Binding(b) => &b.value,
         };
         collect_expr_idents(expr, &mut consumed);
     }
-    let terminal_outputs: Vec<String> = all_output_names.iter()
+    let terminal_outputs: Vec<String> = all_output_names
+        .iter()
         .filter(|name| !consumed.contains(*name))
         .cloned()
         .collect();
@@ -281,7 +317,13 @@ fn build_graph(source: &str) -> Result<(Vec<VizNode>, Vec<VizEdge>), String> {
     // ─── Function nodes (middle) ────────────────────────
     for stmt in &ast.statements {
         match stmt {
-            Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) | Statement::Tile(_) => continue,
+            Statement::InputDecl(_)
+            | Statement::ModuleDef(_)
+            | Statement::ExternPort(_)
+            | Statement::Cursor(_)
+            | Statement::Pragma { .. }
+            | Statement::For(_)
+            | Statement::Tile(_) => continue,
             Statement::Binding(b) => {
                 let id = format!("n{node_counter}");
                 node_counter += 1;
@@ -312,7 +354,11 @@ fn build_graph(source: &str) -> Result<(Vec<VizNode>, Vec<VizEdge>), String> {
                     name_to_node_id.insert(t.clone(), id.clone());
                 }
                 nodes.push(VizNode {
-                    id, label, inputs: input_refs, outputs: b.targets.clone(), is_coord: false,
+                    id,
+                    label,
+                    inputs: input_refs,
+                    outputs: b.targets.clone(),
+                    is_coord: false,
                 });
             }
         }
@@ -347,17 +393,25 @@ fn build_graph(source: &str) -> Result<(Vec<VizNode>, Vec<VizEdge>), String> {
 fn format_node_label(expr: &Expr, target: &str) -> String {
     match expr {
         Expr::Call(call) => {
-            let args: Vec<String> = call.args.iter().map(|a| match a {
-                Arg::Positional(e) => format_expr_short(e),
-                Arg::Named(n, e) => format!("{}: {}", n, format_expr_short(e)),
-            }).collect();
+            let args: Vec<String> = call
+                .args
+                .iter()
+                .map(|a| match a {
+                    Arg::Positional(e) => format_expr_short(e),
+                    Arg::Named(n, e) => format!("{}: {}", n, format_expr_short(e)),
+                })
+                .collect();
             format!("{} := {}({})", target, call.func, args.join(", "))
         }
         Expr::Ident(id, _) => format!("{} := {}", target, id),
         Expr::IntLit(v, _) => format!("{} = {}", target, v),
         Expr::FloatLit(v, _) => format!("{} = {}", target, v),
         Expr::StringLit(s, _) => {
-            let trunc = if s.len() > 20 { format!("{}...", &s[..20]) } else { s.clone() };
+            let trunc = if s.len() > 20 {
+                format!("{}...", &s[..20])
+            } else {
+                s.clone()
+            };
             format!("{} = \"{}\"", target, trunc)
         }
         _ => target.to_string(),
@@ -377,14 +431,22 @@ fn format_expr_short(expr: &Expr) -> String {
 
 fn collect_expr_idents(expr: &Expr, out: &mut HashSet<String>) {
     match expr {
-        Expr::Ident(name, _) => { out.insert(name.clone()); }
+        Expr::Ident(name, _) => {
+            out.insert(name.clone());
+        }
         Expr::Call(call) => {
             for arg in &call.args {
-                let inner = match arg { Arg::Positional(e) | Arg::Named(_, e) => e };
+                let inner = match arg {
+                    Arg::Positional(e) | Arg::Named(_, e) => e,
+                };
                 collect_expr_idents(inner, out);
             }
         }
-        Expr::ArrayLit(elems, _) => { for e in elems { collect_expr_idents(e, out); } }
+        Expr::ArrayLit(elems, _) => {
+            for e in elems {
+                collect_expr_idents(e, out);
+            }
+        }
         _ => {}
     }
 }
@@ -393,27 +455,35 @@ fn collect_expr_idents(expr: &Expr, out: &mut HashSet<String>) {
 fn collect_expr_idents_ordered(expr: &Expr, out: &mut Vec<String>) {
     match expr {
         Expr::Ident(name, _) => {
-            if !out.contains(name) { out.push(name.clone()); }
+            if !out.contains(name) {
+                out.push(name.clone());
+            }
         }
         Expr::Call(call) => {
             for arg in &call.args {
-                let inner = match arg { Arg::Positional(e) | Arg::Named(_, e) => e };
+                let inner = match arg {
+                    Arg::Positional(e) | Arg::Named(_, e) => e,
+                };
                 collect_expr_idents_ordered(inner, out);
             }
         }
-        Expr::ArrayLit(elems, _) => { for e in elems { collect_expr_idents_ordered(e, out); } }
+        Expr::ArrayLit(elems, _) => {
+            for e in elems {
+                collect_expr_idents_ordered(e, out);
+            }
+        }
         _ => {}
     }
 }
 
 fn dot_escape(s: &str) -> String {
     s.replace('\\', "\\\\")
-     .replace('"', "\\\"")
-     .replace('{', "\\{")
-     .replace('}', "\\}")
-     .replace('<', "\\<")
-     .replace('>', "\\>")
-     .replace('|', "\\|")
+        .replace('"', "\\\"")
+        .replace('{', "\\{")
+        .replace('}', "\\}")
+        .replace('<', "\\<")
+        .replace('>', "\\>")
+        .replace('|', "\\|")
 }
 
 #[cfg(test)]
@@ -427,16 +497,16 @@ mod tests {
         let dot = polydat_to_dot(SIMPLE_POLYDAT).unwrap();
         assert!(dot.contains("shape=record"));
         assert!(dot.contains("bgcolor"));
-        assert!(dot.contains(":o_"));  // output port syntax
-        assert!(dot.contains(":i_"));  // input port syntax
+        assert!(dot.contains(":o_")); // output port syntax
+        assert!(dot.contains(":i_")); // input port syntax
     }
 
     #[test]
     fn dot_dark_theme() {
         let dot = polydat_to_dot(SIMPLE_POLYDAT).unwrap();
-        assert!(dot.contains("#1a1a2e"));  // dark bg
-        assert!(dot.contains("#16213e"));  // node fill
-        assert!(dot.contains("#e0e0e0"));  // light text
+        assert!(dot.contains("#1a1a2e")); // dark bg
+        assert!(dot.contains("#16213e")); // node fill
+        assert!(dot.contains("#e0e0e0")); // light text
     }
 
     #[test]

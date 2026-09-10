@@ -7,7 +7,10 @@
 
 use polydat::ast::Value;
 use polydat::derive_support::Ext;
-use polydat::dsl::compile::{compile_polydat, compile_polydat_to_assembler, compile_polydat_with_libs, compile_polydat_with_log};
+use polydat::dsl::compile::{
+    compile_polydat, compile_polydat_to_assembler, compile_polydat_with_libs,
+    compile_polydat_with_log,
+};
 use polydat::dsl::events::CompileEventLog;
 
 /// A node the host defines. The attribute registers it at link time
@@ -43,7 +46,10 @@ impl polydat::ast::ReflectedValue for GeoCell {
         "GeoCell"
     }
     fn display(&self) -> String {
-        format!("cell({:.3}, {:.3}, L{})", self.lat_deg, self.lon_deg, self.level)
+        format!(
+            "cell({:.3}, {:.3}, L{})",
+            self.lat_deg, self.lon_deg, self.level
+        )
     }
     fn to_json_value(&self) -> serde_json::Value {
         serde_json::json!({ "lat": self.lat_deg, "lon": self.lon_deg, "level": self.level })
@@ -62,7 +68,11 @@ impl polydat::ast::ReflectedValue for GeoCell {
 /// it `GeoCellNode` instead; the DSL name stays `geo_cell`.
 #[polydat::polydat_node(category = Math, struct_name = GeoCellNode)]
 fn geo_cell(lat: f64, lon: f64, level: u64) -> Ext<GeoCell> {
-    Ext(GeoCell { lat_deg: lat, lon_deg: lon, level })
+    Ext(GeoCell {
+        lat_deg: lat,
+        lon_deg: lon,
+        level,
+    })
 }
 
 /// A node that consumes it. The parameter type `Ext<GeoCell>` downcasts
@@ -104,7 +114,11 @@ fn section_compile_and_drive() {
     )
     .expect("compile");
     println!("inputs: {:?}", kernel.input_names());
-    let named: Vec<&str> = kernel.output_names().into_iter().filter(|n| !n.contains("__anon")).collect();
+    let named: Vec<&str> = kernel
+        .output_names()
+        .into_iter()
+        .filter(|n| !n.contains("__anon"))
+        .collect();
     println!("outputs: {named:?}");
     for cycle in [0u64, 1, 2] {
         kernel.set_inputs(&[cycle]);
@@ -132,8 +146,12 @@ fn section_externs() {
     let mut state = program.create_state();
     state.set_inputs(&[7]);
     println!("defaults: {}", state.pull(&program, "key").as_str());
-    let region = program.find_input("region").expect("extern is an input slot");
-    let scale = program.find_input("scale").expect("extern is an input slot");
+    let region = program
+        .find_input("region")
+        .expect("extern is an input slot");
+    let scale = program
+        .find_input("scale")
+        .expect("extern is an input slot");
     state.set_input(region, Value::Str("eu-west".into()));
     state.set_input(scale, Value::U64(1000));
     state.set_inputs(&[7]);
@@ -141,26 +159,41 @@ fn section_externs() {
     // The same assignment as a program transform: rewrite the source
     // before compiling, as the binary does for `name=value` arguments,
     // so nothing is written to a state at run time.
-    let transformed = src.replace("extern region: str = \"us-east\"", "extern region: str = \"ap-south\"");
+    let transformed = src.replace(
+        "extern region: str = \"us-east\"",
+        "extern region: str = \"ap-south\"",
+    );
     let mut fixed = compile_polydat(&transformed).expect("compile");
     fixed.set_inputs(&[7]);
     println!("transformed: {}", fixed.pull("key").as_str());
     // The compiled engines carry the same externs: defaults are seeded
     // into the kernel and set_input replaces them between runs.
-    let mut compiled = compile_polydat_to_assembler(src).unwrap().try_compile_raw().unwrap_or_else(|_| panic!("P2"));
+    let mut compiled = compile_polydat_to_assembler(src)
+        .unwrap()
+        .try_compile_raw()
+        .unwrap_or_else(|_| panic!("P2"));
     compiled.eval(&[7]);
     println!("compiled, defaults: {}", compiled.get_value("key").as_str());
-    compiled.set_input("region", Value::Str("eu-west".into())).expect("a str extern");
-    compiled.set_input("scale", Value::U64(1000)).expect("a u64 extern");
+    compiled
+        .set_input("region", Value::Str("eu-west".into()))
+        .expect("a str extern");
+    compiled
+        .set_input("scale", Value::U64(1000))
+        .expect("a u64 extern");
     compiled.eval(&[7]);
-    println!("compiled, overridden: {}", compiled.get_value("key").as_str());
+    println!(
+        "compiled, overridden: {}",
+        compiled.get_value("key").as_str()
+    );
     println!();
 }
 
 /// One immutable program, one state per thread, no locks.
 fn section_share_across_threads() {
     println!("== 3. Share a program across threads ==");
-    let program = compile_polydat("input cycle: u64\nv := mod(hash(cycle), 1000)\n").expect("compile").into_program();
+    let program = compile_polydat("input cycle: u64\nv := mod(hash(cycle), 1000)\n")
+        .expect("compile")
+        .into_program();
     let threads = 4;
     let per_thread = 25_000u64;
     let sums: Vec<u64> = std::thread::scope(|s| {
@@ -189,7 +222,10 @@ fn section_share_across_threads() {
         state.set_inputs(&[c]);
         serial += state.pull(&program, "v").as_u64();
     }
-    println!("{threads} threads x {per_thread} cycles: sum {total}; serial sum {serial}; equal: {}", total == serial);
+    println!(
+        "{threads} threads x {per_thread} cycles: sum {total}; serial sum {serial}; equal: {}",
+        total == serial
+    );
     println!();
 }
 
@@ -206,7 +242,11 @@ fn section_host_nodes() {
     .expect("compile");
     for cycle in [1u64, 2] {
         kernel.set_inputs(&[cycle]);
-        println!("cycle {cycle}: c={} t={}", kernel.pull("c").as_u64(), kernel.pull("t").as_str());
+        println!(
+            "cycle {cycle}: c={} t={}",
+            kernel.pull("c").as_u64(),
+            kernel.pull("t").as_str()
+        );
     }
     println!();
 }
@@ -230,11 +270,22 @@ fn section_host_values() {
         println!("cycle {cycle}: {}", kernel.pull("line").as_str());
         // The host reads the wire as its own type again.
         let cell = kernel.pull("cell").clone();
-        let Value::Ext(boxed) = cell else { panic!("cell is an Ext wire") };
+        let Value::Ext(boxed) = cell else {
+            panic!("cell is an Ext wire")
+        };
         let cell = boxed.as_any().downcast_ref::<GeoCell>().expect("a GeoCell");
-        println!("cycle {cycle}: level {} at ({:.1}, {:.1}); json {}", cell.level, cell.lat_deg, cell.lon_deg, boxed.to_json_value());
+        println!(
+            "cycle {cycle}: level {} at ({:.1}, {:.1}); json {}",
+            cell.level,
+            cell.lat_deg,
+            cell.lon_deg,
+            boxed.to_json_value()
+        );
     }
-    println!("cell wire type: {:?}", kernel.program().output_port_type("cell"));
+    println!(
+        "cell wire type: {:?}",
+        kernel.program().output_port_type("cell")
+    );
     println!();
 }
 
@@ -245,8 +296,16 @@ fn section_assembler() {
     use polydat::library::arithmetic::Mod;
     use polydat::library::hash::Hash;
     let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
-    asm.add_node("hashed", Box::new(Hash::new()), vec![WireRef::input("cycle")]);
-    asm.add_node("user_id", Box::new(Mod::new(1_000_000)), vec![WireRef::node("hashed")]);
+    asm.add_node(
+        "hashed",
+        Box::new(Hash::new()),
+        vec![WireRef::input("cycle")],
+    );
+    asm.add_node(
+        "user_id",
+        Box::new(Mod::new(1_000_000)),
+        vec![WireRef::node("hashed")],
+    );
     asm.add_output("user_id", WireRef::node("user_id"));
     let mut kernel = asm.compile().expect("compile");
     kernel.set_inputs(&[42]);
@@ -275,7 +334,11 @@ fn section_modules() {
     .expect("compile with libs");
     for cycle in [0u64, 1, 2] {
         kernel.set_inputs(&[cycle]);
-        println!("cycle {cycle}: bucket={} label={}", kernel.pull("b").as_u64(), kernel.pull("l").as_str());
+        println!(
+            "cycle {cycle}: bucket={} label={}",
+            kernel.pull("b").as_u64(),
+            kernel.pull("l").as_str()
+        );
     }
     let _ = std::fs::remove_dir_all(&dir);
     println!();
@@ -297,7 +360,11 @@ fn section_traversal() {
     .expect("compile");
     kernel.set_inputs(&[0]);
     let mut stream = kernel.traverse(0).expect("open traversal");
-    println!("{} activations of `{}`", stream.len(), stream.traversal().source_text);
+    println!(
+        "{} activations of `{}`",
+        stream.len(),
+        stream.traversal().source_text
+    );
     while let Some(mut act) = stream.advance().expect("activation") {
         let index = act.index;
         let k = act.cycle(1);
@@ -310,13 +377,19 @@ fn section_traversal() {
 /// JSON value becomes a tile statement.
 fn section_tiles() {
     println!("== 9. Tiles from host data ==");
-    use polydat::tile::{compile_polydat_with_tiles, tile_from_json_value, Span, TileOptions};
+    use polydat::tile::{Span, TileOptions, compile_polydat_with_tiles, tile_from_json_value};
     let template = serde_json::json!({
         "id": "${cycle}",
         "label": "row-${cycle}",
         "points": [ "@for s in 0..2", { "n": "${s}", "v": "${cycle + s}" } ]
     });
-    let tile = tile_from_json_value("doc", &template, &TileOptions::default(), Span { line: 0, col: 0 }).expect("tile");
+    let tile = tile_from_json_value(
+        "doc",
+        &template,
+        &TileOptions::default(),
+        Span { line: 0, col: 0 },
+    )
+    .expect("tile");
     let mut kernel = compile_polydat_with_tiles("input cycle: u64\n", vec![tile]).expect("compile");
     kernel.set_inputs(&[4]);
     println!("doc: {}", kernel.pull("doc").as_str());
@@ -330,14 +403,20 @@ fn section_compiled_kernels() {
     // host_tag and the two extension nodes have closure forms but no
     // native one, so the hybrid kernel must mix engines to run this.
     let src = "input cycle: u64\nh := hash(cycle)\nname := \"user-{h}\"\ntag := host_tag(\"job\", mod(h, 10000))\ncell := geo_cell(to_f64(mod(h, 180)) - 90.0, to_f64(mod(h, 360)) - 180.0, 4)\ntok := cell_token(cell)\ntile j : json := {\"h\": ${h}, \"name\": ${name}, \"tag\": ${tag}, \"cell\": ${tok}}\n";
-    let mut p2 = compile_polydat_to_assembler(src).unwrap().try_compile_raw().unwrap_or_else(|_| panic!("P2"));
+    let mut p2 = compile_polydat_to_assembler(src)
+        .unwrap()
+        .try_compile_raw()
+        .unwrap_or_else(|_| panic!("P2"));
     // Pure native code needs every node to have a native form.
     match compile_polydat_to_assembler(src).unwrap().try_compile_jit() {
         Ok(_) => println!("pure P3: compiled"),
         Err(e) => println!("pure P3 refused: {e}"),
     }
     // The hybrid kernel lowers what it can and runs the rest as closures.
-    let mut hybrid = compile_polydat_to_assembler(src).unwrap().compile_hybrid().expect("hybrid");
+    let mut hybrid = compile_polydat_to_assembler(src)
+        .unwrap()
+        .compile_hybrid()
+        .expect("hybrid");
     let (native, closures) = hybrid.engine_counts();
     println!("hybrid plan: {native} native segment(s), {closures} closure step(s)");
     for cycle in [0u64, 1] {
@@ -350,12 +429,21 @@ fn section_compiled_kernels() {
         let hy_h = hybrid.get("h");
         let hy_j = hybrid.get_value("j").to_display_string();
         println!("cycle {cycle}: P2 h={p2_h} j={p2_j}");
-        println!("cycle {cycle}: hybrid agrees: {}", p2_h == hy_h && p2_j == hy_j);
+        println!(
+            "cycle {cycle}: hybrid agrees: {}",
+            p2_h == hy_h && p2_j == hy_j
+        );
     }
     // The production kernel mixes engines itself; the host never picks.
-    let mut mixed = compile_polydat_to_assembler(src).unwrap().compile().expect("mixed");
+    let mut mixed = compile_polydat_to_assembler(src)
+        .unwrap()
+        .compile()
+        .expect("mixed");
     mixed.set_inputs(&[1]);
-    println!("production kernel j: {}", mixed.pull("j").to_display_string());
+    println!(
+        "production kernel j: {}",
+        mixed.pull("j").to_display_string()
+    );
     println!();
 }
 
@@ -364,7 +452,8 @@ fn section_compiled_kernels() {
 fn section_transforms() {
     println!("== 11. Program transforms ==");
     let src = "input cycle: u64\nid := mod(hash(cycle), 1000)\nname := \"user-{id}\"\n";
-    let with_emit = format!("{src}__emit := emit_row(\"jsonl\", \"cycle,id,name\", cycle, id, name)\n");
+    let with_emit =
+        format!("{src}__emit := emit_row(\"jsonl\", \"cycle,id,name\", cycle, id, name)\n");
     let mut kernel = compile_polydat(&with_emit).expect("compile");
     for cycle in [0u64, 1, 2] {
         kernel.set_inputs(&[cycle]);
@@ -389,8 +478,14 @@ fn section_diagnostics() {
         println!("  {:?}: {event:?}", event.level());
     }
     let program = kernel.program();
-    println!("nodes: {}, deterministic: {}", program.node_count(), program.is_deterministic());
-    let names: Vec<String> = (0..program.node_count()).map(|i| program.node_meta(i).name.clone()).collect();
+    println!(
+        "nodes: {}, deterministic: {}",
+        program.node_count(),
+        program.is_deterministic()
+    );
+    let names: Vec<String> = (0..program.node_count())
+        .map(|i| program.node_meta(i).name.clone())
+        .collect();
     println!("node names: {names:?}");
     println!();
 }

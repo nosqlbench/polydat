@@ -74,7 +74,9 @@ pub mod r5_factorize;
 pub mod r6_filter_fold;
 pub mod r7_order_fold;
 
-pub use finding::{ComplexityDelta, Ordering as ComplexityOrdering, Reduction, ReducibilityFinding, RuleId};
+pub use finding::{
+    ComplexityDelta, Ordering as ComplexityOrdering, ReducibilityFinding, Reduction, RuleId,
+};
 
 /// Top-level optimizer entry. Applies the R-rule catalog to a
 /// fixed point and returns the optimized AST.
@@ -159,7 +161,10 @@ fn try_rules_at_node(ast: &Comprehension) -> ReducibilityFinding {
     // R0a — identity elimination
     if let Some(witness) = r0a_identity::apply(ast) {
         return ReducibilityFinding {
-            reduction: Some(Reduction::Rewrite { rule: RuleId::R0a, witness }),
+            reduction: Some(Reduction::Rewrite {
+                rule: RuleId::R0a,
+                witness,
+            }),
             rule: Some(RuleId::R0a),
             improvement: ComplexityDelta::less_compute(),
         };
@@ -167,7 +172,10 @@ fn try_rules_at_node(ast: &Comprehension) -> ReducibilityFinding {
     // R0b — associativity flattening
     if let Some(witness) = r0b_flatten::apply(ast) {
         return ReducibilityFinding {
-            reduction: Some(Reduction::Rewrite { rule: RuleId::R0b, witness }),
+            reduction: Some(Reduction::Rewrite {
+                rule: RuleId::R0b,
+                witness,
+            }),
             rule: Some(RuleId::R0b),
             improvement: ComplexityDelta::less_compute(),
         };
@@ -175,7 +183,10 @@ fn try_rules_at_node(ast: &Comprehension) -> ReducibilityFinding {
     // R3 — Lex/filter commute
     if let Some(witness) = r3_commute::apply(ast) {
         return ReducibilityFinding {
-            reduction: Some(Reduction::Rewrite { rule: RuleId::R3, witness }),
+            reduction: Some(Reduction::Rewrite {
+                rule: RuleId::R3,
+                witness,
+            }),
             rule: Some(RuleId::R3),
             improvement: ComplexityDelta::less_memory(),
         };
@@ -183,17 +194,21 @@ fn try_rules_at_node(ast: &Comprehension) -> ReducibilityFinding {
     // R4 — filter distributes over union
     if let Some(witness) = r4_distribute::apply(ast) {
         return ReducibilityFinding {
-            reduction: Some(Reduction::Rewrite { rule: RuleId::R4, witness }),
+            reduction: Some(Reduction::Rewrite {
+                rule: RuleId::R4,
+                witness,
+            }),
             rule: Some(RuleId::R4),
             improvement: ComplexityDelta::less_memory(),
         };
     }
     // R5 — per-axis filter pushdown
-    if let Some(witness) = r5_factorize::apply(ast, &|p, c| {
-        super::predicate::analyze(p, c)
-    }) {
+    if let Some(witness) = r5_factorize::apply(ast, &|p, c| super::predicate::analyze(p, c)) {
         return ReducibilityFinding {
-            reduction: Some(Reduction::Rewrite { rule: RuleId::R5, witness }),
+            reduction: Some(Reduction::Rewrite {
+                rule: RuleId::R5,
+                witness,
+            }),
             rule: Some(RuleId::R5),
             improvement: ComplexityDelta::less_both(),
         };
@@ -201,7 +216,10 @@ fn try_rules_at_node(ast: &Comprehension) -> ReducibilityFinding {
     // R6 — chained filter folding
     if let Some(witness) = r6_filter_fold::apply(ast) {
         return ReducibilityFinding {
-            reduction: Some(Reduction::Rewrite { rule: RuleId::R6, witness }),
+            reduction: Some(Reduction::Rewrite {
+                rule: RuleId::R6,
+                witness,
+            }),
             rule: Some(RuleId::R6),
             improvement: ComplexityDelta::less_compute(),
         };
@@ -209,7 +227,10 @@ fn try_rules_at_node(ast: &Comprehension) -> ReducibilityFinding {
     // R7 — order chain folding
     if let Some(witness) = r7_order_fold::apply(ast) {
         return ReducibilityFinding {
-            reduction: Some(Reduction::Rewrite { rule: RuleId::R7, witness }),
+            reduction: Some(Reduction::Rewrite {
+                rule: RuleId::R7,
+                witness,
+            }),
             rule: Some(RuleId::R7),
             improvement: ComplexityDelta::less_both(),
         };
@@ -231,23 +252,34 @@ fn replace_child_at(ast: &Comprehension, i: usize, replacement: Comprehension) -
         Comprehension::Cartesian { children } => {
             let mut new_children = children.clone();
             new_children[i] = replacement;
-            Comprehension::Cartesian { children: new_children }
+            Comprehension::Cartesian {
+                children: new_children,
+            }
         }
         Comprehension::Zip { children, mode } => {
             let mut new_children = children.clone();
             new_children[i] = replacement;
-            Comprehension::Zip { children: new_children, mode: *mode }
+            Comprehension::Zip {
+                children: new_children,
+                mode: *mode,
+            }
         }
         Comprehension::Union { children } => {
             let mut new_children = children.clone();
             new_children[i] = replacement;
-            Comprehension::Union { children: new_children }
+            Comprehension::Union {
+                children: new_children,
+            }
         }
         Comprehension::Filter { predicate, .. } => Comprehension::Filter {
             child: Box::new(replacement),
             predicate: predicate.clone(),
         },
-        Comprehension::Order { strategy, truncation, .. } => Comprehension::Order {
+        Comprehension::Order {
+            strategy,
+            truncation,
+            ..
+        } => Comprehension::Order {
             child: Box::new(replacement),
             strategy: *strategy,
             truncation: *truncation,

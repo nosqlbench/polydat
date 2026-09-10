@@ -4,21 +4,30 @@
 //! Programmatic kernel construction via the assembler API.
 
 use polydat::compile::assembly::{PolydatAssembler, WireRef};
+use polydat::library::arithmetic::{MixedRadix, Mod};
 use polydat::library::hash::Hash;
-use polydat::library::arithmetic::{Mod, MixedRadix};
 
 fn main() {
     let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
 
     // Decompose cycle into (region, device, reading) coordinates
-    asm.add_node("decompose", Box::new(MixedRadix::new(vec![100, 1000, 0])),
-        vec![WireRef::input("cycle")]);
+    asm.add_node(
+        "decompose",
+        Box::new(MixedRadix::new(vec![100, 1000, 0])),
+        vec![WireRef::input("cycle")],
+    );
 
     // Hash region for a deterministic region code
-    asm.add_node("region_h", Box::new(Hash::new()),
-        vec![WireRef::node_port("decompose", 0)]);
-    asm.add_node("region_code", Box::new(Mod::new(10000)),
-        vec![WireRef::node("region_h")]);
+    asm.add_node(
+        "region_h",
+        Box::new(Hash::new()),
+        vec![WireRef::node_port("decompose", 0)],
+    );
+    asm.add_node(
+        "region_code",
+        Box::new(Mod::new(10000)),
+        vec![WireRef::node("region_h")],
+    );
 
     // Declare outputs
     asm.add_output("region", WireRef::node_port("decompose", 0));
@@ -32,7 +41,8 @@ fn main() {
     println!("--------  ------  ------  -------  -----------");
     for cycle in [0, 1, 50, 100, 10000, 100000] {
         kernel.set_inputs(&[cycle]);
-        println!("{cycle:>8}  {:>6}  {:>6}  {:>7}  {:>11}",
+        println!(
+            "{cycle:>8}  {:>6}  {:>6}  {:>7}  {:>11}",
             kernel.pull("region").as_u64(),
             kernel.pull("device").as_u64(),
             kernel.pull("reading").as_u64(),

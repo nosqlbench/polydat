@@ -144,8 +144,13 @@ fn is_scalar(p: PortType) -> bool {
 fn is_vector(p: PortType) -> bool {
     matches!(
         p,
-        PortType::VecF32 | PortType::VecI32 | PortType::VecF64 | PortType::VecI64
-            | PortType::VecF16 | PortType::VecI16 | PortType::VecI8
+        PortType::VecF32
+            | PortType::VecI32
+            | PortType::VecF64
+            | PortType::VecI64
+            | PortType::VecF16
+            | PortType::VecI16
+            | PortType::VecI8
     )
 }
 fn is_meaningful(from: PortType, to: PortType) -> bool {

@@ -44,7 +44,11 @@ fn run(args: &[&str], cwd: &Path, with_stderr: bool) -> String {
         .current_dir(cwd)
         .output()
         .unwrap_or_else(|e| panic!("cargo run {args:?}: {e}"));
-    assert!(out.status.success(), "cargo run {args:?} failed:\n{}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "cargo run {args:?} failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let mut text = String::new();
     if with_stderr {
         text.push_str(&String::from_utf8_lossy(&out.stderr));
@@ -87,7 +91,10 @@ fn section_examples(lines: &[&str]) -> Vec<(usize, Option<String>)> {
         if line.starts_with("## ") {
             sections.push((i, None));
         } else if let Some(rest) = line.split("examples/").nth(1) {
-            let name: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
             if rest[name.len()..].starts_with(".rs") {
                 let current = sections.last_mut().unwrap();
                 if current.1.is_none() {
@@ -106,7 +113,11 @@ fn text_blocks(doc: &str, default: Option<&str>) -> Vec<Block> {
     // alone; links to other examples in its prose are cross-references.
     let example_for = |line: usize| -> Option<String> {
         default.map(str::to_string).or_else(|| {
-            let section = sections.iter().rev().find(|(start, _)| *start <= line).unwrap();
+            let section = sections
+                .iter()
+                .rev()
+                .find(|(start, _)| *start <= line)
+                .unwrap();
             section.1.clone()
         })
     };
@@ -134,9 +145,17 @@ fn text_blocks(doc: &str, default: Option<&str>) -> Vec<Block> {
                         }
                     }
                     let args = command.split_whitespace().map(str::to_string).collect();
-                    Block { line: start + 1, producer: Some(Producer::Binary(args)), lines: rest }
+                    Block {
+                        line: start + 1,
+                        producer: Some(Producer::Binary(args)),
+                        lines: rest,
+                    }
                 } else {
-                    Block { line: start + 1, producer: example_for(start).map(Producer::Example), lines: body }
+                    Block {
+                        line: start + 1,
+                        producer: example_for(start).map(Producer::Example),
+                        lines: body,
+                    }
                 };
                 blocks.push(block);
                 open = None;
@@ -167,23 +186,40 @@ fn missing_lines(block: &[String], output: &str) -> Vec<String> {
 
 fn check(doc: &str, default: Option<&str>) {
     let path = manifest_dir().join(doc);
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display())).replace("\r\n", "\n");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+        .replace("\r\n", "\n");
     let blocks = text_blocks(&text, default);
     assert!(!blocks.is_empty(), "{doc} has no text blocks");
     let mut outputs: HashMap<Producer, String> = HashMap::new();
     let mut failures = Vec::new();
     for block in &blocks {
         let Some(producer) = &block.producer else {
-            failures.push(format!("{doc}:{}: no example link in this section and no default", block.line));
+            failures.push(format!(
+                "{doc}:{}: no example link in this section and no default",
+                block.line
+            ));
             continue;
         };
-        let output = outputs.entry(producer.clone()).or_insert_with(|| producer.output());
+        let output = outputs
+            .entry(producer.clone())
+            .or_insert_with(|| producer.output());
         let missing = missing_lines(&block.lines, output);
         if !missing.is_empty() {
-            failures.push(format!("{doc}:{}: lines not produced by {producer:?}:\n  {}", block.line, missing.join("\n  ")));
+            failures.push(format!(
+                "{doc}:{}: lines not produced by {producer:?}:\n  {}",
+                block.line,
+                missing.join("\n  ")
+            ));
         }
     }
-    assert!(failures.is_empty(), "{} of {} blocks are not real output:\n\n{}\n", failures.len(), blocks.len(), failures.join("\n\n"));
+    assert!(
+        failures.is_empty(),
+        "{} of {} blocks are not real output:\n\n{}\n",
+        failures.len(),
+        blocks.len(),
+        failures.join("\n\n")
+    );
 }
 
 #[test]
@@ -193,7 +229,10 @@ fn embedding_guide_quotes_its_example() {
 
 #[test]
 fn polytile_tutorial_quotes_its_example() {
-    check("docs/tutorials/polytile_tutorial.md", Some("polytile_tutorial"));
+    check(
+        "docs/tutorials/polytile_tutorial.md",
+        Some("polytile_tutorial"),
+    );
 }
 
 #[test]
@@ -210,29 +249,69 @@ fn toy_tutorial_quotes_the_binary() {
 /// be the file.
 #[test]
 fn toy_tutorial_quotes_the_grammar_file() {
-    let doc = std::fs::read_to_string(manifest_dir().join("docs/tutorials/toy_test_definition.md")).unwrap().replace("\r\n", "\n");
-    let file = std::fs::read_to_string(manifest_dir().join("examples/toy_test_definition.polydat")).unwrap().replace("\r\n", "\n");
-    let after_heading = doc.split("\n## The grammar\n").nth(1).expect("grammar section");
-    let block = after_heading.split("```polydat\n").nth(1).expect("polydat fence").split("\n```").next().unwrap();
-    let normalize = |s: &str| s.lines().map(str::trim_end).collect::<Vec<_>>().join("\n").trim_end().to_string();
-    assert_eq!(normalize(block), normalize(&file), "the quoted grammar differs from examples/toy_test_definition.polydat");
+    let doc = std::fs::read_to_string(manifest_dir().join("docs/tutorials/toy_test_definition.md"))
+        .unwrap()
+        .replace("\r\n", "\n");
+    let file = std::fs::read_to_string(manifest_dir().join("examples/toy_test_definition.polydat"))
+        .unwrap()
+        .replace("\r\n", "\n");
+    let after_heading = doc
+        .split("\n## The grammar\n")
+        .nth(1)
+        .expect("grammar section");
+    let block = after_heading
+        .split("```polydat\n")
+        .nth(1)
+        .expect("polydat fence")
+        .split("\n```")
+        .next()
+        .unwrap();
+    let normalize = |s: &str| {
+        s.lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim_end()
+            .to_string()
+    };
+    assert_eq!(
+        normalize(block),
+        normalize(&file),
+        "the quoted grammar differs from examples/toy_test_definition.polydat"
+    );
 }
 
 // ── Guides that quote files and facts rather than program output ──
 
 fn read(rel: &str) -> String {
     let path = manifest_dir().join(rel);
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display())).replace("\r\n", "\n")
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+        .replace("\r\n", "\n")
 }
 
 /// The fenced block of the given language that follows a heading.
 fn block_after<'a>(doc: &'a str, heading: &str, lang: &str) -> &'a str {
-    let after = doc.split(&format!("\n{heading}\n")).nth(1).unwrap_or_else(|| panic!("heading {heading:?}"));
-    after.split(&format!("```{lang}\n")).nth(1).unwrap_or_else(|| panic!("{lang} fence after {heading:?}")).split("\n```").next().unwrap()
+    let after = doc
+        .split(&format!("\n{heading}\n"))
+        .nth(1)
+        .unwrap_or_else(|| panic!("heading {heading:?}"));
+    after
+        .split(&format!("```{lang}\n"))
+        .nth(1)
+        .unwrap_or_else(|| panic!("{lang} fence after {heading:?}"))
+        .split("\n```")
+        .next()
+        .unwrap()
 }
 
 fn normalize(s: &str) -> String {
-    s.lines().map(str::trim_end).collect::<Vec<_>>().join("\n").trim_end().to_string()
+    s.lines()
+        .map(str::trim_end)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end()
+        .to_string()
 }
 
 /// Backticked spans in a line, in order.
@@ -247,8 +326,15 @@ fn code_spans(line: &str) -> Vec<&str> {
 fn performance_guide_quotes_the_graph_file() {
     let doc = read("docs/guides/performance.md");
     let file = read("examples/engine_ladder.polydat");
-    let body: Vec<&str> = file.lines().skip_while(|l| l.starts_with("//") || l.trim().is_empty()).collect();
-    assert_eq!(normalize(block_after(&doc, "## The graph", "polydat")), normalize(&body.join("\n")), "the quoted graph differs from examples/engine_ladder.polydat");
+    let body: Vec<&str> = file
+        .lines()
+        .skip_while(|l| l.starts_with("//") || l.trim().is_empty())
+        .collect();
+    assert_eq!(
+        normalize(block_after(&doc, "## The graph", "polydat")),
+        normalize(&body.join("\n")),
+        "the quoted graph differs from examples/engine_ladder.polydat"
+    );
 }
 
 /// The measurement contract names the graph's inputs, node count, and
@@ -259,21 +345,59 @@ fn performance_guide_describes_the_graph() {
     let file = read("examples/engine_ladder.polydat");
     let inputs = file.lines().filter(|l| l.starts_with("input ")).count();
     let nodes = file.lines().filter(|l| l.contains(":=")).count();
-    let words = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve"];
-    let word = |n: usize| words.get(n).copied().unwrap_or_else(|| panic!("no number word for {n}; extend the table"));
-    let contract = doc.split("\n## Measurement contract\n").nth(1).expect("contract section").split("\n## ").next().unwrap();
-    assert!(contract.contains(&format!("all {} inputs", word(inputs))), "the graph has {inputs} inputs; the contract says otherwise");
-    assert!(contract.contains(&format!("the {} graph nodes", word(nodes))), "the graph has {nodes} nodes; the contract says otherwise");
-    let consume = contract.lines().find(|l| l.contains("Consume `")).expect("a Consume step");
+    let words = [
+        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+        "eleven", "twelve",
+    ];
+    let word = |n: usize| {
+        words
+            .get(n)
+            .copied()
+            .unwrap_or_else(|| panic!("no number word for {n}; extend the table"))
+    };
+    let contract = doc
+        .split("\n## Measurement contract\n")
+        .nth(1)
+        .expect("contract section")
+        .split("\n## ")
+        .next()
+        .unwrap();
+    assert!(
+        contract.contains(&format!("all {} inputs", word(inputs))),
+        "the graph has {inputs} inputs; the contract says otherwise"
+    );
+    assert!(
+        contract.contains(&format!("the {} graph nodes", word(nodes))),
+        "the graph has {nodes} nodes; the contract says otherwise"
+    );
+    let consume = contract
+        .lines()
+        .find(|l| l.contains("Consume `"))
+        .expect("a Consume step");
     let outputs = code_spans(consume);
     assert_eq!(outputs.len(), 4, "the contract consumes four outputs");
     for name in outputs {
-        assert!(file.lines().any(|l| l.starts_with(&format!("{name} :="))), "consumed output `{name}` is not a binding in the graph");
+        assert!(
+            file.lines().any(|l| l.starts_with(&format!("{name} :="))),
+            "consumed output `{name}` is not a binding in the graph"
+        );
     }
     let manifest = read("Cargo.toml");
-    let cranelift = manifest.lines().find(|l| l.starts_with("cranelift-jit = ")).expect("cranelift-jit dependency");
-    let version = cranelift.split("version = \"").nth(1).expect("version").split('"').next().unwrap();
-    assert!(doc.contains(&format!("Cranelift {version}")), "the reference environment names a Cranelift version other than the manifest's {version}");
+    let cranelift = manifest
+        .lines()
+        .find(|l| l.starts_with("cranelift-jit = "))
+        .expect("cranelift-jit dependency");
+    let version = cranelift
+        .split("version = \"")
+        .nth(1)
+        .expect("version")
+        .split('"')
+        .next()
+        .unwrap();
+    assert!(
+        doc.contains(&format!("Cranelift {version}")),
+        "the reference environment names a Cranelift version other than the manifest's {version}"
+    );
 }
 
 /// The compilation guide's feature names are real Cargo features.
@@ -294,7 +418,12 @@ fn compilation_guide_names_real_features() {
     let mut named = Vec::new();
     for line in doc.lines() {
         if line.starts_with("| Phase") || line.starts_with("| Hybrid") {
-            let cell = line.trim_end_matches('|').rsplit('|').next().unwrap().trim();
+            let cell = line
+                .trim_end_matches('|')
+                .rsplit('|')
+                .next()
+                .unwrap()
+                .trim();
             if cell != "always" {
                 named.extend(code_spans(cell));
             }
@@ -304,7 +433,10 @@ fn compilation_guide_names_real_features() {
     }
     assert!(!named.is_empty(), "no feature names found in the guide");
     for name in named {
-        assert!(features.contains(&name), "`{name}` is not a feature in Cargo.toml (features: {features:?})");
+        assert!(
+            features.contains(&name),
+            "`{name}` is not a feature in Cargo.toml (features: {features:?})"
+        );
     }
 }
 
@@ -338,12 +470,21 @@ fn documentation_links_resolve() {
                     continue;
                 }
                 if !dir.join(target).exists() {
-                    broken.push(format!("{}:{}: {target}", file.strip_prefix(manifest_dir()).unwrap_or(file).display(), i + 1));
+                    broken.push(format!(
+                        "{}:{}: {target}",
+                        file.strip_prefix(manifest_dir()).unwrap_or(file).display(),
+                        i + 1
+                    ));
                 }
             }
         }
     }
-    assert!(broken.is_empty(), "{} broken links:\n{}", broken.len(), broken.join("\n"));
+    assert!(
+        broken.is_empty(),
+        "{} broken links:\n{}",
+        broken.len(),
+        broken.join("\n")
+    );
 }
 
 /// The compilation guide's measured column cites the performance
@@ -357,8 +498,14 @@ fn compilation_guide_cites_the_reference_run() {
     for line in doc.lines().filter(|l| l.starts_with("| Phase")) {
         let cells: Vec<&str> = line.split('|').map(str::trim).collect();
         let measured = cells[3];
-        for token in measured.split([' ', ',']).filter(|t| t.chars().next().is_some_and(|c| c.is_ascii_digit())) {
-            assert!(reference.contains(token), "`{token}` from the compilation guide is not in the performance guide's reference table");
+        for token in measured
+            .split([' ', ','])
+            .filter(|t| t.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        {
+            assert!(
+                reference.contains(token),
+                "`{token}` from the compilation guide is not in the performance guide's reference table"
+            );
             quoted += 1;
         }
     }

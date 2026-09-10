@@ -161,7 +161,10 @@ fn __f64_to_u64_checked(f: f64) -> u64 {
     }
     let n = f.trunc();
     if n < 0.0 || n > u64::MAX as f64 {
-        panic!("__f64_to_u64_checked: value {f} out of u64 range [0, {}]", u64::MAX);
+        panic!(
+            "__f64_to_u64_checked: value {f} out of u64 range [0, {}]",
+            u64::MAX
+        );
     }
     n as u64
 }
@@ -278,34 +281,54 @@ fn __f32_to_i32(f: f32) -> i32 {
 // =================================================================
 
 #[crate::polydat_node(category = Conversions)]
-fn __bool_to_u32(b: bool) -> u32 { if b { 1 } else { 0 } }
+fn __bool_to_u32(b: bool) -> u32 {
+    if b { 1 } else { 0 }
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __bool_to_i64(b: bool) -> i64 { if b { 1 } else { 0 } }
+fn __bool_to_i64(b: bool) -> i64 {
+    if b { 1 } else { 0 }
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __bool_to_i32(b: bool) -> i32 { if b { 1 } else { 0 } }
+fn __bool_to_i32(b: bool) -> i32 {
+    if b { 1 } else { 0 }
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __bool_to_f64(b: bool) -> f64 { if b { 1.0 } else { 0.0 } }
+fn __bool_to_f64(b: bool) -> f64 {
+    if b { 1.0 } else { 0.0 }
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __bool_to_f32(b: bool) -> f32 { if b { 1.0 } else { 0.0 } }
+fn __bool_to_f32(b: bool) -> f32 {
+    if b { 1.0 } else { 0.0 }
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __u32_to_bool(n: u32) -> bool { n != 0 }
+fn __u32_to_bool(n: u32) -> bool {
+    n != 0
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __i64_to_bool(n: i64) -> bool { n != 0 }
+fn __i64_to_bool(n: i64) -> bool {
+    n != 0
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __i32_to_bool(n: i32) -> bool { n != 0 }
+fn __i32_to_bool(n: i32) -> bool {
+    n != 0
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __f64_to_bool(f: f64) -> bool { f != 0.0 && !f.is_nan() }
+fn __f64_to_bool(f: f64) -> bool {
+    f != 0.0 && !f.is_nan()
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __f32_to_bool(f: f32) -> bool { f != 0.0 && !f.is_nan() }
+fn __f32_to_bool(f: f32) -> bool {
+    f != 0.0 && !f.is_nan()
+}
 
 // =================================================================
 // 3. Str → narrow numerics + collections (parsers)
@@ -374,12 +397,11 @@ fn __str_to_json(input: &str) -> Arc<serde_json::Value> {
 #[crate::polydat_node(category = Conversions)]
 fn __str_to_vec_f32(input: &str) -> Vec<f32> {
     let raw = input.trim();
-    let parsed: serde_json::Value = serde_json::from_str(raw).unwrap_or_else(|e| {
-        panic!("__str_to_vec_f32: cannot parse {raw:?} as JSON array: {e}")
-    });
-    let arr = parsed.as_array().unwrap_or_else(|| {
-        panic!("__str_to_vec_f32: parsed JSON is not an array: {raw:?}")
-    });
+    let parsed: serde_json::Value = serde_json::from_str(raw)
+        .unwrap_or_else(|e| panic!("__str_to_vec_f32: cannot parse {raw:?} as JSON array: {e}"));
+    let arr = parsed
+        .as_array()
+        .unwrap_or_else(|| panic!("__str_to_vec_f32: parsed JSON is not an array: {raw:?}"));
     arr.iter()
         .map(|j| {
             j.as_f64().unwrap_or_else(|| {
@@ -392,12 +414,11 @@ fn __str_to_vec_f32(input: &str) -> Vec<f32> {
 #[crate::polydat_node(category = Conversions)]
 fn __str_to_vec_i32(input: &str) -> Vec<i32> {
     let raw = input.trim();
-    let parsed: serde_json::Value = serde_json::from_str(raw).unwrap_or_else(|e| {
-        panic!("__str_to_vec_i32: cannot parse {raw:?} as JSON array: {e}")
-    });
-    let arr = parsed.as_array().unwrap_or_else(|| {
-        panic!("__str_to_vec_i32: parsed JSON is not an array: {raw:?}")
-    });
+    let parsed: serde_json::Value = serde_json::from_str(raw)
+        .unwrap_or_else(|e| panic!("__str_to_vec_i32: cannot parse {raw:?} as JSON array: {e}"));
+    let arr = parsed
+        .as_array()
+        .unwrap_or_else(|| panic!("__str_to_vec_i32: parsed JSON is not an array: {raw:?}"));
     arr.iter()
         .map(|j| {
             let n = j.as_i64().unwrap_or_else(|| {
@@ -431,25 +452,39 @@ fn __str_to_vec_i32(input: &str) -> Vec<i32> {
 //     Roundtrip-lossless, unambiguous, JSON-safe.
 
 #[crate::polydat_node(category = Conversions)]
-fn __u64_to_bytes(n: u64) -> Vec<u8> { n.to_le_bytes().to_vec() }
+fn __u64_to_bytes(n: u64) -> Vec<u8> {
+    n.to_le_bytes().to_vec()
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __u32_to_bytes(n: u32) -> Vec<u8> { n.to_le_bytes().to_vec() }
+fn __u32_to_bytes(n: u32) -> Vec<u8> {
+    n.to_le_bytes().to_vec()
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __i64_to_bytes(n: i64) -> Vec<u8> { n.to_le_bytes().to_vec() }
+fn __i64_to_bytes(n: i64) -> Vec<u8> {
+    n.to_le_bytes().to_vec()
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __i32_to_bytes(n: i32) -> Vec<u8> { n.to_le_bytes().to_vec() }
+fn __i32_to_bytes(n: i32) -> Vec<u8> {
+    n.to_le_bytes().to_vec()
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __f64_to_bytes(f: f64) -> Vec<u8> { f.to_le_bytes().to_vec() }
+fn __f64_to_bytes(f: f64) -> Vec<u8> {
+    f.to_le_bytes().to_vec()
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __f32_to_bytes(f: f32) -> Vec<u8> { f.to_le_bytes().to_vec() }
+fn __f32_to_bytes(f: f32) -> Vec<u8> {
+    f.to_le_bytes().to_vec()
+}
 
 #[crate::polydat_node(category = Conversions)]
-fn __bool_to_bytes(b: bool) -> Vec<u8> { vec![if b { 1 } else { 0 }] }
+fn __bool_to_bytes(b: bool) -> Vec<u8> {
+    vec![if b { 1 } else { 0 }]
+}
 
 #[crate::polydat_node(category = Conversions)]
 fn __bytes_to_u64(b: &[u8]) -> u64 {
@@ -674,9 +709,9 @@ fn __json_to_bool(j: &serde_json::Value) -> bool {
 
 #[crate::polydat_node(category = Conversions)]
 fn __json_to_bytes(j: &serde_json::Value) -> Vec<u8> {
-    let s = j
-        .as_str()
-        .unwrap_or_else(|| panic!("__json_to_bytes: JSON value {j} is not a string (expected hex)"));
+    let s = j.as_str().unwrap_or_else(|| {
+        panic!("__json_to_bytes: JSON value {j} is not a string (expected hex)")
+    });
     data_encoding::HEXLOWER_PERMISSIVE
         .decode(s.as_bytes())
         .unwrap_or_else(|e| panic!("__json_to_bytes: cannot hex-decode {s:?}: {e}"))
@@ -832,7 +867,8 @@ mod tests {
         let mut out = [Value::None];
         node.eval(&[input], &mut out);
         assert_eq!(
-            out[0], expected,
+            out[0],
+            expected,
             "{} produced wrong output",
             node.meta().name
         );
@@ -849,9 +885,7 @@ mod tests {
                 let s = payload
                     .downcast_ref::<String>()
                     .cloned()
-                    .or_else(|| {
-                        payload.downcast_ref::<&'static str>().map(|s| (*s).into())
-                    })
+                    .or_else(|| payload.downcast_ref::<&'static str>().map(|s| (*s).into()))
                     .unwrap_or_default();
                 assert!(
                     s.contains(msg_substring),
@@ -900,36 +934,16 @@ mod tests {
             Value::U64(u32::MAX as u64 + 1),
             "exceeds u32::MAX",
         );
-        check_panics(
-            &U64ToI64::new(),
-            Value::U64(u64::MAX),
-            "exceeds i64::MAX",
-        );
-        check_panics(
-            &I64ToU64::new(),
-            Value::I64(-1),
-            "negative",
-        );
-        check_panics(
-            &I64ToI32::new(),
-            Value::I64(i64::MAX),
-            "out of i32 range",
-        );
-        check_panics(
-            &F64ToU64Checked::new(),
-            Value::F64(f64::NAN),
-            "non-finite",
-        );
+        check_panics(&U64ToI64::new(), Value::U64(u64::MAX), "exceeds i64::MAX");
+        check_panics(&I64ToU64::new(), Value::I64(-1), "negative");
+        check_panics(&I64ToI32::new(), Value::I64(i64::MAX), "out of i32 range");
+        check_panics(&F64ToU64Checked::new(), Value::F64(f64::NAN), "non-finite");
         check_panics(
             &F64ToU64Checked::new(),
             Value::F64(-1.0),
             "out of u64 range",
         );
-        check_panics(
-            &F64ToI32::new(),
-            Value::F64(f64::INFINITY),
-            "non-finite",
-        );
+        check_panics(&F64ToI32::new(), Value::F64(f64::INFINITY), "non-finite");
     }
 
     // -----------------------------------------------------------
@@ -950,11 +964,7 @@ mod tests {
         check(&F64ToBool::new(), Value::F64(0.1), Value::Bool(true));
         check(&F64ToBool::new(), Value::F64(0.0), Value::Bool(false));
         check(&F64ToBool::new(), Value::F64(f64::NAN), Value::Bool(false));
-        check(
-            &F32ToBool::new(),
-            f32_value(2.5),
-            Value::Bool(true),
-        );
+        check(&F32ToBool::new(), f32_value(2.5), Value::Bool(true));
     }
 
     // -----------------------------------------------------------
@@ -969,26 +979,14 @@ mod tests {
             Value::Str("-100".into()),
             Value::I64(-100),
         );
-        check(
-            &StrToI32::new(),
-            Value::Str("-7".into()),
-            Value::I64(-7),
-        );
-        check(
-            &StrToF32::new(),
-            Value::Str("1.5".into()),
-            f32_value(1.5),
-        );
+        check(&StrToI32::new(), Value::Str("-7".into()), Value::I64(-7));
+        check(&StrToF32::new(), Value::Str("1.5".into()), f32_value(1.5));
         check_panics(
             &StrToU32::new(),
             Value::Str("4294967296".into()),
             "cannot parse",
         );
-        check_panics(
-            &StrToI32::new(),
-            Value::Str("abc".into()),
-            "cannot parse",
-        );
+        check_panics(&StrToI32::new(), Value::Str("abc".into()), "cannot parse");
     }
 
     #[test]
@@ -1024,7 +1022,10 @@ mod tests {
         match &out[0] {
             Value::Json(j) => {
                 let obj = j.as_object().expect("error wrap is object");
-                assert_eq!(obj.get("error").and_then(|v| v.as_str()), Some("invalid JSON"));
+                assert_eq!(
+                    obj.get("error").and_then(|v| v.as_str()),
+                    Some("invalid JSON")
+                );
                 assert_eq!(obj.get("raw").and_then(|v| v.as_str()), Some("{bad json"));
                 assert!(obj.get("message").and_then(|v| v.as_str()).is_some());
             }
@@ -1062,7 +1063,10 @@ mod tests {
             other => panic!("expected Bytes, got {other:?}"),
         }
         let mut out = [Value::None];
-        BytesToU64::new().eval(&[Value::Bytes(Arc::from(&[8u8, 7, 6, 5, 4, 3, 2, 1][..]))], &mut out);
+        BytesToU64::new().eval(
+            &[Value::Bytes(Arc::from(&[8u8, 7, 6, 5, 4, 3, 2, 1][..]))],
+            &mut out,
+        );
         assert_eq!(out[0], Value::U64(0x0102030405060708));
 
         // u32 round trip
@@ -1161,10 +1165,7 @@ mod tests {
 
         let mut out = [Value::None];
         BoolToJson::new().eval(&[Value::Bool(true)], &mut out);
-        assert_eq!(
-            out[0],
-            Value::Json(Arc::new(serde_json::Value::Bool(true)))
-        );
+        assert_eq!(out[0], Value::Json(Arc::new(serde_json::Value::Bool(true))));
     }
 
     #[test]
@@ -1189,10 +1190,7 @@ mod tests {
     #[test]
     fn json_bytes_via_hex() {
         let mut out_j = [Value::None];
-        BytesToJson::new().eval(
-            &[Value::Bytes(Arc::from(&[0xDE_u8, 0xAD][..]))],
-            &mut out_j,
-        );
+        BytesToJson::new().eval(&[Value::Bytes(Arc::from(&[0xDE_u8, 0xAD][..]))], &mut out_j);
         let j = match &out_j[0] {
             Value::Json(j) => j.clone(),
             _ => panic!(),
@@ -1208,11 +1206,7 @@ mod tests {
 
     #[test]
     fn float_to_json_non_finite_panics() {
-        check_panics(
-            &F64ToJson::new(),
-            Value::F64(f64::NAN),
-            "non-finite",
-        );
+        check_panics(&F64ToJson::new(), Value::F64(f64::NAN), "non-finite");
     }
 
     // -----------------------------------------------------------

@@ -14,25 +14,29 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use polydat::JitMode;
 use polydat::ast::Slot;
-use polydat::dsl::ast::{Statement, WireModifier};
-use polydat::dsl::events::{CompileEvent, CompileEventLog};
 use polydat::dsl::ast::PolydatFile;
 use polydat::dsl::ast::TileOptions;
+use polydat::dsl::ast::{Statement, WireModifier};
+use polydat::dsl::events::{CompileEvent, CompileEventLog};
 use polydat::dsl::transform::{apply_tile_defaults, assign_values, parse_assignment};
-use polydat::dsl::{compile_ast_with_options, CompileOptions};
-use polydat::kernel::{extract_manifest, PolydatProgram, WireSource};
-use polydat::iteration::cursor_partition::{cursor_over_partitions, narrow_cursor, Partition};
+use polydat::dsl::{CompileOptions, compile_ast_with_options};
+use polydat::iteration::cursor_partition::{Partition, cursor_over_partitions, narrow_cursor};
+use polydat::kernel::{PolydatProgram, WireSource, extract_manifest};
 use polydat::library::emit::{self, EmitFormat};
 use polydat::library::support::audit::{self, LogLevel};
-use polydat::JitMode;
 
 #[derive(Parser)]
-#[command(name = "polydat", version, about = "Compile, explain, and run Polydat programs")]
+#[command(
+    name = "polydat",
+    version,
+    about = "Compile, explain, and run Polydat programs"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -313,7 +317,11 @@ fn read_source(path: &Path) -> Result<String, String> {
 /// Advance the coordinate to `cycle`. Only coordinate inputs move; an
 /// extern, including an input a `name=value` argument fixed for this
 /// run, keeps the value it was given.
-fn drive_cycle(program: &polydat::kernel::PolydatProgram, state: &mut polydat::kernel::PolydatState, cycle: u64) {
+fn drive_cycle(
+    program: &polydat::kernel::PolydatProgram,
+    state: &mut polydat::kernel::PolydatState,
+    cycle: u64,
+) {
     let mut moved = false;
     for i in 0..program.input_names().len() {
         if program.input_kind(i) == Some(polydat::kernel::InputKind::Coordinate) {
@@ -358,10 +366,13 @@ fn compile_ast(ast: &PolydatFile, source: &str, args: &CompileArgs) -> Result<Co
     });
     // A bare file name has an empty parent; modules beside it live in
     // the current directory.
-    let source_dir = args
-        .file
-        .parent()
-        .map(|p| if p.as_os_str().is_empty() { PathBuf::from(".") } else { p.to_path_buf() });
+    let source_dir = args.file.parent().map(|p| {
+        if p.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            p.to_path_buf()
+        }
+    });
     let options = CompileOptions {
         source_dir,
         lib_paths: args.libs.clone(),
@@ -375,7 +386,12 @@ fn compile_ast(ast: &PolydatFile, source: &str, args: &CompileArgs) -> Result<Co
     let start = Instant::now();
     let kernel = compile_ast_with_options(ast, source, &options, Some(&mut events))?;
     let elapsed = start.elapsed();
-    Ok(Compiled { program: kernel.into_program(), events, audit: take_audit(), elapsed })
+    Ok(Compiled {
+        program: kernel.into_program(),
+        events,
+        audit: take_audit(),
+        elapsed,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -401,7 +417,11 @@ fn run(args: RunArgs) -> Result<(), String> {
     // Probe compile: discovers the declared outputs the emit transform names.
     let probe = compile_ast(&ast, &source, &args.compile)?;
     let selected: Vec<String> = match &args.outputs {
-        Some(list) => list.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+        Some(list) => list
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
         None => {
             let inputs = probe.program.input_names();
             probe
@@ -418,7 +438,10 @@ fn run(args: RunArgs) -> Result<(), String> {
     if probe.program.traversals().is_empty() {
         for name in &selected {
             if probe.program.output_index(name).is_none() {
-                return Err(format!("no output named '{name}'; declared outputs: {}", probe.program.output_names().join(", ")));
+                return Err(format!(
+                    "no output named '{name}'; declared outputs: {}",
+                    probe.program.output_names().join(", ")
+                ));
             }
         }
     } else if args.outputs.is_some() {
@@ -448,17 +471,34 @@ fn run(args: RunArgs) -> Result<(), String> {
     let (emit_format, selected) = match &args.emit {
         Some(EmitSpec::Tile(name)) => {
             let present = if traversal_mode {
-                probe.program.traversals().iter().all(|t| t.program.output_index(name).is_some())
+                probe
+                    .program
+                    .traversals()
+                    .iter()
+                    .all(|t| t.program.output_index(name).is_some())
             } else {
                 probe.program.output_index(name).is_some()
             };
             if !present {
                 let known: Vec<String> = if traversal_mode {
-                    probe.program.traversals().iter().flat_map(|t| body_wire_names(&t.program)).collect()
+                    probe
+                        .program
+                        .traversals()
+                        .iter()
+                        .flat_map(|t| body_wire_names(&t.program))
+                        .collect()
                 } else {
-                    probe.program.output_names().iter().map(|s| s.to_string()).collect()
+                    probe
+                        .program
+                        .output_names()
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect()
                 };
-                return Err(format!("no tile or output named '{name}'; declared outputs: {}", known.join(", ")));
+                return Err(format!(
+                    "no tile or output named '{name}'; declared outputs: {}",
+                    known.join(", ")
+                ));
             }
             (Some(EmitFormat::Text), vec![name.clone()])
         }
@@ -487,8 +527,13 @@ fn run(args: RunArgs) -> Result<(), String> {
         if traversal_mode {
             for stmt in ast.statements.iter_mut() {
                 if let Statement::For(f) = stmt {
-                    let explicit = args.outputs.is_some() || matches!(args.emit, Some(EmitSpec::Tile(_)));
-                    let names: Vec<String> = if explicit { selected.clone() } else { body_output_names(&f.body) };
+                    let explicit =
+                        args.outputs.is_some() || matches!(args.emit, Some(EmitSpec::Tile(_)));
+                    let names: Vec<String> = if explicit {
+                        selected.clone()
+                    } else {
+                        body_output_names(&f.body)
+                    };
                     f.body.push(emit_binding(&names)?);
                 }
             }
@@ -516,7 +561,10 @@ fn run(args: RunArgs) -> Result<(), String> {
     // list of partitions; this run either represents one of them or, when
     // fibers and partitions match, spreads them one per fiber.
     let fibers = args.fibers.max(1);
-    let mut plan = CursorPlan { per_cursor: Vec::new(), per_fiber: false };
+    let mut plan = CursorPlan {
+        per_cursor: Vec::new(),
+        per_fiber: false,
+    };
     {
         let mut probe_state = program.create_state();
         for schema in program.cursor_schemas() {
@@ -526,15 +574,23 @@ fn run(args: RunArgs) -> Result<(), String> {
             }
             let chosen: Vec<Partition> = match (parts.len(), args.partition) {
                 (1, _) => vec![parts[0]],
-                (_, Some(i)) => vec![*parts.get(i).ok_or_else(|| format!(
-                    "cursor '{}' resolves to {} partitions; --partition {i} is out of range", schema.name, parts.len()))?],
+                (_, Some(i)) => vec![*parts.get(i).ok_or_else(|| {
+                    format!(
+                        "cursor '{}' resolves to {} partitions; --partition {i} is out of range",
+                        schema.name,
+                        parts.len()
+                    )
+                })?],
                 (n, None) if n == fibers => {
                     plan.per_fiber = true;
                     parts.clone()
                 }
-                (n, None) => return Err(format!(
-                    "cursor '{}' resolves to {n} partitions; pass --partition INDEX to run one, or --fibers {n} to run one per fiber",
-                    schema.name)),
+                (n, None) => {
+                    return Err(format!(
+                        "cursor '{}' resolves to {n} partitions; pass --partition INDEX to run one, or --fibers {n} to run one per fiber",
+                        schema.name
+                    ));
+                }
             };
             plan.per_cursor.push((schema.name.clone(), chosen));
         }
@@ -543,7 +599,13 @@ fn run(args: RunArgs) -> Result<(), String> {
     if !args.quiet {
         for (name, parts) in &plan.per_cursor {
             for p in parts {
-                eprintln!("cursor {name}: partition {}/{} [{}, {})", p.idx + 1, p.count.max(1), p.start_ord, p.end_ord);
+                eprintln!(
+                    "cursor {name}: partition {}/{} [{}, {})",
+                    p.idx + 1,
+                    p.count.max(1),
+                    p.start_ord,
+                    p.end_ord
+                );
             }
         }
     }
@@ -551,9 +613,16 @@ fn run(args: RunArgs) -> Result<(), String> {
     // Which outputs each cycle pulls. With emission, pulling `__emit`
     // pulls everything it names; without it, pull the selection.
     let pull_indices: Vec<usize> = if emit_format.is_some() {
-        vec![program.output_index("__emit").ok_or("emit transform did not produce __emit")?]
+        vec![
+            program
+                .output_index("__emit")
+                .ok_or("emit transform did not produce __emit")?,
+        ]
     } else {
-        selected.iter().map(|n| program.output_index(n).unwrap()).collect()
+        selected
+            .iter()
+            .map(|n| program.output_index(n).unwrap())
+            .collect()
     };
 
     let chunk = args.chunk.max(1);
@@ -563,7 +632,8 @@ fn run(args: RunArgs) -> Result<(), String> {
     // Output sink.
     let sink: Box<dyn Write + Send> = match &args.out {
         Some(path) => Box::new(std::io::BufWriter::new(
-            std::fs::File::create(path).map_err(|e| format!("cannot create {}: {e}", path.display()))?,
+            std::fs::File::create(path)
+                .map_err(|e| format!("cannot create {}: {e}", path.display()))?,
         )),
         None => Box::new(std::io::BufWriter::new(std::io::stdout())),
     };
@@ -627,7 +697,11 @@ fn run(args: RunArgs) -> Result<(), String> {
                     if local_seq >= chunk_count {
                         break;
                     }
-                    let seq = if per_fiber { fiber as u64 * chunk_count + local_seq } else { local_seq };
+                    let seq = if per_fiber {
+                        fiber as u64 * chunk_count + local_seq
+                    } else {
+                        local_seq
+                    };
                     let lo = start_cycle.wrapping_add(local_seq * chunk);
                     let n = chunk.min(total - local_seq * chunk);
                     let t = Instant::now();
@@ -675,7 +749,11 @@ fn run(args: RunArgs) -> Result<(), String> {
 
     if let Some(report) = args.timing {
         let busy = fiber_busy.into_inner().unwrap();
-        let ran = if per_fiber { total * fibers as u64 } else { total };
+        let ran = if per_fiber {
+            total * fibers as u64
+        } else {
+            total
+        };
         print_timing(report, &compiled, ran, fibers, wall, &busy);
     }
     Ok(())
@@ -690,9 +768,18 @@ struct CursorPlan {
 }
 
 impl CursorPlan {
-    fn apply(&self, program: &PolydatProgram, state: &mut polydat::kernel::PolydatState, fiber: usize) {
+    fn apply(
+        &self,
+        program: &PolydatProgram,
+        state: &mut polydat::kernel::PolydatState,
+        fiber: usize,
+    ) {
         for (name, parts) in &self.per_cursor {
-            let p = if parts.len() == 1 { &parts[0] } else { &parts[fiber.min(parts.len() - 1)] };
+            let p = if parts.len() == 1 {
+                &parts[0]
+            } else {
+                &parts[fiber.min(parts.len() - 1)]
+            };
             narrow_cursor(program, state, name, p);
         }
     }
@@ -729,14 +816,20 @@ fn body_output_names(body: &[Statement]) -> Vec<String> {
 /// needed. Each activation runs its cycles under the §3.4 rule, capped
 /// by `--cycles`. Rows are ordered by traversal and activation index
 /// unless `--unordered` is given.
-fn run_traversals(args: &RunArgs, compiled: &Compiled, emit_format: Option<EmitFormat>, selected: &[String]) -> Result<(), String> {
+fn run_traversals(
+    args: &RunArgs,
+    compiled: &Compiled,
+    emit_format: Option<EmitFormat>,
+    selected: &[String],
+) -> Result<(), String> {
     let program = compiled.program.clone();
     let fibers = args.fibers.max(1);
     let cap = args.cycles.max(1);
 
     let sink: Box<dyn Write + Send> = match &args.out {
         Some(path) => Box::new(std::io::BufWriter::new(
-            std::fs::File::create(path).map_err(|e| format!("cannot create {}: {e}", path.display()))?,
+            std::fs::File::create(path)
+                .map_err(|e| format!("cannot create {}: {e}", path.display()))?,
         )),
         None => Box::new(std::io::BufWriter::new(std::io::stdout())),
     };
@@ -748,7 +841,11 @@ fn run_traversals(args: &RunArgs, compiled: &Compiled, emit_format: Option<EmitF
     let streams = root.traverse_all()?;
     if !args.quiet {
         for (i, s) in streams.iter().enumerate() {
-            eprintln!("traversal {i}: for {}  ({} activations)", s.traversal().source_text, s.len());
+            eprintln!(
+                "traversal {i}: for {}  ({} activations)",
+                s.traversal().source_text,
+                s.len()
+            );
         }
     }
     // Header rows travel with each traversal's first activation, so a
@@ -758,7 +855,11 @@ fn run_traversals(args: &RunArgs, compiled: &Compiled, emit_format: Option<EmitF
         .iter()
         .map(|s| {
             let fmt = emit_format?;
-            let names: Vec<String> = if args.outputs.is_some() { selected.to_vec() } else { body_wire_names(&s.traversal().program) };
+            let names: Vec<String> = if args.outputs.is_some() {
+                selected.to_vec()
+            } else {
+                body_wire_names(&s.traversal().program)
+            };
             let refs: Vec<&str> = names.iter().map(String::as_str).collect();
             emit::header(fmt, &refs)
         })
@@ -766,7 +867,14 @@ fn run_traversals(args: &RunArgs, compiled: &Compiled, emit_format: Option<EmitF
 
     // Sequence numbers: activation index within a traversal, offset by
     // the activations of the traversals before it.
-    let offsets: Vec<u64> = streams.iter().scan(0u64, |acc, s| { let o = *acc; *acc += s.len() as u64; Some(o) }).collect();
+    let offsets: Vec<u64> = streams
+        .iter()
+        .scan(0u64, |acc, s| {
+            let o = *acc;
+            *acc += s.len() as u64;
+            Some(o)
+        })
+        .collect();
     let total_activations: u64 = streams.iter().map(|s| s.len() as u64).sum();
 
     let (tx, rx) = mpsc::channel::<(u64, Vec<String>)>();
@@ -810,12 +918,22 @@ fn run_traversals(args: &RunArgs, compiled: &Compiled, emit_format: Option<EmitF
                                     if emitting {
                                         kernel.pull("__emit");
                                     } else {
-                                        let line: Vec<String> = pull_names.iter().map(|name| format!("{name}={}", kernel.pull(name).to_display_string())).collect();
+                                        let line: Vec<String> = pull_names
+                                            .iter()
+                                            .map(|name| {
+                                                format!(
+                                                    "{name}={}",
+                                                    kernel.pull(name).to_display_string()
+                                                )
+                                            })
+                                            .collect();
                                         rows.push(format!("{t}/{i}/{c} {}", line.join(" ")));
                                     }
                                 }
                                 cycles_run.fetch_add(n, Ordering::Relaxed);
-                                if emitting { rows.extend(emit::take_rows()); }
+                                if emitting {
+                                    rows.extend(emit::take_rows());
+                                }
                                 rows
                             }
                             Err(e) => vec![format!("error: activation {i} of traversal {t}: {e}")],
@@ -858,19 +976,41 @@ fn run_traversals(args: &RunArgs, compiled: &Compiled, emit_format: Option<EmitF
         let busy = fiber_busy.into_inner().unwrap();
         let ran = cycles_run.load(Ordering::Relaxed);
         if !args.quiet {
-            eprintln!("{total_activations} activations across {} traversal(s)", streams.len());
+            eprintln!(
+                "{total_activations} activations across {} traversal(s)",
+                streams.len()
+            );
         }
         print_timing(report, compiled, ran, fibers, wall, &busy);
     }
     Ok(())
 }
 
-fn print_timing(report: Report, compiled: &Compiled, cycles: u64, fibers: usize, wall: Duration, busy: &[Duration]) {
+fn print_timing(
+    report: Report,
+    compiled: &Compiled,
+    cycles: u64,
+    fibers: usize,
+    wall: Duration,
+    busy: &[Duration],
+) {
     let secs = wall.as_secs_f64();
-    let per_cycle_ns = if cycles > 0 { wall.as_nanos() as f64 / cycles as f64 } else { 0.0 };
-    let rate = if secs > 0.0 { cycles as f64 / secs } else { 0.0 };
+    let per_cycle_ns = if cycles > 0 {
+        wall.as_nanos() as f64 / cycles as f64
+    } else {
+        0.0
+    };
+    let rate = if secs > 0.0 {
+        cycles as f64 / secs
+    } else {
+        0.0
+    };
     let busy_total: Duration = busy.iter().sum();
-    let fiber_ns = if cycles > 0 { busy_total.as_nanos() as f64 / cycles as f64 } else { 0.0 };
+    let fiber_ns = if cycles > 0 {
+        busy_total.as_nanos() as f64 / cycles as f64
+    } else {
+        0.0
+    };
     match report {
         Report::Text => {
             println!();
@@ -928,14 +1068,22 @@ fn check(args: CheckArgs) -> Result<(), String> {
             }
             if args.manifest {
                 for e in extract_manifest(program) {
-                    println!("{:<24} {:?}{}", e.name, e.port_type, modifier_suffix(&e.modifier));
+                    println!(
+                        "{:<24} {:?}{}",
+                        e.name,
+                        e.port_type,
+                        modifier_suffix(&e.modifier)
+                    );
                 }
             }
         }
         Report::Json => {
             let mut obj = serde_json::Map::new();
             obj.insert("ok".into(), true.into());
-            obj.insert("compile_ns".into(), (compiled.elapsed.as_nanos() as u64).into());
+            obj.insert(
+                "compile_ns".into(),
+                (compiled.elapsed.as_nanos() as u64).into(),
+            );
             obj.insert("stats".into(), stats_json(program, &compiled));
             if args.manifest {
                 let m: Vec<serde_json::Value> = extract_manifest(program)
@@ -945,7 +1093,12 @@ fn check(args: CheckArgs) -> Result<(), String> {
                 obj.insert("manifest".into(), m.into());
             }
             if args.events {
-                let ev: Vec<String> = compiled.events.events().iter().map(|e| format!("{e:?}")).collect();
+                let ev: Vec<String> = compiled
+                    .events
+                    .events()
+                    .iter()
+                    .map(|e| format!("{e:?}"))
+                    .collect();
                 obj.insert("events".into(), ev.into());
             }
             println!("{}", serde_json::Value::Object(obj));
@@ -965,7 +1118,11 @@ fn modifier_suffix(m: &polydat::dsl::ast::BindingModifier) -> String {
     if m.has(WireModifier::Volatile) {
         parts.push("volatile");
     }
-    if parts.is_empty() { String::new() } else { format!("  [{}]", parts.join(" ")) }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("  [{}]", parts.join(" "))
+    }
 }
 
 /// A fused native cone appears in the program as one node whose name
@@ -1013,20 +1170,31 @@ fn print_stats(program: &PolydatProgram, compiled: &Compiled, _report: Report) {
     println!("wires         {}", program.wire_count());
     println!("avg degree    {:.2}", program.avg_degree());
     println!("inputs        {}", program.input_names().len());
-    println!("outputs       {}  (const {}, shared {}, side-effect {})",
+    println!(
+        "outputs       {}  (const {}, shared {}, side-effect {})",
         program.output_count(),
         program.const_outputs().len(),
         program.shared_outputs().len(),
-        program.outputs_with_side_effects().len());
+        program.outputs_with_side_effects().len()
+    );
     println!("engines       P1 nodes {p1}  P2 nodes {p2}  P3 cones {p3}");
     println!("deterministic {}", program.is_deterministic());
     println!("cursors       {}", program.cursor_schemas().len());
-    println!("traversals    {} (producers {})", program.traversals().len(), program.producers().len());
-    println!("programs      {} (root plus one per for body at every depth)", polydat::kernel::program_count(program));
-    println!("events        {} recorded ({} warnings, {} advisories)",
+    println!(
+        "traversals    {} (producers {})",
+        program.traversals().len(),
+        program.producers().len()
+    );
+    println!(
+        "programs      {} (root plus one per for body at every depth)",
+        polydat::kernel::program_count(program)
+    );
+    println!(
+        "events        {} recorded ({} warnings, {} advisories)",
         compiled.events.events().len(),
         compiled.events.warnings().len(),
-        compiled.events.advisories().len());
+        compiled.events.advisories().len()
+    );
     println!("compile       {:?}", compiled.elapsed);
 }
 
@@ -1056,7 +1224,11 @@ fn stats_json(program: &PolydatProgram, compiled: &Compiled) -> serde_json::Valu
 fn explain(args: ExplainArgs) -> Result<(), String> {
     install_audit(false);
     let source = read_source(&args.compile.file)?;
-    let phases: Vec<Phase> = if args.phases.is_empty() { ALL_PHASES.to_vec() } else { args.phases.clone() };
+    let phases: Vec<Phase> = if args.phases.is_empty() {
+        ALL_PHASES.to_vec()
+    } else {
+        args.phases.clone()
+    };
 
     // Lex and parse are narrated from their own results so a program
     // that fails later still explains its front end.
@@ -1071,7 +1243,11 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
         WireSource::Input(i) => format!("input {}", input_name(*i)),
         WireSource::NodeOutput(n, p) => {
             let meta = program.node_meta(*n);
-            if meta.outs.len() > 1 { format!("{}.{}", meta.name, meta.outs[*p].name) } else { meta.name.clone() }
+            if meta.outs.len() > 1 {
+                format!("{}.{}", meta.name, meta.outs[*p].name)
+            } else {
+                meta.name.clone()
+            }
         }
     };
 
@@ -1085,50 +1261,115 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
                     let k = d.split(['(', ' ']).next().unwrap_or(&d).to_string();
                     *kinds.entry(k).or_default() += 1;
                 }
-                println!("The lexer turned {} bytes of source into {} tokens.", source.len(), tokens.len());
+                println!(
+                    "The lexer turned {} bytes of source into {} tokens.",
+                    source.len(),
+                    tokens.len()
+                );
                 for (k, n) in kinds {
                     println!("  {k:<14} {n}");
                 }
             }
             Phase::Parse => {
-                println!("The parser produced {} top-level statements.", ast.statements.len());
+                println!(
+                    "The parser produced {} top-level statements.",
+                    ast.statements.len()
+                );
                 for stmt in &ast.statements {
                     match stmt {
-                        Statement::InputDecl(d) => println!("  input     {}{}", d.name, d.ty.as_ref().map(|t| format!(": {t}")).unwrap_or_default()),
-                        Statement::ExternPort(p) => println!("  extern    {}: {}{}", p.name, p.typ, if p.default.is_some() { " (with default)" } else { "" }),
-                        Statement::Cursor(c) => println!("  cursor    {}{}", c.name, if c.over.is_some() { " over ..." } else { "" }),
-                        Statement::ModuleDef(m) => println!("  module    {}({} params) -> ({} outputs), {} body statements", m.name, m.params.len(), m.outputs.len(), m.body.len()),
+                        Statement::InputDecl(d) => println!(
+                            "  input     {}{}",
+                            d.name,
+                            d.ty.as_ref().map(|t| format!(": {t}")).unwrap_or_default()
+                        ),
+                        Statement::ExternPort(p) => println!(
+                            "  extern    {}: {}{}",
+                            p.name,
+                            p.typ,
+                            if p.default.is_some() {
+                                " (with default)"
+                            } else {
+                                ""
+                            }
+                        ),
+                        Statement::Cursor(c) => println!(
+                            "  cursor    {}{}",
+                            c.name,
+                            if c.over.is_some() { " over ..." } else { "" }
+                        ),
+                        Statement::ModuleDef(m) => println!(
+                            "  module    {}({} params) -> ({} outputs), {} body statements",
+                            m.name,
+                            m.params.len(),
+                            m.outputs.len(),
+                            m.body.len()
+                        ),
                         Statement::Pragma { name, .. } => println!("  pragma    {name}"),
-                        Statement::For(f) => println!("  for       {} {{ {} statements }}", f.source.text, f.body.len()),
-                        Statement::Tile(t) => println!("  tile      {} : {} ({} pieces)", t.name, t.encoding.as_deref().unwrap_or("text"), t.pieces.len()),
+                        Statement::For(f) => println!(
+                            "  for       {} {{ {} statements }}",
+                            f.source.text,
+                            f.body.len()
+                        ),
+                        Statement::Tile(t) => println!(
+                            "  tile      {} : {} ({} pieces)",
+                            t.name,
+                            t.encoding.as_deref().unwrap_or("text"),
+                            t.pieces.len()
+                        ),
                         Statement::Binding(b) => {
                             let mods = modifier_suffix(&b.modifier);
-                            let targets = if b.targets.len() > 1 { format!("({})", b.targets.join(", ")) } else { b.targets.join("") };
+                            let targets = if b.targets.len() > 1 {
+                                format!("({})", b.targets.join(", "))
+                            } else {
+                                b.targets.join("")
+                            };
                             println!("  binding   {targets} := {}{mods}", expr_summary(&b.value));
                         }
                     }
                 }
-                println!("Every function call in a binding becomes a node; every name becomes a wire.");
+                println!(
+                    "Every function call in a binding becomes a node; every name becomes a wire."
+                );
             }
             Phase::Inputs => {
                 let names = program.input_names();
-                println!("The program has {} input slots. Coordinates are advanced by set_inputs; externs are written by the host or a parent scope.", names.len());
+                println!(
+                    "The program has {} input slots. Coordinates are advanced by set_inputs; externs are written by the host or a parent scope.",
+                    names.len()
+                );
                 for (i, n) in names.iter().enumerate() {
-                    let kind = program.input_kind(i).map(|k| format!("{k:?}")).unwrap_or_default();
-                    let ty = program.input_port_type_by_idx(i).map(|t| format!("{t:?}")).unwrap_or_default();
-                    let default = program.input_default_by_idx(i).map(|v| format!(" default {}", v.to_display_string())).unwrap_or_default();
+                    let kind = program
+                        .input_kind(i)
+                        .map(|k| format!("{k:?}"))
+                        .unwrap_or_default();
+                    let ty = program
+                        .input_port_type_by_idx(i)
+                        .map(|t| format!("{t:?}"))
+                        .unwrap_or_default();
+                    let default = program
+                        .input_default_by_idx(i)
+                        .map(|v| format!(" default {}", v.to_display_string()))
+                        .unwrap_or_default();
                     println!("  [{i}] {n:<24} {ty:<8} {kind}{default}");
                 }
             }
             Phase::Modules => {
-                let inlined: Vec<_> = events.iter().filter(|e| matches!(e, CompileEvent::ModuleInlined { .. })).collect();
-                let translated: Vec<_> = events.iter().filter(|e| matches!(e, CompileEvent::LegacyTranslated { .. })).collect();
+                let inlined: Vec<_> = events
+                    .iter()
+                    .filter(|e| matches!(e, CompileEvent::ModuleInlined { .. }))
+                    .collect();
+                let translated: Vec<_> = events
+                    .iter()
+                    .filter(|e| matches!(e, CompileEvent::LegacyTranslated { .. }))
+                    .collect();
                 if inlined.is_empty() && translated.is_empty() {
                     println!("No modules were inlined. Every call resolved to a registered node.");
                 }
                 for e in inlined {
                     if let CompileEvent::ModuleInlined { name, nodes_added } = e {
-                        println!("  module {name} was inlined, adding {nodes_added} nodes. The module boundary no longer exists in the graph.");
+                        println!(
+                            "  module {name} was inlined, adding {nodes_added} nodes. The module boundary no longer exists in the graph."
+                        );
                     }
                 }
                 for e in translated {
@@ -1138,29 +1379,64 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
                 }
             }
             Phase::Wires => {
-                println!("The assembler resolved every reference to a wire. {} nodes, {} wires, average in-degree {:.2}.",
-                    program.node_count(), program.wire_count(), program.avg_degree());
+                println!(
+                    "The assembler resolved every reference to a wire. {} nodes, {} wires, average in-degree {:.2}.",
+                    program.node_count(),
+                    program.wire_count(),
+                    program.avg_degree()
+                );
                 for i in 0..program.node_count() {
                     let meta = program.node_meta(i);
                     let ins: Vec<String> = program.node_wiring(i).iter().map(wire_label).collect();
-                    let outs: Vec<String> = meta.outs.iter().map(|o| format!("{}:{:?}", o.name, o.typ)).collect();
-                    println!("  [{i:>3}] {:<28} <- ({})  -> {}", meta.name, ins.join(", "), outs.join(", "));
+                    let outs: Vec<String> = meta
+                        .outs
+                        .iter()
+                        .map(|o| format!("{}:{:?}", o.name, o.typ))
+                        .collect();
+                    println!(
+                        "  [{i:>3}] {:<28} <- ({})  -> {}",
+                        meta.name,
+                        ins.join(", "),
+                        outs.join(", ")
+                    );
                 }
-                let resolved = events.iter().filter(|e| matches!(e, CompileEvent::BindingResolved { .. })).count();
+                let resolved = events
+                    .iter()
+                    .filter(|e| matches!(e, CompileEvent::BindingResolved { .. }))
+                    .count();
                 if resolved > 0 {
                     println!("{resolved} bindings were resolved to node types by name.");
                 }
             }
             Phase::Types => {
-                let adapters: Vec<_> = events.iter().filter(|e| matches!(e, CompileEvent::TypeAdapterInserted { .. } | CompileEvent::TypeWidening { .. })).collect();
-                println!("Every port has a PortType and every wire was checked before the kernel could run.");
+                let adapters: Vec<_> = events
+                    .iter()
+                    .filter(|e| {
+                        matches!(
+                            e,
+                            CompileEvent::TypeAdapterInserted { .. }
+                                | CompileEvent::TypeWidening { .. }
+                        )
+                    })
+                    .collect();
+                println!(
+                    "Every port has a PortType and every wire was checked before the kernel could run."
+                );
                 if adapters.is_empty() {
                     println!("No adapters were needed: every wire already matched its port.");
                 }
                 for e in adapters {
                     match e {
-                        CompileEvent::TypeAdapterInserted { from_node, to_node, adapter } => println!("  {adapter} was inserted between {from_node} and {to_node}."),
-                        CompileEvent::TypeWidening { from, to, context } => println!("  {from} widened to {to} at {context}."),
+                        CompileEvent::TypeAdapterInserted {
+                            from_node,
+                            to_node,
+                            adapter,
+                        } => {
+                            println!("  {adapter} was inserted between {from_node} and {to_node}.")
+                        }
+                        CompileEvent::TypeWidening { from, to, context } => {
+                            println!("  {from} widened to {to} at {context}.")
+                        }
                         _ => {}
                     }
                 }
@@ -1178,18 +1454,49 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
             Phase::Lifecycle => {
                 let consts = program.const_outputs();
                 let shared = program.shared_outputs();
-                println!("Values are classified by when they may change. Const wires are computed once at scope init; dynamic wires are computed per cycle; shared wires live in cells visible across fibers.");
-                println!("  const   {}", if consts.is_empty() { "(none)".to_string() } else { consts.join(", ") });
-                println!("  shared  {}", if shared.is_empty() { "(none)".to_string() } else { shared.join(", ") });
-                let dynamic: Vec<&str> = program.own_output_names().into_iter().filter(|n| !consts.contains(n) && !shared.contains(n)).collect();
-                println!("  dynamic {}", if dynamic.is_empty() { "(none)".to_string() } else { dynamic.join(", ") });
+                println!(
+                    "Values are classified by when they may change. Const wires are computed once at scope init; dynamic wires are computed per cycle; shared wires live in cells visible across fibers."
+                );
+                println!(
+                    "  const   {}",
+                    if consts.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        consts.join(", ")
+                    }
+                );
+                println!(
+                    "  shared  {}",
+                    if shared.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        shared.join(", ")
+                    }
+                );
+                let dynamic: Vec<&str> = program
+                    .own_output_names()
+                    .into_iter()
+                    .filter(|n| !consts.contains(n) && !shared.contains(n))
+                    .collect();
+                println!(
+                    "  dynamic {}",
+                    if dynamic.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        dynamic.join(", ")
+                    }
+                );
                 let init_ports: usize = (0..program.node_count())
                     .map(|i| program.node_meta(i).ins.iter().filter(|s| matches!(s, Slot::Wire(p) if p.lifecycle == polydat::ast::Lifecycle::Init)).count())
                     .sum();
-                println!("{init_ports} wire ports require init-time values; wiring a cycle-time value to one is an assembly error.");
+                println!(
+                    "{init_ports} wire ports require init-time values; wiring a cycle-time value to one is an assembly error."
+                );
             }
             Phase::Constants => {
-                println!("Constants are baked into nodes at assembly. Init-time expressions were folded before the graph was frozen.");
+                println!(
+                    "Constants are baked into nodes at assembly. Init-time expressions were folded before the graph was frozen."
+                );
                 let mut baked = 0;
                 for i in 0..program.node_count() {
                     let meta = program.node_meta(i);
@@ -1210,27 +1517,49 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
                 }
             }
             Phase::Fusion => {
-                let fusions: Vec<_> = events.iter().filter(|e| matches!(e, CompileEvent::FusionApplied { .. })).collect();
-                println!("Fusion replaces chains of nodes with single nodes so dispatch happens once per chain.");
+                let fusions: Vec<_> = events
+                    .iter()
+                    .filter(|e| matches!(e, CompileEvent::FusionApplied { .. }))
+                    .collect();
+                println!(
+                    "Fusion replaces chains of nodes with single nodes so dispatch happens once per chain."
+                );
                 if fusions.is_empty() {
                     println!("  no fusion patterns matched");
                 }
                 for e in fusions {
-                    if let CompileEvent::FusionApplied { pattern, nodes_replaced } = e {
+                    if let CompileEvent::FusionApplied {
+                        pattern,
+                        nodes_replaced,
+                    } = e
+                    {
                         println!("  {pattern} replaced {nodes_replaced} nodes");
                     }
                 }
             }
             Phase::Engines => {
                 let (p1, p2, p3) = level_counts(program);
-                println!("Each node runs on one engine. P1 is the typed interpreter, P2 a compiled closure, P3 native code through Cranelift. A cone is a region of eligible nodes fused into one native function; the interpreter dispatches it as a single node.");
+                println!(
+                    "Each node runs on one engine. P1 is the typed interpreter, P2 a compiled closure, P3 native code through Cranelift. A cone is a region of eligible nodes fused into one native function; the interpreter dispatches it as a single node."
+                );
                 println!("  P1 nodes {p1}   P2 nodes {p2}   P3 cones {p3}");
                 for i in 0..program.node_count() {
-                    println!("  [{i:>3}] {:<28} {}", program.node_meta(i).name, engine_label(program, i));
+                    println!(
+                        "  [{i:>3}] {:<28} {}",
+                        program.node_meta(i).name,
+                        engine_label(program, i)
+                    );
                 }
-                let cone_lines: Vec<&String> = compiled.audit.iter().filter(|(_, m)| m.contains("cone")).map(|(_, m)| m).collect();
+                let cone_lines: Vec<&String> = compiled
+                    .audit
+                    .iter()
+                    .filter(|(_, m)| m.contains("cone"))
+                    .map(|(_, m)| m)
+                    .collect();
                 if cone_lines.is_empty() {
-                    println!("The cone extractor reported nothing; either the engine is off or no region qualified.");
+                    println!(
+                        "The cone extractor reported nothing; either the engine is off or no region qualified."
+                    );
                 } else {
                     println!("Cone extraction:");
                     for m in cone_lines {
@@ -1244,42 +1573,86 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
                 }
             }
             Phase::Provenance => {
-                println!("Provenance records which inputs can invalidate each output. A pull only recomputes nodes reachable from a changed input.");
+                println!(
+                    "Provenance records which inputs can invalidate each output. A pull only recomputes nodes reachable from a changed input."
+                );
                 for name in program.output_names() {
-                    let Some((node, _)) = program.resolve_output(name) else { continue };
+                    let Some((node, _)) = program.resolve_output(name) else {
+                        continue;
+                    };
                     let deps: Vec<String> = program
                         .input_provenance_for(node)
                         .map(|m| m.iter_ones().map(&input_name).collect())
                         .unwrap_or_default();
-                    println!("  {name:<24} <- {}", if deps.is_empty() { "(constant)".to_string() } else { deps.join(", ") });
+                    println!(
+                        "  {name:<24} <- {}",
+                        if deps.is_empty() {
+                            "(constant)".to_string()
+                        } else {
+                            deps.join(", ")
+                        }
+                    );
                 }
             }
             Phase::Outputs => {
                 let manifest = extract_manifest(program);
-                println!("The program exposes {} named outputs. A pull by name resolves to a node and port.", manifest.len());
+                println!(
+                    "The program exposes {} named outputs. A pull by name resolves to a node and port.",
+                    manifest.len()
+                );
                 for e in manifest {
                     let (n, p) = program.resolve_output(&e.name).unwrap_or((0, 0));
-                    println!("  {:<24} {:?}{}  (node {n} port {p})", e.name, e.port_type, modifier_suffix(&e.modifier));
+                    println!(
+                        "  {:<24} {:?}{}  (node {n} port {p})",
+                        e.name,
+                        e.port_type,
+                        modifier_suffix(&e.modifier)
+                    );
                 }
                 let se = program.outputs_with_side_effects();
                 if !se.is_empty() {
                     println!("Outputs with side effects: {}", se.join(", "));
                 }
                 for s in program.cursor_schemas() {
-                    println!("  cursor {} extent {:?} projections {}", s.name, s.extent, s.projections.len());
+                    println!(
+                        "  cursor {} extent {:?} projections {}",
+                        s.name,
+                        s.extent,
+                        s.projections.len()
+                    );
                 }
                 println!("Deterministic: {}", program.is_deterministic());
             }
             Phase::Tiles => {
-                let tiles: Vec<_> = events.iter().filter(|e| matches!(e, CompileEvent::TileCompiled { .. })).collect();
-                let holes: Vec<_> = events.iter().filter(|e| matches!(e, CompileEvent::TileHoleTyped { .. })).collect();
+                let tiles: Vec<_> = events
+                    .iter()
+                    .filter(|e| matches!(e, CompileEvent::TileCompiled { .. }))
+                    .collect();
+                let holes: Vec<_> = events
+                    .iter()
+                    .filter(|e| matches!(e, CompileEvent::TileHoleTyped { .. }))
+                    .collect();
                 if tiles.is_empty() {
                     println!("No tiles in this program.");
                 } else {
-                    println!("Each tile compiled to a skeleton: static runs copied whole, encoded holes, branches, and projections whose bodies are programs of their own.");
+                    println!(
+                        "Each tile compiled to a skeleton: static runs copied whole, encoded holes, branches, and projections whose bodies are programs of their own."
+                    );
                     for e in &tiles {
-                        if let CompileEvent::TileCompiled { tile, encoding, statics, static_bytes, holes, branches, projections, bodies } = e {
-                            println!("  {tile:<12} {encoding}: {statics} static run(s) totalling {static_bytes} bytes, {holes} hole(s), {branches} branch(es), {projections} projection(s)");
+                        if let CompileEvent::TileCompiled {
+                            tile,
+                            encoding,
+                            statics,
+                            static_bytes,
+                            holes,
+                            branches,
+                            projections,
+                            bodies,
+                        } = e
+                        {
+                            println!(
+                                "  {tile:<12} {encoding}: {statics} static run(s) totalling {static_bytes} bytes, {holes} hole(s), {branches} branch(es), {projections} projection(s)"
+                            );
                             for (i, body) in bodies.iter().enumerate() {
                                 println!("               projection body {i}:");
                                 for line in body.lines() {
@@ -1288,13 +1661,32 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
                             }
                         }
                     }
-                    println!("Every hole was typed before the tile compiled: a declared type wins, otherwise the wire's type; the hole's position says what the encoding expects there, and the two pick the encoder.");
+                    println!(
+                        "Every hole was typed before the tile compiled: a declared type wins, otherwise the wire's type; the hole's position says what the encoding expects there, and the two pick the encoder."
+                    );
                     for e in holes {
-                        if let CompileEvent::TileHoleTyped { tile, hole, wire_type, declared, expectation, encoder, adapter } = e {
-                            let declared = declared.as_ref().map(|d| format!(", declared {d}")).unwrap_or_default();
-                            let adapter = adapter.as_ref().map(|a| format!("  adapter {a}")).unwrap_or_default();
+                        if let CompileEvent::TileHoleTyped {
+                            tile,
+                            hole,
+                            wire_type,
+                            declared,
+                            expectation,
+                            encoder,
+                            adapter,
+                        } = e
+                        {
+                            let declared = declared
+                                .as_ref()
+                                .map(|d| format!(", declared {d}"))
+                                .unwrap_or_default();
+                            let adapter = adapter
+                                .as_ref()
+                                .map(|a| format!("  adapter {a}"))
+                                .unwrap_or_default();
                             println!("  {tile:<12} ${{{hole}}}");
-                            println!("               wire {wire_type}{declared}; expects {expectation}");
+                            println!(
+                                "               wire {wire_type}{declared}; expects {expectation}"
+                            );
                             println!("               -> {encoder}{adapter}");
                         }
                     }
@@ -1306,9 +1698,14 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
                 if ts.is_empty() && ps.is_empty() {
                     println!("No for forms. Every statement compiled into the one program above.");
                 } else {
-                    println!("Each for body is one program for the life of the parent, keyed by where it appears. Activation only allocates state over it.");
+                    println!(
+                        "Each for body is one program for the life of the parent, keyed by where it appears. Activation only allocates state over it."
+                    );
                     for p in ps {
-                        println!("  producer {} := for {}  (line {})", p.name, p.source_text, p.span.line);
+                        println!(
+                            "  producer {} := for {}  (line {})",
+                            p.name, p.source_text, p.span.line
+                        );
                     }
                     explain_traversals(ts, 1);
                 }
@@ -1330,13 +1727,42 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
 fn explain_traversals(ts: &[polydat::dsl::traversal::Traversal], indent: usize) {
     let pad = "  ".repeat(indent);
     for t in ts {
-        let elems: Vec<String> = t.elements.iter().map(|(n, ty)| format!("{n}:{ty:?}")).collect();
-        let cascade: Vec<String> = t.cascade.iter().map(|(n, ty)| format!("{n}:{ty:?}")).collect();
-        println!("{pad}for {}  (line {}, col {})", t.source_text, t.span.line, t.span.col);
-        println!("{pad}  elements {}", if elems.is_empty() { "(none)".to_string() } else { elems.join(", ") });
-        println!("{pad}  cascade  {}", if cascade.is_empty() { "(none)".to_string() } else { cascade.join(", ") });
-        println!("{pad}  program  {} nodes, {} outputs, {} nested traversals",
-            t.program.node_count(), t.program.output_count(), t.program.traversals().len());
+        let elems: Vec<String> = t
+            .elements
+            .iter()
+            .map(|(n, ty)| format!("{n}:{ty:?}"))
+            .collect();
+        let cascade: Vec<String> = t
+            .cascade
+            .iter()
+            .map(|(n, ty)| format!("{n}:{ty:?}"))
+            .collect();
+        println!(
+            "{pad}for {}  (line {}, col {})",
+            t.source_text, t.span.line, t.span.col
+        );
+        println!(
+            "{pad}  elements {}",
+            if elems.is_empty() {
+                "(none)".to_string()
+            } else {
+                elems.join(", ")
+            }
+        );
+        println!(
+            "{pad}  cascade  {}",
+            if cascade.is_empty() {
+                "(none)".to_string()
+            } else {
+                cascade.join(", ")
+            }
+        );
+        println!(
+            "{pad}  program  {} nodes, {} outputs, {} nested traversals",
+            t.program.node_count(),
+            t.program.output_count(),
+            t.program.traversals().len()
+        );
         explain_traversals(t.program.traversals(), indent + 2);
     }
 }
@@ -1362,7 +1788,11 @@ fn phase_title(p: Phase) -> &'static str {
 
 fn expr_summary(e: &polydat::dsl::ast::Expr) -> String {
     let s = polydat::dsl::pprint::pp_expr(e).replace('\n', " ");
-    if s.chars().count() > 96 { format!("{}...", s.chars().take(96).collect::<String>()) } else { s }
+    if s.chars().count() > 96 {
+        format!("{}...", s.chars().take(96).collect::<String>())
+    } else {
+        s
+    }
 }
 
 // ---------------------------------------------------------------------------

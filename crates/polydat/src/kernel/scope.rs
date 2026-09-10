@@ -69,7 +69,9 @@ pub struct ScopeCoord {
 
 impl ScopeCoord {
     pub fn new() -> Self {
-        Self { vars: IndexMap::new() }
+        Self {
+            vars: IndexMap::new(),
+        }
     }
     pub fn is_empty(&self) -> bool {
         self.vars.is_empty()
@@ -85,7 +87,9 @@ where
     I: IntoIterator<Item = (String, Value)>,
 {
     fn from(it: I) -> Self {
-        Self { vars: it.into_iter().collect() }
+        Self {
+            vars: it.into_iter().collect(),
+        }
     }
 }
 
@@ -104,10 +108,13 @@ where
 /// position is what lets observer lifecycle calls bind to
 /// pre-mapped scene nodes without a parallel matching scheme.
 pub fn format_scope_coordinate_path(path: &[ScopeCoord]) -> String {
-    let strata: Vec<String> = path.iter()
+    let strata: Vec<String> = path
+        .iter()
         .filter(|c| !c.is_empty())
         .map(|coord| {
-            let inner = coord.vars.iter()
+            let inner = coord
+                .vars
+                .iter()
                 .map(|(k, v)| format!("{k}={}", v.to_display_string()))
                 .collect::<Vec<_>>()
                 .join(", ");

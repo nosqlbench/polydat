@@ -27,8 +27,8 @@
 
 use std::sync::OnceLock;
 
-use cranelift_codegen::ir::{self, types, AbiParam, InstBuilder};
 use cranelift_codegen::ir::condcodes::IntCC;
+use cranelift_codegen::ir::{self, AbiParam, InstBuilder, types};
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::{JITBuilder, JITModule};
@@ -88,7 +88,12 @@ fn compile_kernels() -> Result<SimdKernels, String> {
     let dot_id = build_kernel(&mut module, &mut fn_ctx, "simd_dot_f32", KernelKind::Dot)?;
     let l2_id = build_kernel(&mut module, &mut fn_ctx, "simd_l2sq_f32", KernelKind::L2Sq)?;
     let add_id = build_kernel(&mut module, &mut fn_ctx, "simd_add_f32", KernelKind::Add)?;
-    let scale_id = build_kernel(&mut module, &mut fn_ctx, "simd_scale_f32", KernelKind::Scale)?;
+    let scale_id = build_kernel(
+        &mut module,
+        &mut fn_ctx,
+        "simd_scale_f32",
+        KernelKind::Scale,
+    )?;
 
     module
         .finalize_definitions()
@@ -98,18 +103,22 @@ fn compile_kernels() -> Result<SimdKernels, String> {
     // declared for each kind.
     unsafe {
         Ok(SimdKernels {
-            dot_f32: std::mem::transmute::<*const u8, unsafe extern "C" fn(*const f32, *const f32, u64) -> f32>(
-                module.get_finalized_function(dot_id),
-            ),
-            l2sq_f32: std::mem::transmute::<*const u8, unsafe extern "C" fn(*const f32, *const f32, u64) -> f32>(
-                module.get_finalized_function(l2_id),
-            ),
-            add_f32: std::mem::transmute::<*const u8, unsafe extern "C" fn(*const f32, *const f32, *mut f32, u64)>(
-                module.get_finalized_function(add_id),
-            ),
-            scale_f32: std::mem::transmute::<*const u8, unsafe extern "C" fn(*const f32, f32, *mut f32, u64)>(
-                module.get_finalized_function(scale_id),
-            ),
+            dot_f32: std::mem::transmute::<
+                *const u8,
+                unsafe extern "C" fn(*const f32, *const f32, u64) -> f32,
+            >(module.get_finalized_function(dot_id)),
+            l2sq_f32: std::mem::transmute::<
+                *const u8,
+                unsafe extern "C" fn(*const f32, *const f32, u64) -> f32,
+            >(module.get_finalized_function(l2_id)),
+            add_f32: std::mem::transmute::<
+                *const u8,
+                unsafe extern "C" fn(*const f32, *const f32, *mut f32, u64),
+            >(module.get_finalized_function(add_id)),
+            scale_f32: std::mem::transmute::<
+                *const u8,
+                unsafe extern "C" fn(*const f32, f32, *mut f32, u64),
+            >(module.get_finalized_function(scale_id)),
             _module: module,
         })
     }
@@ -203,13 +212,7 @@ fn build_kernel(
         let vi = b.block_params(vhead)[0];
         let vacc = b.block_params(vhead)[1];
         let done4 = b.ins().icmp(IntCC::UnsignedGreaterThanOrEqual, vi, n4);
-        b.ins().brif(
-            done4,
-            vexit,
-            &[vi, vacc],
-            vbody,
-            &[],
-        );
+        b.ins().brif(done4, vexit, &[vi, vacc], vbody, &[]);
 
         b.switch_to_block(vbody);
         let byte_off = b.ins().ishl_imm(vi, 2); // i * sizeof(f32)
@@ -360,8 +363,10 @@ mod tests {
     #[test]
     fn simd_kernels_match_scalar_reference() {
         let Some(k) = super::kernels() else {
-            panic!("SIMD kernels failed to compile on this host — \
-                    the cranelift ISA should support enable_simd");
+            panic!(
+                "SIMD kernels failed to compile on this host — \
+                    the cranelift ISA should support enable_simd"
+            );
         };
         // Cover: empty, sub-chunk, exact-chunk, chunk+tail sizes.
         for &n in &[0usize, 3, 8, 1029] {

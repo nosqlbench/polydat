@@ -89,17 +89,32 @@ pub struct Interval {
 impl Interval {
     /// Closed-closed interval `[lo, hi]`.
     pub fn closed(lo: f64, hi: f64) -> Self {
-        Self { lo, hi, lo_open: false, hi_open: false }
+        Self {
+            lo,
+            hi,
+            lo_open: false,
+            hi_open: false,
+        }
     }
 
     /// Half-open `[lo, hi)`.
     pub fn half_open(lo: f64, hi: f64) -> Self {
-        Self { lo, hi, lo_open: false, hi_open: true }
+        Self {
+            lo,
+            hi,
+            lo_open: false,
+            hi_open: true,
+        }
     }
 
     /// Open interval `(lo, hi)`.
     pub fn open(lo: f64, hi: f64) -> Self {
-        Self { lo, hi, lo_open: true, hi_open: true }
+        Self {
+            lo,
+            hi,
+            lo_open: true,
+            hi_open: true,
+        }
     }
 
     /// `true` if the interval has finite Lebesgue measure
@@ -186,7 +201,12 @@ mod tests {
 
     #[test]
     fn unbounded_interval_is_not_bounded() {
-        let i = Interval { lo: 0.0, hi: f64::INFINITY, lo_open: false, hi_open: true };
+        let i = Interval {
+            lo: 0.0,
+            hi: f64::INFINITY,
+            lo_open: false,
+            hi_open: true,
+        };
         assert!(!i.is_bounded());
     }
 
@@ -199,7 +219,12 @@ mod tests {
     #[test]
     fn uniform_not_integrable_on_unbounded_interval() {
         let m = ProductMeasure::Uniform;
-        let unbounded = Interval { lo: 0.0, hi: f64::INFINITY, lo_open: false, hi_open: true };
+        let unbounded = Interval {
+            lo: 0.0,
+            hi: f64::INFINITY,
+            lo_open: false,
+            hi_open: true,
+        };
         assert!(!m.is_integrable(&[unbounded]));
     }
 

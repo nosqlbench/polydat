@@ -20,9 +20,10 @@
 #   all-features — single fast leg on linux/amd64 covering the
 #     optional `vectordata` feature (pulls network-stack deps;
 #     one platform is enough since the feature is pure Rust and
-#     arch-independent, unlike the JIT). Runs clippy and rustdoc
-#     with warnings as errors under all features, and the node
-#     attribute's compile-fail suite, which is ignored by default.
+#     arch-independent, unlike the JIT). Runs the rustfmt check, then
+#     clippy and rustdoc with warnings as errors under all features,
+#     and the node attribute's compile-fail suite, which is ignored
+#     by default.
 #
 # Platform notes (deltas from the nbrs matrix):
 #
@@ -121,6 +122,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: polydat-all-features
+
+      # The tree is rustfmt-formatted; a change that is not fails
+      # here before anything is built. One platform is enough since
+      # formatting is arch-independent.
+      - name: Rustfmt (check)
+        run: cargo fmt --all --check
 
       - name: Test (all features)
         run: cargo test --workspace --all-features

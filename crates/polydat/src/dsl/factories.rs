@@ -11,8 +11,8 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use crate::dsl::registry::{FuncSig, FuncCategory};
 use crate::ast::{PolydatNode, PortType, Value};
+use crate::dsl::registry::{FuncCategory, FuncSig};
 
 // ───── Virtual-wire resolver registry (γ-8) ─────
 
@@ -177,7 +177,8 @@ impl PolydatRuntime {
         for sig in sigs {
             groups.entry(sig.category).or_default().push(sig);
         }
-        FuncCategory::display_order().iter()
+        FuncCategory::display_order()
+            .iter()
             .filter_map(|cat| groups.remove(cat).map(|funcs| (*cat, funcs)))
             .collect()
     }
@@ -220,8 +221,8 @@ impl Default for PolydatRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dsl::registry::{Arity, ParamSpec};
     use crate::ast::SlotType;
+    use crate::dsl::registry::{Arity, ParamSpec};
 
     /// Test helper: serialise resolver-registry tests via a
     /// process-wide mutex so two tests don't race the static
@@ -299,21 +300,31 @@ mod tests {
                     help: "",
                     identity: None,
                     variadic_ctor: None,
-                    params: &[
-                        ParamSpec { name: "input", slot_type: SlotType::Wire, required: true, example: "cycle", constraint: None },
-                    ],
+                    params: &[ParamSpec {
+                        name: "input",
+                        slot_type: SlotType::Wire,
+                        required: true,
+                        example: "cycle",
+                        constraint: None,
+                    }],
                     arity: Arity::Fixed,
                     commutativity: crate::ast::Commutativity::Positional,
-            default_resolver: None,
-            output_type: crate::dsl::registry::OutputType::Fixed,
-            // Hand registration: no static return-port declaration;
-            // type inference falls back to the name heuristic.
-            output_port: None,
+                    default_resolver: None,
+                    output_type: crate::dsl::registry::OutputType::Fixed,
+                    // Hand registration: no static return-port declaration;
+                    // type inference falls back to the name heuristic.
+                    output_port: None,
                 }]
             }
-            fn build(&self, _name: &str, _wc: usize, _consts: &[FactoryArg])
-                -> Result<Box<dyn PolydatNode>, String> {
-                Ok(Box::new(crate::library::identity::Identity::new(crate::ast::PortType::U64)))
+            fn build(
+                &self,
+                _name: &str,
+                _wc: usize,
+                _consts: &[FactoryArg],
+            ) -> Result<Box<dyn PolydatNode>, String> {
+                Ok(Box::new(crate::library::identity::Identity::new(
+                    crate::ast::PortType::U64,
+                )))
             }
         }
 
@@ -340,22 +351,32 @@ mod tests {
                     help: "",
                     identity: None,
                     variadic_ctor: None,
-                    params: &[
-                        ParamSpec { name: "input", slot_type: SlotType::Wire, required: true, example: "cycle", constraint: None },
-                    ],
+                    params: &[ParamSpec {
+                        name: "input",
+                        slot_type: SlotType::Wire,
+                        required: true,
+                        example: "cycle",
+                        constraint: None,
+                    }],
                     arity: Arity::Fixed,
                     commutativity: crate::ast::Commutativity::Positional,
-            default_resolver: None,
-            output_type: crate::dsl::registry::OutputType::Fixed,
-            // Hand registration: no static return-port declaration;
-            // type inference falls back to the name heuristic.
-            output_port: None,
+                    default_resolver: None,
+                    output_type: crate::dsl::registry::OutputType::Fixed,
+                    // Hand registration: no static return-port declaration;
+                    // type inference falls back to the name heuristic.
+                    output_port: None,
                 }]
             }
-            fn build(&self, name: &str, _wc: usize, _consts: &[FactoryArg])
-                -> Result<Box<dyn PolydatNode>, String> {
+            fn build(
+                &self,
+                name: &str,
+                _wc: usize,
+                _consts: &[FactoryArg],
+            ) -> Result<Box<dyn PolydatNode>, String> {
                 match name {
-                    "custom_identity" => Ok(Box::new(crate::library::identity::Identity::new(crate::ast::PortType::U64))),
+                    "custom_identity" => Ok(Box::new(crate::library::identity::Identity::new(
+                        crate::ast::PortType::U64,
+                    ))),
                     _ => Err(format!("unknown: {name}")),
                 }
             }
@@ -387,21 +408,31 @@ mod tests {
                     help: "",
                     identity: None,
                     variadic_ctor: None,
-                    params: &[
-                        ParamSpec { name: "input", slot_type: SlotType::Wire, required: true, example: "cycle", constraint: None },
-                    ],
+                    params: &[ParamSpec {
+                        name: "input",
+                        slot_type: SlotType::Wire,
+                        required: true,
+                        example: "cycle",
+                        constraint: None,
+                    }],
                     arity: Arity::Fixed,
                     commutativity: crate::ast::Commutativity::Positional,
-            default_resolver: None,
-            output_type: crate::dsl::registry::OutputType::Fixed,
-            // Hand registration: no static return-port declaration;
-            // type inference falls back to the name heuristic.
-            output_port: None,
+                    default_resolver: None,
+                    output_type: crate::dsl::registry::OutputType::Fixed,
+                    // Hand registration: no static return-port declaration;
+                    // type inference falls back to the name heuristic.
+                    output_port: None,
                 }]
             }
-            fn build(&self, _: &str, _: usize, _: &[FactoryArg])
-                -> Result<Box<dyn PolydatNode>, String> {
-                Ok(Box::new(crate::library::identity::Identity::new(crate::ast::PortType::U64)))
+            fn build(
+                &self,
+                _: &str,
+                _: usize,
+                _: &[FactoryArg],
+            ) -> Result<Box<dyn PolydatNode>, String> {
+                Ok(Box::new(crate::library::identity::Identity::new(
+                    crate::ast::PortType::U64,
+                )))
             }
         }
 
@@ -409,7 +440,10 @@ mod tests {
         rt.register_factory(Box::new(TestFactory));
 
         let grouped = rt.by_category();
-        let hashing = grouped.iter().find(|(c, _)| *c == FuncCategory::Hashing).unwrap();
+        let hashing = grouped
+            .iter()
+            .find(|(c, _)| *c == FuncCategory::Hashing)
+            .unwrap();
         assert!(hashing.1.iter().any(|s| s.name == "factory_hash"));
         // Built-in hash should also be there
         assert!(hashing.1.iter().any(|s| s.name == "hash"));

@@ -20,8 +20,8 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{PortType, Value, ValueRef};
-use crate::iteration::comprehension::runtime::evaluate_for_iteration;
 use crate::iteration::comprehension::StreamerValue;
+use crate::iteration::comprehension::runtime::evaluate_for_iteration;
 use crate::kernel::{PolydatKernel, PolydatProgram, PolydatState};
 
 /// Where a hole sits in a `json` skeleton, which decides its encoding.
@@ -56,17 +56,34 @@ impl HoleEncoding {
             HolePosition::Text => "text",
         };
         let mut flags = String::new();
-        if self.raw { flags.push('r'); }
-        if self.cond { flags.push('c'); }
-        format!("{}|{}|{}|{}|{}", self.encoding, pos, self.ty.as_deref().unwrap_or(""), self.format.as_deref().unwrap_or(""), flags)
+        if self.raw {
+            flags.push('r');
+        }
+        if self.cond {
+            flags.push('c');
+        }
+        format!(
+            "{}|{}|{}|{}|{}",
+            self.encoding,
+            pos,
+            self.ty.as_deref().unwrap_or(""),
+            self.format.as_deref().unwrap_or(""),
+            flags
+        )
     }
 
     /// The encoding for a spec, interned for the process (SRD 115 §6)
     /// so the compiled lowering of `tile_encode` can bake its address.
     pub fn interned(spec: &str) -> &'static HoleEncoding {
         use std::sync::RwLock;
-        static ENCODINGS: RwLock<Option<HashMap<String, &'static HoleEncoding>>> = RwLock::new(None);
-        if let Some(e) = ENCODINGS.read().unwrap().as_ref().and_then(|m| m.get(spec).copied()) {
+        static ENCODINGS: RwLock<Option<HashMap<String, &'static HoleEncoding>>> =
+            RwLock::new(None);
+        if let Some(e) = ENCODINGS
+            .read()
+            .unwrap()
+            .as_ref()
+            .and_then(|m| m.get(spec).copied())
+        {
             return e;
         }
         let mut guard = ENCODINGS.write().unwrap();
@@ -90,7 +107,14 @@ impl HoleEncoding {
         let ty = parts.next().filter(|s| !s.is_empty()).map(str::to_string);
         let format = parts.next().filter(|s| !s.is_empty()).map(str::to_string);
         let flags = parts.next().unwrap_or("");
-        HoleEncoding { encoding, position, ty, format, raw: flags.contains('r'), cond: flags.contains('c') }
+        HoleEncoding {
+            encoding,
+            position,
+            ty,
+            format,
+            raw: flags.contains('r'),
+            cond: flags.contains('c'),
+        }
     }
 }
 
@@ -187,7 +211,13 @@ fn lower_ops(ops: &[TileOp]) -> Vec<RtOp> {
                 RtOp::Copy(StaticInterner::resolve_handle(handle).expect("just interned"))
             }
             TileOp::Hole(h) => RtOp::Hole(h.clone()),
-            TileOp::Repeat { stream, child, sep, body, generators } => {
+            TileOp::Repeat {
+                stream,
+                child,
+                sep,
+                body,
+                generators,
+            } => {
                 let sep_handle = StaticInterner::intern(sep);
                 RtOp::Repeat {
                     stream: Arc::new(StreamerValue::from_json(stream)),
@@ -197,7 +227,11 @@ fn lower_ops(ops: &[TileOp]) -> Vec<RtOp> {
                     generators: generators.clone(),
                 }
             }
-            TileOp::Branch { cond, then, otherwise } => RtOp::Branch {
+            TileOp::Branch {
+                cond,
+                then,
+                otherwise,
+            } => RtOp::Branch {
                 cond: cond.clone(),
                 then: lower_ops(then),
                 otherwise: lower_ops(otherwise),
@@ -233,7 +267,12 @@ impl TileProgram {
             .iter()
             .map(|c| {
                 crate::dsl::compile_polydat(&c.source)
-                    .unwrap_or_else(|e| panic!("tile '{}': projection body failed to compile: {e}\n{}", spec.name, c.source))
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "tile '{}': projection body failed to compile: {e}\n{}",
+                            spec.name, c.source
+                        )
+                    })
                     .into_program()
             })
             .collect();
@@ -243,11 +282,18 @@ impl TileProgram {
             .iter()
             .map(|p| Arc::new(PolydatKernel::from_program_nested(p.clone())))
             .collect();
-        let mut empty_kernel = crate::dsl::compile_polydat("\n").expect("the empty program compiles");
+        let mut empty_kernel =
+            crate::dsl::compile_polydat("\n").expect("the empty program compiles");
         empty_kernel.mark_nested();
         let empty = Arc::new(empty_kernel);
         let ops = lower_ops(&spec.ops);
-        TileProgram { spec, ops, children, canonicals, empty }
+        TileProgram {
+            spec,
+            ops,
+            children,
+            canonicals,
+            empty,
+        }
     }
 
     /// The program for a skeleton payload, interned for the process
@@ -257,7 +303,11 @@ impl TileProgram {
     pub fn interned(spec: &str) -> &'static TileProgram {
         use std::sync::RwLock;
         static PROGRAMS: RwLock<Option<HashMap<String, usize>>> = RwLock::new(None);
-        let found = PROGRAMS.read().unwrap().as_ref().and_then(|m| m.get(spec).copied());
+        let found = PROGRAMS
+            .read()
+            .unwrap()
+            .as_ref()
+            .and_then(|m| m.get(spec).copied());
         if let Some(p) = found {
             // SAFETY: the address was leaked below and is never freed.
             return unsafe { &*(p as *const TileProgram) };
@@ -279,7 +329,9 @@ impl TileProgram {
         fn walk(ops: &[RtOp]) -> bool {
             ops.iter().any(|op| match op {
                 RtOp::Repeat { .. } => true,
-                RtOp::Branch { then, otherwise, .. } => walk(then) || walk(otherwise),
+                RtOp::Branch {
+                    then, otherwise, ..
+                } => walk(then) || walk(otherwise),
                 _ => false,
             })
         }
@@ -299,14 +351,24 @@ impl TileProgram {
         self.render_ops(&self.ops, inputs, None, out);
     }
 
-    fn render_ops<W: std::fmt::Write>(&self, ops: &[RtOp], inputs: &[Value], mut child: Option<(&Arc<PolydatProgram>, &mut PolydatState)>, out: &mut W) {
+    fn render_ops<W: std::fmt::Write>(
+        &self,
+        ops: &[RtOp],
+        inputs: &[Value],
+        mut child: Option<(&Arc<PolydatProgram>, &mut PolydatState)>,
+        out: &mut W,
+    ) {
         for op in ops {
             match op {
                 // `Copy`: a memcpy from the static interner (SRD 114 §6,
                 // SRD 115 step 3). The bytes were interned at build.
                 RtOp::Copy(s) => out.put(s),
                 RtOp::Hole(source) => out.put(&self.text_of(source, inputs, child.as_mut())),
-                RtOp::Branch { cond, then, otherwise } => {
+                RtOp::Branch {
+                    cond,
+                    then,
+                    otherwise,
+                } => {
                     let c = self.text_of(cond, inputs, child.as_mut());
                     let branch = if c.trim() == "1" { then } else { otherwise };
                     match child.as_mut() {
@@ -314,7 +376,13 @@ impl TileProgram {
                         None => self.render_ops(branch, inputs, None, out),
                     }
                 }
-                RtOp::Repeat { stream, child: child_idx, sep, body, generators } => {
+                RtOp::Repeat {
+                    stream,
+                    child: child_idx,
+                    sep,
+                    body,
+                    generators,
+                } => {
                     let mut streamer = (**stream).clone();
                     if !generators.is_empty() {
                         streamer.ast = bind_generators(&streamer.ast, generators, inputs);
@@ -334,7 +402,12 @@ impl TileProgram {
                         &HashMap::new(),
                         |_| Ok(()),
                     )
-                    .unwrap_or_else(|e| panic!("tile '{}': projection `for {}` failed at render: {e}", self.spec.name, streamer.text));
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "tile '{}': projection `for {}` failed at render: {e}",
+                            self.spec.name, streamer.text
+                        )
+                    });
                     let mut first = true;
                     with_scratch(program, |state| {
                         for (index, tuple) in tuples.iter().enumerate() {
@@ -349,7 +422,9 @@ impl TileProgram {
                                 }
                             }
                             for (name, input_idx, ty) in &child_spec.cascade {
-                                if let (Some(idx), Some(v)) = (program.find_input(name), inputs.get(*input_idx)) {
+                                if let (Some(idx), Some(v)) =
+                                    (program.find_input(name), inputs.get(*input_idx))
+                                {
                                     state.set_input(idx, typed_for(v, ty));
                                 }
                             }
@@ -361,9 +436,17 @@ impl TileProgram {
         }
     }
 
-    fn text_of(&self, source: &HoleSource, inputs: &[Value], child: Option<&mut (&Arc<PolydatProgram>, &mut PolydatState)>) -> String {
+    fn text_of(
+        &self,
+        source: &HoleSource,
+        inputs: &[Value],
+        child: Option<&mut (&Arc<PolydatProgram>, &mut PolydatState)>,
+    ) -> String {
         match source {
-            HoleSource::Wire(i) => inputs.get(*i).map(|v| v.to_display_string()).unwrap_or_default(),
+            HoleSource::Wire(i) => inputs
+                .get(*i)
+                .map(|v| v.to_display_string())
+                .unwrap_or_default(),
             HoleSource::Child(name) => match child {
                 Some((program, state)) => state.pull(program, name).to_display_string(),
                 None => String::new(),
@@ -391,27 +474,38 @@ fn bind_generators(
     generators: &[(String, usize, String)],
     inputs: &[Value],
 ) -> crate::iteration::comprehension::Comprehension {
-    use crate::iteration::comprehension::source::{LiteralValue, Source};
     use crate::iteration::comprehension::Comprehension as K;
+    use crate::iteration::comprehension::source::{LiteralValue, Source};
     match c {
-        K::Clause { name, source: Source::Generator { .. } } => {
+        K::Clause {
+            name,
+            source: Source::Generator { .. },
+        } => {
             let Some((_, idx, ty)) = generators.iter().find(|(n, _, _)| n == name) else {
                 return c.clone();
             };
             let raw = inputs.get(*idx).cloned().unwrap_or(Value::None);
-            let items: Vec<Value> = match crate::iteration::comprehension::source::iteration_interior(&raw) {
-                Some(interior) => interior,
-                None => match &raw {
-                    Value::Str(text) => match serde_json::from_str::<serde_json::Value>(text.trim()) {
-                        Ok(serde_json::Value::Array(items)) => items
-                            .iter()
-                            .map(|j| retype(&Value::Str(j.to_string().trim_matches('"').into()), ty))
-                            .collect(),
-                        _ => vec![typed_for(&raw, ty)],
+            let items: Vec<Value> =
+                match crate::iteration::comprehension::source::iteration_interior(&raw) {
+                    Some(interior) => interior,
+                    None => match &raw {
+                        Value::Str(text) => {
+                            match serde_json::from_str::<serde_json::Value>(text.trim()) {
+                                Ok(serde_json::Value::Array(items)) => items
+                                    .iter()
+                                    .map(|j| {
+                                        retype(
+                                            &Value::Str(j.to_string().trim_matches('"').into()),
+                                            ty,
+                                        )
+                                    })
+                                    .collect(),
+                                _ => vec![typed_for(&raw, ty)],
+                            }
+                        }
+                        _ => vec![raw.clone()],
                     },
-                    _ => vec![raw.clone()],
-                },
-            };
+                };
             let values = items
                 .iter()
                 .map(|v| match v {
@@ -421,9 +515,15 @@ fn bind_generators(
                     Value::Bool(b) => LiteralValue::Bool(*b),
                     // JSON scalars carry their own kind.
                     Value::Json(j) => match j.as_ref() {
-                        serde_json::Value::Number(n) if n.is_u64() => LiteralValue::Int(n.as_u64().unwrap_or(0) as i64),
-                        serde_json::Value::Number(n) if n.is_i64() => LiteralValue::Int(n.as_i64().unwrap_or(0)),
-                        serde_json::Value::Number(n) => LiteralValue::Float(n.as_f64().unwrap_or(0.0)),
+                        serde_json::Value::Number(n) if n.is_u64() => {
+                            LiteralValue::Int(n.as_u64().unwrap_or(0) as i64)
+                        }
+                        serde_json::Value::Number(n) if n.is_i64() => {
+                            LiteralValue::Int(n.as_i64().unwrap_or(0))
+                        }
+                        serde_json::Value::Number(n) => {
+                            LiteralValue::Float(n.as_f64().unwrap_or(0.0))
+                        }
                         serde_json::Value::Bool(b) => LiteralValue::Bool(*b),
                         serde_json::Value::String(s) => LiteralValue::String(s.clone()),
                         other => LiteralValue::String(other.to_string()),
@@ -431,14 +531,40 @@ fn bind_generators(
                     other => LiteralValue::String(other.to_display_string()),
                 })
                 .collect();
-            K::Clause { name: name.clone(), source: Source::Literal { values } }
+            K::Clause {
+                name: name.clone(),
+                source: Source::Literal { values },
+            }
         }
         K::Clause { .. } => c.clone(),
-        K::Cartesian { children } => K::Cartesian { children: children.iter().map(|ch| bind_generators(ch, generators, inputs)).collect() },
-        K::Zip { children, mode } => K::Zip { children: children.iter().map(|ch| bind_generators(ch, generators, inputs)).collect(), mode: *mode },
-        K::Union { children } => K::Union { children: children.iter().map(|ch| bind_generators(ch, generators, inputs)).collect() },
-        K::Filter { child, predicate } => K::Filter { child: Box::new(bind_generators(child, generators, inputs)), predicate: predicate.clone() },
-        K::Order { child, strategy, truncation } => K::Order {
+        K::Cartesian { children } => K::Cartesian {
+            children: children
+                .iter()
+                .map(|ch| bind_generators(ch, generators, inputs))
+                .collect(),
+        },
+        K::Zip { children, mode } => K::Zip {
+            children: children
+                .iter()
+                .map(|ch| bind_generators(ch, generators, inputs))
+                .collect(),
+            mode: *mode,
+        },
+        K::Union { children } => K::Union {
+            children: children
+                .iter()
+                .map(|ch| bind_generators(ch, generators, inputs))
+                .collect(),
+        },
+        K::Filter { child, predicate } => K::Filter {
+            child: Box::new(bind_generators(child, generators, inputs)),
+            predicate: predicate.clone(),
+        },
+        K::Order {
+            child,
+            strategy,
+            truncation,
+        } => K::Order {
             child: Box::new(bind_generators(child, generators, inputs)),
             strategy: *strategy,
             truncation: *truncation,
@@ -535,14 +661,18 @@ pub fn encode_ref<W: std::fmt::Write>(value: ValueRef<'_>, enc: &HoleEncoding, o
             match (kind, value) {
                 (_, ValueRef::None) => out.put("null"),
                 ("bool", _) => out.put(if truthy_of(value) { "true" } else { "false" }),
-                ("json", ValueRef::Json(j)) => { let _ = write!(out, "{j}"); }
+                ("json", ValueRef::Json(j)) => {
+                    let _ = write!(out, "{j}");
+                }
                 ("str", _) | ("String", _) | ("string", _) => {
                     out.put_char('"');
                     push_json_escaped(&text, out);
                     out.put_char('"');
                 }
                 (k, _) if is_numeric_keyword(k) => out.put(&text),
-                (_, ValueRef::Json(j)) => { let _ = write!(out, "{j}"); }
+                (_, ValueRef::Json(j)) => {
+                    let _ = write!(out, "{j}");
+                }
                 (_, ValueRef::Bool(b)) => out.put(if b { "true" } else { "false" }),
                 (_, ValueRef::U64(_)) | (_, ValueRef::F64(_)) => out.put(&text),
                 _ => {
@@ -582,13 +712,32 @@ fn truthy_of(v: ValueRef<'_>) -> bool {
 }
 
 fn is_numeric_keyword(k: &str) -> bool {
-    matches!(k, "u64" | "i64" | "f64" | "f32" | "u32" | "i32" | "u16" | "i16" | "u8" | "i8" | "u128" | "i128" | "f16")
+    matches!(
+        k,
+        "u64"
+            | "i64"
+            | "f64"
+            | "f32"
+            | "u32"
+            | "i32"
+            | "u16"
+            | "i16"
+            | "u8"
+            | "i8"
+            | "u128"
+            | "i128"
+            | "f16"
+    )
 }
 
 /// Display text for a value under an optional printf-style format:
 /// `.N` precision for floats, `0N` zero-padded width, `N` width, `>N`
 /// and `<N` alignment, `x`/`X` hex for integers.
-fn formatted_text<'a>(value: ValueRef<'a>, ty: Option<&str>, format: Option<&str>) -> std::borrow::Cow<'a, str> {
+fn formatted_text<'a>(
+    value: ValueRef<'a>,
+    ty: Option<&str>,
+    format: Option<&str>,
+) -> std::borrow::Cow<'a, str> {
     use std::borrow::Cow;
     // A string with no format is borrowed as it is; everything else is
     // owned text.
@@ -607,7 +756,11 @@ fn formatted_text<'a>(value: ValueRef<'a>, ty: Option<&str>, format: Option<&str
     }
     if fmt == "x" || fmt == "X" {
         if let ValueRef::U64(n) = value {
-            return Cow::Owned(if fmt == "x" { format!("{n:x}") } else { format!("{n:X}") });
+            return Cow::Owned(if fmt == "x" {
+                format!("{n:x}")
+            } else {
+                format!("{n:X}")
+            });
         }
         return base;
     }
@@ -642,7 +795,9 @@ fn push_json_escaped<W: std::fmt::Write>(s: &str, out: &mut W) {
             '\n' => out.put("\\n"),
             '\r' => out.put("\\r"),
             '\t' => out.put("\\t"),
-            c if (c as u32) < 0x20 => { let _ = write!(out, "\\u{:04x}", c as u32); }
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
             c => out.put_char(c),
         }
     }
@@ -663,8 +818,7 @@ fn tile_encode(value: Value, spec: Const<&str>) -> String {
 #[crate::polydat_node(category = Formatting, variadic_min = 0)]
 fn tile_render(
     spec: Const<&str>,
-    #[poly_const(TileProgram::from_json, from = spec)]
-    program: &TileProgram,
+    #[poly_const(TileProgram::from_json, from = spec)] program: &TileProgram,
     values: &[Value],
 ) -> String {
     program.render(values)
@@ -674,44 +828,94 @@ fn tile_render(
 mod tests {
     use super::*;
 
-    fn enc(encoding: &str, position: HolePosition, ty: Option<&str>, format: Option<&str>, raw: bool) -> HoleEncoding {
-        HoleEncoding { encoding: encoding.into(), position, ty: ty.map(str::to_string), format: format.map(str::to_string), raw, cond: false }
+    fn enc(
+        encoding: &str,
+        position: HolePosition,
+        ty: Option<&str>,
+        format: Option<&str>,
+        raw: bool,
+    ) -> HoleEncoding {
+        HoleEncoding {
+            encoding: encoding.into(),
+            position,
+            ty: ty.map(str::to_string),
+            format: format.map(str::to_string),
+            raw,
+            cond: false,
+        }
     }
 
     #[test]
     fn json_value_and_string_positions_encode_by_type() {
         let mut out = String::new();
-        encode(&Value::Str("a\"b".into()), &enc("json", HolePosition::Value, Some("str"), None, false), &mut out);
+        encode(
+            &Value::Str("a\"b".into()),
+            &enc("json", HolePosition::Value, Some("str"), None, false),
+            &mut out,
+        );
         assert_eq!(out, "\"a\\\"b\"");
         out.clear();
-        encode(&Value::U64(7), &enc("json", HolePosition::Value, None, None, false), &mut out);
+        encode(
+            &Value::U64(7),
+            &enc("json", HolePosition::Value, None, None, false),
+            &mut out,
+        );
         assert_eq!(out, "7");
         out.clear();
-        encode(&Value::Str("x\ny".into()), &enc("json", HolePosition::InString, None, None, false), &mut out);
+        encode(
+            &Value::Str("x\ny".into()),
+            &enc("json", HolePosition::InString, None, None, false),
+            &mut out,
+        );
         assert_eq!(out, "x\\ny");
         out.clear();
-        encode(&Value::F64(2.0 / 3.0), &enc("json", HolePosition::Value, None, Some(".2"), false), &mut out);
+        encode(
+            &Value::F64(2.0 / 3.0),
+            &enc("json", HolePosition::Value, None, Some(".2"), false),
+            &mut out,
+        );
         assert_eq!(out, "0.67");
         out.clear();
-        encode(&Value::None, &enc("json", HolePosition::Value, None, None, false), &mut out);
+        encode(
+            &Value::None,
+            &enc("json", HolePosition::Value, None, None, false),
+            &mut out,
+        );
         assert_eq!(out, "null");
     }
 
     #[test]
     fn spec_round_trips() {
-        let e = enc("json", HolePosition::InString, Some("u64"), Some(".2"), true);
+        let e = enc(
+            "json",
+            HolePosition::InString,
+            Some("u64"),
+            Some(".2"),
+            true,
+        );
         assert_eq!(HoleEncoding::from_spec(&e.to_spec()), e);
-        let c = HoleEncoding { cond: true, ..enc("text", HolePosition::Text, None, None, false) };
+        let c = HoleEncoding {
+            cond: true,
+            ..enc("text", HolePosition::Text, None, None, false)
+        };
         assert_eq!(HoleEncoding::from_spec(&c.to_spec()), c);
     }
 
     #[test]
     fn csv_quotes_when_needed_and_raw_skips_escaping() {
         let mut out = String::new();
-        encode(&Value::Str("a,b".into()), &enc("csv", HolePosition::Text, None, None, false), &mut out);
+        encode(
+            &Value::Str("a,b".into()),
+            &enc("csv", HolePosition::Text, None, None, false),
+            &mut out,
+        );
         assert_eq!(out, "\"a,b\"");
         out.clear();
-        encode(&Value::Str("a\"b".into()), &enc("json", HolePosition::Value, None, None, true), &mut out);
+        encode(
+            &Value::Str("a\"b".into()),
+            &enc("json", HolePosition::Value, None, None, true),
+            &mut out,
+        );
         assert_eq!(out, "a\"b");
     }
 
@@ -719,6 +923,9 @@ mod tests {
     fn formats_apply_before_encoding() {
         assert_eq!(formatted_text(ValueRef::U64(5), None, Some("03")), "005");
         assert_eq!(formatted_text(ValueRef::U64(255), None, Some("x")), "ff");
-        assert_eq!(formatted_text(ValueRef::Str("ab"), None, Some(">4")), "  ab");
+        assert_eq!(
+            formatted_text(ValueRef::Str("ab"), None, Some(">4")),
+            "  ab"
+        );
     }
 }

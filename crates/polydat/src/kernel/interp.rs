@@ -76,19 +76,17 @@ pub fn interpolate_via_kernel(
     .map_err(|msg| classify_interpolate_error(text, msg))
 }
 
-fn classify_interpolate_error(
-    text: &str,
-    msg: String,
-) -> crate::dsl::compile::EmbeddingError {
+fn classify_interpolate_error(text: &str, msg: String) -> crate::dsl::compile::EmbeddingError {
     // "interpolation: unresolved placeholder '{name}' in '...'"
     if let Some(rest) = msg.strip_prefix("interpolation: unresolved placeholder '{")
-        && let Some(end) = rest.find('}') {
-            let name = rest[..end].to_string();
-            return crate::dsl::compile::EmbeddingError::UnresolvedPlaceholder {
-                name,
-                source: text.to_string(),
-            };
-        }
+        && let Some(end) = rest.find('}')
+    {
+        let name = rest[..end].to_string();
+        return crate::dsl::compile::EmbeddingError::UnresolvedPlaceholder {
+            name,
+            source: text.to_string(),
+        };
+    }
     // Cyclic placeholder fall-through: classify as Parse since
     // the text didn't stabilise.
     crate::dsl::compile::EmbeddingError::Parse {
@@ -173,7 +171,9 @@ pub fn collect_string_interp_refs(src: &str, refs: &mut HashSet<String>) {
                 if !trimmed.is_empty()
                     && !trimmed.starts_with('\'')
                     && !trimmed.starts_with('"')
-                    && trimmed.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                    && trimmed
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_')
                     && !trimmed.bytes().next().unwrap().is_ascii_digit()
                 {
                     refs.insert(trimmed.to_string());
@@ -302,8 +302,7 @@ fn first_unresolved(s: &str) -> Option<String> {
         if bytes[i] == b'{' {
             let mut j = i + 1;
             while j < n {
-                if bytes[j] == b'\\' && j + 1 < n
-                    && (bytes[j + 1] == b'{' || bytes[j + 1] == b'}')
+                if bytes[j] == b'\\' && j + 1 < n && (bytes[j + 1] == b'{' || bytes[j + 1] == b'}')
                 {
                     j += 2;
                     continue;
@@ -335,11 +334,12 @@ fn unescape(s: &str) -> String {
     while let Some(c) = chars.next() {
         if c == '\\'
             && let Some(&next) = chars.peek()
-                && (next == '{' || next == '}') {
-                    out.push(next);
-                    chars.next();
-                    continue;
-                }
+            && (next == '{' || next == '}')
+        {
+            out.push(next);
+            chars.next();
+            continue;
+        }
         out.push(c);
     }
     out
@@ -351,7 +351,10 @@ mod tests {
     use std::collections::HashMap;
 
     fn h(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     #[test]

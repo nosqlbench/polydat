@@ -20,10 +20,7 @@ use super::instance::{KernelScope, ScopedKernelInstance};
 /// Available as a standalone function and as a method on
 /// [`crate::iteration::comprehension::surfaces::CompiledComprehension::scope_once`];
 /// neither form consults the program's dispense cursor.
-pub fn scope_once<K: KernelScope>(
-    parent: &K,
-    coords: &Tuple,
-) -> ScopedKernelInstance<K::Scoped> {
+pub fn scope_once<K: KernelScope>(parent: &K, coords: &Tuple) -> ScopedKernelInstance<K::Scoped> {
     scope_once_with(parent, coords)
 }
 

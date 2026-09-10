@@ -58,9 +58,7 @@ fn srd80b_no_handwritten_polydat_node_impl_outside_carveouts() {
     );
 
     let mut offending: Vec<String> = Vec::new();
-    let carveout: HashSet<PathBuf> = CARVEOUT_FILES.iter()
-        .map(|p| crate_root.join(p))
-        .collect();
+    let carveout: HashSet<PathBuf> = CARVEOUT_FILES.iter().map(|p| crate_root.join(p)).collect();
 
     visit_rust_files(&library_root, &mut |path| {
         if carveout.contains(path) {

@@ -13,7 +13,7 @@
 //! test restores `Off` before releasing it.
 
 use crate::ast::Value;
-use crate::compile::cone::{set_default_jit_mode, JitMode};
+use crate::compile::cone::{JitMode, set_default_jit_mode};
 use crate::dsl::compile::compile_polydat_with_libs;
 use std::sync::Mutex;
 
@@ -35,8 +35,7 @@ fn with_mode<T>(mode: JitMode, f: impl FnOnce() -> T) -> T {
 }
 
 fn compile(src: &str) -> crate::kernel::PolydatKernel {
-    compile_polydat_with_libs(src, None, vec![], &[], false, "cone_test")
-        .expect("compile")
+    compile_polydat_with_libs(src, None, vec![], &[], false, "cone_test").expect("compile")
 }
 
 /// Pull `output` for each x in `xs`, returning the values.
@@ -71,10 +70,12 @@ fn default_mode_is_auto() {
 #[test]
 fn force_fuses_and_matches_interpreter_u64() {
     let xs: Vec<u64> = (0..50).chain([u64::MAX / 3, u64::MAX]).collect();
-    let (baseline, base_nodes) =
-        with_mode(JitMode::Off, || (sweep(U64_CHAIN, "w", &xs), node_count(U64_CHAIN)));
-    let (fused, fused_nodes) =
-        with_mode(JitMode::Force, || (sweep(U64_CHAIN, "w", &xs), node_count(U64_CHAIN)));
+    let (baseline, base_nodes) = with_mode(JitMode::Off, || {
+        (sweep(U64_CHAIN, "w", &xs), node_count(U64_CHAIN))
+    });
+    let (fused, fused_nodes) = with_mode(JitMode::Force, || {
+        (sweep(U64_CHAIN, "w", &xs), node_count(U64_CHAIN))
+    });
     assert_eq!(baseline, fused, "cone output must be bit-identical");
     assert!(
         fused_nodes < base_nodes,
@@ -127,7 +128,10 @@ fn auto_requires_two_members() {
     let force_nodes = with_mode(JitMode::Force, || node_count(src));
     let off_nodes = with_mode(JitMode::Off, || node_count(src));
     assert_eq!(auto_nodes, off_nodes, "auto must not fuse a 1-node cone");
-    assert_eq!(force_nodes, off_nodes, "a 1-node cone replaces 1 node with 1 cone");
+    assert_eq!(
+        force_nodes, off_nodes,
+        "a 1-node cone replaces 1 node with 1 cone"
+    );
     let xs: Vec<u64> = (0..10).collect();
     let baseline = with_mode(JitMode::Off, || sweep(src, "v", &xs));
     let forced = with_mode(JitMode::Force, || sweep(src, "v", &xs));
@@ -197,10 +201,7 @@ fn scope_init_chains_stay_on_the_fold_path() {
                w := add(v, 7)\n";
     let off_nodes = with_mode(JitMode::Off, || node_count(src));
     let force_nodes = with_mode(JitMode::Force, || node_count(src));
-    assert_eq!(
-        off_nodes, force_nodes,
-        "scope-init chains must not fuse"
-    );
+    assert_eq!(off_nodes, force_nodes, "scope-init chains must not fuse");
     let xs: Vec<u64> = (0..10).collect();
     let baseline = with_mode(JitMode::Off, || sweep(src, "w", &xs));
     let forced = with_mode(JitMode::Force, || sweep(src, "w", &xs));
@@ -231,8 +232,14 @@ fn capture_violation(src: &str, mode: JitMode, x: u64) -> String {
 fn assert_parity(src: &str, x: u64, core: &str) {
     let off = capture_violation(src, JitMode::Off, x);
     let force = capture_violation(src, JitMode::Force, x);
-    assert!(off.contains(core), "interpreter message carries the core: {off}");
-    assert!(force.contains(core), "cone message carries the same core: {force}");
+    assert!(
+        off.contains(core),
+        "interpreter message carries the core: {off}"
+    );
+    assert!(
+        force.contains(core),
+        "cone message carries the same core: {force}"
+    );
     assert!(off.contains("in node"), "interpreter enriches: {off}");
     assert!(force.contains("in node"), "cone enriches: {force}");
 }
@@ -310,7 +317,5 @@ fn non_convex_components_stay_on_the_interpreter() {
     // The result may be Ok or a clean Err (the fuzz feeds garbage
     // types on purpose); the invariant under test is NO PANIC in
     // cone extraction/splicing under the default (auto) mode.
-    let _ = with_mode(JitMode::Auto, || {
-        crate::dsl::compile::compile_polydat(src)
-    });
+    let _ = with_mode(JitMode::Auto, || crate::dsl::compile::compile_polydat(src));
 }

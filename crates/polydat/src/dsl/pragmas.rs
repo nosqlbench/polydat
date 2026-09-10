@@ -175,7 +175,10 @@ pub fn collect_from_ast(file: &crate::dsl::ast::PolydatFile) -> PragmaSet {
             });
         }
     }
-    PragmaSet { entries, parent: None }
+    PragmaSet {
+        entries,
+        parent: None,
+    }
 }
 
 /// A pragma that disagreed across nested scopes. Used by
@@ -238,7 +241,10 @@ mod tests {
         });
         let inner = PragmaSet::default();
         let (attached, conflicts) = inner.attach_to(outer);
-        assert!(attached.strict_values(), "inner should see outer's strict_values via parent walk");
+        assert!(
+            attached.strict_values(),
+            "inner should see outer's strict_values via parent walk"
+        );
         assert!(conflicts.is_empty());
     }
 

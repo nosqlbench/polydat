@@ -15,8 +15,7 @@ use crate::iteration::comprehension::streamer_value::StreamerValue;
 #[crate::polydat_node(category = Variadic)]
 fn streamer(
     spec: Const<&str>,
-    #[poly_const(StreamerValue::from_json, from = spec)]
-    parsed: &StreamerValue,
+    #[poly_const(StreamerValue::from_json, from = spec)] parsed: &StreamerValue,
 ) -> Ext<StreamerValue> {
     Ext(parsed.clone())
 }
@@ -30,7 +29,14 @@ mod tests {
 
     #[test]
     fn node_round_trips_the_payload() {
-        let ast = Comprehension::clause("k", Source::IntRange { lo: 1, hi: 4, step: 1 });
+        let ast = Comprehension::clause(
+            "k",
+            Source::IntRange {
+                lo: 1,
+                hi: 4,
+                step: 1,
+            },
+        );
         let payload = StreamerValue::new("k in 1..4", ast).to_json();
         let node = Streamer::new(payload);
         let mut out = [Value::None];

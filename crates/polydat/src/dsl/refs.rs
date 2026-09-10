@@ -89,8 +89,7 @@ pub fn collect_expr_refs(expr: &Expr, out: &mut BTreeSet<String>) {
         // outer references in its sources resolve at compile time
         // (SRD 113 step 2).
         Expr::For(_) => {}
-        Expr::UnaryNeg(inner, _) | Expr::UnaryBitNot(inner, _)
-        | Expr::Cast(inner, _, _) => {
+        Expr::UnaryNeg(inner, _) | Expr::UnaryBitNot(inner, _) | Expr::Cast(inner, _, _) => {
             collect_expr_refs(inner, out);
         }
         Expr::ArrayLit(elems, _) => {
@@ -138,7 +137,9 @@ pub fn collect_string_interpolation_refs(s: &str, out: &mut BTreeSet<String>) {
                 '}' => depth -= 1,
                 _ => {}
             }
-            if depth == 0 { break; }
+            if depth == 0 {
+                break;
+            }
             j += 1;
         }
         if depth != 0 {

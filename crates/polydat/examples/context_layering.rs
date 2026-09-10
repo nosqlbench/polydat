@@ -21,7 +21,8 @@
 
 fn main() {
     let lib_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("stdlib").join("identity.polydat");
+        .join("stdlib")
+        .join("identity.polydat");
 
     let mut kernel = polydat::dsl::compile_polydat_with_libs(
         r#"
@@ -41,7 +42,8 @@ fn main() {
         &[],
         false,
         "context_layering example",
-    ).expect("compile failed");
+    )
+    .expect("compile failed");
 
     println!("library function loaded from: {}", lib_path.display());
     println!();

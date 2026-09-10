@@ -14,14 +14,14 @@
 //! write `pow(x, 3.0)` or `f64_mul(x, 0.1)` directly without first
 //! binding the constant to a name.
 
+use crate::ast::{PortType, SlotType};
 use crate::compile::assembly::{PolydatAssembler, WireRef};
 use crate::dsl::ast::*;
-use crate::dsl::factory::{build_node, ConstArg};
+use crate::dsl::factory::{ConstArg, build_node};
 use crate::dsl::registry;
-use crate::ast::{PortType, SlotType};
 use crate::library::fixed::*;
-use crate::library::identity::*;
 use crate::library::format::*;
+use crate::library::identity::*;
 
 use super::compile::Compiler;
 use crate::dsl::lexer::Span;
@@ -52,10 +52,7 @@ fn string_lit_has_real_placeholder(s: &str) -> bool {
             }
             let body: String = chars[body_start..body_end].iter().collect();
             let trimmed = body.trim();
-            if !trimmed.is_empty()
-                && !trimmed.starts_with('\'')
-                && !trimmed.starts_with('"')
-            {
+            if !trimmed.is_empty() && !trimmed.starts_with('\'') && !trimmed.starts_with('"') {
                 return true;
             }
             i = body_end + 1;
@@ -72,9 +69,14 @@ fn string_lit_has_real_placeholder(s: &str) -> bool {
 /// reach into an operand.
 fn expr_span(expr: &Expr) -> Span {
     match expr {
-        Expr::IntLit(_, s) | Expr::FloatLit(_, s) | Expr::StringLit(_, s)
-            | Expr::Ident(_, s) | Expr::UnaryNeg(_, s) | Expr::UnaryBitNot(_, s)
-            | Expr::ArrayLit(_, s) | Expr::Cast(_, _, s) => *s,
+        Expr::IntLit(_, s)
+        | Expr::FloatLit(_, s)
+        | Expr::StringLit(_, s)
+        | Expr::Ident(_, s)
+        | Expr::UnaryNeg(_, s)
+        | Expr::UnaryBitNot(_, s)
+        | Expr::ArrayLit(_, s)
+        | Expr::Cast(_, _, s) => *s,
         Expr::For(source) => source.span,
         Expr::Call(c) => c.span,
         Expr::FieldAccess { span, .. } => *span,
@@ -98,7 +100,11 @@ fn render_list_literal(elems: &[Expr]) -> String {
         match e {
             Expr::IntLit(v, _) => v.to_string(),
             Expr::FloatLit(v, _) => {
-                if v.fract() == 0.0 { format!("{v:.1}") } else { format!("{v}") }
+                if v.fract() == 0.0 {
+                    format!("{v:.1}")
+                } else {
+                    format!("{v}")
+                }
             }
             // Unquoted — matches the `"OTHER, ADA002"` string-list
             // convention so the comprehension source splits cleanly.
@@ -178,19 +184,37 @@ pub(super) fn infer_expr_type(
             // added (vec_dot et al. inferred as U64, lowering
             // `vec_dot(..) * x` to u64_mul and failing resolve).
             let f = call.func.as_str();
-            if let Some(port) = crate::dsl::registry::lookup(f)
-                .and_then(|sig| sig.output_port)
-            {
+            if let Some(port) = crate::dsl::registry::lookup(f).and_then(|sig| sig.output_port) {
                 return port;
             }
             // Heuristic based on function name prefix/membership.
-            if f.starts_with("f64_") || f.starts_with("to_f64")
-                || ["sin", "cos", "tan", "asin", "acos", "atan", "atan2",
-                    "sqrt", "abs_f64", "ln", "exp", "pow", "lerp",
-                    "scale_range", "unit_interval", "clamp_f64",
-                    "quantize", "discretize", "f64_mod",
-                    "icd_normal", "icd_uniform",
-                ].contains(&f) {
+            if f.starts_with("f64_")
+                || f.starts_with("to_f64")
+                || [
+                    "sin",
+                    "cos",
+                    "tan",
+                    "asin",
+                    "acos",
+                    "atan",
+                    "atan2",
+                    "sqrt",
+                    "abs_f64",
+                    "ln",
+                    "exp",
+                    "pow",
+                    "lerp",
+                    "scale_range",
+                    "unit_interval",
+                    "clamp_f64",
+                    "quantize",
+                    "discretize",
+                    "f64_mod",
+                    "icd_normal",
+                    "icd_uniform",
+                ]
+                .contains(&f)
+            {
                 PortType::F64
             } else {
                 PortType::U64
@@ -198,24 +222,29 @@ pub(super) fn infer_expr_type(
         }
         Expr::BinOp(lhs, op, rhs) => {
             match op {
-                BinOpKind::BitAnd | BinOpKind::BitOr | BinOpKind::BitXor |
-                BinOpKind::Shl | BinOpKind::Shr => PortType::U64,
+                BinOpKind::BitAnd
+                | BinOpKind::BitOr
+                | BinOpKind::BitXor
+                | BinOpKind::Shl
+                | BinOpKind::Shr => PortType::U64,
                 BinOpKind::Pow => PortType::F64,
                 // Comparison operators always produce a u64 truth
                 // value (0 or 1) regardless of operand types — the
                 // type-aware desugar in compile_binding picks the
                 // right input variant.
-                BinOpKind::Eq | BinOpKind::Ne |
-                BinOpKind::Lt | BinOpKind::Gt |
-                BinOpKind::Le | BinOpKind::Ge => PortType::U64,
+                BinOpKind::Eq
+                | BinOpKind::Ne
+                | BinOpKind::Lt
+                | BinOpKind::Gt
+                | BinOpKind::Le
+                | BinOpKind::Ge => PortType::U64,
                 // SRD-84 Part 1 — logical `&&` / `||` produce a u64
                 // truthiness (0/1), like comparisons.
                 BinOpKind::And | BinOpKind::Or => PortType::U64,
                 _ => {
                     let lt = infer_expr_type(lhs, asm, input_names);
                     let rt = infer_expr_type(rhs, asm, input_names);
-                    if matches!(op, BinOpKind::Add)
-                        && (lt == PortType::Str || rt == PortType::Str)
+                    if matches!(op, BinOpKind::Add) && (lt == PortType::Str || rt == PortType::Str)
                     {
                         PortType::Str
                     } else if lt == PortType::F64 || rt == PortType::F64 {
@@ -280,7 +309,8 @@ impl Compiler {
                     if call.args.len() != 3 {
                         return Err(format!(
                             "if({}): expected 3 arguments (cond, a, b), got {}",
-                            targets[0], call.args.len()
+                            targets[0],
+                            call.args.len()
                         ));
                     }
                     let cond_arg = call.args[0].clone();
@@ -301,17 +331,25 @@ impl Compiler {
                     // Otherwise the existing F64/U64 widening path
                     // applies.
                     let str_path = a_type == PortType::Str || b_type == PortType::Str;
-                    let f64_path = !str_path
-                        && (a_type == PortType::F64 || b_type == PortType::F64);
+                    let f64_path =
+                        !str_path && (a_type == PortType::F64 || b_type == PortType::F64);
                     let widened_a = if f64_path && a_type == PortType::U64 {
                         wrap_to_f64(a_expr.clone())
-                    } else { a_expr };
+                    } else {
+                        a_expr
+                    };
                     let widened_b = if f64_path && b_type == PortType::U64 {
                         wrap_to_f64(b_expr.clone())
-                    } else { b_expr };
-                    let func_name = if str_path { "select_str" }
-                                    else if f64_path { "select_f64" }
-                                    else { "select_u64" };
+                    } else {
+                        b_expr
+                    };
+                    let func_name = if str_path {
+                        "select_str"
+                    } else if f64_path {
+                        "select_f64"
+                    } else {
+                        "select_u64"
+                    };
                     let new_call = crate::dsl::ast::CallExpr {
                         func: func_name.into(),
                         args: vec![
@@ -380,9 +418,7 @@ impl Compiler {
                     let expected_slot = param_slot_types.get(param_cursor).copied();
 
                     // Helper: is this arg position expected to be a wire input?
-                    let wants_wire = expected_slot
-                        .map(|s| s.is_wire())
-                        .unwrap_or(variadic_wires);
+                    let wants_wire = expected_slot.map(|s| s.is_wire()).unwrap_or(variadic_wires);
 
                     match expr {
                         Expr::Ident(id, _) => {
@@ -426,15 +462,22 @@ impl Compiler {
                         Expr::Call(inner) => {
                             // Inline nesting: desugar to an anonymous node
                             let anon = self.anon_name();
-                            self.compile_binding(asm, std::slice::from_ref(&anon), &Expr::Call(inner.clone()))?;
+                            self.compile_binding(
+                                asm,
+                                std::slice::from_ref(&anon),
+                                &Expr::Call(inner.clone()),
+                            )?;
                             wire_refs.push(WireRef::node(anon));
                         }
                         Expr::ArrayLit(elems, _) => {
-                            let floats: Vec<f64> = elems.iter().map(|e| match e {
-                                Expr::FloatLit(v, _) => *v,
-                                Expr::IntLit(v, _) => *v as f64,
-                                _ => 0.0,
-                            }).collect();
+                            let floats: Vec<f64> = elems
+                                .iter()
+                                .map(|e| match e {
+                                    Expr::FloatLit(v, _) => *v,
+                                    Expr::IntLit(v, _) => *v as f64,
+                                    _ => 0.0,
+                                })
+                                .collect();
                             const_args.push(ConstArg::FloatArray(floats));
                         }
                         Expr::UnaryNeg(inner, _) => {
@@ -455,7 +498,11 @@ impl Compiler {
                                     if wants_wire {
                                         // Negative integer: promote as ConstF64
                                         let anon = self.anon_name();
-                                        asm.add_node(&anon, Box::new(ConstF64::new(-(*v as f64))), vec![]);
+                                        asm.add_node(
+                                            &anon,
+                                            Box::new(ConstF64::new(-(*v as f64))),
+                                            vec![],
+                                        );
                                         wire_refs.push(WireRef::node(anon));
                                     } else {
                                         // Wrapping negate for u64 (effectively i64 reinterpret)
@@ -473,7 +520,10 @@ impl Compiler {
                         Expr::For(source) => {
                             return Err(format!(
                                 "`for {}` at line {}, col {}: {}",
-                                source.text, source.span.line, source.span.col, "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
+                                source.text,
+                                source.span.line,
+                                source.span.col,
+                                "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
                             ));
                         }
                         Expr::BinOp(..) | Expr::UnaryBitNot(..) | Expr::Cast(..) => {
@@ -494,15 +544,19 @@ impl Compiler {
                 // any node that records it (e.g. `control_set`).
                 // The scope guard clears on Drop so nested
                 // compilation never leaks an outer attribution.
-                let _binding_scope = targets.first().map(|n|
-                    crate::dsl::factory::compile_ctx::scoped_binding(n));
-                let wire_types: Vec<PortType> = wire_refs.iter()
+                let _binding_scope = targets
+                    .first()
+                    .map(|n| crate::dsl::factory::compile_ctx::scoped_binding(n));
+                let wire_types: Vec<PortType> = wire_refs
+                    .iter()
                     .map(|w| asm.wire_type(w).unwrap_or(PortType::U64))
                     .collect();
                 // A module the program defines (or one already resolved)
                 // takes the call before the function registry does, so an
                 // author's definition shadows a library node of that name.
-                if self.has_known_module(&call.func) && self.try_inline_module(asm, &call.func, &call.args, targets)? {
+                if self.has_known_module(&call.func)
+                    && self.try_inline_module(asm, &call.func, &call.args, targets)?
+                {
                     return Ok(());
                 }
                 let node = match build_node(&call.func, &wire_refs, &wire_types, &const_args) {
@@ -526,9 +580,7 @@ impl Compiler {
                 // type-adapter pass, but is parameterized by the
                 // consumer's resolver hint (which the type-adapter
                 // pass can't see at the wire-type-only granularity).
-                self.auto_promote_handle_inputs(
-                    asm, &call.func, &*node, &mut wire_refs,
-                )?;
+                self.auto_promote_handle_inputs(asm, &call.func, &*node, &mut wire_refs)?;
 
                 if targets.len() == 1 {
                     asm.add_node(&node_name, node, wire_refs);
@@ -542,12 +594,7 @@ impl Compiler {
                     // type — a heterogeneous tuple (e.g. `is_stable`'s
                     // `(f64, u64)`) otherwise fails wire-type resolution.
                     // Capture the port types before the node is moved.
-                    let out_types: Vec<PortType> = node
-                        .meta()
-                        .outs
-                        .iter()
-                        .map(|p| p.typ)
-                        .collect();
+                    let out_types: Vec<PortType> = node.meta().outs.iter().map(|p| p.typ).collect();
                     let internal_name = format!("__destruct_{}", self.anon_counter);
                     self.anon_counter += 1;
                     asm.add_node(&internal_name, node, wire_refs);
@@ -575,8 +622,7 @@ impl Compiler {
                 // emit the whole string as a `ConstStr` — no
                 // interpolation, no wire wiring.
                 let has_braces = s.contains('{') && s.contains('}');
-                let any_real_placeholder = has_braces
-                    && string_lit_has_real_placeholder(s);
+                let any_real_placeholder = has_braces && string_lit_has_real_placeholder(s);
                 if any_real_placeholder {
                     // Parse bind points
                     let mut bind_names = Vec::new();
@@ -586,7 +632,9 @@ impl Compiler {
                         if chars[i] == '{' {
                             i += 1;
                             let start = i;
-                            while i < chars.len() && chars[i] != '}' { i += 1; }
+                            while i < chars.len() && chars[i] != '}' {
+                                i += 1;
+                            }
                             let body: String = chars[start..i].iter().collect();
                             // Skip literal-content `{...}` (matches
                             // `is_literal_content`); they stay as
@@ -607,7 +655,8 @@ impl Compiler {
                     // For now, use a Printf node with U64ToString adapters
                     // This is a simplified desugar — a full implementation
                     // would handle mixed types.
-                    let wire_refs: Vec<WireRef> = bind_names.iter()
+                    let wire_refs: Vec<WireRef> = bind_names
+                        .iter()
                         .map(|n| {
                             if self.input_names.contains(n) {
                                 WireRef::input(n)
@@ -682,7 +731,11 @@ impl Compiler {
                 };
                 let src_type = asm.wire_type(&wire).unwrap_or(PortType::U64);
                 if src_type == PortType::U64 {
-                    asm.add_node(name, Box::new(Identity::new(crate::ast::PortType::U64)), vec![wire]);
+                    asm.add_node(
+                        name,
+                        Box::new(Identity::new(crate::ast::PortType::U64)),
+                        vec![wire],
+                    );
                 } else {
                     asm.add_node(
                         name,
@@ -725,7 +778,8 @@ impl Compiler {
                     for operand in &operands {
                         wire_refs.push(self.compile_binop_operand(asm, operand)?);
                     }
-                    let wire_types: Vec<PortType> = wire_refs.iter()
+                    let wire_types: Vec<PortType> = wire_refs
+                        .iter()
                         .map(|w| asm.wire_type(w).unwrap_or(PortType::U64))
                         .collect();
                     let node = build_node("str_concat", &wire_refs, &wire_types, &[])?;
@@ -742,11 +796,15 @@ impl Compiler {
                 // (eager; short-circuit is a deferred optimisation).
                 if matches!(op, BinOpKind::And | BinOpKind::Or) {
                     let lhs_truthy = Expr::BinOp(
-                        lhs.clone(), BinOpKind::Ne,
-                        Box::new(Expr::IntLit(0, expr_span(lhs))));
+                        lhs.clone(),
+                        BinOpKind::Ne,
+                        Box::new(Expr::IntLit(0, expr_span(lhs))),
+                    );
                     let rhs_truthy = Expr::BinOp(
-                        rhs.clone(), BinOpKind::Ne,
-                        Box::new(Expr::IntLit(0, expr_span(rhs))));
+                        rhs.clone(),
+                        BinOpKind::Ne,
+                        Box::new(Expr::IntLit(0, expr_span(rhs))),
+                    );
                     let wa = self.compile_binop_operand(asm, &lhs_truthy)?;
                     let wb = self.compile_binop_operand(asm, &rhs_truthy)?;
                     let func = if matches!(op, BinOpKind::And) {
@@ -755,8 +813,11 @@ impl Compiler {
                         "u64_or"
                     };
                     let node = build_node(
-                        func, &[wa.clone(), wb.clone()],
-                        &[PortType::U64, PortType::U64], &[])?;
+                        func,
+                        &[wa.clone(), wb.clone()],
+                        &[PortType::U64, PortType::U64],
+                        &[],
+                    )?;
                     let name = &targets[0];
                     asm.add_node(name, node, vec![wa, wb]);
                     self.all_names.push(name.clone());
@@ -764,8 +825,11 @@ impl Compiler {
                 }
 
                 let (func_name, need_widen_lhs, need_widen_rhs) = match op {
-                    BinOpKind::Add | BinOpKind::Sub | BinOpKind::Mul |
-                    BinOpKind::Div | BinOpKind::Mod => {
+                    BinOpKind::Add
+                    | BinOpKind::Sub
+                    | BinOpKind::Mul
+                    | BinOpKind::Div
+                    | BinOpKind::Mod => {
                         if lhs_type == PortType::U64 && rhs_type == PortType::U64 {
                             let name = match op {
                                 BinOpKind::Add => "u64_add",
@@ -776,7 +840,8 @@ impl Compiler {
                                 other => unreachable!(
                                     "arithmetic dispatch reached with non-arithmetic \
                                      BinOpKind {other:?}; the enclosing match only \
-                                     admits Add/Sub/Mul/Div/Mod"),
+                                     admits Add/Sub/Mul/Div/Mod"
+                                ),
                             };
                             (name, false, false)
                         } else {
@@ -789,24 +854,28 @@ impl Compiler {
                                 other => unreachable!(
                                     "arithmetic dispatch reached with non-arithmetic \
                                      BinOpKind {other:?}; the enclosing match only \
-                                     admits Add/Sub/Mul/Div/Mod"),
+                                     admits Add/Sub/Mul/Div/Mod"
+                                ),
                             };
                             (name, lhs_type == PortType::U64, rhs_type == PortType::U64)
                         }
                     }
                     BinOpKind::Pow => ("pow", lhs_type == PortType::U64, rhs_type == PortType::U64),
                     BinOpKind::BitAnd => ("u64_and", false, false),
-                    BinOpKind::BitOr  => ("u64_or", false, false),
+                    BinOpKind::BitOr => ("u64_or", false, false),
                     BinOpKind::BitXor => ("u64_xor", false, false),
-                    BinOpKind::Shl    => ("u64_shl", false, false),
-                    BinOpKind::Shr    => ("u64_shr", false, false),
+                    BinOpKind::Shl => ("u64_shl", false, false),
+                    BinOpKind::Shr => ("u64_shr", false, false),
                     // Comparison: pick u64 or f64 input variant. If
                     // either operand is f64 we widen the u64 side via
                     // ToF64 so both inputs share a type and the
                     // f64-suffixed comparison node fires.
-                    BinOpKind::Eq | BinOpKind::Ne |
-                    BinOpKind::Lt | BinOpKind::Gt |
-                    BinOpKind::Le | BinOpKind::Ge => {
+                    BinOpKind::Eq
+                    | BinOpKind::Ne
+                    | BinOpKind::Lt
+                    | BinOpKind::Gt
+                    | BinOpKind::Le
+                    | BinOpKind::Ge => {
                         // Three operand-type families: Str takes
                         // priority (str_eq / str_ne are the only
                         // ordered ops we support on Str so far —
@@ -816,11 +885,15 @@ impl Compiler {
                         // side is f64 (with widening). u64 is the
                         // default.
                         let str_path = lhs_type == PortType::Str || rhs_type == PortType::Str;
-                        let f64_path = !str_path
-                            && (lhs_type == PortType::F64 || rhs_type == PortType::F64);
-                        let prefix = if str_path { "str" }
-                                     else if f64_path { "f64" }
-                                     else { "u64" };
+                        let f64_path =
+                            !str_path && (lhs_type == PortType::F64 || rhs_type == PortType::F64);
+                        let prefix = if str_path {
+                            "str"
+                        } else if f64_path {
+                            "f64"
+                        } else {
+                            "u64"
+                        };
                         let (suffix, symbol) = match op {
                             BinOpKind::Eq => ("eq", "=="),
                             BinOpKind::Ne => ("ne", "!="),
@@ -831,27 +904,38 @@ impl Compiler {
                             other => unreachable!(
                                 "comparison dispatch reached with non-comparison \
                                  BinOpKind {other:?}; the enclosing match only \
-                                 admits Eq/Ne/Lt/Gt/Le/Ge"),
+                                 admits Eq/Ne/Lt/Gt/Le/Ge"
+                            ),
                         };
                         let name: &'static str = match (prefix, suffix) {
-                            ("u64", "eq") => "u64_eq", ("u64", "ne") => "u64_ne",
-                            ("u64", "lt") => "u64_lt", ("u64", "gt") => "u64_gt",
-                            ("u64", "le") => "u64_le", ("u64", "ge") => "u64_ge",
-                            ("f64", "eq") => "f64_eq", ("f64", "ne") => "f64_ne",
-                            ("f64", "lt") => "f64_lt", ("f64", "gt") => "f64_gt",
-                            ("f64", "le") => "f64_le", ("f64", "ge") => "f64_ge",
-                            ("str", "eq") => "str_eq", ("str", "ne") => "str_ne",
-                            ("str", _) => return Err(format!(
-                                "comparison operator `{symbol}` is not supported for \
+                            ("u64", "eq") => "u64_eq",
+                            ("u64", "ne") => "u64_ne",
+                            ("u64", "lt") => "u64_lt",
+                            ("u64", "gt") => "u64_gt",
+                            ("u64", "le") => "u64_le",
+                            ("u64", "ge") => "u64_ge",
+                            ("f64", "eq") => "f64_eq",
+                            ("f64", "ne") => "f64_ne",
+                            ("f64", "lt") => "f64_lt",
+                            ("f64", "gt") => "f64_gt",
+                            ("f64", "le") => "f64_le",
+                            ("f64", "ge") => "f64_ge",
+                            ("str", "eq") => "str_eq",
+                            ("str", "ne") => "str_ne",
+                            ("str", _) => {
+                                return Err(format!(
+                                    "comparison operator `{symbol}` is not supported for \
                                  String operands; only `==` and `!=` are defined on \
                                  strings. Compare string values for equality, or \
                                  convert to a numeric type for ordering comparisons.",
-                            )),
+                                ));
+                            }
                             (other_prefix, other_suffix) => unreachable!(
                                 "comparison node-name dispatch fell through for \
                                  (prefix={other_prefix:?}, suffix={other_suffix:?}); \
                                  prefix is one of u64/f64/str and suffix one of \
-                                 eq/ne/lt/gt/le/ge by construction"),
+                                 eq/ne/lt/gt/le/ge by construction"
+                            ),
                         };
                         // Widen u64→f64 only on the f64 path. The
                         // str path takes both sides as Str via
@@ -865,7 +949,8 @@ impl Compiler {
                     BinOpKind::And | BinOpKind::Or => unreachable!(
                         "logical And/Or are desugared by the early-return \
                          truthiness path above and never reach the func-name \
-                         dispatch"),
+                         dispatch"
+                    ),
                 };
 
                 // Compile each operand. Simple identifiers and literals
@@ -899,7 +984,8 @@ impl Compiler {
                 };
 
                 let wire_refs = vec![lhs_final, rhs_final];
-                let wire_types: Vec<PortType> = wire_refs.iter()
+                let wire_types: Vec<PortType> = wire_refs
+                    .iter()
                     .map(|w| asm.wire_type(w).unwrap_or(PortType::U64))
                     .collect();
                 let node = build_node(func_name, &wire_refs, &wire_types, &[])?;
@@ -916,7 +1002,8 @@ impl Compiler {
                 self.compile_binding(asm, std::slice::from_ref(&inner_name), inner)?;
 
                 let wire_refs = vec![WireRef::node(&zero_name), WireRef::node(&inner_name)];
-                let wire_types: Vec<PortType> = wire_refs.iter()
+                let wire_types: Vec<PortType> = wire_refs
+                    .iter()
                     .map(|w| asm.wire_type(w).unwrap_or(PortType::U64))
                     .collect();
                 let node = build_node("f64_sub", &wire_refs, &wire_types, &[])?;
@@ -930,7 +1017,8 @@ impl Compiler {
                 self.compile_binding(asm, std::slice::from_ref(&inner_name), inner)?;
 
                 let wire_refs = vec![WireRef::node(&inner_name)];
-                let wire_types: Vec<PortType> = wire_refs.iter()
+                let wire_types: Vec<PortType> = wire_refs
+                    .iter()
                     .map(|w| asm.wire_type(w).unwrap_or(PortType::U64))
                     .collect();
                 let node = build_node("u64_not", &wire_refs, &wire_types, &[])?;
@@ -947,11 +1035,12 @@ impl Compiler {
                 // Without this inference, Ext-typed projections like
                 // SRD 71's `q.cursor` would be forced to u64 and fail
                 // downstream type-checking.
-                let port_type = asm.output_type(&wire_name)
+                let port_type = asm
+                    .output_type(&wire_name)
                     .unwrap_or(crate::ast::PortType::U64);
-                let identity = Box::new(
-                    crate::library::identity::PortPassthrough::new(name, port_type)
-                );
+                let identity = Box::new(crate::library::identity::PortPassthrough::new(
+                    name, port_type,
+                ));
                 asm.add_node(name, identity, vec![WireRef::node(&wire_name)]);
                 self.all_names.push(name.clone());
             }
@@ -972,7 +1061,10 @@ impl Compiler {
             Expr::For(source) => {
                 return Err(format!(
                     "`for {}` at line {}, col {}: {}",
-                    source.text, source.span.line, source.span.col, "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
+                    source.text,
+                    source.span.line,
+                    source.span.col,
+                    "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
                 ));
             }
             Expr::Cast(inner, target, _) => {
@@ -987,32 +1079,37 @@ impl Compiler {
                 let inner_wire = self.compile_binop_operand(asm, inner)?;
                 let name = &targets[0];
                 let node: Box<dyn crate::ast::PolydatNode> = if from == *target {
-                    Box::new(crate::library::identity::PortPassthrough::new(name, *target))
+                    Box::new(crate::library::identity::PortPassthrough::new(
+                        name, *target,
+                    ))
                 } else {
                     match (from, *target) {
                         // The parse fusion: text to a number is a
                         // declared reading, not a lossy narrowing.
-                        (PT::Str, PT::U64) =>
-                            Box::new(crate::library::convert::StrToU64::new()),
+                        (PT::Str, PT::U64) => Box::new(crate::library::convert::StrToU64::new()),
                         // SRD-84 Part 1b — `as` does NOT perform lossy
                         // numeric narrowing: the rounding is a semantic
                         // choice the author must make explicitly.
-                        (PT::F64, PT::U64) => return Err(
-                            "`as u64`: narrowing f64 → u64 is not allowed under \
+                        (PT::F64, PT::U64) => {
+                            return Err("`as u64`: narrowing f64 → u64 is not allowed under \
                              `as` — it loses precision and the rounding is \
                              ambiguous. Choose explicitly: `f64_to_u64(x)` \
                              (truncate), `round_to_u64(x)`, `floor_to_u64(x)`, \
                              or `ceil_to_u64(x)`. `as` performs only widening / \
                              alignment fusion (SRD-84 Part 1b)."
-                                .to_string()),
+                                .to_string());
+                        }
                         // Every other alignment-only fusion is the same
                         // lossless adapter the assembler inserts between
                         // mismatched wires (type_system.md §3, class A).
                         (f, t) => match crate::compile::assembly::auto_adapter(f, t) {
                             Some(adapter) => adapter,
-                            None => return Err(format!(
-                                "`as {t:?}`: no type-fusion from {f:?} to {t:?} is \
-                                 defined (SRD-84 Part 1b)")),
+                            None => {
+                                return Err(format!(
+                                    "`as {t:?}`: no type-fusion from {f:?} to {t:?} is \
+                                 defined (SRD-84 Part 1b)"
+                                ));
+                            }
                         },
                     }
                 };

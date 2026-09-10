@@ -123,7 +123,11 @@ impl Op {
     pub fn is_barrier(&self) -> bool {
         matches!(
             self,
-            Op::OrderMaterialize { .. } | Op::Zip { mode: ZipMode::Cycle, .. }
+            Op::OrderMaterialize { .. }
+                | Op::Zip {
+                    mode: ZipMode::Cycle,
+                    ..
+                }
         )
     }
 }
@@ -134,28 +138,50 @@ mod tests {
 
     #[test]
     fn stack_effect_basics() {
-        assert_eq!(Op::PushClause {
-            name: "k".into(),
-            source: Source::Literal { values: vec![] },
-        }.stack_effect(), (0, 1));
+        assert_eq!(
+            Op::PushClause {
+                name: "k".into(),
+                source: Source::Literal { values: vec![] },
+            }
+            .stack_effect(),
+            (0, 1)
+        );
         assert_eq!(Op::Cartesian { n: 3 }.stack_effect(), (3, 1));
         assert_eq!(Op::Dispense.stack_effect(), (1, 0));
     }
 
     #[test]
     fn barrier_classification() {
-        assert!(Op::OrderMaterialize {
-            strategy: StrategyName::Halton,
-            truncation: Some(10),
-            indexed: true,
-            input_index_fn: None,
-        }.is_barrier());
-        assert!(Op::Zip { n: 2, mode: ZipMode::Cycle }.is_barrier());
-        assert!(!Op::Zip { n: 2, mode: ZipMode::Strict }.is_barrier());
-        assert!(!Op::OrderStreaming {
-            kind: OrderStreamingKind::Lex,
-            truncation: None,
-        }.is_barrier());
+        assert!(
+            Op::OrderMaterialize {
+                strategy: StrategyName::Halton,
+                truncation: Some(10),
+                indexed: true,
+                input_index_fn: None,
+            }
+            .is_barrier()
+        );
+        assert!(
+            Op::Zip {
+                n: 2,
+                mode: ZipMode::Cycle
+            }
+            .is_barrier()
+        );
+        assert!(
+            !Op::Zip {
+                n: 2,
+                mode: ZipMode::Strict
+            }
+            .is_barrier()
+        );
+        assert!(
+            !Op::OrderStreaming {
+                kind: OrderStreamingKind::Lex,
+                truncation: None,
+            }
+            .is_barrier()
+        );
     }
 
     #[test]
@@ -164,9 +190,11 @@ mod tests {
             strategy: StrategyName::Halton,
             truncation: Some(50),
             indexed: true,
-            input_index_fn: Some(crate::iteration::comprehension::metadata::IndexFn::Lattice {
-                axis_sizes: vec![10, 5],
-            }),
+            input_index_fn: Some(
+                crate::iteration::comprehension::metadata::IndexFn::Lattice {
+                    axis_sizes: vec![10, 5],
+                },
+            ),
         };
         let json = serde_json::to_string(&op).unwrap();
         let back: Op = serde_json::from_str(&json).unwrap();

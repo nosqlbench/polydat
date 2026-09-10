@@ -21,8 +21,8 @@
 //! `inventory::submit!` plus a handler function — no compile.rs
 //! change required.
 
-use crate::dsl::ast::Expr;
 use crate::ast::PortType;
+use crate::dsl::ast::Expr;
 
 /// A handler that recognizes one or more cursor-constructor
 /// shapes and produces a [`CursorSugar`] rewrite. Return:
@@ -34,8 +34,8 @@ use crate::ast::PortType;
 /// - `Err(msg)` when the handler matched the *name* but the
 ///   arguments don't validate. The caller surfaces the error
 ///   directly (with the cursor name prepended).
-pub type CursorSugarFn = fn(source_name: &str, constructor: &Expr)
-    -> Result<Option<CursorSugar>, String>;
+pub type CursorSugarFn =
+    fn(source_name: &str, constructor: &Expr) -> Result<Option<CursorSugar>, String>;
 
 /// One inventory entry. Handlers self-name for diagnostic
 /// listings (`describe wiring cursor-sugar`, future) and so the
@@ -75,10 +75,7 @@ pub struct AuxBinding {
 /// Walk the inventory and dispatch to the first handler that
 /// matches `constructor`. Returns the rewrite to apply, `None`
 /// if no handler matches, or the handler's error.
-pub fn dispatch(
-    source_name: &str,
-    constructor: &Expr,
-) -> Result<Option<CursorSugar>, String> {
+pub fn dispatch(source_name: &str, constructor: &Expr) -> Result<Option<CursorSugar>, String> {
     for reg in inventory::iter::<CursorSugarRegistration> {
         match (reg.handler)(source_name, constructor) {
             Ok(Some(s)) => return Ok(Some(s)),

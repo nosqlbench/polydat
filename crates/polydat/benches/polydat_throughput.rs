@@ -9,7 +9,7 @@
 //! 2. **Deep chain: N-stage unary identity pipeline**
 //! 3. **Wide fan-in: N inputs → one sum node**
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main, black_box};
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 
 use polydat::compile::assembly::{PolydatAssembler, WireRef};
 use polydat::library::arithmetic::{Add, Sum};
@@ -241,8 +241,8 @@ fn bench_hybrid_identity_chain(c: &mut Criterion) {
 // Invalidation strategy benchmarks
 // =================================================================
 
-use polydat::library::hash::Hash;
 use polydat::library::arithmetic::Mod;
+use polydat::library::hash::Hash;
 
 fn asm_hash_chain(depth: usize) -> PolydatAssembler {
     let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
@@ -250,7 +250,11 @@ fn asm_hash_chain(depth: usize) -> PolydatAssembler {
     for i in 1..depth {
         let name = format!("h{i}");
         let prev = format!("h{}", i - 1);
-        asm.add_node(&name, Box::new(Mod::new(1_000_000)), vec![WireRef::node(prev)]);
+        asm.add_node(
+            &name,
+            Box::new(Mod::new(1_000_000)),
+            vec![WireRef::node(prev)],
+        );
     }
     let last = format!("h{}", depth - 1);
     asm.add_output("out", WireRef::node(last));
@@ -264,20 +268,16 @@ fn bench_invalidation_strategy(c: &mut Criterion) {
         let program = kernel.into_program();
 
         // Engine 1: Dependent List
-        group.bench_with_input(
-            BenchmarkId::new("dependent_list", depth),
-            &depth,
-            |b, _| {
-                let mut state = program.create_state();
-                let mut cycle = 0u64;
-                b.iter(|| {
-                    state.set_inputs(&[cycle]);
-                    state.pull(&program, "out");
-                    black_box(());
-                    cycle = cycle.wrapping_add(1);
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("dependent_list", depth), &depth, |b, _| {
+            let mut state = program.create_state();
+            let mut cycle = 0u64;
+            b.iter(|| {
+                state.set_inputs(&[cycle]);
+                state.pull(&program, "out");
+                black_box(());
+                cycle = cycle.wrapping_add(1);
+            });
+        });
 
         // Engine 2: Provenance Scan
         group.bench_with_input(
@@ -307,8 +307,7 @@ fn bench_invalidation_strategy(c: &mut Criterion) {
 // =================================================================
 
 fn compile_dsl_mode(src: &str, mode: polydat::JitMode) -> polydat::kernel::PolydatKernel {
-    let mut asm = polydat::dsl::compile::compile_polydat_to_assembler(src)
-        .expect("assemble");
+    let mut asm = polydat::dsl::compile::compile_polydat_to_assembler(src).expect("assemble");
     asm.set_jit_mode(mode);
     asm.compile().expect("compile")
 }
@@ -349,17 +348,19 @@ fn vector_pipeline_src(dim: usize) -> String {
 fn bench_cone_hash_mod_chain(c: &mut Criterion) {
     let mut group = c.benchmark_group("cone/hash_mod_chain");
     for depth in [4usize, 16, 64] {
-        for (label, mode) in [("off", polydat::JitMode::Off), ("auto", polydat::JitMode::Auto)] {
+        for (label, mode) in [
+            ("off", polydat::JitMode::Off),
+            ("auto", polydat::JitMode::Auto),
+        ] {
             let mut kernel = compile_dsl_mode(&hash_mod_chain_src(depth), mode);
-            group.bench_with_input(
-                BenchmarkId::new(label, depth), &depth, |b, _| {
-                    let mut cycle = 0u64;
-                    b.iter(|| {
-                        kernel.set_inputs(&[cycle]);
-                        black_box(kernel.pull("out"));
-                        cycle = cycle.wrapping_add(1);
-                    });
+            group.bench_with_input(BenchmarkId::new(label, depth), &depth, |b, _| {
+                let mut cycle = 0u64;
+                b.iter(|| {
+                    kernel.set_inputs(&[cycle]);
+                    black_box(kernel.pull("out"));
+                    cycle = cycle.wrapping_add(1);
                 });
+            });
         }
     }
     group.finish();
@@ -367,7 +368,10 @@ fn bench_cone_hash_mod_chain(c: &mut Criterion) {
 
 fn bench_cone_workload_bindings(c: &mut Criterion) {
     let mut group = c.benchmark_group("cone/workload_bindings");
-    for (label, mode) in [("off", polydat::JitMode::Off), ("auto", polydat::JitMode::Auto)] {
+    for (label, mode) in [
+        ("off", polydat::JitMode::Off),
+        ("auto", polydat::JitMode::Auto),
+    ] {
         let mut kernel = compile_dsl_mode(WORKLOAD_BINDINGS_SRC, mode);
         group.bench_function(label, |b| {
             let mut cycle = 0u64;
@@ -386,17 +390,19 @@ fn bench_cone_vector_pipeline(c: &mut Criterion) {
     let mut group = c.benchmark_group("cone/vector_pipeline");
     group.sample_size(30);
     for dim in [128usize, 768] {
-        for (label, mode) in [("off", polydat::JitMode::Off), ("auto", polydat::JitMode::Auto)] {
+        for (label, mode) in [
+            ("off", polydat::JitMode::Off),
+            ("auto", polydat::JitMode::Auto),
+        ] {
             let mut kernel = compile_dsl_mode(&vector_pipeline_src(dim), mode);
-            group.bench_with_input(
-                BenchmarkId::new(label, dim), &dim, |b, _| {
-                    let mut cycle = 0u64;
-                    b.iter(|| {
-                        kernel.set_inputs(&[cycle]);
-                        black_box(kernel.pull("out"));
-                        cycle = cycle.wrapping_add(1);
-                    });
+            group.bench_with_input(BenchmarkId::new(label, dim), &dim, |b, _| {
+                let mut cycle = 0u64;
+                b.iter(|| {
+                    kernel.set_inputs(&[cycle]);
+                    black_box(kernel.pull("out"));
+                    cycle = cycle.wrapping_add(1);
                 });
+            });
         }
     }
     group.finish();

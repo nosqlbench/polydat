@@ -16,9 +16,9 @@
 //! - Concurrent source consumption
 //! - Edge cases and error handling
 
+use polydat::ast::Value;
 use polydat::dsl::compile::compile_polydat;
 use polydat::iteration::source::{DataSourceFactory, RangeSourceFactory, SourceItem};
-use polydat::ast::Value;
 use std::sync::Arc;
 use std::thread;
 
@@ -29,49 +29,62 @@ use std::thread;
 #[test]
 fn cursor_keyword_lexes() {
     let tokens = polydat::dsl::lexer::lex("cursor base = range(0, 100)").unwrap();
-    assert!(matches!(tokens[0].kind, polydat::dsl::lexer::TokenKind::Cursor));
+    assert!(matches!(
+        tokens[0].kind,
+        polydat::dsl::lexer::TokenKind::Cursor
+    ));
 }
 
 #[test]
 fn dot_token_lexes() {
     let tokens = polydat::dsl::lexer::lex("base.ordinal").unwrap();
-    assert!(matches!(tokens[0].kind, polydat::dsl::lexer::TokenKind::Ident(_)));
-    assert!(matches!(tokens[1].kind, polydat::dsl::lexer::TokenKind::Dot));
-    assert!(matches!(tokens[2].kind, polydat::dsl::lexer::TokenKind::Ident(_)));
+    assert!(matches!(
+        tokens[0].kind,
+        polydat::dsl::lexer::TokenKind::Ident(_)
+    ));
+    assert!(matches!(
+        tokens[1].kind,
+        polydat::dsl::lexer::TokenKind::Dot
+    ));
+    assert!(matches!(
+        tokens[2].kind,
+        polydat::dsl::lexer::TokenKind::Ident(_)
+    ));
 }
 
 #[test]
 fn dot_in_float_not_confused() {
     // 3.14 should lex as a float, not ident.dot.ident
     let tokens = polydat::dsl::lexer::lex("x := 3.14").unwrap();
-    assert!(matches!(tokens[2].kind, polydat::dsl::lexer::TokenKind::FloatLit(f) if (f - 3.14).abs() < 0.001));
+    assert!(
+        matches!(tokens[2].kind, polydat::dsl::lexer::TokenKind::FloatLit(f) if (f - 3.14).abs() < 0.001)
+    );
 }
 
 #[test]
 fn cursor_decl_parses() {
-    let tokens = polydat::dsl::lexer::lex(
-        "cursor base = range(0, 100)\nid := hash(cycle)"
-    ).unwrap();
+    let tokens =
+        polydat::dsl::lexer::lex("cursor base = range(0, 100)\nid := hash(cycle)").unwrap();
     let ast = polydat::dsl::parser::parse(tokens).unwrap();
-    assert!(matches!(ast.statements[0], polydat::dsl::ast::Statement::Cursor(_)));
+    assert!(matches!(
+        ast.statements[0],
+        polydat::dsl::ast::Statement::Cursor(_)
+    ));
 }
 
 #[test]
 fn field_access_parses() {
-    let tokens = polydat::dsl::lexer::lex(
-        "cursor base = range(0, 100)\nid := base.ordinal"
-    ).unwrap();
+    let tokens =
+        polydat::dsl::lexer::lex("cursor base = range(0, 100)\nid := base.ordinal").unwrap();
     let ast = polydat::dsl::parser::parse(tokens).unwrap();
     match &ast.statements[1] {
-        polydat::dsl::ast::Statement::Binding(b) => {
-            match &b.value {
-                polydat::dsl::ast::Expr::FieldAccess { source, field, .. } => {
-                    assert_eq!(source, "base");
-                    assert_eq!(field, "ordinal");
-                }
-                other => panic!("expected FieldAccess, got {:?}", other),
+        polydat::dsl::ast::Statement::Binding(b) => match &b.value {
+            polydat::dsl::ast::Expr::FieldAccess { source, field, .. } => {
+                assert_eq!(source, "base");
+                assert_eq!(field, "ordinal");
             }
-        }
+            other => panic!("expected FieldAccess, got {:?}", other),
+        },
         other => panic!("expected Binding, got {:?}", other),
     }
 }
@@ -79,9 +92,8 @@ fn field_access_parses() {
 #[test]
 fn nested_dot_in_function_arg() {
     // base.ordinal used as a function argument
-    let tokens = polydat::dsl::lexer::lex(
-        "cursor base = range(0, 100)\nid := hash(base.ordinal)"
-    ).unwrap();
+    let tokens =
+        polydat::dsl::lexer::lex("cursor base = range(0, 100)\nid := hash(base.ordinal)").unwrap();
     let ast = polydat::dsl::parser::parse(tokens).unwrap();
     // Should parse without error
     assert_eq!(ast.statements.len(), 2);
@@ -188,7 +200,9 @@ fn multiple_cursor_declarations() {
     "#;
     let tokens = polydat::dsl::lexer::lex(src).unwrap();
     let ast = polydat::dsl::parser::parse(tokens).unwrap();
-    let source_count = ast.statements.iter()
+    let source_count = ast
+        .statements
+        .iter()
         .filter(|s| matches!(s, polydat::dsl::ast::Statement::Cursor(_)))
         .count();
     assert_eq!(source_count, 2);
@@ -216,7 +230,9 @@ fn range_source_exact_extent() {
     assert_eq!(factory.schema().extent, Some(10));
     let mut reader = factory.create_reader();
     let mut count = 0;
-    while reader.next().is_some() { count += 1; }
+    while reader.next().is_some() {
+        count += 1;
+    }
     assert_eq!(count, 10);
     assert_eq!(reader.consumed(), 10);
 }
@@ -286,24 +302,31 @@ fn range_source_concurrent_total_coverage() {
     let fiber_count = 8;
     let factory = Arc::new(RangeSourceFactory::new(0, extent));
 
-    let handles: Vec<_> = (0..fiber_count).map(|_| {
-        let f = factory.clone();
-        thread::spawn(move || {
-            let mut reader = f.create_reader();
-            let mut collected = Vec::new();
-            while let Some(item) = reader.next() {
-                collected.push(item.ordinal);
-            }
-            collected
+    let handles: Vec<_> = (0..fiber_count)
+        .map(|_| {
+            let f = factory.clone();
+            thread::spawn(move || {
+                let mut reader = f.create_reader();
+                let mut collected = Vec::new();
+                while let Some(item) = reader.next() {
+                    collected.push(item.ordinal);
+                }
+                collected
+            })
         })
-    }).collect();
+        .collect();
 
-    let mut all: Vec<u64> = handles.into_iter()
+    let mut all: Vec<u64> = handles
+        .into_iter()
         .flat_map(|h| h.join().unwrap())
         .collect();
     all.sort();
     all.dedup();
-    assert_eq!(all.len(), extent as usize, "every ordinal consumed exactly once");
+    assert_eq!(
+        all.len(),
+        extent as usize,
+        "every ordinal consumed exactly once"
+    );
     assert_eq!(all[0], 0);
     assert_eq!(*all.last().unwrap(), extent - 1);
 }
@@ -316,23 +339,28 @@ fn range_source_concurrent_chunk_coverage() {
     let chunk_size = 100;
     let factory = Arc::new(RangeSourceFactory::new(0, extent));
 
-    let handles: Vec<_> = (0..fiber_count).map(|_| {
-        let f = factory.clone();
-        thread::spawn(move || {
-            let mut reader = f.create_reader();
-            let mut collected = Vec::new();
-            loop {
-                let chunk = reader.next_chunk(chunk_size);
-                if chunk.is_empty() { break; }
-                for item in chunk {
-                    collected.push(item.ordinal);
+    let handles: Vec<_> = (0..fiber_count)
+        .map(|_| {
+            let f = factory.clone();
+            thread::spawn(move || {
+                let mut reader = f.create_reader();
+                let mut collected = Vec::new();
+                loop {
+                    let chunk = reader.next_chunk(chunk_size);
+                    if chunk.is_empty() {
+                        break;
+                    }
+                    for item in chunk {
+                        collected.push(item.ordinal);
+                    }
                 }
-            }
-            collected
+                collected
+            })
         })
-    }).collect();
+        .collect();
 
-    let mut all: Vec<u64> = handles.into_iter()
+    let mut all: Vec<u64> = handles
+        .into_iter()
         .flat_map(|h| h.join().unwrap())
         .collect();
     all.sort();
@@ -347,19 +375,21 @@ fn range_source_high_contention() {
     let fiber_count = 64;
     let factory = Arc::new(RangeSourceFactory::new(0, extent));
 
-    let handles: Vec<_> = (0..fiber_count).map(|_| {
-        let f = factory.clone();
-        thread::spawn(move || {
-            let mut reader = f.create_reader();
-            let mut count = 0u64;
-            while reader.next().is_some() { count += 1; }
-            count
+    let handles: Vec<_> = (0..fiber_count)
+        .map(|_| {
+            let f = factory.clone();
+            thread::spawn(move || {
+                let mut reader = f.create_reader();
+                let mut count = 0u64;
+                while reader.next().is_some() {
+                    count += 1;
+                }
+                count
+            })
         })
-    }).collect();
+        .collect();
 
-    let total: u64 = handles.into_iter()
-        .map(|h| h.join().unwrap())
-        .sum();
+    let total: u64 = handles.into_iter().map(|h| h.join().unwrap()).sum();
     assert_eq!(total, extent);
 }
 
@@ -378,22 +408,25 @@ fn source_item_empty_fields() {
 #[test]
 fn source_item_duplicate_field_names() {
     // If a source yields duplicate field names, first match wins
-    let item = SourceItem::with_fields(0, vec![
-        ("x".into(), Value::U64(1)),
-        ("x".into(), Value::U64(2)),
-    ]);
+    let item = SourceItem::with_fields(
+        0,
+        vec![("x".into(), Value::U64(1)), ("x".into(), Value::U64(2))],
+    );
     assert_eq!(item.field("x"), Some(&Value::U64(1)));
 }
 
 #[test]
 fn source_item_various_value_types() {
-    let item = SourceItem::with_fields(0, vec![
-        ("u".into(), Value::U64(42)),
-        ("f".into(), Value::F64(3.14)),
-        ("s".into(), Value::Str("hello".into())),
-        ("b".into(), Value::Bool(true)),
-        ("n".into(), Value::None),
-    ]);
+    let item = SourceItem::with_fields(
+        0,
+        vec![
+            ("u".into(), Value::U64(42)),
+            ("f".into(), Value::F64(3.14)),
+            ("s".into(), Value::Str("hello".into())),
+            ("b".into(), Value::Bool(true)),
+            ("n".into(), Value::None),
+        ],
+    );
     assert_eq!(item.field("u"), Some(&Value::U64(42)));
     assert_eq!(item.field("f"), Some(&Value::F64(3.14)));
     assert_eq!(item.field("b"), Some(&Value::Bool(true)));
@@ -463,7 +496,11 @@ fn cursor_extent_folds_const_function_call() {
     let kernel = compile_polydat(src).unwrap();
     let schemas = kernel.program().cursor_schemas();
     assert_eq!(schemas.len(), 1);
-    assert_eq!(schemas[0].extent, Some(2), "extent should fold mod(100, 7) = 2");
+    assert_eq!(
+        schemas[0].extent,
+        Some(2),
+        "extent should fold mod(100, 7) = 2"
+    );
 }
 
 #[test]
@@ -476,7 +513,11 @@ fn cursor_extent_folds_arithmetic_expression() {
     "#;
     let kernel = compile_polydat(src).unwrap();
     let schemas = kernel.program().cursor_schemas();
-    assert_eq!(schemas[0].extent, Some(50), "extent should fold (10+50) - 10 = 50");
+    assert_eq!(
+        schemas[0].extent,
+        Some(50),
+        "extent should fold (10+50) - 10 = 50"
+    );
 }
 
 #[test]
@@ -560,7 +601,8 @@ fn advancer_targets_correct_cursors() {
     let kernel = compile_polydat(src).unwrap();
     let program = kernel.program();
 
-    let mut factories: HashMap<String, Arc<dyn polydat::iteration::source::DataSourceFactory>> = HashMap::new();
+    let mut factories: HashMap<String, Arc<dyn polydat::iteration::source::DataSourceFactory>> =
+        HashMap::new();
     factories.insert("base".into(), Arc::new(RangeSourceFactory::new(0, 100)));
 
     // Cursors for "id" should target the base cursor
@@ -583,7 +625,8 @@ fn advancer_does_not_target_unused_sources() {
     let kernel = compile_polydat(src).unwrap();
     let program = kernel.program();
 
-    let mut factories: HashMap<String, Arc<dyn polydat::iteration::source::DataSourceFactory>> = HashMap::new();
+    let mut factories: HashMap<String, Arc<dyn polydat::iteration::source::DataSourceFactory>> =
+        HashMap::new();
     factories.insert("base".into(), Arc::new(RangeSourceFactory::new(0, 100)));
     factories.insert("queries".into(), Arc::new(RangeSourceFactory::new(0, 50)));
 
@@ -606,7 +649,8 @@ fn advancer_advance_and_exhaust() {
     let kernel = compile_polydat(src).unwrap();
     let program = kernel.program();
 
-    let mut factories: HashMap<String, Arc<dyn polydat::iteration::source::DataSourceFactory>> = HashMap::new();
+    let mut factories: HashMap<String, Arc<dyn polydat::iteration::source::DataSourceFactory>> =
+        HashMap::new();
     factories.insert("r".into(), Arc::new(RangeSourceFactory::new(0, 3)));
 
     let mut advancer = Cursors::for_fields(program, &["id"], &factories);
@@ -632,7 +676,8 @@ fn advancer_last_items_reflect_position() {
     let kernel = compile_polydat(src).unwrap();
     let program = kernel.program();
 
-    let mut factories: HashMap<String, Arc<dyn polydat::iteration::source::DataSourceFactory>> = HashMap::new();
+    let mut factories: HashMap<String, Arc<dyn polydat::iteration::source::DataSourceFactory>> =
+        HashMap::new();
     factories.insert("r".into(), Arc::new(RangeSourceFactory::new(10, 13)));
 
     let mut advancer = Cursors::for_fields(program, &["id"], &factories);
@@ -657,7 +702,8 @@ fn advancer_empty_when_no_sources_referenced() {
     let kernel = compile_polydat(src).unwrap();
     let program = kernel.program();
 
-    let factories: HashMap<String, Arc<dyn polydat::iteration::source::DataSourceFactory>> = HashMap::new();
+    let factories: HashMap<String, Arc<dyn polydat::iteration::source::DataSourceFactory>> =
+        HashMap::new();
     let advancer = Cursors::for_fields(program, &["id"], &factories);
     assert!(advancer.is_empty());
 }
@@ -677,8 +723,15 @@ fn limit_node_compiles_and_clamps_extent() {
         id := hash(r.ordinal)
     "#;
     let kernel = compile_polydat_with_libs_and_limit(
-        src, None, Vec::<PathBuf>::new(), &[], false, "(test)", Some(100),
-    ).unwrap();
+        src,
+        None,
+        Vec::<PathBuf>::new(),
+        &[],
+        false,
+        "(test)",
+        Some(100),
+    )
+    .unwrap();
     let schemas = kernel.program().cursor_schemas();
     assert_eq!(schemas.len(), 1);
     // Extent should be clamped to 100 (min of 1000 and limit 100)
@@ -696,8 +749,15 @@ fn limit_node_not_inserted_when_no_limit() {
         id := hash(r.ordinal)
     "#;
     let kernel = compile_polydat_with_libs_and_limit(
-        src, None, Vec::<PathBuf>::new(), &[], false, "(test)", None,
-    ).unwrap();
+        src,
+        None,
+        Vec::<PathBuf>::new(),
+        &[],
+        false,
+        "(test)",
+        None,
+    )
+    .unwrap();
     let schemas = kernel.program().cursor_schemas();
     assert_eq!(schemas[0].extent, Some(500)); // unclamped
 }
@@ -713,8 +773,15 @@ fn limit_larger_than_extent_preserves_extent() {
         id := hash(r.ordinal)
     "#;
     let kernel = compile_polydat_with_libs_and_limit(
-        src, None, Vec::<PathBuf>::new(), &[], false, "(test)", Some(1000),
-    ).unwrap();
+        src,
+        None,
+        Vec::<PathBuf>::new(),
+        &[],
+        false,
+        "(test)",
+        Some(1000),
+    )
+    .unwrap();
     let schemas = kernel.program().cursor_schemas();
     // Limit 1000 > extent 50 → extent stays 50
     assert_eq!(schemas[0].extent, Some(50));

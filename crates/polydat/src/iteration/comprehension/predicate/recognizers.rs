@@ -25,8 +25,8 @@
 
 use super::coordset::{CoordKind, CoordSet};
 use super::info::{
-    ConstValue, Determinism, Factorization, Monotonicity, OpaqueReason, PerAxisMap,
-    PredicateInfo, RangeConstraint,
+    ConstValue, Determinism, Factorization, Monotonicity, OpaqueReason, PerAxisMap, PredicateInfo,
+    RangeConstraint,
 };
 
 /// Extract `{name}` interpolation references from a predicate
@@ -37,17 +37,18 @@ pub fn extract_coord_refs(predicate: &str) -> Vec<String> {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'{'
-            && let Some(close) = predicate[i + 1..].find('}') {
-                let name = predicate[i + 1..i + 1 + close].trim();
-                if !name.is_empty()
-                    && name.chars().all(|c| c.is_alphanumeric() || c == '_')
-                    && !out.contains(&name.to_string())
-                {
-                    out.push(name.to_string());
-                }
-                i += close + 2;
-                continue;
+            && let Some(close) = predicate[i + 1..].find('}')
+        {
+            let name = predicate[i + 1..i + 1 + close].trim();
+            if !name.is_empty()
+                && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+                && !out.contains(&name.to_string())
+            {
+                out.push(name.to_string());
             }
+            i += close + 2;
+            continue;
+        }
         i += 1;
     }
     out
@@ -156,8 +157,15 @@ pub fn recognize(predicate: &str, coords: &CoordSet) -> PredicateInfo {
 /// `Determinism::Opaque`.
 fn classify_determinism(predicate: &str) -> Determinism {
     const NONDET_FUNCTIONS: &[&str] = &[
-        "random", "rand", "pcg(", "pcg_stream(", "now(", "time(",
-        "uuid(", "thread_id(", "wall_clock(",
+        "random",
+        "rand",
+        "pcg(",
+        "pcg_stream(",
+        "now(",
+        "time(",
+        "uuid(",
+        "thread_id(",
+        "wall_clock(",
     ];
     let lower = predicate.to_lowercase();
     for fn_name in NONDET_FUNCTIONS {
@@ -228,7 +236,10 @@ fn per_axis_info(
     coord_refs: &[String],
 ) -> PredicateInfo {
     let mut factor = PerAxisMap::new();
-    factor.insert(axis, format!("{{{axis}}} {} {}", op_str(op), const_repr(&rhs)));
+    factor.insert(
+        axis,
+        format!("{{{axis}}} {} {}", op_str(op), const_repr(&rhs)),
+    );
 
     let mut mono = PerAxisMap::new();
     let direction = match op {
@@ -321,18 +332,18 @@ fn recognize_cross_axis_comparison(
     for (op_str, _) in COMPARISON_OPS {
         if let Some((lhs, rhs)) = split_top_level_op(predicate.trim(), op_str)
             && let (Some(a), Some(b)) = (strip_curly(lhs.trim()), strip_curly(rhs.trim()))
-                && coords.contains(&a)
-                && coords.contains(&b)
-                && a != b
-            {
-                return Some(PredicateInfo {
-                    factorization: Factorization::Conjunctive(vec![predicate.trim().to_string()]),
-                    monotonicity: PerAxisMap::new(),
-                    range_constraint: PerAxisMap::new(),
-                    determinism: Determinism::Deterministic,
-                    coords_referenced: coord_refs.to_vec(),
-                });
-            }
+            && coords.contains(&a)
+            && coords.contains(&b)
+            && a != b
+        {
+            return Some(PredicateInfo {
+                factorization: Factorization::Conjunctive(vec![predicate.trim().to_string()]),
+                monotonicity: PerAxisMap::new(),
+                range_constraint: PerAxisMap::new(),
+                determinism: Determinism::Deterministic,
+                coords_referenced: coord_refs.to_vec(),
+            });
+        }
     }
     None
 }
@@ -358,8 +369,7 @@ fn recognize_conjunction(
                         // Two sub-predicates on the same axis —
                         // fold them with `&&`.
                         let existing = merged_factor.get(axis).cloned().unwrap();
-                        merged_factor
-                            .insert(axis, format!("({existing}) && ({expr})"));
+                        merged_factor.insert(axis, format!("({existing}) && ({expr})"));
                     } else {
                         merged_factor.insert(axis, expr.to_string());
                     }
@@ -399,7 +409,10 @@ fn recognize_conjunction(
         }
     }
 
-    let determinism = if sub_infos.iter().all(|i| i.determinism == Determinism::Deterministic) {
+    let determinism = if sub_infos
+        .iter()
+        .all(|i| i.determinism == Determinism::Deterministic)
+    {
         Determinism::Deterministic
     } else {
         Determinism::Opaque
@@ -424,17 +437,26 @@ fn intersect_ranges(a: &RangeConstraint, b: &RangeConstraint) -> RangeConstraint
     match (a, b) {
         (
             RangeConstraint::Bounded {
-                lo: lo_a, hi: hi_a, lo_inclusive: li_a, hi_inclusive: hi_inc_a,
+                lo: lo_a,
+                hi: hi_a,
+                lo_inclusive: li_a,
+                hi_inclusive: hi_inc_a,
             },
             RangeConstraint::Bounded {
-                lo: lo_b, hi: hi_b, lo_inclusive: li_b, hi_inclusive: hi_inc_b,
+                lo: lo_b,
+                hi: hi_b,
+                lo_inclusive: li_b,
+                hi_inclusive: hi_inc_b,
             },
         ) => {
             // Pick the tighter lo / hi.
             let (lo, lo_inclusive) = pick_lo(lo_a.as_ref(), *li_a, lo_b.as_ref(), *li_b);
             let (hi, hi_inclusive) = pick_hi(hi_a.as_ref(), *hi_inc_a, hi_b.as_ref(), *hi_inc_b);
             RangeConstraint::Bounded {
-                lo, hi, lo_inclusive, hi_inclusive,
+                lo,
+                hi,
+                lo_inclusive,
+                hi_inclusive,
             }
         }
         (RangeConstraint::Discrete(vs), RangeConstraint::Bounded { .. })
@@ -503,9 +525,15 @@ fn pick_hi(
 fn compare_const(a: &ConstValue, b: &ConstValue) -> std::cmp::Ordering {
     match (a, b) {
         (ConstValue::Int(a), ConstValue::Int(b)) => a.cmp(b),
-        (ConstValue::Float(a), ConstValue::Float(b)) => a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal),
-        (ConstValue::Int(a), ConstValue::Float(b)) => (*a as f64).partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal),
-        (ConstValue::Float(a), ConstValue::Int(b)) => a.partial_cmp(&(*b as f64)).unwrap_or(std::cmp::Ordering::Equal),
+        (ConstValue::Float(a), ConstValue::Float(b)) => {
+            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+        }
+        (ConstValue::Int(a), ConstValue::Float(b)) => (*a as f64)
+            .partial_cmp(b)
+            .unwrap_or(std::cmp::Ordering::Equal),
+        (ConstValue::Float(a), ConstValue::Int(b)) => a
+            .partial_cmp(&(*b as f64))
+            .unwrap_or(std::cmp::Ordering::Equal),
         _ => std::cmp::Ordering::Equal,
     }
 }
@@ -534,7 +562,10 @@ fn recognize_disjunction(
         Factorization::Opaque(OpaqueReason::UnknownPattern)
     };
 
-    let determinism = if sub_infos.iter().all(|i| i.determinism == Determinism::Deterministic) {
+    let determinism = if sub_infos
+        .iter()
+        .all(|i| i.determinism == Determinism::Deterministic)
+    {
         Determinism::Deterministic
     } else {
         Determinism::Opaque
@@ -692,8 +723,7 @@ fn parse_literal(s: &str) -> Option<ConstValue> {
     }
     // Quoted string?
     if s.len() >= 2
-        && ((s.starts_with('"') && s.ends_with('"'))
-            || (s.starts_with('\'') && s.ends_with('\'')))
+        && ((s.starts_with('"') && s.ends_with('"')) || (s.starts_with('\'') && s.ends_with('\'')))
     {
         return Some(ConstValue::String(s[1..s.len() - 1].to_string()));
     }
@@ -723,7 +753,10 @@ fn split_top_level(s: &str, sep: &str) -> Option<Vec<String>> {
             b')' | b']' | b'}' => depth -= 1,
             _ => {}
         }
-        if depth == 0 && i + sep_bytes.len() <= bytes.len() && &bytes[i..i + sep_bytes.len()] == sep_bytes {
+        if depth == 0
+            && i + sep_bytes.len() <= bytes.len()
+            && &bytes[i..i + sep_bytes.len()] == sep_bytes
+        {
             parts.push(s[last..i].trim().to_string());
             last = i + sep_bytes.len();
             i = last;
@@ -752,7 +785,10 @@ fn split_top_level_op<'a>(s: &'a str, op: &str) -> Option<(&'a str, &'a str)> {
             b')' | b']' | b'}' => depth -= 1,
             _ => {}
         }
-        if depth == 0 && i + op_bytes.len() <= bytes.len() && &bytes[i..i + op_bytes.len()] == op_bytes {
+        if depth == 0
+            && i + op_bytes.len() <= bytes.len()
+            && &bytes[i..i + op_bytes.len()] == op_bytes
+        {
             // For the shorter ops (<, >) ensure we don't catch
             // <=, >= (longer ops are checked first by the
             // caller's loop order).
@@ -800,7 +836,11 @@ mod tests {
         assert_eq!(info.monotonicity.get("k"), Some(&Monotonicity::Increasing));
         let range = info.range_constraint.get("k").unwrap();
         match range {
-            RangeConstraint::Bounded { lo: Some(ConstValue::Int(10)), hi: None, .. } => {}
+            RangeConstraint::Bounded {
+                lo: Some(ConstValue::Int(10)),
+                hi: None,
+                ..
+            } => {}
             other => panic!("expected Bounded lo=10, got {other:?}"),
         }
     }
@@ -812,7 +852,11 @@ mod tests {
         assert_eq!(info.monotonicity.get("k"), Some(&Monotonicity::Increasing));
         let range = info.range_constraint.get("k").unwrap();
         match range {
-            RangeConstraint::Bounded { lo: Some(ConstValue::Int(5)), lo_inclusive: true, .. } => {}
+            RangeConstraint::Bounded {
+                lo: Some(ConstValue::Int(5)),
+                lo_inclusive: true,
+                ..
+            } => {}
             other => panic!("expected Bounded lo=5 inclusive, got {other:?}"),
         }
     }
@@ -834,7 +878,10 @@ mod tests {
             other => panic!("expected PerAxis, got {other:?}"),
         }
         assert_eq!(info.monotonicity.get("k"), Some(&Monotonicity::Increasing));
-        assert_eq!(info.monotonicity.get("limit"), Some(&Monotonicity::Decreasing));
+        assert_eq!(
+            info.monotonicity.get("limit"),
+            Some(&Monotonicity::Decreasing)
+        );
     }
 
     #[test]

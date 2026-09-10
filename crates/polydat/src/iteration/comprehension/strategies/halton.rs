@@ -38,9 +38,7 @@ use crate::iteration::comprehension::strategy::StrategyName;
 
 pub struct Halton;
 
-const PRIMES: &[u64] = &[
-    2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53,
-];
+const PRIMES: &[u64] = &[2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53];
 
 /// Radical-inverse of `i` in base `b` — `phi_b(i)` in `[0, 1)`.
 /// The standard van der Corput / Halton building block.
@@ -226,12 +224,22 @@ mod tests {
         // §2; the digit-reversal of 1,2,3,…): 1/2, 1/4, 3/4, 1/8,
         // 5/8, 3/8, 7/8, 1/16, …
         let expected = [
-            1.0 / 2.0, 1.0 / 4.0, 3.0 / 4.0, 1.0 / 8.0,
-            5.0 / 8.0, 3.0 / 8.0, 7.0 / 8.0, 1.0 / 16.0,
+            1.0 / 2.0,
+            1.0 / 4.0,
+            3.0 / 4.0,
+            1.0 / 8.0,
+            5.0 / 8.0,
+            3.0 / 8.0,
+            7.0 / 8.0,
+            1.0 / 16.0,
         ];
         for (k, want) in expected.iter().enumerate() {
             let got = radical_inverse(k as u64 + 1, 2);
-            assert!((got - want).abs() < 1e-12, "phi_2({}) = {got}, want {want}", k + 1);
+            assert!(
+                (got - want).abs() < 1e-12,
+                "phi_2({}) = {got}, want {want}",
+                k + 1
+            );
         }
     }
 
@@ -239,11 +247,20 @@ mod tests {
     fn van_der_corput_base3_published_prefix() {
         // Base-3 van der Corput: 1/3, 2/3, 1/9, 4/9, 7/9, 2/9, …
         let expected = [
-            1.0 / 3.0, 2.0 / 3.0, 1.0 / 9.0, 4.0 / 9.0, 7.0 / 9.0, 2.0 / 9.0,
+            1.0 / 3.0,
+            2.0 / 3.0,
+            1.0 / 9.0,
+            4.0 / 9.0,
+            7.0 / 9.0,
+            2.0 / 9.0,
         ];
         for (k, want) in expected.iter().enumerate() {
             let got = radical_inverse(k as u64 + 1, 3);
-            assert!((got - want).abs() < 1e-12, "phi_3({}) = {got}, want {want}", k + 1);
+            assert!(
+                (got - want).abs() < 1e-12,
+                "phi_3({}) = {got}, want {want}",
+                k + 1
+            );
         }
     }
 
@@ -263,7 +280,9 @@ mod tests {
 
     #[test]
     fn halton_multi_indices_lattice() {
-        let idx = IndexFn::Lattice { axis_sizes: vec![10, 10] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![10, 10],
+        };
         let out = halton_multi_indices(&idx, Some(5));
         assert_eq!(out.len(), 5);
         for mi in &out {
@@ -292,7 +311,9 @@ mod tests {
 
     #[test]
     fn deterministic() {
-        let idx = IndexFn::Lattice { axis_sizes: vec![100, 100] };
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![100, 100],
+        };
         let a = halton_multi_indices(&idx, Some(20));
         let b = halton_multi_indices(&idx, Some(20));
         assert_eq!(a, b);

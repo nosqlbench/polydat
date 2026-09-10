@@ -6,10 +6,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::ast::{PolydatNode, Value};
-use super::{WireSource, InputDef};
-use super::program::PolydatProgram;
 use super::engines::{PolydatState, SharedCellEntry};
+use super::program::PolydatProgram;
+use super::{InputDef, WireSource};
+use crate::ast::{PolydatNode, Value};
 
 /// Auto-create `SharedCell`s for `shared`-modifier outputs that
 /// have a backing input slot on this kernel. Call once at
@@ -23,8 +23,12 @@ use super::engines::{PolydatState, SharedCellEntry};
 /// without a slot there's nothing to share.
 fn seed_shared_cells(state: &mut PolydatState, program: &PolydatProgram) {
     for name in program.shared_outputs() {
-        let Some(idx) = program.find_input(name) else { continue };
-        if state.shared_cell(idx).is_some() { continue; } // already seeded
+        let Some(idx) = program.find_input(name) else {
+            continue;
+        };
+        if state.shared_cell(idx).is_some() {
+            continue;
+        } // already seeded
         let init_value = state.get_input(idx);
         // `make_shared_cell` allocates the next bit position
         // from this scope's intent-dirty vector and constructs
@@ -56,7 +60,11 @@ fn seed_shared_cells(state: &mut PolydatState, program: &PolydatProgram) {
 /// Spec: `expression_engine.md` §5.4 (boundary adapter
 /// polyfills); `composition_substrate.md` T2 (typed-mismatch
 /// healing extended to synthesis sites).
-pub(crate) fn adapt_boundary_value(slot_name: &str, slot_type: crate::ast::PortType, value: Value) -> Value {
+pub(crate) fn adapt_boundary_value(
+    slot_name: &str,
+    slot_type: crate::ast::PortType,
+    value: Value,
+) -> Value {
     let value_type = value.port_type();
     if value_type == slot_type {
         return value;
@@ -116,8 +124,7 @@ pub(crate) fn adapt_boundary_value(slot_name: &str, slot_type: crate::ast::PortT
                  \x20   * Convert at the consumer: wrap the read with the matching `as_*` / \
                  `*_from_*` adapter for the slot type."
             };
-            let hint = hint
-                .replace("{slot_name}", slot_name);
+            let hint = hint.replace("{slot_name}", slot_name);
             crate::library::support::audit::warn(&format!(
                 "boundary adapter: no catalog entry for {value_type:?} → {slot_type:?} \
                  at slot '{slot_name}'; passing value as-is (will likely produce a wire \
@@ -221,14 +228,18 @@ pub(crate) fn check_write_through_type(
     // `round_u64(...)`.
     let widening = matches!(
         (got, slot_type),
-        (P::U64, P::F64) | (P::I64, P::F64) | (P::U32, P::F64)
-            | (P::I32, P::F64) | (P::F32, P::F64)
-            | (P::U32, P::U64) | (P::U32, P::I64) | (P::I32, P::I64)
-            | (P::U64, P::Bool) | (P::Bool, P::U64),
+        (P::U64, P::F64)
+            | (P::I64, P::F64)
+            | (P::U32, P::F64)
+            | (P::I32, P::F64)
+            | (P::F32, P::F64)
+            | (P::U32, P::U64)
+            | (P::U32, P::I64)
+            | (P::I32, P::I64)
+            | (P::U64, P::Bool)
+            | (P::Bool, P::U64),
     );
-    if widening
-        && let Some(adapter) = crate::compile::assembly::boundary_adapter(got, slot_type)
-    {
+    if widening && let Some(adapter) = crate::compile::assembly::boundary_adapter(got, slot_type) {
         let inputs = vec![value];
         let mut outputs = vec![Value::None];
         adapter.eval(&inputs, &mut outputs);
@@ -265,7 +276,8 @@ impl PolydatKernel {
         context: &str,
     ) -> Self {
         let coord_count = input_names.len();
-        let input_defs: Vec<InputDef> = input_names.into_iter()
+        let input_defs: Vec<InputDef> = input_names
+            .into_iter()
             .map(|name| InputDef {
                 name,
                 default: Value::U64(0),
@@ -274,10 +286,21 @@ impl PolydatKernel {
             })
             .collect();
         let order: Vec<String> = output_map.keys().cloned().collect();
-        Self::new_with_inputs(nodes, wiring, input_defs, coord_count, output_map, order,
-                       std::collections::HashSet::new(),
-                       HashMap::new(),
-                       source, context, None, false).unwrap()
+        Self::new_with_inputs(
+            nodes,
+            wiring,
+            input_defs,
+            coord_count,
+            output_map,
+            order,
+            std::collections::HashSet::new(),
+            HashMap::new(),
+            source,
+            context,
+            None,
+            false,
+        )
+        .unwrap()
     }
 
     /// Create with explicit input definitions. `strict` selects
@@ -308,8 +331,14 @@ impl PolydatKernel {
         strict: bool,
     ) -> Result<Self, String> {
         let mut program = PolydatProgram::with_inputs(
-            nodes, wiring, input_defs, coord_count, output_map, output_order,
-            source, context,
+            nodes,
+            wiring,
+            input_defs,
+            coord_count,
+            output_map,
+            output_order,
+            source,
+            context,
         );
         // Mark const bindings BEFORE fold runs so the compile-time
         // check (Plan A) can validate each one's upstream chain.
@@ -371,7 +400,8 @@ impl PolydatKernel {
     /// construction, before the `Arc<PolydatProgram>` is shared.
     /// Panics if the Arc has other references.
     pub fn mark_inherited_outputs<I>(&mut self, names: I)
-    where I: IntoIterator<Item = String>
+    where
+        I: IntoIterator<Item = String>,
     {
         let program = Arc::get_mut(&mut self.program)
             .expect("mark_inherited_outputs called after program was shared");
@@ -526,7 +556,9 @@ impl PolydatKernel {
         let debug = crate::library::debug_nodes_enabled();
         if self.write_throughs.is_empty() {
             if debug {
-                crate::library::support::audit::debug("commit_write_throughs: kernel has zero bindings — no-op");
+                crate::library::support::audit::debug(
+                    "commit_write_throughs: kernel has zero bindings — no-op",
+                );
             }
             return Ok(());
         }
@@ -565,11 +597,12 @@ impl PolydatKernel {
             // Type-stability boundary (doc above): match passes,
             // catalog adapters heal (widening), anything else errors
             // HERE — at the write, with the full story.
-            let slot_type = self.program.input_port_type_by_idx(idx)
+            let slot_type = self
+                .program
+                .input_port_type_by_idx(idx)
                 .expect("write-through idx resolved from find_input");
-            let value = check_write_through_type(
-                &wt.export_name, &wt.source_output, slot_type, value,
-            )?;
+            let value =
+                check_write_through_type(&wt.export_name, &wt.source_output, slot_type, value)?;
             pending.push((idx, value));
         }
         for (idx, value) in pending {
@@ -629,10 +662,12 @@ impl PolydatKernel {
     /// Set an extern by name on the owned state. The compiled kernels
     /// offer the same call, so a host drives every engine alike.
     pub fn set_input(&mut self, name: &str, value: Value) -> Result<(), String> {
-        let idx = self
-            .program
-            .find_input(name)
-            .ok_or_else(|| format!("no input named '{name}'; this program's inputs are {:?}", self.program.input_names()))?;
+        let idx = self.program.find_input(name).ok_or_else(|| {
+            format!(
+                "no input named '{name}'; this program's inputs are {:?}",
+                self.program.input_names()
+            )
+        })?;
         self.state.set_input(idx, value);
         Ok(())
     }
@@ -648,7 +683,8 @@ impl PolydatKernel {
     /// Read an input value by name. Cell-aware: cell-bound
     /// slots return the cell's current value.
     pub fn get_input(&self, name: &str) -> Option<Value> {
-        self.program.find_input(name)
+        self.program
+            .find_input(name)
             .map(|idx| self.state.get_input(idx))
     }
 
@@ -687,10 +723,16 @@ impl PolydatKernel {
     pub fn propagate_inputs_into(&self, child: &mut PolydatKernel) {
         let names = self.program.input_names();
         for name in names {
-            let Some(outer_value) = self.get_input(&name) else { continue };
-            if matches!(outer_value, Value::None) { continue; }
+            let Some(outer_value) = self.get_input(&name) else {
+                continue;
+            };
+            if matches!(outer_value, Value::None) {
+                continue;
+            }
             let cloned = outer_value.clone();
-            let Some(inner_idx) = child.program.find_input(&name) else { continue };
+            let Some(inner_idx) = child.program.find_input(&name) else {
+                continue;
+            };
             child.state.set_input(inner_idx, cloned);
         }
     }
@@ -716,7 +758,11 @@ impl PolydatKernel {
     pub fn get_constant(&self, name: &str) -> Option<&Value> {
         let (node_idx, port_idx) = self.program.output_map.get(name)?;
         let val = &self.state.core.buffers[*node_idx][*port_idx];
-        if matches!(val, Value::None) { None } else { Some(val) }
+        if matches!(val, Value::None) {
+            None
+        } else {
+            Some(val)
+        }
     }
 
     /// Find every `const` output whose Plan B materialisation
@@ -742,14 +788,15 @@ impl PolydatKernel {
     /// scope-init pulls have completed). Calling before
     /// scope-init returns a misleading result.
     pub fn find_l2f_violations(&self) -> Vec<String> {
-        self.program.const_outputs.iter()
+        self.program
+            .const_outputs
+            .iter()
             .filter(|name| {
-                self.program.output_map.get(name.as_str())
+                self.program
+                    .output_map
+                    .get(name.as_str())
                     .map(|(node_idx, port_idx)| {
-                        matches!(
-                            &self.state.core.buffers[*node_idx][*port_idx],
-                            Value::None
-                        )
+                        matches!(&self.state.core.buffers[*node_idx][*port_idx], Value::None)
                     })
                     .unwrap_or(false)
             })
@@ -792,7 +839,11 @@ impl PolydatKernel {
         }
         if let Some(idx) = self.program.find_input(name) {
             let v = self.state.read_input_value(idx);
-            return if matches!(v, Value::None) { None } else { Some(v) };
+            return if matches!(v, Value::None) {
+                None
+            } else {
+                Some(v)
+            };
         }
         // Dotted names follow the established field-access wire
         // convention (`a.b` lowers to the wire `a__b`), so a
@@ -897,8 +948,12 @@ impl PolydatKernel {
         // and names are isomorphic since the program is the
         // same Arc.
         for name in self.program.input_names() {
-            let Some(idx) = self.program.find_input(&name) else { continue };
-            let Some(cell) = self.state.shared_cell(idx) else { continue };
+            let Some(idx) = self.program.find_input(&name) else {
+                continue;
+            };
+            let Some(cell) = self.state.shared_cell(idx) else {
+                continue;
+            };
             snapshot.state.attach_shared_cell(idx, cell);
         }
         snapshot
@@ -970,17 +1025,15 @@ impl PolydatKernel {
         // `extern NAME` lookup. The distinction is internal
         // (when the value is computed) and doesn't affect the
         // shadowing semantics.
-        let local_finals: std::collections::HashSet<&str> = self.program
+        let local_finals: std::collections::HashSet<&str> = self
+            .program
             .output_names()
             .into_iter()
             // `const_outputs()` filters output_modifiers for CONST,
             // so checking the modifier directly is the same query —
             // single source of truth for "this scope authoritatively
             // owns NAME via a const binding."
-            .filter(|n| {
-                self.program.output_modifier(n)
-                    == crate::dsl::ast::BindingModifier::CONST
-            })
+            .filter(|n| self.program.output_modifier(n) == crate::dsl::ast::BindingModifier::CONST)
             .collect();
         for entry in outer_cells {
             // A local final on this scope is the canonical writer
@@ -1027,8 +1080,12 @@ impl PolydatKernel {
         //   same lineage — no shared-kernel race on the
         //   cell.
         for name in outer.program.output_names() {
-            if attached_names.contains(name) { continue; }
-            let Some(inner_idx) = self.program.find_input(name) else { continue };
+            if attached_names.contains(name) {
+                continue;
+            }
+            let Some(inner_idx) = self.program.find_input(name) else {
+                continue;
+            };
             let outer_has_slot = outer.program.find_input(name).is_some();
             // SRD-74 P2 transitive composition: when outer's output
             // is a `const` binding, ALWAYS go through outer.lookup
@@ -1045,8 +1102,8 @@ impl PolydatKernel {
             // lifetime (SRD-11) — value-copy is semantically
             // equivalent to cell-attach and avoids the dynamic-cell
             // overhead.
-            let outer_is_const = outer.program.output_modifier(name)
-                == crate::dsl::ast::BindingModifier::CONST;
+            let outer_is_const =
+                outer.program.output_modifier(name) == crate::dsl::ast::BindingModifier::CONST;
             // Slot's declared port type — needed for γ-5
             // boundary-adapter dispatch. `find_input` returned
             // `Some(inner_idx)` above, so `input_port_type` on
@@ -1071,8 +1128,7 @@ impl PolydatKernel {
             } else if let Some(value) = outer.lookup(name) {
                 let adapted = adapt_boundary_value(name, inner_slot_type, value);
                 self.state.set_input(inner_idx, adapted);
-            } else if let Some(value) =
-                crate::dsl::factories::resolve_extern(name, inner_slot_type)
+            } else if let Some(value) = crate::dsl::factories::resolve_extern(name, inner_slot_type)
             {
                 // γ-8 virtual-wire resolver: outer chain has no
                 // binding; a host-registered resolver provides one.
@@ -1106,7 +1162,8 @@ impl PolydatKernel {
         // panic so operators can see the eval failure even when
         // the conditional-shadow fall-through papers over the
         // None buffer at the next lookup.
-        let const_outputs: Vec<String> = self.program
+        let const_outputs: Vec<String> = self
+            .program
             .const_outputs()
             .into_iter()
             .map(|s| s.to_string())
@@ -1173,8 +1230,13 @@ impl PolydatKernel {
         let program = self.program.clone();
         let n_outputs = program.output_names().len();
         for i in 0..n_outputs {
-            if self.state.core.output_cells.get(i)
-                .and_then(|c| c.as_ref()).is_some()
+            if self
+                .state
+                .core
+                .output_cells
+                .get(i)
+                .and_then(|c| c.as_ref())
+                .is_some()
             {
                 let name = program.output_names()[i].to_string();
                 // SRD-13f Push D: some workload-level bindings
@@ -1212,15 +1274,26 @@ impl PolydatKernel {
             by_name.insert(entry.name.clone(), entry.clone());
         }
         for name in self.program.input_names() {
-            let Some(idx) = self.program.find_input(&name) else { continue };
-            let Some(cell) = self.state.shared_cell(idx) else { continue };
+            let Some(idx) = self.program.find_input(&name) else {
+                continue;
+            };
+            let Some(cell) = self.state.shared_cell(idx) else {
+                continue;
+            };
             // `find_input` just returned `Some(idx)`; the program
             // shape guarantees a declared port type for that idx.
             let port_type = self
                 .program
                 .input_port_type(&name)
                 .expect("input index resolved but no declared port type");
-            by_name.insert(name.clone(), SharedCellEntry { name, port_type, cell });
+            by_name.insert(
+                name.clone(),
+                SharedCellEntry {
+                    name,
+                    port_type,
+                    cell,
+                },
+            );
         }
         by_name.into_values().collect()
     }
@@ -1329,8 +1402,12 @@ impl PolydatKernel {
         let mut vars = indexmap::IndexMap::new();
         for (idx, name) in self.program.input_names().into_iter().enumerate() {
             let kind = self.program.input_kind(idx);
-            if kind != Some(InputKind::IterationExtern) { continue; }
-            if self.program.is_inherited(&name) { continue; }
+            if kind != Some(InputKind::IterationExtern) {
+                continue;
+            }
+            if self.program.is_inherited(&name) {
+                continue;
+            }
             // Use `lookup` (two-tier: const buffer first, input
             // slot second) rather than reading the input slot
             // directly. The conditional-shadow `const NAME :=
@@ -1343,8 +1420,12 @@ impl PolydatKernel {
             // Reading the input slot directly would report the
             // wired-in default, masking the per-iter shadow value
             // in activity labels / scope-coord display paths.
-            let Some(value) = self.lookup(&name) else { continue; };
-            if matches!(value, Value::None) { continue; }
+            let Some(value) = self.lookup(&name) else {
+                continue;
+            };
+            if matches!(value, Value::None) {
+                continue;
+            }
             vars.insert(name, value);
         }
         super::ScopeCoord { vars }
@@ -1424,10 +1505,20 @@ mod type_stability_tests {
         // Narrowing: F64 into a U64 cell is the incident shape — an
         // error at the write, naming everything the author needs.
         let err = check_write_through_type(
-            "measured", "__write_measured", PortType::U64, Value::F64(900.0),
-        ).expect_err("f64→u64 narrowing must be rejected");
+            "measured",
+            "__write_measured",
+            PortType::U64,
+            Value::F64(900.0),
+        )
+        .expect_err("f64→u64 narrowing must be rejected");
         assert!(err.contains("measured"), "names the cell: {err}");
-        assert!(err.contains("U64") && err.contains("F64"), "names both types: {err}");
-        assert!(err.contains("trunc_u64"), "points at the explicit cast: {err}");
+        assert!(
+            err.contains("U64") && err.contains("F64"),
+            "names both types: {err}"
+        );
+        assert!(
+            err.contains("trunc_u64"),
+            "points at the explicit cast: {err}"
+        );
     }
 }

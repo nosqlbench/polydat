@@ -27,10 +27,10 @@
 //!    pair we also consider legal. The FUZZ_SEED env var seeds the
 //!    RNG; FUZZ_ITERATIONS controls iteration count.
 
+use polydat::ast::{PortType, SlotType};
 use polydat::dsl::compile::{compile_polydat, compile_polydat_with_log};
 use polydat::dsl::events::{CompileEvent, CompileEventLog};
 use polydat::dsl::registry::{self, FuncSig};
-use polydat::ast::{PortType, SlotType};
 
 // ─── Expected-adapter table ───────────────────────────────────────
 //
@@ -111,10 +111,22 @@ struct SinkRecipe {
 fn producers() -> Vec<TypeRecipe> {
     use PortType::*;
     vec![
-        TypeRecipe { produce: "cycle",                        src: U64 },
-        TypeRecipe { produce: "to_f64(cycle)",                src: F64 },
-        TypeRecipe { produce: "format_u64(cycle, 10)",        src: Str },
-        TypeRecipe { produce: "to_json(cycle)",               src: Json },
+        TypeRecipe {
+            produce: "cycle",
+            src: U64,
+        },
+        TypeRecipe {
+            produce: "to_f64(cycle)",
+            src: F64,
+        },
+        TypeRecipe {
+            produce: "format_u64(cycle, 10)",
+            src: Str,
+        },
+        TypeRecipe {
+            produce: "to_json(cycle)",
+            src: Json,
+        },
     ]
 }
 
@@ -123,9 +135,18 @@ fn producers() -> Vec<TypeRecipe> {
 fn consumers() -> Vec<SinkRecipe> {
     use PortType::*;
     vec![
-        SinkRecipe { consume_tmpl: "add({}, 1)",              dst: U64 },
-        SinkRecipe { consume_tmpl: "clamp_f64({}, 0.0, 1.0)", dst: F64 },
-        SinkRecipe { consume_tmpl: "json_to_str({})",         dst: Json },
+        SinkRecipe {
+            consume_tmpl: "add({}, 1)",
+            dst: U64,
+        },
+        SinkRecipe {
+            consume_tmpl: "clamp_f64({}, 0.0, 1.0)",
+            dst: F64,
+        },
+        SinkRecipe {
+            consume_tmpl: "json_to_str({})",
+            dst: Json,
+        },
     ]
 }
 
@@ -151,7 +172,8 @@ fn adapter_table_is_consistent() {
                      expected {expected:?}, observed {observed:?}\n\
                      result: {}\n\
                      source:\n{source}",
-                    p.src, c.dst,
+                    p.src,
+                    c.dst,
                     match &result {
                         Ok(_) => "<compiled>".to_string(),
                         Err(e) => e.clone(),
@@ -160,8 +182,11 @@ fn adapter_table_is_consistent() {
             }
         }
     }
-    assert!(mismatches.is_empty(),
-        "adapter-table disagreements:\n\n{}", mismatches.join("\n---\n"));
+    assert!(
+        mismatches.is_empty(),
+        "adapter-table disagreements:\n\n{}",
+        mismatches.join("\n---\n")
+    );
 }
 
 /// Classify a compile outcome into the same vocabulary as `Adapt`.
@@ -175,9 +200,15 @@ fn adapter_table_is_consistent() {
 fn classify_result<T>(result: &Result<T, String>, log: &CompileEventLog) -> Adapt {
     match result {
         Ok(_) => {
-            let has_adapter = log.events().iter().any(|e|
-                matches!(e, CompileEvent::TypeAdapterInserted { .. }));
-            if has_adapter { Adapt::Inserted } else { Adapt::Identity }
+            let has_adapter = log
+                .events()
+                .iter()
+                .any(|e| matches!(e, CompileEvent::TypeAdapterInserted { .. }));
+            if has_adapter {
+                Adapt::Inserted
+            } else {
+                Adapt::Identity
+            }
         }
         Err(msg) => {
             if msg.contains("type mismatch") {
@@ -214,7 +245,9 @@ fn adapt_agrees(expected: Adapt, observed: Adapt) -> bool {
 /// test inputs — we don't need cryptographic quality.
 struct Rng(u64);
 impl Rng {
-    fn new(seed: u64) -> Self { Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1)) }
+    fn new(seed: u64) -> Self {
+        Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15).wrapping_add(1))
+    }
     fn next_u64(&mut self) -> u64 {
         self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.0;
@@ -223,7 +256,9 @@ impl Rng {
         z ^ (z >> 31)
     }
     fn range(&mut self, n: usize) -> usize {
-        if n == 0 { return 0; }
+        if n == 0 {
+            return 0;
+        }
         (self.next_u64() as usize) % n
     }
     fn f64(&mut self) -> f64 {
@@ -245,25 +280,32 @@ impl Rng {
 /// - context nodes that require runtime fixtures (metric queries,
 ///   control sets, fiber context) that aren't present in a unit test.
 fn fuzzable_sigs() -> Vec<FuncSig> {
-    registry::registry().into_iter()
+    registry::registry()
+        .into_iter()
         .filter(|s| !s.name.starts_with("__"))
         .filter(|s| s.outputs == 1)
         // VariadicWires we can drive (random wire-arg count); the
         // other variadic shapes (VariadicConsts, VariadicGroup)
         // need positional pair / group invariants the random
         // generator can't yet guarantee, so they stay excluded.
-        .filter(|s| matches!(
-            s.arity,
-            registry::Arity::Fixed | registry::Arity::VariadicWires { .. },
-        ))
+        .filter(|s| {
+            matches!(
+                s.arity,
+                registry::Arity::Fixed | registry::Arity::VariadicWires { .. },
+            )
+        })
         // No fuzzable signature actually declares a `ConstVec*`
         // slot type today; the filter is kept for forward-
         // compatibility — the generator below would have to
         // synthesize array literals (`[1, 2, 3]`) for those.
-        .filter(|s| !s.params.iter().any(|p| matches!(
-            p.slot_type,
-            SlotType::ConstVecU64 | SlotType::ConstVecF64 | SlotType::ConstVec
-        )))
+        .filter(|s| {
+            !s.params.iter().any(|p| {
+                matches!(
+                    p.slot_type,
+                    SlotType::ConstVecU64 | SlotType::ConstVecF64 | SlotType::ConstVec
+                )
+            })
+        })
         // Context-dependent functions need runtime fixtures the
         // compile path doesn't provide for standalone sources.
         // `fft_analyze` is excluded because its constructor opens
@@ -275,14 +317,27 @@ fn fuzzable_sigs() -> Vec<FuncSig> {
         // the compile path. They share the same exclusion as
         // `fft_analyze` until the macro grows a `Result`-returning
         // setup attribute (Phase D extension).
-        .filter(|s| !matches!(s.name,
-            "metric" | "control" | "control_u64" | "control_bool"
-            | "control_str" | "control_set" | "rate" | "concurrency"
-            | "phase" | "session_id"
-            | "fft_analyze"
-            | "csv_row" | "csv_row_count"
-            | "jsonl_row" | "jsonl_row_count" | "jsonl_field"
-        ))
+        .filter(|s| {
+            !matches!(
+                s.name,
+                "metric"
+                    | "control"
+                    | "control_u64"
+                    | "control_bool"
+                    | "control_str"
+                    | "control_set"
+                    | "rate"
+                    | "concurrency"
+                    | "phase"
+                    | "session_id"
+                    | "fft_analyze"
+                    | "csv_row"
+                    | "csv_row_count"
+                    | "jsonl_row"
+                    | "jsonl_row_count"
+                    | "jsonl_field"
+            )
+        })
         .collect()
 }
 
@@ -314,18 +369,23 @@ fn generate_module(rng: &mut Rng, sigs: &[FuncSig], n_bindings: usize) -> String
                 defined[rng.range(defined.len())].clone()
             }
         };
-        let materialize = |rng: &mut Rng, p: &polydat::dsl::registry::ParamSpec, defined: &[String]| -> String {
-            match p.slot_type {
-                SlotType::Wire => pick_wire(rng, defined),
-                SlotType::ConstU64 => format!("{}", rng.next_u64() % 100),
-                SlotType::ConstF64 => format!("{:.2}", rng.f64()),
-                SlotType::ConstStr => format!("\"s{}\"", rng.range(100)),
-                SlotType::ConstVecU64 | SlotType::ConstVecF64 | SlotType::ConstVec => unreachable!(),
-            }
-        };
+        let materialize =
+            |rng: &mut Rng, p: &polydat::dsl::registry::ParamSpec, defined: &[String]| -> String {
+                match p.slot_type {
+                    SlotType::Wire => pick_wire(rng, defined),
+                    SlotType::ConstU64 => format!("{}", rng.next_u64() % 100),
+                    SlotType::ConstF64 => format!("{:.2}", rng.f64()),
+                    SlotType::ConstStr => format!("\"s{}\"", rng.range(100)),
+                    SlotType::ConstVecU64 | SlotType::ConstVecF64 | SlotType::ConstVec => {
+                        unreachable!()
+                    }
+                }
+            };
 
         // Fill the declared params (skip optional ones at random).
-        let chosen: Vec<&_> = sig.params.iter()
+        let chosen: Vec<&_> = sig
+            .params
+            .iter()
             .filter(|p| p.required || rng.range(2) == 0)
             .collect();
         for param in chosen {
@@ -366,18 +426,26 @@ fn run_fuzz_pass(seed: u64, iterations: usize) -> Vec<String> {
     const MAX_FAILURES_PER_SEED: usize = 8;
 
     let sigs = fuzzable_sigs();
-    assert!(!sigs.is_empty(), "no fuzzable signatures found — registry wiring broken?");
+    assert!(
+        !sigs.is_empty(),
+        "no fuzzable signatures found — registry wiring broken?"
+    );
 
     let mut rng = Rng::new(seed);
     let mut failures: Vec<String> = Vec::new();
-    let repro = |i: usize| format!(
-        "reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test --workspace \
-         --test fuzz_type_adapters random_dags", i + 1);
+    let repro = |i: usize| {
+        format!(
+            "reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test --workspace \
+         --test fuzz_type_adapters random_dags",
+            i + 1
+        )
+    };
 
     for i in 0..iterations {
         if failures.len() >= MAX_FAILURES_PER_SEED {
             failures.push(format!(
-                "[seed {seed:#x}] … stopping this seed after {MAX_FAILURES_PER_SEED} failures"));
+                "[seed {seed:#x}] … stopping this seed after {MAX_FAILURES_PER_SEED} failures"
+            ));
             break;
         }
         let n = 3 + rng.range(8);
@@ -392,10 +460,11 @@ fn run_fuzz_pass(seed: u64, iterations: usize) -> Vec<String> {
         // here is always a bug in the compiler — even when the input
         // is bananas, the error path should be a returned `Err`, not
         // a process-level abort.
-        let result = match result {
-            Ok(r) => r,
-            Err(panic) => {
-                failures.push(format!(
+        let result =
+            match result {
+                Ok(r) => r,
+                Err(panic) => {
+                    failures.push(format!(
                     "[seed {seed:#x}] compiler panicked on iteration {i}:\n  source:\n{source}\n  \
                      panic: {:?}\n  {}",
                     panic.downcast_ref::<&str>().copied()
@@ -403,9 +472,9 @@ fn run_fuzz_pass(seed: u64, iterations: usize) -> Vec<String> {
                         .unwrap_or("<non-string panic>"),
                     repro(i),
                 ));
-                continue;
-            }
-        };
+                    continue;
+                }
+            };
 
         match result {
             Err(msg) => {
@@ -428,7 +497,9 @@ fn run_fuzz_pass(seed: u64, iterations: usize) -> Vec<String> {
                 {
                     failures.push(format!(
                         "[seed {seed:#x}] iteration {i} produced a cryptic error message.\n  \
-                         error: {msg}\n  source:\n{source}\n  {}", repro(i)));
+                         error: {msg}\n  source:\n{source}\n  {}",
+                        repro(i)
+                    ));
                 }
             }
             Ok(_) => {
@@ -438,14 +509,17 @@ fn run_fuzz_pass(seed: u64, iterations: usize) -> Vec<String> {
                 // compiler without an entry in this test's mirror.
                 for e in log.events() {
                     if let CompileEvent::TypeAdapterInserted { adapter, .. } = e
-                        && !adapter_label_is_known(adapter) {
-                            failures.push(format!(
-                                "[seed {seed:#x}] iteration {i} inserted an unrecognised \
+                        && !adapter_label_is_known(adapter)
+                    {
+                        failures.push(format!(
+                            "[seed {seed:#x}] iteration {i} inserted an unrecognised \
                                  adapter '{adapter}'.\n\
                                  Update `expected_adapt`/`adapter_label_is_known` and the \
                                  compiler's\n`auto_adapter` table together.\n  \
-                                 source:\n{source}\n  {}", repro(i)));
-                        }
+                                 source:\n{source}\n  {}",
+                            repro(i)
+                        ));
+                    }
                 }
             }
         }
@@ -455,14 +529,21 @@ fn run_fuzz_pass(seed: u64, iterations: usize) -> Vec<String> {
 
 #[test]
 fn random_dags_compile_or_fail_cleanly() {
-    let seed: u64 = std::env::var("FUZZ_SEED").ok()
-        .and_then(|s| s.parse().ok()).unwrap_or(0xDEAD_BEEFu64);
-    let iterations: usize = std::env::var("FUZZ_ITERATIONS").ok()
-        .and_then(|s| s.parse().ok()).unwrap_or(500);
+    let seed: u64 = std::env::var("FUZZ_SEED")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0xDEAD_BEEFu64);
+    let iterations: usize = std::env::var("FUZZ_ITERATIONS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(500);
     let failures = run_fuzz_pass(seed, iterations);
-    assert!(failures.is_empty(),
+    assert!(
+        failures.is_empty(),
         "fuzz invariants violated ({} failures):\n\n{}",
-        failures.len(), failures.join("\n---\n"));
+        failures.len(),
+        failures.join("\n---\n")
+    );
 }
 
 /// MANUAL SUPERFUZZ — the deep sweep the per-commit sample can't
@@ -481,12 +562,18 @@ fn random_dags_compile_or_fail_cleanly() {
 #[test]
 #[ignore = "manual superfuzz — minutes of runtime; run with `-- --ignored`"]
 fn superfuzz_sampler() {
-    let base: u64 = std::env::var("FUZZ_SEED").ok()
-        .and_then(|s| s.parse().ok()).unwrap_or(0xDEAD_BEEFu64);
-    let seeds: u64 = std::env::var("SUPERFUZZ_SEEDS").ok()
-        .and_then(|s| s.parse().ok()).unwrap_or(64);
-    let iterations: usize = std::env::var("FUZZ_ITERATIONS").ok()
-        .and_then(|s| s.parse().ok()).unwrap_or(2000);
+    let base: u64 = std::env::var("FUZZ_SEED")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0xDEAD_BEEFu64);
+    let seeds: u64 = std::env::var("SUPERFUZZ_SEEDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(64);
+    let iterations: usize = std::env::var("FUZZ_ITERATIONS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2000);
 
     let mut all: Vec<String> = Vec::new();
     for k in 0..seeds {
@@ -498,8 +585,11 @@ fn superfuzz_sampler() {
             eprintln!("superfuzz: seed {seed:#x}: {} violation(s)", failures.len());
         }
         if k % 8 == 7 {
-            eprintln!("superfuzz: {}/{seeds} seeds swept, {} violation(s) so far",
-                k + 1, all.len() + failures.len());
+            eprintln!(
+                "superfuzz: {}/{seeds} seeds swept, {} violation(s) so far",
+                k + 1,
+                all.len() + failures.len()
+            );
         }
         all.extend(failures);
     }
@@ -510,14 +600,18 @@ fn superfuzz_sampler() {
     const MAX_REPORT: usize = 30_000;
     if report.len() > MAX_REPORT {
         let mut cut = MAX_REPORT;
-        while !report.is_char_boundary(cut) { cut -= 1; }
+        while !report.is_char_boundary(cut) {
+            cut -= 1;
+        }
         report.truncate(cut);
         report.push_str("\n… (report truncated)");
     }
-    assert!(all.is_empty(),
+    assert!(
+        all.is_empty(),
         "superfuzz invariants violated ({} failures across {seeds} seeds × \
          {iterations} iterations):\n\n{report}",
-        all.len());
+        all.len()
+    );
 }
 
 /// Recognise the `{SrcType:?}→{DstType:?}` labels the compiler writes
@@ -532,57 +626,134 @@ fn adapter_label_is_known(label: &str) -> bool {
     let is_reg = |t: &str| {
         matches!(
             t,
-            "Reg128" | "RegI8x16" | "RegI16x8" | "RegI32x4" | "RegI64x2"
-                | "RegF16x8" | "RegF32x4" | "RegF64x2"
+            "Reg128"
+                | "RegI8x16"
+                | "RegI16x8"
+                | "RegI32x4"
+                | "RegI64x2"
+                | "RegF16x8"
+                | "RegF32x4"
+                | "RegF64x2"
         )
     };
     if let Some((from, to)) = label.split_once('→')
-        && is_reg(from) && is_reg(to) {
-            return true;
-        }
+        && is_reg(from)
+        && is_reg(to)
+    {
+        return true;
+    }
     // PortType's Debug impl yields "U64", "F64", etc. — match those.
     // Mirror the assembler's auto_adapter table (intra-graph only;
     // boundary-only parsers + lossy narrowings are NOT here).
     let known = [
         // Numeric widening
-        "U64→F64", "U32→U64", "U32→F64", "I32→I64", "I32→F64",
-        "I64→F64", "F32→F64",
+        "U64→F64",
+        "U32→U64",
+        "U32→F64",
+        "I32→I64",
+        "I32→F64",
+        "I64→F64",
+        "F32→F64",
         // X → Str
-        "U64→Str", "F64→Str", "Bool→Str", "Json→Str",
-        "U32→Str", "I32→Str", "I64→Str", "F32→Str",
+        "U64→Str",
+        "F64→Str",
+        "Bool→Str",
+        "Json→Str",
+        "U32→Str",
+        "I32→Str",
+        "I64→Str",
+        "F32→Str",
         // Bool ↔ numeric
-        "Bool→U64", "Bool→U32", "Bool→I64", "Bool→I32",
-        "Bool→F64", "Bool→F32",
-        "U64→Bool", "U32→Bool", "I64→Bool", "I32→Bool",
-        "F64→Bool", "F32→Bool",
+        "Bool→U64",
+        "Bool→U32",
+        "Bool→I64",
+        "Bool→I32",
+        "Bool→F64",
+        "Bool→F32",
+        "U64→Bool",
+        "U32→Bool",
+        "I64→Bool",
+        "I32→Bool",
+        "F64→Bool",
+        "F32→Bool",
         // X → Bytes
-        "U64→Bytes", "U32→Bytes", "I64→Bytes", "I32→Bytes",
-        "F64→Bytes", "F32→Bytes", "Bool→Bytes",
-        "VecF32→Bytes", "VecI32→Bytes",
+        "U64→Bytes",
+        "U32→Bytes",
+        "I64→Bytes",
+        "I32→Bytes",
+        "F64→Bytes",
+        "F32→Bytes",
+        "Bool→Bytes",
+        "VecF32→Bytes",
+        "VecI32→Bytes",
         // X → Json (integers + Bool + VecI32)
-        "U64→Json", "U32→Json", "I64→Json", "I32→Json",
-        "Bool→Json", "VecI32→Json",
+        "U64→Json",
+        "U32→Json",
+        "I64→Json",
+        "I32→Json",
+        "Bool→Json",
+        "VecI32→Json",
         // Vec ↔ Vec
         "VecI32→VecF32",
         // Phase-1 totality fills (widening + bool families; all
         // class A). Keep in lockstep with the same arms in
         // `auto_adapter` — `adapter_catalog_invariants` enforces it.
-        "U8→I16", "U8→I32", "U8→I64", "U8→F32",
-        "U16→I32", "U16→I64", "U16→F32",
-        "I8→F32", "I16→F32", "U8→F16", "I8→F16", "U32→I64",
-        "U8→U128", "U8→I128", "U16→U128", "U16→I128",
-        "U32→U128", "U32→I128", "I8→I128", "I16→I128", "I32→I128",
-        "Bool→U128", "Bool→I128", "U128→Bool", "I128→Bool",
+        "U8→I16",
+        "U8→I32",
+        "U8→I64",
+        "U8→F32",
+        "U16→I32",
+        "U16→I64",
+        "U16→F32",
+        "I8→F32",
+        "I16→F32",
+        "U8→F16",
+        "I8→F16",
+        "U32→I64",
+        "U8→U128",
+        "U8→I128",
+        "U16→U128",
+        "U16→I128",
+        "U32→U128",
+        "U32→I128",
+        "I8→I128",
+        "I16→I128",
+        "I32→I128",
+        "Bool→U128",
+        "Bool→I128",
+        "U128→Bool",
+        "I128→Bool",
         // Vector lane completion — class A (widening / serialise /
         // int-lane Json/Str). Boundary-only (class B) vec casts are
         // not listed (this mirror is auto_adapter only).
-        "VecI8→VecI16", "VecI8→VecI32", "VecI8→VecI64", "VecI8→VecF16",
-        "VecI8→VecF32", "VecI8→VecF64", "VecI16→VecI32", "VecI16→VecI64",
-        "VecI16→VecF32", "VecI16→VecF64", "VecI32→VecI64", "VecI32→VecF64",
-        "VecI64→VecF64", "VecF16→VecF32", "VecF16→VecF64", "VecF32→VecF64",
-        "VecF64→Bytes", "VecI64→Bytes", "VecF16→Bytes", "VecI16→Bytes",
-        "VecI8→Bytes", "VecI64→Json", "VecI16→Json", "VecI8→Json",
-        "VecI32→Str", "VecI64→Str", "VecI16→Str", "VecI8→Str",
+        "VecI8→VecI16",
+        "VecI8→VecI32",
+        "VecI8→VecI64",
+        "VecI8→VecF16",
+        "VecI8→VecF32",
+        "VecI8→VecF64",
+        "VecI16→VecI32",
+        "VecI16→VecI64",
+        "VecI16→VecF32",
+        "VecI16→VecF64",
+        "VecI32→VecI64",
+        "VecI32→VecF64",
+        "VecI64→VecF64",
+        "VecF16→VecF32",
+        "VecF16→VecF64",
+        "VecF32→VecF64",
+        "VecF64→Bytes",
+        "VecI64→Bytes",
+        "VecF16→Bytes",
+        "VecI16→Bytes",
+        "VecI8→Bytes",
+        "VecI64→Json",
+        "VecI16→Json",
+        "VecI8→Json",
+        "VecI32→Str",
+        "VecI64→Str",
+        "VecI16→Str",
+        "VecI8→Str",
     ];
     known.contains(&label)
 }
@@ -608,7 +779,9 @@ fn strict_values_inserts_nonzero_assertion_on_mod_wire() {
     let mut log = CompileEventLog::new();
     let result = compile_polydat_with_log(strict_source, &mut log);
     assert!(result.is_ok(), "compile failed: {:?}", result.err());
-    let assertion_inserts: Vec<&CompileEvent> = log.events().iter()
+    let assertion_inserts: Vec<&CompileEvent> = log
+        .events()
+        .iter()
         .filter(|e| matches!(e, CompileEvent::AssertionInserted { .. }))
         .collect();
     assert!(
@@ -625,7 +798,9 @@ fn strict_values_inserts_nonzero_assertion_on_mod_wire() {
     let mut lax_log = CompileEventLog::new();
     let lax_result = compile_polydat_with_log(lax_source, &mut lax_log);
     assert!(lax_result.is_ok(), "compile failed: {:?}", lax_result.err());
-    let lax_inserts: Vec<&CompileEvent> = lax_log.events().iter()
+    let lax_inserts: Vec<&CompileEvent> = lax_log
+        .events()
+        .iter()
         .filter(|e| matches!(e, CompileEvent::AssertionInserted { .. }))
         .collect();
     assert!(
@@ -647,14 +822,18 @@ fn strict_values_skips_assertion_when_source_is_constant() {
     let mut log = CompileEventLog::new();
     let result = compile_polydat_with_log(source, &mut log);
     assert!(result.is_ok(), "compile failed: {:?}", result.err());
-    let inserts: Vec<&CompileEvent> = log.events().iter()
+    let inserts: Vec<&CompileEvent> = log
+        .events()
+        .iter()
         .filter(|e| matches!(e, CompileEvent::AssertionInserted { .. }))
         .collect();
     assert!(
         inserts.is_empty(),
         "constant source should skip assertion; got inserts: {inserts:?}",
     );
-    let skips: Vec<&CompileEvent> = log.events().iter()
+    let skips: Vec<&CompileEvent> = log
+        .events()
+        .iter()
         .filter(|e| matches!(e, CompileEvent::AssertionSkipped { .. }))
         .collect();
     assert!(
@@ -682,18 +861,32 @@ fn pragmas_round_trip_through_compile() {
     let mut log = CompileEventLog::new();
     let result = compile_polydat_with_log(source, &mut log);
     assert!(result.is_ok(), "compile failed: {:?}", result.err());
-    let acknowledged: Vec<&str> = log.events().iter()
+    let acknowledged: Vec<&str> = log
+        .events()
+        .iter()
         .filter_map(|e| match e {
             CompileEvent::PragmaAcknowledged { name, .. } => Some(name.as_str()),
             _ => None,
-        }).collect();
-    let unknown: Vec<&str> = log.events().iter()
+        })
+        .collect();
+    let unknown: Vec<&str> = log
+        .events()
+        .iter()
         .filter_map(|e| match e {
             CompileEvent::UnknownPragma { name, .. } => Some(name.as_str()),
             _ => None,
-        }).collect();
-    assert_eq!(acknowledged, vec!["strict"], "expected single ack for `strict`");
-    assert_eq!(unknown, vec!["warp_drive"], "expected unknown record for `warp_drive`");
+        })
+        .collect();
+    assert_eq!(
+        acknowledged,
+        vec!["strict"],
+        "expected single ack for `strict`"
+    );
+    assert_eq!(
+        unknown,
+        vec!["warp_drive"],
+        "expected unknown record for `warp_drive`"
+    );
 }
 
 /// Guard against the test mis-firing: a plain same-type chain must
@@ -709,7 +902,11 @@ fn sanity_same_type_chain_has_no_adapters() {
     ";
     let mut log = CompileEventLog::new();
     let result = compile_polydat_with_log(source, &mut log);
-    assert!(result.is_ok(), "simple chain should compile: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "simple chain should compile: {:?}",
+        result.err()
+    );
     for e in log.events() {
         if let CompileEvent::TypeAdapterInserted { .. } = e {
             panic!("unexpected type adapter in same-type chain:\n{source}\nevent: {e:?}");
@@ -725,10 +922,19 @@ fn sanity_u64_to_f64_widens_via_adapter() {
     ";
     let mut log = CompileEventLog::new();
     let result = compile_polydat_with_log(source, &mut log);
-    assert!(result.is_ok(), "u64→f64 widening should auto-adapt: {:?}", result.err());
-    let has_adapter = log.events().iter().any(|e|
-        matches!(e, CompileEvent::TypeAdapterInserted { adapter, .. } if adapter == "U64→F64"));
-    assert!(has_adapter, "expected a U64→F64 adapter event in log: {:?}", log.events());
+    assert!(
+        result.is_ok(),
+        "u64→f64 widening should auto-adapt: {:?}",
+        result.err()
+    );
+    let has_adapter = log.events().iter().any(
+        |e| matches!(e, CompileEvent::TypeAdapterInserted { adapter, .. } if adapter == "U64→F64"),
+    );
+    assert!(
+        has_adapter,
+        "expected a U64→F64 adapter event in log: {:?}",
+        log.events()
+    );
 }
 
 #[test]
@@ -742,6 +948,8 @@ fn sanity_f64_to_u64_rejects_without_cast() {
         y := add(x, 1)\n\
     ";
     let err = compile_polydat(source).expect_err("narrowing f64→u64 must not compile");
-    assert!(err.contains("type mismatch"),
-        "expected a type-mismatch error for narrowing, got: {err}");
+    assert!(
+        err.contains("type mismatch"),
+        "expected a type-mismatch error for narrowing, got: {err}"
+    );
 }
