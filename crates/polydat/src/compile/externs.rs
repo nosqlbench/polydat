@@ -1,5 +1,5 @@
 // Copyright 2024-2026 Jonathan Shook
-// SPDX-Licene-Identifier: Apache-2.0
+// SPDX-Licene-Ientifier: Apache-2.0
 
 //! Extern on the compiled engines.
 //!
@@ -112,6 +112,17 @@ impl Externs {
         &self.input_names
     }
 
+    /// The slots of the externs that have no value at build: they are
+    /// `None` until a host sets them, and their consumers propagate it.
+    #[cfg(feature = "jit")]
+    pub(crate) fn unset_slots(&self) -> Vec<usize> {
+        self.slots
+            .iter()
+            .filter(|s| s.value == Value::None)
+            .map(|s| s.slot)
+            .collect()
+    }
+
     /// The cursors the program declares, with their partitions where
     /// the compiler resolved them.
     pub(crate) fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema] {
@@ -187,29 +198,44 @@ impl Externs {
     /// strings and byte strings into the arena, table kinds into their
     /// entries. Called after the run's generation is set and before
     /// any step reads an input.
-    pub(crate) fn materialize(&self, buffer: &mut [u64], table: &mut ValueTable) {
+    pub(crate) fn materialize(
+        &self,
+        buffer: &mut [u64],
+        table: &mut ValueTable,
+        mut none: Option<&mut [bool]>,
+    ) {
         for s in &self.slots {
+            // An unset extern is `None` (A12): the kernel that keeps a
+            // `None` mask marks the slot and its consumers propagate
+            // it as the interpreter does; a native kernel, which
+            // cannot, refuses to run.
+            if s.value == Value::None {
+                match none.as_deref_mut() {
+                    Some(mask) => mask[s.slot] = true,
+                    None if s.entry.is_some() => panic!(
+                        "extern '{}' ({}) has no value: it has no default, so set it with \
+                         set_input before the first run (native code cannot carry `None`; \
+                         docs/design/engine_parity.md, A12)",
+                        s.name, s.ty
+                    ),
+                    None => {}
+                }
+            } else if let Some(mask) = none.as_deref_mut() {
+                mask[s.slot] = false;
+            }
             if s.ty.slot_color() != crate::ast::SlotColor::Hdl1 {
                 continue;
             }
             buffer[s.slot] = match (&s.value, s.entry) {
                 (Value::Str(text), None) => crate::kernel::put_thread_str(text),
                 (Value::Bytes(bytes), None) => crate::kernel::put_thread_bytes(bytes),
-                // An unset string extern reads as empty, as a missing
-                // default does on the interpreter after `as_str`.
+                // An unset string extern reads as empty where nothing
+                // keeps a `None` mask.
                 (Value::None, None) => crate::kernel::put_thread_str(""),
                 (other, None) => crate::kernel::put_thread_str(&other.to_display_string()),
-                // A table kind without a value has nothing its
-                // consumers could decode; the engines run eagerly, so
-                // the run cannot start. The interpreter fails at the
-                // consumer instead, which is later and less clear.
-                (Value::None, Some(_)) => panic!(
-                    "extern '{}' ({}) has no value: it has no default, so set it with \
-                     set_input before the first run",
-                    s.name, s.ty
-                ),
                 // A table kind: the entry is written every run so the
-                // slot's handle names it in this generation.
+                // slot's handle names it in this generation; an unset
+                // one holds `None`, which decodes as `None`.
                 (v, Some(entry)) => table.write(entry, v.clone()),
             };
         }

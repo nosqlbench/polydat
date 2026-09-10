@@ -205,6 +205,14 @@ pub(crate) struct NodeInventory {
     pub side_channel_nodes: Vec<bool>,
 }
 
+/// The lifecycle of every node and the nodes that are never current
+/// (`classify_lifecycle`).
+pub(crate) struct LifecycleClasses {
+    pub lifecycle: Vec<EvalLifecycle>,
+    /// Declared nondeterministic or `volatile`, or downstream of one.
+    pub nondeterministic: Vec<bool>,
+}
+
 /// The immutable compiled DAG. Shared across fibers via `Arc`.
 /// Process-wide count of programs constructed. A diagnostic for the
 /// program-invariance property (SRD 113 §5.1): compiling a program with
@@ -781,6 +789,93 @@ impl PolydatProgram {
         wiring: &[Vec<WireSource>],
     ) -> Vec<ProvMask> {
         Self::compute_node_inventory(nodes, wiring).input_provenance
+    }
+
+    /// The runtime model's lifecycle classification of every node (SRD 11
+    /// §"Three Evaluation Lifecycles"), the one rule the interpreter's
+    /// fold and every compiled engine share: a node is compile-constant
+    /// when no coordinate or external-write input reaches it and neither
+    /// it nor anything upstream is declared nondeterministic or
+    /// `volatile`; scope-init when only iteration externs reach it;
+    /// dynamic otherwise. `nondeterministic` is the declared volatility
+    /// and its downstream contagion on its own, which an engine never
+    /// treats as current.
+    pub(crate) fn classify_lifecycle(
+        nodes: &[Box<dyn PolydatNode>],
+        wiring: &[Vec<WireSource>],
+        input_defs: &[InputDef],
+        output_map: &HashMap<String, (usize, usize)>,
+        output_modifiers: &HashMap<String, crate::dsl::ast::BindingModifier>,
+    ) -> LifecycleClasses {
+        use crate::kernel::InputKind;
+        let n = nodes.len();
+        let mut lifecycle: Vec<EvalLifecycle> = vec![EvalLifecycle::CompileConst; n];
+        let mut nondeterministic: Vec<bool> = vec![false; n];
+        for (i, wires) in wiring.iter().enumerate() {
+            for source in wires {
+                if let WireSource::Input(idx) = source {
+                    let kind = input_defs
+                        .get(*idx)
+                        .map(|d| d.kind)
+                        .unwrap_or(InputKind::Coordinate);
+                    let lc = match kind {
+                        InputKind::IterationExtern => EvalLifecycle::ScopeInit,
+                        InputKind::Coordinate | InputKind::ExternalWrite => EvalLifecycle::Dynamic,
+                    };
+                    if lc > lifecycle[i] {
+                        lifecycle[i] = lc;
+                    }
+                }
+            }
+            // Per R1.v: a node declaring `Purity::Nondeterministic` is
+            // intrinsically volatile; the fold leaves it alone and the
+            // canonical hash sees its shape, never a value.
+            let declared = matches!(
+                nodes[i].purity(),
+                crate::ast::Purity::Nondeterministic { .. }
+            );
+            // SRD-13f Push D / SRD-44: `volatile` is the author's
+            // declaration that a wire's value is nondeterministic across
+            // invocations and must not be folded into the workload's
+            // identity. Every output modifier is walked, not only the
+            // exposed outputs, so a binding pruned from the output list
+            // still marks its producing node.
+            let modifier = output_modifiers.iter().any(|(name, m)| {
+                m.is_volatile()
+                    && output_map
+                        .get(name)
+                        .map(|(ni, _)| *ni == i)
+                        .unwrap_or(false)
+            });
+            if declared || modifier {
+                lifecycle[i] = EvalLifecycle::Dynamic;
+                nondeterministic[i] = true;
+            }
+        }
+        // Propagate: a node's lifecycle is the max of its own seed and
+        // every upstream node's, and volatility is contagious downstream.
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for i in 0..n {
+                for source in &wiring[i] {
+                    if let WireSource::NodeOutput(upstream, _) = source {
+                        if lifecycle[*upstream] > lifecycle[i] {
+                            lifecycle[i] = lifecycle[*upstream];
+                            changed = true;
+                        }
+                        if nondeterministic[*upstream] && !nondeterministic[i] {
+                            nondeterministic[i] = true;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        LifecycleClasses {
+            lifecycle,
+            nondeterministic,
+        }
     }
 
     pub(crate) fn compute_node_inventory(
@@ -1695,92 +1790,14 @@ impl PolydatProgram {
         //               activation (depends on iteration externs).
         // Dynamic:      depends on cycle inputs, external-write ports, or
         //               non-deterministic sources.
-        use crate::kernel::InputKind;
-        let mut lifecycle: Vec<EvalLifecycle> = vec![EvalLifecycle::CompileConst; n];
-
-        for (i, wiring) in self.wiring.iter().enumerate() {
-            for source in wiring {
-                match source {
-                    WireSource::Input(idx) => {
-                        let kind = self
-                            .input_defs
-                            .get(*idx)
-                            .map(|d| d.kind)
-                            .unwrap_or(InputKind::Coordinate);
-                        let lc = match kind {
-                            InputKind::IterationExtern => EvalLifecycle::ScopeInit,
-                            InputKind::Coordinate | InputKind::ExternalWrite => {
-                                EvalLifecycle::Dynamic
-                            }
-                        };
-                        if lc > lifecycle[i] {
-                            lifecycle[i] = lc;
-                        }
-                    }
-                    WireSource::NodeOutput(_, _) => {}
-                }
-            }
-            // Per R1.v: nodes declaring `Purity::Nondeterministic`
-            // are intrinsically volatile (their typed return is not
-            // a function of declared inputs). Mark them Dynamic so
-            // the fold pass leaves them alone and the canonical_hash
-            // sees node-type + wiring shape but never the value
-            // (workload identity stable across processes).
-            if matches!(
-                self.nodes[i].purity(),
-                crate::ast::Purity::Nondeterministic { .. }
-            ) {
-                lifecycle[i] = EvalLifecycle::Dynamic;
-            }
-
-            // SRD-13f Push D / SRD-44: `volatile` is the
-            // author's explicit declaration that this wire's
-            // value is non-deterministic across invocations
-            // (e.g. a sequence-next fixture, an env-derived
-            // value) and MUST NOT be const-folded into the
-            // workload's identity. Mark the producing node as
-            // Dynamic so the fold pass leaves it alone — the
-            // canonical_hash then sees the node-type + wiring
-            // shape but never the value, keeping the workload
-            // identity stable across processes (resume-skip
-            // identity matching depends on this).
-            //
-            // Walk output_modifiers directly (not output_list)
-            // so volatile bindings DCE-pruned out of the
-            // exposed output list still mark their producing
-            // node Dynamic — the modifier was the author's
-            // intent at the source layer, independent of
-            // whether the binding survived DCE as a kernel
-            // output.
-            if self.output_modifiers.iter().any(|(name, m)| {
-                m.is_volatile()
-                    && self
-                        .output_map
-                        .get(name)
-                        .map(|(ni, _)| *ni == i)
-                        .unwrap_or(false)
-            }) {
-                lifecycle[i] = EvalLifecycle::Dynamic;
-            }
-        }
-
-        // Propagate: a node's lifecycle is the max of its own seed
-        // and every upstream NodeOutput's lifecycle. Iterate to
-        // fixed point.
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for i in 0..n {
-                for source in &self.wiring[i] {
-                    if let WireSource::NodeOutput(upstream, _) = source
-                        && lifecycle[*upstream] > lifecycle[i]
-                    {
-                        lifecycle[i] = lifecycle[*upstream];
-                        changed = true;
-                    }
-                }
-            }
-        }
+        let lifecycle = Self::classify_lifecycle(
+            &self.nodes,
+            &self.wiring,
+            &self.input_defs,
+            &self.output_map,
+            &self.output_modifiers,
+        )
+        .lifecycle;
 
         // is_init is the compile-const subset. Subsequent fold
         // phases below only operate on CompileConst nodes; ScopeInit

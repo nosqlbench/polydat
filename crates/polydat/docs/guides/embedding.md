@@ -151,9 +151,15 @@ recomputation. The compiled `set_input` checks the value against the
 declared port type and refuses a mismatch by name; the state's
 `set_input` writes without checking, so the wrong variant there is a
 host bug that surfaces when a consumer reads it. An extern declared
-without a default, such as `extern doc: json`, must be set before the
-first run of a compiled kernel, which evaluates eagerly and stops with
-a message naming the extern if it is not.
+without a default, such as `extern doc: json`, is `None` until the
+host sets it, and every consumer reads `None` through it, on the
+interpreter, the closure tier, and the hybrid kernel alike; pure native
+code cannot carry `None` and refuses to run until it is set. The
+compile log (§13) names every extern without a default, so a host
+knows what it must set. A constant no input reaches is folded when a
+kernel is built, on every engine, so a failure there surfaces at build;
+what depends on an extern is computed at the first pull that needs it
+and kept until the extern changes.
 
 Prefer the transform when the value is fixed for the run: the compiler
 then sees a constant, folds it, and the fused native cones in §11 carry
@@ -565,6 +571,17 @@ closure steps, with the extension value passing between two of them as
 a table handle; `engine_counts` is the only planning detail it exposes,
 so a host can see whether a program is mostly native before deciding
 to care.
+
+`pull` evaluates the output's cone and no more on every engine but pure
+native code, whose one function is the program: a side channel in the
+cone fires when the output is pulled, and a failing node fails when
+pulled, as on the interpreter. A constant no input reaches is folded
+when the kernel is built, on every engine, so a failure there surfaces
+at build; a step that depends on an extern is computed at the first
+pull that needs it and kept until that extern changes. An
+extern without a default is `None` until the host sets it, and every
+consumer reads `None` through it; the compile log names each such
+extern.
 
 `pull` returns an owned value on every engine: a string, JSON document,
 or rendered tile is copied out of the arena or the value table the

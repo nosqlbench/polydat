@@ -23,10 +23,10 @@
 
 #![cfg(feature = "jit")]
 
-use polydat::JitMode;
 use polydat::ast::{PortType, Value};
 use polydat::dsl::compile::compile_polydat_to_assembler;
 use polydat::kernel::PolydatKernel;
+use polydat::{JitMode, Kernel};
 
 // Two shapes the library has no instance of with a handle element: a
 // fallible construction whose cached value is a string, and a tuple
@@ -236,7 +236,7 @@ impl Gen {
     /// One binding from the grammar.
     fn step(&mut self) {
         let u = self.pick(PortType::U64).expect("cycle is always u64");
-        match self.rng.range(43) {
+        match self.rng.range(44) {
             0 => {
                 self.bind(PortType::U64, format!("hash({})", u.name));
             }
@@ -697,6 +697,19 @@ impl Gen {
                     self.bind_ext("Partition", 0, format!("{name}.cursor"));
                 }
             }
+            42 => {
+                // A side channel: the row it emits is counted per engine
+                // per cycle, so a compiled kernel fires it exactly when
+                // the interpreter does.
+                let a = self.any();
+                let b = self.any();
+                if a.ext.is_none() && b.ext.is_none() {
+                    self.bind(
+                        PortType::U64,
+                        format!("emit_row(\"csv\", \"a,b\", {}, {})", a.name, b.name),
+                    );
+                }
+            }
             _ => {
                 // A session-static setup, captured from the node.
                 self.bind(PortType::Str, "tmp_dir()".to_string());
@@ -932,8 +945,16 @@ fn check(src: &str, outputs: &[&str], cycles: u64) -> bool {
 /// `check` for a program with externs the host sets: every kernel gets
 /// the same values before it runs.
 fn check_with(src: &str, outputs: &[&str], cycles: u64, externs: &[(String, Value)]) -> bool {
+    // A constant side channel fires when its step is flattened: at
+    // construction on a compiled kernel, at the first pull on the
+    // interpreter (engine_parity.md, A6). Each engine's construction
+    // rows count toward its first cycle.
+    let _ = polydat::library::emit::take_rows();
+    let built = || polydat::library::emit::take_rows().len();
     let mut p1 = kernel(src, JitMode::Off);
+    let p1_built = built();
     let mut cones = kernel(src, JitMode::Force);
+    let cones_built = built();
     let mut p2 = compile_polydat_to_assembler(src)
         .unwrap()
         .try_compile_raw()
@@ -946,18 +967,22 @@ fn check_with(src: &str, outputs: &[&str], cycles: u64, externs: &[(String, Valu
                 "every node here has a P2 form, but the kernel fell back; nodes: {names:?}\n{src}"
             )
         });
+    let p2_built = built();
     let mut p2pp = compile_polydat_to_assembler(src)
         .unwrap()
         .try_compile()
         .unwrap_or_else(|_| panic!("P2 push-pull\n{src}"));
+    let _ = built();
     let mut p3 = compile_polydat_to_assembler(src)
         .unwrap()
         .try_compile_jit()
         .ok();
+    let p3_built = built();
     let mut hybrid = compile_polydat_to_assembler(src)
         .unwrap()
         .compile_hybrid()
         .unwrap_or_else(|e| panic!("hybrid: {e}\n{src}"));
+    let hybrid_built = built();
     for (name, value) in externs {
         p1.set_input(name, value.clone())
             .unwrap_or_else(|e| panic!("P1 set_input: {e}\n{src}"));
@@ -981,19 +1006,34 @@ fn check_with(src: &str, outputs: &[&str], cycles: u64, externs: &[(String, Valu
     // are copied out right after its own run, before the next root
     // kernel runs. Reading them later would read through handles into
     // storage another kernel has reused.
+    // Every engine is driven through the `Kernel` trait, output by
+    // output, so a compiled kernel runs each output's cone as the
+    // interpreter does (engine parity step 5), and the side channel's
+    // rows are counted per engine per cycle: what `emit_row` observes
+    // is what it observes on the interpreter.
+    let _ = polydat::library::emit::take_rows();
     for c in 0..cycles {
+        let first = |n: usize| if c == 0 { n } else { 0 };
         p1.set_inputs(&[c]);
         let want: Vec<Value> = outputs.iter().map(|o| p1.pull(o).clone()).collect();
+        let want_rows = built() + first(p1_built);
         cones.set_inputs(&[c]);
         let got_cones: Vec<Value> = outputs.iter().map(|o| cones.pull(o).clone()).collect();
-        p2.eval(&[c]);
-        let got_p2: Vec<Value> = outputs.iter().map(|o| p2.get_value(o)).collect();
+        let cones_rows = built() + first(cones_built);
+        Kernel::set_inputs(&mut p2, &[c]);
+        let got_p2: Vec<Value> = outputs.iter().map(|o| Kernel::pull(&mut p2, o)).collect();
+        let p2_rows = built() + first(p2_built);
         let got_p3: Option<Vec<Value>> = p3.as_mut().map(|k| {
-            k.eval(&[c]);
-            outputs.iter().map(|o| k.get_value(o)).collect()
+            Kernel::set_inputs(k, &[c]);
+            outputs.iter().map(|o| Kernel::pull(k, o)).collect()
         });
-        hybrid.eval(&[c]);
-        let got_hybrid: Vec<Value> = outputs.iter().map(|o| hybrid.get_value(o)).collect();
+        let p3_rows = built() + first(p3_built);
+        Kernel::set_inputs(&mut hybrid, &[c]);
+        let got_hybrid: Vec<Value> = outputs
+            .iter()
+            .map(|o| Kernel::pull(&mut hybrid, o))
+            .collect();
+        let hybrid_rows = built() + first(hybrid_built);
         for (i, out) in outputs.iter().enumerate() {
             same(&want[i], &got_cones[i], "cones", out, c, src);
             same(&want[i], &got_p2[i], "P2", out, c, src);
@@ -1002,6 +1042,18 @@ fn check_with(src: &str, outputs: &[&str], cycles: u64, externs: &[(String, Valu
             }
             same(&want[i], &got_hybrid[i], "hybrid", out, c, src);
         }
+        assert_eq!(
+            cones_rows, want_rows,
+            "cones: rows emitted at cycle {c}\n{src}"
+        );
+        assert_eq!(p2_rows, want_rows, "P2: rows emitted at cycle {c}\n{src}");
+        if p3.is_some() {
+            assert_eq!(p3_rows, want_rows, "P3: rows emitted at cycle {c}\n{src}");
+        }
+        assert_eq!(
+            hybrid_rows, want_rows,
+            "hybrid: rows emitted at cycle {c}\n{src}"
+        );
     }
     // The push-pull kernel over a repeating sequence: clean-step
     // skipping must never leave a handle slot pointing into storage the

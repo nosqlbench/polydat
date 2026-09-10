@@ -175,9 +175,10 @@ fn the_compiled_kernels_report_the_cursors_the_interpreter_does() {
 
 #[test]
 fn a_clause_denoting_several_partitions_is_unset_until_narrowed() {
-    // The interpreter reads `None` through the consumers; a compiled
-    // kernel refuses to run until the host narrows the cursor
-    // (engine_parity.md, A3 and A12).
+    // The cursor is `None` until the host narrows it, and every
+    // consumer reads `None` through it, on the interpreter and on the
+    // closure tier alike (engine_parity.md, A3 and A12). Native code
+    // cannot carry `None` and refuses to run.
     let src = program("*/4");
     let mut p1 = compile_polydat_to_assembler(&src)
         .unwrap()
@@ -190,10 +191,21 @@ fn a_clause_denoting_several_partitions_is_unset_until_narrowed() {
         .try_compile_raw()
         .ok()
         .unwrap();
-    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| p2.eval(&[0])));
-    let msg = r
-        .err()
-        .and_then(|p| p.downcast_ref::<String>().cloned())
-        .unwrap_or_default();
-    assert!(msg.contains("extern 'q__cursor'"), "{msg}");
+    p2.eval(&[0]);
+    for o in OUTPUTS {
+        // The partition consumers read `None`; the scalar projections
+        // read their declared defaults, on both engines.
+        assert_eq!(p2.get_value(o), *p1.pull(o), "`{o}` on the closure tier");
+    }
+    // Narrowed, the same kernel computes; the outputs stop being `None`.
+    let parts = compile_polydat_to_assembler(&src).unwrap().cursor_schemas()[0]
+        .partitions
+        .clone()
+        .unwrap();
+    p2.set_cursor("q", &parts[1]).unwrap();
+    p2.eval(&[0]);
+    assert_eq!(
+        p2.get_value("n").as_u64(),
+        parts[1].end_ord - parts[1].start_ord
+    );
 }

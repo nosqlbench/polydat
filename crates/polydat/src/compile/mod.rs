@@ -145,16 +145,11 @@ macro_rules! impl_kernel_trait {
                 $ty::set_cursor(self, name, partition)
             }
             fn eval(&mut self) {
-                let coords = std::mem::take(&mut self.core.drive.coords);
-                $ty::eval(self, &coords);
-                self.core.drive.coords = coords;
+                self.eval_pending();
                 self.core.drive.stale = false;
             }
             fn pull(&mut self, name: &str) -> crate::ast::Value {
-                if self.core.drive.stale {
-                    crate::kernel::Kernel::eval(self);
-                }
-                self.get_value(name)
+                self.pull_value(name)
             }
             fn input_names(&self) -> Vec<String> {
                 self.core.externs.input_names().to_vec()
@@ -190,3 +185,61 @@ macro_rules! impl_kernel_trait {
     };
 }
 pub(crate) use impl_kernel_trait;
+
+/// The dirty-register plan of a compiled kernel: which steps each input
+/// slot invalidates when it changes, and which steps each named output
+/// needs. The evaluation loops consume only this; provenance derives it
+/// today, and a host that knows its write and read patterns may supply
+/// a narrower plan later without touching the loops
+/// (docs/design/engine_parity.md, step 5).
+pub(crate) struct Invalidation {
+    /// Per input slot (coordinates and externs alike), the steps that
+    /// depend on it, transitively.
+    pub(crate) input_dependents: Vec<Vec<usize>>,
+    /// Per named output, the steps of its cone in evaluation order.
+    pub(crate) cones: std::collections::HashMap<String, Vec<usize>>,
+}
+
+impl Invalidation {
+    /// The plan provenance gives: every step downstream of an input is
+    /// invalidated by it, and every step upstream of an output is in
+    /// its cone. `inputs` and `outputs` are each step's slots;
+    /// `output_slots` names the outputs.
+    pub(crate) fn from_provenance(
+        input_dependents: Vec<Vec<usize>>,
+        step_inputs: &[&[usize]],
+        step_outputs: &[&[usize]],
+        output_slots: &std::collections::HashMap<String, usize>,
+        total_slots: usize,
+    ) -> Self {
+        let step_count = step_inputs.len();
+        let mut slot_step: Vec<Option<usize>> = vec![None; total_slots];
+        for (i, outs) in step_outputs.iter().enumerate() {
+            for &s in outs.iter() {
+                slot_step[s] = Some(i);
+            }
+        }
+        let cones = output_slots
+            .iter()
+            .map(|(name, &slot)| {
+                let mut wanted = vec![false; step_count];
+                let mut stack: Vec<usize> = slot_step[slot].into_iter().collect();
+                while let Some(i) = stack.pop() {
+                    if wanted[i] {
+                        continue;
+                    }
+                    wanted[i] = true;
+                    stack.extend(step_inputs[i].iter().filter_map(|&s| slot_step[s]));
+                }
+                (
+                    name.clone(),
+                    (0..step_count).filter(|&i| wanted[i]).collect(),
+                )
+            })
+            .collect();
+        Self {
+            input_dependents,
+            cones,
+        }
+    }
+}

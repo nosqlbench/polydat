@@ -1043,6 +1043,23 @@ impl PolydatAssembler {
             .map(|(name, (n, p))| (name.clone(), resolved.nodes[*n].meta().outs[*p].typ))
             .collect();
 
+        // The runtime model's lifecycle classification, the one rule the
+        // interpreter's fold applies, and the provenance the plan is
+        // derived from.
+        let classes = PolydatProgram::classify_lifecycle(
+            &resolved.nodes,
+            &resolved.wiring,
+            &resolved.input_defs,
+            &resolved.output_map,
+            &resolved.output_modifiers,
+        );
+        let inventory = PolydatProgram::compute_node_inventory(&resolved.nodes, &resolved.wiring);
+        let per_input = PolydatProgram::compute_dependents(
+            &inventory.input_provenance,
+            resolved.input_defs.len(),
+        );
+        extras.input_dependents = layout.expand_dependents(resolved, &per_input);
+
         let mut steps = Vec::with_capacity(resolved.nodes.len());
         for (node_idx, (op, scratch)) in compiled_ops.into_iter().enumerate() {
             steps.push(crate::compile::closures::P2Step {
@@ -1055,6 +1072,13 @@ impl PolydatAssembler {
                     layout.ref_output_starts(resolved, node_idx)
                 },
                 scratch,
+                accepts_none: resolved.nodes[node_idx].accepts_none_inputs(),
+                volatile: classes.nondeterministic[node_idx],
+                constant: classes.lifecycle[node_idx] == crate::kernel::EvalLifecycle::CompileConst,
+                side: matches!(
+                    resolved.nodes[node_idx].purity(),
+                    crate::ast::Purity::SideChannel { .. }
+                ),
             });
         }
         let output_map = layout.named_outputs(resolved);
@@ -1482,6 +1506,20 @@ impl PolydatAssembler {
         let ref_slots = layout.ref_slot_mask(&resolved);
         let input_types: Vec<PortType> = resolved.input_defs.iter().map(|d| d.port_type).collect();
         let externs = Self::externs_of(&resolved)?;
+        // The runtime model's lifecycle classification, the one rule the
+        // interpreter's fold applies.
+        let classes = PolydatProgram::classify_lifecycle(
+            &resolved.nodes,
+            &resolved.wiring,
+            &resolved.input_defs,
+            &resolved.output_map,
+            &resolved.output_modifiers,
+        );
+        let constant: Vec<bool> = classes
+            .lifecycle
+            .iter()
+            .map(|lc| *lc == crate::kernel::EvalLifecycle::CompileConst)
+            .collect();
         let mut kernel = crate::compile::hybrid::build_hybrid(
             &resolved.nodes,
             &resolved.wiring,
@@ -1494,6 +1532,8 @@ impl PolydatAssembler {
             ref_slots,
             &input_types,
             externs,
+            constant,
+            classes.nondeterministic,
         )?;
         kernel.retain_nodes(resolved.nodes);
         Ok(kernel)
@@ -1508,6 +1548,21 @@ impl PolydatAssembler {
         self,
         mut log: Option<&mut crate::dsl::events::CompileEventLog>,
     ) -> Result<ResolvedDag, AssemblyError> {
+        // An extern without a default is `None` until the host sets it,
+        // and every consumer reads `None` through it; the log names each
+        // one so a host knows what it must set (engine_parity.md, A12).
+        if let Some(log) = log.as_deref_mut() {
+            for def in &self.input_defs {
+                if def.kind == crate::kernel::InputKind::ExternalWrite
+                    && def.default == crate::ast::Value::None
+                {
+                    log.push(crate::dsl::events::CompileEvent::ExternWithoutDefault {
+                        name: def.name.clone(),
+                        port_type: def.port_type.to_string(),
+                    });
+                }
+            }
+        }
         // Build name → index map for nodes
         let mut name_to_idx: HashMap<String, usize> = HashMap::new();
         for (i, pn) in self.nodes.iter().enumerate() {

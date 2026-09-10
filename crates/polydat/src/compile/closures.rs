@@ -35,6 +35,9 @@ pub(crate) struct P2Extras {
     /// The kernel's extern inputs: seeded at build, host-settable,
     /// materialized every run (`compile::externs`).
     pub(crate) externs: crate::compile::externs::Externs,
+    /// Per input slot, coordinates and externs alike, the steps that
+    /// depend on it: the provenance the plan is derived from.
+    pub(crate) input_dependents: Vec<Vec<usize>>,
 }
 
 /// A single evaluation step in the compiled kernel.
@@ -56,6 +59,19 @@ pub(crate) struct P2Step {
     /// slot→arena map for axiom S9(a)'s validator and the S2
     /// accessors.
     pub(crate) ref_output_starts: Vec<usize>,
+    /// The node handles `None` inputs itself (SRD-74 Rule 2); every
+    /// other node emits `None` when any input is `None` (Rule 1).
+    pub(crate) accepts_none: bool,
+    /// The node is nondeterministic or downstream of one (the runtime
+    /// model's per-cycle invalidation set): never current.
+    pub(crate) volatile: bool,
+    /// No input reaches the node and it is not volatile: the runtime
+    /// model's compile-constant lifecycle, folded at build.
+    pub(crate) constant: bool,
+    /// The node is a side channel: it runs exactly when the interpreter
+    /// would run it, in every provenance mode, because its run is
+    /// observable.
+    pub(crate) side: bool,
 }
 
 struct CompiledStep {
@@ -66,6 +82,15 @@ struct CompiledStep {
     /// True when an output is a handle slot: the step runs every
     /// cycle regardless of the clean mask (SRD 115 §4).
     rerun: bool,
+    /// SRD-74 Rule 2: the closure runs on `None` inputs.
+    accepts_none: bool,
+    /// Never current: nondeterministic or downstream of one.
+    volatile: bool,
+    /// Compile-constant: folded at build, current from then on.
+    constant: bool,
+    /// A side channel: skipped when current in every mode, since a
+    /// redundant run would be observed.
+    side: bool,
 }
 
 /// Common fields shared by all kernel variants. A clone is a new state
@@ -104,44 +129,191 @@ struct KernelCore {
     /// The extern inputs, materialized at the start of every run.
     externs: crate::compile::externs::Externs,
     /// The coordinates set through the `Kernel` trait, pending
-    /// evaluation.
+    /// evaluation; `stale` means the next evaluation begins a cycle.
     drive: crate::compile::Drive,
+    /// Per slot: the slot holds `None` (SRD-74 on a compiled kernel):
+    /// an unset extern, or an output of a step that propagated one.
+    none: Vec<bool>,
+    /// Per step: ran in the cycle that is open.
+    ran: Vec<bool>,
+    /// Per step: its outputs are current for the inputs it depends on.
+    /// Cleared through the plan when an input changes, whichever call
+    /// changed it; never set for a volatile or handle-writing step.
+    clean: Vec<bool>,
+    /// Whether this kernel's provenance mode skips current steps
+    /// (push-side); a mode without per-step skipping runs every step
+    /// in the cone once per cycle.
+    use_clean: bool,
+    /// The dirty-register plan: what each input invalidates, what each
+    /// output needs.
+    plan: std::sync::Arc<crate::compile::Invalidation>,
+    /// Per slot: the step that writes it, for the validator.
+    slot_step: std::sync::Arc<[Option<usize>]>,
 }
 
 impl KernelCore {
-    /// Begin a run (SRD 115 §4, §7): advance or adopt the cycle
-    /// generation and hand the table out for installation. The table
-    /// leaves the core for the duration of the run so the step loop's
-    /// borrows of the core and the installation's borrow of the table
-    /// do not overlap; `end_run` puts it back.
-    #[inline]
-    fn begin_run(&mut self) -> ValueTable {
+    /// Begin a cycle (SRD 115 §4, §7; engine_parity.md, step 5): advance
+    /// or adopt the cycle generation, write the externs (an unset one
+    /// as `None`), forget what ran in the last cycle, and invalidate
+    /// the volatile steps, as the interpreter does at every
+    /// `set_inputs`.
+    fn begin_cycle(&mut self) {
         let generation = if self.owns_cycle {
             crate::kernel::begin_root_cycle()
         } else {
             crate::kernel::cycle_generation()
         };
+        self.table.set_generation(generation);
+        // Extern handles belong to this cycle: strings into the arena
+        // the cycle just reset, table kinds into their entries (H3, H4).
+        self.externs
+            .materialize(&mut self.buffer, &mut self.table, Some(&mut self.none));
+        for r in &mut self.ran {
+            *r = false;
+        }
+        for (i, step) in self.steps.iter().enumerate() {
+            if step.volatile {
+                self.clean[i] = false;
+            }
+        }
+        self.drive.stale = false;
+    }
+
+    /// An input slot changed, through whichever call: every step the
+    /// plan lists for it is no longer current.
+    fn dirty_input(&mut self, slot: usize) {
+        if let Some(deps) = self.plan.input_dependents.get(slot) {
+            for &i in deps {
+                self.clean[i] = false;
+            }
+        }
+    }
+
+    /// Run the steps of `order` that have not run in this cycle and are
+    /// not current: one rule for every step, whatever reaches it. A
+    /// handle-writing step runs every cycle (SRD 115 §4) and a volatile
+    /// one is never current.
+    fn run_steps(&mut self, order: &[usize]) {
         let mut table = std::mem::take(&mut self.table);
-        table.set_generation(generation);
-        // Extern handles belong to this run: strings into the arena the
-        // cycle just reset, table kinds into their entries (H3, H4).
-        self.externs.materialize(&mut self.buffer, &mut table);
-        table
-    }
-
-    /// Set an extern by name; returns its slot for dirty marking.
-    fn set_extern(&mut self, name: &str, value: crate::ast::Value) -> Result<usize, String> {
-        self.externs.set(name, value, &mut self.buffer)
-    }
-
-    /// End a run: take the table back and check the handle
-    /// invariants (H3, H4) in debug builds, as `validate_refs` checks
-    /// the Ref pairs.
-    #[inline]
-    fn end_run(&mut self, table: ValueTable) {
+        {
+            let _installed = crate::kernel::install_value_table(&mut table);
+            let steps = std::sync::Arc::clone(&self.steps);
+            for &i in order {
+                if self.ran[i] {
+                    continue;
+                }
+                let step = &steps[i];
+                // A pure step may be recomputed redundantly in a mode
+                // without per-step skipping; a side channel may not.
+                if (self.use_clean || step.side) && self.clean[i] && !step.rerun && !step.volatile {
+                    self.ran[i] = true;
+                    continue;
+                }
+                self.run_or_propagate(step);
+                self.ran[i] = true;
+                self.clean[i] = !step.rerun && !step.volatile;
+            }
+        }
         self.table = table;
+        self.validate_table();
+        #[cfg(debug_assertions)]
+        self.validate_refs();
+    }
+
+    /// One step: SRD-74 Rule 1, then gather, run the closure, scatter.
+    /// A node that does not accept `None` emits `None` on every output
+    /// when any input is `None`, without running.
+    #[inline]
+    fn run_or_propagate(&mut self, step: &CompiledStep) {
+        if !step.accepts_none && step.input_slots.iter().any(|&s| self.none[s]) {
+            for &s in &step.output_slots {
+                self.none[s] = true;
+            }
+            return;
+        }
+        for (i, &s) in step.input_slots.iter().enumerate() {
+            self.gather_buf[i] = self.buffer[s];
+        }
+        match &step.op {
+            StepOp::U64(op) => op(
+                &self.gather_buf[..step.input_slots.len()],
+                &mut self.scatter_buf[..step.output_slots.len()],
+            ),
+            StepOp::Slot(op) => op(
+                &self.gather_buf[..step.input_slots.len()],
+                &mut self.scatter_buf[..step.output_slots.len()],
+                &mut self.scratch[step.scratch_range.0..step.scratch_range.1],
+            ),
+        }
+        for (i, &s) in step.output_slots.iter().enumerate() {
+            self.buffer[s] = self.scatter_buf[i];
+            self.none[s] = false;
+        }
+    }
+
+    /// Evaluate every output: begin the cycle if none is open, then run
+    /// every step that has not run.
+    fn eval_all(&mut self) {
+        if self.drive.stale {
+            self.begin_cycle();
+        }
+        let all: Vec<usize> = (0..self.steps.len()).collect();
+        self.run_steps(&all);
+    }
+
+    /// The named output for the cycle's inputs, running only its cone
+    /// (A6): the interpreter's `pull`, on a compiled kernel.
+    fn pull_named(&mut self, name: &str) -> crate::ast::Value {
+        if self.drive.stale {
+            self.begin_cycle();
+        }
+        let plan = std::sync::Arc::clone(&self.plan);
+        if let Some(order) = plan.cones.get(name) {
+            self.run_steps(order);
+        }
+        self.value_of(name)
+    }
+
+    /// The named output as a typed `Value`, `None` where the slot holds
+    /// one; a vector from scratch; a handle copied out.
+    fn value_of(&self, name: &str) -> crate::ast::Value {
+        let slot = self.output_map[name];
+        if self.none.get(slot).copied().unwrap_or(false) {
+            return crate::ast::Value::None;
+        }
+        let ty = self
+            .output_types
+            .get(name)
+            .copied()
+            .unwrap_or(crate::ast::PortType::U64);
+        if let Some(&(_, idx)) = self.ref_scratch.iter().find(|(s, _)| *s == slot) {
+            return self.scratch[idx].to_value();
+        }
+        crate::compile::marshal::decode_output(&self.buffer, slot, ty, &self.table)
+    }
+
+    /// Set an extern by name; returns its slot. The plan invalidates
+    /// what depends on it, as a changed coordinate is invalidated, and
+    /// the next evaluation begins a cycle.
+    fn set_extern(&mut self, name: &str, value: crate::ast::Value) -> Result<usize, String> {
+        let slot = self.externs.set(name, value, &mut self.buffer)?;
+        self.dirty_input(slot);
+        self.drive.stale = true;
+        Ok(slot)
+    }
+
+    /// The handle invariants (H3, H4) in debug builds, for every
+    /// table-kind slot written in this cycle: a step that did not run,
+    /// or that propagated `None`, left its slot as it was.
+    #[inline]
+    fn validate_table(&self) {
         if cfg!(debug_assertions) {
             for &(slot, entry) in &self.table_entries {
+                if let Some(Some(step)) = self.slot_step.get(slot)
+                    && (!self.ran[*step] || self.none[slot])
+                {
+                    continue;
+                }
                 let handle = self.buffer[slot];
                 assert_eq!(
                     handle & crate::kernel::TAG_MASK,
@@ -175,6 +347,12 @@ impl KernelCore {
     #[cfg(debug_assertions)]
     fn validate_refs(&self) {
         for &(slot, idx) in &self.ref_scratch {
+            // A step that has not run in this cycle has not published.
+            if let Some(Some(step)) = self.slot_step.get(slot)
+                && !self.ran[*step]
+            {
+                continue;
+            }
             let (p, l) = self.scratch[idx].ptr_len();
             assert!(
                 self.buffer[slot] == p && self.buffer[slot + 1] == l,
@@ -219,7 +397,8 @@ impl KernelCore {
     }
 }
 
-/// Build kernel core from raw step data.
+/// Build kernel core from raw step data. `use_clean` is whether the
+/// kernel's provenance mode skips current steps.
 fn build_core(
     coord_count: usize,
     total_slots: usize,
@@ -227,12 +406,14 @@ fn build_core(
     output_map: HashMap<String, usize>,
     ref_slots: Vec<bool>,
     extras: P2Extras,
+    use_clean: bool,
 ) -> KernelCore {
     let P2Extras {
         mut table_entries,
         output_types,
         handle_slots,
         externs,
+        input_dependents,
     } = extras;
     // Table-kind externs own entries after the nodes' and are checked
     // by the same validator.
@@ -275,12 +456,44 @@ fn build_core(
                 output_slots: step.output_slots,
                 scratch_range: (start, scratch.len()),
                 rerun,
+                accepts_none: step.accepts_none,
+                volatile: step.volatile,
+                constant: step.constant,
+                side: step.side,
             }
         })
         .collect();
+    let mut slot_step: Vec<Option<usize>> = vec![None; total_slots];
+    for (i, step) in compiled_steps.iter().enumerate() {
+        for &s in &step.output_slots {
+            slot_step[s] = Some(i);
+        }
+    }
+    let step_inputs: Vec<&[usize]> = compiled_steps
+        .iter()
+        .map(|s| s.input_slots.as_slice())
+        .collect();
+    let step_outputs: Vec<&[usize]> = compiled_steps
+        .iter()
+        .map(|s| s.output_slots.as_slice())
+        .collect();
+    let plan = crate::compile::Invalidation::from_provenance(
+        input_dependents,
+        &step_inputs,
+        &step_outputs,
+        &output_map,
+        total_slots,
+    );
     let mut buffer = vec![0u64; total_slots];
     externs.seed(&mut buffer);
-    KernelCore {
+    let step_count = compiled_steps.len();
+    let constants: Vec<usize> = compiled_steps
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.constant)
+        .map(|(i, _)| i)
+        .collect();
+    let mut core = KernelCore {
         buffer,
         coord_count,
         steps: compiled_steps.into(),
@@ -295,8 +508,26 @@ fn build_core(
         owns_cycle: true,
         output_types,
         externs,
-        drive: crate::compile::Drive::default(),
-    }
+        drive: crate::compile::Drive {
+            coords: Vec::new(),
+            stale: true,
+        },
+        none: vec![false; total_slots],
+        ran: vec![false; step_count],
+        clean: vec![false; step_count],
+        use_clean,
+        plan: std::sync::Arc::new(plan),
+        slot_step: slot_step.into(),
+    };
+    // The compile-constant fold of the runtime model, on this engine: a
+    // step no input reaches runs at build, once, and is current from
+    // then on, so what is knowable at build is known at build and fails
+    // at build. A handle-writing constant reruns per cycle as any
+    // handle writer does.
+    core.begin_cycle();
+    core.run_steps(&constants);
+    core.drive.stale = true;
+    core
 }
 
 /// Compute per-slot provenance bitmasks from input_dependents.
@@ -371,19 +602,28 @@ macro_rules! kernel_accessors {
 
         /// The named output as a typed `Value`, decoded by its port
         /// type: a handle slot is copied out of the arena or the value
-        /// table (SRD 115 §5), so the caller never holds a handle.
+        /// table (SRD 115 §5), so the caller never holds a handle; a
+        /// slot that holds `None` reads as `None`.
         pub fn get_value(&self, name: &str) -> crate::ast::Value {
-            let slot = self.core.output_map[name];
-            let ty = self
-                .core
-                .output_types
-                .get(name)
-                .copied()
-                .unwrap_or(crate::ast::PortType::U64);
-            if let Some(&(_, idx)) = self.core.ref_scratch.iter().find(|(s, _)| *s == slot) {
-                return self.core.scratch[idx].to_value();
-            }
-            crate::compile::marshal::decode_output(&self.core.buffer, slot, ty, &self.core.table)
+            self.core.value_of(name)
+        }
+
+        /// The named output through the `Kernel` trait: the pending
+        /// coordinates are applied, a cycle begins if none is open, and
+        /// only the output's cone runs.
+        fn pull_value(&mut self, name: &str) -> crate::ast::Value {
+            let coords = std::mem::take(&mut self.core.drive.coords);
+            self.set_coords(&coords);
+            self.core.drive.coords = coords;
+            self.pull_in_cycle(name)
+        }
+
+        /// `eval` through the `Kernel` trait: the pending coordinates,
+        /// then every step.
+        fn eval_pending(&mut self) {
+            let coords = std::mem::take(&mut self.core.drive.coords);
+            self.eval(&coords);
+            self.core.drive.coords = coords;
         }
 
         /// Whether each run begins a root cycle (SRD 115 §4). A state
@@ -448,71 +688,6 @@ macro_rules! kernel_accessors {
     };
 }
 
-/// One step: gather, run the closure, scatter.
-#[inline]
-fn run_step(core: &mut KernelCore, step: &CompiledStep) {
-    for (i, &s) in step.input_slots.iter().enumerate() {
-        core.gather_buf[i] = core.buffer[s];
-    }
-    match &step.op {
-        StepOp::U64(op) => op(
-            &core.gather_buf[..step.input_slots.len()],
-            &mut core.scatter_buf[..step.output_slots.len()],
-        ),
-        StepOp::Slot(op) => op(
-            &core.gather_buf[..step.input_slots.len()],
-            &mut core.scatter_buf[..step.output_slots.len()],
-            &mut core.scratch[step.scratch_range.0..step.scratch_range.1],
-        ),
-    }
-    for (i, &s) in step.output_slots.iter().enumerate() {
-        core.buffer[s] = core.scatter_buf[i];
-    }
-}
-
-/// Run all steps unconditionally (no clean checks).
-#[inline]
-fn eval_all_steps(core: &mut KernelCore) {
-    let mut table = core.begin_run();
-    {
-        let _installed = crate::kernel::install_value_table(&mut table);
-        for i in 0..core.steps.len() {
-            let step = &core.steps[i];
-            // The step is borrowed from `core.steps` while `run_step`
-            // writes the other fields; split the borrow by index.
-            let step: *const CompiledStep = step;
-            // SAFETY: `core.steps` is not touched by `run_step`, so the
-            // step outlives the call and no other reference aliases it.
-            run_step(core, unsafe { &*step });
-        }
-    }
-    core.end_run(table);
-    #[cfg(debug_assertions)]
-    core.validate_refs();
-}
-
-/// Run the steps that are not clean, marking each clean afterwards.
-#[inline]
-fn eval_dirty_steps(core: &mut KernelCore, node_clean: &mut [bool]) {
-    let mut table = core.begin_run();
-    {
-        let _installed = crate::kernel::install_value_table(&mut table);
-        for (i, clean) in node_clean.iter_mut().enumerate().take(core.steps.len()) {
-            if *clean {
-                continue;
-            }
-            let step: *const CompiledStep = &core.steps[i];
-            // SAFETY: as in `eval_all_steps`.
-            run_step(core, unsafe { &*step });
-            // A handle-writing step is never clean (SRD 115 §4).
-            *clean = !core.steps[i].rerun;
-        }
-    }
-    core.end_run(table);
-    #[cfg(debug_assertions)]
-    core.validate_refs();
-}
-
 // ═══════════════════════════════════════════════════════════════
 // Raw: no provenance, no cone guard. Eval runs all steps.
 // ═══════════════════════════════════════════════════════════════
@@ -539,18 +714,39 @@ impl CompiledKernelRaw {
                 output_map,
                 ref_slots,
                 extras,
+                false,
             ),
         }
     }
 
-    /// Every run evaluates everything; a changed input needs no mark.
-    fn mark_input_changed(&mut self, _slot: usize) {}
+    /// The plan invalidates what depends on the input; this mode runs
+    /// every step of a cone once per cycle regardless.
+    fn mark_input_changed(&mut self, slot: usize) {
+        self.core.dirty_input(slot);
+    }
 
+    /// The coordinates of the next cycle; a changed one invalidates
+    /// its dependents through the plan, as in every mode.
+    #[inline]
+    fn set_coords(&mut self, coords: &[u64]) {
+        for (i, &c) in coords.iter().enumerate().take(self.core.coord_count) {
+            if self.core.buffer[i] != c {
+                self.core.buffer[i] = c;
+                self.core.dirty_input(i);
+            }
+        }
+    }
+
+    /// Evaluate every step for `coords`: a new cycle.
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
-        self.core.buffer[..self.core.coord_count.min(coords.len())]
-            .copy_from_slice(&coords[..self.core.coord_count.min(coords.len())]);
-        eval_all_steps(&mut self.core);
+        self.set_coords(coords);
+        self.core.drive.stale = true;
+        self.core.eval_all();
+    }
+
+    fn pull_in_cycle(&mut self, name: &str) -> crate::ast::Value {
+        self.core.pull_named(name)
     }
 
     /// Eval + return a specific slot. No cone guard — always evaluates.
@@ -565,15 +761,13 @@ impl CompiledKernelRaw {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Push: per-node dirty skip, no cone guard.
-// set_inputs marks dependents dirty. eval skips clean steps.
+// Push: per-step skip, no cone guard. A changed input invalidates
+// its dependents through the plan; a current step is skipped.
 // ═══════════════════════════════════════════════════════════════
 
 #[derive(Clone)]
 pub struct CompiledKernelPush {
     core: KernelCore,
-    node_clean: Vec<bool>,
-    input_dependents: Vec<Vec<usize>>,
 }
 
 impl CompiledKernelPush {
@@ -586,7 +780,8 @@ impl CompiledKernelPush {
         ref_slots: Vec<bool>,
         extras: P2Extras,
     ) -> Self {
-        let step_count = steps.len();
+        // The plan in `extras` carries the dependents.
+        let _ = input_dependents;
         Self {
             core: build_core(
                 coord_count,
@@ -595,35 +790,36 @@ impl CompiledKernelPush {
                 output_map,
                 ref_slots,
                 extras,
+                true,
             ),
-            node_clean: vec![false; step_count],
-            input_dependents,
         }
     }
 
     #[inline]
-    fn set_inputs(&mut self, coords: &[u64]) {
+    fn set_coords(&mut self, coords: &[u64]) {
         for (i, &c) in coords.iter().enumerate().take(self.core.coord_count) {
             if self.core.buffer[i] != c {
                 self.core.buffer[i] = c;
-                self.mark_input_changed(i);
+                self.core.dirty_input(i);
             }
         }
     }
 
     /// Every step downstream of the slot reruns.
     fn mark_input_changed(&mut self, slot: usize) {
-        if slot < self.input_dependents.len() {
-            for &step_idx in &self.input_dependents[slot] {
-                self.node_clean[step_idx] = false;
-            }
-        }
+        self.core.dirty_input(slot);
     }
 
+    /// Evaluate every step that is not current for `coords`: a new cycle.
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
-        self.set_inputs(coords);
-        eval_dirty_steps(&mut self.core, &mut self.node_clean);
+        self.set_coords(coords);
+        self.core.drive.stale = true;
+        self.core.eval_all();
+    }
+
+    fn pull_in_cycle(&mut self, name: &str) -> crate::ast::Value {
+        self.core.pull_named(name)
     }
 
     /// Eval + return a specific slot. No cone guard — always enters eval loop.
@@ -638,7 +834,7 @@ impl CompiledKernelPush {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Pull: cone guard only, no per-node skip.
+// Pull: cone guard only, no per-step skip.
 // set_inputs tracks changed_mask. eval_for_slot checks cone
 // then runs ALL steps if dirty.
 // ═══════════════════════════════════════════════════════════════
@@ -670,6 +866,7 @@ impl CompiledKernelPull {
             output_map,
             ref_slots,
             extras,
+            false,
         );
         let slot_provenance =
             compute_slot_provenance(coord_count, total_slots, input_dependents, &core.steps);
@@ -681,31 +878,38 @@ impl CompiledKernelPull {
         }
     }
 
-    /// Track which inputs changed (for cone guard). Does NOT mark
-    /// individual nodes dirty — there is no per-node clean state.
+    /// Track which inputs changed (for the cone guard), and invalidate
+    /// their dependents through the plan, as in every mode.
     #[inline]
-    fn set_inputs(&mut self, coords: &[u64]) {
+    fn set_coords(&mut self, coords: &[u64]) {
         self.changed_mask.clear();
         for (i, &c) in coords.iter().enumerate().take(self.core.coord_count) {
             if self.core.buffer[i] != c {
                 self.core.buffer[i] = c;
                 self.changed_mask.set(i);
+                self.core.dirty_input(i);
             }
         }
     }
 
     /// The next evaluation runs regardless of the cone guard, since
     /// `set_inputs` rebuilds the changed set from the coordinates alone.
-    fn mark_input_changed(&mut self, _slot: usize) {
+    fn mark_input_changed(&mut self, slot: usize) {
+        self.core.dirty_input(slot);
         self.force_run = true;
     }
 
-    /// Evaluate eagerly (no cone guard). Runs all steps.
+    /// Evaluate eagerly (no cone guard). Runs all steps: a new cycle.
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
-        self.set_inputs(coords);
+        self.set_coords(coords);
         self.force_run = false;
-        eval_all_steps(&mut self.core);
+        self.core.drive.stale = true;
+        self.core.eval_all();
+    }
+
+    fn pull_in_cycle(&mut self, name: &str) -> crate::ast::Value {
+        self.core.pull_named(name)
     }
 
     /// Cone guard: if the output's cone is clean, skip eval entirely.
@@ -713,7 +917,7 @@ impl CompiledKernelPull {
     #[inline]
     pub fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
         self.core.guard_ref_slot(slot);
-        self.set_inputs(coords);
+        self.set_coords(coords);
         if !self.force_run
             && slot < self.slot_provenance.len()
             && !self.slot_provenance[slot].intersects(&self.changed_mask)
@@ -721,7 +925,8 @@ impl CompiledKernelPull {
             return self.core.buffer[slot];
         }
         self.force_run = false;
-        eval_all_steps(&mut self.core);
+        self.core.drive.stale = true;
+        self.core.eval_all();
         self.core.buffer[slot]
     }
 
@@ -729,15 +934,13 @@ impl CompiledKernelPull {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// PushPull: push-side per-node skip + pull-side cone guard.
+// PushPull: push-side per-step skip + pull-side cone guard.
 // Full optimization.
 // ═══════════════════════════════════════════════════════════════
 
 #[derive(Clone)]
 pub struct CompiledKernelPushPull {
     core: KernelCore,
-    node_clean: Vec<bool>,
-    input_dependents: Vec<Vec<usize>>,
     slot_provenance: Vec<crate::kernel::ProvMask>,
     changed_mask: crate::kernel::ProvMask,
     /// Set by `set_input`: an extern changed, so the next evaluation
@@ -755,7 +958,6 @@ impl CompiledKernelPushPull {
         ref_slots: Vec<bool>,
         extras: P2Extras,
     ) -> Self {
-        let step_count = steps.len();
         let core = build_core(
             coord_count,
             total_slots,
@@ -763,13 +965,12 @@ impl CompiledKernelPushPull {
             output_map,
             ref_slots,
             extras,
+            true,
         );
         let slot_provenance =
             compute_slot_provenance(coord_count, total_slots, &input_dependents, &core.steps);
         Self {
             core,
-            node_clean: vec![false; step_count],
-            input_dependents,
             slot_provenance,
             changed_mask: crate::kernel::ProvMask::all_below(coord_count),
             force_run: false,
@@ -777,17 +978,13 @@ impl CompiledKernelPushPull {
     }
 
     #[inline]
-    fn set_inputs(&mut self, coords: &[u64]) {
+    fn set_coords(&mut self, coords: &[u64]) {
         self.changed_mask.clear();
         for (i, &c) in coords.iter().enumerate().take(self.core.coord_count) {
             if self.core.buffer[i] != c {
                 self.core.buffer[i] = c;
                 self.changed_mask.set(i);
-                if i < self.input_dependents.len() {
-                    for &step_idx in &self.input_dependents[i] {
-                        self.node_clean[step_idx] = false;
-                    }
-                }
+                self.core.dirty_input(i);
             }
         }
     }
@@ -795,27 +992,28 @@ impl CompiledKernelPushPull {
     /// Every step downstream of the slot reruns, and the next
     /// evaluation runs whatever the cone guard says.
     fn mark_input_changed(&mut self, slot: usize) {
-        if slot < self.input_dependents.len() {
-            for &step_idx in &self.input_dependents[slot] {
-                self.node_clean[step_idx] = false;
-            }
-        }
+        self.core.dirty_input(slot);
         self.force_run = true;
     }
 
-    /// Eval with push-side skip (no cone guard).
+    /// Eval with push-side skip (no cone guard): a new cycle.
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
-        self.set_inputs(coords);
+        self.set_coords(coords);
         self.force_run = false;
-        eval_dirty_steps(&mut self.core, &mut self.node_clean);
+        self.core.drive.stale = true;
+        self.core.eval_all();
+    }
+
+    fn pull_in_cycle(&mut self, name: &str) -> crate::ast::Value {
+        self.core.pull_named(name)
     }
 
     /// Cone guard + push-side skip: the full optimization.
     #[inline]
     pub fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
         self.core.guard_ref_slot(slot);
-        self.set_inputs(coords);
+        self.set_coords(coords);
         if !self.force_run
             && slot < self.slot_provenance.len()
             && !self.slot_provenance[slot].intersects(&self.changed_mask)
@@ -823,7 +1021,8 @@ impl CompiledKernelPushPull {
             return self.core.buffer[slot];
         }
         self.force_run = false;
-        eval_dirty_steps(&mut self.core, &mut self.node_clean);
+        self.core.drive.stale = true;
+        self.core.eval_all();
         self.core.buffer[slot]
     }
 

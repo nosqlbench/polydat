@@ -143,7 +143,8 @@ impl JitCore {
         };
         self.table.set_generation(generation);
         // Extern handles belong to this run (H3, H4).
-        self.externs.materialize(&mut self.buffer, &mut self.table);
+        self.externs
+            .materialize(&mut self.buffer, &mut self.table, None);
         crate::kernel::with_value_table(&mut self.table, || {
             super::codegen::invoke_with_catch(native)
         });
@@ -316,6 +317,24 @@ macro_rules! jit_accessors {
             for i in 0..self.core.coord_count {
                 self.mark_input_changed(i);
             }
+        }
+
+        /// The named output through the `Kernel` trait. Native code
+        /// evaluates the whole program, so a pull after new inputs is an
+        /// evaluation.
+        fn pull_value(&mut self, name: &str) -> crate::ast::Value {
+            if self.core.drive.stale {
+                self.eval_pending();
+                self.core.drive.stale = false;
+            }
+            self.get_value(name)
+        }
+
+        /// `eval` through the `Kernel` trait: the pending coordinates.
+        fn eval_pending(&mut self) {
+            let coords = std::mem::take(&mut self.core.drive.coords);
+            self.eval(&coords);
+            self.core.drive.coords = coords;
         }
 
         /// The cursors the program declares, with the partitions the

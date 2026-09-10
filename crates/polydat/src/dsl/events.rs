@@ -66,6 +66,9 @@ pub enum CompileEvent {
     },
     /// Warning during compilation.
     Warning { message: String },
+    /// An extern with no default: `None` until the host sets it, and
+    /// every consumer reads `None` through it (engine_parity.md, A12).
+    ExternWithoutDefault { name: String, port_type: String },
     /// Summary of the compiled program.
     Summary {
         nodes: usize,
@@ -156,6 +159,7 @@ impl CompileEvent {
             // Warning: potential issues
             CompileEvent::ConfigWireCycleWarning { .. } => EventLevel::Warning,
             CompileEvent::Warning { .. } => EventLevel::Warning,
+            CompileEvent::ExternWithoutDefault { .. } => EventLevel::Warning,
             CompileEvent::UnknownPragma { .. } => EventLevel::Warning,
         }
     }
@@ -237,6 +241,8 @@ impl CompileEventLog {
                 format!("widening {from} → {to} in {context}"),
             CompileEvent::Warning { message } =>
                 message.to_string(),
+            CompileEvent::ExternWithoutDefault { name, port_type } =>
+                format!("extern '{name}' ({port_type}) has no default: it is `None` until the host sets it"),
             CompileEvent::Summary { nodes, outputs, constants_folded } =>
                 format!("{nodes} nodes, {outputs} outputs, {constants_folded} constant(s) folded"),
             CompileEvent::PragmaAcknowledged { name, line } =>

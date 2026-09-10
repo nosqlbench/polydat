@@ -344,9 +344,12 @@ pub trait Kernel: Send {
     fn eval(&mut self);
 
     /// The named output for the inputs set so far, evaluating what it
-    /// needs: on the interpreter its cone, on a compiled kernel the
-    /// program when an input changed since the last evaluation. The
-    /// value is owned; a handle is never returned to the host.
+    /// needs and no more: the output's cone, on the interpreter, the
+    /// closure tier, and the hybrid kernel alike (pure native code,
+    /// being one function, evaluates the program). A side channel in
+    /// the cone fires when the output is pulled; a failing node fails
+    /// when pulled. The value is owned; a handle is never returned to
+    /// the host, and a slot that holds `None` reads as `None`.
     fn pull(&mut self, name: &str) -> Value;
 
     /// Every input by name, the coordinates first.

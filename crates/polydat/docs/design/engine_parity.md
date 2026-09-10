@@ -4,7 +4,7 @@
 2026-09-09, of every place the compilation levels differ in anything
 other than performance, and the plan that removes each difference.
 §5 is the plan, §4 the findings it answers. Steps 1 through 3 of the
-plan landed on 2026-09-09 and step 4 on 2026-09-10 (the landing
+plan landed on 2026-09-09 and steps 4 and 5 on 2026-09-10 (the landing
 records are under the steps); the rest is proposed.
 
 **Ownership.** Polydat owns the feature set, the engines, and the public
@@ -190,11 +190,13 @@ capture and the slot kit's `Value` argument (A1) cover all sixteen.
 ### A3. Cursors are an interpreter feature — functional and semantic
 
 *Closed by step 3 for every cursor whose `over` clause is a literal
-spec over an extent known at build; the record below is the state the
-review found. What remains: a cursor whose `over` clause is computed
-or whose extent is known only at run time is resolved by the host
-through `cursor_over_partitions` on an interpreter state, as before,
-and a compiled kernel of such a program runs only after the host
+spec over an extent known at build, and by step 5 for the rest of the
+difference: a cursor not yet narrowed is `None` on the closure tier and
+in a hybrid kernel as it is on the interpreter. The record below is the
+state the review found. What remains: a cursor whose `over` clause is
+computed or whose extent is known only at run time is resolved by the
+host through `cursor_over_partitions` on an interpreter state, as
+before, and pure native code runs such a program only after the host
 narrows it with `set_cursor`.*
 
 A `cursor` declaration becomes an `ExternalWrite` input named
@@ -263,6 +265,11 @@ with the same drive and read API (A8). This is the largest item in the
 plan and depends on A8.
 
 ### A6. Evaluation is lazy on the interpreter and eager everywhere else — semantic
+
+*Closed by step 5 for the closure tier and the hybrid kernel; the
+record below is the state the review found. What remains: pure native
+code evaluates the whole program at a pull, since one native function
+is the program (it retires from the public path in step 7).*
 
 `PolydatState::pull` evaluates the cone of the requested output and
 nothing else. `eval` on every compiled kernel runs every step, or every
@@ -395,6 +402,12 @@ hybrid kernel runs vector nodes as closures and reads them with
 limit of the pure tier and belongs in the SIMD and register documents.
 
 ### A12. An unset extern is a `None` on the interpreter and a refusal elsewhere — semantic
+
+*Closed by step 5 for the closure tier and the hybrid kernel, which
+carry a `None` mask per slot and propagate it as SRD-74 Rule 1 says;
+the compile log names every extern without a default
+(`CompileEvent::ExternWithoutDefault`). Pure native code cannot carry
+`None` and still refuses to run with an unset table-kind extern.*
 
 An `extern` without a default and never set is `Value::None` on the
 interpreter, which propagates to its consumers' outputs. On a compiled
@@ -538,6 +551,50 @@ proves it.
    through the trait against the interpreter, shares each across
    threads, and checks the error type; the embedding guide's compiled
    kernels section is written to the trait.
+
+   *Step 5 landed 2026-09-10.* The closure tier and the hybrid kernel
+   evaluate under the runtime model's one rule, the classification the
+   interpreter's fold itself calls (`classify_lifecycle`): a step is
+   current until an input in its provenance changes, whichever call
+   changed it, a coordinate through `set_inputs` or an extern or cursor
+   through `set_input`; a nondeterministic step, or one downstream of
+   one, is never current, and is invalidated at every cycle as the
+   interpreter invalidates it at every `set_inputs`; a handle-writing
+   step runs every cycle (SRD 115 §4); a compile-constant step, one no
+   input reaches, is folded at build, once, on every engine, which is
+   the interpreter's fold at the same moment, so what is knowable at
+   build is known at build and fails at build; and everything else
+   runs at first pull. `set_inputs` (or a changed extern or cursor)
+   opens a cycle, `pull(name)` runs the steps of that output's cone
+   that are not current and have not run in the cycle, and `eval` runs
+   every step. A provenance mode is an optimization on that rule and
+   never a change to it: a mode without per-step skipping may recompute
+   a pure step redundantly, which nothing observes, but a side-channel
+   step is skipped when current in every mode, since its run is
+   observed. The bookkeeping is one data structure,
+   `compile::Invalidation`: per input slot the steps it invalidates,
+   per named output the steps it needs. The evaluation loops consume
+   only that, and provenance derives it today; a host that knows its
+   write and read patterns may supply a narrower plan later (explicit
+   dirty registers instead of cone invalidation) without touching the
+   loops. A per-slot `None` mask carries SRD-74 through the compiled
+   kernels: an unset extern is `None`, a step whose node does not
+   accept `None` emits `None` on every output without running, and
+   `pull` returns `None` for such a slot; a node downstream of an
+   extern without a default runs as a closure in a hybrid kernel, since
+   native code cannot carry `None`. The handle validators (H4, S9)
+   check only the slots the cycle wrote. The compile log names every
+   extern without a default. The fuzzer drives every engine through
+   `Kernel::pull` output by output and counts the rows a side channel
+   emits per engine per cycle, with an `emit_row` arm; it caught, in
+   turn, a plan that took every input slot as a coordinate, a
+   construction-time flattening of extern-dependent steps that the
+   interpreter does not do (a semantic difference by engine, removed),
+   a raw mode that re-fired a memoized side channel, and a nullary
+   nondeterministic node (`tmp_dir`) that the compiled engines classed
+   volatile while the fold classed it compile-constant, which is why
+   the classification is now one function shared with the fold. Pure native
+   kernels still evaluate the whole program per pull (A6).
 2. **Close the closure tier.** Setup capture in the u64 kit, the
    `Bytes` handle in both kits, `Value` arguments in the slot kit,
    `Const<Vec<_>>` capture, and the session-static form (A1, A2). Refuse
