@@ -4,7 +4,7 @@
 2026-09-09, of every place the compilation levels differ in anything
 other than performance, and the plan that removes each difference.
 §5 is the plan, §4 the findings it answers. Steps 1 through 3 of the
-plan landed on 2026-09-09 and steps 4 through 8 on 2026-09-10 (the landing
+plan landed on 2026-09-09 and steps 4 through 9 on 2026-09-10 (the landing
 records are under the steps); the rest is proposed.
 
 **Ownership.** Polydat owns the feature set, the engines, and the public
@@ -103,7 +103,7 @@ name, signature, and meaning as the interpreter kernel.
 | Share across threads | `into_program()` then `create_state()` per thread | none: compile once per thread | none | none |
 | Traversal | `traverse(i)`, activations, `for_iteration` | none | none | none |
 | Cursors | `cursor_schemas` (with the partitions resolved at build), `set_cursor`; `cursor_over_partitions` for the run-time cases; activations seed their bodies | `cursor_schemas`, `set_cursor` | same | same |
-| Shared bindings | cells, write-through, broadcast | an ordinary input | same | same |
+| Shared bindings | cells, write-through, broadcast | same, through the cell bound to the binding's extern slot (step 9) | same | same |
 | Failure of a node | panic enriched with node name, outputs, context, and inputs | same | same | same |
 | Engine selection | `set_jit_mode` (production kernel mixes cones) | `auto_compile_p2` → `P2Engine` | one form | `auto_compile_p3` → `P3Engine` |
 
@@ -391,6 +391,10 @@ a kernel-path argument (`compile_polydat_with_log`) until A8's single
 constructor takes it.
 
 ### A10. `shared` bindings lose their cells off the interpreter — semantic
+
+*Closed by step 9: the cell protocol reaches every compiled kernel
+through `compile::externs`, and the `Kernel` trait carries the cells.
+The record below is the state the review found.*
 
 A `shared` binding compiles on every engine (probe: register, closure,
 hybrid, and native all accept `shared counter := 0`), but only the
@@ -751,6 +755,30 @@ proves it.
    that inner activations of an interpreter activation run anywhere.
 9. **Shared cells on compiled engines** (A10) through `compile::externs`
    materialization and publication.
+
+   *Step 9 landed 2026-09-10.* A `shared` binding runs on every engine
+   under the interpreter's cell protocol. The binding was already an
+   extern slot on the compiled kernels; `compile::externs` now binds
+   that slot to a `SharedCell`, the same type the interpreter attaches
+   (`kernel::engines::SharedCellInner`, with the scope's intent word
+   and bit): `set` publishes through the cell, every run's
+   materialization and every pull inside a cycle take the cell's value
+   where its revision moved and mark the slot's dependents through the
+   plan, so a write by any holder of the cell is what the others read
+   next, as the interpreter's revision-aware cone check gives it, and a
+   write outside every kernel, through the cell itself, reaches them
+   all the same way. Pure native code, which evaluates the program per
+   pull, treats a moved revision as a changed input. The `Kernel` trait
+   carries the protocol: `shared_cells` lists a kernel's cells and
+   `attach_shared_cell` binds one kernel's cell into another, on the
+   interpreter and the compiled engines alike, and a kernel created
+   from a shared program starts with cells of its own, as an
+   interpreter state does. The refusal step 2 landed
+   (`shared_binding_refusal`) is gone. `tests/shared_tiers.rs` drives
+   the default, the write-through, two attached kernels writing and
+   reading one register inside open cycles, a publication from outside,
+   program-created kernels' independence, and type stability on every
+   engine and provenance mode.
 10. **Documentation to zero** (A13): `missing_docs` burn-down under CI,
     the generated matrix in the node reference, the guide and the
     engines document updated to state that every engine accepts every

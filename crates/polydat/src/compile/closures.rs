@@ -209,12 +209,55 @@ impl KernelCore {
         self.any_none =
             self.externs
                 .materialize(&mut self.buffer, &mut self.table, Some(&mut self.none));
+        self.dirty_refreshed();
         self.cycle += 1;
         self.all_ran = false;
         for &i in self.volatile_steps.iter() {
             self.clean[i] = false;
         }
         self.drive.stale = false;
+    }
+
+    /// Every dependent of a slot a cell refresh changed runs again,
+    /// inside the open cycle too, as the interpreter re-evaluates a node
+    /// whose cell moved on its next read: the plan's dependents, whatever
+    /// the mode, are neither run nor current.
+    #[inline]
+    fn dirty_refreshed(&mut self) {
+        if !self.externs.has_changed() {
+            return;
+        }
+        let changed = self.externs.take_changed();
+        for &slot in &changed {
+            if let Some(deps) = self.plan.input_dependents.get(slot) {
+                for &i in deps {
+                    self.ran[i] = 0;
+                    self.clean[i] = false;
+                }
+                self.all_ran = false;
+            }
+        }
+        self.externs.return_changed(changed);
+    }
+
+    /// Take the current value of every cell another holder published
+    /// to, and mark its dependents, so a pull inside a cycle sees the
+    /// register as the interpreter's revision check does.
+    #[inline]
+    fn refresh_cells(&mut self) {
+        if self.externs.cells_dirty() {
+            self.externs.refresh_cells(&mut self.buffer);
+            self.dirty_refreshed();
+        }
+    }
+
+    /// Bind a `shared` binding to `cell` (engine parity, step 9): this
+    /// kernel reads and writes that register from now on.
+    fn attach_cell(&mut self, name: &str, cell: crate::kernel::SharedCell) -> Result<(), String> {
+        let slot = self.externs.attach_cell(name, cell)?;
+        self.dirty_input(slot);
+        self.drive.stale = true;
+        Ok(())
     }
 
     /// An input slot changed, through whichever call: every step the
@@ -339,6 +382,8 @@ impl KernelCore {
         let fresh = self.drive.stale;
         if fresh {
             self.begin_cycle();
+        } else {
+            self.refresh_cells();
         }
         if fresh && !self.use_clean && !self.any_none {
             self.run_guarded(|core| core.run_fresh());
@@ -353,6 +398,8 @@ impl KernelCore {
     fn pull_named(&mut self, name: &str) -> crate::ast::Value {
         if self.drive.stale {
             self.begin_cycle();
+        } else {
+            self.refresh_cells();
         }
         let plan = std::sync::Arc::clone(&self.plan);
         if let Some(order) = plan.cones.get(name) {

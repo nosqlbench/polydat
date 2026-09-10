@@ -186,15 +186,18 @@ fn a_program_is_shared_across_threads_on_every_engine() {
 
 #[test]
 fn a_refusal_names_the_engine_and_the_reason() {
-    // A `shared` binding runs on the interpreter only (A10).
-    let src = "input cycle: u64\nshared counter := 0\nout := cycle + counter\n";
+    // A vector-typed extern has no compiled passthrough, so every
+    // compiled engine refuses it by name.
+    let src = "input cycle: u64\nextern v: vec_f32\nout := cycle\n";
     assert!(compile_polydat_with(src, Engine::Interpreter).is_ok());
     for engine in engines().into_iter().skip(1) {
         match compile_polydat_with(src, engine) {
             Err(KernelError::Refused { engine: e, reason }) => {
                 assert_eq!(e, engine);
                 assert!(
-                    reason.contains("`shared`") || reason.contains("jit"),
+                    reason.contains("no compiled form")
+                        || reason.contains("spans")
+                        || reason.contains("jit"),
                     "{engine}: {reason}"
                 );
                 let text = format!("{}", KernelError::Refused { engine: e, reason });

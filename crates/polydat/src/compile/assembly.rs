@@ -1010,9 +1010,6 @@ impl PolydatAssembler {
     /// output slots are assigned value-table entries in node and port
     /// order (SRD 115 §3, §7).
     fn build_p2_layout(resolved: &ResolvedDag) -> Result<P2Layout, String> {
-        if let Some(refusal) = shared_binding_refusal(resolved) {
-            return Err(refusal);
-        }
         let layout = slot_layout(resolved);
 
         let mut compiled_ops = Vec::with_capacity(resolved.nodes.len());
@@ -1045,6 +1042,7 @@ impl PolydatAssembler {
             &layout.input_starts,
             extras.table_entries.len(),
             &resolved.cursor_schemas,
+            &shared_outputs_of(resolved),
         )?;
         extras.output_types = resolved
             .output_map
@@ -1107,9 +1105,6 @@ impl PolydatAssembler {
     /// Shared: resolve nodes to JIT steps + slot layout.
     #[cfg(feature = "jit")]
     pub(crate) fn build_jit_layout(resolved: &ResolvedDag) -> Result<JitLayout, String> {
-        if let Some(refusal) = shared_binding_refusal(resolved) {
-            return Err(refusal);
-        }
         let layout = slot_layout(resolved);
 
         // P3 corollary (jit_boundary.md slot-state axioms): a
@@ -1262,6 +1257,7 @@ impl PolydatAssembler {
             &layout.input_starts,
             0,
             &resolved.cursor_schemas,
+            &shared_outputs_of(resolved),
         )
     }
 
@@ -1534,9 +1530,6 @@ impl PolydatAssembler {
     }
 
     fn hybrid_from(resolved: ResolvedDag) -> Result<crate::compile::hybrid::HybridKernel, String> {
-        if let Some(refusal) = shared_binding_refusal(&resolved) {
-            return Err(refusal);
-        }
         let _coord_names = resolved.input_names();
         let layout = slot_layout(&resolved);
 
@@ -2185,26 +2178,17 @@ fn assertion_skip_reason(
 /// nothing publishes, so the graph is refused rather than run with
 /// other semantics (engine_parity.md, A10) until the cell protocol
 /// reaches compiled kernels.
-pub(crate) fn shared_binding_refusal(resolved: &ResolvedDag) -> Option<String> {
-    let mut shared: Vec<&String> = resolved
+/// The `shared` bindings of a resolved graph, by name: each is an
+/// extern the compiled kernels bind to a cell (engine parity, step 9).
+pub(crate) fn shared_outputs_of(resolved: &ResolvedDag) -> Vec<&str> {
+    let mut shared: Vec<&str> = resolved
         .output_modifiers
         .iter()
         .filter(|(_, m)| **m == crate::dsl::ast::BindingModifier::SHARED)
-        .map(|(name, _)| name)
+        .map(|(name, _)| name.as_str())
         .collect();
-    if shared.is_empty() {
-        return None;
-    }
     shared.sort();
-    Some(format!(
-        "a `shared` binding ({}) runs on the interpreter only: compiled engines have no \
-         shared cell yet (docs/design/engine_parity.md, A10)",
-        shared
-            .iter()
-            .map(|s| format!("`{s}`"))
-            .collect::<Vec<_>>()
-            .join(", ")
-    ))
+    shared
 }
 
 pub(crate) fn wire_types_of(resolved: &ResolvedDag, node_idx: usize) -> Vec<PortType> {

@@ -573,8 +573,11 @@ steps, with the extension value passing between
 two of them as a table handle; `engine_counts` is the only planning detail
 it exposes, so a host can see whether a program is mostly native before
 deciding to care. An engine that cannot run a program at all, the
-closure tier on a `shared` binding for one, says so as the error, with
-the engine and the node named.
+closure tier on a vector-typed extern for one, says so as the error,
+with the engine and the node named. A `shared` binding runs on every
+engine with the interpreter's cell: `shared_cells` on a kernel lists
+its cells and `attach_shared_cell` binds one kernel's cell into
+another, so both read and write one register.
 
 `pull` evaluates the output's cone and no more on every engine: a side
 channel in the

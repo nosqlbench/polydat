@@ -138,6 +138,14 @@ impl JitCore {
         self.externs.set(name, value, &mut self.buffer)
     }
 
+    /// Bind a `shared` binding to `cell` (engine parity, step 9). Native
+    /// code evaluates the whole program, so the next run reads it.
+    fn attach_cell(&mut self, name: &str, cell: crate::kernel::SharedCell) -> Result<(), String> {
+        self.externs.attach_cell(name, cell)?;
+        self.drive.stale = true;
+        Ok(())
+    }
+
     /// Run one native evaluation: begin the cycle it belongs to, install
     /// the kernel's value table for the helpers, run inside the longjmp
     /// catch, then check the table invariants.
@@ -353,7 +361,8 @@ macro_rules! jit_accessors {
         /// evaluates the whole program, so a pull after new inputs is an
         /// evaluation.
         fn pull_value(&mut self, name: &str) -> crate::ast::Value {
-            if self.core.drive.stale {
+            // A cell another holder published to is a changed input.
+            if self.core.drive.stale || self.core.externs.cells_dirty() {
                 self.eval_pending();
                 self.core.drive.stale = false;
             }

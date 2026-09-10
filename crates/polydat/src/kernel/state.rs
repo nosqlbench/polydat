@@ -668,6 +668,19 @@ impl PolydatKernel {
                 self.program.input_names()
             )
         })?;
+        // A shared cell keeps one type for life (scope model §6.1): a
+        // write of another type fails at the write site, as it does on
+        // every compiled kernel.
+        if self.state.shared_cell(idx).is_some()
+            && value != Value::None
+            && let Some(declared) = self.program.input_port_type(name)
+            && value.port_type() != declared
+        {
+            return Err(format!(
+                "shared binding '{name}' is declared {declared} but was set to a {} value",
+                value.port_type()
+            ));
+        }
         self.state.set_input(idx, value);
         Ok(())
     }

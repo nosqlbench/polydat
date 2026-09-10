@@ -227,6 +227,25 @@ impl crate::kernel::Kernel for PolydatKernel {
     fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema] {
         self.program().cursor_schemas()
     }
+    fn shared_cells(&self) -> Vec<crate::kernel::SharedCellEntry> {
+        self.shared_cells_in_scope()
+    }
+    fn attach_shared_cell(
+        &mut self,
+        name: &str,
+        cell: crate::kernel::SharedCell,
+    ) -> Result<(), String> {
+        let program = self.program().clone();
+        let shared = program.shared_outputs();
+        let idx = program.find_input(name).filter(|_| shared.contains(&name));
+        let Some(idx) = idx else {
+            return Err(format!(
+                "no `shared` binding named '{name}'; this kernel's shared bindings are {shared:?}"
+            ));
+        };
+        self.state().attach_shared_cell(idx, cell);
+        Ok(())
+    }
     fn nest(&mut self) {
         self.state().mark_nested();
     }

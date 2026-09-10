@@ -35,6 +35,7 @@
 //! [`PolydatKernel`]: super::PolydatKernel
 
 use crate::ast::{PortType, Value};
+use crate::kernel::{SharedCell, SharedCellEntry};
 
 /// Error returned by [`Dataflow::set_wire_idx`] /
 /// [`Dataflow::set_wire`] when the typed-write contract at the
@@ -370,6 +371,23 @@ pub trait Kernel: Send {
     /// compiler resolved where it could.
     fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema];
 
+    /// The cells this kernel's `shared` bindings are bound to (scope
+    /// model §6): one register per binding, which every kernel holding
+    /// the cell reads and writes.
+    fn shared_cells(&self) -> Vec<SharedCellEntry>;
+
+    /// Bind the `shared` binding `name` to `cell`, so this kernel and
+    /// every other holder of the cell read and write one register:
+    /// a write on any of them is what the others read next, and a
+    /// dependent output is recomputed. A name that is not a `shared`
+    /// binding is an error naming the ones that are.
+    fn attach_shared_cell(&mut self, name: &str, cell: SharedCell) -> Result<(), String>;
+
+    /// Give every `shared` binding a cell of its own again: what a
+    /// kernel created from a shared program starts with.
+    #[doc(hidden)]
+    fn reseed_shared_cells(&mut self) {}
+
     /// Make this kernel a nested one: it runs inside the cycle of the
     /// kernel that opened it (a traversal's activation inside its
     /// root; SRD 115 §4), and so never begins a root cycle of its own.
@@ -411,6 +429,10 @@ impl<K: Kernel + Clone + Send + Sync + 'static> KernelProgram for SharedKernel<K
         self.0.engine()
     }
     fn create_kernel(self: std::sync::Arc<Self>) -> Box<dyn Kernel> {
-        Box::new(self.0.clone())
+        let mut kernel = self.0.clone();
+        // A created kernel has cells of its own, as an interpreter state
+        // created from a program does; a host attaches what it shares.
+        kernel.reseed_shared_cells();
+        Box::new(kernel)
     }
 }

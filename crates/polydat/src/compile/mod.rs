@@ -177,6 +177,19 @@ macro_rules! impl_kernel_trait {
             fn nest(&mut self) {
                 self.set_owns_cycle(false);
             }
+            fn shared_cells(&self) -> Vec<crate::kernel::SharedCellEntry> {
+                self.core.externs.shared_cells()
+            }
+            fn attach_shared_cell(
+                &mut self,
+                name: &str,
+                cell: crate::kernel::SharedCell,
+            ) -> Result<(), String> {
+                self.core.attach_cell(name, cell)
+            }
+            fn reseed_shared_cells(&mut self) {
+                self.core.externs.reseed_cells();
+            }
             fn into_program(
                 mut self: Box<Self>,
             ) -> std::sync::Arc<dyn crate::kernel::KernelProgram> {
