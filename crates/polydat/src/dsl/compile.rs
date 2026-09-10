@@ -265,11 +265,51 @@ pub fn compile_polydat_with_tiles(source: &str, tiles: Vec<super::ast::TileDef>)
 /// `.try_compile()` for P2, `.try_compile_jit()` for P3,
 /// `.compile_hybrid()` for Hybrid.
 pub fn compile_polydat_to_assembler(source: &str) -> Result<PolydatAssembler, String> {
+    compile_polydat_to_assembler_with(source, &CompileOptions::default())
+}
+
+/// [`compile_polydat_to_assembler`] with the options the kernel entry
+/// points take: a source directory for relative imports, library
+/// directories, required outputs, strict typing, a diagnostic context,
+/// and a cursor limit. The assembler it returns is the graph
+/// [`compile_polydat_with_options`] would compile from the same source
+/// and options, ready for any engine.
+pub fn compile_polydat_to_assembler_with(
+    source: &str,
+    options: &CompileOptions,
+) -> Result<PolydatAssembler, String> {
+    let _data_base = options.source_dir.as_deref().map(DataBaseDirGuard::set);
     let tokens = super::lexer::lex(source)?;
     let ast = super::parser::parse(tokens)?;
-    let mut compiler = Compiler::new(None, false);
-    let mut asm = compiler.build_assembler(&ast)?;
-    asm.set_context(source, "(polydat source)");
+    let pragmas = super::pragmas::collect_from_ast(&ast);
+    let extended = if options.required_outputs.is_empty() {
+        Vec::new()
+    } else {
+        extend_required_with_const_bindings(&options.required_outputs, &ast)
+    };
+    let filter = if extended.is_empty() {
+        None
+    } else {
+        Some(extended.as_slice())
+    };
+    let mut compiler = Compiler::with_lib_paths(
+        options.source_dir.clone(),
+        options.lib_paths.clone(),
+        options.strict,
+    );
+    compiler.source_text = source.to_string();
+    compiler.context_label = if options.context.is_empty() {
+        "(polydat source)".into()
+    } else {
+        options.context.clone()
+    };
+    compiler.cursor_limit = options.cursor_limit;
+    compiler.pragmas = pragmas;
+    let mut asm = compiler.assemble_parent(&ast, filter)?;
+    asm.set_strict_wires(
+        compiler.pragmas.strict_types(),
+        compiler.pragmas.strict_values(),
+    );
     Ok(asm)
 }
 
@@ -1920,384 +1960,9 @@ impl Compiler {
     }
 
     fn compile_parent(&mut self, file: &PolydatFile) -> Result<PolydatKernel, String> {
-        // First pass: collect explicit `input` declarations,
-        // deduping by name so re-declaration is a no-op (the slot
-        // already exists; the second `input cycle: u64` line is just
-        // a redundant reaffirmation, not an error).
-        let mut has_explicit_inputs = false;
-        for stmt in &file.statements {
-            if let Statement::InputDecl(d) = stmt {
-                if !self.input_names.iter().any(|n| n == &d.name) {
-                    self.input_names.push(d.name.clone());
-                }
-                has_explicit_inputs = true;
-            }
-        }
-
-        // Input declaration check: error in strict mode (modules, .polydat files)
-        if !has_explicit_inputs && self.strict {
-            return Err(
-                "strict mode: no `input` declaration — add `input <name>: <type>` \
-                 (or the tuple form `input (a: u64, b: f64)`) to declare graph \
-                 inputs explicitly".into()
-            );
-        }
-
-        // If no explicit inputs, infer from unbound references
-        if !has_explicit_inputs {
-            let defined: HashSet<String> = file.statements.iter().flat_map(|stmt| {
-                match stmt {
-                    Statement::Binding(b) => b.targets.clone(),
-                    Statement::ModuleDef(m) => vec![m.name.clone()],
-                    Statement::ExternPort(p) => vec![p.name.clone()],
-                    Statement::InputDecl(_) => vec![],
-                    Statement::Cursor(_) => vec![],
-                    Statement::Pragma { .. } => vec![],
-                    Statement::For(_) => vec![],
-                    Statement::Tile(t) => vec![t.name.clone()],
-                }
-            }).collect();
-
-            let mut referenced: HashSet<String> = HashSet::new();
-            for stmt in &file.statements {
-                let expr = match stmt {
-                    Statement::InputDecl(_) | Statement::ModuleDef(_) | Statement::ExternPort(_) | Statement::Cursor(_) | Statement::Pragma { .. } | Statement::For(_) | Statement::Tile(_) => continue,
-                    Statement::Binding(b) => &b.value,
-                };
-                collect_references(expr, &mut referenced);
-            }
-
-            let mut inferred: Vec<String> = referenced.into_iter()
-                .filter(|name| !defined.contains(name))
-                .collect();
-            inferred.sort(); // deterministic order
-            self.input_names = inferred;
-        }
-
-        // Zero inferred inputs means all bindings are constants — valid.
-
-        // Pragmas were already collected from the AST by the
-        // top-level compile entry points. If a caller bypasses
-        // those (custom Compiler invocation), populate from this
-        // AST as a last resort so the strict-wire flags below
-        // still reflect the source.
-        if self.pragmas.entries.is_empty() {
-            self.pragmas = super::pragmas::collect_from_ast(file);
-        }
-
-        let mut asm = PolydatAssembler::new(self.input_names.clone());
-        // Apply declared `input <name>: <type>` types — `new` seeds
-        // every input as U64, so an `input x: f64` would otherwise read
-        // back as U64 and force a spurious U64→F64 adapter at every f64
-        // consumer.
-        for (name, ty) in declared_input_types(file) {
-            asm.set_input_type(&name, ty);
-        }
-        // Honour module-level pragmas: a `pragma strict_values` (or
-        // `strict`) directive at the source head opts into
-        // auto-inserted assertion nodes (SRD 15 §"Module-Level
-        // Pragmas" + §"Strict Wire Mode").
-        asm.set_strict_wires(self.pragmas.strict_types(), self.pragmas.strict_values());
-
-        // Auto-expose every declared input as a passthrough output,
-        // mirroring the `extern` declaration's behavior. This makes
-        // `input cycle: u64` (or `input (cycle: u64, thread: u64)`)
-        // produce `cycle` and `thread` as kernel outputs that
-        // downstream consumers can read via `pull(...)` — no
-        // user-written `cycle := identity(cycle)` shim required.
-        // Inputs and externs are now uniform: declaration syntax
-        // differs but the resulting input+output shape is identical.
-        for input_name in self.input_names.clone() {
-            // Mirror the input's (now correctly-typed) slot so the
-            // auto-exposed output carries the declared type, not U64.
-            let port_type = asm.input_type(&input_name).unwrap_or(crate::ast::PortType::U64);
-            let passthrough = Box::new(
-                crate::library::identity::PortPassthrough::new(&input_name, port_type)
-            );
-            let passthrough_name = format!("__port_{input_name}");
-            asm.add_node(
-                &passthrough_name,
-                passthrough,
-                vec![WireRef::input(&input_name)],
-            );
-            asm.add_output(&input_name, WireRef::node(&passthrough_name));
-        }
-
-        // Second pass: process all bindings
-        for stmt in &file.statements {
-            match stmt {
-                Statement::InputDecl(_) => {} // already handled in first pass
-                Statement::Binding(b) => {
-                    // `shared X := <literal>` compiles to an input
-                    // slot + passthrough output, so `materialize_wiring_from_outer`
-                    // can wire a `SharedCell` for cross-scope
-                    // mutability (SRD-16 §"Mutability Rules: Shared
-                    // Mutable"). Single-target bindings only — tuple
-                    // unpacks aren't shareable as cells.
-                    //
-                    // Non-literal `shared` inits and tuple-target
-                    // shared bindings are rejected: the cell needs a
-                    // single, well-defined initial value, and a
-                    // computation-shaped RHS doesn't have one. See
-                    // SRD-16 §"Non-literal `shared` initializers".
-                    if b.modifier == BindingModifier::SHARED {
-                        if b.targets.len() != 1 {
-                            return Err(format!(
-                                "shared binding must be single-target, not tuple unpack \
-                                 ({}). Declare each target separately if a shared cell \
-                                 is intended.",
-                                b.targets.join(", "),
-                            ));
-                        }
-                        let name = &b.targets[0];
-                        let (init_value, port_type) = try_fold_shared_init(&b.value)
-                            .ok_or_else(|| format!(
-                                "shared binding '{name}' requires a literal initial value \
-                                 (number, string, true/false). Computed and cycle-dependent \
-                                 expressions don't have a well-defined single init for the \
-                                 shared cell. See SRD-16 §\"Non-literal `shared` initializers\"."
-                            ))?;
-                        let (init_value, port_type) = apply_shared_type_annotation(
-                            name, b.type_annotation.as_ref(), init_value, port_type,
-                        )?;
-                        // `shared X := <literal>` cells: dynamic for
-                        // init-contract purposes — the cell can be
-                        // written by inner scopes between scope-init
-                        // and per-cycle reads.
-                        asm.add_input(name, init_value, port_type, crate::kernel::InputKind::ExternalWrite);
-                        self.input_names.push(name.clone());
-                        let passthrough = Box::new(
-                            crate::library::identity::PortPassthrough::new(name, port_type)
-                        );
-                        let passthrough_name = format!("__port_{name}");
-                        asm.add_node(
-                            &passthrough_name,
-                            passthrough,
-                            vec![WireRef::input(name)],
-                        );
-                        asm.add_output(name, WireRef::node(&passthrough_name));
-                        asm.set_output_modifier(name, BindingModifier::SHARED);
-                        continue;
-                    }
-                    self.compile_binding(
-                        &mut asm,
-                        &b.targets,
-                        &b.value,
-                    )?;
-                    if b.modifier != BindingModifier::NONE {
-                        for target in &b.targets {
-                            asm.set_output_modifier(target, b.modifier);
-                        }
-                    }
-                    // `const NAME := …` — register every target as a
-                    // const output so the runtime's scope-activation
-                    // materialization pass knows to pull these. Const-
-                    // modifier bindings collapse the former `init` and
-                    // `const` keywords into a single lifecycle: fold
-                    // at compile when possible, materialize at scope-
-                    // init otherwise, immutable thereafter.
-                    //
-                    // SRD-74 P2: auto-extern const targets whose RHS
-                    // references at least one name. Pure-literal
-                    // consts (e.g. `const x := 1` from iter-var
-                    // synthesis, SRD-13f Gate 2) DO NOT get auto-
-                    // externed — they always fold to a real value and
-                    // there's nothing for the chain to fall through
-                    // to. Consts with name references CAN fold to
-                    // None (the SRD-74 Rule 1 path when any
-                    // referenced name reads as Value::None at scope-
-                    // init); the auto-extern slot is the conditional-
-                    // shadow fallback path that two-tier lookup uses
-                    // when the const-fold yields None. Skipped when
-                    // the name is already declared as an input.
-                    if b.modifier.is_const() {
-                        let rhs_has_refs = {
-                            let mut refs = std::collections::HashSet::new();
-                            crate::dsl::validate::collect_references(&b.value, &mut refs);
-                            !refs.is_empty()
-                        };
-                        for target in &b.targets {
-                            asm.mark_const_output(target);
-                            if rhs_has_refs
-                                && !asm.input_names().contains(&target.as_str())
-                            {
-                                // Infer the slot's `PortType` from the
-                                // RHS surface shape so the auto-extern
-                                // lands at the boundary with its
-                                // actual type (Str for string-template
-                                // / interpolation forms, U64 / F64 /
-                                // Bool for literals + literal-bearing
-                                // arithmetic) rather than the legacy
-                                // `Ext` catchall — the conflation the
-                                // type-axis-vs-scope-axis design fix
-                                // removes. `Ext` survives as the
-                                // fallback for shapes we can't cheaply
-                                // resolve (function calls, array
-                                // literals, field access), so the
-                                // boundary adapter's catalog miss is
-                                // narrower and the typed paths bypass
-                                // the warning entirely.
-                                // Two-step type discovery for the
-                                // auto-extern slot:
-                                //
-                                // 1. The binding's RHS was just
-                                //    compiled (`compile_binding`
-                                //    above) — its output is now a
-                                //    node in the assembler. Query
-                                //    that node's declared output
-                                //    `PortType` directly. This
-                                //    covers every shape the
-                                //    inferrer's surface-AST pass
-                                //    can't see through: `select_str`,
-                                //    `str_concat`, `format_u64`,
-                                //    `query_count`, arbitrary nested
-                                //    function calls — all already
-                                //    have nodes in the assembler with
-                                //    fully-resolved `NodeMeta` ports.
-                                // 2. If the assembler doesn't have an
-                                //    answer (rare — should only
-                                //    happen for shapes where
-                                //    `compile_binding` didn't
-                                //    register a node under the
-                                //    target name), fall back to the
-                                //    surface-AST inferrer.
-                                // 3. If both fail, `PortType::Ext`
-                                //    remains as the last-resort
-                                //    fallback — every catalog miss
-                                //    at runtime points back to a
-                                //    real registry gap.
-                                let inferred = asm.output_type(target.as_str())
-                                    .or_else(|| infer_auto_extern_type(&b.value, &asm))
-                                    .unwrap_or(crate::ast::PortType::Ext);
-                                asm.add_input(
-                                    target.as_str(),
-                                    crate::ast::Value::None,
-                                    inferred,
-                                    crate::kernel::InputKind::IterationExtern,
-                                );
-                            }
-                        }
-                    }
-                }
-                Statement::ModuleDef(_) => {
-                    // Module definitions are not executed — they're
-                    // templates resolved by the module system when
-                    // referenced from another file/kernel.
-                }
-                Statement::ExternPort(port) => {
-                    // Declare the input on the assembler. The
-                    // `extern name: type = default` syntax binds
-                    // the trailing default expression to the input
-                    // slot's initial value; without a default, the
-                    // slot starts at `Value::None` (unset).
-                    //
-                    // Classify by SRD 11 §"Effectively-Const Nodes":
-                    // a default makes this a user-declared capture
-                    // port (dynamic — written by capture extraction);
-                    // no default makes this an iteration extern
-                    // (effectively-const, populated by
-                    // `materialize_wiring_from_outer` from a parent for_each /
-                    // for_combinations clause).
-                    let port_type = crate::ast::PortType::from_keyword(port.typ.as_str())
-                        .ok_or_else(|| format!(
-                            "extern '{}': unknown polydat type keyword '{}'. \
-                             Canonical keywords are emitted by PortType::to_keyword \
-                             (one per PortType variant).",
-                            port.name, port.typ,
-                        ))?;
-                    let (default_value, kind) = match &port.default {
-                        Some(expr) => {
-                            let v = evaluate_default_expr(expr, port_type)
-                                .map_err(|e| format!(
-                                    "extern '{}' default: {e}", port.name,
-                                ))?;
-                            (v, crate::kernel::InputKind::ExternalWrite)
-                        }
-                        None => (
-                            crate::ast::Value::None,
-                            crate::kernel::InputKind::IterationExtern,
-                        ),
-                    };
-                    asm.add_input(&port.name, default_value, port_type, kind);
-
-                    // Register the extern name as an input so the
-                    // binding compiler resolves it as WireRef::input
-                    // (enables `hash(offset)` where offset is extern)
-                    self.input_names.push(port.name.clone());
-
-                    // Create a passthrough node wired to the input
-                    let passthrough = Box::new(
-                        crate::library::identity::PortPassthrough::new(&port.name, port_type)
-                    );
-                    let passthrough_name = format!("__port_{}", port.name);
-                    asm.add_node(
-                        &passthrough_name,
-                        passthrough,
-                        vec![WireRef::input(&port.name)],
-                    );
-                    // Register as output so {name} resolves from GK
-                    asm.add_output(&port.name, WireRef::node(&passthrough_name));
-                }
-                Statement::Cursor(decl) => {
-                    self.process_cursor(&mut asm, decl)?;
-                }
-                Statement::For(f) => {
-                    return Err(format!(
-                        "`for {}` at line {}, col {}: {}",
-                        f.source.text, f.span.line, f.span.col, "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
-                    ));
-                }
-                Statement::Tile(t) => {
-                    self.compile_tile(&mut asm, t)?;
-                }
-                Statement::Pragma { .. } => {
-                    // Pragmas were collected before this pass (see
-                    // `collect_pragmas`) and applied to the
-                    // assembler via `set_strict_wires` already.
-                    // Nothing to do during binding processing.
-                }
-            }
-        }
-
-        // Expose all top-level named bindings as outputs
-        for name in &self.all_names {
-            asm.add_output(name, WireRef::node(name));
-        }
-
-        // Attach source and context for diagnostics
-        asm.set_context(&self.source_text, &self.context_label);
-        let mut kernel = asm.compile_strict(self.strict).map_err(|e| format!("{e}"))?;
-
-        // Retain the parsed AST as live program metadata (SRD-13f
-        // §"Wire-reference classification"). The subscope
-        // synthesizer queries this to integrate parent bindings'
-        // matter into child scopes.
-        kernel.set_ast(std::sync::Arc::new(file.clone()));
-
-        // Resolve deferred cursor extents. At this point the kernel has
-        // folded any const expressions to constant outputs; we read the
-        // aux outputs compiled by process_cursor and update the schema
-        // extents in place.
-        for deferred in &self.deferred_extents {
-            let start = kernel.get_constant(&deferred.start_output).map(|v| v.as_u64());
-            let end = kernel.get_constant(&deferred.end_output).map(|v| v.as_u64());
-            if let (Some(s), Some(e)) = (start, end) {
-                let resolved_extent = e.saturating_sub(s);
-                // Apply cursor_limit clamping if configured
-                let final_extent = self.cursor_limit
-                    .map(|limit| resolved_extent.min(limit))
-                    .unwrap_or(resolved_extent);
-                if let Some(schema) = self.cursor_schemas.get_mut(deferred.schema_idx) {
-                    schema.extent = Some(final_extent);
-                }
-            }
-        }
-
-        // Propagate source schemas to the program for runtime discovery
-        if !self.cursor_schemas.is_empty() {
-            kernel.set_cursor_schemas(self.cursor_schemas.clone());
-        }
-        Ok(kernel)
+        // One assembly path (docs/design/engine_parity.md, step 1): the
+        // strict entry point compiles the same graph the logged path does.
+        self.compile_parent_with_log(file, None, None)
     }
 
     /// Build an assembler with all nodes and wiring, without compiling.
@@ -2516,15 +2181,33 @@ impl Compiler {
             match stmt {
                 Statement::InputDecl(_) => {}
                 Statement::Binding(b) => {
-                    // Mirror `compile()`: literal-init `shared`
-                    // bindings compile to slot+passthrough so
-                    // SharedCells can be wired across kernels.
-                    if b.modifier == BindingModifier::SHARED
-                        && b.targets.len() == 1
-                        && let Some((init_value, port_type)) =
-                            try_fold_shared_init(&b.value)
-                    {
+                    // `shared X := <literal>` compiles to an input
+                    // slot + passthrough output, so
+                    // `materialize_wiring_from_outer` can wire a
+                    // `SharedCell` for cross-scope mutability (SRD-16
+                    // §"Mutability Rules: Shared Mutable"). Non-literal
+                    // inits and tuple-target shared bindings are
+                    // rejected on every entry point: the cell needs a
+                    // single, well-defined initial value, and a
+                    // computation-shaped RHS doesn't have one. See
+                    // SRD-16 §"Non-literal `shared` initializers".
+                    if b.modifier == BindingModifier::SHARED {
+                        if b.targets.len() != 1 {
+                            return Err(format!(
+                                "shared binding must be single-target, not tuple unpack \
+                                 ({}). Declare each target separately if a shared cell \
+                                 is intended.",
+                                b.targets.join(", "),
+                            ));
+                        }
                         let name = &b.targets[0];
+                        let (init_value, port_type) = try_fold_shared_init(&b.value)
+                            .ok_or_else(|| format!(
+                                "shared binding '{name}' requires a literal initial value \
+                                 (number, string, true/false). Computed and cycle-dependent \
+                                 expressions don't have a well-defined single init for the \
+                                 shared cell. See SRD-16 §\"Non-literal `shared` initializers\"."
+                            ))?;
                         let (init_value, port_type) = apply_shared_type_annotation(
                             name, b.type_annotation.as_ref(), init_value, port_type,
                         )?;
@@ -2676,7 +2359,7 @@ impl Compiler {
                 Statement::For(f) => {
                     return Err(format!(
                         "`for {}` at line {}, col {}: {}",
-                        f.source.text, f.span.line, f.span.col, "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
+                        f.source.text, f.span.line, f.span.col, "a `for` traversal compiles through `compile_polydat` and runs through `PolydatKernel::traverse`; the assembler entry point builds one program and cannot carry a traversal (docs/design/engine_parity.md, A5)"
                     ));
                 }
                 Statement::Tile(t) => {

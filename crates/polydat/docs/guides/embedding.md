@@ -87,6 +87,7 @@ The other compile entry points differ only in what they take:
 | `compile_polydat_with_log(src, &mut log)` | the compile event log (§13) |
 | `compile_polydat_with_tiles(src, tiles)` | tile statements built from host data (§10) |
 | `compile_polydat_to_assembler(src)` | stops before engine selection and returns the assembler (§7, §11) |
+| `compile_polydat_to_assembler_with(src, &options)` | the assembler built with the same `CompileOptions` the kernel path takes: source directory, library paths, required outputs, strict typing, the error context label, and the cursor limit |
 
 ## 3. Externs
 

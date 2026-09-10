@@ -176,6 +176,11 @@ macro_rules! jit_accessors {
             self.core.output_map.get(name).copied()
         }
 
+        /// The named outputs, as every engine reports them.
+        pub fn output_names(&self) -> Vec<&str> {
+            self.core.output_map.keys().map(|s| s.as_str()).collect()
+        }
+
         /// Returns the raw u64 value stored in the named output slot.
         #[inline]
         pub fn get(&self, name: &str) -> u64 {

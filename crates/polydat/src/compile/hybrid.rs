@@ -364,6 +364,11 @@ impl HybridKernelRaw {
         self.core.output_map.get(name).copied()
     }
 
+    /// The named outputs, as every engine reports them.
+    pub fn output_names(&self) -> Vec<&str> {
+        self.core.output_map.keys().map(|s| s.as_str()).collect()
+    }
+
     /// Store owned nodes to keep JIT-baked pointers valid.
     pub fn retain_nodes(&mut self, nodes: Vec<Box<dyn PolydatNode>>) {
         self.core._nodes = nodes;
@@ -485,6 +490,11 @@ impl HybridKernelPull {
     /// Resolve an output name to its buffer slot.
     pub fn resolve_output(&self, name: &str) -> Option<usize> {
         self.core.output_map.get(name).copied()
+    }
+
+    /// The named outputs, as every engine reports them.
+    pub fn output_names(&self) -> Vec<&str> {
+        self.core.output_map.keys().map(|s| s.as_str()).collect()
     }
 
     /// Store owned nodes to keep JIT-baked pointers valid.
@@ -708,6 +718,11 @@ impl HybridKernelPushPull {
     /// Resolve an output name to its buffer slot.
     pub fn resolve_output(&self, name: &str) -> Option<usize> {
         self.core.output_map.get(name).copied()
+    }
+
+    /// The named outputs, as every engine reports them.
+    pub fn output_names(&self) -> Vec<&str> {
+        self.core.output_map.keys().map(|s| s.as_str()).collect()
     }
 
     /// Store owned nodes to keep JIT-baked pointers valid.

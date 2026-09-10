@@ -3,7 +3,9 @@
 **Status:** Proposed SRD 116. This document is a review, recorded on
 2026-09-09, of every place the compilation levels differ in anything
 other than performance, and the plan that removes each difference.
-Nothing in it has landed; §5 is the plan, §4 the findings it answers.
+§5 is the plan, §4 the findings it answers. Step 1 of the plan landed
+on 2026-09-09 (the landing record is under the step); the rest is
+proposed.
 
 **Ownership.** Polydat owns the feature set, the engines, and the public
 API that names them. A host chooses an engine for speed and for nothing
@@ -41,14 +43,16 @@ public API whose shape differs by engine.
 
 Three surveys, all reproducible from the tree at this revision:
 
-- **A node-by-engine matrix.** Every registered public node (96, the
-  `__` adapters and file-backed nodes excluded) compiled and run through
+- **A node-by-engine matrix.** Every registered public node (the `__`
+  adapters and the real-data category excluded) compiled and run through
   one cycle on each engine, from one program per node: the explicit case
-  in `tests/function_coverage.rs` where it has one, otherwise the same
-  synthesized call that test uses. The engines are the interpreter with
-  cones off, the raw closure kernel, the hybrid kernel, and the pure
-  native push-pull kernel. The probe that produced it is described in
-  §5 step 1, which makes it a permanent test.
+  in `tests/common/coverage_cases.rs` where it has one, otherwise the
+  same synthesized call the coverage test uses. The engines are the
+  interpreter with cones off, the raw closure kernel, the hybrid kernel,
+  and the pure native push-pull kernel. The review's first pass probed
+  the 96 nodes with explicit cases; the permanent test of §5 step 1
+  covers all 294 registered names (296 programs, two names being
+  registered twice) and is the matrix recorded below.
 - **Constructs and runtime interactions**, probed one program each:
   register inputs, vectors, cursors, `shared` bindings, `for`
   traversals and producers, side-channel nodes, externs with and
@@ -59,17 +63,19 @@ Three surveys, all reproducible from the tree at this revision:
   and the count of public items with no documentation
   (`RUSTDOCFLAGS=-W missing_docs`).
 
-The matrix at this revision:
+The matrix as pinned in `tests/engine_parity.txt` (296 programs):
 
-| Engine | Accepts | Refuses or fails |
-| --- | ---: | ---: |
-| Interpreter (P1) | 96 | 0 |
-| Closure tier (P2) | 59 | 37 |
-| Hybrid | 69 | 27 |
-| Pure native (P3) | 39 | 57 |
+| Engine | Accepts | Refuses at compile | Fails at run |
+| --- | ---: | ---: | ---: |
+| Interpreter (P1) | 296 | 0 | 0 |
+| Closure tier (P2) | 215 | 71 | 10 |
+| Hybrid | 231 | 55 | 10 |
+| Pure native (P3) | 169 | 127 | 0 |
 
-The 27 the hybrid kernel refuses are the 17 of A1 and the 10 cursor
-consumers of A3; the 37 the closure tier refuses add the 10 of A2.
+The 55 the hybrid kernel refuses are the 53 nodes of A1 (two of them
+with two cases); the 71 the closure tier refuses add the 16 of A2; the
+10 run failures on both are the cursor consumers of A3; the 127 pure
+native refusals add the 62 of A4.
 
 ## 3. The public API today
 
@@ -104,35 +110,45 @@ engine refuses or cannot express something), **semantic** (the same
 program behaves differently), **API** (the same thing is spelled
 differently or is missing), **documentation**.
 
-### A1. Seventeen nodes run on the interpreter only — functional
+### A1. Fifty-three nodes run on the interpreter only — functional
 
-`to_hex`, `from_hex`, `sha256`, `md5`, `to_base64`, `from_base64`,
-`histribution`, `weighted_strings`, `weighted_u64`, `one_of_weighted`,
-`regex_match`, `regex_replace`, `counter`, `elapsed_millis`,
-`fft_analyze`, `body_column_i32`, and `reg_shuffle_bytes` have no
-compiled form: the closure tier and the hybrid kernel refuse a program
-that contains one (`hybrid.rs`: "has no compiled form and can't be
-JIT-compiled"), and the production kernel runs them interpreted. Five
-causes, each in the node attribute's kit eligibility
-(`polydat-derive/src/lib.rs`, `jit_eligible`, `slot_eligible`, and the
-handle plan):
+Fifty-three nodes have no compiled form: the closure tier and the
+hybrid kernel refuse a program that contains one (`hybrid.rs`: "has no
+compiled form and can't be JIT-compiled"), and the production kernel
+runs them interpreted. The review's first pass found seventeen; the
+pinned matrix found the rest. Seven causes, all but one in the node
+attribute's kit eligibility (`polydat-derive/src/lib.rs`,
+`jit_eligible`, `slot_eligible`, and the handle plan):
 
-- A byte-string argument (`&[u8]`) or return (`Vec<u8>`) has no kit.
-  The `Bytes` handle exists; the kits do not read or write it.
+- A byte-string argument (`&[u8]`) or return (`Vec<u8>`) has no kit:
+  `to_hex`, `from_hex`, `sha256`, `md5`, `to_base64`, `from_base64`,
+  `to_base32`, `byte_slice`. The `Bytes` handle exists; the kits do not
+  read or write it.
 - A setup argument derived from consts (`#[poly_const(..., from =
   spec)]`) is admitted by the handle kit only when the node also has a
-  handle shape, and never by the u64 kit. `histribution`, the weighted
-  family, and the regex nodes are scalar-or-string nodes with a setup,
-  so no kit takes them.
-- A session-static setup (`from = ()`) is refused by every kit.
-  `counter` and `elapsed_millis` are the two cases; `session_start_millis`
-  is the same shape but has a native lowering, so it is missing on P2
-  only (A2).
-- A `Value` argument with a `Vec<i32>` return (`body_column_i32`)
-  matches neither the handle kit (vector return) nor the slot kit
-  (polymorphic argument).
-- A `Const<Vec<u64>>` with a 128-bit register wire (`reg_shuffle_bytes`)
-  is a const-list shape the u64 kit does not capture.
+  handle shape, and never by the u64 kit. Twenty-four scalar-or-string
+  nodes have such a setup: `histribution`, `weighted_strings`,
+  `weighted_u64`, `one_of_weighted`, `alias_sample`, `is_stable`,
+  `regex_match`, `regex_replace`, `regex_extract`, `pattern_match`,
+  `matches`, `combinations`, `char_buf`, `hashed_line_to_string`,
+  `char_image_extract`, `byte_image_extract`, `env_or`, and the
+  file-backed `csv_row`, `csv_field`, `csv_row_count`, `jsonl_row`,
+  `jsonl_field`, `jsonl_row_count`, `file_line_at`.
+- A session-static setup (`from = ()`) is refused by every kit:
+  `counter`, `elapsed_millis`, `tmp_dir`. `session_start_millis` is the
+  same shape but has a native lowering, so it is missing on P2 only
+  (A2).
+- A `Value` or `Option<u64>` argument matches neither the handle kit nor
+  the slot kit: `body_column_i32` (with its `Vec<i32>` return), `pick`
+  (variadic `&[bool]` and `&[Value]`), `this_or`, `required`, the
+  side-channel nodes `log_debug`, `log_info`, `log_warn`, `log_error`,
+  `inspect`, and `fft_analyze`.
+- A `Const<Vec<_>>` is a const-list shape the u64 kit does not capture:
+  `reg_shuffle_bytes` (with a 128-bit register wire), `fixed_values_u64`,
+  `fixed_values_str`, `fixed_values_f64`, `is_one_of`, `one_of`.
+- A `Config<_>` wire (`dynamic_weighted_select`) has no kit form.
+- `limit` is registered by hand in `library/context.rs` rather than
+  through the node attribute, so no kit ever sees it.
 
 True-up: extend the u64 kit to capture setup arguments the way the
 handle kit does (recomputed from the captured consts at closure
@@ -140,19 +156,23 @@ creation), including the session-static form, which is a construction
 capture like a fallible node's cached value; give both kits the `Bytes`
 handle through `put_thread_bytes` and `resolve_thread_bytes`; let the
 slot kit take a `Value` argument decoded by wire type; and let the u64
-kit capture `Const<Vec<_>>`. Each is a plan in the derive crate with a
+kit capture `Const<Vec<_>>` and a `Config<_>` wire; and move `limit`
+onto the node attribute. Each is a plan in the derive crate with a
 differential in `tests/ext_tiers.rs` and a fuzzer arm.
 
-### A2. Ten nodes run compiled only with the JIT — functional
+### A2. Sixteen nodes run compiled only with the JIT — functional
 
 `dist_normal`, `dist_exponential`, `dist_uniform`, `dist_pareto`,
-`dist_zipf`, `dist_empirical`, `perlin_2d`, `simplex_2d`,
-`fractal_noise_2d`, and `session_start_millis` have a native lowering
-(`jit_constants` overrides bake their lookup tables) but no closure, so
-a build without the `jit` feature, or a hybrid kernel on it, runs them
-interpreted, and the raw closure kernel refuses them. The cause is the
-same setup-argument rule as A1. True-up: the u64 kit's setup capture
-(A1) covers all ten.
+`dist_zipf`, `dist_empirical`, `icd_normal`, `icd_exponential`,
+`perlin_1d`, `perlin_2d`, `simplex_2d`, `fractal_noise_1d`,
+`fractal_noise_2d`, `coin_flip`, `session_start_millis`, and
+`default_or` have a native lowering (`jit_constants` overrides bake the
+lookup tables of the first fourteen) but no closure, so a build without
+the `jit` feature, or a hybrid kernel on it, runs them interpreted, and
+the raw closure kernel refuses them. The cause is the same
+setup-argument rule as A1 for all but `default_or`, whose `Value`
+arguments are the fourth cause there. True-up: the u64 kit's setup
+capture and the slot kit's `Value` argument (A1) cover all sixteen.
 
 ### A3. Cursors are an interpreter feature — functional and semantic
 
@@ -180,9 +200,10 @@ constant at build, so the common case needs no host call on any engine.
 
 ### A4. Pure native code refuses half the library — functional
 
-Thirty nodes with no native lowering and every vector-bearing node
-(`Ref2` ports) make `try_compile_jit*` fail, while the hybrid kernel
-accepts all of them: `json_merge`, `escape_json`, `html_encode`,
+Sixty-two programs the closure tier accepts fail on `try_compile_jit*`,
+while the hybrid kernel accepts all of them: the nodes with no native
+lowering and every vector-bearing node (`Ref2` ports), among them
+`json_merge`, `escape_json`, `html_encode`,
 `html_decode`, `url_encode`, `url_decode`, `date_components`,
 `format_u64`, `random_range`, `random_f64`, `env`, `partitions`,
 `partition_count`, `partition_at`, the seven `vec_*` and `lid_mle`,
@@ -207,13 +228,14 @@ what it is for.
 A `for` statement or producer compiles only through `compile_polydat*`,
 which builds activation programs and a runtime the host drives with
 `traverse`. The assembler entry point fails on either with a message
-that has been wrong since SRD 113 step 2 landed ("the `for` construct is
+that had been wrong since SRD 113 step 2 landed ("the `for` construct is
 parsed but not compiled yet"; `dsl/compile.rs`, two sites). A compiled
 kernel cannot be a traversal's parent or its body.
 
-True-up, in two parts. First, the message: the assembler entry point
-should say that traversals are driven through `PolydatKernel::traverse`
-and point at the guide. Second, the capability: an activation's body is
+True-up, in two parts. First, the message (landed in step 1): the
+assembler entry point says that a traversal compiles through
+`compile_polydat` and runs through `PolydatKernel::traverse`, and points
+here. Second, the capability: an activation's body is
 a program like any other, so `ActivationStream` should be able to
 compile bodies with the engine the host chose and hand back a kernel
 with the same drive and read API (A8). This is the largest item in the
@@ -260,7 +282,21 @@ longjmp catch with no node attribution at all. The message a host logs
 for the same failing program therefore differs by engine, and the
 compiled one does not say which node failed.
 
-True-up: every compiled kernel keeps a step-to-node map (the hybrid
+Worse than a different message: a panic inside a native helper is a
+process abort unless the helper body runs under `guarded`
+(`jit/codegen.rs`), which converts the panic to the longjmp the kernel
+catches. Rust cannot unwind through Cranelift frames, and the `extern
+"C"` boundary turns the unwind into an abort. Step 1 hit this while
+pinning the matrix: `fractal_noise_1d` at 100 octaves saturated the
+lattice coordinate and overflowed `xi + 1` in `library/noise.rs`, which
+the interpreter reported as an enriched panic and the native kernel
+turned into a crash of the test process. The lattice arithmetic now
+wraps and the five noise helpers run under `guarded`; 64 of the 72
+helpers still do not.
+
+True-up: every helper body under `guarded`, so a node failure is a
+caught failure on every engine, then the attribution below. Every
+compiled kernel keeps a step-to-node map (the hybrid
 kernel already retains its nodes); the eval loop catches a panic at the
 step boundary, on the failure path only, and re-raises it enriched the
 same way, with the decoded input values where the slot types allow.
@@ -299,12 +335,15 @@ per-thread state that owns the buffer, the table, and the externs.
 
 ### A9. The assembler entry point takes fewer options — API
 
-`compile_polydat_to_assembler` has no source directory, no library
+`compile_polydat_to_assembler` had no source directory, no library
 paths, no strict flag, and no compile log, so modules from disk and
-strict typing are reachable only through the kernel path. True-up:
-`compile_polydat_to_assembler_with(src, CompileOptions)` sharing the
-options struct with the kernel entry points, which then reduce to
-wrappers.
+strict typing were reachable only through the kernel path. True-up
+(landed in step 1): `compile_polydat_to_assembler_with(src, &options)`
+takes the kernel path's `CompileOptions`, and the kernel path's
+`compile_parent` is the same assembly routine the assembler entry point
+uses, where before it was a second copy of it. The compile log remains
+a kernel-path argument (`compile_polydat_with_log`) until A8's single
+constructor takes it.
 
 ### A10. `shared` bindings lose their cells off the interpreter — semantic
 
@@ -373,6 +412,26 @@ proves it.
    the test is the definition of done for A1 through A4. Also fix the
    traversal message (A5, first part) and make the assembler entry point
    take the kernel path's options (A9).
+
+   *Landed 2026-09-09.* The coverage cases moved to
+   `tests/common/coverage_cases.rs`, shared by `function_coverage` and
+   the new `tests/engine_parity.rs`, whose table `tests/engine_parity.txt`
+   is the matrix in §2 (regenerate with `ENGINE_PARITY=overwrite`, list
+   every non-`ok` cell with `ENGINE_PARITY_TRACE=1 -- --nocapture`). The
+   matrix corrected the review's counts: 53 interpreter-only nodes, not
+   17 (A1), and 16 JIT-only, not 10 (A2). Pinning also found that five
+   coverage programs never ran on any engine (the assertion nodes and
+   `pick` were called with arguments that fail their own checks; the
+   coverage test only compiled them), that a comparison such as
+   `cycle == 0` is a u64 truth value and not the `Bool` wire `pick`
+   requires, and the native-helper abort recorded under A7. The
+   traversal message and `compile_polydat_to_assembler_with` landed as
+   planned; `output_names` was added to the hybrid and pure native
+   kernels, which lacked it (A8). Folding the kernel path's assembly
+   onto the assembler's (A9) exposed one more difference, now closed:
+   the assembler entry point accepted a non-literal `shared`
+   initializer as an ordinary binding where the kernel path rejected
+   it; both reject it now.
 2. **Close the closure tier.** Setup capture in the u64 kit, the
    `Bytes` handle in both kits, `Value` arguments in the slot kit,
    `Const<Vec<_>>` capture, and the session-static form (A1, A2). Refuse
@@ -411,7 +470,8 @@ proves it.
 
 Steps 1 through 3 are contained in the derive crate, the assembler, and
 the extern plumbing that landed on 2026-09-09, and change no public
-signature. Step 4 is the API change and should land as one release.
+signature (step 1 adds two: the options-taking assembler entry point and
+`output_names` on the hybrid and pure native kernels). Step 4 is the API change and should land as one release.
 Steps 5 through 7 change semantics and belong behind the equivalence
 harness that step 5 extends. Steps 8 and 9 are new capability.
 

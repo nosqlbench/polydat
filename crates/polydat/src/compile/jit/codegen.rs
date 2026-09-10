@@ -207,38 +207,48 @@ extern "C" fn jit_cycle_walk(pos: u64, range: u64, seed: u64, inc: u64) -> u64 {
 }
 
 extern "C" fn jit_perlin_1d(input: u64, perm_ptr: u64, freq_bits: u64) -> u64 {
-    let perm = unsafe { &*(perm_ptr as *const crate::library::noise::PermTable) };
-    let freq = f64::from_bits(freq_bits);
-    let r = crate::library::noise::perlin_1d_algo(perm, input as f64 * freq);
-    r.to_bits()
+    guarded(|| {
+        let perm = unsafe { &*(perm_ptr as *const crate::library::noise::PermTable) };
+        let freq = f64::from_bits(freq_bits);
+        let r = crate::library::noise::perlin_1d_algo(perm, input as f64 * freq);
+        r.to_bits()
+    })
 }
 
 extern "C" fn jit_perlin_2d(x: u64, y: u64, perm_ptr: u64, freq_bits: u64) -> u64 {
-    let perm = unsafe { &*(perm_ptr as *const crate::library::noise::PermTable) };
-    let freq = f64::from_bits(freq_bits);
-    let r = crate::library::noise::perlin_2d_algo(perm, x as f64 * freq, y as f64 * freq);
-    r.to_bits()
+    guarded(|| {
+        let perm = unsafe { &*(perm_ptr as *const crate::library::noise::PermTable) };
+        let freq = f64::from_bits(freq_bits);
+        let r = crate::library::noise::perlin_2d_algo(perm, x as f64 * freq, y as f64 * freq);
+        r.to_bits()
+    })
 }
 
 extern "C" fn jit_simplex_2d(x: u64, y: u64, perm_ptr: u64, freq_bits: u64) -> u64 {
-    let perm = unsafe { &*(perm_ptr as *const crate::library::noise::PermTable) };
-    let freq = f64::from_bits(freq_bits);
-    let r = crate::library::noise::simplex_2d_algo(perm, x as f64 * freq, y as f64 * freq);
-    r.to_bits()
+    guarded(|| {
+        let perm = unsafe { &*(perm_ptr as *const crate::library::noise::PermTable) };
+        let freq = f64::from_bits(freq_bits);
+        let r = crate::library::noise::simplex_2d_algo(perm, x as f64 * freq, y as f64 * freq);
+        r.to_bits()
+    })
 }
 
 extern "C" fn jit_fractal_noise_1d(input: u64, perm_ptr: u64, freq_bits: u64, octaves: u64) -> u64 {
-    let perm = unsafe { &*(perm_ptr as *const crate::library::noise::PermTable) };
-    let freq = f64::from_bits(freq_bits);
-    let r = crate::library::noise::fbm_1d(perm, input as f64, freq, octaves as u32);
-    r.to_bits()
+    guarded(|| {
+        let perm = unsafe { &*(perm_ptr as *const crate::library::noise::PermTable) };
+        let freq = f64::from_bits(freq_bits);
+        let r = crate::library::noise::fbm_1d(perm, input as f64, freq, octaves as u32);
+        r.to_bits()
+    })
 }
 
 extern "C" fn jit_fractal_noise_2d(x: u64, y: u64, perm_ptr: u64, freq_bits: u64, octaves: u64) -> u64 {
-    let perm = unsafe { &*(perm_ptr as *const crate::library::noise::PermTable) };
-    let freq = f64::from_bits(freq_bits);
-    let r = crate::library::noise::fbm_2d(perm, x as f64, y as f64, freq, octaves as u32);
-    r.to_bits()
+    guarded(|| {
+        let perm = unsafe { &*(perm_ptr as *const crate::library::noise::PermTable) };
+        let freq = f64::from_bits(freq_bits);
+        let r = crate::library::noise::fbm_2d(perm, x as f64, y as f64, freq, octaves as u32);
+        r.to_bits()
+    })
 }
 
 extern "C" fn jit_thread_id() -> u64 {

@@ -90,7 +90,7 @@ pub(crate) fn perlin_1d_algo(perm: &PermTable, x: f64) -> f64 {
     let u = fade(xf);
 
     let a = perm.hash(xi);
-    let b = perm.hash(xi + 1);
+    let b = perm.hash(xi.wrapping_add(1));
 
     lerp(u, grad1d(a, xf), grad1d(b, xf - 1.0))
 }
@@ -105,10 +105,14 @@ pub(crate) fn perlin_2d_algo(perm: &PermTable, x: f64, y: f64) -> f64 {
     let u = fade(xf);
     let v = fade(yf);
 
-    let aa = perm.hash(perm.hash(xi) as i32 + yi);
-    let ab = perm.hash(perm.hash(xi) as i32 + yi + 1);
-    let ba = perm.hash(perm.hash(xi + 1) as i32 + yi);
-    let bb = perm.hash(perm.hash(xi + 1) as i32 + yi + 1);
+    let aa = perm.hash((perm.hash(xi) as i32).wrapping_add(yi));
+    let ab = perm.hash((perm.hash(xi) as i32).wrapping_add(yi).wrapping_add(1));
+    let ba = perm.hash((perm.hash(xi.wrapping_add(1)) as i32).wrapping_add(yi));
+    let bb = perm.hash(
+        (perm.hash(xi.wrapping_add(1)) as i32)
+            .wrapping_add(yi)
+            .wrapping_add(1),
+    );
 
     lerp(v,
         lerp(u, grad2d(aa, xf, yf), grad2d(ba, xf - 1.0, yf)),
@@ -139,9 +143,15 @@ pub(crate) fn simplex_2d_algo(perm: &PermTable, x: f64, y: f64) -> f64 {
     let x2 = x0 - 1.0 + 2.0 * G2;
     let y2 = y0 - 1.0 + 2.0 * G2;
 
-    let gi0 = perm.hash(i + perm.hash(j) as i32);
-    let gi1 = perm.hash(i + i1 + perm.hash(j + j1) as i32);
-    let gi2 = perm.hash(i + 1 + perm.hash(j + 1) as i32);
+    let gi0 = perm.hash(i.wrapping_add(perm.hash(j) as i32));
+    let gi1 = perm.hash(
+        i.wrapping_add(i1)
+            .wrapping_add(perm.hash(j.wrapping_add(j1)) as i32),
+    );
+    let gi2 = perm.hash(
+        i.wrapping_add(1)
+            .wrapping_add(perm.hash(j.wrapping_add(1)) as i32),
+    );
 
     let mut n0 = 0.0;
     let t0 = 0.5 - x0 * x0 - y0 * y0;
