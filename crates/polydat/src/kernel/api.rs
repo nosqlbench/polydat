@@ -386,6 +386,42 @@ pub trait Kernel: Send {
     /// or a coordinate; `None` for a name that is not an input.
     fn input_value(&self, name: &str) -> Option<Value>;
 
+    /// The index of a named input among [`Self::input_names`], the
+    /// coordinates first: what [`Self::set_input_at`] takes.
+    fn input_index(&self, name: &str) -> Option<usize> {
+        self.input_names().iter().position(|n| n == name)
+    }
+
+    /// [`Self::set_input`] by index, for a host that binds the same
+    /// inputs every cycle: the name is resolved once, with
+    /// [`Self::input_index`], and no lookup runs per write.
+    fn set_input_at(&mut self, index: usize, value: Value) -> Result<(), String> {
+        let name = self
+            .input_names()
+            .get(index)
+            .cloned()
+            .ok_or_else(|| format!("no input at index {index}"))?;
+        self.set_input(&name, value)
+    }
+
+    /// The index of a named output among [`Self::output_names`]: what
+    /// [`Self::pull_at`] takes.
+    fn output_index(&self, name: &str) -> Option<usize> {
+        self.output_names().iter().position(|n| n == name)
+    }
+
+    /// [`Self::pull`] by index, for a host that reads the same outputs
+    /// every cycle: the name is resolved once, with
+    /// [`Self::output_index`], and no lookup runs per pull.
+    fn pull_at(&mut self, index: usize) -> Value {
+        let name = self
+            .output_names()
+            .get(index)
+            .cloned()
+            .unwrap_or_else(|| panic!("no output at index {index}"));
+        self.pull(&name)
+    }
+
     /// The traversals the program declares, in document order.
     fn traversals(&self) -> &[crate::dsl::traversal::Traversal];
 

@@ -334,6 +334,19 @@ fn read_source(path: &Path) -> Result<String, String> {
 /// given. A program with no coordinate left still runs a cycle: nothing
 /// moved, so nothing would re-evaluate, and the kernel is told to run
 /// everything again so per-cycle nodes such as the emit binding fire.
+/// The output indices of `names` on `kernel`, resolved once so the
+/// run pulls by index (SRD 117 step 3).
+fn resolve_pulls(kernel: &dyn Kernel, names: &[String]) -> Vec<usize> {
+    names
+        .iter()
+        .map(|n| {
+            kernel
+                .output_index(n)
+                .unwrap_or_else(|| panic!("the program has no output named `{n}`"))
+        })
+        .collect()
+}
+
 fn drive_cycle(kernel: &mut dyn Kernel, coords: &[u64]) {
     if coords.is_empty() {
         kernel.invalidate_all();
@@ -669,12 +682,13 @@ fn run(args: RunArgs) -> Result<(), String> {
     if args.warmup > 0 {
         let mut kernel = compiled.root.clone().create_kernel();
         plan.apply(kernel.as_mut(), 0)?;
+        let pulls = resolve_pulls(kernel.as_ref(), &pull_names);
         let mut coords = vec![0u64; coord_count];
         for c in 0..args.warmup {
             coords.fill(start_cycle.wrapping_add(c));
             drive_cycle(kernel.as_mut(), &coords);
-            for name in &pull_names {
-                kernel.pull(name);
+            for &i in &pulls {
+                kernel.pull_at(i);
             }
         }
         emit::take_rows();
@@ -703,6 +717,8 @@ fn run(args: RunArgs) -> Result<(), String> {
                 let mut kernel = root.create_kernel();
                 plan.apply(kernel.as_mut(), fiber)
                     .expect("the plan names cursors the program declares");
+                // The outputs resolved once per fiber: no lookup per pull.
+                let pulls = resolve_pulls(kernel.as_ref(), pull_names);
                 let mut coords = vec![0u64; coord_count];
                 let mut busy = Duration::ZERO;
                 // Shared mode: fibers claim chunks of one cycle range.
@@ -732,8 +748,8 @@ fn run(args: RunArgs) -> Result<(), String> {
                     for i in 0..n {
                         coords.fill(lo.wrapping_add(i));
                         drive_cycle(kernel.as_mut(), &coords);
-                        for name in pull_names {
-                            kernel.pull(name);
+                        for &idx in &pulls {
+                            kernel.pull_at(idx);
                         }
                     }
                     busy += t.elapsed();

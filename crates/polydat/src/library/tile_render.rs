@@ -14,7 +14,7 @@
 //! tuple over a scratch state, using a skeleton it parses once at setup.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -239,15 +239,18 @@ enum RtOp {
 #[derive(Debug)]
 enum RtSource {
     Wire(usize),
-    Child(String),
+    /// A body output and its ordinal among the body's holes, which a
+    /// body kernel's entry resolves to an output index once.
+    Child(String, usize),
 }
 
 fn lower_source(source: &HoleSource) -> (RtSource, HoleEncoding) {
     match source {
         HoleSource::Wire { index, spec } => (RtSource::Wire(*index), HoleEncoding::from_spec(spec)),
-        HoleSource::Child { name, spec } => {
-            (RtSource::Child(name.clone()), HoleEncoding::from_spec(spec))
-        }
+        HoleSource::Child { name, spec } => (
+            RtSource::Child(name.clone(), 0),
+            HoleEncoding::from_spec(spec),
+        ),
     }
 }
 
@@ -327,6 +330,41 @@ impl std::fmt::Debug for TileProgram {
     }
 }
 
+/// Give every body hole an ordinal within its body, so a body kernel's
+/// entry can resolve the hole's output index once and keep it by
+/// position (SRD 117 step 3).
+fn number_child_holes(ops: &mut [RtOp]) {
+    fn walk(ops: &mut [RtOp], next: &mut usize) {
+        for op in ops.iter_mut() {
+            match op {
+                RtOp::Hole(RtSource::Child(_, k), _) => {
+                    *k = *next;
+                    *next += 1;
+                }
+                RtOp::Branch {
+                    cond,
+                    then,
+                    otherwise,
+                } => {
+                    if let RtSource::Child(_, k) = cond {
+                        *k = *next;
+                        *next += 1;
+                    }
+                    walk(then, next);
+                    walk(otherwise, next);
+                }
+                RtOp::Repeat { body, .. } => {
+                    let mut inner = 0;
+                    walk(body, &mut inner);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut top = 0;
+    walk(ops, &mut top);
+}
+
 /// Evaluate every projection whose tuples cannot change between
 /// renders, once.
 fn memoize(
@@ -394,7 +432,8 @@ impl TileProgram {
             .iter()
             .map(|p| Arc::new(PolydatKernel::from_program_nested(p.clone())))
             .collect();
-        let ops = lower_ops(&spec.ops);
+        let mut ops = lower_ops(&spec.ops);
+        number_child_holes(&mut ops);
         let mut memo = vec![None; children.len()];
         memoize(&ops, &canonicals, &mut memo);
         let compiled = spec
@@ -509,12 +548,12 @@ impl TileProgram {
         self.render_ops(&self.ops, inputs, engine, None, out);
     }
 
-    fn render_ops<'k, W: std::fmt::Write>(
+    fn render_ops<W: std::fmt::Write>(
         &self,
         ops: &[RtOp],
         inputs: &[ValueRef<'_>],
         engine: crate::Engine,
-        mut child: Option<&mut (dyn Kernel + 'k)>,
+        mut child: Option<&mut BodyEntry>,
         out: &mut W,
     ) {
         for op in ops {
@@ -526,9 +565,11 @@ impl TileProgram {
                     RtSource::Wire(i) => {
                         encode_ref(inputs.get(*i).copied().unwrap_or(ValueRef::None), enc, out)
                     }
-                    RtSource::Child(name) => {
-                        if let Some(kernel) = child.as_deref_mut() {
-                            let v = kernel.pull(name);
+                    RtSource::Child(name, k) => {
+                        if let Some(entry) = child.as_deref_mut()
+                            && let Some(i) = entry.hole(*k, name)
+                        {
+                            let v = entry.kernel.pull_at(i);
                             encode_ref(ValueRef::from(&v), enc, out)
                         }
                     }
@@ -598,30 +639,52 @@ impl TileProgram {
                             self.spec.name
                         )
                     };
-                    with_body_kernel(&program, engine, |kernel, declared| {
+                    with_body_kernel(&program, engine, |entry| {
                         for (index, tuple) in tuples.iter().enumerate() {
                             if !first {
                                 out.put(sep);
                             }
                             first = false;
-                            kernel.set_inputs(&[index as u64]);
-                            for (name, v) in tuple {
-                                if declared.contains(name) {
-                                    kernel
-                                        .set_input(name, v.clone())
-                                        .unwrap_or_else(|e| fail(name, e));
+                            {
+                                // The body's inputs by index: the names are
+                                // resolved on the first tuple and kept.
+                                let BodyEntry {
+                                    kernel,
+                                    elements,
+                                    cascade,
+                                    ..
+                                } = &mut *entry;
+                                kernel.set_inputs(&[index as u64]);
+                                let elements = elements.get_or_insert_with(|| {
+                                    tuple.iter().map(|(n, _)| kernel.input_index(n)).collect()
+                                });
+                                for (k, (name, v)) in tuple.iter().enumerate() {
+                                    if let Some(i) = elements.get(k).copied().flatten() {
+                                        kernel
+                                            .set_input_at(i, v.clone())
+                                            .unwrap_or_else(|e| fail(name, e));
+                                    }
                                 }
-                            }
-                            for (name, input_idx, ty) in &child_spec.cascade {
-                                if declared.contains(name)
-                                    && let Some(v) = inputs.get(*input_idx)
+                                let cascade = cascade.get_or_insert_with(|| {
+                                    child_spec
+                                        .cascade
+                                        .iter()
+                                        .map(|(n, _, _)| kernel.input_index(n))
+                                        .collect()
+                                });
+                                for (k, (name, input_idx, ty)) in
+                                    child_spec.cascade.iter().enumerate()
                                 {
-                                    kernel
-                                        .set_input(name, typed_for(&owned(*v), ty))
-                                        .unwrap_or_else(|e| fail(name, e));
+                                    if let Some(i) = cascade.get(k).copied().flatten()
+                                        && let Some(v) = inputs.get(*input_idx)
+                                    {
+                                        kernel
+                                            .set_input_at(i, typed_for(&owned(*v), ty))
+                                            .unwrap_or_else(|e| fail(name, e));
+                                    }
                                 }
                             }
-                            self.render_ops(body, inputs, engine, Some(kernel), out);
+                            self.render_ops(body, inputs, engine, Some(entry), out);
                         }
                     });
                 }
@@ -630,16 +693,19 @@ impl TileProgram {
     }
 
     /// A branch condition's truth, as the `cond` encoding decides it.
-    fn truthy<'k>(
+    fn truthy(
         &self,
         source: &RtSource,
         inputs: &[ValueRef<'_>],
-        child: Option<&mut (dyn Kernel + 'k)>,
+        child: Option<&mut BodyEntry>,
     ) -> bool {
         match source {
             RtSource::Wire(i) => truthy_of(inputs.get(*i).copied().unwrap_or(ValueRef::None)),
-            RtSource::Child(name) => match child {
-                Some(kernel) => truthy_of(ValueRef::from(&kernel.pull(name))),
+            RtSource::Child(name, k) => match child {
+                Some(entry) => match entry.hole(*k, name) {
+                    Some(i) => truthy_of(ValueRef::from(&entry.kernel.pull_at(i))),
+                    None => false,
+                },
                 None => false,
             },
         }
@@ -793,8 +859,32 @@ fn retype(v: &Value, ty: &str) -> Value {
 }
 
 /// A cached body kernel: the program it was created from, the kernel,
-/// and the inputs the body declares.
-type BodyEntry = (Arc<dyn KernelProgram>, Box<dyn Kernel>, HashSet<String>);
+/// and the body's names resolved to indices once (SRD 117 step 3), so
+/// a tuple is bound and its holes read with no lookup per tuple.
+struct BodyEntry {
+    program: Arc<dyn KernelProgram>,
+    kernel: Box<dyn Kernel>,
+    /// The tuple elements' input indices, by position in the tuple;
+    /// `None` for an element the body does not declare.
+    elements: Option<Vec<Option<usize>>>,
+    /// The cascade's input indices, by position in the cascade.
+    cascade: Option<Vec<Option<usize>>>,
+    /// The body holes' output indices, by ordinal.
+    holes: Vec<Option<Option<usize>>>,
+}
+
+impl BodyEntry {
+    /// The output index of body hole `k`, named `name`, resolved once.
+    fn hole(&mut self, k: usize, name: &str) -> Option<usize> {
+        if self.holes.len() <= k {
+            self.holes.resize(k + 1, None);
+        }
+        if self.holes[k].is_none() {
+            self.holes[k] = Some(self.kernel.output_index(name));
+        }
+        self.holes[k].flatten()
+    }
+}
 
 thread_local! {
     /// One kernel per projection body program and engine per thread,
@@ -819,29 +909,34 @@ pub fn body_kernels_created(engine: crate::Engine) -> u64 {
 fn with_body_kernel(
     program: &Arc<dyn KernelProgram>,
     engine: crate::Engine,
-    f: impl FnOnce(&mut dyn Kernel, &HashSet<String>),
+    f: impl FnOnce(&mut BodyEntry),
 ) {
     // The entry pins its program so the address cannot be reused by a
     // later program while a kernel built for this one is still cached.
     let key = (Arc::as_ptr(program) as *const () as usize, engine);
-    let (kernel_program, mut kernel, declared) = BODY_KERNELS
+    let mut entry = BODY_KERNELS
         .with(|m| m.borrow_mut().remove(&key))
-        .filter(|(p, _, _)| Arc::ptr_eq(p, program))
+        .filter(|e| Arc::ptr_eq(&e.program, program))
         .unwrap_or_else(|| {
             // A body runs inside the enclosing cycle: it must never
             // reset the thread's arena (SRD 115, axiom H5).
             let kernel = program.clone().create_nested_kernel();
-            let declared: HashSet<String> = kernel.input_names().into_iter().collect();
             BODIES_CREATED.with(|m| *m.borrow_mut().entry(engine).or_insert(0) += 1);
-            (program.clone(), kernel, declared)
+            BodyEntry {
+                program: program.clone(),
+                kernel,
+                elements: None,
+                cascade: None,
+                holes: Vec::new(),
+            }
         });
-    f(kernel.as_mut(), &declared);
+    f(&mut entry);
     BODY_KERNELS.with(|m| {
         let mut m = m.borrow_mut();
         if m.len() >= SCRATCH_LIMIT {
             m.clear();
         }
-        m.insert(key, (kernel_program, kernel, declared));
+        m.insert(key, entry);
     });
 }
 
@@ -873,6 +968,26 @@ pub fn encode_ref<W: std::fmt::Write>(value: ValueRef<'_>, enc: &HoleEncoding, o
         return;
     }
     let ty = enc.ty.as_deref();
+    // An integer with no format writes its digits straight into the
+    // sink (SRD 117 step 3): digits need no escaping in any encoding or
+    // position, so the text is the same as the general path's, without
+    // the `String` the general path builds.
+    if enc.format.is_none() && is_numeric_keyword(ty.unwrap_or("u64")) {
+        match value {
+            ValueRef::U64(n) => {
+                put_u64(n, out);
+                return;
+            }
+            ValueRef::I64(n) => {
+                if n < 0 {
+                    out.put_char('-');
+                }
+                put_u64(n.unsigned_abs(), out);
+                return;
+            }
+            _ => {}
+        }
+    }
     let text = formatted_text(value, ty, enc.format.as_deref());
     if enc.raw {
         out.put(&text);
@@ -922,6 +1037,23 @@ pub fn encode_ref<W: std::fmt::Write>(value: ValueRef<'_>, enc: &HoleEncoding, o
         }
         _ => out.put(&text),
     }
+}
+
+/// The decimal digits of `n`, written without an allocation.
+fn put_u64<W: std::fmt::Write>(mut n: u64, out: &mut W) {
+    if n == 0 {
+        out.put_char('0');
+        return;
+    }
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    while n > 0 {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+    }
+    // SAFETY-free: the buffer holds ASCII digits only.
+    out.put(std::str::from_utf8(&buf[i..]).expect("ascii digits"));
 }
 
 fn truthy_of(v: ValueRef<'_>) -> bool {

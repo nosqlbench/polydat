@@ -205,6 +205,31 @@ macro_rules! impl_kernel_trait {
             fn plan(&self) -> crate::EnginePlan {
                 self.core.plan()
             }
+            fn input_index(&self, name: &str) -> Option<usize> {
+                self.core
+                    .externs
+                    .input_names()
+                    .iter()
+                    .position(|n| n == name)
+            }
+            fn set_input_at(
+                &mut self,
+                index: usize,
+                value: crate::ast::Value,
+            ) -> Result<(), String> {
+                self.core.drive.stale = true;
+                $ty::set_input_at(self, index, value)
+            }
+            fn output_index(&self, name: &str) -> Option<usize> {
+                self.core
+                    .externs
+                    .output_names()
+                    .iter()
+                    .position(|n| n == name)
+            }
+            fn pull_at(&mut self, index: usize) -> crate::ast::Value {
+                self.pull_value_at(index)
+            }
             fn traverse(&mut self, index: usize) -> Result<crate::kernel::TraversalStream, String> {
                 let traversal = self.core.traversals.get(index).cloned().ok_or_else(|| {
                     format!(

@@ -449,3 +449,62 @@ fn every_engine_reports_its_plan() {
     }
     assert_eq!(polydat::EnginePlan::default().to_string(), "nothing");
 }
+
+#[test]
+fn the_index_keyed_calls_agree_with_the_named_ones_on_every_engine() {
+    // SRD 117 step 3: a host that binds the same inputs and reads the
+    // same outputs every cycle resolves the names once.
+    for engine in [
+        Engine::Interpreter,
+        Engine::Closures(Provenance::Auto),
+        Engine::Native(Provenance::Auto),
+    ] {
+        let Ok(mut by_name) = compile_polydat_with(SRC, engine) else {
+            continue;
+        };
+        let mut by_index = compile_polydat_with(SRC, engine).unwrap();
+        let scale = by_index.input_index("scale").unwrap();
+        let region = by_index.input_index("region").unwrap();
+        assert_eq!(by_index.input_index("cycle"), Some(0), "{engine}");
+        assert_eq!(by_index.input_index("nope"), None, "{engine}");
+        let key = by_index.output_index("key").unwrap();
+        let n = by_index.output_index("n").unwrap();
+        assert_eq!(by_index.output_index("nope"), None, "{engine}");
+        assert_eq!(
+            by_index.output_names()[key],
+            "key",
+            "{engine}: index among output_names"
+        );
+        for cycle in 0..4u64 {
+            by_name.set_inputs(&[cycle]);
+            by_name.set_input("scale", Value::U64(100 + cycle)).unwrap();
+            by_name
+                .set_input("region", Value::Str(format!("r{cycle}").into()))
+                .unwrap();
+            by_index.set_inputs(&[cycle]);
+            by_index
+                .set_input_at(scale, Value::U64(100 + cycle))
+                .unwrap();
+            by_index
+                .set_input_at(region, Value::Str(format!("r{cycle}").into()))
+                .unwrap();
+            assert_eq!(
+                by_index.pull_at(key),
+                by_name.pull("key"),
+                "{engine} {cycle}"
+            );
+            assert_eq!(by_index.pull_at(n), by_name.pull("n"), "{engine} {cycle}");
+        }
+        // A coordinate is not set by index through an extern write, and
+        // the wrong type is refused by name.
+        assert!(
+            by_index.set_input_at(0, Value::U64(1)).is_err() || engine == Engine::Interpreter,
+            "{engine}"
+        );
+        let err = by_index.set_input_at(scale, Value::Str("x".into()));
+        assert!(
+            err.is_err() || engine == Engine::Interpreter,
+            "{engine}: {err:?}"
+        );
+    }
+}

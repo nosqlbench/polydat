@@ -180,6 +180,41 @@ each measured:
    the performance guide records; if step 1 and step 2 already reach the
    floor set by encoding and copying, the plan closes there and says so.
 
+   *Landed 2026-09-11, in two halves, the second measured against the
+   first.* The first half is the index-keyed body path step 2 named:
+   `Kernel` gains `input_index`, `set_input_at`, `output_index`, and
+   `pull_at`, with defaults over the named calls; the interpreter maps
+   them to its index APIs, and the compiled kernels resolve an output
+   once to its slot, type, and cone (`pull_at` on the cores) and set an
+   extern by input index (`Externs::set_at`). A body kernel's entry
+   resolves the tuple's elements, the cascade, and the body's holes (now
+   numbered within their body) to indices on the first tuple and keeps
+   them, so a tuple is bound and read with no string lookup. The
+   binary's fibers pull by index too. Paired bench, baseline worktree at
+   the step 2 commit against the working tree, same hour: `projected`
+   7907 to 6693 ns on P3, 8248 to 7104 on P2, 8334 to 7949 on P1; every
+   other case within drift. The projection's per-tuple cost on P3 fell
+   from about 1050 ns to 750, and P3 leads the projection case for the
+   first time. `tests/kernel_api.rs` checks the index-keyed calls
+   against the named ones on every engine.
+
+   The second half is not generated skeleton code. With the allocations
+   and lookups gone, what remains per hole on P3 is the encoder itself
+   and, per render, the read that copies the document out; the walk is
+   about ten nanoseconds an op, which generated code would save at the
+   cost of a Cranelift function per tile, and no measurement here
+   justifies that. The encoder is where the time is: an integer went
+   through `Display` into a `String` and then into the sink, so an
+   integer hole with no format now writes its digits straight into the
+   sink, on every engine, the same bytes. Floats keep `Display` and the
+   precision formats keep `format!`, because a faster float writer must
+   produce byte-identical text to Rust's for every value, which the
+   shortest-representation writers do not promise, and a tile's bytes
+   are the contract. Measured in the same hour as the paired run:
+   `one_hole` 493 to 395 ns on P3, 483 to 371 on pure native code, 653
+   to 536 on P1; `flat`, with two integer holes among seven, within
+   drift.
+
 ## 3. What does not change
 
 - **The bytes.** Every step runs under `tests/handle_tiers.rs`, whose
@@ -324,6 +359,21 @@ The machine drifted a few percent slower than the step 1 run (the
 `reading` and `wide` rows moved without a change to their code); the
 projection moved 4% on P3 and not at all on P1. The step's record in
 §5 says where the per-tuple cost actually is.
+
+**Step 3, index-keyed body path** (2026-09-11, paired: baseline worktree
+at the step 2 commit, then the working tree, same hour):
+
+| Case | P1 before | P1 after | P2 before | P2 after | P3 before | P3 after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `reading` | 2641 | 2833 | 2222 | 2617 | 2155 | 2230 |
+| `one_hole` | 605 | 653 | 426 | 478 | 422 | 493 |
+| `flat` | 4745 | 5136 | 3943 | 3696 | 3719 | 3682 |
+| `projected` | 8334 | 7949 | 8248 | 7104 | 7907 | 6693 |
+| `wide` | 10071 | 9109 | 8870 | 8341 | 9057 | 8286 |
+
+The unchanged cases (`reading`, `one_hole`) show the pair's drift, about
+5 to 15% slower in the second run; against that, the projection fell
+15% on P3 and 14% on P2.
 
 ## 7. Boundaries
 

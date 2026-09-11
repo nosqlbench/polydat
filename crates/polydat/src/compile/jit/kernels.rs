@@ -160,6 +160,11 @@ impl JitCore {
         self.externs.set(name, value, &mut self.buffer)
     }
 
+    /// [`Self::set_extern`] by input index.
+    fn set_extern_at(&mut self, index: usize, value: crate::ast::Value) -> Result<usize, String> {
+        self.externs.set_at(index, value, &mut self.buffer)
+    }
+
     /// Bind a `shared` binding to `cell` (engine parity, step 9). Native
     /// code evaluates the whole program, so the next run reads it.
     fn attach_cell(&mut self, name: &str, cell: crate::kernel::SharedCell) -> Result<(), String> {
@@ -365,6 +370,17 @@ macro_rules! jit_accessors {
             Ok(())
         }
 
+        /// [`Self::set_input`] by input index.
+        pub fn set_input_at(
+            &mut self,
+            index: usize,
+            value: crate::ast::Value,
+        ) -> Result<(), String> {
+            let slot = self.core.set_extern_at(index, value)?;
+            self.mark_input_changed(slot);
+            Ok(())
+        }
+
         /// The kernel's externs by name and declared type.
         pub fn externs(&self) -> Vec<(&str, crate::ast::PortType)> {
             self.core.externs.names()
@@ -389,6 +405,19 @@ macro_rules! jit_accessors {
                 self.core.drive.stale = false;
             }
             self.get_value(name)
+        }
+
+        /// [`Self::pull_value`] by output index: one native function is
+        /// the program, so the index names the output and nothing more.
+        fn pull_value_at(&mut self, index: usize) -> crate::ast::Value {
+            let name = self
+                .core
+                .externs
+                .output_names()
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| panic!("no output at index {index}"));
+            self.pull_value(&name)
         }
 
         /// `eval` through the `Kernel` trait: the pending coordinates.

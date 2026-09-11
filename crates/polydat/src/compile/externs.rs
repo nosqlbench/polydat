@@ -62,6 +62,9 @@ pub(crate) struct Externs {
     /// Every input by name, the coordinates first, as the interpreter
     /// program lists them.
     input_names: Vec<String>,
+    /// Per input index, the extern slot it names; `None` for a
+    /// coordinate. The index-keyed set (SRD 117 step 3).
+    by_index: Vec<Option<usize>>,
     /// Every named output in declaration order, as the interpreter
     /// program lists them.
     output_names: Vec<String>,
@@ -94,6 +97,7 @@ impl Externs {
     ) -> Result<Self, String> {
         let mut slots = Vec::new();
         let mut by_name = HashMap::new();
+        let mut by_index = vec![None; input_defs.len()];
         let mut next_entry = entry_base;
         for (i, def) in input_defs.iter().enumerate().skip(coord_count) {
             if def.port_type.slot_width() != 1 {
@@ -113,6 +117,7 @@ impl Externs {
                 None
             };
             by_name.insert(def.name.clone(), slots.len());
+            by_index[i] = Some(slots.len());
             slots.push(ExternSlot {
                 name: def.name.clone(),
                 slot: input_starts[i],
@@ -127,6 +132,7 @@ impl Externs {
             slots,
             by_name,
             input_names: input_defs.iter().map(|d| d.name.clone()).collect(),
+            by_index,
             output_names: Vec::new(),
             cursors: cursors.to_vec(),
             intent: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -438,10 +444,32 @@ impl Externs {
                 "no extern named '{name}'; this kernel's externs are {known:?}"
             ));
         };
+        self.set_slot(i, value, buffer)
+    }
+
+    /// [`Self::set`] by input index, the index among every input with
+    /// the coordinates first, as `input_names` lists them.
+    pub(crate) fn set_at(
+        &mut self,
+        index: usize,
+        value: Value,
+        buffer: &mut [u64],
+    ) -> Result<usize, String> {
+        match self.by_index.get(index) {
+            Some(Some(i)) => self.set_slot(*i, value, buffer),
+            _ => Err(format!(
+                "input {index} is not an extern; this kernel's inputs are {:?}",
+                self.input_names
+            )),
+        }
+    }
+
+    fn set_slot(&mut self, i: usize, value: Value, buffer: &mut [u64]) -> Result<usize, String> {
         let s = &mut self.slots[i];
         if value != Value::None && value.port_type() != s.ty {
             return Err(format!(
-                "extern '{name}' is declared {} but was set to a {} value",
+                "extern '{}' is declared {} but was set to a {} value",
+                s.name,
                 s.ty,
                 value.port_type()
             ));

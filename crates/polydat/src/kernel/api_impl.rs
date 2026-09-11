@@ -231,6 +231,18 @@ impl crate::kernel::Kernel for PolydatKernel {
         let idx = self.program().find_input(name)?;
         Some(self.state_ref().get_input(idx))
     }
+    fn input_index(&self, name: &str) -> Option<usize> {
+        self.program().find_input(name)
+    }
+    fn set_input_at(&mut self, index: usize, value: Value) -> Result<(), String> {
+        PolydatKernel::set_input_at(self, index, value)
+    }
+    fn output_index(&self, name: &str) -> Option<usize> {
+        self.program().output_index(name)
+    }
+    fn pull_at(&mut self, index: usize) -> Value {
+        PolydatKernel::pull_by_index(self, index).clone()
+    }
     fn traversals(&self) -> &[crate::dsl::traversal::Traversal] {
         self.program().traversals()
     }

@@ -98,6 +98,10 @@ struct CompiledStep {
     side: bool,
 }
 
+/// An output resolved for the index-keyed pull: its slot, its type,
+/// and the steps of its cone.
+type ResolvedOutput = (usize, crate::ast::PortType, Option<std::sync::Arc<[usize]>>);
+
 /// Common fields shared by all kernel variants. A clone is a new state
 /// of the same program: the steps are shared, everything else is the
 /// clone's own (engine_parity.md, step 4).
@@ -136,6 +140,9 @@ struct KernelCore {
     /// The traversals the program declares (SRD 113), opened through the
     /// `Kernel` trait.
     traversals: std::sync::Arc<[crate::dsl::traversal::Traversal]>,
+    /// Per declared output, its slot, type, and cone, resolved on the
+    /// first index-keyed pull (SRD 117 step 3).
+    resolved_outputs: Vec<Option<ResolvedOutput>>,
     /// The coordinates set through the `Kernel` trait, pending
     /// evaluation; `stale` means the next evaluation begins a cycle.
     drive: crate::compile::Drive,
@@ -411,6 +418,52 @@ impl KernelCore {
         self.value_of(name)
     }
 
+    /// [`Self::pull_named`] by output index: the name is resolved to
+    /// its slot, type, and cone once, so a pull costs no string lookup
+    /// (SRD 117 step 3).
+    fn pull_at(&mut self, index: usize) -> crate::ast::Value {
+        if self.resolved_outputs.len() <= index {
+            self.resolved_outputs.resize(index + 1, None);
+        }
+        if self.resolved_outputs[index].is_none() {
+            let name = self
+                .externs
+                .output_names()
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "no output at index {index}; this kernel declares {}",
+                        self.externs.output_names().len()
+                    )
+                });
+            let slot = self.output_map[&name];
+            let ty = self
+                .output_types
+                .get(&name)
+                .copied()
+                .unwrap_or(crate::ast::PortType::U64);
+            let cone = self
+                .plan
+                .cones
+                .get(&name)
+                .map(|c| std::sync::Arc::from(c.as_slice()));
+            self.resolved_outputs[index] = Some((slot, ty, cone));
+        }
+        if self.drive.stale {
+            self.begin_cycle();
+        } else {
+            self.refresh_cells();
+        }
+        let (slot, ty, cone) = self.resolved_outputs[index]
+            .clone()
+            .expect("resolved above");
+        if let Some(order) = cone {
+            self.run_steps(&order);
+        }
+        self.slot_value(slot, ty)
+    }
+
     /// The named output as a typed `Value`, `None` where the slot holds
     /// one; a vector from scratch; a handle copied out.
     fn value_of(&self, name: &str) -> crate::ast::Value {
@@ -455,6 +508,14 @@ impl KernelCore {
     /// the next evaluation begins a cycle.
     fn set_extern(&mut self, name: &str, value: crate::ast::Value) -> Result<usize, String> {
         let slot = self.externs.set(name, value, &mut self.buffer)?;
+        self.dirty_input(slot);
+        self.drive.stale = true;
+        Ok(slot)
+    }
+
+    /// [`Self::set_extern`] by input index.
+    fn set_extern_at(&mut self, index: usize, value: crate::ast::Value) -> Result<usize, String> {
+        let slot = self.externs.set_at(index, value, &mut self.buffer)?;
         self.dirty_input(slot);
         self.drive.stale = true;
         Ok(slot)
@@ -685,6 +746,7 @@ fn build_core(
         output_types,
         externs,
         traversals: Vec::new().into(),
+        resolved_outputs: Vec::new(),
         drive: crate::compile::Drive {
             coords: Vec::new(),
             stale: true,
@@ -806,6 +868,14 @@ macro_rules! kernel_accessors {
             self.pull_in_cycle(name)
         }
 
+        /// [`Self::pull_value`] by output index.
+        fn pull_value_at(&mut self, index: usize) -> crate::ast::Value {
+            let coords = std::mem::take(&mut self.core.drive.coords);
+            self.set_coords(&coords);
+            self.core.drive.coords = coords;
+            self.core.pull_at(index)
+        }
+
         /// `eval` through the `Kernel` trait: the pending coordinates,
         /// then every step.
         fn eval_pending(&mut self) {
@@ -833,6 +903,17 @@ macro_rules! kernel_accessors {
         /// every step downstream of the extern reruns.
         pub fn set_input(&mut self, name: &str, value: crate::ast::Value) -> Result<(), String> {
             let slot = self.core.set_extern(name, value)?;
+            self.mark_input_changed(slot);
+            Ok(())
+        }
+
+        /// [`Self::set_input`] by input index.
+        pub fn set_input_at(
+            &mut self,
+            index: usize,
+            value: crate::ast::Value,
+        ) -> Result<(), String> {
+            let slot = self.core.set_extern_at(index, value)?;
             self.mark_input_changed(slot);
             Ok(())
         }

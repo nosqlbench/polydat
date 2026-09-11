@@ -668,12 +668,23 @@ impl PolydatKernel {
                 self.program.input_names()
             )
         })?;
+        self.set_input_at(idx, value)
+    }
+
+    /// [`Self::set_input`] by input index, as `find_input` numbers them.
+    pub fn set_input_at(&mut self, idx: usize, value: Value) -> Result<(), String> {
+        let Some(name) = self.program.input_name_by_idx(idx) else {
+            return Err(format!(
+                "no input at index {idx}; this program's inputs are {:?}",
+                self.program.input_names()
+            ));
+        };
         // A shared cell keeps one type for life (scope model §6.1): a
         // write of another type fails at the write site, as it does on
         // every compiled kernel.
         if self.state.shared_cell(idx).is_some()
             && value != Value::None
-            && let Some(declared) = self.program.input_port_type(name)
+            && let Some(declared) = self.program.input_port_type_by_idx(idx)
             && value.port_type() != declared
         {
             return Err(format!(
