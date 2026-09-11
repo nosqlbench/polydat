@@ -857,19 +857,6 @@ fn type_codes(types: u64) -> &'static str {
     crate::kernel::StaticInterner::resolve_handle(types).unwrap_or("")
 }
 
-/// The arguments of a variadic call as owned values, by their codes.
-///
-/// # Safety
-/// `args` points at `type_codes(types).len()` slots written by the
-/// generated code into its own frame, live for the duration of the call.
-unsafe fn decode_args(types: u64, args: *const u64) -> Vec<crate::ast::Value> {
-    type_codes(types)
-        .bytes()
-        .enumerate()
-        .map(|(i, code)| crate::compile::marshal::arg_value(code, unsafe { *args.add(i) }))
-        .collect()
-}
-
 /// Run a body that may panic as its P1 node panics (a `printf`
 /// placeholder without an argument, a projection that fails at
 /// render) inside an `extern "C"` helper, where a panic would abort:
@@ -899,7 +886,7 @@ extern "C" fn jit_printf(format: u64, types: u64, args: *const u64) -> u64 {
         parsed.render_into(
             codes.len(),
             |i| {
-                // SAFETY: see `decode_args`; `i < codes.len()`.
+                // SAFETY: the variadic ABI (SRD 115 §6): one slot per type code in the caller's frame, live for the call.
                 crate::compile::marshal::fmt_arg(codes[i], unsafe { *args.add(i) })
             },
             &mut w,
@@ -913,7 +900,8 @@ extern "C" fn jit_printf(format: u64, types: u64, args: *const u64) -> u64 {
 /// table, nothing copied.
 ///
 /// # Safety
-/// As for `decode_args`.
+/// `args` points at `type_codes(types).len()` slots written by the
+/// generated code into its own frame, live for the duration of the call.
 unsafe fn arg_refs(types: u64, args: *const u64) -> Vec<crate::ast::ValueRef<'static>> {
     type_codes(types)
         .bytes()
@@ -924,7 +912,7 @@ unsafe fn arg_refs(types: u64, args: *const u64) -> Vec<crate::ast::ValueRef<'st
 
 extern "C" fn jit_json_array(entry: u64, types: u64, args: *const u64) -> u64 {
     guarded(|| {
-        // SAFETY: see `decode_args`.
+        // SAFETY: the variadic ABI (SRD 115 §6): one slot per type code in the caller's frame, live for the call.
         let vals = unsafe { arg_refs(types, args) };
         write_json(entry, crate::library::json::json_array_of_refs(vals))
     })
@@ -932,7 +920,7 @@ extern "C" fn jit_json_array(entry: u64, types: u64, args: *const u64) -> u64 {
 
 extern "C" fn jit_json_object(entry: u64, types: u64, args: *const u64) -> u64 {
     guarded(|| {
-        // SAFETY: see `decode_args`.
+        // SAFETY: the variadic ABI (SRD 115 §6): one slot per type code in the caller's frame, live for the call.
         let vals = unsafe { arg_refs(types, args) };
         write_json(entry, crate::library::json::json_object_of_refs(vals))
     })
@@ -974,14 +962,16 @@ extern "C" fn jit_tile_render(program: u64, types: u64, args: *const u64) -> u64
     // SAFETY: `program` is the address of a `TileProgram` interned for
     // the process (`TileProgram::interned`), baked by the classifier.
     let program = unsafe { &*(program as *const crate::library::tile_render::TileProgram) };
-    // SAFETY: see `decode_args`.
-    let vals = unsafe { decode_args(types, args) };
+    // The hole values as borrowed views (SRD 117 step 1): nothing is
+    // decoded into an owned value on the way to the encoder.
+    // SAFETY: the variadic ABI (SRD 115 §6): one slot per type code in the caller's frame, live for the call.
+    let refs = unsafe { arg_refs(types, args) };
     // The document is written straight into the arena as it renders.
     // A projection's nested kernels allocate in the arena between the
     // writer's pushes; the writer relocates its bytes when that happens
     // and the result is still one range.
     let mut w = crate::kernel::ArenaWriter::new();
-    guarded(|| program.render_into(&vals, &mut w));
+    guarded(|| program.render_into(&refs, &mut w));
     w.finish()
 }
 

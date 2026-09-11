@@ -586,8 +586,11 @@ impl TileLowering {
             });
     }
 
-    /// A hole in the tile's own scope: `__tile_<name>_hN := tile_encode(expr, spec)`,
-    /// with the declaration's adapter node between when one is needed.
+    /// A hole in the tile's own scope: the expression as a binding of
+    /// the enclosing program, `__tile_<name>_hN := expr`, with the
+    /// declaration's adapter node between when one is needed; a hole
+    /// that names a wire uses the wire itself. The render node takes
+    /// the value and encodes it at the hole (SRD 117 step 1).
     fn wire_hole(
         &mut self,
         compiler: &mut Compiler,
@@ -620,18 +623,27 @@ impl TileLowering {
             }
             None => expr.clone(),
         };
-        let call = encode_call(&value, &enc, self.span);
-        compiler
-            .compile_binding(asm, std::slice::from_ref(&name), &call)
-            .map_err(err)?;
+        let input = match &value {
+            Expr::Ident(wire, _) if asm.output_type(wire.as_str()).is_some() => wire.clone(),
+            _ => {
+                compiler
+                    .compile_binding(asm, std::slice::from_ref(&name), &value)
+                    .map_err(err)?;
+                name
+            }
+        };
         self.record(compiler, text, &typing, &enc);
-        let index = self.push_input(name);
-        Ok(HoleSource::Wire(index))
+        let index = self.push_input(input);
+        Ok(HoleSource::Wire {
+            index,
+            spec: enc.to_spec(),
+        })
     }
 
-    /// A hole inside a projection body: a `tile_encode` binding of the
-    /// child program. Outer names it references cascade in as render
-    /// node inputs, typed by the parent's wire.
+    /// A hole inside a projection body: a binding of the child program
+    /// whose value the render node encodes at the hole. Outer names it
+    /// references cascade in as render node inputs, typed by the
+    /// parent's wire.
     fn body_hole(
         &mut self,
         compiler: &mut Compiler,
@@ -658,11 +670,13 @@ impl TileLowering {
         };
         let name = format!("__b{}", ctx.counter);
         ctx.counter += 1;
-        let call = encode_call(&value, &enc, self.span);
         ctx.bindings
-            .push(format!("{name} := {}", super::pprint::pp_expr(&call)));
+            .push(format!("{name} := {}", super::pprint::pp_expr(&value)));
         self.record(compiler, text, &typing, &enc);
-        Ok(HoleSource::Child(name))
+        Ok(HoleSource::Child {
+            name,
+            spec: enc.to_spec(),
+        })
     }
 
     /// Make an outer name the body references available inside the body
@@ -881,7 +895,19 @@ impl TileLowering {
             self.encoding,
             escape_polydat_string(&text)
         ));
-        Ok(TileOp::Hole(HoleSource::Child(name)))
+        // The nested tile's text is complete: it is copied as it is.
+        let raw = HoleEncoding {
+            encoding: self.encoding.clone(),
+            position: HolePosition::Text,
+            ty: None,
+            format: None,
+            raw: true,
+            cond: false,
+        };
+        Ok(TileOp::Hole(HoleSource::Child {
+            name,
+            spec: raw.to_spec(),
+        }))
     }
 
     fn push_input(&mut self, name: String) -> usize {
@@ -1117,16 +1143,4 @@ fn is_numeric(t: PortType) -> bool {
             | PortType::U128
             | PortType::I128
     )
-}
-
-/// `tile_encode(expr, "<spec>")`.
-fn encode_call(expr: &Expr, enc: &HoleEncoding, span: super::lexer::Span) -> Expr {
-    Expr::Call(CallExpr {
-        func: "tile_encode".into(),
-        args: vec![
-            Arg::Positional(expr.clone()),
-            Arg::Positional(Expr::StringLit(enc.to_spec(), span)),
-        ],
-        span,
-    })
 }

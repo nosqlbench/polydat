@@ -128,13 +128,25 @@ impl HoleEncoding {
 /// Where a hole's encoded text comes from at render time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HoleSource {
-    /// The render node's wire input at this index.
-    Wire(usize),
-    /// An output of the enclosing projection's body program.
-    Child(String),
+    /// The render node's wire input at this index, encoded per `spec`
+    /// (a [`HoleEncoding`] spec) as it is rendered.
+    Wire {
+        /// The input's index among the render node's wires.
+        index: usize,
+        /// The hole's encoding spec.
+        spec: String,
+    },
+    /// An output of the enclosing projection's body program, encoded
+    /// per `spec` as it is rendered.
+    Child {
+        /// The body program's output.
+        name: String,
+        /// The hole's encoding spec.
+        spec: String,
+    },
 }
 
-/// One skeleton instruction. Holes arrive already encoded.
+/// One skeleton instruction. Holes are values, encoded at the hole.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TileOp {
     /// Text copied as is.
@@ -207,7 +219,8 @@ impl TileSpec {
 enum RtOp {
     /// Copy an interned static run.
     Copy(&'static str),
-    Hole(HoleSource),
+    /// Encode a value at the hole.
+    Hole(RtSource, HoleEncoding),
     Repeat {
         stream: Arc<StreamerValue>,
         child: usize,
@@ -216,10 +229,26 @@ enum RtOp {
         generators: Vec<(String, usize, String)>,
     },
     Branch {
-        cond: HoleSource,
+        cond: RtSource,
         then: Vec<RtOp>,
         otherwise: Vec<RtOp>,
     },
+}
+
+/// Where a hole's value comes from at render time.
+#[derive(Debug)]
+enum RtSource {
+    Wire(usize),
+    Child(String),
+}
+
+fn lower_source(source: &HoleSource) -> (RtSource, HoleEncoding) {
+    match source {
+        HoleSource::Wire { index, spec } => (RtSource::Wire(*index), HoleEncoding::from_spec(spec)),
+        HoleSource::Child { name, spec } => {
+            (RtSource::Child(name.clone()), HoleEncoding::from_spec(spec))
+        }
+    }
 }
 
 /// Intern every static run and separator of a skeleton and parse every
@@ -232,7 +261,10 @@ fn lower_ops(ops: &[TileOp]) -> Vec<RtOp> {
                 let handle = StaticInterner::intern(s);
                 RtOp::Copy(StaticInterner::resolve_handle(handle).expect("just interned"))
             }
-            TileOp::Hole(h) => RtOp::Hole(h.clone()),
+            TileOp::Hole(h) => {
+                let (source, enc) = lower_source(h);
+                RtOp::Hole(source, enc)
+            }
             TileOp::Repeat {
                 stream,
                 child,
@@ -254,7 +286,7 @@ fn lower_ops(ops: &[TileOp]) -> Vec<RtOp> {
                 then,
                 otherwise,
             } => RtOp::Branch {
-                cond: cond.clone(),
+                cond: lower_source(cond).0,
                 then: lower_ops(then),
                 otherwise: lower_ops(otherwise),
             },
@@ -354,23 +386,26 @@ impl TileProgram {
         walk(&self.ops)
     }
 
-    /// Render with the node's wire inputs, each already encoded text.
+    /// Render with the node's wire inputs, the hole values.
     pub fn render(&self, inputs: &[Value]) -> String {
+        let refs: Vec<ValueRef<'_>> = inputs.iter().map(ValueRef::from).collect();
         let mut out = String::new();
-        self.render_into(inputs, &mut out);
+        self.render_into(&refs, &mut out);
         out
     }
 
-    /// Render into any text sink: a `String` at P1, the cycle arena
-    /// writer in a compiled helper (SRD 115 §6).
-    pub fn render_into<W: std::fmt::Write>(&self, inputs: &[Value], out: &mut W) {
+    /// Render into any text sink from borrowed views of the hole
+    /// values: a `String` at P1, the cycle arena writer in a compiled
+    /// closure or helper (SRD 115 §6). Every hole is encoded here, from
+    /// the view straight into the sink.
+    pub fn render_into<W: std::fmt::Write>(&self, inputs: &[ValueRef<'_>], out: &mut W) {
         self.render_ops(&self.ops, inputs, None, out);
     }
 
     fn render_ops<W: std::fmt::Write>(
         &self,
         ops: &[RtOp],
-        inputs: &[Value],
+        inputs: &[ValueRef<'_>],
         mut child: Option<(&Arc<PolydatProgram>, &mut PolydatState)>,
         out: &mut W,
     ) {
@@ -379,14 +414,23 @@ impl TileProgram {
                 // `Copy`: a memcpy from the static interner (SRD 114 §6,
                 // SRD 115 step 3). The bytes were interned at build.
                 RtOp::Copy(s) => out.put(s),
-                RtOp::Hole(source) => out.put(&self.text_of(source, inputs, child.as_mut())),
+                RtOp::Hole(source, enc) => match source {
+                    RtSource::Wire(i) => {
+                        encode_ref(inputs.get(*i).copied().unwrap_or(ValueRef::None), enc, out)
+                    }
+                    RtSource::Child(name) => {
+                        if let Some((program, state)) = child.as_mut() {
+                            encode_ref(ValueRef::from(state.pull(program, name)), enc, out)
+                        }
+                    }
+                },
                 RtOp::Branch {
                     cond,
                     then,
                     otherwise,
                 } => {
-                    let c = self.text_of(cond, inputs, child.as_mut());
-                    let branch = if c.trim() == "1" { then } else { otherwise };
+                    let c = self.truthy(cond, inputs, child.as_mut());
+                    let branch = if c { then } else { otherwise };
                     match child.as_mut() {
                         Some((p, s)) => self.render_ops(branch, inputs, Some((p, s)), out),
                         None => self.render_ops(branch, inputs, None, out),
@@ -440,7 +484,7 @@ impl TileProgram {
                                 if let (Some(idx), Some(v)) =
                                     (program.find_input(name), inputs.get(*input_idx))
                                 {
-                                    state.set_input(idx, typed_for(v, ty));
+                                    state.set_input(idx, typed_for(&owned(*v), ty));
                                 }
                             }
                             self.render_ops(body, inputs, Some((program, state)), out);
@@ -451,22 +495,36 @@ impl TileProgram {
         }
     }
 
-    fn text_of(
+    /// A branch condition's truth, as the `cond` encoding decides it.
+    fn truthy(
         &self,
-        source: &HoleSource,
-        inputs: &[Value],
+        source: &RtSource,
+        inputs: &[ValueRef<'_>],
         child: Option<&mut (&Arc<PolydatProgram>, &mut PolydatState)>,
-    ) -> String {
+    ) -> bool {
         match source {
-            HoleSource::Wire(i) => inputs
-                .get(*i)
-                .map(|v| v.to_display_string())
-                .unwrap_or_default(),
-            HoleSource::Child(name) => match child {
-                Some((program, state)) => state.pull(program, name).to_display_string(),
-                None => String::new(),
+            RtSource::Wire(i) => truthy_of(inputs.get(*i).copied().unwrap_or(ValueRef::None)),
+            RtSource::Child(name) => match child {
+                Some((program, state)) => truthy_of(ValueRef::from(state.pull(program, name))),
+                None => false,
             },
         }
+    }
+}
+
+/// A borrowed view as an owned value, for the paths that bind values
+/// into a body program or a comprehension.
+fn owned(v: ValueRef<'_>) -> Value {
+    match v {
+        ValueRef::U64(n) => Value::U64(n),
+        ValueRef::I64(n) => Value::I64(n),
+        ValueRef::F64(f) => Value::F64(f),
+        ValueRef::Bool(b) => Value::Bool(b),
+        ValueRef::Str(s) => Value::Str(Arc::from(s)),
+        ValueRef::Bytes(b) => Value::Bytes(Arc::from(b)),
+        ValueRef::Json(j) => Value::Json(Arc::new(j.clone())),
+        ValueRef::None => Value::None,
+        ValueRef::Other(v) => v.clone(),
     }
 }
 
@@ -487,7 +545,7 @@ fn typed_for(v: &Value, ty: &str) -> Value {
 fn bind_generators(
     c: &crate::iteration::comprehension::Comprehension,
     generators: &[(String, usize, String)],
-    inputs: &[Value],
+    inputs: &[ValueRef<'_>],
 ) -> crate::iteration::comprehension::Comprehension {
     use crate::iteration::comprehension::Comprehension as K;
     use crate::iteration::comprehension::source::{LiteralValue, Source};
@@ -499,7 +557,7 @@ fn bind_generators(
             let Some((_, idx, ty)) = generators.iter().find(|(n, _, _)| n == name) else {
                 return c.clone();
             };
-            let raw = inputs.get(*idx).cloned().unwrap_or(Value::None);
+            let raw = inputs.get(*idx).map(|v| owned(*v)).unwrap_or(Value::None);
             let items: Vec<Value> =
                 match crate::iteration::comprehension::source::iteration_interior(&raw) {
                     Some(interior) => interior,
@@ -755,19 +813,24 @@ fn formatted_text<'a>(
 ) -> std::borrow::Cow<'a, str> {
     use std::borrow::Cow;
     // A string with no format is borrowed as it is; everything else is
-    // owned text.
-    let base: Cow<'a, str> = match (ty, value) {
-        (Some("bool"), v) => Cow::Owned(truthy_of(v).to_string()),
-        (_, ValueRef::Json(j)) => Cow::Owned(j.to_string()),
-        (_, v) => v.display(),
+    // owned text. The base text is produced only where a format needs
+    // it: a precision or a hex format writes the number once, itself.
+    let base = |value: ValueRef<'a>| -> Cow<'a, str> {
+        match (ty, value) {
+            (Some("bool"), v) => Cow::Owned(truthy_of(v).to_string()),
+            (_, ValueRef::Json(j)) => Cow::Owned(j.to_string()),
+            (_, v) => v.display(),
+        }
     };
-    let Some(fmt) = format else { return base };
+    let Some(fmt) = format else {
+        return base(value);
+    };
     let fmt = fmt.trim();
     if let Some(prec) = fmt.strip_prefix('.').and_then(|p| p.parse::<usize>().ok()) {
         if let Some(f) = as_f64(value) {
             return Cow::Owned(format!("{f:.prec$}"));
         }
-        return base;
+        return base(value);
     }
     if fmt == "x" || fmt == "X" {
         if let ValueRef::U64(n) = value {
@@ -777,8 +840,9 @@ fn formatted_text<'a>(
                 format!("{n:X}")
             });
         }
-        return base;
+        return base(value);
     }
+    let base = base(value);
     if let Some(w) = fmt.strip_prefix('0').and_then(|w| w.parse::<usize>().ok()) {
         return Cow::Owned(format!("{base:0>w$}"));
     }
@@ -821,16 +885,79 @@ fn push_json_escaped<W: std::fmt::Write>(s: &str, out: &mut W) {
 /// Encode one hole's value per its spec (`encoding|position|type|format|flags`).
 /// Authors do not call this directly; the compiler emits it for each hole.
 #[crate::polydat_node(category = Formatting)]
-fn tile_encode(value: Value, spec: Const<&str>) -> String {
-    let enc = HoleEncoding::from_spec(&spec);
+fn tile_encode(
+    value: Value,
+    spec: Const<&str>,
+    #[poly_const(HoleEncoding::from_spec, from = spec)] enc: &HoleEncoding,
+) -> String {
     let mut out = String::new();
-    encode(&value, &enc, &mut out);
+    encode(&value, enc, &mut out);
     out
+}
+
+/// The closure-tier form of `tile_render` (SRD 117 step 1): every hole
+/// value is read from its slot as a borrowed view, by the wire type the
+/// kernel fixed, and the document is rendered straight into the cycle
+/// arena; nothing is decoded into an owned `Value` on the way. A wire
+/// wider than one slot, or of a kind without a view, is read as a value
+/// through the typed decoder.
+fn tile_render_compiled(
+    node: &TileRender,
+    _entry_base: usize,
+    wire_types: &[PortType],
+) -> crate::ast::CompiledU64Op {
+    let program: &'static TileProgram = TileProgram::interned(&node.spec);
+    // Per wire: its first slot, its type, and its view code where the
+    // wire is one slot of a kind `arg_ref` reads.
+    let mut reads: Vec<(usize, PortType, Option<u8>)> = Vec::with_capacity(wire_types.len());
+    let mut offset = 0usize;
+    for &ty in wire_types {
+        let code = if ty.slot_width() == 1 {
+            crate::compile::marshal::type_code(ty)
+        } else {
+            None
+        };
+        reads.push((offset, ty, code));
+        offset += ty.slot_width().max(1);
+    }
+    Box::new(move |inputs: &[u64], outputs: &mut [u64]| {
+        // Owned values only for the wires without a view; they keep
+        // their positions, so the views are built once they are all in
+        // place.
+        let owned_values: Vec<Value> = reads
+            .iter()
+            .filter(|(_, _, code)| code.is_none())
+            .map(|&(offset, ty, _)| {
+                crate::kernel::with_current_value_table(|t| {
+                    crate::compile::marshal::decode_output(inputs, offset, ty, t)
+                })
+            })
+            .collect();
+        let mut next_owned = 0usize;
+        let refs: Vec<ValueRef<'_>> = reads
+            .iter()
+            .map(|&(offset, _, code)| match code {
+                Some(code) => crate::compile::marshal::arg_ref(code, inputs[offset]),
+                None => {
+                    let v = ValueRef::from(&owned_values[next_owned]);
+                    next_owned += 1;
+                    v
+                }
+            })
+            .collect();
+        let mut w = crate::kernel::ArenaWriter::new();
+        program.render_into(&refs, &mut w);
+        outputs[0] = w.finish();
+    })
 }
 
 /// Render a compiled tile skeleton over its encoded hole texts. Authors
 /// do not call this directly; the compiler emits it for `tile` statements.
-#[crate::polydat_node(category = Formatting, variadic_min = 0)]
+#[crate::polydat_node(
+    category = Formatting,
+    variadic_min = 0,
+    compiled_handle = tile_render_compiled
+)]
 fn tile_render(
     spec: Const<&str>,
     #[poly_const(TileProgram::from_json, from = spec)] program: &TileProgram,

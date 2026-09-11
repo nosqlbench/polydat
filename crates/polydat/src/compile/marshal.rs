@@ -46,7 +46,6 @@ pub(crate) fn encode_slot(v: &Value, table: &mut ValueTable, entry: Option<usize
 /// (SRD 115 §6): the codes of a node's wires are interned as a static
 /// string, and the helper decodes each argument by its code. `None`
 /// for a type no helper can take.
-#[cfg(feature = "jit")]
 pub(crate) fn type_code(ty: PortType) -> Option<u8> {
     Some(match ty {
         PortType::U64 => b'u',
@@ -95,7 +94,6 @@ pub(crate) fn arg_value(code: u8, bits: u64) -> Value {
 /// code: nothing is copied. Strings are borrowed from the arena or the
 /// interner and table kinds from the installed table, both valid for
 /// the rest of the current native call.
-#[cfg(feature = "jit")]
 pub(crate) fn arg_ref(code: u8, bits: u64) -> crate::ast::ValueRef<'static> {
     use crate::ast::ValueRef;
     match code {

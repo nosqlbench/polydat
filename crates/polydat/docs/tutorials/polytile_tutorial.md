@@ -170,8 +170,8 @@ Each tile compiled to a skeleton: static runs copied whole, encoded holes, branc
                  extern i: u64
                  extern reading: u64
                  extern temp_c: f64
-                 __b0 := tile_encode((reading + i), "json|value|u64||")
-                 __b1 := tile_encode((temp_c + to_f64(i)), "json|value|f64|.1|")
+                 __b0 := (reading + i)
+                 __b1 := (temp_c + to_f64(i))
   load         text: 6 static run(s) totalling 59 bytes, 5 hole(s), 0 branch(es), 0 projection(s)
 Every hole was typed before the tile compiled: a declared type wins, otherwise the wire's type; the hole's position says what the encoding expects there, and the two pick the encoder.
   doc          ${tenant_id}
@@ -788,26 +788,28 @@ out a handle, so nothing about this applies to `pull`.
 
 Knowing the lowering makes the rules above predictable:
 
-1. Each hole becomes a `tile_encode` node in the enclosing scope. Its
-   constant spec records the encoding, the hole's position (value or
-   inside a string), the declared type, the format, and the raw flag.
-   Its input is the hole's expression, compiled like any binding.
-2. Each branch condition becomes a `tile_encode` node that yields `1`
-   or `0`.
+1. Each hole's expression becomes a binding of the enclosing scope,
+   compiled like any other; a hole that names a wire uses the wire
+   itself. The skeleton records, per hole, the encoding, the hole's
+   position (value or inside a string), the declared type, the format,
+   and the raw flag.
+2. Each branch condition is a hole whose value is read for its truth.
 3. Each projection becomes a child program: an input carrying the
    tuple index, one `extern` per element, one `extern` per outer wire
-   the body reads (`cycle` included), and one `tile_encode` binding per
-   hole in the body. The comprehension is embedded in the skeleton.
+   the body reads (`cycle` included), and one binding per hole in the
+   body. The comprehension is embedded in the skeleton.
 4. The tile itself is one `tile_render` node whose constant is the
-   skeleton and whose inputs are the encoded holes. It concatenates
-   static runs and hole text, selects branch arms, and drives child
-   programs over the comprehension stream.
+   skeleton and whose inputs are the hole values. It copies static
+   runs, encodes each value at its hole straight into the document,
+   selects branch arms, and drives child programs over the
+   comprehension stream.
 
-Because the hole nodes are ordinary wires, `explain` and `viz` show
-them, dead holes are pruned with the rest of the graph, and a hole
-shared by two tiles is computed once. On the compiled levels each node
-has the same body behind a native helper or a closure, which is why
-section 16 holds.
+Because the hole expressions are ordinary wires, `explain` and `viz`
+show them, dead holes are pruned with the rest of the graph, and a
+hole shared by two tiles is computed once. On the compiled levels the
+render node has the same body behind a native helper or a closure,
+reading its hole values from their slots, which is why section 16
+holds.
 
 ## Limits at this level
 

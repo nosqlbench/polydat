@@ -723,7 +723,7 @@ compile events: 4
   Info: TileCompiled { tile: "t", encoding: "json", statics: 3, static_bytes: 14, holes: 2, branches: 0, projections: 0, bodies: [] }
   Info: ConstantFolded { node: "const_f64", value: "3.0" }
 nodes: 3, deterministic: true
-node names: ["const_f64", "__port_cycle", "jit_cone[hash+tile_encode+to_f64+f64_div+tile_encode+tile_render]"]
+node names: ["const_f64", "__port_cycle", "jit_cone[hash+to_f64+f64_div+tile_render]"]
 compile events on the default engine: 4
 ```
 

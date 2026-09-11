@@ -163,7 +163,7 @@ fn tiles_without_projections_render_natively_and_agree() {
     let json = format!(
         "{WIRES}tile d : json := {{\"n\": ${{h}}, \"f\": ${{f | .2}}, \"s\": ${{s}}, \"t\": ${{b}}, \"in\": \"x-${{h}}-${{s}}\", \"hex\": ${{h | x}}}}\n"
     );
-    agree(&json, &["d"], 6, &["tile_render", "tile_encode"], &[]);
+    agree(&json, &["d"], 6, &["tile_render"], &[]);
     let csv = format!(
         "{WIRES}c := \"x,y\"\ntile r : csv := \"${{h}},${{f | .1}},${{s}},${{c}},${{b: bool}}\"\n"
     );
@@ -175,10 +175,11 @@ fn tiles_without_projections_render_natively_and_agree() {
 }
 
 #[test]
-fn a_hole_fed_by_a_kernel_input_keeps_its_encoder_on_p1() {
-    // `tile_encode` tolerates None (it writes `null`), so fed by the
-    // kernel input it cannot join a cone; the render node still does,
-    // taking the encoded text as a boundary input.
+fn a_hole_that_names_a_kernel_input_still_renders_natively() {
+    // A hole naming a kernel input reads it through the input
+    // passthrough, a node of the graph, so the render node (which
+    // tolerates None and so may not sit on a cone boundary) still
+    // fuses with the hash beside it.
     let src = "input cycle: u64\ntile d : json := {\"c\": ${cycle}, \"h\": ${hash(cycle)}}\n";
     let p3 = agree(src, &["d"], 5, &["tile_render"], &[]);
     let n = cones(&p3).len();

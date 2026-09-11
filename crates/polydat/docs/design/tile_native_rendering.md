@@ -98,6 +98,28 @@ each measured:
    one per hole plus one. Two defects the probe found are fixed on the
    way: `formatted_text` formats a number once, under its precision or
    width, and no engine parses a spec string at render time.
+
+   *Landed 2026-09-11.* `HoleSource::Wire` and `Child` carry the hole's
+   spec; `RtOp::Hole` holds the parsed encoding; `render_into` takes
+   `&[ValueRef]` and encodes at the hole, and a branch reads its
+   condition's truth. The compiler binds each hole expression
+   (`__tile_<name>_hN := expr`, or the wire itself when the hole names
+   one) and passes the values to one `tile_render`. On P3 the helper
+   builds views with `arg_refs`; on P2 and as a closure step in a
+   hybrid kernel, `tile_render` supplies its own closure through the
+   new `compiled_handle = <path>` override of the node macro, reading
+   each slot as a view by the wire type the kernel fixed. The `None`
+   rule is unchanged: a hole naming a kernel input reads it through the
+   input passthrough, so the render node still fuses beside it. Bench
+   after the step, same machine: `flat` 3459 ns on P3 (was 6241) and
+   5476 on P1 (was 10715), so a hole costs about 175 ns on P3 and 370
+   on P1; `wide` 7857 on P3 (was 13460), 280 ns per hole; `one_hole`
+   466 on P3 (was 878); `projected` 8496 on P3 (was 14851), now no
+   better than P1's 8360, because the projection's body runs
+   interpreted inside the helper, which is step 2's subject. The
+   remaining per-hole cost on P3 is the encoder's `Display` path for
+   numbers and the read that copies the document out, which step 3
+   measures against.
 2. **Projections as compiled bodies with memoized tuples.** A `Repeat`
    whose comprehension names no generator clause and no cascaded wire
    in its sources has the same tuples every render; they are evaluated
@@ -241,6 +263,21 @@ graphs and one projection tuple thirty-five. The engine ratio P3/P1 is
 about 1.7 on `flat` and 1.5 on `wide`, against 5.8 on the engine
 ladder: a tile is the part of a program that native code speeds up
 least, which is the refinement this plan exists for.
+
+**After step 1** (2026-09-11, same machine, working tree at the step's
+commit):
+
+| Case | P1 interpreter | P2 closures | P3 native segments | pure native |
+| --- | ---: | ---: | ---: | ---: |
+| `reading` | 2760 | 2470 | 2243 | – |
+| `one_hole` | 588 | 449 | 466 | 551 |
+| `flat` | 5476 | 3701 | 3459 | – |
+| `projected` | 8360 | 7764 | 8496 | – |
+| `wide` | 8393 | 8194 | 7857 | – |
+
+Every engine roughly halved its render cost; P3's `flat` fell from
+4.1 µs to 1.2 µs. The projection is the one case P3 does not lead,
+which step 2 addresses.
 
 ## 7. Boundaries
 

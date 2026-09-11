@@ -306,6 +306,13 @@ struct NodeAttrs {
     /// signature: `fn(&[u64], &mut [u64])`. Escape hatch for
     /// hand-tuned SIMD / FFI / unusual carriers.
     compiled_u64_override: Option<syn::ExprPath>,
+    /// SRD 117 — override path for `compiled_handle()`. When set, the
+    /// macro emits `compiled_handle(&self, entry_base, wire_types) ->
+    /// Some(<path>(self, entry_base, wire_types))` instead of the
+    /// handle kit's closure. Free-fn signature:
+    /// `fn(&Node, usize, &[PortType]) -> CompiledU64Op`. For a node
+    /// whose closure reads its slots as borrowed views.
+    compiled_handle_override: Option<syn::ExprPath>,
     /// SRD-80 PR B.7 — override path for `jit_constants()`.
     /// Free-fn signature: `fn(&Node) -> Vec<u64>`. Macro emits
     /// `jit_constants(&self) -> <path>(self)`.
@@ -400,6 +407,7 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
     let mut category: Option<Ident> = None;
     let mut no_jit = false;
     let mut compiled_u64_override: Option<syn::ExprPath> = None;
+    let mut compiled_handle_override: Option<syn::ExprPath> = None;
     let mut jit_constants_override: Option<syn::ExprPath> = None;
     let mut decompose: Option<syn::ExprPath> = None;
     let mut purity: Option<syn::Expr> = None;
@@ -484,6 +492,17 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                             ));
                         };
                         compiled_u64_override = Some(p.clone());
+                    }
+                    "compiled_handle" => {
+                        let syn::Expr::Path(p) = &nv.value else {
+                            return Err(syn::Error::new_spanned(
+                                &nv.value,
+                                "`compiled_handle` value must be a path to a free \
+                                 function with signature \
+                                 `fn(&Node, usize, &[PortType]) -> CompiledU64Op`.",
+                            ));
+                        };
+                        compiled_handle_override = Some(p.clone());
                     }
                     "jit_constants" => {
                         let syn::Expr::Path(p) = &nv.value else {
@@ -623,6 +642,7 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                                  Registration: `category = <FuncCategory>`, \
                                  `struct_name = <Ident>`, `adapter = \"<name>\"`. \
                                  Engines: `no_jit`, `compiled_u64 = <path>`, \
+                                 `compiled_handle = <path>`, \
                                  `jit_constants = <path>`, `decompose = <path>`, \
                                  `simd = \"<node>\"`, `simd_total`. \
                                  Semantics: `purity = <Purity>`, `identity = <expr>`, \
@@ -701,6 +721,7 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
         category,
         no_jit,
         compiled_u64_override,
+        compiled_handle_override,
         jit_constants_override,
         decompose,
         purity,
@@ -3369,7 +3390,13 @@ fn generate(
         }
     };
 
-    let compiled_handle_impl: TokenStream2 = if let Some((shapes, ret_shape)) = &handle_plan {
+    let compiled_handle_impl: TokenStream2 = if let Some(path) = &attrs.compiled_handle_override {
+        quote! {
+            fn compiled_handle(&self, entry_base: usize, wire_types: &[polydat::ast::PortType]) -> Option<polydat::ast::CompiledU64Op> {
+                Some(#path(self, entry_base, wire_types))
+            }
+        }
+    } else if let Some((shapes, ret_shape)) = &handle_plan {
         // Captures: consts and const lists by clone, then setups
         // recomputed from those captured consts exactly as `new()`
         // computes them (a setup is a pure function of its consts).
