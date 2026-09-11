@@ -55,6 +55,8 @@ of the guides most often needs are [Runtime Model](design/runtime_model.md),
 [Graph Compiler](design/graph_compiler.md), [Engines](design/engines.md),
 [The `for` Construct](design/for_traversal.md), [Polytile](design/polytile.md),
 and [Compiled Non-Scalar Slots](design/compiled_handles.md).
+[Native Tile Rendering](design/tile_native_rendering.md) is the plan for
+rendering tiles as straight-line native code, measured step by step.
 [Engine Parity](design/engine_parity.md) is the review of every way the
 compilation levels differed in anything other than performance, and the
 plan that removed each difference; every step has landed.

@@ -744,7 +744,9 @@ as rules. Dates are 2026-09-04 to 2026-09-06.
   and one program per position were shaped so that the SRD 115 lowering
   undid nothing; it did not. The P3 renderer is the P1 walk behind a
   helper, not the straight-line skeleton code the first drafts sketched;
-  SRD 115 §12 records what remains a refinement.
+  SRD 115 §12 records what remains a refinement, and
+  [Native Tile Rendering](tile_native_rendering.md) (SRD 117) is the
+  plan that closes it, measured step by step.
 - **Coverage review (2026-09-07).** The tier differential's generator
   was extended to every string, JSON, and tile shape that landed: casts,
   parses, the typed JSON adapters, `json_merge`, `escape_json`,

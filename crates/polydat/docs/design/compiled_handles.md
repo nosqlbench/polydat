@@ -654,3 +654,9 @@ Kept short; the normative text above is what the code does. Dates are
   included, and the fuzzer emits externs.
 
 No refinements remain recorded.
+
+- **Renderer refinement.** The P3 renderer is the interpreter's walk
+  behind a helper: a hole is encoded by its own node and decoded again
+  in the render helper, and a projection body runs interpreted.
+  [Native Tile Rendering](tile_native_rendering.md) (SRD 117) is the
+  plan that closes it, with a bench recorded before the first change.
