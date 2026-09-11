@@ -971,7 +971,7 @@ extern "C" fn jit_tile_render(program: u64, types: u64, args: *const u64) -> u64
     // writer's pushes; the writer relocates its bytes when that happens
     // and the result is still one range.
     let mut w = crate::kernel::ArenaWriter::new();
-    guarded(|| program.render_into(&refs, &mut w));
+    guarded(|| program.render_into(&refs, crate::Engine::default(), &mut w));
     w.finish()
 }
 

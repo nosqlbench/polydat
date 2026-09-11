@@ -222,3 +222,65 @@ fn list_valued_generators_contribute_one_tuple_per_item() {
     let src = "input cycle: u64\npair := str_to_json(\"[1, 2]\")\ntile t : text := \"@for g in pair, k in 0..2 sep \\\",\\\" {${g}${k}}\"\n";
     assert_eq!(render(src, 0, "t"), "10,11,20,21");
 }
+
+#[test]
+fn a_projection_body_runs_on_the_engine_of_the_kernel_rendering() {
+    // SRD 117 step 2: the body of a projection is a nested kernel over
+    // the body's program for the engine rendering, compiled once per
+    // engine; the tuples of a constant comprehension are evaluated once.
+    use polydat::dsl::compile::compile_polydat_to_assembler;
+    use polydat::library::tile_render::body_kernels_created;
+    use polydat::{Engine, JitMode, Kernel, Provenance};
+    let src = r#"
+        input cycle: u64
+        base := cycle * 10
+        tile t : json := { "rows": [ @for r in 0..3 { {"r": ${r}, "v": ${base + r}} } ] }
+    "#;
+    let want = |cycle: u64| {
+        format!(
+            r#"{{ "rows": [ {{"r": 0, "v": {}}},{{"r": 1, "v": {}}},{{"r": 2, "v": {}}} ] }}"#,
+            cycle * 10,
+            cycle * 10 + 1,
+            cycle * 10 + 2
+        )
+    };
+    let mut engines = vec![Engine::Interpreter, Engine::Closures(Provenance::Auto)];
+    if cfg!(feature = "jit") {
+        engines.push(Engine::Native(Provenance::Auto));
+    }
+    for engine in engines {
+        // The interpreter with its cones off, so the render is the
+        // interpreter's own; with cones the render node fuses and its
+        // bodies are the helper's, on the default engine.
+        let mut k: Box<dyn Kernel> = match engine {
+            Engine::Interpreter => {
+                let mut asm = compile_polydat_to_assembler(src).unwrap();
+                asm.set_jit_mode(JitMode::Off);
+                Box::new(asm.compile().unwrap())
+            }
+            _ => polydat::dsl::compile_polydat_with(src, engine).unwrap(),
+        };
+        // A compiled kernel renders its projection bodies on the default
+        // engine, whichever compiled engine it is on itself.
+        let body_engine = match engine {
+            Engine::Interpreter => Engine::Interpreter,
+            _ => Engine::default(),
+        };
+        let before = body_kernels_created(body_engine);
+        for cycle in 0..3u64 {
+            k.set_inputs(&[cycle]);
+            assert_eq!(k.pull("t").as_str(), want(cycle), "{engine} cycle {cycle}");
+        }
+        // One kernel per thread, body program, and engine, reused across
+        // renders and across the compiled engines, which share the default
+        // engine's body: a kernel created by the previous engine counts.
+        let created = body_kernels_created(body_engine);
+        assert!(
+            created > before || (engine != Engine::Interpreter && created >= 1),
+            "{engine}: no body kernel on {body_engine}"
+        );
+        k.set_inputs(&[7]);
+        k.pull("t");
+        assert_eq!(body_kernels_created(body_engine), created, "{engine}");
+    }
+}

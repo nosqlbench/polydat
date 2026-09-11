@@ -133,6 +133,37 @@ each measured:
    states are today. The comprehension evaluator is engine-neutral
    already (SRD 116, step 8 addendum), so a comprehension that does read
    a cascaded wire evaluates against the body kernel on any engine.
+
+   *Landed 2026-09-11, with two corrections to the design above.* The
+   body's compiled program is built at `TileProgram` construction, not
+   on first render: a kernel's build folds its constants in a root
+   cycle of its own, which would reset the arena a render is writing
+   (SRD 115, H5), and the first attempt did exactly that inside a cone's
+   helper. Every compiled kernel renders its bodies on
+   `Engine::default()`, not on its own engine: the render node's closure
+   serves the closure tier and a hybrid kernel's closure steps alike
+   and has no engine to ask, and the default is the fastest engine the
+   build has. `TileProgram::interned` builds outside its lock, since a
+   body with a tile of its own interns through the same table; holding
+   the lock deadlocked the tutorial. The tuples of a comprehension with
+   no generator clause and no placeholder are evaluated once at
+   construction; the walk binds each tuple and the cascade through the
+   `Kernel` trait into one nested kernel per body, engine, and thread,
+   and reads each body hole with `pull`. `tests/tile_projections.rs`
+   checks the body's engine and the reuse. Bench: `projected` 8150 ns
+   on P3 (was 8496), 8366 on P1 (was 8360): the step is functionally
+   complete and nearly free of effect, because the cost was not where
+   §1 put it. A probe of one nested body kernel (two holes) driven the
+   way the walk drives it costs about 450 ns per tuple on P3 and 375
+   on P1; the two hole encodes about 300; the rest of the 1.2 µs per
+   tuple is the binding around them. Of the body's 450 ns, a clean
+   `pull` alone is 110 to 160 ns on a compiled kernel against 82 on
+   the interpreter: the name-keyed trait path is four string-hashed
+   lookups, an `Arc` clone of the plan, and a cone walk per pull, which
+   a host pulling a few outputs never notices and a projection pulling
+   per tuple does. Resolving a body's inputs and holes to slots once
+   per kernel, and driving the body through an index-keyed path, is
+   the refinement step 3 measures alongside the skeleton code.
 3. **Generated skeleton code.** With the allocations gone, the
    remaining interpretation is the `RtOp` match and the `HoleEncoding`
    dispatch per hole. The classifier lowers a `tile_render` whose
@@ -278,6 +309,21 @@ commit):
 Every engine roughly halved its render cost; P3's `flat` fell from
 4.1 µs to 1.2 µs. The projection is the one case P3 does not lead,
 which step 2 addresses.
+
+**After step 2** (2026-09-11, same machine):
+
+| Case | P1 interpreter | P2 closures | P3 native segments | pure native |
+| --- | ---: | ---: | ---: | ---: |
+| `reading` | 2749 | 2380 | 2038 | – |
+| `one_hole` | 574 | 448 | 452 | 413 |
+| `flat` | 4717 | 3760 | 3424 | – |
+| `projected` | 8366 | 7904 | 8150 | – |
+| `wide` | 9133 | 8976 | 8654 | – |
+
+The machine drifted a few percent slower than the step 1 run (the
+`reading` and `wide` rows moved without a change to their code); the
+projection moved 4% on P3 and not at all on P1. The step's record in
+§5 says where the per-tuple cost actually is.
 
 ## 7. Boundaries
 

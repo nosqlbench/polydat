@@ -14,15 +14,15 @@
 //! tuple over a scratch state, using a skeleton it parses once at setup.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
 use crate::ast::{PortType, Value, ValueRef};
 use crate::iteration::comprehension::StreamerValue;
-use crate::iteration::comprehension::runtime::evaluate_for_iteration;
-use crate::kernel::{PolydatKernel, PolydatProgram, PolydatState};
+use crate::iteration::comprehension::runtime::{RuntimeTuple, evaluate_for_iteration};
+use crate::kernel::{Kernel, KernelProgram, PolydatKernel, PolydatProgram};
 
 /// Where a hole sits in a `json` skeleton, which decides its encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -295,17 +295,76 @@ fn lower_ops(ops: &[TileOp]) -> Vec<RtOp> {
 }
 
 /// The runtime form: the spec, compiled body programs, and parsed streams.
-#[derive(Debug)]
 pub struct TileProgram {
     /// The serialized skeleton.
     pub spec: TileSpec,
     /// The skeleton with statics interned and streams parsed.
     ops: Vec<RtOp>,
-    /// The body programs, compiled once at setup.
+    /// The body programs, compiled once at setup, for the interpreter.
     pub children: Vec<Arc<PolydatProgram>>,
     /// One kernel over each body program, the canonical kernel the
     /// comprehension evaluator installs tuple values into.
     canonicals: Vec<Arc<PolydatKernel>>,
+    /// Per body, its program on the default engine (SRD 117 step 2),
+    /// compiled here, at construction, never inside a cycle: a kernel's
+    /// build folds its constants in a root cycle of its own, which would
+    /// reset the arena a render is writing (SRD 115, H5). `None` where
+    /// the engine refused the body, which then renders interpreted.
+    compiled: Vec<Option<Arc<dyn KernelProgram>>>,
+    /// Per body, its projection's tuples when the comprehension is the
+    /// same every render: no generator clause and no placeholder in
+    /// its sources. Evaluated once at construction.
+    memo: Vec<Option<Arc<[RuntimeTuple]>>>,
+}
+
+impl std::fmt::Debug for TileProgram {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TileProgram")
+            .field("spec", &self.spec)
+            .field("ops", &self.ops)
+            .field("children", &self.children.len())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Evaluate every projection whose tuples cannot change between
+/// renders, once.
+fn memoize(
+    ops: &[RtOp],
+    canonicals: &[Arc<PolydatKernel>],
+    memo: &mut [Option<Arc<[RuntimeTuple]>>],
+) {
+    for op in ops {
+        match op {
+            RtOp::Repeat {
+                stream,
+                child,
+                body,
+                generators,
+                ..
+            } => {
+                if generators.is_empty()
+                    && !stream.text.contains('{')
+                    && let Ok(tuples) = evaluate_for_iteration(
+                        &stream.ast,
+                        &*canonicals[*child],
+                        &HashMap::new(),
+                        |_| Ok(()),
+                    )
+                {
+                    memo[*child] = Some(tuples.into());
+                }
+                memoize(body, canonicals, memo);
+            }
+            RtOp::Branch {
+                then, otherwise, ..
+            } => {
+                memoize(then, canonicals, memo);
+                memoize(otherwise, canonicals, memo);
+            }
+            _ => {}
+        }
+    }
 }
 
 impl TileProgram {
@@ -331,17 +390,52 @@ impl TileProgram {
             .collect();
         // Both kernels serve the comprehension evaluator inside a render,
         // so neither is a root of its own cycle (SRD 115, axiom H5).
-        let canonicals = children
+        let canonicals: Vec<Arc<PolydatKernel>> = children
             .iter()
             .map(|p| Arc::new(PolydatKernel::from_program_nested(p.clone())))
             .collect();
         let ops = lower_ops(&spec.ops);
+        let mut memo = vec![None; children.len()];
+        memoize(&ops, &canonicals, &mut memo);
+        let compiled = spec
+            .children
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                match crate::dsl::compile::compile_polydat_with(&c.source, crate::Engine::default())
+                {
+                    Ok(kernel) => Some(kernel.into_program()),
+                    Err(e) => {
+                        crate::library::support::audit::debug(&format!(
+                            "tile '{}': projection body {i} renders on the interpreter: {e}",
+                            spec.name
+                        ));
+                        None
+                    }
+                }
+            })
+            .collect();
         TileProgram {
             spec,
             ops,
             children,
             canonicals,
+            compiled,
+            memo,
         }
+    }
+
+    /// The body program of projection `child` for a render on `engine`:
+    /// the interpreter's for the interpreter, the default engine's for
+    /// every compiled kernel, and the interpreter's again where the
+    /// default engine refused the body.
+    fn body_program_on(&self, child: usize, engine: crate::Engine) -> Arc<dyn KernelProgram> {
+        if engine == crate::Engine::Interpreter {
+            return self.children[child].clone();
+        }
+        self.compiled[child]
+            .clone()
+            .unwrap_or_else(|| self.children[child].clone())
     }
 
     /// The program for a skeleton payload, interned for the process
@@ -360,13 +454,19 @@ impl TileProgram {
             // SAFETY: the address was leaked below and is never freed.
             return unsafe { &*(p as *const TileProgram) };
         }
+        // Built with no lock held: constructing a program compiles its
+        // projection bodies, and a body's own tile interns its program
+        // through this same table (SRD 117 step 2). Two threads may
+        // build the same program at once; the first to insert wins and
+        // the other's build is dropped.
+        let built = Box::new(Self::from_json(spec));
         let mut guard = PROGRAMS.write().unwrap();
         let map = guard.get_or_insert_with(HashMap::new);
         if let Some(&p) = map.get(spec) {
             // SAFETY: as above.
             return unsafe { &*(p as *const TileProgram) };
         }
-        let leaked: &'static TileProgram = Box::leak(Box::new(Self::from_json(spec)));
+        let leaked: &'static TileProgram = Box::leak(built);
         map.insert(spec.to_string(), leaked as *const TileProgram as usize);
         leaked
     }
@@ -386,27 +486,35 @@ impl TileProgram {
         walk(&self.ops)
     }
 
-    /// Render with the node's wire inputs, the hole values.
+    /// Render with the node's wire inputs, the hole values, on the
+    /// interpreter.
     pub fn render(&self, inputs: &[Value]) -> String {
         let refs: Vec<ValueRef<'_>> = inputs.iter().map(ValueRef::from).collect();
         let mut out = String::new();
-        self.render_into(&refs, &mut out);
+        self.render_into(&refs, crate::Engine::Interpreter, &mut out);
         out
     }
 
     /// Render into any text sink from borrowed views of the hole
     /// values: a `String` at P1, the cycle arena writer in a compiled
     /// closure or helper (SRD 115 §6). Every hole is encoded here, from
-    /// the view straight into the sink.
-    pub fn render_into<W: std::fmt::Write>(&self, inputs: &[ValueRef<'_>], out: &mut W) {
-        self.render_ops(&self.ops, inputs, None, out);
+    /// the view straight into the sink, and a projection's body runs
+    /// on `engine`, the engine of the kernel rendering.
+    pub fn render_into<W: std::fmt::Write>(
+        &self,
+        inputs: &[ValueRef<'_>],
+        engine: crate::Engine,
+        out: &mut W,
+    ) {
+        self.render_ops(&self.ops, inputs, engine, None, out);
     }
 
-    fn render_ops<W: std::fmt::Write>(
+    fn render_ops<'k, W: std::fmt::Write>(
         &self,
         ops: &[RtOp],
         inputs: &[ValueRef<'_>],
-        mut child: Option<(&Arc<PolydatProgram>, &mut PolydatState)>,
+        engine: crate::Engine,
+        mut child: Option<&mut (dyn Kernel + 'k)>,
         out: &mut W,
     ) {
         for op in ops {
@@ -419,8 +527,9 @@ impl TileProgram {
                         encode_ref(inputs.get(*i).copied().unwrap_or(ValueRef::None), enc, out)
                     }
                     RtSource::Child(name) => {
-                        if let Some((program, state)) = child.as_mut() {
-                            encode_ref(ValueRef::from(state.pull(program, name)), enc, out)
+                        if let Some(kernel) = child.as_deref_mut() {
+                            let v = kernel.pull(name);
+                            encode_ref(ValueRef::from(&v), enc, out)
                         }
                     }
                 },
@@ -429,12 +538,9 @@ impl TileProgram {
                     then,
                     otherwise,
                 } => {
-                    let c = self.truthy(cond, inputs, child.as_mut());
+                    let c = self.truthy(cond, inputs, child.as_deref_mut());
                     let branch = if c { then } else { otherwise };
-                    match child.as_mut() {
-                        Some((p, s)) => self.render_ops(branch, inputs, Some((p, s)), out),
-                        None => self.render_ops(branch, inputs, None, out),
-                    }
+                    self.render_ops(branch, inputs, engine, child.as_deref_mut(), out);
                 }
                 RtOp::Repeat {
                     stream,
@@ -443,51 +549,79 @@ impl TileProgram {
                     body,
                     generators,
                 } => {
-                    let mut streamer = (**stream).clone();
-                    if !generators.is_empty() {
-                        streamer.ast = bind_generators(&streamer.ast, generators, inputs);
-                    }
-                    let program = &self.children[*child_idx];
+                    // The tuples: memoized when the comprehension is the
+                    // same every render, otherwise evaluated now with the
+                    // same evaluator the `for` construct opens a traversal
+                    // with, which applies order strategies, samples
+                    // continuous sources, and runs predicates over the
+                    // tuple. Generators are bound first, so the parent
+                    // kernel it sees is empty and the canonical kernel is
+                    // the body program.
+                    let memoized = self.memo[*child_idx].clone();
+                    let tuples: std::borrow::Cow<'_, [RuntimeTuple]> = match &memoized {
+                        Some(t) => std::borrow::Cow::Borrowed(&t[..]),
+                        None => {
+                            let mut streamer = (**stream).clone();
+                            if !generators.is_empty() {
+                                streamer.ast = bind_generators(&streamer.ast, generators, inputs);
+                            }
+                            std::borrow::Cow::Owned(
+                                evaluate_for_iteration(
+                                    &streamer.ast,
+                                    &*self.canonicals[*child_idx],
+                                    &HashMap::new(),
+                                    |_| Ok(()),
+                                )
+                                .unwrap_or_else(|e| {
+                                    panic!(
+                                        "tile '{}': projection `for {}` failed at render: {e}",
+                                        self.spec.name, streamer.text
+                                    )
+                                }),
+                            )
+                        }
+                    };
                     let child_spec = &self.spec.children[*child_idx];
-                    // The same evaluator the `for` construct opens a
-                    // traversal with: it applies order strategies,
-                    // samples continuous sources, and runs predicates
-                    // over the tuple. Generators were bound above, so
-                    // the parent kernel it sees is empty and the
-                    // canonical kernel is the body program.
-                    let tuples = evaluate_for_iteration(
-                        &streamer.ast,
-                        &*self.canonicals[*child_idx],
-                        &HashMap::new(),
-                        |_| Ok(()),
-                    )
-                    .unwrap_or_else(|e| {
-                        panic!(
-                            "tile '{}': projection `for {}` failed at render: {e}",
-                            self.spec.name, streamer.text
-                        )
-                    });
+                    // The body runs compiled wherever the kernel rendering
+                    // is compiled, as a nested kernel over the body's program
+                    // for the default engine, reused across renders on this
+                    // thread; on the interpreter it runs interpreted.
+                    let engine = match engine {
+                        crate::Engine::Interpreter => engine,
+                        _ => crate::Engine::default(),
+                    };
+                    let program = self.body_program_on(*child_idx, engine);
                     let mut first = true;
-                    with_scratch(program, |state| {
+                    let fail = |name: &str, e: String| -> ! {
+                        panic!(
+                            "tile '{}': projection body input `{name}`: {e}",
+                            self.spec.name
+                        )
+                    };
+                    with_body_kernel(&program, engine, |kernel, declared| {
                         for (index, tuple) in tuples.iter().enumerate() {
                             if !first {
                                 out.put(sep);
                             }
                             first = false;
-                            state.set_inputs(&[index as u64]);
+                            kernel.set_inputs(&[index as u64]);
                             for (name, v) in tuple {
-                                if let Some(idx) = program.find_input(name) {
-                                    state.set_input(idx, v.clone());
+                                if declared.contains(name) {
+                                    kernel
+                                        .set_input(name, v.clone())
+                                        .unwrap_or_else(|e| fail(name, e));
                                 }
                             }
                             for (name, input_idx, ty) in &child_spec.cascade {
-                                if let (Some(idx), Some(v)) =
-                                    (program.find_input(name), inputs.get(*input_idx))
+                                if declared.contains(name)
+                                    && let Some(v) = inputs.get(*input_idx)
                                 {
-                                    state.set_input(idx, typed_for(&owned(*v), ty));
+                                    kernel
+                                        .set_input(name, typed_for(&owned(*v), ty))
+                                        .unwrap_or_else(|e| fail(name, e));
                                 }
                             }
-                            self.render_ops(body, inputs, Some((program, state)), out);
+                            self.render_ops(body, inputs, engine, Some(kernel), out);
                         }
                     });
                 }
@@ -496,16 +630,16 @@ impl TileProgram {
     }
 
     /// A branch condition's truth, as the `cond` encoding decides it.
-    fn truthy(
+    fn truthy<'k>(
         &self,
         source: &RtSource,
         inputs: &[ValueRef<'_>],
-        child: Option<&mut (&Arc<PolydatProgram>, &mut PolydatState)>,
+        child: Option<&mut (dyn Kernel + 'k)>,
     ) -> bool {
         match source {
             RtSource::Wire(i) => truthy_of(inputs.get(*i).copied().unwrap_or(ValueRef::None)),
             RtSource::Child(name) => match child {
-                Some((program, state)) => truthy_of(ValueRef::from(state.pull(program, name))),
+                Some(kernel) => truthy_of(ValueRef::from(&kernel.pull(name))),
                 None => false,
             },
         }
@@ -658,39 +792,56 @@ fn retype(v: &Value, ty: &str) -> Value {
     }
 }
 
+/// A cached body kernel: the program it was created from, the kernel,
+/// and the inputs the body declares.
+type BodyEntry = (Arc<dyn KernelProgram>, Box<dyn Kernel>, HashSet<String>);
+
 thread_local! {
-    /// One scratch state per projection body program per thread, reused
-    /// across renders so a projection allocates nothing per tuple.
-    static SCRATCH: RefCell<HashMap<usize, (Arc<PolydatProgram>, PolydatState)>> = RefCell::new(HashMap::new());
+    /// One kernel per projection body program and engine per thread,
+    /// reused across renders so a projection creates nothing per tuple.
+    static BODY_KERNELS: RefCell<HashMap<(usize, crate::Engine), BodyEntry>> = RefCell::new(HashMap::new());
+    /// Body kernels created on this thread, by engine: a diagnostic for
+    /// the tests.
+    static BODIES_CREATED: RefCell<HashMap<crate::Engine, u64>> = RefCell::new(HashMap::new());
 }
 
-/// Distinct child programs one thread will keep scratch states for
-/// before starting over. Bounds the cache when programs are compiled
-/// and dropped in a loop.
+/// Distinct body programs one thread will keep kernels for before
+/// starting over. Bounds the cache when programs are compiled and
+/// dropped in a loop.
 const SCRATCH_LIMIT: usize = 64;
 
-fn with_scratch(program: &Arc<PolydatProgram>, f: impl FnOnce(&mut PolydatState)) {
+/// Projection body kernels created on this thread for `engine`.
+#[doc(hidden)]
+pub fn body_kernels_created(engine: crate::Engine) -> u64 {
+    BODIES_CREATED.with(|m| m.borrow().get(&engine).copied().unwrap_or(0))
+}
+
+fn with_body_kernel(
+    program: &Arc<dyn KernelProgram>,
+    engine: crate::Engine,
+    f: impl FnOnce(&mut dyn Kernel, &HashSet<String>),
+) {
     // The entry pins its program so the address cannot be reused by a
-    // later program while a state built for this one is still cached.
-    let key = Arc::as_ptr(program) as usize;
-    let mut state = SCRATCH
+    // later program while a kernel built for this one is still cached.
+    let key = (Arc::as_ptr(program) as *const () as usize, engine);
+    let (kernel_program, mut kernel, declared) = BODY_KERNELS
         .with(|m| m.borrow_mut().remove(&key))
-        .filter(|(p, _)| Arc::ptr_eq(p, program))
-        .map(|(_, s)| s)
+        .filter(|(p, _, _)| Arc::ptr_eq(p, program))
         .unwrap_or_else(|| {
             // A body runs inside the enclosing cycle: it must never
             // reset the thread's arena (SRD 115, axiom H5).
-            let mut s = program.create_state();
-            s.mark_nested();
-            s
+            let kernel = program.clone().create_nested_kernel();
+            let declared: HashSet<String> = kernel.input_names().into_iter().collect();
+            BODIES_CREATED.with(|m| *m.borrow_mut().entry(engine).or_insert(0) += 1);
+            (program.clone(), kernel, declared)
         });
-    f(&mut state);
-    SCRATCH.with(|m| {
+    f(kernel.as_mut(), &declared);
+    BODY_KERNELS.with(|m| {
         let mut m = m.borrow_mut();
         if m.len() >= SCRATCH_LIMIT {
             m.clear();
         }
-        m.insert(key, (Arc::clone(program), state));
+        m.insert(key, (kernel_program, kernel, declared));
     });
 }
 
@@ -945,8 +1096,11 @@ fn tile_render_compiled(
                 }
             })
             .collect();
+        // A body runs compiled wherever the kernel rendering is compiled:
+        // this closure serves the closure tier and a hybrid kernel's
+        // closure steps alike, so the body takes the default engine.
         let mut w = crate::kernel::ArenaWriter::new();
-        program.render_into(&refs, &mut w);
+        program.render_into(&refs, crate::Engine::default(), &mut w);
         outputs[0] = w.finish();
     })
 }
