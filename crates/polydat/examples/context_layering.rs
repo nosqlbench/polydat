@@ -19,12 +19,14 @@
 //! / `ScopeKernel` machinery is what nbrs uses for the multi-scope
 //! case.
 
+use polydat::dsl::{CompileOptions, compile_polydat_kernel_with_options};
+
 fn main() {
     let lib_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("stdlib")
         .join("identity.polydat");
 
-    let mut kernel = polydat::dsl::compile_polydat_with_libs(
+    let mut kernel = compile_polydat_kernel_with_options(
         r#"
             input cycle: u64
             (tenant, device) := mixed_radix(cycle, 100, 0)
@@ -37,11 +39,12 @@ fn main() {
             tenant_id := hashed_id(tenant, 10000)
             device_id := hashed_id(device, 10000)
         "#,
+        &CompileOptions {
+            lib_paths: vec![lib_path.clone()],
+            context: "context_layering example".into(),
+            ..CompileOptions::default()
+        },
         None,
-        vec![lib_path.clone()],
-        &[],
-        false,
-        "context_layering example",
     )
     .expect("compile failed");
 

@@ -35,7 +35,7 @@ fn main() {
     asm.add_output("reading", WireRef::node_port("decompose", 2));
     asm.add_output("region_code", WireRef::node("region_code"));
 
-    let mut kernel = asm.compile().expect("assembly failed");
+    let mut kernel = asm.compile_kernel().expect("assembly failed");
 
     println!("cycle     region  device  reading  region_code");
     println!("--------  ------  ------  -------  -----------");

@@ -26,9 +26,9 @@ does, the example is the source of truth.
 ## From the Polydat DSL
 
 ```rust
-use polydat::dsl::compile_polydat;
+use polydat::dsl::compile_polydat_kernel;
 
-let mut kernel = compile_polydat(r#"
+let mut kernel = compile_polydat_kernel(r#"
     input cycle: u64
     hashed := hash(cycle)
     user_id := mod(hashed, 1000000)
@@ -44,16 +44,16 @@ See [`examples/basic.rs`](../../examples/basic.rs) for the full runnable form.
 ## From the Assembler API
 
 ```rust
-use polydat::assembly::{GkAssembler, WireRef};
-use polydat::nodes::hash::Hash64;
-use polydat::nodes::arithmetic::ModU64;
+use polydat::compile::assembly::{PolydatAssembler, WireRef};
+use polydat::library::hash::Hash;
+use polydat::library::arithmetic::Mod;
 
-let mut asm = GkAssembler::new(vec!["cycle".into()]);
-asm.add_node("hashed", Box::new(Hash64::new()), vec![WireRef::coord("cycle")]);
-asm.add_node("user_id", Box::new(ModU64::new(1_000_000)), vec![WireRef::node("hashed")]);
+let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
+asm.add_node("hashed", Box::new(Hash::new()), vec![WireRef::input("cycle")]);
+asm.add_node("user_id", Box::new(Mod::new(1_000_000)), vec![WireRef::node("hashed")]);
 asm.add_output("user_id", WireRef::node("user_id"));
 
-let mut kernel = asm.compile().unwrap();
+let mut kernel = asm.compile_kernel().unwrap();
 kernel.set_inputs(&[42]);
 assert!(kernel.pull("user_id").as_u64() < 1_000_000);
 ```
@@ -74,7 +74,7 @@ nodes by name, forming directed edges. The compiler topologically
 sorts the result and refuses cycles.
 
 ```rust
-let mut kernel = polydat::dsl::compile_polydat(r#"
+let mut kernel = polydat::dsl::compile_polydat_kernel(r#"
     input cycle: u64
 
     // Decompose one coordinate into two dimensions (device, reading).
@@ -91,7 +91,7 @@ let mut kernel = polydat::dsl::compile_polydat(r#"
 "#).expect("compile failed");
 
 kernel.set_inputs(&[12_345]);
-// device=45, reading=123, q_temp=0.071753, q_humid=0.452280
+// device=45, reading=123, q_temp=0.019101, q_humid=0.155169
 ```
 
 The grammar fits on one page (see [`src/dsl/`](../../src/dsl/)) but the
@@ -111,10 +111,10 @@ A compiled kernel is a pure function of its coordinate inputs. Same
 coordinate in, same outputs out, every time, no shared state. That
 property is what lets a multi-thread benchmark generate billions of
 distinct, reproducible variates in parallel — each thread gets its
-own state, the program is shared via `Arc`.
+own kernel, the program is shared via `Arc`.
 
 ```rust
-let kernel = polydat::dsl::compile_polydat(r#"
+let kernel = polydat::dsl::compile_polydat_kernel(r#"
     input cycle: u64
     user_id := mod(hash(cycle), 1000000)
 "#).unwrap();
@@ -126,14 +126,14 @@ let results: Vec<u64> = std::thread::scope(|s| {
     let handles: Vec<_> = (0..2).map(|_| {
         let program = program.clone();
         s.spawn(move || {
-            let mut state = program.create_state();
-            state.set_inputs(&[42]);
-            state.pull(&program, "user_id").as_u64()
+            let mut kernel = program.create_kernel();
+            kernel.set_inputs(&[42]);
+            kernel.pull("user_id").as_u64()
         })
     }).collect();
     handles.into_iter().map(|h| h.join().unwrap()).collect()
 });
-// All threads produce the same value (915720 for coord=42).
+// All threads produce the same value (275413 for coord=42).
 ```
 
 See [`examples/generation_kernel.rs`](../../examples/generation_kernel.rs)
@@ -144,24 +144,25 @@ larger benchmark form).
 
 The 230 built-in nodes (see [nodes.md](../reference/nodes.md)) are one library.
 Workload-author functions written in `.polydat` files are another —
-`compile_polydat_with_libs` loads them from disk and they're callable from
-your DSL by name as if they were built in.
+the library paths in `CompileOptions` load them from disk and they're
+callable from your DSL by name as if they were built in.
 
 ```rust
 let stdlib = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     .join("stdlib").join("identity.polydat");
 
-let mut kernel = polydat::dsl::compile_polydat_with_libs(
+let mut kernel = polydat::dsl::compile_polydat_kernel_with_options(
     r#"
         input cycle: u64
         // `hashed_id` is loaded from identity.polydat, not a built-in.
         uid := hashed_id(cycle, 1000000)
     "#,
-    None,                 // source_dir — no implicit ./*.gk lookup
-    vec![stdlib],         // explicit library paths
-    &[],                  // required_outputs — compile everything
-    false,                // strict
-    "library example",
+    &CompileOptions {
+        lib_paths: vec![stdlib],   // explicit library paths
+        context: "library example".into(),
+        ..CompileOptions::default() // no source directory, every output, not strict
+    },
+    None,
 ).expect("compile failed");
 ```
 
@@ -182,7 +183,7 @@ typed accessor.
 ```rust
 use polydat::node::Value;
 
-let mut kernel = polydat::dsl::compile_polydat(r#"
+let mut kernel = polydat::dsl::compile_polydat_kernel(r#"
     input cycle: u64
     n := mod(hash(cycle), 1000)             // u64
     p := unit_interval(hash(cycle))         // f64 in [0.0, 1.0)
@@ -220,7 +221,7 @@ A single integer coordinate (`cycle`) is a 1-D parameter space.
 drive everything.
 
 ```rust
-let mut kernel = polydat::dsl::compile_polydat(r#"
+let mut kernel = polydat::dsl::compile_polydat_kernel(r#"
     input cycle: u64
     (device, reading) := mixed_radix(cycle, 100, 0)
 "#).unwrap();
@@ -266,7 +267,7 @@ each other. The `partitions` node resolves a spec against an extent
 and returns the list as a value:
 
 ```rust
-let mut k = compile_polydat(r#"
+let mut k = compile_polydat_kernel(r#"
     input cycle: u64
     parts := partitions("20%,30%,*", 1000000)
 "#).expect("compile");
@@ -286,11 +287,11 @@ p2  [ 500000, 1000000)  500000 ordinals
 A fiber claims its slice with `over`. The kernel exposes the resolved
 partition as `q.cursor` and its bounds as metadata wires. Resolving the
 `over` spec and writing those slots is the host's job at scope setup;
-`cursor_over_partitions` and `narrow_cursor` are that step, and this
-example performs it for fiber 1:
+`cursor_over_partitions_on` and `set_cursor` are that step, on any
+engine, and this example performs it for fiber 1:
 
 ```rust
-let mut k = compile_polydat(r#"
+let mut k = compile_polydat_kernel(r#"
     input cycle: u64
     cursor q = range(0, 1000000) over "20%,30%,*"
     start := q.cursor.start_ordinal
@@ -302,10 +303,9 @@ let mut k = compile_polydat(r#"
 "#).expect("compile2");
 
 // The host resolves the `over` spec and hands fiber 1 its partition.
-let program = k.program().clone();
-let schema = &program.cursor_schemas()[0];
-let parts = cursor_over_partitions(&program, k.state(), schema).expect("resolve");
-narrow_cursor(&program, k.state(), "q", &parts[1]);
+let schema = k.cursor_schemas()[0].clone();
+let parts = cursor_over_partitions_on(k.as_mut(), &schema).expect("resolve");
+k.set_cursor("q", &parts[1]).expect("narrow");
 
 for cycle in [0u64, 1, 299_999, 300_000] {
     k.set_inputs(&[cycle]);
@@ -396,7 +396,7 @@ factories and cardinality metadata. Derivations are written with the
 same keyword over a bound producer.
 
 ```rust
-let mut kernel = polydat::dsl::compile_polydat(r#"
+let mut kernel = polydat::dsl::compile_polydat_kernel(r#"
     input cycle: u64
 
     base    := for k in 1..4, limit in 10,20,30
@@ -408,12 +408,12 @@ let mut kernel = polydat::dsl::compile_polydat(r#"
 kernel.set_inputs(&[0]);
 println!("{}", kernel.pull("label").as_str());
 for name in ["base", "corners", "sampled"] {
-    let value = kernel.pull(name).clone();
+    let value = kernel.pull(name);
     show(name, value.as_streamer().expect("streamer"));
 }
 
 // Two streams from one wire never share a cursor.
-let value = kernel.pull("base").clone();
+let value = kernel.pull("base");
 let base = value.as_streamer().unwrap();
 let mut a = base.coordinate_stream();
 let b = base.coordinate_stream();
@@ -440,13 +440,13 @@ and it interpolates as its `for` text. See
 
 `for <comprehension> { body }` activates one child scope per tuple. The
 body compiles once, at parent compile time, into its own program. Each
-activation is a fresh state over that program with the tuple's elements
+activation is a fresh kernel over that program with the tuple's elements
 bound as typed wires and the parent's referenced wires cascaded in. A
 cursor declared `over` an element is narrowed per activation, and its
 slice sets how many cycles the activation runs.
 
 ```rust
-let mut kernel = polydat::dsl::compile_polydat(r#"
+let mut kernel = polydat::dsl::compile_polydat_kernel(r#"
     input cycle: u64
     extern total: u64 = 1000
     base := hash(cycle)
@@ -459,15 +459,19 @@ let mut kernel = polydat::dsl::compile_polydat(r#"
 "#).expect("compile failed");
 kernel.set_inputs(&[7]);
 
+let stream = kernel.traverse(0).expect("open traversal");
+// The body compiles for the engine on the first activation; every
+// activation after it shares that program.
+drop(stream.activate(0).expect("first activation"));
 let built_before = programs_built();
-let mut stream = kernel.traverse(0).expect("open traversal");
-while let Some(mut act) = stream.advance().expect("activation") {
+for index in 0..stream.len() {
+    let mut act = stream.activate(index).expect("activation");
     let slice = act.cursor.clone().expect("cursor slice");
     let scale = act.coord("scale").unwrap().as_u64();
     let kernel = act.cycle(0);
     // ... print index, slice, scale, cycle count, row, v
 }
-println!("programs built while activating: {}", programs_built() - built_before);
+println!("programs built after the first activation: {}", programs_built() - built_before);
 ```
 
 ```text
@@ -484,7 +488,7 @@ act  p          scale  cycles  first row  first v
   6  [750,1000)      1     250        750  7191089600892375237
   7  [750,1000)    100     250        750  7191089600892449487
 
-programs built while activating: 0
+programs built after the first activation: 0
 ```
 
 The comprehension's source reads the parent's `total` through `{total}`
@@ -501,7 +505,7 @@ the graph and renders per cycle as a string wire, with the encoding
 deciding how each hole is written.
 
 ```rust
-let mut kernel = compile_polydat(r#"
+let mut kernel = compile_polydat_kernel(r#"
     input cycle: u64
     base := cycle * 100
     tile samples : json := {
@@ -537,7 +541,7 @@ at each call.
 let stdlib = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     .join("stdlib").join("identity.polydat");
 
-let mut kernel = polydat::dsl::compile_polydat_with_libs(
+let mut kernel = polydat::dsl::compile_polydat_kernel_with_options(
     r#"
         input cycle: u64
         (tenant, device) := mixed_radix(cycle, 100, 0)
@@ -545,7 +549,8 @@ let mut kernel = polydat::dsl::compile_polydat_with_libs(
         tenant_id := hashed_id(tenant, 10000)
         device_id := hashed_id(device, 10000)
     "#,
-    None, vec![stdlib], &[], false, "context layering",
+    &CompileOptions { lib_paths: vec![stdlib], context: "context layering".into(), ..CompileOptions::default() },
+    None,
 ).expect("compile failed");
 ```
 
@@ -566,7 +571,7 @@ wire — useful for one-line derivations where naming the intermediate
 would just be noise.
 
 ```rust
-let mut kernel = polydat::dsl::compile_polydat(r#"
+let mut kernel = polydat::dsl::compile_polydat_kernel(r#"
     input cycle: u64
 
     // Nested expressions — no named intermediates needed.

@@ -32,7 +32,7 @@ fn show(label: &str, s: &polydat::iteration::comprehension::StreamerValue) {
 }
 
 fn main() {
-    let mut kernel = polydat::dsl::compile_polydat(
+    let mut kernel = polydat::dsl::compile_polydat_kernel(
         r#"
         input cycle: u64
 
@@ -47,12 +47,12 @@ fn main() {
     kernel.set_inputs(&[0]);
     println!("{}", kernel.pull("label").as_str());
     for name in ["base", "corners", "sampled"] {
-        let value = kernel.pull(name).clone();
+        let value = kernel.pull(name);
         show(name, value.as_streamer().expect("streamer"));
     }
 
     // Two streams from one wire never share a cursor.
-    let value = kernel.pull("base").clone();
+    let value = kernel.pull("base");
     let base = value.as_streamer().unwrap();
     let mut a = base.coordinate_stream();
     let b = base.coordinate_stream();

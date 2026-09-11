@@ -154,11 +154,18 @@ macro_rules! impl_kernel_trait {
             fn input_names(&self) -> Vec<String> {
                 self.core.externs.input_names().to_vec()
             }
+            /// In declaration order, as the interpreter lists them; a kernel
+            /// built without a program surface lists its slots.
             fn output_names(&self) -> Vec<String> {
-                $ty::output_names(self)
-                    .into_iter()
-                    .map(String::from)
-                    .collect()
+                let declared = self.core.externs.output_names();
+                if declared.is_empty() {
+                    $ty::output_names(self)
+                        .into_iter()
+                        .map(String::from)
+                        .collect()
+                } else {
+                    declared.to_vec()
+                }
             }
             fn output_type(&self, name: &str) -> Option<crate::ast::PortType> {
                 self.core.output_types.get(name).copied()

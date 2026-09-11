@@ -14,12 +14,13 @@
 //!
 //! ### From DSL source
 //!
-//! The simplest way to build a kernel is from Polydat DSL source:
+//! The simplest way to build a kernel is from Polydat DSL source, on the
+//! default engine (native code with the `jit` feature, closures without):
 //!
 //! ```rust
-//! use polydat::dsl::compile_polydat;
+//! use polydat::dsl::compile_polydat_kernel;
 //!
-//! let mut kernel = compile_polydat(r#"
+//! let mut kernel = compile_polydat_kernel(r#"
 //!     input cycle: u64
 //!     hashed := hash(cycle)
 //!     user_id := mod(hashed, 1000000)
@@ -119,7 +120,7 @@
 //!   [`compile::closures`] (Phase 2), [`compile::hybrid`]
 //!   (per-node optimal), `compile::jit` (Phase 3 Cranelift,
 //!   feature-gated)
-//! - [`dsl`]: Polydat language — [`dsl::compile_polydat`], lexer, parser, registry
+//! - [`dsl`]: Polydat language — [`dsl::compile_polydat_kernel`], [`dsl::compile_polydat`] (the interpreter), lexer, parser, registry
 //! - [`library`]: 250+ built-in function nodes (hash, arithmetic, string,
 //!   math, distributions, datetime, noise, etc.) plus [`library::sampling`]
 //!   (alias tables, LUT interpolation, ICD) and [`library::support`]
@@ -157,7 +158,7 @@ pub mod viz;
 /// [`tile::compile_polydat_with_tiles`].
 pub mod tile {
     pub use crate::dsl::ast::{TileBodyKind, TileDef, TileOptions, TilePiece};
-    pub use crate::dsl::compile::compile_polydat_with_tiles;
+    pub use crate::dsl::compile::{compile_polydat_kernel_with_tiles, compile_polydat_with_tiles};
     pub use crate::dsl::lexer::Span;
     pub use crate::dsl::tile::{parse_template, render_template};
     pub use crate::dsl::tile_structural::{

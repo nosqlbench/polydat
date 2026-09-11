@@ -4,15 +4,16 @@
 //! Tutorial companion: every program in docs/tutorials/polytile_tutorial.md,
 //! compiled and rendered here so the document's output is real.
 
-use polydat::dsl::compile_polydat;
+use polydat::dsl::{compile_polydat_kernel, compile_polydat_with};
+use polydat::{Engine, JitMode, Provenance};
 
 fn show(title: &str, src: &str, cycles: &[u64], outputs: &[&str]) {
     println!("== {title} ==");
-    let mut kernel = compile_polydat(src).unwrap_or_else(|e| panic!("{title}: {e}"));
+    let mut kernel = compile_polydat_kernel(src).unwrap_or_else(|e| panic!("{title}: {e}"));
     for &cycle in cycles {
         kernel.set_inputs(&[cycle]);
         for name in outputs {
-            let value = kernel.pull(name).clone();
+            let value = kernel.pull(name);
             println!("cycle {cycle} {name}: {}", value.to_display_string());
         }
     }
@@ -244,15 +245,15 @@ fn main() {
 
 /// Print the compiler's diagnostic for a program it refuses.
 fn fail(title: &str, src: &str) {
-    match compile_polydat(src) {
+    match compile_polydat_kernel(src) {
         Ok(_) => println!("{title}: compiled (unexpected)"),
         Err(e) => println!("{title}:\n  {}", e.to_string().replace('\n', "\n  ")),
     }
 }
 
-/// The same tile at every engine level: the interpreter, the production
-/// kernel with fused native cones, the P2 closure kernel, and the P3
-/// kernel produce identical bytes.
+/// The same tile at every engine level: the interpreter, the interpreter
+/// with native cones forced on, the P2 closure kernel, and P3, the
+/// default, produce identical bytes.
 fn tiers() {
     use polydat::dsl::compile::compile_polydat_to_assembler;
     let src = r#"
@@ -263,28 +264,23 @@ fn tiers() {
     "#;
     println!("== 16. One tile, every engine ==");
     let mut p1 = compile_polydat_to_assembler(src).unwrap();
-    p1.set_jit_mode(polydat::JitMode::Off);
+    p1.set_jit_mode(JitMode::Off);
     let mut p1 = p1.compile().unwrap();
     let mut cones = compile_polydat_to_assembler(src).unwrap();
-    cones.set_jit_mode(polydat::JitMode::Force);
+    cones.set_jit_mode(JitMode::Force);
     let mut cones = cones.compile().unwrap();
-    let mut p2 = compile_polydat_to_assembler(src)
-        .unwrap()
-        .try_compile_raw()
-        .unwrap_or_else(|_| panic!("P2 closures"));
-    let mut p3 = compile_polydat_to_assembler(src)
-        .unwrap()
-        .try_compile_jit()
-        .expect("P3");
+    let mut p2 =
+        compile_polydat_with(src, Engine::Closures(Provenance::Auto)).expect("P2 closures");
+    let mut p3 = compile_polydat_kernel(src).expect("P3");
     for cycle in [0u64, 1] {
         p1.set_inputs(&[cycle]);
         let a = p1.pull("doc").to_display_string();
         cones.set_inputs(&[cycle]);
         let b = cones.pull("doc").to_display_string();
-        p2.eval(&[cycle]);
-        let c = p2.get_value("doc").to_display_string();
-        p3.eval(&[cycle]);
-        let d = p3.get_value("doc").to_display_string();
+        p2.set_inputs(&[cycle]);
+        let c = p2.pull("doc").to_display_string();
+        p3.set_inputs(&[cycle]);
+        let d = p3.pull("doc").to_display_string();
         println!("cycle {cycle} P1:    {a}");
         println!(
             "cycle {cycle} cones: {}",
@@ -305,7 +301,9 @@ fn tiers() {
 /// A host that already holds the template as a parsed JSON value hands
 /// it in without going through source text at all.
 fn host_boundary() {
-    use polydat::tile::{Span, TileOptions, compile_polydat_with_tiles, tile_from_json_value};
+    use polydat::tile::{
+        Span, TileOptions, compile_polydat_kernel_with_tiles, tile_from_json_value,
+    };
 
     let template = serde_json::json!({
         "id": "${cycle}",
@@ -318,7 +316,8 @@ fn host_boundary() {
         Span { line: 0, col: 0 },
     )
     .expect("structural template");
-    let mut kernel = compile_polydat_with_tiles("input cycle: u64\n", vec![tile]).expect("compile");
+    let mut kernel =
+        compile_polydat_kernel_with_tiles("input cycle: u64\n", vec![tile]).expect("compile");
     kernel.set_inputs(&[4]);
     println!("== 10. A tile from a parsed JSON value ==");
     println!("cycle 4 doc: {}", kernel.pull("doc").as_str());

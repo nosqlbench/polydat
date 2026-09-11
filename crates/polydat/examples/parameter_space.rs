@@ -10,7 +10,7 @@
 //! list: the first dimension fills before the second advances.
 
 fn main() {
-    let mut kernel = polydat::dsl::compile_polydat(
+    let mut kernel = polydat::dsl::compile_polydat_kernel(
         r#"
         input cycle: u64
         // 100 × 500 = 50,000 distinct (device, reading) pairs.

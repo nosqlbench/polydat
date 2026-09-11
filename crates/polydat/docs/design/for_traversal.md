@@ -335,7 +335,8 @@ build it on the engine it chose: `TraversalStream::activation_on(index,
 engine)` compiles the body for that engine once, on the first request,
 through the same assembler every engine uses, and every later
 activation on that engine shares the program, as interpreter
-activations share theirs. The activation is driven through the `Kernel`
+activations share theirs; `activate(index)` is `activation_on` on
+`Engine::default()`. The activation is driven through the `Kernel`
 trait and computes what the interpreter's activation computes
 ([engine parity](engine_parity.md), step 8). Opening a traversal is
 engine-neutral too: `traverse` is a method of the `Kernel` trait, and a

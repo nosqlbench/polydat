@@ -21,7 +21,7 @@ thread. The host owns everything that touches the outside world.
 | --- | --- | --- |
 | Which coordinates to visit, in what order, on which threads | host | §3, §4, §9 |
 | Parsing, typing, and compiling the program | Polydat | §2, §8 |
-| Selecting engines (interpreter, closures, native code) | Polydat | §11 |
+| Selecting engines (native code, closures, the interpreter) | Polydat, unless the host names one | §11 |
 | Per-coordinate values and their determinism | Polydat | §2, §4 |
 | Extern values and their defaults | host sets, Polydat types | §3 |
 | Functions the program may call | Polydat's library plus the host's registered nodes | §5, §6 |
@@ -40,18 +40,20 @@ this rule serves.
 ## 2. Compile and drive
 
 The smallest host compiles source text, sets a coordinate, and reads
-named outputs. `compile_polydat` returns a `PolydatKernel`: a program
-plus one state, ready to run on the calling thread.
+named outputs. `compile_polydat_kernel` returns a `Box<dyn Kernel>` on
+the default engine, native code where the build has the `jit` feature
+and the closure tier otherwise, ready to run on the calling thread.
 
 ```rust
-use polydat::dsl::compile::compile_polydat;
+use polydat::dsl::compile_polydat_kernel;
 
-let mut kernel = compile_polydat(r#"
+let mut kernel = compile_polydat_kernel(r#"
     input cycle: u64
     user_id := mod(hash(cycle), 1000000)
     score   := unit_interval(hash(user_id))
     label   := "user-{user_id}"
 "#)?;
+println!("engine: {}", kernel.engine());
 println!("inputs: {:?}", kernel.input_names());
 for cycle in [0u64, 1, 2] {
     kernel.set_inputs(&[cycle]);
@@ -63,6 +65,7 @@ for cycle in [0u64, 1, 2] {
 ```
 
 ```text
+engine: native (PushPull)
 inputs: ["cycle"]
 outputs: ["cycle", "user_id", "score", "label"]
 cycle 0: user_id=607535 score=0.601 label=user-607535
@@ -71,28 +74,29 @@ cycle 2: user_id=348110 score=0.219 label=user-348110
 ```
 
 `set_inputs` writes the coordinate tuple and advances the cycle; `pull`
-evaluates on demand and caches within the cycle, so pulling the same
-wire twice costs one evaluation. Values come back as `&Value` with typed
-accessors (`as_u64`, `as_f64`, `as_str`, `as_bool`) that panic on a
-type mismatch, which is a host bug: the program's types are known at
-compile time and the host is expected to read what it declared.
+evaluates the output's cone on demand and caches within the cycle, so
+pulling the same wire twice costs one evaluation. Values come back as
+an owned `Value` with typed accessors (`as_u64`, `as_f64`, `as_str`,
+`as_bool`) that panic on a type mismatch, which is a host bug: the
+program's types are known at compile time and the host is expected to
+read what it declared. `engine()` reports what the selector built, here
+native code with push-pull provenance; §11 names the engines.
 
-The other compile entry points differ only in what they take:
+The other entry points differ in what they take:
 
 | Function | Adds |
 | --- | --- |
-| `compile_polydat_with_path(src, path)` | the source directory, so relative `import` paths resolve |
-| `compile_polydat_with_libs(src, dir, libs, outputs, strict, ctx)` | library directories, required outputs, strict typing, and a context label for errors |
-| `compile_polydat_strict(src, dir, strict)` | strict mode: implicit adapters are errors |
-| `compile_polydat_with_log(src, &mut log)` | the compile event log (§13) |
-| `compile_polydat_with_tiles(src, tiles)` | tile statements built from host data (§10) |
+| `compile_polydat_kernel_with_options(src, &options, log)` | `CompileOptions`: the source directory, so relative `import` paths resolve; library directories (§8); required outputs; strict typing, where implicit adapters are errors; a context label for errors; a cursor limit. And the compile event log (§13). |
+| `compile_polydat_kernel_with_tiles(src, tiles)` | tile statements built from host data (§10) |
+| `compile_polydat_with(src, engine)` | the engine by name (§11); `compile_polydat_with_engine(src, engine, &options, log)` takes the options and the log as well |
+| `compile_polydat(src)` and the `compile_polydat_with_*` family | the interpreter kernel, `PolydatKernel`, with the same options as separate parameters: the oracle every engine is checked against (§11) and the program a diagnostic inspects (§13) |
 | `compile_polydat_to_assembler(src)` | stops before engine selection and returns the assembler (§7, §11) |
-| `compile_polydat_to_assembler_with(src, &options)` | the assembler built with the same `CompileOptions` the kernel path takes: source directory, library paths, required outputs, strict typing, the error context label, and the cursor limit |
+| `compile_polydat_to_assembler_with(src, &options)` | the assembler built with the same `CompileOptions` |
 
 ## 3. Externs
 
 An `extern` is a typed input slot with a default. The host may overwrite
-it per state, and a program transform may fix it before compilation.
+it per kernel, and a program transform may fix it before compilation.
 Both roads lead to the same slot, so the kernel never learns which one
 the host took.
 
@@ -104,96 +108,90 @@ let src = r#"
     id := mod_wire(hash(cycle), scale)
     key := "{region}/{id}"
 "#;
-let program = compile_polydat(src)?.into_program();
-let mut state = program.create_state();
-state.set_inputs(&[7]);
-println!("defaults: {}", state.pull(&program, "key").as_str());
+let mut kernel = compile_polydat_kernel(src)?;
+kernel.set_inputs(&[7]);
+println!("defaults: {}", kernel.pull("key").as_str());
 
-let region = program.find_input("region").unwrap();
-let scale = program.find_input("scale").unwrap();
-state.set_input(region, Value::Str("eu-west".into()));
-state.set_input(scale, Value::U64(1000));
-state.set_inputs(&[7]);
-println!("overridden: {}", state.pull(&program, "key").as_str());
+kernel.set_input("region", Value::Str("eu-west".into()))?;
+kernel.set_input("scale", Value::U64(1000))?;
+kernel.set_inputs(&[7]);
+println!("overridden: {}", kernel.pull("key").as_str());
 
 // The binary's `name=value` arguments are this transform.
 let transformed = src.replace(r#"extern region: str = "us-east""#, r#"extern region: str = "ap-south""#);
-let mut fixed = compile_polydat(&transformed)?;
+let mut fixed = compile_polydat_kernel(&transformed)?;
 fixed.set_inputs(&[7]);
 println!("transformed: {}", fixed.pull("key").as_str());
 
-// The compiled engines carry the same externs.
-let mut compiled = compile_polydat_to_assembler(src)?.try_compile_raw().unwrap_or_else(|_| panic!("P2"));
-compiled.eval(&[7]);
-println!("compiled, defaults: {}", compiled.get_value("key").as_str());
-compiled.set_input("region", Value::Str("eu-west".into()))?;
-compiled.set_input("scale", Value::U64(1000))?;
-compiled.eval(&[7]);
-println!("compiled, overridden: {}", compiled.get_value("key").as_str());
+// The interpreter has the same slots behind the same calls.
+let mut p1 = compile_polydat_with(src, Engine::Interpreter)?;
+p1.set_input("region", Value::Str("eu-west".into()))?;
+p1.set_input("scale", Value::U64(1000))?;
+p1.set_inputs(&[7]);
+println!("interpreter, overridden: {}", p1.pull("key").as_str());
 ```
 
 ```text
 defaults: us-east/7
 overridden: eu-west/487
 transformed: ap-south/7
-compiled, defaults: us-east/7
-compiled, overridden: eu-west/487
+interpreter, overridden: eu-west/487
 ```
 
-Every engine treats an extern the same way. The interpreter keeps it as
-a value in the state. A compiled kernel gives it a slot after the
-coordinates, seeds the default when the kernel is built, and offers the
-same `set_input` by name: a number or boolean is written into its slot
-at once, and a string, JSON, or extension value is written afresh at
-the start of every run, so its handle always belongs to the cycle that
-reads it. Setting an extern marks everything downstream of it for
-recomputation. The compiled `set_input` checks the value against the
-declared port type and refuses a mismatch by name; the state's
-`set_input` writes without checking, so the wrong variant there is a
-host bug that surfaces when a consumer reads it. An extern declared
-without a default, such as `extern doc: json`, is `None` until the
-host sets it, and every consumer reads `None` through it, on the
-interpreter, the closure tier, and the hybrid kernel alike; pure native
-code cannot carry `None` and refuses to run until it is set. The
-compile log (§13) names every extern without a default, so a host
-knows what it must set. A constant no input reaches is folded when a
-kernel is built, on every engine, so a failure there surfaces at build;
-what depends on an extern is computed at the first pull that needs it
-and kept until the extern changes.
+Every engine treats an extern the same way. A compiled kernel gives it a
+slot after the coordinates, seeds the default when the kernel is built,
+and `set_input` by name writes a number or boolean into its slot at
+once and a string, JSON, or extension value afresh at the start of
+every run, so its handle always belongs to the cycle that reads it; the
+interpreter keeps it as a value in the state. Setting an extern marks
+everything downstream of it for recomputation. The compiled `set_input`
+checks the value against the declared port type and refuses a mismatch
+by name; the interpreter's checks a `shared` binding's cell and
+otherwise writes what it is given, so the wrong variant there is a host
+bug that surfaces when a consumer reads it. An extern declared without
+a default, such as `extern doc: json`, is `None` until the host sets
+it, and every consumer reads `None` through it, on the interpreter, the
+closure tier, and the hybrid kernel alike; pure native code cannot
+carry `None` and refuses to run until it is set. The compile log (§13)
+names every extern without a default, so a host knows what it must
+set. A constant no input reaches is folded when a kernel is built, on
+every engine, so a failure there surfaces at build; what depends on an
+extern is computed at the first pull that needs it and kept until the
+extern changes.
 
 Prefer the transform when the value is fixed for the run: the compiler
-then sees a constant, folds it, and the fused native cones in §11 carry
-it as an immediate. Use `set_input` when the value genuinely varies per
-state, such as a per-thread shard label.
+then sees a constant, folds it, and the native segments carry it as an
+immediate. Use `set_input` when the value genuinely varies per kernel,
+such as a per-thread shard label.
 
 A `cursor` declared `over` a literal spec is resolved at build. The
 assembler and every kernel list each cursor with its partitions through
 `cursor_schemas`; a clause that denotes one partition seeds the cursor,
 so the program runs on every engine with no host call; a clause that
 denotes several is narrowed with `set_cursor(name, &partition)`, the
-same call on the interpreter kernel, the closure kernels, and the hybrid
-kernel. [Cursor Partitions](../design/cursor_partitions.md) §7.2 has the
+same call on every engine. [Cursor Partitions](../design/cursor_partitions.md) §7.2 has the
 rules.
 
 ## 4. Share a program across threads
 
-A `PolydatProgram` is immutable once compiled and is shared through an
-`Arc`. Each thread creates its own `PolydatState` over it. There are no
-locks on the evaluation path, and because values depend only on the
-coordinate, the partition of cycles across threads is invisible in the
-results.
+A program is immutable once compiled and is shared through an `Arc`:
+`into_program` turns a kernel into an `Arc<dyn KernelProgram>`, and
+`create_kernel` gives each thread a kernel of its own over the shared
+steps or native code. There are no locks on the evaluation path, and
+because values depend only on the coordinate, the partition of cycles
+across threads is invisible in the results.
 
 ```rust
-let program = compile_polydat("input cycle: u64\nv := mod(hash(cycle), 1000)\n")?.into_program();
+let program = compile_polydat_kernel("input cycle: u64\nv := mod(hash(cycle), 1000)\n")?.into_program();
 let sums: Vec<u64> = std::thread::scope(|s| {
     let handles: Vec<_> = (0..threads).map(|t| {
         let program = program.clone();
         s.spawn(move || {
-            let mut state = program.create_state();
+            let mut kernel = program.create_kernel();
             let mut sum = 0u64;
             for c in t * per_thread..(t + 1) * per_thread {
-                state.set_inputs(&[c]);
-                sum += state.pull(&program, "v").as_u64();
+                kernel.set_inputs(&[c]);
+                sum += kernel.pull("v").as_u64();
             }
             sum
         })
@@ -206,14 +204,13 @@ let sums: Vec<u64> = std::thread::scope(|s| {
 4 threads x 25000 cycles: sum 49908479; serial sum 49908479; equal: true
 ```
 
-The serial sum is the same cycles on one state. This is the whole
+The serial sum is the same cycles on one kernel. This is the whole
 concurrency story for a host: decide which thread gets which
-coordinates, create one state per thread, and never share a state.
+coordinates, create one kernel per thread, and never share a kernel.
 `examples/multi_thread.rs` shows the same pattern at a million cycles
-per thread, with timing. A kernel on any engine shares the same way
-through the `Kernel` trait of §11: `into_program` gives an
-`Arc<dyn KernelProgram>`, and `create_kernel` gives each thread its
-own.
+per thread, with timing. The interpreter's program has the same shape
+under its own names, `PolydatProgram` and one `PolydatState` per
+thread through `create_state`.
 
 ## 5. Host-defined nodes
 
@@ -234,7 +231,7 @@ fn host_tag(prefix: &str, n: u64) -> String {
     format!("{prefix}-{n:04}")
 }
 
-let mut kernel = compile_polydat(r#"
+let mut kernel = compile_polydat_kernel(r#"
     input cycle: u64
     c := host_checksum(cycle, hash(cycle))
     t := host_tag("job", mod(c, 10000))
@@ -303,7 +300,7 @@ fn cell_token(cell: Ext<GeoCell>) -> String {
     format!("L{}:{row}:{col}", cell.level)
 }
 
-let mut kernel = compile_polydat(r#"
+let mut kernel = compile_polydat_kernel(r#"
     input cycle: u64
     lat  := unit_interval(hash(cycle)) * 180.0 - 90.0
     lon  := unit_interval(hash(cycle + 1000)) * 360.0 - 180.0
@@ -315,11 +312,11 @@ for cycle in [0u64, 1] {
     kernel.set_inputs(&[cycle]);
     println!("cycle {cycle}: {}", kernel.pull("line").as_str());
     // The host reads the wire as its own type again.
-    let Value::Ext(boxed) = kernel.pull("cell").clone() else { panic!("cell is an Ext wire") };
+    let Value::Ext(boxed) = kernel.pull("cell") else { panic!("cell is an Ext wire") };
     let cell = boxed.as_any().downcast_ref::<GeoCell>().expect("a GeoCell");
     println!("cycle {cycle}: level {} at ({:.1}, {:.1}); json {}", cell.level, cell.lat_deg, cell.lon_deg, boxed.to_json_value());
 }
-println!("cell wire type: {:?}", kernel.program().output_port_type("cell"));
+println!("cell wire type: {:?}", kernel.output_type("cell"));
 ```
 
 ```text
@@ -347,11 +344,10 @@ Three things to know about extension values:
   extension value rides the compiled engines as a table handle, the same
   way JSON does, so the closure tier and the hybrid kernel of §11 run a
   node with an `Ext` signature as a closure step. Pure native code
-  refuses it, and the production kernel never fuses it into a cone. The
-  scalar work around it is still fused: in the run above the hashing
-  and scaling fused into two native cones while the two host nodes ran
-  interpreted, and a native neighbour reads the value through the table
-  handle described in
+  refuses it. The scalar work around it is still native: in the run
+  above the hashing and scaling ran as native segments while the two
+  host nodes ran as closure steps, and a native neighbour reads the
+  value through the table handle described in
   [Compiled Non-Scalar Slots](../design/compiled_handles.md).
 - **The value is cloned on every read.** `Ext<T>::extract` clones the
   boxed value, so a large host type should hold its payload in an `Arc`.
@@ -371,7 +367,7 @@ let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
 asm.add_node("hashed", Box::new(Hash::new()), vec![WireRef::input("cycle")]);
 asm.add_node("user_id", Box::new(Mod::new(1_000_000)), vec![WireRef::node("hashed")]);
 asm.add_output("user_id", WireRef::node("user_id"));
-let mut kernel = asm.compile()?;
+let mut kernel = asm.compile_kernel()?;
 kernel.set_inputs(&[42]);
 ```
 
@@ -381,8 +377,10 @@ user_id at cycle 42: 275413
 
 The DSL compiler produces exactly this assembler, so
 `compile_polydat_to_assembler` is the point where a host can inspect or
-adjust the graph between parsing and engine selection, and where it can
-set the JIT mode before calling `compile()`.
+adjust the graph between parsing and engine selection. `compile_kernel()`
+builds on the default engine, `compile_with(engine)` names one, and
+`compile()` builds the interpreter kernel, with `set_jit_mode` choosing
+how much of that graph runs as native cones.
 
 ## 8. Modules from a library directory
 
@@ -398,13 +396,14 @@ bucketed(input: u64, buckets: u64) -> (bucket: u64, label: str) := {
     label := "b{bucket}"
 }
 "#)?;
-let mut kernel = compile_polydat_with_libs(
+let mut kernel = compile_polydat_kernel_with_options(
     "input cycle: u64\n(b, l) := bucketed(input: cycle, buckets: 8)\n",
-    None,            // source directory for relative imports
-    vec![dir],       // library directories, searched in order
-    &[],             // required outputs, if the host wants a check
-    false,           // strict typing
-    "embedding guide",
+    &CompileOptions {
+        lib_paths: vec![dir],   // library directories, searched in order
+        context: "embedding guide".into(),
+        ..CompileOptions::default()
+    },
+    None,
 )?;
 ```
 
@@ -414,7 +413,7 @@ cycle 1: bucket=1 label=b1
 cycle 2: bucket=6 label=b6
 ```
 
-The binary's `--lib` flag is this argument. See
+The binary's `--lib` flag is this option. See
 [Module System](../design/module_system.md) for resolution order and the
 rules for named and positional arguments.
 
@@ -428,7 +427,7 @@ tuples deterministically and types the body, the host decides when and
 where each activation runs.
 
 ```rust
-let mut kernel = compile_polydat(r#"
+let mut kernel = compile_polydat_kernel(r#"
     input cycle: u64
     for shard in 0..3, phase in load,verify {
         row := mod(hash(cycle), 100) + shard * 100
@@ -436,9 +435,9 @@ let mut kernel = compile_polydat(r#"
     }
 "#)?;
 kernel.set_inputs(&[0]);
-let mut stream = kernel.traverse(0)?;
-while let Some(mut act) = stream.advance()? {
-    let index = act.index;
+let stream = kernel.traverse(0)?;
+for index in 0..stream.len() {
+    let mut act = stream.activate(index)?;
     let k = act.cycle(1);
     println!("  activation {index}: {}", k.pull("stmt").as_str());
 }
@@ -454,18 +453,20 @@ while let Some(mut act) = stream.advance()? {
   activation 5: verify shard 2 row 265
 ```
 
-`activation_on(index, engine)` on the stream builds the same activation
-on the engine of the host's choice, compiled once per engine and driven
-through the `Kernel` trait, computing what the interpreter's computes.
-`traverse(i)` opens the i-th traversal in the program; it is a `Kernel`
-trait method, so a root from `compile_polydat_with_engine` opens its
-traversals the same way, and an activation on any engine opens the
-`for` statements of its own body. Each activation
+`activate(index)` builds the activation at `index` on the default
+engine; `activation_on(index, engine)` names one, and `activation(index)`
+and `advance()` build the interpreter's. Every activation is a kernel
+over the body's program, compiled once per engine and driven through
+the `Kernel` trait, computing what the interpreter's computes. Fibers
+partition a traversal by activating disjoint index ranges. `traverse(i)`
+opens the i-th traversal in the program; it is a `Kernel` trait method,
+so a kernel on any engine opens its traversals the same way, and an
+activation opens the `for` statements of its own body. Each activation
 exposes its coordinates (`act.coord("shard")`), its cursor slice when
 the body declares a cursor, its cycle count, and `act.cycle(n)`, which
 returns the activation's kernel positioned at cycle `n`. The body
-program is compiled once per traversal position, not once per
-activation; `examples/for_traversal.rs` measures that.
+program is compiled once per traversal position and engine, not once
+per activation; `examples/for_traversal.rs` measures that.
 [The `for` Construct](../design/for_traversal.md) has the full contract.
 
 ## 10. Tiles from host data
@@ -478,7 +479,7 @@ templates in their own configuration format without teaching the host
 anything about rendering.
 
 ```rust
-use polydat::tile::{compile_polydat_with_tiles, tile_from_json_value, Span, TileOptions};
+use polydat::tile::{compile_polydat_kernel_with_tiles, tile_from_json_value, Span, TileOptions};
 
 let template = serde_json::json!({
     "id": "${cycle}",
@@ -486,7 +487,7 @@ let template = serde_json::json!({
     "points": [ "@for s in 0..2", { "n": "${s}", "v": "${cycle + s}" } ]
 });
 let tile = tile_from_json_value("doc", &template, &TileOptions::default(), Span { line: 0, col: 0 })?;
-let mut kernel = compile_polydat_with_tiles("input cycle: u64\n", vec![tile])?;
+let mut kernel = compile_polydat_kernel_with_tiles("input cycle: u64\n", vec![tile])?;
 kernel.set_inputs(&[4]);
 println!("doc: {}", kernel.pull("doc").as_str());
 ```
@@ -502,24 +503,21 @@ structural JSON form the value above uses.
 
 ## 11. Compiled kernels
 
-A host normally lets `compile()` choose engines. The production kernel
-runs the interpreter over a graph in which every native-eligible region
-has been fused into a cone, and everything else runs through closures
-or the interpreter. Two direct forms exist for hosts that want a whole
-kernel compiled, such as benchmarks and the differential tests, and
-they are named by one type, `Engine`: the closure tier, and P3, native
-code for every node that has a lowering with the node's closure
-elsewhere, each with a `Provenance` that says how much work repeated
-inputs skip (`Auto` lets the selector choose); the interpreter is the
-third name. One constructor,
-`compile_polydat_with(src, engine)` or `compile_with(engine)` on the
-assembler, builds a `Box<dyn Kernel>` on any of them or returns one
-error type, `KernelError`, whose `Refused` variant names the engine and
-the node or construct it cannot run. The `Kernel` trait is the same
-calls on every engine: `set_inputs`, `set_input`, `set_cursor`, `eval`,
-`pull`, and the name and type listings. The program below includes
-`host_tag` from §5 and the two extension nodes from §6, which have
-closure forms but no native one, so P3 mixes the two:
+A host normally lets `Engine::default()` choose: P3 with the `jit`
+feature, the closure tier without. The engines are named by one type,
+`Engine`. `Native` is P3, native code for every node that has a lowering
+with the node's closure elsewhere; `Closures` is P2, the closure tier;
+each takes a `Provenance` that says how much work repeated inputs skip
+(`Auto` lets the selector choose); and `Interpreter` is P1, the oracle.
+One constructor, `compile_polydat_with(src, engine)` or
+`compile_with(engine)` on the assembler, builds a `Box<dyn Kernel>` on
+any of them or returns one error type, `KernelError`, whose `Refused`
+variant names the engine and the node or construct it cannot run. The
+`Kernel` trait is the same calls on every engine: `set_inputs`,
+`set_input`, `set_cursor`, `eval`, `pull`, `traverse`, and the name and
+type listings. The program below includes `host_tag` from §5 and the two
+extension nodes from §6, which have closure forms but no native one, so
+P3 mixes the two:
 
 ```rust
 let src = r#"
@@ -541,6 +539,7 @@ for engine in [
         Err(e) => println!("{e}"),
     }
 }
+println!("Engine::default() is {}", compile_polydat_kernel(src)?.engine());
 let p3 = compile_polydat_to_assembler(src)?.try_compile_jit()?;
 let (native, closures) = p3.engine_counts();
 println!("P3 plan: {native} native segment(s), {closures} closure step(s)");
@@ -558,6 +557,7 @@ for cycle in [0u64, 1] {
 ```
 
 ```text
+Engine::default() is native (PushPull)
 P3 plan: 4 native segment(s), 3 closure step(s)
 cycle 0: j={"h": 16294208416658607535, "name": "user-16294208416658607535", "tag": "job-7535", "cell": "L4:10:13"}
   closures (Pull) agrees: true
@@ -611,14 +611,16 @@ shows for the interpreter: `into_program` gives an
 `Arc<dyn KernelProgram>`, and `create_kernel` on it gives each thread a
 kernel of its own over the shared steps or native code.
 
-The production kernel of `compile()` and `compile_polydat` is
-`Engine::Interpreter`: the interpreter over a graph whose native-eligible
+The interpreter kernel of `compile()` and `compile_polydat`,
+`PolydatKernel`, runs the interpreter over a graph whose native-eligible
 regions are cones, per `set_jit_mode` on the assembler (`Auto`, `Off`,
-`Force`) and the `jit` Cargo feature. The engine a host gets when it names
-none, `Engine::default()`, is P3 with the `jit` feature and the closure
-tier without: `compile_polydat_kernel(src)` and `compile_kernel()` on the
-assembler build on it, and the `polydat` binary compiles a program with
-traversals on it and opens every level of a nest on it. [Compilation levels](compilation.md)
+`Force`) and the `jit` Cargo feature; it is the oracle every engine is
+checked against, and its program carries the metadata §13 inspects. The
+engine a host gets when it names none, `Engine::default()`, is P3 with
+the `jit` feature and the closure tier without: `compile_polydat_kernel`
+and its `_with_options` and `_with_tiles` forms, `compile_kernel()` on
+the assembler, and the `polydat` binary build on it, and the binary opens
+every level of a traversal nest on it. [Compilation levels](compilation.md)
 describes each engine, [Engines](../design/engines.md) the selection
 rules, and [Engine Parity](../design/engine_parity.md) what each engine
 accepts.
@@ -632,7 +634,7 @@ side-channel node, plus a thread-local buffer the host drains.
 ```rust
 let src = "input cycle: u64\nid := mod(hash(cycle), 1000)\nname := \"user-{id}\"\n";
 let with_emit = format!("{src}__emit := emit_row(\"jsonl\", \"cycle,id,name\", cycle, id, name)\n");
-let mut kernel = compile_polydat(&with_emit)?;
+let mut kernel = compile_polydat_kernel(&with_emit)?;
 for cycle in [0u64, 1, 2] {
     kernel.set_inputs(&[cycle]);
     kernel.pull("__emit");   // the pull is what emits
@@ -694,8 +696,10 @@ kernel's determinism contract does not know it exists.
 
 The compile log records what the compiler did to a program: what it
 inlined, folded, fused, and why. The binary's `explain` command narrates
-it; a host gets the same events from `compile_polydat_with_log`. The
-program itself answers the questions a host usually has at run time.
+it; a host gets the same events through the log parameter of
+`compile_polydat_kernel_with_options`, and `compile_polydat_with_log`
+fills the same log while building the interpreter's program, whose
+metadata answers the questions a host usually has at run time.
 
 ```rust
 let mut log = CompileEventLog::new();
@@ -707,6 +711,10 @@ for event in log.events() {
 let program = kernel.program();
 println!("nodes: {}, deterministic: {}", program.node_count(), program.is_deterministic());
 let names: Vec<_> = (0..program.node_count()).map(|i| program.node_meta(i).name.clone()).collect();
+
+let mut compiled_log = CompileEventLog::new();
+compile_polydat_kernel_with_options(src, &CompileOptions::default(), Some(&mut compiled_log))?;
+println!("compile events on the default engine: {}", compiled_log.events().len());
 ```
 
 ```text
@@ -717,6 +725,7 @@ compile events: 4
   Info: ConstantFolded { node: "const_f64", value: "3.0" }
 nodes: 3, deterministic: true
 node names: ["const_f64", "__port_cycle", "jit_cone[hash+tile_encode+to_f64+f64_div+tile_encode+tile_render]"]
+compile events on the default engine: 3
 ```
 
 The program in this section is a hash, a division, and a JSON tile with
@@ -729,10 +738,14 @@ one constant the compiler folded. Advisories, such as an implicit type
 widening, and warnings, such as an unknown pragma, arrive in the same
 list, so a host that wants a strict build can fail on any event whose
 level is a warning. Cone fusion is not an
-event: the node list shows what the host is actually running, one
-constant, the passthrough that exposes the coordinate as an output, and
-one native cone that fused the hash, the conversion, the division, both
-hole encoders, and the tile renderer. `is_deterministic`
+event: the node list shows what the interpreter's program is actually
+running, one constant, the passthrough that exposes the coordinate as
+an output, and one native cone that fused the hash, the conversion, the
+division, both hole encoders, and the tile renderer. The same log on
+the default engine holds the assembly's events, the two hole typings
+and the compiled tile here, and every extern without a default; the
+fold of the compile-time constant is a step of the interpreter's
+program, so its event is the interpreter's. `is_deterministic`
 is false when any node's purity is nondeterministic, such as a
 wall-clock or a true random source, which is the check a host should
 make before relying on replay. Side-channel nodes such as `emit_row`
@@ -749,7 +762,7 @@ which receives a severity and a line and is called from every thread.
 - [Illustrations](../tutorials/illustrations.md) runs the DSL and the
   assembler through more complete examples.
 - [Compilation levels](compilation.md) explains the engines a host is
-  choosing between when it calls `set_jit_mode`.
+  choosing between when it names an `Engine`.
 - [Runtime Model](../design/runtime_model.md) states the ownership and
   determinism axioms that this guide's division of labor implements.
 - `examples/multi_thread.rs`, `examples/for_traversal.rs`, and

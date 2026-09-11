@@ -13,7 +13,7 @@
 use polydat::ast::Value;
 
 fn main() {
-    let mut kernel = polydat::dsl::compile_polydat(
+    let mut kernel = polydat::dsl::compile_polydat_kernel(
         r#"
         input cycle: u64
         n := mod(hash(cycle), 1000)             // u64
@@ -30,10 +30,10 @@ fn main() {
 
     kernel.set_inputs(&[42]);
 
-    let n = kernel.pull("n").clone();
-    let p = kernel.pull("p").clone();
-    let label = kernel.pull("label").clone();
-    let is_big = kernel.pull("is_big").clone();
+    let n = kernel.pull("n");
+    let p = kernel.pull("p");
+    let label = kernel.pull("label");
+    let is_big = kernel.pull("is_big");
 
     // Each output is typed at the boundary — the consumer
     // pattern-matches on the Value variant or uses a typed accessor

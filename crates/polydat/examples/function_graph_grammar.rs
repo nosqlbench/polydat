@@ -10,7 +10,7 @@
 //! contracts between every wire connection.
 
 fn main() {
-    let mut kernel = polydat::dsl::compile_polydat(
+    let mut kernel = polydat::dsl::compile_polydat_kernel(
         r#"
         input cycle: u64
 

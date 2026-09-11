@@ -1058,6 +1058,7 @@ impl PolydatAssembler {
             &resolved.cursor_schemas,
             &shared_outputs_of(resolved),
         )?;
+        extras.externs.set_output_names(&resolved.output_order);
         extras.output_types = resolved
             .output_map
             .iter()
@@ -1265,14 +1266,16 @@ impl PolydatAssembler {
     /// gives them; table-kind entries are numbered by the kernel.
     fn externs_of(resolved: &ResolvedDag) -> Result<crate::compile::externs::Externs, String> {
         let layout = slot_layout(resolved);
-        crate::compile::externs::Externs::new(
+        let mut externs = crate::compile::externs::Externs::new(
             &resolved.input_defs,
             resolved.coord_count,
             &layout.input_starts,
             0,
             &resolved.cursor_schemas,
             &shared_outputs_of(resolved),
-        )
+        )?;
+        externs.set_output_names(&resolved.output_order);
+        Ok(externs)
     }
 
     /// Pure native code, raw; see [`Self::try_compile_pure_jit`].

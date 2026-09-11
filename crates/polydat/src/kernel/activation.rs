@@ -223,6 +223,13 @@ impl TraversalStream {
         })
     }
 
+    /// [`Self::activation_on`] on [`Engine::default`](crate::Engine::default):
+    /// the activation at `index` as a compiled kernel, with the JIT where
+    /// the build has it.
+    pub fn activate(&self, index: usize) -> Result<Activation<Box<dyn Kernel>>, String> {
+        self.activation_on(index, crate::Engine::default())
+    }
+
     /// [`Self::activation`] on `engine` (engine parity, step 8): a fresh
     /// kernel over the body's program for that engine, compiled once
     /// per engine and shared by every activation after, driven through

@@ -62,6 +62,9 @@ pub(crate) struct Externs {
     /// Every input by name, the coordinates first, as the interpreter
     /// program lists them.
     input_names: Vec<String>,
+    /// Every named output in declaration order, as the interpreter
+    /// program lists them.
+    output_names: Vec<String>,
     /// The cursors the program declares (engine_parity.md, step 3):
     /// each is an `Ext` extern plus six scalar ones, and its schema
     /// carries the partitions the compiler resolved at build.
@@ -124,6 +127,7 @@ impl Externs {
             slots,
             by_name,
             input_names: input_defs.iter().map(|d| d.name.clone()).collect(),
+            output_names: Vec::new(),
             cursors: cursors.to_vec(),
             intent: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             next_bit: 0,
@@ -267,6 +271,16 @@ impl Externs {
     /// Every input by name, the coordinates first.
     pub(crate) fn input_names(&self) -> &[String] {
         &self.input_names
+    }
+
+    /// Record the named outputs in declaration order.
+    pub(crate) fn set_output_names(&mut self, names: &[String]) {
+        self.output_names = names.to_vec();
+    }
+
+    /// Every named output in declaration order.
+    pub(crate) fn output_names(&self) -> &[String] {
+        &self.output_names
     }
 
     /// The slots of the externs that have no value at build: they are

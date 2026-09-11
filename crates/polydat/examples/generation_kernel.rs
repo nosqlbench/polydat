@@ -7,11 +7,11 @@
 //! Same coordinate in → same outputs out, every time, with no shared
 //! state. That property is what lets a multi-thread benchmark generate
 //! billions of distinct reproducible variates in parallel — each
-//! thread gets its own `PolydatState`, the immutable `PolydatProgram` is shared
-//! via `Arc`.
+//! thread gets its own kernel, the immutable program is shared via
+//! `Arc`.
 
 fn main() {
-    let kernel = polydat::dsl::compile_polydat(
+    let kernel = polydat::dsl::compile_polydat_kernel(
         r#"
         input cycle: u64
         user_id := mod(hash(cycle), 1000000)
@@ -30,9 +30,9 @@ fn main() {
             .map(|_| {
                 let program = program.clone();
                 s.spawn(move || {
-                    let mut state = program.create_state();
-                    state.set_inputs(&[42]);
-                    state.pull(&program, "user_id").as_u64()
+                    let mut kernel = program.create_kernel();
+                    kernel.set_inputs(&[42]);
+                    kernel.pull("user_id").as_u64()
                 })
             })
             .collect();

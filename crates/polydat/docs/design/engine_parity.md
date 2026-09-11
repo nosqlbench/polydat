@@ -851,6 +851,17 @@ signature (step 1 adds two: the options-taking assembler entry point and
 Steps 5 through 7 change semantics and belong behind the equivalence
 harness that step 5 extends. Steps 8 and 9 are new capability.
 
+*Post-landing, 2026-09-11.* Two parity gaps surfaced while the guides
+moved to the default engine, and both are closed. A compiled kernel's
+`output_names` listed a hash map's keys, in no order; it now lists the
+declaration order the interpreter's program lists (`Externs::output_names`,
+set from the resolved graph's `output_order`). The compiled compile path
+dropped the tile events the compiler records while assembling; they now
+reach the log on every engine. The interpreter's log still records its
+own compile-time fold (`ConstantFolded`); the compiled engines fold under
+the same rule but do not log it, the one remaining difference between
+the logs.
+
 ## 6. What does not change
 
 The interpreter remains the oracle. No step coerces a type, moves a

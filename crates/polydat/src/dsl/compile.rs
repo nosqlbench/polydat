@@ -325,19 +325,35 @@ pub fn compile_polydat_with_tiles(
     source: &str,
     tiles: Vec<super::ast::TileDef>,
 ) -> Result<PolydatKernel, String> {
+    let (ast, options) = ast_with_tiles(source, tiles)?;
+    compile_ast_with_options(&ast, source, &options, None)
+}
+
+/// [`compile_polydat_with_tiles`] on [`Engine::default`](crate::Engine::default):
+/// the same program with the same tiles appended, as a compiled kernel.
+pub fn compile_polydat_kernel_with_tiles(
+    source: &str,
+    tiles: Vec<super::ast::TileDef>,
+) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
+    let (ast, options) = ast_with_tiles(source, tiles).map_err(crate::KernelError::Source)?;
+    compile_ast_with_engine(&ast, source, &options, None, crate::Engine::default())
+}
+
+/// The parsed source with `tiles` appended as `tile` statements, and
+/// the options every tile entry point compiles under.
+fn ast_with_tiles(
+    source: &str,
+    tiles: Vec<super::ast::TileDef>,
+) -> Result<(PolydatFile, CompileOptions), String> {
     let tokens = super::lexer::lex(source)?;
     let mut ast = super::parser::parse(tokens)?;
     ast.statements
         .extend(tiles.into_iter().map(Statement::Tile));
     let options = CompileOptions {
-        source_dir: None,
-        lib_paths: Vec::new(),
-        required_outputs: Vec::new(),
-        strict: false,
         context: "polydat source with host tiles".to_string(),
-        cursor_limit: None,
+        ..CompileOptions::default()
     };
-    compile_ast_with_options(&ast, source, &options, None)
+    Ok((ast, options))
 }
 
 /// Compile Polydat source to an assembler (not yet compiled to a kernel).
@@ -2814,6 +2830,18 @@ pub fn compile_polydat_kernel(source: &str) -> Result<Box<dyn crate::Kernel>, cr
     compile_polydat_with(source, crate::Engine::default())
 }
 
+/// [`compile_polydat_kernel`] with the kernel path's options (source
+/// directory, library paths, required outputs, strict typing, the
+/// error context label, the cursor limit) and the compile event log:
+/// [`compile_polydat_with_engine`] on [`Engine::default`](crate::Engine::default).
+pub fn compile_polydat_kernel_with_options(
+    source: &str,
+    options: &CompileOptions,
+    log: Option<&mut super::events::CompileEventLog>,
+) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
+    compile_polydat_with_engine(source, crate::Engine::default(), options, log)
+}
+
 /// [`compile_polydat_with`] with the kernel path's options (source
 /// directory, library paths, required outputs, strict typing, the
 /// error context label, the cursor limit) and the compile event log.
@@ -2893,7 +2921,7 @@ pub(super) fn compile_file_on_engine(
     file: &PolydatFile,
     filter: Option<&[String]>,
     engine: crate::Engine,
-    log: Option<&mut super::events::CompileEventLog>,
+    mut log: Option<&mut super::events::CompileEventLog>,
 ) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
     use crate::KernelError;
     let (parent_file, for_stmts, producers) =
@@ -2906,7 +2934,14 @@ pub(super) fn compile_file_on_engine(
         compiler.pragmas.strict_types(),
         compiler.pragmas.strict_values(),
     );
-    let mut kernel = asm.compile_engine_with_log(engine, log)?;
+    // The tiles typed while assembling belong to this program's log, as
+    // on the interpreter.
+    if let Some(log) = log.as_deref_mut() {
+        for e in compiler.tile_events.drain(..) {
+            log.push(e);
+        }
+    }
+    let mut kernel = asm.compile_engine_with_log(engine, log.as_deref_mut())?;
     if !for_stmts.is_empty() || !producers.is_empty() {
         let externs = kernel.externs();
         let inputs = kernel.input_names();
@@ -2929,6 +2964,12 @@ pub(super) fn compile_file_on_engine(
             .compile_traversals(&for_stmts, &producers, &type_of)
             .map_err(KernelError::Source)?;
         kernel.set_traversals(traversals);
+        // Tiles inside the bodies, typed in the child compilers.
+        if let Some(log) = log {
+            for e in compiler.tile_events.drain(..) {
+                log.push(e);
+            }
+        }
     }
     Ok(kernel)
 }

@@ -463,17 +463,17 @@ pretty-printer prints it as the `tile` statement it became.
 A host that has already parsed its configuration skips source text
 entirely. `polydat::tile` builds a `TileDef` from a template string, a
 JSON string, or a `serde_json::Value`, and
-`compile_polydat_with_tiles` compiles it with a program:
+`compile_polydat_kernel_with_tiles` compiles it with a program:
 
 ```rust
-use polydat::tile::{compile_polydat_with_tiles, tile_from_json_value, Span, TileOptions};
+use polydat::tile::{compile_polydat_kernel_with_tiles, tile_from_json_value, Span, TileOptions};
 
 let template = serde_json::json!({
     "id": "${cycle}",
     "points": [ "@for s in 0..3", { "n": "${s}", "v": "${cycle + s}" } ]
 });
 let tile = tile_from_json_value("doc", &template, &TileOptions::default(), Span { line: 0, col: 0 })?;
-let mut kernel = compile_polydat_with_tiles("input cycle: u64\n", vec![tile])?;
+let mut kernel = compile_polydat_kernel_with_tiles("input cycle: u64\n", vec![tile])?;
 kernel.set_inputs(&[4]);
 println!("{}", kernel.pull("doc").as_str());
 ```
@@ -744,9 +744,9 @@ hole where no value can go is caught before the first render.
 ## 16. One tile, every engine
 
 Polydat runs a program on one of three engine levels: the interpreter
-(P1), closures over a flat slot buffer (P2), and native code (P3),
-either as fused cones inside the production kernel or as a whole native
-kernel. Strings, JSON values, and rendered documents ride through the
+(P1), closures over a flat slot buffer (P2), and native code (P3), the
+default, either as native segments in a compiled kernel or as fused
+cones inside the interpreter's graph. Strings, JSON values, and rendered documents ride through the
 compiled levels as handles into a per-cycle arena and a value table,
 and a tile renders there by the same code path it renders on the
 interpreter. The result is bit-identical on every level:
@@ -770,11 +770,11 @@ cycle 1 P3:    identical
 ```
 
 The example compiles the program four ways: the interpreter, the
-production kernel with cone extraction forced on, the P2 closure
-kernel, and the pure-P3 native kernel, and reads the tile from each.
-The production kernel chooses the mix itself; nothing in a program
-selects an engine, and nothing about a tile changes its meaning when
-the engine changes. The differential suite in `tests/handle_tiers.rs`
+interpreter with cone extraction forced on, the P2 closure kernel, and
+P3, the default `compile_polydat_kernel` builds, and reads the tile
+from each. Each engine chooses its own mix of native and closure work;
+nothing in a program selects an engine, and nothing about a tile
+changes its meaning when the engine changes. The differential suite in `tests/handle_tiers.rs`
 holds that line over random programs of string, JSON, and tile nodes,
 including every corner case in this tutorial.
 

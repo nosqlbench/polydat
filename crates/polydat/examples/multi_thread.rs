@@ -1,10 +1,10 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Multi-threaded usage: shared PolydatProgram, per-thread PolydatState.
+//! Multi-threaded usage: one shared program, one kernel per thread.
 
 fn main() {
-    let kernel = polydat::dsl::compile_polydat(
+    let kernel = polydat::dsl::compile_polydat_kernel(
         r#"
         input cycle: u64
         user_id := mod(hash(cycle), 1000000)
@@ -23,12 +23,12 @@ fn main() {
         for tid in 0..threads {
             let program = program.clone();
             s.spawn(move || {
-                // Each thread creates its own state — no locks.
-                let mut state = program.create_state();
+                // Each thread creates its own kernel over the program: no locks.
+                let mut kernel = program.create_kernel();
                 let base = tid as u64 * cycles_per_thread;
                 for c in base..base + cycles_per_thread {
-                    state.set_inputs(&[c]);
-                    state.pull(&program, "user_id");
+                    kernel.set_inputs(&[c]);
+                    kernel.pull("user_id");
                 }
             });
         }

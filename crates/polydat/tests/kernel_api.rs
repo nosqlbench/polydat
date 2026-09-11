@@ -279,3 +279,87 @@ fn the_default_engine_is_compiled_code() {
     let asm = compile_polydat_to_assembler(SRC).unwrap();
     assert_eq!(asm.compile_kernel().unwrap().engine(), k.engine());
 }
+
+#[test]
+fn outputs_are_listed_in_declaration_order_on_every_engine() {
+    let p1 = compile_polydat_with(SRC, Engine::Interpreter).unwrap();
+    for engine in [
+        Engine::Closures(Provenance::Auto),
+        Engine::Native(Provenance::Auto),
+        Engine::default(),
+    ] {
+        let Ok(k) = compile_polydat_with(SRC, engine) else {
+            continue;
+        };
+        assert_eq!(k.output_names(), p1.output_names(), "{engine}");
+    }
+}
+
+#[test]
+fn the_default_engine_forms_take_options_tiles_and_activations() {
+    use polydat::dsl::compile::{
+        CompileOptions, compile_polydat_kernel, compile_polydat_kernel_with_options,
+        compile_polydat_kernel_with_tiles,
+    };
+    use polydat::dsl::events::CompileEventLog;
+    use polydat::tile::{Span, TileOptions, tile_from_text};
+
+    // Options: the outputs to keep and the compile log.
+    let mut log = CompileEventLog::new();
+    let options = CompileOptions {
+        required_outputs: vec!["key".into()],
+        context: "kernel api".into(),
+        ..CompileOptions::default()
+    };
+    let mut k = compile_polydat_kernel_with_options(SRC, &options, Some(&mut log)).unwrap();
+    // The same pruning the interpreter path applies: `h`, `id`, and `n`
+    // are gone, `key` and the declared surface remain.
+    let mut p1 = polydat::dsl::compile_polydat_with_options(SRC, &options, None).unwrap();
+    assert_eq!(k.output_names(), p1.output_names());
+    assert!(
+        !k.output_names()
+            .iter()
+            .any(|n| n == "h" || n == "id" || n == "n")
+    );
+    assert!(!log.events().is_empty());
+    k.set_inputs(&[3]);
+    p1.set_inputs(&[3]);
+    assert_eq!(k.pull("key"), *p1.pull("key"));
+    assert_eq!(k.engine(), compile_polydat_kernel(SRC).unwrap().engine());
+
+    // Tiles from host data.
+    let tile = tile_from_text(
+        "doc",
+        "json",
+        r#"{"n": ${cycle}, "twice": ${cycle * 2}}"#,
+        &TileOptions::default(),
+        Span { line: 0, col: 0 },
+    )
+    .unwrap();
+    let mut k = compile_polydat_kernel_with_tiles("input cycle: u64\n", vec![tile]).unwrap();
+    k.set_inputs(&[4]);
+    assert_eq!(k.pull("doc").as_str(), r#"{"n": 4, "twice": 8}"#);
+
+    // Activations on the default engine.
+    let mut k = compile_polydat_kernel(
+        "input cycle: u64\nfor a in 1..4 {\n    x := u64_add(a, cycle)\n}\n",
+    )
+    .unwrap();
+    k.set_inputs(&[10]);
+    let stream = k.traverse(0).unwrap();
+    for index in 0..stream.len() {
+        let mut act = stream.activate(index).unwrap();
+        // The same tier as the root; the selector picks each body's provenance.
+        assert!(
+            matches!(
+                (act.kernel.engine(), k.engine()),
+                (Engine::Native(_), Engine::Native(_)) | (Engine::Closures(_), Engine::Closures(_))
+            ),
+            "activation {index}: {} vs {}",
+            act.kernel.engine(),
+            k.engine()
+        );
+        let mut want = stream.activation(index).unwrap();
+        assert_eq!(act.cycle(0).pull("x"), *want.cycle(0).pull("x"));
+    }
+}

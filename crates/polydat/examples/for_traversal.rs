@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Illustration: `for <comprehension> { body }` activates one child scope
-//! per tuple. The body compiles once; each activation is a fresh state
+//! per tuple. The body compiles once; each activation is a fresh kernel
 //! over that program with the tuple's elements bound. A cursor declared
 //! `over` an element is narrowed per activation, and its slice sets the
 //! activation's cycles.
@@ -10,7 +10,7 @@
 use polydat::kernel::programs_built;
 
 fn main() {
-    let mut kernel = polydat::dsl::compile_polydat(
+    let mut kernel = polydat::dsl::compile_polydat_kernel(
         r#"
         input cycle: u64
         extern total: u64 = 1000
@@ -26,41 +26,40 @@ fn main() {
     .expect("compile failed");
     kernel.set_inputs(&[7]);
 
-    let program = kernel.program().traversals()[0].program.clone();
+    let program = kernel.traversals()[0].program.clone();
     println!(
         "body program: {} nodes, compiled once",
         program.node_count()
     );
 
-    let built_before = programs_built();
-    let mut stream = kernel.traverse(0).expect("open traversal");
+    let stream = kernel.traverse(0).expect("open traversal");
     println!(
         "{} activations from `{}`",
         stream.len(),
         stream.traversal().source_text
     );
+    // The body compiles for the engine on the first activation; every
+    // activation after it shares that program.
+    drop(stream.activate(0).expect("first activation"));
+    let built_before = programs_built();
     println!();
     println!("act  p          scale  cycles  first row  first v");
-    while let Some(mut act) = stream.advance().expect("activation") {
+    for index in 0..stream.len() {
+        let mut act = stream.activate(index).expect("activation");
         let slice = act.cursor.clone().expect("cursor slice");
         let scale = act.coord("scale").unwrap().as_u64();
+        let cycles = act.cycle_count();
         let kernel = act.cycle(0);
         let row = kernel.pull("row").as_u64();
         let v = kernel.pull("v").as_u64();
         println!(
             "{:>3}  [{:>3},{:>4})  {:>5}  {:>6}  {:>9}  {}",
-            act.index,
-            slice.start,
-            slice.end,
-            scale,
-            act.cycle_count(),
-            row,
-            v
+            act.index, slice.start, slice.end, scale, cycles, row, v
         );
     }
     println!();
     println!(
-        "programs built while activating: {}",
+        "programs built after the first activation: {}",
         programs_built() - built_before
     );
 }

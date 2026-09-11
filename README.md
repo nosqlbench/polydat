@@ -20,10 +20,10 @@ polydat = "0.2"
 Compile a graph from DSL source and pull named results:
 
 ```rust
-use polydat::dsl::compile_polydat;
+use polydat::dsl::compile_polydat_kernel;
 
-fn main() -> Result<(), String> {
-    let mut kernel = compile_polydat(r#"
+fn main() -> Result<(), polydat::KernelError> {
+    let mut kernel = compile_polydat_kernel(r#"
         input cycle: u64
 
         hashed := hash(cycle)
@@ -156,10 +156,11 @@ Three engines share one semantic model:
 - **P3** lowers eligible graph cones through Cranelift to host-native machine
   code.
 
-With the default `jit` feature, the production kernel is mixed: P1 hosts the
-graph and embeds P3 cones where wire types, purity, and lifecycle allow.
-Unsupported nodes and boundary types stay in the interpreter, so JIT
-eligibility is an optimization, not a requirement for a valid graph.
+With the default `jit` feature, the kernel a host gets by default is P3: native
+segments for every run of nodes with a lowering, closure steps for the rest,
+over one slot buffer. Every engine accepts every program, so native
+eligibility is an optimization, not a requirement for a valid graph, and the
+interpreter is the oracle the others are checked against.
 
 One eleven-node graph with three inputs and four outputs, measured through all
 three engines on one core:
@@ -250,8 +251,8 @@ hosts; it does not invent wider values that the installed backend cannot lower.
 SIMD scalar-flow promotion is an explicit, opt-in Tier-1 path. It can
 discover and compile a sealed `u64` flow into `RegI64x2`, reserve an owned
 perfect-ordinal input range, and drain results in scalar order across arbitrary
-bursts with forward-only recovery. Normal `compile_polydat`/`pull` execution
-does not silently enable this path. Broader lane types and automatic cost-based
+bursts with forward-only recovery. Normal `compile_polydat_kernel`/`pull`
+execution does not silently enable this path. Broader lane types and automatic cost-based
 selection are outside the current [SIMD ISA and auto-promotion
 specification](crates/polydat/docs/design/simd_isa_autopromotion.md).
 

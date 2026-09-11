@@ -5,12 +5,12 @@
 //! fiber narrow its cursor to a single partition. The host plays its
 //! scope-setup role explicitly here by writing the cursor slots.
 
-use polydat::dsl::compile_polydat;
-use polydat::iteration::cursor_partition::{cursor_over_partitions, narrow_cursor};
+use polydat::dsl::compile_polydat_kernel;
+use polydat::iteration::cursor_partition::cursor_over_partitions_on;
 
 fn main() {
     // 1. Resolve a partition spec against a domain.
-    let mut k = compile_polydat(
+    let mut k = compile_polydat_kernel(
         r#"
         input cycle: u64
         parts := partitions("20%,30%,*", 1000000)
@@ -31,7 +31,7 @@ fn main() {
     println!();
 
     // 2. One fiber narrows its cursor to one partition.
-    let mut k = compile_polydat(
+    let mut k = compile_polydat_kernel(
         r#"
         input cycle: u64
         cursor q = range(0, 1000000) over "20%,30%,*"
@@ -46,10 +46,9 @@ fn main() {
     .expect("compile2");
 
     // The host resolves the `over` spec and hands fiber 1 its partition.
-    let program = k.program().clone();
-    let schema = &program.cursor_schemas()[0];
-    let parts = cursor_over_partitions(&program, k.state(), schema).expect("resolve");
-    narrow_cursor(&program, k.state(), "q", &parts[1]);
+    let schema = k.cursor_schemas()[0].clone();
+    let parts = cursor_over_partitions_on(k.as_mut(), &schema).expect("resolve");
+    k.set_cursor("q", &parts[1]).expect("narrow");
 
     for cycle in [0u64, 1, 299_999, 300_000] {
         k.set_inputs(&[cycle]);
