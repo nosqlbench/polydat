@@ -1720,6 +1720,21 @@ impl PolydatProgram {
         crate::ast::compile_level_of(self.nodes[idx].as_ref())
     }
 
+    /// What the interpreter runs of this program: its native cones as
+    /// native segments and every other node interpreted
+    /// ([`Kernel::plan`](crate::Kernel::plan)).
+    pub fn engine_plan(&self) -> crate::EnginePlan {
+        let mut plan = crate::EnginePlan::default();
+        for i in 0..self.node_count() {
+            if self.node_meta(i).name.starts_with("jit_cone[") {
+                plan.native_segments += 1;
+            } else {
+                plan.interpreted_nodes += 1;
+            }
+        }
+        plan
+    }
+
     /// Probe the compile level of the last node.
     pub fn last_node_compile_level(&self) -> crate::ast::CompileLevel {
         if self.nodes.is_empty() {

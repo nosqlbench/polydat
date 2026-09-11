@@ -372,6 +372,43 @@ impl std::fmt::Display for Engine {
     }
 }
 
+/// What a kernel's engine decided for its program: how much of it runs
+/// as native segments, as closure steps, and on the interpreter. The one
+/// planning detail a kernel exposes, on every engine
+/// ([`Kernel::plan`](crate::Kernel::plan)).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EnginePlan {
+    /// Runs of nodes compiled to one native function each; on the
+    /// interpreter, its native cones.
+    pub native_segments: usize,
+    /// Nodes that run their generated closure.
+    pub closure_steps: usize,
+    /// Nodes the interpreter dispatches itself.
+    pub interpreted_nodes: usize,
+}
+
+impl std::fmt::Display for EnginePlan {
+    /// The non-zero counts, native first: `4 native segment(s), 3
+    /// closure step(s)`; `nothing` for an empty program.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut parts = Vec::new();
+        if self.native_segments > 0 {
+            parts.push(format!("{} native segment(s)", self.native_segments));
+        }
+        if self.closure_steps > 0 {
+            parts.push(format!("{} closure step(s)", self.closure_steps));
+        }
+        if self.interpreted_nodes > 0 {
+            parts.push(format!("{} interpreted node(s)", self.interpreted_nodes));
+        }
+        if parts.is_empty() {
+            write!(f, "nothing")
+        } else {
+            write!(f, "{}", parts.join(", "))
+        }
+    }
+}
+
 /// Why a kernel was not built: the one error type of every constructor
 /// that takes an [`Engine`].
 #[derive(Debug)]

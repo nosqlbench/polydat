@@ -435,6 +435,14 @@ impl KernelCore {
         crate::compile::marshal::decode_output(&self.buffer, slot, ty, &self.table)
     }
 
+    /// Every step is a closure.
+    fn plan(&self) -> crate::EnginePlan {
+        crate::EnginePlan {
+            closure_steps: self.steps.len(),
+            ..Default::default()
+        }
+    }
+
     /// Nothing is current: every step runs at the next evaluation.
     fn invalidate_all(&mut self) {
         self.clean.fill(false);

@@ -234,6 +234,9 @@ impl crate::kernel::Kernel for PolydatKernel {
     fn traversals(&self) -> &[crate::dsl::traversal::Traversal] {
         self.program().traversals()
     }
+    fn plan(&self) -> crate::EnginePlan {
+        self.program().engine_plan()
+    }
     fn traverse(&mut self, index: usize) -> Result<crate::kernel::TraversalStream, String> {
         PolydatKernel::traverse(self, index)
     }

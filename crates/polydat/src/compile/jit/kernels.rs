@@ -91,6 +91,14 @@ impl JitCore {
         crate::compile::marshal::decode_output(&self.buffer, slot, ty, &self.table)
     }
 
+    /// One native function is the program.
+    pub(super) fn plan(&self) -> crate::EnginePlan {
+        crate::EnginePlan {
+            native_segments: 1,
+            ..Default::default()
+        }
+    }
+
     /// The next evaluation runs the program: one native function.
     pub(super) fn invalidate_all(&mut self) {
         self.drive.stale = true;

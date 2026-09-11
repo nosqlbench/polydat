@@ -377,6 +377,11 @@ pub trait Kernel: Send {
     /// compiler resolved where it could.
     fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema];
 
+    /// What this kernel's engine decided for the program: how much of
+    /// it runs as native segments, as closure steps, and on the
+    /// interpreter. The one planning detail a kernel exposes.
+    fn plan(&self) -> crate::EnginePlan;
+
     /// The value of a named input as the kernel holds it now, an extern
     /// or a coordinate; `None` for a name that is not an input.
     fn input_value(&self, name: &str) -> Option<Value>;

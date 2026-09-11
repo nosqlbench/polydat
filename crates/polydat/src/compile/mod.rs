@@ -202,6 +202,9 @@ macro_rules! impl_kernel_trait {
             fn traversals(&self) -> &[crate::dsl::traversal::Traversal] {
                 &self.core.traversals
             }
+            fn plan(&self) -> crate::EnginePlan {
+                self.core.plan()
+            }
             fn traverse(&mut self, index: usize) -> Result<crate::kernel::TraversalStream, String> {
                 let traversal = self.core.traversals.get(index).cloned().ok_or_else(|| {
                     format!(

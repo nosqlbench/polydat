@@ -187,7 +187,7 @@ pub use derive_support::Const;
 pub use compile::cone::{JitMode, default_jit_mode, set_default_jit_mode};
 /// The engine a host chooses and the one error of every constructor
 /// that takes it (docs/design/engine_parity.md, step 4).
-pub use compile::select::{Engine, KernelError, Provenance};
+pub use compile::select::{Engine, EnginePlan, KernelError, Provenance};
 /// One kernel API for every engine.
 pub use kernel::{Kernel, KernelProgram};
 

@@ -30,7 +30,7 @@ use polydat::kernel::activation::Activation;
 use polydat::kernel::{KernelProgram, PolydatProgram, WireSource, extract_manifest};
 use polydat::library::emit::{self, EmitFormat};
 use polydat::library::support::audit::{self, LogLevel};
-use polydat::{Engine as KernelEngine, JitMode, Kernel, Provenance};
+use polydat::{Engine as KernelEngine, EnginePlan, JitMode, Kernel, Provenance};
 
 #[derive(Parser)]
 #[command(
@@ -299,6 +299,9 @@ struct Compiled {
     root: Arc<dyn KernelProgram>,
     /// The engine `--engine` named, which the activations open on too.
     engine: KernelEngine,
+    /// What that engine decided for the root: its native segments,
+    /// closure steps, and interpreted nodes.
+    run_plan: EnginePlan,
     events: CompileEventLog,
     audit: Vec<(LogLevel, String)>,
     elapsed: Duration,
@@ -396,14 +399,16 @@ fn compile_ast(ast: &PolydatFile, source: &str, args: &CompileArgs) -> Result<Co
     let start = Instant::now();
     let kernel = compile_ast_with_options(ast, source, &options, Some(&mut events))?;
     let engine = run_engine(args.engine);
-    let root = compile_ast_with_engine(ast, source, &options, None, engine)
-        .map_err(|e| e.to_string())?
-        .into_program();
+    let root =
+        compile_ast_with_engine(ast, source, &options, None, engine).map_err(|e| e.to_string())?;
+    let run_plan = root.plan();
+    let root = root.into_program();
     let elapsed = start.elapsed();
     Ok(Compiled {
         program: kernel.into_program(),
         root,
         engine,
+        run_plan,
         events,
         audit: take_audit(),
         elapsed,
@@ -1035,6 +1040,11 @@ fn print_timing(
         Report::Text => {
             println!();
             println!("compile      {:?}", compiled.elapsed);
+            println!(
+                "engine       {}: {}",
+                compiled.root.engine(),
+                compiled.run_plan
+            );
             println!("cycles       {cycles}");
             println!("fibers       {fibers}");
             println!("wall         {wall:?}");
@@ -1048,6 +1058,12 @@ fn print_timing(
         Report::Json => {
             let obj = serde_json::json!({
                 "compile_ns": compiled.elapsed.as_nanos() as u64,
+                "engine": compiled.root.engine().to_string(),
+                "plan": {
+                    "native_segments": compiled.run_plan.native_segments,
+                    "closure_steps": compiled.run_plan.closure_steps,
+                    "interpreted_nodes": compiled.run_plan.interpreted_nodes,
+                },
                 "cycles": cycles,
                 "fibers": fibers,
                 "wall_ns": wall.as_nanos() as u64,
@@ -1198,6 +1214,11 @@ fn print_stats(program: &PolydatProgram, compiled: &Compiled, _report: Report) {
         program.outputs_with_side_effects().len()
     );
     println!("engines       P1 nodes {p1}  P2 nodes {p2}  P3 cones {p3}");
+    println!(
+        "run engine    {}: {}",
+        compiled.root.engine(),
+        compiled.run_plan
+    );
     println!("deterministic {}", program.is_deterministic());
     println!("cursors       {}", program.cursor_schemas().len());
     println!(
@@ -1230,6 +1251,12 @@ fn stats_json(program: &PolydatProgram, compiled: &Compiled) -> serde_json::Valu
         "shared_outputs": program.shared_outputs().len(),
         "side_effect_outputs": program.outputs_with_side_effects().len(),
         "engine_nodes": {"p1": p1, "p2": p2, "p3": p3},
+        "run_engine": compiled.root.engine().to_string(),
+        "run_plan": {
+            "native_segments": compiled.run_plan.native_segments,
+            "closure_steps": compiled.run_plan.closure_steps,
+            "interpreted_nodes": compiled.run_plan.interpreted_nodes,
+        },
         "deterministic": program.is_deterministic(),
         "cursors": program.cursor_schemas().len(),
         "events": compiled.events.events().len(),
@@ -1561,6 +1588,11 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
                 let (p1, p2, p3) = level_counts(program);
                 println!(
                     "Each node runs on one engine. P1 is the typed interpreter, P2 a compiled closure, P3 native code through Cranelift. A cone is a region of eligible nodes fused into one native function; the interpreter dispatches it as a single node."
+                );
+                println!(
+                    "A run drives the {} engine: {}. The interpreter's program below is what this command and --stats describe.",
+                    compiled.root.engine(),
+                    compiled.run_plan
                 );
                 println!("  P1 nodes {p1}   P2 nodes {p2}   P3 cones {p3}");
                 for i in 0..program.node_count() {

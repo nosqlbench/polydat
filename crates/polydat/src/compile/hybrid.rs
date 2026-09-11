@@ -565,6 +565,16 @@ impl HybridCore {
         crate::compile::marshal::decode_output(&self.buffer, slot, ty, &self.table)
     }
 
+    /// The native segments and the closure steps.
+    fn plan(&self) -> crate::EnginePlan {
+        let (native_segments, closure_steps) = self.engine_counts();
+        crate::EnginePlan {
+            native_segments,
+            closure_steps,
+            interpreted_nodes: 0,
+        }
+    }
+
     /// Nothing is current: every step runs at the next evaluation.
     fn invalidate_all(&mut self) {
         self.clean.fill(false);

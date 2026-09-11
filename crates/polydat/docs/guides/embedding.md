@@ -539,10 +539,9 @@ for engine in [
         Err(e) => println!("{e}"),
     }
 }
-println!("Engine::default() is {}", compile_polydat_kernel(src)?.engine());
-let p3 = compile_polydat_to_assembler(src)?.try_compile_jit()?;
-let (native, closures) = p3.engine_counts();
-println!("P3 plan: {native} native segment(s), {closures} closure step(s)");
+let p3 = compile_polydat_kernel(src)?;
+println!("Engine::default() is {}", p3.engine());
+println!("P3 plan: {}", p3.plan());
 let mut p1 = compile_polydat_with(src, Engine::Interpreter)?;
 for cycle in [0u64, 1] {
     p1.set_inputs(&[cycle]);
@@ -573,8 +572,8 @@ chose. P3 runs its nineteen native-eligible nodes as four native
 segments, one per run of them between the host nodes and on either
 side of a compile-time constant, and the three host nodes as closure
 steps, with the extension value passing between
-two of them as a table handle; `engine_counts` is the only planning detail
-it exposes, so a host can see whether a program is mostly native before
+two of them as a table handle; `plan()` is the only planning detail
+a kernel exposes, on every engine, so a host can see whether a program is mostly native before
 deciding to care. An engine that cannot run a program at all, the
 closure tier on a vector-typed extern for one, says so as the error,
 with the engine and the node named. A `shared` binding runs on every

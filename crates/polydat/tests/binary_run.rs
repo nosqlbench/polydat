@@ -136,3 +136,46 @@ fn every_engine_emits_the_same_rows() {
         assert_eq!(run("force"), want);
     }
 }
+
+#[test]
+fn stats_and_timing_name_the_run_engine() {
+    let path = write_temp(
+        "plan",
+        "input cycle: u64\nh := hash(cycle)\ns := \"x{h}\"\n",
+    );
+    let (ok, stdout, stderr) = run_binary(&["check", path.to_str().unwrap(), "--stats"]);
+    assert!(ok, "{stderr}");
+    let line = stdout
+        .lines()
+        .find(|l| l.starts_with("run engine"))
+        .unwrap_or_else(|| panic!("{stdout}"));
+    // The binary under test carries its own feature set, so either
+    // compiled engine may answer; both name the engine and its plan.
+    let native = line.contains("native (") && line.contains("native segment(s)");
+    let closures = line.contains("closures (") && line.contains("closure step(s)");
+    assert!(native || closures, "{line}");
+    let (ok, stdout, stderr) = run_binary(&[
+        "run",
+        path.to_str().unwrap(),
+        "--cycles",
+        "2",
+        "--timing",
+        "json",
+        "-q",
+    ]);
+    assert!(ok, "{stderr}");
+    let report: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert_eq!(report["cycles"], 2);
+    assert!(report["engine"].is_string(), "{report}");
+    assert!(report["plan"]["native_segments"].is_number(), "{report}");
+    let (ok, stdout, _) = run_binary(&[
+        "check",
+        path.to_str().unwrap(),
+        "--stats",
+        "--format",
+        "json",
+    ]);
+    assert!(ok);
+    let report: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+    assert!(report["stats"]["run_engine"].is_string(), "{report}");
+}

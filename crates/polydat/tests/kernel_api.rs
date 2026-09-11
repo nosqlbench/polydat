@@ -419,3 +419,33 @@ fn the_default_engine_forms_take_options_tiles_and_activations() {
         assert_eq!(act.cycle(0).pull("x"), *want.cycle(0).pull("x"));
     }
 }
+
+#[test]
+fn every_engine_reports_its_plan() {
+    let p1 = compile_polydat_with(SRC, Engine::Interpreter).unwrap();
+    let nodes = polydat::dsl::compile_polydat(SRC)
+        .unwrap()
+        .program()
+        .node_count();
+    let plan = p1.plan();
+    assert_eq!(plan.closure_steps, 0);
+    assert_eq!(plan.native_segments + plan.interpreted_nodes, nodes);
+    let p2 = compile_polydat_with(SRC, Engine::Closures(Provenance::Auto)).unwrap();
+    let plan = p2.plan();
+    assert!(plan.closure_steps > 0, "{plan}");
+    assert_eq!((plan.native_segments, plan.interpreted_nodes), (0, 0));
+    assert_eq!(
+        plan.to_string(),
+        format!("{} closure step(s)", plan.closure_steps)
+    );
+    if let Ok(p3) = compile_polydat_with(SRC, Engine::Native(Provenance::Auto)) {
+        let plan = p3.plan();
+        assert!(plan.native_segments > 0, "{plan}");
+        assert_eq!(plan.interpreted_nodes, 0);
+        assert!(
+            plan.to_string()
+                .starts_with(&format!("{} native segment(s)", plan.native_segments))
+        );
+    }
+    assert_eq!(polydat::EnginePlan::default().to_string(), "nothing");
+}

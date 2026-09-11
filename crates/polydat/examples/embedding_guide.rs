@@ -9,7 +9,7 @@ use polydat::ast::Value;
 use polydat::derive_support::Ext;
 use polydat::dsl::compile::{
     CompileOptions, compile_polydat_kernel, compile_polydat_kernel_with_options,
-    compile_polydat_to_assembler, compile_polydat_with, compile_polydat_with_log,
+    compile_polydat_with, compile_polydat_with_log,
 };
 use polydat::dsl::events::CompileEventLog;
 use polydat::{Engine, Kernel, Provenance};
@@ -403,17 +403,11 @@ fn section_engines() {
             Err(e) => println!("{e}"),
         }
     }
-    println!(
-        "Engine::default() is {}",
-        compile_polydat_kernel(src).expect("default").engine()
-    );
-    // The P3 kernel's plan, the one planning detail it exposes.
-    let p3 = compile_polydat_to_assembler(src)
-        .unwrap()
-        .try_compile_jit()
-        .expect("P3");
-    let (native, closures) = p3.engine_counts();
-    println!("P3 plan: {native} native segment(s), {closures} closure step(s)");
+    // The default engine's kernel and its plan, the one planning detail
+    // a kernel exposes.
+    let p3 = compile_polydat_kernel(src).expect("default");
+    println!("Engine::default() is {}", p3.engine());
+    println!("P3 plan: {}", p3.plan());
     // The interpreter is the oracle; every engine that accepted the
     // program computes the same values through the same calls.
     let mut p1 = compile_polydat_with(src, Engine::Interpreter).unwrap();

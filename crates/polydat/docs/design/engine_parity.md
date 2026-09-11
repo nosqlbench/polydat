@@ -108,7 +108,7 @@ name, signature, and meaning as the interpreter kernel.
 | Read a value | `pull(name) -> &Value` (lazy) | `get_value(name) -> Value` after `eval` | same | same |
 | Read raw bits | none | `get`, `get_slot` (refuse handle slots) | same | same |
 | Read vectors | through `Value` | `read_vec_*` | `read_vec_*` | none (refused at compile) |
-| Introspect | `program()`, `input_names`, `output_names`, `get_constant`, `lookup` | `output_names`, `resolve_output`, `coord_count` (counts slots) | same plus `engine_counts` | `output_names`, `resolve_output`, `coord_count` |
+| Introspect | `program()`, `input_names`, `output_names`, `get_constant`, `lookup`, `plan` | `output_names`, `resolve_output`, `coord_count` (counts slots), `plan` | same (`plan` counts native segments and closure steps) | `output_names`, `resolve_output`, `coord_count`, `plan` |
 | Share across threads | `into_program()` then `create_state()` per thread | none: compile once per thread | none | none |
 | Traversal | `traverse(i)`, activations, `for_iteration` | none | none | none |
 | Cursors | `cursor_schemas` (with the partitions resolved at build), `set_cursor`; `cursor_over_partitions_on` for the run-time cases on every engine; activations seed their bodies | `cursor_schemas`, `set_cursor`, `cursor_over_partitions_on` | same | same |
@@ -877,7 +877,11 @@ Finally, `ExternWithoutDefault` was logged only for an extern with a
 default expression that evaluated to `None`, never for the DSL's
 `extern name: type` with no default, which is an `IterationExtern`
 slot; the log now names both, and no engine names a cursor's slots,
-which are `None` until narrowed by design.
+which are `None` until narrowed by design. With the binary on the run
+engine, `Kernel::plan` reports what an engine decided for a program on
+every engine (`EnginePlan`: native segments, closure steps, interpreted
+nodes), and `--stats`, `--timing`, and `explain engines` print the run
+engine and its plan beside the interpreter program's description.
 
 ## 6. What does not change
 
