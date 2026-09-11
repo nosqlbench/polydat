@@ -39,7 +39,9 @@ How the parts work and how to use them from a host program.
   closure tier, the hybrid kernel, and native code; features and
   trade-offs.
 - [Engine-ladder performance](guides/performance.md): one typed graph
-  measured on every engine, with the measurement contract.
+  measured on every engine, with the measurement contract; the tile
+  ladder in `benches/tile_render.rs` is recorded in
+  [Native Tile Rendering](design/tile_native_rendering.md) §6.
 
 ## Reference
 

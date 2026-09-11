@@ -113,6 +113,10 @@ required-features = ["jit"]
 name = "engine_ladder"
 harness = false
 
+[[bench]]
+name = "tile_render"
+harness = false
+
 # These examples drive the native tier directly, so they need the JIT.
 [[example]]
 name = "polytile_tutorial"

@@ -52,7 +52,26 @@ None of this is visible in the differential, which is what it should be:
 the bytes agree. It is visible in a per-cycle cost that scales with the
 hole count and, for a projection, with the tuple count times the body's
 P1 cost, where the rest of the program pays P3 prices. The engine ladder
-does not render a tile, so the cost has never been recorded.
+does not render a tile, so the cost had never been recorded until step 0
+of this plan.
+
+**Where the time goes.** Step 0 timed the pieces on their own (release
+build, the machine of §6). One `u64` hole in a two-byte skeleton costs
+about 330 ns on P3 and 860 ns on P1 beyond the graph that feeds it, and
+each further `u64` hole adds about the same. The pieces: parsing the
+hole's spec string, which the P1 and P2 `tile_encode` bodies do on
+every call, 115 ns; encoding a `u64` through `Value` display, 90 ns;
+turning the arena handle back into an owned `Value` and that into a
+`String` in the render helper, two allocations and two copies, about
+160 ns; the arena writer itself, 18 ns; the panic guard, 1 ns. A
+formatted `f64` hole (`${f | .2}`) costs 530 ns to encode alone because
+`formatted_text` renders the value's display text first and then
+formats it again with the precision, so the number is formatted twice
+and the first result thrown away. A string hole costs 50 ns to encode
+but 780 ns end to end on P3, the rest being the handle round trip. So
+the cost is not the skeleton walk (99 ns for a whole one-hole render
+into a `String`); it is that every hole's bytes are produced twice and
+carried through owned values between the two.
 
 ## 2. What "straight-line skeleton code" means here
 
@@ -76,7 +95,9 @@ each measured:
    over the slots (`marshal::arg_ref`, which the encoder already takes)
    and never builds a `Value`. A hole then costs one encode and one
    copy on every engine, and the graph has one node per tile instead of
-   one per hole plus one.
+   one per hole plus one. Two defects the probe found are fixed on the
+   way: `formatted_text` formats a number once, under its precision or
+   width, and no engine parses a spec string at render time.
 2. **Projections as compiled bodies with memoized tuples.** A `Repeat`
    whose comprehension names no generator clause and no cascaded wire
    in its sources has the same tuples every render; they are evaluated
@@ -98,8 +119,9 @@ each measured:
    immediates, and a typed encoder per hole (`jit_encode_u64_json`,
    `jit_encode_str_json_quoted`, and so on, one per encoding, position,
    and wire type the classifier has already fixed), each appending to
-   the open arena writer. A `Branch` is a native conditional over the
-   condition slot. A skeleton with a `Repeat` keeps the helper of step
+   the open arena writer, with integer and float text produced by the
+   fast formatters rather than `Display`. A `Branch` is a native
+   conditional over the condition slot. A skeleton with a `Repeat` keeps the helper of step
    2, since a projection's body is a program, not a sequence. This step
    lands only if the bench of §4 shows it wins by more than the drift
    the performance guide records; if step 1 and step 2 already reach the
@@ -141,12 +163,16 @@ cases per engine, each one complete cycle that pulls the rendered tile:
 
 | Case | What it isolates |
 | --- | --- |
+| `reading` | the reading's eight wires read directly, no tile: the render cost of every other case is that case less this one |
+| `one_hole` | one numeric hole in a two-byte skeleton: the floor for a render |
 | `flat` | the document without its projection: encode and copy cost per hole |
 | `projected` | the document as written: the projection's tuple and body cost |
-| `wide` | the flat document with twenty holes: how cost scales with hole count |
+| `wide` | the flat document with twenty holes of three types: how cost scales with hole count |
 
 The engines are the four of the engine ladder: P1 with `JitMode::Off`,
-P2, P3 (the hybrid kernel), and pure native code. The bench records
+P2, P3 (the hybrid kernel), and pure native code, the last only where
+every node of the case lowers (`hashed_uuid` and `weighted_strings`
+keep the reading off it, so `one_hole` is its only case). The bench records
 nanoseconds per cycle and is run against a same-hour baseline worktree
 before and after every step, as the performance guide does for the
 ladder. The numbers before step 1 are the baseline this plan is judged
@@ -188,8 +214,33 @@ previous surfaces working.
 
 ## 6. Baseline
 
-Recorded when step 0 lands: the table of §4 before any change, with
-the date, the machine, and the commit.
+Recorded 2026-09-11 at commit e6ab238, before any change, on the
+machine of the performance guide (AMD Ryzen 9 3900X, Windows,
+`x86_64-pc-windows-msvc`), with `cargo bench --bench tile_render`.
+Each entry is Criterion's point estimate in nanoseconds per cycle, with
+its confidence interval; pure native code runs `one_hole` only, since
+the reading's two string nodes have no native lowering.
+
+| Case | P1 interpreter | P2 closures | P3 native segments | pure native |
+| --- | ---: | ---: | ---: | ---: |
+| `reading` | 2861 `[2787, 2949]` | 2565 `[2498, 2660]` | 2147 `[2101, 2195]` | – |
+| `one_hole` | 988 `[971, 1007]` | 1043 `[1026, 1064]` | 878 `[815, 960]` | 597 `[583, 613]` |
+| `flat` | 10715 `[10407, 11027]` | 10230 `[9902, 10593]` | 6241 `[5995, 6501]` | – |
+| `projected` | 18810 `[18593, 19058]` | 17479 `[17222, 17748]` | 14851 `[14562, 15174]` | – |
+| `wide` | 20626 `[20401, 20887]` | 20826 `[20494, 21202]` | 13460 `[13154, 13861]` | – |
+
+What the table says, taking each case less `reading`: rendering the
+seven-hole `flat` document costs about 4.1 µs on P3 and 7.9 µs on P1,
+roughly 590 ns and 1.1 µs per hole; the twenty-hole `wide` document
+costs 11.3 µs on P3, 565 ns per hole, so the cost is linear in the hole
+count and the static skeleton is not where it goes; and the four-tuple
+projection adds 8.6 µs on P3 over `flat`, about 2.2 µs per tuple, for a
+body with two holes. For scale, the whole eleven-node engine ladder
+graph evaluates in about 60 ns on P3, so one hole costs ten of those
+graphs and one projection tuple thirty-five. The engine ratio P3/P1 is
+about 1.7 on `flat` and 1.5 on `wide`, against 5.8 on the engine
+ladder: a tile is the part of a program that native code speeds up
+least, which is the refinement this plan exists for.
 
 ## 7. Boundaries
 
