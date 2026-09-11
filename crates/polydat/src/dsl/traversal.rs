@@ -89,10 +89,8 @@ impl std::fmt::Debug for BodySource {
 impl Traversal {
     /// The body's program on `engine`, compiled on the first call for
     /// that engine and shared by every activation after it, as the
-    /// interpreter's program is (SRD 113 §5.1, §5.2). A body that itself
-    /// contains a `for` statement or producer binding runs on the
-    /// interpreter only, because its activation is the kernel that opens
-    /// the nested traversal; every other engine refuses it by name.
+    /// interpreter's program is (SRD 113 §5.1, §5.2), its own `for`
+    /// statements included: an activation on any engine opens them.
     pub fn program_on(
         &self,
         engine: crate::Engine,
@@ -444,7 +442,7 @@ pub fn child_file(
     f: &ForStmt,
     comprehension: &Comprehension,
     elements: &[(String, PortType)],
-    parent: &PolydatProgram,
+    type_of: &dyn Fn(&str) -> Option<PortType>,
 ) -> Result<(PolydatFile, Vec<(String, PortType)>), String> {
     // §7: a body may not declare a coordinate other than `cycle`.
     for stmt in &f.body {
@@ -469,9 +467,7 @@ pub fn child_file(
         if declared.contains(&name) {
             continue;
         }
-        let ty = parent
-            .output_port_type(&name)
-            .or_else(|| parent.input_port_type(&name));
+        let ty = type_of(&name);
         if let Some(ty) = ty {
             cascade.push((name, ty));
         }

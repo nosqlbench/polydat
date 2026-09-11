@@ -227,6 +227,20 @@ impl crate::kernel::Kernel for PolydatKernel {
     fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema] {
         self.program().cursor_schemas()
     }
+    fn input_value(&self, name: &str) -> Option<Value> {
+        let idx = self.program().find_input(name)?;
+        Some(self.state_ref().get_input(idx))
+    }
+    fn traversals(&self) -> &[crate::dsl::traversal::Traversal] {
+        self.program().traversals()
+    }
+    fn traverse(&mut self, index: usize) -> Result<crate::kernel::TraversalStream, String> {
+        PolydatKernel::traverse(self, index)
+    }
+    fn set_traversals(&mut self, traversals: Vec<crate::dsl::traversal::Traversal>) {
+        let producers = self.program().producers().to_vec();
+        PolydatKernel::set_traversals(self, traversals, producers);
+    }
     fn shared_cells(&self) -> Vec<crate::kernel::SharedCellEntry> {
         self.shared_cells_in_scope()
     }

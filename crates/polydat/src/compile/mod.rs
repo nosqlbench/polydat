@@ -174,6 +174,39 @@ macro_rules! impl_kernel_trait {
             fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema] {
                 self.core.externs.cursor_schemas()
             }
+            fn input_value(&self, name: &str) -> Option<crate::ast::Value> {
+                self.core.externs.value(name).or_else(|| {
+                    let i = self
+                        .core
+                        .externs
+                        .input_names()
+                        .iter()
+                        .position(|n| n == name)?;
+                    if i < self.core.coord_count {
+                        let pending = self.core.drive.coords.get(i).copied();
+                        Some(crate::ast::Value::U64(
+                            pending.unwrap_or(self.core.buffer[i]),
+                        ))
+                    } else {
+                        None
+                    }
+                })
+            }
+            fn traversals(&self) -> &[crate::dsl::traversal::Traversal] {
+                &self.core.traversals
+            }
+            fn traverse(&mut self, index: usize) -> Result<crate::kernel::TraversalStream, String> {
+                let traversal = self.core.traversals.get(index).cloned().ok_or_else(|| {
+                    format!(
+                        "no traversal at index {index}; the program declares {}",
+                        self.core.traversals.len()
+                    )
+                })?;
+                crate::kernel::activation::open_traversal(self, traversal)
+            }
+            fn set_traversals(&mut self, traversals: Vec<crate::dsl::traversal::Traversal>) {
+                self.core.traversals = traversals.into();
+            }
             fn nest(&mut self) {
                 self.set_owns_cycle(false);
             }

@@ -337,14 +337,19 @@ through the same assembler every engine uses, and every later
 activation on that engine shares the program, as interpreter
 activations share theirs. The activation is driven through the `Kernel`
 trait and computes what the interpreter's activation computes
-([engine parity](engine_parity.md), step 8). Opening a traversal is the
-interpreter's work: the comprehension's sources are evaluated against
-the kernel that opens it, and that kernel is an interpreter kernel. So
-the root program's kernel is one, and so is the activation of any body
-that itself contains a `for` statement, because that activation is the
-kernel that opens the nested traversal. Only a body with no `for` of
-its own, the innermost body of a nest, where the cycles run, is
-activated on the engine the host chose.
+([engine parity](engine_parity.md), step 8). Opening a traversal is
+engine-neutral too: `traverse` is a method of the `Kernel` trait, and a
+kernel on any engine opens the traversals its program declares against
+the values it holds. The comprehension is evaluated in the body's
+scope, the body's program with the cascaded wires bound, where a
+source or predicate resolves every name it can reference (§3.2), so
+the opening kernel contributes only the snapshot of those wires. A
+body's own `for` statements are compiled with the body on every engine
+and open from its activation, so every level of a nest, root, outer
+bodies, and the innermost body where the cycles run, is on the engine
+the host chose. `compile_polydat_with_engine` and
+`compile_ast_with_engine` build such a root; the `polydat` binary runs
+a program with traversals on `Engine::default()` throughout.
 
 **Opening cost.** Opening a traversal evaluates its comprehension. Ranges
 and literal lists evaluate directly. A generator-call source such as
@@ -601,6 +606,8 @@ where it has ordinary wired access to everything the scope can see.
    `docs/tutorials/illustrations.md`. The README describes the construct in its
 . **Activations on every engine.** Done (engine parity, step 8).
    `TraversalStream::activation_on` and `Traversal::program_on`;
-   `tests/for_engines.rs`.
+   `tests/for_engines.rs`. Opening is engine-neutral since the step 8
+   addendum: `Kernel::traverse` on every engine, every level of a nest
+   compiled, and the `polydat` binary on `Engine::default()`.
 
 Each step lands with its tests and leaves the previous surfaces working.

@@ -446,6 +446,11 @@ impl Externs {
         Ok(s.slot)
     }
 
+    /// The current value of the extern `name`, if there is one.
+    pub(crate) fn value(&self, name: &str) -> Option<Value> {
+        self.by_name.get(name).map(|&i| self.slots[i].value.clone())
+    }
+
     /// The externs by name and declared type, for diagnostics.
     pub(crate) fn names(&self) -> Vec<(&str, PortType)> {
         self.slots.iter().map(|s| (s.name.as_str(), s.ty)).collect()

@@ -133,6 +133,9 @@ struct KernelCore {
     output_types: HashMap<String, PortType>,
     /// The extern inputs, materialized at the start of every run.
     externs: crate::compile::externs::Externs,
+    /// The traversals the program declares (SRD 113), opened through the
+    /// `Kernel` trait.
+    traversals: std::sync::Arc<[crate::dsl::traversal::Traversal]>,
     /// The coordinates set through the `Kernel` trait, pending
     /// evaluation; `stale` means the next evaluation begins a cycle.
     drive: crate::compile::Drive,
@@ -660,6 +663,7 @@ fn build_core(
         owns_cycle: true,
         output_types,
         externs,
+        traversals: Vec::new().into(),
         drive: crate::compile::Drive {
             coords: Vec::new(),
             stale: true,

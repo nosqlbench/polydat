@@ -44,6 +44,7 @@ use std::sync::Arc;
 
 use crate::ast::Value;
 use crate::kernel::PolydatKernel;
+use crate::kernel::interp::Lookup;
 use crate::kernel::interp::{interpolate_via_kernel, interpolate_with_lookup};
 
 /// Evaluate a comprehension clause's spec text against a kernel.
@@ -67,7 +68,7 @@ use crate::kernel::interp::{interpolate_via_kernel, interpolate_with_lookup};
 /// actionable diagnostics.
 pub fn evaluate_spec(
     spec_text: &str,
-    kernel: &PolydatKernel,
+    kernel: &dyn Lookup,
 ) -> Result<Vec<Value>, crate::dsl::compile::EmbeddingError> {
     evaluate_spec_internal(spec_text, kernel).map_err(|msg| {
         if let Some(rest) = msg.strip_prefix("interpolation: unresolved placeholder '{")
@@ -87,7 +88,7 @@ pub fn evaluate_spec(
     })
 }
 
-fn evaluate_spec_internal(spec_text: &str, kernel: &PolydatKernel) -> Result<Vec<Value>, String> {
+fn evaluate_spec_internal(spec_text: &str, kernel: &dyn Lookup) -> Result<Vec<Value>, String> {
     if let Some(values) = try_eval_all_cursor(spec_text, kernel)? {
         return Ok(values);
     }
@@ -250,7 +251,7 @@ fn evaluate_spec_internal(spec_text: &str, kernel: &PolydatKernel) -> Result<Vec
 /// kernel), a quoted token is a string, numbers/bools are
 /// literals. Returns `Ok(None)` when `text` is not a bracketed
 /// list (so the caller falls through to the other source forms).
-fn try_eval_bracket_list(text: &str, kernel: &PolydatKernel) -> Result<Option<Vec<Value>>, String> {
+fn try_eval_bracket_list(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>, String> {
     let t = text.trim();
     if !(t.starts_with('[') && t.ends_with(']') && t.len() >= 2) {
         return Ok(None);
@@ -300,7 +301,7 @@ fn try_eval_bracket_list(text: &str, kernel: &PolydatKernel) -> Result<Option<Ve
 /// number, bool, expression) goes through the const evaluator.
 /// SRD-18f §6: an unresolved bare reference is a hard error with
 /// a quoting hint, not a silent literal-name binding.
-fn eval_element_value(expr: &str, kernel: &PolydatKernel) -> Result<Value, String> {
+fn eval_element_value(expr: &str, kernel: &dyn Lookup) -> Result<Value, String> {
     let e = expr.trim();
     if is_single_bare_ident(e) {
         return kernel.lookup(e).ok_or_else(|| {
@@ -376,7 +377,7 @@ fn looks_like_literal_list(text: &str) -> bool {
 /// kernel via the synthesis path.
 pub fn pre_evaluate_clause(
     spec_text: &str,
-    parent_kernel: &PolydatKernel,
+    parent_kernel: &dyn Lookup,
     workload_params: &HashMap<String, String>,
     probes: &HashMap<String, String>,
 ) -> Result<Vec<Value>, String> {
@@ -401,12 +402,7 @@ pub fn pre_evaluate_clause(
         if let Some(pv) = probes.get(name) {
             return Ok(crate::iteration::comprehension::source::strip_string_tokens(pv));
         }
-        if let Some(v) = parent_kernel
-            .get_constant(name)
-            .cloned()
-            .or_else(|| parent_kernel.get_input(name))
-            .filter(|v| !matches!(v, Value::None))
-        {
+        if let Some(v) = parent_kernel.lookup(name) {
             return Ok(
                 match crate::iteration::comprehension::source::iteration_interior(&v) {
                     Some(interior) => interior,
@@ -430,10 +426,7 @@ pub fn pre_evaluate_clause(
 
     let interpolated = interpolate_with_lookup(&text, |name| {
         parent_kernel
-            .get_constant(name)
-            .cloned()
-            .or_else(|| parent_kernel.get_input(name))
-            .filter(|v| !matches!(v, Value::None))
+            .lookup(name)
             .map(|v| v.to_display_string())
             .or_else(|| workload_params.get(name).cloned())
     })?;
@@ -547,10 +540,7 @@ pub fn parse_list_with_types(text: &str) -> Vec<Value> {
 /// - `Err(...)` if the form matched but the cursor's extent
 ///   couldn't be resolved (cursor not in scope, extent wires
 ///   missing, etc.) — surfaced as a clause-level diagnostic.
-fn try_eval_all_cursor(
-    spec_text: &str,
-    kernel: &PolydatKernel,
-) -> Result<Option<Vec<Value>>, String> {
+fn try_eval_all_cursor(spec_text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>, String> {
     let trimmed = spec_text.trim();
     let Some(stripped) = trimmed.strip_prefix("all(") else {
         return Ok(None);
@@ -1209,10 +1199,7 @@ fn generate_binomial(n: u64) -> Vec<Value> {
 /// installed; a still-unresolved ident there falls out as an
 /// unresolved-clause error downstream, never a silent empty
 /// iteration.
-fn try_eval_partition_call(
-    text: &str,
-    kernel: &PolydatKernel,
-) -> Result<Option<Vec<Value>>, String> {
+fn try_eval_partition_call(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>, String> {
     let Some((name, args)) = parse_func_call(text) else {
         return Ok(None);
     };
@@ -1368,7 +1355,7 @@ fn try_eval_partition_call(
 /// [`try_eval_partition_call`].
 fn try_eval_param_partitions(
     text: &str,
-    kernel: &PolydatKernel,
+    kernel: &dyn Lookup,
 ) -> Result<Option<Vec<Value>>, String> {
     let Some(ident) = text.trim().strip_suffix(".partitions") else {
         return Ok(None);
@@ -1435,7 +1422,7 @@ fn desugar_partition_spec(spec: &str, extent: u64, ctx: &str) -> Result<Vec<Valu
 /// string literal yields its inner text; a bare identifier resolves against
 /// the kernel chain to its string value; anything else is taken verbatim (an
 /// unquoted spec such as a raw percentage list).
-fn resolve_partition_spec_arg(arg: &str, kernel: &PolydatKernel) -> Result<String, String> {
+fn resolve_partition_spec_arg(arg: &str, kernel: &dyn Lookup) -> Result<String, String> {
     let a = arg.trim();
     if a.len() >= 2
         && ((a.starts_with('"') && a.ends_with('"')) || (a.starts_with('\'') && a.ends_with('\'')))
@@ -1512,7 +1499,7 @@ fn generate_log_steps(start: f64, end: f64, n: u64) -> Result<Vec<Value>, String
 /// recursively evaluates its arguments through `evaluate_spec`
 /// (so `concat(1..10, fib(8))` works), then combines the
 /// resulting lists.
-fn try_eval_setop(text: &str, kernel: &PolydatKernel) -> Result<Option<Vec<Value>>, String> {
+fn try_eval_setop(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>, String> {
     let Some((name, args)) = parse_func_call(text) else {
         return Ok(None);
     };
@@ -1653,7 +1640,7 @@ fn try_eval_setop(text: &str, kernel: &PolydatKernel) -> Result<Option<Vec<Value
 /// outputs match `build_bucket_lut` / `build_concat_lut` /
 /// `build_interval_lut` byte-for-byte (covered by the
 /// the host's op-sequencing tests).
-fn try_eval_sequencer(text: &str, kernel: &PolydatKernel) -> Result<Option<Vec<Value>>, String> {
+fn try_eval_sequencer(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>, String> {
     let Some((name, args)) = parse_func_call(text) else {
         return Ok(None);
     };

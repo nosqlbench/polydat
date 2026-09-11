@@ -274,9 +274,6 @@ pub struct TileProgram {
     /// One kernel over each body program, the canonical kernel the
     /// comprehension evaluator installs tuple values into.
     canonicals: Vec<Arc<PolydatKernel>>,
-    /// The empty parent kernel: every scope value a projection needs
-    /// arrives through the node's inputs instead.
-    empty: Arc<PolydatKernel>,
 }
 
 impl TileProgram {
@@ -306,17 +303,12 @@ impl TileProgram {
             .iter()
             .map(|p| Arc::new(PolydatKernel::from_program_nested(p.clone())))
             .collect();
-        let mut empty_kernel =
-            crate::dsl::compile_polydat("\n").expect("the empty program compiles");
-        empty_kernel.mark_nested();
-        let empty = Arc::new(empty_kernel);
         let ops = lower_ops(&spec.ops);
         TileProgram {
             spec,
             ops,
             children,
             canonicals,
-            empty,
         }
     }
 
@@ -421,8 +413,7 @@ impl TileProgram {
                     // canonical kernel is the body program.
                     let tuples = evaluate_for_iteration(
                         &streamer.ast,
-                        &self.empty,
-                        &self.canonicals[*child_idx],
+                        &*self.canonicals[*child_idx],
                         &HashMap::new(),
                         |_| Ok(()),
                     )

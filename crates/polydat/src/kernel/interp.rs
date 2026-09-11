@@ -44,7 +44,42 @@
 
 use std::collections::HashSet;
 
+use crate::ast::Value;
 use crate::kernel::PolydatKernel;
+
+/// Name resolution for comprehension sources and predicates: what a
+/// `{name}` placeholder or a bare identifier reads. The interpreter
+/// kernel is one; a [`Layered`] view puts a tuple's bindings in front of
+/// another, so opening a traversal needs no kernel of the engine that
+/// opens it (engine parity, step 8).
+pub trait Lookup {
+    /// The value `name` denotes here, if any.
+    fn lookup(&self, name: &str) -> Option<Value>;
+}
+
+impl Lookup for PolydatKernel {
+    fn lookup(&self, name: &str) -> Option<Value> {
+        PolydatKernel::lookup(self, name)
+    }
+}
+
+/// Bindings in front of another lookup: a tuple's elements over the
+/// scope they were drawn in.
+pub struct Layered<'a> {
+    /// The bindings consulted first, in order.
+    pub prefix: &'a [(String, Value)],
+    /// Where every other name resolves.
+    pub inner: &'a dyn Lookup,
+}
+
+impl Lookup for Layered<'_> {
+    fn lookup(&self, name: &str) -> Option<Value> {
+        if let Some((_, v)) = self.prefix.iter().find(|(n, _)| n == name) {
+            return Some(v.clone());
+        }
+        self.inner.lookup(name)
+    }
+}
 
 /// Round count at which we warn about possible cycles in the
 /// substitution stream.
@@ -68,7 +103,7 @@ const ROUND_HARD: usize = 1000;
 /// typed-error overhead.
 pub fn interpolate_via_kernel(
     text: &str,
-    kernel: &PolydatKernel,
+    kernel: &dyn Lookup,
 ) -> Result<String, crate::dsl::compile::EmbeddingError> {
     interpolate_with_lookup(text, |name| {
         kernel.lookup(name).map(|v| v.to_display_string())

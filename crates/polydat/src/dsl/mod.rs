@@ -39,10 +39,10 @@ mod binding;
 mod modules;
 
 pub use compile::{
-    CompileOptions, compile_ast_with_options, compile_polydat, compile_polydat_checked,
-    compile_polydat_strict, compile_polydat_with_libs, compile_polydat_with_libs_and_limit,
-    compile_polydat_with_options, compile_polydat_with_outputs, compile_polydat_with_path,
-    eval_const_expr,
+    CompileOptions, compile_ast_with_engine, compile_ast_with_options, compile_polydat,
+    compile_polydat_checked, compile_polydat_strict, compile_polydat_with_libs,
+    compile_polydat_with_libs_and_limit, compile_polydat_with_options,
+    compile_polydat_with_outputs, compile_polydat_with_path, eval_const_expr,
 };
 
 /// Collect identifier references from an `Expr` tree into `out`.

@@ -2167,7 +2167,15 @@ impl Compiler {
         self.producers_seen = producers.clone();
         let mut kernel = self.compile_parent(&parent_file)?;
         if !for_stmts.is_empty() || !producers.is_empty() {
-            let traversals = self.compile_traversals(&for_stmts, &producers, kernel.program())?;
+            let traversals = {
+                let program = kernel.program();
+                let type_of = |n: &str| {
+                    program
+                        .output_port_type(n)
+                        .or_else(|| program.input_port_type(n))
+                };
+                self.compile_traversals(&for_stmts, &producers, &type_of)?
+            };
             kernel.set_traversals(traversals, producers);
         }
         Ok(kernel)
@@ -2228,7 +2236,15 @@ impl Compiler {
         let mut kernel =
             self.compile_parent_with_log(file, required_outputs, log.as_deref_mut())?;
         if !for_stmts.is_empty() || !producers.is_empty() {
-            let traversals = self.compile_traversals(&for_stmts, &producers, kernel.program())?;
+            let traversals = {
+                let program = kernel.program();
+                let type_of = |n: &str| {
+                    program
+                        .output_port_type(n)
+                        .or_else(|| program.input_port_type(n))
+                };
+                self.compile_traversals(&for_stmts, &producers, &type_of)?
+            };
             kernel.set_traversals(traversals, producers);
             // Tiles inside the bodies typed and compiled in the child
             // compilers; their events belong to this program's log.
@@ -2268,7 +2284,7 @@ impl Compiler {
         &mut self,
         for_stmts: &[super::ast::ForStmt],
         producers: &[super::traversal::Producer],
-        parent: &crate::kernel::PolydatProgram,
+        type_of: &dyn Fn(&str) -> Option<crate::ast::PortType>,
     ) -> Result<Vec<super::traversal::Traversal>, String> {
         use super::traversal::{Traversal, child_file, element_types, resolve_source};
         let mut out = Vec::with_capacity(for_stmts.len());
@@ -2281,7 +2297,7 @@ impl Compiler {
                     f.source.text, f.span.line, f.span.col
                 )
             })?;
-            let (child, cascade) = child_file(f, &comprehension, &elements, parent)?;
+            let (child, cascade) = child_file(f, &comprehension, &elements, type_of)?;
             let mut child_compiler = Compiler::with_lib_paths(
                 self.source_dir.clone(),
                 self.polydat_lib_paths.clone(),
@@ -2329,28 +2345,12 @@ impl Compiler {
 
     /// Compile a traversal body on `engine` (engine parity, step 8): the
     /// same child file and compiler settings the parent used for the
-    /// interpreter's program, through the assembler. A body with `for`
-    /// statements or producers of its own is refused by name, since
-    /// those open from an interpreter activation.
+    /// interpreter's program, through the assembler, its own `for`
+    /// statements and producers included.
     pub(super) fn compile_body_on(
         body: &super::traversal::BodySource,
         engine: crate::Engine,
     ) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
-        use crate::KernelError;
-        let (_, for_stmts, producers) =
-            super::traversal::strip_for_forms(&body.file).map_err(KernelError::Source)?;
-        if !for_stmts.is_empty() || !producers.is_empty() {
-            return Err(KernelError::Refused {
-                engine,
-                reason: format!(
-                    "{}: the body contains a `for` statement or producer binding, so its \
-                     activation is the interpreter activation that opens the nested \
-                     traversal; only a body with no `for` of its own runs on another \
-                     engine (docs/design/engine_parity.md, step 8)",
-                    body.context_label
-                ),
-            });
-        }
         let _data_base = body.source_dir.as_deref().map(DataBaseDirGuard::set);
         let mut compiler =
             Compiler::with_lib_paths(body.source_dir.clone(), body.lib_paths.clone(), body.strict);
@@ -2358,10 +2358,7 @@ impl Compiler {
         compiler.context_label = body.context_label.clone();
         compiler.cursor_limit = body.cursor_limit;
         compiler.pragmas = body.pragmas.clone();
-        let asm = compiler
-            .build_assembler(&body.file)
-            .map_err(KernelError::Source)?;
-        asm.compile_engine_with_log(engine, None)
+        compile_file_on_engine(&mut compiler, &body.file, None, engine, None)
     }
 
     /// Assemble the parent program: inputs and their passthroughs,
@@ -2834,10 +2831,106 @@ pub fn compile_polydat_with_engine(
         crate::Engine::Interpreter => compile_polydat_with_options(source, options, log)
             .map(|k| Box::new(k) as Box<dyn crate::Kernel>)
             .map_err(KernelError::Source),
-        _ => compile_polydat_to_assembler_with(source, options)
-            .map_err(KernelError::Source)?
-            .compile_engine_with_log(engine, log),
+        _ => {
+            let tokens = super::lexer::lex(source).map_err(KernelError::Source)?;
+            let ast = super::parser::parse(tokens).map_err(KernelError::Source)?;
+            compile_ast_with_engine(&ast, source, options, log, engine)
+        }
     }
+}
+
+/// [`compile_polydat_with_engine`] from a parsed file: the parent
+/// compiles on `engine` through the assembler, and each `for` body
+/// compiles once for the interpreter as the traversal's record and on
+/// any engine at activation (engine parity, step 8).
+pub fn compile_ast_with_engine(
+    ast: &PolydatFile,
+    source: &str,
+    options: &CompileOptions,
+    mut log: Option<&mut super::events::CompileEventLog>,
+    engine: crate::Engine,
+) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
+    use crate::KernelError;
+    if engine == crate::Engine::Interpreter {
+        return compile_ast_with_options(ast, source, options, log)
+            .map(|k| Box::new(k) as Box<dyn crate::Kernel>)
+            .map_err(KernelError::Source);
+    }
+    let _data_base = options.source_dir.as_deref().map(DataBaseDirGuard::set);
+    let pragmas = super::pragmas::collect_from_ast(ast);
+    if let Some(log) = log.as_deref_mut() {
+        record_pragma_events(&pragmas, log);
+    }
+    let extended = if options.required_outputs.is_empty() {
+        Vec::new()
+    } else {
+        extend_required_with_const_bindings(&options.required_outputs, ast)
+    };
+    let filter = if extended.is_empty() {
+        None
+    } else {
+        Some(extended.as_slice())
+    };
+    let mut compiler = Compiler::with_lib_paths(
+        options.source_dir.clone(),
+        options.lib_paths.clone(),
+        options.strict,
+    );
+    compiler.source_text = source.to_string();
+    compiler.context_label = options.context.clone();
+    compiler.cursor_limit = options.cursor_limit;
+    compiler.pragmas = pragmas;
+    compile_file_on_engine(&mut compiler, ast, filter, engine, log)
+}
+
+/// One path from a parsed file to a kernel on a compiled engine: the
+/// `for` statements and producer bindings are lifted out, the parent
+/// assembles and compiles on `engine`, and each body compiles once
+/// against the parent's types and is attached to the kernel, so a
+/// compiled kernel opens its traversals as the interpreter does.
+pub(super) fn compile_file_on_engine(
+    compiler: &mut Compiler,
+    file: &PolydatFile,
+    filter: Option<&[String]>,
+    engine: crate::Engine,
+    log: Option<&mut super::events::CompileEventLog>,
+) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
+    use crate::KernelError;
+    let (parent_file, for_stmts, producers) =
+        super::traversal::strip_for_forms(file).map_err(KernelError::Source)?;
+    compiler.producers_seen = producers.clone();
+    let mut asm = compiler
+        .assemble_parent(&parent_file, filter)
+        .map_err(KernelError::Source)?;
+    asm.set_strict_wires(
+        compiler.pragmas.strict_types(),
+        compiler.pragmas.strict_values(),
+    );
+    let mut kernel = asm.compile_engine_with_log(engine, log)?;
+    if !for_stmts.is_empty() || !producers.is_empty() {
+        let externs = kernel.externs();
+        let inputs = kernel.input_names();
+        let type_of = |name: &str| {
+            kernel.output_type(name).or_else(|| {
+                externs
+                    .iter()
+                    .find(|(n, _)| n == name)
+                    .map(|(_, t)| *t)
+                    .or_else(|| {
+                        // A coordinate: the one input kind that is not an extern.
+                        inputs
+                            .iter()
+                            .any(|n| n == name)
+                            .then_some(crate::ast::PortType::U64)
+                    })
+            })
+        };
+        let traversals = compiler
+            .compile_traversals(&for_stmts, &producers, &type_of)
+            .map_err(KernelError::Source)?;
+        kernel.set_traversals(traversals);
+    }
+    Ok(kernel)
 }
 
 #[cfg(test)]

@@ -24,7 +24,7 @@ use polydat::dsl::ast::TileOptions;
 use polydat::dsl::ast::{Statement, WireModifier};
 use polydat::dsl::events::{CompileEvent, CompileEventLog};
 use polydat::dsl::transform::{apply_tile_defaults, assign_values, parse_assignment};
-use polydat::dsl::{CompileOptions, compile_ast_with_options};
+use polydat::dsl::{CompileOptions, compile_ast_with_engine, compile_ast_with_options};
 use polydat::iteration::cursor_partition::{Partition, cursor_over_partitions, narrow_cursor};
 use polydat::kernel::activation::Activation;
 use polydat::kernel::{PolydatProgram, WireSource, extract_manifest};
@@ -289,6 +289,9 @@ fn main() {
 /// audit lines the compiler wrote while it ran.
 struct Compiled {
     program: Arc<PolydatProgram>,
+    /// The root on the default engine, when the program declares
+    /// traversals: what traversal mode opens them on.
+    root: Option<Box<dyn Kernel>>,
     events: CompileEventLog,
     audit: Vec<(LogLevel, String)>,
     elapsed: Duration,
@@ -386,9 +389,18 @@ fn compile_ast(ast: &PolydatFile, source: &str, args: &CompileArgs) -> Result<Co
     take_audit();
     let start = Instant::now();
     let kernel = compile_ast_with_options(ast, source, &options, Some(&mut events))?;
+    let root = if kernel.program().traversals().is_empty() {
+        None
+    } else {
+        Some(
+            compile_ast_with_engine(ast, source, &options, None, KernelEngine::default())
+                .map_err(|e| e.to_string())?,
+        )
+    };
     let elapsed = start.elapsed();
     Ok(Compiled {
         program: kernel.into_program(),
+        root,
         events,
         audit: take_audit(),
         elapsed,
@@ -524,7 +536,7 @@ fn run(args: RunArgs) -> Result<(), String> {
         Ok(emit_ast.statements.remove(0))
     };
 
-    let compiled = if emit_format.is_some() {
+    let mut compiled = if emit_format.is_some() {
         if traversal_mode {
             for stmt in ast.statements.iter_mut() {
                 if let Statement::For(f) = stmt {
@@ -555,7 +567,7 @@ fn run(args: RunArgs) -> Result<(), String> {
     }
 
     if traversal_mode {
-        return run_traversals(&args, &compiled, emit_format, &selected);
+        return run_traversals(&args, &mut compiled, emit_format, &selected);
     }
 
     // Cursor narrowing. Each cursor declared `over <spec>` resolves to a
@@ -819,11 +831,10 @@ fn body_output_names(body: &[Statement]) -> Vec<String> {
 /// unless `--unordered` is given.
 fn run_traversals(
     args: &RunArgs,
-    compiled: &Compiled,
+    compiled: &mut Compiled,
     emit_format: Option<EmitFormat>,
     selected: &[String],
 ) -> Result<(), String> {
-    let program = compiled.program.clone();
     let fibers = args.fibers.max(1);
     let cap = args.cycles.max(1);
 
@@ -836,8 +847,12 @@ fn run_traversals(
     };
     let sink = Arc::new(Mutex::new(sink));
 
-    // Open every traversal against a root kernel positioned at --start.
-    let mut root = polydat::kernel::PolydatKernel::over(program.clone());
+    // Open every traversal against the root, on the default engine,
+    // positioned at --start.
+    let root = compiled
+        .root
+        .as_mut()
+        .ok_or_else(|| "the program declares no traversal".to_string())?;
     root.set_inputs(&[args.start]);
     let streams = root.traverse_all()?;
     if !args.quiet {
@@ -905,17 +920,10 @@ fn run_traversals(
                     let mut i = fiber;
                     while i < stream.len() {
                         let start = Instant::now();
-                        // Activations run compiled by default. A body that itself
-                        // contains a `for` statement is activated on the interpreter,
-                        // since that activation is the kernel that opens the nested
-                        // traversal; the innermost bodies run compiled.
-                        let activation: Result<Box<dyn CycleKernel>, String> =
-                            match stream.activation_on(i, KernelEngine::default()) {
-                                Ok(act) => Ok(Box::new(act)),
-                                Err(_) => stream
-                                    .activation(i)
-                                    .map(|act| Box::new(act) as Box<dyn CycleKernel>),
-                            };
+                        // Every activation runs on the default engine.
+                        let activation: Result<Box<dyn CycleKernel>, String> = stream
+                            .activation_on(i, KernelEngine::default())
+                            .map(|act| Box::new(act) as Box<dyn CycleKernel>);
                         let rows = match activation {
                             Ok(mut act) => {
                                 let n = act.count().min(cap);
@@ -1828,15 +1836,6 @@ fn viz(args: VizArgs) -> Result<(), String> {
 trait CycleKernel {
     fn count(&self) -> u64;
     fn at(&mut self, i: u64) -> &mut dyn Kernel;
-}
-
-impl CycleKernel for Activation {
-    fn count(&self) -> u64 {
-        self.cycle_count()
-    }
-    fn at(&mut self, i: u64) -> &mut dyn Kernel {
-        self.cycle(i)
-    }
 }
 
 impl CycleKernel for Activation<Box<dyn Kernel>> {

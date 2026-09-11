@@ -349,51 +349,7 @@ impl PolydatKernel {
                 program.traversals().len()
             )
         })?;
-
-        // Snapshot the cascade: pull each outer wire the body imports.
-        let mut cascade = Vec::with_capacity(traversal.cascade.len());
-        for (name, _) in &traversal.cascade {
-            let value = if program.output_index(name).is_some() {
-                self.pull(name).clone()
-            } else if let Some(idx) = program.find_input(name) {
-                self.state().get_input(idx)
-            } else {
-                Value::None
-            };
-            cascade.push((name.clone(), value));
-        }
-
-        // Evaluate the comprehension with this kernel's values in scope.
-        // The parent is a snapshot of this kernel; the canonical kernel is
-        // the body's program, whose element externs let filter predicates
-        // and dependent sources see the tuple being built.
-        let mut snapshot = PolydatKernel::from_program_nested(program.clone());
-        self.propagate_inputs_into(&mut snapshot);
-        let parent = Arc::new(snapshot);
-        let mut canonical_kernel = PolydatKernel::from_program_nested(traversal.program.clone());
-        bind_by_name(&mut canonical_kernel, &cascade);
-        let canonical = Arc::new(canonical_kernel);
-        let params: HashMap<String, String> = HashMap::new();
-        let tuples = evaluate_for_iteration(
-            &traversal.comprehension,
-            &parent,
-            &canonical,
-            &params,
-            |_| Ok(()),
-        )
-        .map_err(|e| {
-            format!(
-                "`for {}` at line {}, col {}: {e}",
-                traversal.source_text, traversal.span.line, traversal.span.col
-            )
-        })?;
-
-        Ok(TraversalStream {
-            traversal,
-            tuples,
-            cascade,
-            next: 0,
-        })
+        open_traversal(self, traversal)
     }
 
     /// Open every top-level traversal, in document order.
@@ -407,4 +363,42 @@ impl PolydatKernel {
 /// want to assert the one-program-per-position property.
 pub fn program_identity(kernel: &PolydatKernel) -> *const PolydatProgram {
     Arc::as_ptr(kernel.program())
+}
+
+/// Open `traversal` against `parent`'s current values, on any engine
+/// (engine parity, step 8): the cascaded wires are snapshotted through
+/// the [`Kernel`] trait, and the comprehension is evaluated in the
+/// body's scope, the body's program with those wires bound, where a
+/// source or predicate resolves every name it can reference and a
+/// tuple's own elements are layered in front as it is built. Nothing
+/// here needs the opening kernel beyond the snapshot.
+pub fn open_traversal(
+    parent: &mut dyn Kernel,
+    traversal: Traversal,
+) -> Result<TraversalStream, String> {
+    let mut cascade = Vec::with_capacity(traversal.cascade.len());
+    for (name, _) in &traversal.cascade {
+        let value = if parent.output_type(name).is_some() {
+            parent.pull(name)
+        } else {
+            parent.input_value(name).unwrap_or(Value::None)
+        };
+        cascade.push((name.clone(), value));
+    }
+    let mut canonical = PolydatKernel::from_program_nested(traversal.program.clone());
+    bind_by_name(&mut canonical, &cascade);
+    let params: HashMap<String, String> = HashMap::new();
+    let tuples = evaluate_for_iteration(&traversal.comprehension, &canonical, &params, |_| Ok(()))
+        .map_err(|e| {
+            format!(
+                "`for {}` at line {}, col {}: {e}",
+                traversal.source_text, traversal.span.line, traversal.span.col
+            )
+        })?;
+    Ok(TraversalStream {
+        traversal,
+        tuples,
+        cascade,
+        next: 0,
+    })
 }

@@ -66,7 +66,7 @@ use crate::ast::Value;
 use crate::iteration::comprehension::cardinality::ProductMeasure;
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::source::{LiteralValue, Source};
-use crate::kernel::PolydatKernel;
+use crate::kernel::interp::{Layered, Lookup};
 
 /// Result of evaluating one clause's source.
 ///
@@ -161,10 +161,9 @@ impl std::error::Error for EvalError {}
 pub struct EvalContext<'a> {
     /// The clause's element name, for messages.
     pub var_name: &'a str,
-    /// The kernel whose wires the source may reference.
-    pub parent: &'a Arc<PolydatKernel>,
-    /// The body's kernel, where prior-axis values are installed.
-    pub canonical: &'a Arc<PolydatKernel>,
+    /// Where the source's names resolve: the body's scope with the
+    /// parent's cascaded wires.
+    pub scope: &'a dyn Lookup,
     /// The prior-axis bindings, in axis order.
     pub prefix: &'a [(String, Value)],
 }
@@ -249,16 +248,16 @@ impl SourceEval for Source {
                     Source::WorkloadParamList { name, .. } => format!("{{{name}}}"),
                     _ => unreachable!(),
                 };
-                let kernel = ctx
-                    .parent
-                    .materialize_subscope(ctx.canonical.program().clone(), ctx.prefix);
-                let vals =
-                    crate::iteration::comprehension::eval::evaluate_spec(&spec_text, &kernel)
-                        .map_err(|e| EvalError::EvalFailed {
-                            var: ctx.var_name.to_string(),
-                            source: spec_text,
-                            message: e.to_string(),
-                        })?;
+                let scope = Layered {
+                    prefix: ctx.prefix,
+                    inner: ctx.scope,
+                };
+                let vals = crate::iteration::comprehension::eval::evaluate_spec(&spec_text, &scope)
+                    .map_err(|e| EvalError::EvalFailed {
+                        var: ctx.var_name.to_string(),
+                        source: spec_text,
+                        message: e.to_string(),
+                    })?;
                 let n = vals.len() as u64;
                 let index_fn = classify_observed_values(&vals);
                 Ok(EvaluatedSource {
@@ -416,7 +415,6 @@ mod tests {
 
     #[test]
     fn generator_with_context_evaluates_to_lattice() {
-        let parent = Arc::new(crate::dsl::compile_polydat("\n").unwrap());
         let canonical = Arc::new(crate::dsl::compile_polydat("\n").unwrap());
         let s = Source::Generator {
             expr: "1, 2, 3, 4, 5".into(),
@@ -424,8 +422,7 @@ mod tests {
         };
         let ctx = EvalContext {
             var_name: "k",
-            parent: &parent,
-            canonical: &canonical,
+            scope: &*canonical,
             prefix: &[],
         };
         let ev = s.evaluate(Some(&ctx)).unwrap();

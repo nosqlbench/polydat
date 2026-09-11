@@ -377,6 +377,32 @@ pub trait Kernel: Send {
     /// compiler resolved where it could.
     fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema];
 
+    /// The value of a named input as the kernel holds it now, an extern
+    /// or a coordinate; `None` for a name that is not an input.
+    fn input_value(&self, name: &str) -> Option<Value>;
+
+    /// The traversals the program declares, in document order.
+    fn traversals(&self) -> &[crate::dsl::traversal::Traversal];
+
+    /// Open the traversal at `index` against this kernel's current
+    /// values (SRD 113 §3.6): the comprehension's sources see the wires
+    /// they reference as this kernel holds them now, and the cascaded
+    /// wires are snapshotted into every activation. On every engine
+    /// (engine parity, step 8).
+    fn traverse(&mut self, index: usize) -> Result<crate::kernel::TraversalStream, String>;
+
+    /// Open every traversal, in document order.
+    fn traverse_all(&mut self) -> Result<Vec<crate::kernel::TraversalStream>, String> {
+        (0..self.traversals().len())
+            .map(|i| self.traverse(i))
+            .collect()
+    }
+
+    /// Attach the traversals the program declares; the compile path
+    /// calls this once, before the kernel is shared.
+    #[doc(hidden)]
+    fn set_traversals(&mut self, traversals: Vec<crate::dsl::traversal::Traversal>);
+
     /// The cells this kernel's `shared` bindings are bound to (scope
     /// model §6): one register per binding, which every kernel holding
     /// the cell reads and writes.

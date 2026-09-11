@@ -70,6 +70,9 @@ pub(super) struct JitCore {
     pub(super) owns_cycle: bool,
     /// The extern inputs, materialized at the start of every run.
     pub(super) externs: crate::compile::externs::Externs,
+    /// The traversals the program declares (SRD 113), opened through the
+    /// `Kernel` trait.
+    pub(super) traversals: std::sync::Arc<[crate::dsl::traversal::Traversal]>,
     pub(super) _module: JitCode,
     pub(super) _nodes: std::sync::Arc<Vec<Box<dyn PolydatNode>>>,
     /// The coordinates set through the `Kernel` trait, pending
@@ -102,6 +105,7 @@ impl JitCore {
             table_entries,
             owns_cycle: true,
             externs: crate::compile::externs::Externs::default(),
+            traversals: Vec::new().into(),
             _module: JitCode::new(module),
             _nodes: std::sync::Arc::new(nodes),
             drive: crate::compile::Drive::default(),

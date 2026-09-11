@@ -145,6 +145,9 @@ struct HybridCore {
     step_rerun: Vec<bool>,
     /// The extern inputs, materialized at the start of every run.
     externs: crate::compile::externs::Externs,
+    /// The traversals the program declares (SRD 113), opened through the
+    /// `Kernel` trait.
+    traversals: std::sync::Arc<[crate::dsl::traversal::Traversal]>,
     /// Keep source nodes alive so JIT-baked pointers remain valid.
     _nodes: std::sync::Arc<Vec<Box<dyn PolydatNode>>>,
     /// The coordinates set through the `Kernel` trait, pending
@@ -1714,6 +1717,7 @@ fn build_pushpull_from_steps(
             output_types,
             step_rerun,
             externs,
+            traversals: Vec::new().into(),
             _nodes: std::sync::Arc::new(Vec::new()),
             drive: crate::compile::Drive {
                 coords: Vec::new(),

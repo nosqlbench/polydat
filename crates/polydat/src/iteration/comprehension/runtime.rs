@@ -43,7 +43,7 @@
 //! `(algebra AST + parent kernel + canonical kernel +
 //! workload params) → Vec<RuntimeTuple>`. The returned tuples
 //! carry polydat [`Value`]s ready for per-iteration kernel
-//! construction via [`PolydatKernel::for_iteration`].
+//! construction via [`PolydatKernel::for_iteration`](crate::kernel::PolydatKernel::for_iteration).
 //!
 //! Order modifiers route through the unified
 //! `Strategy::apply` (spec §10.7.8): each node returns its
@@ -62,6 +62,7 @@
 //!   does today.
 
 use std::collections::HashMap;
+#[cfg(test)]
 use std::sync::Arc;
 
 use crate::ast::Value;
@@ -72,15 +73,16 @@ use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::source::Source;
 use crate::iteration::comprehension::strategies::{EvaluatedInput, Tuple, TupleValue};
 use crate::iteration::comprehension::strategy::StrategyName;
+#[cfg(test)]
 use crate::kernel::PolydatKernel;
-use crate::kernel::interp::interpolate_via_kernel;
+use crate::kernel::interp::{Layered, Lookup, interpolate_via_kernel};
 
 /// Runtime tuple type — polydat-Value-based to preserve Ext
 /// typing (Partition / Json / etc.) through the iteration
 /// pipeline. The algebra layer's [`Tuple`] uses
 /// [`TupleValue`] which is scalar-only; this `RuntimeTuple`
 /// is what the executor actually wants for per-iteration
-/// kernel binding via [`PolydatKernel::for_iteration`].
+/// kernel binding via [`PolydatKernel::for_iteration`](crate::kernel::PolydatKernel::for_iteration).
 pub type RuntimeTuple = Vec<(String, Value)>;
 
 /// Per-node result of the runtime walker.
@@ -195,8 +197,7 @@ impl std::error::Error for RuntimeError {}
 /// `enumerate_tuples`'s callback.
 pub fn evaluate_for_iteration<F>(
     comp: &Comprehension,
-    parent: &Arc<PolydatKernel>,
-    canonical: &Arc<PolydatKernel>,
+    scope: &dyn Lookup,
     workload_params: &HashMap<String, String>,
     on_empty: F,
 ) -> Result<Vec<RuntimeTuple>, RuntimeError>
@@ -204,8 +205,7 @@ where
     F: FnMut(EmptyClause<'_>) -> Result<(), String>,
 {
     let mut state = EvalState {
-        parent: parent.clone(),
-        canonical: canonical.clone(),
+        scope,
         workload_params,
         on_empty,
     };
@@ -431,8 +431,9 @@ fn split_op<'a>(s: &'a str, op: &str) -> Option<(&'a str, &'a str)> {
 /// references so the recursive walker doesn't have to thread
 /// them through every call.
 struct EvalState<'a, F> {
-    parent: Arc<PolydatKernel>,
-    canonical: Arc<PolydatKernel>,
+    /// Where names resolve: the body's kernel with the parent's cascaded
+    /// wires bound; a tuple's own bindings are layered in front per use.
+    scope: &'a dyn Lookup,
     /// Workload-param fallback. The polydat-owned
     /// `evaluate_spec` already routes through the parent
     /// kernel chain for shadow-aware resolution (SRD-21),
@@ -492,8 +493,7 @@ where
     ) -> Result<EvaluatedNode, RuntimeError> {
         let ctx = EvalContext {
             var_name: name,
-            parent: &self.parent,
-            canonical: &self.canonical,
+            scope: self.scope,
             prefix,
         };
         let evaluated = source.evaluate(Some(&ctx)).map_err(|e| match e {
@@ -725,10 +725,11 @@ where
                 }
                 continue;
             }
-            let kernel = self
-                .parent
-                .materialize_subscope(self.canonical.program().clone(), &tuple);
-            let interpolated = interpolate_via_kernel(predicate, &kernel).map_err(|e| {
+            let scope = Layered {
+                prefix: &tuple,
+                inner: self.scope,
+            };
+            let interpolated = interpolate_via_kernel(predicate, &scope).map_err(|e| {
                 RuntimeError::FilterEval {
                     predicate: predicate.to_string(),
                     message: e.to_string(),
@@ -1025,11 +1026,9 @@ mod tests {
                 step: 1,
             },
         };
-        let parent = empty_kernel();
         let canonical = empty_kernel();
         let params = HashMap::new();
-        let tuples =
-            evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(())).unwrap();
+        let tuples = evaluate_for_iteration(&comp, &*canonical, &params, |_| Ok(())).unwrap();
         assert_eq!(tuples.len(), 4);
         assert_eq!(tuples[0][0].1, Value::U64(1));
         assert_eq!(tuples[3][0].1, Value::U64(4));
@@ -1043,11 +1042,9 @@ mod tests {
                 values: vec![LiteralValue::Int(10), LiteralValue::Int(20)],
             },
         };
-        let parent = empty_kernel();
         let canonical = empty_kernel();
         let params = HashMap::new();
-        let tuples =
-            evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(())).unwrap();
+        let tuples = evaluate_for_iteration(&comp, &*canonical, &params, |_| Ok(())).unwrap();
         assert_eq!(tuples.len(), 2);
     }
 
@@ -1071,11 +1068,9 @@ mod tests {
                 },
             },
         ]);
-        let parent = empty_kernel();
         let canonical = empty_kernel();
         let params = HashMap::new();
-        let tuples =
-            evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(())).unwrap();
+        let tuples = evaluate_for_iteration(&comp, &*canonical, &params, |_| Ok(())).unwrap();
         // 2 × 2 = 4
         assert_eq!(tuples.len(), 4);
     }
@@ -1096,11 +1091,9 @@ mod tests {
                 },
             },
         ]);
-        let parent = empty_kernel();
         let canonical = empty_kernel();
         let params = HashMap::new();
-        let tuples =
-            evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(())).unwrap();
+        let tuples = evaluate_for_iteration(&comp, &*canonical, &params, |_| Ok(())).unwrap();
         assert_eq!(tuples.len(), 3);
     }
 
@@ -1117,11 +1110,9 @@ mod tests {
             },
             "{k} > 3",
         );
-        let parent = empty_kernel();
         let canonical = canonical_with_k();
         let params = HashMap::new();
-        let tuples =
-            evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(())).unwrap();
+        let tuples = evaluate_for_iteration(&comp, &*canonical, &params, |_| Ok(())).unwrap();
         // 1..6 = [1,2,3,4,5]; filter > 3 keeps [4, 5]
         assert_eq!(tuples.len(), 2);
     }
@@ -1140,11 +1131,9 @@ mod tests {
             StrategyName::Lex,
             Some(5),
         );
-        let parent = empty_kernel();
         let canonical = empty_kernel();
         let params = HashMap::new();
-        let tuples =
-            evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(())).unwrap();
+        let tuples = evaluate_for_iteration(&comp, &*canonical, &params, |_| Ok(())).unwrap();
         assert_eq!(tuples.len(), 5);
     }
 
@@ -1184,11 +1173,9 @@ mod tests {
             // corners-first; `/1` selects just the corners.)
             Some(1),
         );
-        let parent = empty_kernel();
         let canonical = empty_kernel();
         let params = HashMap::new();
-        let tuples =
-            evaluate_for_iteration(&comp, &parent, &canonical, &params, |_| Ok(())).unwrap();
+        let tuples = evaluate_for_iteration(&comp, &*canonical, &params, |_| Ok(())).unwrap();
         // 3x3 lattice → 4 corners (interior count 0) via the indexed form.
         assert_eq!(tuples.len(), 4);
         // Each corner pairs an extreme k with an extreme limit.

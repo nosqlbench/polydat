@@ -184,9 +184,6 @@ The remaining distinctions are placements inside an engine, not refusals:
   identity-style compiled step; such nodes are closure steps.
 - A node whose variadic wires carry a type its helper cannot decode runs its
   closure; the classifier never re-types a wire to admit it.
-- A `for` statement compiles through `compile_polydat` and its parent runs
-  on the interpreter; its activations run on any engine, except a body that
-  opens a traversal of its own.
 - An extern wider than one slot (a vector) has no compiled form, and a build
   without the `jit` feature has no P3; both are refused by name.
 - SIMD scalar-flow promotion is not selected by ordinary engine choice; it has

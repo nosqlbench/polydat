@@ -457,7 +457,10 @@ while let Some(mut act) = stream.advance()? {
 `activation_on(index, engine)` on the stream builds the same activation
 on the engine of the host's choice, compiled once per engine and driven
 through the `Kernel` trait, computing what the interpreter's computes.
-`traverse(i)` opens the i-th traversal in the program. Each activation
+`traverse(i)` opens the i-th traversal in the program; it is a `Kernel`
+trait method, so a root from `compile_polydat_with_engine` opens its
+traversals the same way, and an activation on any engine opens the
+`for` statements of its own body. Each activation
 exposes its coordinates (`act.coord("shard")`), its cursor slice when
 the body declares a cursor, its cycle count, and `act.cycle(n)`, which
 returns the activation's kernel positioned at cycle `n`. The body
@@ -614,9 +617,8 @@ regions are cones, per `set_jit_mode` on the assembler (`Auto`, `Off`,
 `Force`) and the `jit` Cargo feature. The engine a host gets when it names
 none, `Engine::default()`, is P3 with the `jit` feature and the closure
 tier without: `compile_polydat_kernel(src)` and `compile_kernel()` on the
-assembler build on it, and the `polydat` binary activates traversals on
-it (a body that itself contains a `for` statement is activated on the
-interpreter, since that activation opens the nested traversal). [Compilation levels](compilation.md)
+assembler build on it, and the `polydat` binary compiles a program with
+traversals on it and opens every level of a nest on it. [Compilation levels](compilation.md)
 describes each engine, [Engines](../design/engines.md) the selection
 rules, and [Engine Parity](../design/engine_parity.md) what each engine
 accepts.

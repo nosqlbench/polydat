@@ -262,12 +262,12 @@ what it is for.
 
 ### A5. Traversals and producers are a kernel-path feature — functional
 
-*Closed by step 8 for the bodies: an activation runs on any engine
-through `TraversalStream::activation_on`. Opening a traversal remains
-the interpreter's work, so the root kernel and the activation of any
-body that itself contains a `for` statement are interpreter kernels;
-the innermost bodies, where the cycles run, activate on any engine. The
-record below is the state the review found.*
+*Closed by step 8: an activation runs on any engine through
+`TraversalStream::activation_on`, and, since the step 8 addendum,
+opening a traversal is a `Kernel` trait method on every engine, so a
+root compiled with `compile_polydat_with_engine` and every level of a
+nest run on the engine the host chose. The record below is the state
+the review found.*
 
 A `for` statement or producer compiles only through `compile_polydat*`,
 which builds activation programs and a runtime the host drives with
@@ -758,20 +758,36 @@ proves it.
    host of the old form is unchanged. A nested kernel is a trait
    matter now: `KernelProgram::create_nested_kernel` and
    `Kernel::nest` mark a kernel as running inside the cycle of the
-   kernel that opened it (SRD 115 §4), on every engine. What stays on
-   the interpreter is opening a traversal, since the comprehension's
-   sources evaluate against the kernel that opens it. So the root kernel
-   is an interpreter kernel, and so is the activation of any body that
-   itself contains a `for` statement or producer binding, because that
-   activation is what opens the nested traversal; the other engines
-   refuse such a body by name. Only a body with no `for` of its own, the
-   innermost body of a nest, where the cycles run, activates on another
-   engine. The `polydat` binary still activates on the interpreter.
-   `tests/for_engines.rs` traces every activation and cycle of a sweep
-   and of a partition-sliced cursor body on every engine against the
+   kernel that opened it (SRD 115 §4), on every engine. As first landed,
+   opening a traversal stayed on the interpreter, since the
+   comprehension's sources evaluated against the kernel that opened
+   it, so the root kernel and the activation of any body with a `for`
+   of its own were interpreter kernels and the other engines refused
+   such a body by name; only the innermost bodies ran compiled.
+
+   *Addendum, 2026-09-10: opening is engine-neutral.* The only thing
+   that held opening to the interpreter was the comprehension
+   evaluator's parameter type. It now evaluates against a `Lookup`
+   (`kernel::interp::Lookup`, a name-to-value view, with `Layered` for
+   a tuple's own elements in front of it), and the scope it evaluates
+   in is the body's program with the cascade bound, where a source or
+   predicate resolves every name it can reference (SRD 113 §3.2). So
+   `traverse` is a `Kernel` trait method: it snapshots the cascade
+   through `pull` and `input_value` and calls
+   `activation::open_traversal`, on every engine. The compile path
+   attaches traversals to compiled kernels
+   (`dsl::compile::compile_file_on_engine`, behind
+   `compile_polydat_with_engine` and the new `compile_ast_with_engine`,
+   with the body types looked up through the trait), a body's own
+   `for` statements compile with it on every engine, and the refusal is
+   gone. The `polydat` binary compiles a program with traversals on
+   `Engine::default()` and opens every level on it. `tests/for_engines.rs`
+   traces every activation and cycle of a sweep and of a
+   partition-sliced cursor body on every engine against the
    interpreter's, checks one program per engine with the build counter
-   flat across activations, and checks the nested-body refusal and
-   that inner activations of an interpreter activation run anywhere.
+   flat across activations, opens the same traversals from a compiled
+   root with the same tuples, cursors, and trace, and runs a
+   three-level nest with every kernel on the chosen engine.
 9. **Shared cells on compiled engines** (A10) through `compile::externs`
    materialization and publication.
 

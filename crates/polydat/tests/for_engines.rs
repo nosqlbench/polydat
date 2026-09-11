@@ -1,19 +1,30 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Engine parity, step 8 (A5): a traversal's activations run on any
-//! engine. The parent opens the traversal on the interpreter; each
+//! Engine parity, step 8 (A5): traversals open and run on any engine.
+//! A kernel on any engine opens the traversals its program declares
+//! through the `Kernel` trait, against the values it holds; each
 //! activation is a fresh kernel over the body's program for the engine
-//! the host chose, compiled once per engine, driven through the
-//! `Kernel` trait with the same elements, cascade, and cursor narrowing,
-//! and computing what the interpreter's activation computes.
+//! the host chose, compiled once per engine, with the same elements,
+//! cascade, and cursor narrowing, computing what the interpreter's
+//! activation computes; and a body's own traversals open from that
+//! activation, so every level of a nest runs compiled.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use polydat::ast::Value;
+use polydat::dsl::compile::{CompileOptions, compile_polydat_with_engine};
 use polydat::dsl::compile_polydat;
 use polydat::kernel::PolydatKernel;
-use polydat::{Engine, Provenance};
+use polydat::kernel::activation::TraversalStream;
+use polydat::{Engine, Kernel, Provenance};
+
+/// The tests share the process-wide program build counter, so they run
+/// one at a time.
+fn serial() -> MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 fn compile(src: &str) -> PolydatKernel {
     compile_polydat(src).unwrap_or_else(|e| panic!("compile failed: {e}\n{src}"))
@@ -63,6 +74,7 @@ const SWEEP: &str = "input cycle: u64\nbase := hash(cycle)\nfor k in 1..4, limit
 
 #[test]
 fn activations_on_every_engine_compute_what_the_interpreters_do() {
+    let _serial = serial();
     for engine in engines() {
         let (want, got) = traces(SWEEP, &[7], &["f", "g"], engine);
         assert_eq!(want.len(), 18);
@@ -74,6 +86,7 @@ const SLICED: &str = "input cycle: u64\nfor p in partitions(\"*/4\", 1000) {\n  
 
 #[test]
 fn cursors_narrow_and_iterate_their_slice_on_every_engine() {
+    let _serial = serial();
     for engine in engines() {
         let (want, got) = traces(SLICED, &[0], &["n", "o", "v"], engine);
         // Four partitions of 250 ordinals, one cycle per ordinal.
@@ -84,6 +97,7 @@ fn cursors_narrow_and_iterate_their_slice_on_every_engine() {
 
 #[test]
 fn a_body_compiles_once_per_engine_and_every_activation_shares_it() {
+    let _serial = serial();
     let mut k = compile(SWEEP);
     k.set_inputs(&[1]);
     let stream = k.traverse(0).unwrap();
@@ -103,27 +117,186 @@ fn a_body_compiles_once_per_engine_and_every_activation_shares_it() {
     }
 }
 
+/// The trace of `stream` with every activation on `engine`.
+fn trace_on(stream: &TraversalStream, outputs: &[&str], engine: Engine) -> Trace {
+    let mut got = Vec::new();
+    for index in 0..stream.len() {
+        let mut act = stream
+            .activation_on(index, engine)
+            .unwrap_or_else(|e| panic!("{engine}: {e}"));
+        act.for_each_cycle(|i, kernel| {
+            for name in outputs {
+                got.push((index as u64, i, name.to_string(), kernel.pull(name)));
+            }
+        });
+    }
+    got
+}
+
+fn compile_on(src: &str, engine: Engine) -> Box<dyn Kernel> {
+    compile_polydat_with_engine(src, engine, &CompileOptions::default(), None)
+        .unwrap_or_else(|e| panic!("{engine}: compile failed: {e}\n{src}"))
+}
+
+fn same_tier(a: Engine, b: Engine) -> bool {
+    matches!(
+        (a, b),
+        (Engine::Interpreter, Engine::Interpreter)
+            | (Engine::Closures(_), Engine::Closures(_))
+            | (Engine::Native(_), Engine::Native(_))
+    )
+}
+
 #[test]
-fn a_body_with_its_own_traversal_is_an_interpreter_activation() {
+fn a_compiled_parent_opens_a_traversal_as_the_interpreter_does() {
+    let _serial = serial();
+    for src in [SWEEP, SLICED] {
+        let outputs: &[&str] = if src == SWEEP {
+            &["f", "g"]
+        } else {
+            &["n", "o", "v"]
+        };
+        let mut p1 = compile(src);
+        p1.set_inputs(&[7]);
+        let want_stream = p1.traverse(0).unwrap();
+        let want = trace_on(&want_stream, outputs, Engine::Interpreter);
+        for engine in engines() {
+            let mut root = compile_on(src, engine);
+            assert!(
+                same_tier(root.engine(), engine),
+                "{engine}: {}",
+                root.engine()
+            );
+            root.set_inputs(&[7]);
+            let stream = root.traverse(0).unwrap_or_else(|e| panic!("{engine}: {e}"));
+            assert_eq!(stream.len(), want_stream.len(), "{engine}: activations");
+            for index in 0..stream.len() {
+                let a = stream.activation(index).unwrap();
+                let b = want_stream.activation(index).unwrap();
+                assert_eq!(a.coords, b.coords, "{engine}: coordinates of {index}");
+                assert_eq!(a.cursor, b.cursor, "{engine}: cursor of {index}");
+            }
+            assert_eq!(trace_on(&stream, outputs, engine), want, "{engine}");
+            assert_eq!(root.traverse_all().unwrap().len(), 1, "{engine}");
+        }
+    }
+}
+
+const NEST: &str = "input cycle: u64\nbase := u64_add(cycle, 100)\nfor a in 1..3 {\n    x := u64_add(a, base)\n    for b in 1..3 {\n        y := u64_add(x, b)\n        for c in 1..3 {\n            z := u64_add(y, c)\n        }\n    }\n}\n";
+
+/// One (a, b, c, z) row of the nest.
+type NestRow = (u64, u64, u64, Value);
+
+/// Every row of the nest, opening each level on `engine` from the
+/// activation above it, with the engine every level reports.
+fn nest_on(engine: Engine, coord: u64) -> (Vec<NestRow>, Vec<Engine>) {
+    let mut root = compile_on(NEST, engine);
+    root.set_inputs(&[coord]);
+    let mut rows = Vec::new();
+    let mut seen = vec![root.engine()];
+    let outer = root.traverse(0).unwrap_or_else(|e| panic!("{engine}: {e}"));
+    for i in 0..outer.len() {
+        let mut a = outer.activation_on(i, engine).unwrap();
+        seen.push(a.kernel.engine());
+        let a_val = a.coord("a").unwrap().clone();
+        let middle = a
+            .kernel
+            .traverse(0)
+            .unwrap_or_else(|e| panic!("{engine}: {e}"));
+        for j in 0..middle.len() {
+            let mut b = middle.activation_on(j, engine).unwrap();
+            seen.push(b.kernel.engine());
+            let b_val = b.coord("b").unwrap().clone();
+            let inner = b
+                .kernel
+                .traverse(0)
+                .unwrap_or_else(|e| panic!("{engine}: {e}"));
+            for k in 0..inner.len() {
+                let mut c = inner.activation_on(k, engine).unwrap();
+                seen.push(c.kernel.engine());
+                let c_val = c.coord("c").unwrap().clone();
+                let (Value::U64(av), Value::U64(bv), Value::U64(cv)) = (&a_val, &b_val, &c_val)
+                else {
+                    panic!("{engine}: element types {a_val:?} {b_val:?} {c_val:?}");
+                };
+                rows.push((*av, *bv, *cv, c.cycle(0).pull("z")));
+            }
+        }
+    }
+    (rows, seen)
+}
+
+#[test]
+fn a_nest_runs_compiled_at_every_level() {
+    let _serial = serial();
+    let (want, p1) = nest_on(Engine::Interpreter, 5);
+    assert_eq!(want.len(), 8);
+    assert!(p1.iter().all(|e| *e == Engine::Interpreter));
+    for (a, b, c, z) in &want {
+        assert_eq!(*z, Value::U64(105 + a + b + c));
+    }
+    for engine in engines() {
+        let (got, seen) = nest_on(engine, 5);
+        assert_eq!(got, want, "{engine}");
+        // The root, both outer activations, four middle ones, eight
+        // inner ones: every kernel in the nest is on the chosen engine.
+        assert_eq!(seen.len(), 1 + 2 + 4 + 8, "{engine}");
+        for e in seen {
+            assert!(same_tier(e, engine), "{engine}: a level ran on {e}");
+        }
+    }
+}
+
+#[test]
+fn a_body_with_its_own_traversal_opens_it_from_any_activation() {
+    let _serial = serial();
     let src = "input cycle: u64\nfor a in 1..3 {\n    x := u64_add(a, cycle)\n    for b in 1..3 {\n        y := u64_add(x, b)\n    }\n}\n";
     let mut k = compile(src);
     k.set_inputs(&[0]);
     let stream = k.traverse(0).unwrap();
-    // The interpreter activation opens the inner traversal.
-    let mut outer = stream.activation(0).unwrap();
-    let inner = outer.kernel.traverse(0).unwrap();
-    assert_eq!(inner.len(), 2);
-    // Every inner activation may run on any engine.
     for engine in engines() {
-        let mut act = inner.activation_on(1, engine).unwrap();
-        assert_eq!(act.cycle(0).pull("y"), Value::U64(3));
+        let mut outer = stream.activation_on(0, engine).unwrap();
+        let inner = outer.kernel.traverse(0).unwrap();
+        assert_eq!(inner.len(), 2);
+        assert_eq!(
+            inner
+                .traversal()
+                .cascade
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>(),
+            ["x"],
+            "{engine}: the body cascades what it references"
+        );
+        for e in engines().into_iter().chain([Engine::Interpreter]) {
+            let mut act = inner.activation_on(1, e).unwrap();
+            assert_eq!(act.cycle(0).pull("y"), Value::U64(3), "{engine} -> {e}");
+        }
     }
-    // The outer body declares a traversal, so no other engine runs it.
+}
+
+#[test]
+fn a_kernel_created_from_a_compiled_program_opens_its_traversals() {
+    let _serial = serial();
     for engine in engines() {
-        let err = stream
-            .activation_on(0, engine)
-            .err()
-            .unwrap_or_else(|| panic!("{engine}: expected a refusal"));
-        assert!(err.contains("interpreter activation"), "{engine}: {err}");
+        let root = compile_on(SWEEP, engine);
+        let program = root.into_program();
+        let mut a = program.clone().create_kernel();
+        let mut b = program.create_kernel();
+        a.set_inputs(&[3]);
+        b.set_inputs(&[4]);
+        assert_eq!(a.traversals().len(), 1, "{engine}");
+        let sa = a.traverse(0).unwrap_or_else(|e| panic!("{engine}: {e}"));
+        let sb = b.traverse(0).unwrap_or_else(|e| panic!("{engine}: {e}"));
+        assert_eq!(sa.len(), 9, "{engine}");
+        assert_eq!(sb.len(), 9, "{engine}");
+        // The cascade is each kernel's own: `base` differs by coordinate.
+        let ga = trace_on(&sa, &["g"], engine);
+        let gb = trace_on(&sb, &["g"], engine);
+        assert_ne!(ga, gb, "{engine}");
+        let mut p1 = compile(SWEEP);
+        p1.set_inputs(&[3]);
+        let want = trace_on(&p1.traverse(0).unwrap(), &["g"], Engine::Interpreter);
+        assert_eq!(ga, want, "{engine}");
     }
 }
