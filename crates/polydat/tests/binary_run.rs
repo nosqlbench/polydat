@@ -102,3 +102,37 @@ fn jsonl_rows_carry_typed_values() {
     assert_eq!(second["s"], "x1");
     assert_eq!(second["b"], 1);
 }
+
+#[test]
+fn every_engine_emits_the_same_rows() {
+    let path = write_temp(
+        "engines",
+        "input cycle: u64\ncursor q = range(0, 100) over \"*/2\"\nh := hash(cycle)\nf := to_f64(mod(h, 1000)) / 4.0\ns := \"row-{h}\"\nn := mod_in(cycle, q.cursor)\ntile t : json := {\"s\": ${s}, \"f\": ${f | .1}}\n",
+    );
+    let run = |engine: &str| {
+        let (ok, stdout, stderr) = run_binary(&[
+            "run",
+            path.to_str().unwrap(),
+            "--cycles",
+            "4",
+            "--partition",
+            "1",
+            "--emit",
+            "map",
+            "--outputs",
+            "cycle,f,s,n,t",
+            "--engine",
+            engine,
+            "-q",
+        ]);
+        assert!(ok, "{engine}: {stderr}");
+        rows(&stdout)
+    };
+    let want = run("off");
+    assert_eq!(want.len(), 4, "{want:?}");
+    assert!(want[0].contains("n=50 "), "{want:?}");
+    assert_eq!(run("auto"), want);
+    if cfg!(feature = "jit") {
+        assert_eq!(run("force"), want);
+    }
+}

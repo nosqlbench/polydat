@@ -247,13 +247,69 @@ fn the_older_constructors_build_the_same_kernels() {
 }
 
 #[test]
-fn the_compile_log_reaches_every_engine() {
+fn the_compile_log_is_the_same_on_every_engine() {
     use polydat::dsl::compile::{CompileOptions, compile_polydat_with_engine};
-    for engine in [Engine::Interpreter, Engine::Closures(Provenance::Auto)] {
+    // Tile typings, an extern without a default, and two constants to
+    // fold: a literal and a node no input reaches.
+    let src = "input cycle: u64\nextern doc: json\nh := hash(cycle)\nf := to_f64(h) / 3.0\ns := \"n-{h}\"\nc := u64_add(2, 3)\ntile t : json := {\"h\": ${h}, \"f\": ${f | .2}, \"s\": ${s}, \"c\": ${c}}\n";
+    let events = |engine: Engine| {
         let mut log = polydat::dsl::events::CompileEventLog::default();
-        compile_polydat_with_engine(SRC, engine, &CompileOptions::default(), Some(&mut log))
+        compile_polydat_with_engine(src, engine, &CompileOptions::default(), Some(&mut log))
             .unwrap_or_else(|e| panic!("{engine}: {e}"));
-        assert!(!log.events().is_empty(), "{engine}: no compile events");
+        log.events()
+            .iter()
+            .map(|e| format!("{e:?}"))
+            .collect::<Vec<_>>()
+    };
+    let want = events(Engine::Interpreter);
+    assert!(
+        want.iter().any(|e| e.starts_with("ConstantFolded")),
+        "{want:?}"
+    );
+    assert!(
+        want.iter().any(|e| e.starts_with("ExternWithoutDefault")),
+        "{want:?}"
+    );
+    for engine in [
+        Engine::Closures(Provenance::Auto),
+        Engine::Native(Provenance::Auto),
+    ] {
+        if cfg!(not(feature = "jit")) && matches!(engine, Engine::Native(_)) {
+            continue;
+        }
+        assert_eq!(events(engine), want, "{engine}");
+    }
+}
+
+#[test]
+fn invalidate_all_reruns_a_cycle_whose_inputs_did_not_move() {
+    // A side channel fires once per pull of a fresh cycle; with nothing
+    // moved it is current and silent, and `invalidate_all` runs it again.
+    let src = "input cycle: u64\nextern tag: str = \"t\"\n__emit := emit_row(\"map\", \"cycle,tag\", cycle, tag)\n";
+    for engine in [
+        Engine::Interpreter,
+        Engine::Closures(Provenance::Auto),
+        Engine::Native(Provenance::Auto),
+    ] {
+        let Ok(mut k) = compile_polydat_with(src, engine) else {
+            continue;
+        };
+        polydat::library::emit::take_rows();
+        k.set_inputs(&[3]);
+        k.pull("__emit");
+        k.set_inputs(&[3]);
+        k.pull("__emit");
+        let quiet = polydat::library::emit::take_rows().len();
+        k.invalidate_all();
+        k.pull("__emit");
+        k.invalidate_all();
+        k.pull("__emit");
+        let rows = polydat::library::emit::take_rows();
+        assert_eq!(rows.len(), 2, "{engine}: {rows:?} after {quiet} quiet");
+        assert!(
+            rows.iter().all(|r| r == "cycle=3 tag=t"),
+            "{engine}: {rows:?}"
+        );
     }
 }
 

@@ -86,6 +86,16 @@ pub(super) struct JitCore {
 }
 
 impl JitCore {
+    /// The value at `slot` decoded as `ty`, a handle through the table.
+    pub(super) fn slot_value(&self, slot: usize, ty: crate::ast::PortType) -> crate::ast::Value {
+        crate::compile::marshal::decode_output(&self.buffer, slot, ty, &self.table)
+    }
+
+    /// The next evaluation runs the program: one native function.
+    pub(super) fn invalidate_all(&mut self) {
+        self.drive.stale = true;
+    }
+
     pub(super) fn new(
         total_slots: usize,
         coord_count: usize,

@@ -403,6 +403,21 @@ pub trait Kernel: Send {
     #[doc(hidden)]
     fn set_traversals(&mut self, traversals: Vec<crate::dsl::traversal::Traversal>);
 
+    /// Begin the next cycle with nothing current, so every step, a side
+    /// channel included, runs again when pulled. The runtime model makes
+    /// a cycle whose inputs did not move cost nothing; this is how a
+    /// host runs such a cycle anyway, as the `polydat` binary does when
+    /// every input is fixed.
+    fn invalidate_all(&mut self);
+
+    /// The value at a buffer slot decoded as `ty`, for the compile log's
+    /// record of the constants folded at build; `None` on the interpreter,
+    /// whose program logs its own fold.
+    #[doc(hidden)]
+    fn slot_value(&self, _slot: usize, _ty: PortType) -> Value {
+        Value::None
+    }
+
     /// The cells this kernel's `shared` bindings are bound to (scope
     /// model §6): one register per binding, which every kernel holding
     /// the cell reads and writes.

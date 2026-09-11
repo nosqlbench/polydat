@@ -25,12 +25,12 @@ use polydat::dsl::ast::{Statement, WireModifier};
 use polydat::dsl::events::{CompileEvent, CompileEventLog};
 use polydat::dsl::transform::{apply_tile_defaults, assign_values, parse_assignment};
 use polydat::dsl::{CompileOptions, compile_ast_with_engine, compile_ast_with_options};
-use polydat::iteration::cursor_partition::{Partition, cursor_over_partitions, narrow_cursor};
+use polydat::iteration::cursor_partition::{Partition, cursor_over_partitions_on};
 use polydat::kernel::activation::Activation;
-use polydat::kernel::{PolydatProgram, WireSource, extract_manifest};
+use polydat::kernel::{KernelProgram, PolydatProgram, WireSource, extract_manifest};
 use polydat::library::emit::{self, EmitFormat};
 use polydat::library::support::audit::{self, LogLevel};
-use polydat::{Engine as KernelEngine, JitMode, Kernel};
+use polydat::{Engine as KernelEngine, JitMode, Kernel, Provenance};
 
 #[derive(Parser)]
 #[command(
@@ -65,8 +65,11 @@ struct CompileArgs {
     /// Reject implicit type coercions and require explicit inputs.
     #[arg(long)]
     strict: bool,
-    /// Execution engine: `off` is the interpreter, `auto` embeds native
-    /// cones where eligible, `force` puts every eligible node in a cone.
+    /// Execution engine: `auto` runs on the default engine, native code
+    /// where the build has it and closures otherwise; `off` runs on the
+    /// interpreter with no native code; `force` runs native code. The
+    /// interpreter's program, which `explain` and `--stats` describe,
+    /// embeds native cones under the same setting.
     #[arg(long, value_enum, default_value_t = Engine::Auto)]
     engine: Engine,
     /// Keep only these outputs and what they depend on. Repeatable.
@@ -288,10 +291,14 @@ fn main() {
 /// Everything a compile produced: the kernel, its event log, and the
 /// audit lines the compiler wrote while it ran.
 struct Compiled {
+    /// The interpreter's program: what `explain` and `--stats` describe,
+    /// and the record of the program's inputs and outputs.
     program: Arc<PolydatProgram>,
-    /// The root on the default engine, when the program declares
-    /// traversals: what traversal mode opens them on.
-    root: Option<Box<dyn Kernel>>,
+    /// The program on the run engine: every fiber, warmup, cursor probe,
+    /// and traversal root is a kernel created from it.
+    root: Arc<dyn KernelProgram>,
+    /// The engine `--engine` named, which the activations open on too.
+    engine: KernelEngine,
     events: CompileEventLog,
     audit: Vec<(LogLevel, String)>,
     elapsed: Duration,
@@ -318,27 +325,17 @@ fn read_source(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))
 }
 
-/// Advance the coordinate to `cycle`. Only coordinate inputs move; an
-/// extern, including an input a `name=value` argument fixed for this
-/// run, keeps the value it was given.
-fn drive_cycle(
-    program: &polydat::kernel::PolydatProgram,
-    state: &mut polydat::kernel::PolydatState,
-    cycle: u64,
-) {
-    let mut moved = false;
-    for i in 0..program.input_names().len() {
-        if program.input_kind(i) == Some(polydat::kernel::InputKind::Coordinate) {
-            state.set_input(i, polydat::ast::Value::U64(cycle));
-            moved = true;
-        }
-    }
-    if !moved {
-        // Nothing changed, so nothing would re-evaluate. Every cycle is
-        // still a cycle: restore the defaults, which hold the assigned
-        // values, and mark the graph dirty so per-cycle nodes such as
-        // the emit binding fire.
-        state.invalidate_all();
+/// Advance the coordinates to `coords`, one value per coordinate input.
+/// Only coordinate inputs move; an extern, including an input a
+/// `name=value` argument fixed for this run, keeps the value it was
+/// given. A program with no coordinate left still runs a cycle: nothing
+/// moved, so nothing would re-evaluate, and the kernel is told to run
+/// everything again so per-cycle nodes such as the emit binding fire.
+fn drive_cycle(kernel: &mut dyn Kernel, coords: &[u64]) {
+    if coords.is_empty() {
+        kernel.invalidate_all();
+    } else {
+        kernel.set_inputs(coords);
     }
 }
 
@@ -355,6 +352,15 @@ fn parse_program(source: &str, args: &CompileArgs) -> Result<PolydatFile, String
         apply_tile_defaults(&mut ast, &defaults)?;
     }
     Ok(ast)
+}
+
+/// The engine a run drives, from `--engine`.
+fn run_engine(engine: Engine) -> KernelEngine {
+    match engine {
+        Engine::Off => KernelEngine::Interpreter,
+        Engine::Auto => KernelEngine::default(),
+        Engine::Force => KernelEngine::Native(Provenance::Auto),
+    }
 }
 
 fn compile_source(source: &str, args: &CompileArgs) -> Result<Compiled, String> {
@@ -389,18 +395,15 @@ fn compile_ast(ast: &PolydatFile, source: &str, args: &CompileArgs) -> Result<Co
     take_audit();
     let start = Instant::now();
     let kernel = compile_ast_with_options(ast, source, &options, Some(&mut events))?;
-    let root = if kernel.program().traversals().is_empty() {
-        None
-    } else {
-        Some(
-            compile_ast_with_engine(ast, source, &options, None, KernelEngine::default())
-                .map_err(|e| e.to_string())?,
-        )
-    };
+    let engine = run_engine(args.engine);
+    let root = compile_ast_with_engine(ast, source, &options, None, engine)
+        .map_err(|e| e.to_string())?
+        .into_program();
     let elapsed = start.elapsed();
     Ok(Compiled {
         program: kernel.into_program(),
         root,
+        engine,
         events,
         audit: take_audit(),
         elapsed,
@@ -536,7 +539,7 @@ fn run(args: RunArgs) -> Result<(), String> {
         Ok(emit_ast.statements.remove(0))
     };
 
-    let mut compiled = if emit_format.is_some() {
+    let compiled = if emit_format.is_some() {
         if traversal_mode {
             for stmt in ast.statements.iter_mut() {
                 if let Statement::For(f) = stmt {
@@ -567,7 +570,7 @@ fn run(args: RunArgs) -> Result<(), String> {
     }
 
     if traversal_mode {
-        return run_traversals(&args, &mut compiled, emit_format, &selected);
+        return run_traversals(&args, &compiled, emit_format, &selected);
     }
 
     // Cursor narrowing. Each cursor declared `over <spec>` resolves to a
@@ -579,9 +582,9 @@ fn run(args: RunArgs) -> Result<(), String> {
         per_fiber: false,
     };
     {
-        let mut probe_state = program.create_state();
-        for schema in program.cursor_schemas() {
-            let parts = cursor_over_partitions(&program, &mut probe_state, schema)?;
+        let mut probe = compiled.root.clone().create_kernel();
+        for schema in probe.cursor_schemas().to_vec() {
+            let parts = cursor_over_partitions_on(probe.as_mut(), &schema)?;
             if parts.is_empty() {
                 continue;
             }
@@ -625,18 +628,17 @@ fn run(args: RunArgs) -> Result<(), String> {
 
     // Which outputs each cycle pulls. With emission, pulling `__emit`
     // pulls everything it names; without it, pull the selection.
-    let pull_indices: Vec<usize> = if emit_format.is_some() {
-        vec![
-            program
-                .output_index("__emit")
-                .ok_or("emit transform did not produce __emit")?,
-        ]
+    let pull_names: Vec<String> = if emit_format.is_some() {
+        program
+            .output_index("__emit")
+            .ok_or("emit transform did not produce __emit")?;
+        vec!["__emit".to_string()]
     } else {
-        selected
-            .iter()
-            .map(|n| program.output_index(n).unwrap())
-            .collect()
+        selected.to_vec()
     };
+    let coord_count = (0..program.input_names().len())
+        .filter(|&i| program.input_kind(i) == Some(polydat::kernel::InputKind::Coordinate))
+        .count();
 
     let chunk = args.chunk.max(1);
     let total = args.cycles;
@@ -658,14 +660,16 @@ fn run(args: RunArgs) -> Result<(), String> {
         }
     }
 
-    // Warmup on one state, untimed.
+    // Warmup on one kernel, untimed.
     if args.warmup > 0 {
-        let mut state = program.create_state();
-        plan.apply(&program, &mut state, 0);
+        let mut kernel = compiled.root.clone().create_kernel();
+        plan.apply(kernel.as_mut(), 0)?;
+        let mut coords = vec![0u64; coord_count];
         for c in 0..args.warmup {
-            drive_cycle(&program, &mut state, start_cycle.wrapping_add(c));
-            for &idx in &pull_indices {
-                state.pull_by_index(&program, idx);
+            coords.fill(start_cycle.wrapping_add(c));
+            drive_cycle(kernel.as_mut(), &coords);
+            for name in &pull_names {
+                kernel.pull(name);
             }
         }
         emit::take_rows();
@@ -683,16 +687,18 @@ fn run(args: RunArgs) -> Result<(), String> {
 
     std::thread::scope(|s| {
         for fiber in 0..fibers {
-            let program = program.clone();
+            let root = compiled.root.clone();
             let tx = tx.clone();
-            let pull_indices = &pull_indices;
+            let pull_names = &pull_names;
             let next_chunk = &next_chunk;
             let fiber_busy = &fiber_busy;
             let emitting = emit_format.is_some();
             let plan = &plan;
             s.spawn(move || {
-                let mut state = program.create_state();
-                plan.apply(&program, &mut state, fiber);
+                let mut kernel = root.create_kernel();
+                plan.apply(kernel.as_mut(), fiber)
+                    .expect("the plan names cursors the program declares");
+                let mut coords = vec![0u64; coord_count];
                 let mut busy = Duration::ZERO;
                 // Shared mode: fibers claim chunks of one cycle range.
                 // Per-fiber mode: every fiber walks the whole range over
@@ -719,9 +725,10 @@ fn run(args: RunArgs) -> Result<(), String> {
                     let n = chunk.min(total - local_seq * chunk);
                     let t = Instant::now();
                     for i in 0..n {
-                        drive_cycle(&program, &mut state, lo.wrapping_add(i));
-                        for &idx in pull_indices {
-                            state.pull_by_index(&program, idx);
+                        coords.fill(lo.wrapping_add(i));
+                        drive_cycle(kernel.as_mut(), &coords);
+                        for name in pull_names {
+                            kernel.pull(name);
                         }
                     }
                     busy += t.elapsed();
@@ -781,20 +788,16 @@ struct CursorPlan {
 }
 
 impl CursorPlan {
-    fn apply(
-        &self,
-        program: &PolydatProgram,
-        state: &mut polydat::kernel::PolydatState,
-        fiber: usize,
-    ) {
+    fn apply(&self, kernel: &mut dyn Kernel, fiber: usize) -> Result<(), String> {
         for (name, parts) in &self.per_cursor {
             let p = if parts.len() == 1 {
                 &parts[0]
             } else {
                 &parts[fiber.min(parts.len() - 1)]
             };
-            narrow_cursor(program, state, name, p);
+            kernel.set_cursor(name, p)?;
         }
+        Ok(())
     }
 }
 
@@ -831,7 +834,7 @@ fn body_output_names(body: &[Statement]) -> Vec<String> {
 /// unless `--unordered` is given.
 fn run_traversals(
     args: &RunArgs,
-    compiled: &mut Compiled,
+    compiled: &Compiled,
     emit_format: Option<EmitFormat>,
     selected: &[String],
 ) -> Result<(), String> {
@@ -847,12 +850,9 @@ fn run_traversals(
     };
     let sink = Arc::new(Mutex::new(sink));
 
-    // Open every traversal against the root, on the default engine,
-    // positioned at --start.
-    let root = compiled
-        .root
-        .as_mut()
-        .ok_or_else(|| "the program declares no traversal".to_string())?;
+    // Open every traversal against a root on the run engine, positioned
+    // at --start.
+    let mut root = compiled.root.clone().create_kernel();
     root.set_inputs(&[args.start]);
     let streams = root.traverse_all()?;
     if !args.quiet {
@@ -920,9 +920,9 @@ fn run_traversals(
                     let mut i = fiber;
                     while i < stream.len() {
                         let start = Instant::now();
-                        // Every activation runs on the default engine.
+                        // Every activation runs on the run engine.
                         let activation: Result<Box<dyn CycleKernel>, String> = stream
-                            .activation_on(i, KernelEngine::default())
+                            .activation_on(i, compiled.engine)
                             .map(|act| Box::new(act) as Box<dyn CycleKernel>);
                         let rows = match activation {
                             Ok(mut act) => {

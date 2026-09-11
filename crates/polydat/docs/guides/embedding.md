@@ -725,7 +725,7 @@ compile events: 4
   Info: ConstantFolded { node: "const_f64", value: "3.0" }
 nodes: 3, deterministic: true
 node names: ["const_f64", "__port_cycle", "jit_cone[hash+tile_encode+to_f64+f64_div+tile_encode+tile_render]"]
-compile events on the default engine: 3
+compile events on the default engine: 4
 ```
 
 The program in this section is a hash, a division, and a JSON tile with
@@ -741,11 +741,11 @@ level is a warning. Cone fusion is not an
 event: the node list shows what the interpreter's program is actually
 running, one constant, the passthrough that exposes the coordinate as
 an output, and one native cone that fused the hash, the conversion, the
-division, both hole encoders, and the tile renderer. The same log on
-the default engine holds the assembly's events, the two hole typings
-and the compiled tile here, and every extern without a default; the
-fold of the compile-time constant is a step of the interpreter's
-program, so its event is the interpreter's. `is_deterministic`
+division, both hole encoders, and the tile renderer. The log is the
+same on every engine: the default engine records the same four events,
+the hole typings and the compiled tile from the assembly and the
+constant its own build folded, and every extern without a default is
+named on every engine. `is_deterministic`
 is false when any node's purity is nondeterministic, such as a
 wall-clock or a true random source, which is the check a host should
 make before relying on replay. Side-channel nodes such as `emit_row`

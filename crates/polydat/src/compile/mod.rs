@@ -214,6 +214,13 @@ macro_rules! impl_kernel_trait {
             fn set_traversals(&mut self, traversals: Vec<crate::dsl::traversal::Traversal>) {
                 self.core.traversals = traversals.into();
             }
+            fn invalidate_all(&mut self) {
+                self.mark_all_dirty();
+                self.core.invalidate_all();
+            }
+            fn slot_value(&self, slot: usize, ty: crate::ast::PortType) -> crate::ast::Value {
+                self.core.slot_value(slot, ty)
+            }
             fn nest(&mut self) {
                 self.set_owns_cycle(false);
             }

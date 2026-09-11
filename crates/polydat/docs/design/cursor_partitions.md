@@ -272,8 +272,9 @@ on every engine with no host call. A clause that denotes several is narrowed
 by the host or the traversal runtime through `set_cursor(name, &partition)`,
 which every kernel offers, the interpreter's and the compiled ones alike; it
 writes the seven slots above. A computed `over` value, or an extent known only
-at run time, is resolved through `cursor_over_partitions` on an interpreter
-state as before ([engine parity](engine_parity.md), A3).
+at run time, is resolved through `cursor_over_partitions_on` on a kernel of any
+engine, and through `cursor_over_partitions` on an interpreter state
+([engine parity](engine_parity.md), A3).
 
 Available cursor metadata wires are:
 

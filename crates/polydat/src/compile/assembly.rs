@@ -1607,10 +1607,21 @@ impl PolydatAssembler {
         // An extern without a default is `None` until the host sets it,
         // and every consumer reads `None` through it; the log names each
         // one so a host knows what it must set (engine_parity.md, A12).
+        // A cursor's slots are `None` until narrowed by design and are
+        // not externs a host sets by value.
         if let Some(log) = log.as_deref_mut() {
+            let cursor_slot = |name: &str| {
+                self.cursor_schemas
+                    .iter()
+                    .any(|s| name.starts_with(&format!("{}__cursor", s.name)))
+            };
             for def in &self.input_defs {
-                if def.kind == crate::kernel::InputKind::ExternalWrite
-                    && def.default == crate::ast::Value::None
+                if matches!(
+                    def.kind,
+                    crate::kernel::InputKind::ExternalWrite
+                        | crate::kernel::InputKind::IterationExtern
+                ) && def.default == crate::ast::Value::None
+                    && !cursor_slot(&def.name)
                 {
                     log.push(crate::dsl::events::CompileEvent::ExternWithoutDefault {
                         name: def.name.clone(),
@@ -2753,27 +2764,33 @@ impl PolydatAssembler {
     pub fn compile_engine_with_log(
         self,
         engine: Engine,
-        log: Option<&mut crate::dsl::events::CompileEventLog>,
+        mut log: Option<&mut crate::dsl::events::CompileEventLog>,
     ) -> Result<Box<dyn Kernel>, KernelError> {
         let refused = |reason: String| KernelError::Refused { engine, reason };
         match engine {
             Engine::Interpreter => Ok(Box::new(self.compile_with_log(log)?)),
             Engine::Closures(prov) => {
-                let resolved = self.resolve_with_log(log)?;
-                Self::closures_from(resolved, prov).map_err(refused)
+                let resolved = self.resolve_with_log(log.as_deref_mut())?;
+                let folded = log.is_some().then(|| Self::constant_sites(&resolved));
+                let kernel = Self::closures_from(resolved, prov).map_err(refused)?;
+                Self::log_folded(kernel.as_ref(), folded, log);
+                Ok(kernel)
             }
             Engine::Native(prov) => {
                 #[cfg(feature = "jit")]
                 {
-                    let resolved = self.resolve_with_log(log)?;
+                    let resolved = self.resolve_with_log(log.as_deref_mut())?;
+                    let folded = log.is_some().then(|| Self::constant_sites(&resolved));
                     let kernel = Self::hybrid_from(resolved).map_err(refused)?;
-                    Ok(match prov {
+                    let kernel: Box<dyn Kernel> = match prov {
                         Provenance::Raw => Box::new(kernel.into_raw()),
                         Provenance::Pull => Box::new(kernel.into_pull()),
                         Provenance::Push | Provenance::PushPull | Provenance::Auto => {
                             Box::new(kernel)
                         }
-                    })
+                    };
+                    Self::log_folded(kernel.as_ref(), folded, log);
+                    Ok(kernel)
                 }
                 #[cfg(not(feature = "jit"))]
                 {
@@ -2782,6 +2799,58 @@ impl PolydatAssembler {
                         "this build has no native code (the `jit` feature is off)".into(),
                     ))
                 }
+            }
+        }
+    }
+
+    /// The nodes the compile-constant fold applies to, as the
+    /// interpreter's fold selects them: no input reaches the node and it
+    /// has one output; with the slot and type to read once the kernel is
+    /// built.
+    fn constant_sites(resolved: &ResolvedDag) -> Vec<(String, usize, crate::ast::PortType)> {
+        let classes = PolydatProgram::classify_lifecycle(
+            &resolved.nodes,
+            &resolved.wiring,
+            &resolved.input_defs,
+            &resolved.output_map,
+            &resolved.output_modifiers,
+        );
+        let layout = slot_layout(resolved);
+        resolved
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(i, n)| {
+                classes.lifecycle[*i] == crate::kernel::EvalLifecycle::CompileConst
+                    && n.meta().outs.len() == 1
+            })
+            .map(|(i, n)| {
+                (
+                    n.meta().name.clone(),
+                    layout.port_offsets[i][0],
+                    n.meta().outs[0].typ,
+                )
+            })
+            .collect()
+    }
+
+    /// Record the constants the build folded, as the interpreter's fold
+    /// records its own: one event per node, with the value it holds.
+    fn log_folded(
+        kernel: &dyn Kernel,
+        sites: Option<Vec<(String, usize, crate::ast::PortType)>>,
+        log: Option<&mut crate::dsl::events::CompileEventLog>,
+    ) {
+        let (Some(sites), Some(log)) = (sites, log) else {
+            return;
+        };
+        for (node, slot, ty) in sites {
+            let value = kernel.slot_value(slot, ty);
+            if !matches!(value, crate::ast::Value::None) {
+                log.push(crate::dsl::events::CompileEvent::ConstantFolded {
+                    node,
+                    value: value.to_display_string(),
+                });
             }
         }
     }

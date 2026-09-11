@@ -545,18 +545,31 @@ impl HybridCore {
     /// one; a vector from scratch; a handle copied out.
     fn value_of(&self, name: &str) -> crate::ast::Value {
         let slot = self.output_map[name];
-        if self.none.get(slot).copied().unwrap_or(false) {
-            return crate::ast::Value::None;
-        }
         let ty = self
             .output_types
             .get(name)
             .copied()
             .unwrap_or(crate::ast::PortType::U64);
+        self.slot_value(slot, ty)
+    }
+
+    /// The value at `slot` decoded as `ty`: `None` where the mask says
+    /// so, a Ref pair through its scratch, a handle through the table.
+    fn slot_value(&self, slot: usize, ty: crate::ast::PortType) -> crate::ast::Value {
+        if self.none.get(slot).copied().unwrap_or(false) {
+            return crate::ast::Value::None;
+        }
         if let Some(&(_, idx)) = self.ref_scratch.iter().find(|(s, _)| *s == slot) {
             return self.scratch[idx].to_value();
         }
         crate::compile::marshal::decode_output(&self.buffer, slot, ty, &self.table)
+    }
+
+    /// Nothing is current: every step runs at the next evaluation.
+    fn invalidate_all(&mut self) {
+        self.clean.fill(false);
+        self.all_ran = false;
+        self.drive.stale = true;
     }
 }
 

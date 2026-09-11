@@ -2810,7 +2810,8 @@ pub fn cursor_extent(
 /// compiler resolved at build when the clause and the extent were
 /// constant, otherwise the raw `over` value pulled from `state` against
 /// the extent. Returns an empty list for a cursor without an `over`
-/// clause.
+/// clause. The interpreter-state form of [`cursor_over_partitions_on`],
+/// which does the same on a kernel of any engine.
 pub fn cursor_over_partitions(
     program: &crate::kernel::PolydatProgram,
     state: &mut crate::kernel::PolydatState,
@@ -2889,7 +2890,9 @@ pub fn cursor_slot_writes(cursor_name: &str, partition: &Partition) -> [(String,
 
 /// Write one resolved partition into a cursor's `<cursor>__cursor` slot
 /// and its six scalar projection slots. Slots the program does not
-/// declare are skipped.
+/// declare are skipped. The interpreter-state form of `set_cursor` on
+/// the [`Kernel`](crate::kernel::Kernel) trait, which does the same on
+/// a kernel of any engine.
 pub fn narrow_cursor(
     program: &crate::kernel::PolydatProgram,
     state: &mut crate::kernel::PolydatState,

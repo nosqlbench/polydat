@@ -111,7 +111,7 @@ name, signature, and meaning as the interpreter kernel.
 | Introspect | `program()`, `input_names`, `output_names`, `get_constant`, `lookup` | `output_names`, `resolve_output`, `coord_count` (counts slots) | same plus `engine_counts` | `output_names`, `resolve_output`, `coord_count` |
 | Share across threads | `into_program()` then `create_state()` per thread | none: compile once per thread | none | none |
 | Traversal | `traverse(i)`, activations, `for_iteration` | none | none | none |
-| Cursors | `cursor_schemas` (with the partitions resolved at build), `set_cursor`; `cursor_over_partitions` for the run-time cases; activations seed their bodies | `cursor_schemas`, `set_cursor` | same | same |
+| Cursors | `cursor_schemas` (with the partitions resolved at build), `set_cursor`; `cursor_over_partitions_on` for the run-time cases on every engine; activations seed their bodies | `cursor_schemas`, `set_cursor`, `cursor_over_partitions_on` | same | same |
 | Shared bindings | cells, write-through, broadcast | same, through the cell bound to the binding's extern slot (step 9) | same | same |
 | Failure of a node | panic enriched with node name, outputs, context, and inputs | same | same | same |
 | Engine selection | `set_jit_mode` (production kernel mixes cones) | `auto_compile_p2` → `P2Engine` | one form | `auto_compile_p3` → `P3Engine` |
@@ -201,12 +201,14 @@ capture and the slot kit's `Value` argument (A1) cover all sixteen.
 *Closed by step 3 for every cursor whose `over` clause is a literal
 spec over an extent known at build, and by step 5 for the rest of the
 difference: a cursor not yet narrowed is `None` on the closure tier and
-in a hybrid kernel as it is on the interpreter. The record below is the
-state the review found. What remains: a cursor whose `over` clause is
-computed or whose extent is known only at run time is resolved by the
-host through `cursor_over_partitions` on an interpreter state, as
-before, and pure native code runs such a program only after the host
-narrows it with `set_cursor`.*
+in a hybrid kernel as it is on the interpreter, and by step 8 for the
+rest: a cursor whose `over` clause is computed or whose extent is known
+only at run time is resolved on any engine through
+`cursor_over_partitions_on` and narrowed with `set_cursor`, which the
+traversal runtime, the binary, and the illustrations use; the
+interpreter-state forms remain as they were. Pure native code runs such
+a program only after the host narrows it. The record below is the state
+the review found.*
 
 A `cursor` declaration becomes an `ExternalWrite` input named
 `<name>__cursor` with a `Value::None` default (`dsl/compile.rs`,
@@ -851,16 +853,31 @@ signature (step 1 adds two: the options-taking assembler entry point and
 Steps 5 through 7 change semantics and belong behind the equivalence
 harness that step 5 extends. Steps 8 and 9 are new capability.
 
-*Post-landing, 2026-09-11.* Two parity gaps surfaced while the guides
-moved to the default engine, and both are closed. A compiled kernel's
+*Post-landing, 2026-09-11.* Five parity gaps surfaced while the guides
+moved to the default engine, and all are closed. A compiled kernel's
 `output_names` listed a hash map's keys, in no order; it now lists the
 declaration order the interpreter's program lists (`Externs::output_names`,
 set from the resolved graph's `output_order`). The compiled compile path
 dropped the tile events the compiler records while assembling; they now
-reach the log on every engine. The interpreter's log still records its
-own compile-time fold (`ConstantFolded`); the compiled engines fold under
-the same rule but do not log it, the one remaining difference between
-the logs.
+reach the log on every engine. The compiled engines folded compile-time
+constants under the interpreter's rule without logging them; the
+assembler now records `ConstantFolded` for each such node after the
+build, reading the folded value back through the hidden
+`Kernel::slot_value`, so the log is the same on every engine
+(`tests/kernel_api.rs`). And the `polydat` binary drove its cycles on
+interpreter states while its traversals opened on the default engine;
+it now creates every fiber, the warmup, the cursor probe, and the
+traversal root from one program on the run engine, `--engine off` being
+the interpreter, `auto` the default, and `force` native code, narrowing
+cursors through `cursor_over_partitions_on` and `set_cursor`. A cycle
+whose inputs did not move is `Kernel::invalidate_all` on every engine,
+which reruns every step at the next pull and keeps the inputs, so a run
+with every input fixed still emits a row per cycle.
+Finally, `ExternWithoutDefault` was logged only for an extern with a
+default expression that evaluated to `None`, never for the DSL's
+`extern name: type` with no default, which is an `IterationExtern`
+slot; the log now names both, and no engine names a cursor's slots,
+which are `None` until narrowed by design.
 
 ## 6. What does not change
 

@@ -1127,6 +1127,14 @@ impl PolydatState {
         }
     }
 
+    /// Mark every node dirty and leave the inputs as they are: every
+    /// node reruns at the next pull, as if the cycle had moved.
+    pub fn invalidate_outputs(&mut self) {
+        for clean in &mut self.core.node_clean {
+            *clean = false;
+        }
+    }
+
     /// Pull a named output variate from the program.
     pub fn pull(&mut self, program: &PolydatProgram, output_name: &str) -> &Value {
         self.core.pull(program, output_name)
