@@ -178,6 +178,20 @@ runs on the day of this record, and the step 4 tree, benchmarked in the same
 hour, measured 136 ns for P2 and 57 ns for native code. Compare rungs within
 one run, not runs across days.
 
+## The tile ladder
+
+A second ladder, `benches/tile_render.rs`, renders one JSON document, the
+reading of the toy test definition, through the same four levels in five
+cases: the reading's wires with no tile, a one-hole floor, the document
+without its projection, the document as written with a four-tuple
+projection, and a twenty-hole variant. Its design, its baseline, and the
+measurement after each step of the rendering work are recorded in
+[Native Tile Rendering](../design/tile_native_rendering.md) §6. The last
+paired run there, on this machine on 2026-09-11, put the document with its
+projection at 7949 ns on P1, 7104 on P2, and 6693 on P3, from 18810, 17479,
+and 14851 before the work began. The same drift caveat applies: compare
+rungs within one run.
+
 ## Run it locally
 
 Run the semantic gate first:
@@ -190,6 +204,12 @@ Then run only the focused performance target:
 
 ```sh
 cargo bench -p polydat --bench engine_ladder
+```
+
+The tile ladder runs the same way:
+
+```sh
+cargo bench -p polydat --bench tile_render
 ```
 
 The P3 and pure cases require the default `jit` feature. A no-default-features

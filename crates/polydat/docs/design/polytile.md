@@ -14,15 +14,16 @@ and nested bodies; the binary's `--emit tile:<name>`, `--tile-delims`,
 and `--tile-sigil`; tiles inside module bodies; and the toy test
 definition rendering its readings as documents.
 
-Step 7, the P2 and P3 renderers, is done through SRD 115. A tile
-renders natively: `tile_encode` and `tile_render` lower by the types
-of their wires, join the fused cones of the production kernel and the
-pure-P3 kernels, and produce the same bytes P1 does
-(`tests/variadic_lowering.rs`). A projection re-runs its body program
-per tuple through nested kernels inside the render helper, as it does
-at P1, and at P2 the whole renderer runs as a closure. The tier
-differential in `tests/handle_tiers.rs` pins random tiles, projections
-included, to the interpreter across the tiers.
+Step 7, the P2 and P3 renderers, is done through SRD 115 and refined
+by SRD 117. A tile renders natively: one `tile_render` over the hole
+values lowers by the types of its wires, joins the fused cones of the
+interpreter's graph and the native segments of the compiled kernels,
+encodes each value at its hole straight into the arena, and produces
+the same bytes P1 does (`tests/variadic_lowering.rs`). A projection
+binds each tuple into a nested kernel over the body's program on the
+default engine, and at P2 the whole renderer runs as a closure over
+slot views. The tier differential in `tests/handle_tiers.rs` pins random
+tiles, projections included, to the interpreter across the tiers.
 
 The walk-through with real output is
 [the Polytile tutorial](../tutorials/polytile_tutorial.md).
@@ -506,13 +507,16 @@ Compilation proceeds in six passes:
    interned byte range. This is the pass that gives static arms their
    O(1) render cost regardless of depth.
 5. **Validate** against the encoding's structural rules.
-6. **Lower.** Each hole expression compiles to an anonymous binding. The
-   tile itself compiles to a `tile_render` node whose wire inputs are
-   the hole bindings in skeleton order and whose constant is the
-   skeleton. A projection body compiles to a child program keyed by its
-   lexical position, exactly as a `for` body does, with one
-   `IterationExtern` per element; the `Repeat` instruction carries its
-   identity. One program per position, however many tuples flow.
+6. **Lower.** Each hole expression compiles to an anonymous binding of
+   the enclosing program, or the wire itself when the hole names one.
+   The tile compiles to one `tile_render` node whose wire inputs are
+   the hole values in skeleton order and whose constant is the
+   skeleton, each `Hole` carrying its encoding, position, declared
+   type, format, and raw flag. A projection body compiles to a child
+   program keyed by its lexical position, exactly as a `for` body does,
+   with one `IterationExtern` per element and one binding per hole in
+   the body; the `Repeat` instruction carries its identity. One program
+   per position, however many tuples flow.
 
 Tiles declared inside a `for` body compile inside that body's program.
 
@@ -521,40 +525,54 @@ Tiles declared inside a `for` body compile inside that body's program.
 ### 7.1 The render program
 
 A tile renders by walking its skeleton once. `Copy` appends an interned
-static run; `Hole` appends the encoded text the hole's `tile_encode`
-binding produced; `Branch` selects a body on a `1`/`0` hole; `Repeat`
-evaluates its comprehension with the evaluator the `for` runtime opens a
-traversal with, binds each tuple into a per-thread scratch state over
+static run; `Hole` encodes the hole's value, a borrowed view of the
+wire, straight into the output; `Branch` reads its condition's truth
+and selects a body; `Repeat` takes its tuples, evaluated once at
+construction when the comprehension names no generator clause and no
+placeholder and otherwise with the evaluator the `for` runtime opens a
+traversal with, binds each tuple by index into a nested kernel over
 the body program, and renders the body per tuple with the separator
 between. The comprehension and the static runs are parsed and interned
-once, when the render node is constructed; scratch states are reused
-across renders; two renders never share dispense state. The same walk
-runs on every tier.
+once, when the render node is constructed; the body's inputs and holes
+are resolved to indices on the first tuple; one body kernel per body,
+engine, and thread is reused across renders; two renders never share
+dispense state. The same walk runs on every tier.
 
 ### 7.2 Tiers
 
-The tiers differ only in how the hole texts arrive and where the result
-goes, per [Compiled Non-Scalar Slots](compiled_handles.md):
+The tiers differ only in how the hole values arrive and where the
+result goes, per [Compiled Non-Scalar Slots](compiled_handles.md):
 
-- **P1.** `tile_encode` runs per hole and `tile_render` walks the
-  skeleton, both as ordinary nodes on `Value`s. The document is built in
-  a `String` and surfaced as a `Str`, since a P1 value owns its bytes.
-- **P2.** Both nodes run as `compiled_handle` closures over handle
-  slots: hole texts are arena handles decoded by the wire types the
-  kernel supplies, and the rendered document enters the arena.
-- **P3.** In a fused cone or a pure-P3 kernel, `tile_encode` lowers to a
-  helper over the hole's wire type and the interned encoding, and
-  `tile_render` to a helper over the interned tile program and the
-  encoded hole texts, passed in a stack array with their type codes.
-  Both write straight into the cycle arena as they render, with no
-  intermediate `String` (SRD 115 §6).
-  Projections activate the body program through nested kernels inside
-  the helper, exactly as at P1; the cone eval is re-entrant so a body's
-  own cones run inside it. The rendered handle flows on as a slot, so a
+- **P1.** `tile_render` walks the skeleton as an ordinary node on
+  `Value`s, encoding each hole from a view of its value. The document
+  is built in a `String` and surfaced as a `Str`, since a P1 value owns
+  its bytes. A projection's body runs interpreted.
+- **P2.** The render node runs its own closure over the slots
+  (`compiled_handle = tile_render_compiled`): each hole is read as a
+  borrowed view by the wire type the kernel fixed, a string from the
+  arena and a JSON or extension value from the value table, and the
+  rendered document enters the arena. The same closure serves a hybrid
+  kernel's closure steps.
+- **P3.** In a fused cone or a native segment, `tile_render` lowers to a
+  helper over the interned tile program and the hole values, passed in
+  a stack array with their type codes and read as views. It writes
+  straight into the cycle arena as it renders, with no intermediate
+  `String` (SRD 115 §6). The rendered handle flows on as a slot, so a
   tile feeds an adapter or `emit_row` without leaving native code. One
-  rule keeps semantics exact: `tile_encode` tolerates a `None` input (it
-  writes `null`), so fed straight by a kernel input it stays on P1 and
-  the render node takes its text as a boundary input (SRD 115 §9).
+  rule keeps semantics exact: the render node tolerates a `None` input
+  (it writes `null`), so it never sits on a cone boundary where a
+  `None` could reach it; a hole that names a kernel input reads it
+  through the input passthrough and the node still fuses.
+- **Projections on the compiled engines.** A body's program is compiled
+  for `Engine::default()` when the tile program is constructed, never
+  inside a cycle, since a kernel's build folds its constants in a root
+  cycle of its own (SRD 115, H5); every compiled kernel renders its
+  bodies on that engine as nested kernels inside its closure or helper,
+  and the cone eval is re-entrant so a body's own native code runs
+  inside it. A body the default engine refuses renders interpreted.
+
+The measurements behind this design are in
+[Native Tile Rendering](tile_native_rendering.md) §6.
 
 ### 7.3 Cost
 
@@ -742,11 +760,17 @@ as rules. Dates are 2026-09-04 to 2026-09-06.
   body.
 - **P2 and P3.** The typed transport into bodies, the skeleton counts,
   and one program per position were shaped so that the SRD 115 lowering
-  undid nothing; it did not. The P3 renderer is the P1 walk behind a
-  helper, not the straight-line skeleton code the first drafts sketched;
-  SRD 115 §12 records what remains a refinement, and
-  [Native Tile Rendering](tile_native_rendering.md) (SRD 117) is the
-  plan that closes it, measured step by step.
+  undid nothing; it did not. As first landed, the P3 renderer was the
+  P1 walk behind a helper: every hole encoded by its own node, decoded
+  back into an owned value in the helper, and stringified again; every
+  projection re-evaluated per render with its body interpreted.
+  [Native Tile Rendering](tile_native_rendering.md) (SRD 117, landed
+  2026-09-11) closed that in three measured steps: encoding at the hole
+  from a borrowed view, projection bodies as compiled kernels with
+  memoized tuples, and an index-keyed body path with integers written
+  straight into the sink. The straight-line skeleton code the first
+  drafts sketched was not taken: with the allocations gone, the walk
+  costs ten nanoseconds an op and the encoder is where the time is.
 - **Coverage review (2026-09-07).** The tier differential's generator
   was extended to every string, JSON, and tile shape that landed: casts,
   parses, the typed JSON adapters, `json_merge`, `escape_json`,

@@ -1,11 +1,15 @@
 # Native Tile Rendering — Plan
 
-**Status:** Proposed SRD 117. A plan for the refinement SRD 115 §12 and
-SRD 114 §13 record: the P3 tile renderer is the interpreter's walk
-behind a helper, not the straight-line skeleton code the first Polytile
-drafts sketched. Nothing here changes what a tile means or the bytes it
-renders; every step is gated on the tier differential and on a bench
-recorded before the first change.
+**Status:** SRD 117, landed 2026-09-11. Steps 0 through 4 are in; §5
+records each step and §6 its measurements. The plan set out to close
+the refinement SRD 115 §12 and SRD 114 §13 recorded: the P3 tile
+renderer was the interpreter's walk behind a helper, not the
+straight-line skeleton code the first Polytile drafts sketched. Nothing
+here changed what a tile means or the bytes it renders; every step was
+gated on the tier differential and on a bench recorded before the first
+change. The straight-line code itself was not taken, for the reason
+step 3 records: once the allocations and lookups were gone, the walk
+was not where the time was.
 
 **Depends on:** [Polytile](polytile.md) (SRD 114) for the skeleton and
 its semantics, [Compiled Non-Scalar Slots](compiled_handles.md) (SRD 115)
@@ -299,6 +303,10 @@ previous surfaces working.
    form; SRD 115 §12 and SRD 114 §13 note the refinement closed; the
    Polytile tutorial's engine section keeps its quoted output; the
    performance guide gains the tile ladder beside the engine ladder.
+
+   *Landed 2026-09-11.* The tutorial's lowering description and its
+   quoted `explain tiles` output were re-captured at step 1; the rest
+   here.
 
 ## 6. Baseline
 

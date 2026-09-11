@@ -655,8 +655,14 @@ Kept short; the normative text above is what the code does. Dates are
 
 No refinements remain recorded.
 
-- **Renderer refinement.** The P3 renderer is the interpreter's walk
-  behind a helper: a hole is encoded by its own node and decoded again
-  in the render helper, and a projection body runs interpreted.
-  [Native Tile Rendering](tile_native_rendering.md) (SRD 117) is the
-  plan that closes it, with a bench recorded before the first change.
+- **Renderer refinement.** The P3 renderer was the interpreter's walk
+  behind a helper: a hole encoded by its own node and decoded again in
+  the render helper, and a projection body run interpreted.
+  [Native Tile Rendering](tile_native_rendering.md) (SRD 117, landed
+  2026-09-11) closed it: the render helper and the render node's own
+  closure read the hole values as views (`arg_refs`, `arg_ref`) and
+  encode at the hole, projection bodies compile for the default engine
+  at construction and render as nested kernels, and the `Kernel` trait
+  gained the index-keyed `set_input_at` and `pull_at` the bodies bind
+  and read through. The node macro gained `compiled_handle = <path>`
+  for a node that supplies its own closure over slot views.
