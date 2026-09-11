@@ -43,6 +43,7 @@ impl Program {
         self.ops.len()
     }
 
+    /// Whether the program has no opcode.
     pub fn is_empty(&self) -> bool {
         self.ops.is_empty()
     }

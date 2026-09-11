@@ -67,6 +67,7 @@ pub type MultiIndex = Vec<u64>;
 /// pulling in the broader runtime.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tuple {
+    /// The tuple's `(name, value)` pairs, in shape order.
     pub bindings: Vec<(String, TupleValue)>,
 }
 
@@ -75,20 +76,27 @@ pub struct Tuple {
 /// `Value`; this type is the algebraic-layer testing currency.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TupleValue {
+    /// An unsigned integer.
     U64(u64),
+    /// A signed integer.
     I64(i64),
+    /// A float.
     F64(f64),
+    /// A string.
     Str(String),
+    /// A boolean.
     Bool(bool),
 }
 
 impl Tuple {
+    /// An empty tuple.
     pub fn new() -> Self {
         Self {
             bindings: Vec::new(),
         }
     }
 
+    /// The tuple with one more binding.
     pub fn with<K: Into<String>>(mut self, key: K, value: TupleValue) -> Self {
         self.bindings.push((key.into(), value));
         self
@@ -113,8 +121,11 @@ impl Default for Tuple {
 /// layer, combined upward by the runtime walker per spec
 /// §10.7.2 propagation rules.
 pub struct EvaluatedInput {
+    /// The input's tuples, in source order.
     pub tuples: Vec<Tuple>,
+    /// How many tuples: `tuples.len()`.
     pub cardinality: u64,
+    /// The addressing scheme the input satisfies.
     pub index_fn: IndexFn,
 }
 

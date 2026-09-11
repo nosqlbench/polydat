@@ -54,20 +54,34 @@ struct PendingNode {
 /// Errors that can occur during assembly.
 #[derive(Debug)]
 pub enum AssemblyError {
+    /// A wire reference names no node output or input.
     UnknownWire(String),
+    /// A wire's type does not match the port it feeds and no adapter heals it.
     TypeMismatch {
+        /// The producing node.
         from_node: String,
+        /// Its output port index.
         from_port: usize,
+        /// The output's type.
         from_type: PortType,
+        /// The consuming node.
         to_node: String,
+        /// Its input port index.
         to_port: usize,
+        /// The type the port requires.
         to_type: PortType,
     },
+    /// Two nodes were added under one name.
     DuplicateNode(String),
+    /// The wiring has a cycle.
     CycleDetected,
+    /// A node was wired with the wrong number of inputs.
     ArityMismatch {
+        /// The node.
         node_name: String,
+        /// Inputs its signature takes.
         expected: usize,
+        /// Inputs it was given.
         got: usize,
     },
     /// Catch-all for errors from downstream phases (e.g., strict mode).
@@ -2217,6 +2231,9 @@ pub(crate) const UNTYPED_VARIADIC_NODES: &[&str] = &[
     "tile_render",
 ];
 
+/// The lossless adapter node from one port type to another, if the
+/// catalog has one: what the assembler inserts between a wire and a port
+/// of different types.
 pub fn auto_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>> {
     use crate::library::convert::{
         BoolToStr, BoolToU64, F32ToF64, F32ToString, I32ToF64, I32ToI64, I32ToString, I64ToF64,

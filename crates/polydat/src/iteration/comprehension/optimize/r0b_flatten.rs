@@ -14,6 +14,8 @@
 
 use crate::iteration::comprehension::ast::Comprehension;
 
+/// Flatten a union of unions or a cartesian of cartesians by one level;
+/// `None` when nothing nests.
 pub fn apply(ast: &Comprehension) -> Option<Comprehension> {
     match ast {
         Comprehension::Union { children } => {

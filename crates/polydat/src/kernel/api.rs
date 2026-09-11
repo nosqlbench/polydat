@@ -51,15 +51,21 @@ pub enum WriteError {
     /// The wire key did not resolve to a known input slot.
     /// Carries the name that was looked up; for indexed writes
     /// the index is reported instead.
-    UnknownWire { key: String },
+    UnknownWire {
+        /// The name or index looked up.
+        key: String,
+    },
 
     /// The value's port type did not match the slot's declared
     /// port type and no auto-adapter exists to heal the
     /// mismatch. Both expected and provided port types are
     /// reported for diagnostic clarity.
     TypeMismatch {
+        /// The slot written.
         slot: String,
+        /// Its declared type.
         expected: PortType,
+        /// The value's type.
         got: PortType,
     },
 }

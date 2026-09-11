@@ -41,6 +41,7 @@ pub type CursorSugarFn =
 /// listings (`describe wiring cursor-sugar`, future) and so the
 /// dispatcher can attribute errors to the right module.
 pub struct CursorSugarRegistration {
+    /// The function that recognises and lowers the sugar.
     pub handler: CursorSugarFn,
     /// Short identifier of the sugar family for diagnostics
     /// (e.g. `"vectordata"`).
@@ -67,8 +68,11 @@ pub struct CursorSugar {
 /// `SourceSchema.projections` list and added as a kernel output
 /// the runtime can read.
 pub struct AuxBinding {
+    /// The binding's name.
     pub name: String,
+    /// Its expression.
     pub value: Expr,
+    /// The cursor projection it becomes, as `(name, type)`, if any.
     pub projection: Option<(String, PortType)>,
 }
 

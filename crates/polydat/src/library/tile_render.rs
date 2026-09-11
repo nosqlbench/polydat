@@ -39,16 +39,22 @@ pub enum HolePosition {
 /// Serialized compactly as `encoding|position|type|format|flags`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HoleEncoding {
+    /// The tile's encoding.
     pub encoding: String,
+    /// Where in the output the hole sits: a value, inside a string, or text.
     pub position: HolePosition,
+    /// The declared type, if any.
     pub ty: Option<String>,
+    /// The format, if any.
     pub format: Option<String>,
+    /// Whether the value is emitted without the encoding's escaping.
     pub raw: bool,
     /// Encode as a branch condition: `1` or `0`.
     pub cond: bool,
 }
 
 impl HoleEncoding {
+    /// The compact spec form, `encoding|position|type|format|flags`.
     pub fn to_spec(&self) -> String {
         let pos = match self.position {
             HolePosition::Value => "value",
@@ -96,6 +102,7 @@ impl HoleEncoding {
         leaked
     }
 
+    /// The encoding a spec names; a missing part takes its default.
     pub fn from_spec(spec: &str) -> Self {
         let mut parts = spec.splitn(5, '|');
         let encoding = parts.next().unwrap_or("text").to_string();
@@ -130,14 +137,19 @@ pub enum HoleSource {
 /// One skeleton instruction. Holes arrive already encoded.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TileOp {
+    /// Text copied as is.
     Static(String),
+    /// A hole, already encoded.
     Hole(HoleSource),
+    /// A projection: the body rendered once per tuple.
     Repeat {
         /// The comprehension, as a serialized [`StreamerValue`].
         stream: String,
         /// Index into [`TileSpec::children`].
         child: usize,
+        /// The separator between tuples.
         sep: String,
+        /// The body skeleton.
         body: Vec<TileOp>,
         /// Generator-call clauses whose expressions compiled to wires of
         /// the enclosing program: `(element, node input index, type)`.
@@ -145,9 +157,13 @@ pub enum TileOp {
         #[serde(default)]
         generators: Vec<(String, usize, String)>,
     },
+    /// A branch on a condition hole.
     Branch {
+        /// The condition, encoded as `1` or `0`.
         cond: HoleSource,
+        /// The skeleton when the condition holds.
         then: Vec<TileOp>,
+        /// The skeleton otherwise.
         otherwise: Vec<TileOp>,
     },
 }
@@ -157,6 +173,7 @@ pub enum TileOp {
 /// its extern declares so the transported text can be re-typed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChildSpec {
+    /// The body program's source.
     pub source: String,
     /// `(extern name, render-node input index, port-type keyword)`.
     pub cascade: Vec<(String, usize, String)>,
@@ -165,13 +182,18 @@ pub struct ChildSpec {
 /// The serialized skeleton.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TileSpec {
+    /// The tile's name.
     pub name: String,
+    /// The tile's encoding.
     pub encoding: String,
+    /// The skeleton.
     pub ops: Vec<TileOp>,
+    /// The projection body programs, by index.
     pub children: Vec<ChildSpec>,
 }
 
 impl TileSpec {
+    /// The spec as JSON, the form the `tile_render` node's spec argument carries.
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).expect("TileSpec serializes")
     }
@@ -243,9 +265,11 @@ fn lower_ops(ops: &[TileOp]) -> Vec<RtOp> {
 /// The runtime form: the spec, compiled body programs, and parsed streams.
 #[derive(Debug)]
 pub struct TileProgram {
+    /// The serialized skeleton.
     pub spec: TileSpec,
     /// The skeleton with statics interned and streams parsed.
     ops: Vec<RtOp>,
+    /// The body programs, compiled once at setup.
     pub children: Vec<Arc<PolydatProgram>>,
     /// One kernel over each body program, the canonical kernel the
     /// comprehension evaluator installs tuple values into.

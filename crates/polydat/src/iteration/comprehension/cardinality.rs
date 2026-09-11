@@ -40,14 +40,18 @@ pub enum CardinalityClass {
     /// `order(_, strategy, Some(n))` before reaching a
     /// `PolyStreamer`.
     Continuous {
+        /// The interval of each axis.
         intervals: Vec<Interval>,
+        /// The measure sampled.
         measure: ProductMeasure,
     },
 
     /// Filtered continuous source. Measure reduced by the
     /// predicate; still requires sampling.
     ContinuousAtMost {
+        /// The interval of each axis.
         intervals: Vec<Interval>,
+        /// The measure before the predicate reduces it.
         measure_at_most: ProductMeasure,
     },
 
@@ -80,9 +84,13 @@ pub struct Hybrid {
 /// whether such intervals are valid given the measure.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Interval {
+    /// The lower end.
     pub lo: f64,
+    /// The upper end.
     pub hi: f64,
+    /// Whether the lower end is excluded.
     pub lo_open: bool,
+    /// Whether the upper end is excluded.
     pub hi_open: bool,
 }
 
@@ -135,8 +143,11 @@ impl Interval {
 /// for K-D continuous cartesians.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ProductMeasure {
+    /// Lebesgue measure scaled to the interval; needs bounded intervals.
     Uniform,
+    /// A named probability distribution over its support.
     Named(MeasureName),
+    /// One measure per axis.
     Product(Vec<ProductMeasure>),
 }
 
@@ -171,12 +182,19 @@ impl ProductMeasure {
 /// distributions land as coordinated additions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MeasureName {
+    /// The normal distribution.
     Normal,
+    /// The exponential distribution.
     Exponential,
+    /// The Pareto distribution.
     Pareto,
+    /// The beta distribution.
     Beta,
+    /// The log-normal distribution.
     LogNormal,
+    /// The gamma distribution.
     Gamma,
+    /// The uniform distribution on `[0, 1]`.
     Uniform01,
 }
 

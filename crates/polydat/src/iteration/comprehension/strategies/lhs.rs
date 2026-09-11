@@ -40,6 +40,7 @@ use super::{
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::strategy::StrategyName;
 
+/// Latin hypercube samples.
 pub struct Lhs;
 
 /// Algebra-layer seed; replaced by per-streamer seed in Phase 7.

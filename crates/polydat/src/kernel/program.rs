@@ -114,6 +114,7 @@ pub struct ProvMask {
 }
 
 impl ProvMask {
+    /// A mask with no bit set.
     pub fn empty() -> Self {
         Self { words: Vec::new() }
     }
@@ -150,6 +151,7 @@ impl ProvMask {
         newly
     }
 
+    /// Whether bit `idx` is set.
     pub fn contains(&self, idx: usize) -> bool {
         self.words
             .get(idx / 64)
@@ -171,6 +173,7 @@ impl ProvMask {
         changed
     }
 
+    /// Whether any bit is set in both masks.
     pub fn intersects(&self, other: &Self) -> bool {
         self.words
             .iter()
@@ -178,6 +181,7 @@ impl ProvMask {
             .any(|(a, b)| a & b != 0)
     }
 
+    /// Whether no bit is set.
     pub fn is_zero(&self) -> bool {
         self.words.iter().all(|w| *w == 0)
     }
@@ -238,6 +242,9 @@ pub fn program_count(program: &PolydatProgram) -> usize {
         .sum::<usize>()
 }
 
+/// A compiled program: the nodes in topological order, their wiring,
+/// the inputs, the outputs, and the metadata the compiler attached.
+/// Immutable once built, and shared across kernels through an `Arc`.
 pub struct PolydatProgram {
     /// Node instances in topological order.
     pub(crate) nodes: Vec<Box<dyn PolydatNode>>,
@@ -1082,6 +1089,7 @@ impl PolydatProgram {
         self.input_defs.get(idx).map(|d| &d.default)
     }
 
+    /// The name of the input at `idx`, if there is one.
     pub fn input_name_by_idx(&self, idx: usize) -> Option<&str> {
         self.input_defs.get(idx).map(|d| d.name.as_str())
     }
@@ -1155,6 +1163,7 @@ impl PolydatProgram {
         &self.output_list
     }
 
+    /// The position of a named output in the output list, if declared.
     pub fn output_index(&self, name: &str) -> Option<usize> {
         self.output_list.iter().position(|(n, _, _)| n == name)
     }
@@ -1406,6 +1415,8 @@ impl PolydatProgram {
         unresolved.into_iter().collect()
     }
 
+    /// A SHA-256 over the program's structure: the nodes, their wiring,
+    /// inputs, and outputs, as a stable identity for caching.
     pub fn canonical_hash(&self) -> [u8; 32] {
         use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
@@ -1736,6 +1747,8 @@ impl PolydatProgram {
             .any(|n| matches!(n.purity(), crate::ast::Purity::Nondeterministic { .. }))
     }
 
+    /// Fold every init-lifecycle constant now, as the compiler does at the
+    /// end of a build, and return how many were folded.
     pub fn fold_init_constants(&mut self) -> Result<usize, String> {
         self.fold_init_constants_impl(None, false)
     }

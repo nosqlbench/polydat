@@ -18,7 +18,9 @@ use crate::iteration::comprehension::metadata::{IndexFn, Metadata};
 /// classification.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CoordInfo {
+    /// The coordinate's name.
     pub name: String,
+    /// Discrete or continuous.
     pub kind: CoordKind,
 }
 
@@ -28,7 +30,9 @@ pub struct CoordInfo {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CoordKind {
+    /// Enumerable values.
     Discrete,
+    /// A real interval, sampled.
     Continuous,
 }
 
@@ -42,10 +46,12 @@ pub struct CoordSet {
 }
 
 impl CoordSet {
+    /// An empty set.
     pub fn new() -> Self {
         Self { coords: Vec::new() }
     }
 
+    /// Add a coordinate at the end.
     pub fn push(&mut self, info: CoordInfo) {
         self.coords.push(info);
     }
@@ -92,30 +98,37 @@ impl CoordSet {
         Self { coords }
     }
 
+    /// The coordinates, in declaration order.
     pub fn iter(&self) -> impl Iterator<Item = &CoordInfo> {
         self.coords.iter()
     }
 
+    /// The names, in declaration order.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.coords.iter().map(|c| c.name.as_str())
     }
 
+    /// The coordinate named, if any.
     pub fn get(&self, name: &str) -> Option<&CoordInfo> {
         self.coords.iter().find(|c| c.name == name)
     }
 
+    /// Whether the named coordinate is continuous.
     pub fn is_continuous(&self, name: &str) -> bool {
         matches!(self.get(name).map(|c| c.kind), Some(CoordKind::Continuous))
     }
 
+    /// Whether the set has the named coordinate.
     pub fn contains(&self, name: &str) -> bool {
         self.get(name).is_some()
     }
 
+    /// The number of coordinates.
     pub fn len(&self) -> usize {
         self.coords.len()
     }
 
+    /// Whether the set has no coordinate.
     pub fn is_empty(&self) -> bool {
         self.coords.is_empty()
     }

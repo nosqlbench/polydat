@@ -22,12 +22,15 @@ pub struct ConeEntry {
     pub label: String,
     /// Member function names, in fusion order.
     pub members: Vec<String>,
+    /// Boundary inputs the cone reads.
     pub boundary_in: usize,
+    /// Boundary outputs it writes.
     pub boundary_out: usize,
 }
 
 /// One node left on the interpreter.
 pub struct ResidueEntry {
+    /// The node's function name.
     pub name: String,
     /// The P3 classifier can lower this node (it stayed unfused
     /// for lifecycle / threshold / boundary reasons).
@@ -39,9 +42,11 @@ pub struct ResidueEntry {
 
 /// Engine-mix report for one compiled program.
 pub struct LatticeReport {
+    /// The fused cones, in program order.
     pub cones: Vec<ConeEntry>,
     /// Total nodes fused into cones (sum of members).
     pub fused_nodes: usize,
+    /// The nodes left on the interpreter, in program order.
     pub residue: Vec<ResidueEntry>,
     /// Residue nodes with a P2 closure but no P3 classification —
     /// the "P2 closures at cone boundaries" candidate set.

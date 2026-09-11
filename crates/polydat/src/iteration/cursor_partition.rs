@@ -195,7 +195,12 @@ impl fmt::Display for PartitionOrder {
 pub enum Chunking {
     /// `start..end` form. Single partition spanning the named
     /// boundary, regardless of either endpoint's `Bound` kind.
-    SingleRange { start: Bound, end: Bound },
+    SingleRange {
+        /// Where the partition starts.
+        start: Bound,
+        /// Where it ends.
+        end: Bound,
+    },
     /// Comma-separated delta list. Each entry is the delta
     /// from the running start; a single tail token is allowed
     /// per list and resolves against whatever's left after the
@@ -208,7 +213,10 @@ pub enum Chunking {
     /// Deltas summing to less than the extent (without a tail
     /// token) drop the trailing gap; summing to more is a
     /// resolve-time error.
-    DeltaList { deltas: Vec<Bound> },
+    DeltaList {
+        /// The deltas, in order.
+        deltas: Vec<Bound>,
+    },
 }
 
 /// Parsed `cursor=...` argument:
@@ -1535,6 +1543,7 @@ impl ReflectedValue for PartitionSpec {
 pub struct PartitionList(pub Arc<Vec<Partition>>);
 
 impl PartitionList {
+    /// A list of the given partitions.
     pub fn new(partitions: Vec<Partition>) -> Self {
         Self(Arc::new(partitions))
     }

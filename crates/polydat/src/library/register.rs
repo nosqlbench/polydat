@@ -48,6 +48,7 @@ pub struct RegView {
 }
 
 impl RegView {
+    /// A view of a register word as the given register type.
     pub fn new(to: PortType) -> Self {
         let (name, view) = match to {
             PortType::Reg128 => ("__reg_view_raw", RegLanes::Raw),

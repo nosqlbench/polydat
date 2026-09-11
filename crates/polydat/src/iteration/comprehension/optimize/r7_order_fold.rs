@@ -17,6 +17,8 @@
 
 use crate::iteration::comprehension::ast::Comprehension;
 
+/// Drop an untruncated order under another order; `None` when the shape
+/// differs.
 pub fn apply(ast: &Comprehension) -> Option<Comprehension> {
     let Comprehension::Order {
         child: outer_child,

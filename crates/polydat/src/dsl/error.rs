@@ -12,22 +12,29 @@ use std::fmt;
 /// Severity level for diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
+    /// A fault that fails the compile.
     Error,
+    /// A note that does not.
     Warning,
 }
 
 /// A single diagnostic message with source context.
 #[derive(Debug, Clone)]
 pub struct Diagnostic {
+    /// Error or warning.
     pub severity: Severity,
+    /// Where in the source.
     pub span: Span,
+    /// The message.
     pub message: String,
+    /// A suggested fix, if any.
     pub hint: Option<String>,
     /// The source line text (for display).
     pub source_line: Option<String>,
 }
 
 impl Diagnostic {
+    /// An error at `span`.
     pub fn error(span: Span, message: impl Into<String>) -> Self {
         Self {
             severity: Severity::Error,
@@ -38,6 +45,7 @@ impl Diagnostic {
         }
     }
 
+    /// A warning at `span`.
     pub fn warning(span: Span, message: impl Into<String>) -> Self {
         Self {
             severity: Severity::Warning,
@@ -48,11 +56,13 @@ impl Diagnostic {
         }
     }
 
+    /// The same diagnostic with a hint.
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
         self
     }
 
+    /// The same diagnostic with the source line shown under it.
     pub fn with_source_line(mut self, line: impl Into<String>) -> Self {
         self.source_line = Some(line.into());
         self
@@ -91,12 +101,14 @@ impl fmt::Display for Diagnostic {
 /// A collection of diagnostics from compilation.
 #[derive(Debug, Clone)]
 pub struct DiagnosticReport {
+    /// Every diagnostic recorded, in order.
     pub diagnostics: Vec<Diagnostic>,
     /// The original source text (for extracting source lines).
     source_lines: Vec<String>,
 }
 
 impl DiagnosticReport {
+    /// An empty report over `source`, whose lines the diagnostics quote.
     pub fn new(source: &str) -> Self {
         Self {
             diagnostics: Vec::new(),
@@ -104,6 +116,7 @@ impl DiagnosticReport {
         }
     }
 
+    /// Record an error at `span`, quoting its source line.
     pub fn error(&mut self, span: Span, message: impl Into<String>) {
         let mut diag = Diagnostic::error(span, message);
         if span.line > 0 && span.line <= self.source_lines.len() {
@@ -112,6 +125,7 @@ impl DiagnosticReport {
         self.diagnostics.push(diag);
     }
 
+    /// Record an error at `span` with a hint, quoting its source line.
     pub fn error_with_hint(
         &mut self,
         span: Span,
@@ -125,6 +139,7 @@ impl DiagnosticReport {
         self.diagnostics.push(diag);
     }
 
+    /// Record a warning at `span`, quoting its source line.
     pub fn warning(&mut self, span: Span, message: impl Into<String>) {
         let mut diag = Diagnostic::warning(span, message);
         if span.line > 0 && span.line <= self.source_lines.len() {
@@ -133,6 +148,7 @@ impl DiagnosticReport {
         self.diagnostics.push(diag);
     }
 
+    /// Record a warning at `span` with a hint, quoting its source line.
     pub fn warning_with_hint(
         &mut self,
         span: Span,
@@ -146,12 +162,14 @@ impl DiagnosticReport {
         self.diagnostics.push(diag);
     }
 
+    /// Whether any diagnostic is an error.
     pub fn has_errors(&self) -> bool {
         self.diagnostics
             .iter()
             .any(|d| d.severity == Severity::Error)
     }
 
+    /// The errors, in order.
     pub fn errors(&self) -> Vec<&Diagnostic> {
         self.diagnostics
             .iter()
@@ -159,6 +177,7 @@ impl DiagnosticReport {
             .collect()
     }
 
+    /// The warnings, in order.
     pub fn warnings(&self) -> Vec<&Diagnostic> {
         self.diagnostics
             .iter()

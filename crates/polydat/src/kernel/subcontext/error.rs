@@ -22,6 +22,7 @@ pub struct SourceContext {
 }
 
 impl SourceContext {
+    /// A context with a label and no file or lines.
     pub fn new(label: impl Into<String>) -> Self {
         Self {
             label: label.into(),
@@ -30,19 +31,23 @@ impl SourceContext {
         }
     }
 
+    /// The context of a phase, labelled `phase:<name>`.
     pub fn for_phase(name: &str) -> Self {
         Self::new(format!("phase:{name}"))
     }
 
+    /// The context of an op, labelled `op:<name>`.
     pub fn for_op(name: &str) -> Self {
         Self::new(format!("op:{name}"))
     }
 
+    /// The same context with its source file.
     pub fn with_file(mut self, file: impl Into<String>) -> Self {
         self.file = Some(file.into());
         self
     }
 
+    /// The same context with its line range.
     pub fn with_lines(mut self, start: usize, end: usize) -> Self {
         self.line_range = Some((start, end));
         self
@@ -75,24 +80,41 @@ impl SourceContext {
 pub enum ContractViolation {
     /// Rule 1 — Import resolution: an artifact import has no
     /// matching parent export.
-    UnboundImport { import: String, site: SourceContext },
+    UnboundImport {
+        /// The import's name.
+        import: String,
+        /// Where the import is declared.
+        site: SourceContext,
+    },
     /// Rule 1 — Type mismatch on import.
     Type {
+        /// The import's name.
         import: String,
+        /// The type the import requires.
         required: PortType,
+        /// The type the parent exports.
         parent_export: PortType,
+        /// Where the import is declared.
         site: SourceContext,
     },
     /// Rule 1 — Modifier mismatch (e.g. shared import against a
     /// non-shared parent export).
     Modifier {
+        /// The import's name.
         import: String,
+        /// What differs.
         detail: String,
+        /// Where the import is declared.
         site: SourceContext,
     },
     /// Rule 2 — Final-shadow on export: a child can't redefine
     /// an immutable parent export.
-    FinalShadow { export: String, site: SourceContext },
+    FinalShadow {
+        /// The export shadowed.
+        export: String,
+        /// Where the child redefines it.
+        site: SourceContext,
+    },
     /// Rule 2 — Shared write-through rewrite was required but
     /// could not be performed.
     ///
@@ -104,19 +126,24 @@ pub enum ContractViolation {
     /// resulting [`super::ScopeModule::write_throughs`] and the
     /// underlying [`Self::Compile`] surface.
     Phase2WriteThrough {
+        /// The export the rewrite targeted.
         export: String,
+        /// Where the export is declared.
         site: SourceContext,
+        /// What the rewrite could not do.
         note: &'static str,
     },
     /// Named-child registry: a duplicate spawn under the same
     /// name (SRD-67 §"Named-child registry"). Reports both spawn
     /// sites.
     DuplicateChild {
+        /// The child's name.
         name: ChildName,
         /// Boxed: this is the only variant carrying two
         /// `SourceContext`s — boxing one keeps the whole enum (and
         /// every `Result<_, ContractViolation>`) small.
         prior_site: Box<SourceContext>,
+        /// The second spawn site.
         this_site: SourceContext,
     },
     /// Polydat compile-time error — the body failed to compile (most
@@ -136,7 +163,9 @@ pub enum ContractViolation {
     /// intended. The `bindings` field carries every const
     /// output that materialised to None.
     StrictNonePropagation {
+        /// Every const output that materialised to `None`.
         bindings: Vec<String>,
+        /// Where the bindings are declared.
         site: SourceContext,
     },
 }

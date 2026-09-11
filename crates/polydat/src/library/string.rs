@@ -31,12 +31,15 @@
 /// the instance in a struct field and hands the eval body a
 /// `&ParsedCombinations` borrow each call.
 pub struct ParsedCombinations {
+    /// The segments, in output order.
     pub segments: Vec<Segment>,
+    /// The product of the charset sizes: the distinct combinations.
     pub modulus: u64,
 }
 
 impl crate::derive_support::PolydatSetup for ParsedCombinations {}
 
+/// One piece of a combinations pattern.
 pub enum Segment {
     /// Variable: select one char from the charset based on a radix digit.
     Charset(Vec<char>),

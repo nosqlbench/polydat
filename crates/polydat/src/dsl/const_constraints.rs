@@ -37,9 +37,19 @@ use crate::dsl::factory::ConstArg;
 #[derive(Debug, Clone, Copy)]
 pub enum ConstConstraint {
     /// Integer must satisfy `min ≤ v ≤ max`.
-    RangeU64 { min: u64, max: u64 },
+    RangeU64 {
+        /// The least value allowed.
+        min: u64,
+        /// The greatest value allowed.
+        max: u64,
+    },
     /// Float must satisfy `min ≤ v ≤ max`.
-    RangeF64 { min: f64, max: f64 },
+    RangeF64 {
+        /// The least value allowed.
+        min: f64,
+        /// The greatest value allowed.
+        max: f64,
+    },
     /// Integer must appear in a closed set (e.g. radix ∈ {2, 8, 10, 16}).
     AllowedU64(&'static [u64]),
     /// Integer must be non-zero (divisors, moduli, ranges).

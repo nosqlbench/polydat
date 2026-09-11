@@ -194,6 +194,7 @@ static SIGS: &[FuncSig] = &[
     // `#[polydat_node]` per SRD-80 PR B.13 (PR B.6 for str).
 ];
 
+/// The hand-registered signatures of this module.
 pub fn signatures() -> &'static [FuncSig] {
     SIGS
 }

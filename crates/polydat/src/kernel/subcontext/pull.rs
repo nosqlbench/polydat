@@ -60,6 +60,7 @@ pub struct RegisteredPullConsumer {
 }
 
 impl RegisteredPullConsumer {
+    /// A registered consumer wrapping `consumer`.
     pub fn new(consumer: Arc<dyn PullConsumer>) -> Self {
         Self { inner: consumer }
     }
@@ -105,6 +106,7 @@ pub struct NamedPullConsumer {
 }
 
 impl NamedPullConsumer {
+    /// A consumer with a label and the output names it pulls.
     pub fn new(label: impl Into<String>, names: impl IntoIterator<Item = String>) -> Self {
         Self {
             label: label.into(),

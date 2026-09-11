@@ -118,9 +118,13 @@ impl Traversal {
 /// declares it so traversals over `name` resolve at compile time.
 #[derive(Debug, Clone)]
 pub struct Producer {
+    /// The wire the producer binds.
     pub name: String,
+    /// Where the binding appears.
     pub span: Span,
+    /// The text after `for`, as written.
     pub source_text: String,
+    /// The comprehension, with derivations resolved.
     pub comprehension: Comprehension,
 }
 

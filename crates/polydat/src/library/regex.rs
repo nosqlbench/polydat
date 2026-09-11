@@ -97,6 +97,7 @@ pub enum PatternDialect {
 }
 
 impl PatternDialect {
+    /// The dialect's name, as `pattern_dialect` spells it.
     pub fn as_str(self) -> &'static str {
         match self {
             PatternDialect::Literal => "literal",
@@ -154,7 +155,7 @@ fn compile_promoted(pattern: &str) -> Regex {
 }
 
 /// Promoted pattern match: `true` if `input` matches `pattern` under the
-/// literal / glob / regex promotion rules. Sibling to [`regex_match`]
+/// literal / glob / regex promotion rules. Sibling to `regex_match`
 /// (which takes a *raw* regex) — use this when the pattern may be a
 /// strict string, a `*` glob, or a regex and the kind should be
 /// auto-detected from its shape.

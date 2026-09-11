@@ -101,6 +101,7 @@ pub struct GraphMatter {
 }
 
 impl GraphMatter {
+    /// An empty statement list.
     pub fn new() -> Self {
         Self::default()
     }

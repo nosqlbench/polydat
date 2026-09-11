@@ -74,7 +74,9 @@ pub enum Binder {
     /// placeholders → three positional slots. The slot at index 0
     /// binds to the first `?`, etc.
     Positional {
+        /// The op-template field bound.
         field: String,
+        /// One slot per placeholder, in position order.
         slots: Vec<BinderSlot>,
     },
 
@@ -84,7 +86,9 @@ pub enum Binder {
     /// named parameters → two named slots keyed by `id` / `val`.
     /// `BTreeMap` for deterministic diagnostic ordering.
     Named {
+        /// The op-template field bound.
         field: String,
+        /// One slot per named parameter.
         slots: BTreeMap<String, BinderSlot>,
     },
 
@@ -94,7 +98,12 @@ pub enum Binder {
     /// payload bound as Bytes. The slot supplies the field's
     /// entire value with the lvalue type declared by the
     /// protocol.
-    Single { field: String, slot: BinderSlot },
+    Single {
+        /// The op-template field bound.
+        field: String,
+        /// The slot supplying the field's whole value.
+        slot: BinderSlot,
+    },
 }
 
 /// One slot in a binder.
@@ -124,8 +133,11 @@ pub enum Binder {
 /// bind paths) see the true protocol-side type.
 #[derive(Debug, Clone)]
 pub struct BinderSlot {
+    /// The wire the slot reads.
     pub wire: String,
+    /// The type the protocol side requires.
     pub lvalue_type: PortType,
+    /// Whether a wire of another type may be fused into the lvalue type.
     pub allow_fusion: bool,
 }
 
@@ -164,15 +176,20 @@ impl Binder {
 /// [`verify_binders`].
 #[derive(Debug, Clone)]
 pub struct BinderViolation {
+    /// The op-template field.
     pub field: String,
+    /// The slot's position hint: `[i]`, `:name`, or empty.
     pub slot_label: String,
+    /// The wire named.
     pub wire: String,
     /// Wire's rvalue type as resolved from the program, or
     /// `None` if the wire wasn't declared in the program at all
     /// (a separate error — the binder names a wire the kernel
     /// doesn't know).
     pub rvalue_type: Option<PortType>,
+    /// The type the protocol side requires.
     pub lvalue_type: PortType,
+    /// What is wrong.
     pub message: String,
 }
 
@@ -228,6 +245,8 @@ pub fn verify_against_kernel(
     }
 }
 
+/// Every slot whose wire type cannot satisfy its lvalue type, given a
+/// lookup from wire name to the program's type for it.
 pub fn verify_binders(
     binders: &[Binder],
     wire_type: impl Fn(&str) -> Option<PortType>,

@@ -150,6 +150,7 @@ fn matches(
 
 use crate::dsl::registry::FuncSig;
 
+/// The hand-registered signatures of this module.
 pub fn signatures() -> &'static [FuncSig] {
     &[
         // `required` / `this_or` migrated to `#[polydat_node]` via the

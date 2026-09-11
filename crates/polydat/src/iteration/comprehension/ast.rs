@@ -37,29 +37,44 @@ use super::strategy::{StrategyName, ZipMode};
 pub enum Comprehension {
     /// Leaf source per spec §3.1. Binds `name` to one value
     /// per dispense, drawn from `source`.
-    Clause { name: String, source: Source },
+    Clause {
+        /// The name bound.
+        name: String,
+        /// Where the values come from.
+        source: Source,
+    },
 
     /// Cross-product combinator per spec §3.2. Children must
     /// have disjoint name sets (V1).
-    Cartesian { children: Vec<Comprehension> },
+    Cartesian {
+        /// The factors.
+        children: Vec<Comprehension>,
+    },
 
     /// Lockstep combinator per spec §3.3. Children must be
     /// discrete (V7) and have disjoint name sets (V1).
     Zip {
+        /// The streams zipped.
         children: Vec<Comprehension>,
+        /// The length policy.
         mode: ZipMode,
     },
 
     /// Concatenation combinator per spec §3.4. Children must
     /// share an identical tuple shape (V2) and all be discrete
     /// (V9).
-    Union { children: Vec<Comprehension> },
+    Union {
+        /// The streams concatenated, in order.
+        children: Vec<Comprehension>,
+    },
 
     /// Selection modifier per spec §3.5. Predicate is a GK
     /// boolean expression; names must close over the child's
     /// coordinates plus the parent scope (V3).
     Filter {
+        /// The stream filtered.
         child: Box<Comprehension>,
+        /// The predicate, a boolean expression over the tuple and the parent scope.
         predicate: String,
     },
 
@@ -67,8 +82,11 @@ pub enum Comprehension {
     /// accept the child's IndexFn (V4); `truncation` limits the
     /// dispensed count.
     Order {
+        /// The stream ordered.
         child: Box<Comprehension>,
+        /// The strategy applied.
         strategy: StrategyName,
+        /// The dispensed count cap, if any.
         truncation: Option<u64>,
     },
 }

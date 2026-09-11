@@ -30,6 +30,7 @@ pub struct StreamerValue {
 }
 
 impl StreamerValue {
+    /// A streamer over `ast` with its source text.
     pub fn new(text: impl Into<String>, ast: Comprehension) -> Self {
         Self {
             text: text.into(),
@@ -48,6 +49,7 @@ impl StreamerValue {
         self.ast.metadata()
     }
 
+    /// The cardinality class of the tuple space.
     pub fn cardinality(&self) -> CardinalityClass {
         self.metadata().cardinality
     }

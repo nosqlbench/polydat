@@ -205,8 +205,11 @@ pub(crate) struct CellConeEntry {
 /// construction.
 #[derive(Clone, Debug)]
 pub struct SharedCellEntry {
+    /// The binding's name.
     pub name: String,
+    /// The cell's declared type.
     pub port_type: crate::ast::PortType,
+    /// The cell.
     pub cell: SharedCell,
 }
 

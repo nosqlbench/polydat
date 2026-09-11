@@ -11,6 +11,8 @@
 
 use crate::iteration::comprehension::ast::Comprehension;
 
+/// Fold two nested filters into one conjunction; `None` when the shape
+/// differs.
 pub fn apply(ast: &Comprehension) -> Option<Comprehension> {
     let Comprehension::Filter {
         child: outer_child,

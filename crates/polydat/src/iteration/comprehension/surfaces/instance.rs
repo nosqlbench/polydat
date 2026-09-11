@@ -35,11 +35,14 @@ pub trait KernelScope {
 /// originating coord tuple for traceability.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScopedKernelInstance<S> {
+    /// The coordinate tuple the kernel was scoped against.
     pub coords: Tuple,
+    /// The scoped value.
     pub scoped: S,
 }
 
 impl<S> ScopedKernelInstance<S> {
+    /// An instance of `scoped` at `coords`.
     pub fn new(coords: Tuple, scoped: S) -> Self {
         Self { coords, scoped }
     }

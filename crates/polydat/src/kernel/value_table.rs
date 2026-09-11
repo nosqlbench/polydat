@@ -37,7 +37,9 @@ const ENTRY_MASK: u64 = 0xFFFF_FFFF;
 
 /// Kind codes carried in a table handle.
 pub const KIND_JSON: u64 = 1;
+/// An extension value.
 pub const KIND_EXT: u64 = 2;
+/// A handle value.
 pub const KIND_HANDLE: u64 = 3;
 /// Any other variant the engine admits at a boundary.
 pub const KIND_OTHER: u64 = 0;

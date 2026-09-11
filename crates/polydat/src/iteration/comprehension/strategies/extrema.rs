@@ -34,6 +34,7 @@ use super::{
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::strategy::StrategyName;
 
+/// All extrema first, stratified by how many indices are interior.
 pub struct Extrema;
 
 impl Strategy for Extrema {

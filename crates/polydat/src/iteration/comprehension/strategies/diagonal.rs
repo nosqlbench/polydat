@@ -26,6 +26,7 @@ use super::{
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::strategy::StrategyName;
 
+/// Sort by sum of indices ascending, ties in lexicographic order.
 pub struct Diagonal;
 
 impl Strategy for Diagonal {
@@ -57,6 +58,7 @@ impl Strategy for Diagonal {
     }
 }
 
+/// Sort by sum of indices descending.
 pub struct Antidiagonal;
 
 impl Strategy for Antidiagonal {

@@ -17,6 +17,8 @@
 use crate::iteration::comprehension::ast::Comprehension;
 use crate::iteration::comprehension::strategy::StrategyName;
 
+/// Swap an untruncated lexicographic order with the filter under it;
+/// `None` when the shape differs.
 pub fn apply(ast: &Comprehension) -> Option<Comprehension> {
     let Comprehension::Order {
         child,

@@ -8,6 +8,7 @@ use crate::dsl::lexer::Span;
 /// A complete `.polydat` file.
 #[derive(Debug, Clone)]
 pub struct PolydatFile {
+    /// The statements, in document order.
     pub statements: Vec<Statement>,
 }
 
@@ -65,7 +66,12 @@ pub enum Statement {
     /// `CompileEvent::PragmaAcknowledged`; unknown names trigger
     /// `CompileEvent::UnknownPragma` and are otherwise ignored
     /// (forward-compatible).
-    Pragma { name: String, span: Span },
+    Pragma {
+        /// The pragma's name, after the `#`.
+        name: String,
+        /// Where the pragma appears.
+        span: Span,
+    },
     /// `for <source> { body }` — a traversal scope (SRD 113 §3.2).
     /// One child scope activates per tuple of the source; the
     /// comprehension's element names are wires inside the body.
@@ -79,9 +85,13 @@ pub enum Statement {
 /// directive sigil, and strictness.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TileOptions {
+    /// The text that opens a hole, `${` by default.
     pub open: String,
+    /// The text that closes a hole, `}` by default.
     pub close: String,
+    /// The directive sigil, `@` by default.
     pub sigil: String,
+    /// Whether an unknown hole or directive is an error rather than text.
     pub strict: bool,
     /// The body begins inside a JSON string literal (`instring`): holes
     /// encode as escaped text from the first byte. The compiler sets
@@ -116,14 +126,19 @@ pub enum TileBodyKind {
 /// A tile definition: its header, its raw body, and the parsed template.
 #[derive(Debug, Clone)]
 pub struct TileDef {
+    /// The tile's name: the wire it binds.
     pub name: String,
+    /// The declared encoding, such as `json` or `csv`, if any.
     pub encoding: Option<String>,
+    /// The delimiter and strictness options.
     pub options: TileOptions,
+    /// How the body was written: heredoc or string literal.
     pub body_kind: TileBodyKind,
     /// The body text exactly as captured.
     pub body: String,
     /// The body parsed into static runs, holes, projections, and branches.
     pub pieces: Vec<TilePiece>,
+    /// Where the definition appears.
     pub span: Span,
 }
 
@@ -136,16 +151,24 @@ pub enum TilePiece {
     Hole(TileHole),
     /// `@for <source> [sep "..."] { body }`.
     Projection {
+        /// What the projection iterates.
         source: ForSource,
+        /// The separator emitted between tuples, if any.
         sep: Option<String>,
+        /// The template rendered once per tuple.
         body: Vec<TilePiece>,
+        /// Where the directive appears.
         span: Span,
     },
     /// `@if cond { body } [@else { body }]`.
     Branch {
+        /// The condition, a boolean expression.
         cond: Expr,
+        /// The template rendered when the condition holds.
         then: Vec<TilePiece>,
+        /// The template rendered otherwise, if an `@else` was written.
         otherwise: Option<Vec<TilePiece>>,
+        /// Where the directive appears.
         span: Span,
     },
 }
@@ -156,10 +179,15 @@ pub enum TilePiece {
 pub struct TileHole {
     /// The text between the delimiters, as written.
     pub text: String,
+    /// The expression the hole evaluates.
     pub expr: Expr,
+    /// The declared type after the colon, if any.
     pub decl_type: Option<String>,
+    /// The format after the bar, if any.
     pub format: Option<String>,
+    /// Whether the value is emitted without the encoding's escaping.
     pub raw: bool,
+    /// Where the hole appears.
     pub span: Span,
 }
 
@@ -170,11 +198,14 @@ pub struct ForSource {
     /// The raw text after `for`, preserved for diagnostics and for
     /// pretty-printing round trips.
     pub text: String,
+    /// What the text denotes once parsed.
     pub kind: ForSourceKind,
+    /// Where the source appears.
     pub span: Span,
 }
 
 #[derive(Debug, Clone)]
+/// The parsed form of a `for` source.
 pub enum ForSourceKind {
     /// A bare identifier naming a `Streamer` wire bound by a `for`
     /// expression elsewhere in scope.
@@ -185,8 +216,11 @@ pub enum ForSourceKind {
     /// `base order <spec>`, or both (SRD 113 §3.1). Resolved against
     /// the producer at compile time.
     Derived {
+        /// The producer wire the derivation starts from.
         base: String,
+        /// The `where` predicate text, if any.
         filter: Option<String>,
+        /// The `order` specification text, if any.
         order: Option<String>,
     },
 }
@@ -206,8 +240,11 @@ impl ForSource {
 /// A traversal statement: `for <source> { statements }`.
 #[derive(Debug, Clone)]
 pub struct ForStmt {
+    /// What the traversal iterates.
     pub source: ForSource,
+    /// The body: one child scope per tuple.
     pub body: Vec<Statement>,
+    /// Where the statement appears.
     pub span: Span,
 }
 
@@ -222,9 +259,13 @@ pub struct ForStmt {
 /// ```
 #[derive(Debug, Clone)]
 pub struct ExternPort {
+    /// The port's name.
     pub name: String,
+    /// The declared type keyword.
     pub typ: String,
+    /// The default value, if one was written; without one the port is `None` until set.
     pub default: Option<Expr>,
+    /// Where the declaration appears.
     pub span: Span,
 }
 
@@ -242,8 +283,11 @@ pub struct ExternPort {
 /// the type for clarity and editor support.
 #[derive(Debug, Clone)]
 pub struct InputDecl {
+    /// The input's name.
     pub name: String,
+    /// The declared type keyword, if one was written.
     pub ty: Option<String>,
+    /// Where the declaration appears.
     pub span: Span,
 }
 
@@ -310,9 +354,11 @@ impl BindingModifier {
     pub const CONST: Self = Self {
         bits: Self::bit(WireModifier::Const),
     };
+    /// The `shared` modifier alone.
     pub const SHARED: Self = Self {
         bits: Self::bit(WireModifier::Shared),
     };
+    /// The `volatile` modifier alone.
     pub const VOLATILE: Self = Self {
         bits: Self::bit(WireModifier::Volatile),
     };
@@ -375,10 +421,12 @@ impl BindingModifier {
         self.has(WireModifier::Const)
     }
     #[inline]
+    /// `true` iff `shared` is set.
     pub const fn is_shared(&self) -> bool {
         self.has(WireModifier::Shared)
     }
     #[inline]
+    /// `true` iff `volatile` is set.
     pub const fn is_volatile(&self) -> bool {
         self.has(WireModifier::Volatile)
     }
@@ -402,8 +450,11 @@ impl BindingModifier {
 /// lifecycle.
 #[derive(Debug, Clone)]
 pub struct Binding {
+    /// The bound names: one, or several for tuple destructuring.
     pub targets: Vec<String>,
+    /// The right-hand side.
     pub value: Expr,
+    /// The wire-coloring keywords written before the names.
     pub modifier: BindingModifier,
     /// Optional explicit type annotation — `shared name: f64 := 1`.
     /// Only meaningful on `shared` bindings (scope_model.md §"Type
@@ -411,6 +462,7 @@ pub struct Binding {
     /// literal inference (so `1` vs `1.0` stops being load-bearing).
     /// The parser rejects annotations on non-shared bindings.
     pub type_annotation: Option<String>,
+    /// Where the binding appears.
     pub span: Span,
 }
 
@@ -428,7 +480,9 @@ pub struct Binding {
 /// range; without it, the cursor uses its full declared extent.
 #[derive(Debug, Clone)]
 pub struct CursorDecl {
+    /// The cursor's name.
     pub name: String,
+    /// The constructor call, such as `range(0, 100)`.
     pub constructor: Expr,
     /// SRD 71 `over <expr>` clause. The expression is parsed
     /// the same way as any other Polydat expression so authors can
@@ -438,6 +492,7 @@ pub struct CursorDecl {
     /// projection (`q1.cursor`). `None` means no narrowing —
     /// the cursor uses its full declared extent.
     pub over: Option<Expr>,
+    /// Where the declaration appears.
     pub span: Span,
 }
 
@@ -468,8 +523,11 @@ pub enum Expr {
     /// Source field projection: `base.ordinal`, `base.vector`.
     /// Resolved by the compiler to a node that reads from the source item.
     FieldAccess {
+        /// The wire the field is read from.
         source: String,
+        /// The field's name.
         field: String,
+        /// Where the projection appears.
         span: Span,
     },
     /// `<expr> as <type>` — SRD-84 Part 1b type-coercion cast. An
@@ -537,7 +595,9 @@ pub enum BinOpKind {
 /// A typed parameter in a module signature.
 #[derive(Debug, Clone)]
 pub struct TypedParam {
+    /// The parameter's name.
     pub name: String,
+    /// The declared type keyword.
     pub typ: String, // "u64", "f64", "String", "bytes", etc.
 }
 
@@ -551,18 +611,26 @@ pub struct TypedParam {
 /// ```
 #[derive(Debug, Clone)]
 pub struct ModuleDef {
+    /// The module's name.
     pub name: String,
+    /// The typed inputs, in signature order.
     pub params: Vec<TypedParam>,
+    /// The typed outputs, in signature order.
     pub outputs: Vec<TypedParam>,
+    /// The module body.
     pub body: Vec<Statement>,
+    /// Where the definition appears.
     pub span: Span,
 }
 
 /// A function call expression.
 #[derive(Debug, Clone)]
 pub struct CallExpr {
+    /// The function's name.
     pub func: String,
+    /// The arguments, in call order.
     pub args: Vec<Arg>,
+    /// Where the call appears.
     pub span: Span,
 }
 

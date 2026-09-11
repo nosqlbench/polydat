@@ -64,12 +64,16 @@ pub enum SourceValueForm {
 /// new logical evaluation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SourceReplayContract {
+    /// Whether rendering an ordinal again gives the same value.
     pub stability: SourceReplayStability,
+    /// The generation of the source's values; changes when an ordinal may render differently.
     pub generation: u64,
+    /// What a value is: an ordinal, or opaque.
     pub value_form: SourceValueForm,
 }
 
 impl SourceReplayContract {
+    /// The contract of a source that is consumed as it advances: no replay.
     pub const fn consumptive() -> Self {
         Self {
             stability: SourceReplayStability::Consumptive,
@@ -78,6 +82,7 @@ impl SourceReplayContract {
         }
     }
 
+    /// The contract of a source stable by ordinal in `generation`.
     pub const fn stable_ordinal(generation: u64) -> Self {
         Self {
             stability: SourceReplayStability::StableByOrdinal,
@@ -86,6 +91,7 @@ impl SourceReplayContract {
         }
     }
 
+    /// Whether any owned ordinal renders again without advancing the source.
     pub const fn is_stable_by_ordinal(self) -> bool {
         matches!(self.stability, SourceReplayStability::StableByOrdinal)
     }
@@ -201,35 +207,47 @@ pub enum CursorKind {
     /// `until_elapsed(base, min_ms[, delta])`.
     /// Extends while elapsed_ms < min_ms.
     ExtendingTimed {
+        /// The output holding the minimum elapsed milliseconds.
         min_ms_output: String,
+        /// The output holding the extension step, if one was given.
         delta_output: Option<String>,
     },
     /// `until_passes(base, min_passes[, delta])`.
     /// Extends while completed passes < min_passes.
     ExtendingPasses {
+        /// The output holding the minimum number of passes.
         min_passes_output: String,
+        /// The output holding the extension step, if one was given.
         delta_output: Option<String>,
     },
     /// `until_count(base, min_count[, delta])`.
     /// Extends while raw consumed count < min_count.
     ExtendingCount {
+        /// The output holding the minimum consumed count.
         min_count_output: String,
+        /// The output holding the extension step, if one was given.
         delta_output: Option<String>,
     },
     /// `until_elapsed_and_passes(base, min_ms, min_passes[, delta])`.
     /// AND: stops when EITHER target is reached. Extends while
     /// BOTH conditions are still below target.
     ExtendingElapsedAndPasses {
+        /// The output holding the minimum elapsed milliseconds.
         min_ms_output: String,
+        /// The output holding the minimum number of passes.
         min_passes_output: String,
+        /// The output holding the extension step, if one was given.
         delta_output: Option<String>,
     },
     /// `until_elapsed_or_passes(base, min_ms, min_passes[, delta])`.
     /// OR: stops only when BOTH targets are reached. Extends
     /// while EITHER condition is still below target.
     ExtendingElapsedOrPasses {
+        /// The output holding the minimum elapsed milliseconds.
         min_ms_output: String,
+        /// The output holding the minimum number of passes.
         min_passes_output: String,
+        /// The output holding the extension step, if one was given.
         delta_output: Option<String>,
     },
 }
@@ -789,44 +807,62 @@ pub struct OrdinalBatchLease {
 }
 
 impl OrdinalBatchLease {
+    /// The cursor the lease reserves from.
     pub fn source_name(&self) -> &str {
         &self.source_name
     }
 
+    /// The stream the ordinals belong to.
     pub const fn stream_id(&self) -> u64 {
         self.stream_id
     }
 
+    /// The generation of the source's values.
     pub const fn source_generation(&self) -> u64 {
         self.source_generation
     }
 
+    /// The kernel input the cursor's ordinal is written to.
     pub const fn input_index(&self) -> usize {
         self.input_index
     }
 
+    /// The lease's position in reservation order.
     pub const fn sequence(&self) -> u64 {
         self.sequence
     }
 
+    /// The ordinals reserved.
     pub fn range(&self) -> std::ops::Range<u64> {
         self.range.clone()
     }
 
+    /// How many ordinals the lease holds.
     pub const fn len_u64(&self) -> u64 {
         self.range.end - self.range.start
     }
 
+    /// Whether the lease holds no ordinal.
     pub const fn is_empty(&self) -> bool {
         self.range.start == self.range.end
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Why a cursor batch could not be reserved.
 pub enum CursorBatchError {
+    /// No ordinals were asked for.
     ZeroDemand,
-    RequiresSingleTarget { targets: usize },
-    SourceNotPerfectOrdinal { source: String },
+    /// The reservation names several targets; a batch drives one.
+    RequiresSingleTarget {
+        /// The targets named.
+        targets: usize,
+    },
+    /// The source is not a perfect ordinal stream.
+    SourceNotPerfectOrdinal {
+        /// The source's name.
+        source: String,
+    },
 }
 
 impl std::fmt::Display for CursorBatchError {
@@ -1057,7 +1093,9 @@ impl Cursors {
 /// rate signal yet — `elapsed_ms == 0` or `consumed == 0`)
 /// falls back to one base chunk via the `delta` field.
 pub struct UntilElapsedPolicy {
+    /// The elapsed milliseconds to reach.
     pub min_ms: u64,
+    /// The extension step for the first call, before a rate is known.
     pub delta: u64,
 }
 
@@ -1095,7 +1133,9 @@ impl ExtensionPolicy for UntilElapsedPolicy {
 /// Extend by `delta` while `ctx.passes() < min_passes`. Passes
 /// are whole multiples of `ctx.base`.
 pub struct UntilPassesPolicy {
+    /// The passes to reach.
     pub min_passes: u64,
+    /// The extension step.
     pub delta: u64,
 }
 
@@ -1111,7 +1151,9 @@ impl ExtensionPolicy for UntilPassesPolicy {
 
 /// Extend by `delta` while `ctx.consumed < min_count`.
 pub struct UntilCountPolicy {
+    /// The consumed count to reach.
     pub min_count: u64,
+    /// The extension step.
     pub delta: u64,
 }
 
@@ -1131,6 +1173,7 @@ impl ExtensionPolicy for UntilCountPolicy {
 /// step size keeps any single condition from over-shooting its
 /// stop point.
 pub struct AndPolicy {
+    /// The policies that must all ask to continue.
     pub policies: Vec<Arc<dyn ExtensionPolicy>>,
 }
 
@@ -1156,6 +1199,7 @@ impl ExtensionPolicy for AndPolicy {
 /// delta is the maximum of the policies that said continue —
 /// matches the most aggressive child still pushing forward.
 pub struct OrPolicy {
+    /// The policies of which any may ask to continue.
     pub policies: Vec<Arc<dyn ExtensionPolicy>>,
 }
 
@@ -1178,6 +1222,7 @@ pub struct TimeElapsedPolicy {
 }
 
 impl TimeElapsedPolicy {
+    /// A policy extending in steps of `base` until `min_ms` have elapsed.
     pub fn new(base: u64, min_ms: u64) -> Self {
         Self {
             inner: UntilElapsedPolicy {

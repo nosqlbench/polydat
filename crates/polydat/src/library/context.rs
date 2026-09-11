@@ -209,6 +209,7 @@ pub struct CursorLimit {
 }
 
 impl CursorLimit {
+    /// A limit node yielding at most `max_items`.
     pub fn new(max_items: u64) -> Self {
         Self {
             meta: NodeMeta {

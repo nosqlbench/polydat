@@ -20,6 +20,8 @@
 
 use crate::iteration::comprehension::ast::Comprehension;
 
+/// Push a filter into each child of the union under it; `None` when the
+/// shape differs.
 pub fn apply(ast: &Comprehension) -> Option<Comprehension> {
     let Comprehension::Filter { child, predicate } = ast else {
         return None;

@@ -1223,7 +1223,9 @@ pub enum JitOp {
     /// with the interpreter's `is_positive({name}): …` is asserted
     /// by the SRD-105 battery.
     IsPositiveCheck {
+        /// Address of the predicate's name, or 0 for the default.
         name_ptr: u64,
+        /// Its length in bytes.
         name_len: u64,
     },
     /// Parameter predicate: pass `input[0]` through to `output[0]`;
@@ -1238,8 +1240,11 @@ pub enum JitOp {
     /// `is_one_of: … not in allowed set […]` is asserted by the
     /// SRD-105 battery. Inline comparisons use the baked vector.
     IsOneOfCheck {
+        /// The allow-list, baked into the comparisons.
         allowed: Vec<u64>,
+        /// Address of the node's allow-list constant for the message, or 0.
         set_ptr: u64,
+        /// Its length.
         set_len: u64,
     },
 
@@ -1315,10 +1320,15 @@ pub enum JitOp {
     CurrentEpochMillis,
 
     // --- Coherent Noise (SRD 110) ---
+    /// `output[0] = jit_perlin_1d(input[0], perm, freq)`: (permutation table address, frequency bits).
     Perlin1dConst(u64, u64),
+    /// `jit_perlin_2d` over two inputs: (permutation table address, frequency bits).
     Perlin2dConst(u64, u64),
+    /// `jit_simplex_2d` over two inputs: (permutation table address, frequency bits).
     Simplex2dConst(u64, u64),
+    /// `jit_fractal_noise_1d`: (permutation table address, frequency bits, octaves).
     FractalNoise1dConst(u64, u64, u64),
+    /// `jit_fractal_noise_2d` over two inputs: (permutation table address, frequency bits, octaves).
     FractalNoise2dConst(u64, u64, u64),
 
     // --- Variadics & wire arithmetic (SRD 110) ---
@@ -1417,15 +1427,19 @@ pub enum JitOp {
     /// handle of the argument type codes, `args` the inputs in a
     /// stack array
     Printf {
+        /// Address of the interned parsed format.
         format: u64,
+        /// Static handle of the argument type codes.
         types: u64,
     },
     /// `output[0] = jit_json_array(entry, types, args)`
     JsonArray {
+        /// Static handle of the argument type codes.
         types: u64,
     },
     /// `output[0] = jit_json_object(entry, types, args)`
     JsonObject {
+        /// Static handle of the argument type codes.
         types: u64,
     },
     /// `output[0] = jit_to_json(entry, code, input[0])`
@@ -1435,13 +1449,17 @@ pub enum JitOp {
     /// `output[0] = jit_tile_encode(spec, code, input[0])`: spec is
     /// the address of the interned hole encoding
     TileEncode {
+        /// Address of the interned hole encoding.
         spec: u64,
+        /// The input's type code.
         code: u8,
     },
     /// `output[0] = jit_tile_render(program, types, args)`: `program`
     /// is the address of the interned tile program
     TileRender {
+        /// Address of the interned tile program.
         program: u64,
+        /// Static handle of the argument type codes.
         types: u64,
     },
 

@@ -40,9 +40,13 @@ use crate::kernel::{InputDef, WireSource};
 /// restored by `restore_node` via the `via` type.
 #[derive(Debug, Clone)]
 pub struct RoundTripFinding {
+    /// The type restored.
     pub restored: PortType,
+    /// The type it went through.
     pub via: PortType,
+    /// The node that left the type.
     pub departure_node: String,
+    /// The node that restored it.
     pub restore_node: String,
 }
 

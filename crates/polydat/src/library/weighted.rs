@@ -169,8 +169,11 @@ fn weighted_u64(
 /// `FusedNode::decomposed` can reconstruct the equivalent
 /// `weighted_u64` spec string.
 pub struct WeightedPickState {
+    /// The alias table sampled.
     pub table: AliasTableU64,
+    /// The value per outcome.
     pub values: Vec<u64>,
+    /// The weight per outcome, kept to reconstruct the spec.
     pub weights: Vec<f64>,
 }
 

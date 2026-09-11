@@ -22,30 +22,51 @@ use crate::iteration::comprehension::strategy::{StrategyName, ZipMode};
 pub enum Op {
     /// Push a single-name tuple stream produced by `source`.
     /// Streaming; O(1) per pull above the source's own state.
-    PushClause { name: String, source: Source },
+    PushClause {
+        /// The name the stream binds.
+        name: String,
+        /// Where its values come from.
+        source: Source,
+    },
 
     /// Replace the top-N stream operands with one stream that
     /// enumerates their cross product in Lex order. Streaming.
-    Cartesian { n: usize },
+    Cartesian {
+        /// Operands combined.
+        n: usize,
+    },
 
     /// Replace the top-N stream operands with their lockstep
     /// diagonal. Streaming under Strict/Truncate; `Cycle`
     /// buffers each non-longest child.
-    Zip { n: usize, mode: ZipMode },
+    Zip {
+        /// Operands combined.
+        n: usize,
+        /// The length policy.
+        mode: ZipMode,
+    },
 
     /// Replace the top-N stream operands with a stream that
     /// concatenates them in operand order. Streaming.
-    Union { n: usize },
+    Union {
+        /// Operands concatenated.
+        n: usize,
+    },
 
     /// Wrap the top operand with a per-tuple predicate check.
     /// Streaming.
-    Filter { predicate: String },
+    Filter {
+        /// The predicate, a boolean expression over the tuple.
+        predicate: String,
+    },
 
     /// Wrap the top operand with a counter / pass-through.
     /// Used for `order(Lex, _)` per spec §10.2 R1; this is
     /// the "streaming" order opcode.
     OrderStreaming {
+        /// The streaming order's kind.
         kind: OrderStreamingKind,
+        /// The output cap, if any.
         truncation: Option<u64>,
     },
 
@@ -70,7 +91,9 @@ pub enum Op {
     /// upstream metadata propagator couldn't claim a closed-
     /// form addressing function.
     OrderMaterialize {
+        /// The strategy applied.
         strategy: StrategyName,
+        /// The output cap, if any.
         truncation: Option<u64>,
         /// `true` when R2 push-down applies: the interpreter
         /// should use the strategy's indexed form (draw
@@ -97,6 +120,7 @@ pub enum Op {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OrderStreamingKind {
+    /// Lexicographic order: the natural enumeration, counted.
     Lex,
 }
 

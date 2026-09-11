@@ -33,30 +33,49 @@ use super::cardinality::{CardinalityClass, Interval, MeasureName, ProductMeasure
 pub enum Source {
     /// Literal comma list (e.g., `[1, 2, 4, 8]`). Stream
     /// producer over the list contents.
-    Literal { values: Vec<LiteralValue> },
+    Literal {
+        /// The values, in order.
+        values: Vec<LiteralValue>,
+    },
 
     /// Integer half-open range `lo..hi` with optional step.
     /// Default step is 1.
-    IntRange { lo: i64, hi: i64, step: i64 },
+    IntRange {
+        /// The first value.
+        lo: i64,
+        /// One past the last.
+        hi: i64,
+        /// The step between values, 1 by default.
+        step: i64,
+    },
 
     /// Generator function call expressed as a Polydat source string.
     /// Resolved at clause construction; cardinality may be
     /// `Unbounded` if the generator is open-ended.
     Generator {
+        /// The generator call, as Polydat source.
         expr: String,
+        /// How many values it yields, when known.
         cardinality_hint: Option<u64>,
     },
 
     /// Reference to a workload-level parameter that resolves to
     /// a list of values. Cardinality is the parameter's
     /// declared list length.
-    WorkloadParamList { name: String, len_hint: Option<u64> },
+    WorkloadParamList {
+        /// The parameter's name.
+        name: String,
+        /// The list's length, when known.
+        len_hint: Option<u64>,
+    },
 
     /// Real interval (continuous source). Combined with a
     /// `measure` to form a `Continuous` cardinality.
     /// Integrability is checked at parse via V8.
     ContinuousInterval {
+        /// The interval.
         interval: Interval,
+        /// The measure drawn from.
         measure: ProductMeasure,
     },
 
@@ -64,8 +83,11 @@ pub enum Source {
     /// its own support; the `support` field records the
     /// effective interval for V8's check.
     Distribution {
+        /// The distribution.
         distribution: MeasureName,
+        /// Its effective support.
         support: Interval,
+        /// Its parameters, in the distribution's order.
         params: Vec<f64>,
     },
 }
@@ -81,9 +103,13 @@ pub enum Source {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum LiteralValue {
+    /// An integer.
     Int(i64),
+    /// A float.
     Float(f64),
+    /// A string.
     String(String),
+    /// A boolean.
     Bool(bool),
 }
 

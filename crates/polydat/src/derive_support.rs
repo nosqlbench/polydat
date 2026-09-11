@@ -686,6 +686,7 @@ impl<R: ResolverKind, T: 'static + Send + Sync> Resolved<R, T> {
 /// [`crate::dsl::registry::DefaultResolver`]; each impl picks
 /// one of them.
 pub trait ResolverKind: 'static {
+    /// The resolver this kind names.
     const RESOLVER: crate::dsl::registry::DefaultResolver;
 }
 
@@ -736,7 +737,9 @@ impl<R: ResolverKind, T: 'static + Send + Sync> Wire for Resolved<R, T> {
 /// and emits `Const(self.field.as_str())` at the eval call site
 /// to satisfy the operator-side `Const<&str>` signature.
 pub trait ConstSource: Sized + 'static {
+    /// The slot type the constant occupies.
     const SLOT: SlotType;
+    /// The value from a build-time constant argument.
     fn extract(arg: &ConstArg) -> Self;
 }
 

@@ -16,18 +16,30 @@ use crate::iteration::comprehension::ast::Comprehension;
 /// (§10.2 + §10.10.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RuleId {
+    /// Identity elimination: a singleton combinator or a trivial filter is dropped.
     R0a,
+    /// Associativity flattening: nested unions or cartesians of one kind become one n-ary node.
     R0b,
+    /// `order(Lex)` is a counter wrapper: it becomes a truncated lexicographic walk.
     R1,
+    /// Push-down of a truncated order to an index-addressable child's closed form.
     R2,
+    /// An untruncated lexicographic order commutes with a filter.
     R3,
+    /// A filter distributes over a union.
     R4,
+    /// A per-axis filter pushes down into a cartesian's axes.
     R5,
+    /// A chain of filters folds into one.
     R6,
+    /// A chain of orders folds into one when the inner is untruncated.
     R7,
     // Deferred per spec §14.1:
+    /// Range narrowing from a bounded predicate (deferred).
     R8,
+    /// Discrete-set substitution from an `in` predicate (deferred).
     R9,
+    /// Monotonic-cutoff truncation (deferred).
     R10,
 }
 
@@ -48,11 +60,16 @@ pub struct ReducibilityFinding {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Reduction {
     /// Replace the entire AST with `with` (whole-tree swap).
-    Replace { with: Comprehension },
+    Replace {
+        /// The AST that replaces the whole input.
+        with: Comprehension,
+    },
     /// Rewrite via a tagged R-rule. The `witness` is the new
     /// AST; `rule` is the catalog identifier.
     Rewrite {
+        /// The catalog rule that fired.
         rule: RuleId,
+        /// The rewritten AST.
         witness: Comprehension,
     },
 }
@@ -65,16 +82,22 @@ pub enum Reduction {
 /// findings that are `Equal` on both dimensions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ComplexityDelta {
+    /// How the compute cost of the witness compares to the input's.
     pub compute_order: Ordering,
+    /// How its memory cost compares.
     pub memory_order: Ordering,
+    /// Why the ordering holds.
     pub rationale: &'static str,
 }
 
 /// Three-way asymptotic ordering for one complexity dimension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ordering {
+    /// Asymptotically less.
     Less,
+    /// Asymptotically the same.
     Equal,
+    /// Asymptotically more.
     Greater,
 }
 

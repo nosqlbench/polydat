@@ -49,6 +49,7 @@ pub struct AssertType {
 }
 
 impl AssertType {
+    /// A type assertion for `typ`, named `assert_<type>`.
     pub fn new(typ: PortType) -> Self {
         let name = match typ {
             PortType::U64 => "assert_u64",
@@ -183,6 +184,7 @@ pub struct AssertValue {
 }
 
 impl AssertValue {
+    /// A value assertion for `typ` under `constraint`, named by the pair.
     pub fn new(typ: PortType, constraint: ConstConstraint) -> Self {
         let name = match (&typ, &constraint) {
             (PortType::U64, ConstConstraint::NonZeroU64) => "assert_u64_nonzero",
@@ -206,10 +208,12 @@ impl AssertValue {
         }
     }
 
+    /// The constraint asserted.
     pub fn constraint(&self) -> &ConstConstraint {
         &self.constraint
     }
 
+    /// The type asserted.
     pub fn port_type(&self) -> PortType {
         self.typ
     }

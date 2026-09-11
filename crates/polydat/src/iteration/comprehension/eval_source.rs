@@ -80,8 +80,11 @@ use crate::kernel::PolydatKernel;
 /// variants.
 #[derive(Debug, Clone)]
 pub struct EvaluatedSource {
+    /// The values, in dispense order.
     pub values: Vec<Value>,
+    /// How many values; zero for an unsampled continuous source.
     pub cardinality: u64,
+    /// The addressing scheme the values satisfy.
     pub index_fn: IndexFn,
 }
 
@@ -121,8 +124,11 @@ pub enum EvalError {
     /// names the clause; `source` is the spec-text or
     /// description; `message` carries the underlying reason.
     EvalFailed {
+        /// The clause's element name.
         var: String,
+        /// The source text or description.
         source: String,
+        /// The underlying reason.
         message: String,
     },
 }
@@ -153,9 +159,13 @@ impl std::error::Error for EvalError {}
 /// installs via `PolydatKernel::materialize_subscope` so dependent
 /// sources see earlier-axis values.
 pub struct EvalContext<'a> {
+    /// The clause's element name, for messages.
     pub var_name: &'a str,
+    /// The kernel whose wires the source may reference.
     pub parent: &'a Arc<PolydatKernel>,
+    /// The body's kernel, where prior-axis values are installed.
     pub canonical: &'a Arc<PolydatKernel>,
+    /// The prior-axis bindings, in axis order.
     pub prefix: &'a [(String, Value)],
 }
 

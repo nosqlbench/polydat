@@ -731,14 +731,17 @@ fn compute_slot_provenance(
 
 macro_rules! kernel_accessors {
     () => {
+        /// The coordinate inputs.
         pub fn coord_count(&self) -> usize {
             self.core.coord_count
         }
 
+        /// The slot of a named output.
         pub fn resolve_output(&self, name: &str) -> Option<usize> {
             self.core.output_map.get(name).copied()
         }
 
+        /// The named outputs.
         pub fn output_names(&self) -> Vec<&str> {
             self.core.output_map.keys().map(|s| s.as_str()).collect()
         }
@@ -853,6 +856,7 @@ macro_rules! kernel_accessors {
 // ═══════════════════════════════════════════════════════════════
 
 #[derive(Clone)]
+/// The closure tier with no provenance: every evaluation runs every step.
 pub struct CompiledKernelRaw {
     core: KernelCore,
 }
@@ -926,6 +930,8 @@ impl CompiledKernelRaw {
 // ═══════════════════════════════════════════════════════════════
 
 #[derive(Clone)]
+/// The closure tier with per-step skipping: a changed input invalidates
+/// its dependents through the plan, and a current step is skipped.
 pub struct CompiledKernelPush {
     core: KernelCore,
 }
@@ -1000,6 +1006,8 @@ impl CompiledKernelPush {
 // ═══════════════════════════════════════════════════════════════
 
 #[derive(Clone)]
+/// The closure tier with the cone guard: an output whose cone no changed
+/// input reaches is not recomputed.
 pub struct CompiledKernelPull {
     core: KernelCore,
     slot_provenance: Vec<crate::kernel::ProvMask>,
@@ -1099,6 +1107,7 @@ impl CompiledKernelPull {
 // ═══════════════════════════════════════════════════════════════
 
 #[derive(Clone)]
+/// The closure tier with per-step skipping and the cone guard.
 pub struct CompiledKernelPushPull {
     core: KernelCore,
     slot_provenance: Vec<crate::kernel::ProvMask>,

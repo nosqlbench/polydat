@@ -108,8 +108,11 @@ impl<M> std::fmt::Debug for ScopeKernel<M> {
 /// slots and reading `crate::kernel::engines::Engines::shared_cell`.
 #[derive(Clone)]
 pub struct SharedCellInScope {
+    /// The binding's name.
     pub name: String,
+    /// The cell's declared type.
     pub port_type: PortType,
+    /// The cell.
     pub cell: SharedCell,
 }
 

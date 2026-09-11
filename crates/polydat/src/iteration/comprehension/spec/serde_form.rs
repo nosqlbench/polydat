@@ -90,11 +90,24 @@ pub enum ForSpec {
 #[derive(Debug, Clone)]
 pub enum SpecConvertError {
     /// `parse_clause_list` failed on one of the input strings.
-    ParseClause { input: String, message: String },
+    ParseClause {
+        /// The clause text.
+        input: String,
+        /// The parser's message.
+        message: String,
+    },
     /// `parse_order_spec` failed on the `order` field.
-    ParseOrder { input: String, message: String },
+    ParseOrder {
+        /// The order text.
+        input: String,
+        /// The parser's message.
+        message: String,
+    },
     /// Legacy AST failed self-validation.
-    LegacyValidate { errors: Vec<String> },
+    LegacyValidate {
+        /// The validation errors, in order.
+        errors: Vec<String>,
+    },
     /// Conversion from legacy AST to algebra AST failed.
     Convert(ConvertError),
 }

@@ -73,7 +73,9 @@ use serde::{Deserialize, Serialize};
 /// lifetimes through every consumer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Clause {
+    /// The element names the clause binds.
     pub vars: Vec<String>,
+    /// Where the values come from.
     pub source: ClauseSource,
 }
 
@@ -92,7 +94,12 @@ pub enum ClauseSource {
     /// controlled by [`ZipMode`]: strict (default) errors
     /// on mismatch, truncate cuts to the shortest, cycle
     /// repeats shorter sources to the longest.
-    Parallel { mode: ZipMode, exprs: Vec<String> },
+    Parallel {
+        /// The length policy when the sources differ in length.
+        mode: ZipMode,
+        /// One expression per element name, zipped in lockstep.
+        exprs: Vec<String>,
+    },
 }
 
 /// Length-policy for parallel-iter clauses (SRD-18c Layer 7a).
@@ -303,19 +310,24 @@ pub enum ComprehensionMode {
 /// can land additively without breaking match sites.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Subspace {
+    /// The clauses whose cross product is the subspace.
     pub clauses: Vec<Clause>,
 }
 
 impl Subspace {
+    /// A subspace of the given clauses.
     pub fn new(clauses: Vec<Clause>) -> Self {
         Self { clauses }
     }
+    /// Whether the subspace has no clause.
     pub fn is_empty(&self) -> bool {
         self.clauses.is_empty()
     }
+    /// The number of clauses.
     pub fn len(&self) -> usize {
         self.clauses.len()
     }
+    /// The clauses, in order.
     pub fn iter(&self) -> std::slice::Iter<'_, Clause> {
         self.clauses.iter()
     }
@@ -364,21 +376,25 @@ pub enum TraversalOrder {
     /// represent "explicitly default" if needed.
     Lex {
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Tuples to keep, from the first; all when absent.
         count: Option<usize>,
     },
     /// Lexicographic, leftmost varies fastest.
     ReverseLex {
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Tuples to keep, from the first; all when absent.
         count: Option<usize>,
     },
     /// Sort by sum-of-indices ascending; ties broken by lex.
     Diagonal {
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Tuples to keep, from the first; all when absent.
         count: Option<usize>,
     },
     /// Sort by sum-of-indices descending.
     Antidiagonal {
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Tuples to keep, from the first; all when absent.
         count: Option<usize>,
     },
     /// All-extrema first, stratified by interior count.
@@ -386,35 +402,45 @@ pub enum TraversalOrder {
     /// corners only.
     Extrema {
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Strata to keep, from the extrema inward; all when absent.
         strata: Option<usize>,
     },
     /// Concentric L∞ shells from a chosen origin.
     Shells {
         #[serde(default)]
+        /// The shell origin.
         origin: ShellOrigin,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Shells to keep, from the origin outward; all when absent.
         depth: Option<usize>,
     },
     /// Halton low-discrepancy sequence.
     Halton {
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Tuples to keep, from the first; all when absent.
         count: Option<usize>,
     },
     /// Sobol low-discrepancy sequence.
     Sobol {
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Tuples to keep, from the first; all when absent.
         count: Option<usize>,
     },
     /// Latin Hypercube samples.
     Lhs {
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Tuples to keep, from the first; all when absent.
         count: Option<usize>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// The sampling seed; a fixed default when absent.
         seed: Option<u64>,
     },
     /// User-supplied Polydat function name. Function takes the tuple
     /// list and returns a permutation/subset.
-    Custom { function: String },
+    Custom {
+        /// The Polydat function that orders the tuples.
+        function: String,
+    },
 }
 
 /// Origin for shell stratification.
@@ -459,14 +485,18 @@ pub enum ShellOrigin {
 /// space was assembled.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Comprehension {
+    /// How the tuple space is assembled: one cross product, or a union of subspaces.
     pub mode: ComprehensionMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// A predicate applied to every tuple, if any.
     pub filter: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The traversal order, if one was written.
     pub order: Option<TraversalOrder>,
 }
 
 impl Comprehension {
+    /// A cross product of the clauses with no filter or order.
     pub fn cartesian(clauses: Vec<Clause>) -> Self {
         Self {
             mode: ComprehensionMode::Cartesian(clauses),
@@ -475,6 +505,7 @@ impl Comprehension {
         }
     }
 
+    /// A union of subspaces with no filter or order.
     pub fn union(subspaces: Vec<Vec<Clause>>) -> Self {
         Self {
             mode: ComprehensionMode::Union(subspaces.into_iter().map(Subspace::new).collect()),
@@ -565,10 +596,12 @@ impl Comprehension {
         self.flat_clauses().len()
     }
 
+    /// Whether the mode is one cross product.
     pub fn is_cartesian(&self) -> bool {
         matches!(self.mode, ComprehensionMode::Cartesian(_))
     }
 
+    /// Whether the mode is a union of subspaces.
     pub fn is_union(&self) -> bool {
         matches!(self.mode, ComprehensionMode::Union(_))
     }

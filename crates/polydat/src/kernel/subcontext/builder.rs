@@ -59,11 +59,17 @@ fn port_type_keyword(pt: PortType) -> &'static str {
 /// identical compile output during migration.
 #[derive(Clone, Debug, Default)]
 pub struct CompileOptions {
+    /// The directory relative data-file paths resolve against.
     pub workload_dir: Option<PathBuf>,
+    /// Library search paths.
     pub polydat_lib_paths: Vec<PathBuf>,
+    /// Whether to enforce strict validation.
     pub strict: bool,
+    /// The outputs to keep; every output when empty.
     pub required_outputs: Vec<String>,
+    /// The diagnostic context label, if any.
     pub context_label: Option<String>,
+    /// A limit on every cursor's extent, if any.
     pub cursor_limit: Option<u64>,
     /// Session-wide optimization level for op-template synthesis.
     /// `Release` (the default) lets the closure-binding economy

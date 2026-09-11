@@ -67,6 +67,7 @@ pub struct ImportSpec {
 }
 
 impl ImportSpec {
+    /// An import written to by the host, as an `extern` port.
     pub fn extern_(name: impl Into<String>, port_type: PortType) -> Self {
         Self {
             name: name.into(),
@@ -75,6 +76,7 @@ impl ImportSpec {
         }
     }
 
+    /// An import fixed at compile time, from a parent `final` export.
     pub fn final_(name: impl Into<String>, port_type: PortType) -> Self {
         Self {
             name: name.into(),
@@ -83,6 +85,7 @@ impl ImportSpec {
         }
     }
 
+    /// An import bound to a shared cell.
     pub fn shared(name: impl Into<String>, port_type: PortType) -> Self {
         Self {
             name: name.into(),
@@ -91,6 +94,7 @@ impl ImportSpec {
         }
     }
 
+    /// An import rebound per activation of an enclosing iteration.
     pub fn iter_var(name: impl Into<String>, port_type: PortType) -> Self {
         Self {
             name: name.into(),
@@ -116,6 +120,7 @@ pub struct ExportSpec {
 }
 
 impl ExportSpec {
+    /// A local export with no modifier.
     pub fn local(name: impl Into<String>, port_type: PortType) -> Self {
         Self {
             name: name.into(),
@@ -125,6 +130,7 @@ impl ExportSpec {
         }
     }
 
+    /// A `final` export: fixed once bound.
     pub fn final_(name: impl Into<String>, port_type: PortType) -> Self {
         Self {
             name: name.into(),
@@ -134,6 +140,7 @@ impl ExportSpec {
         }
     }
 
+    /// A `shared` export: a cell the descendants write through.
     pub fn shared(name: impl Into<String>, port_type: PortType) -> Self {
         Self {
             name: name.into(),
@@ -143,6 +150,7 @@ impl ExportSpec {
         }
     }
 
+    /// An export rebound per activation of an enclosing iteration.
     pub fn iter_var(name: impl Into<String>, port_type: PortType) -> Self {
         Self {
             name: name.into(),

@@ -40,6 +40,7 @@ use super::{
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::strategy::StrategyName;
 
+/// A seeded permutation.
 pub struct Shuffle;
 
 /// Algebra-layer default seed. Production wiring (Phase 7)

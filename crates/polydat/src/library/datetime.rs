@@ -16,15 +16,19 @@ fn epoch_scale(input: u64, #[poly_default(1u64)] factor: crate::derive_support::
 }
 
 impl EpochScale {
+    /// Scale by 1: milliseconds stay milliseconds.
     pub fn millis() -> Self {
         Self::new(1)
     }
+    /// Scale by 1,000: seconds to milliseconds.
     pub fn seconds() -> Self {
         Self::new(1_000)
     }
+    /// Scale by 60,000: minutes to milliseconds.
     pub fn minutes() -> Self {
         Self::new(60_000)
     }
+    /// Scale by 3,600,000: hours to milliseconds.
     pub fn hours() -> Self {
         Self::new(3_600_000)
     }

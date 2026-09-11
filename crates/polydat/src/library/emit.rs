@@ -40,6 +40,7 @@ pub enum EmitFormat {
 }
 
 impl EmitFormat {
+    /// The format named by `s`, case-insensitively, if any.
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "map" => Some(Self::Map),

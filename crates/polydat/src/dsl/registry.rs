@@ -309,12 +309,20 @@ pub enum Arity {
     #[default]
     Fixed,
     /// Trailing wire parameters repeat (sum, product, min, max).
-    VariadicWires { min_wires: usize },
+    VariadicWires {
+        /// The fewest trailing wires allowed.
+        min_wires: usize,
+    },
     /// Trailing constant parameters repeat (mixed_radix).
-    VariadicConsts { min_consts: usize },
+    VariadicConsts {
+        /// The fewest trailing constants allowed.
+        min_consts: usize,
+    },
     /// A repeating group of slot types (weighted_sum).
     VariadicGroup {
+        /// The slot types of one repetition, in order.
         group: &'static [SlotType],
+        /// The fewest repetitions allowed.
         min_repeats: usize,
     },
 }

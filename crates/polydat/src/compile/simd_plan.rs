@@ -16,22 +16,31 @@ use crate::ast::{Lifecycle, PolydatNode, PortType, Purity};
 /// Interpretation of scalar values sharing one physical register lane shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SimdLaneKind {
+    /// Unsigned integer lanes.
     UnsignedInteger,
+    /// Signed integer lanes.
     SignedInteger,
+    /// Floating-point lanes.
     Float,
 }
 
 /// A scalar type's fixed 128-bit Polydat register representation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SimdTypeShape {
+    /// The scalar type.
     pub scalar: PortType,
+    /// The register type that carries a packet of it.
     pub register: PortType,
+    /// How the lanes are interpreted.
     pub lane_kind: SimdLaneKind,
+    /// Bits per lane.
     pub lane_bits: u8,
+    /// Lanes per register.
     pub lanes: u8,
 }
 
 impl SimdTypeShape {
+    /// Bits per packet: lanes times lane bits.
     pub const fn packet_bits(self) -> u16 {
         self.lane_bits as u16 * self.lanes as u16
     }
@@ -134,25 +143,42 @@ pub const fn promotable_type_shape(scalar: PortType) -> Option<SimdTypeShape> {
 /// semantic validation. It still needs whole-cone Cranelift compilation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ValidatedSimdVariant {
+    /// The scalar node's name.
     pub scalar_node: String,
+    /// The register node that computes a packet of it.
     pub vector_node: &'static str,
+    /// The lane shape.
     pub shape: SimdTypeShape,
+    /// Wire inputs the scalar node takes.
     pub wire_inputs: u8,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Why a scalar node's declared register variant was not accepted.
 pub enum SimdVariantError {
+    /// The node declares no register variant.
     Undeclared,
+    /// The scalar node is not pure.
     ScalarNodeNotPure,
+    /// The variant is not declared exact.
     VariantNotExact,
+    /// The variant is not declared total.
     VariantNotTotal,
+    /// The variant is not declared lane-independent.
     VariantNotLaneIndependent,
+    /// The scalar type has no fixed register shape.
     UnsupportedScalarShape(PortType),
+    /// The scalar node's inputs and output are not all of one type.
     ScalarSignatureNotUniform,
+    /// The scalar node's ports are not all cycle-lifecycle.
     ScalarLifecycleNotCycle,
+    /// The register node is not registered.
     VectorNodeUnavailable(String),
+    /// The register node is not pure.
     VectorNodeNotPure,
+    /// The register node's signature does not match the scalar node's shape.
     VectorSignatureMismatch,
+    /// The register node's ports are not all cycle-lifecycle.
     VectorLifecycleNotCycle,
 }
 

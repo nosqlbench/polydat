@@ -520,7 +520,7 @@ fn icd_normal_jit_constants(node: &IcdNormal) -> Vec<u64> {
     vec![node.lut.as_ptr() as u64, node.lut.len() as u64]
 }
 
-/// Alias of [`dist_normal`]. Preserved because workload examples
+/// Alias of `dist_normal`. Preserved because workload examples
 /// and the host's distribution binding both surface
 /// `icd_normal` as the public DSL name.
 #[crate::polydat_node(category = Distributions, jit_constants = icd_normal_jit_constants)]
@@ -558,7 +558,7 @@ fn icd_exponential_jit_constants(node: &IcdExponential) -> Vec<u64> {
     vec![node.lut.as_ptr() as u64, node.lut.len() as u64]
 }
 
-/// Alias of [`dist_exponential`].
+/// Alias of `dist_exponential`.
 #[crate::polydat_node(category = Distributions, jit_constants = icd_exponential_jit_constants)]
 fn icd_exponential(
     input: f64,

@@ -31,16 +31,21 @@ use super::{PolydatKernel, PolydatProgram};
 /// The interval of ordinals an activation's cursor iterates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CursorSlice {
+    /// The cursor's name.
     pub cursor: String,
+    /// The first ordinal of the slice.
     pub start: u64,
+    /// One past the last ordinal.
     pub end: u64,
 }
 
 impl CursorSlice {
+    /// Ordinals in the slice.
     pub fn len(&self) -> u64 {
         self.end.saturating_sub(self.start)
     }
 
+    /// Whether the slice has no ordinal.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -163,6 +168,7 @@ impl TraversalStream {
         self.tuples.len()
     }
 
+    /// Whether the traversal dispenses no activation.
     pub fn is_empty(&self) -> bool {
         self.tuples.is_empty()
     }

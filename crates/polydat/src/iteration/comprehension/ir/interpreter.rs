@@ -25,6 +25,7 @@ use super::program::Program;
 /// A lazy tuple stream — `advance` returns the next tuple or
 /// `None` when the stream is exhausted.
 pub trait TupleStream {
+    /// The next tuple, or `None` once the stream is exhausted.
     fn advance(&mut self) -> Option<Tuple>;
 }
 

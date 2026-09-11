@@ -152,6 +152,7 @@ pub struct ConstHandle {
 }
 
 impl ConstHandle {
+    /// A constant node holding `value` as a handle.
     pub fn new(value: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> Self {
         Self {
             meta: NodeMeta {
@@ -192,6 +193,7 @@ pub struct ConstExt {
 }
 
 impl ConstExt {
+    /// A constant node holding an extension value.
     pub fn new(value: Box<dyn crate::ast::ReflectedValue>) -> Self {
         Self {
             meta: NodeMeta {

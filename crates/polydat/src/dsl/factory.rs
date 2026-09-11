@@ -26,9 +26,13 @@ use crate::dsl::registry;
 /// pointers (which are `pub` fields) can name this type.
 #[derive(Debug, Clone)]
 pub enum ConstArg {
+    /// An integer literal.
     Int(u64),
+    /// A float literal.
     Float(f64),
+    /// A string literal.
     Str(String),
+    /// A list of float literals.
     FloatArray(#[allow(dead_code)] Vec<f64>),
     /// SRD-80b Phase C — workload-list const carrier for the
     /// `Const<Vec<C>>` shape. Each inner [`ConstArg`] is one
@@ -126,6 +130,9 @@ pub mod compile_ctx {
     }
 }
 
+/// Build the node `func` takes for the given wires, their types, and
+/// constant arguments, through the registry; an unknown function or a
+/// mismatched signature is an error naming it.
 pub fn build_node(
     func: &str,
     wires: &[WireRef],

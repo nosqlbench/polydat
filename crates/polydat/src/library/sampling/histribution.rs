@@ -19,7 +19,9 @@ use crate::library::sampling::alias::AliasTableU64;
 /// tuple. Labeled by index `i` → outcome `labels[i]`; sampling
 /// goes through `table`.
 pub struct ParsedHistribution {
+    /// The outcome per index.
     pub labels: Vec<u64>,
+    /// The alias table sampled.
     pub table: AliasTableU64,
 }
 

@@ -135,7 +135,7 @@ fn trunc_u64(input: f64) -> u64 {
 }
 
 /// Round an `f64` half-away-from-zero into a `u64` (saturating;
-/// NaN → 0). Rounding twin of [`trunc_u64`].
+/// NaN → 0). Rounding twin of `trunc_u64`.
 #[crate::polydat_node(category = Conversions)]
 fn round_u64(input: f64) -> u64 {
     if input.is_nan() {
@@ -352,18 +352,23 @@ fn format_u64(
 }
 
 impl FormatU64 {
+    /// Base 10.
     pub fn decimal() -> Self {
         Self::new(10)
     }
+    /// Base 16, with a `0x` prefix.
     pub fn hex() -> Self {
         Self::new(16)
     }
+    /// Base 8, with a `0o` prefix.
     pub fn octal() -> Self {
         Self::new(8)
     }
+    /// Base 2, with a `0b` prefix.
     pub fn binary() -> Self {
         Self::new(2)
     }
+    /// The given radix; anything but 2, 8, or 16 formats as base 10.
     pub fn with_radix(radix: u32) -> Self {
         Self::new(radix as u64)
     }

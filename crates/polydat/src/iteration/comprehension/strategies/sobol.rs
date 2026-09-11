@@ -45,6 +45,7 @@ use super::{
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::strategy::StrategyName;
 
+/// The Sobol low-discrepancy sequence.
 pub struct Sobol;
 
 /// Bit-width of the direction numbers (`u32` fixed point).

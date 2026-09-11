@@ -85,8 +85,11 @@ pub(crate) fn resolve_extern(slot_name: &str, slot_type: PortType) -> Option<Val
 /// Constant argument passed to a node factory at build time.
 #[derive(Debug, Clone)]
 pub enum FactoryArg {
+    /// An integer literal.
     Int(u64),
+    /// A float literal.
     Float(f64),
+    /// A string literal.
     Str(String),
 }
 

@@ -27,56 +27,100 @@ const TIER1_U64_LANES: usize = 2;
 const TIER1_MIN_MEMBERS: usize = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// Why a Tier-1 SIMD plan could not be built, started, or advanced;
+/// `Display` renders each with its names.
 pub enum Tier1SimdError {
+    /// The selected output does not exist.
     OutputNotFound(String),
+    /// The driving input does not exist.
     DrivingInputNotFound(String),
+    /// The selected output does not depend on the driving input.
     DrivingInputNotUsed(String),
+    /// The selected node has more than one output port.
     OutputPortUnsupported,
+    /// Fewer nodes could be promoted than the plan requires.
     TooFewMembers {
+        /// Promotable nodes found.
         found: usize,
+        /// The minimum required.
         minimum: usize,
     },
+    /// A node in the cone cannot be promoted.
     NodeIneligible {
+        /// The node.
         node: String,
+        /// Why it cannot be promoted.
         reason: String,
     },
+    /// A node changes the lane shape.
     ShapeMismatch {
+        /// The node.
         node: String,
     },
+    /// A node cannot serve as a packet boundary.
     BoundaryUnsupported {
+        /// The node.
         node: String,
     },
+    /// A boundary does not carry the scalar type the plan requires.
     BoundaryTypeMismatch {
+        /// The boundary's name.
         boundary: String,
+        /// The scalar type required.
         expected: PortType,
     },
+    /// An input other than the driving ordinal is externally writable.
     MutableBroadcast(String),
+    /// A node accepts `None` inputs, for which packets have no validity semantics.
     NoneAwareNode(String),
+    /// The output has a visibility modifier and cannot be packetized speculatively.
     OutputModifierUnsupported(String),
+    /// The output is an init binding, not a scalar stream.
     ConstOutputUnsupported(String),
+    /// The lease driver supports `u64` over two `i64` lanes only, not this type.
     RuntimeShapeUnsupported(PortType),
+    /// A constant boundary node could not be evaluated safely.
     ConstantEvaluationFailed(String),
+    /// The register-typed graph could not be built.
     VectorGraphBuild(String),
+    /// The effective native ISA declined the graph.
     VectorCompilation(String),
+    /// Native ISA detection failed.
     CapabilityDetection(String),
+    /// The previous ordinal lease is not fully drained.
     ActiveLease,
+    /// The lease targets an input other than the plan's driving input.
     LeaseInputMismatch {
+        /// The plan's driving input index.
         expected: usize,
+        /// The lease's input index.
         got: usize,
     },
+    /// The lease arrived out of reservation order.
     LeaseSequenceMismatch {
+        /// The sequence expected.
         expected: u64,
+        /// The sequence received.
         got: u64,
     },
+    /// The lease's stream or generation changed within one activation.
     LeaseStreamMismatch,
+    /// The activation epoch moved backwards.
     ActivationWentBackwards {
+        /// The epoch before.
         previous: u64,
+        /// The epoch received.
         got: u64,
     },
+    /// The name is not a scope-stable broadcast input of the plan.
     UnknownBroadcast(String),
+    /// A broadcast value has the wrong type.
     BroadcastTypeMismatch {
+        /// The broadcast's name.
         name: String,
+        /// The type expected.
         expected: PortType,
+        /// The type received.
         got: PortType,
     },
 }
@@ -197,10 +241,12 @@ pub struct Tier1LeaseStartError {
 }
 
 impl Tier1LeaseStartError {
+    /// Why the lease could not start.
     pub const fn reason(&self) -> &Tier1SimdError {
         &self.reason
     }
 
+    /// The reason and the lease, whose ordinal range is the caller's again.
     pub fn into_parts(self) -> (Tier1SimdError, OrdinalBatchLease) {
         (self.reason, self.lease)
     }
@@ -215,23 +261,39 @@ impl fmt::Display for Tier1LeaseStartError {
 impl std::error::Error for Tier1LeaseStartError {}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+/// What a Tier-1 SIMD plan promotes: the output, the driving input, the
+/// lane shape, the member nodes, and the broadcast inputs.
 pub struct Tier1SimdDescriptor {
+    /// The output the plan computes.
     pub output: String,
+    /// The input whose ordinals the packets stride.
     pub driving_input: String,
+    /// The scalar type of the stream.
     pub scalar_type: PortType,
+    /// The register type a packet carries.
     pub register_type: PortType,
+    /// Lanes per packet.
     pub lanes: u8,
+    /// The nodes promoted into the vector graph.
     pub member_nodes: Vec<String>,
+    /// Scope-stable inputs broadcast across the lanes.
     pub broadcast_inputs: Vec<String>,
+    /// The native ISA the plan was compiled for.
     pub effective_isa_fingerprint: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// Counters of a plan's execution.
 pub struct Tier1SimdStats {
+    /// Ordinal leases drained to completion.
     pub leases_completed: u64,
+    /// Packets computed by the vector graph.
     pub vector_packets: u64,
+    /// Lanes of a partial packet, computed one at a time.
     pub scalar_fragment_lanes: u64,
+    /// Lanes computed one at a time after a lease fell back to the scalar path.
     pub scalar_recovery_lanes: u64,
+    /// Values handed out.
     pub values_drained: u64,
 }
 
@@ -279,22 +341,27 @@ pub struct Tier1SimdExecutor {
 }
 
 impl Tier1SimdExecutor {
+    /// The plan's description.
     pub fn descriptor(&self) -> &Tier1SimdDescriptor {
         &self.descriptor
     }
 
+    /// The counters so far.
     pub const fn stats(&self) -> Tier1SimdStats {
         self.stats
     }
 
+    /// The scalar program the plan falls back to.
     pub fn scalar_program(&self) -> &Arc<PolydatProgram> {
         self.scalar.program()
     }
 
+    /// Whether a lease is open.
     pub const fn has_active_lease(&self) -> bool {
         self.active.is_some()
     }
 
+    /// Values left in the open lease, or zero.
     pub fn remaining(&self) -> u64 {
         self.active
             .as_ref()

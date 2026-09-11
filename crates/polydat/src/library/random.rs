@@ -142,6 +142,7 @@ fn random_bool(#[poly_default(0.5f64)] probability: crate::derive_support::Const
 }
 
 impl RandomString {
+    /// A random string node over `A-Za-z0-9` of the given length.
     pub fn alphanumeric(length: u64) -> Self {
         Self::new("A-Za-z0-9".to_string(), length)
     }

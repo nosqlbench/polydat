@@ -64,18 +64,22 @@ use crate::ast::Value;
 /// just a list of phases — no comprehension at that level).
 #[derive(Clone, Debug, Default)]
 pub struct ScopeCoord {
+    /// The coordinates, in declaration order.
     pub vars: IndexMap<String, Value>,
 }
 
 impl ScopeCoord {
+    /// No coordinates.
     pub fn new() -> Self {
         Self {
             vars: IndexMap::new(),
         }
     }
+    /// Whether the scope owns no coordinate.
     pub fn is_empty(&self) -> bool {
         self.vars.is_empty()
     }
+    /// The number of coordinates.
     pub fn len(&self) -> usize {
         self.vars.len()
     }

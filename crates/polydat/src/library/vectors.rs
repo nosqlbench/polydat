@@ -428,6 +428,7 @@ macro_rules! handle_indexed_node {
         }
 
         impl $name {
+            /// A node of this kind.
             pub fn new() -> Self {
                 Self {
                     meta: NodeMeta {
@@ -658,6 +659,7 @@ macro_rules! handle_metadata_node {
         }
 
         impl $name {
+            /// A node of this kind.
             pub fn new() -> Self {
                 Self {
                     meta: NodeMeta {
@@ -715,6 +717,7 @@ macro_rules! source_only_node {
         }
 
         impl $name {
+            /// A node of this kind.
             pub fn new() -> Self {
                 Self {
                     meta: NodeMeta {
@@ -1139,7 +1142,7 @@ fn profile_facets(
 /// since the previously loaded set" is just the partition's
 /// `[start_of(p), end_of(p))`, and a partition inherently knows its
 /// start (no cross-iteration carry needed). `idx_of(p)` is the 0-based
-/// masked position (pairs with [`matching_profile_name_at`] to address
+/// masked position (pairs with `matching_profile_name_at` to address
 /// the tier's own ground-truth facets); `count_of(p)` is the number of
 /// masked tiers; `base_extent` is the largest masked tier's size.
 ///
@@ -1230,7 +1233,7 @@ pub(crate) fn build_profile_partitions(
 }
 
 /// Name of the `index`-th profile **matching `pattern`**, in canonical
-/// (base-count-ascending) order. Pairs with [`profile_partitions`]'s
+/// (base-count-ascending) order. Pairs with `profile_partitions`'s
 /// masked-position `idx_of` so a sweep can prebuffer the active tier's
 /// own ground-truth facets (`dataset_prebuffer(str_concat("ds:", name))`).
 /// `pattern` follows the literal / glob / regex promotion; the index

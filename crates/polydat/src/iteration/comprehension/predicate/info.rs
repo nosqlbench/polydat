@@ -109,8 +109,11 @@ pub enum OpaqueReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Monotonicity {
+    /// Once true at an axis value, true for every greater value.
     Increasing,
+    /// Once true at an axis value, true for every lesser value.
     Decreasing,
+    /// No monotonicity established.
     None,
 }
 
@@ -122,9 +125,13 @@ pub enum Monotonicity {
 pub enum RangeConstraint {
     /// `lo ≤ axis ≤ hi` (with open/closed flags).
     Bounded {
+        /// The lower bound, if any.
         lo: Option<ConstValue>,
+        /// The upper bound, if any.
         hi: Option<ConstValue>,
+        /// Whether the lower bound is included.
         lo_inclusive: bool,
+        /// Whether the upper bound is included.
         hi_inclusive: bool,
     },
     /// `axis ∈ {v_1, v_2, …}` (e.g., from an `in` predicate).
@@ -138,7 +145,9 @@ pub enum RangeConstraint {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Determinism {
+    /// The same predicate and coordinates always give the same answer.
     Deterministic,
+    /// The predicate may depend on something else.
     Opaque,
 }
 
@@ -148,9 +157,13 @@ pub enum Determinism {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ConstValue {
+    /// An integer.
     Int(i64),
+    /// A float.
     Float(f64),
+    /// A string.
     String(String),
+    /// A boolean.
     Bool(bool),
 }
 
@@ -163,12 +176,14 @@ pub struct PerAxisMap<T> {
 }
 
 impl<T> PerAxisMap<T> {
+    /// An empty map.
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
         }
     }
 
+    /// Set the entry for a coordinate, keeping its position if present.
     pub fn insert<K: Into<String>>(&mut self, key: K, value: T) {
         let key = key.into();
         // Replace if already present; preserves position.
@@ -179,22 +194,27 @@ impl<T> PerAxisMap<T> {
         }
     }
 
+    /// The entry for a coordinate, if any.
     pub fn get(&self, key: &str) -> Option<&T> {
         self.entries.iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
 
+    /// The entries, in declaration order.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &T)> {
         self.entries.iter().map(|(k, v)| (k.as_str(), v))
     }
 
+    /// The number of entries.
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    /// Whether the map has no entry.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
+    /// The coordinate names, in declaration order.
     pub fn keys(&self) -> impl Iterator<Item = &str> {
         self.entries.iter().map(|(k, _)| k.as_str())
     }

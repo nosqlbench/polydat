@@ -76,10 +76,12 @@ impl<M> ScopeContract<M> {
         }
     }
 
+    /// The imports the module declares, in declaration order.
     pub fn imports(&self) -> &[ImportHandle<M>] {
         &self.imports
     }
 
+    /// The exports the module declares, in declaration order.
     pub fn exports(&self) -> &[ExportHandle<M>] {
         &self.exports
     }
@@ -177,30 +179,37 @@ pub struct ScopeModule<M> {
 }
 
 impl<M> ScopeModule<M> {
+    /// The imports the module declares.
     pub fn imports(&self) -> &[ImportSpec] {
         &self.imports
     }
 
+    /// The exports the module declares.
     pub fn exports(&self) -> &[ExportSpec] {
         &self.exports
     }
 
+    /// The body's compiled program.
     pub fn program(&self) -> &Arc<PolydatProgram> {
         &self.program
     }
 
+    /// The contract the module was built against.
     pub fn contract(&self) -> &ScopeContract<M> {
         &self.contract
     }
 
+    /// Where the module comes from.
     pub fn context(&self) -> &SourceContext {
         &self.context
     }
 
+    /// The pull consumers registered on the module's outputs.
     pub fn consumers(&self) -> &[RegisteredPullConsumer] {
         &self.consumers
     }
 
+    /// Diagnostics the build recorded.
     pub fn diagnostics(&self) -> &[String] {
         &self.diagnostics
     }

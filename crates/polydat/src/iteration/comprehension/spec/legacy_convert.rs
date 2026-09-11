@@ -37,8 +37,11 @@ use super::source_parser::{SourceParseError, parse_source};
 pub enum ConvertError {
     /// A clause's source string didn't parse to a typed `Source`.
     SourceParse {
+        /// The clause's element name.
         clause_var: String,
+        /// The source text.
         source: String,
+        /// Why it did not parse.
         cause: SourceParseError,
     },
     /// An empty cartesian or empty union mode.
@@ -47,10 +50,18 @@ pub enum ConvertError {
     EmptyUnionSubspace,
     /// A parallel clause's vars and exprs had mismatched lengths
     /// (should be caught by the parser, but defensive here).
-    ParallelArityMismatch { vars: usize, exprs: usize },
+    ParallelArityMismatch {
+        /// Names bound.
+        vars: usize,
+        /// Expressions given.
+        exprs: usize,
+    },
     /// Custom traversal order encountered — removed from the
     /// algebra per spec §3.6.
-    CustomOrderingRemoved { function: String },
+    CustomOrderingRemoved {
+        /// The function the order named.
+        function: String,
+    },
 }
 
 impl std::fmt::Display for ConvertError {

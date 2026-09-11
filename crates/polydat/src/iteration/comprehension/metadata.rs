@@ -72,29 +72,43 @@ pub enum IndexFn {
     /// Discrete cartesian. `axis_sizes[i]` is the i-th axis's
     /// element count. Multi-index `(i₀, i₁, …)` maps to the
     /// per-axis tuple at those positions.
-    Lattice { axis_sizes: Vec<u64> },
+    Lattice {
+        /// Element count per axis.
+        axis_sizes: Vec<u64>,
+    },
 
     /// Zip Strict / Truncate. One index `i ∈ 0..length` maps
     /// to the per-child tuple at position i.
-    Lockstep { length: u64 },
+    Lockstep {
+        /// The common length.
+        length: u64,
+    },
 
     /// Zip Cycle. Modular addressing — index `i` maps to each
     /// child at `i mod child.cardinality`. At least one child
     /// must be bounded (the cycling target).
-    Modular { axis_sizes: Vec<u64> },
+    Modular {
+        /// Element count per child.
+        axis_sizes: Vec<u64>,
+    },
 
     /// Union of index-addressable children. Index `i ∈
     /// 0..Σsegment_sizes` maps to segment k where k is the
     /// smallest such that `Σ₀^k segment_sizes > i`, position
     /// `i - Σ₀^{k-1} segment_sizes` within that segment.
-    Concatenation { segment_sizes: Vec<u64> },
+    Concatenation {
+        /// Element count per segment, in order.
+        segment_sizes: Vec<u64>,
+    },
 
     /// Continuous K-D box. Strategy push-down rules (Halton /
     /// Sobol / Lhs / Extrema on Continuous) draw from this
     /// directly; the discrete-to-continuous mapping is
     /// strategy-specific.
     Continuous {
+        /// The interval of each axis.
         intervals: Vec<Interval>,
+        /// The measure drawn from.
         measure: ProductMeasure,
     },
 
@@ -102,8 +116,11 @@ pub enum IndexFn {
     /// integer indexing; continuous axes get measure-weighted
     /// sampling. Strategy push-down dispatches per-axis.
     Hybrid {
+        /// Element count per discrete axis.
         discrete_axes: Vec<u64>,
+        /// The interval of each continuous axis.
         continuous_axes: Vec<Interval>,
+        /// The measure over the continuous axes.
         measure: ProductMeasure,
     },
 }
@@ -160,7 +177,10 @@ pub enum Materialization {
     /// Holds a finite working set; size declared at compile
     /// time. The two natural barriers per spec §6.3:
     /// `zip(Cycle)` shorter children + non-Lex `order`.
-    BoundedBarrier { working_set_size: u64 },
+    BoundedBarrier {
+        /// Tuples the barrier holds at most.
+        working_set_size: u64,
+    },
 
     /// Working set is unbounded. Always V6-rejected per spec
     /// §5; this variant exists for representational

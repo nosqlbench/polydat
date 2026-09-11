@@ -38,9 +38,13 @@ use cranelift_module::{Linkage, Module};
 /// kept alive alongside the pointers (dropping it would unmap the
 /// code pages).
 pub struct SimdKernels {
+    /// Dot product of two `f32` slices of the given length.
     pub dot_f32: unsafe extern "C" fn(*const f32, *const f32, u64) -> f32,
+    /// Squared L2 distance between two `f32` slices of the given length.
     pub l2sq_f32: unsafe extern "C" fn(*const f32, *const f32, u64) -> f32,
+    /// Element-wise sum of two `f32` slices into the output slice.
     pub add_f32: unsafe extern "C" fn(*const f32, *const f32, *mut f32, u64),
+    /// Each element of an `f32` slice times a scalar, into the output slice.
     pub scale_f32: unsafe extern "C" fn(*const f32, f32, *mut f32, u64),
     _module: JITModule,
 }

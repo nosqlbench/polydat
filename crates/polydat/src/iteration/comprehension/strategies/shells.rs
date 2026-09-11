@@ -32,6 +32,7 @@ use super::{
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::strategy::StrategyName;
 
+/// Concentric L-infinity shells from a chosen origin.
 pub struct Shells;
 
 impl Strategy for Shells {

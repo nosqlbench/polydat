@@ -27,6 +27,7 @@ pub struct OrdinalLaneClock<const LANES: usize>;
 
 impl<const LANES: usize> OrdinalLaneClock<LANES> {
     #[inline]
+    /// Whether the lane count is a power of two between 1 and 16.
     pub const fn is_supported() -> bool {
         LANES > 0 && LANES <= 16 && LANES.is_power_of_two()
     }
@@ -63,8 +64,11 @@ impl<const LANES: usize> OrdinalLaneClock<LANES> {
 /// Stable source which can render any owned ordinal without advancing mutable
 /// cursor state.
 pub trait StableOrdinalSource<T, const LANES: usize> {
+    /// The stream this source belongs to.
     fn stream_id(&self) -> u64;
+    /// The generation of the stream's values.
     fn generation(&self) -> u64;
+    /// The value at one ordinal.
     fn value_at(&self, ordinal: u64) -> T;
 
     /// Materialize one aligned ingress packet. Sources with an affine or other
@@ -76,12 +80,15 @@ pub trait StableOrdinalSource<T, const LANES: usize> {
 
 /// Closure-backed stable ordinal renderer used by typed promotion plans.
 pub struct RenderedOrdinalSource<R> {
+    /// The stream this source belongs to.
     pub stream_id: u64,
+    /// The generation of its values.
     pub generation: u64,
     render: R,
 }
 
 impl<R> RenderedOrdinalSource<R> {
+    /// A source rendering each ordinal with `render`.
     pub const fn new(stream_id: u64, generation: u64, render: R) -> Self {
         Self {
             stream_id,
@@ -115,14 +122,20 @@ where
 /// materializing preceding values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AffineI32Source {
+    /// The stream this source belongs to.
     pub stream_id: u64,
+    /// The generation of its values.
     pub generation: u64,
+    /// The ordinal the origin value sits at.
     pub origin_ordinal: u64,
+    /// The value at the origin ordinal.
     pub origin_value: i32,
+    /// The difference between consecutive values, wrapping.
     pub step: i32,
 }
 
 impl AffineI32Source {
+    /// An affine source with the given origin and step.
     pub const fn new(
         stream_id: u64,
         generation: u64,
@@ -188,10 +201,15 @@ impl StableOrdinalSource<i32, I32X4_LANES> for AffineI32Source {
 /// Provenance and ownership stamp carried beside one SIMD value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OrdinalPacketStamp {
+    /// The stream the value came from.
     pub stream_id: u64,
+    /// The generation of the source's values.
     pub source_generation: u64,
+    /// The activation the packet belongs to.
     pub activation_epoch: u64,
+    /// The dependency epoch the packet was computed under.
     pub dependency_epoch: u64,
+    /// The ordinal of lane 0.
     pub base_ordinal: u64,
     /// Logical lanes in this packet. Limited to 16 by `valid_mask`.
     pub lane_count: u8,
@@ -201,12 +219,14 @@ pub struct OrdinalPacketStamp {
 
 impl OrdinalPacketStamp {
     #[inline]
+    /// The packet's index in the stream: its base ordinal over the lane count.
     pub const fn packet_number(self) -> u64 {
         debug_assert!(self.lane_count.is_power_of_two());
         self.base_ordinal >> self.lane_count.trailing_zeros()
     }
 
     #[inline]
+    /// Whether the packet holds a valid lane for `ordinal`.
     pub const fn contains(self, ordinal: u64) -> bool {
         let Some(delta) = ordinal.checked_sub(self.base_ordinal) else {
             return false;
@@ -219,32 +239,59 @@ impl OrdinalPacketStamp {
 /// intentionally absent: a stable source can reconstruct them by ordinal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OrdinalBatchCheckpoint {
+    /// The stream.
     pub stream_id: u64,
+    /// The generation of the source's values.
     pub source_generation: u64,
+    /// The activation epoch.
     pub activation_epoch: u64,
+    /// The dependency epoch.
     pub dependency_epoch: u64,
+    /// The first ordinal of the lease.
     pub lease_start: u64,
+    /// One past the last ordinal of the lease.
     pub lease_end: u64,
+    /// The next ordinal the consumer will take.
     pub next_ordinal: u64,
 }
 
 /// Counters used by correctness tests and the local performance study.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OrdinalBatchStats {
+    /// Packets computed by the vector path.
     pub vector_packets: u64,
+    /// Vector packets with invalid lanes past the lease end.
     pub padded_vector_packets: u64,
+    /// Lanes computed by the scalar path.
     pub scalar_fragment_lanes: u64,
+    /// Values handed to the consumer.
     pub values_drained: u64,
+    /// Packets served again from the ready register.
     pub burst_reuses: u64,
+    /// Times a dependency change dropped the ready register.
     pub dependency_invalidations: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Why a batch could not be built or resumed.
 pub enum OrdinalBatchError {
-    InvalidLease { start: u64, end: u64 },
-    InvalidLaneCount { lanes: usize },
+    /// The lease's end precedes its start.
+    InvalidLease {
+        /// The lease's first ordinal.
+        start: u64,
+        /// One past its last.
+        end: u64,
+    },
+    /// The lane count is not a supported power of two.
+    InvalidLaneCount {
+        /// The lane count given.
+        lanes: usize,
+    },
+    /// The checkpoint names another stream, generation, or epoch.
     CheckpointIdentityMismatch,
+    /// The checkpoint's lease is not this batch's.
     CheckpointLeaseMismatch,
+    /// The checkpoint's cursor lies outside the lease.
     CheckpointCursorOutsideLease,
 }
 
@@ -329,6 +376,8 @@ where
     V: FnMut([T; LANES]) -> [T; LANES],
     S: FnMut(T) -> T,
 {
+    /// A batch over `lease` of `source`, computing packets with `vector` and
+    /// single lanes with `scalar`; an inverted lease is an error.
     pub fn new(
         source: R,
         lease: Range<u64>,
@@ -377,16 +426,19 @@ where
     }
 
     #[inline]
+    /// The ordinal range leased.
     pub fn lease(&self) -> Range<u64> {
         self.lease.clone()
     }
 
     #[inline]
+    /// The counters so far.
     pub const fn stats(&self) -> OrdinalBatchStats {
         self.stats
     }
 
     #[inline]
+    /// The stamp of the packet ready to drain, if any.
     pub fn current_stamp(&self) -> Option<OrdinalPacketStamp> {
         self.ready.map(|p| p.stamp)
     }

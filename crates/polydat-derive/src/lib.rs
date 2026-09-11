@@ -2473,17 +2473,20 @@ fn generate(
             ArgKind::Const(shape) => {
                 let n = &a.name;
                 let ft = shape.field_type_tokens();
-                Some(quote!(pub #n: #ft))
+                let doc = format!("The `{n}` argument, as given at construction.");
+                Some(quote!(#[doc = #doc] pub #n: #ft))
             }
             ArgKind::ConstVec(inner) => {
                 let n = &a.name;
                 let ft = inner.field_type_tokens();
-                Some(quote!(pub #n: Vec<#ft>))
+                let doc = format!("The `{n}` arguments, as given at construction.");
+                Some(quote!(#[doc = #doc] pub #n: Vec<#ft>))
             }
             ArgKind::Setup(spec) => {
                 let n = &a.name;
                 let ty = &spec.inner_ty;
-                Some(quote!(pub #n: #ty))
+                let doc = format!("The `{n}` value, computed once at construction.");
+                Some(quote!(#[doc = #doc] pub #n: #ty))
             }
         })
         .collect();
@@ -4263,6 +4266,7 @@ fn generate(
     //   * runs the body once inside try_new, captures Ok into the
     //     cache, propagates Err via Into<String>,
     //   * makes eval read the cached value (no per-eval body call).
+    let ctor_doc = format!("A `{func_name_str}` node with the given constant arguments.");
     let (ctor_emission, eval_emission, build_call_emission): (
         TokenStream2,
         TokenStream2,
@@ -4291,6 +4295,7 @@ fn generate(
         // body receives `Const<T>` and unwraps via .0 or .as_str()
         // in its own code.
         let try_new = quote! {
+            #[doc = #ctor_doc]
             pub fn try_new( #( #new_params ),* ) -> ::std::result::Result<Self, String> {
                 #( #setup_precomputes )*
                 let mut ins: Vec<polydat::ast::Slot> = vec![ #( #slot_exprs ),* ];
@@ -4328,6 +4333,7 @@ fn generate(
         (try_new, ev, bc)
     } else {
         let ctor = quote! {
+            #[doc = #ctor_doc]
             pub fn new( #( #new_params ),* ) -> Self {
                 // SRD-80 PR B.6: setup pre-computes (FnOnce-
                 // equivalent — emitted once by the macro,
@@ -4380,7 +4386,23 @@ fn generate(
         quote!()
     };
 
+    // The node's documentation: the function's own doc comments on the
+    // struct the macro generates, or a line naming the node, and a line
+    // for the constructor, so a generated node is documented as the
+    // function that defines it is.
+    let fn_docs: Vec<&syn::Attribute> = func
+        .attrs
+        .iter()
+        .filter(|a| a.path().is_ident("doc"))
+        .collect();
+    let struct_doc = if fn_docs.is_empty() {
+        let text = format!("The `{func_name_str}` node.");
+        quote! { #[doc = #text] }
+    } else {
+        quote! { #( #fn_docs )* }
+    };
     let result = quote! {
+        #struct_doc
         pub struct #struct_name {
             meta: polydat::ast::NodeMeta,
             #( #struct_fields, )*

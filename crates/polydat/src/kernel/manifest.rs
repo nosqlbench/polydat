@@ -23,8 +23,11 @@ use crate::kernel::PolydatProgram;
 /// aware view of a single output name.
 #[derive(Debug, Clone)]
 pub struct ManifestEntry {
+    /// The output's name.
     pub name: String,
+    /// Its type.
     pub port_type: PortType,
+    /// Its wire-coloring keywords.
     pub modifier: BindingModifier,
 }
 

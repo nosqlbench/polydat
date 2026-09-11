@@ -31,8 +31,11 @@ pub enum ProvMode {
 /// Graph analysis results used by the engine selection heuristic.
 #[derive(Debug, Clone)]
 pub struct GraphAnalysis {
+    /// Nodes in the graph.
     pub total_nodes: usize,
+    /// Inputs.
     pub num_inputs: usize,
+    /// Named outputs.
     pub num_outputs: usize,
     /// Per-output cone size (number of nodes in transitive dependency).
     pub output_cone_sizes: Vec<(String, usize)>,
@@ -166,13 +169,17 @@ pub fn select_prov_mode(analysis: &GraphAnalysis) -> ProvMode {
 /// construction time based on graph analysis. One outer branch
 /// per eval call (perfectly predicted), zero branches inside.
 pub enum P2Engine {
+    /// Every evaluation runs every step.
     Raw(CompiledKernelRaw),
+    /// The cone guard alone.
     Pull(CompiledKernelPull),
+    /// Per-step skipping and the cone guard.
     PushPull(CompiledKernelPushPull),
 }
 
 impl P2Engine {
     #[inline]
+    /// Evaluate for the coordinates and read one slot.
     pub fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
         match self {
             P2Engine::Raw(k) => k.eval_for_slot(coords, slot),
@@ -182,6 +189,7 @@ impl P2Engine {
     }
 
     #[inline]
+    /// Evaluate for the coordinates.
     pub fn eval(&mut self, coords: &[u64]) {
         match self {
             P2Engine::Raw(k) => k.eval(coords),
@@ -191,6 +199,7 @@ impl P2Engine {
     }
 
     #[inline]
+    /// Read a slot of the last evaluation.
     pub fn get_slot(&self, slot: usize) -> u64 {
         match self {
             P2Engine::Raw(k) => k.get_slot(slot),
@@ -199,6 +208,7 @@ impl P2Engine {
         }
     }
 
+    /// The slot of a named output.
     pub fn resolve_output(&self, name: &str) -> Option<usize> {
         match self {
             P2Engine::Raw(k) => k.resolve_output(name),
@@ -207,6 +217,7 @@ impl P2Engine {
         }
     }
 
+    /// The coordinate inputs.
     pub fn coord_count(&self) -> usize {
         match self {
             P2Engine::Raw(k) => k.coord_count(),
@@ -215,6 +226,7 @@ impl P2Engine {
         }
     }
 
+    /// The provenance mode the selector chose.
     pub fn prov_mode(&self) -> ProvMode {
         match self {
             P2Engine::Raw(_) => ProvMode::Raw,
@@ -228,14 +240,18 @@ impl P2Engine {
 /// the selector chose (engine_parity.md, step 7).
 #[cfg(feature = "jit")]
 pub enum P3Engine {
+    /// Every evaluation runs every step.
     Raw(crate::compile::hybrid::HybridKernelRaw),
+    /// The cone guard alone.
     Pull(crate::compile::hybrid::HybridKernelPull),
+    /// Per-step skipping and the cone guard.
     PushPull(crate::compile::hybrid::HybridKernelPushPull),
 }
 
 #[cfg(feature = "jit")]
 impl P3Engine {
     #[inline]
+    /// Evaluate for the coordinates and read one slot.
     pub fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
         match self {
             P3Engine::Raw(k) => k.eval_for_slot(coords, slot),
@@ -245,6 +261,7 @@ impl P3Engine {
     }
 
     #[inline]
+    /// Evaluate for the coordinates.
     pub fn eval(&mut self, coords: &[u64]) {
         match self {
             P3Engine::Raw(k) => k.eval(coords),
@@ -254,6 +271,7 @@ impl P3Engine {
     }
 
     #[inline]
+    /// Read a slot of the last evaluation.
     pub fn get_slot(&self, slot: usize) -> u64 {
         match self {
             P3Engine::Raw(k) => k.get_slot(slot),
@@ -262,6 +280,7 @@ impl P3Engine {
         }
     }
 
+    /// The slot of a named output.
     pub fn resolve_output(&self, name: &str) -> Option<usize> {
         match self {
             P3Engine::Raw(k) => k.resolve_output(name),
@@ -270,6 +289,7 @@ impl P3Engine {
         }
     }
 
+    /// The coordinate inputs.
     pub fn coord_count(&self) -> usize {
         match self {
             P3Engine::Raw(k) => k.coord_count(),
@@ -278,6 +298,7 @@ impl P3Engine {
         }
     }
 
+    /// The provenance mode the selector chose.
     pub fn prov_mode(&self) -> ProvMode {
         match self {
             P3Engine::Raw(_) => ProvMode::Raw,
@@ -345,7 +366,12 @@ pub enum KernelError {
     Assembly(crate::compile::assembly::AssemblyError),
     /// The engine refuses this graph, which the interpreter accepts;
     /// `reason` names the node or construct.
-    Refused { engine: Engine, reason: String },
+    Refused {
+        /// The engine that refused.
+        engine: Engine,
+        /// The node or construct it cannot run.
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for KernelError {

@@ -19,6 +19,7 @@ use super::{EvaluatedInput, MultiIndex, Strategy, Tuple, index_fn_size, lex::lex
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::strategy::StrategyName;
 
+/// Lexicographic order with the leftmost index varying fastest.
 pub struct ReverseLex;
 
 impl Strategy for ReverseLex {

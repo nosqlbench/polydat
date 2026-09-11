@@ -48,13 +48,16 @@ use super::strategy::{StrategyName, ZipMode};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Mode {
     #[default]
+    /// V1 through V9 are errors; degenerate compositions are warnings.
     Permissive,
+    /// Degenerate compositions are errors too.
     Strict,
 }
 
 /// Result of a validation pass.
 #[derive(Debug, Clone)]
 pub struct ValidationReport {
+    /// The warnings the pass raised.
     pub warnings: Vec<ValidationWarning>,
 }
 
@@ -64,13 +67,17 @@ pub struct ValidationReport {
 pub enum ValidationError {
     /// V1 — cartesian or zip children share a name.
     V1DuplicateName {
+        /// The combinator whose children share the name.
         combinator: &'static str,
+        /// The duplicated name.
         name: String,
     },
 
     /// V2 — union children disagree on tuple shape.
     V2ShapeMismatch {
+        /// The tuple shape of the first child.
         expected: Vec<String>,
+        /// The shape that differs.
         actual: Vec<String>,
     },
 
@@ -83,8 +90,11 @@ pub enum ValidationError {
     /// the predicate may also reference names from the parent
     /// scope which this layer doesn't see.
     V3UnresolvedNames {
+        /// The predicate text.
         predicate: String,
+        /// The coordinates the comprehension binds.
         coords: Vec<String>,
+        /// The names the predicate references that are neither coordinates nor known here.
         unresolved: Vec<String>,
     },
 
@@ -99,29 +109,44 @@ pub enum ValidationError {
     ///
     /// Phase 3 will replace this with the full IndexFn check.
     V4InputShape {
+        /// The strategy applied.
         strategy: StrategyName,
+        /// Why its input's shape is unacceptable.
         reason: String,
     },
 
     /// V6 — non-Lex order or Strict/Truncate zip applied to an
     /// `Unbounded` discrete input.
     V6UnboundedDiscrete {
+        /// The operator applied.
         operator: &'static str,
+        /// The unbounded input's cardinality class.
         cardinality: CardinalityClass,
     },
 
     /// V7 — zip cardinality contract violated. Three sub-cases:
     /// Strict-mode mismatch, mixed-class children, or any
     /// continuous child.
-    V7ZipCardinality { mode: ZipMode, reason: String },
+    V7ZipCardinality {
+        /// The zip mode in force.
+        mode: ZipMode,
+        /// Which contract was violated.
+        reason: String,
+    },
 
     /// V8 — continuous source requires explicit sampling OR
     /// source declares a non-integrable measure.
-    V8ContinuousRequirement { reason: String },
+    V8ContinuousRequirement {
+        /// What the source lacks.
+        reason: String,
+    },
 
     /// V9 — union children include a continuous or mixed-class
     /// child.
-    V9UnionClassMismatch { reason: String },
+    V9UnionClassMismatch {
+        /// Which child mismatches, and how.
+        reason: String,
+    },
 }
 
 /// Non-blocking warning for degenerate-but-defined compositions
@@ -132,7 +157,10 @@ pub enum ValidationWarning {
     /// `Diagonal` / `Antidiagonal`) over a 1-axis input.
     /// Collapses to {first, last} or a trivial walk; usually
     /// not what the author meant.
-    DegenerateGeometric { strategy: StrategyName },
+    DegenerateGeometric {
+        /// The strategy applied.
+        strategy: StrategyName,
+    },
 
     /// `Lhs` over a 1-axis input. Equivalent to `Shuffle`;
     /// two names for one behavior.
@@ -150,7 +178,10 @@ pub enum ValidationWarning {
     /// Singleton variant of a combinator: `zip([c], _)`,
     /// `cartesian(c)`, `union(c)`. Identity per spec §4.2 I1-I3;
     /// the optimizer's R0a elides it.
-    SingletonCombinator { combinator: &'static str },
+    SingletonCombinator {
+        /// The combinator with one child.
+        combinator: &'static str,
+    },
 }
 
 /// Validate a comprehension AST per spec §5.

@@ -24,10 +24,15 @@ use std::sync::OnceLock;
 /// logger levels without reformatting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogLevel {
+    /// The finest detail.
     Trace,
+    /// Developer detail.
     Debug,
+    /// Ordinary events.
     Info,
+    /// Something is off but the run continues.
     Warn,
+    /// A failure.
     Error,
 }
 
@@ -67,12 +72,15 @@ pub fn log(level: LogLevel, msg: &str) {
 pub fn debug(msg: &str) {
     log(LogLevel::Debug, msg);
 }
+/// Log at `Info`.
 pub fn info(msg: &str) {
     log(LogLevel::Info, msg);
 }
+/// Log at `Warn`.
 pub fn warn(msg: &str) {
     log(LogLevel::Warn, msg);
 }
+/// Log at `Error`.
 pub fn error(msg: &str) {
     log(LogLevel::Error, msg);
 }

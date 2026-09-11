@@ -41,15 +41,23 @@ pub enum EmbeddingError {
     /// The lexer or parser rejected the input before any
     /// semantic analysis.
     Parse {
+        /// The source text.
         source: String,
+        /// The lexer's or parser's message.
         message: String,
+        /// The byte offset of the error, when known.
         position: Option<usize>,
     },
 
     /// A `{name}` placeholder in the text had no matching
     /// binding in the kernel chain. Produced by
     /// `interpolate_via_kernel` only.
-    UnresolvedPlaceholder { name: String, source: String },
+    UnresolvedPlaceholder {
+        /// The placeholder's name.
+        name: String,
+        /// The source text.
+        source: String,
+    },
 
     /// The expression's upstream cone reaches a dynamic input,
     /// but the requested evaluation surface requires
@@ -57,7 +65,9 @@ pub enum EmbeddingError {
     /// `eval_const_expr` (directly or via the two-step
     /// composition).
     LifecycleMismatch {
+        /// The source text.
         source: String,
+        /// The dynamic inputs the cone reaches.
         dynamic_inputs: Vec<String>,
     },
 
@@ -65,8 +75,11 @@ pub enum EmbeddingError {
     /// in the runtime. Includes a suggested alternative when
     /// the name is close to a known node.
     UnknownNode {
+        /// The unknown node's name.
         name: String,
+        /// The source text.
         source: String,
+        /// A registered name close to it, if any.
         suggestion: Option<String>,
     },
 
@@ -74,10 +87,15 @@ pub enum EmbeddingError {
     /// auto-adapters cannot heal. Produced by the assembly
     /// pass during compilation.
     TypeMismatch {
+        /// The producing node.
         from_node: String,
+        /// Its output type.
         from_type: crate::ast::PortType,
+        /// The consuming node.
         to_node: String,
+        /// The type its port requires.
         to_type: crate::ast::PortType,
+        /// The source text.
         source: String,
     },
 
@@ -86,8 +104,11 @@ pub enum EmbeddingError {
     /// panic; the message is the panic payload's
     /// human-readable form.
     NodeEvalPanic {
+        /// The node that panicked.
         node_name: String,
+        /// The panic's message.
         message: String,
+        /// The source text.
         source: String,
     },
 
@@ -96,14 +117,21 @@ pub enum EmbeddingError {
     /// Indicates an internal compiler issue or a mismatch
     /// between the wrapper template and the compiler's output
     /// naming.
-    ResultMissing { output_name: String, source: String },
+    ResultMissing {
+        /// The output the caller asked for.
+        output_name: String,
+        /// The source text.
+        source: String,
+    },
 
     /// A `Value::None` propagated to the expression's output
     /// when the host called a strict accessor (`as_bool` on
     /// `Value::None`, etc.). Produced at the host's
     /// accessor call, not by polydat directly. See SRD-74.
     NonePropagated {
+        /// The accessor the host called.
         accessor: &'static str,
+        /// The source text.
         source: String,
     },
 
@@ -112,8 +140,11 @@ pub enum EmbeddingError {
     /// surfaces (reserved for the bulk-evaluation surface
     /// γ-9 and adapter-specific embedding paths).
     Timeout {
+        /// The source text.
         source: String,
+        /// Milliseconds spent.
         elapsed_ms: u64,
+        /// The budget, in milliseconds.
         deadline_ms: u64,
     },
 
@@ -123,7 +154,9 @@ pub enum EmbeddingError {
     /// the expression referenced but couldn't resolve due to
     /// registry incompleteness.
     RegistryNotInitialised {
+        /// The node names that could not be resolved.
         missing: Vec<String>,
+        /// The source text.
         source: String,
     },
 }
@@ -524,6 +557,11 @@ impl Drop for DataBaseDirGuard {
     }
 }
 
+/// Compile Polydat source on the interpreter with every option spelled
+/// out: the directory relative data files resolve against, the library
+/// search paths, the outputs to keep (all when empty), strictness, the
+/// diagnostic context label, and the cursor extent limit. Every other
+/// `compile_polydat*` form reduces to this one.
 pub fn compile_polydat_with_libs_and_limit(
     source: &str,
     source_dir: Option<&Path>,
@@ -581,11 +619,17 @@ pub fn compile_polydat_strict(
 /// corresponding parameter of [`compile_polydat_with_libs_and_limit`].
 #[derive(Debug, Default, Clone)]
 pub struct CompileOptions {
+    /// The directory relative data-file paths resolve against.
     pub source_dir: Option<PathBuf>,
+    /// Library search paths, tried after the source directory and before the embedded standard library.
     pub lib_paths: Vec<PathBuf>,
+    /// The outputs to keep; every output when empty.
     pub required_outputs: Vec<String>,
+    /// Whether to enforce strict validation.
     pub strict: bool,
+    /// The diagnostic context label, such as a file name.
     pub context: String,
+    /// A limit on every cursor's extent, if any.
     pub cursor_limit: Option<u64>,
 }
 
@@ -768,6 +812,11 @@ static CONST_EXPR_CACHE: std::sync::OnceLock<
 > = std::sync::OnceLock::new();
 const CONST_EXPR_CACHE_CAP: usize = 8192;
 
+/// Evaluate a constant expression by compiling it as a one-binding
+/// program: what a comprehension source such as `partitions("*\/4", 1000)`
+/// goes through. Cached by source text, so the same text compiles once
+/// per process (SRD 113 §5.2). An expression that reaches a dynamic
+/// input is a lifecycle error.
 pub fn eval_const_expr(source: &str) -> Result<crate::ast::Value, EmbeddingError> {
     let cache =
         CONST_EXPR_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));

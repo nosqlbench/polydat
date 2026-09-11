@@ -10,18 +10,23 @@
 /// A source location for error reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Span {
+    /// The line, from 1.
     pub line: usize,
+    /// The column, from 1.
     pub col: usize,
 }
 
 /// A token with its source location.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
+    /// What the token is.
     pub kind: TokenKind,
+    /// Where it appears.
     pub span: Span,
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// The kinds of token the lexer produces.
 pub enum TokenKind {
     /// A bare identifier: `cycle`, `hash`, `temp_lut`
     Ident(String),

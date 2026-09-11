@@ -190,28 +190,34 @@ pub struct Bits128(pub [u64; 2]);
 
 impl Bits128 {
     #[inline]
+    /// The two-word form of a `u128`, low word first.
     pub fn from_u128(v: u128) -> Self {
         Self([v as u64, (v >> 64) as u64])
     }
     #[inline]
+    /// The two-word form of an `i128`, low word first.
     pub fn from_i128(v: i128) -> Self {
         Self::from_u128(v as u128)
     }
     #[inline]
+    /// The word as a `u128`.
     pub fn as_u128(self) -> u128 {
         (self.0[0] as u128) | ((self.0[1] as u128) << 64)
     }
     #[inline]
+    /// The word as an `i128`.
     pub fn as_i128(self) -> i128 {
         self.as_u128() as i128
     }
 
     #[inline]
+    /// The word's sixteen bytes, little-endian.
     pub fn to_le_bytes(self) -> [u8; 16] {
         self.as_u128().to_le_bytes()
     }
 
     #[inline]
+    /// A word from sixteen little-endian bytes.
     pub fn from_le_bytes(b: [u8; 16]) -> Self {
         Self::from_u128(u128::from_le_bytes(b))
     }
@@ -223,6 +229,7 @@ macro_rules! bits128_lanes {
     ($to:ident, $from:ident, $t:ty, $n:expr) => {
         impl Bits128 {
             #[inline]
+            /// The word as lanes of one element type, lane 0 at the lowest address.
             pub fn $to(self) -> [$t; $n] {
                 let b = self.to_le_bytes();
                 let mut out = [<$t>::default(); $n];
@@ -235,6 +242,7 @@ macro_rules! bits128_lanes {
                 out
             }
             #[inline]
+            /// A word from lanes of one element type, lane 0 at the lowest address.
             pub fn $from(lanes: [$t; $n]) -> Self {
                 let mut b = [0u8; 16];
                 let w = core::mem::size_of::<$t>();
@@ -262,6 +270,7 @@ impl Bits128 {
         self.lanes_i16().map(|b| half::f16::from_bits(b as u16))
     }
     #[inline]
+    /// A word from eight `f16` lanes, through the bit-pattern codec.
     pub fn from_lanes_f16(lanes: [half::f16; 8]) -> Self {
         Self::from_lanes_i16(lanes.map(|f| f.to_bits() as i16))
     }
@@ -275,17 +284,27 @@ impl Bits128 {
 /// All views are free bitcasts of one another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RegLanes {
+    /// The algorithm-defined view: heterogeneous lane roles, no element type.
     Raw,
+    /// Sixteen `i8` lanes.
     I8x16,
+    /// Eight `i16` lanes.
     I16x8,
+    /// Four `i32` lanes.
     I32x4,
+    /// Two `i64` lanes.
     I64x2,
+    /// Eight `f16` lanes.
     F16x8,
+    /// Four `f32` lanes.
     F32x4,
+    /// Two `f64` lanes.
     F64x2,
 }
 
 #[derive(Debug, Clone)]
+/// A typed value on a wire: what a node reads and produces on the
+/// interpreter, and what a host sets and pulls on every engine.
 pub enum Value {
     /// Unsigned 64-bit integer. The workhorse type for deterministic
     /// data generation: hash outputs, modular arithmetic, bit
@@ -497,6 +516,7 @@ impl Clone for Box<dyn ReflectedValue> {
 }
 
 impl Value {
+    /// The `U64` payload; panics on any other variant, naming both types.
     pub fn as_u64(&self) -> u64 {
         match self {
             Value::U64(v) => *v,
@@ -549,6 +569,7 @@ impl Value {
         }
     }
 
+    /// The `F64` payload; panics on any other variant, naming both types.
     pub fn as_f64(&self) -> f64 {
         match self {
             Value::F64(v) => *v,
@@ -556,6 +577,7 @@ impl Value {
         }
     }
 
+    /// The `Bool` payload; panics on any other variant, naming both types.
     pub fn as_bool(&self) -> bool {
         match self {
             Value::Bool(v) => *v,
@@ -563,6 +585,7 @@ impl Value {
         }
     }
 
+    /// The `Str` payload as a string slice; panics on any other variant.
     pub fn as_str(&self) -> &str {
         match self {
             Value::Str(v) => v,
@@ -570,6 +593,7 @@ impl Value {
         }
     }
 
+    /// The `Bytes` payload as a byte slice; panics on any other variant.
     pub fn as_bytes(&self) -> &[u8] {
         match self {
             Value::Bytes(v) => v,
@@ -577,6 +601,7 @@ impl Value {
         }
     }
 
+    /// The `Json` payload by reference; panics on any other variant.
     pub fn as_json(&self) -> &serde_json::Value {
         match self {
             Value::Json(v) => v,
@@ -1434,8 +1459,11 @@ pub enum WireCost {
 /// Descriptor for a single input or output port on a node.
 #[derive(Debug, Clone)]
 pub struct Port {
+    /// The port's name, as bindings and diagnostics refer to it.
     pub name: String,
+    /// The port's declared type.
     pub typ: PortType,
+    /// When the port's value changes: per cycle, at init, or as configuration.
     pub lifecycle: Lifecycle,
     /// Cost class for input ports. Ignored for output ports.
     pub wire_cost: WireCost,
@@ -1453,6 +1481,7 @@ pub struct Port {
 }
 
 impl Port {
+    /// A cycle-lifecycle port of the given type with no constraint.
     pub fn new(name: impl Into<String>, typ: PortType) -> Self {
         Self {
             name: name.into(),
@@ -1474,34 +1503,42 @@ impl Port {
         }
     }
 
+    /// A `u64` port.
     pub fn u64(name: impl Into<String>) -> Self {
         Self::new(name, PortType::U64)
     }
 
+    /// An `f64` port.
     pub fn f64(name: impl Into<String>) -> Self {
         Self::new(name, PortType::F64)
     }
 
+    /// A string port.
     pub fn str(name: impl Into<String>) -> Self {
         Self::new(name, PortType::Str)
     }
 
+    /// A boolean port.
     pub fn bool(name: impl Into<String>) -> Self {
         Self::new(name, PortType::Bool)
     }
 
+    /// A JSON port.
     pub fn json(name: impl Into<String>) -> Self {
         Self::new(name, PortType::Json)
     }
 
+    /// A handle port.
     pub fn handle(name: impl Into<String>) -> Self {
         Self::new(name, PortType::Handle)
     }
 
+    /// An `f32` vector port.
     pub fn vec_f32(name: impl Into<String>) -> Self {
         Self::new(name, PortType::VecF32)
     }
 
+    /// An `i32` vector port.
     pub fn vec_i32(name: impl Into<String>) -> Self {
         Self::new(name, PortType::VecI32)
     }
@@ -1592,22 +1629,39 @@ impl SlotType {
 /// Wire-typed Rust value with its JIT carrier (or `None`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum JitType {
+    /// An unsigned 64-bit carrier.
     U64,
+    /// A signed 64-bit carrier.
     I64,
+    /// An `f64` carrier, as its bits.
     F64,
+    /// A boolean carrier, 0 or 1.
     Bool,
+    /// A string handle.
     Str,
+    /// A byte-string handle.
     Bytes,
+    /// A `u8` carrier, zero-extended.
     U8,
+    /// A `u16` carrier, zero-extended.
     U16,
+    /// A `u32` carrier, zero-extended.
     U32,
+    /// An `i8` carrier, sign-extended.
     I8,
+    /// An `i16` carrier, sign-extended.
     I16,
+    /// An `i32` carrier, sign-extended.
     I32,
+    /// An `f32` carrier, as its bits.
     F32,
+    /// An `f16` carrier, as its bits.
     F16,
+    /// A `u128`, in two slots.
     U128,
+    /// An `i128`, in two slots.
     I128,
+    /// A 128-bit register word, in two slots.
     Reg128,
 }
 
@@ -1618,10 +1672,15 @@ pub enum JitType {
 /// is needed.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConstValue {
+    /// An unsigned integer.
     U64(u64),
+    /// A floating-point number.
     F64(f64),
+    /// A string.
     Str(String),
+    /// A list of unsigned integers.
     VecU64(Vec<u64>),
+    /// A list of floating-point numbers.
     VecF64(Vec<f64>),
 }
 
@@ -1657,7 +1716,12 @@ pub enum Slot {
     /// A runtime wire input carrying a value each cycle.
     Wire(Port),
     /// An assembly-time constant, baked into the node at construction.
-    Const { name: String, value: ConstValue },
+    Const {
+        /// The constant's name, as the node's signature calls it.
+        name: String,
+        /// The baked value.
+        value: ConstValue,
+    },
 }
 
 impl Slot {
@@ -1759,9 +1823,11 @@ pub enum Commutativity {
 /// Use `wire_inputs()` to extract just the wire ports.
 #[derive(Debug, Clone)]
 pub struct NodeMeta {
+    /// The node's function name, as programs call it.
     pub name: String,
     /// All inputs in positional order: wires and constants.
     pub ins: Vec<Slot>,
+    /// The output ports, in positional order.
     pub outs: Vec<Port>,
 }
 
@@ -1809,12 +1875,19 @@ pub type CompiledU64Op = Box<dyn Fn(&[u64], &mut [u64]) + Send + Sync>;
 /// vector-producing output port of a slot-compiled node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScratchElem {
+    /// `f32` elements.
     F32,
+    /// `f64` elements.
     F64,
+    /// `f16` elements.
     F16,
+    /// `i8` elements.
     I8,
+    /// `i16` elements.
     I16,
+    /// `i32` elements.
     I32,
+    /// `i64` elements.
     I64,
 }
 
@@ -1857,12 +1930,19 @@ pub enum HandleKind {
 /// allocation after warmup.
 #[derive(Debug, Clone)]
 pub enum ScratchBuf {
+    /// An `f32` buffer.
     F32(Vec<f32>),
+    /// An `f64` buffer.
     F64(Vec<f64>),
+    /// An `f16` buffer.
     F16(Vec<half::f16>),
+    /// An `i8` buffer.
     I8(Vec<i8>),
+    /// An `i16` buffer.
     I16(Vec<i16>),
+    /// An `i32` buffer.
     I32(Vec<i32>),
+    /// An `i64` buffer.
     I64(Vec<i64>),
 }
 
@@ -1897,6 +1977,7 @@ impl ScratchBuf {
         }
     }
 
+    /// An empty buffer of the element type.
     pub fn new(elem: ScratchElem) -> Self {
         match elem {
             ScratchElem::F32 => ScratchBuf::F32(Vec::new()),
@@ -1921,7 +2002,9 @@ pub type CompiledSlotOp = Box<dyn Fn(&[u64], &mut [u64], &mut [ScratchBuf]) + Se
 /// (one [`ScratchElem`] per vector-producing output, in port
 /// order). Returned by [`PolydatNode::compiled_slot`].
 pub struct CompiledSlotKit {
+    /// The closure: slice inputs as slot pairs, vector outputs into scratch.
     pub op: CompiledSlotOp,
+    /// One element type per vector-producing output, in port order.
     pub scratch: Vec<ScratchElem>,
 }
 
@@ -1958,7 +2041,10 @@ pub enum Purity {
     /// function of inputs. Hosts that care about side-channel
     /// observability examine the `sink` to know what
     /// observable surface this node writes to.
-    SideChannel { sink: SideChannelSink },
+    SideChannel {
+        /// The observable surface the node writes to.
+        sink: SideChannelSink,
+    },
 
     /// The typed return value is not a function of declared
     /// inputs alone — it depends on external sources (system
@@ -1980,7 +2066,10 @@ pub enum Purity {
     /// marker. User-opt-in volatility via the `volatile`
     /// modifier is a separate surface that produces the same
     /// runtime effect (see R1.v).
-    Nondeterministic { reason: &'static str },
+    Nondeterministic {
+        /// The source of the non-determinism, for diagnostics.
+        reason: &'static str,
+    },
 }
 
 /// Where a [`Purity::SideChannel`] node writes its observable
@@ -2387,14 +2476,23 @@ mod value_size_probe {
 /// tiers without copying a string argument to inspect it.
 #[derive(Clone, Copy, Debug)]
 pub enum ValueRef<'a> {
+    /// An unsigned integer.
     U64(u64),
+    /// A signed integer.
     I64(i64),
+    /// A float.
     F64(f64),
+    /// A boolean.
     Bool(bool),
+    /// A string, borrowed from the arena or the interner.
     Str(&'a str),
+    /// A byte string, borrowed.
     Bytes(&'a [u8]),
+    /// A JSON value, by reference into the value table.
     Json(&'a serde_json::Value),
+    /// No value.
     None,
+    /// Any other variant, by reference to the value.
     Other(&'a Value),
 }
 

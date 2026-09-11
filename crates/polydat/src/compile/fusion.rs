@@ -726,8 +726,11 @@ pub fn default_rules() -> Vec<FusionRule> {
 /// Built by fused nodes to represent their unfused (decomposed) form.
 /// Not used at runtime — only in tests.
 pub struct DecomposedGraph {
+    /// External inputs the graph takes.
     pub input_count: usize,
+    /// Each node with the wiring of its inputs, in order.
     pub nodes: Vec<(Box<dyn PolydatNode>, Vec<DecomposedWire>)>,
+    /// Where each output comes from.
     pub output_wires: Vec<DecomposedWire>,
 }
 
@@ -741,6 +744,7 @@ pub enum DecomposedWire {
 }
 
 impl DecomposedGraph {
+    /// An empty graph over `input_count` inputs.
     pub fn new(input_count: usize) -> Self {
         Self {
             input_count,

@@ -29,11 +29,14 @@ use crate::derive_support::PolydatSetup;
 /// A parsed format segment: either literal text or a placeholder.
 #[derive(Debug, Clone)]
 pub enum Segment {
+    /// Literal text, copied as is.
     Literal(String),
+    /// A placeholder, formatted from the next argument.
     Placeholder(FormatSpec),
 }
 
 #[derive(Debug, Clone)]
+/// One placeholder's formatting: which argument, and how to render it.
 pub struct FormatSpec {
     /// Input index (sequential, 0-based)
     index: usize,
@@ -110,10 +113,15 @@ fn printf(
 /// tiers run the same formatting code (SRD 115 §6, axiom H7) and a
 /// string argument is formatted without being copied first.
 pub enum FmtArg<'a> {
+    /// An unsigned integer.
     U64(u64),
+    /// A float.
     F64(f64),
+    /// A boolean.
     Bool(bool),
+    /// A string, by reference.
     Str(&'a str),
+    /// Any other value, rendered in its display form.
     Value(Value),
 }
 

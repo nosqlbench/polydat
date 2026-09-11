@@ -20,6 +20,7 @@ use super::{EvaluatedInput, MultiIndex, Strategy, Tuple, index_fn_dim, index_fn_
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::strategy::StrategyName;
 
+/// Lexicographic order: the natural enumeration, rightmost index varying fastest.
 pub struct Lex;
 
 impl Strategy for Lex {

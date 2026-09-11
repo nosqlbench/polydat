@@ -1,9 +1,11 @@
 # Compilation Levels
 
-Polydat compiles a function graph at one of three levels. The compiled
-artifact is the same shape at each level — a kernel callers can poke
-coordinates into and pull outputs out of — so picking a level is a
-performance / build-size trade rather than a behaviour switch.
+Polydat compiles a function graph at one of three levels. Every level
+accepts every program and computes the same values, and every level is
+driven through one trait, `Kernel`: set inputs, pull outputs, and read
+names and types the same way whatever the engine ([engine
+parity](../design/engine_parity.md)). Picking a level is a performance and
+build-size trade rather than a behaviour switch.
 
 | Level   | Mechanism                 | Measured, per cycle of an eleven-node graph | Feature |
 |---------|---------------------------|--------------------------------------------:|---------|

@@ -133,6 +133,7 @@
 // noise for test data. Scope the allowance to `cfg(test)` so the
 // lint still guards real code.
 #![cfg_attr(test, allow(clippy::approx_constant))]
+#![warn(missing_docs)]
 
 // SRD-80 PR B.3 — let the `#[polydat_node]` macro's emitted
 // `polydat::...` paths resolve when the macro is invoked from

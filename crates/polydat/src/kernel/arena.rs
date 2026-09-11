@@ -31,8 +31,11 @@ use std::sync::RwLock;
 
 /// Handle Tag constants
 pub const TAG_STATIC: u64 = 0b00 << 62;
+/// Tag of a handle into the cycle arena.
 pub const TAG_ARENA: u64 = 0b01 << 62;
+/// Tag of a handle into the value table.
 pub const TAG_RES: u64 = 0b10 << 62;
+/// The tag bits of a handle.
 pub const TAG_MASK: u64 = 0b11 << 62;
 
 /// Chunk size and the offset split: `offset = chunk << CHUNK_SHIFT | position`.
@@ -67,6 +70,7 @@ impl Default for CycleArena {
 }
 
 impl CycleArena {
+    /// An arena with one chunk.
     pub fn new() -> Self {
         Self {
             chunks: vec![vec![0u8; CHUNK_SIZE]],

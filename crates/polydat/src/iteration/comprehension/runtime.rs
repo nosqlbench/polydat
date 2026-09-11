@@ -101,7 +101,9 @@ struct EvaluatedNode {
 /// empty-clause policy callback.
 #[derive(Debug)]
 pub struct EmptyClause<'a> {
+    /// The clause's element name.
     pub var: &'a str,
+    /// The clause's source text, if any.
     pub spec_expr: Option<&'a str>,
 }
 
@@ -111,21 +113,33 @@ pub enum RuntimeError {
     /// Source evaluation failed (interpolation error,
     /// eval_const_expr error, unsupported source shape, etc.).
     SourceEval {
+        /// The clause's element name.
         var: String,
+        /// The source text.
         source: String,
+        /// The underlying reason.
         message: String,
     },
     /// Filter predicate evaluation failed.
-    FilterEval { predicate: String, message: String },
+    FilterEval {
+        /// The predicate text.
+        predicate: String,
+        /// The underlying reason.
+        message: String,
+    },
     /// Strategy application failed.
     OrderEval {
+        /// The strategy applied.
         strategy: StrategyName,
+        /// The underlying reason.
         message: String,
     },
     /// V4 (spec §5) violation — strategy rejects the input's
     /// addressing shape at invocation time (spec §10.7.8).
     StrategyRejectsInput {
+        /// The strategy applied.
         strategy: StrategyName,
+        /// The input's addressing scheme, if one was claimed.
         index_fn: Option<IndexFn>,
     },
     /// The runtime evaluator encountered an algebra-AST shape

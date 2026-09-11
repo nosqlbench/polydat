@@ -134,12 +134,16 @@ impl std::fmt::Display for StrategyName {
 ///   Bounded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ZipMode {
+    /// A length mismatch is an error.
     Strict,
+    /// Cut to the shortest child.
     Truncate,
+    /// Repeat shorter children to the longest's length.
     Cycle,
 }
 
 impl ZipMode {
+    /// The mode's name, as the comprehension grammar spells it.
     pub fn as_str(self) -> &'static str {
         match self {
             ZipMode::Strict => "strict",

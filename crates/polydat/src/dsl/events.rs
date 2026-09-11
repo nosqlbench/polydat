@@ -30,74 +30,150 @@ pub enum EventLevel {
 #[derive(Debug, Clone)]
 pub enum CompileEvent {
     /// DSL source parsed into AST.
-    Parsed { statements: usize },
+    Parsed {
+        /// Top-level statements in the file.
+        statements: usize,
+    },
     /// A binding was resolved from DSL to a node.
-    BindingResolved { name: String, node_type: String },
+    BindingResolved {
+        /// The binding's name.
+        name: String,
+        /// The node type it resolved to.
+        node_type: String,
+    },
     /// A module was loaded and inlined.
-    ModuleInlined { name: String, nodes_added: usize },
+    ModuleInlined {
+        /// The module's name.
+        name: String,
+        /// Nodes the inlining added to the graph.
+        nodes_added: usize,
+    },
     /// A legacy binding chain was translated to Polydat source.
-    LegacyTranslated { name: String, polydat_expr: String },
+    LegacyTranslated {
+        /// The binding's name.
+        name: String,
+        /// The Polydat expression it became.
+        polydat_expr: String,
+    },
     /// Type adapter inserted between mismatched ports.
     TypeAdapterInserted {
+        /// The producing node.
         from_node: String,
+        /// The consuming node.
         to_node: String,
+        /// The adapter node inserted between them.
         adapter: String,
     },
     /// Init-time constant folded (SRD 44).
-    ConstantFolded { node: String, value: String },
+    ConstantFolded {
+        /// The node folded.
+        node: String,
+        /// The constant's rendered value.
+        value: String,
+    },
     /// Fusion pattern matched and applied (SRD 36).
     FusionApplied {
+        /// The fusion pattern's name.
         pattern: String,
+        /// Nodes the fused node replaced.
         nodes_replaced: usize,
     },
     /// Output declared.
-    OutputDeclared { name: String },
+    OutputDeclared {
+        /// The output's name.
+        name: String,
+    },
     /// Compilation level selected for a node.
-    CompileLevelSelected { node: String, level: String },
+    CompileLevelSelected {
+        /// The node.
+        node: String,
+        /// The level's name.
+        level: String,
+    },
     /// Workload parameter injected as constant.
-    ParamInjected { name: String, value: String },
+    ParamInjected {
+        /// The parameter's name.
+        name: String,
+        /// The value injected.
+        value: String,
+    },
     /// Config wire connected to a cycle-time source (performance warning).
-    ConfigWireCycleWarning { node: String, port: String },
+    ConfigWireCycleWarning {
+        /// The consuming node.
+        node: String,
+        /// The config port fed by a cycle-time source.
+        port: String,
+    },
     /// Auto-widening type coercion inserted by the compiler.
     TypeWidening {
+        /// The source type.
         from: &'static str,
+        /// The type widened to.
         to: &'static str,
+        /// Where the widening was inserted.
         context: String,
     },
     /// Warning during compilation.
-    Warning { message: String },
+    Warning {
+        /// The warning text.
+        message: String,
+    },
     /// An extern with no default: `None` until the host sets it, and
     /// every consumer reads `None` through it (engine_parity.md, A12).
-    ExternWithoutDefault { name: String, port_type: String },
+    ExternWithoutDefault {
+        /// The extern's name.
+        name: String,
+        /// Its declared type.
+        port_type: String,
+    },
     /// Summary of the compiled program.
     Summary {
+        /// Nodes in the compiled graph.
         nodes: usize,
+        /// Declared outputs.
         outputs: usize,
+        /// Init-time constants folded.
         constants_folded: usize,
     },
     /// A module-level pragma was acknowledged. Recorded once per
     /// recognised `// @pragma: <name>` directive at the top of the
     /// source. Lets `--diagnose` show which graph transforms the
     /// module asked for.
-    PragmaAcknowledged { name: String, line: usize },
+    PragmaAcknowledged {
+        /// The pragma's name.
+        name: String,
+        /// The source line it appears on.
+        line: usize,
+    },
     /// An unrecognised module-level pragma was seen. Pragmas are
     /// forward-compatible: an old binary parses a newer module
     /// that opts into features it doesn't support, and the only
     /// effect is this advisory.
-    UnknownPragma { name: String, line: usize },
+    UnknownPragma {
+        /// The pragma's name.
+        name: String,
+        /// The source line it appears on.
+        line: usize,
+    },
     /// Strict-wire mode auto-inserted an assertion node between
     /// `from_node` and `to_node`. SRD 15 §"Strict Wire Mode".
     AssertionInserted {
+        /// The producing node.
         from_node: String,
+        /// The consuming node.
         to_node: String,
+        /// The assertion kind inserted.
         kind: String,
     },
     /// Strict-wire mode considered inserting an assertion but
     /// proved it redundant. The reason field names which skip
     /// rule applied (constant source, upstream assertion, etc.).
     AssertionSkipped {
+        /// The producing node.
         from_node: String,
+        /// The consuming node.
         to_node: String,
+        /// The skip rule that applied.
         reason: String,
     },
     /// A tile hole was typed (SRD 114 §4): its expression, the wire
@@ -105,25 +181,40 @@ pub enum CompileEvent {
     /// contextual expectation of its position, the encoder chosen, and
     /// the adapter inserted between wire and declared type if one was.
     TileHoleTyped {
+        /// The tile's name.
         tile: String,
+        /// The hole's expression text.
         hole: String,
+        /// The wire type the compiler inferred.
         wire_type: String,
+        /// The declared type, if any.
         declared: Option<String>,
+        /// The contextual expectation of the hole's position.
         expectation: String,
+        /// The encoder chosen.
         encoder: String,
+        /// The adapter inserted between wire and declared type, if any.
         adapter: Option<String>,
     },
     /// A tile's skeleton (SRD 114 §6, §10): how many static runs it
     /// copies and their byte total, its holes, branches, and
     /// projections, and the source of each projection body program.
     TileCompiled {
+        /// The tile's name.
         tile: String,
+        /// The tile's encoding.
         encoding: String,
+        /// Static runs the skeleton copies.
         statics: usize,
+        /// Their byte total.
         static_bytes: usize,
+        /// Holes.
         holes: usize,
+        /// Branches.
         branches: usize,
+        /// Projections.
         projections: usize,
+        /// The source of each projection body program.
         bodies: Vec<String>,
     },
 }
@@ -172,18 +263,22 @@ pub struct CompileEventLog {
 }
 
 impl CompileEventLog {
+    /// An empty log.
     pub fn new() -> Self {
         Self { events: Vec::new() }
     }
 
+    /// Record an event.
     pub fn push(&mut self, event: CompileEvent) {
         self.events.push(event);
     }
 
+    /// Every event recorded, in order.
     pub fn events(&self) -> &[CompileEvent] {
         &self.events
     }
 
+    /// Whether no event has been recorded.
     pub fn is_empty(&self) -> bool {
         self.events.is_empty()
     }

@@ -67,6 +67,7 @@ pub struct Pragma {
 /// outer scopes win on conflict.
 #[derive(Debug, Clone, Default)]
 pub struct PragmaSet {
+    /// The pragmas declared in this scope, in order.
     pub entries: Vec<Pragma>,
     /// Outer scope, if any. Lookups walk this chain after their
     /// own entries miss; conflicts are detected at attach time
@@ -189,8 +190,11 @@ pub fn collect_from_ast(file: &crate::dsl::ast::PolydatFile) -> PragmaSet {
 /// diagnostics, not for resolution.
 #[derive(Debug, Clone)]
 pub struct PragmaConflict {
+    /// The pragma's name.
     pub name: String,
+    /// The line the outer scope declares it on.
     pub outer_line: usize,
+    /// The line the inner scope declares it on.
     pub inner_line: usize,
 }
 
