@@ -337,9 +337,14 @@ through the same assembler every engine uses, and every later
 activation on that engine shares the program, as interpreter
 activations share theirs. The activation is driven through the `Kernel`
 trait and computes what the interpreter's activation computes
-([engine parity](engine_parity.md), step 8). The kernel that opens a
-traversal is an interpreter kernel, and so is an activation whose body
-opens a traversal of its own.
+([engine parity](engine_parity.md), step 8). Opening a traversal is the
+interpreter's work: the comprehension's sources are evaluated against
+the kernel that opens it, and that kernel is an interpreter kernel. So
+the root program's kernel is one, and so is the activation of any body
+that itself contains a `for` statement, because that activation is the
+kernel that opens the nested traversal. Only a body with no `for` of
+its own, the innermost body of a nest, where the cycles run, is
+activated on the engine the host chose.
 
 **Opening cost.** Opening a traversal evaluates its comprehension. Ranges
 and literal lists evaluate directly. A generator-call source such as

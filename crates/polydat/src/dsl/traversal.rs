@@ -89,10 +89,10 @@ impl std::fmt::Debug for BodySource {
 impl Traversal {
     /// The body's program on `engine`, compiled on the first call for
     /// that engine and shared by every activation after it, as the
-    /// interpreter's program is (SRD 113 §5.1, §5.2). A body that
-    /// declares a traversal or producer of its own runs on the
-    /// interpreter only, since its activations open those; every other
-    /// engine refuses it by name.
+    /// interpreter's program is (SRD 113 §5.1, §5.2). A body that itself
+    /// contains a `for` statement or producer binding runs on the
+    /// interpreter only, because its activation is the kernel that opens
+    /// the nested traversal; every other engine refuses it by name.
     pub fn program_on(
         &self,
         engine: crate::Engine,

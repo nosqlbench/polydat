@@ -1,11 +1,16 @@
 # Engine Parity — Review and True-Up Plan
 
-**Status:** Proposed SRD 116. This document is a review, recorded on
-2026-09-09, of every place the compilation levels differ in anything
-other than performance, and the plan that removes each difference.
-§5 is the plan, §4 the findings it answers. Steps 1 through 3 of the
-plan landed on 2026-09-09 and steps 4 through 10 on 2026-09-10 (the landing
-records are under the steps); the rest is proposed.
+**Status:** SRD 116, landed. This document is a review, recorded on
+2026-09-09, of every place the compilation levels differed in anything
+other than performance, and the plan that removed each difference. §4
+holds the findings, each with the note that closed it; §5 holds the
+plan, each step with its landing record. Steps 1 through 3 landed on
+2026-09-09 and steps 4 through 10 on 2026-09-10. Every engine a host
+can choose now accepts every program the interpreter accepts and
+computes what it computes, behind one trait; the node-by-engine matrix
+the parity suite maintains in the [node reference](../reference/nodes.md)
+is the standing proof, and `tests/engine_parity.rs` fails on any change
+to it.
 
 **Ownership.** Polydat owns the feature set, the engines, and the public
 API that names them. A host chooses an engine for speed and for nothing
@@ -80,13 +85,17 @@ pure native refusals add the 62 of A4. The same test now also compares
 every output of every program across the engines that ran it with the
 interpreter's value (`the_engines_agree_on_every_node`).
 
-## 3. The public API today
+## 3. The public API the review found
 
-*As of step 4 every engine is behind one trait, `Kernel`, built by one
-constructor, `compile_with(Engine)` on the assembler and
-`compile_polydat_with(src, Engine)` on the DSL entry, with one error
-type, `KernelError`; the table below records the surfaces the review
-found, which remain as engine-specific extras and documented aliases.*
+*The API today is one trait, `Kernel`, built by one constructor,
+`compile_with(Engine)` on the assembler and `compile_polydat_with(src,
+Engine)` on the DSL entry, with one error type, `KernelError` (step 4),
+and the engines are the interpreter, the closure tier, and P3, the
+hybrid kernel (step 7). The table below records the surfaces the review
+found on 2026-09-09; the closure and hybrid extras remain as documented
+aliases, and the pure native kernels of the last column are the
+differential tier behind P3, hidden and reachable through
+`try_compile_pure_jit*` only.*
 
 What a host held after compiling, by engine. "Same" means the same
 name, signature, and meaning as the interpreter kernel.
@@ -254,9 +263,11 @@ what it is for.
 ### A5. Traversals and producers are a kernel-path feature — functional
 
 *Closed by step 8 for the bodies: an activation runs on any engine
-through `TraversalStream::activation_on`. The parent that opens a
-traversal is an interpreter kernel, and so is an activation whose body
-opens one of its own. The record below is the state the review found.*
+through `TraversalStream::activation_on`. Opening a traversal remains
+the interpreter's work, so the root kernel and the activation of any
+body that itself contains a `for` statement are interpreter kernels;
+the innermost bodies, where the cycles run, activate on any engine. The
+record below is the state the review found.*
 
 A `for` statement or producer compiles only through `compile_polydat*`,
 which builds activation programs and a runtime the host drives with
@@ -748,11 +759,14 @@ proves it.
    matter now: `KernelProgram::create_nested_kernel` and
    `Kernel::nest` mark a kernel as running inside the cycle of the
    kernel that opened it (SRD 115 §4), on every engine. What stays on
-   the interpreter: the parent that opens a traversal, since the
-   comprehension evaluates against its values, and an activation whose
-   body declares a traversal or producer of its own, since its
-   activations open those; the other engines refuse such a body by
-   name. The `polydat` binary still activates on the interpreter.
+   the interpreter is opening a traversal, since the comprehension's
+   sources evaluate against the kernel that opens it. So the root kernel
+   is an interpreter kernel, and so is the activation of any body that
+   itself contains a `for` statement or producer binding, because that
+   activation is what opens the nested traversal; the other engines
+   refuse such a body by name. Only a body with no `for` of its own, the
+   innermost body of a nest, where the cycles run, activates on another
+   engine. The `polydat` binary still activates on the interpreter.
    `tests/for_engines.rs` traces every activation and cycle of a sweep
    and of a partition-sliced cursor body on every engine against the
    interpreter's, checks one program per engine with the build counter

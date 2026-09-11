@@ -345,6 +345,23 @@ pub enum Engine {
     Native(Provenance),
 }
 
+impl Default for Engine {
+    /// The engine a host gets when it names none: the fastest this build
+    /// has, P3 with the `jit` feature and the closure tier without, with
+    /// the provenance mode left to the selector. Compiled code is the
+    /// default; the interpreter is a choice.
+    fn default() -> Self {
+        #[cfg(feature = "jit")]
+        {
+            Engine::Native(Provenance::Auto)
+        }
+        #[cfg(not(feature = "jit"))]
+        {
+            Engine::Closures(Provenance::Auto)
+        }
+    }
+}
+
 impl std::fmt::Display for Engine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

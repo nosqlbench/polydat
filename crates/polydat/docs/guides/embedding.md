@@ -611,7 +611,12 @@ kernel of its own over the shared steps or native code.
 The production kernel of `compile()` and `compile_polydat` is
 `Engine::Interpreter`: the interpreter over a graph whose native-eligible
 regions are cones, per `set_jit_mode` on the assembler (`Auto`, `Off`,
-`Force`) and the `jit` Cargo feature. [Compilation levels](compilation.md)
+`Force`) and the `jit` Cargo feature. The engine a host gets when it names
+none, `Engine::default()`, is P3 with the `jit` feature and the closure
+tier without: `compile_polydat_kernel(src)` and `compile_kernel()` on the
+assembler build on it, and the `polydat` binary activates traversals on
+it (a body that itself contains a `for` statement is activated on the
+interpreter, since that activation opens the nested traversal). [Compilation levels](compilation.md)
 describes each engine, [Engines](../design/engines.md) the selection
 rules, and [Engine Parity](../design/engine_parity.md) what each engine
 accepts.

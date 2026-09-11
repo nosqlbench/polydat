@@ -18,7 +18,6 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use polydat::JitMode;
 use polydat::ast::Slot;
 use polydat::dsl::ast::PolydatFile;
 use polydat::dsl::ast::TileOptions;
@@ -27,9 +26,11 @@ use polydat::dsl::events::{CompileEvent, CompileEventLog};
 use polydat::dsl::transform::{apply_tile_defaults, assign_values, parse_assignment};
 use polydat::dsl::{CompileOptions, compile_ast_with_options};
 use polydat::iteration::cursor_partition::{Partition, cursor_over_partitions, narrow_cursor};
+use polydat::kernel::activation::Activation;
 use polydat::kernel::{PolydatProgram, WireSource, extract_manifest};
 use polydat::library::emit::{self, EmitFormat};
 use polydat::library::support::audit::{self, LogLevel};
+use polydat::{Engine as KernelEngine, JitMode, Kernel};
 
 #[derive(Parser)]
 #[command(
@@ -904,9 +905,20 @@ fn run_traversals(
                     let mut i = fiber;
                     while i < stream.len() {
                         let start = Instant::now();
-                        let rows = match stream.activation(i) {
+                        // Activations run compiled by default. A body that itself
+                        // contains a `for` statement is activated on the interpreter,
+                        // since that activation is the kernel that opens the nested
+                        // traversal; the innermost bodies run compiled.
+                        let activation: Result<Box<dyn CycleKernel>, String> =
+                            match stream.activation_on(i, KernelEngine::default()) {
+                                Ok(act) => Ok(Box::new(act)),
+                                Err(_) => stream
+                                    .activation(i)
+                                    .map(|act| Box::new(act) as Box<dyn CycleKernel>),
+                            };
+                        let rows = match activation {
                             Ok(mut act) => {
-                                let n = act.cycle_count().min(cap);
+                                let n = act.count().min(cap);
                                 let mut rows = Vec::new();
                                 if i == 0
                                     && let Some(h) = &headers[t]
@@ -914,7 +926,7 @@ fn run_traversals(
                                     rows.push(h.clone());
                                 }
                                 for c in 0..n {
-                                    let kernel = act.cycle(c);
+                                    let kernel = act.at(c);
                                     if emitting {
                                         kernel.pull("__emit");
                                     } else {
@@ -1809,4 +1821,29 @@ fn viz(args: VizArgs) -> Result<(), String> {
     };
     print!("{out}");
     Ok(())
+}
+
+/// An activation driven cycle by cycle through the `Kernel` trait,
+/// whichever engine it runs on.
+trait CycleKernel {
+    fn count(&self) -> u64;
+    fn at(&mut self, i: u64) -> &mut dyn Kernel;
+}
+
+impl CycleKernel for Activation {
+    fn count(&self) -> u64 {
+        self.cycle_count()
+    }
+    fn at(&mut self, i: u64) -> &mut dyn Kernel {
+        self.cycle(i)
+    }
+}
+
+impl CycleKernel for Activation<Box<dyn Kernel>> {
+    fn count(&self) -> u64 {
+        self.cycle_count()
+    }
+    fn at(&mut self, i: u64) -> &mut dyn Kernel {
+        self.cycle(i)
+    }
 }

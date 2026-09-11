@@ -2343,8 +2343,10 @@ impl Compiler {
             return Err(KernelError::Refused {
                 engine,
                 reason: format!(
-                    "{}: the body declares a traversal or producer of its own, which opens \
-                     from an interpreter activation (docs/design/engine_parity.md, step 8)",
+                    "{}: the body contains a `for` statement or producer binding, so its \
+                     activation is the interpreter activation that opens the nested \
+                     traversal; only a body with no `for` of its own runs on another \
+                     engine (docs/design/engine_parity.md, step 8)",
                     body.context_label
                 ),
             });
@@ -2807,6 +2809,12 @@ pub fn compile_polydat_with(
     engine: crate::Engine,
 ) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
     compile_polydat_with_engine(source, engine, &CompileOptions::default(), None)
+}
+
+/// [`compile_polydat_with`] on [`Engine::default`](crate::Engine::default):
+/// compiled code, with the JIT where the build has it.
+pub fn compile_polydat_kernel(source: &str) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
+    compile_polydat_with(source, crate::Engine::default())
 }
 
 /// [`compile_polydat_with`] with the kernel path's options (source

@@ -256,3 +256,26 @@ fn the_compile_log_reaches_every_engine() {
         assert!(!log.events().is_empty(), "{engine}: no compile events");
     }
 }
+
+#[test]
+fn the_default_engine_is_compiled_code() {
+    let want = if cfg!(feature = "jit") {
+        Engine::Native(Provenance::Auto)
+    } else {
+        Engine::Closures(Provenance::Auto)
+    };
+    assert_eq!(Engine::default(), want);
+    let mut k = polydat::dsl::compile::compile_polydat_kernel(SRC).unwrap();
+    assert!(matches!(
+        (k.engine(), want),
+        (Engine::Native(_), Engine::Native(_)) | (Engine::Closures(_), Engine::Closures(_))
+    ));
+    let mut p1 = compile_polydat_with(SRC, Engine::Interpreter).unwrap();
+    k.set_inputs(&[7]);
+    p1.set_inputs(&[7]);
+    for name in p1.output_names() {
+        assert_eq!(k.pull(&name), p1.pull(&name), "{name}");
+    }
+    let asm = compile_polydat_to_assembler(SRC).unwrap();
+    assert_eq!(asm.compile_kernel().unwrap().engine(), k.engine());
+}

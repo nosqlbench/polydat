@@ -2739,6 +2739,12 @@ impl PolydatAssembler {
         self.compile_engine_with_log(engine, None)
     }
 
+    /// [`Self::compile_with`] on [`Engine::default`]: compiled code, with
+    /// the JIT where the build has it.
+    pub fn compile_kernel(self) -> Result<Box<dyn Kernel>, KernelError> {
+        self.compile_with(Engine::default())
+    }
+
     /// [`Self::compile_with`] with the compile event log, which
     /// receives the assembly events for every engine.
     pub fn compile_engine_with_log(
