@@ -728,7 +728,8 @@ mod tests {
         );
         asm2.add_output("result", WireRef::node("dws"));
 
-        let result = asm2.compile_strict(true);
+        asm2.set_strict(true);
+        let result = asm2.compile();
         assert!(
             result.is_err(),
             "strict mode should reject cycle-time config wire"

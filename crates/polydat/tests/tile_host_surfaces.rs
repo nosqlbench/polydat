@@ -9,10 +9,16 @@
 use std::process::Command;
 
 use polydat::dsl::ast::TileOptions;
-use polydat::dsl::compile::compile_ast;
-use polydat::dsl::compile::compile_polydat_with_log;
+use polydat::dsl::compile::{CompileOptions, compile_ast_with_options, compile_polydat_with_log};
 use polydat::dsl::events::{CompileEvent, CompileEventLog};
 use polydat::dsl::transform::apply_tile_defaults;
+
+/// The interpreter kernel of a parsed program under the default options.
+fn compile_ast(
+    ast: &polydat::dsl::ast::PolydatFile,
+) -> Result<polydat::kernel::PolydatKernel, String> {
+    compile_ast_with_options(ast, "", &CompileOptions::default(), None)
+}
 
 #[test]
 fn tile_defaults_transform_rereads_untouched_tiles_only() {

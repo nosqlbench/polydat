@@ -64,6 +64,10 @@ pub struct BodySource {
     pub(crate) context_label: String,
     pub(crate) cursor_limit: Option<u64>,
     pub(crate) pragmas: super::pragmas::PragmaSet,
+    /// The modules the parent program had resolved when the body was
+    /// lowered, its own definitions included, so the body sees them
+    /// wherever it compiles, as the parent did.
+    pub(super) modules: HashMap<String, super::modules::ResolvedModule>,
     /// The body's program per engine, built on first use.
     pub(crate) programs: Mutex<HashMap<crate::Engine, Arc<dyn crate::kernel::KernelProgram>>>,
 }

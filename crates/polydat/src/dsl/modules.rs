@@ -25,6 +25,7 @@ use crate::dsl::validate::collect_references;
 use super::compile::{Compiler, STDLIB_MODULES};
 
 /// A resolved Polydat module ready for inlining.
+#[derive(Clone)]
 pub(super) struct ResolvedModule {
     /// Input parameter names (from formal signature or inferred).
     pub(super) inputs: Vec<String>,

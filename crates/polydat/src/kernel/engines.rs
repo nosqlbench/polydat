@@ -1344,7 +1344,7 @@ mod panic_enrichment_tests {
     //! when a node panics on a type mismatch (the "expected U64,
     //! got Str" surface that operators see in the wild).
 
-    use crate::dsl::compile::compile_polydat_with_libs;
+    use crate::dsl::compile::{CompileOptions, compile_polydat_with_options};
 
     #[test]
     fn type_mismatch_panic_carries_node_and_output_context() {
@@ -1352,14 +1352,15 @@ mod panic_enrichment_tests {
         // slot — `mul`'s u64 path will panic on `as_u64()`.
         // The enricher must wrap the message with the node
         // name + output name + program context.
-        let mut k = compile_polydat_with_libs(
+        let options = CompileOptions {
+            context: "test_workload".into(),
+            ..CompileOptions::default()
+        };
+        let mut k = compile_polydat_with_options(
             "extern x: u64\n\
              doubled := mul(x, 2)\n",
+            &options,
             None,
-            vec![],
-            &[],
-            false,
-            "test_workload",
         )
         .expect("compile");
         let idx = k.program().find_input("x").unwrap();

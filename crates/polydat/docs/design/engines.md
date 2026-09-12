@@ -11,8 +11,8 @@ specified in [graph_compiler.md](graph_compiler.md).
 | Level | Representation | Semantic coverage | Construction |
 | --- | --- | --- | --- |
 | P1 | `PolydatKernel` over `Box<dyn PolydatNode>` and typed `Value` buffers | Complete node, type, scope, and lifecycle model | Normal DSL and assembler compile paths |
-| P2 | Direct closures over a flat `u64` slot buffer | Nodes that provide `compiled_u64` or `compiled_slot` kits | Explicit `try_compile*` and `auto_compile_p2` paths |
-| P3 | Cranelift native code for every node with a lowering and the node's closure elsewhere, over one flat slot buffer | Every program the closure tier accepts | Explicit `try_compile_jit*` and `auto_compile_p3` paths; embedded cones in normal compilation |
+| P2 | Direct closures over a flat `u64` slot buffer | Every program the interpreter accepts, one-slot externs | `compile_with(Engine::Closures(p))`; `try_compile*` for the concrete type in the differential suites |
+| P3 | Cranelift native code for every node with a lowering and the node's closure elsewhere, over one flat slot buffer | Every program the closure tier accepts | `compile_with(Engine::Native(p))`, the default engine with the `jit` feature; `try_compile_jit*` for the concrete type; embedded cones on the interpreter |
 
 P1 is the semantic host and fallback. P2 and P3 are constructive: a compiled
 builder succeeds only when every required operation and slot shape is supported.

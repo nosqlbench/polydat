@@ -231,7 +231,13 @@ macro_rules! impl_kernel_trait {
                 })?;
                 crate::kernel::activation::open_traversal(self, traversal)
             }
-            fn set_traversals(&mut self, traversals: Vec<crate::dsl::traversal::Traversal>) {
+            /// A compiled kernel keeps the traversals; each carries the
+            /// comprehension its producer resolved to at compile time.
+            fn set_traversals(
+                &mut self,
+                traversals: Vec<crate::dsl::traversal::Traversal>,
+                _producers: Vec<crate::dsl::traversal::Producer>,
+            ) {
                 self.core.traversals = traversals.into();
             }
             fn invalidate_all(&mut self) {
@@ -240,6 +246,14 @@ macro_rules! impl_kernel_trait {
             }
             fn slot_value(&self, slot: usize, ty: crate::ast::PortType) -> crate::ast::Value {
                 self.core.slot_value(slot, ty)
+            }
+            fn folded_value(&self, name: &str) -> Option<crate::ast::Value> {
+                let slot = *self.core.output_map.get(name)?;
+                let ty = *self.core.output_types.get(name)?;
+                Some(self.core.slot_value(slot, ty))
+            }
+            fn set_cursor_extent(&mut self, index: usize, extent: u64) {
+                self.core.externs.set_cursor_extent(index, extent);
             }
             fn nest(&mut self) {
                 self.set_owns_cycle(false);

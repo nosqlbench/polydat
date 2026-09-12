@@ -13,7 +13,16 @@
 //! and scope composition mechanics.
 
 use polydat::dsl::ast::BindingModifier;
-use polydat::dsl::compile::{compile_polydat, compile_polydat_strict};
+use polydat::dsl::compile::{CompileOptions, compile_polydat, compile_polydat_with_options};
+
+/// The interpreter kernel under strict typing.
+fn compile_strict(src: &str) -> Result<polydat::kernel::PolydatKernel, String> {
+    let options = CompileOptions {
+        strict: true,
+        ..CompileOptions::default()
+    };
+    compile_polydat_with_options(src, &options, None)
+}
 use polydat::kernel::Construction;
 use polydat::kernel::subcontext::PolydatMatter;
 
@@ -248,7 +257,7 @@ fn self_referential_binding() {
 
 #[test]
 fn strict_requires_explicit_inputs() {
-    let result = compile_polydat_strict("h := hash(cycle)", None, true);
+    let result = compile_strict("h := hash(cycle)");
     assert!(
         result.is_err(),
         "strict mode should require explicit inputs"
@@ -257,7 +266,7 @@ fn strict_requires_explicit_inputs() {
 
 #[test]
 fn strict_accepts_explicit_inputs() {
-    let result = compile_polydat_strict("input cycle: u64\nh := hash(cycle)", None, true);
+    let result = compile_strict("input cycle: u64\nh := hash(cycle)");
     assert!(
         result.is_ok(),
         "strict with explicit inputs should work: {:?}",

@@ -439,10 +439,15 @@ pub trait Kernel: Send {
             .collect()
     }
 
-    /// Attach the traversals the program declares; the compile path
-    /// calls this once, before the kernel is shared.
+    /// Attach the traversals the program declares and the producer
+    /// bindings they may traverse; the compile path calls this once,
+    /// before the kernel is shared.
     #[doc(hidden)]
-    fn set_traversals(&mut self, traversals: Vec<crate::dsl::traversal::Traversal>);
+    fn set_traversals(
+        &mut self,
+        traversals: Vec<crate::dsl::traversal::Traversal>,
+        producers: Vec<crate::dsl::traversal::Producer>,
+    );
 
     /// Begin the next cycle with nothing current, so every step, a side
     /// channel included, runs again when pulled. The runtime model makes
@@ -458,6 +463,18 @@ pub trait Kernel: Send {
     fn slot_value(&self, _slot: usize, _ty: PortType) -> Value {
         Value::None
     }
+
+    /// The value the build folded for output `name`, if it folded one:
+    /// what the compile path reads to resolve a cursor extent computed
+    /// from constants, on every engine.
+    #[doc(hidden)]
+    fn folded_value(&self, name: &str) -> Option<Value>;
+
+    /// Record the extent of cursor `index` once the compile path has
+    /// resolved it from the folded constants; the compile path calls
+    /// this once, before the kernel is shared.
+    #[doc(hidden)]
+    fn set_cursor_extent(&mut self, index: usize, extent: u64);
 
     /// The cells this kernel's `shared` bindings are bound to (scope
     /// model §6): one register per binding, which every kernel holding

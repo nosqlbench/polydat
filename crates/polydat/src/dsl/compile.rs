@@ -312,9 +312,12 @@ pub fn stdlib_sources() -> &'static [(&'static str, &'static str)] {
     STDLIB_MODULES
 }
 
-/// Compile a `.polydat` source string into a runtime kernel.
+/// Compile a `.polydat` source string into the interpreter's kernel,
+/// under the default options: [`compile_polydat_with_options`] with
+/// [`CompileOptions::default`]. The interpreter is the semantic oracle;
+/// [`compile_polydat_kernel`] is the same program on the default engine.
 pub fn compile_polydat(source: &str) -> Result<PolydatKernel, String> {
-    compile_polydat_with_path(source, None)
+    compile_polydat_with_options(source, &CompileOptions::default(), None)
 }
 
 /// Compile source together with tiles a host built from what it holds
@@ -358,10 +361,13 @@ fn ast_with_tiles(
 
 /// Compile Polydat source to an assembler (not yet compiled to a kernel).
 ///
-/// Returns the `PolydatAssembler` with all nodes and wiring populated,
-/// ready to be compiled at any level: `.compile()` for P1,
-/// `.try_compile()` for P2, `.try_compile_jit()` for P3 (native code
-/// where a node has a lowering, its closure elsewhere).
+/// Returns the `PolydatAssembler` with every node and wire in place,
+/// the graph a host may extend by hand before building it on any
+/// engine: [`PolydatAssembler::compile_kernel`] for the default engine,
+/// [`PolydatAssembler::compile_with`] for a named one,
+/// [`PolydatAssembler::compile`] for the interpreter's concrete kernel.
+/// An assembler carries no traversal, so a program with a `for`
+/// statement is refused here; the kernel entry points compile it.
 pub fn compile_polydat_to_assembler(source: &str) -> Result<PolydatAssembler, String> {
     compile_polydat_to_assembler_with(source, &CompileOptions::default())
 }
@@ -376,33 +382,11 @@ pub fn compile_polydat_to_assembler_with(
     source: &str,
     options: &CompileOptions,
 ) -> Result<PolydatAssembler, String> {
-    let _data_base = options.source_dir.as_deref().map(DataBaseDirGuard::set);
     let tokens = super::lexer::lex(source)?;
     let ast = super::parser::parse(tokens)?;
-    let pragmas = super::pragmas::collect_from_ast(&ast);
-    let extended = if options.required_outputs.is_empty() {
-        Vec::new()
-    } else {
-        extend_required_with_const_bindings(&options.required_outputs, &ast)
-    };
-    let filter = if extended.is_empty() {
-        None
-    } else {
-        Some(extended.as_slice())
-    };
-    let mut compiler = Compiler::with_lib_paths(
-        options.source_dir.clone(),
-        options.lib_paths.clone(),
-        options.strict,
-    );
-    compiler.source_text = source.to_string();
-    if !options.context.is_empty() {
-        compiler.context_label = options.context.clone();
-    }
-    compiler.cursor_limit = options.cursor_limit;
-    compiler.pragmas = pragmas;
-    let asm = compiler.assemble_parent(&ast, filter)?;
-    Ok(asm)
+    let mut prepared = Prepared::new(source, &ast, options, None);
+    let (compiler, filter) = prepared.parts();
+    compiler.assemble_parent(&ast, filter)
 }
 
 /// Compile one selected scalar output into the conservative perfect-ordinal
@@ -423,53 +407,37 @@ pub fn compile_polydat_tier1_simd_ordinal(
         .map_err(|error| error.to_string())
 }
 
-/// Compile with a source directory for module resolution.
-///
-/// When the compiler encounters an unknown function name, it searches
-/// `source_dir` for `.polydat` module files that export a matching binding.
+/// [`compile_polydat_with_options`] with a source directory alone.
+#[deprecated(note = "use compile_polydat_with_options with CompileOptions { source_dir, .. }")]
 pub fn compile_polydat_with_path(
     source: &str,
     source_dir: Option<&Path>,
 ) -> Result<PolydatKernel, String> {
-    compile_polydat_strict(source, source_dir, false)
+    let options = CompileOptions {
+        source_dir: source_dir.map(Path::to_path_buf),
+        ..CompileOptions::default()
+    };
+    compile_polydat_with_options(source, &options, None)
 }
 
-/// Compile with dead code elimination: only outputs named in
-/// `required_outputs` are exposed, and unreachable upstream nodes
-/// are pruned from the kernel.
-///
-/// When `required_outputs` is empty, compiles all bindings as outputs
-/// (same as `compile_polydat_with_path`).
-///
-/// The `strict` flag enforces the same rules as `compile_polydat_strict`.
+/// [`compile_polydat_with_options`] with a source directory, the
+/// outputs to keep, and strictness as separate parameters.
+#[deprecated(
+    note = "use compile_polydat_with_options with CompileOptions { required_outputs, .. }"
+)]
 pub fn compile_polydat_with_outputs(
     source: &str,
     source_dir: Option<&Path>,
     required_outputs: &[String],
     strict: bool,
 ) -> Result<PolydatKernel, String> {
-    let tokens = lexer::lex(source)?;
-    let ast = parser::parse(tokens)?;
-    // Only extend the required-outputs list with init bindings
-    // when the caller actually passed a non-empty list. Empty
-    // means "keep every binding" (DCE doesn't run); init
-    // bindings are already preserved in that case, and adding
-    // them to a previously-empty list would flip the meaning to
-    // "keep only these and their deps" — silently dropping
-    // every cycle binding the workload depends on.
-    let extended = if required_outputs.is_empty() {
-        Vec::new()
-    } else {
-        extend_required_with_const_bindings(required_outputs, &ast)
+    let options = CompileOptions {
+        source_dir: source_dir.map(Path::to_path_buf),
+        required_outputs: required_outputs.to_vec(),
+        strict,
+        ..CompileOptions::default()
     };
-    let filter = if extended.is_empty() {
-        None
-    } else {
-        Some(extended.as_slice())
-    };
-    let mut compiler = Compiler::new(source_dir.map(|p| p.to_path_buf()), strict);
-    compiler.source_text = source.to_string();
-    compiler.compile_filtered(&ast, filter)
+    compile_polydat_with_options(source, &options, None)
 }
 
 /// `init <name> = <expr>` declares a side-effect-carrying init-time
@@ -508,11 +476,10 @@ fn extend_required_with_const_bindings(
     out
 }
 
-/// Compile with additional library directories for module resolution.
-///
-/// Resolution order: source_dir, then each polydat_lib_path in order,
-/// then the embedded stdlib.  When `required_outputs` is empty,
-/// compiles all bindings as outputs.
+/// [`compile_polydat_with_options`] with the source directory, library
+/// directories, outputs to keep, strictness, and context label as
+/// separate parameters.
+#[deprecated(note = "use compile_polydat_with_options with CompileOptions { lib_paths, .. }")]
 pub fn compile_polydat_with_libs(
     source: &str,
     source_dir: Option<&Path>,
@@ -521,32 +488,17 @@ pub fn compile_polydat_with_libs(
     strict: bool,
     context: &str,
 ) -> Result<PolydatKernel, String> {
-    let tokens = lexer::lex(source)?;
-    let ast = parser::parse(tokens)?;
-    let extended = if required_outputs.is_empty() {
-        Vec::new()
-    } else {
-        extend_required_with_const_bindings(required_outputs, &ast)
-    };
-    let filter = if extended.is_empty() {
-        None
-    } else {
-        Some(extended.as_slice())
-    };
-    let mut compiler = Compiler::with_lib_paths(
-        source_dir.map(|p| p.to_path_buf()),
-        polydat_lib_paths,
+    let options = CompileOptions {
+        source_dir: source_dir.map(Path::to_path_buf),
+        lib_paths: polydat_lib_paths,
+        required_outputs: required_outputs.to_vec(),
         strict,
-    );
-    compiler.source_text = source.to_string();
-    compiler.context_label = context.to_string();
-    compiler.compile_filtered(&ast, filter)
+        context: context.to_string(),
+        cursor_limit: None,
+    };
+    compile_polydat_with_options(source, &options, None)
 }
 
-/// Compile with an optional cursor limit applied to all cursor declarations.
-///
-/// When `cursor_limit` is `Some(n)`, the compiler inserts a `limit(cursor, n)`
-/// node after each cursor declaration, clamping its extent.
 /// RAII guard that sets the data-file base directory (see
 /// [`crate::library::datafile::set_data_base_dir`]) for the duration of
 /// a synchronous compile and restores the previous value on drop, so
@@ -567,11 +519,9 @@ impl Drop for DataBaseDirGuard {
     }
 }
 
-/// Compile Polydat source on the interpreter with every option spelled
-/// out: the directory relative data files resolve against, the library
-/// search paths, the outputs to keep (all when empty), strictness, the
-/// diagnostic context label, and the cursor extent limit. Every other
-/// `compile_polydat*` form reduces to this one.
+/// [`compile_polydat_with_options`] with every option as a separate
+/// parameter.
+#[deprecated(note = "use compile_polydat_with_options")]
 pub fn compile_polydat_with_libs_and_limit(
     source: &str,
     source_dir: Option<&Path>,
@@ -581,52 +531,43 @@ pub fn compile_polydat_with_libs_and_limit(
     context: &str,
     cursor_limit: Option<u64>,
 ) -> Result<PolydatKernel, String> {
-    // Relative data-file paths (csv/jsonl nodes) resolve against the
-    // workload's own directory for the duration of this synchronous
-    // compile — see `library::datafile::set_data_base_dir`.
-    let _data_base = source_dir.map(DataBaseDirGuard::set);
-    let tokens = lexer::lex(source)?;
-    let ast = parser::parse(tokens)?;
-    let extended = if required_outputs.is_empty() {
-        Vec::new()
-    } else {
-        extend_required_with_const_bindings(required_outputs, &ast)
-    };
-    let filter = if extended.is_empty() {
-        None
-    } else {
-        Some(extended.as_slice())
-    };
-    let mut compiler = Compiler::with_lib_paths(
-        source_dir.map(|p| p.to_path_buf()),
-        polydat_lib_paths,
+    let options = CompileOptions {
+        source_dir: source_dir.map(Path::to_path_buf),
+        lib_paths: polydat_lib_paths,
+        required_outputs: required_outputs.to_vec(),
         strict,
-    );
-    compiler.source_text = source.to_string();
-    compiler.context_label = context.to_string();
-    compiler.cursor_limit = cursor_limit;
-    compiler.compile_filtered(&ast, filter)
+        context: context.to_string(),
+        cursor_limit,
+    };
+    compile_polydat_with_options(source, &options, None)
 }
 
-/// Compile with a source directory and optional strict mode.
-///
-/// When `strict` is true, the compiler enforces:
-/// - Explicit `input ...: u64` declaration (no inference)
-/// - All module arguments must be named (no positional)
-/// - All module inputs must be provided by the caller (no fallthrough to coordinates)
+/// [`compile_polydat_with_options`] with a source directory and
+/// strictness alone.
+#[deprecated(note = "use compile_polydat_with_options with CompileOptions { strict, .. }")]
 pub fn compile_polydat_strict(
     source: &str,
     source_dir: Option<&Path>,
     strict: bool,
 ) -> Result<PolydatKernel, String> {
-    let tokens = lexer::lex(source)?;
-    let ast = parser::parse(tokens)?;
-    compile_ast_strict_with_source(&ast, source_dir, strict, source)
+    let options = CompileOptions {
+        source_dir: source_dir.map(Path::to_path_buf),
+        strict,
+        ..CompileOptions::default()
+    };
+    compile_polydat_with_options(source, &options, None)
 }
 
-/// Options for [`compile_polydat_with_options`], the entry point the
-/// `polydat` binary uses. Every field has the same meaning as the
-/// corresponding parameter of [`compile_polydat_with_libs_and_limit`].
+/// The options every entry point compiles under. A host that names
+/// none gets the defaults: no source directory, no library paths,
+/// every binding an output, lax typing, the default context label,
+/// and no cursor limit.
+///
+/// `strict` refuses what lax compilation warns about, on every engine:
+/// an implicit type coercion, a config wire fed from a cycle-time
+/// source, a nondeterministic node no `volatile` output acknowledges, a
+/// binding nothing reads, an undeclared coordinate, and a positional
+/// module argument.
 #[derive(Debug, Default, Clone)]
 pub struct CompileOptions {
     /// The directory relative data-file paths resolve against.
@@ -643,9 +584,11 @@ pub struct CompileOptions {
     pub cursor_limit: Option<u64>,
 }
 
-/// Compile with library paths, strictness, and an optional compile-event
-/// log in one call. Pragma events are recorded the same way
-/// [`compile_polydat_with_log`] records them.
+/// Compile Polydat source into the interpreter's kernel under
+/// `options`, recording pragma and assembly events in `log` when one is
+/// given: the interpreter-typed entry point every other interpreter form
+/// reduces to. [`compile_polydat_with_engine`] is the same compile on
+/// any engine.
 pub fn compile_polydat_with_options(
     source: &str,
     options: &CompileOptions,
@@ -665,52 +608,21 @@ pub fn compile_ast_with_options(
     options: &CompileOptions,
     mut log: Option<&mut super::events::CompileEventLog>,
 ) -> Result<PolydatKernel, String> {
-    let _data_base = options.source_dir.as_deref().map(DataBaseDirGuard::set);
-    let pragmas = super::pragmas::collect_from_ast(ast);
-    if let Some(log) = log.as_deref_mut() {
-        record_pragma_events(&pragmas, log);
-    }
-    let extended = if options.required_outputs.is_empty() {
-        Vec::new()
-    } else {
-        extend_required_with_const_bindings(&options.required_outputs, ast)
-    };
-    let filter = if extended.is_empty() {
-        None
-    } else {
-        Some(extended.as_slice())
-    };
-    let mut compiler = Compiler::with_lib_paths(
-        options.source_dir.clone(),
-        options.lib_paths.clone(),
-        options.strict,
-    );
-    compiler.source_text = source.to_string();
-    if !options.context.is_empty() {
-        compiler.context_label = options.context.clone();
-    }
-    compiler.cursor_limit = options.cursor_limit;
-    compiler.pragmas = pragmas;
-    compiler.compile_filtered_with_log(ast, filter, log)
+    let mut prepared = Prepared::new(source, ast, options, log.as_deref_mut());
+    let (compiler, filter) = prepared.parts();
+    compiler
+        .compile_interpreter(ast, filter, log)
+        .map_err(|e| e.to_string())
 }
 
-/// Compile with a compile event log for diagnostic inspection.
+/// [`compile_polydat_with_options`] under the default options, with the
+/// compile event log: the same kernel [`compile_polydat`] builds, with
+/// every pragma, assembly, fold, and tile event recorded.
 pub fn compile_polydat_with_log(
     source: &str,
     log: &mut super::events::CompileEventLog,
 ) -> Result<PolydatKernel, String> {
-    let tokens = lexer::lex(source)?;
-    let ast = parser::parse(tokens)?;
-    let pragmas = super::pragmas::collect_from_ast(&ast);
-    record_pragma_events(&pragmas, log);
-    let mut compiler = Compiler::new(None, false);
-    compiler.source_text = source.to_string();
-    compiler.pragmas = pragmas;
-    let asm = compiler.build_assembler(&ast)?;
-    for e in compiler.tile_events.drain(..) {
-        log.push(e);
-    }
-    asm.compile_with_log(Some(log)).map_err(|e| e.to_string())
+    compile_polydat_with_options(source, &CompileOptions::default(), Some(log))
 }
 
 /// Scan the source for module-level `// @pragma: …` directives and
@@ -753,12 +665,16 @@ pub(crate) fn record_pragma_events(
     }
 }
 
-/// Compile with full diagnostics: errors, warnings, suggestions.
+/// Compile with full diagnostics: errors, warnings, suggestions, on the
+/// default engine.
 ///
 /// Returns `(Ok(kernel), report)` on success with possible warnings,
 /// or `(Err(()), report)` on failure with errors. The report always
-/// contains all diagnostics.
-pub fn compile_polydat_checked(source: &str) -> (Result<PolydatKernel, ()>, DiagnosticReport) {
+/// contains all diagnostics. The program the report describes is the
+/// program the kernel runs: the same compile every entry point makes.
+pub fn compile_polydat_checked(
+    source: &str,
+) -> (Result<Box<dyn crate::Kernel>, ()>, DiagnosticReport) {
     let mut report = DiagnosticReport::new(source);
 
     let tokens = match lexer::lex(source) {
@@ -784,10 +700,16 @@ pub fn compile_polydat_checked(source: &str) -> (Result<PolydatKernel, ()>, Diag
         return (Err(()), report);
     }
 
-    match compile_ast(&ast) {
+    match compile_ast_with_engine(
+        &ast,
+        source,
+        &CompileOptions::default(),
+        None,
+        crate::Engine::default(),
+    ) {
         Ok(kernel) => (Ok(kernel), report),
         Err(e) => {
-            report.error(crate::dsl::lexer::Span { line: 1, col: 1 }, e);
+            report.error(crate::dsl::lexer::Span { line: 1, col: 1 }, e.to_string());
             (Err(()), report)
         }
     }
@@ -1517,40 +1439,45 @@ pub fn positional_str_lit(arg: Option<&crate::dsl::ast::Arg>) -> Option<String> 
     }
 }
 
-/// Compile a parsed AST into a runtime kernel.
+/// [`compile_ast_with_options`] under the default options.
+#[deprecated(note = "use compile_ast_with_options")]
 pub fn compile_ast(file: &PolydatFile) -> Result<PolydatKernel, String> {
-    compile_ast_with_path(file, None)
+    compile_ast_with_options(file, "", &CompileOptions::default(), None)
 }
 
-/// Compile a parsed AST with module resolution from a source directory.
+/// [`compile_ast_with_options`] with a source directory alone.
+#[deprecated(note = "use compile_ast_with_options with CompileOptions { source_dir, .. }")]
 pub fn compile_ast_with_path(
     file: &PolydatFile,
     source_dir: Option<&Path>,
 ) -> Result<PolydatKernel, String> {
-    compile_ast_strict(file, source_dir, false)
+    let options = CompileOptions {
+        source_dir: source_dir.map(Path::to_path_buf),
+        ..CompileOptions::default()
+    };
+    compile_ast_with_options(file, "", &options, None)
 }
 
-/// Compile a parsed AST with module resolution and optional strict mode.
-///
-/// When `strict` is true, the compiler enforces:
-/// - Explicit `input ...: u64` declaration (no inference)
-/// - All module arguments must be named (no positional)
-/// - All module inputs must be provided by the caller (no fallthrough)
+/// [`compile_ast_with_options`] with a source directory and strictness
+/// alone.
+#[deprecated(note = "use compile_ast_with_options with CompileOptions { strict, .. }")]
 pub fn compile_ast_strict(
     file: &PolydatFile,
     source_dir: Option<&Path>,
     strict: bool,
 ) -> Result<PolydatKernel, String> {
-    let mut compiler = Compiler::new(source_dir.map(|p| p.to_path_buf()), strict);
-    compiler.compile(file)
+    let options = CompileOptions {
+        source_dir: source_dir.map(Path::to_path_buf),
+        strict,
+        ..CompileOptions::default()
+    };
+    compile_ast_with_options(file, "", &options, None)
 }
 
-/// Compile a pre-parsed AST with the same library / strict /
-/// required-outputs / context-label knobs as
-/// [`compile_polydat_with_libs`]. Used by SRD-67's
-/// [`crate::kernel::subcontext::SubcontextBuilder`] when finalize has
-/// rewritten the AST in-place (Rule 2 write-through) and can
-/// no longer round-trip through the source-string compile path.
+/// [`compile_ast_with_options`] with the source directory, library
+/// directories, outputs to keep, strictness, and context label as
+/// separate parameters.
+#[deprecated(note = "use compile_ast_with_options")]
 pub fn compile_ast_with_libs(
     file: &PolydatFile,
     source_dir: Option<&Path>,
@@ -1559,48 +1486,15 @@ pub fn compile_ast_with_libs(
     strict: bool,
     context: &str,
 ) -> Result<PolydatKernel, String> {
-    // See `compile_polydat_with_libs_and_limit`: resolve relative
-    // data-file paths against the workload directory for this compile.
-    let _data_base = source_dir.map(DataBaseDirGuard::set);
-    let extended = if required_outputs.is_empty() {
-        Vec::new()
-    } else {
-        extend_required_with_const_bindings(required_outputs, file)
-    };
-    let filter = if extended.is_empty() {
-        None
-    } else {
-        Some(extended.as_slice())
-    };
-    let mut compiler = Compiler::with_lib_paths(
-        source_dir.map(|p| p.to_path_buf()),
-        polydat_lib_paths,
+    let options = CompileOptions {
+        source_dir: source_dir.map(Path::to_path_buf),
+        lib_paths: polydat_lib_paths,
+        required_outputs: required_outputs.to_vec(),
         strict,
-    );
-    compiler.context_label = context.to_string();
-    // Collect pragmas from the AST so strict-wire / other
-    // pragma-gated behaviour matches the source-string path.
-    compiler.pragmas = super::pragmas::collect_from_ast(file);
-    compiler.compile_filtered(file, filter)
-}
-
-/// Compile a parsed AST with strict mode and source text for diagnostics.
-///
-/// Same as `compile_ast_strict` but attaches the original source text
-/// to the compiled program for diagnostic inspection.
-fn compile_ast_strict_with_source(
-    file: &PolydatFile,
-    source_dir: Option<&Path>,
-    strict: bool,
-    source: &str,
-) -> Result<PolydatKernel, String> {
-    let mut compiler = Compiler::new(source_dir.map(|p| p.to_path_buf()), strict);
-    compiler.source_text = source.to_string();
-    // Pragmas affect strict-wire mode even when no event log is
-    // supplied — collect them from the AST so library callers
-    // that go through `compile_polydat_with_path` still honour them.
-    compiler.pragmas = super::pragmas::collect_from_ast(file);
-    compiler.compile(file)
+        context: context.to_string(),
+        cursor_limit: None,
+    };
+    compile_ast_with_options(file, "", &options, None)
 }
 
 pub(super) struct Compiler {
@@ -1669,28 +1563,6 @@ pub(super) struct DeferredExtent {
 }
 
 impl Compiler {
-    pub(super) fn new(source_dir: Option<PathBuf>, strict: bool) -> Self {
-        Self {
-            input_names: Vec::new(),
-            all_names: Vec::new(),
-            anon_counter: 0,
-            source_dir,
-            polydat_lib_paths: Vec::new(),
-            module_cache: std::collections::HashMap::new(),
-            strict,
-            source_text: String::new(),
-            context_label: "(polydat)".into(),
-            cursor_schemas: Vec::new(),
-            deferred_extents: Vec::new(),
-            cursor_limit: None,
-            pragmas: super::pragmas::PragmaSet::default(),
-            current_binding: None,
-            tiles: Vec::new(),
-            producers_seen: Vec::new(),
-            tile_events: Vec::new(),
-        }
-    }
-
     pub(super) fn with_lib_paths(
         source_dir: Option<PathBuf>,
         polydat_lib_paths: Vec<PathBuf>,
@@ -2166,102 +2038,22 @@ impl Compiler {
         Ok(())
     }
 
-    pub(super) fn compile(&mut self, file: &PolydatFile) -> Result<PolydatKernel, String> {
-        self.register_local_modules(file);
-        // SRD 113: same lowering as `compile_filtered_with_log`; the
-        // parent compiles without `for` forms, then each body compiles
-        // once against it.
-        let (parent_file, for_stmts, producers) = super::traversal::strip_for_forms(file)?;
-        self.producers_seen = producers.clone();
-        let mut kernel = self.compile_parent(&parent_file)?;
-        if !for_stmts.is_empty() || !producers.is_empty() {
-            let traversals = {
-                let program = kernel.program();
-                let type_of = |n: &str| {
-                    program
-                        .output_port_type(n)
-                        .or_else(|| program.input_port_type(n))
-                };
-                self.compile_traversals(&for_stmts, &producers, &type_of)?
-            };
-            kernel.set_traversals(traversals, producers);
-        }
-        Ok(kernel)
-    }
-
-    fn compile_parent(&mut self, file: &PolydatFile) -> Result<PolydatKernel, String> {
-        // One assembly path (docs/design/engine_parity.md, step 1): the
-        // strict entry point compiles the same graph the logged path does.
-        self.compile_parent_with_log(file, None, None)
-    }
-
-    /// Build an assembler with all nodes and wiring, without compiling.
-    pub(super) fn build_assembler(
+    /// The interpreter's kernel of `file` as its concrete type: the one
+    /// compile path with the interpreter's build, keeping the outputs in
+    /// `filter` (every output when `None`) and recording events in `log`.
+    /// The parent's AST is retained as program metadata for the subscope
+    /// synthesizer.
+    pub(super) fn compile_interpreter(
         &mut self,
         file: &PolydatFile,
-    ) -> Result<PolydatAssembler, String> {
-        // One assembly path for every entry point: the assembler a host
-        // gets from `compile_polydat_to_assembler` is the one the kernel
-        // path compiles, externs, shared bindings, and cursors included.
-        let asm = self.assemble_parent(file, None)?;
-        Ok(asm)
-    }
-
-    /// Compile with optional output filtering for dead code elimination.
-    ///
-    /// When `required_outputs` is `Some`, only those named bindings are
-    /// exposed as kernel outputs. The assembler's DCE pass then prunes
-    /// all nodes not reachable from those outputs.
-    ///
-    /// When `None`, behaves identically to `compile()`.
-    pub(super) fn compile_filtered(
-        &mut self,
-        file: &PolydatFile,
-        required_outputs: Option<&[String]>,
-    ) -> Result<PolydatKernel, String> {
-        self.compile_filtered_with_log(file, required_outputs, None)
-    }
-
-    /// [`Self::compile_filtered`] with an optional compile-event log.
-    /// Strict compilation does not record assembler events; the
-    /// strict path validates and returns before the logged resolver
-    /// runs.
-    pub(super) fn compile_filtered_with_log(
-        &mut self,
-        file: &PolydatFile,
-        required_outputs: Option<&[String]>,
+        filter: Option<&[String]>,
         log: Option<&mut super::events::CompileEventLog>,
-    ) -> Result<PolydatKernel, String> {
-        // SRD 113: `for` statements lower to child programs and producer
-        // bindings become program metadata. The parent compiles without
-        // them, then each body compiles once against the parent.
-        let (parent_file, for_stmts, producers) = super::traversal::strip_for_forms(file)?;
-        self.producers_seen = producers.clone();
-        let original = file;
-        let file = &parent_file;
-        let mut log = log;
-        let mut kernel =
-            self.compile_parent_with_log(file, required_outputs, log.as_deref_mut())?;
-        if !for_stmts.is_empty() || !producers.is_empty() {
-            let traversals = {
-                let program = kernel.program();
-                let type_of = |n: &str| {
-                    program
-                        .output_port_type(n)
-                        .or_else(|| program.input_port_type(n))
-                };
-                self.compile_traversals(&for_stmts, &producers, &type_of)?
-            };
-            kernel.set_traversals(traversals, producers);
-            // Tiles inside the bodies typed and compiled in the child
-            // compilers; their events belong to this program's log.
-            if let Some(log) = log {
-                for e in self.tile_events.drain(..) {
-                    log.push(e);
-                }
-            }
-        }
-        let _ = original;
+    ) -> Result<PolydatKernel, crate::KernelError> {
+        let (mut kernel, parent) = compile_file_with(self, file, filter, log, |asm, log| {
+            asm.compile_with_log(log)
+                .map_err(crate::KernelError::Assembly)
+        })?;
+        kernel.set_ast(std::sync::Arc::new(parent));
         Ok(kernel)
     }
 
@@ -2279,7 +2071,10 @@ impl Compiler {
         );
         probe_compiler.source_text = src.clone();
         probe_compiler.context_label = format!("{} (element probe)", self.context_label);
-        let k = probe_compiler.compile_filtered_with_log(&ast, None, None)?;
+        probe_compiler.module_cache = self.module_cache.clone();
+        let k = probe_compiler
+            .compile_interpreter(&ast, None, None)
+            .map_err(|e| e.to_string())?;
         k.program()
             .output_port_type("__probe")
             .ok_or_else(|| "probe produced no output".to_string())
@@ -2310,6 +2105,9 @@ impl Compiler {
                 self.polydat_lib_paths.clone(),
                 self.strict,
             );
+            // The body sees every module the parent resolved, its own
+            // definitions included, wherever it compiles.
+            child_compiler.module_cache = self.module_cache.clone();
             child_compiler.source_text = super::pprint::pp_file(&child);
             child_compiler.context_label = format!(
                 "{} :: for {} (line {}, col {})",
@@ -2318,7 +2116,7 @@ impl Compiler {
             child_compiler.cursor_limit = self.cursor_limit;
             child_compiler.pragmas = self.pragmas.clone();
             let child_kernel = child_compiler
-                .compile_filtered_with_log(&child, None, None)
+                .compile_interpreter(&child, None, None)
                 .map_err(|e| {
                     format!(
                         "`for {}` at line {}, col {}: body failed to compile: {e}",
@@ -2335,6 +2133,7 @@ impl Compiler {
                 context_label: child_compiler.context_label.clone(),
                 cursor_limit: self.cursor_limit,
                 pragmas: self.pragmas.clone(),
+                modules: self.module_cache.clone(),
                 programs: std::sync::Mutex::new(std::collections::HashMap::new()),
             };
             out.push(Traversal {
@@ -2365,6 +2164,7 @@ impl Compiler {
         compiler.context_label = body.context_label.clone();
         compiler.cursor_limit = body.cursor_limit;
         compiler.pragmas = body.pragmas.clone();
+        compiler.module_cache = body.modules.clone();
         compile_file_on_engine(&mut compiler, &body.file, None, engine, None)
     }
 
@@ -2741,63 +2541,12 @@ impl Compiler {
         // The strictness pragmas reach every kernel built from this
         // assembler, on every engine and on every entry point.
         asm.set_strict_wires(self.pragmas.strict_types(), self.pragmas.strict_values());
+        asm.set_strict(self.strict);
         // The cursors, with their partitions resolved at build, reach
         // every kernel built from this assembler (engine_parity.md,
         // step 3).
         asm.set_cursor_schemas(self.cursor_schemas.clone());
         Ok(asm)
-    }
-
-    fn compile_parent_with_log(
-        &mut self,
-        file: &PolydatFile,
-        required_outputs: Option<&[String]>,
-        log: Option<&mut super::events::CompileEventLog>,
-    ) -> Result<PolydatKernel, String> {
-        let asm = self.assemble_parent(file, required_outputs)?;
-        let mut kernel = match log {
-            Some(log) if !self.strict => {
-                for e in self.tile_events.drain(..) {
-                    log.push(e);
-                }
-                asm.compile_with_log(Some(log))
-                    .map_err(|e| format!("{e}"))?
-            }
-            _ => asm
-                .compile_strict(self.strict)
-                .map_err(|e| format!("{e}"))?,
-        };
-
-        // Retain the parsed AST as live program metadata (SRD-13f
-        // §"Wire-reference classification"). The subscope
-        // synthesizer queries this to integrate parent bindings'
-        // matter into child scopes.
-        kernel.set_ast(std::sync::Arc::new(file.clone()));
-
-        // Resolve deferred cursor extents (same logic as in compile()).
-        for deferred in &self.deferred_extents {
-            let start = kernel
-                .get_constant(&deferred.start_output)
-                .map(|v| v.as_u64());
-            let end = kernel
-                .get_constant(&deferred.end_output)
-                .map(|v| v.as_u64());
-            if let (Some(s), Some(e)) = (start, end) {
-                let resolved_extent = e.saturating_sub(s);
-                let final_extent = self
-                    .cursor_limit
-                    .map(|limit| resolved_extent.min(limit))
-                    .unwrap_or(resolved_extent);
-                if let Some(schema) = self.cursor_schemas.get_mut(deferred.schema_idx) {
-                    schema.extent = Some(final_extent);
-                }
-            }
-        }
-
-        if !self.cursor_schemas.is_empty() {
-            kernel.set_cursor_schemas(self.cursor_schemas.clone());
-        }
-        Ok(kernel)
     }
 }
 
@@ -2848,16 +2597,9 @@ pub fn compile_polydat_with_engine(
     log: Option<&mut super::events::CompileEventLog>,
 ) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
     use crate::KernelError;
-    match engine {
-        crate::Engine::Interpreter => compile_polydat_with_options(source, options, log)
-            .map(|k| Box::new(k) as Box<dyn crate::Kernel>)
-            .map_err(KernelError::Source),
-        _ => {
-            let tokens = super::lexer::lex(source).map_err(KernelError::Source)?;
-            let ast = super::parser::parse(tokens).map_err(KernelError::Source)?;
-            compile_ast_with_engine(&ast, source, options, log, engine)
-        }
-    }
+    let tokens = super::lexer::lex(source).map_err(KernelError::Source)?;
+    let ast = super::parser::parse(tokens).map_err(KernelError::Source)?;
+    compile_ast_with_engine(&ast, source, options, log, engine)
 }
 
 /// [`compile_polydat_with_engine`] from a parsed file: the parent
@@ -2871,56 +2613,93 @@ pub fn compile_ast_with_engine(
     mut log: Option<&mut super::events::CompileEventLog>,
     engine: crate::Engine,
 ) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
-    use crate::KernelError;
-    if engine == crate::Engine::Interpreter {
-        return compile_ast_with_options(ast, source, options, log)
-            .map(|k| Box::new(k) as Box<dyn crate::Kernel>)
-            .map_err(KernelError::Source);
-    }
-    let _data_base = options.source_dir.as_deref().map(DataBaseDirGuard::set);
-    let pragmas = super::pragmas::collect_from_ast(ast);
-    if let Some(log) = log.as_deref_mut() {
-        record_pragma_events(&pragmas, log);
-    }
-    let extended = if options.required_outputs.is_empty() {
-        Vec::new()
-    } else {
-        extend_required_with_const_bindings(&options.required_outputs, ast)
-    };
-    let filter = if extended.is_empty() {
-        None
-    } else {
-        Some(extended.as_slice())
-    };
-    let mut compiler = Compiler::with_lib_paths(
-        options.source_dir.clone(),
-        options.lib_paths.clone(),
-        options.strict,
-    );
-    compiler.source_text = source.to_string();
-    // An empty context keeps the compiler's default label, the one the
-    // interpreter's entry points use, so a failure reads the same on
-    // every engine.
-    if !options.context.is_empty() {
-        compiler.context_label = options.context.clone();
-    }
-    compiler.cursor_limit = options.cursor_limit;
-    compiler.pragmas = pragmas;
-    compile_file_on_engine(&mut compiler, ast, filter, engine, log)
+    let mut prepared = Prepared::new(source, ast, options, log.as_deref_mut());
+    let (compiler, filter) = prepared.parts();
+    compile_file_on_engine(compiler, ast, filter, engine, log)
 }
 
-/// One path from a parsed file to a kernel on a compiled engine: the
+/// Everything an entry point sets up before a program assembles: the
+/// compiler under its options, the outputs to keep, and the data-file
+/// base directory for the compile's duration. One prologue for every
+/// entry point, so the options mean the same thing whichever one
+/// carries them.
+struct Prepared {
+    compiler: Compiler,
+    required: Vec<String>,
+    _data_base: Option<DataBaseDirGuard>,
+}
+
+impl Prepared {
+    fn new(
+        source: &str,
+        ast: &PolydatFile,
+        options: &CompileOptions,
+        log: Option<&mut super::events::CompileEventLog>,
+    ) -> Self {
+        // Relative data-file paths (csv/jsonl nodes) resolve against the
+        // program's own directory for the duration of this synchronous
+        // compile; see `library::datafile::set_data_base_dir`.
+        let _data_base = options.source_dir.as_deref().map(DataBaseDirGuard::set);
+        let pragmas = super::pragmas::collect_from_ast(ast);
+        if let Some(log) = log {
+            record_pragma_events(&pragmas, log);
+        }
+        // The required-outputs list is extended with the const bindings
+        // only when the caller passed one: an empty list keeps every
+        // binding, and extending it would flip its meaning.
+        let required = if options.required_outputs.is_empty() {
+            Vec::new()
+        } else {
+            extend_required_with_const_bindings(&options.required_outputs, ast)
+        };
+        let mut compiler = Compiler::with_lib_paths(
+            options.source_dir.clone(),
+            options.lib_paths.clone(),
+            options.strict,
+        );
+        compiler.source_text = source.to_string();
+        // An empty context keeps the compiler's default label, so a
+        // failure reads the same whichever entry point built the kernel.
+        if !options.context.is_empty() {
+            compiler.context_label = options.context.clone();
+        }
+        compiler.cursor_limit = options.cursor_limit;
+        compiler.pragmas = pragmas;
+        Prepared {
+            compiler,
+            required,
+            _data_base,
+        }
+    }
+
+    /// The compiler and the output filter, `None` for every output.
+    fn parts(&mut self) -> (&mut Compiler, Option<&[String]>) {
+        let filter = if self.required.is_empty() {
+            None
+        } else {
+            Some(self.required.as_slice())
+        };
+        (&mut self.compiler, filter)
+    }
+}
+
+/// The one path from a parsed file to a kernel, on every engine: the
 /// `for` statements and producer bindings are lifted out, the parent
-/// assembles and compiles on `engine`, and each body compiles once
-/// against the parent's types and is attached to the kernel, so a
-/// compiled kernel opens its traversals as the interpreter does.
-pub(super) fn compile_file_on_engine(
+/// assembles and `build` makes its kernel, each body compiles once
+/// against the parent's types and is attached, the tile events reach
+/// the log, and every cursor extent the program computes from constants
+/// is resolved on the kernel. Returns the kernel with the parent file
+/// the traversals were lifted from.
+fn compile_file_with<K: Built>(
     compiler: &mut Compiler,
     file: &PolydatFile,
     filter: Option<&[String]>,
-    engine: crate::Engine,
     mut log: Option<&mut super::events::CompileEventLog>,
-) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
+    build: impl FnOnce(
+        PolydatAssembler,
+        Option<&mut super::events::CompileEventLog>,
+    ) -> Result<K, crate::KernelError>,
+) -> Result<(K, PolydatFile), crate::KernelError> {
     use crate::KernelError;
     let (parent_file, for_stmts, producers) =
         super::traversal::strip_for_forms(file).map_err(KernelError::Source)?;
@@ -2928,14 +2707,14 @@ pub(super) fn compile_file_on_engine(
     let asm = compiler
         .assemble_parent(&parent_file, filter)
         .map_err(KernelError::Source)?;
-    // The tiles typed while assembling belong to this program's log, as
-    // on the interpreter.
+    // The tiles typed while assembling belong to this program's log.
     if let Some(log) = log.as_deref_mut() {
         for e in compiler.tile_events.drain(..) {
             log.push(e);
         }
     }
-    let mut kernel = asm.compile_engine_with_log(engine, log.as_deref_mut())?;
+    let mut built = build(asm, log.as_deref_mut())?;
+    let kernel: &mut dyn crate::Kernel = built.kernel();
     if !for_stmts.is_empty() || !producers.is_empty() {
         let externs = kernel.externs();
         let inputs = kernel.input_names();
@@ -2957,7 +2736,7 @@ pub(super) fn compile_file_on_engine(
         let traversals = compiler
             .compile_traversals(&for_stmts, &producers, &type_of)
             .map_err(KernelError::Source)?;
-        kernel.set_traversals(traversals);
+        kernel.set_traversals(traversals, producers);
         // Tiles inside the bodies, typed in the child compilers.
         if let Some(log) = log {
             for e in compiler.tile_events.drain(..) {
@@ -2965,12 +2744,92 @@ pub(super) fn compile_file_on_engine(
             }
         }
     }
+    // A cursor whose range is computed from constants gets its extent
+    // from the values the build folded, on every engine.
+    for deferred in &compiler.deferred_extents {
+        let start = kernel
+            .folded_value(&deferred.start_output)
+            .map(|v| v.as_u64());
+        let end = kernel
+            .folded_value(&deferred.end_output)
+            .map(|v| v.as_u64());
+        if let (Some(s), Some(e)) = (start, end) {
+            let resolved = e.saturating_sub(s);
+            let extent = compiler
+                .cursor_limit
+                .map(|limit| resolved.min(limit))
+                .unwrap_or(resolved);
+            if let Some(schema) = compiler.cursor_schemas.get_mut(deferred.schema_idx) {
+                schema.extent = Some(extent);
+            }
+            kernel.set_cursor_extent(deferred.schema_idx, extent);
+        }
+    }
+    Ok((built, parent_file))
+}
+
+/// What a build hands back to the compile path: the interpreter's
+/// concrete kernel or any engine's boxed one, each reachable as the one
+/// trait the lowering drives.
+trait Built {
+    fn kernel(&mut self) -> &mut dyn crate::Kernel;
+}
+
+impl Built for PolydatKernel {
+    fn kernel(&mut self) -> &mut dyn crate::Kernel {
+        self
+    }
+}
+
+impl Built for Box<dyn crate::Kernel> {
+    fn kernel(&mut self) -> &mut dyn crate::Kernel {
+        self.as_mut()
+    }
+}
+
+/// The kernel of a parsed file on `engine`: [`compile_file_with`] with
+/// the engine's build, and the interpreter's concrete kernel boxed when
+/// the engine is the interpreter.
+pub(super) fn compile_file_on_engine(
+    compiler: &mut Compiler,
+    file: &PolydatFile,
+    filter: Option<&[String]>,
+    engine: crate::Engine,
+    log: Option<&mut super::events::CompileEventLog>,
+) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
+    if engine == crate::Engine::Interpreter {
+        return compiler
+            .compile_interpreter(file, filter, log)
+            .map(|k| Box::new(k) as Box<dyn crate::Kernel>);
+    }
+    let (kernel, _) = compile_file_with(compiler, file, filter, log, |asm, log| {
+        asm.compile_engine_with_log(engine, log)
+    })?;
     Ok(kernel)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The interpreter kernel under `strict` alone.
+    fn strict(src: &str, strict: bool) -> Result<PolydatKernel, String> {
+        let options = CompileOptions {
+            strict,
+            ..CompileOptions::default()
+        };
+        compile_polydat_with_options(src, &options, None)
+    }
+
+    /// The interpreter kernel keeping `required` outputs, under `strict`.
+    fn with_outputs(src: &str, required: &[String], strict: bool) -> Result<PolydatKernel, String> {
+        let options = CompileOptions {
+            required_outputs: required.to_vec(),
+            strict,
+            ..CompileOptions::default()
+        };
+        compile_polydat_with_options(src, &options, None)
+    }
 
     #[test]
     fn array_literal_binding_compiles_as_string() {
@@ -3534,7 +3393,7 @@ mod tests {
     fn strict_requires_explicit_inputs() {
         // Without inputs declaration, strict mode should error
         let src = "h := hash(cycle)";
-        let result = compile_polydat_strict(src, None, true);
+        let result = strict(src, true);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
@@ -3554,7 +3413,7 @@ mod tests {
             input cycle: u64
             h := hash(cycle)
         "#;
-        let mut kernel = compile_polydat_strict(src, None, true).unwrap();
+        let mut kernel = strict(src, true).unwrap();
         kernel.set_inputs(&[42]);
         let h = kernel.pull("h").as_u64();
         assert_ne!(h, 42); // hashed, not identity
@@ -3564,7 +3423,7 @@ mod tests {
     fn non_strict_infers_coordinates() {
         // Without strict, coordinate inference works as before
         let src = "h := hash(cycle)";
-        let mut kernel = compile_polydat_strict(src, None, false).unwrap();
+        let mut kernel = strict(src, false).unwrap();
         kernel.set_inputs(&[42]);
         assert_ne!(kernel.pull("h").as_u64(), 42);
     }
@@ -3581,7 +3440,7 @@ mod tests {
             c := add(cycle, 1)
         "#;
         let required = vec!["b".to_string()];
-        let mut kernel = compile_polydat_with_outputs(src, None, &required, false).unwrap();
+        let mut kernel = with_outputs(src, &required, false).unwrap();
         kernel.set_inputs(&[42]);
 
         // "b" should be available and correct
@@ -3606,7 +3465,7 @@ mod tests {
             unrelated := add(cycle, 999)
         "#;
         let required = vec!["result".to_string()];
-        let mut kernel = compile_polydat_with_outputs(src, None, &required, false).unwrap();
+        let mut kernel = with_outputs(src, &required, false).unwrap();
         kernel.set_inputs(&[42]);
 
         let result = kernel.pull("result").as_u64();
@@ -3628,7 +3487,7 @@ mod tests {
             b := mod(a, 100)
         "#;
         let kernel_all = compile_polydat(src).unwrap();
-        let kernel_empty = compile_polydat_with_outputs(src, None, &[], false).unwrap();
+        let kernel_empty = with_outputs(src, &[], false).unwrap();
 
         assert_eq!(
             kernel_all.output_names().len(),
@@ -3659,7 +3518,7 @@ mod tests {
             b := mod(hash(cycle), 100)
         "#;
         let required = vec!["b".to_string()];
-        let mut kernel = compile_polydat_with_outputs(src, None, &required, false).unwrap();
+        let mut kernel = with_outputs(src, &required, false).unwrap();
         kernel.set_inputs(&[0]);
 
         let outputs = kernel.output_names();
@@ -3680,7 +3539,7 @@ mod tests {
             z := add(cycle, 10)
         "#;
         let required = vec!["y".to_string(), "z".to_string()];
-        let mut kernel = compile_polydat_with_outputs(src, None, &required, false).unwrap();
+        let mut kernel = with_outputs(src, &required, false).unwrap();
         kernel.set_inputs(&[5]);
 
         assert!(kernel.pull("y").as_u64() < 50);
@@ -3711,7 +3570,7 @@ mod tests {
         "#;
         let required = vec!["used".to_string()];
         // Non-strict: DCE prunes "unused" silently
-        let result = compile_polydat_with_outputs(src, None, &required, false);
+        let result = with_outputs(src, &required, false);
         assert!(result.is_ok(), "non-strict with DCE should compile");
         // Verify "unused" is actually pruned
         let kernel = result.unwrap();
@@ -3729,7 +3588,7 @@ mod tests {
             h := hash(cycle)
             f := sqrt(h)
         "#;
-        let result = compile_polydat_strict(src, None, true);
+        let result = strict(src, true);
         assert!(result.is_err(), "strict should reject implicit coercion");
         let err = result.unwrap_err();
         assert!(
@@ -3745,7 +3604,7 @@ mod tests {
             h := hash(cycle)
             f := sqrt(h)
         "#;
-        let result = compile_polydat_strict(src, None, false);
+        let result = strict(src, false);
         assert!(result.is_ok(), "non-strict should allow implicit coercion");
     }
 
@@ -3758,7 +3617,7 @@ mod tests {
             id := mod(h, 1000)
         "#;
         let required = vec!["id".to_string()];
-        let result = compile_polydat_with_outputs(src, None, &required, true);
+        let result = with_outputs(src, &required, true);
         assert!(
             result.is_ok(),
             "clean program should pass strict: {:?}",

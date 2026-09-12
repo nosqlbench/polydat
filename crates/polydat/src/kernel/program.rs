@@ -1777,6 +1777,102 @@ impl PolydatProgram {
         self.fold_init_constants_impl(log, false)
     }
 
+    /// What strict mode refuses in a resolved graph, on every engine: a
+    /// config wire fed from a cycle-time source, a nondeterministic
+    /// node no `volatile` output acknowledges, and a binding nothing
+    /// reads. `is_init` marks the compile-constant nodes, from
+    /// [`Self::classify_lifecycle`]. The first violation, as the error
+    /// message; the interpreter's fold warns about the same findings
+    /// when strict is off.
+    pub(crate) fn strict_violation(
+        nodes: &[Box<dyn PolydatNode>],
+        wiring: &[Vec<WireSource>],
+        is_init: &[bool],
+        output_map: &HashMap<String, (usize, usize)>,
+        output_modifiers: &HashMap<String, crate::dsl::ast::BindingModifier>,
+    ) -> Option<String> {
+        let n = nodes.len();
+        for (node, wires) in nodes.iter().zip(wiring.iter()) {
+            let wire_inputs = node.meta().wire_inputs();
+            for (port_idx, wire_source) in wires.iter().enumerate() {
+                if port_idx >= wire_inputs.len() {
+                    break;
+                }
+                if wire_inputs[port_idx].wire_cost != crate::ast::WireCost::Config {
+                    continue;
+                }
+                let source_is_cycle = match wire_source {
+                    WireSource::Input(_) => true,
+                    WireSource::NodeOutput(src_idx, _) => !is_init[*src_idx],
+                };
+                if source_is_cycle {
+                    return Some(format!(
+                        "strict mode: config wire '{}' on node '{}' is connected to a \
+                         cycle-time source.",
+                        wire_inputs[port_idx].name,
+                        node.meta().name
+                    ));
+                }
+            }
+        }
+        let mut feeds_volatile = vec![false; n];
+        for (out_name, (node_idx, _)) in output_map.iter() {
+            if output_modifiers
+                .get(out_name)
+                .map(|m| m.is_volatile())
+                .unwrap_or(false)
+            {
+                feeds_volatile[*node_idx] = true;
+            }
+        }
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for i in 0..n {
+                if !feeds_volatile[i] {
+                    continue;
+                }
+                for source in &wiring[i] {
+                    if let WireSource::NodeOutput(upstream, _) = source
+                        && !feeds_volatile[*upstream]
+                    {
+                        feeds_volatile[*upstream] = true;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        for (i, node) in nodes.iter().enumerate() {
+            let name = &node.meta().name;
+            if wiring[i].is_empty() && !is_init[i] && !name.starts_with("__") && !feeds_volatile[i]
+            {
+                return Some(format!(
+                    "strict mode: non-deterministic node '{name}' used without explicit \
+                     acknowledgment. Use a deterministic alternative."
+                ));
+            }
+        }
+        let output_nodes: std::collections::HashSet<usize> =
+            output_map.values().map(|(idx, _)| *idx).collect();
+        for (i, node) in nodes.iter().enumerate() {
+            let name = &node.meta().name;
+            if name.starts_with("__") || output_nodes.contains(&i) {
+                continue;
+            }
+            let consumed = wiring.iter().any(|w| {
+                w.iter()
+                    .any(|s| matches!(s, WireSource::NodeOutput(src, _) if *src == i))
+            });
+            if !consumed {
+                return Some(format!(
+                    "strict mode: binding '{name}' is never referenced. Remove it or mark as \
+                     output."
+                ));
+            }
+        }
+        None
+    }
+
     /// Fold init-time constants with strict mode.
     pub fn fold_init_constants_strict(
         &mut self,
@@ -1870,6 +1966,20 @@ impl PolydatProgram {
         }
         // ─────────────────────────────────────────────────────────────
 
+        // Strict refuses what the checks below warn about, through the
+        // one function every engine's build applies.
+        if strict
+            && let Some(violation) = Self::strict_violation(
+                &self.nodes,
+                &self.wiring,
+                &is_init,
+                &self.output_map,
+                &self.output_modifiers,
+            )
+        {
+            return Err(violation);
+        }
+
         // Wire cost check
         for i in 0..n {
             let wire_inputs = self.nodes[i].meta().wire_inputs();
@@ -1887,12 +1997,6 @@ impl PolydatProgram {
                 if source_is_cycle {
                     let node_name = &self.nodes[i].meta().name;
                     let port_name = &wire_inputs[port_idx].name;
-                    if strict {
-                        return Err(format!(
-                            "strict mode: config wire '{port_name}' on node '{node_name}' \
-                             is connected to a cycle-time source."
-                        ));
-                    }
                     crate::library::support::audit::warn(&format!(
                         "config wire '{port_name}' on node '{node_name}' is connected to a \
                          cycle-time source."
@@ -1977,31 +2081,9 @@ impl PolydatProgram {
             }
             let msg =
                 format!("non-deterministic node '{name}' used without explicit acknowledgment");
-            if strict {
-                return Err(format!(
-                    "strict mode: {msg}. Use a deterministic alternative."
-                ));
-            }
             crate::library::support::audit::warn(&msg);
             if let Some(ref mut log) = log {
                 log.push(crate::dsl::events::CompileEvent::Warning { message: msg });
-            }
-        }
-
-        // Implicit type coercion check
-        for i in 0..n {
-            let name = &self.nodes[i].meta().name;
-            if name.starts_with("__adapt_") {
-                let msg = format!(
-                    "implicit type coercion via '{name}'. Use explicit conversion function."
-                );
-                if strict {
-                    return Err(format!("strict mode: {msg}"));
-                }
-                crate::library::support::audit::warn(&msg);
-                if let Some(ref mut log) = log {
-                    log.push(crate::dsl::events::CompileEvent::Warning { message: msg });
-                }
             }
         }
 
@@ -2021,9 +2103,6 @@ impl PolydatProgram {
             });
             if !is_output && !is_consumed {
                 let msg = format!("binding '{name}' is never referenced");
-                if strict {
-                    return Err(format!("strict mode: {msg}. Remove it or mark as output."));
-                }
                 if !name.contains("__") {
                     crate::library::support::audit::warn(&msg);
                     if let Some(ref mut log) = log {

@@ -1,15 +1,11 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Engine selection: analyze a compiled DAG and choose the optimal
-//! monomorphic kernel variant.
-//!
-//! The heuristic is applied at construction time by the assembler.
-//! The resulting kernel has the selected optimizations baked in with
-//! no runtime strategy branching.
+//! The engine a host chooses, the provenance mode a compiled engine is
+//! built with, and the selector that picks a mode from a graph's shape
+//! when the host leaves it to `Provenance::Auto`.
 
 use crate::ast::PolydatNode;
-use crate::compile::closures::{CompiledKernelPull, CompiledKernelPushPull, CompiledKernelRaw};
 use crate::kernel::WireSource;
 use std::collections::HashMap;
 
@@ -161,151 +157,6 @@ pub fn select_prov_mode(analysis: &GraphAnalysis) -> ProvMode {
     // over Raw as free insurance for future multi-output scenarios
     // where not all outputs are pulled every cycle.
     ProvMode::Pull
-}
-
-// ── Compiled engine wrappers ───────────────────────────────────
-
-/// Auto-selected P2 compiled kernel. The variant is chosen at
-/// construction time based on graph analysis. One outer branch
-/// per eval call (perfectly predicted), zero branches inside.
-pub enum P2Engine {
-    /// Every evaluation runs every step.
-    Raw(CompiledKernelRaw),
-    /// The cone guard alone.
-    Pull(CompiledKernelPull),
-    /// Per-step skipping and the cone guard.
-    PushPull(CompiledKernelPushPull),
-}
-
-impl P2Engine {
-    #[inline]
-    /// Evaluate for the coordinates and read one slot.
-    pub fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
-        match self {
-            P2Engine::Raw(k) => k.eval_for_slot(coords, slot),
-            P2Engine::Pull(k) => k.eval_for_slot(coords, slot),
-            P2Engine::PushPull(k) => k.eval_for_slot(coords, slot),
-        }
-    }
-
-    #[inline]
-    /// Evaluate for the coordinates.
-    pub fn eval(&mut self, coords: &[u64]) {
-        match self {
-            P2Engine::Raw(k) => k.eval(coords),
-            P2Engine::Pull(k) => k.eval(coords),
-            P2Engine::PushPull(k) => k.eval(coords),
-        }
-    }
-
-    #[inline]
-    /// Read a slot of the last evaluation.
-    pub fn get_slot(&self, slot: usize) -> u64 {
-        match self {
-            P2Engine::Raw(k) => k.get_slot(slot),
-            P2Engine::Pull(k) => k.get_slot(slot),
-            P2Engine::PushPull(k) => k.get_slot(slot),
-        }
-    }
-
-    /// The slot of a named output.
-    pub fn resolve_output(&self, name: &str) -> Option<usize> {
-        match self {
-            P2Engine::Raw(k) => k.resolve_output(name),
-            P2Engine::Pull(k) => k.resolve_output(name),
-            P2Engine::PushPull(k) => k.resolve_output(name),
-        }
-    }
-
-    /// The coordinate inputs.
-    pub fn coord_count(&self) -> usize {
-        match self {
-            P2Engine::Raw(k) => k.coord_count(),
-            P2Engine::Pull(k) => k.coord_count(),
-            P2Engine::PushPull(k) => k.coord_count(),
-        }
-    }
-
-    /// The provenance mode the selector chose.
-    pub fn prov_mode(&self) -> ProvMode {
-        match self {
-            P2Engine::Raw(_) => ProvMode::Raw,
-            P2Engine::Pull(_) => ProvMode::Pull,
-            P2Engine::PushPull(_) => ProvMode::PushPull,
-        }
-    }
-}
-
-/// Auto-selected P3 kernel: the hybrid kernel in the provenance mode
-/// the selector chose (engine_parity.md, step 7).
-#[cfg(feature = "jit")]
-pub enum P3Engine {
-    /// Every evaluation runs every step.
-    Raw(crate::compile::hybrid::HybridKernelRaw),
-    /// The cone guard alone.
-    Pull(crate::compile::hybrid::HybridKernelPull),
-    /// Per-step skipping and the cone guard.
-    PushPull(crate::compile::hybrid::HybridKernelPushPull),
-}
-
-#[cfg(feature = "jit")]
-impl P3Engine {
-    #[inline]
-    /// Evaluate for the coordinates and read one slot.
-    pub fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
-        match self {
-            P3Engine::Raw(k) => k.eval_for_slot(coords, slot),
-            P3Engine::Pull(k) => k.eval_for_slot(coords, slot),
-            P3Engine::PushPull(k) => k.eval_for_slot(coords, slot),
-        }
-    }
-
-    #[inline]
-    /// Evaluate for the coordinates.
-    pub fn eval(&mut self, coords: &[u64]) {
-        match self {
-            P3Engine::Raw(k) => k.eval(coords),
-            P3Engine::Pull(k) => k.eval(coords),
-            P3Engine::PushPull(k) => k.eval(coords),
-        }
-    }
-
-    #[inline]
-    /// Read a slot of the last evaluation.
-    pub fn get_slot(&self, slot: usize) -> u64 {
-        match self {
-            P3Engine::Raw(k) => k.get_slot(slot),
-            P3Engine::Pull(k) => k.get_slot(slot),
-            P3Engine::PushPull(k) => k.get_slot(slot),
-        }
-    }
-
-    /// The slot of a named output.
-    pub fn resolve_output(&self, name: &str) -> Option<usize> {
-        match self {
-            P3Engine::Raw(k) => k.resolve_output(name),
-            P3Engine::Pull(k) => k.resolve_output(name),
-            P3Engine::PushPull(k) => k.resolve_output(name),
-        }
-    }
-
-    /// The coordinate inputs.
-    pub fn coord_count(&self) -> usize {
-        match self {
-            P3Engine::Raw(k) => k.coord_count(),
-            P3Engine::Pull(k) => k.coord_count(),
-            P3Engine::PushPull(k) => k.coord_count(),
-        }
-    }
-
-    /// The provenance mode the selector chose.
-    pub fn prov_mode(&self) -> ProvMode {
-        match self {
-            P3Engine::Raw(_) => ProvMode::Raw,
-            P3Engine::Pull(_) => ProvMode::Pull,
-            P3Engine::PushPull(_) => ProvMode::PushPull,
-        }
-    }
 }
 
 // ── The engine a host chooses (engine_parity.md, step 4) ──────────

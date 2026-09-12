@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use crate::ast::PortType;
 use crate::dsl::ast::{Arg, CallExpr, Expr, ExternPort, PolydatFile, Statement};
-use crate::dsl::compile::{compile_ast, compile_ast_with_libs};
+use crate::dsl::compile::{CompileOptions as DslOptions, compile_ast_with_options};
 use crate::dsl::lexer::{Span, lex};
 use crate::dsl::parser::parse;
 
@@ -49,7 +49,7 @@ fn port_type_keyword(pt: PortType) -> &'static str {
 /// Optional compile-time configuration passed through to
 /// [`compile_polydat_with_libs`](crate::dsl::compile::compile_polydat_with_libs) when finalize compiles the body. When
 /// every field is at its default, finalize falls back to the
-/// minimal [`compile_ast`] path used by the do-loop bridge — no
+/// minimal [`compile_ast_with_options`] path used by the do-loop bridge — no
 /// behaviour change for the simplest synthesisers.
 ///
 /// SRD-67 Phase 3 bridge hook: the for_each / op-template
@@ -136,7 +136,7 @@ impl<P> SubcontextBuilder<P> {
     /// `compile_polydat_with_libs` directly fold those calls into a
     /// single `with_compile_options(...)` invocation; the do-loop
     /// bridge leaves this at its default and finalize uses
-    /// [`compile_ast`].
+    /// [`compile_ast_with_options`].
     pub fn with_compile_options(&mut self, options: CompileOptions) -> &mut Self {
         self.compile_options = options;
         self
@@ -582,10 +582,26 @@ impl<P> SubcontextBuilder<P> {
         // with `shared` parent exports). Reject the combination
         // explicitly so a future caller hits a clear diagnostic
         // rather than silently dropping the rewrite.
+        let dsl_options = DslOptions {
+            source_dir: compile_options.workload_dir.clone(),
+            lib_paths: compile_options.polydat_lib_paths.clone(),
+            required_outputs: compile_options.required_outputs.clone(),
+            strict: compile_options.strict,
+            context: compile_options
+                .context_label
+                .clone()
+                .unwrap_or_else(|| context.label.clone()),
+            cursor_limit: compile_options.cursor_limit,
+        };
         let mut kernel = if compile_options.is_default() {
-            compile_ast(&PolydatFile {
-                statements: statements.clone(),
-            })
+            compile_ast_with_options(
+                &PolydatFile {
+                    statements: statements.clone(),
+                },
+                "",
+                &DslOptions::default(),
+                None,
+            )
             .map_err(ContractViolation::Compile)?
         } else if !write_throughs.is_empty()
             || body
@@ -599,19 +615,13 @@ impl<P> SubcontextBuilder<P> {
             // libs-aware compile path directly. Avoids the prior
             // restriction that combined Rule 2 with non-default
             // compile options.
-            let context_label = compile_options
-                .context_label
-                .as_deref()
-                .unwrap_or(context.label.as_str());
-            compile_ast_with_libs(
+            compile_ast_with_options(
                 &PolydatFile {
                     statements: statements.clone(),
                 },
-                compile_options.workload_dir.as_deref(),
-                compile_options.polydat_lib_paths.clone(),
-                &compile_options.required_outputs,
-                compile_options.strict,
-                context_label,
+                "",
+                &dsl_options,
+                None,
             )
             .map_err(ContractViolation::Compile)?
         } else {
@@ -634,20 +644,8 @@ impl<P> SubcontextBuilder<P> {
                     ),
                 }
             }
-            let context_label = compile_options
-                .context_label
-                .as_deref()
-                .unwrap_or(context.label.as_str());
-            crate::dsl::compile::compile_polydat_with_libs_and_limit(
-                &src,
-                compile_options.workload_dir.as_deref(),
-                compile_options.polydat_lib_paths.clone(),
-                &compile_options.required_outputs,
-                compile_options.strict,
-                context_label,
-                compile_options.cursor_limit,
-            )
-            .map_err(ContractViolation::Compile)?
+            crate::dsl::compile::compile_polydat_with_options(&src, &dsl_options, None)
+                .map_err(ContractViolation::Compile)?
         };
 
         // ----- Apply legacy-bridge inherited-output marking.

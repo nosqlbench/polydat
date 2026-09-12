@@ -127,16 +127,20 @@ impl Construction for PolydatKernel {
         use crate::kernel::subcontext::PolydatMatterInner;
         match matter.inner {
             PolydatMatterInner::Source(s) => {
-                crate::dsl::compile::compile_polydat_with_libs_and_limit(
-                    &s.body,
-                    s.options.workload_dir.as_deref(),
-                    s.options.polydat_lib_paths,
-                    &s.options.required_outputs,
-                    s.options.strict,
-                    s.options.context_label.as_deref().unwrap_or(&s.label),
-                    s.options.cursor_limit,
-                )
-                .map_err(crate::kernel::subcontext::ContractViolation::Compile)
+                let options = crate::dsl::compile::CompileOptions {
+                    source_dir: s.options.workload_dir.clone(),
+                    lib_paths: s.options.polydat_lib_paths,
+                    required_outputs: s.options.required_outputs.clone(),
+                    strict: s.options.strict,
+                    context: s
+                        .options
+                        .context_label
+                        .clone()
+                        .unwrap_or_else(|| s.label.clone()),
+                    cursor_limit: s.options.cursor_limit,
+                };
+                crate::dsl::compile::compile_polydat_with_options(&s.body, &options, None)
+                    .map_err(crate::kernel::subcontext::ContractViolation::Compile)
             }
             PolydatMatterInner::Statements(s) => {
                 // Pre-parsed AST — go through the compile-from-AST
@@ -146,15 +150,20 @@ impl Construction for PolydatKernel {
                 let file = crate::dsl::ast::PolydatFile {
                     statements: s.statements,
                 };
-                crate::dsl::compile::compile_ast_with_libs(
-                    &file,
-                    s.options.workload_dir.as_deref(),
-                    s.options.polydat_lib_paths,
-                    &s.options.required_outputs,
-                    s.options.strict,
-                    s.options.context_label.as_deref().unwrap_or(&s.label),
-                )
-                .map_err(crate::kernel::subcontext::ContractViolation::Compile)
+                let options = crate::dsl::compile::CompileOptions {
+                    source_dir: s.options.workload_dir.clone(),
+                    lib_paths: s.options.polydat_lib_paths,
+                    required_outputs: s.options.required_outputs.clone(),
+                    strict: s.options.strict,
+                    context: s
+                        .options
+                        .context_label
+                        .clone()
+                        .unwrap_or_else(|| s.label.clone()),
+                    cursor_limit: None,
+                };
+                crate::dsl::compile::compile_ast_with_options(&file, "", &options, None)
+                    .map_err(crate::kernel::subcontext::ContractViolation::Compile)
             }
             PolydatMatterInner::Program(p) => {
                 let mut k = PolydatKernel::from_program(p.program);
@@ -252,9 +261,22 @@ impl crate::kernel::Kernel for PolydatKernel {
     fn traverse(&mut self, index: usize) -> Result<crate::kernel::TraversalStream, String> {
         PolydatKernel::traverse(self, index)
     }
-    fn set_traversals(&mut self, traversals: Vec<crate::dsl::traversal::Traversal>) {
-        let producers = self.program().producers().to_vec();
+    fn set_traversals(
+        &mut self,
+        traversals: Vec<crate::dsl::traversal::Traversal>,
+        producers: Vec<crate::dsl::traversal::Producer>,
+    ) {
         PolydatKernel::set_traversals(self, traversals, producers);
+    }
+    fn folded_value(&self, name: &str) -> Option<Value> {
+        self.get_constant(name).cloned()
+    }
+    fn set_cursor_extent(&mut self, index: usize, extent: u64) {
+        let mut schemas = self.program().cursor_schemas().to_vec();
+        if let Some(schema) = schemas.get_mut(index) {
+            schema.extent = Some(extent);
+            self.set_cursor_schemas(schemas);
+        }
     }
     fn invalidate_all(&mut self) {
         self.state().invalidate_all();

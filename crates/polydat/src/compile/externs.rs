@@ -310,6 +310,14 @@ impl Externs {
         &self.cursors
     }
 
+    /// Record the extent of cursor `index`, resolved after the build from
+    /// the constants the graph folded.
+    pub(crate) fn set_cursor_extent(&mut self, index: usize, extent: u64) {
+        if let Some(schema) = self.cursors.get_mut(index) {
+            schema.extent = Some(extent);
+        }
+    }
+
     /// The writes that narrow cursor `name` to `partition`: its `Ext`
     /// slot and its six scalar projections, each an extern of this
     /// kernel. An unknown cursor is an error naming the known ones.

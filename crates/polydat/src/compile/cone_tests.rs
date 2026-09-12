@@ -14,7 +14,7 @@
 
 use crate::ast::Value;
 use crate::compile::cone::{JitMode, set_default_jit_mode};
-use crate::dsl::compile::compile_polydat_with_libs;
+use crate::dsl::compile::{CompileOptions, compile_polydat_with_options};
 use std::sync::Mutex;
 
 static MODE_LOCK: Mutex<()> = Mutex::new(());
@@ -35,7 +35,11 @@ fn with_mode<T>(mode: JitMode, f: impl FnOnce() -> T) -> T {
 }
 
 fn compile(src: &str) -> crate::kernel::PolydatKernel {
-    compile_polydat_with_libs(src, None, vec![], &[], false, "cone_test").expect("compile")
+    let options = CompileOptions {
+        context: "cone_test".into(),
+        ..CompileOptions::default()
+    };
+    compile_polydat_with_options(src, &options, None).expect("compile")
 }
 
 /// Pull `output` for each x in `xs`, returning the values.

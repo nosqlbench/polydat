@@ -714,24 +714,19 @@ fn advancer_empty_when_no_sources_referenced() {
 
 #[test]
 fn limit_node_compiles_and_clamps_extent() {
-    use polydat::dsl::compile::compile_polydat_with_libs_and_limit;
-    use std::path::PathBuf;
+    use polydat::dsl::compile::{CompileOptions, compile_polydat_with_options};
 
     let src = r#"
         cursor r = range(0, 1000)
         input cycle: u64
         id := hash(r.ordinal)
     "#;
-    let kernel = compile_polydat_with_libs_and_limit(
-        src,
-        None,
-        Vec::<PathBuf>::new(),
-        &[],
-        false,
-        "(test)",
-        Some(100),
-    )
-    .unwrap();
+    let options = CompileOptions {
+        context: "(test)".into(),
+        cursor_limit: Some(100),
+        ..CompileOptions::default()
+    };
+    let kernel = compile_polydat_with_options(src, &options, None).unwrap();
     let schemas = kernel.program().cursor_schemas();
     assert_eq!(schemas.len(), 1);
     // Extent should be clamped to 100 (min of 1000 and limit 100)
@@ -740,48 +735,38 @@ fn limit_node_compiles_and_clamps_extent() {
 
 #[test]
 fn limit_node_not_inserted_when_no_limit() {
-    use polydat::dsl::compile::compile_polydat_with_libs_and_limit;
-    use std::path::PathBuf;
+    use polydat::dsl::compile::{CompileOptions, compile_polydat_with_options};
 
     let src = r#"
         cursor r = range(0, 500)
         input cycle: u64
         id := hash(r.ordinal)
     "#;
-    let kernel = compile_polydat_with_libs_and_limit(
-        src,
-        None,
-        Vec::<PathBuf>::new(),
-        &[],
-        false,
-        "(test)",
-        None,
-    )
-    .unwrap();
+    let options = CompileOptions {
+        context: "(test)".into(),
+        cursor_limit: None,
+        ..CompileOptions::default()
+    };
+    let kernel = compile_polydat_with_options(src, &options, None).unwrap();
     let schemas = kernel.program().cursor_schemas();
     assert_eq!(schemas[0].extent, Some(500)); // unclamped
 }
 
 #[test]
 fn limit_larger_than_extent_preserves_extent() {
-    use polydat::dsl::compile::compile_polydat_with_libs_and_limit;
-    use std::path::PathBuf;
+    use polydat::dsl::compile::{CompileOptions, compile_polydat_with_options};
 
     let src = r#"
         cursor r = range(0, 50)
         input cycle: u64
         id := hash(r.ordinal)
     "#;
-    let kernel = compile_polydat_with_libs_and_limit(
-        src,
-        None,
-        Vec::<PathBuf>::new(),
-        &[],
-        false,
-        "(test)",
-        Some(1000),
-    )
-    .unwrap();
+    let options = CompileOptions {
+        context: "(test)".into(),
+        cursor_limit: Some(1000),
+        ..CompileOptions::default()
+    };
+    let kernel = compile_polydat_with_options(src, &options, None).unwrap();
     let schemas = kernel.program().cursor_schemas();
     // Limit 1000 > extent 50 → extent stays 50
     assert_eq!(schemas[0].extent, Some(50));

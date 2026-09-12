@@ -4,8 +4,13 @@
 //! Programmatic assembly API for building Polydat Kernels.
 //!
 //! The assembler validates wiring and types, auto-inserts edge adapters,
-//! topologically sorts nodes, and produces either a Phase 1 runtime
-//! kernel or a Phase 2 compiled kernel.
+//! topologically sorts nodes, and builds a kernel on any engine: a host
+//! adds nodes and wires (or takes the assembler the DSL built from
+//! source) and calls [`PolydatAssembler::compile_kernel`] for the default
+//! engine, [`PolydatAssembler::compile_with`] for a named one, or
+//! [`PolydatAssembler::compile`] for the interpreter kernel as a concrete
+//! type. The `try_compile*` constructors build one engine's kernel as its
+//! concrete type for the differential suites and the ladder.
 
 use std::collections::HashMap;
 
@@ -13,7 +18,7 @@ use crate::ast::{PolydatNode, PortType};
 use crate::compile::closures::{
     CompiledKernelPull, CompiledKernelPush, CompiledKernelPushPull, CompiledKernelRaw,
 };
-use crate::compile::select::{self, GraphAnalysis, P2Engine, ProvMode};
+use crate::compile::select::{self, ProvMode};
 use crate::kernel::{PolydatKernel, PolydatProgram, WireSource};
 use crate::library::convert::{F64ToString, U64ToF64, U64ToString};
 use crate::library::json::JsonToStr;
@@ -522,6 +527,11 @@ pub struct PolydatAssembler {
     /// the flag exists for forward compatibility with dynamic
     /// JSON navigation, `Ext` unwraps, and cross-adapter values.
     pub(crate) strict_types: bool,
+    /// Strict mode: an implicit type coercion is refused at wire
+    /// resolution, and a config wire fed from a cycle-time source, a
+    /// nondeterministic node no `volatile` output acknowledges, and a
+    /// binding nothing reads are refused at build, on every engine.
+    pub(crate) strict: bool,
     /// SRD-105 per-assembler engine-mix override. `None` defers to
     /// the process default ([`crate::compile::cone::default_jit_mode`]).
     pub(crate) jit_mode: Option<crate::compile::cone::JitMode>,
@@ -578,6 +588,7 @@ impl PolydatAssembler {
             const_outputs: std::collections::HashSet::new(),
             strict_values: false,
             strict_types: false,
+            strict: false,
             jit_mode: None,
             cursor_schemas: Vec::new(),
         }
@@ -602,6 +613,15 @@ impl PolydatAssembler {
     pub fn set_strict_wires(&mut self, strict_types: bool, strict_values: bool) {
         self.strict_types = strict_types;
         self.strict_values = strict_values;
+    }
+
+    /// Strict mode, on every engine this assembler builds for: an
+    /// implicit type coercion, a config wire fed from a cycle-time
+    /// source, a nondeterministic node no `volatile` output
+    /// acknowledges, and a binding nothing reads are errors. Off by
+    /// default; the DSL sets it from its `strict` option.
+    pub fn set_strict(&mut self, strict: bool) {
+        self.strict = strict;
     }
 
     /// Override the engine-mix mode for this compile (SRD-105).
@@ -762,6 +782,7 @@ impl PolydatAssembler {
         let jit_mode = self
             .jit_mode
             .unwrap_or_else(crate::compile::cone::default_jit_mode);
+        let strict = self.strict;
         let mut resolved = self.resolve_with_log(log.as_deref_mut())?;
         crate::compile::cone::extract_jit_cones(&mut resolved, jit_mode);
         let _coord_names = resolved.input_names();
@@ -779,7 +800,7 @@ impl PolydatAssembler {
             &resolved.source,
             &resolved.context,
             log,
-            false,
+            strict,
         )
         .map_err(AssemblyError::Other)?;
         if !cursors.is_empty() {
@@ -788,57 +809,32 @@ impl PolydatAssembler {
         Ok(kernel)
     }
 
-    /// Compile with strict mode: config wire violations are errors,
-    /// implicit type coercions are rejected, unused bindings flagged.
-    pub fn compile_strict(self, strict: bool) -> Result<PolydatKernel, AssemblyError> {
-        if !strict {
-            return self.compile();
-        }
-        let jit_mode = self
-            .jit_mode
-            .unwrap_or_else(crate::compile::cone::default_jit_mode);
-        let mut resolved = self.resolve()?;
-        let _coord_names = resolved.input_names();
-
-        // Strict: reject implicit type coercions (auto-inserted adapter nodes)
-        // Adapters have names starting with "__" and containing type conversion hints
-        let adapter_count = resolved
-            .nodes
+    /// Strict mode's build-time refusals on a resolved graph, the ones
+    /// the interpreter's fold makes: what a compiled engine checks
+    /// before it builds, so strict means the same thing on every engine.
+    fn refuse_strict(resolved: &ResolvedDag) -> Result<(), AssemblyError> {
+        let classes = PolydatProgram::classify_lifecycle(
+            &resolved.nodes,
+            &resolved.wiring,
+            &resolved.input_defs,
+            &resolved.output_map,
+            &resolved.output_modifiers,
+        );
+        let is_init: Vec<bool> = classes
+            .lifecycle
             .iter()
-            .filter(|n| {
-                let name = &n.meta().name;
-                name.starts_with("__adapt_")
-                    || name.starts_with("__u64_to_")
-                    || name.starts_with("__f64_to_")
-                    || name.starts_with("__bool_to_")
-                    || name.starts_with("__str_to_")
-            })
-            .count();
-        if adapter_count > 0 {
-            return Err(AssemblyError::Other(format!(
-                "strict mode: {adapter_count} implicit type coercion(s) inserted. \
-                 Use explicit conversion functions (e.g., u64_to_f64, f64_to_u64)."
-            )));
+            .map(|lc| *lc == crate::kernel::EvalLifecycle::CompileConst)
+            .collect();
+        match PolydatProgram::strict_violation(
+            &resolved.nodes,
+            &resolved.wiring,
+            &is_init,
+            &resolved.output_map,
+            &resolved.output_modifiers,
+        ) {
+            Some(violation) => Err(AssemblyError::Other(violation)),
+            None => Ok(()),
         }
-
-        crate::compile::cone::extract_jit_cones(&mut resolved, jit_mode);
-        let modifiers = resolved.output_modifiers.clone();
-        let kernel = PolydatKernel::new_with_inputs(
-            resolved.nodes,
-            resolved.wiring,
-            resolved.input_defs,
-            resolved.coord_count,
-            resolved.output_map,
-            resolved.output_order,
-            resolved.const_outputs,
-            modifiers,
-            &resolved.source,
-            &resolved.context,
-            None,
-            true,
-        )
-        .map_err(AssemblyError::Other)?;
-        Ok(kernel)
     }
 
     /// Validate, resolve, and attempt Phase 2 compilation.
@@ -1446,101 +1442,11 @@ impl PolydatAssembler {
         Ok(k)
     }
 
-    /// Analyze the graph and auto-select the optimal P2 provenance mode.
-    ///
-    /// Returns a `P2Engine` enum wrapping the monomorphic kernel variant.
-    /// The selection is based on graph structure (cone sizes, input count).
-    pub fn auto_compile_p2(self) -> Result<(P2Engine, GraphAnalysis), String> {
-        let resolved = self.resolve().map_err(|e| format!("{e}"))?;
-        let _coord_names = resolved.input_names();
-        let analysis =
-            select::analyze_graph(&resolved.nodes, &resolved.wiring, &resolved.output_map);
-        let mode = select::select_prov_mode(&analysis);
-
-        let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
-            Self::build_p2_layout(&resolved)?;
-
-        // The state that wraps the engine owns the cycle (SRD 115 §4).
-        let engine = match mode {
-            ProvMode::Raw => {
-                let mut k = CompiledKernelRaw::new(
-                    coord_count,
-                    total_slots,
-                    steps,
-                    output_map,
-                    ref_slots,
-                    extras,
-                );
-                k.set_owns_cycle(false);
-                P2Engine::Raw(k)
-            }
-            ProvMode::Pull => {
-                let deps = slot_layout(&resolved).expand_dependents(
-                    &resolved,
-                    &PolydatProgram::compute_dependents(
-                        &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
-                        resolved.input_defs.len(),
-                    ),
-                );
-                let mut k = CompiledKernelPull::new(
-                    coord_count,
-                    total_slots,
-                    steps,
-                    output_map,
-                    &deps,
-                    ref_slots,
-                    extras,
-                );
-                k.set_owns_cycle(false);
-                P2Engine::Pull(k)
-            }
-            ProvMode::PushPull => {
-                let deps = slot_layout(&resolved).expand_dependents(
-                    &resolved,
-                    &PolydatProgram::compute_dependents(
-                        &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
-                        resolved.input_defs.len(),
-                    ),
-                );
-                let mut k = CompiledKernelPushPull::new(
-                    coord_count,
-                    total_slots,
-                    steps,
-                    output_map,
-                    deps,
-                    ref_slots,
-                    extras,
-                );
-                k.set_owns_cycle(false);
-                P2Engine::PushPull(k)
-            }
-        };
-        Ok((engine, analysis))
-    }
-
-    /// Analyze the graph and auto-select the optimal P3 JIT provenance mode.
-    #[cfg(feature = "jit")]
-    pub fn auto_compile_p3(self) -> Result<(select::P3Engine, GraphAnalysis), String> {
-        let resolved = self.resolve().map_err(|e| format!("{e}"))?;
-        let _coord_names = resolved.input_names();
-        let analysis =
-            select::analyze_graph(&resolved.nodes, &resolved.wiring, &resolved.output_map);
-        let mode = select::select_prov_mode(&analysis);
-
-        let mut kernel = Self::hybrid_from(resolved)?;
-        kernel.set_owns_cycle(false);
-        let engine = match mode {
-            ProvMode::Raw => select::P3Engine::Raw(kernel.into_raw()),
-            ProvMode::Pull => select::P3Engine::Pull(kernel.into_pull()),
-            ProvMode::PushPull => select::P3Engine::PushPull(kernel),
-        };
-        Ok((engine, analysis))
-    }
-
-    /// The P3 kernel: each node at its optimal level, native code where
-    /// it has a lowering and its closure elsewhere. The same kernel as
-    /// `try_compile_jit`; without the `jit` feature every node is a
-    /// closure.
+    /// The P3 kernel as its concrete type, for the differential suites
+    /// and the ladder; a host uses [`Self::compile_with`]. Native code
+    /// where a node has a lowering and its closure elsewhere; without
+    /// the `jit` feature every node is a closure.
+    #[doc(hidden)]
     pub fn compile_hybrid(self) -> Result<crate::compile::hybrid::HybridKernel, String> {
         let resolved = self.resolve().map_err(|e| format!("{e}"))?;
         Self::hybrid_from(resolved)
@@ -1666,6 +1572,7 @@ impl PolydatAssembler {
         let mut assertion_count = 0usize;
         let strict_values = self.strict_values;
         let strict_types = self.strict_types;
+        let strict = self.strict;
 
         for pn in self.nodes {
             let idx = all_nodes.len();
@@ -1736,6 +1643,14 @@ impl PolydatAssembler {
                 if skip_type_check || source_type == expected_type {
                     node_wiring.push(source);
                 } else if let Some(adapter) = auto_adapter(source_type, expected_type) {
+                    if strict {
+                        return Err(AssemblyError::Other(format!(
+                            "strict mode: implicit type coercion {source_type} → {expected_type} \
+                             into '{}'. Use an explicit conversion function (e.g., u64_to_f64, \
+                             f64_to_u64).",
+                            all_nodes[node_idx].name
+                        )));
+                    }
                     let adapter_name = format!("__adapt_{adapter_count}");
                     adapter_count += 1;
                     let adapter_idx = all_nodes.len();
@@ -2767,10 +2682,14 @@ impl PolydatAssembler {
         mut log: Option<&mut crate::dsl::events::CompileEventLog>,
     ) -> Result<Box<dyn Kernel>, KernelError> {
         let refused = |reason: String| KernelError::Refused { engine, reason };
+        let strict = self.strict;
         match engine {
             Engine::Interpreter => Ok(Box::new(self.compile_with_log(log)?)),
             Engine::Closures(prov) => {
                 let resolved = self.resolve_with_log(log.as_deref_mut())?;
+                if strict {
+                    Self::refuse_strict(&resolved)?;
+                }
                 let folded = log.is_some().then(|| Self::constant_sites(&resolved));
                 let kernel = Self::closures_from(resolved, prov).map_err(refused)?;
                 Self::log_folded(kernel.as_ref(), folded, log);
@@ -2780,6 +2699,9 @@ impl PolydatAssembler {
                 #[cfg(feature = "jit")]
                 {
                     let resolved = self.resolve_with_log(log.as_deref_mut())?;
+                    if strict {
+                        Self::refuse_strict(&resolved)?;
+                    }
                     let folded = log.is_some().then(|| Self::constant_sites(&resolved));
                     let prov = Self::provenance_for(prov, &resolved);
                     let kernel = Self::hybrid_from(resolved).map_err(refused)?;
