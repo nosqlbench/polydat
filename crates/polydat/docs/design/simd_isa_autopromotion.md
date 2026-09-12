@@ -1,8 +1,5 @@
 # SIMD ISA Selection and Scalar-Flow Promotion
 
-**Status:** Implemented specification for explicit Tier-1 perfect-ordinal
-promotion.
-
 **Scope:** Effective native-ISA discovery, typed SIMD node variants, promotion
 qualification, ordinal packet execution, ordered scalar drain, and recovery.
 
@@ -12,15 +9,15 @@ This specification extends:
   invalidation;
 - [The Graph Compiler](graph_compiler.md), especially fusion and engine
   selection;
-- [SRD-11: Evaluation Model](evaluation_model.md), especially per-fiber state;
-- [SRD-16: Engines](engines.md) and [SRD-16b: JIT Boundary](jit_boundary.md);
+- [The Evaluation Model](evaluation_model.md), especially per-fiber state;
+- [Engines](engines.md) and [JIT Boundary](jit_boundary.md);
 - [The Type System](type_system.md), especially the fixed 128-bit register
   plane; and
 - [Cross-Fiber Cell Invalidation](cross_fiber_invalidation.md).
 
-The implemented optimization processes an owned scalar ordinal sequence as
-128-bit lane packets while preserving scalar graph signatures and scalar result
-order. It does not place several logical cycles in the ordinary node cache.
+The optimization processes an owned scalar ordinal sequence as 128-bit lane
+packets while preserving scalar graph signatures and scalar result order. It
+does not place several logical cycles in the ordinary node cache.
 
 ---
 
@@ -51,7 +48,7 @@ order. It does not place several logical cycles in the ordinary node cache.
 9. **Downstream invalidation does not travel upstream.** Only state whose
    provenance includes the changed source is invalidated.
 10. **Promotion is explicit and conservative.** Ordinary compilation and
-    `PolydatKernel::pull` remain scalar-cycle APIs. The supported promoted
+    `Kernel::pull` remain scalar-cycle APIs. The supported promoted
     executor has one perfect-ordinal `u64` input, one selected output, exact
     `RegI64x2` variants, and stable broadcast boundaries.
 
@@ -78,9 +75,10 @@ cache identity. A compiled plan must not be reused when the fingerprint differs.
 Architecture lookup without native feature inference is not an effective-ISA
 probe.
 
-Polydat is pinned to Cranelift 0.116. The current x64 lowering boundary for
-ordinary vector SSA values is 128 bits. Wider physical registers or instruction
-sets do not change the graph type plane.
+The `jit` feature depends on Cranelift 0.116 (the crate's `Cargo.toml`); the
+x64 lowering boundary for ordinary vector SSA values in that backend is 128
+bits. Wider physical registers or instruction sets do not change the graph type
+plane.
 
 ### 2.2 Type shapes
 
@@ -320,8 +318,8 @@ must not be interpreted as providing those semantics.
 
 ### 6.1 Explicit compilation
 
-Ordinary `compile_polydat`, `PolydatAssembler::compile`, and
-`PolydatKernel::pull` do not select scalar-flow SIMD promotion.
+`compile_with(Engine)` on any engine, and `Kernel::pull`, do not select
+scalar-flow SIMD promotion.
 
 The public DSL entry point is:
 
@@ -343,6 +341,13 @@ flowchart LR
     F --> G[Compile native register kernel]
     G --> H[Return executor with scalar oracle]
 ```
+
+The register kernel the executor owns is a pure native raw kernel
+(`JitKernelRaw`): the whole register DAG as one native function over the slot
+buffer, with no provenance tracking, because the executor sequences every
+packet itself and the scalar kernel it also owns is the oracle and the
+recovery path. Beside the engine differential, this executor is the reason the
+pure native tier exists ([Engines](engines.md)).
 
 Any qualification or register-lowering failure is a compile error for this
 explicit API. It does not alter or invalidate ordinary scalar compilation.
@@ -427,10 +432,10 @@ Cursor rewind is forbidden as packet recovery. Rewinding a shared cursor can
 duplicate another fiber's reservation, reorder work, cross allocation
 boundaries, and cannot reconstruct dependency values from the original epoch.
 
-The implemented retention strategy is the stable ordinal replay key plus the
-consumer frontier. The compiled scalar graph is retained as the oracle. There
-are no intermediate-stage checkpoints, retry transactions, or shared-cell
-snapshot protocol in Tier 1.
+The retention strategy is the stable ordinal replay key plus the consumer
+frontier. The compiled scalar graph is retained as the oracle. There are no
+intermediate-stage checkpoints, retry transactions, or shared-cell snapshot
+protocol in Tier 1.
 
 ---
 
@@ -475,7 +480,7 @@ packets, frontiers, or statistics.
 
 ---
 
-## 9. Performance model and measured evidence
+## 9. Performance model
 
 For lane width `W`, let:
 
@@ -501,67 +506,17 @@ plans do not.
 Promotion is explicit; there is no automatic cost threshold in the normal
 compiler. The descriptor and runtime counters provide the facts needed by a
 caller or profiling layer to make that selection without changing semantics.
-
-### 9.1 Reference benchmark
-
-`benches/simd_autopromotion.rs` compares two P3 JIT paths implementing the same
-low-32-bit wrapping affine transform:
-
-```text
-scalar: ordinal -> [mul; add] x depth -> one JIT call per token
-
-SIMD:   ordinal high bits -> synthesize i32x4 -> [mul; add] x depth
-              ordinal low bits <- ordered scalar drain <- one JIT call per packet
-```
-
-The benchmark is a focused `i32x4` ordinal-stream mechanism study, not the
-integrated `u64x2` Tier-1 selector. It demonstrates packet reuse across drain
-bursts and validates the cursor-clock optimization.
-
-Recorded environment:
-
-```text
-AMD Ryzen 9 3900X, 24 logical processors, Windows 10.0.26200
-rustc/cargo 1.96.0, Cranelift 0.116, Criterion 0.5
-cargo bench -p polydat --bench simd_autopromotion -- \
-  --warm-up-time 2 --measurement-time 5 --sample-size 30 --noplot
-```
-
-Rates are Criterion slope point estimates in millions of scalar elements per
-second. The speedup interval is the conservative quotient of the separate 95%
-slope intervals, not a paired-sample confidence interval.
-
-| Depth | Burst | Scalar M/s | SIMD M/s | Speedup | Conservative interval |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| 1 | 1 | 57.67 | 83.99 | 1.46x | 1.40-1.50x |
-| 1 | 3 | 57.78 | 92.77 | 1.61x | 1.55-1.66x |
-| 1 | 4 | 57.26 | 99.11 | 1.73x | 1.68-1.79x |
-| 1 | 16 | 60.16 | 120.22 | 2.00x | 1.95-2.05x |
-| 1 | 256 | 46.69 | 122.69 | 2.63x | 2.61-2.64x |
-| 4 | 1 | 54.73 | 90.61 | 1.66x | 1.62-1.68x |
-| 4 | 3 | 51.45 | 94.96 | 1.85x | 1.79-1.92x |
-| 4 | 4 | 51.76 | 92.74 | 1.79x | 1.71-1.88x |
-| 4 | 16 | 52.72 | 100.93 | 1.91x | 1.86-1.97x |
-| 4 | 256 | 52.69 | 98.36 | 1.87x | 1.80-1.95x |
-| 16 | 1 | 34.76 | 55.84 | 1.61x | 1.56-1.65x |
-| 16 | 3 | 34.88 | 62.07 | 1.78x | 1.70-1.86x |
-| 16 | 4 | 35.89 | 64.29 | 1.79x | 1.74-1.85x |
-| 16 | 16 | 36.62 | 64.74 | 1.77x | 1.72-1.82x |
-| 16 | 256 | 32.81 | 72.65 | 2.21x | 2.17-2.25x |
-
-All 15 measured cells favored the ordinal SIMD executor; the median point
-estimate was 1.79x and the lowest conservative interval endpoint was above
-1.40x. The host did not remain in one performance state across the sweep, so the
-long-burst maxima are not a selection threshold. The stable conclusion is that
-packet reuse remains effective when caller burst size is smaller than vector
-width. These measurements do not establish multi-consumer, shared-state,
-per-lane error, or automatic-selection semantics.
+The measured reason the packet clock is worth its complexity is that packet
+reuse stays effective when the caller's burst size is smaller than the vector
+width: a ready packet drained one value at a time still amortizes its native
+call over its lanes. The measurements do not establish multi-consumer,
+shared-state, per-lane error, or automatic-selection semantics.
 
 ---
 
 ## 10. Verification contract
 
-The implemented behavior is covered by two complementary suites.
+The behavior is covered by two complementary suites.
 
 `compile::simd_tier1` verifies:
 

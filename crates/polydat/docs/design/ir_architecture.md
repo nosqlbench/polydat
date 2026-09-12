@@ -3,9 +3,9 @@
 Reference for developers working on or against polydat's
 comprehension IR (`polydat::iteration::comprehension::ir`).
 Companion to the algebra spec
-(`polydat/docs/design/comprehension_forms.md`) — focuses on
-the **how** of the runtime model rather than the **what** of
-the algebra.
+([comprehension_forms.md](comprehension_forms.md)) — focuses
+on the **how** of the runtime model rather than the **what**
+of the algebra.
 
 ## The execution model: stack machine + stream operands
 
@@ -87,12 +87,12 @@ Two simultaneous wins:
 
 1. **The IR sequence is small and analyzable.** Linear,
    typed, immutable. Easy to inspect (e.g., bounds checker
-   walks the opcodes once). Easy to serialize. Easy to swap
-   for an alternative interpretation strategy (a stream-
-   fusion compiler that rewrites the IR into a single nested
-   generator function would produce identical dispense
-   sequences per §9.2's correctness contract — option (b)
-   of the spec).
+   walks the opcodes once). Easy to serialize. Any other
+   executor of the same IR — a stream-fusion compiler that
+   rewrites it into a single nested generator, say — must
+   produce the identical dispense sequence under §9.2's
+   correctness contract, so the IR fixes the semantics and
+   the executor is free.
 2. **Per-tuple cost stays bounded.** No opcode dispatch per
    tuple — the per-opcode work happens at interpret-time
    (one walk). Per-tuple cost lives inside the stream
@@ -123,26 +123,26 @@ operator needs to re-iterate over) but streams axis 0 lazily.
 
 ## The R1 + R2 boundary: AST vs IR
 
-The optimizer (PR 5 / spec §10) catalog includes R1 ("order
-Lex → counter wrapper") and R2 ("order non-Lex → indexed
-push-down"). Both are **IR compilation decisions**, not AST
-rewrites. The compiler (`compile.rs`) reads
-`metadata.index_addressable` to decide:
+Two of the algebra's reductions, R1 ("order Lex → counter
+wrapper") and R2 ("order non-Lex → indexed push-down"), are
+**IR compilation decisions**, not AST rewrites. The rule:
+`optimize()` never rewrites the AST for them; the IR compiler
+(`ir::compile`) chooses the opcode from
+`metadata.index_addressable`:
 
-- `order(Lex, _)` → `Op::OrderStreaming` (R1's realization).
+- `order(Lex, _)` → `Op::OrderStreaming` (R1).
 - `order(non-Lex, Some(n))` over index-addressable input →
-  `Op::OrderMaterialize { indexed: true }` (R2 fires; the
+  `Op::OrderMaterialize { indexed: true }` (R2; the
   interpreter's `OrderMaterializeStream` uses the strategy's
   closed-form indexed lookup over the input's `IndexFn`).
 - `order(non-Lex, Some(n))` over non-addressable input →
-  `Op::OrderMaterialize { indexed: false }` (naïve: pull
-  full input, apply strategy, emit).
+  `Op::OrderMaterialize { indexed: false }` (pull the full
+  input, apply the strategy, emit).
 
 The AST shape doesn't change for R1/R2; only the chosen IR
 opcode does. The reducibility catalog (spec §10.10.3) records
 R1 and R2 as IR-compilation eligibilities so the optimizer's
-introspection surface reports them, but `optimize()` doesn't
-rewrite for them.
+introspection surface reports them.
 
 ## Trait object choice
 
@@ -160,17 +160,6 @@ stack. The rejected alternatives are:
 
 Trait-object overhead is one vtable dispatch per `advance()`.
 This cost is part of the specified interpreter representation.
-
-## File layout
-
-| File | Role |
-|---|---|
-| `mod.rs` | Module re-exports |
-| `op.rs` | `Op` enum (8 opcodes) + `OrderStreamingKind` + `Op::stack_effect()` + `Op::is_barrier()` |
-| `program.rs` | `#[non_exhaustive] Program` wrapper; `Program::stack_depth()` |
-| `compile.rs` | `compile(ast)` — bottom-up AST walker; R1 + R2 dispatch via metadata |
-| `interpreter.rs` | `interpret(program)`; `TupleStream` trait; per-opcode stream type impls; predicate evaluator |
-| `bounds.rs` | `check_bounds(program) -> ResourceBound` — spec §9.3 |
 
 ## Stack effect rules (spec §9.1)
 
@@ -209,14 +198,28 @@ ever reached during interpretation, which bounds spec §9.3's
 - Predicate evaluation beyond the §10.9.5 catalog. The static
   IR interpreter treats unknown predicates as `true`
   (conservative pass-through); production iteration uses the
-  runtime evaluator and Polydat kernel scope.
+  runtime evaluator and the kernel's scope.
 - Source evaluation for `Generator` / `WorkloadParamList` /
   continuous sources. The static interpreter exhausts these
-  to `None` (no tuple); `runtime::evaluate_for_iteration`
-  owns evaluated-source behavior.
+  to `None` (no tuple); the runtime evaluator owns
+  evaluated-source behavior.
 - Stream-fusion compilation is not part of this IR. The
   specified executor is the stack-machine interpreter, and
   its dispense sequence is governed by §9.2.
+
+**The runtime evaluator.** Production iteration evaluates a
+comprehension through `iteration::comprehension::eval`
+(`evaluate_spec`, one clause source to its list of values) and
+`iteration::comprehension::runtime::evaluate_for_iteration`
+(a whole comprehension to its tuples). Both evaluate against
+`&dyn Lookup` (`kernel::interp::Lookup`): the name resolution
+a `{name}` placeholder or a bare identifier reads. The
+interpreter kernel implements `Lookup`, and `Layered` puts a
+tuple's bindings in front of any other lookup, so the
+evaluator is engine-neutral — opening a traversal on the
+closure tier or the native engine evaluates the same
+comprehension against the same scope, and needs no kernel of
+the engine that opens it.
 
 ## Adding a new opcode
 
@@ -235,8 +238,7 @@ strategy that's a parameterization of `OrderMaterialize`):
    `Op` enum's documentation in the comprehension spec
    §9.1.
 
-Per spec §10.8's "It does NOT add new operators to the IR.
-The eight §9.1 opcodes are sufficient" — adding a new opcode
-is a coordinated change across the algebra spec + IR.
-Strategies should normally be added as new `StrategyName`
-variants (no IR change) rather than new opcodes.
+The eight §9.1 opcodes are the IR; adding one is a
+coordinated change across the algebra spec + IR. Strategies
+should normally be added as new `StrategyName` variants (no
+IR change) rather than new opcodes.

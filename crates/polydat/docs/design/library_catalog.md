@@ -4,9 +4,11 @@ The Polydat node library provides deterministic, composable functions
 for data generation. Nodes are registered in the DSL compiler's
 function registry and available by name in `.polydat` source.
 
-This doc is the catalog reference for the polydat library
-(`polydat/src/library/`). The node-metadata contract that every
-entry satisfies is specified in
+This document is the design rationale for the library
+(`polydat/src/library/`): what a node is, the authoring contract, the
+cost classes, and why the registry is open. It is not a listing; the
+nodes themselves are in the [node reference](../reference/nodes.md). The
+node-metadata contract that every entry satisfies is specified in
 [composition_substrate.md §2 (slot contract)](composition_substrate.md);
 fusion of catalog nodes is in
 [graph_compiler.md §5](graph_compiler.md); virtual-node
@@ -37,160 +39,19 @@ values through the same typed slot ABI.
 
 ---
 
-## Node Categories
-
-### Hash and Distribution
-
-| Node | Signature | Description |
-|------|-----------|-------------|
-| `hash` | `u64 → u64` | xxh3 deterministic hash |
-| `hash_range` | `u64, u64 → u64` | hash into [0, range) |
-| `mod` | `u64, u64 → u64` | modular arithmetic |
-| `unit_interval` | `u64 → f64` | hash to [0.0, 1.0) |
-| `uniform` | `u64, f64, f64 → f64` | hash to [lo, hi) |
-
-### Arithmetic
-
-| Node | Signature | Description |
-|------|-----------|-------------|
-| `add` | `u64, u64 → u64` | addition |
-| `mul` | `u64, u64 → u64` | multiplication |
-| `pow` | `f64, f64 → f64` | exponentiation |
-| `clamp` | `f64, f64, f64 → f64` | clamp to [min, max] |
-| `lerp` | `f64, f64, f64 → f64` | linear interpolation |
-| `min` / `max` | `u64, u64 → u64` | min/max selection |
-
-### String Generation
-
-| Node | Signature | Description |
-|------|-----------|-------------|
-| `format_u64` | `u64, u64 → String` | zero-padded decimal |
-| `hex` | `u64 → String` | hex representation |
-| `weighted_strings` | `u64, String → String` | weighted selection from list |
-| `one_of` | `u64, String → String` | uniform selection from list |
-| `alpha_numeric` | `u64, u64 → String` | random alphanumeric string |
-| `uuid_from_u64` | `u64 → String` | deterministic UUID |
-
-### Random Number Generation
-
-| Node | Signature | Description |
-|------|-----------|-------------|
-| `pcg` | `u64, u64 → u64` | PCG-RXS-M-XS 64/64 (seekable) |
-| `pcg_stream` | `u64 → u64` | PCG with wire-time stream ID |
-
-PCG provides reproducible, seekable random streams. O(log N) seek
-via repeated squaring. Entity-correlated: one stream per entity ID.
-
-### Weighted Selection
-
-| Node | Signature | Description |
-|------|-----------|-------------|
-| `fair_coin` | `u64 → u64` | 50/50 binary selection |
-| `select` | `u64, String → u64` | weighted index selection |
-| `one_of_weighted` | `u64, String → String` | weighted string selection |
-
-Uses alias method for O(1) weighted selection regardless of
-category count.
-
-### Time and Identity
-
-| Node | Signature | Description |
-|------|-----------|-------------|
-| `identity` | `u64 → u64` | pass-through |
-| `counter` | `→ u64` | monotonic counter (non-deterministic) |
-| `mixed_radix` | `u64, u64, u64 → u64` | input decomposition |
-
-### Math (binary f64)
-
-| Node | Signature | Description |
-|------|-----------|-------------|
-| `f64_add` | `f64, f64 → f64` | addition |
-| `f64_sub` | `f64, f64 → f64` | subtraction |
-| `f64_mul` | `f64, f64 → f64` | multiplication |
-| `f64_div` | `f64, f64 → f64` | division |
-| `f64_mod` | `f64, f64 → f64` | modulo |
-| `to_f64` | `u64 → f64` | widen u64 to f64 |
-
-### Integer (two-wire u64)
-
-| Node | Signature | Description |
-|------|-----------|-------------|
-| `u64_add` | `u64, u64 → u64` | addition |
-| `u64_sub` | `u64, u64 → u64` | subtraction |
-| `u64_mul` | `u64, u64 → u64` | multiplication |
-| `u64_div` | `u64, u64 → u64` | division |
-| `u64_mod` | `u64, u64 → u64` | modulo |
-
-### Bitwise
-
-| Node | Signature | Description |
-|------|-----------|-------------|
-| `u64_and` | `u64, u64 → u64` | bitwise AND |
-| `u64_or` | `u64, u64 → u64` | bitwise OR |
-| `u64_xor` | `u64, u64 → u64` | bitwise XOR |
-| `u64_shl` | `u64, u64 → u64` | left shift |
-| `u64_shr` | `u64, u64 → u64` | logical right shift |
-| `u64_not` | `u64 → u64` | bitwise complement |
-
-### Checked Arithmetic
-
-| Node | Signature | Description |
-|------|-----------|-------------|
-| `checked_add` | `u64, u64 → u64, bool` | add with overflow flag |
-| `checked_sub` | `u64, u64 → u64, bool` | subtract with underflow flag |
-| `checked_mul` | `u64, u64 → u64, bool` | multiply with overflow flag |
-
-The bool output wire is `true` on overflow/underflow. Safe
-replacement for wrapping arithmetic when correctness matters.
-
-### String Generation (extended)
-
-| Node | Signature | Description |
-|------|-----------|-------------|
-| `hashed_uuid` | `u64 → String` | deterministic UUID v4-format from hash |
-| `char_buf` | `u64, u64 → String` | fixed-length character buffer |
-| `file_line_at` | `u64, String → String` | line from file at index |
-
-### Array and JSON
-
-| Node | Signature | Description |
-|------|-----------|-------------|
-| `array_len` | `JSON → u64` | number of elements in JSON array |
-| `array_at` | `JSON, u64 → JSON` | element at index |
-| `normalize_vector` | `JSON → JSON` | L2-normalize a float array |
-| `random_vector` | `u64, u64 → JSON` | random unit vector of given dimension |
-
-### Diagnostic
-
-| Node | Signature | Description |
-|------|-----------|-------------|
-| `fft_analyze` | `JSON → JSON` | FFT frequency analysis of a float array |
-| `log_debug` | `T → T` | Emit value at Debug log level; return input unchanged. Declared `Purity::SideChannel { sink: LogBuffer }` so output elision can't drop it when the return value is unused. |
-| `log_info` | `T → T` | As `log_debug`, at Info level. |
-| `log_warn` | `T → T` | As `log_debug`, at Warn level. |
-| `log_error` | `T → T` | As `log_debug`, at Error level. |
-
-Each log node takes one wire input, emits a log line at the
-named level via the host log sink (installed through
-`polydat::audit`), and returns the input unchanged. The pass-through return value lets workloads
-insert logging into a binding chain without restructuring;
-the side-channel purity declaration suppresses output elision
-when the return value is unused. The logged line carries the
-value (formatted via `Value::Display` / `Debug`), the wire
-name when known, and the op-template context — same
-diagnostic enrichment the eval-panic path uses.
+## Node design notes
 
 ### Branched dispatch and structured-body assertions
 
-These nodes back the runtime-feature-detection pattern, which a
-host exposes as a workload surface.
-
-| Node | Signature | Description |
-|------|-----------|-------------|
-| `pick` | `Bool×N, T×N → T` | Variadic dispatcher: 2N wires (N selectors + N values). Exactly one selector must be `true`; returns the matching value. Zero-true or multi-true is an eval-time error. All values must share a common type. |
-| `exactly_one_value` | `<StructuralBody> → V` | Assert a structural body is unary (1 row × 1 column × 1 cell) and return the cell value. Non-unary input is an eval-time error naming the actual `<r> rows × <c> columns`. |
+`pick` and `exactly_one_value` back the runtime-feature-detection
+pattern, which a host exposes as a workload surface: probe once,
+record what was found in booleans, and dispatch on them later.
 
 #### `pick` — semantics
+
+`pick(b0, …, bN-1, v0, …, vN-1)` is a variadic dispatcher over 2N
+wires: N selectors and N values. Exactly one selector must be `true`;
+the node returns the matching value.
 
 - Evaluates all 2N inputs (no short-circuit; Polydat is data-flow).
 - Counts how many of `b0..bN-1` are `true`.
@@ -201,9 +62,9 @@ host exposes as a workload surface.
   - Two or more true → eval-time error: "pick: multiple
     selectors matched (b1, b3, …); selectors must be mutually
     exclusive."
-- Errors flow through `enrich_eval_panic` so the operator
+- Errors flow through the failure contract, so the operator
   sees the function name, the result-wire context, and the
-  inputs.
+  inputs, on every engine.
 
 **Argument shape.** Selectors and values are split into two
 halves rather than interleaved `(b0,v0,b1,v1,…)`. The split
@@ -247,17 +108,19 @@ pick: no selector matched (all N=2 booleans false)
 
 #### `exactly_one_value` — motivation and semantics
 
-The motivating use case has a CQL `describe keyspace` op
-whose body is a single row × single text column carrying
-schema text. To regex-match against that text, the workload
-needs to **unwrap** the structural body — extract the
-one-and-only text value — before applying `regex_match`.
+The motivating use case is a query whose result body is a single
+row × single text column carrying schema text. To regex-match
+against that text, the workload needs to **unwrap** the structural
+body — extract the one-and-only text value — before applying
+`regex_match`.
 
-`exactly_one_value(body)` is the explicit-assertion approach
-(rejecting the implicit-modal-projection alternative that the
-adapter's `body.to_text()` could choose unary vs JSON
-stringify based on shape — implicit modal behaviour is
-unwelcome).
+`exactly_one_value(body)` is the explicit-assertion approach,
+rejecting the implicit-modal-projection alternative in which a
+host's `body.to_text()` would choose unary extraction or JSON
+stringification based on shape. Implicit modal behaviour is
+unwelcome: a body that silently changed shape would change the
+text and the match with it, and the failure would surface as a
+wrong answer rather than an error.
 
 **Semantics.**
 
@@ -269,148 +132,58 @@ unwelcome).
   unary structure (1 row × 1 column), found <r> rows × <c>
   columns"`.
 
-The error flows through `enrich_eval_panic`; the operator
+The error flows through the failure contract; the operator
 sees the function name, the result-wire context, and the
-body's actual shape.
-
-**Composition with regex** reads as a two-step dance —
-assertively extract the unary value, then match against it:
-
-```yaml
-result: |
-  has_sai_column_indexes := regex_match(exactly_one_value(body),
-                            "(?im)^\s*(VIRTUAL\s+)?TABLE\s+system_views\.sai_column_indexes\s*\(")
-```
-
-**Body type.** The exact Polydat type of the `body` extern is a
-structural value wide enough to round-trip through the
-JSON-AST representation that map-shape result wires already
-need (per SRD-66 Surface 1 "Map shape composite wire").
-`exactly_one_value` is type-agnostic at the substrate layer.
+body's actual shape. Composition with regex reads as a two-step
+dance — assertively extract the unary value, then match against
+it. `exactly_one_value` is type-agnostic at the substrate layer:
+the body is a structural value wide enough to round-trip through
+the JSON representation.
 
 ### Host-registered nodes
 
 The node registry is **open**. A host application registers additional nodes via
 `inventory` to project its *own* runtime state — live controls, metric series, the
 executing phase, the current cycle, and similar — into the DSL as named,
-side-effect-free projections. polydat itself provides only the deterministic library
-documented here; nodes that read host runtime state live in (and are documented by)
+side-effect-free projections. polydat itself provides only the deterministic library;
+nodes that read host runtime state live in (and are documented by)
 the host, since they depend on host services polydat does not. The engine marks such
-nodes `volatile` so the constant-folder leaves them in place (their value changes per
+nodes nondeterministic so the constant-folder leaves them in place (their value changes per
 pull by definition). A read-side projection is a context node; a writable value is a
 control — neither is a template / env-var / global.
 
 ### Parameter resolution and validation
 
-These nodes let a workload compose layered defaults and assert
-preconditions on any value flowing through a binding. They
-operate on the same Polydat wires everything else does — a
-`required(...)` on a workload param is the same mechanism as
-`required(...)` on an externally-written wire or a runtime
-control.
-
-| Node | Signature | Description |
-|------|-----------|-------------|
-| `this_or` | `T?, T → T` | Returns the first argument if it resolves to a defined value, otherwise the second. Lets a workload explicitly say "use this or fall back to that" across scopes. Arguments are ordinary wires; `default` can be a literal, a param lookup, an externally-written wire, or another `this_or`. |
-| `required` | `T? → T` | Compile / scope-init assertion that the input resolves to a defined, non-empty value. Passes the value through on success; raises an error with the parameter name on failure. Use to catch missing-parameter bugs before cycles run. |
-| `is_positive` | `N → N` | Predicate: pass through if value > 0, error otherwise (numeric types). |
-| `in_range` | `N, N, N → N` | Predicate: pass through if `lo ≤ value ≤ hi`, error with a range-mismatch diagnostic otherwise. |
-| `matches` | `String, String → String` | Predicate: pass through if value matches the regex, error otherwise. |
-| `is_one_of` | `T, [T] → T` | Predicate: pass through if value is in the allowed set, error otherwise. (Distinct from the probabilistic `one_of` selector.) |
-
-Predicates stack — the same value can carry several — and are
-evaluated at the earliest time the input is known (compile
-time for const-folded values, init time for workload params,
-cycle time for live reads). Violations at cycle time surface as
-`panic!` regardless of compilation level (P1 interpreter, P2
-closure, P3 JIT); the JIT path reaches that same observable
-behavior through a setjmp/longjmp shim documented in
-[JIT Boundary](../design/jit_boundary.md).
+The predicates (`is_positive`, `in_range`, `matches`, `is_one_of`)
+and the resolvers (`this_or`, `required`) are ordinary pass-through
+nodes: each returns its input unchanged when the condition holds and
+panics with a diagnostic otherwise. They operate on the same wires
+everything else does, so a `required(...)` on a workload parameter is
+the same mechanism as `required(...)` on an externally written wire
+or a runtime control, and they stack: the same value can carry
+several. A predicate is evaluated at the earliest time its input is
+known — at compile time for a const-folded value, at scope init for
+a parameter, at cycle time for a live read — and a violation surfaces
+the same way on every engine: the interpreter and the closure tier
+panic in the node's body; native code reaches the same panic through
+the longjmp path of [JIT Boundary](jit_boundary.md), where the scalar
+predicates (`is_positive`, `in_range`, `is_one_of`) have native
+lowerings and dedicated fail helpers; and
+every engine enriches the message with the node, its outputs, and its
+inputs through the one failure contract ([Engines](engines.md)).
 
 <a id="cursor-partitions-srd-71"></a>
-### [Cursor Partitions (SRD 71)](cursor_partitions.md)
+### Partition values
 
-Partition-typed nodes (`library/partition.rs`). `Partition` /
-`PartitionList` ride wires as `Value::Ext` reflected values
-(`iteration/cursor_partition.rs`); these nodes are how
-workload-author code reads and derives them. The partition
-value is effectively-const for a scope activation, so each
-eval reduces to constant arithmetic.
-
-| Node | Signature | Description |
-|------|-----------|-------------|
-| `cardinality` | `Partition → u64` | `end_ord - start_ord` — the number of ordinals the partition covers. |
-| `start_of` | `Partition → u64` | Start ordinal (inclusive). |
-| `end_of` | `Partition → u64` | End ordinal (exclusive). |
-| `idx_of` | `Partition → u64` | 0-based generation position in the resolved list (stable under spec-level reordering). |
-| `count_of` | `Partition → u64` | Total partitions in the list this one was resolved as part of; 1 for single-partition specs. Function form of the `partition_count` projection. |
-| `mod_in` | `u64, Partition → u64` | `start + (n mod cardinality)` — wraps an arbitrary integer into the partition's range. Cardinality 0 returns the start. |
-| `at` | `Partition, u64 → u64` | Bounds-checked `start + i`; panics at eval when `i ≥ cardinality`. The consume-each-ordinal-once counterpart to `mod_in`. |
-| `clamp_in` | `u64, Partition → u64` | Saturating projection into the partition (`max(start, min(n, end-1))`); no wrap. |
-| `random_in` | `Partition, u64 → u64` | `start + xxh3(seed) mod cardinality` — deterministic per seed, same entropy source as `hash`. Cardinality 0 returns the start. |
-| `subdivide` | `Partition, u64 → PartitionList` | `n` near-equal sub-partitions (sizes differ by ≤ 1 ordinal; boundary math identical to the `*/N` spec token). Indices restart at 0 with `count = n`; `base_extent` propagates; pcts interpolate the parent's span. Panics when `n` is 0 or exceeds the cardinality. Also a kernel-aware comprehension source: `for: "inner in subdivide(outer, n)"`. |
-| `partitions` | `Str[, Const<u64>] → PartitionList` | Parse a partition spec string and resolve it against `[0, extent)` (extent defaults to 100). The canonical comprehension source for `for: "p in partitions(...)"`. The full grammar — forms, tail tokens, `xN`/`~` modifiers, `in` windows, and order keywords — is defined by [SRD 71](cursor_partitions.md). |
-
-The numeric comprehension generator formerly named `subdivide`
-(evenly spaced *values* over an interval) is `linear_starts`;
-see SRD 18c's named-generator table.
-
-### Vectordata Integration (feature-gated)
-
-Vectors are array-shaped data. The canonical access path keeps
-them in their packed binary form end-to-end — the runtime reads
-mmap'd `f32` slices, hands them out as `Bytes`, and prepared-
-binding adapters wire the bytes directly into the wire protocol
-(CQL prepared statements do an LE → BE swap and bind as a
-`vector<float, dim>` BLOB; no string round-trip). The string
-variants below predate the byte path and remain only for
-diagnostic display / debug printing.
-
-**Bytes accessors (production fast path):**
-
-| Node | Signature | Description |
-|------|-----------|-------------|
-| `vector_at_bytes` | `u64, String → Bytes` | training vector at index, packed `f32` LE bytes |
-| `query_vector_at_bytes` | `u64, String → Bytes` | query vector at index, packed `f32` LE bytes |
-
-**Scalar / count accessors:**
-
-| Node | Signature | Description |
-|------|-----------|-------------|
-| `vector_dim` | `String → u64` | dataset dimension count (const-folded at init) |
-| `vector_count` | `String → u64` | training-set size (const-folded at init) |
-| `query_count` | `String → u64` | query-set size (const-folded at init) |
-| `metadata_value_at` | `u64, String → String` | per-vector metadata value; the string return is the stable boundary for dataset-conditional, dynamically dispatched metadata types |
-| `dataset_distance_function` | `String → String` | similarity metric name |
-
-**Typed-vector accessors:**
-
-| Node | Signature | Description |
-|------|-----------|-------------|
-| `vector_at` | `Handle, u64 → VecF32` | base vector at index |
-| `query_vector_at` | `Handle, u64 → VecF32` | query vector at index |
-| `neighbor_indices_at` | `Handle, u64 → VecI32` | ground-truth neighbor indices |
-| `neighbor_distances_at` | `Handle, u64 → VecF32` | ground-truth neighbor distances |
-
-The legacy string and byte accessor variants
-(`vector_at_bytes` / `query_vector_at_bytes`) are removed.
-Vectors flow as typed `Value::VecF32(Arc<[f32]>)` or
-`Value::VecI32(Arc<[i32]>)` end-to-end; the CQL adapter binds
-them via scylla's native `SerializeValue` for `[T]` and the
-display path via `Value::to_display_string()` renders them as
-JSON-array text. See SRD 53 §"Native Vector Binding".
-
-Dataset resolution: bare name → `vectordata` catalog → URL →
-download + cache. Datasets loaded once globally via
-`DATASET_CACHE`.
-
-For workloads, the vectordata module also registers
-**cursor-construction sugar** so `cursor row = vectordata_base("ds",
-"profile")` collapses the verbose `range` + `dataset_prebuffer` +
-`vector_at_bytes` boilerplate into one line and auto-publishes the
-`row.vector` projection. See SRD 10 §"Cursor-Constructor Sugar"
-for the full surface and how to add a new sugar family for a
-different source kind (CSV, streaming, etc.).
+`Partition` and `PartitionList` ride wires as `Value::Ext` reflected
+values (`iteration/cursor_partition.rs`); the partition nodes in
+`library/partition.rs` are how workload-author code reads and derives
+them, and they run on every engine through the general closure kit's
+`Ext<T>` shape (no partition node has a native form). The partition
+value is effectively-const for a scope activation, so each eval
+reduces to constant arithmetic. The partition grammar and the axioms
+behind the nodes are in [Cursor Partitions](cursor_partitions.md);
+the nodes are listed in the [node reference](../reference/nodes.md).
 
 ---
 
@@ -419,9 +192,8 @@ different source kind (CSV, streaming, etc.).
 Library nodes are authored via the `#[polydat_node]`
 attribute macro and self-register through the `inventory`
 crate at link time. The macro is the SOLE authoring path for
-workload-callable library nodes. The canonical-form
-authoring-patterns table (see `polydat-derive`) lists every
-recognised function-signature shape; new nodes use what's there.
+workload-callable library nodes; every recognised shape is in the
+table below, and a new node uses one of them.
 
 ```rust
 // Scalar — body returns the output value; macro reads
@@ -438,78 +210,132 @@ fn mod_u64(input: u64, modulus: Const<u64>) -> u64 {
 }
 ```
 
-The macro reads everything from the function signature:
-- Per-arg metadata via Wire trait consts (`PORT`, `JIT`,
-  `RESOLVER`, `WIRE_COST`) — no `#[polydat_node]` attribute
-  noise for these
-- Marker wrappers (`Const<T>`, `Ext<T>`, `Resolved<R, T>`,
-  `Config<T>`, `Option<T>`, `DynamicOutputs<T>`) cover every
-  shape the operator surfaces explicitly
-- Variadic shapes recognised syntactically: `&[T]` (single),
-  two `&[T]` args (split-halves), `Const<Vec<C>>` (trailing
-  scalar consts)
+The macro reads everything from the function signature. Per-argument
+metadata comes from the `Wire` trait's consts (`PORT`, `JIT`,
+`RESOLVER`, `WIRE_COST`), so a carrier argument needs no attribute;
+marker wrappers and borrow shapes cover every other kind. Cross-crate
+registration works identically: a host crate declares
+`#[polydat_node]` functions in its own source and its nodes appear in
+the Polydat registry at link time.
 
-Vectordata nodes are registered behind a `vectordata` feature
-gate. Cross-crate registration works identically — adapter
-crates (`nbrs-adapter-cql`, etc.) declare `#[polydat_node]`
-functions in their own source and their nodes appear in the
-Polydat registry at link time.
+### Shapes
+
+**Argument kinds** (`crates/polydat-derive/src/lib.rs`, `ArgKind` and
+the kit plans):
+
+| Argument | Meaning |
+|---|---|
+| `T` where `T: Wire` | A carrier: `u64`, `i64`, `f64`, `bool`, the narrow widths, `u128`/`i128`, the `Reg*` register views, `String`/`Arc<str>`, and every other type with a `Wire` impl. `<T as Wire>::PORT` is the port type. |
+| `&str`, `&[u8]`, `&serde_json::Value`, `&[f32]` and the other typed slices | Borrow shapes: the body borrows the value for the call. |
+| `Arc<[u8]>` / `Vec<u8>`, `Arc<serde_json::Value>`, `SliceArc<T>` / `Vec<T>`, `Handle` | Owned wrapper wires for bytes, JSON, vectors, and opaque handles. |
+| `Const<T>` (`u64`, `f64`, `bool`, `&str`) | A workload-supplied literal, fixed at construction. |
+| `Const<Vec<C>>` | A trailing list of literals (`Arity::VariadicConsts`), collected from the tail of the const arguments. |
+| `#[poly_const(path, from = arg)] name: &T` | Setup state computed once at construction by `path(arg)` from a const; `from = ()` names a session-static value that is not a function of the consts. |
+| `Value` | A polymorphic wire whose port type is resolved at construction; with a `Value` return the output type is `SameAsInput`. |
+| `&[T]` (one argument), two `&[T]` arguments | A variadic wire list (`Arity::VariadicWires`), or split halves; element types `u64`, `bool`, `&str`, `String`, `Value`. |
+| `Option<T>` | A carrier that may be `None` on the interpreter; a compiled slot never carries `None`, so the closure reads `Some` and the kernel's `None` mask skips the step (see [Compiled By-Reference Slots](compiled_handles.md) §5). |
+| `Ext<T>` | A host-defined value carried opaquely as `Value::Ext`. |
+| `Config<T>` | A carrier declared a configuration wire (`WIRE_COST = Config`). |
+| `Resolved<R, T>` | A value supplied by the default resolver `R` (`FuncSig.default_resolver`, read from `Wire::RESOLVER`) when the workload names none. |
+
+**Return shapes:** a single `T: Wire`; a tuple with
+`output_names(...)` naming each element; `Value` (polymorphic);
+`DynamicOutputs<T>` (one output port per element, the count fixed at
+construction from the node's one `Const<Vec<C>>` argument);
+`Result<T, E>` (a fallible body over const arguments
+only, run once at construction, whose cached value every evaluation
+returns).
+
+**Attributes.** Registration: `category = <FuncCategory>` (required),
+`struct_name = <Ident>`, `adapter = "<name>"`. Semantics:
+`purity = <Purity>`, `identity = <expr>`, `commutativity =
+<Commutativity>`, `variadic_min = <int>`. Shapes: `output_names(...)`,
+`instantiate(...)`. Engines: `compiled_u64 = <path>`,
+`compiled_slot = <path>`, `state = <path>`, `jit_constants = <path>`, `no_jit`,
+`decompose = <path>`, `simd = "<node>"`, `simd_total`. Per argument:
+`#[constraint(...)]` on a wire argument and `#[poly_const(...)]` as
+above.
+
+### The kit each shape yields
+
+Every node runs on the interpreter through the macro's `eval`. Its
+form on the compiled engines is derived from the signature, in this
+order:
+
+- **The u64 kit** (`compiled_u64`) carries a node whose every argument
+  and return is an immediate: carriers, consts, and a `&[u64]`
+  variadic; a tuple return of such elements; no setup argument; not
+  fallible.
+- **The slot kit** (`compiled_slot(wire_types)`) carries every other
+  node whose shape it can read: carriers of one or two slots, typed
+  slices, `&str` or owned strings, `&[u8]` or owned byte strings, JSON
+  ports, `Ext<T>`, `Value`, variadics (split included), `Option<T>`
+  over a carrier, `Config<T>` over a carrier or an owned string or
+  byte string, consts, const lists, and setups; a return of a carrier,
+  a vector, a string, a byte string, JSON, `Ext`, `Value`, or a tuple
+  of these. It declares one scratch entry per by-reference output, and
+  its bodies hold the `Ref2` dereferences the S-axioms of [JIT
+  Boundary](jit_boundary.md) govern; its contracts with the kernel are
+  in [Compiled By-Reference Slots](compiled_handles.md) §5.
+- **A fallible body** runs once at construction; the kit its return
+  shape names replays the cached value every run.
+- **Outside every kit:** `DynamicOutputs<T>`, `no_jit`, and a node
+  that downcasts a `Handle`. Such a node runs on the interpreter only.
+
+**Overrides.** `compiled_u64 = <path>` makes the macro emit
+`compiled_u64(&self)` as `Some(<path>(self))`, with `<path>:
+fn(&Node) -> CompiledU64Op`; it exists for a closure that needs
+setup-derived state the shape kits do not capture (a cycle walk's
+half-bits, a mixed radix's table). `compiled_slot = <path>` makes
+the macro emit `compiled_slot(&self, wire_types)` as
+`Some(<path>(self, wire_types))`, with `<path>: fn(&Node,
+&[PortType]) -> CompiledSlotKit`; it exists for a node whose closure
+must read its slots as borrowed views rather than as owned body
+arguments, or that keeps state of its own in its scratch — the tile
+renderer is the user. `state = <path>` names a module with
+`layout(&Node) -> Vec<ScratchElem>` and `eval(&Node, &mut
+[ScratchBuf], &[Value], &mut [Value])`, the node's per-state storage
+and its interpreter evaluation over it (`PolydatNode::scratch_layout`
+and `eval_in`). `jit_constants = <path>` supplies the constants a
+native lowering bakes, in the order that lowering reads them. An
+override wins over eligibility.
+
+### Where a native form lives
+
+A node's closure form is declared by its shape and emitted by the
+macro; its native form is not. Native lowerings are matched by node
+name in the classifier (`classify_node` and `classify_node_typed` in
+`src/compile/jit/codegen.rs`): each arm names a `JitOp`, reads the
+node's `jit_constants()` positionally, and, for a node whose body
+dispatches on `Value` variants, decides by the types of its wires. A
+node with no arm classifies `Fallback` and runs as a closure step in
+the P3 kernel. The macro emits `jit_constants` in declaration order
+for a node the u64 kit carries; a node whose lowering reads its
+constants in another order supplies `jit_constants = <path>`.
+
+The tile hole encoder, `tile_encode`, is a library node with a native
+lowering that the compiler no longer emits: the renderer encodes each
+hole where it stands in the skeleton ([Polytile](polytile.md) §7). It
+remains callable as a node.
 
 ### Carve-outs from the canonical path
 
-Six files contain hand-written `impl PolydatNode for X` blocks
-by explicit architectural design:
+Hand-written `impl PolydatNode for X` blocks exist only where the
+node cannot be expressed as a function of typed arguments, and the
+hand-written-impl invariant test's `CARVEOUT_FILES` allowlist is the
+list; any new hand-written impl under `polydat/src/library/**`
+outside it fails that test. The families outside the attribute, and
+why:
 
-- `polydat/src/library/identity.rs` — `PortPassthrough`,
-  `ConstHandle`, `ConstExt`: compiler-synthesised
-  infrastructure (extern-port nodes, fold-pass synthesised
-  from runtime values), not DSL-callable.
-- `polydat/src/library/assertions.rs` — `AssertType`,
-  `AssertValue`: compiler-synthesised via runtime-PortType /
-  runtime-ConstConstraint dispatch.
-- `polydat/src/library/context.rs` — `CursorLimit`:
-  cursor-compiler synthesised; no workload signature.
-- `polydat/src/library/sampling/lut.rs` — `LutSample`:
-  Rust-internal composition primitive backing the `dist_*`
-  family; no DSL surface.
-
-This carve-out list is the ceiling — any new hand-written
-`impl PolydatNode for X` in `polydat/src/library/**` outside
-these files fails the SRD-80b invariant test at
-`polydat/tests/srd80b_invariant.rs`.
-
----
-
-## Polydat Modules
-
-Reusable `.polydat` files that define subgraphs:
-
-```
-// latency_model.polydat
-input cycle: u64
-base_ns := uniform(hash(cycle), 500000.0, 2000000.0)
-jitter := uniform(hash(add(cycle, 1)), 0.9, 1.1)
-latency_ns := mul(base_ns, jitter)
-```
-
-Module interface inferred: graph inputs = unbound references,
-outputs = terminal bindings. Modules inline into the host DAG
-with name prefixing to avoid collision.
-
-Resolution chain: workload directory → `--polydat-lib` paths →
-bundled stdlib → error.
-
----
-
-## Node Fusion
-
-Assembly-time graph optimization: recognize subgraph patterns
-and replace with fused nodes.
-
-| Pattern | Fused To |
-|---------|----------|
-| `mod(hash(x), K)` | `hash_range(x, K)` |
-| `lerp(unit_interval(hash(x)), lo, hi)` | `hash_interval(x, lo, hi)` |
-
-Fusion rules match on node types and check for external consumers
-of intermediate nodes before replacing.
+- **Compiler-synthesised nodes dispatched on a runtime port type or
+  constraint** — `PortPassthrough`, `ConstHandle`, `ConstExt`
+  (`identity.rs`), `AssertType`, `AssertValue` (`assertions.rs`),
+  `RegView` (`register.rs`). The macro fixes a node's port types from
+  its signature; these take theirs from the value or wire the compiler
+  is synthesising for, and are not DSL-callable.
+- **Cursor-compiler synthesised** — `CursorLimit` (`context.rs`), built
+  by the cursor materialiser with no workload signature.
+- **Rust-internal composition primitives** — `LutSample`
+  (`sampling/lut.rs`), the primitive behind the `dist_*` family, which
+  has no DSL surface of its own; the `dist_*` functions are the
+  workload-callable wrappers.

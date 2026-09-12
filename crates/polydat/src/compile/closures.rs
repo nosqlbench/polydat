@@ -167,9 +167,9 @@ struct KernelCore {
     /// channels among them (an optimization over the plan, not a change
     /// to it).
     dirty: std::sync::Arc<[Vec<usize>]>,
-    /// The steps that are never current, invalidated at every cycle.
+    /// The steps that are never current.
     volatile_steps: std::sync::Arc<[usize]>,
-    /// Some slot holds `None` in this cycle: an unset extern, which is
+    /// Some slot holds `None`: an unset extern, which is
     /// the only way one enters (SRD-74). When none does, the steps run
     /// without the mask.
     any_none: bool,
@@ -248,7 +248,7 @@ impl KernelCore {
     }
 
     /// Every dependent of a slot a cell refresh changed runs again,
-    /// inside the open cycle too, as the interpreter re-evaluates a node
+    /// between writes too, as the interpreter re-evaluates a node
     /// whose cell moved on its next read: the plan's dependents, whatever
     /// the mode, are neither run nor current.
     #[inline]
@@ -270,7 +270,7 @@ impl KernelCore {
     }
 
     /// Take the current value of every cell another holder published
-    /// to, and mark its dependents, so a pull inside a cycle sees the
+    /// to, and mark its dependents, so a pull between writes sees the
     /// register as the interpreter's revision check does.
     #[inline]
     fn refresh_cells(&mut self) {
@@ -409,7 +409,7 @@ impl KernelCore {
         }
     }
 
-    /// The named output for the cycle's inputs, running only its cone
+    /// The named output for the current inputs, running only its cone
     /// (A6): the interpreter's `pull`, on a compiled kernel.
     fn pull_named(&mut self, name: &str) -> crate::ast::Value {
         if self.drive.stale {
@@ -508,7 +508,7 @@ impl KernelCore {
 
     /// Set an extern by name; returns its slot. The plan invalidates
     /// what depends on it, as a changed coordinate is invalidated, and
-    /// the next evaluation begins a cycle.
+    /// the next evaluation begins a round.
     fn set_extern(&mut self, name: &str, value: crate::ast::Value) -> Result<usize, String> {
         let (slot, unset) = self.externs.set(name, value, &mut self.buffer)?;
         self.extern_written(slot, unset);
@@ -788,13 +788,13 @@ macro_rules! kernel_accessors {
         }
 
         /// The named output through the `Kernel` trait: the pending
-        /// coordinates are applied, a cycle begins if none is open, and
+        /// coordinates are applied, a round begins if a write is pending, and
         /// only the output's cone runs.
         fn pull_value(&mut self, name: &str) -> crate::ast::Value {
             let coords = std::mem::take(&mut self.core.drive.coords);
             self.set_coords(&coords);
             self.core.drive.coords = coords;
-            self.pull_in_cycle(name)
+            self.pull_output(name)
         }
 
         /// [`Self::pull_value`] by output index.
@@ -907,12 +907,12 @@ impl CompiledKernelRaw {
     }
 
     /// The plan invalidates what depends on the input; this mode runs
-    /// every step of a cone once per cycle regardless.
+    /// every step of a cone once per round regardless.
     fn mark_input_changed(&mut self, slot: usize) {
         self.core.dirty_input(slot);
     }
 
-    /// The coordinates of the next cycle; a changed one invalidates
+    /// The coordinates, written; a changed one invalidates
     /// its dependents through the plan, as in every mode.
     #[inline]
     fn set_coords(&mut self, coords: &[u64]) {
@@ -924,7 +924,7 @@ impl CompiledKernelRaw {
         }
     }
 
-    /// Evaluate every step for `coords`: a new cycle.
+    /// Evaluate every step for `coords`: a new round.
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_coords(coords);
@@ -932,7 +932,7 @@ impl CompiledKernelRaw {
         self.core.eval_all();
     }
 
-    fn pull_in_cycle(&mut self, name: &str) -> crate::ast::Value {
+    fn pull_output(&mut self, name: &str) -> crate::ast::Value {
         self.core.pull_named(name)
     }
 
@@ -999,7 +999,7 @@ impl CompiledKernelPush {
         self.core.dirty_input(slot);
     }
 
-    /// Evaluate every step that is not current for `coords`: a new cycle.
+    /// Evaluate every step that is not current for `coords`: a new round.
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_coords(coords);
@@ -1007,7 +1007,7 @@ impl CompiledKernelPush {
         self.core.eval_all();
     }
 
-    fn pull_in_cycle(&mut self, name: &str) -> crate::ast::Value {
+    fn pull_output(&mut self, name: &str) -> crate::ast::Value {
         self.core.pull_named(name)
     }
 
@@ -1090,7 +1090,7 @@ impl CompiledKernelPull {
         self.force_run = true;
     }
 
-    /// Evaluate eagerly (no cone guard). Runs all steps: a new cycle.
+    /// Evaluate eagerly (no cone guard). Runs all steps: a new round.
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_coords(coords);
@@ -1099,7 +1099,7 @@ impl CompiledKernelPull {
         self.core.eval_all();
     }
 
-    fn pull_in_cycle(&mut self, name: &str) -> crate::ast::Value {
+    fn pull_output(&mut self, name: &str) -> crate::ast::Value {
         self.core.pull_named(name)
     }
 
@@ -1188,7 +1188,7 @@ impl CompiledKernelPushPull {
         self.force_run = true;
     }
 
-    /// Eval with push-side skip (no cone guard): a new cycle.
+    /// Eval with push-side skip (no cone guard): a new round.
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_coords(coords);
@@ -1197,7 +1197,7 @@ impl CompiledKernelPushPull {
         self.core.eval_all();
     }
 
-    fn pull_in_cycle(&mut self, name: &str) -> crate::ast::Value {
+    fn pull_output(&mut self, name: &str) -> crate::ast::Value {
         self.core.pull_named(name)
     }
 

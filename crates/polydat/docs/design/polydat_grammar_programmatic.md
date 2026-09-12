@@ -5,7 +5,8 @@
 This guide shows, for a selection of the spec's examples, how to build
 the **same kernel** in Rust through the public AST types — without ever
 writing a source string. Each example here is cross-linked to its spec
-section, and every one is **machine-verified**: the test
+section. The paired examples (§2 to §7) are **machine-verified**: the
+test
 [`polydat/tests/doc_examples_test.rs`](../../tests/doc_examples_test.rs)
 asserts that the hand-built AST and the spec's grammar source **project
 to identical canonical syntax**:
@@ -26,7 +27,7 @@ silently drift from the code that runs.
 > it with `pp_file` is the most direct expression of that: it compares
 > construction paths at the canonical-syntax layer. For driving a
 > compiled kernel (`set_inputs`/`pull`, the typed `Dataflow` path), see
-> §[7](#sec-driving) at the end.
+> §[10](#sec-driving) at the end.
 
 <a id="sec-setup"></a>
 ## 1. Imports and helpers
@@ -63,13 +64,13 @@ fn binop(l: Expr, op: BinOpKind, r: Expr) -> Expr {
 fn bind(target: &str, value: Expr) -> Statement {
     Statement::Binding(Binding {
         targets: vec![target.into()], value,
-        modifier: BindingModifier::NONE, span: sp(),
+        modifier: BindingModifier::NONE, type_annotation: None, span: sp(),
     })
 }
 fn bind_multi(targets: &[&str], value: Expr) -> Statement {
     Statement::Binding(Binding {
         targets: targets.iter().map(|s| s.to_string()).collect(), value,
-        modifier: BindingModifier::NONE, span: sp(),
+        modifier: BindingModifier::NONE, type_annotation: None, span: sp(),
     })
 }
 fn file(statements: Vec<Statement>) -> PolydatFile { PolydatFile { statements } }
@@ -181,10 +182,6 @@ fn build_cursor_over() -> PolydatFile {
 }
 ```
 
-This is the example the `pp_cursor` fix was made for: before it, the
-`over p` clause was dropped on projection and this builder could not have
-matched the grammar source.
-
 <a id="p-module"></a>
 ## 7. Module definition
 
@@ -212,8 +209,101 @@ fn build_module() -> PolydatFile {
 }
 ```
 
+<a id="p-for"></a>
+## 8. A `for` traversal over a bound producer
+
+Mirrors [spec §16 “The `for` construct”](polydat_grammar.md#sec-for).
+The comprehension text after `for` is one token, so a `ForSource` holds
+the text as written beside its parsed form; the parsed form is the
+comprehension algebra, obtained from the same parser the lexer's token
+goes through. A producer binding is `Expr::For`; a traversal is
+`Statement::For` with the source and a body of ordinary statements.
+
+```text
+sweep := for k in 1..4, limit in 10,20,30 order halton/5
+for sweep {
+    f := hash(k)
+    g := u64_add(limit, k)
+}
+```
+
+```rust
+use polydat::dsl::ast::{ForSource, ForSourceKind, ForStmt};
+use polydat::iteration::comprehension::spec::{legacy_to_algebra, parse_comprehension_text};
+
+fn comprehension(text: &str) -> ForSource {
+    let legacy = parse_comprehension_text(text).expect("comprehension text");
+    let algebra = legacy_to_algebra(&legacy).expect("algebra");
+    ForSource { text: text.into(), kind: ForSourceKind::Comprehension(algebra), span: sp() }
+}
+
+fn build_for() -> PolydatFile {
+    file(vec![
+        bind("sweep", Expr::For(Box::new(comprehension("k in 1..4, limit in 10,20,30 order halton/5")))),
+        Statement::For(ForStmt {
+            source: ForSource { text: "sweep".into(), kind: ForSourceKind::Producer("sweep".into()), span: sp() },
+            body: vec![
+                bind("f", call("hash", vec![id("k")])),
+                bind("g", call("u64_add", vec![id("limit"), id("k")])),
+            ],
+            span: sp(),
+        }),
+    ])
+}
+```
+
+`pp_file` prints a `for` source from its `text` field, so the projection
+is `sweep := for k in 1..4, limit in 10,20,30 order halton/5` followed by
+the traversal with its body indented four spaces, which is the spec's
+source byte for byte. A traversal over inline comprehension text uses
+`comprehension(...)` as the statement's source instead of
+`ForSourceKind::Producer`.
+
+<a id="p-tile"></a>
+## 9. A tile
+
+Mirrors [spec §17 “Tiles”](polydat_grammar.md#sec-tiles). A `TileDef`
+carries the header (name, optional encoding, options), the body text
+exactly as captured with how it was written (`TileBodyKind`), and the
+body parsed into pieces by `polydat::dsl::tile::parse_template` under
+the tile's options. The printer reproduces the body from the captured
+text, so the pieces need only agree with it.
+
+```text
+input cycle: u64
+tile t := "n=${cycle}"
+```
+
+```rust
+use polydat::dsl::ast::{TileBodyKind, TileDef, TileOptions};
+use polydat::dsl::tile::parse_template;
+
+fn build_tile() -> PolydatFile {
+    let options = TileOptions::default();
+    let body = "n=${cycle}".to_string();
+    let pieces = parse_template(&body, &options, sp()).expect("template");
+    file(vec![
+        input("cycle", "u64"),
+        Statement::Tile(TileDef {
+            name: "t".into(),
+            encoding: None,
+            options,
+            body_kind: TileBodyKind::Literal,
+            body,
+            pieces,
+            span: sp(),
+        }),
+    ])
+}
+```
+
+A `json` block body is the same construction with `encoding:
+Some("json".into())`, `TileBodyKind::Block`, and the balanced block as
+the body text; a heredoc is `TileBodyKind::Heredoc` with the text between
+`<<<` and `>>>`.
+
 <a id="sec-driving"></a>
-## 8. Driving a compiled kernel (reference)
+## 10. Driving a compiled kernel (reference)
 
 The builders above are verified at the *syntax* layer. To verify at the
 *behaviour* layer, compile and drive a kernel. The simplest path is from

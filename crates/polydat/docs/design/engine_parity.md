@@ -604,9 +604,10 @@ proves it.
    the interpreter's fold at the same moment, so what is knowable at
    build is known at build and fails at build; and everything else
    runs at first pull. `set_inputs` (or a changed extern or cursor)
-   opens a cycle, `pull(name)` runs the steps of that output's cone
-   that are not current and have not run in the cycle, and `eval` runs
-   every step. A provenance mode is an optimization on that rule and
+   invalidates its dependents, `pull(name)` runs the steps of that
+   output's cone that are not current and have not run since the
+   write, and `eval` runs every step. A provenance mode is an
+   optimization on that rule and
    never a change to it: a mode without per-step skipping may recompute
    a pure step redundantly, which nothing observes, but a side-channel
    step is skipped when current in every mode, since its run is
@@ -811,7 +812,7 @@ proves it.
    interpreter state does. The refusal step 2 landed
    (`shared_binding_refusal`) is gone. `tests/shared_tiers.rs` drives
    the default, the write-through, two attached kernels writing and
-   reading one register inside open cycles, a publication from outside,
+   reading one register between writes, a publication from outside,
    program-created kernels' independence, and type stability on every
    engine and provenance mode.
 10. **Documentation to zero** (A13): `missing_docs` burn-down under CI,

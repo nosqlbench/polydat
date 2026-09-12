@@ -3,50 +3,60 @@
 The mechanism contract for Polydat evaluation: program/state split,
 provenance-based invalidation, the two-lifecycle classification
 (effectively-const vs dynamic), the const binding contract
-(Plan A/B compile-time + scope-activation checks), the
-non-deterministic node exclusion, input spaces,
-externally-written ports, and the engine-level compilation
-surface.
-
-This doc extends axiom-level statements:
-- [runtime_model.md §1 program/state split + §3-§4 provenance + invalidation + R1-R3](runtime_model.md)
-- [composition_substrate.md L2 (effectively-const) + S4 (external-write inputs) + T1 (typed return)](composition_substrate.md)
-- [grammar.md G2 (const lifecycle declared at syntax) + G5 (two-lifecycle classification)](grammar.md)
-- [engines.md (compilation levels; engine selection)](engines.md)
-
-The host-side FiberBuilder and cursor-driven evaluation
-(activity-pump details, DataSource API) are documented host-side.
+(Plan A at build, Plan B at scope activation), the
+non-deterministic node exclusion, input spaces, and
+externally-written inputs. The axioms it gives mechanism to are
+R1–R4 of [runtime_model.md](runtime_model.md), L2/S4/T1 of
+[composition_substrate.md](composition_substrate.md), and G2/G5
+of [grammar.md](grammar.md); the engines that run the model are
+[engines.md](engines.md).
 
 The Polydat evaluation model separates the immutable program
-(shared) from mutable per-fiber state (private). This
-allows ordinary per-fiber evaluation without shared cache locks.
+(shared) from mutable per-thread state (private). This
+allows ordinary per-thread evaluation without shared cache locks.
 Explicit `SharedCell` inputs retain their own synchronization
-contract.
+contract. The split holds on every engine.
 
 ---
 
 ## Program / State Split
 
-```
-PolydatProgram (Arc, immutable, shared)
-  ├── nodes[]          — node instances
-  ├── wiring[]         — input source tables
-  ├── input_defs[]     — typed names, defaults, and lifecycle kinds
-  ├── output_map       — name → (node_idx, port_idx)
-  └── provenance/dependents — exact multi-word masks and reverse lists
+The split is the `KernelProgram` / `Kernel` pair of the kernel
+API: a program is an `Arc<dyn KernelProgram>`, immutable and
+shared across threads, and each thread creates its own
+`Kernel` from it (`create_kernel`). A kernel becomes its
+program again with `Kernel::into_program`; a kernel created
+from a program starts from the program on every engine — every
+input at its declared default, every `shared` binding with a
+cell of its own, nothing current.
 
-PolydatState (per-fiber, mutable, private)
-  ├── buffers[][]        — per-node output value slots
-  ├── node_clean[]       — per-node cache validity (bool)
-  ├── inputs[]           — non-cell input registers
-  ├── input_defaults[]   — reset values
-  ├── shared_cells[]     — optional cell register per input
-  └── cell-cone/revision state
+```
+KernelProgram (Arc, immutable, shared across threads)
+  interpreter realisation — PolydatProgram:
+    ├── nodes[]          — node instances
+    ├── wiring[]         — input source tables
+    ├── input_defs[]     — typed names, defaults, and lifecycle kinds
+    ├── output_map       — name → (node_idx, port_idx)
+    └── provenance/dependents — exact multi-word masks and reverse lists
+  compiled realisation — the closure plan or the hybrid segments
+    over one slot layout, with the same provenance and dependents
+
+Kernel (per thread, mutable, private)
+  interpreter realisation — PolydatState:
+    ├── buffers[][]        — per-node output value slots
+    ├── node_clean[]       — per-node cache validity (bool)
+    ├── inputs[]           — non-cell input registers
+    ├── input_defaults[]   — reset values
+    ├── shared_cells[]     — optional cell register per input
+    └── cell-cone/revision state
+  compiled realisation — one u64 slot buffer, its None mask,
+    the per-step current-ness of the provenance mode, and the
+    scratch entries its steps publish pairs into
 ```
 
-`PolydatProgram` is created once at compilation time and shared via
-`Arc` across all fibers. `PolydatState` is created per-fiber via
-`program.create_state()`.
+The interpreter's `PolydatProgram` is created once at compilation
+time and shared via `Arc`; `PolydatState` is created per thread
+via `program.create_state()`.
 
 ---
 
@@ -58,21 +68,33 @@ change, only nodes whose provenance overlaps the changed inputs
 are invalidated. Nodes depending on unchanged inputs stay cached.
 
 ```
-1. fiber.set_inputs(&[cycle])
+1. kernel.set_inputs(&[cycle])
+   → open the cycle
    → write each coordinate input in the leading coordinate prefix
    → dirty every transitive dependent of each written coordinate
    → dirty every non-deterministic node
 
-2. state.pull(program, "user_id")
-   → if node_clean[node] → return cached buffer
+2. kernel.pull("user_id")
+   → if the node is current → return the cached value
    → recursively evaluate dirty upstream nodes
-   → gather inputs, evaluate, mark node_clean = true
-   → return &buffers[node_idx][port_idx]
+   → gather inputs, evaluate, mark the node current
+   → return the value
 ```
 
-Nodes that do not depend on a written input stay clean. P1 treats
-the write itself as the invalidation signal and does not compare
-rich `Value` instances for equality.
+Nodes that do not depend on a written input stay current. The
+interpreter treats the write itself as the invalidation signal
+and does not compare rich `Value` instances for equality.
+
+This is the one evaluation rule, and it holds on every engine:
+a step is current until an input in its provenance changes; a
+nondeterministic node is never current; compile-constant nodes
+are folded once at build; `set_inputs` opens the cycle and
+`pull` evaluates the named output's cone and no more — on the
+interpreter, the closure tier, and the hybrid kernel alike
+(pure native code, being one function, evaluates the program).
+The provenance mode a compiled engine is built with (`Raw`,
+`Push`, `Pull`, `PushPull`, or the selector's `Auto`) changes
+what is recomputed, never a value: it is an optimization.
 
 **Diamond optimization:** In a diamond-shaped DAG where only one
 input branch is written, the unchanged branch stays cached.
@@ -92,8 +114,8 @@ re-evaluated. Two are recognised:
 
 | Lifecycle | When evaluated | Re-evaluated when… |
 |-----------|----------------|---------------------|
-| **effectively-const** | Once, for the duration of a scope activation. Two implementation paths: (a) **compile-fold** — evaluated during Polydat compilation and replaced with a leaf const node; (b) **scope-init pull** — evaluated once after parent materialization populates iteration-variable externs, then frozen for the activation. The choice between (a) and (b) is decided by the compiler based on the wire chain; the author writes `const NAME := <expr>` in both cases. | Never within an activation. The enclosing comprehension advancing to its next iteration (polydat comprehension dispense per `polydat/docs/design/comprehension_forms.md` §9.5) triggers a fresh activation, which re-runs scope-init pull (compile-folded leaves are immutable across activations). |
-| **dynamic** | Once per pull, on demand at execution time | Whenever a transitively dependent input changes (provenance-based invalidation). Includes per-cycle pulls *and* intra-stanza recomputation when external-write ports or `do_while`/`do_until` counters tick. |
+| **effectively-const** | Once, for the duration of a scope activation. Two implementation paths: (a) **compile-fold** — evaluated during the build and replaced with a leaf const node; (b) **scope-init pull** — evaluated once after parent materialization populates iteration-variable externs, then frozen for the activation. The choice between (a) and (b) is decided by the compiler based on the wire chain; the author writes `const NAME := <expr>` in both cases. | Never within an activation. The enclosing comprehension advancing to its next iteration ([comprehension_forms.md](comprehension_forms.md) §9.5) triggers a fresh activation, which re-runs scope-init pull (compile-folded leaves are immutable across activations). |
+| **dynamic** | Once per pull, on demand at execution time | Whenever a transitively dependent input changes (provenance-based invalidation). Includes per-cycle pulls *and* intra-stanza recomputation when external-write inputs or `do_while`/`do_until` counters tick. |
 
 The `const` modifier is the single author-facing surface for
 effectively-const bindings. Compile-fold and scope-init pull are
@@ -117,51 +139,60 @@ is itself effectively-const.
 | `for_each` / `for_combinations` iteration extern | Yes — *for the duration of one activation* | Injected during each child construction; held constant for every cycle within that iteration. |
 | `do_while` / `do_until` counter | **No** | Dynamic — ticks within the scope's own evaluation; not stable for the activation. |
 | Graph input (e.g. `cycle`) | **No** | Dynamic — changes every cycle. |
-| External-write port | **No** | Dynamic — mutated by external writes between pulls. |
+| External-write input | **No** | Dynamic — mutated by external writes between pulls. |
 | Non-deterministic source (`counter`, `current_epoch_millis`, `elapsed_millis`, `thread_id`) | **No** | Excluded by construction even when wires would suggest otherwise. |
 
-The iteration-extern entry is the load-bearing case the prior
-"binary" model handled wrong. A leaf phase nested inside
-`for_combinations [profile, table]` sees `profile` and `table`
-as input slots; the data-flow analysis flagged any binding
-downstream of those slots as dynamic and refused to fold it.
-But `profile` is rebound exactly once per phase activation and
-held fixed for every cycle — the same stability guarantee as a
-folded literal. Treating iteration externs as effectively-const
-is what permits `const prebuffered := dataset_prebuffer("{dataset}:{profile}")`
+The iteration-extern row is the load-bearing case. A leaf phase
+nested inside `for_combinations [profile, table]` sees `profile`
+and `table` as input slots; a purely data-flow view would flag
+any binding downstream of those slots as dynamic and refuse to
+fold it. But `profile` is rebound exactly once per phase
+activation and held fixed for every cycle — the same stability
+guarantee as a folded literal. Treating iteration externs as
+effectively-const is what permits
+`const prebuffered := dataset_prebuffer("{dataset}:{profile}")`
 to be a legal const binding inside such a scope.
 
 ### Compile-Time Constant Folding
 
 Compile-time fold is the compile-fold implementation path for
-the effectively-const lifecycle. It runs once per `PolydatProgram`
-build, before the program is wrapped in `Arc` and shared:
+the effectively-const lifecycle. It runs once per build, on
+every engine, before the program is shared:
 
 ```
-Phase 1: Classify each node by upstream wire chain
-  - Graph input / external port / non-deterministic source
-                                  → not effectively-const
-  - NodeOutput whose source is not effectively-const
-                                  → not effectively-const (propagates)
+Phase 1: Classify each node — PolydatProgram::classify_lifecycle
+  - Graph input / external-write input / non-deterministic source
+                                  → dynamic
+  - NodeOutput whose source is dynamic
+                                  → dynamic (propagates)
   - Wire to an iteration extern (for_each / for_combinations)
-                                  → not effectively-const at *compile*
-                                    time. Extern values are unknown
+                                  → scope-init: not foldable at
+                                    build. Extern values are unknown
                                     until scope activation; folding is
-                                    deferred to the scope-init pass.
-  - Everything else               → effectively-const at compile time
+                                    deferred to the scope-init pull.
+  - Everything else               → compile-constant
 
-Phase 2: Evaluate compile-const nodes with dummy inputs
+Phase 2: Evaluate the compile-constant nodes once
 
 Phase 3: Replace evaluated nodes with leaf const nodes
          (ConstU64, ConstF64, ConstStr, ConstHandle, …)
 ```
+
+On the interpreter the three phases are
+`PolydatProgram::fold_init_constants_impl`. The closure tier and
+the native engine build from the same classification: the
+compile-constant nodes run once when the kernel is built and
+their slots hold the folded values thereafter. The
+`ConstantFolded` compile event is recorded for the same nodes
+with the same values on every engine.
 
 Type adapter nodes (`__u64_to_f64`, etc.) participate. A chain
 like `ConstU64(42) → __u64_to_f64 → sin` folds to
 `ConstF64(sin(42.0))` — the whole chain is evaluated once and
 replaced with a single constant.
 
-Folded constants are available via `kernel.get_constant(name)` for
+Folded constants are readable by name (`get_constant` on the
+interpreter kernel; `Kernel::pull` on any engine) for
 activity config resolution (cycles, concurrency from dataset
 metadata).
 
@@ -170,39 +201,22 @@ metadata).
 The scope-init pull is the scope-init-pull implementation path
 for the effectively-const lifecycle. It runs once per scope
 activation, *after* parent materialization has populated the
-kernel's iteration-extern input slots and *before* any fiber
-is created.
+kernel's iteration-extern input slots and *before* the scope is
+used.
 
 ```
 For each const-modifier output b in this scope's program:
-  1. Pull b's name on the activation kernel's state. The standard
-     pull walks back through b's subgraph, evaluating each upstream
-     node against the populated externs and caching the result in
-     the state's per-node buffer (clean flag set to true).
-  2. Verify the resulting value is non-`None` (Plan B, below).
-
-After every const output has been pulled, the executor wraps the
-kernel in an `OpBuilder` that snapshots the
-`(node_idx, port_idx, Value)` triples for those bindings as
-`init_overrides`. Each fiber spawned from this `OpBuilder` seeds
-the triples into its own state's buffers and marks the
-corresponding nodes clean. A fiber's first dynamic pull of a
-const binding reads the seeded buffer directly — the binding's
-eval function does not re-fire, regardless of how many cycles
-or fibers traverse it.
+  Pull b's name on the activation kernel. The standard pull walks
+  back through b's subgraph, evaluating each upstream node against
+  the populated externs and caching the result in the kernel's
+  per-node buffer (marked current).
 ```
 
-This is the runtime side of the const-binding contract: one
-eval per scope activation, full stop, regardless of fiber
-count.
-
-Reference points in the code:
-- `polydat::kernel::engines::PolydatState::seed_node_buffer` —
-  primitive that writes a value into a node's buffer slot and
-  marks it clean.
-- `polydat::kernel::PolydatKernel::materialize_wiring_from_outer`
-  Step 3 — the one pull of every const output, immediately after
-  the extern-slot bind step.
+Every later read of the binding, from any cycle and from every
+kernel created from the activation, sees that one value; the
+binding's eval does not re-fire. This is the runtime side of
+the const-binding contract: one eval per scope activation,
+regardless of how many cycles or threads traverse it.
 
 ---
 
@@ -215,8 +229,7 @@ scope. The compiler and runtime together enforce two checks:
 
 ### Compile-Time Check (Plan A)
 
-During Polydat compilation, after wire resolution and topological
-sort:
+During the build, after wire resolution and topological sort:
 
 > For every binding declared `const`, every node in its upstream
 > wire chain must be effectively-const (either compile-foldable
@@ -224,15 +237,15 @@ sort:
 > scope activation).
 
 If any upstream node is non-effectively-const — a graph input,
-an external-write port, a `do_while`/`do_until` counter, a chain through
+an external-write input, a `do_while`/`do_until` counter, a chain through
 a non-deterministic source — compilation **fails** with a
 diagnostic naming the const binding and the offending wire.
 There is no soft fall-through to dynamic evaluation.
 
-This check runs in the compile-time fold pass. Effectively-const
+This check runs in the fold pass. Effectively-const
 classification (above) and the const-binding check share the
-same upstream walk; the const check simply demands the upstream
-set be a subset of `{compile-foldable ∪ iteration externs}`.
+same upstream walk (`classify_lifecycle`); the const check simply
+demands the binding's node not be dynamic.
 
 ### Scope-Activation Pull (Plan B)
 
@@ -280,16 +293,23 @@ pair is the contract.
 
 ### Diagnostic Format
 
-Plan A fails compilation with `const binding '<name>' violates
-the const contract: <reason>`, the reason naming the offending
-wire:
+Plan A fails the build with
+
+```
+init binding '<name>' violates the init contract: <offending>
+(init bindings must be effectively-const at scope-init time per SRD 11 §"Init Binding Contract")
+```
+
+where the message's `init` names the `const` modifier (the
+keyword changed; the message did not), and `<offending>` names
+the wire the fold found first:
 
 - **`wire on node '<n>' reaches coordinate input '<name>'
   (dynamic; changes every cycle)`** — const binding wired to a
   graph input declared by `input ...: u64`.
 - **`wire on node '<n>' reaches external-write port '<name>'
   (dynamic; mutated by external writes)`** — const binding
-  wired to an `extern X: T = default` port (the polydat
+  wired to an `extern X: T = default` input (the polydat
   external-write surface; hosts use it for runtime injection
   patterns).
 - **`wire on node '<n>' reaches non-deterministic source '<name>'
@@ -302,20 +322,23 @@ wire:
 
 Plan B warns at scope activation with `warning: scope-init const
 pull failed for '<name>': <panic text>`, from
-`PolydatKernel::materialize_wiring_from_outer` step 3, and the
-node's own failure message, enriched with the consumer's context,
-is what a later read of the binding raises.
+`materialize_wiring_from_outer` step 3, and the node's own
+failure message, enriched with the consumer's context, is what a
+later read of the binding raises.
 
 ---
 
 ## Non-Deterministic Nodes
 
-`counter`, `current_epoch_millis`, `elapsed_millis`, `thread_id`
-are excluded from compile-fold *and* from effectively-const
-classification regardless of their input wires. They are
-inherently dynamic even when a static analysis would suggest
-otherwise. A `const` binding that depends on one of these fails
-the Plan A check.
+A node declared `Purity::Nondeterministic` — `counter`,
+`current_epoch_millis`, `elapsed_millis`, `thread_id` and their
+kind — and any node feeding a `volatile` output are excluded
+from compile-fold *and* from effectively-const classification
+regardless of their input wires, and the exclusion is contagious
+downstream. They are inherently dynamic even when a static
+analysis would suggest otherwise, and an engine never treats
+them as current. A `const` binding that depends on one of these
+fails the Plan A check.
 
 ---
 
@@ -342,18 +365,19 @@ executor simple (it just passes `[cycle]`).
 
 An `extern name: type = default` declaration produces an
 `InputDef` with `InputKind::ExternalWrite`. External producers
-write these inputs through the typed `Dataflow::set_wire` API.
+write these inputs through the typed `Dataflow::set_wire` API
+(the interpreter kernel) or `Kernel::set_input` (any engine).
 The boundary accepts `Value::None`, accepts a value that
 satisfies the declared slot type, applies a registered boundary
-adapter when one exists, and otherwise returns `WriteError`.
+adapter when one exists, and otherwise returns an error.
 
 ```
 Producer writes to slot "user_name"
   → kernel.set_wire("user_name", value)?
-  → input slot in PolydatState holds the value
+  → input slot in the kernel holds the value
 
 Consumer pulls a binding that reads {user_name}
-  → standard port-read from state → returns the value
+  → standard input read → returns the value
 ```
 
 External-write inputs persist across `set_inputs()` calls,
@@ -365,22 +389,28 @@ because their lifecycle belongs to the shared cell's owning
 scope. Rebuilding or invalidating the whole state also restores
 ordinary input defaults.
 
-Hosts give external writes their own application-level
-names (nbrs's *capture* uses external-write inputs to flow op-result
-values into subsequent ops, for example); the polydat
-mechanism is generic external-port population.
+Hosts give external writes their own application-level names
+(a host that flows one op's result into the next op's inputs
+does so through external-write inputs, for example); the
+polydat mechanism is generic external-input population.
 
 ---
 
 ## Compilation Levels
 
-The compiled DAG can run at one of three execution levels
-— P1 interpreter, P2 closures, P3 Cranelift JIT — selected
-automatically per subgraph based on node eligibility and
-projected payoff. Per-node costs, eligibility rules, the
-auto-selection heuristic, and the JIT call-boundary
-contract live in
-[engines.md](engines.md) and [jit_boundary.md](jit_boundary.md).
+The host chooses an `Engine` (`compile_polydat_with`,
+`PolydatAssembler::compile_with`): the interpreter, the closure
+tier (P2), or native code where a node has a lowering and its
+closure elsewhere (P3). `Engine::default()` — what every
+engine-less entry point and the binary build — is P3 with the
+`jit` feature and P2 without. Every engine evaluates under the
+one rule of this document, computes the same values for the
+same inputs, and refuses at construction, with a reason, a
+program it cannot run; `Kernel::plan` reports what the engine
+chose for the program. Per-node costs, eligibility, the
+provenance-mode selector, and the JIT call-boundary contract
+live in [engines.md](engines.md) and
+[jit_boundary.md](jit_boundary.md).
 
 This file covers what *evaluation* is —
 program/state split, lifecycles, provenance — independent

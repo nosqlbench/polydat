@@ -3,47 +3,21 @@
 The mechanism for cross-scope wire flow: architectural model
 (one logical graph; scope boundaries partition lifecycle and
 access; the uniform read invariant; the write contract) and
-the materialization gradient the matter interpreter applies
-(inlined constant / value-only shared cell / read-write shared
-cell, plus shadow suppression and value-clone economy).
-
-This doc extends axiom-level statements:
-- [composition_substrate.md L1 (lifecycle isolation) + S5 (cross-tier write-through) + T1 (typed return)](composition_substrate.md)
-- [cross_fiber_invalidation.md (canonical validity-tracking mechanism for shared cells — revision counter + intent vectors + per-fiber `last_seen`)](cross_fiber_invalidation.md)
-- [graph_compiler.md CF1-CF4 (Context Fusion) + CF3 (gradient honoring)](graph_compiler.md)
-- [runtime_model.md R1 (clean-flag memoization) + R2 (hybrid push/pull invalidation)](runtime_model.md)
-- [scope_model.md (visibility, parent materialization, and shared-cell ownership)](scope_model.md)
-- [subcontext_construction.md (parent-walking lookup; SharedCell write-through)](subcontext_construction.md)
-
-Host-side synthesis policy is outside this specification. Related
-Polydat specifications are:
-[engines.md (per-scope canonical kernel cache)](engines.md),
-[module_system.md](module_system.md).
-
----
-
-## What this SRD covers
-
-How a wire defined in an outer scope becomes readable (and
-optionally writable) from an inner scope's kernel. Specifically:
-
-- What "wiring an inner kernel to its enclosing scope" means
-  semantically, independent of any specific API method name.
-- Why the read invariant is "reading on inner returns what
-  reading on outer returns" — uniformly, without per-cycle vs.
-  not-per-cycle special casing, without the caller composing
-  fallback chains.
-- What materialization the matter interpreter chooses for each
-  visible wire (literal fold, value-only shared cell, read-write
-  shared cell) and what determines the choice.
-- How the `shared` modifier relates to all of this (write
-  permission, *not* read-mediation).
+the materialization gradient the materializer applies (shared
+cell / value copy through the outer lookup / broadcast cell /
+resolver, plus shadow suppression). The cell protocol itself —
+revision counter, intent bits, the consumer's poll — is
+[cross_fiber_invalidation.md](cross_fiber_invalidation.md);
+the scope chain and its visibility rules are
+[scope_model.md](scope_model.md).
 
 The construction-time wiring operation is general matter-AST
 interpretation, not a public post-hoc bind. Parent-gated
-construction drives the private `materialize_wiring_from_outer`
-chokepoint, which installs the value, broadcast, shared-cell, and
-transit wiring prescribed by each visible binding's classification.
+construction (`materialize_subscope`) drives the private
+`materialize_wiring_from_outer` chokepoint in
+`kernel/state.rs`, which installs the value, broadcast,
+shared-cell, and transit wiring prescribed by each visible
+binding's classification.
 
 ---
 
@@ -69,8 +43,8 @@ per-fiber) are not value-isolation barriers — they partition:
 The wire's *identity* is preserved across scopes. The wire's
 *materialization* on each scope's kernel — whether the value is
 inlined as a constant, stored in a cell, or wired to chain to an
-upstream pull — is an implementation detail of how the matter
-interpreter materializes the access plane on that scope.
+upstream pull — is an implementation detail of how the
+materializer builds the access plane on that scope.
 
 ### The read invariant
 
@@ -80,7 +54,7 @@ interpreter materializes the access plane on that scope.
 
 This is uniform. It does not depend on whether the wire is
 per-cycle, per-iteration, constant, or otherwise. It does not
-depend on whether the wire is `shared`. The matter interpreter is
+depend on whether the wire is `shared`. The materializer is
 responsible for materializing each handle so the invariant holds
 without the *caller* (the wires layer, the dispenser, an adapter)
 doing anything beyond a local read.
@@ -113,193 +87,191 @@ propagates without read-time traversal.
 
 ## Materialization gradient
 
-The matter interpreter chooses one of these forms for each
-visible cross-scope wire at inner kernel construction. The
-choice is dictated by the wire's matter classification, *not*
-by the caller.
+The materializer chooses one of these forms for each visible
+cross-scope wire at inner kernel construction. The choice is
+dictated by the wire's matter classification — the outer
+binding's modifier (`const`, `shared`) and whether the name is an
+input slot or a computed output on the outer program — *not* by
+the caller. `materialize_wiring_from_outer` applies them in this
+order.
 
-### Inlined constant (compile-time fold)
+### 1. Shared-cell cascade
 
-When the outer wire's value is statically known (literal RHS,
-folded const bindings) and no intermediate scope might
-legitimately want to *shadow* it (the bindings's lexical layer
-in SRD-18), the matter interpreter *inlines the value into the
-inner program* as a `const` constant. No cell, no slot, no
-valid bit — the value is part of the inner kernel's compiled
-artifact. Reads are direct constant lookups.
+Every cell visible at the outer scope — the cells on its own
+input slots (its `shared` declarations and cells it inherited
+onto slots) plus its transit cells — attaches to the inner input
+slot of the same name. Storage is shared with the defining
+scope's kernel; both sides hold local handles backed by the same
+cell; the mutex serializes writes; the cell's revision counter
+and the defining scope's intent-dirty bit are bumped on every
+write per
+[cross_fiber_invalidation.md](cross_fiber_invalidation.md).
+Inner writes are visible to the outer scope (and to siblings
+sharing the cell) on the next read, without any host-side
+refresh ceremony.
 
-This is the materialization for:
+A cell whose name the inner scope declares `const` is dropped —
+neither attached nor forwarded (transit suppression, below). A
+cell with no matching inner slot is stored on the inner kernel
+as transit so a deeper descendant can pick it up.
 
-- Author-declared workload `bindings: | const X := <literal>`
-  where the author asserts compile-time const semantics.
-- Outer `const X := <literal>` declarations from any scope
-  whose chain-position is known not to be a shadow site.
-- Folded const bindings whose value resolved at compile time.
+This is the materialization for `shared X := …` declarations and
+for anything else that opts into cross-scope write-back.
 
-**Workload parameters use the chain-wired form instead.** A
-separate **params-kernel** sits at the root of the chain
-(below workload-root) and holds one `const NAME := <literal>`
-per workload param. The workload-root program emits
-`extern NAME: T` for each param and is marked
-`inherited_outputs` for those names so they cascade through as
-auto-passthrough slots without being treated as workload-root's
-own iteration coordinates. Every descendant scope (phase, op-
-template, comprehension, do-loop, scenario-tree bindings)
-likewise externs them. The value flows from the params-kernel
-through each scope's input-slot wiring via
-`materialize_wiring_from_outer`.
+### 2. Value copy through the outer lookup
 
-The motivation for the indirection is **lexical shadowing**: a
-scenario-tree `bindings:` (or its `set:` sugar form) needs to
-be able to redeclare a workload-param name for its subtree
-without rewriting the workload-root program. With the params-
-kernel design, the SetParam scope sits as a lexical layer
-between params-kernel and any descendant, its local
-`const NAME := <override>` shadows the chain-cascaded value, and
-descendants resolve NAME via the standard `extern NAME` lookup
-through the chain. Without the indirection, the workload-root's
-folded `const NAME := <literal>` would short-circuit lookup
-via get_constant before the chain wiring is consulted, and the
-override would be silently masked.
+For each output of the outer program that names an inner input
+slot not bound by step 1, the first of these applies.
 
-A previous design baked `const NAME := <literal>` into the
-workload-root program for every workload param, which works
-for the common case but makes scenario-tree shadowing
-unimplementable; the current design is a deliberate trade-off
-in favor of the more general lexical-scope semantics.
+When the name is an input slot on the outer program too (a
+passthrough extern) or is a `const` output of the outer program,
+the value is copied from `outer.lookup(name)` — the two-tier read
+that consults the outer's own folded constant first and falls
+through to its wired-in input when the constant is `None`
+([none_semantics.md](none_semantics.md)). The copy passes
+through `adapt_boundary_value` (the boundary adapter catalog of
+[type_system.md](type_system.md) §6.2). No cell: a const is
+effectively-const for the scope's lifetime, so a copy is
+semantically equivalent to a cell and costs no cell traffic; and
+a const whose buffer is `None` must not be broadcast, or the
+chain walk that gives descendants the grandparent's value would
+be defeated.
 
-### Value-only shared cell
+### 3. Broadcast cell for computed outputs
 
-When the outer wire is recomputable (non-literal RHS, depends on
-inputs that change) but is read-only from the inner scope's
-perspective, the matter interpreter installs a *value-only shared
-cell*: shared storage between outer and inner, mutex-protected
-for concurrent reader safety, paired with a `revision: AtomicU64`
-counter. Inner's local slot is wired to read through this cell.
-Outer's per-cycle re-eval of the wire writes its new value into
-the cell, bumps the revision (Release), and sets the cell's
-intent bit on the defining scope's intent-dirty vector. Every
-consumer fiber's cone walker observes the change on its next
-read via the bulk-mask + per-cell-revision compare protocol
-specified in [cross_fiber_invalidation.md].
-
+Otherwise, when the outer output is computed (node-backed, no
+input slot on the outer program) and the outer kernel publishes
+it through a broadcast cell, the cell attaches to the inner
+slot. The outer's per-cycle re-evaluation of the wire writes
+its new value into the cell, bumps the revision, and sets the
+cell's intent bit; every consumer's cone walker observes the
+change on its next read via the bulk-mask + per-cell-revision
+compare protocol of
+[cross_fiber_invalidation.md](cross_fiber_invalidation.md).
 The inner side has no write surface to this cell.
 
-This is the materialization for:
+This is the materialization for phase bindings that descendants
+reference (`load := add(cycle, 1)`) and any computed binding
+visible across scope boundaries that isn't `shared`.
 
-- Phase bindings that descendants reference (e.g., `load :=
-  add(cycle, 1)`).
-- Any computed binding visible across scope boundaries that
-  isn't `shared`.
+### 4. Plain value copy
 
-### Read-write shared cell (mutex)
+Otherwise, when the outer lookup yields a value but no cell
+exists, the value is copied once, through `adapt_boundary_value`.
 
-When the matter classifies the wire as `shared` (or an
-equivalent cross-scope-mutable form), the matter interpreter
-installs a read-write shared cell. Storage is shared with the
-defining scope's kernel; both sides hold local handles backed by
-the same cell; the mutex serializes writes; the cell's
-`revision: AtomicU64` counter and the defining scope's intent-
-dirty bit are bumped on every write per
-[cross_fiber_invalidation.md]. Inner writes are visible to outer
-(and to siblings sharing the cell) on next read, without any
-host-side refresh ceremony.
+### 5. The registered extern resolver
 
-This is the materialization for:
+When the outer chain has no binding for the name at all, the
+host's resolver (`dsl::factories::register_extern_resolver`) is
+consulted; a value it returns is copied through
+`adapt_boundary_value`. A slot no form fills stays at its
+declared default (`None` when it has none).
 
-- `shared X := <literal>` declarations.
-- For_each iteration variables (treated as shared internally
-  by polydat's comprehension synthesis path — the same
-  surface that backs polydat spec §9.5's `scope_once`).
-- Any other matter that explicitly opts into cross-scope
-  write-back.
+After the walk, every `const` output of the inner program is
+pulled once against the populated slots
+([evaluation_model.md](evaluation_model.md), Plan B), and the
+inner scope's coordinate path becomes its own coordinates
+followed by the outer's.
+
+### Inlined constants and the parameter scope
+
+A wire whose value is statically known — a literal RHS, a folded
+const binding — is folded into the program at build; every
+engine performs the same compile-constant fold, and the folded
+value is what step 2 copies into a descendant. No cell, no valid
+bit; reads are constant lookups.
+
+Workload parameters are deliberately *not* folded into the
+program that declares the workload. A parameter scope at the root
+of the chain holds one `const NAME := <literal>` per parameter;
+the workload program externs each `NAME` and inherits it as a
+passthrough so it cascades through descendants as an auto-
+passthrough slot rather than as one of the program's own
+coordinates; every descendant scope likewise externs it, and the
+value flows down through step 2.
+
+The reason is **lexical shadowing**: an intermediate scope must
+be able to redeclare a parameter name for its subtree without
+rewriting the root program. With the parameter scope as a
+separate lexical layer, an intermediate `const NAME := <override>`
+shadows the cascaded value, and descendants resolve `NAME`
+through the standard `extern NAME` lookup. Folding the
+parameter into the root program instead would short-circuit
+lookup through `get_constant` before the chain wiring is
+consulted, and the override would be silently masked. That
+design was tried and rejected for exactly this reason; the
+indirection is a deliberate trade-off in favour of the general
+lexical-scope semantics.
 
 ### Why the gradient is matter-driven, not caller-driven
 
 The caller (the scope synthesizer, the wires layer, the
 dispenser) does not pick the materialization. The matter AST
-classifies each wire; the matter interpreter materializes
+classifies each wire; the materializer materializes
 accordingly. This:
 
 - Removes the "is this wire per-cycle or not" question from
   every caller site — the matter knows.
-- Eliminates external chain composition (e.g.,
-  `CycleWires::with_fallback`) — the inner kernel's local read
-  is correct on its own because the matter set the wiring up.
+- Eliminates external fallback chains composed by the caller —
+  the inner kernel's local read is correct on its own because
+  the materializer set the wiring up.
 - Lets the same wire's materialization change (literal →
   computed) without touching consumers — only the matter and
-  interpreter change.
+  the materializer change.
 
 ### Local-authoritative shadow (transit suppression)
 
-When an inner scope declares `const NAME := …` or
-`const NAME := …` for a name that is *also* exported by an outer
-scope in the chain (as a folded constant or a passthrough
-output), the inner declaration is the new authoritative writer
-for that name over its subtree. The chain must not carry the
-upstream value past this scope, or descendants would read it
-instead of the local declaration.
+When an inner scope declares `const NAME := …` for a name that
+is *also* exported by an outer scope in the chain (as a folded
+constant or a passthrough output), the inner declaration is the
+new authoritative writer for that name over its subtree. The
+chain must not carry the upstream value past this scope, or
+descendants would read it instead of the local declaration.
 
-The materialize step enforces this through **transit
-suppression**: during step 1 (cell cascade), any shared cell
-visible at the outer scope whose name matches a local
-const output on `self` is dropped on the floor — not
-attached to a self slot, not transit-forwarded to descendants.
-Step 2's value-copy path then runs normally and copies the
-outer's view via `self.lookup(name)` into the self slot
-(for non-shadow names) or skips the name entirely (for
-shadow names, because `self`'s own folded buffer / init
-binding owns it).
+The materializer enforces this through **transit suppression**:
+during the cell cascade (step 1), any cell visible at the outer
+scope whose name matches a local `const` output is dropped on
+the floor — not attached to a local slot, not forwarded to
+descendants. Step 2's value-copy path then runs normally and
+copies the outer's view via `outer.lookup(name)` into the local
+slot (for non-shadow names) or leaves the name to the local
+folded buffer (for shadow names, which the scope owns).
 
 This is the same mechanism every scope-tree node uses —
-phases, op-templates, comprehensions, do-loops, scenario-tree
-bindings. The synthesizer doesn't need to coordinate; the
+phases, op-templates, comprehensions, do-loops, intermediate
+binding scopes. The synthesizer doesn't need to coordinate; the
 materializer enforces the invariant uniformly. The result is
 standard lexical-scope shadowing: the closest declaration
 wins, transit cells stop at the first redeclaration, and the
 chain remains self-consistent.
 
-This is the mechanism that makes scenario-tree
-`bindings:` / `set:` actually shadow workload params — see
-SRD-18 §"bindings: (scenario level) and the set: sugar form"
-for the surface, this section for the underlying rule.
+### The gradient on every engine
+
+The forms above are the interpreter kernel's materializer. The
+same forms exist on every engine through the `Kernel` trait, and
+the gradient holds there: `shared` bindings are bound to cells on
+the interpreter, the closure tier, and the native engine alike
+(`Kernel::attach_shared_cell`, `Kernel::shared_cells`), so a
+write on any holder is what the others read next; a value copy
+is `Kernel::set_input`; and the inlined-constant form is the
+compile-constant fold every engine performs at build. A
+traversal's activation snapshots the cascaded wires into the
+body's kernel on whichever engine runs it
+([for_traversal.md](for_traversal.md)).
 
 ### Value-clone economy on the chain
 
-When materialize-wiring value-copies an outer scope's output
-into an inner scope's input slot (the "no cell, plain
-passthrough" path), the cost depends on which `Value` variant
-the chain is carrying. Every non-primitive variant is Arc-
-backed:
-
-- `Str(Arc<str>)`
-- `Bytes(Arc<[u8]>)`
-- `Json(Arc<serde_json::Value>)`
-- `VecF32(SliceArc<f32>)` / `VecI32(SliceArc<i32>)`
-- `Handle(Arc<dyn Any + Send + Sync>)`
-
-All clone via `Arc::clone` — one atomic increment, no heap
-allocation. Primitive variants (U64, F64, Bool) memcpy.
-
-For per-cycle reads from the input slot via `read_input`
-(`engines.rs::EngineCore::read_input`), the same economy
-applies: the slot's stored `Value` is cloned to hand back to
-the caller. A workload referencing the same `const` / `const`
-wire across 30k cycles/sec produces ~30k atomic increments
-and zero heap allocations on that wire, regardless of the
-variant carried. The implementation aligns with what the
-grammar says: declarations signaling shareability map to
-types that clone cheaply.
-
-The Json variant being Arc-backed matters specifically for
-result-body wire paths: when a host produces a row-
-shaped JSON body and downstream nodes extract multiple
-columns from it (`body_column_i32`, `body_column_str`, …),
-each consumer reads the body wire per cycle. Pre-Arc that was
-one full deep-clone of the JSON tree per column per cycle;
-post-Arc it's one atomic increment. The two consumers that
-need an owned `serde_json::Value` — adapters that mutate the
-body before serializing, validation paths that walk and
-transform — explicitly deep-clone via `(*v).clone()` at the
-consume site (`Value::to_json_value` does this for the
-`Json(...)` variant).
+A value copy costs what cloning the `Value` costs. The
+container variants are Arc-backed — `Str(Arc<str>)`,
+`Bytes(Arc<[u8]>)`, `Json(Arc<serde_json::Value>)`,
+`Handle(Arc<dyn Any + Send + Sync>)`, and the `Vec*` lane
+family over `SliceArc<T>` — so a clone is one atomic increment
+and no allocation; `Ext` is boxed and clones through its own
+reflected clone; the scalar variants (`U64`, `I64`, `F64`,
+`Bool`, the two-limb `U128`/`I128`, `Reg128`) copy. A workload
+that reads the same cross-scope wire every cycle therefore pays
+an atomic increment per read and never a heap allocation on that
+wire, whichever variant it carries. Consumers that need an owned
+tree (a `Json` body they mutate before serialising) deep-clone
+explicitly at the consume site (`Value::to_json_value` does so
+for the `Json` variant); the chain itself never does.

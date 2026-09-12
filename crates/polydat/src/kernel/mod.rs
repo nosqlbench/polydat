@@ -101,7 +101,7 @@ pub enum WireSource {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputKind {
     /// Dimensional input declared by `input (cycle: u64, ...: u64)` —
-    /// dynamic, reset every cycle.
+    /// dynamic, written at every coordinate advance.
     Coordinate,
     /// External slot populated by `materialize_wiring_from_outer` from an
     /// enclosing `for_each` / `for_combinations` clause —

@@ -1,7 +1,5 @@
 # Parent-Gated Subcontext Construction
 
-**Status:** Implemented specification.
-
 This document specifies the typed construction boundary for a Polydat child
 scope. It is the concrete enforcement mechanism for lifecycle isolation and
 cross-tier write-through in [The Composition
@@ -83,9 +81,7 @@ The implemented enforcement boundary is exact:
 `ImportSpec::port_type` and `ImportSpec::classification` are preserved in the
 public `ScopeContract`, but `finalize` does not independently compare them with
 a typed parent-export manifest. Actual child input slots and shared-cell writes
-remain protected by the compiler and kernel slot type checks. The public
-`ContractViolation::Type`, `Modifier`, and `Phase2WriteThrough` variants are
-compatibility surface and are not emitted by the current builder path.
+remain protected by the compiler and kernel slot type checks.
 
 ### 2.3 Compile options
 
@@ -179,6 +175,11 @@ write-through path. It has these additional rules:
 Non-colliding result bindings remain ordinary child outputs with their inferred
 types.
 
+The names `body`, `count`, and `ok` and their types are a host convention: a
+host that binds an operation's result into a child scope injects them. Polydat
+hosts the convention here because the write-through rewrite is the mechanism
+it needs; nothing in the language depends on the three names.
+
 ---
 
 ## 4. Spawn
@@ -188,9 +189,11 @@ types.
 1. It locks the parent registry and rejects an existing `ChildName`, reporting
    the prior and current `SourceContext` values.
 2. It records the child name.
-3. It materializes the closed child program under the parent. Shared cells
-   visible at the parent attach to matching child slots and remain available for
-   transitive descendant wiring.
+3. It materializes the closed child program under the parent, as a kernel
+   state of its own that owns its outputs and their storage
+   ([Runtime Model](runtime_model.md) R4). Shared cells visible at the
+   parent attach to matching child slots and remain available for transitive
+   descendant wiring.
 4. It transfers context, consumer registrations, and write-through bindings to
    the new `ScopeKernel<Child<P>>`.
 
@@ -220,10 +223,11 @@ values follow normal parent/child import and materialization rules.
 
 ---
 
-## 5. Per-cycle write-through
+## 5. Write-through after evaluation
 
 `ScopeKernel::commit_write_throughs` is called after the child has produced its
-cycle values. It is a no-op when the module has no write-through bindings.
+values for a coordinate. It is a no-op when the module has no write-through
+bindings.
 
 For each binding it:
 
@@ -257,15 +261,15 @@ parent live
 - `spawn` consumes the module artifact.
 - A compiled `PolydatProgram` is immutable and shareable.
 - The spawned `ScopeKernel` owns one synchronized mutable kernel state.
-- Independent fiber states are constructed from the immutable program through
-  the ordinary Polydat program/state split; they are not created by repeating
+- Independent kernels for other fibers are created from the immutable program
+  through `KernelProgram::create_kernel`; they are not created by repeating
   `spawn` for the same named child.
 - Hot rebinding and multi-parent construction are unsupported.
 
-Direct string compilation may create a parentless `PolydatKernel`, but it does
-not create a typed child relationship. Internal bridges wrap a root or bind a
-compiled program under a parent by routing through the same finalize/materialize
-rules.
+Direct compilation (`compile_polydat_with`) creates a root kernel on any
+engine, but it does not create a typed child relationship. Internal bridges
+wrap a root or bind a compiled program under a parent by routing through the
+same finalize/materialize rules.
 
 ---
 
@@ -321,19 +325,30 @@ state sharing between independent kernel instances.
 
 ---
 
-## 9. Verification correspondence
+## 9. Beside traversal activation
 
-The `kernel::subcontext` tests cover:
+Polydat has two ways to produce a child kernel bound to outer wires, and this
+protocol is one of them. Both produce a child state of its own (R4) over a
+program compiled once; both bind the child's declared externs to the outer scope by
+name, through typed writes; both leave the child's own buffers and currency
+fresh. They differ in who composes the child and what crosses the boundary:
 
-- typed builder creation and both body fragment forms;
-- import closure and final-shadow rejection;
-- named spawn, duplicate detection, release, and respawn;
-- consumer persistence;
-- shared collision rewriting and sibling visibility;
-- shared-cell cascade through silent intermediate scopes;
-- write-through type stability for boolean and numeric values;
-- compile-option propagation;
-- result-binding extern economy and protected injected names; and
-- strict `None` fall-through behavior.
+- **Subcontext construction** is for a host-composed child with a contract:
+  the host supplies imports, exports, body fragments, consumers, and result
+  bindings, and the parent's `spawn` binds the child through the full binder
+  ([Scope Model](scope_model.md) §4) — shared cells and transit cells
+  attached, computed parent outputs attached as broadcast cells, scope-init
+  `const` outputs pulled, scope coordinates threaded. The child is an
+  interpreter kernel.
+- **Traversal activation** is for the language's own `for`: the body is
+  compiled with the parent, and `TraversalStream::activation_on` creates one
+  kernel per tuple on the engine the host asks for, binding the
+  tuple's elements and a snapshot of the cascaded wires by value and
+  narrowing every cursor ([for_traversal.md](for_traversal.md)).
 
-These tests are the executable oracle for SC1–SC10.
+The difference today is that the subcontext path is interpreter-only and
+carries cells, while the traversal path runs on every engine and carries
+values. The intent is that both call one binder expressed over the `Kernel`
+trait (`shared_cells`, `attach_shared_cell`, `input_value`, `pull`,
+`set_input`), so that a host-composed child can run on any engine and a
+traversal body can share a cell rather than a snapshot.

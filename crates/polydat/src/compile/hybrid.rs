@@ -194,7 +194,7 @@ struct HybridCore {
     /// channels among them (an optimization over the plan, not a change
     /// to it).
     dirty: std::sync::Arc<[Vec<usize>]>,
-    /// Some slot holds `None` in this cycle: an unset extern, which is
+    /// Some slot holds `None`: an unset extern, which is
     /// the only way one enters (SRD-74). When none does, the steps run
     /// without the mask.
     any_none: bool,
@@ -364,7 +364,7 @@ impl HybridCore {
     }
 
     /// Every dependent of a slot a cell refresh changed runs again,
-    /// inside the open cycle too, as the interpreter re-evaluates a node
+    /// between writes too, as the interpreter re-evaluates a node
     /// whose cell moved on its next read: the plan's dependents, whatever
     /// the mode, are neither run nor current.
     #[inline]
@@ -386,7 +386,7 @@ impl HybridCore {
     }
 
     /// Take the current value of every cell another holder published
-    /// to, and mark its dependents, so a pull inside a cycle sees the
+    /// to, and mark its dependents, so a pull between writes sees the
     /// register as the interpreter's revision check does.
     #[inline]
     fn refresh_cells(&mut self) {
@@ -500,7 +500,7 @@ impl HybridCore {
         self.all_ran = true;
     }
 
-    /// Evaluate every output: begin the cycle if none is open, then run
+    /// Evaluate every output: begin a round if a write is pending, then run
     /// every step that has not run.
     #[inline]
     fn eval_all(&mut self) {
@@ -518,7 +518,7 @@ impl HybridCore {
         }
     }
 
-    /// The named output for the cycle's inputs, running only its cone.
+    /// The named output for the current inputs, running only its cone.
     fn pull_named(&mut self, name: &str) -> crate::ast::Value {
         if self.drive.stale {
             self.begin_epoch();
@@ -618,7 +618,7 @@ impl HybridCore {
 }
 
 /// Everything the evaluation loops once did, kept for the raw kernel's
-/// `eval`, which evaluates every step in a new cycle.
+/// `eval`, which evaluates every step in a new round.
 #[inline]
 fn eval_all_hybrid_steps(core: &mut HybridCore) {
     core.drive.stale = true;
@@ -644,7 +644,7 @@ impl HybridCore {
     /// Set an extern by name; returns its slot for dirty marking.
     /// Set an extern by name; returns its slot. The plan invalidates
     /// what depends on it, as a changed coordinate is invalidated, and
-    /// the next evaluation begins a cycle.
+    /// the next evaluation begins a round.
     fn set_extern(&mut self, name: &str, value: crate::ast::Value) -> Result<usize, String> {
         let (slot, unset) = self.externs.set(name, value, &mut self.buffer)?;
         self.extern_written(slot, unset);
@@ -678,14 +678,14 @@ impl HybridCore {
 /// Hybrid kernel with no provenance tracking.
 ///
 /// Every `eval()` call runs all steps unconditionally. Useful as a
-/// baseline and for graphs where inputs change on every cycle.
+/// baseline and for graphs where inputs change on every evaluation.
 #[derive(Clone)]
 pub struct HybridKernelRaw {
     core: HybridCore,
 }
 
 impl HybridKernelRaw {
-    /// The coordinates of the next cycle; a changed one invalidates
+    /// The coordinates, written; a changed one invalidates
     /// its dependents through the plan, as in every mode.
     #[inline]
     fn set_coords(&mut self, coords: &[u64]) {
@@ -697,7 +697,7 @@ impl HybridKernelRaw {
         }
     }
 
-    /// Evaluate all hybrid steps unconditionally: a new cycle.
+    /// Evaluate all hybrid steps unconditionally: a new round.
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_coords(coords);
@@ -705,7 +705,7 @@ impl HybridKernelRaw {
     }
 
     #[cfg(feature = "jit")]
-    fn pull_in_cycle(&mut self, name: &str) -> crate::ast::Value {
+    fn pull_output(&mut self, name: &str) -> crate::ast::Value {
         self.core.pull_named(name)
     }
 
@@ -839,7 +839,7 @@ impl HybridKernelPull {
         }
     }
 
-    /// Evaluate all steps (no cone guard): a new cycle.
+    /// Evaluate all steps (no cone guard): a new round.
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_inputs(coords);
@@ -847,7 +847,7 @@ impl HybridKernelPull {
         eval_all_hybrid_steps(&mut self.core);
     }
 
-    fn pull_in_cycle(&mut self, name: &str) -> crate::ast::Value {
+    fn pull_output(&mut self, name: &str) -> crate::ast::Value {
         self.core.pull_named(name)
     }
 
@@ -1040,7 +1040,7 @@ impl HybridKernelPushPull {
         }
     }
 
-    /// Evaluate with push-side step skip (no cone guard): a new cycle.
+    /// Evaluate with push-side step skip (no cone guard): a new round.
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_inputs(coords);
@@ -1049,7 +1049,7 @@ impl HybridKernelPushPull {
         self.core.eval_all();
     }
 
-    fn pull_in_cycle(&mut self, name: &str) -> crate::ast::Value {
+    fn pull_output(&mut self, name: &str) -> crate::ast::Value {
         self.core.pull_named(name)
     }
 
@@ -1775,13 +1775,13 @@ macro_rules! hybrid_drive {
     ($ty:ident, $set_coords:ident) => {
         impl $ty {
             /// The named output through the `Kernel` trait: the pending
-            /// coordinates are applied, a cycle begins if none is open,
+            /// coordinates are applied, a round begins if a write is pending,
             /// and only the output's cone runs.
             fn pull_value(&mut self, name: &str) -> crate::ast::Value {
                 let coords = std::mem::take(&mut self.core.drive.coords);
                 self.$set_coords(&coords);
                 self.core.drive.coords = coords;
-                self.pull_in_cycle(name)
+                self.pull_output(name)
             }
             /// [`Self::pull_value`] by output index.
             fn pull_value_at(&mut self, index: usize) -> crate::ast::Value {

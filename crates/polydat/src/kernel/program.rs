@@ -202,7 +202,7 @@ pub(crate) struct NodeInventory {
     /// Which inputs transitively feed each node (exact).
     pub input_provenance: Vec<ProvMask>,
     /// Nodes that are nondeterministic (nullary / declared) or
-    /// downstream of one — the per-cycle cache-invalidation set.
+    /// downstream of one — never current.
     pub nondet_nodes: Vec<usize>,
     /// Per-node flag: dependency cone contains a
     /// `Purity::SideChannel` node.
@@ -2653,7 +2653,7 @@ bar := mod(foo, 100)
 /// R1.v transitive contagion: a node whose dependency cone
 /// reaches a volatile producer must itself be marked
 /// nondeterministic at construction time, so its clean flag
-/// is reset every cycle and downstream pulls re-evaluate.
+/// is never set and downstream pulls re-evaluate.
 /// Without contagion, a consumer of `current_epoch_millis`
 /// would return a stale cached value referencing the prior
 /// cycle's timestamp.

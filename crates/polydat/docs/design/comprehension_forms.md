@@ -1,34 +1,19 @@
 # Comprehension Forms — Polydat Design
 
-**Status:** Implemented, authoritative specification for the
-comprehension algebra, including constructors, closure properties,
-validity axioms, optimization, IR, and execution.
-
-## Authoritative ownership declaration
-
-This document is the **single authoritative reference** for the
-comprehension algebra — its constructors, validity axioms,
-metadata propagation rules, optimizer rewrites, IR opcodes, and
-consumption surfaces. Any non-polydat SRD discussing
-comprehensions does so **strictly to describe how that SRD's
-subject integrates with polydat-owned comprehensions**; non-
-polydat SRDs do not redefine, extend, or shadow polydat-owned
-material. Apparent contradictions between a non-polydat SRD and
-this document resolve in favor of this document. §15 below
-names each touching SRD's role under this declaration.
-
-This document is authoritative for comprehension grammar, semantics, and the
-operator language; the surface grammar, source-position forms, per-strategy
-algorithmic detail, and the streaming runtime that *consume* these contracts are
-documented by the host that wires polydat in.
-
-The forcing question: **given filtering, ordering, unioning,
-parallel-zipping, cartesian-multiplying, and bounded/unbounded
-source distinctions, can every meaningful combination be written
-in one regular grammar, validated by a small axiom set, and
-compiled to a small operator language that runs in bounded memory
-beyond unavoidable combinatoric tracking?** This doc says yes,
-and shows how.
+This document is the reference for the comprehension algebra: its
+constructors, closure properties, validity axioms, metadata
+propagation rules, optimizer rewrites, IR opcodes, consumption
+surfaces, and the verification rule every rewrite is held to. The
+text surface that produces these ASTs is Polydat's own `for`
+construct ([The Polydat Grammar](polydat_grammar.md) §16, [The `for`
+Construct](for_traversal.md)); §8 states how that surface maps onto
+the algebra. The forcing question: **given filtering, ordering,
+unioning, parallel-zipping, cartesian-multiplying, and
+bounded/unbounded source distinctions, can every meaningful
+combination be written in one regular grammar, validated by a small
+axiom set, and compiled to a small operator language that runs in
+bounded memory beyond unavoidable combinatoric tracking?** This
+document says yes, and shows how.
 
 ---
 
@@ -42,8 +27,8 @@ Across a single comprehension's dispense, every tuple carries the
 
 Comprehensions are *first-class*: the same constructors apply
 whether the comprehension appears in a user-authored expression,
-is bound to a wire and reused, is held as a runtime
-`PolyStreamer`, or is the subject of a static optimization pass.
+is bound to a wire and reused, is opened as a stream, or is the
+subject of a static optimization pass.
 
 ### 1.1 Universe of values
 
@@ -125,8 +110,8 @@ Produces a **stream** of single-name tuples
   interval with a defined measure, sampled rather than
   enumerated). Discrete sources cover literal comma lists, Polydat
   integer/string ranges, generator functions, stdlib helpers,
-  workload-param references, set operators, etc. (SRD-18c
-  Layers 1-6.) Continuous sources cover bounded real intervals
+  parameter references, set operators, etc. Continuous sources
+  cover bounded real intervals
   (`0.0..1.0`, `-π..π`) and unbounded ones (`0.0..` for the
   non-negative reals), plus continuous-distribution objects
   (uniform, normal, exponential — sampled as their respective
@@ -155,7 +140,7 @@ be `Bounded(n)`, `BoundedAtMost(n)`, `Unbounded`, or
 **Per-tuple memory:** O(1) above the source's own per-tuple
 state. No buffering at the clause level.
 
-#### 3.1.1 Source resolution — the bound sequence (SRD-18f)
+#### 3.1.1 Source resolution — the bound sequence
 
 A clause's `source` is resolved into a **bound sequence** — the
 ordered `Vec<Value>` the clause iterates, binding `name` to each
@@ -179,8 +164,9 @@ flattens more than another.
 
 The parser-/resolver-layer **surface** for the source position —
 which syntactic forms exist and how an author selects peel vs.
-no-peel — is a host surface concern; this section owns the
-resolution **semantics** that surface maps to.
+no-peel — is the `for` construct's source surface
+([The Polydat Grammar](polydat_grammar.md) §16.2); this section owns
+the resolution **semantics** that surface maps to.
 
 #### 3.1.2 The `iteration_interior` predicate
 
@@ -195,7 +181,7 @@ iteration scalar, wrap as a singleton.
 |---|---|
 | `VecF32` / `VecF64` / `VecF16` / `VecI16` / `VecI32` / `VecI64` (native vectors) | the element values (numeric) |
 | `Json` that is an array | the element values (each carried as `Json`) |
-| `Ext` exposing a `PartitionList` ([SRD-71](cursor_partitions.md)) | the partition entries |
+| `Ext` exposing a `PartitionList` ([Cursor Partitions](cursor_partitions.md)) | the partition entries |
 | `Str` | its **string-comprehension tokens** (§3.1.3) |
 | `U64` / `F64` / `Bool` / `Bytes` / `Handle` / `None` / non-array `Json` / opaque `Ext` | none (scalar) |
 
@@ -258,9 +244,9 @@ wire/const/param/outer-iter-var is a **hard error** with a quoting
 hint (`… did not resolve … if you meant the literal string "X",
 quote it: "X"`), not a silent self-name binding. The compatibility
 rule for an unbracketed bare *label list* `a, b, c` retains
-string-token striping. The exact parser acceptance boundary is
-protected by the
-[comprehension regression contract](comprehension_migration_gate.md).
+string-token striping. The exact parser acceptance boundary is a
+tested contract of the source parser: a change to what it accepts is
+a change to this rule.
 
 **Where the work happens (parse vs. eval).** `source_parser`
 splits the `[…]` form into two compilation paths:
@@ -407,8 +393,7 @@ filter(
 Produces the substream of tuples for which `predicate` evaluates
 to `true`. Tuples that evaluate to `false` are dropped; tuples
 where the predicate fails to evaluate (missing name, type error,
-etc.) are runtime errors per SRD-18e §"`where` predicate
-semantics".
+etc.) are runtime errors.
 
 - Predicate is a Polydat boolean expression; names referenced must be
   in the comprehension's tuple shape or inherited from the
@@ -440,8 +425,10 @@ every use site. If a workload need cannot be expressed by the
 named strategies, the spec is the right place to add a named
 strategy, not a user-callback escape hatch.
 
-The strategy taxonomy is SRD-18d's set plus `Shuffle`. Each
-strategy declares its **input requirement** in terms of the
+The strategy taxonomy is the closed `StrategyName` set (§14.4):
+`Lex`, `ReverseLex`, `Diagonal`, `Antidiagonal`, `Extrema`, `Shells`,
+`Halton`, `Sobol`, `Lhs`, and `Shuffle`. Each strategy declares its
+**input requirement** in terms of the
 input's `IndexFn` (per §10.7's metadata algebra) and its
 behavior over discrete vs. Continuous inputs. The validator
 (V4) accepts only inputs whose `IndexFn` satisfies the
@@ -635,7 +622,7 @@ node has `index_addressable: None` per §10.7's propagation
 rules, but V4 looks through one filter layer when computing
 the strategy's input `IndexFn`. The ordering operates on the
 filter-surviving tuples while reasoning about their *original*
-index-space positions (per SRD-18e §"Index-space contract").
+index-space positions.
 *Reason:* extrema-of-survivors and shells-of-survivors are
 meaningful when the user wrote "extrema of (k, limit) where
 k*limit ≤ 50"; the surviving corners are still corners of the
@@ -701,8 +688,8 @@ Form (b) is usually what's intended.
 
 **Axiom V8 (continuous requires explicit sampling + integrable
 measure).** A comprehension whose cardinality is `Continuous` or
-`ContinuousAtMost` cannot be a `PolyStreamer`'s dispense source
-directly. It MUST be wrapped in an `order(_, strategy, Some(n))`
+`ContinuousAtMost` cannot be dispensed directly. It MUST be wrapped
+in an `order(_, strategy, Some(n))`
 where the strategy accepts a Continuous input (per §3.6's
 per-strategy input table) and `n` is finite.
 
@@ -731,7 +718,7 @@ prevents a runtime sampling failure with confusing root cause.
 V8 is checked at the comprehension's outermost level. Continuous
 subexpressions deep inside an AST are fine as long as some
 enclosing `order(_, _, Some(n))` produces a finite traversal
-before the AST reaches a `PolyStreamer`. The integrability check
+before the AST is dispensed. The integrability check
 fires at parse on every continuous source independently of where
 it sits in the AST. Example:
 `order(cartesian(clause(k, 1..10), clause(theta, 0.0..2π)),
@@ -1072,15 +1059,19 @@ materialization).
 
 ## 8. The syntactic surface
 
-The algebra is what the compiler manipulates; the user writes a
-flatter surface that desugars to the algebra. The surface
-preserves regularity by mapping each surface form to exactly
-one algebraic constructor (or a small fixed chain).
+The algebra is what the compiler manipulates; the author writes a
+flatter surface that desugars to the algebra. The surface is
+Polydat's own: the `for` construct of the statement language
+([The Polydat Grammar](polydat_grammar.md) §16), whose lexer captures
+the text after `for` as one token and hands it to the comprehension
+parser unchanged, so the surface has exactly one owner. The surface
+preserves regularity by mapping each surface form to exactly one
+algebraic constructor (or a small fixed chain).
 
 ### 8.1 The single `for` keyword
 
-Polydat expression form uses one keyword: `for`. The RHS shape
-disambiguates which constructor:
+One keyword, `for`, opens every comprehension. The shape of the text
+after it disambiguates which constructor:
 
 ```text
 for var in source                              → clause(var, source)
@@ -1104,7 +1095,8 @@ filter/order nodes per F1/O1 chaining rules.
 The `source` on the right of `in` is itself a small surface — list
 sugar `[…]`, string comprehension `"…"`/`'…'`, the relaxed bare
 form, spreads — resolved to the clause's bound sequence by the
-rules in §3.1.1–§3.1.4 (semantics); the host owns the surface forms.
+rules in §3.1.1–§3.1.4 (semantics); the surface forms are
+[The Polydat Grammar](polydat_grammar.md) §16.2.
 
 ### 8.2 Recursive composition
 
@@ -1125,23 +1117,29 @@ and the bracketed-string form are equivalent at the AST level.
 
 ### 8.3 Comprehensions as named values
 
-A comprehension binds to a wire of `PortType::Streamer`. Bound
-wires reference comprehensions by name; the same comprehension
-may participate in multiple derived expressions:
+A comprehension binds to a wire whose port type is `Ext`, carrying a
+reflected `StreamerValue` whose type name is `Streamer`
+([The `for` Construct](for_traversal.md) §3.1); the reflected type
+name is the wire-level tag, and no dedicated port-type variant
+exists. Bound wires reference comprehensions by name through `for`,
+since one keyword opens every comprehension, and the same producer
+may participate in several derived expressions:
 
 ```text
 base := for k in 1..100, limit in 1..100
 
 // Three derived streamers from one base.
-boundary := base where {k} == 1 || {k} == 100 || {limit} == 1 || {limit} == 100
-sampled  := base order halton/50
-fast_corner := boundary order extrema/1
+boundary := for base where {k} == 1 || {k} == 100 || {limit} == 1 || {limit} == 100
+sampled  := for base order halton/50
+fast_corner := for boundary order extrema/1
 ```
 
 `base`, `boundary`, `sampled`, and `fast_corner` are four distinct
-ASTs. Each `PolyStreamer` instance builds independent evaluation
-state and owns its own dispense cursor; derived comprehensions do
-not share a mutable evaluation cursor.
+ASTs: a derivation is resolved at compile time by applying the filter
+and the order to the base producer's AST, so derivations chain. Every
+stream opened from any of them builds independent evaluation state
+and owns its own dispense cursor; derived comprehensions do not share
+a mutable evaluation cursor.
 
 ### 8.4 Inferred union (special case)
 
@@ -1149,8 +1147,7 @@ The parser supports `for k in 10, limit in ..., k in 100,
 limit in ...` with repeated names inferring `union`. Under the
 regular algebra this is a parser convenience — the disambiguation
 runs after clause-list parsing and lifts to `union(cartesian(...),
-cartesian(...))`. The convenience persists for backward
-compatibility; the canonical form is the explicit bracketed
+cartesian(...))`. The canonical form is the explicit bracketed
 union.
 
 ---
@@ -1176,7 +1173,7 @@ PUSH_CLAUSE(name, source)
     Push a single-name tuple stream produced by `source`.
     Sources are themselves stream producers: their advance()
     yields one Value per call. The source is bound at runtime
-    by the streamer's outer scope (SRD-78), not eagerly
+    by the scope the stream is opened in, not eagerly
     enumerated here. Per-pull cost: O(1) plus source.advance().
     Steady-state memory: O(1).
 
@@ -1241,7 +1238,7 @@ ORDER_MATERIALIZE(strategy, truncation)
 
 DISPENSE
     Bind the top stream as the comprehension's result. The
-    consumer (PolyStreamer per SRD-78) pulls from this stream.
+    consumer pulls from this stream.
 ```
 
 Compilation from AST to IR is a bottom-up tree walk: each AST
@@ -1333,9 +1330,10 @@ imply:
    `BoundedAtMost(n)`, `Unbounded`, `Continuous`, or
    `ContinuousAtMost` per §6.1.
 4. Every IR that the bound-checker proves unbounded-cardinality
-   is reachable as a `PolyStreamer` only via the unbounded-
-   variant queue (SRD-78 §"Unbounded sources") — bounded-only
-   consumers can refuse to instantiate the streamer.
+   is refused by a bounded-only consumer before any tuple is
+   dispensed: a tile projection requires bounded cardinality at
+   compile time, and a `for` traversal's opening evaluates the
+   whole tuple set.
 5. Every IR with `ORDER_MATERIALIZE` over an `Unbounded` discrete
    input fails validation (Axiom V6); every IR whose outermost
    cardinality is `Continuous` or `ContinuousAtMost` fails
@@ -1350,11 +1348,10 @@ correctness reference, not the runtime input.
 
 ### 9.5 Consumption surfaces
 
-A compiled comprehension IR is consumed at two distinct
-**orders**, with three concrete surface forms. The orders are
-not levels in a single pipeline — they are independent,
-first-class consumption modes that share the compiled IR but
-maintain separate dispense state.
+A compiled comprehension is consumed at two distinct **orders**.
+The orders are not levels in a single pipeline — they are
+independent, first-class consumption modes that share the compiled
+IR but maintain separate dispense state.
 
 #### 9.5.1 The two orders
 
@@ -1367,7 +1364,7 @@ system, feeding a non-polydat computation.
 
 **Second-order: scoped kernel instances.** A
 `ScopedKernelStream<K>` pulls one **scoped polydat kernel
-instance** per `advance()` — a `ScopedKernelInstance<K>` whose
+instance** per `advance()` — a `ScopedKernelInstance` whose
 scope already has the coordinate tuple's values bound as scope
 variables. The consumer invokes the kernel as if it were a
 standalone kernel; the coordinate binding is transparent.
@@ -1379,18 +1376,32 @@ parent_kernel.scope(coords)`. But the spec does **not** model
 the second-order stream as a Rust-style `.map()` view over the
 first. The two are independent first-class streams (see §9.5.2).
 
-#### 9.5.2 Independence contract
+#### 9.5.2 The surfaces and the independence contract
 
-The three consumption surfaces are produced by three independent
-factory functions on the comprehension handle:
+The surfaces are factories on the compiled comprehension
+(`surfaces::CompiledComprehension`, obtained by `compile(&ast)`,
+`from_ast`, or `from_program`):
 
 ```text
-trait Comprehension {
-    fn coordinate_stream(&self) -> CoordinateStream;
-    fn scoped_kernel_stream<K>(&self, parent: &K) -> ScopedKernelStream<K>;
-    fn scope_once<K>(&self, parent: &K, coords: &CoordTuple) -> ScopedKernelInstance<K>;
-}
+CompiledComprehension::coordinate_stream(&self) -> CoordinateStream
+CompiledComprehension::scoped_kernel_stream<K: KernelScope>(&self, parent: K) -> ScopedKernelStream<K>
+CompiledComprehension::scope_once<K: KernelScope>(&self, parent: &K, coords: &Tuple) -> ScopedKernelInstance<K::Scoped>
 ```
+
+`KernelScope` is the parent's side of the second order: what it
+means to bind a tuple into a child scope of that parent.
+`PolydatKernelScope` implements it over a canonical kernel and its
+parent. A `StreamerValue`, the value a producer wire carries,
+exposes `compiled()` and `coordinate_stream()` over the same
+factories ([The `for` Construct](for_traversal.md) §3.1).
+
+The `for` construct's traversal surface, `TraversalStream`
+([The `for` Construct](for_traversal.md) §3.6), is a third form
+built on the same evaluation: opening a traversal evaluates the
+whole tuple set through `runtime::evaluate_for_iteration` in the
+body's scope, and each `Activation` is a kernel of its own over the
+body's program with one tuple bound, on any engine. A tile
+projection consumes a comprehension the same way per render.
 
 Each call to `coordinate_stream` or `scoped_kernel_stream`
 returns a **fresh streamer** with its own dispense cursor. The
@@ -1410,9 +1421,11 @@ The independence is **structural, not performance-driven**:
 - Two `ScopedKernelStream` instances from the same comprehension
   produce identical dispense sequences of scoped kernel
   instances and advance independently.
+- Two traversals opened over the same producer, and two renders
+  of the same tile, never share dispense state.
 
-This is the SRD-78 "one streamer per Arc, each with its own
-dispense cursor" semantic, generalized across the two orders.
+One stream per handle, each with its own dispense cursor, holds
+across both orders and every form.
 
 #### 9.5.3 The one-shot map function
 
@@ -1423,17 +1436,19 @@ replay log, or a manually-constructed tuple) and produces a
 single scoped kernel instance. It does not advance any stream
 and does not consult any dispense cursor.
 
-This is the surface workload-replay and debugging tooling uses:
+This is the surface replay and debugging tooling uses:
 "Replay the kernel for the coordinate tuple captured in this
 log entry," "Run the kernel for this specific point in the
 parameter sweep," "Construct a kernel instance for the tuple
 my UI just emitted." None of these need a stream; they need a
-point query.
+point query. The `for` construct's random-access
+`TraversalStream::activation(index)` is the same idea for
+activations.
 
 `scope_once` is also the **unit of work** that
 `ScopedKernelStream::advance()` performs internally — pull one
 coordinate tuple from the underlying IR, apply `scope_once` to
-produce one `ScopedKernelInstance<K>`, return. The function is
+produce one `ScopedKernelInstance`, return. The function is
 exposed publicly so callers can perform the same operation
 without going through a streamer at all.
 
@@ -1455,28 +1470,69 @@ Separating the surfaces lets:
 
 - Inspection / logging / export tooling work over coordinate
   tuples without paying the kernel-instantiation cost.
-- Workload runners work over scoped kernel instances without
-  the consumer having to write the `coords ↦ kernel.scope(...)`
-  glue.
+- Runners work over scoped kernel instances without the consumer
+  having to write the `coords ↦ kernel.scope(...)` glue.
 - Replay tooling pull a tuple from a log and call
   `scope_once` directly — no streamer needed.
 - The polydat optimizer and metadata algebra stay focused on
   coordinate-tuple semantics; kernel concerns don't leak in.
 
-#### 9.5.5 What this means for SRD-78
+### 9.6 Core invariants
 
-SRD-78 (PolyStreamer) is the runtime that hosts both stream
-surfaces. The compiled IR (§9.1) is the shared resource;
-SRD-78's streamer instances are the per-surface dispense state.
-The first-order / second-order split is a polydat-side
-architectural decision; SRD-78 implements both as concrete
-streamer types over the same IR.
+Six invariants the implementation keeps, each a consequence of the
+sections above:
 
-The "lock-free shared cursor" semantic SRD-78 documents applies
-**per streamer instance**, not across streamers from the same
-comprehension. Two `CoordinateStream` instances from one
-comprehension have two independent lock-free cursors, not one
-shared cursor.
+- **Stream-first execution.** Clause sources are stream producers. A
+  clause is not normalized to `Vec<Value>` as its semantic
+  representation. Materialization occurs only at an IR operation
+  whose metadata declares a barrier, such as a non-streaming order
+  strategy (§6.3, §9.1).
+- **Dependent Cartesian product.** Cartesian evaluation is a dependent
+  product: each downstream source is evaluated in the environment
+  formed by the tuple prefix already selected, and reduces to the
+  ordinary independent product when no source depends on that prefix
+  (§3.2). Non-lexicographic Cartesian ordering requires independence;
+  validation rejects a strategy that would need random access over a
+  dependent source.
+- **Closed-enum behavior.** `IndexFn`, `NaturalOrder`,
+  `Materialization`, `StrategyName`, and `ZipMode` are closed. Runtime
+  callbacks and process-level strategy registration are not part of
+  the contract; adding a variant requires exhaustive updates to
+  metadata, validation, IR compilation, execution, serde, and tests
+  (§14.4).
+- **Immutable public IR.** `ir::Program` is constructed by the
+  compiler and exposed by value through read-only operations.
+  Consumers do not mutate opcodes or stack effects, and
+  `Program::stack_depth()` and the resource-bound pass agree with
+  every opcode's declared stack effect (§9.1, §9.3).
+- **Independent consumers.** Consumption surfaces may share an AST or
+  IR program, but each owns its dispense cursor, strategy state,
+  buffers, and kernel state; advancing one consumer cannot advance or
+  invalidate another (§9.5.2, §14.3).
+- **Deterministic seeded strategies.** Seeded strategies derive their
+  state from the authored seed and stable structural identity. Thread
+  scheduling, address layout, and iteration among sibling consumers
+  do not alter the sequence (§3.6).
+
+`EvaluatedSource` distinguishes source values from source
+indexability: `IndexFn` is a runtime query over the evaluated source,
+not a promise inferred from source syntax alone, and a caller consults
+the evaluated contract before selecting an index-sampling strategy
+(§10.7.6).
+
+### 9.7 Error ownership
+
+Each error class has one origin, and a consumer that adds source
+locations or context preserves the underlying category and causal
+chain:
+
+- parse and serde shape errors originate in `spec`;
+- algebra validity errors originate in `validate`;
+- bound and IR-shape errors originate in `ir`;
+- runtime source, interpolation, predicate, and strategy errors
+  originate in `runtime`;
+- parent/child contract errors originate in the nested-kernel
+  protocol that binds a tuple into a body.
 
 ---
 
@@ -1866,6 +1922,25 @@ that compile but produce degenerate or surprising output (e.g.
 Extrema over a 1-D zip) are §5.8's `ValidationWarning` channel,
 not the optimizer's concern.
 
+**The equivalence oracle.** For every implemented rewrite rule, the
+unoptimized tree is the semantic oracle. Verification of a rule
+compares, between the unoptimized and the rewritten tree:
+
+- tuple count;
+- tuple coordinate names and values;
+- dispense order;
+- termination or error class;
+- deterministic strategy state where applicable.
+
+For bounded discrete trees, exhaustive comparison is preferred.
+Property-generated trees use bounded sources and stable seeds so a
+failure reproduces exactly. Continuous or externally evaluated
+sources are held to contract-level checks for cardinality,
+integrability, indexing, and sampling preconditions; they are not
+coerced into a discrete exhaustive oracle. A rule is part of the
+optimizer only when it has a `RuleId`, a concrete module, an
+equivalence precondition, and this verification.
+
 ### 10.7 Metadata algebra
 
 The R-rules in §10.2 are guards over a small **metadata bundle**
@@ -2086,9 +2161,9 @@ metadata field is read.
   is no cost-comparison logic peeking into metadata to decide.
   If two rules apply, they apply in fixed priority order.
 - **Source-evaluation timing.** Whether a clause's source is
-  eager- or lazy-evaluated at runtime is a PolyStreamer
-  concern (SRD-78). Metadata records *declared* cardinality,
-  not evaluation state.
+  eager- or lazy-evaluated at runtime is the consumer's
+  concern. Metadata records *declared* cardinality, not
+  evaluation state.
 - **User-defined extensions.** `IndexFn`, `NaturalOrder`,
   `Materialization`, and `StrategyName` are closed enums. New
   values land as coordinated type extensions, not registration
@@ -2251,8 +2326,8 @@ the planner didn't know yet.
   a lazy stream producer per §9.1.
 - It does NOT inline cross-AST sharing. The §8.3 derived-
   streamers case (`base`, `sampled`, `boundary`) compiles each
-  AST independently; sharing across PolyStreamers is SRD-78's
-  job, not the optimizer's.
+  AST independently; consumers never share evaluation state
+  (§14.3), and the optimizer does not try to.
 - It does NOT add new operators to the IR. The eight §9.1
   opcodes are sufficient; the optimizer's "indexed_halton"
   family is an `ORDER_MATERIALIZE` strategy parameterization,
@@ -3163,18 +3238,23 @@ Under this specification:
 
 - `iteration::comprehension::ast::Comprehension` is the
   canonical six-variant operator tree.
-- `spec::ComprehensionSpec` and `spec::parse_text` normalize
-  author-facing forms into that tree.
-- Legacy flat structs exist only inside the compatibility parse
-  pipeline and are converted before validation or retention.
+- The text front end (`parse::parse_comprehension_text`, reached
+  from the `for` token) produces a flat clause/predicate/order form
+  that `spec::legacy_to_algebra` converts into that tree before
+  validation or retention; the flat form is the parser's
+  intermediate, never a retained representation. `spec::parse_text`
+  and `spec::ComprehensionSpec` are the same normalization for text
+  and serde input handed in directly.
 - `validate` enforces V1–V9; `metadata` performs bottom-up
   propagation; `optimize` applies §10; `ir` owns the immutable
   stack program.
-- `surfaces` owns static algebra consumers, while
+- `surfaces` owns the static algebra consumers (§9.5), while
   `runtime::evaluate_for_iteration` owns scope-dependent tuple
-  evaluation.
+  evaluation against a `Lookup` view of the scope.
 - Strategy selection uses the closed `StrategyName` enum. There
-  is no user-callback ordering escape hatch.
+  is no user-callback ordering escape hatch: the text front end
+  still recognizes `custom(fn)`, and the conversion to the tree
+  rejects it.
 
 ---
 
@@ -3223,140 +3303,22 @@ analysis of arbitrary Polydat calls are opaque. An opaque
 predicate remains at its authored filter position and executes
 per tuple.
 
----
+### 14.6 No parallel owner
 
-## 15. Relationship to the SRDs
+There is no separate comprehension `iteration` module or `order`
+module: iteration is owned by `runtime` and `surfaces`, and
+strategies own ordering. There is no comprehension-specific
+source-synthesis module: a child scope over a tuple is built by the
+general nested-kernel protocol the `for` construct and tile
+projections use. These absences are architectural constraints; a
+parallel owner would create competing semantics.
 
-The following SRDs touch comprehension material. This section
-names each SRD's role relative to this document.
+### 14.7 Cursor partitions are a source, not an extension
 
-### 15.1 Sibling specifications (polydat-adjacent)
-
-- **SRD-18c (Comprehension Syntax)** — **owns the parser-layer
-  surface grammar** that produces this document's ASTs. SRD-18c
-  defines how source text becomes `clause` source values
-  (literal lists, integer/string ranges, generators, SI
-  suffixes, etc.). It does **not** own comprehension semantics;
-  semantics are this document. The parser surface is discrete.
-  Continuous intervals and measures are represented by the
-  canonical AST/API contract in §3.1 rather than by additional
-  source syntax.
-
-- **SRD-18f (Comprehension Source Forms)** — **owns the parser-/
-  resolver-layer surface for a clause's source position** (the
-  expression right of `in`): list-comprehension sugar `[…]`, the
-  string comprehension `"…"`/`'…'` distinction, the relaxed bare
-  form, the `…` spread operator, and the bare-word→reference rule.
-  It does **not** own the resolution semantics — §3.1.1–§3.1.4 own
-  the bound-sequence model, the `iteration_interior` predicate, and
-  peel-exactly-one-level. Single-quoted atomic strings are resolved
-  by the parser, so `iteration_interior` is value-only. The
-  bare-word resolution rule is normative in §3.1.4 and guarded by
-  the [regression contract](comprehension_migration_gate.md).
-
-- **SRD-18d (Traversal Order)** — **owns per-strategy
-  algorithmic detail** (Halton recurrence, Sobol direction
-  numbers, Lhs stratification construction, etc.). SRD-18d
-  does **not** own compositional behavior or per-strategy input
-  requirements; §3.6 is authoritative on those. SRD-18d carries
-  no `Custom(fn)` escape hatch and includes `Shuffle` alongside
-  the other named strategies.
-
-- **SRD-18e (Canonical Reference)** — superseded by this document.
-  This document is the target for canonical comprehension
-  cross-references.
-
-- **SRD-78 (PolyStreamer)** — **owns the runtime that hosts
-  this document's consumption surfaces.** SRD-78 implements
-  `CoordinateStream`, `ScopedKernelStream<K>`, and
-  `scope_once` (defined here in §9.5) as concrete types over
-  the shared compiled IR (§9.1). The "lock-free shared cursor"
-  semantic SRD-78 owns applies *per streamer instance* — two
-  streamers from one comprehension have two independent
-  cursors (per §9.5.2's independence contract). SRD-78 also
-  owns the unbounded-variant queue used to accept `Unbounded`
-  cardinality streamers.
-
-### 15.2 Consumer specifications (workload + control flow)
-
-- **SRD-18 (Control Flow)** — defines the user-facing
-  control-flow shapes (`ForCombinations`, `ForEachUnion`, the
-  `for_each` family) that desugar to polydat constructors per
-  §8. SRD-18 frames each shape as "this control-flow construct
-  desugars to [polydat constructor]" and carries no inline
-  semantics.
-
-- **SRD-18b (Scenario Tree and Scheduler)** — defines the
-  scenario tree's `ScenarioNode::Comprehension { comprehension,
-  children }` wrapper variant, where `comprehension` is a
-  reference to a `polydat::iteration::comprehension::Comprehension`
-  value. SRD-18b owns the scenario-tree integration (how
-  scenario nodes dispatch and find-by-comprehension lookup);
-  this document owns the comprehension type SRD-18b wraps.
-
-- **[SRD-71 (Cursor Partitions)](cursor_partitions.md)** — owns the cursor-partition
-  surface (partition-spec language, `cursor.partitions`
-  projection wire, cursor-declaration `over <iter-var>` syntax,
-  CLI workload-param surface). The comprehension iteration
-  pattern `for: "p in cursor.partitions"` is standard polydat
-  clause-over-list semantics per §3.1 and §8.1 — SRD-71 does
-  **not** extend polydat's algebra. Polydat sees a plain
-  list-source comprehension; the cursor narrowing is SRD-71's
-  concern resolved against the iter-var at cursor
-  materialization time.
-
-### 15.3 Integration touch points (kernel scope, lifecycle)
-
-- **SRD-13e (Scope-as-Module Refinement)** — names
-  `ComprehensionModule` as one of the typed scope modules.
-  The module's content is polydat-defined; SRD-13e owns the
-  typed scope-module protocol that wraps it.
-
-- **SRD-13f (Cross-Scope Wire Materialization)** — describes
-  cross-scope wire flow that crosses comprehension scope
-  boundaries. References polydat's public synthesis surface
-  (this document §9.5) rather than internals paths.
-
-- **SRD-67 (Polydat Subcontext Construction)** — describes
-  comprehension scope synthesis as one of the subcontext-
-  construction paths, via polydat's public synthesis surface.
-
-- **SRD-68 (Dispenser-Owned Polydat Context)** — mentions
-  `for_each` comprehensions positionally in the scope-tree
-  ownership model; integration-level only.
-
-- **SRD-74 (None Propagation)** — references polydat's
-  comprehension synthesis test suite for the Gate 2
-  regression guard; no semantic claims.
-
-### 15.4 Passing-mention SRDs
-
-These SRDs name "comprehension" as a background concept without
-making semantic claims; each carries a one-line cross-reference
-to this document on first mention:
-
-- **SRD-00 (Index)** — table-of-contents entries.
-- **SRD-02 (Concurrency Model)** — comprehension iter-steps in
-  the concurrency context.
-- **SRD-11 (Polydat Evaluation)** — enclosing-comprehension
-  advancing in the scope-init pull context.
-- **SRD-17 (Diagnostic Modes)** — comprehension iteration
-  logging.
-- **SRD-40b (Synthetic Metrics from Polydat)** — example syntax
-  using a `comprehension_var`.
-- **SRD-44 (Workload Checkpointing)** — comprehensions
-  enumerate distinct tuples for checkpoint ordering.
-
-### 15.5 Ownership invariant
-
-The following invariant holds across the SRD corpus:
-
-> Every comprehension-semantic claim in the SRD corpus either
-> appears in this document, or is a one-line reference to a
-> section of this document. No two SRDs make different claims
-> about the same comprehension behavior.
-
-Verification is a `grep` sweep: every passage in any non-polydat
-SRD mentioning a comprehension constructor, axiom, strategy, or
-optimizer rule must either (a) be an integration description, or
-(b) be a cross-reference to this document.
+The iteration pattern `p in cursor.partitions` or
+`p in partitions("*/4", n)` is ordinary clause-over-list semantics
+per §3.1 and §8.1. The partition-spec language, the `partitions`
+projection wire, and the cursor-declaration `over <element>` syntax
+are [Cursor Partitions](cursor_partitions.md); the algebra sees a
+plain list-source comprehension, and cursor narrowing happens at
+activation, resolved against the element.

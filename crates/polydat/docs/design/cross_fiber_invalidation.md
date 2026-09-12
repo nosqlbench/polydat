@@ -2,112 +2,88 @@
 
 The validity-tracking mechanism for `SharedCell`s
 ([composition_substrate.md] §S5). A producer's write
-on any fiber is observable by every consumer on its
+on any kernel is observable by every consumer on its
 next read, with no host-side ceremony — satisfying
-S5's reader contract by construction.
-
-Implementation: `polydat/src/kernel/engines.rs`
-(`SharedCellInner`, `EngineCore::check_cell_clean`,
-`EngineCore::build_cell_cone`,
-`EngineCore::allocate_cell_bit`).
+S5's reader contract by construction, on every engine.
 
 [composition_substrate.md]: composition_substrate.md
 
 ---
 
-## 1. Mechanism
+## 1. The contract, then the mechanism
 
-Each cell carries a monotonic 64-bit revision counter.
-Each scope holds a `Vec<Arc<AtomicU64>>` of intent-
-dirty words — one word per 64 cells, appended on
-demand by the allocator. Each cell holds a clone of
-its scope's specific word `Arc` plus a bit position
-within that word.
+The contract is engine-independent:
 
-On write, the producer mutates the cell value under
-the cell's `Mutex`, bumps the cell's revision (one
+> **Publish** is one act with three parts: the value, a
+> monotonic revision, and an intent bit on the word of
+> the scope that created the cell. **A consumer re-reads
+> a cell when a revision it has seen moves**, and every
+> step whose provenance includes the cell's slot is then
+> not current.
+
+Two consumer realizations satisfy it. The interpreter
+checks the cells in a node's cone at every memoized
+read: it loads the intent words the cone reads cells
+from, ANDs each with the cone's interest mask, drills
+down to per-cell revisions only where a bit is set, and
+on any moved revision invalidates every node whose
+provenance covers the moved slot (§5). A compiled
+kernel polls every one of its cells' revisions at the first
+evaluation after a write and before each pull, takes the value of each
+cell whose revision moved, and marks the dependents of
+that slot not current (§5.2). Both realizations rely on
+the same producer protocol (§4) and the same memory
+ordering (§6).
+
+Each cell carries a 64-bit revision counter. Each scope
+holds intent-dirty words, one `AtomicU64` per 64 cells
+it creates. Each cell holds a clone of its scope's
+specific word `Arc` plus a bit position within that
+word, so a publish is one `Arc` indirection, not a
+lookup.
+
+On write, the producer mutates the cell value under the
+cell's `Mutex`, bumps the cell's revision (one
 `fetch_add(Release)`), and sets the cell's bit on the
 scope's word (one `fetch_or(Release)`). Three Release
 stores, O(1) total, no fan-out.
 
-On read, each consumer fiber's cone walker iterates
-the precomputed cell-cone groups for the node it is
-about to evaluate. Each group corresponds to one
-scope-word the cone reads cells from. For each group:
-load the word (one `Acquire` load), AND with the
-group's interest mask; if zero, every cell in this
-group is clean for this consumer (one bit per cell,
-short-circuit). Otherwise, drill down by comparing
-each cell's revision against the consumer fiber's
-`last_seen[cell_handle]`; cells whose revision has
-advanced mark the cone dirty and update `last_seen`
-in preparation for re-evaluation.
-
-Bulk-clean cost: one Acquire load + one AND per
-group, typically ≤4 ops per node-eval regardless of
-how many cells exist substrate-wide. Per-cell
-compares are reached only when the bulk mask
+On the interpreter's read, the bulk check is one Acquire
+load plus one AND per scope word the cone reads cells
+from, typically at most a few per node evaluation
+regardless of how many cells exist substrate-wide;
+per-cell compares are reached only when the bulk mask
 indicates change.
 
 ---
 
 ## 2. Data shapes
 
-The canonical Rust types in `polydat/src/kernel/engines.rs`:
+- **A cell** (`SharedCellInner`, shared as an `Arc`): the
+  value under a `Mutex`, the revision (`AtomicU64`), the
+  `Arc<AtomicU64>` of its scope's intent word, and its
+  bit within that word. The same type on every engine.
+- **A scope's allocator.** The interpreter's `EngineCore`
+  keeps a `Vec<Arc<AtomicU64>>` of intent words and a
+  next-bit cursor; a compiled kernel's extern table
+  keeps one word and a next-bit cursor (§9.1).
+- **The interpreter's per-kernel consumer state**: the
+  cell attached to each input slot (`shared_cells`), the
+  broadcast cell for each output (`output_cells`), the
+  last revision it observed per cell (`last_seen`, keyed
+  by the cell's `Arc` pointer, compared by identity and
+  never dereferenced), and a per-node cone cache
+  (`cell_cones`) built lazily and cleared whenever a cell
+  is attached.
+- **A compiled kernel's per-slot consumer state**: for
+  each `shared` extern slot, its cell and the revision
+  the slot last took its value from (`seen`).
 
-```rust
-pub struct SharedCellInner {
-    pub value:               Mutex<Value>,
-    pub revision:            AtomicU64,
-    pub scope_intent_dirty:  Arc<AtomicU64>,  // shared with sibling cells
-                                              // in the same scope-word
-    pub bit:                 u8,              // 0..64 position in
-                                              // scope_intent_dirty
-}
-
-pub type SharedCell = Arc<SharedCellInner>;
-
-pub struct EngineCore {
-    // ... unrelated fields ...
-
-    pub(crate) shared_cells:      Vec<Option<SharedCell>>,
-    pub(crate) output_cells:      Vec<Option<SharedCell>>,
-    pub(crate) scope_intent_words: Vec<Arc<AtomicU64>>,
-    pub(crate) next_cell_bit:     u32,
-    pub(crate) last_seen:         HashMap<*const SharedCellInner, u64>,
-    pub(crate) cell_cones:        Vec<Option<CellCone>>,
-}
-
-pub(crate) struct CellCone {
-    pub(crate) groups: Vec<CellConeGroup>,
-}
-
-pub(crate) struct CellConeGroup {
-    pub(crate) intent_dirty:   Arc<AtomicU64>,   // one scope-word
-    pub(crate) interest_mask:  u64,              // OR of cells'
-                                                  // 1<<bit in this group
-    pub(crate) cells:          Vec<CellConeEntry>,
-}
-
-pub(crate) struct CellConeEntry {
-    pub(crate) bit:         u8,
-    pub(crate) input_slot:  usize,
-}
-```
-
-`shared_cells[i]` is the cell attached to input slot
-`i` on this fiber's kernel. `output_cells[j]` is the
-broadcast cell for output `j` (SRD-13f Push B.2) —
-descendants that bind to this output receive the same
-`Arc<SharedCellInner>` via `materialize_wiring_from_outer`.
-
-`scope_intent_words` and `next_cell_bit` together are
-the scope's bit allocator. `last_seen` keys are raw
-pointers (`Arc::as_ptr`) — they are compared by
-identity only, never dereferenced, and stay valid for
-the cell's `Arc` lifetime. `cell_cones` is the per-
-node, per-fiber metadata cache; entries are built
-lazily and invalidated on `attach_shared_cell`.
+A cell cone (interpreter) is a list of groups, one per
+scope word the node's provenance reaches a cell through;
+a group holds the word, an interest mask (the OR of
+`1 << bit` of its cells), and the cells' bits and input
+slots.
 
 ---
 
@@ -115,161 +91,149 @@ lazily and invalidated on `attach_shared_cell`.
 
 ### 3.1 Cell creation
 
-`EngineCore::allocate_cell_bit` yields the next bit
-position from `scope_intent_words`, growing the Vec
-by one fresh `Arc<AtomicU64>` whenever the cursor
-crosses a 64-bit boundary. `EngineCore::make_shared_cell`
-wraps this allocator: it draws the next bit, builds
-a `SharedCellInner` with the corresponding word Arc,
-and returns the cell as `Arc<SharedCellInner>`.
+Three sites create cells. Each draws the next bit from
+its own scope's allocator, so every cell carries the word
+of the scope that created it, wherever it is later
+attached:
 
-Two call sites in `polydat/src/kernel/state.rs` /
-`engines.rs` create cells:
+- **Interpreter, `shared` bindings.** At kernel
+  construction, one cell per `shared` output that has a
+  backing input slot, holding the slot's current value
+  (`seed_shared_cells`, via `EngineCore::make_shared_cell`).
+- **Interpreter, broadcast outputs.** At kernel
+  construction, one cell per output, holding the output's
+  current buffer value (`seed_output_cells`). A descendant
+  whose input matches a computed parent output is
+  attached to this cell by the parent-gated binder
+  ([scope_model.md](scope_model.md) §4), and the parent's
+  every pull of the output publishes through it.
+- **Compiled kernels, `shared` bindings.** At build, one
+  cell per `shared` slot (`compile::externs::Externs::new`,
+  via `new_cell`), holding the slot's value; a kernel
+  created from a shared program reseeds cells of its own
+  (`reseed_cells`), on a fresh word.
 
-- `seed_shared_cells` — creates one cell per `shared`
-  output that has a backing input slot. Called at
-  kernel construction from `PolydatKernel::from_program`.
-- `seed_output_cells` — creates one cell per output
-  for SRD-13f Push B.2 broadcast. Called from the
-  same constructor.
+`Kernel::attach_shared_cell` replaces a `shared` slot's
+cell with one another kernel holds, on any engine; the
+replaced cell keeps its word and bit, and the attaching
+kernel's consumer state for the slot starts over (the
+interpreter clears its cone cache; a compiled kernel
+clears the slot's `seen`).
 
-Both paths route through `make_shared_cell`, so every
-cell allocated by an `EngineCore` inherits that
-core's `scope_intent_words`.
+### 3.2 Cone metadata (interpreter)
 
-### 3.2 Cone metadata
+Built lazily on the first check per node:
 
-Built lazily by `EngineCore::build_cell_cone` on the
-first `check_cell_clean` invocation per node:
+1. Read the node's provenance, the exact multi-word mask
+   of every input slot that flows into the node.
+2. For each set bit, take the cell attached to that input
+   slot, if any.
+3. Group cells by identity of their intent word. Within
+   each group, OR `1 << cell.bit` into the interest mask
+   and record the cell's bit and input slot.
 
-1. Read `program.input_provenance[node_idx]` — an exact
-   multi-word `ProvMask` of every input slot that flows into
-   the node transitively.
-2. Iterate set bits. For each input slot, look up
-   `shared_cells[slot]`; if `Some(cell)`, the cell
-   joins the cone.
-3. Group cells by `Arc::ptr_eq` of their
-   `scope_intent_dirty` word. Within each group, OR
-   `1 << cell.bit` into `interest_mask` and append
-   `CellConeEntry { bit, input_slot }` to `cells`.
+The cone is cached per node and rebuilt after any cell
+attach, since which slots hold cells is what it encodes.
 
-Built cones are cached in `EngineCore::cell_cones[node_idx]`.
-`EngineCore::invalidate_cell_cones` (called by
-`PolydatState::attach_shared_cell`) clears every cached
-entry to `None`, forcing rebuild on next access.
+### 3.3 Per-kernel state
 
-### 3.3 Per-fiber state
-
-`EngineCore::last_seen` starts empty when the
-`EngineCore` is constructed. Entries are inserted
-lazily on first observation in §5's consumer
-protocol. The map is per-`EngineCore`, hence
-per-fiber-state — no contention.
+The interpreter's `last_seen` starts empty and is filled
+on first observation in §5's protocol. A compiled slot's
+`seen` starts at the revision of the cell the build gave
+it and is cleared by an attach. Both are per kernel,
+hence per fiber — no contention.
 
 ### 3.4 Scope teardown
 
-Dropping an `EngineCore` releases its
-`scope_intent_words` Arcs and `cell_cones` cache.
-Cells defined in this scope are dropped when their
-`Arc` refcount hits zero (descendants that hold
-clones keep them alive). Consumer `last_seen`
-entries for dropped cells stay in the map but the
-pointer is never observed again — harmless.
+Dropping a kernel releases its intent words and consumer
+caches. Cells created in this scope are dropped when
+their `Arc` refcount hits zero (descendants that hold
+clones keep them alive). Consumer `last_seen` entries for
+dropped cells stay in the map but the pointer is never
+observed again — harmless.
 
 ---
 
 ## 4. Producer protocol
 
-```rust
-impl SharedCellInner {
-    pub fn publish(&self, value: Value) {
-        {
-            let mut guard = self.value.lock().unwrap();
-            *guard = value;
-        }
-        self.revision.fetch_add(1, Ordering::Release);
-        self.scope_intent_dirty
-            .fetch_or(1u64 << self.bit, Ordering::Release);
-    }
-}
-```
+`SharedCellInner::publish(value)` does, in this order:
 
-Every cell-write path calls `publish`:
+1. lock the value mutex, store the value, unlock;
+2. `revision.fetch_add(1, Release)`;
+3. `scope_intent_dirty.fetch_or(1 << bit, Release)`.
 
-- `PolydatState::set_input` on a cell-bound slot
-  (`engines.rs`).
-- `EngineCore::pull` on an output whose `output_cell`
-  is attached (the SRD-13f Push B.2 broadcast).
+Every cell-write path calls `publish`, on every engine:
 
-Cost: one mutex acquire/release + one `fetch_add` +
-one `fetch_or`. O(1). No upward propagation, no
-fan-out, no consumer enumeration.
+- the interpreter's `set_input` on a cell-bound slot,
+  which reaches `commit_write_throughs` and the binder's
+  writes too;
+- the interpreter's `pull` of an output whose broadcast
+  cell is attached;
+- a compiled kernel's `set_input` on a `shared` slot,
+  which then records the new revision as seen so its own
+  write costs it no refresh.
+
+Cost: one mutex acquire/release + one `fetch_add` + one
+`fetch_or`. O(1). No upward propagation, no fan-out, no
+consumer enumeration.
 
 ---
 
 ## 5. Consumer protocol
 
-```rust
-fn check_cell_clean(
-    &mut self,
-    program: &PolydatProgram,
-    node_idx: usize,
-) -> bool {
-    // Lazy-build the cone metadata.
-    if self.cell_cones.len() <= node_idx {
-        self.cell_cones.resize_with(node_idx + 1, || None);
-    }
-    if self.cell_cones[node_idx].is_none() {
-        let cone = self.build_cell_cone(program, node_idx);
-        self.cell_cones[node_idx] = Some(cone);
-    }
+### 5.1 The interpreter
 
-    // Pass 1: walk the cone, collect mismatches.
-    let mut dirty: Vec<(*const SharedCellInner, u64)> = Vec::new();
-    {
-        let cone = self.cell_cones[node_idx].as_ref().unwrap();
-        for group in &cone.groups {
-            let intent = group.intent_dirty.load(Ordering::Acquire);
-            let masked = intent & group.interest_mask;
-            if masked == 0 { continue; }
-            for entry in &group.cells {
-                if masked & (1u64 << entry.bit) == 0 { continue; }
-                let Some(Some(cell)) = self.shared_cells.get(entry.input_slot)
-                    else { continue };
-                let r = cell.revision.load(Ordering::Acquire);
-                let ptr = Arc::as_ptr(cell);
-                let prev = self.last_seen.get(&ptr).copied().unwrap_or(0);
-                if r != prev {
-                    dirty.push((ptr, r));
-                }
-            }
-        }
-    }
-    // Pass 2: update last_seen for advanced cells.
-    let clean = dirty.is_empty();
-    for (ptr, r) in dirty {
-        self.last_seen.insert(ptr, r);
-    }
-    clean
-}
-```
+`check_cell_clean(node)` runs ahead of the memoization
+early-return in `eval_node`: when the node's clean flag
+is set, the early return fires only if the check also
+returns clean. It has two passes:
 
-Invoked by `EngineCore::eval_node` ahead of the
-memoization early-return: when `node_clean[node_idx]`
-is `true`, the early-return fires only if
-`check_cell_clean` also returns `true`. A `false`
-return forces `node_clean[node_idx] := false` and
-falls through to re-evaluation; the re-evaluation
-re-reads the cells through `read_input → cell.value.lock()`.
+**Pass 1 — collect.** For each group of the node's cone,
+load the intent word (Acquire) and AND it with the
+group's interest mask; if zero, every cell in the group
+is clean for this kernel, skip. Otherwise, for each cell
+whose bit is set, load its revision (Acquire) and compare
+with `last_seen` (absent counts as 0); a mismatch is
+recorded with the cell's input slot.
 
-Cost when clean: `|groups|` Acquire loads + ANDs
-(typically ≤4). No allocation, no host-visible side
-effect.
+**Pass 2 — consume and invalidate.** If nothing
+mismatched, the node is clean. Otherwise update
+`last_seen` for every mismatched cell and clear the clean
+flag of **every node whose provenance intersects the set
+of mismatched slots**, not only the checked node.
 
-Cost when dirty: above + one Acquire load and one
-HashMap lookup per cell whose intent bit is set,
-plus one HashMap insert per cell whose revision
-mismatched.
+Why provenance-wide: updating `last_seen` consumes the
+dirty signal for this kernel. The re-evaluation it
+triggers must reach every memoized node between the moved
+slot and any consumer. If only the checked node were
+invalidated, its recursive upstream walk would re-check
+each parent's own cone, which now reads the just-updated
+`last_seen` and comes back clean, and the checked node
+would recompute from stale parents; a predicate downstream
+of a cell would then stay memoized at its pre-write value
+for good. The read side mirrors the write side's rule:
+a detected write invalidates every node whose transitive
+provenance covers the slot, exactly as `set_input` on
+that slot would.
+
+The re-evaluation re-reads the cells through `read_input`,
+which takes the cell's value under its mutex.
+
+### 5.2 The compiled kernels
+
+A compiled kernel keeps no cone cache and reads no intent
+word. Its extern table polls: `cells_dirty` loads every
+cell's revision (Acquire) and compares it with the slot's
+`seen`; `refresh_cells` takes the value of each cell whose
+revision moved, writes a carrier through into the slot
+buffer (a handle kind is written at the next
+materialization), records the revision as seen, and lists
+the slot as changed. The kernel then marks every step the
+slot's dependents list names as not current and not run
+since the last write. The poll runs at the first evaluation after a write (inside the
+externs' materialization) and before every `pull` and
+`eval` between writes, so a pull between writes sees
+the register as the interpreter's revision check does.
 
 ---
 
@@ -280,73 +244,75 @@ mismatched.
 | Producer cell value write | mutex acquire/release | consumer mutex acquire | atomic value visibility |
 | Producer `revision.fetch_add` | Release | consumer `revision.load(Acquire)` | revision visible |
 | Producer `intent_dirty.fetch_or` | Release | consumer `intent_dirty.load(Acquire)` | dirty bit visible |
-| Consumer `last_seen` access | non-atomic | n/a (per-fiber) | no contention |
+| Consumer `last_seen` / `seen` access | non-atomic | n/a (per-kernel) | no contention |
 
 The producer issues two atomic Release stores; the
-consumer issues two atomic Acquire loads. Per the
-C++20 / Rust memory model, any `load(Acquire)` that
-observes the value of a `store(Release)`
-synchronizes-with that store, establishing
-happens-before from every write the producer made
-before the Release to every read the consumer makes
-after the Acquire. The cell's `Mutex` provides the
-analogous synchronizes-with edge for the value
-itself.
+interpreter consumer issues two atomic Acquire loads, the
+compiled consumer one. Per the C++20 / Rust memory model,
+any `load(Acquire)` that observes the value of a
+`store(Release)` synchronizes-with that store, establishing
+happens-before from every write the producer made before
+the Release to every read the consumer makes after the
+Acquire. The cell's `Mutex` provides the analogous
+synchronizes-with edge for the value itself.
 
 ---
 
 ## 7. Correctness
 
-**Claim.** For any producer write `W` on cell `C`
-that completes its `intent_dirty.fetch_or(Release)`
-before fiber `F`'s `check_cell_clean` issues its
-`intent_dirty.load(Acquire)` on `C`'s scope-word:
-either `F` re-evaluates the affected cone, or
-`F.last_seen[C_ptr]` already reflects a revision ≥
-`W`'s post-bump revision.
+**Claim.** For any producer write `W` on cell `C` that
+completes its `revision.fetch_add(Release)` before
+consumer `F` issues its `revision.load(Acquire)` on `C`:
+either `F` re-evaluates every step whose provenance
+covers `C`'s slot, or `F`'s last-seen revision for `C`
+already reflects a revision ≥ `W`'s post-bump revision.
 
-**Proof sketch.** `W`'s `intent_dirty.fetch_or`
-happens-after `W`'s `revision.fetch_add` in program
-order on the producer fiber. If `F`'s
-`intent_dirty.load(Acquire)` observes the bit set by
-`W`, the load synchronizes-with `W`'s `fetch_or`
-Release, so `F` is guaranteed to also observe `W`'s
+**Proof sketch (interpreter).** `W`'s `intent_dirty.fetch_or`
+happens-after `W`'s `revision.fetch_add` in program order
+on the producer. If `F`'s `intent_dirty.load(Acquire)`
+observes the bit set by `W`, the load synchronizes-with
+`W`'s `fetch_or` Release, so `F` also observes `W`'s
 revision bump on its subsequent `revision.load(Acquire)`
-— the compare `r != prev` returns true and the cone
-re-evaluates. If `F`'s load does not observe the bit
-set, either `F.last_seen` already reflects a
-revision ≥ `W`'s (a prior check captured it; the
-bit is sticky), or `F`'s next `check_cell_clean`
-will observe it (memory propagation is bounded).
+— the compare returns a mismatch and §5.1's pass 2
+invalidates every node over the slot. If `F`'s load does
+not observe the bit set, either `F.last_seen` already
+reflects a revision ≥ `W`'s (a prior check captured it;
+the bit is sticky), or `F`'s next check will observe it
+(memory propagation is bounded).
 
-**Multi-consumer independence.** No consumer's
-update to its own `last_seen` affects any other
-consumer. Each `EngineCore` owns its own map; only
-the producer-side atomic state is shared.
+**Proof sketch (compiled).** The poll reads the revision
+directly; a `revision.load(Acquire)` that observes `W`'s
+bump synchronizes-with it, and the subsequent `snapshot`
+takes the value under the mutex, which synchronizes-with
+`W`'s unlock. The dependents of the slot are marked not
+current before any step runs in the evaluation or pull.
 
-**Sticky-bit semantics.** Intent bits are never
-cleared. A scope-word that has ever published a
-write reports its bit as set for the remainder of
-the scope's lifetime. The bulk-mask check therefore
-forces the consumer into the per-cell drill-down,
-where the revision compare correctly returns clean
-for cells whose `last_seen` already matches. The
-cost is bounded by the number of cells in the cone,
-not the number of writes.
+**Multi-consumer independence.** No consumer's update to
+its own last-seen state affects any other consumer. Each
+kernel owns its own; only the producer-side atomic state
+is shared.
+
+**Sticky-bit semantics.** Intent bits are never cleared.
+A scope word that has ever published a write reports its
+bit as set for the remainder of the scope's lifetime. The
+bulk-mask check therefore forces the interpreter consumer
+into the per-cell drill-down, where the revision compare
+correctly returns clean for cells whose `last_seen`
+already matches. The cost is bounded by the number of
+cells in the cone, not the number of writes.
 
 ---
 
 ## 8. Parent-child composition
 
 A child scope's intent words are independent of its
-parent's — no propagation. The "logical composition"
-of parent and child masks the substrate exposes to a
-consumer is realized by §5's loop over
-`cone.groups`. The lazy `build_cell_cone` walker
-enumerates every scope (every distinct
-`Arc<AtomicU64>` word) whose cells the cone reads —
-parent, child, sibling-of-ancestor, any depth — and
-emits one group per scope-word.
+parent's — no propagation. The "logical composition" of
+parent and child masks the substrate exposes to a consumer
+is realized by §5.1's loop over cone groups. The lazy cone
+builder enumerates every scope (every distinct intent word)
+whose cells the cone reads — parent, child,
+sibling-of-ancestor, a compiled kernel's word, any depth —
+and emits one group per word.
 
 Equivalent to one combined bitmask check:
 
@@ -357,8 +323,8 @@ Equivalent to one combined bitmask check:
     | ...   != 0
 ```
 
-decomposed into a per-scope loop that early-outs
-per scope and avoids contention on any single mask.
+decomposed into a per-scope loop that early-outs per scope
+and avoids contention on any single mask.
 
 ---
 
@@ -366,252 +332,52 @@ per scope and avoids contention on any single mask.
 
 ### 9.1 Per-scope capacity
 
-The scope holds `Vec<Arc<AtomicU64>>` — one
-`AtomicU64` word per 64 cells, appended on demand by
-the allocator. Each cell carries a clone of the
-specific `Arc<AtomicU64>` for its word plus the
-bit-within-word, so the cell needs only a single
-`Arc` indirection (not a `Vec` lookup) on every
-publish.
+The interpreter scope holds a `Vec<Arc<AtomicU64>>` — one
+word per 64 cells, appended on demand by the allocator.
+Each cell carries a clone of the specific word for its
+bit, so growing the list is non-disruptive: every cell
+already allocated keeps its reference, and a new cell that
+needs a new word appends one. There is no upper bound on
+cells per interpreter scope.
 
-Growing the scope's word list is non-disruptive:
-every cell already allocated keeps its
-`Arc<AtomicU64>` reference, and a new cell that
-needs a new word simply appends. There is no upper
-bound on cells per scope.
+A compiled kernel holds one word. Its allocator gives the
+first 64 cells distinct bits and every later cell bit 63.
+This is a bound, not a fault: no compiled consumer reads
+the word, and an interpreter consumer that reads it finds
+the shared bit set and drills down to per-cell revisions,
+which stay exact. Past 64 `shared` bindings a compiled
+kernel's word only makes the interpreter's bulk early-out
+coarser.
 
-Cone grouping (§5) groups cells by `Arc::ptr_eq` of
-the word: cells in the same scope's same word share
-one group; cells in different words (even in the
-same scope) form separate groups, each with its own
-bulk-mask early-out.
+Cone grouping (§5.1) groups cells by identity of the word:
+cells in the same scope's same word share one group; cells
+in different words (even in the same scope) form separate
+groups, each with its own bulk-mask early-out.
 
 ### 9.2 Allocation policy
 
-First-fit, monotonic. Bits are not reused within a
-scope's lifetime. Bit positions are stable for the
-cell's lifetime in this scope.
+First-fit, monotonic. Bits are not reused within a scope's
+lifetime. Bit positions are stable for the cell's lifetime.
 
 ### 9.3 Per-cell, not per-consumer
 
-Bits are allocated per cell (producer-side), so the
-vector bound is the scope's cell count — known at
-scope construction. Per-consumer allocation would
-require registration at sub-context construction, an
-unbounded vector that grows with the consumer
-population, and a registration-time fan-out. The
-per-cell scheme avoids all three.
+Bits are allocated per cell (producer-side), so the vector
+bound is the scope's cell count — known at scope
+construction. Per-consumer allocation would require
+registration at sub-context construction, an unbounded
+vector that grows with the consumer population, and a
+registration-time fan-out. The per-cell scheme avoids all
+three.
 
 ---
 
-## 10. Worked example
+## 10. Happens-before for cell publication
 
-A scenario covering cells at multiple scope levels,
-two consumer fibers, and a concurrent producer.
-
-### 10.1 Scene
-
-```
-                    Scope tree
-                   ────────────
-                                              ╔════════════════════════════════╗
-                       Root R                 ║ Cells & their bit assignments  ║
-                      ╱      ╲                ╠════════════════════════════════╣
-                     ╱        ╲               ║ pop_size                       ║
-                    ▼          ▼              ║   defined in R                 ║
-              Child C1      Child C2          ║   word = R.intent_words[0]     ║
-                  │            │              ║   bit = 0                      ║
-                  ▼            ▼              ║                                ║
-              Fiber FA      Fiber FB          ║ c1_counter                     ║
-            (consumer)    (consumer)          ║   defined in C1                ║
-                                              ║   word = C1.intent_words[0]    ║
-                                              ║   bit = 0                      ║
-       Cone deps per fiber                    ║                                ║
-      ─────────────────────                   ║ c2_counter                     ║
-                                              ║   defined in C2                ║
-      FA's output node reads:                 ║   word = C2.intent_words[0]    ║
-        pop_size    (slot 5 on FA)            ║   bit = 0                      ║
-        c1_counter  (slot 7 on FA)            ║                                ║
-                                              ║ Producer FW:                   ║
-      FB's output node reads:                 ║   writes pop_size from R       ║
-        pop_size    (slot 5 on FB)            ║   writes c1_counter from C1    ║
-        c2_counter  (slot 7 on FB)            ║   writes c2_counter from C2    ║
-                                              ╚════════════════════════════════╝
-```
-
-### 10.2 Cone metadata
-
-`build_cell_cone` groups each fiber's cell-bound
-deps by `Arc::ptr_eq` of `scope_intent_dirty`:
-
-```
-FA's CellCone for its output node:
-┌─────────────────────────────────────────────────────┐
-│ Group #0                                            │
-│   intent_dirty: ─► R.intent_words[0]                │
-│   interest_mask: 0b0000_0001  (bit 0 → pop_size)    │
-│   cells: [ (bit=0, input_slot=5) ]                  │
-├─────────────────────────────────────────────────────┤
-│ Group #1                                            │
-│   intent_dirty: ─► C1.intent_words[0]               │
-│   interest_mask: 0b0000_0001  (bit 0 → c1_counter)  │
-│   cells: [ (bit=0, input_slot=7) ]                  │
-└─────────────────────────────────────────────────────┘
-
-FB's CellCone for its output node:
-┌─────────────────────────────────────────────────────┐
-│ Group #0                                            │
-│   intent_dirty: ─► R.intent_words[0]   ← SAME Arc!  │
-│   interest_mask: 0b0000_0001  (bit 0 → pop_size)    │
-│   cells: [ (bit=0, input_slot=5) ]                  │
-├─────────────────────────────────────────────────────┤
-│ Group #1                                            │
-│   intent_dirty: ─► C2.intent_words[0]               │
-│   interest_mask: 0b0000_0001  (bit 0 → c2_counter)  │
-│   cells: [ (bit=0, input_slot=7) ]                  │
-└─────────────────────────────────────────────────────┘
-```
-
-FA's Group #0 and FB's Group #0 point to the same
-`Arc<AtomicU64>` — both cones share read access to
-R's intent word. FA's Group #1 and FB's Group #1
-point to different Arcs (C1's and C2's). This is
-what makes scope isolation cheap: when C1 publishes
-dirty intent on `C1.intent_words[0]`, FB's cone walk
-never loads that atomic — its scope chain doesn't
-include C1.
-
-### 10.3 Timeline
-
-Notation: cells in form `name [value | rev]`; intent
-words as `word: bitmask`; `last_seen` per fiber as a
-sparse map.
-
-```
-═══════════════════════════════════════════════════════════════════════════════
-T0 — Initial state
-═══════════════════════════════════════════════════════════════════════════════
-  pop_size      [ 10 | rev=0 ]      R.intent_words[0]:  0
-  c1_counter    [  0 | rev=0 ]      C1.intent_words[0]: 0
-  c2_counter    [  0 | rev=0 ]      C2.intent_words[0]: 0
-  FA.last_seen = {}                  node_clean[FA.output] = false
-  FB.last_seen = {}                  node_clean[FB.output] = false
-
-═══════════════════════════════════════════════════════════════════════════════
-T1 — FA evaluates output (first pull)
-═══════════════════════════════════════════════════════════════════════════════
-  node_clean is false → no early return → normal eval
-  read_input(5): pop_size.value.lock() → 10
-  read_input(7): c1_counter.value.lock() → 0
-  Node evaluates; buffer = f(10, 0) = (say) 10.
-  node_clean[FA.output] := true
-
-═══════════════════════════════════════════════════════════════════════════════
-T2 — FW (producer fiber) writes pop_size = 20  via R
-═══════════════════════════════════════════════════════════════════════════════
-  cell.value.lock() → *value = 20 → mutex released
-  cell.revision.fetch_add(1, Release)            → rev = 1   ◄┐ three
-  cell.scope_intent_dirty.fetch_or(0b1, Release) │            ├ Release
-                                                 │            │ stores,
-  ─── R.intent_words[0] now = 0b1               ◄┘            │ all happens-
-                                                              │ after the
-                                                              │ value swap
-
-═══════════════════════════════════════════════════════════════════════════════
-T3 — FA evaluates output again (second pull)
-═══════════════════════════════════════════════════════════════════════════════
-  node_clean[FA.output] is true → check_cell_clean(FA.output):
-
-    Group #0 (R.intent_words[0]):
-      intent.load(Acquire) = 0b1                              ◄── synchronizes
-      0b1 AND 0b1 = 0b1   → DRILL DOWN                            with T2's
-        bit 0 → pop_size at slot 5:                               Release
-          pop_size.revision.load(Acquire) = 1                 ◄── synchronizes
-          FA.last_seen[&pop_size] = (none → treat as 0)           with T2's
-          1 != 0 → DIRTY                                          revision
-          FA.last_seen[&pop_size] := 1                            Release
-
-    Group #1 (C1.intent_words[0]):
-      intent.load(Acquire) = 0                                ◄── clean
-      0 AND 0b1 = 0 → skip
-
-  → returns false (dirty)
-  node_clean[FA.output] := false → fall through to re-eval
-  read_input(5): pop_size.value.lock() → 20                   ◄── synchronizes
-  read_input(7): c1_counter.value.lock() → 0                      with T2's
-  Node evaluates; buffer = f(20, 0) = 20.                          mutex release
-  node_clean[FA.output] := true
-
-═══════════════════════════════════════════════════════════════════════════════
-T4 — FB evaluates output (parallel with T3, independent)
-═══════════════════════════════════════════════════════════════════════════════
-  check_cell_clean(FB.output):
-    Group #0 (R.intent_words[0]):
-      intent.load(Acquire) = 0b1 (set at T2)                  ◄── same atomic
-      0b1 AND 0b1 = 0b1 → DRILL DOWN                              FA read at T3
-        pop_size.revision = 1
-        FB.last_seen[&pop_size] = (none → 0)                  ◄── independent
-        1 != 0 → DIRTY                                            of FA's
-        FB.last_seen[&pop_size] := 1                              last_seen
-    Group #1 (C2.intent_words[0]):
-      intent.load(Acquire) = 0 → clean
-  → returns false; re-eval; FB sees pop_size=20.
-
-═══════════════════════════════════════════════════════════════════════════════
-T5 — C1 writes c1_counter = 5
-═══════════════════════════════════════════════════════════════════════════════
-  cell.value.lock() → *value = 5 → release
-  cell.revision.fetch_add(1, Release)            → rev = 1
-  cell.scope_intent_dirty.fetch_or(0b1, Release)
-  ─── C1.intent_words[0] now = 0b1
-  ─── R.intent_words[0] still = 0b1 (untouched; c1_counter doesn't live in R)
-
-═══════════════════════════════════════════════════════════════════════════════
-T6 — FA evaluates output again
-═══════════════════════════════════════════════════════════════════════════════
-  check_cell_clean(FA.output):
-    Group #0 (R.intent_words[0]):
-      intent.load = 0b1 (sticky from T2)
-      0b1 AND 0b1 = 0b1 → DRILL DOWN
-        pop_size.revision = 1
-        FA.last_seen[&pop_size] = 1 → MATCH (sticky-bit false-positive
-                                              caught by per-cell compare)
-    Group #1 (C1.intent_words[0]):
-      intent.load = 0b1
-      0b1 AND 0b1 = 0b1 → DRILL DOWN
-        c1_counter.revision = 1
-        FA.last_seen[&c1_counter] = (none → 0)
-        1 != 0 → DIRTY
-        FA.last_seen[&c1_counter] := 1
-  → returns false; re-eval; FA reads c1_counter=5.
-
-═══════════════════════════════════════════════════════════════════════════════
-T7 — FB evaluates output again
-═══════════════════════════════════════════════════════════════════════════════
-  check_cell_clean(FB.output):
-    Group #0 (R.intent_words[0]):
-      intent.load = 0b1 (sticky)  → drill: pop_size.rev=1, last_seen=1 → match
-    Group #1 (C2.intent_words[0]):
-      intent.load = 0  → 0 AND 0b1 = 0 → CLEAN (early-out, no per-cell work)
-  → returns true → CLEAN, return cached value (no re-eval).
-```
-
-T2/T3/T4 show multi-fiber independence (one cell,
-two consumers, each tracks its own last_seen). T5/T6
-show sticky-bit semantics (R's bit remains set after
-T2; the per-cell compare correctly catches it).
-T5/T7 show scope isolation (C1's write at T5 has no
-effect on FB's eval — FB's cone never loads
-`C1.intent_words[0]` because C1 isn't in FB's scope
-chain).
-
-### 10.4 Happens-before for cell publication
-
-The producer's three-store publish + the consumer's
-two-load check form a synchronization pattern that
-delivers the appearance of a single atomic
-`(value, revision, intent_bit)` triple, even though
-it is six separate atomic operations:
+The producer's three-store publish and the consumer's
+loads form a synchronization pattern that delivers the
+appearance of a single atomic `(value, revision,
+intent_bit)` triple, even though it is several separate
+atomic operations:
 
 ```
                 Producer fiber FW                Consumer fiber FA
@@ -642,8 +408,8 @@ it is six separate atomic operations:
                                                        to FA after C2
 
                                                     (revision mismatched;
-                                                     mark node dirty;
-                                                     fall through to re-eval)
+                                                     mark dependents not
+                                                     current; re-evaluate)
 
                                                     C3: read_input(slot)
                                                         → mutex.lock()
@@ -654,92 +420,68 @@ it is six separate atomic operations:
                                                         ← V_new
 ```
 
-If the consumer's bulk-mask check observes the
-intent bit set (C1 sees P5's store), the consumer's
-subsequent `revision.load(Acquire)` (C2) is
-guaranteed to observe at least the revision P4 set,
-and the subsequent `value.lock()` (C3) is guaranteed
-to observe at least the value P2 wrote. If the
-consumer's bulk-mask check observes the intent bit
-clear (C1 sees P5's store as not-yet-published), the
-consumer's cached value and `last_seen` reflect the
-prior revision consistently; the next
-`check_cell_clean` after P5 propagates will detect
-the change.
+A compiled consumer begins at C2. If the consumer's
+bulk-mask check observes the intent bit set (C1 sees P5's
+store), the consumer's subsequent `revision.load(Acquire)`
+(C2) is guaranteed to observe at least the revision P4
+set, and the subsequent `value.lock()` (C3) is guaranteed
+to observe at least the value P2 wrote. If the consumer's
+bulk-mask check observes the intent bit clear, the
+consumer's cached value and `last_seen` reflect the prior
+revision consistently; the next check after P5 propagates
+will detect the change.
 
-There is no observable interleaving where the
-consumer reads a torn `(value, revision, intent_bit)`
-triple — i.e., sees a new intent_bit but an old
-revision, or a new revision but the old value.
-
-### 10.5 Per-event cost
-
-| Event | Producer cost | Consumer cost (clean) | Consumer cost (dirty) |
-| --- | --- | --- | --- |
-| `pop_size` write (T2) | 1 mutex + 1 fetch_add + 1 fetch_or | n/a | n/a |
-| FA pull, all clean | n/a | 2 Acquire loads + 2 ANDs | n/a |
-| FA pull, after T2 write | n/a | 2 Acquire loads + 2 ANDs | + 1 revision load + 1 HashMap lookup + 1 insert |
-| `c1_counter` write (T5) | 1 mutex + 1 fetch_add + 1 fetch_or | n/a | n/a |
-| FB pull, after T5 (scope iso) | n/a | 2 Acquire loads + 2 ANDs | none (C2 bulk check is zero → early-out) |
-
-The fast path — "every cell in every scope this
-fiber cares about is at the last revision I
-observed" — costs one Acquire load + one AND per
-scope group, typically ≤4 ops per pull regardless of
-how many cells exist substrate-wide. The dirty path
-costs extra only for the cells that actually
-changed, not for the rest of the cone.
-
-Measured numbers from `polydat/benches/cell_throughput.rs`
-(steady state, release build): `cell.publish`
-uncontended ≈ 25 ns; `cell.snapshot` ≈ 24 ns;
-clean-path pull ≈ 45 ns regardless of cells-per-
-scope (1, 8, 32, 64) or cells-per-multi-word-scope
-(64, 128, 256); each additional scope-group in the
-cone adds ≈ 1.5 ns.
+There is no observable interleaving where the consumer
+reads a torn `(value, revision, intent_bit)` triple —
+i.e., sees a new intent bit but an old revision, or a new
+revision but the old value.
 
 ---
 
 ## 11. Out of scope
 
 - **Volatile-node handling.** Nodes declared
-  `Purity::Nondeterministic` re-evaluate every cycle
+  `Purity::Nondeterministic` re-evaluate after every write
   unconditionally; that path is independent of cell
-  validity tracking. Shared and volatile are
-  orthogonal.
-- **Cell value-read atomicity primitive.** The implemented
+  validity tracking. Shared and volatile are orthogonal.
+- **Cell value-read atomicity primitive.** The
   `Mutex<Value>` provides single-value atomicity. Validity
   tracking is layered on that primitive.
-- **Intent-bit clearing.** Bits are sticky; the
-  per-cell revision compare handles the
-  consequence (§7 "Sticky-bit semantics").
-- **Cross-process / distributed cells.** polydat
-  is single-process; the substrate makes no claim
-  beyond that boundary.
+- **Intent-bit clearing.** Bits are sticky; the per-cell
+  revision compare handles the consequence (§7
+  "Sticky-bit semantics").
+- **Cross-process / distributed cells.** polydat is
+  single-process; the substrate makes no claim beyond that
+  boundary.
 
 ---
 
 ## 12. Bounds and invariants
 
-- `revision: u64` — wraparound is treated as a
-  non-event (would require 2⁶⁴ writes per cell).
-- `scope_intent_words` grows monotonically with
-  cell allocations; cells per scope are unbounded.
-- `last_seen` per fiber is unbounded by type; in
-  practice bounded by the distinct cell handles the
-  fiber has read.
-- Cell handles (`*const SharedCellInner` = `Arc::as_ptr`) are
-  stable for the cell's `Arc` lifetime. Attaching a cell is a
-  construction-time operation; replacing an attached cell with
-  a different allocation in the same `EngineCore` is outside the
-  runtime contract because `last_seen` keys are identity tokens.
-- Per-write cost is O(1); per-clean-read cost is
-  O(scopes_in_cone); per-dirty-read cost is
-  O(dirty_cells_in_cone).
-- `attach_shared_cell` to a coordinate input slot
-  is a precondition violation — coordinate slots
-  have an independent write path (`set_inputs`)
-  that bypasses cells, producing dual writers.
-  The invariant is maintained by convention (see
-  composition_substrate.md §12.1 "A latent
-  invariant worth naming").
+- `revision: u64` — wraparound is treated as a non-event
+  (would require 2⁶⁴ writes per cell).
+- An interpreter scope's word list grows monotonically
+  with cell allocations; cells per scope are unbounded. A
+  compiled kernel has one word and the 64-cell bound of
+  §9.1.
+- `last_seen` per interpreter kernel is unbounded by type;
+  in practice bounded by the distinct cell handles the
+  kernel has read.
+- Cell handles (`Arc::as_ptr`) are stable for the cell's
+  `Arc` lifetime. Attaching a cell is a construction-time
+  operation on the spawn path and an explicit act through
+  `attach_shared_cell` otherwise; both reset the attaching
+  kernel's consumer state for the slot, since the identity
+  token changed.
+- Per-write cost is O(1). Interpreter clean-read cost is
+  O(scope words in the node's cone); interpreter dirty-read
+  cost is O(cells in the cone) for the compare plus O(nodes
+  in the program) for the provenance-wide invalidation.
+  Compiled cost is O(`shared` slots) per first evaluation after a write and
+  per pull, whether or not anything moved.
+- `attach_shared_cell` to a coordinate input slot is a
+  precondition violation — coordinate slots have an
+  independent write path (`set_inputs`) that bypasses
+  cells, producing dual writers. The trait form refuses any
+  slot that is not a `shared` binding; the invariant is
+  stated at [composition_substrate.md] S3.

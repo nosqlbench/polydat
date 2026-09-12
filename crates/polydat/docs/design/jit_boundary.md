@@ -1,23 +1,22 @@
 # JIT Boundary
 
-The polydat-internal contract for the Phase-3 native kernel.
-This doc specifies *how* the Cranelift-generated machine code
-plugs into the rest of the runtime — the call boundary
-between Rust and the native function, what happens when that
-code raises a predicate violation, and how invalidation and
-extern resolution cross the boundary.
+The polydat-internal contract for native code. This doc specifies
+*how* the Cranelift-generated machine code plugs into the rest of the
+runtime — the call boundary between Rust and the native function,
+what happens when that code fails, and how invalidation and extern
+resolution cross the boundary.
 
-For the engine-selection side (*which* compilation level the
-compiler picks for a given subgraph), see
+For the engine-selection side (*which* engine runs a program and
+which of its nodes run natively), see [Engines](engines.md) and
 [graph_compiler.md §6 (ordered composition)](graph_compiler.md).
-The clean-flag and memoization model the JIT preserves across
+The clean-flag and memoization model native code preserves across
 the boundary is in [runtime_model.md](runtime_model.md) (R-axioms).
 
 ---
 
 ## Call boundary overview
 
-A Phase-3 kernel compiles to a single native function:
+Native code compiles to a function over the slot buffer:
 
 ```text
 fn(coords: *const u64, buffer: *mut u64)        // raw
@@ -25,40 +24,32 @@ fn(coords: *const u64, buffer: *mut u64,
    clean:  *mut u8)                             // provenance variant
 ```
 
-The Rust wrapper owns a `Vec<u64>` buffer and calls the function
-pointer each cycle. Four kernel variants dispatch the same way
-but apply different optimizations:
+The Rust side owns the buffer and calls the function pointer. Native
+code runs in three places, and every one of them calls through
+`codegen::invoke_with_catch`:
 
-| Kernel | Optimization |
-|---|---|
-| `JitKernelRaw` | Runs every node unconditionally |
-| `JitKernelPush` | Per-node dirty tracking (push-side step skip) |
-| `JitKernelPull` | Cone guard for per-slot eval (pull-side skip) |
-| `JitKernelPushPull` | Both |
+| Site | What runs natively | Where |
+|---|---|---|
+| An embedded cone | A fused subgraph of an interpreter kernel, one native function per cone, over a slot buffer the evaluating state owns as the cone node's scratch | `compile/cone.rs`, the cone node's `eval_in` |
+| A segment of the P3 kernel | A run of consecutive native-eligible nodes of one lifecycle, one native function per segment, over the kernel's own buffer; the nodes between segments run as closure steps | `compile/hybrid.rs`, the step runner |
+| The pure native tier | The whole program as one native function, with the provenance variant where the kernel tracks clean flags | `compile/jit/kernels.rs`, `JitCore::run` |
 
-Since engine parity step 7 these four are the pure tier behind P3, the
-differential reference for native lowering, built only by the hidden
-`try_compile_pure_jit*`; the hybrid variants below are the public P3.
-
-The `HybridKernelRaw` / `HybridKernelPull` / `HybridKernelPushPull`
-variants mix Phase-3 JIT segments with Phase-2 closure steps
-inside one kernel, using the same buffer.
-
-All of these share one entry rule: **every call into native code
-goes through `codegen::invoke_with_catch`.** There is no direct
-`(code_fn)(...)` invocation anywhere in the library; grep for
-that pattern finds only the wrapper itself.
+The pure native tier is the differential reference for native
+lowering and the carrier of the Tier-1 register kernel
+([SIMD ISA Selection](simd_isa_autopromotion.md)); a host reaches
+native code through the P3 kernel. There is no direct `(code_fn)(...)`
+invocation outside the three sites; grep for that pattern finds only
+them, each inside the wrapper.
 
 ---
 
 ## Why predicate violations are a problem at this boundary
 
-SRD 12 §"Parameter resolution and validation" lists three JIT-
-lowered predicates that can fail at cycle time: `is_positive`,
-`in_range`, `is_one_of`. When they fail the JIT emits a call to
-an extern helper (`jit_is_positive_fail`, `jit_in_range_fail`,
-`jit_is_one_of_fail`) that must report the violation and stop
-the current evaluation.
+The library's predicates (`is_positive`, `in_range`, `is_one_of`;
+[Library Catalog](library_catalog.md)) lower natively and can fail
+at cycle time. When they fail the native code calls an extern helper
+(`jit_is_positive_fail`, `jit_in_range_fail`, `jit_is_one_of_fail`)
+that must report the violation and stop the current evaluation.
 
 The obvious shape — `panic!` from the extern helper and catch
 it upstream — does not work with Cranelift-generated frames:
@@ -112,7 +103,7 @@ Rather than unwinding *through* the JIT frame, we jump *past* it.
         ┌─────────── Rust caller (eval) ───────────┐
         │  _setjmp returned non-zero:              │
         │  read the stashed message                │
-        │  panic!(message)   ← Rust-land panic     │
+        │  resume_unwind(message) ← Rust-land panic│
         └──────────────────────────────────────────┘
                      │
           ordinary Rust unwind, proper personality
@@ -122,7 +113,7 @@ Rather than unwinding *through* the JIT frame, we jump *past* it.
 
 The longjmp skips the JIT frame entirely — no unwinding through
 it, no personality lookup, no catch-block walk. Control returns
-into Rust land where a normal `panic!` propagates through
+into Rust land where a normal panic propagates through
 Rust-personality FDEs the way any other panic would.
 
 ### Safety
@@ -137,12 +128,14 @@ Rust-personality FDEs the way any other panic would.
   dropped implicitly across the jump.
 - **Thread locality.** The jmp_buf pointer and the message
   slot are both `thread_local!`. Concurrent kernels on
-  different tokio worker threads don't share state.
+  different worker threads don't share state.
 - **Nesting.** `invoke_with_catch` saves the outer
   `JIT_JMP_BUF` slot in a stack-local variable, installs its
   own buffer, and restores the outer on every exit path. An
   inner longjmp jumps to the innermost buffer; the outer
-  regains the slot when the inner frame unwinds.
+  regains the slot when the inner frame unwinds. A projection
+  body's native kernel rendering inside another kernel's render
+  step is such a nesting.
 - **SIMD register state.** `_setjmp` on glibc preserves only
   the core register set that `longjmp` restores. The Rust
   wrapper doesn't keep live SIMD state across the JIT call,
@@ -160,17 +153,36 @@ them directly:
 #[repr(C, align(16))]
 struct JitJmpBuf([u8; 512]);          // 512 > glibc (~200) > macOS (~192)
 
+#[cfg(not(windows))]
 unsafe extern "C" {
     fn _setjmp(env: *mut JitJmpBuf) -> i32;
     fn _longjmp(env: *mut JitJmpBuf, val: i32) -> !;
 }
+
+#[cfg(windows)]
+unsafe extern "C" {
+    fn _setjmp(env: *mut JitJmpBuf, frame: *mut std::ffi::c_void) -> i32;
+    #[link_name = "longjmp"]
+    fn _longjmp(env: *mut JitJmpBuf, val: i32) -> !;
+}
 ```
 
-We link against `_setjmp` / `_longjmp` (rather than plain
-`setjmp` / `longjmp`) because the plain variants are glibc
-macros that expand to `__sigsetjmp(env, 0)` — saving the
+On glibc and macOS we link against `_setjmp` / `_longjmp` (rather
+than plain `setjmp` / `longjmp`) because the plain variants are
+glibc macros that expand to `__sigsetjmp(env, 0)` — saving the
 signal mask, which we don't need. `_setjmp` saves registers
 only and is faster.
+
+The MSVC CRT spells the pair differently: it exports `longjmp`
+(there is no `_longjmp`), and its x64 `_setjmp` takes a second
+argument recorded as the jmp_buf's `Frame` field, which a C
+compiler fills in by intrinsic. The wrapper passes NULL explicitly,
+and that is load-bearing twice over: it keeps the second argument
+register from carrying garbage into the buffer, and a zero `Frame`
+makes `longjmp` do a plain register restore instead of an
+`RtlUnwindEx` unwind — mandatory, because the frames being skipped
+are JIT code with no unwind tables registered, the exact problem
+this path exists to avoid.
 
 ---
 
@@ -185,18 +197,20 @@ pub(crate) fn invoke_with_catch<F: FnOnce()>(f: F)
 - Runs `f()`.
 - If `f()` returns normally, a [`JmpBufGuard`] restores the
   outer slot on drop.
-- If `f()` triggers a JIT predicate violation, the extern
-  helper `_longjmp`s back; the wrapper reads the TLS message
-  and raises `panic!`. The guard still runs (on the panic
-  unwind path inside the wrapper frame) and restores the
-  outer slot.
+- If `f()` triggers a native failure, the extern helper
+  `_longjmp`s back; the wrapper reads the TLS message and
+  re-raises it with `std::panic::resume_unwind`, not `panic!`:
+  the panic hook already saw the original panic under `guarded`
+  (below) and recorded its location for the enrichment the kernel
+  adds, and a second hook call would overwrite it. The guard still
+  runs (on the unwind path inside the wrapper frame) and restores
+  the outer slot.
 - If `f()` panics for a non-JIT reason (a bug in a non-JIT
-  sub-path; a panic from a closure step in a hybrid kernel),
+  sub-path; a panic from a closure step in the P3 kernel),
   the panic unwinds through the wrapper's frame. The guard's
   `Drop` restores the outer slot before the unwind
   continues. Subsequent `invoke_with_catch` calls see a clean
-  sentinel. This is covered by the test
-  `invoke_with_catch_restores_slot_after_foreign_panic`.
+  sentinel.
 
 ### RAII guard
 
@@ -212,31 +226,28 @@ impl Drop for JmpBufGuard {
 
 The guard is the only thing that writes the previous slot
 back. Every exit path from `invoke_with_catch` — return,
-setjmp-return-then-panic, or panic-through-wrapper — runs
+setjmp-return-then-unwind, or panic-through-wrapper — runs
 through `Drop`.
 
----
+### `guarded`: helpers whose body may panic
 
-## Where the wrapper is applied
+A predicate helper fails on purpose and calls
+`jit_violation_longjmp` itself. A helper whose body may panic as its
+interpreter node panics (`printf` with a placeholder and no argument,
+a tile whose projection body fails at render) cannot let that panic
+unwind out of an `extern "C"` frame, where it would abort. Such a
+helper runs its body under `guarded`:
 
-Every `eval` / `eval_for_slot` on every JIT and Hybrid kernel
-variant uses the wrapper:
+```rust
+fn guarded<T>(body: impl FnOnce() -> T) -> T
+```
 
-| Caller | Uses |
-|---|---|
-| `JitKernelRaw::eval` | ✓ |
-| `JitKernelPush::eval` | ✓ |
-| `JitKernelPull::eval`, `eval_for_slot` | ✓ (both invocation sites) |
-| `JitKernelPushPull::eval`, `eval_for_slot` | ✓ (both) |
-| `HybridCore::eval_all_hybrid_steps` (used by `HybridKernelRaw::eval`, `HybridKernelPull::eval`, `HybridKernelPull::eval_for_slot`'s dirty path) | ✓ (each per-step JIT segment) |
-| `HybridKernelPushPull::eval`, `eval_for_slot` | ✓ (each per-step JIT segment) |
-
-The `JitKernelRaw::into_parts` accessor remains a raw-pointer
-export for hybrid-kernel integration. Callers of `into_parts`
-are expected to either build a hybrid kernel (which wraps every
-call) or install their own wrapper before invoking the pointer;
-calling the pointer directly without either would abort on
-violation via the no-sentinel fallback.
+which runs the body under `catch_unwind`, extracts the payload's
+message, and re-raises it through `jit_violation_longjmp`. The panic
+hook fires once, inside `guarded`, and records the location; the
+wrapper's `resume_unwind` then carries the message out without a
+second hook call. `guarded` is part of the ABI: a helper that can
+panic and does not use it is a defect.
 
 ---
 
@@ -251,7 +262,7 @@ fn jit_violation_longjmp(msg: String) -> ! {
     match JIT_JMP_BUF.with(|b| b.get()) {
         Some(ptr) => unsafe { _longjmp(ptr, 1) },
         None => {
-            // Raw code_fn invoked outside a wrapper.
+            // Native code invoked outside a wrapper.
             eprintln!("{msg}");
             std::process::abort();
         }
@@ -259,22 +270,47 @@ fn jit_violation_longjmp(msg: String) -> ! {
 }
 ```
 
-This is the last-line defense. In practice the only way to
-reach it is to call a JIT function pointer without going through
-one of the wrapped kernels (e.g. a test that retrieves the raw
-pointer via `into_parts` and invokes it directly). The fallback
-prints the message and aborts — the same behavior the wrapper
-replaces in the normal path, but without the catch-unwind
-integration.
+This is the last-line defense. The only way to reach it is to call
+a native function pointer without going through one of the three
+wrapped sites. The fallback prints the message and aborts — the
+same behavior the wrapper replaces in the normal path, but without
+the catch-unwind integration.
+
+---
+
+## The failure contract
+
+A failure in native code reports exactly as the same failure reports
+on the interpreter: one message, on every engine
+([Engines](engines.md) states the contract; this section is its
+native half).
+
+- **The tracker slot.** Every native function has one slot past the
+  layout, the tracker. Before a step that calls a helper, generated
+  code stores the step's index there; a step of inline arithmetic
+  cannot fail and pays nothing (codegen removes the store when the
+  step emitted no call). The runner sets the tracker to `u64::MAX`
+  before each run, so a failure before any store names no step.
+- **Attribution.** The runner arms an `EvalPanicCaptureGuard` for the
+  run, so the panic the hook sees under `guarded` or at a predicate
+  helper is recorded quietly rather than printed. When the wrapped
+  call unwinds, the runner reads the tracker, maps the step to the
+  program node it belongs to (a cone or segment keeps its members in
+  step order), decodes that node's input slots by their port types,
+  and re-raises through `enrich_panic` with the original payload, the
+  recorded location, the node's name, every output it feeds, the
+  program's diagnostic context, and the formatted inputs. The
+  interpreter's re-raise builds the same message from its `Value`s.
+- **The P3 kernel** does the same for a closure step, and for a
+  segment names the member native code stored in the tracker.
 
 ---
 
 ## Extern-helper table
 
 Each predicate has one dedicated fail helper. The helpers live
-in `polydat/src/compile/jit/codegen.rs` and are registered with
-Cranelift's JIT symbol table so the emitted native code can
-call them.
+in `compile/jit/codegen.rs` and are registered with Cranelift's JIT
+symbol table so the emitted native code can call them.
 
 | Extern | Arity | Called from |
 |---|---|---|
@@ -306,58 +342,41 @@ extern "C" fn jit_in_range_fail(value: u64, lo: u64, hi: u64) -> u64 {
 
 ## Operator-visible semantics
 
-From the outside looking in, a predicate violation in JIT code
-behaves exactly like a predicate violation in Phase-1 or Phase-2:
+From the outside looking in, a predicate violation in native code
+behaves exactly like a predicate violation on the interpreter or the
+closure tier:
 
 - `#[should_panic(expected = "must be > 0")]` on the caller
   works.
 - `std::panic::catch_unwind` catches and returns `Err`.
 - The panic message carries the violating value (and, for
-  `in_range`, the configured bounds).
+  `in_range`, the configured bounds), enriched with the node and its
+  inputs as above.
 - The workload can continue — the kernel survives catches;
-  the per-cycle buffer is left partially written for the
+  the slot buffer is left partially written for the
   failing step but subsequent evals overwrite cleanly.
 
 The helper ABI preserves the `is_positive` control name and the
 `is_one_of` allowed set through stable pointers into node metadata.
 `in_range` carries its numeric bounds directly. These values remain
-valid for the compiled kernel lifetime because the JIT core retains
-the originating nodes.
-
----
-
-## Tests
-
-`polydat/src/compile/jit/codegen.rs` carries unit coverage:
-
-- Per-predicate happy path: value passes through.
-- Per-predicate catchable-panic path: violation fires and
-  `catch_unwind` returns `Err` with the expected message.
-- `jit_kernel_survives_multiple_violations` — repeated
-  caught violations followed by a happy-path eval all work
-  on the same kernel instance, proving no state leaks
-  across longjmp.
-- `invoke_with_catch_restores_slot_after_foreign_panic` —
-  a non-JIT panic inside the closure still restores the
-  TLS slot, so a subsequent legitimate JIT violation is
-  caught cleanly. This is the specific regression `JmpBufGuard`
-  protects against.
+valid for the compiled kernel lifetime because the native core and the
+cone node retain the originating nodes.
 
 ---
 
 ## Unwind boundary constraint
 
-JIT predicate violations cross generated frames through the
-documented setjmp/longjmp trampoline. Generated code MUST NOT
-allow a Rust panic to unwind through a Cranelift frame because
-the emitted object does not register a compatible Rust unwind
-personality for that path. The TLS jump-buffer guard and
-Rust-side catch boundary are therefore part of the ABI, not an
-optional implementation detail.
+Native failures cross generated frames through the documented
+setjmp/longjmp trampoline. Generated code MUST NOT allow a Rust
+panic to unwind through a Cranelift frame because the emitted
+object does not register a compatible Rust unwind personality for
+that path. The TLS jump-buffer guard, `guarded`, and the Rust-side
+catch boundary are therefore part of the ABI, not an optional
+implementation detail.
 
 ---
 
-## SIMD compute kernels (alignment §8.2)
+## SIMD compute kernels
 
 `compile/jit/simd.rs` compiles four f32-lane kernels once per
 process through the same cranelift engine, using real cranelift
@@ -368,10 +387,11 @@ scalar tail loop, and reducing kernels finish with an
 `extractlane` horizontal sum. Consumers are the `vec_*` nodes in
 `library/vector_math.rs`, which fall back to scalar Rust loops
 when the `jit` feature is off or host-ISA construction fails.
-This is also usable through the slot ABI. Typed slice values
+This is also usable through the slot ABI ([Type-System
+Alignment](type_system_alignment.md) §8.2). Typed slice values
 cross compiled steps as `(ptr, len)` slot pairs and
 `CompiledSlotOp` publishes vector results through kernel-owned
-scratch. Scalar-only P3 segments retain the compact
+scratch. Scalar-only native segments retain the compact
 `fn(coords, buffer)` shape; slice-bearing steps use the wider
 compiled-op contract described by the slot-state axioms below.
 
@@ -393,14 +413,19 @@ equivalence tests compare with relative tolerance.
   `PortType`. The `#[polydat_node]` macro's buffer tokens are
   width-aware (its internal `JitType` carries one variant per
   width), so narrow-typed nodes get `compiled_u64` closures whose
-  casts mirror the Wire storage conventions exactly — pinned by
-  the P1↔P2 equivalence tests in `polydat_node_macro.rs`.
-- 128-bit integers do not ride at all (interpreter-only) until a
-  two-slot protocol exists.
+  casts mirror the Wire storage conventions exactly; the typed
+  readers of every compiled kernel sign-extend narrow signed
+  outputs on the way out.
+- 128-bit integers and register words ride as `Imm2`, two immediate
+  limbs in consecutive slots; the typed readers reassemble them
+  (`marshal::decode_output`).
+- Strings, byte strings, JSON, extension values, and handles ride
+  as `Ref2` pairs, per [Compiled By-Reference
+  Slots](compiled_handles.md); every read copies out.
 
 ---
 
-## Slot-state axioms (S1–S10) — RATIFIED 2026-06-12
+## Slot-state axioms (S1–S10)
 
 The normative contract for compiled-kernel buffer state under the
 §8.4 vector substrate (`type_system_alignment.md`). These are
@@ -442,7 +467,7 @@ producer's current interval.
 transitive consumer executes later in the same pass. Mechanical
 oracle: the Raw (never-skip) engine and the Push/Pull/PushPull
 (skip) engines must produce identical outputs for arbitrary
-input-change sequences (`tests/slot_state_axioms.rs`).
+input-change sequences.
 
 **S6 — Sequential-by-axiom; parallelism is a redesign gate.**
 Kernel state (buffer + scratch) is single-threaded by
@@ -458,10 +483,10 @@ color dispatch, and any second hop are forbidden — in interpreter
 closures and in JIT-generated code alike (a segment loads the
 pointer from its slot and passes it).
 
-**S8 — P1 is the semantic oracle.** Typed eval defines meaning;
-every compiled tier must be bit-identical to it (cross-lane float
-reductions per their declared fixed-shape contracts). No node or
-op shape lands without a P1↔P2(↔P3) equivalence test.
+**S8 — The interpreter is the semantic oracle.** Typed eval defines
+meaning; every compiled tier must be bit-identical to it (cross-lane
+float reductions per their declared fixed-shape contracts). No node
+or op shape lands without an equivalence test across the engines.
 
 **S9 — Deterministic runtime validation.** (a) In debug/test
 builds, after every eval pass the engine asserts every
@@ -470,33 +495,21 @@ scratch-backed Ref pair equals its owning entry's current
 dangling failures name the slot deterministically. (b) The
 slice-transport tests run under Miri (no-jit configuration —
 Miri cannot execute JIT'd native code) to adjudicate the formal
-aliasing validity of the `from_raw_parts` pattern. Lane command:
-
-```sh
-MIRIFLAGS=-Zmiri-ignore-leaks cargo +nightly miri test \
-    -p polydat --no-default-features --test slot_state_axioms
-```
-
-Lane command (clean leak-checking, no suppression flags):
+aliasing validity of the `from_raw_parts` pattern. Lane command
+(clean leak-checking, no suppression flags):
 
 ```sh
 cargo +nightly miri test -p polydat --no-default-features \
     --test slot_state_axioms
 ```
 
-ADJUDICATED 2026-06-12: Stacked Borrows accepts the pattern (the
-S5 oracle passes under Miri across all five engines) AND the leak
-check passes clean. One caveat, recorded rather than hidden: Miri
-warns on the integer-to-pointer casts (inherent to a u64-slot
-transport — provenance is necessarily reconstructed, so the check
-runs under permissive int-ptr semantics rather than strict
-provenance). The earlier `-Zmiri-ignore-leaks` requirement is
-gone: the ~200-byte-per-compile leak it masked was a real bug in
-`registry::lookup` (it `Box::leak`'d a clone to fabricate a
-`'static` instead of returning the already-`'static` inventory
-entry) plus a latent twin in the fusion matcher (`Box::leak` on a
-synthesized bind name, now `Cow::Owned`); both fixed 2026-06-12,
-so the leak check itself is now the regression guard.
+Stacked Borrows accepts the pattern (the S5 oracle passes under Miri
+across the engines) and the leak check passes clean, so the leak
+check itself is a regression guard. One caveat, recorded rather than
+hidden: Miri warns on the integer-to-pointer casts (inherent to a
+u64-slot transport — provenance is necessarily reconstructed, so the
+check runs under permissive int-ptr semantics rather than strict
+provenance).
 
 **S10 — Unsafe is enumerable, annotated, and tripwired.** Every
 Ref-deref `unsafe` lives in macro-generated `compiled_slot`
@@ -505,13 +518,13 @@ sites; each SAFETY comment cites the axioms it relies on (S3,
 S4). A CI tripwire fails when `from_raw_parts` appears outside
 the allowlisted files.
 
-**P3 corollary.** Pure-P3 kernels contain no Ref slots by
+**Native corollary.** Pure native kernels contain no Ref slots by
 construction (slice-bearing nodes classify `Fallback`, and
 `build_jit_layout` rejects Fallback); the JIT builders enforce
-this defensively. Hybrid kernels carry Ref slots only in closure
+this defensively. The P3 kernel carries Ref slots only in closure
 steps.
 
-**Forwarding boundary.** Ref-pair pass-through is not a P3
+**Forwarding boundary.** Ref-pair pass-through is not a native
 optimization. A Ref output is scratch-backed, and S9(a)'s validator
 mapping applies to it, unless its pair names storage that outlives the
 kernel (a string constant interned for the process) or a boundary value

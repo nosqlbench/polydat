@@ -1,14 +1,8 @@
-# Cursor Partitions (SRD 71)
+# Cursor Partitions
 
-**Status:** Implemented. This document is the authoritative specification for
-Polydat cursor-partition values, the partition-spec language, resolution math,
-ordering, cursor narrowing, and partition metadata wires.
-
-**Implementation:**
-[`iteration/cursor_partition.rs`](../../src/iteration/cursor_partition.rs),
-[`library/partition.rs`](../../src/library/partition.rs), and the cursor
-materialization path in
-[`dsl/compile.rs`](../../src/dsl/compile.rs).
+The specification for Polydat cursor-partition values, the partition-spec
+language, resolution math, ordering, cursor narrowing, and partition metadata
+wires.
 
 ## 1. Purpose
 
@@ -258,23 +252,22 @@ partition_index := q.cursor.idx
 partition_start := q.cursor.start_ordinal
 ```
 
-At scope setup, the executor resolves the `over` value, narrows the cursor to
-the resulting interval, and writes the partition plus its scalar projections
-into the cursor's external slots. The partition remains fixed for that scope
-activation.
+Narrowing a cursor to one partition writes the partition into the cursor's
+`Ext` slot and its scalar projections into six more, all of them externs of
+the program. The partition remains fixed for that scope activation (CP8).
 
-When the `over` value is a literal spec and the cursor's extent is known at
-build, the compiler resolves the partitions itself and records them on the
-cursor's schema (`SourceSchema::partitions`), which the assembler and every
-kernel built from it report through `cursor_schemas`. A clause that denotes
-exactly one partition seeds the cursor's slots at build, so the program runs
-on every engine with no host call. A clause that denotes several is narrowed
-by the host or the traversal runtime through `set_cursor(name, &partition)`,
-which every kernel offers, the interpreter's and the compiled ones alike; it
-writes the seven slots above. A computed `over` value, or an extent known only
-at run time, is resolved through `cursor_over_partitions_on` on a kernel of any
-engine, and through `cursor_over_partitions` on an interpreter state
-([engine parity](engine_parity.md), A3).
+The compiler resolves a literal `over` clause against a known extent at build
+and records the partitions on the cursor's schema
+(`SourceSchema::partitions`); every kernel, on every engine, reports its
+cursors and their resolved partitions through `Kernel::cursor_schemas`. A
+clause that denotes exactly one partition is seeded into the cursor's slots
+at build, so the program runs with no host call. A clause that denotes
+several is narrowed by the host, or by the traversal runtime for a body's
+cursor, through `Kernel::set_cursor(name, &partition)`, which writes the
+seven slots on any kernel. A computed `over` value, or an extent known only
+at run time, is resolved through `cursor_over_partitions_on(kernel, schema)`,
+which pulls the clause's value and the extent from a kernel of any engine
+and resolves them as §6 does.
 
 Available cursor metadata wires are:
 
@@ -296,7 +289,8 @@ field-access rules; it is not a separate runtime object lookup.
 Typed library nodes expose partition values without relying on field syntax:
 `cardinality`, `start_of`, `end_of`, `idx_of`, `count_of`, `at`, `mod_in`,
 `clamp_in`, `random_in`, and `subdivide`. Their signatures and error behavior
-are cataloged in [Library Catalog](library_catalog.md#cursor-partitions-srd-71).
+are in the node reference ([nodes.md](../reference/nodes.md), the
+`partition` section).
 
 ## 8. Error policy
 
@@ -350,7 +344,7 @@ comprehension operator.
   traversal, filtering, ordering, and consumption surfaces.
 - [Polydat Grammar](polydat_grammar.md#sec-fields-cursors) owns general cursor
   declaration and field-access syntax.
-- [Library Catalog](library_catalog.md#cursor-partitions-srd-71) owns the typed
-  node catalog that consumes `Partition` values.
+- The node reference ([nodes.md](../reference/nodes.md)) lists the typed
+  nodes that consume `Partition` values.
 - [Runtime Model](runtime_model.md) owns scope activation, state ownership,
   caching, and invalidation semantics.

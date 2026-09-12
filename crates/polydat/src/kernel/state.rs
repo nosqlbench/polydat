@@ -362,7 +362,8 @@ impl PolydatKernel {
         let program = Arc::new(program);
         let mut state = program.create_state();
         // Populate buffers for folded constants so get_constant() works.
-        // Seeded, not set: construction opens no cycle (axiom H5).
+        // Seeded, not set: construction writes no input, so nothing
+        // is invalidated by it.
         let dummy = vec![0u64; program.coord_count()];
         state.seed_inputs(&dummy);
         // Seed buffers for folded *constant* nullary nodes so

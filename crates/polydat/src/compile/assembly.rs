@@ -1125,10 +1125,8 @@ impl PolydatAssembler {
                             out.typ
                         ));
                     }
-                    // SRD 115: a handle slot marshals across a boundary
-                    // through the arena (byte strings) or the cycle
-                    // value table (everything else), and raw readers
-                    // refuse it; it is legal in a pure-P3 layout.
+                    // An immediate rides in its slot as bits and is
+                    // legal in a pure-P3 layout.
                     crate::ast::SlotColor::Imm1 | crate::ast::SlotColor::Imm2 => {}
                 }
             }

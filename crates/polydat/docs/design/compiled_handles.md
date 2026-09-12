@@ -295,4 +295,4 @@ citations a SAFETY comment or a test needs are:
 | A kernel created from a shared program points its pairs into its own storage, read after the source state is dropped | `tests/slot_state_axioms.rs` |
 | A rendering state's body kernels created once and reused; a clone starts empty | `library::tile_render::tests` |
 | S9(a) validator | every P2 and hybrid run in debug builds |
-| S10 source scan | `tests/slot_state_axioms.rs` |
+| S10 source scan; no `thread_local!` holds a value, a pointer, or a state | `tests/slot_state_axioms.rs` |

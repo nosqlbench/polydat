@@ -39,7 +39,7 @@ engine may restate widths independently.
 | `F16/F32` | low-bit IEEE pattern in `Value::U64` for node outputs; accepted host carrier as specified by `satisfies_slot` | F16/F32 operation where supported, one u64 slot | JSON number after widening |
 | `F64` | `Value::F64` | F64, one u64 slot by bitcast | JSON number when finite |
 | `Bool` | `Value::Bool` | 0/1 integer convention, one u64 slot | JSON bool |
-| `U128/I128` | `Value::U128/I128(Bits128)` | no production JIT lowering | decimal JSON string |
+| `U128/I128` | `Value::U128/I128(Bits128)` | no native lowering; two immediate slots, run as a closure step | decimal JSON string |
 
 Cranelift integer types are sign-agnostic; signedness is chosen
 by operations. Polydat keeps signedness in `PortType` and,
@@ -48,9 +48,11 @@ for 64-bit runtime/interchange honesty, in distinct
 
 `F128` is excluded. Stable Rust and the pinned backend path do
 not provide the complete carrier and lowering contract Polydat
-requires. `U128/I128` are valid typed runtime values but remain
-P1; their two-slot shape is reserved as immediate data, never a
-pointer.
+requires. `U128/I128` are valid typed runtime values with no
+native lowering: they occupy two immediate slots (`Imm2`, never
+a pointer), and a node over them runs as a closure step on the
+closure tier and the native engine, with the same result as on
+the interpreter.
 
 ## 3. Register-value plane
 
@@ -161,25 +163,49 @@ The complete unsafe and validation contract is S1–S10 in
 
 Type support and engine eligibility are separate:
 
-- A valid `PortType` is always executable through P1 when its
-  node implementation exists.
-- One-slot scalar nodes with a supported lowering may execute
-  through P2 or P3.
-- By-reference nodes (`Ref2` ports of the string, byte-string,
-  JSON, extension, or handle kinds) execute through P2 when the
-  macro emits a `compiled_slot` kit for them, which it does for
-  every shape the kit accepts; native code carries no reference
-  pairs yet, so they stay closure steps beside native segments
-  ([Compiled By-Reference Slots](compiled_handles.md) §5, §6).
-- Register-plane nodes may execute through P2 and, when
-  `classify_node` has a lowering for the operation, native P3
-  SIMD. Unsupported register operations remain on a lower tier.
-- Slice-bearing nodes may use `CompiledSlotOp` and
-  kernel-owned scratch; their internal vector math may call
-  compiled SIMD helpers.
+- A valid `PortType` is executable on every engine — the
+  interpreter, the closure tier (P2), and the native engine
+  (P3) — when its node implementation exists. An engine that
+  cannot run a program refuses it at construction with a
+  reason naming the node or construct; it never runs it
+  differently.
+- P2 is total: every node has a closure form, derived from its
+  signature by the `#[polydat_node]` macro (or supplied by a
+  hand-written override), whatever the slot colors of its
+  ports — one-slot scalars, two-slot immediates, and `Ref2`
+  pairs over the step's own scratch, vectors and by-reference
+  values alike ([Compiled By-Reference Slots](compiled_handles.md)
+  §5).
+- P3 is native where a node has a lowering and its closure
+  elsewhere. The native form is the node's own: the classifier
+  (`classify_node_typed`) selects it from the node and the
+  types of its wires, fixed at classification; a wire of a type
+  no lowering takes leaves the node on its closure. Native code
+  carries no reference pairs yet, so a node with a `Ref2` port
+  on either side keeps its closure beside the native segments
+  ([Compiled By-Reference Slots](compiled_handles.md) §6).
+  Register-plane operations with a lowering run as native SIMD;
+  slice-bearing nodes' internal vector math may call compiled
+  SIMD helpers from their closure.
 - `U128/I128` operations and nodes that downcast an `Ext` or
-  `Handle` remain P1; the values themselves cross compiled
-  tiers as reference pairs.
+  `Handle` have no native form and run as closure steps; the
+  values themselves cross compiled tiers as two immediate slots
+  and as reference pairs respectively.
+
+The one typed read is `Kernel::pull`: on every engine it
+returns the named output as the `Value` its port type names,
+decoding whichever slot color the engine stored it in
+(`marshal::decode_output` for the compiled engines — one-slot
+carriers, reference pairs copied out, and the two-limb
+reassembly of a 128-bit integer or register word). A pair is
+never handed to the host, and a slot that holds `None` reads
+as `None`.
+
+What an engine decided is observed, not inferred:
+`Kernel::plan` returns an `EnginePlan` — how many runs of nodes
+run as native segments (on the interpreter, its native cones),
+how many nodes run their closure, and how many the interpreter
+dispatches itself — on every engine.
 
 No compiler may coerce a value merely to make a higher engine
 tier available. Engine selection follows the typed graph; it

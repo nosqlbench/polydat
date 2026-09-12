@@ -5,7 +5,7 @@
 //!
 //! A host holds a kernel as `Box<dyn Kernel>` whatever engine built
 //! it, and drives it through [`Kernel`]: the coordinate and extern
-//! writes that open a cycle, `pull` for one output and `eval` for
+//! writes that invalidate their dependents, `pull` for one output and `eval` for
 //! every one, the names and types of its inputs and outputs, the
 //! traversals its program declares, its cells, and `into_program`, the
 //! program shared across threads that [`KernelProgram::create_kernel`]

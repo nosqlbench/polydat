@@ -9,48 +9,20 @@ language.
 > position.
 
 <a id="sec-authority"></a>
-## 0. Authority and supersession
+## 0. Authority
 
-This document is the **single authoritative reference** for the Polydat
-surface language: its lexical grammar, its statement and expression
-productions, its type-naming vocabulary, its desugaring and projection
-behaviour, and its rejection rules. It is written to be read top to
-bottom — every construct is introduced **one at a time, with worked
-examples** — and to be **machine-verified**: the examples in this file
-are extracted and round-tripped by
-[`polydat/tests/doc_examples_test.rs`](../../tests/doc_examples_test.rs)
-on every `cargo test` run.
-
-It **supersedes and replaces**:
-
-- [`grammar.md`](grammar.md) — *The Grammar Substrate.* Its formal
-  productions, type-inference rules, and the six **G-axioms** are carried
-  forward here in summary (§[17](#sec-gaxioms)); `grammar.md` carries a
-  supersession banner pointing here as the definitive entry point and is
-  retained as the detailed formal appendix this spec cross-references.
-- the host's **SRD-10** (*nbrs-side framing*). Its grammar-facing material
-  (cursor declarations, modifiers, output selection as it touches syntax)
-  is carried forward here; its host-integration framing remains in SRD-10,
-  which now points here for all grammar matters.
-
-It **does not** supersede:
-
-- [`language_spec.md`](language_spec.md) — the compilation-pipeline /
-  node-contract substrate. This spec owns *what the syntax is*;
-  `language_spec.md` owns *how it is compiled and run*.
-- [`comprehension_forms.md`](comprehension_forms.md) — the comprehension
-  **algebra** (constructors, validity axioms, optimizer rewrites, IR).
-  The comprehension `for:`/`where:`/`order:` surface is a *sibling*
-  mini-grammar parsed by the `iteration` subsystem, **not** part of the
-  `.polydat` statement language. §[16](#sec-comprehension) describes its
-  surface and defers to `comprehension_forms.md` for all semantics.
-- [`type_system.md`](type_system.md) — the storage-class / adapter
-  machinery behind the type *keywords* this spec names.
-
-**Conflict resolution.** On any grammar-structural matter (productions,
-precedence, type-naming, projection), this document is final. Where a
-companion doc describes runtime or host behaviour, it remains
-authoritative for that.
+This document is the normative reference for the Polydat surface
+language, its lexical grammar, statement and expression productions,
+type-naming vocabulary, desugaring and projection behaviour, and
+rejection rules, and every example in it is checked by
+[`polydat/tests/doc_examples_test.rs`](../../tests/doc_examples_test.rs);
+[`grammar.md`](grammar.md) is its formal appendix (type rules and the
+G-axioms in full), [`language_spec.md`](language_spec.md) its
+compilation companion, [`comprehension_forms.md`](comprehension_forms.md)
+the algebra behind the `for` construct (§[16](#sec-for)),
+[`polytile.md`](polytile.md) the semantics behind tiles
+(§[17](#sec-tiles)), and [`type_system.md`](type_system.md) the adapter
+machinery behind the type keywords.
 
 <a id="sec-roundtrip"></a>
 ### 0.1 How the examples are verified — the round-trip contract
@@ -83,8 +55,8 @@ Code blocks tagged <code>```polydat</code> in this document are parsed
 and checked for idempotent round-trip. Blocks additionally tagged
 <code>```polydat compile</code> are also compiled (and must succeed).
 Blocks tagged <code>```text</code> are illustrative only — EBNF,
-token tables, rejected forms, and the sibling comprehension surface —
-and are **not** parsed.
+token tables, rejected forms, and programs that need wires or modules
+this file does not define — and are **not** parsed.
 
 A second document,
 [`polydat_grammar_programmatic.md`](polydat_grammar_programmatic.md),
@@ -120,26 +92,31 @@ y := 2   /* a block comment */
 /* block comments do /* not */ nest — this trailing text is live code
 ```
 
-Note that `pragma` (§[15](#sec-pragmas)) is a real first-class statement,
+Note that `pragma` (§[14](#sec-pragmas)) is a real first-class statement,
 **not** a comment, despite looking directive-like.
 
 <a id="sec-keywords"></a>
 ### 1.2 Keywords
 
-There are exactly **eight hard keyword tokens**:
+There are exactly **ten hard keyword tokens**:
 
 ```text
-const   input   extern   shared   volatile   cursor   over   pragma
+const   input   extern   shared   volatile   cursor   over   pragma   for   tile
 ```
 
-Everything else — including `module`, `as`, `range`, and every type name
-(`u64`, `f64`, …) — is an ordinary identifier. Three of the eight are
-**soft** in expression position and may be used as names: `input`,
-`cursor`, `over`. The other five (`const`, `extern`, `shared`,
-`volatile`, `pragma`) cannot be used as names. `as` is a *soft postfix
-keyword*: it is a cast only in `<expr> as <type>` position and is
+Everything else — including `module`, `as`, `if`, `else`, `range`, and
+every type name (`u64`, `f64`, …) — is an ordinary identifier. Three of
+the ten are **soft** in expression position and may be used as names:
+`input`, `cursor`, `over`. The other seven (`const`, `extern`, `shared`,
+`volatile`, `pragma`, `for`, `tile`) cannot be used as names. `for` and
+`tile` are also the two keywords after which the lexer captures raw
+text: the comprehension text after `for` (§[16](#sec-for)) and the
+template body after a tile's `:=` (§[17](#sec-tiles)). `as` is a *soft
+postfix keyword*: it is a cast only in `<expr> as <type>` position and is
 otherwise an ordinary identifier (it is also the conventional module
-parameter name).
+parameter name). `if` is a soft keyword: `if(` is the call form of the
+intrinsic and `if <cond> {` its block form (§[7.1](#sec-if-block)), and
+a wire may still be named `if` where no block can follow.
 
 <a id="sec-operators"></a>
 ### 1.3 Operator and punctuation tokens
@@ -161,7 +138,7 @@ Two tokens are easy to confuse:
   form. `=` (`Eq`) is used **only** by `extern …: T = default` and
   `cursor … = constructor`. `x = 1` is **not** a binding.
 - `-` is always the minus token; there is no negative-literal token.
-  `-5` is unary negation applied to `5` (§[8](#sec-unary)).
+  `-5` is unary negation applied to `5` (§[6.3](#sec-unary)).
 
 There is **no `..` token**: `..` lexes as two `.` tokens, and `range(a, b)`
 is an ordinary function call, not special syntax.
@@ -250,7 +227,7 @@ quote := "she said \"hi\""
 ```
 
 `{…}` placeholders inside a string are **interpolation**, desugared to a
-`printf` call — see §[10](#sec-interpolation).
+`printf` call — see §[9](#sec-interpolation).
 
 <a id="sec-array-literals"></a>
 ### 2.5 Array literals
@@ -347,7 +324,7 @@ row_key := mod(hash(combined), 1000000)
 
 A binding may be prefixed by one or more **wire modifiers**, in any
 order. They declare *lifecycle* at the syntactic surface (this is
-G-axiom **G2**, §[17](#sec-gaxioms)) — the compiler verifies the
+G-axiom **G2**, §[18](#sec-gaxioms)) — the compiler verifies the
 declaration against the wire chain, it does not infer it.
 
 | Modifier | Meaning |
@@ -385,6 +362,29 @@ shared const z := 100    # OK: a shared cell whose initial value folds
 > The retired `init` / `final` keyword pair is **gone** — `const`
 > subsumes both. Do not reintroduce them.
 
+<a id="sec-shared-typed"></a>
+### 5.2 Typed shared cells — `shared x: T := …`
+
+A `shared` binding may carry a type annotation between the name and
+`:=`. The annotation pins the cell's type for the cell's lifetime
+([Scope Model](scope_model.md) §6.1: a cell keeps one `PortType` and a
+write never changes it), so literal inference (`1` versus `1.0`) stops
+being load-bearing for the cell's type. An integer literal initializer
+widens to an `f64`-annotated cell; any other mismatch between the
+initializer's type and the annotation is a compile error at the
+declaration. The annotation is accepted **only** on `shared` bindings,
+because only a `shared` binding has a cell whose type an annotation can
+pin; on any other binding it is a parse error pointing at
+`extern name: T = …` as the typed-slot form. The annotation is part of
+the canonical projection.
+
+```text
+shared total: f64 := 0          # a float cell, initialised from an integer literal
+shared status: str := "init"
+const scale: f64 := 1           # REJECTED: annotation only on `shared`
+shared count: u64 := 1.5        # REJECTED: initializer does not match the annotation
+```
+
 ---
 
 <a id="sec-expressions"></a>
@@ -393,9 +393,11 @@ shared const z := 100    # OK: a shared cell whose initial value folds
 There is one expression grammar, used identically for a four-character
 expression and a two-hundred-line kernel (G-axiom **G6**). The non-sugar
 constructors are: identifier, integer literal, float literal, string
-literal, array literal, call, and field access. Three **sugar** forms —
-binary operator, unary negation (`-`), and bitwise NOT (`!`) — desugar
-to calls.
+literal, array literal, call, field access, the `as` cast
+(§[10](#sec-casts)), and the `for` expression (§[16](#sec-for)). Three
+**sugar** forms — binary operator, unary negation (`-`), and bitwise NOT
+(`!`) — desugar to calls, as does the block form of `if`
+(§[7.1](#sec-if-block)).
 
 <a id="sec-precedence"></a>
 ### 6.1 Precedence and associativity
@@ -483,7 +485,10 @@ flag := (x == 0) || big
 
 The built-in `if(cond, a, b)` is a compiler intrinsic (a closed
 parse-time form, G-axiom **G6.i**) lowering to `select_u64/f64/str`;
-like the logical operators it evaluates **both** branches.
+like the logical operators it evaluates **both** branches. The branch
+type is chosen by priority `Str` > `f64` > `u64`: when one branch is
+`u64` and the other `f64`, the `u64` branch is widened through `to_f64`.
+The condition is `u64`; any nonzero value selects `a`, zero selects `b`.
 
 ```polydat compile
 input cycle: u64
@@ -492,6 +497,52 @@ latency_factor := 1.5
 recall_factor := 9.5
 overscan := if(optimize_for == "LATENCY", latency_factor, recall_factor)
 ```
+
+<a id="sec-if-block"></a>
+### 7.1 The block form — `if cond { a } else { b }`
+
+The same intrinsic has a block spelling. The parser rewrites
+`if <cond> { <then> } else { <else> }` to `if(cond, then, else)` before
+anything else sees it, in the same way `a + b` becomes `u64_add(a, b)`,
+so branch-type dispatch, the `u64`→`f64` widening, and the `select_*`
+node are identical between the two spellings: one construct, two ways
+to write it. `else if` chains by recursion, so
+`if a { 1 } else if b { 2 } else { 3 }` is `if(a, 1, if(b, 2, 3))`. The
+block form is an expression and composes like one
+(`scaled := 1 + if hot { 10 } else { 0 }`).
+
+```polydat compile
+input cycle: u64
+n := 12
+out := if n > 0 { 100 } else { 7 }
+```
+
+```polydat compile
+input cycle: u64
+n := 5
+out := if n > 10 { 1 } else if n > 3 { 2 } else { 3 }
+```
+
+```polydat compile
+input cycle: u64
+s := "LATENCY"
+out := if s == "LATENCY" { "fast" } else { "thorough" }
+```
+
+Two consequences follow from Polydat being a dataflow language, and the
+block form does not pretend otherwise:
+
+- **`else` is mandatory.** A Polydat expression always produces a value
+  and there is no unit type, so a one-armed `if` would have no result on
+  the false path. A missing `else` is a parse error.
+- **The braces are not a guard.** Both branches always evaluate, so
+  `if n > 0 { total / n } else { 0 }` does *not* protect the division;
+  write `total / max(n, 1)` instead. The block form looks imperative;
+  the semantics remain dataflow.
+
+> **Projection note.** The block form projects as the canonical call
+> form: `out := if((n > 0), 100, 7)`. The round-trip is idempotent from
+> there.
 
 ---
 
@@ -549,17 +600,27 @@ label := "sensor_reading"
 <a id="sec-casts"></a>
 ## 10. `as` casts
 
-`<expr> as <type>` is an **alignment-only** cast. The defined coercions
-are:
+`<expr> as <type>` declares the type a wire should have and inserts the
+adapter that gets it there. The rule, in order:
 
-- `u64 as f64` → widening (`to_f64`)
-- `str as u64` → `StrToU64`
-- same type → no-op passthrough
+- same type → a no-op passthrough;
+- `str as u64` → the string-to-number parse (`StrToU64`): a declared
+  reading of text, not a narrowing;
+- `f64 as u64` → a **hard compile error**. Narrowing a float to an
+  integer under `as` is disallowed because the rounding is a semantic
+  choice the author must make by name: `f64_to_u64` (truncate),
+  `round_to_u64`, `floor_to_u64`, or `ceil_to_u64`;
+- any other pair → exactly the adapter the assembler would insert
+  between a wire of the expression's type and a port of the target type,
+  from the whole adapter catalog ([Type System](type_system.md) §3):
+  every lossless widening (`u64 as f64` is `to_f64`), every register
+  retag, and the JSON and byte-string conversions the catalog defines. A
+  pair the catalog has no adapter for is a compile error naming both
+  types.
 
-`f64 as u64` is a **hard compile error** — narrowing under `as` is
-disallowed; choose an explicit rounding node (`f64_to_u64`,
-`round_to_u64`, `floor_to_u64`, `ceil_to_u64`). Any other pair is also an
-error. Casts may chain (`x as u64 as f64`).
+Casts may chain (`x as u64 as f64`). A hole's declared type in a tile
+(`${x: u64}`, §[17](#sec-tiles)) is the same rule, so a tile can reach
+every catalog adapter a binding can.
 
 ```polydat compile
 input cycle: u64
@@ -596,8 +657,8 @@ A **cursor** is a named `u64` ordinal position tracker driving data
 access. Its declaration uses `=` (not `:=`):
 `cursor <name> = <constructor> [over <expr>]`. A cursor has no fields or
 schema of its own; data is read via accessor functions that take the
-cursor's ordinal. The optional `over <expr>` clause ([SRD-71](cursor_partitions.md))
-supplies a partition source.
+cursor's ordinal. The optional `over <expr>` clause
+([Cursor Partitions](cursor_partitions.md)) supplies a partition source.
 
 ```polydat
 cursor users = range(0, 1000000)
@@ -610,9 +671,9 @@ ratio := (i as f64) / 100.0
 ```
 
 > The `over` clause is part of the canonical projection — `pp_cursor`
-> emits it, so a cursor with `over` round-trips faithfully. (This was a
-> projection gap closed alongside this spec.) The paired AST builder is
-> in the [programmatic guide](polydat_grammar_programmatic.md#p-cursor-over).
+> emits it, so a cursor with `over` round-trips faithfully. The paired
+> AST builder is in the
+> [programmatic guide](polydat_grammar_programmatic.md#p-cursor-over).
 
 The **constructor** is an ordinary expression. `range(start, end)` is the
 finite-ordinal form. The vectordata cursor-sugar forms rewrite to a
@@ -731,69 +792,320 @@ extern embedding: vec_f32
 
 ---
 
+<a id="sec-for"></a>
 <a id="sec-comprehension"></a>
-## 16. Sibling surface: the comprehension `for:`/`where:`/`order:` grammar
+## 16. The `for` construct
 
-> **Scope boundary.** The comprehension surface is **not** part of the
-> `.polydat` statement language and does **not** round-trip through
-> `pp_file`. It is a sibling mini-grammar owned by the `iteration`
-> subsystem and authored in workload YAML/JSON, embedding the core
-> Polydat expression grammar only for scalar sub-expressions. All
-> semantics — constructors, validity axioms, optimizer rewrites, IR —
-> are owned by [`comprehension_forms.md`](comprehension_forms.md). This
-> section documents only the **surface shape**, in `text` blocks (never
-> parsed by the round-trip harness).
-
-A comprehension is a text block with three keys:
-
-```text
-for:   "k in 1..10, limit in [10, 100]"
-where: "{k} > 0"
-order: "halton/20"
-```
-
-- **`for:`** is a comma-separated list of `var in source` clauses
-  (cartesian product), or a list-of-lists for a union. A depth-0 comma
-  starts a new clause only when followed by `<ident> in` — so value-list
-  and function-argument commas stay inside one clause.
-- **Ranges** in source position: `a..b` (half-open), `a..=b`
-  (inclusive), `a..b step c` (or legacy `a..b..c`). Integer endpoints →
-  discrete `IntRange`; float endpoints → a continuous interval. SI
-  suffixes apply (`0..1K..200` → 0, 200, 400, 600, 800).
-- **Tuple clauses** `(a, b) in (…)` zip in parallel; `zip_truncate(…)`
-  and `zip_cycle(…)` choose the zip mode.
-- **Source quote-kind** selects iteration interior: `"a, b; c"`
-  (double) token-strips into `[a, b, c]`; `'a, b; c'` (single) is one
-  atomic element. A **bare identifier** is a wire/param reference, not a
-  string. Spread is `…` (U+2026) or `...`.
-- **`order:`** keywords are exactly `lex`, `reverse_lex`, `diagonal`,
-  `antidiagonal`, `extrema`, `shells`, `halton`, `sobol`, `lhs`,
-  `custom`, plus the meta-form `space_filling(<halton|sobol|lhs>, …)`.
-  Forms: bare `name`, terse `name/N`, keyword `name(arg=val, …)`.
+`for` is one keyword with two readings that share one compiled form
+([The `for` Construct](for_traversal.md)). As an **expression**,
+`name := for <comprehension>` binds the comprehension as a value: a
+**producer** wire of type `Streamer`. As a **statement**,
+`for <source> { body }` with no l-value is a **traversal**: one child
+scope activates per tuple, and the comprehension's element names are
+wires inside the body. The comprehension algebra itself (constructors,
+validity axioms, optimizer rewrites, IR) is owned by
+[`comprehension_forms.md`](comprehension_forms.md); this section is the
+statement-language surface.
 
 ```text
-for k in 1..1000000, limit in 1..1000000 order halton/30
-(x, y) in (1..10, 100..1000..100)
-for (k, limit) in zip_cycle(1..1000000, [10, 50, 100])
-k in 10,100, limit in 10,20,30 where k * limit < 1000
-order: "shells(origin=center, depth=3)"
+statement          ::= ... | for_stmt
+binding            ::= modifier* ident ":=" expr        (* expr may be for_expr *)
+expr               ::= ... | for_expr
+
+for_expr           ::= "for" comprehension_text
+                    |  "for" ident ("where" predicate)? ("order" strategy ("/" int)?)?   (* derivation *)
+for_stmt           ::= "for" for_source "{" statement* "}"
+for_source         ::= comprehension_text                (* inline comprehension *)
+                    |  ident                             (* a bound producer *)
+
+comprehension_text ::= clause ("," clause)* ("where" predicate)? ("order" strategy ("/" int)?)?
+clause             ::= ident "in" source
+                    |  "(" ident ("," ident)+ ")" "in" source
 ```
 
-See [`comprehension_forms.md`](comprehension_forms.md) for the algebra
-(`Clause`, `Cartesian`, `Zip`, `Union`, `Filter`, `Order`), the validity
-axioms (V1–V9), and the legacy↔algebra bridge (note: `order: "shuffle"`
-and `order: "custom(fn)"` are **not** reachable from workload text).
+<a id="sec-for-capture"></a>
+### 16.1 The captured text
+
+The lexer captures everything after `for` as **one token**: up to the end
+of the line or a `{` at bracket depth zero, whichever comes first, with
+string literals skipped whole. The captured text is handed to the
+comprehension parser unchanged, so the comprehension grammar has exactly
+one owner and `pp_file` prints the text back as written. Three
+consequences:
+
+- A traversal's `{` must open **on the same line** as its comprehension;
+  `for k in 1..4` followed by a newline is a parse error naming the
+  missing block.
+- A `{name}` reference inside a `where` predicate is part of the text
+  (a block brace is never immediately followed by an identifier and a
+  closing brace), so `for k in 1..9 where {k} > 3 {` reads as intended.
+- A trailing `//` or `#` comment on the line is not captured.
+
+<a id="sec-for-sources"></a>
+### 16.2 Sources, predicates, and order
+
+`source` is the comprehension's source surface: literal lists
+(`10,20,30`, `load,verify`, `true,false`), `lo..hi` ranges (`a..=b`
+inclusive, `a..b step c`), generator calls such as
+`partitions("*/4", n)` and `subdivide(p, n)`, string comprehensions, and
+`{name}` references to wires of the enclosing scope, which are resolved
+when the traversal is opened. A depth-0 comma starts a new clause only
+when followed by `<ident> in`, so value-list and argument commas stay
+inside one clause. Tuple clauses `(a, b) in (…)` zip in parallel;
+`zip_truncate(…)` and `zip_cycle(…)` choose the zip mode.
+
+`where <predicate>` filters tuples; the predicate names elements as
+`{name}`. `order <strategy>[/<n>]` permutes and optionally truncates;
+the strategy names the text grammar accepts are `lex`, `reverse_lex`,
+`diagonal`, `antidiagonal`, `extrema`, `shells`, `halton`, `sobol`, and
+`lhs`, plus the meta-form `space_filling(<halton|sobol|lhs>, …)`, as a
+bare `name`, terse `name/N`, or keyword `name(arg=val, …)`. The
+algebra's `Shuffle` strategy has no text spelling. `custom(fn)` parses
+but is rejected when the text is lowered to the algebra: the strategy
+set is closed.
+
+<a id="sec-for-elements"></a>
+### 16.3 Element types
+
+Each element name is typed at compile time from its source:
+
+| Source form | Element type |
+|---|---|
+| Integer literal list or `lo..hi` range | `u64` |
+| Float literal list or continuous interval | `f64` |
+| String literal list or string comprehension | `str` |
+| Boolean literal list | `bool` |
+| `partitions(...)`, `subdivide(...)`, `<name>.partitions` | `ext` carrying `Partition` |
+| A generator node call | the node's declared return type |
+| A bound `Streamer` used as a source | `Streamer` |
+
+An integer among floats widens the element to `f64`; a list mixing
+numbers and strings is a compile error.
+
+```polydat compile
+input cycle: u64
+for a in 1..4, b in 10,20,30, c in 1.5,2.5, d in load,verify, e in true,false, p in partitions("*/2", 100) {
+    x := hash(a)
+}
+```
+
+<a id="sec-for-traversal"></a>
+### 16.4 Traversals
+
+The body is a statement list compiled once, at parent compile time, into
+a child program keyed by the statement's lexical position. Every
+statement kind is allowed inside it: bindings, `const`, cursors, module
+calls, tiles, nested `for` statements, and nested producers. Element
+names are typed inputs of the child; outer wires the body references
+cascade in with the parent's types; the only coordinate a body may
+declare is `cycle`. The projection indents the body four spaces.
+
+```polydat compile
+input cycle: u64
+for k in 1..4, limit in 10,20,30 {
+    f := hash(k)
+    g := u64_add(limit, k)
+}
+```
+
+A cursor inside a body may be declared `over` an element; at activation
+the cursor is narrowed to that partition and the body iterates the
+slice:
+
+```polydat compile
+input cycle: u64
+for p in partitions("*/4", 1000) {
+    cursor rows = range(0, 1000) over p
+    row := mod_in(cycle, rows.cursor)
+}
+```
+
+Bodies nest; each level is one program, however many tuples flow, and a
+nested comprehension may name the enclosing tuple's elements:
+
+```polydat compile
+input cycle: u64
+for p in partitions("*/4", 1000) {
+    outer := cardinality(p)
+    for t in 0..20 {
+        mid := u64_add(outer, t)
+        for d in 0..50 {
+            leaf := u64_add(mid, d)
+        }
+    }
+}
+```
+
+<a id="sec-for-producer"></a>
+### 16.5 Producers and derivations
+
+`name := for <comprehension>` binds a `Streamer`. The binding is
+`const`: the compiler lowers it to `const name := streamer("<payload>")`
+over the resolved comprehension, so the wire carries the comprehension
+as an `ext` value. A traversal may name a producer instead of inline
+text, and reads the producer's element names. A **derivation**,
+`for <producer> where …` or `for <producer> order …` (or both), applies
+the algebra's filter and order to a producer bound earlier in the same
+scope; derivations chain. A bare producer name alone in expression
+position (`x := for sweep`) is a parse error, since it modifies nothing.
+
+```polydat compile
+input cycle: u64
+sweep := for k in 1..4, limit in 10,20,30 order halton/5
+for sweep {
+    f := hash(k)
+    g := u64_add(limit, k)
+}
+```
+
+The full surface, with both readings, a producer traversal, an inline
+traversal, and nesting, round-trips through `pp_file` byte for byte
+(this block is not compiled: `myfunc` and `otherfunc` are not defined
+here):
+
+```polydat
+sweep := for k in 1..4, limit in 10,20,30 order halton/5
+for sweep {
+    f := myfunc(k)
+    g := otherfunc(limit, k)
+}
+for phase in load,verify, p in partitions("*/4", 1000000) {
+    row := mod_in(cycle, p)
+    for q in 1..2 {
+        z := hash(q)
+    }
+}
+```
+
+```text
+base     := for k in 1..100, limit in 1..100
+boundary := for base where {k} == 1 || {k} == 100
+sampled  := for base order halton/50
+```
+
+---
+
+<a id="sec-tiles"></a>
+## 17. Tiles
+
+A **tile** is a compiled variate template: a skeleton of static bytes
+with typed holes bound to wires ([Polytile](polytile.md)). A tile
+statement has the shape of every other wire binding,
+`modifier name : type := value`: `tile` is the modifier, the encoding
+is the type of the document on the wire (its port type is `str`), and
+`:=` binds the wire, so another tile reads it as `${doc!}` and a
+binding as `f(doc)`. `:=` is mandatory in every body form; a header
+without it is a parse error naming the tile.
+
+```text
+statement   ::= ... | tile_def
+
+tile_def    ::= "tile" ident (":" encoding)? options? ":=" tile_body
+encoding    ::= "json" | "text" | "csv"                (* default text *)
+options     ::= "(" option ("," option)* ")"
+option      ::= "delims" string string                  (* hole delimiters *)
+             |  "sigil" string                          (* directive prefix *)
+             |  "strict"
+             |  "instring"
+
+tile_body   ::= json_block                              (* json: balanced { } or [ ] *)
+             |  heredoc                                 (* <<< ... >>> *)
+             |  string_literal                          (* one-line tiles *)
+```
+
+The lexer captures a tile body **raw** after `:=`, as it captures the
+text after `for`: a `json` body is a brace- or bracket-balanced block,
+string-aware; a heredoc is everything between `<<<` and `>>>`; a string
+literal is an ordinary Polydat string. A block body keeps the author's
+layout but not the indentation of the statement around it (the common
+leading whitespace of the lines after the first is removed), so a tile
+inside a `for` body renders the same bytes as at top level; heredoc and
+string bodies are exact.
+
+<a id="sec-tile-template"></a>
+### 17.1 The template grammar
+
+Inside a body:
+
+```text
+hole        ::= open expr (":" type)? ("|" format)? ("!")? close
+projection  ::= sigil "for" for_source ("sep" string)? "{" body "}"
+branch      ::= sigil "if" expr "{" body "}" (sigil "else" "{" body "}")?
+splice      ::= open tile_name close
+escape      ::= open open                               (* a literal open delimiter *)
+```
+
+`open` and `close` default to `${` and `}`; `sigil` defaults to `@`;
+all three are overridable per tile with `delims` and `sigil`. A **hole**
+is a Polydat expression in the enclosing scope; `:type` declares the
+hole's type by the `as` rule (§[10](#sec-casts)), `|format` is a printf
+format spec applied before encoding, and `!` marks the hole raw (no
+escaping). Named arguments inside a hole expression are not type
+declarations. A **projection** repeats its body once per tuple of a
+comprehension; `for_source` is the `for` construct's source surface
+(§[16](#sec-for)), inline text or a bound producer, and the element
+names are wires inside the body. A **branch** renders one of two bodies
+by a `u64` condition. A **splice** names another tile of the same
+encoding and inlines its skeleton at compile time. A doubled open
+delimiter is a literal open delimiter. The braces of a directive block
+delimit it and whitespace padding them is not body; braces inside body
+text are balanced, so JSON objects sit in a block unescaped; a hole
+cannot appear in a directive header, but `{name}` interpolation may.
+
+```polydat compile
+input cycle: u64
+tile t := "n=${cycle}"
+```
+
+Every body form, with a projection, a raw hole, and per-tile options,
+round-trips through `pp_file` byte for byte (not compiled here: the
+holes name wires this block does not define):
+
+```polydat
+tile doc : json := {
+    "tenant": ${tenant_id},
+    "samples": [ @for s in 0..4 { { "n": ${s} } } ]
+}
+tile load : text := <<<
+INSERT ${keyspace} '${doc!}'
+>>>
+tile row : csv := "${a},${b}"
+tile odd : text (delims "<%" "%>", sigil "#", strict) := "<%x%> #if c { y }"
+```
+
+<a id="sec-tile-typing"></a>
+### 17.2 Typing, encodings, and the host forms
+
+Every hole has a type known at compile time, from its declaration, else
+its expression's inferred type, else the position's contextual
+expectation, and the encoder for the hole is chosen by that type: in a
+`json` value position a `str` wire is quoted and a number bare; inside a
+string literal or an object key any type renders as escaped text; `csv`
+fields are quoted when needed; `text` is the display form. A `json` tile
+is checked at compile time as JSON with `0` in every hole. A projection's
+comprehension must have bounded cardinality; a continuous source projects
+only under a sampling order (`halton`, `sobol`, or `lhs`) with a count. Under `(strict)` or the compiler's strict mode, implicit adapters
+at holes are rejected as they are on wires. The rules in full are
+[Polytile](polytile.md) §4 and §5.
+
+`name := polytile(encoding, body, options...)` and
+`name := polytile_json(body, options...)` are binding forms the parser
+rewrites into `tile` statements, so a host that holds only a string
+lowers it to a tile as a program transform; the body is taken raw and
+never evaluated. `tile` is a hard keyword; directives and delimiters have
+no meaning outside a tile body.
 
 ---
 
 <a id="sec-gaxioms"></a>
-## 17. Carried-forward foundations: the six G-axioms
+## 18. Foundations: the six G-axioms
 
 The grammar is small but does an unusual amount of load-bearing work.
-These six structural commitments (from the superseded `grammar.md`) are
-the basis the substrate, compiler, runtime, and embedding docs rest on.
-They are **not** optimizations — without them those layers' contracts
-would not hold.
+These six structural commitments (stated in full, with what breaks
+without each, in [`grammar.md`](grammar.md) §4) are the basis the
+substrate, compiler, runtime, and embedding docs rest on. They are
+**not** optimizations — without them those layers' contracts would not
+hold.
 
 - **G1 — Auto-extern as syntactic discovery.** An identifier reference is
   classified local-or-outer with the *same* syntax; an unresolved local
@@ -812,37 +1124,49 @@ would not hold.
   independent of runtime state.
 - **G6 — One grammar for expressions and programs.** An expression is a
   program of one anonymous output; a program is a sequence of named
-  bindings. Sub-axiom **G6.i**: compiler intrinsics (`if(…)`, literal
-  promotion, interpolation→`printf`) are a **closed** parse-time set, not
-  extensible by library code. Sub-axiom **G6.p**: infix precedence is a
-  stable, grammar-structural commitment (§[6.1](#sec-precedence)).
+  bindings. Sub-axiom **G6.i**: compiler intrinsics (`if(…)` and its
+  block form, literal promotion, interpolation→`printf`, and the
+  `polytile`/`polytile_json` rewrites into `tile` statements) are a
+  **closed** parse-time set, not extensible by library code. Sub-axiom
+  **G6.p**: infix precedence is a stable, grammar-structural commitment
+  (§[6.1](#sec-precedence)).
 
 This section summarizes the G-axioms. The full type-inference rules
-(`T-IntLit`, `T-Call-OverloadResolve`, `T-BinOp-Add`, `T-FieldAccess`, …),
-the G-axiom composition diagram, and the downstream cross-reference map
-remain in the retained [`grammar.md`](grammar.md) formal appendix, which
-this spec supersedes as the reading entry point but cross-references for
-the complete formal statements.
+(`T-IntLit`, `T-Call-OverloadResolve`, `T-BinOp-Add`, `T-FieldAccess`, …)
+and the G-axiom composition diagram are in the
+[`grammar.md`](grammar.md) formal appendix.
 
 ---
 
 <a id="sec-rejections"></a>
-## 18. Rejection rules (summary)
+## 19. Rejection rules (summary)
 
 The parser/compiler reject, with diagnostics:
 
 - `const volatile` together, and any duplicate modifier
   (§[5.1](#sec-modifier-combos)).
+- A type annotation on a binding that is not `shared`, and a `shared`
+  initializer whose type does not match its annotation
+  (§[5.2](#sec-shared-typed)).
 - `input ()` — the empty input tuple (§[4.1](#sec-input-tuple)).
-- `f64 as u64` and any undefined `as` coercion
+- `f64 as u64`, and any `as` pair the adapter catalog has no adapter for
   (§[10](#sec-casts)) — narrowing requires an explicit rounding node.
 - Ordered comparison (`< > <= >=`) on strings
   (§[7](#sec-comparison)).
+- An `if` block without `else`, or with anything but `{` or `if` after
+  `else` (§[7.1](#sec-if-block)).
+- A `for` statement whose `{` is not on the comprehension's line; a bare
+  producer name as a `for` expression; a traversal over a producer that
+  is not bound in scope; a body declaring an `input` other than `cycle`;
+  a literal list mixing numbers and strings (§[16](#sec-for)).
+- A tile header without `:=`; an unknown encoding; an unterminated hole,
+  block, or heredoc; a projection over a source of unbounded
+  cardinality (§[17](#sec-tiles)).
 - A bare expression that is not a complete statement (every top-level
   construct must be a statement).
 - Undefined wire / unknown function / forward reference (at validate).
 
-> There is **no** “reserved word used as a name” error beyond the five
+> There is **no** “reserved word used as a name” error beyond the seven
 > hard-unusable keywords, and **no** “chained dot rejected” error —
 > chained field access is accepted (§[11.1](#sec-field-access)). Do not
 > assume rejections this spec does not list.
@@ -850,7 +1174,7 @@ The parser/compiler reject, with diagnostics:
 ---
 
 <a id="sec-projection-summary"></a>
-## 19. Appendix: projection canonicalization, at a glance
+## 20. Appendix: projection canonicalization, at a glance
 
 What “the syntax the runtime gives back” changes, relative to your input:
 
@@ -862,6 +1186,9 @@ What “the syntax the runtime gives back” changes, relative to your input:
 | `f := 60` (into f64 ctx) / `60.0` | `60.0` | integral floats keep `.0` |
 | `input (a: u64, b: u64)` | `input a: u64` / `input b: u64` | tuple input desugared |
 | `cursor q = range(0,1) over p` | `cursor q = range(0, 1) over p` | `over` retained |
+| `out := if n > 0 { 1 } else { 2 }` | `out := if((n > 0), 1, 2)` | block `if` desugared at parse |
+| `for k in 1..4 {` … | `for k in 1..4 {` … | the captured text is printed as written; the body indents four spaces |
+| `tile t := "n=${cycle}"` | `tile t := "n=${cycle}"` | the raw body is printed as captured |
 
 Everything in this table is exercised by
 [`doc_examples_test.rs`](../../tests/doc_examples_test.rs), which extracts

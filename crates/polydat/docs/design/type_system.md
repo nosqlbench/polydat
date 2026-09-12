@@ -29,7 +29,7 @@ the catalog where it can heal a mismatch.
 | `F64`     | 64-bit float    | `Value::F64(f64)` | IEEE 754 double |
 | `F32`     | 32-bit float    | `Value::U64` (as `f32::to_bits() as u64`) | Bit-stuffed; widens to `F64` |
 | `F16`     | 16-bit float    | `Value::U64` (as `f16::to_bits() as u64`) | binary16; widens exactly to F32/F64 |
-| `U128`/`I128` | 128-bit int | `Value::U128`/`I128(Bits128)` | Two u64 limbs (keeps `Value` at align 8); interpreter-only |
+| `U128`/`I128` | 128-bit int | `Value::U128`/`I128(Bits128)` | Two u64 limbs (keeps `Value` at align 8); no native lowering — a closure step on the compiled engines |
 | `Reg128`, `RegI8x16`, `RegI16x8`, `RegI32x4`, `RegI64x2`, `RegF16x8`, `RegF32x4`, `RegF64x2` | 128-bit SIMD word | `Value::Reg128(Bits128, RegLanes)` | One register word under 8 lane-views; reg→reg is a free bitcast retag (alignment §8.4) |
 | `Bool`    | logical          | `Value::Bool(bool)` | Distinct runtime variant |
 | `Str`     | UTF-8 string     | `Value::Str(Arc<str>)` | Cheap-clone via Arc |
@@ -57,8 +57,8 @@ carries them:
   narrow widths are *bit-stuffed* into it (the `PortType` says how
   to read the bits). JIT-eligible at P3.
 - **Two-limb 128-bit** (`U128`, `I128`) — `Bits128([u64; 2])`;
-  interpreter-only; the compiled layout reserves their two
-  slots as immediate limbs but exposes no production lowering.
+  two immediate slots (`Imm2`) in the compiled layout, where a
+  128-bit node runs as its closure step; no native lowering.
 - **128-bit SIMD register plane** (`Reg128` + 7 lane-views) — a
   16-byte word with a `RegLanes` view tag; reg→reg retags are free
   bitcasts and the arithmetic ops JIT to native SIMD.
@@ -105,10 +105,12 @@ each carrying a [`Bits128`] — two little-endian `u64` limbs
 `Value`'s alignment at 8 and its footprint inside the 40-byte
 buffer-slot envelope (the `value_size_probe` test guards this).
 
-- **Interpreter-only** — 128-bit integer operations have no
-  production JIT lowering, so they run in the interpreter. The
-  carrier reassembles to a native `u128`/`i128` in two register
-  moves for the arithmetic, then re-splits.
+- **No native lowering** — 128-bit integer operations run as
+  ordinary evals on the interpreter and as closure steps over two
+  immediate slots on the closure tier and the native engine, with
+  the same result on every engine. The carrier reassembles to a
+  native `u128`/`i128` in two register moves for the arithmetic,
+  then re-splits.
 - **JSON** — projects as a **decimal string**, not a JSON Number
   (which tops out at the `u64`/`i64`/`f64` leaves); the extractor
   also accepts an in-range Number for convenience.
@@ -212,7 +214,7 @@ the lane family alongside the register plane (alignment §8.2).
   modes: *owned* (`Arc<[T]>`, one allocation) or *zero-copy* (a raw
   `(ptr, len)` borrow into a long-lived owner such as an mmap'd
   dataset, kept alive by the owner's Arc). Clone is one atomic
-  increment either way (SRD 53 §"Native Vector Binding").
+  increment either way.
 - **Native binding** — `VecF32`/`VecF64`/`VecF16` bind CQL
   `vector<float|double|half_float, N>`; `VecI8`/`VecI16`/`VecI32`/
   `VecI64` bind `vector<tinyint|smallint|int|bigint, N>`. The
@@ -237,7 +239,7 @@ never in the adapter catalog (§3).
   (dataset, prepared statement); the producer node (`dataset_open`,
   …) populates it and the consumer downcasts with
   `Value::as_handle::<T>()`. One `Arc::clone` per cycle, zero
-  allocation (SRD 53 §"Dataset Handles").
+  allocation.
 
 ---
 
@@ -276,8 +278,9 @@ convention.
 `Value::None` is the *absent* sentinel. It appears in
 freshly-allocated buffer slots before first
 evaluation and as the "no value yet" marker for
-optional ports. Per SRD-74 it propagates through node
-evaluation: any node whose inputs include `None`
+optional ports. Per [none_semantics.md](none_semantics.md) it
+propagates through node evaluation, on every engine: any node
+whose inputs include `None`
 emits `None` on every output unless it explicitly
 opts in via `PolydatNode::accepts_none_inputs()`.
 
@@ -314,8 +317,8 @@ Three helper types back the multi-`PortType` variants:
 `Value::None` is the *absent* marker (it appears in
 freshly-allocated buffer slots before first evaluation and as the
 "no value yet" state of optional ports) — already covered above;
-per SRD-74 it propagates through evaluation unless a node opts in
-via `accepts_none_inputs()`. It is not a `PortType`: no wire
+per [none_semantics.md](none_semantics.md) it propagates through
+evaluation unless a node opts in via `accepts_none_inputs()`. It is not a `PortType`: no wire
 declares `None`, and `port_type()` reports `U64` as a placeholder.
 
 ---
@@ -675,20 +678,26 @@ Two call sites apply the catalog:
 
 ### 6.1 Assembler — intra-graph wire validation
 
-`compile::assembly::resolve` walks every wire after
+`compile::assembly::resolve_with_log` walks every wire after
 parse, compares the producer's output `PortType` to
 the consumer's input `PortType`, and:
 
 - Equal types → wire it through, no adapter.
 - Mismatch with a catalog entry → insert the adapter
   node inline, rewriting the wire to route
-  `producer → adapter → consumer`.
+  `producer → adapter → consumer`, and record
+  `TypeAdapterInserted` in the compile log.
 - Mismatch with no catalog entry → fail construction
   with `AssemblyError::TypeMismatch` carrying both
   port types and the offending wire path.
 
-This runs once at kernel construction; the resulting
-program has no remaining mismatches.
+This runs once, before any engine builds, so the resolved
+graph every engine receives has no remaining mismatches: the
+insertion is engine-neutral. Strict mode's refusal of an
+implicit coercion is one check at the same insertion point
+(the assembler's `strict` flag), naming the explicit
+conversion to write, so strict means the same thing on every
+engine.
 
 ### 6.2 Boundary — `adapt_boundary_value`
 
@@ -711,9 +720,7 @@ crossing into inner kernels via the `set:` /
    with a one-line audit warning; the caller's
    `set_wire_idx` then detects the residual type
    mismatch and surfaces `WriteError::TypeMismatch`
-   to the host (scope-init code in
-   `nbrs-runtime/src/synthesis.rs::apply_scope_values`
-   re-raises this as a `panic!`).
+   to the host.
 
 ---
 
@@ -749,44 +756,17 @@ to an empty string implicitly.
 
 ## 8. Cross-references
 
-- [composition_substrate.md] §T1, §T2, §T3 — the
-  typed-slot axioms this catalog enforces.
-- [`polydat/src/library/convert.rs`] — core adapter
-  node implementations.
-- [`polydat/src/library/polyfill_narrow.rs`] —
-  narrow-width (`u8`/`i8`/`u16`/`i16`/`f16`) adapter
-  nodes.
-- [`polydat/src/library/polyfill_128.rs`] — 128-bit
-  (`u128`/`i128`) adapter nodes.
-- [`polydat/src/library/polyfill_complete.rs`] —
-  macro-generated matrix-completion adapters (scalar
-  narrowings + the full vector-lane family).
-- [`polydat/src/compile/assembly.rs::auto_adapter`]
-  — catalog dispatch.
-- [`polydat/src/library/register.rs`] — SIMD register-plane
-  nodes (`RegView` retag, splats, lane arithmetic, `reg_dot_f32`).
-- [`polydat/tests/adapter_catalog_invariants.rs`] — the property
-  test that enforces the widening invariant and re-derives the §3
-  matrix from the catalog (drift guard).
-- [`polydat/src/kernel/state.rs::adapt_boundary_value`]
-  — boundary-time application.
-- [`polydat/src/kernel/api_impl.rs::set_wire_idx`]
-  — the typed Dataflow write surface that surfaces
-  `WriteError::TypeMismatch` when the catalog can't
-  heal.
-- [`polydat/src/dsl/parser.rs::parse_interpolated_string`]
-  — the normative "every placeholder → printf" desugar.
-- [SRD-74](none_semantics.md) — `Value::None`
+- [composition_substrate.md](composition_substrate.md) §T1,
+  §T2, §T3 — the typed-slot axioms this catalog enforces.
+- [none_semantics.md](none_semantics.md) — `Value::None`
   propagation, the absent-sentinel rule.
-
-[composition_substrate.md]: composition_substrate.md
-[`polydat/src/library/convert.rs`]: ../../src/library/convert.rs
-[`polydat/src/library/polyfill_narrow.rs`]: ../../src/library/polyfill_narrow.rs
-[`polydat/src/library/polyfill_128.rs`]: ../../src/library/polyfill_128.rs
-[`polydat/src/library/polyfill_complete.rs`]: ../../src/library/polyfill_complete.rs
-[`polydat/src/compile/assembly.rs::auto_adapter`]: ../../src/compile/assembly.rs
-[`polydat/src/library/register.rs`]: ../../src/library/register.rs
-[`polydat/tests/adapter_catalog_invariants.rs`]: ../../tests/adapter_catalog_invariants.rs
-[`polydat/src/kernel/state.rs::adapt_boundary_value`]: ../../src/kernel/state.rs
-[`polydat/src/kernel/api_impl.rs::set_wire_idx`]: ../../src/kernel/api_impl.rs
-[`polydat/src/dsl/parser.rs::parse_interpolated_string`]: ../../src/dsl/parser.rs
+- [`src/ast.rs`](../../src/ast.rs) — `PortType`, `Value`,
+  `satisfies_slot`, the carriers.
+- [`src/compile/assembly.rs`](../../src/compile/assembly.rs) —
+  `auto_adapter` / `boundary_adapter` (catalog dispatch) and the
+  wire resolution that inserts adapters.
+- [`src/kernel/state.rs`](../../src/kernel/state.rs) —
+  `adapt_boundary_value`, boundary-time application.
+- [`src/library/convert.rs`](../../src/library/convert.rs) — the
+  core adapter nodes; the narrow-width, 128-bit, and
+  matrix-completion adapters are its `polyfill_*` companions.

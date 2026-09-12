@@ -14,6 +14,8 @@
 //!   paths over Ref state.
 //! - **S9(a)** runs implicitly throughout: every eval in these
 //!   debug-built tests executes the ref validator.
+//! - **No per-thread storage** — a `thread_local!` tripwire: values
+//!   belong to kernel states, never to threads.
 //! - **S10** — the `from_raw_parts` tripwire: Ref-deref unsafe
 //!   stays inside the enumerated allowlist.
 
@@ -202,6 +204,68 @@ fn s10_from_raw_parts_tripwire() {
         offending.is_empty(),
         "S10 tripwire: from_raw_parts outside the allowlist (bring the \
          site under the slot-state axioms and add it here deliberately):\n{}",
+        offending.join("\n"),
+    );
+}
+
+/// No value is stored per thread. Storage for a kernel's values
+/// belongs to a kernel state: its slot buffer, its scratch entries,
+/// its externs (compiled_handles.md §3); the program is shared and
+/// holds nothing that changes. A `thread_local!` that held a value,
+/// a pointer to one, or a state would tie an output's lifetime to a
+/// thread instead of to its provenance. The thread-locals that exist
+/// are enumerated here with why each is not value storage; a new one
+/// is brought under this rule and added deliberately.
+#[cfg_attr(miri, ignore)]
+#[test]
+fn no_thread_local_value_storage_tripwire() {
+    // (file, why it's allowed)
+    let allow: &[(&str, &str)] = &[
+        // The longjmp target while native code runs: control flow for
+        // the panic path, holding no value.
+        ("src/compile/jit/codegen.rs", "native panic return target"),
+        // The binding name a node is built under, for attribution
+        // during one synchronous build call.
+        ("src/dsl/factory.rs", "build-time attribution context"),
+        // A flag that a node eval runs under the enrichment catch, so
+        // the panic hook stays quiet.
+        ("src/kernel/engines.rs", "panic-capture flag"),
+        // The directory relative data-file paths resolve against, set
+        // for the duration of one compile.
+        ("src/library/datafile.rs", "compile-time base directory"),
+        // The rows a side-channel node emitted, a sink the harness
+        // drains; no kernel reads them back.
+        ("src/library/emit.rs", "side-channel row sink"),
+        // The entropy state of the nondeterministic random nodes.
+        ("src/library/random.rs", "entropy source"),
+    ];
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut offending = Vec::new();
+    let mut stack = vec![root.clone()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("read_dir") {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let text = std::fs::read_to_string(&path).expect("read");
+                if text.contains("thread_local!") || text.contains("#[thread_local]") {
+                    let rel = path
+                        .strip_prefix(root.parent().unwrap())
+                        .unwrap()
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    if !allow.iter().any(|(f, _)| rel == *f) {
+                        offending.push(rel);
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        offending.is_empty(),
+        "thread-local tripwire: a thread_local! outside the allowlist (no value, \
+         pointer, or state is stored per thread; see compiled_handles.md §3):\n{}",
         offending.join("\n"),
     );
 }

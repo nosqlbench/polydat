@@ -134,3 +134,27 @@ remains.
    evaluation never performs filesystem lookup.
 6. The compiled DAG, not the source file boundary, owns caching,
    invalidation, purity, and execution-tier behavior.
+
+## 7. Modules and bodies
+
+A `for` body ([The `for` Construct](for_traversal.md) §4) compiles as a
+child program with the settings its parent used: the source directory,
+the ordered library paths, the strict flag, the diagnostic context
+label, the cursor limit, and the pragma set. The child compiler also
+starts with the parent's module cache as it stood when the body was
+lowered, which holds the program's own formal definitions (registered
+before any statement compiled, §2) and every module the parent had
+resolved by then. The body therefore resolves a module defined in the
+program itself, and a module the parent already found on disk, without
+a source directory of its own; the same record compiles the body on
+every engine, so a body sees the same modules on every engine.
+
+A tile projection body ([Polytile](polytile.md) §6) compiles with the
+default settings, registered nodes and the embedded standard library,
+and does not inherit the enclosing program's directory, library paths,
+pragmas, or program-local modules.
+
+A tile declared inside a module body inlines with the call under the
+call's prefix, as every other statement of the body does; a producer
+bound in a module body (`name := for ...`) is bound under the prefix as
+the `streamer` constant the `for` expression lowers to.
