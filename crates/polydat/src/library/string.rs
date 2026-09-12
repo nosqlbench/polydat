@@ -248,63 +248,6 @@ fn append_chunk_to_words(buf: &mut String, n: u32) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Signature declarations for the DSL registry
-// ---------------------------------------------------------------------------
-
-use crate::ast::SlotType;
-use crate::dsl::registry::{Arity, FuncCategory, FuncSig, ParamSpec};
-
-/// Signatures for string generation nodes.
-pub fn signatures() -> &'static [FuncSig] {
-    use FuncCategory as C;
-    &[
-        // `combinations` migrated to `#[polydat_node]` per
-        // SRD-80 PR B.6 — Setup<ParsedCombinations> with
-        // PolydatSetup-compatible from_pattern.
-        // `number_to_words` and `hashed_uuid` migrated to
-        // `#[polydat_node]` per SRD-80 PR B.4.
-        // `char_buf` migrated to `#[polydat_node]` per SRD-80 PR B.6.
-        FuncSig {
-            name: "file_line_at",
-            category: C::String,
-            outputs: 1,
-            description: "select a line from a file by index",
-            help: "Read a file at construction time and return a line at cycle-time index.\nIndex wraps modulo line count so every u64 input is valid.\nFile path is a const string argument.\nParameters:\n  index    — u64 wire input\n  filename — ConstStr path to file\nExample: file_line_at(mod(hash(cycle), 1000), \"words.txt\")",
-            identity: None,
-            variadic_ctor: None,
-            params: &[
-                ParamSpec {
-                    name: "index",
-                    slot_type: SlotType::Wire,
-                    required: true,
-                    example: "cycle",
-                    constraint: None,
-                },
-                ParamSpec {
-                    name: "filename",
-                    slot_type: SlotType::ConstStr,
-                    required: true,
-                    example: "\"test.csv\"",
-                    constraint: None,
-                },
-            ],
-            arity: Arity::Fixed,
-            commutativity: crate::ast::Commutativity::Positional,
-            default_resolver: None,
-            output_type: crate::dsl::registry::OutputType::Fixed,
-            // Hand registration: no static return-port declaration;
-            // type inference falls back to the name heuristic.
-            output_port: None,
-        },
-        // `str_concat` migrated to `#[polydat_node]` per SRD-80 PR B.9.
-        // `str_lower` and `str_upper` migrated to
-        // `#[polydat_node]` per SRD-80 PR B.4 — their FuncSig
-        // entries flow through the proc-macro-emitted
-        // NodeRegistration, no manual SIGS entry needed.
-    ]
-}
-
 // =================================================================
 // HashedUuid: deterministic UUID v4 from a u64 seed
 // =================================================================
@@ -516,19 +459,6 @@ fn str_upper(input: String) -> String {
     input.to_uppercase()
 }
 
-/// Try to build a string node from a function name and const args.
-///
-/// Returns `None` if the name is not handled by this module.
-pub(crate) fn build_node(
-    _name: &str,
-    _wires: &[crate::compile::assembly::WireRef],
-    _wire_types: &[crate::ast::PortType],
-    _consts: &[crate::dsl::factory::ConstArg],
-) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
-    None
-}
-
-crate::register_nodes!(signatures, build_node);
 #[cfg(test)]
 mod tests {
     use super::*;

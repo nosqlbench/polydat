@@ -2097,6 +2097,23 @@ fn csv_field_honours_rfc4180_quoting() {
     let _ = std::fs::remove_file(&csv_path);
 }
 
+/// One registration per name: a second one would be found or not by
+/// link order, and its diagnostics with it.
+#[test]
+fn every_function_is_registered_once() {
+    let mut names: Vec<&str> = polydat::dsl::registry::registry()
+        .iter()
+        .map(|sig| sig.name)
+        .collect();
+    names.sort_unstable();
+    let duplicates: Vec<&str> = names
+        .windows(2)
+        .filter(|w| w[0] == w[1])
+        .map(|w| w[0])
+        .collect();
+    assert!(duplicates.is_empty(), "registered twice: {duplicates:?}");
+}
+
 #[test]
 fn every_registered_function_compiles() {
     use polydat::dsl::compile::compile_polydat;

@@ -2447,7 +2447,7 @@ pub fn auto_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>
         (PortType::VecI64, PortType::Json) => Some(Box::new(C::VecI64ToJson::new())),
         (PortType::VecI16, PortType::Json) => Some(Box::new(C::VecI16ToJson::new())),
         (PortType::VecI8, PortType::Json) => Some(Box::new(C::VecI8ToJson::new())),
-        (PortType::VecI32, PortType::Str) => Some(Box::new(C::VecI32ToStr::new())),
+        (PortType::VecI32, PortType::Str) => Some(Box::new(P::VecI32ToStr::new())),
         (PortType::VecI64, PortType::Str) => Some(Box::new(C::VecI64ToStr::new())),
         (PortType::VecI16, PortType::Str) => Some(Box::new(C::VecI16ToStr::new())),
         (PortType::VecI8, PortType::Str) => Some(Box::new(C::VecI8ToStr::new())),

@@ -325,7 +325,8 @@ macro_rules! vec_int_to_str {
         )+ }
     };
 }
-vec_int_to_str!(i32 i32, i64 i64, i16 i16, i8 i8);
+// `VecI32 → Str` is polyfill.rs's, with its tests.
+vec_int_to_str!(i64 i64, i16 i16, i8 i8);
 
 #[crate::polydat_node(category = Conversions)]
 fn __vec_f64_to_str(elems: &[f64]) -> String {

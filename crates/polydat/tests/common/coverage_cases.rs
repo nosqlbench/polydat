@@ -320,5 +320,8 @@ pub fn programs() -> Vec<(String, String)> {
         };
         out.push((sig.name.to_string(), src));
     }
+    // By name, whatever order the modules linked in, so the pinned
+    // matrix does not move when a module is added.
+    out.sort_by(|a, b| a.0.cmp(&b.0));
     out
 }
