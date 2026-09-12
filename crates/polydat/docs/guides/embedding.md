@@ -65,7 +65,7 @@ for cycle in [0u64, 1, 2] {
 ```
 
 ```text
-engine: native (PushPull)
+engine: native (Raw)
 inputs: ["cycle"]
 outputs: ["cycle", "user_id", "score", "label"]
 cycle 0: user_id=607535 score=0.601 label=user-607535
@@ -612,19 +612,21 @@ for cycle in [0u64, 1] {
 ```
 
 ```text
-Engine::default() is native (PushPull)
+Engine::default() is native (Pull)
 P3 plan: 4 native segment(s), 3 closure step(s)
 cycle 0: j={"h": 16294208416658607535, "name": "user-16294208416658607535", "tag": "job-7535", "cell": "L4:10:13"}
   closures (Pull) agrees: true
-  native (PushPull) agrees: true
+  native (Pull) agrees: true
 cycle 1: j={"h": 10451216379200822465, "name": "user-10451216379200822465", "tag": "job-2465", "cell": "L4:0:8"}
   closures (Pull) agrees: true
-  native (PushPull) agrees: true
+  native (Pull) agrees: true
 ```
 
 Both engines accept the program and compute what the interpreter
 computes; `engine()` on a kernel reports the provenance the selector
-chose. P3 runs its nineteen native-eligible nodes as four native
+chose, the same choice on either compiled engine: this graph has one
+input, so the cone guard alone (`Pull`); the smaller first example above
+gets `Raw`. P3 runs its nineteen native-eligible nodes as four native
 segments, one per run of them between the host nodes and on either
 side of a compile-time constant, and the three host nodes as closure
 steps, with the extension value passing between

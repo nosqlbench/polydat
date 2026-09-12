@@ -109,12 +109,14 @@ else:
     Pull
 ```
 
-`auto_compile_p2` and `auto_compile_p3` return both the selected engine and the
-`GraphAnalysis` used to select it. Cone ratios remain diagnostic metadata; the
-selector does not use a `stable_ratio` threshold.
-
-This selector applies only to explicit whole-kernel compiled construction. The
-production mixed path uses `JitMode` and cone qualification instead.
+`Provenance::Auto` on either compiled engine applies this rule to the resolved
+graph, through one function both engine arms share; a named provenance is
+taken as given. On the native engine `Push` builds the push-pull kernel, since
+push bookkeeping without the pull guard has no kernel of its own. `engine()`
+reports the mode the kernel was built in, so `compile_with(Native(Auto))` on a
+small single-input graph reports `Native(Raw)`. Cone ratios remain diagnostic
+metadata; the selector does not use a `stable_ratio` threshold. The
+interpreter uses `JitMode` and cone qualification instead.
 
 ## 5. Slot representation
 

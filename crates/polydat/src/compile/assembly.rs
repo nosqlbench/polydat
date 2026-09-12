@@ -2781,7 +2781,11 @@ impl PolydatAssembler {
                 {
                     let resolved = self.resolve_with_log(log.as_deref_mut())?;
                     let folded = log.is_some().then(|| Self::constant_sites(&resolved));
+                    let prov = Self::provenance_for(prov, &resolved);
                     let kernel = Self::hybrid_from(resolved).map_err(refused)?;
+                    // Push on native is the push-pull kernel: push
+                    // bookkeeping without the cone guard has no kernel of
+                    // its own (engines.md §4).
                     let kernel: Box<dyn Kernel> = match prov {
                         Provenance::Raw => Box::new(kernel.into_raw()),
                         Provenance::Pull => Box::new(kernel.into_pull()),
@@ -2855,10 +2859,12 @@ impl PolydatAssembler {
         }
     }
 
-    /// The closure-tier kernel of a resolved graph in one provenance
-    /// mode, or why the closure tier refuses the graph.
-    fn closures_from(resolved: ResolvedDag, prov: Provenance) -> Result<Box<dyn Kernel>, String> {
-        let prov = match prov {
+    /// The provenance mode a compiled engine builds for `prov`: `Auto`
+    /// is the selector's choice from the resolved graph's shape
+    /// ([`select::select_prov_mode`]), on the closure tier and the
+    /// native engine alike; a named mode is taken as given.
+    fn provenance_for(prov: Provenance, resolved: &ResolvedDag) -> Provenance {
+        match prov {
             Provenance::Auto => {
                 let analysis =
                     select::analyze_graph(&resolved.nodes, &resolved.wiring, &resolved.output_map);
@@ -2869,7 +2875,13 @@ impl PolydatAssembler {
                 }
             }
             p => p,
-        };
+        }
+    }
+
+    /// The closure-tier kernel of a resolved graph in one provenance
+    /// mode, or why the closure tier refuses the graph.
+    fn closures_from(resolved: ResolvedDag, prov: Provenance) -> Result<Box<dyn Kernel>, String> {
+        let prov = Self::provenance_for(prov, &resolved);
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
             Self::build_p2_layout(&resolved)?;
         let dependents = || {
