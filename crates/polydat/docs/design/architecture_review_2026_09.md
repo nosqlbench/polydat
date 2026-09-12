@@ -28,7 +28,7 @@ stale text). Size: XS under an hour, S a half day to a day, M two to three days,
 
 | ID | Area | Size | Defect |
 |---|---|---|---|
-| F-K1 | kernel | S | Constructing or compiling an interpreter kernel opens a root cycle (the build's constant fold seeds inputs through `set_inputs`), which resets the thread's arena. A compiled root that compiles a body mid-cycle can have handles invalidated under it. H5 has no tripwire. |
+| F-K1 | kernel | S | Constructing or compiling an interpreter kernel opened a root cycle (the build's constant fold seeded inputs through `set_inputs`), which reset the thread's arena. Superseded: the cycle and the arena were removed with SRD 115's third revision (runtime_model.md R4). |
 | F-E3 | engines | S | The P3 kernel's provenance mask is one `u64`; a program whose inputs span 64 or more slots (ten cursors plus a coordinate) shifts out of range at build. The closure tier and pure tier use `ProvMask`. |
 | F-E7 | engines | M | The None rule has two predicates: the cone planner's (a None-tolerant node joins a cone only when every input is intra-cone) and the segment batcher's (a node downstream of an extern unset at build is a closure). A host that clears an extern after build reaches the runtime panic in a native segment where the interpreter produces a value. |
 | F-C1 | compiler | XS | `pragma strict_values` and `strict_types` are honoured on every compiled engine and on the logged interpreter path, and silently dropped on the plain interpreter path. |
@@ -172,12 +172,14 @@ belongs in exactly one place; others cite it.
    without; every engine-less entry point and the binary build it (engines.md §1).
 2. One evaluation rule on every engine: a step is current until an input in its
    provenance changes; nondeterministic never current; compile-constant folded at build;
-   handle-writing steps run every cycle; provenance mode is an optimization that never
-   changes a result (runtime_model.md §3, engines.md §3).
-3. Cycle ownership: the kernel the host drives opens the thread's cycle, resets the arena
-   and advances the generation; a nested kernel adopts it; a handle lives one cycle
-   (runtime_model.md R4; compiled_handles H5 cites it).
-4. The `Kernel` trait in those terms: the writes that open a cycle, `pull` runs one cone,
+   no step exempt; provenance mode is an optimization that never changes a result
+   (runtime_model.md §3, engines.md §3).
+3. Outputs are owned by their provenance: every output, immediate or by reference,
+   stands until an input in its provenance is written; each state owns the storage
+   behind its outputs and no storage belongs to a thread (runtime_model.md R4;
+   compiled_handles.md §3). The cycle, the arena, the value table, and the nested
+   kernel of the earlier design were removed for contradicting this.
+4. The `Kernel` trait in those terms: the writes, `pull` runs one cone,
    `eval` runs every step, `invalidate_all` keeps inputs, `into_program` and the created
    kernel's starting state, `traverse` on every engine, the index-keyed calls,
    `cursor_schemas` on every kernel (runtime_model.md, kernel API doc).
@@ -192,11 +194,11 @@ belongs in exactly one place; others cite it.
 9. Traversal activation on every engine: opening evaluates the comprehension in the body's
    scope through `Lookup`/`Layered`; `BodySource` carries settings; one program per engine
    per position; the cascade rule for shared wires (for_traversal.md §5).
-10. Tiles after SRD 117: hole values as the render node's inputs; bodies nested kernels
-    precompiled at construction on `Engine::default()` because a build's fold opens a root
-    cycle and a closure has no engine to ask; memoized tuples and their condition; integers
-    and floats written directly, byte-identical to Rust's formatting; one nested kernel per
-    body, engine and thread (polytile.md §7).
+10. Tiles after SRD 117: hole values as the render node's inputs; bodies are kernels
+    precompiled at construction on `Engine::default()` because a closure has no engine to
+    ask; memoized tuples and their condition; integers and floats written directly,
+    byte-identical to Rust's formatting; one body kernel per body program and engine,
+    owned by the rendering state in the render step's scratch (polytile.md §7).
 11. The hybrid is P3: segments are runs of consecutive native-eligible nodes of one
     lifecycle; a constant node never joins a non-constant segment; the pure tier is the
     differential oracle and Tier-1's carrier, not a host surface (engines.md §1-§2).

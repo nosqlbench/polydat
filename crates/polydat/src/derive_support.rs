@@ -311,7 +311,7 @@ impl Wire for bool {
 
 impl Wire for String {
     const PORT: PortType = PortType::Str;
-    const JIT: Option<JitType> = Some(JitType::Str);
+    const JIT: Option<JitType> = None;
     fn extract(v: &Value) -> Self {
         // SRD-80b: panic on shape mismatch — the type-checker is
         // responsible for routing well-typed values to each slot,
@@ -337,7 +337,7 @@ impl Wire for String {
 /// to avoid the per-cycle `to_string()` allocation.
 impl Wire for std::sync::Arc<str> {
     const PORT: PortType = PortType::Str;
-    const JIT: Option<JitType> = Some(JitType::Str);
+    const JIT: Option<JitType> = None;
     fn extract(v: &Value) -> Self {
         match v {
             Value::Str(s) => s.clone(),
@@ -922,6 +922,82 @@ impl<T> std::ops::DerefMut for Const<T> {
 /// Implementing the trait gives library authors a way to
 /// signal intent and improve `cargo doc` discoverability.
 pub trait PolydatSetup {}
+
+// ── The slot kit's run-time helpers ──────────────────────────────
+// Called by the closures `#[polydat_node]` emits for its `compiled_slot`
+// kit; public because generated code in other crates calls them, not
+// because hosts should.
+
+/// The value a `Ref2` pair at the head of `slots` holds by reference:
+/// the one-element slice a JSON, extension, or handle producer
+/// published (jit_boundary.md, axiom S7: one dereference).
+///
+/// The slots must hold a pair a producer published into storage that
+/// is alive: its own scratch, an extern's stored value, or a boundary
+/// value alive for the call (axioms S3, S4). A pair of length zero,
+/// an unset extern, reads as [`Value::None`].
+#[inline]
+pub fn ref_value(slots: &[u64]) -> &Value {
+    static NONE: Value = Value::None;
+    if slots.get(1).copied().unwrap_or(0) == 0 {
+        return &NONE;
+    }
+    // SAFETY: as documented; the producer's storage outlives the read.
+    unsafe { &*(slots[0] as usize as *const Value) }
+}
+
+/// A polymorphic port's slots as the owned `Value` the wire type
+/// names: a scalar from its bits, a `Ref2` kind copied out of the
+/// pair its producer published.
+#[inline]
+pub fn read_poly(ty: PortType, slots: &[u64]) -> Value {
+    crate::compile::marshal::decode_slot(slots, ty)
+}
+
+/// A polymorphic return written by the node's resolved output type: a
+/// scalar as its bits into `outputs[0]`, a `Ref2` kind into
+/// `scratch[0]` with its pair republished (axiom S3). The value must
+/// be of the port's type: the graph colored the slot by the node's
+/// resolved output type, and a value of another type would be read by
+/// every consumer as something it is not, where the interpreter would
+/// have carried it. A `None` has no slot form on a compiled engine
+/// (engine_parity.md, A12).
+#[inline]
+pub fn write_poly(
+    ty: PortType,
+    v: Value,
+    scratch: &mut [crate::ast::ScratchBuf],
+    outputs: &mut [u64],
+) {
+    use crate::ast::ScratchBuf;
+    if v.port_type() != ty {
+        panic!(
+            "a node produced a {:?} on an output the graph typed {:?}; a compiled engine \
+             cannot carry a value of another type than the slot's (engine_parity.md, A7)",
+            v.port_type(),
+            ty
+        );
+    }
+    match v {
+        Value::U64(x) => outputs[0] = x,
+        Value::I64(x) => outputs[0] = x as u64,
+        Value::F64(x) => outputs[0] = x.to_bits(),
+        Value::Bool(b) => outputs[0] = b as u64,
+        Value::Str(s) => scratch[0].set_str(&s),
+        Value::Bytes(b) => scratch[0].set_bytes(&b),
+        Value::Json(_) | Value::Ext(_) | Value::Handle(_) => scratch[0].set_value(v),
+        other => panic!("a {:?} value has no compiled slot form", other.port_type()),
+    }
+    if matches!(
+        scratch.first(),
+        Some(ScratchBuf::Str(_) | ScratchBuf::Bytes(_) | ScratchBuf::Value(_))
+    ) && ty.slot_color() == crate::ast::SlotColor::Ref2
+    {
+        let (p, l) = scratch[0].ptr_len();
+        outputs[0] = p;
+        outputs[1] = l;
+    }
+}
 
 // SRD-80 PR B.2/B.3 — macro-generated nodes register through
 // the existing `NodeRegistration` inventory channel

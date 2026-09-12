@@ -21,10 +21,7 @@ use cranelift_module::{Linkage, Module};
 
 use crate::ast::PolydatNode;
 
-use super::kernels::{
-    JitCore, JitKernelPull, JitKernelPush, JitKernelPushPull, JitKernelRaw,
-    compute_jit_slot_provenance,
-};
+use super::kernels::{JitCore, JitKernelPull, JitKernelPush, JitKernelPushPull, JitKernelRaw};
 
 // ── Extern "C" runtime helpers ─────────────────────────────
 
@@ -660,208 +657,10 @@ extern "C" fn jit_weighted_pick(
     })
 }
 
-// ── Non-scalar String & Byte extern helpers (SRD 111) ──────────
-// A helper that produces a string writes it straight into the cycle
-// arena through an `ArenaWriter` (SRD 115 §6): no intermediate
-// `String`. Arena chunks never move within a cycle, so a resolved
-// source string stays valid while its result is written.
-
-extern "C" fn jit_u64_to_str(val: u64) -> u64 {
-    guarded(|| {
-        use std::fmt::Write as _;
-        let mut w = crate::kernel::ArenaWriter::new();
-        let _ = write!(w, "{val}");
-        w.finish()
-    })
-}
-
-extern "C" fn jit_i64_to_str(val: i64) -> u64 {
-    guarded(|| {
-        use std::fmt::Write as _;
-        let mut w = crate::kernel::ArenaWriter::new();
-        let _ = write!(w, "{val}");
-        w.finish()
-    })
-}
-
-extern "C" fn jit_f64_to_str(val_bits: u64) -> u64 {
-    guarded(|| {
-        use std::fmt::Write as _;
-        let mut w = crate::kernel::ArenaWriter::new();
-        let _ = write!(w, "{}", f64::from_bits(val_bits));
-        w.finish()
-    })
-}
-
-extern "C" fn jit_bool_to_str(val: u64) -> u64 {
-    guarded(|| {
-        // Both spellings are interned constants; nothing enters the arena.
-        crate::kernel::StaticInterner::intern(if val != 0 { "true" } else { "false" })
-    })
-}
-
-// The parse helpers are the library's own adapters (`__str_to_u64` and
-// siblings), so an unparseable value is the same diagnostic on every
-// engine, and a boolean's spellings are the same set. Failure leaves
-// native code through `guarded`.
-extern "C" fn jit_str_to_u64(handle: u64) -> u64 {
-    guarded(|| crate::library::convert::parse_u64(crate::kernel::resolve_thread_str(handle)))
-}
-
-extern "C" fn jit_str_to_i64(handle: u64) -> i64 {
-    guarded(|| crate::library::polyfill::parse_i64(crate::kernel::resolve_thread_str(handle)))
-}
-
-extern "C" fn jit_str_to_f64(handle: u64) -> u64 {
-    guarded(|| {
-        crate::library::convert::parse_f64(crate::kernel::resolve_thread_str(handle)).to_bits()
-    })
-}
-
-extern "C" fn jit_str_to_bool(handle: u64) -> u64 {
-    guarded(|| {
-        crate::library::convert::parse_bool(crate::kernel::resolve_thread_str(handle)) as u64
-    })
-}
-
-extern "C" fn jit_str_concat(h1: u64, h2: u64) -> u64 {
-    guarded(|| {
-        let s1 = crate::kernel::resolve_thread_str(h1);
-        let s2 = crate::kernel::resolve_thread_str(h2);
-        let mut w = crate::kernel::ArenaWriter::new();
-        w.push(s1.as_bytes());
-        w.push(s2.as_bytes());
-        w.finish()
-    })
-}
-
-extern "C" fn jit_str_lower(h: u64) -> u64 {
-    guarded(|| {
-        use std::fmt::Write as _;
-        let s = crate::kernel::resolve_thread_str(h);
-        let mut w = crate::kernel::ArenaWriter::new();
-        for c in s.chars().flat_map(char::to_lowercase) {
-            let _ = w.write_char(c);
-        }
-        w.finish()
-    })
-}
-
-extern "C" fn jit_str_upper(h: u64) -> u64 {
-    guarded(|| {
-        use std::fmt::Write as _;
-        let s = crate::kernel::resolve_thread_str(h);
-        let mut w = crate::kernel::ArenaWriter::new();
-        for c in s.chars().flat_map(char::to_uppercase) {
-            let _ = w.write_char(c);
-        }
-        w.finish()
-    })
-}
-
-extern "C" fn jit_str_trim(h: u64) -> u64 {
-    guarded(|| {
-        let s = crate::kernel::resolve_thread_str(h);
-        // A trim is a sub-range of the source; the source's bytes are
-        // already in the arena or the interner, so a new range over the
-        // same bytes would name it, but a handle names a range of one
-        // allocation and a static source has no arena range. Copy once.
-        crate::kernel::put_thread_str(s.trim())
-    })
-}
-
-extern "C" fn jit_str_len(h: u64) -> u64 {
-    guarded(|| {
-        let s = crate::kernel::resolve_thread_str(h);
-        s.len() as u64
-    })
-}
-
-// ── JSON through the value table (SRD 115 §3) ────────────────────
-// Each helper matches its P1 node (`__u64_to_json` and siblings in
-// `library/polyfill.rs`, `json_to_str` in `library/json.rs`). A producer
-// takes the table entry the layout assigned to its output slot as its
-// first argument, writes the value there in place, and returns the
-// handle that names it (axiom H4: one writer per entry). The table is
-// the one the owning engine installed around this native call.
-
-fn write_json(entry: u64, j: serde_json::Value) -> u64 {
-    crate::kernel::with_current_value_table(|t| {
-        t.write(
-            entry as usize,
-            crate::ast::Value::Json(std::sync::Arc::new(j)),
-        )
-    })
-}
-
-extern "C" fn jit_u64_to_json(entry: u64, n: u64) -> u64 {
-    guarded(|| write_json(entry, serde_json::Value::from(n)))
-}
-
-extern "C" fn jit_i64_to_json(entry: u64, n: i64) -> u64 {
-    guarded(|| write_json(entry, serde_json::Value::from(n)))
-}
-
-extern "C" fn jit_f64_to_json(entry: u64, bits: u64) -> u64 {
-    guarded(|| write_json(entry, serde_json::Value::from(f64::from_bits(bits))))
-}
-
-extern "C" fn jit_bool_to_json(entry: u64, b: u64) -> u64 {
-    guarded(|| write_json(entry, serde_json::Value::Bool(b != 0)))
-}
-
-extern "C" fn jit_str_to_json(entry: u64, h: u64) -> u64 {
-    guarded(|| {
-        let s = crate::kernel::resolve_thread_str(h);
-        // The same try-parse-or-wrap as P1's `__str_to_json`.
-        let parsed = match serde_json::from_str::<serde_json::Value>(s) {
-            Ok(v) => v,
-            Err(e) => serde_json::json!({
-                "error": "invalid JSON",
-                "message": e.to_string(),
-                "raw": s,
-            }),
-        };
-        write_json(entry, parsed)
-    })
-}
-
-extern "C" fn jit_json_to_str(h: u64) -> u64 {
-    guarded(|| {
-        // Serialized straight into the arena: serde writes through the
-        // writer's `io::Write`, so no intermediate `String` is built.
-        let mut w = crate::kernel::ArenaWriter::new();
-        crate::kernel::with_current_value_table(|t| match t.get(h) {
-            crate::ast::Value::Json(j) => {
-                let _ = serde_json::to_writer(&mut w, &**j);
-            }
-            other => {
-                use std::fmt::Write as _;
-                let _ = w.write_str(&other.to_display_string());
-            }
-        });
-        w.finish()
-    })
-}
-
-// ── Variadic and polymorphic nodes by wire type (SRD 115 §6) ─────
-// A node that inspects `Value` variants at P1 is lowered with the
-// types of its wires fixed at classification: one code per argument,
-// interned as a static string whose handle the code passes along.
-// Generated code stores the arguments into a stack array and the
-// helper decodes each by its code (scalars from bits, strings from the
-// arena or interner, table kinds from the installed table), then runs
-// the same body the P1 node runs.
-
-fn type_codes(types: u64) -> &'static str {
-    crate::kernel::StaticInterner::resolve_handle(types).unwrap_or("")
-}
-
-/// Run a body that may panic as its P1 node panics (a `printf`
-/// placeholder without an argument, a projection that fails at
-/// render) inside an `extern "C"` helper, where a panic would abort:
-/// the panic is caught and re-raised through the longjmp path, so it
-/// surfaces in Rust land as the same panic the P1 node raises.
+/// Run a body that may panic as its P1 node panics inside an
+/// `extern "C"` helper, where a panic would abort: the panic is caught
+/// and re-raised through the longjmp path, so it surfaces in Rust land
+/// as the same panic the P1 node raises.
 fn guarded<T>(body: impl FnOnce() -> T) -> T {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
         Ok(v) => v,
@@ -876,220 +675,27 @@ fn guarded<T>(body: impl FnOnce() -> T) -> T {
     }
 }
 
-extern "C" fn jit_printf(format: u64, types: u64, args: *const u64) -> u64 {
-    // SAFETY: `format` is the address of a `ParsedFormat` interned for
-    // the process (`ParsedFormat::interned`), baked by the classifier.
-    let parsed = unsafe { &*(format as *const crate::library::format::ParsedFormat) };
-    let codes = type_codes(types).as_bytes();
-    let mut w = crate::kernel::ArenaWriter::new();
-    guarded(|| {
-        parsed.render_into(
-            codes.len(),
-            |i| {
-                // SAFETY: the variadic ABI (SRD 115 §6): one slot per type code in the caller's frame, live for the call.
-                crate::compile::marshal::fmt_arg(codes[i], unsafe { *args.add(i) })
-            },
-            &mut w,
-        )
-    });
-    w.finish()
-}
-
-/// The arguments of a variadic call as borrowed views (SRD 115 §6.1):
-/// strings from the arena or interner, table kinds from the installed
-/// table, nothing copied.
-///
-/// # Safety
-/// `args` points at `type_codes(types).len()` slots written by the
-/// generated code into its own frame, live for the duration of the call.
-unsafe fn arg_refs(types: u64, args: *const u64) -> Vec<crate::ast::ValueRef<'static>> {
-    type_codes(types)
-        .bytes()
-        .enumerate()
-        .map(|(i, code)| crate::compile::marshal::arg_ref(code, unsafe { *args.add(i) }))
-        .collect()
-}
-
-extern "C" fn jit_json_array(entry: u64, types: u64, args: *const u64) -> u64 {
-    guarded(|| {
-        // SAFETY: the variadic ABI (SRD 115 §6): one slot per type code in the caller's frame, live for the call.
-        let vals = unsafe { arg_refs(types, args) };
-        write_json(entry, crate::library::json::json_array_of_refs(vals))
-    })
-}
-
-extern "C" fn jit_json_object(entry: u64, types: u64, args: *const u64) -> u64 {
-    guarded(|| {
-        // SAFETY: the variadic ABI (SRD 115 §6): one slot per type code in the caller's frame, live for the call.
-        let vals = unsafe { arg_refs(types, args) };
-        write_json(entry, crate::library::json::json_object_of_refs(vals))
-    })
-}
-
-extern "C" fn jit_to_json(entry: u64, code: u64, bits: u64) -> u64 {
-    guarded(|| {
-        let v = crate::compile::marshal::arg_ref(code as u8, bits);
-        write_json(entry, crate::library::json::json_of_ref(v))
-    })
-}
-
-extern "C" fn jit_json_text(code: u64, bits: u64) -> u64 {
-    guarded(|| {
-        let v = crate::compile::marshal::arg_ref(code as u8, bits);
-        let mut w = crate::kernel::ArenaWriter::new();
-        crate::library::json::json_text_ref_into(v, &mut w);
-        w.finish()
-    })
-}
-
-extern "C" fn jit_tile_encode(spec: u64, code: u64, bits: u64) -> u64 {
-    // SAFETY: `spec` is the address of a `HoleEncoding` interned for the
-    // process (`HoleEncoding::interned`), baked by the classifier.
-    let enc = unsafe { &*(spec as *const crate::library::tile_render::HoleEncoding) };
-    let v = crate::compile::marshal::arg_ref(code as u8, bits);
-    let mut w = crate::kernel::ArenaWriter::new();
-    guarded(|| crate::library::tile_render::encode_ref(v, enc, &mut w));
-    w.finish()
-}
-
-/// Render a tile, projections included: a projection re-runs its body
-/// program per tuple through nested kernels, exactly as P1 and P2 do.
-/// Those kernels never reset the arena (they are nested), take their
-/// own cone scratch and tables, and install and restore their own
-/// value tables, so the render runs inside this helper's cycle and
-/// leaves only its text behind.
-extern "C" fn jit_tile_render(program: u64, types: u64, args: *const u64) -> u64 {
-    // SAFETY: `program` is the address of a `TileProgram` interned for
-    // the process (`TileProgram::interned`), baked by the classifier.
-    let program = unsafe { &*(program as *const crate::library::tile_render::TileProgram) };
-    // The hole values as borrowed views (SRD 117 step 1): nothing is
-    // decoded into an owned value on the way to the encoder.
-    // SAFETY: the variadic ABI (SRD 115 §6): one slot per type code in the caller's frame, live for the call.
-    let refs = unsafe { arg_refs(types, args) };
-    // The document is written straight into the arena as it renders.
-    // A projection's nested kernels allocate in the arena between the
-    // writer's pushes; the writer relocates its bytes when that happens
-    // and the result is still one range.
-    let mut w = crate::kernel::ArenaWriter::new();
-    guarded(|| program.render_into(&refs, crate::Engine::default(), &mut w));
-    w.finish()
-}
-
-/// True for an op whose helper decodes its arguments by the wire types
-/// fixed at classification, so the node's advertised port types do not
-/// bind its wires (SRD 115 §6).
-pub(crate) fn wires_typed_at_lowering(op: &JitOp) -> bool {
-    matches!(
-        op,
-        JitOp::Printf { .. }
-            | JitOp::JsonArray { .. }
-            | JitOp::JsonObject { .. }
-            | JitOp::ToJson(_)
-            | JitOp::JsonText(_)
-            | JitOp::TileEncode { .. }
-            | JitOp::TileRender { .. }
-    )
-}
-
-/// The value of a node's `Const<&str>` slot, by parameter name.
-fn const_str_of<'a>(node: &'a dyn PolydatNode, param: &str) -> Option<&'a str> {
-    node.meta().ins.iter().find_map(|slot| match slot {
-        crate::ast::Slot::Const {
-            name,
-            value: crate::ast::ConstValue::Str(v),
-        } if name == param => Some(v.as_str()),
-        _ => None,
-    })
-}
-
-/// Classify a node with the types of its wire inputs known (SRD 115
-/// §6). Nodes that dispatch on `Value` variants at P1 (`printf`, the
-/// JSON constructors, `to_json`, `json_text`, the tile nodes) lower to
-/// helpers that decode each argument by a type code fixed here; a wire
-/// of a type no helper takes keeps the node on P1. Everything else
+/// Classify a node with the types of its wire inputs known. A node
+/// with a `Ref2` port on either side has no native lowering yet and
+/// stays on the closure tier or the interpreter; everything else
 /// classifies as [`classify_node`] does.
 pub fn classify_node_typed(node: &dyn PolydatNode, wire_types: &[crate::ast::PortType]) -> JitOp {
-    use crate::compile::marshal::type_code;
-    use crate::kernel::StaticInterner;
-    let codes = || -> Option<u64> {
-        let s: Option<String> = wire_types
-            .iter()
-            .map(|t| type_code(*t).map(|c| c as char))
-            .collect();
-        s.map(|s| StaticInterner::intern(&s))
-    };
-    let single = || -> Option<u8> {
-        match wire_types {
-            [t] => type_code(*t),
-            _ => None,
-        }
-    };
+    let is_ref = |t: &crate::ast::PortType| t.slot_color() == crate::ast::SlotColor::Ref2;
+    if wire_types.iter().any(is_ref) || node.meta().outs.iter().any(|o| is_ref(&o.typ)) {
+        return JitOp::Fallback;
+    }
     match node.meta().name.as_str() {
-        // The compiler's input passthrough: a slot copy of any carrier,
-        // handle, or 128-bit immediate. A reference pair (axiom S3) keeps
-        // it on the closure tier.
-        n if n.starts_with("__port_") => match wire_types {
-            [t] if t.slot_color() != crate::ast::SlotColor::Ref2 => JitOp::Identity,
-            _ => JitOp::Fallback,
-        },
-        "printf" => match (const_str_of(node, "format"), codes()) {
-            (Some(fmt), Some(types)) => {
-                let parsed = crate::library::format::ParsedFormat::interned(fmt);
-                JitOp::Printf {
-                    format: parsed as *const _ as u64,
-                    types,
-                }
-            }
-            _ => JitOp::Fallback,
-        },
-        // The concat helper takes string handles; any other wire on it
-        // keeps the node on P1, where it inspects the `Value`.
-        "str_concat" | "concat" if wire_types.iter().any(|t| *t != crate::ast::PortType::Str) => {
-            JitOp::Fallback
-        }
+        // The compiler's input passthrough: a slot copy of any carrier
+        // or 128-bit immediate.
+        n if n.starts_with("__port_") => JitOp::Identity,
         // `default_or(value, fallback)` is `value` unless it is `None`,
         // and a compiled slot never carries `None` (engine_parity.md,
-        // A12), so natively it is a copy of the value; a reference pair
-        // (axiom S3) keeps it on the closure tier.
-        "default_or" => match wire_types {
-            [t, _] if t.slot_color() != crate::ast::SlotColor::Ref2 => JitOp::Identity,
-            _ => JitOp::Fallback,
-        },
-        // A native select between two handles would make a handle by
-        // an instruction other than a load, which the handle discipline
-        // (SRD 115 §8, H1) forbids; such a select stays a closure.
-        "select" | "select_u64"
-            if wire_types
-                .iter()
-                .skip(1)
-                .any(|t| t.handle_kind().is_some() || t.slot_width() != 1) =>
-        {
+        // A12), so natively it is a copy of the value.
+        "default_or" => JitOp::Identity,
+        // A select is native only between one-slot immediates.
+        "select" | "select_u64" if wire_types.iter().skip(1).any(|t| t.slot_width() != 1) => {
             JitOp::Fallback
         }
-        "json_array" => codes().map_or(JitOp::Fallback, |types| JitOp::JsonArray { types }),
-        "json_object" => codes().map_or(JitOp::Fallback, |types| JitOp::JsonObject { types }),
-        "to_json" => single().map_or(JitOp::Fallback, JitOp::ToJson),
-        "json_text" => single().map_or(JitOp::Fallback, JitOp::JsonText),
-        "tile_encode" => match (const_str_of(node, "spec"), single()) {
-            (Some(spec), Some(code)) => {
-                let enc = crate::library::tile_render::HoleEncoding::interned(spec);
-                JitOp::TileEncode {
-                    spec: enc as *const _ as u64,
-                    code,
-                }
-            }
-            _ => JitOp::Fallback,
-        },
-        "tile_render" => match (const_str_of(node, "spec"), codes()) {
-            (Some(spec), Some(types)) => {
-                let program = crate::library::tile_render::TileProgram::interned(spec);
-                JitOp::TileRender {
-                    program: program as *const _ as u64,
-                    types,
-                }
-            }
-            _ => JitOp::Fallback,
-        },
         _ => classify_node(node),
     }
 }
@@ -1365,94 +971,6 @@ pub enum JitOp {
     /// N-of-M selection with constant n and m: (n, m)
     NOfConst(u64, u64),
 
-    // --- String & Non-scalar ops (SRD 111) ---
-    /// `output[0] = jit_u64_to_str(input[0])`
-    U64ToString,
-    /// `output[0] = jit_i64_to_str(input[0])`
-    I64ToString,
-    /// `output[0] = jit_f64_to_str(input[0])`
-    F64ToString,
-    /// `output[0] = jit_bool_to_str(input[0])`
-    BoolToString,
-    /// `output[0] = jit_str_to_u64(input[0])`
-    StringToU64,
-    /// `output[0] = jit_str_to_i64(input[0])`
-    StringToI64,
-    /// `output[0] = jit_str_to_f64(input[0])`
-    StringToF64,
-    /// `output[0] = jit_str_to_bool(input[0])`
-    StringToBool,
-    /// `output[0] = jit_str_concat(input[0], input[1])`
-    StrConcat,
-    /// `output[0] = jit_str_lower(input[0])`
-    StrLower,
-    /// `output[0] = jit_str_upper(input[0])`
-    StrUpper,
-    /// `output[0] = jit_str_trim(input[0])`
-    StrTrim,
-    /// `output[0] = jit_str_len(input[0])`
-    StrLen,
-
-    /// A string constant, interned at kernel build (SRD 115 §2.2, step
-    /// 3): `output[0]` = the static handle, stored as an immediate. The
-    /// bytes never enter the cycle arena.
-    StaticStr(u64),
-
-    // --- JSON through the cycle value table (SRD 115 §3, step 5) ---
-    /// `output[0] = jit_u64_to_json(input[0])`: a table handle
-    U64ToJson,
-    /// `output[0] = jit_i64_to_json(input[0])`
-    I64ToJson,
-    /// `output[0] = jit_f64_to_json(input[0])`
-    F64ToJson,
-    /// `output[0] = jit_bool_to_json(input[0])`
-    BoolToJson,
-    /// `output[0] = jit_str_to_json(input[0])`: parses the text
-    StrToJson,
-    /// `output[0] = jit_json_to_str(input[0])`: serializes to the arena
-    JsonToStr,
-    // --- Variadic and polymorphic nodes by wire type (SRD 115 §6) ---
-    /// `output[0] = jit_printf(format, types, args)`: format is the
-    /// address of the interned parsed format, `types` the static
-    /// handle of the argument type codes, `args` the inputs in a
-    /// stack array
-    Printf {
-        /// Address of the interned parsed format.
-        format: u64,
-        /// Static handle of the argument type codes.
-        types: u64,
-    },
-    /// `output[0] = jit_json_array(entry, types, args)`
-    JsonArray {
-        /// Static handle of the argument type codes.
-        types: u64,
-    },
-    /// `output[0] = jit_json_object(entry, types, args)`
-    JsonObject {
-        /// Static handle of the argument type codes.
-        types: u64,
-    },
-    /// `output[0] = jit_to_json(entry, code, input[0])`
-    ToJson(u8),
-    /// `output[0] = jit_json_text(code, input[0])`
-    JsonText(u8),
-    /// `output[0] = jit_tile_encode(spec, code, input[0])`: spec is
-    /// the address of the interned hole encoding
-    TileEncode {
-        /// Address of the interned hole encoding.
-        spec: u64,
-        /// The input's type code.
-        code: u8,
-    },
-    /// `output[0] = jit_tile_render(program, types, args)`: `program`
-    /// is the address of the interned tile program
-    TileRender {
-        /// Address of the interned tile program.
-        program: u64,
-        /// Static handle of the argument type codes.
-        types: u64,
-    },
-
     /// Fallback: call the Phase 2 closure
     Fallback,
 }
@@ -1469,22 +987,6 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
 
     match name {
         "identity" => JitOp::Identity,
-        // A string literal: intern its text now so the cone stores a
-        // static handle (SRD 115 step 3). The text is the node's
-        // `value` constant.
-        "const_str" => {
-            let text = node.meta().ins.iter().find_map(|slot| match slot {
-                crate::ast::Slot::Const {
-                    name,
-                    value: crate::ast::ConstValue::Str(v),
-                } if name == "value" => Some(v.as_str()),
-                _ => None,
-            });
-            match text {
-                Some(v) => JitOp::StaticStr(crate::kernel::StaticInterner::intern(v)),
-                None => JitOp::Fallback,
-            }
-        }
         "hash" | "splitmix64" | "scatter" => JitOp::SplitMix64,
         "fair_coin" => JitOp::FairCoin,
         "unfair_coin" | "bernoulli" => {
@@ -2029,68 +1531,6 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
                 }
             }
         }
-        // String & Non-scalar conversions (SRD 111)
-        "__u64_to_string" | "__u64_to_str" | "u64_to_str" | "u64_to_string" | "__u32_to_string"
-        | "__u32_to_str" | "u32_to_str" | "__u16_to_string" | "__u16_to_str" | "__u8_to_string"
-        | "__u8_to_str" => JitOp::U64ToString,
-        // `format_u64` is decimal only when its radix is; the other
-        // radices print a prefix the helper does not.
-        "format_u64" => {
-            if consts.first().copied().unwrap_or(10) == 10 {
-                JitOp::U64ToString
-            } else {
-                JitOp::Fallback
-            }
-        }
-
-        "__i64_to_string" | "__i64_to_str" | "i64_to_str" | "i64_to_string" | "__i32_to_string"
-        | "__i32_to_str" | "i32_to_str" | "__i16_to_string" | "__i16_to_str" | "__i8_to_string"
-        | "__i8_to_str" => JitOp::I64ToString,
-
-        "__f64_to_string" | "__f64_to_str" | "f64_to_str" | "f64_to_string" | "__f32_to_string"
-        | "__f32_to_str" | "f32_to_str" => JitOp::F64ToString,
-
-        "__bool_to_string" | "__bool_to_str" | "bool_to_str" => JitOp::BoolToString,
-
-        "__str_to_u64" | "__string_to_u64" | "str_to_u64" | "parse_u64" | "__str_to_u32"
-        | "__string_to_u32" | "str_to_u32" | "__str_to_u16" | "__str_to_u8" => JitOp::StringToU64,
-
-        "__str_to_i64" | "__string_to_i64" | "str_to_i64" | "parse_i64" | "__str_to_i32"
-        | "__string_to_i32" | "str_to_i32" | "__str_to_i16" | "__str_to_i8" => JitOp::StringToI64,
-
-        "__str_to_f64" | "__string_to_f64" | "str_to_f64" | "parse_f64" | "__str_to_f32"
-        | "__string_to_f32" | "str_to_f32" => JitOp::StringToF64,
-
-        "__str_to_bool" | "__string_to_bool" | "str_to_bool" | "parse_bool" => JitOp::StringToBool,
-
-        // JSON conversions (SRD 115 step 5). `to_json` is polymorphic:
-        // its lowering follows the input port's type, fixed at build.
-        "__u64_to_json" | "__u32_to_json" => JitOp::U64ToJson,
-        "__i64_to_json" | "__i32_to_json" => JitOp::I64ToJson,
-        "__f64_to_json" | "__f32_to_json" => JitOp::F64ToJson,
-        "__bool_to_json" => JitOp::BoolToJson,
-        "__str_to_json" => JitOp::StrToJson,
-        "json_to_str" | "__json_to_str" => JitOp::JsonToStr,
-        "to_json" => match node.meta().wire_inputs().first().map(|p| p.typ) {
-            Some(crate::ast::PortType::U64) => JitOp::U64ToJson,
-            Some(crate::ast::PortType::I64) => JitOp::I64ToJson,
-            Some(crate::ast::PortType::F64) => JitOp::F64ToJson,
-            Some(crate::ast::PortType::Bool) => JitOp::BoolToJson,
-            // A string becomes a JSON string value, not parsed text.
-            _ => JitOp::Fallback,
-        },
-        // The helper joins exactly two strings; the node is variadic.
-        "str_concat" | "concat" => {
-            if node.meta().wire_inputs().len() == 2 {
-                JitOp::StrConcat
-            } else {
-                JitOp::Fallback
-            }
-        }
-        "str_lower" | "to_lower" | "lower" | "lowercase" => JitOp::StrLower,
-        "str_upper" | "to_upper" | "upper" | "uppercase" => JitOp::StrUpper,
-        "str_trim" | "trim" => JitOp::StrTrim,
-        "str_len" | "string_len" | "length" => JitOp::StrLen,
         // The remaining param helpers stay on the Phase-2
         // `compiled_u64` closure — by design, not oversight:
         //   * `required` / `this_or` rely on `Value::None`
@@ -2132,9 +1572,8 @@ pub fn compile_jit_raw(
     )
 }
 
-/// `compile_jit_raw` for a graph with extern inputs: their slots are
-/// handle inputs to the verifier, their defaults are seeded, and the
-/// kernel materializes them every run.
+/// `compile_jit_raw` for a graph with extern inputs: their defaults
+/// are written through into the buffer at build.
 pub(crate) fn compile_jit_raw_with(
     coord_count: usize,
     total_slots: usize,
@@ -2143,16 +1582,8 @@ pub(crate) fn compile_jit_raw_with(
     nodes: Vec<Box<dyn PolydatNode>>,
     externs: crate::compile::externs::Externs,
 ) -> Result<JitKernelRaw, String> {
-    let (raw_fn, _, module, table_entries) =
-        compile_jit_impl(&steps, false, 0, &externs.handle_slots(), Some(total_slots))?;
-    let mut core = JitCore::new(
-        total_slots,
-        coord_count,
-        output_map,
-        table_entries,
-        module,
-        nodes,
-    );
+    let (raw_fn, _, module) = compile_jit_impl(&steps, false, Some(total_slots))?;
+    let mut core = JitCore::new(total_slots, coord_count, output_map, module, nodes);
     core.set_externs(externs);
     Ok(JitKernelRaw {
         core,
@@ -2160,28 +1591,20 @@ pub(crate) fn compile_jit_raw_with(
     })
 }
 
-/// A compiled segment for an engine that owns its own buffer and value
-/// table: the entry point, the module that keeps it alive, and the
-/// `(slot, entry)` pairs of the table-kind slots it writes, numbered
-/// from `entry_base` (SRD-105 cones, hybrid JIT segments).
-pub(crate) type JitSegmentCode = (
-    unsafe fn(*const u64, *mut u64),
-    JITModule,
-    Vec<(usize, usize)>,
-);
+/// A compiled segment for an engine that owns its own buffer: the
+/// entry point and the module that keeps it alive (SRD-105 cones,
+/// hybrid JIT segments).
+pub(crate) type JitSegmentCode = (unsafe fn(*const u64, *mut u64), JITModule);
 
 /// SRD-105 cone entry: codegen only, no kernel wrapper — the cone
-/// node owns the function pointer and module directly and provides
-/// its own buffer and value table per eval.
+/// node owns the function pointer and module directly, and the state
+/// evaluating it provides the buffer.
 pub(crate) fn compile_jit_entry(
     steps: &[(JitOp, Vec<usize>, Vec<usize>)],
-    entry_base: usize,
-    handle_inputs: &[usize],
     tracker: Option<usize>,
 ) -> Result<JitSegmentCode, String> {
-    let (raw_fn, _, module, table_entries) =
-        compile_jit_impl(steps, false, entry_base, handle_inputs, tracker)?;
-    Ok((raw_fn, module, table_entries))
+    let (raw_fn, _, module) = compile_jit_impl(steps, false, tracker)?;
+    Ok((raw_fn, module))
 }
 
 /// Compile a set of JIT steps into a push (per-node dirty tracking) native kernel.
@@ -2195,16 +1618,8 @@ pub(crate) fn compile_jit_push(
     externs: crate::compile::externs::Externs,
 ) -> Result<JitKernelPush, String> {
     let step_count = steps.len();
-    let (_, prov_fn, module, table_entries) =
-        compile_jit_impl(&steps, true, 0, &externs.handle_slots(), Some(total_slots))?;
-    let mut core = JitCore::new(
-        total_slots,
-        coord_count,
-        output_map,
-        table_entries,
-        module,
-        nodes,
-    );
+    let (_, prov_fn, module) = compile_jit_impl(&steps, true, Some(total_slots))?;
+    let mut core = JitCore::new(total_slots, coord_count, output_map, module, nodes);
     core.set_externs(externs);
     Ok(JitKernelPush {
         core,
@@ -2226,19 +1641,11 @@ pub(crate) fn compile_jit_pull(
 ) -> Result<JitKernelPull, String> {
     let buffer_len = total_slots;
     // Pull uses the RAW jit function (no per-node clean checks)
-    let (raw_fn, _, module, table_entries) =
-        compile_jit_impl(&steps, false, 0, &externs.handle_slots(), Some(total_slots))?;
-    let step_outs: Vec<Vec<usize>> = steps.iter().map(|(_, _, o)| o.clone()).collect();
+    let (raw_fn, _, module) = compile_jit_impl(&steps, false, Some(total_slots))?;
+    let step_outs: Vec<&[usize]> = steps.iter().map(|(_, _, o)| o.as_slice()).collect();
     let slot_provenance =
-        compute_jit_slot_provenance(coord_count, buffer_len, &step_outs, input_dependents);
-    let mut core = JitCore::new(
-        total_slots,
-        coord_count,
-        output_map,
-        table_entries,
-        module,
-        nodes,
-    );
+        crate::compile::slot_provenance(coord_count, buffer_len, &step_outs, input_dependents);
+    let mut core = JitCore::new(total_slots, coord_count, output_map, module, nodes);
     core.set_externs(externs);
     Ok(JitKernelPull {
         core,
@@ -2261,19 +1668,11 @@ pub(crate) fn compile_jit_push_pull(
 ) -> Result<JitKernelPushPull, String> {
     let step_count = steps.len();
     let buffer_len = total_slots;
-    let (_, prov_fn, module, table_entries) =
-        compile_jit_impl(&steps, true, 0, &externs.handle_slots(), Some(total_slots))?;
-    let step_outs: Vec<Vec<usize>> = steps.iter().map(|(_, _, o)| o.clone()).collect();
+    let (_, prov_fn, module) = compile_jit_impl(&steps, true, Some(total_slots))?;
+    let step_outs: Vec<&[usize]> = steps.iter().map(|(_, _, o)| o.as_slice()).collect();
     let slot_provenance =
-        compute_jit_slot_provenance(coord_count, buffer_len, &step_outs, &input_dependents);
-    let mut core = JitCore::new(
-        total_slots,
-        coord_count,
-        output_map,
-        table_entries,
-        module,
-        nodes,
-    );
+        crate::compile::slot_provenance(coord_count, buffer_len, &step_outs, &input_dependents);
+    let mut core = JitCore::new(total_slots, coord_count, output_map, module, nodes);
     core.set_externs(externs);
     Ok(JitKernelPushPull {
         core,
@@ -2288,200 +1687,23 @@ pub(crate) fn compile_jit_push_pull(
 
 // ── Core Cranelift IR generation ───────────────────────────
 
-/// `(raw_fn, prov_fn, module, table_entries)` — produced by the core
-/// JIT compile: the scalar entry point, the provenance-tracking
-/// entry point, the owning module that keeps both alive, and the
-/// `(slot, entry)` pairs of the table-kind slots the code writes
-/// (SRD 115 §3): the engine sizes its value table from them and the
-/// validator checks each slot's handle names its own entry.
+/// `(raw_fn, prov_fn, module)` — produced by the core JIT compile: the
+/// scalar entry point, the provenance-tracking entry point, and the
+/// owning module that keeps both alive.
 type JitCompiled = (
     unsafe fn(*const u64, *mut u64),
     unsafe fn(*const u64, *mut u64, *mut u8),
     JITModule,
-    Vec<(usize, usize)>,
 );
 
-/// SRD 115 axiom H1, the tripwire: a handle is a name, not an address,
-/// and generated code only loads, stores, and passes it. Every value
-/// loaded from a handle slot, and every value stored into one, is
-/// tainted; a tainted value may flow only into a store as the stored
-/// data, a stack store as the stored data, or a call as an argument.
-/// Any other use, arithmetic, comparison, a bitcast, a branch
-/// condition, an address, is a violation, reported with the slot it
-/// came from and the instruction that misused it. Runs on every
-/// compiled function before it is defined, so a bad lowering never
-/// produces code.
-pub(crate) fn verify_handle_discipline(
-    func: &ir::Function,
-    handle_slots: &std::collections::HashSet<usize>,
-) -> Result<(), String> {
-    use cranelift_codegen::ir::InstructionData;
-    if handle_slots.is_empty() {
-        return Ok(());
-    }
-    let Some(entry) = func.layout.entry_block() else {
-        return Ok(());
-    };
-    let params = func.dfg.block_params(entry);
-    if params.len() < 2 {
-        return Ok(());
-    }
-    let buffer_ptr = params[1];
-    let slot_of = |base: ir::Value, offset: ir::immediates::Offset32| -> Option<usize> {
-        if base != buffer_ptr {
-            return None;
-        }
-        let off = i32::from(offset);
-        if off < 0 || off % 8 != 0 {
-            return None;
-        }
-        let slot = (off / 8) as usize;
-        handle_slots.contains(&slot).then_some(slot)
-    };
-    // Seed: value → the handle slot it came from or went to.
-    let mut tainted: HashMap<ir::Value, usize> = HashMap::new();
-    for block in func.layout.blocks() {
-        for inst in func.layout.block_insts(block) {
-            match func.dfg.insts[inst] {
-                InstructionData::Load { arg, offset, .. } => {
-                    if let Some(slot) = slot_of(arg, offset) {
-                        tainted.insert(func.dfg.inst_results(inst)[0], slot);
-                    }
-                }
-                InstructionData::Store { args, offset, .. } => {
-                    if let Some(slot) = slot_of(args[1], offset) {
-                        tainted.entry(args[0]).or_insert(slot);
-                        // A handle is made by a helper, interned as an
-                        // immediate, or loaded from another slot; it is
-                        // never computed.
-                        let made_by = match func.dfg.value_def(args[0]) {
-                            ir::ValueDef::Result(def, _) => Some(func.dfg.insts[def].opcode()),
-                            _ => None,
-                        };
-                        let legitimate =
-                            matches!(made_by, Some(ir::Opcode::Load) | Some(ir::Opcode::Iconst))
-                                || made_by.is_some_and(|op| op.is_call());
-                        if !legitimate {
-                            return Err(format!(
-                                "H1 handle discipline: slot {slot} was written with a value made by `{}`; \
-                                 a handle is only loaded, returned by a helper, or interned as an immediate (SRD 115 §8)",
-                                made_by
-                                    .map_or("a block parameter".to_string(), |op| op.to_string())
-                            ));
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    // Every use of a tainted value must be a sanctioned one.
-    for block in func.layout.blocks() {
-        for inst in func.layout.block_insts(block) {
-            let data = &func.dfg.insts[inst];
-            let opcode = data.opcode();
-            for (k, arg) in func.dfg.inst_args(inst).iter().enumerate() {
-                let Some(&slot) = tainted.get(arg) else {
-                    continue;
-                };
-                let sanctioned = match data {
-                    // The handle is the data of the store, never its address.
-                    InstructionData::Store { .. } => k == 0,
-                    InstructionData::StackStore { .. } => true,
-                    _ => opcode.is_call(),
-                };
-                if !sanctioned {
-                    return Err(format!(
-                        "H1 handle discipline: the handle in slot {slot} reached `{opcode}` as operand {k}; \
-                         generated code may only load, store, and pass a handle (SRD 115 §8)"
-                    ));
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-/// True for an op whose output slot holds a handle (SRD 115 §2): an
-/// arena string, a static string, or a value-table entry.
-fn produces_handle(op: &JitOp) -> bool {
-    matches!(
-        op,
-        JitOp::U64ToString
-            | JitOp::I64ToString
-            | JitOp::F64ToString
-            | JitOp::BoolToString
-            | JitOp::StrLower
-            | JitOp::StrUpper
-            | JitOp::StrTrim
-            | JitOp::StrConcat
-            | JitOp::StaticStr(_)
-            | JitOp::U64ToJson
-            | JitOp::I64ToJson
-            | JitOp::F64ToJson
-            | JitOp::BoolToJson
-            | JitOp::StrToJson
-            | JitOp::JsonToStr
-            | JitOp::Printf { .. }
-            | JitOp::JsonArray { .. }
-            | JitOp::JsonObject { .. }
-            | JitOp::ToJson(_)
-            | JitOp::JsonText(_)
-            | JitOp::TileEncode { .. }
-            | JitOp::TileRender { .. }
-    )
-}
-
-/// True for an op whose output is a value-table entry.
-fn produces_table_entry(op: &JitOp) -> bool {
-    matches!(
-        op,
-        JitOp::U64ToJson
-            | JitOp::I64ToJson
-            | JitOp::F64ToJson
-            | JitOp::BoolToJson
-            | JitOp::StrToJson
-            | JitOp::JsonArray { .. }
-            | JitOp::JsonObject { .. }
-            | JitOp::ToJson(_)
-    )
-}
-
-/// Core JIT compilation. Returns (raw_fn, prov_fn, module, table_entries).
+/// Core JIT compilation. Returns (raw_fn, prov_fn, module).
 /// If provenance=false, prov_fn is a dummy transmute of raw_fn.
 /// If provenance=true, raw_fn is a dummy transmute of prov_fn.
-/// Table-kind output slots are assigned entries `entry_base..` in step
-/// order, one per slot, so the owning engine can size its table.
 fn compile_jit_impl(
     steps: &[(JitOp, Vec<usize>, Vec<usize>)],
     provenance: bool,
-    entry_base: usize,
-    handle_inputs: &[usize],
     tracker: Option<usize>,
 ) -> Result<JitCompiled, String> {
-    let mut table_entries: Vec<(usize, usize)> = Vec::new();
-    for (op, _, outs) in steps {
-        if produces_table_entry(op) {
-            table_entries.push((outs[0], entry_base + table_entries.len()));
-        }
-    }
-    let entry_of_slot: HashMap<usize, usize> = table_entries.iter().copied().collect();
-    // Every slot that holds a handle inside this function: the outputs
-    // of handle-producing steps and the handle slots the caller fills
-    // before the call (a cone's boundary inputs, a hybrid kernel's
-    // closure-written slots). The H1 verifier tracks these.
-    let mut handle_slots: std::collections::HashSet<usize> =
-        handle_inputs.iter().copied().collect();
-    for (op, ins, outs) in steps {
-        // A copy of a handle is a handle: `identity` forwards its input
-        // slot, so its output is one whenever its input is. Steps are in
-        // dependency order, so the input's status is known here.
-        let copies_handle =
-            matches!(op, JitOp::Identity) && ins.iter().any(|s| handle_slots.contains(s));
-        if produces_handle(op) || copies_handle {
-            handle_slots.extend(outs.iter().copied());
-        }
-    }
     let mut flag_builder = settings::builder();
     flag_builder.set("opt_level", "speed").unwrap();
     // Emit DWARF/SEH unwind tables so a panic raised from an
@@ -2549,33 +1771,6 @@ fn compile_jit_impl(
     jit_builder.symbol("jit_round_nearest", jit_round_nearest as *const u8);
     jit_builder.symbol("jit_round_floor", jit_round_floor as *const u8);
     jit_builder.symbol("jit_round_ceiling", jit_round_ceiling as *const u8);
-    // String externs (SRD 111)
-    jit_builder.symbol("jit_u64_to_str", jit_u64_to_str as *const u8);
-    jit_builder.symbol("jit_i64_to_str", jit_i64_to_str as *const u8);
-    jit_builder.symbol("jit_f64_to_str", jit_f64_to_str as *const u8);
-    jit_builder.symbol("jit_bool_to_str", jit_bool_to_str as *const u8);
-    jit_builder.symbol("jit_str_to_u64", jit_str_to_u64 as *const u8);
-    jit_builder.symbol("jit_str_to_i64", jit_str_to_i64 as *const u8);
-    jit_builder.symbol("jit_str_to_f64", jit_str_to_f64 as *const u8);
-    jit_builder.symbol("jit_str_to_bool", jit_str_to_bool as *const u8);
-    jit_builder.symbol("jit_str_concat", jit_str_concat as *const u8);
-    jit_builder.symbol("jit_str_lower", jit_str_lower as *const u8);
-    jit_builder.symbol("jit_str_upper", jit_str_upper as *const u8);
-    jit_builder.symbol("jit_str_trim", jit_str_trim as *const u8);
-    jit_builder.symbol("jit_str_len", jit_str_len as *const u8);
-    jit_builder.symbol("jit_u64_to_json", jit_u64_to_json as *const u8);
-    jit_builder.symbol("jit_i64_to_json", jit_i64_to_json as *const u8);
-    jit_builder.symbol("jit_f64_to_json", jit_f64_to_json as *const u8);
-    jit_builder.symbol("jit_bool_to_json", jit_bool_to_json as *const u8);
-    jit_builder.symbol("jit_str_to_json", jit_str_to_json as *const u8);
-    jit_builder.symbol("jit_json_to_str", jit_json_to_str as *const u8);
-    jit_builder.symbol("jit_printf", jit_printf as *const u8);
-    jit_builder.symbol("jit_json_array", jit_json_array as *const u8);
-    jit_builder.symbol("jit_json_object", jit_json_object as *const u8);
-    jit_builder.symbol("jit_to_json", jit_to_json as *const u8);
-    jit_builder.symbol("jit_json_text", jit_json_text as *const u8);
-    jit_builder.symbol("jit_tile_encode", jit_tile_encode as *const u8);
-    jit_builder.symbol("jit_tile_render", jit_tile_render as *const u8);
 
     let mut module = JITModule::new(jit_builder);
 
@@ -2838,89 +2033,6 @@ fn compile_jit_impl(
         );
     }
 
-    // Declare string externs (SRD 111)
-    let string_unary_names = [
-        "jit_u64_to_str",
-        "jit_i64_to_str",
-        "jit_f64_to_str",
-        "jit_bool_to_str",
-        "jit_str_to_u64",
-        "jit_str_to_i64",
-        "jit_str_to_f64",
-        "jit_str_to_bool",
-        "jit_str_lower",
-        "jit_str_upper",
-        "jit_str_trim",
-        "jit_str_len",
-        "jit_json_to_str",
-    ];
-    let mut string_unary_ids = Vec::new();
-    for name in &string_unary_names {
-        let mut sig = module.make_signature();
-        sig.params.push(AbiParam::new(types::I64));
-        sig.returns.push(AbiParam::new(types::I64));
-        string_unary_ids.push(
-            module
-                .declare_function(name, Linkage::Import, &sig)
-                .map_err(|e| format!("declare {name}: {e}"))?,
-        );
-    }
-
-    // Declare the value-table producers (SRD 115 §3): `(entry, arg) -> handle`.
-    let table_binary_names = [
-        "jit_u64_to_json",
-        "jit_i64_to_json",
-        "jit_f64_to_json",
-        "jit_bool_to_json",
-        "jit_str_to_json",
-    ];
-    let mut table_binary_ids = Vec::new();
-    for name in &table_binary_names {
-        let mut sig = module.make_signature();
-        sig.params.push(AbiParam::new(types::I64));
-        sig.params.push(AbiParam::new(types::I64));
-        sig.returns.push(AbiParam::new(types::I64));
-        table_binary_ids.push(
-            module
-                .declare_function(name, Linkage::Import, &sig)
-                .map_err(|e| format!("declare {name}: {e}"))?,
-        );
-    }
-
-    // Declare the wire-typed helpers (SRD 115 §6): every argument and
-    // the return are I64 (bits, handles, addresses, codes).
-    let variadic_names: [(&str, usize); 7] = [
-        ("jit_printf", 3),
-        ("jit_json_array", 3),
-        ("jit_json_object", 3),
-        ("jit_to_json", 3),
-        ("jit_json_text", 2),
-        ("jit_tile_encode", 3),
-        ("jit_tile_render", 3),
-    ];
-    let mut variadic_ids: HashMap<&'static str, cranelift_module::FuncId> = HashMap::new();
-    for (name, arity) in variadic_names {
-        let mut sig = module.make_signature();
-        for _ in 0..arity {
-            sig.params.push(AbiParam::new(types::I64));
-        }
-        sig.returns.push(AbiParam::new(types::I64));
-        let id = module
-            .declare_function(name, Linkage::Import, &sig)
-            .map_err(|e| format!("declare {name}: {e}"))?;
-        variadic_ids.insert(name, id);
-    }
-
-    let str_concat_id = {
-        let mut sig = module.make_signature();
-        sig.params.push(AbiParam::new(types::I64));
-        sig.params.push(AbiParam::new(types::I64));
-        sig.returns.push(AbiParam::new(types::I64));
-        module
-            .declare_function("jit_str_concat", Linkage::Import, &sig)
-            .map_err(|e| format!("declare str_concat: {e}"))?
-    };
-
     // Function signature depends on provenance mode:
     // Without: fn(coords: *const u64, buffer: *mut u64)
     // With:    fn(coords: *const u64, buffer: *mut u64, clean: *mut u8)
@@ -2985,33 +2097,10 @@ fn compile_jit_impl(
             .iter()
             .map(|id| module.declare_func_in_func(*id, builder.func))
             .collect();
-        let string_unary_refs: Vec<_> = string_unary_ids
-            .iter()
-            .map(|id| module.declare_func_in_func(*id, builder.func))
-            .collect();
-        let table_binary_refs: Vec<_> = table_binary_ids
-            .iter()
-            .map(|id| module.declare_func_in_func(*id, builder.func))
-            .collect();
-        let variadic_refs: HashMap<&'static str, ir::FuncRef> = variadic_ids
-            .iter()
-            .map(|(name, id)| (*name, module.declare_func_in_func(*id, builder.func)))
-            .collect();
-        let str_concat_ref = module.declare_func_in_func(str_concat_id, builder.func);
-
         // Generate code for each step
         for (step_idx, (jit_op, input_slots, output_slots)) in steps.iter().enumerate() {
             // Provenance guard: if clean[step_idx] != 0, skip this node.
-            // A handle-producing step is never skipped (SRD 115 §4): its
-            // arena bytes or table entry belong to the cycle that ran
-            // it, so a clean slot would hold a handle into storage the
-            // next root cycle has reset. It recomputes from unchanged
-            // inputs, as P1 does. The same holds for a step that only
-            // copies a handle: its producer reruns every cycle, so the
-            // copy must too, or it keeps last cycle's handle.
-            let writes_handle =
-                produces_handle(jit_op) || output_slots.iter().any(|s| handle_slots.contains(s));
-            let skip_block = if let Some(cp) = clean_ptr.filter(|_| !writes_handle) {
+            let skip_block = if let Some(cp) = clean_ptr {
                 let skip = builder.create_block();
                 let cont = builder.create_block();
                 // Load clean[step_idx] (u8)
@@ -4252,203 +3341,6 @@ fn compile_jit_impl(
                     store_slot(&mut builder, buffer_ptr, output_slots[0], result);
                 }
 
-                // String & Non-scalar conversions (SRD 111)
-                JitOp::U64ToString => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let call = builder.ins().call(string_unary_refs[0], &[val]);
-                    let result = builder.inst_results(call)[0];
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::I64ToString => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let call = builder.ins().call(string_unary_refs[1], &[val]);
-                    let result = builder.inst_results(call)[0];
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::F64ToString => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let call = builder.ins().call(string_unary_refs[2], &[val]);
-                    let result = builder.inst_results(call)[0];
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::BoolToString => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let call = builder.ins().call(string_unary_refs[3], &[val]);
-                    let result = builder.inst_results(call)[0];
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::StringToU64 => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let call = builder.ins().call(string_unary_refs[4], &[val]);
-                    let result = builder.inst_results(call)[0];
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::StringToI64 => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let call = builder.ins().call(string_unary_refs[5], &[val]);
-                    let result = builder.inst_results(call)[0];
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::StringToF64 => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let call = builder.ins().call(string_unary_refs[6], &[val]);
-                    let result = builder.inst_results(call)[0];
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::StringToBool => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let call = builder.ins().call(string_unary_refs[7], &[val]);
-                    let result = builder.inst_results(call)[0];
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::StrLower => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let call = builder.ins().call(string_unary_refs[8], &[val]);
-                    let result = builder.inst_results(call)[0];
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::StrUpper => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let call = builder.ins().call(string_unary_refs[9], &[val]);
-                    let result = builder.inst_results(call)[0];
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::StrTrim => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let call = builder.ins().call(string_unary_refs[10], &[val]);
-                    let result = builder.inst_results(call)[0];
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::StrLen => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let call = builder.ins().call(string_unary_refs[11], &[val]);
-                    let result = builder.inst_results(call)[0];
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                // JSON through the value table (SRD 115 §3): a producer
-                // is told the entry its output slot owns.
-                JitOp::U64ToJson
-                | JitOp::I64ToJson
-                | JitOp::F64ToJson
-                | JitOp::BoolToJson
-                | JitOp::StrToJson => {
-                    let idx = match jit_op {
-                        JitOp::U64ToJson => 0,
-                        JitOp::I64ToJson => 1,
-                        JitOp::F64ToJson => 2,
-                        JitOp::BoolToJson => 3,
-                        _ => 4,
-                    };
-                    let entry = builder
-                        .ins()
-                        .iconst(types::I64, entry_of_slot[&output_slots[0]] as i64);
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let call = builder.ins().call(table_binary_refs[idx], &[entry, val]);
-                    let result = builder.inst_results(call)[0];
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::JsonToStr => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let call = builder.ins().call(string_unary_refs[12], &[val]);
-                    let result = builder.inst_results(call)[0];
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                // Wire-typed variadic nodes (SRD 115 §6): the inputs go
-                // into a stack array of this frame and the helper reads
-                // them by the type codes baked at classification.
-                JitOp::Printf { .. }
-                | JitOp::JsonArray { .. }
-                | JitOp::JsonObject { .. }
-                | JitOp::TileRender { .. } => {
-                    let n = input_slots.len();
-                    let slot_data = ir::StackSlotData::new(
-                        ir::StackSlotKind::ExplicitSlot,
-                        (8 * n.max(1)) as u32,
-                        3,
-                    );
-                    let ss = builder.create_sized_stack_slot(slot_data);
-                    for (i, &slot) in input_slots.iter().enumerate() {
-                        let v = load_slot(&mut builder, buffer_ptr, slot);
-                        builder.ins().stack_store(v, ss, (8 * i) as i32);
-                    }
-                    let args = builder.ins().stack_addr(types::I64, ss, 0);
-                    let (helper, first, second) = match jit_op {
-                        JitOp::Printf { format, types } => ("jit_printf", *format, *types),
-                        JitOp::JsonArray { types } => (
-                            "jit_json_array",
-                            entry_of_slot[&output_slots[0]] as u64,
-                            *types,
-                        ),
-                        JitOp::JsonObject { types } => (
-                            "jit_json_object",
-                            entry_of_slot[&output_slots[0]] as u64,
-                            *types,
-                        ),
-                        JitOp::TileRender { program, types } => {
-                            ("jit_tile_render", *program, *types)
-                        }
-                        _ => unreachable!(),
-                    };
-                    let a = builder.ins().iconst(types::I64, first as i64);
-                    let b = builder.ins().iconst(types::I64, second as i64);
-                    let call = builder.ins().call(variadic_refs[helper], &[a, b, args]);
-                    let result = builder.inst_results(call)[0];
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::ToJson(code) => {
-                    let entry = builder
-                        .ins()
-                        .iconst(types::I64, entry_of_slot[&output_slots[0]] as i64);
-                    let c = builder.ins().iconst(types::I64, *code as i64);
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let call = builder
-                        .ins()
-                        .call(variadic_refs["jit_to_json"], &[entry, c, val]);
-                    let result = builder.inst_results(call)[0];
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::JsonText(code) => {
-                    let c = builder.ins().iconst(types::I64, *code as i64);
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let call = builder
-                        .ins()
-                        .call(variadic_refs["jit_json_text"], &[c, val]);
-                    let result = builder.inst_results(call)[0];
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::TileEncode { spec, code } => {
-                    let s = builder.ins().iconst(types::I64, *spec as i64);
-                    let c = builder.ins().iconst(types::I64, *code as i64);
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let call = builder
-                        .ins()
-                        .call(variadic_refs["jit_tile_encode"], &[s, c, val]);
-                    let result = builder.inst_results(call)[0];
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::StrConcat => {
-                    let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let b = load_slot(
-                        &mut builder,
-                        buffer_ptr,
-                        if input_slots.len() > 1 {
-                            input_slots[1]
-                        } else {
-                            input_slots[0]
-                        },
-                    );
-                    let call = builder.ins().call(str_concat_ref, &[a, b]);
-                    let result = builder.inst_results(call)[0];
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-
-                JitOp::StaticStr(handle) => {
-                    // The handle is the value's representation (axiom
-                    // H1): an immediate store, no decode, no arena.
-                    let h = builder.ins().iconst(types::I64, *handle as i64);
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], h);
-                }
-
                 JitOp::Fallback => {
                     // Can't JIT this node — skip (caller should
                     // not include fallback ops in JIT steps)
@@ -4481,10 +3373,6 @@ fn compile_jit_impl(
         builder.finalize();
     }
 
-    // SRD 115 axiom H1: the emitted IR only loads, stores, and passes
-    // handles. Checked on every compile, before the code exists.
-    verify_handle_discipline(&ctx.func, &handle_slots)?;
-
     module
         .define_function(func_id, &mut ctx)
         .map_err(|e| format!("define function: {e}"))?;
@@ -4498,12 +3386,12 @@ fn compile_jit_impl(
     if provenance {
         let prov_fn: unsafe fn(*const u64, *mut u64, *mut u8) = unsafe { mem::transmute(code_ptr) };
         let dummy_raw: unsafe fn(*const u64, *mut u64) = unsafe { mem::transmute(code_ptr) };
-        Ok((dummy_raw, prov_fn, module, table_entries))
+        Ok((dummy_raw, prov_fn, module))
     } else {
         let raw_fn: unsafe fn(*const u64, *mut u64) = unsafe { mem::transmute(code_ptr) };
         let dummy_prov: unsafe fn(*const u64, *mut u64, *mut u8) =
             unsafe { mem::transmute(code_ptr) };
-        Ok((raw_fn, dummy_prov, module, table_entries))
+        Ok((raw_fn, dummy_prov, module))
     }
 }
 
@@ -5261,94 +4149,5 @@ mod tests {
         // Happy path still works.
         kernel.eval(&[42]);
         assert_eq!(kernel.get("out"), 42);
-    }
-}
-
-/// SRD 115 axiom H1, the tripwire's own tests: hand-built IR that
-/// misuses a handle is refused, and IR that only loads, stores, and
-/// passes one is accepted.
-#[cfg(test)]
-mod h1_tests {
-    use super::*;
-    use cranelift_codegen::ir::{Function, MemFlags, Signature, UserFuncName};
-    use cranelift_codegen::isa::CallConv;
-
-    enum Shape {
-        /// load slot 3, store to slot 4
-        Forward,
-        /// load slot 3, add one, store to slot 4
-        Arithmetic,
-        /// load slot 3, branch on it
-        Branch,
-    }
-
-    fn function(shape: Shape) -> Function {
-        let mut sig = Signature::new(CallConv::Fast);
-        sig.params.push(AbiParam::new(types::I64));
-        sig.params.push(AbiParam::new(types::I64));
-        let mut func = Function::with_name_signature(UserFuncName::default(), sig);
-        let mut fb_ctx = FunctionBuilderContext::new();
-        let mut b = FunctionBuilder::new(&mut func, &mut fb_ctx);
-        let block = b.create_block();
-        b.append_block_params_for_function_params(block);
-        b.switch_to_block(block);
-        b.seal_block(block);
-        let buf = b.block_params(block)[1];
-        let h = b.ins().load(types::I64, MemFlags::trusted(), buf, 8 * 3);
-        match shape {
-            Shape::Forward => {
-                b.ins().store(MemFlags::trusted(), h, buf, 8 * 4);
-                b.ins().return_(&[]);
-            }
-            Shape::Arithmetic => {
-                let one = b.ins().iconst(types::I64, 1);
-                let v = b.ins().iadd(h, one);
-                b.ins().store(MemFlags::trusted(), v, buf, 8 * 4);
-                b.ins().return_(&[]);
-            }
-            Shape::Branch => {
-                let yes = b.create_block();
-                let no = b.create_block();
-                b.ins().brif(h, yes, &[], no, &[]);
-                b.switch_to_block(yes);
-                b.seal_block(yes);
-                b.ins().return_(&[]);
-                b.switch_to_block(no);
-                b.seal_block(no);
-                b.ins().return_(&[]);
-            }
-        }
-        b.finalize();
-        func
-    }
-
-    fn slots(s: &[usize]) -> std::collections::HashSet<usize> {
-        s.iter().copied().collect()
-    }
-
-    #[test]
-    fn loading_storing_and_passing_a_handle_is_allowed() {
-        verify_handle_discipline(&function(Shape::Forward), &slots(&[3, 4])).unwrap();
-        verify_handle_discipline(&function(Shape::Arithmetic), &slots(&[])).unwrap();
-    }
-
-    #[test]
-    fn a_handle_used_as_an_arithmetic_operand_is_refused() {
-        let err = verify_handle_discipline(&function(Shape::Arithmetic), &slots(&[3])).unwrap_err();
-        assert!(err.contains("slot 3") && err.contains("iadd"), "{err}");
-    }
-
-    #[test]
-    fn a_computed_value_written_to_a_handle_slot_is_refused() {
-        // Only the destination is known to be a handle slot: the value
-        // stored there was made by arithmetic, which no lowering does.
-        let err = verify_handle_discipline(&function(Shape::Arithmetic), &slots(&[4])).unwrap_err();
-        assert!(err.contains("slot 4") && err.contains("iadd"), "{err}");
-    }
-
-    #[test]
-    fn a_handle_as_a_branch_condition_is_refused() {
-        let err = verify_handle_discipline(&function(Shape::Branch), &slots(&[3])).unwrap_err();
-        assert!(err.contains("brif"), "{err}");
     }
 }

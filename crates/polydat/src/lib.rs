@@ -182,9 +182,9 @@ pub mod derive_support;
 // for ergonomic use in `#[polydat_node]` function signatures.
 pub use derive_support::Const;
 
-// SRD-105 — engine-mix surface: the process-default JIT mode and
-// its accessors. `kernel.jit: auto|off|force` maps here.
-pub use compile::cone::{JitMode, default_jit_mode, set_default_jit_mode};
+/// How much of the interpreter's graph is fused into native cones:
+/// what `Engine::Interpreter` carries.
+pub use compile::cone::JitMode;
 /// The engine a host chooses and the one error of every constructor
 /// that takes it (docs/design/engine_parity.md, step 4).
 pub use compile::select::{Engine, EnginePlan, KernelError, Provenance};

@@ -112,15 +112,27 @@ fn const_str_arc(s: &str) -> std::sync::Arc<str> {
     std::sync::Arc::from(s)
 }
 
-/// The P2 form of a string literal (SRD 115 §2.2): the text is interned
-/// at kernel build and the closure stores its static handle, exactly as
-/// the P3 lowering (`JitOp::StaticStr`) does. Nothing enters the arena.
-fn const_str_compiled(node: &ConstStr) -> crate::ast::CompiledU64Op {
-    let handle = crate::kernel::StaticInterner::intern(&node.value);
-    Box::new(move |_inputs: &[u64], outputs: &mut [u64]| outputs[0] = handle)
+/// The compiled form of a string literal: the text is interned at
+/// kernel build, and the step publishes the `(ptr, len)` pair of the
+/// interned bytes, which have process lifetime (jit_boundary.md, axiom
+/// S7). It owns no scratch and copies nothing.
+fn const_str_compiled(
+    node: &ConstStr,
+    _wire_types: &[crate::ast::PortType],
+) -> crate::ast::CompiledSlotKit {
+    let (ptr, len) = crate::kernel::static_pair(crate::kernel::StaticInterner::intern(&node.value));
+    crate::ast::CompiledSlotKit {
+        scratch: Vec::new(),
+        op: Box::new(
+            move |_inputs: &[u64], outputs: &mut [u64], _scratch: &mut [crate::ast::ScratchBuf]| {
+                outputs[0] = ptr;
+                outputs[1] = len;
+            },
+        ),
+    }
 }
 
-#[crate::polydat_node(category = Diagnostic, compiled_u64 = const_str_compiled)]
+#[crate::polydat_node(category = Diagnostic, compiled_slot = const_str_compiled)]
 fn const_str(
     #[poly_default("")] value: crate::derive_support::Const<&str>,
     #[poly_const(const_str_arc, from = value)] cached: &std::sync::Arc<str>,

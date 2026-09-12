@@ -36,39 +36,25 @@ impl JitCode {
     }
 }
 
-/// A raw native kernel taken apart: its entry point, its code, and the
-/// table-kind `(slot, entry)` pairs the code writes.
-pub type JitParts = (
-    unsafe fn(*const u64, *mut u64),
-    JitCode,
-    Vec<(usize, usize)>,
-);
+/// A raw native kernel taken apart: its entry point and its code.
+pub type JitParts = (unsafe fn(*const u64, *mut u64), JitCode);
 
 /// Shared fields for all JIT kernel variants. A clone is a new state
 /// of the same program: the code and the nodes are shared, everything
-/// else is the clone's own (engine_parity.md, step 4).
-#[derive(Clone)]
+/// else is the clone's own (engine_parity.md, step 4), and every extern
+/// pair in its buffer points into its own storage (axiom S3), never
+/// into the state it was cloned from.
 pub(super) struct JitCore {
     pub(super) buffer: Vec<u64>,
     pub(super) coord_count: usize,
     pub(super) output_map: HashMap<String, usize>,
-    /// Slots the raw readers refuse: `Ref2` pairs (axiom S2) and
-    /// `Hdl1` handles (SRD 115, axiom H1). Set by the assembler once the
-    /// layout is known; empty means no such slot.
+    /// Slots the raw readers refuse: `Ref2` pairs (axiom S2). Set by
+    /// the assembler once the layout is known; empty means no such
+    /// slot.
     pub(super) guard_slots: Vec<bool>,
     /// Port type of each named output, for `get_value`'s decode.
     pub(super) output_types: HashMap<String, crate::ast::PortType>,
-    /// The kernel's value table (SRD 115 §3): one entry per table-kind
-    /// slot the native code writes, owned for the kernel's lifetime.
-    pub(super) table: crate::kernel::ValueTable,
-    /// `(slot, entry)` for every table-kind slot, from codegen; the
-    /// validator checks each slot's handle names its own entry.
-    pub(super) table_entries: Vec<(usize, usize)>,
-    /// True when this kernel is driven directly by a host and so begins
-    /// a root cycle at every eval (SRD 115 §4). False when a state that
-    /// owns the cycle wraps it.
-    pub(super) owns_cycle: bool,
-    /// The extern inputs, materialized at the start of every run.
+    /// The extern inputs, written through at every set.
     pub(super) externs: crate::compile::externs::Externs,
     /// The traversals the program declares (SRD 113), opened through the
     /// `Kernel` trait.
@@ -85,10 +71,33 @@ pub(super) struct JitCore {
     pub(super) tracker: usize,
 }
 
+impl Clone for JitCore {
+    fn clone(&self) -> Self {
+        let mut core = JitCore {
+            buffer: self.buffer.clone(),
+            coord_count: self.coord_count,
+            output_map: self.output_map.clone(),
+            guard_slots: self.guard_slots.clone(),
+            output_types: self.output_types.clone(),
+            externs: self.externs.clone(),
+            traversals: self.traversals.clone(),
+            _module: self._module.clone(),
+            _nodes: self._nodes.clone(),
+            drive: self.drive.clone(),
+            sites: self.sites.clone(),
+            tracker: self.tracker,
+        };
+        // An extern's pair points into the value the state stores
+        // (axiom S3), which a clone stores again.
+        core.externs.seed(&mut core.buffer, None);
+        core
+    }
+}
+
 impl JitCore {
-    /// The value at `slot` decoded as `ty`, a handle through the table.
+    /// The value at `slot` decoded as `ty`, a pair copied out.
     pub(super) fn slot_value(&self, slot: usize, ty: crate::ast::PortType) -> crate::ast::Value {
-        crate::compile::marshal::decode_output(&self.buffer, slot, ty, &self.table)
+        crate::compile::marshal::decode_output(&self.buffer, slot, ty)
     }
 
     /// One native function is the program.
@@ -108,20 +117,15 @@ impl JitCore {
         total_slots: usize,
         coord_count: usize,
         output_map: HashMap<String, usize>,
-        table_entries: Vec<(usize, usize)>,
         module: JITModule,
         nodes: Vec<Box<dyn PolydatNode>>,
     ) -> Self {
-        let table_len = table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0);
         Self {
             buffer: vec![0u64; total_slots + 1],
             coord_count,
             output_map,
             guard_slots: Vec::new(),
             output_types: HashMap::new(),
-            table: crate::kernel::ValueTable::new(table_len),
-            table_entries,
-            owns_cycle: true,
             externs: crate::compile::externs::Externs::default(),
             traversals: Vec::new().into(),
             _module: JitCode::new(module),
@@ -132,37 +136,20 @@ impl JitCore {
         }
     }
 
-    /// Install the extern inputs: table-kind externs take entries after
-    /// the ones the code owns, carriers are seeded now, and every run
-    /// materializes the handle kinds.
-    pub(super) fn set_externs(&mut self, mut externs: crate::compile::externs::Externs) {
-        externs.renumber_entries(
-            self.table_entries
-                .iter()
-                .map(|&(_, e)| e + 1)
-                .max()
-                .unwrap_or(0),
-        );
-        self.table_entries.extend(externs.table_entries());
-        let table_len = self
-            .table_entries
-            .iter()
-            .map(|&(_, e)| e + 1)
-            .max()
-            .unwrap_or(0);
-        self.table = crate::kernel::ValueTable::new(table_len);
-        externs.seed(&mut self.buffer);
+    /// Install the extern inputs, written through into the buffer now.
+    pub(super) fn set_externs(&mut self, externs: crate::compile::externs::Externs) {
+        externs.seed(&mut self.buffer, None);
         self.externs = externs;
     }
 
     /// Set an extern by name; returns its slot for dirty marking.
     fn set_extern(&mut self, name: &str, value: crate::ast::Value) -> Result<usize, String> {
-        self.externs.set(name, value, &mut self.buffer)
+        Ok(self.externs.set(name, value, &mut self.buffer)?.0)
     }
 
     /// [`Self::set_extern`] by input index.
     fn set_extern_at(&mut self, index: usize, value: crate::ast::Value) -> Result<usize, String> {
-        self.externs.set_at(index, value, &mut self.buffer)
+        Ok(self.externs.set_at(index, value, &mut self.buffer)?.0)
     }
 
     /// Bind a `shared` binding to `cell` (engine parity, step 9). Native
@@ -173,109 +160,37 @@ impl JitCore {
         Ok(())
     }
 
-    /// Run one native evaluation: begin the cycle it belongs to, install
-    /// the kernel's value table for the helpers, run inside the longjmp
-    /// catch, then check the table invariants.
+    /// Run one native evaluation: take what cells other holders
+    /// published, refuse an unset extern (native code cannot carry a
+    /// `None`; engine_parity.md, A12), run inside the longjmp catch.
     #[inline]
     pub(super) fn run(&mut self, native: impl FnOnce()) {
-        let generation = if self.owns_cycle {
-            crate::kernel::begin_root_cycle()
-        } else {
-            crate::kernel::cycle_generation()
-        };
-        self.table.set_generation(generation);
-        let _run = crate::kernel::arena::RunScope::enter();
-        // Extern handles belong to this run (H3, H4).
-        let _ = self
-            .externs
-            .materialize(&mut self.buffer, &mut self.table, None);
+        if self.externs.cells_dirty() {
+            self.externs.refresh_cells(&mut self.buffer);
+        }
+        if let Some((name, ty)) = self.externs.first_unset() {
+            panic!(
+                "extern '{name}' ({ty}) has no value: it has no default, so set it with \
+                 set_input before the first run (native code cannot carry `None`; \
+                 docs/design/engine_parity.md, A12)"
+            );
+        }
         // Native code names the step it is in before each helper call;
         // a failure before any names none. The capture guard is armed
         // for the run, so the helper's panic is recorded quietly and
         // re-raised enriched, as the interpreter re-raises a node's (A7).
         self.buffer[self.tracker] = u64::MAX;
         let capture = crate::kernel::engines::EvalPanicCaptureGuard::arm();
-        let outcome = crate::kernel::with_value_table(&mut self.table, || {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                super::codegen::invoke_with_catch(native)
-            }))
-        });
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            super::codegen::invoke_with_catch(native)
+        }));
         drop(capture);
         if let Err(payload) = outcome {
             let step = self.buffer[self.tracker] as usize;
             let sites = std::sync::Arc::clone(&self.sites);
-            sites.reraise(payload, step, &self.buffer, None, &self.table);
-        }
-        self.validate_table();
-    }
-
-    /// SRD 115 axiom H4 validator (the S9 analogue for handles): after
-    /// a native run, every table-kind slot holds a table handle of this
-    /// generation naming exactly the entry the layout assigned it, and
-    /// that entry was written. Debug builds only.
-    #[inline]
-    fn validate_table(&self) {
-        if cfg!(debug_assertions) {
-            for &(slot, entry) in &self.table_entries {
-                let handle = self.buffer[slot];
-                assert_eq!(
-                    handle & crate::kernel::TAG_MASK,
-                    crate::kernel::TAG_RES,
-                    "H4: slot {slot} should hold a table handle, holds {handle:#x}"
-                );
-                let (_, generation, named) = crate::kernel::decode_table_handle(handle);
-                assert_eq!(
-                    named, entry,
-                    "H4: slot {slot} names entry {named}; the layout assigned it entry {entry}"
-                );
-                assert_eq!(
-                    generation,
-                    self.table.generation() & 0xFF_FFFF,
-                    "H3: slot {slot} holds a handle from another cycle generation"
-                );
-                assert!(
-                    self.table.is_written(entry),
-                    "H4: entry {entry} was not written by the run that produced slot {slot}"
-                );
-            }
+            sites.reraise(payload, step, &self.buffer, None);
         }
     }
-}
-
-/// Compute slot provenance from input_dependents.
-///
-/// `input_dependents` is indexed by coordinate SLOT (callers
-/// expand per-input lists across multi-slot inputs per §8.4
-/// layer 1); `step_output_slots` carries every step's flattened
-/// output slot list so multi-slot outputs share their step's
-/// provenance word.
-pub(super) fn compute_jit_slot_provenance(
-    coord_count: usize,
-    buffer_len: usize,
-    step_output_slots: &[Vec<usize>],
-    input_dependents: &[Vec<usize>],
-) -> Vec<ProvMask> {
-    let step_count = step_output_slots.len();
-    let mut step_prov: Vec<ProvMask> = (0..step_count).map(|_| ProvMask::empty()).collect();
-    for (input_slot, deps) in input_dependents.iter().enumerate() {
-        for &step_idx in deps {
-            if step_idx < step_count {
-                step_prov[step_idx].set(input_slot);
-            }
-        }
-    }
-    let mut slot_prov: Vec<ProvMask> = (0..buffer_len).map(|_| ProvMask::empty()).collect();
-    for (i, slot) in slot_prov.iter_mut().enumerate().take(coord_count) {
-        slot.set(i);
-    }
-    for (i, outs) in step_output_slots.iter().enumerate() {
-        for &slot in outs {
-            if slot < slot_prov.len() {
-                slot_prov[slot] = step_prov[i].clone();
-            }
-        }
-    }
-    slot_prov
 }
 
 macro_rules! jit_accessors {
@@ -303,16 +218,16 @@ macro_rules! jit_accessors {
         pub fn get_slot(&self, slot: usize) -> u64 {
             if self.core.guard_slots.get(slot).copied().unwrap_or(false) {
                 panic!(
-                    "slot {slot} is Ref2- or Hdl1-colored; a raw u64 read would leak an \
-                     interior address or a handle. Use get_value to decode it."
+                    "slot {slot} is Ref2-colored; a raw u64 read would leak an interior \
+                     address. Use get_value to decode it."
                 );
             }
             self.core.buffer[slot]
         }
 
         /// The named output as a typed `Value`, decoded by its port type:
-        /// a handle slot is copied out of the arena or the value table
-        /// (SRD 115 §5), so the caller never holds a handle.
+        /// a reference pair is copied out, so the caller never holds a
+        /// reference into the buffer.
         pub fn get_value(&self, name: &str) -> crate::ast::Value {
             let slot = self.core.output_map[name];
             let ty = self
@@ -321,7 +236,7 @@ macro_rules! jit_accessors {
                 .get(name)
                 .copied()
                 .unwrap_or(crate::ast::PortType::U64);
-            crate::compile::marshal::decode_output(&self.core.buffer, slot, ty, &self.core.table)
+            crate::compile::marshal::decode_output(&self.core.buffer, slot, ty)
         }
 
         /// Record the slots raw readers must refuse and each output's
@@ -341,18 +256,6 @@ macro_rules! jit_accessors {
             sites: std::sync::Arc<crate::compile::Attribution>,
         ) {
             self.core.sites = sites;
-        }
-
-        /// Whether each eval begins a root cycle (SRD 115 §4). A state
-        /// that owns the cycle and wraps this kernel sets this false.
-        #[allow(dead_code)] // no state wraps the push-only variant
-        pub(crate) fn set_owns_cycle(&mut self, owns: bool) {
-            self.core.owns_cycle = owns;
-        }
-
-        /// Entries in the kernel's value table.
-        pub fn table_len(&self) -> usize {
-            self.core.table.len()
         }
 
         /// Set an extern by name, as `PolydatState::set_input` does on
@@ -484,10 +387,9 @@ impl JitKernelRaw {
     }
 
     /// Decompose into raw parts for hybrid kernel integration: the
-    /// entry point, its module, and the table-kind `(slot, entry)`
-    /// pairs the code writes.
+    /// entry point and its module.
     pub fn into_parts(self) -> JitParts {
-        (self.code_fn, self.core._module, self.core.table_entries)
+        (self.code_fn, self.core._module)
     }
 
     /// Every run evaluates everything; a changed input needs no mark.

@@ -469,6 +469,11 @@ pub struct EngineCore {
     pub(crate) output_cells: Vec<Option<SharedCell>>,
     /// Pre-allocated scratch buffer for node input gathering.
     pub(crate) input_scratch: Vec<Value>,
+    /// Per node, the scratch entries the node declared through
+    /// `scratch_layout` (a native cone's own slot buffer): storage
+    /// belongs to the state, never to the node, which is shared by
+    /// every state of the program (axiom S3).
+    pub(crate) node_scratch: Vec<Vec<crate::ast::ScratchBuf>>,
     /// This scope's intent-dirty bit-vector. One `AtomicU64`
     /// word per 64 cells allocated by this scope; new words
     /// are appended on demand by [`Self::allocate_cell_bit`].
@@ -711,7 +716,6 @@ impl EngineCore {
     /// Checks the clean flag, recursively evaluates upstream, gathers
     /// inputs, calls node.eval(), marks clean.
     pub fn eval_node(&mut self, program: &PolydatProgram, node_idx: usize) {
-        let _run = crate::kernel::arena::RunScope::enter();
         if self.node_clean[node_idx] {
             // Memoization hit candidate — confirm cell-bound
             // inputs in this node's cone are still at the
@@ -802,7 +806,8 @@ impl EngineCore {
         // message that prints is the enriched one.
         let guard = EvalPanicCaptureGuard::arm();
         let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            program.nodes[node_idx].eval(
+            program.nodes[node_idx].eval_in(
+                &mut self.node_scratch[node_idx],
                 &self.input_scratch[..input_count],
                 &mut self.buffers[node_idx],
             );
@@ -909,11 +914,6 @@ pub struct PolydatState {
     /// `counter()`, `current_epoch_millis()`). They are unconditionally
     /// marked dirty on every `set_input()` call so they are never cached.
     nondeterministic_nodes: Vec<usize>,
-    /// SRD 115 §4: a nested state runs inside another state's cycle
-    /// (a traversal activation, a projection body, a materialized
-    /// subscope) and never resets the thread's cycle arena. A root
-    /// state, which the host drives, resets it on every cycle advance.
-    nested: bool,
 }
 
 impl PolydatState {
@@ -927,44 +927,18 @@ impl PolydatState {
             core,
             input_dependents,
             nondeterministic_nodes,
-            nested: false,
         }
     }
 
-    /// Mark this state as nested: it runs inside a root state's cycle
-    /// and must not reset the thread's cycle arena (SRD 115, axiom H5).
-    pub fn mark_nested(&mut self) {
-        self.nested = true;
-    }
-
-    /// Whether this state is nested inside another's cycle.
-    pub fn is_nested(&self) -> bool {
-        self.nested
-    }
-
-    /// A root state's input write begins a cycle on the thread: the
-    /// cycle arena resets and the generation advances. Nested states do
-    /// nothing here.
-    #[inline]
-    fn begin_cycle_if_root(&self) {
-        if !self.nested {
-            crate::kernel::arena::begin_root_cycle();
-        }
-    }
-
-    /// Set all coordinate inputs at once (convenience for the common
-    /// single-cycle case). Wraps each u64 as `Value::U64` and sets
-    /// them at indices 0..N with per-input change detection.
+    /// Set all coordinate inputs at once. Wraps each u64 as
+    /// `Value::U64` and sets them at indices 0..N with per-input
+    /// change detection.
     pub fn set_inputs(&mut self, coords: &[u64]) {
-        self.begin_cycle_if_root();
         self.write_coordinates(coords);
     }
 
-    /// Write the coordinates without beginning a cycle: what
-    /// construction does to seed a state's folded constants, inside
-    /// whatever cycle is open on the thread (axiom H5: a kernel is
-    /// built and compiled inside a root's cycle without resetting it).
-    /// A host's write is [`Self::set_inputs`].
+    /// Write the coordinates: what construction does to seed a state's
+    /// folded constants. A host's write is [`Self::set_inputs`].
     pub(crate) fn seed_inputs(&mut self, coords: &[u64]) {
         self.write_coordinates(coords);
     }
@@ -1001,7 +975,6 @@ impl PolydatState {
     /// (`RawState`, `ProvScanState`) implement different
     /// strategies — see their own `set_inputs` impls.
     pub fn set_input(&mut self, idx: usize, value: Value) {
-        self.begin_cycle_if_root();
         if let Some(cell) = self.core.shared_cells.get(idx).and_then(|c| c.as_ref()) {
             // Cell-bound slot: the cell is the register. We do
             // NOT mirror the value into `inputs[idx]`; that

@@ -132,9 +132,52 @@ fn every_engine_emits_the_same_rows() {
     assert_eq!(want.len(), 4, "{want:?}");
     assert!(want[0].contains("n=50 "), "{want:?}");
     assert_eq!(run("auto"), want);
+    assert_eq!(run("interpreter"), want);
+    assert_eq!(run("closures"), want);
     if cfg!(feature = "jit") {
         assert_eq!(run("force"), want);
+        assert_eq!(run("native"), want);
     }
+    // The interpreter with its cones off, and a compiled engine in a
+    // named provenance mode, by their own flags.
+    let (ok, stdout, stderr) = run_binary(&[
+        "run",
+        path.to_str().unwrap(),
+        "--cycles",
+        "4",
+        "--partition",
+        "1",
+        "--emit",
+        "map",
+        "--outputs",
+        "cycle,f,s,n,t",
+        "--engine",
+        "interpreter",
+        "--cones",
+        "off",
+        "-q",
+    ]);
+    assert!(ok, "{stderr}");
+    assert_eq!(rows(&stdout), want);
+    let (ok, stdout, stderr) = run_binary(&[
+        "run",
+        path.to_str().unwrap(),
+        "--cycles",
+        "4",
+        "--partition",
+        "1",
+        "--emit",
+        "map",
+        "--outputs",
+        "cycle,f,s,n,t",
+        "--engine",
+        "closures",
+        "--provenance",
+        "raw",
+        "-q",
+    ]);
+    assert!(ok, "{stderr}");
+    assert_eq!(rows(&stdout), want);
 }
 
 #[test]

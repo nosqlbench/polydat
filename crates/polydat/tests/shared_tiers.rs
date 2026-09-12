@@ -10,12 +10,12 @@
 
 use polydat::ast::Value;
 use polydat::dsl::compile::compile_polydat_with;
-use polydat::{Engine, Kernel, Provenance};
+use polydat::{Engine, JitMode, Kernel, Provenance};
 
 const SRC: &str = "input cycle: u64\nshared counter := 10\nout := cycle + counter\n";
 
 fn engines() -> Vec<Engine> {
-    let mut all = vec![Engine::Interpreter];
+    let mut all = vec![Engine::Interpreter(JitMode::Auto)];
     for m in [
         Provenance::Raw,
         Provenance::Push,

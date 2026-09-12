@@ -1,19 +1,24 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! SRD 115 §6, step 6: the nodes that inspect `Value` variants at P1
-//! (`printf`, the JSON constructors, `to_json`, `json_text`, the tile
-//! nodes) lower with their wire types fixed at classification and run
-//! the same body natively. Every result agrees with P1 (axiom H7); a
-//! wire of a type no helper takes, and a tile with a projection, keep
-//! their node on P1.
+//! The nodes that inspect `Value` variants at P1 (`printf`, the JSON
+//! constructors, `to_json`, `json_text`, the tile nodes) agree with the
+//! interpreter on every engine tier, whatever the types of their wires.
+//!
+//! Their string and JSON ports are `Ref2` values (jit_boundary.md,
+//! axioms S1–S10), and the native tier does not carry reference pairs
+//! yet, so these nodes run as closure steps beside the native ones;
+//! `REF_NATIVE` gates the fusion assertions until it does.
 
 #![cfg(feature = "jit")]
 
 use polydat::JitMode;
 use polydat::ast::Value;
 use polydat::dsl::compile::compile_polydat_to_assembler;
-use polydat::kernel::{PolydatKernel, cycle_arena_used};
+use polydat::kernel::PolydatKernel;
+
+/// Whether the native tier lowers steps with reference-pair ports.
+const REF_NATIVE: bool = false;
 
 fn kernel(src: &str, mode: JitMode) -> PolydatKernel {
     let mut asm = compile_polydat_to_assembler(src).unwrap_or_else(|e| panic!("{e}\n{src}"));
@@ -51,7 +56,7 @@ fn agree(
     let names = cones(&p3);
     for member in fused {
         assert!(
-            !standalone(&p3, member),
+            !REF_NATIVE || !standalone(&p3, member),
             "`{member}` was not fused; cones: {names:?}\n{src}"
         );
     }
@@ -136,12 +141,12 @@ fn value_port_nodes_join_a_cone_only_behind_a_member() {
 }
 
 #[test]
-fn pure_p3_kernels_lower_value_port_nodes_by_port_type() {
+fn value_port_nodes_agree_on_the_hybrid_kernel() {
     let src = "input cycle: u64\nh := hash(cycle)\nj := to_json(h)\nt := json_text(j)\ns := printf(\"{}/{:x}\", h, h)\n";
     let mut k = compile_polydat_to_assembler(src)
         .unwrap()
-        .try_compile_pure_jit()
-        .expect("every node lowers");
+        .compile_hybrid()
+        .expect("hybrid");
     let mut p1 = kernel(src, JitMode::Off);
     for c in 0..20u64 {
         k.eval(&[c]);
@@ -197,33 +202,27 @@ fn a_tile_with_a_projection_renders_natively_and_agrees() {
 }
 
 /// A projection body with its own fusable work: the body program's
-/// cone evaluates inside the outer cone's helper, so the cone eval
-/// must be re-entrant, and the body's strings must not disturb the
-/// outer cone's arena mark.
+/// cone evaluates inside the render, in a body kernel the rendering
+/// state owns, and the render agrees with the interpreter.
 #[test]
-fn a_projection_body_with_cones_renders_inside_a_cone() {
+fn a_projection_body_with_cones_renders_inside_a_render() {
     let src = "input cycle: u64\nh := hash(cycle)\ns := __u64_to_string(h)\ntile t : json := {\"h\": ${h}, \"xs\": [@for k in 1..4 sep \",\" { {\"k\": ${k}, \"hk\": ${hash(k)}, \"s\": ${__u64_to_string(hash(k))}, \"outer\": ${s}} }]}\n";
     let mut p3 = agree(src, &["t"], 5, &["tile_render"], &[]);
     p3.set_inputs(&[2]);
-    let before = polydat::kernel::cycle_arena_used();
     let text = p3.pull("t").to_display_string();
     assert!(text.contains("\"hk\":"), "{text}");
-    assert_eq!(
-        polydat::kernel::cycle_arena_used(),
-        before,
-        "the cone released what its render took"
-    );
 }
 
-/// The same tile in a pure-P3 kernel: the helper runs the projection's
-/// nested kernels inside the kernel's own root cycle.
+/// The same tile on the hybrid kernel: the render node runs as a
+/// closure step beside the native ones, and its body kernels are the
+/// step's own.
 #[test]
-fn a_projection_tile_lays_out_in_a_pure_p3_kernel() {
+fn a_projection_tile_renders_on_the_hybrid_kernel() {
     let src = "input cycle: u64\nh := hash(cycle)\ntile t : text := \"${h}: @for k in 1..3 sep \\\"-\\\" {${hash(k)}}\"\n";
     let mut k = compile_polydat_to_assembler(src)
         .unwrap()
-        .try_compile_pure_jit()
-        .expect("every node lowers");
+        .compile_hybrid()
+        .expect("hybrid");
     let mut p1 = kernel(src, JitMode::Off);
     for c in 0..6u64 {
         k.eval(&[c]);
@@ -232,16 +231,30 @@ fn a_projection_tile_lays_out_in_a_pure_p3_kernel() {
     }
 }
 
+/// A pure native kernel carries no reference pairs yet: a program with
+/// a string output is refused by name, and runs on the hybrid kernel.
 #[test]
-fn a_hybrid_kernel_begins_a_root_cycle_per_run_so_the_arena_stays_bounded() {
+fn a_pure_native_kernel_refuses_a_reference_output() {
+    let src = "input cycle: u64\nh := hash(cycle)\ns := __u64_to_string(h)\n";
+    let err = compile_polydat_to_assembler(src)
+        .unwrap()
+        .try_compile_pure_jit()
+        .err()
+        .expect("a string output has no pure native form yet");
+    assert!(err.contains("Ref2"), "{err}");
+}
+
+/// A hybrid kernel's string output is owned by its step: it stands
+/// until the step's input is written, every typed read copies it out,
+/// and the raw reader refuses the slot (axiom S2).
+#[test]
+fn a_hybrid_kernels_string_output_is_owned_by_its_step() {
     let src = "input cycle: u64\nh := hash(cycle)\ns := __u64_to_string(h)\nn := __str_to_u64(s)\n";
     let mut hy = compile_polydat_to_assembler(src)
         .unwrap()
         .compile_hybrid()
         .expect("hybrid");
     let n = hy.resolve_output("n").unwrap();
-    // The oracle runs first: a P1 root kernel resets the arena at its
-    // own cycle advance, which would mask what the hybrid kernel does.
     let mut p1 = kernel(src, JitMode::Off);
     let want: Vec<u64> = (1..500u64)
         .map(|c| {
@@ -249,22 +262,20 @@ fn a_hybrid_kernel_begins_a_root_cycle_per_run_so_the_arena_stays_bounded() {
             p1.pull("n").as_u64()
         })
         .collect();
-    hy.eval(&[1]);
-    let used = cycle_arena_used();
-    assert!(used > 0, "the string result lives in the arena");
-    for c in 2..500u64 {
+    let mut kept = None;
+    for c in 1..500u64 {
         hy.eval(&[c]);
         assert_eq!(hy.get_slot(n), want[(c - 1) as usize]);
-        // The typed reader copies the string out; the raw reader refuses it.
-        assert_eq!(
-            hy.get_value("s").as_str(),
-            want[(c - 1) as usize].to_string()
-        );
+        let s = hy.get_value("s");
+        assert_eq!(s.as_str(), want[(c - 1) as usize].to_string());
+        if c == 100 {
+            kept = Some(s);
+        }
     }
-    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hy.get("s"))).is_err());
     assert_eq!(
-        cycle_arena_used(),
-        used,
-        "each run reset the arena before writing"
+        kept.expect("read at 100").as_str(),
+        want[99].to_string(),
+        "a value read earlier is the reader's own"
     );
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hy.get("s"))).is_err());
 }

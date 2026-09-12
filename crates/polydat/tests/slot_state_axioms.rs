@@ -165,11 +165,15 @@ fn s10_from_raw_parts_tripwire() {
         // Dataset accessor reading an mmap-backed uniform facet
         // (vectordata owner-lifetime contract).
         ("src/library/vectors.rs", "dataset facet view"),
-        // The chunked cycle arena's subrange views (SRD 115 §2.2):
-        // built from raw pointers so a fresh allocation never reborrows
-        // a whole chunk under a live shared reference; adjudicated by
-        // the handle Miri lane (`tests/handle_miri.rs`).
-        ("src/kernel/arena.rs", "cycle arena subrange views"),
+        // The one place a `Ref2` pair is dereferenced on the way out of
+        // the compiled tier (S7): the boundary decode, under S3/S4.
+        ("src/compile/marshal.rs", "reference pair decode"),
+        // A copy step reads its producer's pair into its own scratch
+        // (S3: pairs are never forwarded).
+        ("src/compile/assembly.rs", "reference copy into own scratch"),
+        // A string assertion reads its producer's pair before copying
+        // it into its own scratch (S3).
+        ("src/library/assertions.rs", "string assertion read"),
     ];
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut offending = Vec::new();
@@ -218,27 +222,26 @@ fn lookup_does_not_allocate_per_call() {
     );
 }
 
-/// SRD 115 §2, axioms H1 and H2: the non-scalar types have their own
-/// one-slot color, their handle kind is fixed by the port type, and the
-/// scalar colors are untouched.
+/// Axiom S1: the slot color is static, total, and three-valued. The
+/// by-reference types (strings, byte strings, JSON, extension values,
+/// handles) are `Ref2` like the typed vectors, each with the scratch
+/// element its producer owns; the scalar colors are untouched.
 #[test]
-fn hdl1_is_the_color_of_handle_types() {
-    use polydat::ast::{HandleKind, PortType, SlotColor};
-    for ty in [
-        PortType::Str,
-        PortType::Bytes,
-        PortType::Json,
-        PortType::Ext,
-        PortType::Handle,
+fn ref2_is_the_color_of_by_reference_types() {
+    use polydat::ast::{PortType, ScratchElem, SlotColor};
+    for (ty, elem) in [
+        (PortType::Str, ScratchElem::Str),
+        (PortType::Bytes, ScratchElem::Bytes),
+        (PortType::Json, ScratchElem::Value),
+        (PortType::Ext, ScratchElem::Value),
+        (PortType::Handle, ScratchElem::Value),
+        (PortType::VecF32, ScratchElem::F32),
+        (PortType::VecI64, ScratchElem::I64),
     ] {
-        assert_eq!(ty.slot_color(), SlotColor::Hdl1, "{ty:?}");
-        assert_eq!(ty.slot_width(), 1, "{ty:?}");
+        assert_eq!(ty.slot_color(), SlotColor::Ref2, "{ty:?}");
+        assert_eq!(ty.slot_width(), 2, "{ty:?}");
+        assert_eq!(ty.scratch_elem(), Some(elem), "{ty:?}");
     }
-    assert_eq!(PortType::Str.handle_kind(), Some(HandleKind::Bytes));
-    assert_eq!(PortType::Bytes.handle_kind(), Some(HandleKind::Bytes));
-    assert_eq!(PortType::Json.handle_kind(), Some(HandleKind::Table));
-    assert_eq!(PortType::Ext.handle_kind(), Some(HandleKind::Table));
-    assert_eq!(PortType::Handle.handle_kind(), Some(HandleKind::Table));
     for ty in [
         PortType::U64,
         PortType::F64,
@@ -248,33 +251,97 @@ fn hdl1_is_the_color_of_handle_types() {
         PortType::F32,
     ] {
         assert_eq!(ty.slot_color(), SlotColor::Imm1, "{ty:?}");
-        assert_eq!(ty.handle_kind(), None, "{ty:?}");
+        assert_eq!(ty.scratch_elem(), None, "{ty:?}");
     }
     assert_eq!(PortType::U128.slot_color(), SlotColor::Imm2);
-    assert_eq!(PortType::VecF32.slot_color(), SlotColor::Ref2);
-    assert_eq!(PortType::VecF32.handle_kind(), None);
+    assert_eq!(PortType::U128.scratch_elem(), None);
 }
 
-/// SRD 115 P3 corollary: a handle-colored output is legal in a pure-P3
-/// layout once it marshals (byte strings through the arena, everything
-/// else through the cycle value table); the raw readers still refuse
-/// its slot (axiom H1), so it is read only by decode. A node without a
-/// lowering keeps the whole kernel off pure P3 for its own reason.
+/// Axiom S2 for by-reference outputs on the hybrid kernel: the raw
+/// readers refuse a `Ref2` slot, and the typed reader copies the value
+/// out. A pure native layout carries no reference pairs yet and says so.
 #[cfg(feature = "jit")]
 #[test]
-fn pure_p3_layout_admits_handle_outputs_and_guards_their_slots() {
-    let asm = compile_polydat_to_assembler(
-        "input cycle: u64\nh := hash(cycle)\nj := __u64_to_json(h)\ns := __u64_to_string(h)\n",
-    )
-    .unwrap();
-    let mut k = asm
+fn hybrid_kernels_guard_reference_slots_and_copy_them_out() {
+    let src =
+        "input cycle: u64\nh := hash(cycle)\nj := __u64_to_json(h)\ns := __u64_to_string(h)\n";
+    let err = compile_polydat_to_assembler(src)
+        .unwrap()
         .try_compile_pure_jit()
-        .expect("handle outputs lay out; every node here has a lowering");
-    k.eval_for_slot(&[3], k.resolve_output("h").unwrap());
+        .err()
+        .expect("a reference output has no pure native layout yet");
+    assert!(err.contains("Ref2"), "{err}");
+    let mut k = compile_polydat_to_assembler(src)
+        .unwrap()
+        .compile_hybrid()
+        .expect("hybrid");
+    k.eval(&[3]);
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| k.get("s")));
-    assert!(r.is_err(), "a raw read of a handle slot must be refused");
+    assert!(r.is_err(), "a raw read of a reference slot must be refused");
     // The typed reader decodes by port type and copies out.
     let h = k.get("h");
     assert_eq!(k.get_value("s").as_str(), h.to_string());
     assert_eq!(k.get_value("j").to_display_string(), h.to_string());
+}
+
+/// A program with a string extern and string and JSON outputs, for the
+/// created-kernel checks.
+const OWNED_PAIRS_SRC: &str = "input cycle: u64\n\
+    extern label: str = \"lbl\"\n\
+    h := hash(cycle)\n\
+    s := __u64_to_string(h)\n\
+    j := __u64_to_json(h)\n\
+    line := str_concat(label, \"-\", s)\n";
+
+/// Axiom S3 across states: a kernel created from a shared program is a
+/// new state whose reference pairs point into its own scratch and
+/// extern storage, never into the state it was made from. The source
+/// state has run every step before it is shared, and the shared program
+/// (which holds it) is gone before the created ones are read, so a pair
+/// left pointing into it would read freed memory; the debug
+/// ref-validator on every run checks each pair against the state's own
+/// entry.
+fn created_kernels_own_their_pairs(mut source: Box<dyn polydat::Kernel>) {
+    use polydat::ast::Value;
+    let mut p1 = polydat::dsl::compile::compile_polydat(OWNED_PAIRS_SRC).unwrap();
+    source.set_inputs(&[3]);
+    source.pull("line");
+    source.pull("j");
+    let program = source.into_program();
+    let mut a = std::sync::Arc::clone(&program).create_kernel();
+    let mut b = program.create_kernel();
+    b.set_input("label", Value::Str("other".into())).unwrap();
+    for cycle in [3u64, 4, 3] {
+        for (kernel, label) in [(&mut a, "lbl"), (&mut b, "other")] {
+            p1.set_input("label", Value::Str(label.into())).unwrap();
+            p1.set_inputs(&[cycle]);
+            kernel.set_inputs(&[cycle]);
+            for name in ["s", "j", "line"] {
+                assert_eq!(
+                    kernel.pull(name).to_display_string(),
+                    p1.pull(name).to_display_string(),
+                    "cycle {cycle}, label {label}: `{name}`"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_created_closure_kernel_owns_its_reference_pairs() {
+    let kernel = compile_polydat_to_assembler(OWNED_PAIRS_SRC)
+        .unwrap()
+        .try_compile()
+        .unwrap_or_else(|_| panic!("the closure tier refused the program"));
+    created_kernels_own_their_pairs(Box::new(kernel));
+}
+
+#[cfg(feature = "jit")]
+#[test]
+fn a_created_hybrid_kernel_owns_its_reference_pairs() {
+    let kernel = compile_polydat_to_assembler(OWNED_PAIRS_SRC)
+        .unwrap()
+        .compile_hybrid()
+        .expect("hybrid");
+    created_kernels_own_their_pairs(Box::new(kernel));
 }

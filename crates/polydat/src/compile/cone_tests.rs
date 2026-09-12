@@ -1,50 +1,34 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! SRD-105 Push 1 — cone extraction correctness.
+//! Cone extraction correctness.
 //!
 //! The load-bearing invariant is differential: for any program, a
 //! `Force`-compiled kernel produces bit-identical outputs to an
-//! `Off`-compiled one. These tests pin that invariant on the
-//! boundary types this push marshals (U64/F64), the mixed-graph
-//! case (fallback node kept on the interpreter), and the panic
-//! attribution contract for predicate violations inside native
-//! code. Global-mode changes serialize through `MODE_LOCK`; every
-//! test restores `Off` before releasing it.
+//! `Off`-compiled one. These tests pin that invariant on the boundary
+//! types the cones marshal (U64/F64), the mixed-graph case (fallback
+//! node kept on the interpreter), and the panic attribution contract
+//! for predicate violations inside native code. The cone mode is a
+//! property of each compile, so the tests need no serialization.
 
 use crate::ast::Value;
-use crate::compile::cone::{JitMode, set_default_jit_mode};
-use crate::dsl::compile::{CompileOptions, compile_polydat_with_options};
-use std::sync::Mutex;
+use crate::compile::cone::JitMode;
+use crate::dsl::compile::{CompileOptions, compile_polydat_to_assembler_with};
 
-static MODE_LOCK: Mutex<()> = Mutex::new(());
-
-/// Run `f` with the process-default JIT mode set to `mode`,
-/// restoring `Off` afterwards even if `f` panics.
-fn with_mode<T>(mode: JitMode, f: impl FnOnce() -> T) -> T {
-    let _guard = MODE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    struct Reset;
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            set_default_jit_mode(JitMode::Auto);
-        }
-    }
-    let _reset = Reset;
-    set_default_jit_mode(mode);
-    f()
-}
-
-fn compile(src: &str) -> crate::kernel::PolydatKernel {
+/// The interpreter kernel of `src` with its cones per `mode`.
+fn compile(src: &str, mode: JitMode) -> crate::kernel::PolydatKernel {
     let options = CompileOptions {
         context: "cone_test".into(),
         ..CompileOptions::default()
     };
-    compile_polydat_with_options(src, &options, None).expect("compile")
+    let mut asm = compile_polydat_to_assembler_with(src, &options).expect("assemble");
+    asm.set_jit_mode(mode);
+    asm.compile().expect("compile")
 }
 
 /// Pull `output` for each x in `xs`, returning the values.
-fn sweep(src: &str, output: &str, xs: &[u64]) -> Vec<Value> {
-    let mut k = compile(src);
+fn sweep(src: &str, mode: JitMode, output: &str, xs: &[u64]) -> Vec<Value> {
+    let mut k = compile(src, mode);
     let idx = k.program().find_input("x").expect("input x");
     xs.iter()
         .map(|&x| {
@@ -54,8 +38,8 @@ fn sweep(src: &str, output: &str, xs: &[u64]) -> Vec<Value> {
         .collect()
 }
 
-fn node_count(src: &str) -> usize {
-    compile(src).program().nodes.len()
+fn node_count(src: &str, mode: JitMode) -> usize {
+    compile(src, mode).program().nodes.len()
 }
 
 const U64_CHAIN: &str = "input (x: u64)\n\
@@ -63,23 +47,28 @@ const U64_CHAIN: &str = "input (x: u64)\n\
                          w := add(v, 7)\n";
 
 #[test]
-fn default_mode_is_auto() {
-    // SRD-105 Push 3: JIT is the default engine mix. Serialize
-    // with the other tests: parallel with_mode holders temporarily
-    // set the global; under the lock it is the shipped default.
-    let _guard = MODE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    assert_eq!(crate::compile::cone::default_jit_mode(), JitMode::Auto);
+fn a_plain_compile_fuses_by_default() {
+    // A host that names no mode gets `Auto`: the chain fuses as it does
+    // under an explicit `Auto`, and the kernel reports that engine.
+    let k = crate::dsl::compile::compile_polydat(U64_CHAIN).expect("compile");
+    assert_eq!(
+        crate::Kernel::engine(&k),
+        crate::Engine::Interpreter(JitMode::Auto)
+    );
+    assert_eq!(
+        k.program().nodes.len(),
+        node_count(U64_CHAIN, JitMode::Auto)
+    );
+    assert!(node_count(U64_CHAIN, JitMode::Auto) < node_count(U64_CHAIN, JitMode::Off));
 }
 
 #[test]
 fn force_fuses_and_matches_interpreter_u64() {
     let xs: Vec<u64> = (0..50).chain([u64::MAX / 3, u64::MAX]).collect();
-    let (baseline, base_nodes) = with_mode(JitMode::Off, || {
-        (sweep(U64_CHAIN, "w", &xs), node_count(U64_CHAIN))
-    });
-    let (fused, fused_nodes) = with_mode(JitMode::Force, || {
-        (sweep(U64_CHAIN, "w", &xs), node_count(U64_CHAIN))
-    });
+    let baseline = sweep(U64_CHAIN, JitMode::Off, "w", &xs);
+    let base_nodes = node_count(U64_CHAIN, JitMode::Off);
+    let fused = sweep(U64_CHAIN, JitMode::Force, "w", &xs);
+    let fused_nodes = node_count(U64_CHAIN, JitMode::Force);
     assert_eq!(baseline, fused, "cone output must be bit-identical");
     assert!(
         fused_nodes < base_nodes,
@@ -95,8 +84,8 @@ fn force_matches_interpreter_f64_boundary() {
                f := to_f64(x)\n\
                g := ((f * 1.5) + 0.25)\n";
     let xs: Vec<u64> = (0..40).chain([1 << 52, u64::MAX >> 1]).collect();
-    let baseline = with_mode(JitMode::Off, || sweep(src, "g", &xs));
-    let fused = with_mode(JitMode::Force, || sweep(src, "g", &xs));
+    let baseline = sweep(src, JitMode::Off, "g", &xs);
+    let fused = sweep(src, JitMode::Force, "g", &xs);
     assert_eq!(baseline, fused, "f64 cone output must be bit-identical");
 }
 
@@ -110,10 +99,10 @@ fn mixed_graph_keeps_fallback_on_interpreter() {
                w := add(v, 7)\n\
                out := default_or(w, 9)\n";
     let xs: Vec<u64> = (0..20).collect();
-    let (baseline, base_nodes) =
-        with_mode(JitMode::Off, || (sweep(src, "out", &xs), node_count(src)));
-    let (fused, fused_nodes) =
-        with_mode(JitMode::Force, || (sweep(src, "out", &xs), node_count(src)));
+    let baseline = sweep(src, JitMode::Off, "out", &xs);
+    let base_nodes = node_count(src, JitMode::Off);
+    let fused = sweep(src, JitMode::Force, "out", &xs);
+    let fused_nodes = node_count(src, JitMode::Force);
     assert_eq!(baseline, fused);
     assert!(
         fused_nodes < base_nodes,
@@ -128,17 +117,17 @@ fn auto_requires_two_members() {
     // marshalling.
     let src = "input (x: u64)\n\
                v := mul(x, 3)\n";
-    let auto_nodes = with_mode(JitMode::Auto, || node_count(src));
-    let force_nodes = with_mode(JitMode::Force, || node_count(src));
-    let off_nodes = with_mode(JitMode::Off, || node_count(src));
+    let auto_nodes = node_count(src, JitMode::Auto);
+    let force_nodes = node_count(src, JitMode::Force);
+    let off_nodes = node_count(src, JitMode::Off);
     assert_eq!(auto_nodes, off_nodes, "auto must not fuse a 1-node cone");
     assert_eq!(
         force_nodes, off_nodes,
         "a 1-node cone replaces 1 node with 1 cone"
     );
     let xs: Vec<u64> = (0..10).collect();
-    let baseline = with_mode(JitMode::Off, || sweep(src, "v", &xs));
-    let forced = with_mode(JitMode::Force, || sweep(src, "v", &xs));
+    let baseline = sweep(src, JitMode::Off, "v", &xs);
+    let forced = sweep(src, JitMode::Force, "v", &xs);
     assert_eq!(baseline, forced);
 }
 
@@ -150,19 +139,7 @@ fn violation_inside_cone_attributes_members() {
     // member functions).
     let src = "input (x: u64)\n\
                checked := is_positive(mul(x, 0))\n";
-    let msg = with_mode(JitMode::Force, || {
-        let mut k = compile(src);
-        let idx = k.program().find_input("x").expect("input x");
-        k.state().set_input(idx, Value::U64(5));
-        let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            k.pull("checked");
-        }))
-        .expect_err("violation must panic");
-        err.downcast_ref::<String>()
-            .cloned()
-            .or_else(|| err.downcast_ref::<&'static str>().map(|s| (*s).to_string()))
-            .expect("string payload")
-    });
+    let msg = capture_violation(src, JitMode::Force, 5);
     assert!(
         msg.contains("is_positive"),
         "violation names the predicate: {msg}"
@@ -182,16 +159,15 @@ fn const_subgraphs_stay_on_the_fold_path() {
     // break the single-output fold replacement. Lifecycle
     // classification keeps extraction on per-cycle (Dynamic)
     // work only.
-    let v = with_mode(JitMode::Force, || {
-        crate::dsl::compile::eval_const_expr("mod(hash(42), 100)")
-    })
-    .expect("const expr must fold under force");
+    let v =
+        crate::dsl::compile::eval_const_expr("mod(hash(42), 100)").expect("const expr must fold");
     assert!(v.as_u64() < 100);
-    let baseline = with_mode(JitMode::Off, || {
-        crate::dsl::compile::eval_const_expr("mod(hash(42), 100)")
-    })
-    .expect("const expr folds under off");
-    assert_eq!(v, baseline, "fold result is mode-independent");
+    let forced = compile("out := mod(hash(42), 100)\n", JitMode::Force);
+    assert_eq!(
+        forced.get_constant("out"),
+        Some(&v),
+        "the fold result is mode-independent"
+    );
 }
 
 #[test]
@@ -203,12 +179,12 @@ fn scope_init_chains_stay_on_the_fold_path() {
     let src = "extern x: u64\n\
                v := mul(x, 3)\n\
                w := add(v, 7)\n";
-    let off_nodes = with_mode(JitMode::Off, || node_count(src));
-    let force_nodes = with_mode(JitMode::Force, || node_count(src));
+    let off_nodes = node_count(src, JitMode::Off);
+    let force_nodes = node_count(src, JitMode::Force);
     assert_eq!(off_nodes, force_nodes, "scope-init chains must not fuse");
     let xs: Vec<u64> = (0..10).collect();
-    let baseline = with_mode(JitMode::Off, || sweep(src, "w", &xs));
-    let forced = with_mode(JitMode::Force, || sweep(src, "w", &xs));
+    let baseline = sweep(src, JitMode::Off, "w", &xs);
+    let forced = sweep(src, JitMode::Force, "w", &xs);
     assert_eq!(baseline, forced);
 }
 
@@ -218,19 +194,17 @@ fn scope_init_chains_stay_on_the_fold_path() {
 /// interpreter or inside a fused cone. The cone adds its member
 /// attribution; it never obscures the original message.
 fn capture_violation(src: &str, mode: JitMode, x: u64) -> String {
-    with_mode(mode, || {
-        let mut k = compile(src);
-        let idx = k.program().find_input("x").expect("input x");
-        k.state().set_input(idx, Value::U64(x));
-        let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            k.pull("checked");
-        }))
-        .expect_err("violation must panic");
-        err.downcast_ref::<String>()
-            .cloned()
-            .or_else(|| err.downcast_ref::<&'static str>().map(|s| (*s).to_string()))
-            .expect("string payload")
-    })
+    let mut k = compile(src, mode);
+    let idx = k.program().find_input("x").expect("input x");
+    k.state().set_input(idx, Value::U64(x));
+    let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        k.pull("checked");
+    }))
+    .expect_err("violation must panic");
+    err.downcast_ref::<String>()
+        .cloned()
+        .or_else(|| err.downcast_ref::<&'static str>().map(|s| (*s).to_string()))
+        .expect("string payload")
 }
 
 fn assert_parity(src: &str, x: u64, core: &str) {
@@ -290,9 +264,9 @@ fn canonical_hash_is_extraction_invariant() {
                const c := 42\n\
                v := mul(x, 3)\n\
                w := (v + c)\n";
-    let off = with_mode(JitMode::Off, || compile(src).program().canonical_hash());
-    let force = with_mode(JitMode::Force, || compile(src).program().canonical_hash());
-    let auto = with_mode(JitMode::Auto, || compile(src).program().canonical_hash());
+    let off = compile(src, JitMode::Off).program().canonical_hash();
+    let force = compile(src, JitMode::Force).program().canonical_hash();
+    let auto = compile(src, JitMode::Auto).program().canonical_hash();
     assert_eq!(off, force, "off vs force identity must match");
     assert_eq!(off, auto, "off vs auto identity must match");
 }
@@ -321,5 +295,5 @@ fn non_convex_components_stay_on_the_interpreter() {
     // The result may be Ok or a clean Err (the fuzz feeds garbage
     // types on purpose); the invariant under test is NO PANIC in
     // cone extraction/splicing under the default (auto) mode.
-    let _ = with_mode(JitMode::Auto, || crate::dsl::compile::compile_polydat(src));
+    let _ = crate::dsl::compile::compile_polydat(src);
 }

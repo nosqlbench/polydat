@@ -1,161 +1,161 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Marshalling between typed `Value`s and compiled-tier slots (SRD 115
-//! §5). One place owns the rule for every port type, so embedded cones
-//! and whole compiled kernels decode alike:
+//! Marshalling between typed `Value`s and compiled-tier slots. One
+//! place owns the rule for every port type, so embedded cones and
+//! whole compiled kernels decode alike:
 //!
-//! - scalars ride as their slot bits;
-//! - byte strings (`Str`, `Bytes`) enter as cycle-arena handles and
-//!   leave as owned copies;
-//! - every other non-scalar value (`Json`, `Ext`, `Handle`) is written
-//!   into the entry of the engine's value table that the layout assigned
-//!   to its slot, and leaves as a clone of that entry.
+//! - scalars ride as their slot bits, one slot or two;
+//! - every `Ref2` kind rides as a `(ptr, len)` pair (jit_boundary.md,
+//!   axioms S1–S10): a typed vector, a string, or a byte string as a
+//!   slice of its elements, and a JSON, extension, or handle value as
+//!   a one-element slice holding the `Value`.
 //!
-//! P1 never holds a handle (axiom H6): decoding always copies out.
+//! Entering the compiled tier, a `Value` is borrowed: the pair points
+//! into the value the caller holds for the duration of the call.
+//! Leaving it, the pair is copied out to an owned `Value`: the
+//! interpreter and the host never hold a reference into a state's
+//! buffers.
 
 use crate::ast::{PortType, Value};
-use crate::kernel::ValueTable;
 
-/// A `Value` as the slot bits its port type rides as. A table-kind value
-/// is written to `entry` of `table`; `entry` is `None` for every other
-/// value. `None` when the value's variant has no compiled representation.
-#[cfg(feature = "jit")]
-pub(crate) fn encode_slot(v: &Value, table: &mut ValueTable, entry: Option<usize>) -> Option<u64> {
+/// The `(ptr, len)` pair a `Ref2`-kind value is borrowed as: into the
+/// value's own bytes or element storage, or the value itself for a
+/// JSON, extension, or handle value. The pair is valid while `v` is.
+/// `None` for a scalar or for a variant the port type does not admit.
+pub(crate) fn borrow_pair(v: &Value) -> Option<(u64, u64)> {
     Some(match v {
-        Value::U64(x) => *x,
-        Value::I64(x) => *x as u64,
-        Value::F64(x) => x.to_bits(),
-        Value::Bool(b) => *b as u64,
-        Value::Str(s) => crate::kernel::put_thread_str(s),
-        Value::Bytes(b) => crate::kernel::put_thread_bytes(b),
-        Value::Json(_) | Value::Ext(_) | Value::Handle(_) => {
-            let entry = entry.unwrap_or_else(|| {
-                panic!(
-                    "a {:?} boundary value has no value-table entry assigned (SRD 115 §3)",
-                    v.port_type()
-                )
-            });
-            table.write(entry, v.clone())
-        }
+        Value::Str(s) => (s.as_ptr() as usize as u64, s.len() as u64),
+        Value::Bytes(b) => (b.as_ptr() as usize as u64, b.len() as u64),
+        Value::Json(_) | Value::Ext(_) | Value::Handle(_) => (v as *const Value as usize as u64, 1),
+        Value::VecF32(v) => slice_pair(v.as_slice()),
+        Value::VecF64(v) => slice_pair(v.as_slice()),
+        Value::VecF16(v) => slice_pair(v.as_slice()),
+        Value::VecI8(v) => slice_pair(v.as_slice()),
+        Value::VecI16(v) => slice_pair(v.as_slice()),
+        Value::VecI32(v) => slice_pair(v.as_slice()),
+        Value::VecI64(v) => slice_pair(v.as_slice()),
         _ => return None,
     })
 }
 
-/// The one-byte type code a variadic lowering records per argument
-/// (SRD 115 §6): the codes of a node's wires are interned as a static
-/// string, and the helper decodes each argument by its code. `None`
-/// for a type no helper can take.
-pub(crate) fn type_code(ty: PortType) -> Option<u8> {
-    Some(match ty {
-        PortType::U64 => b'u',
-        PortType::I64 => b'i',
-        PortType::F64 => b'f',
-        PortType::Bool => b'b',
-        PortType::Str => b's',
-        PortType::Bytes => b'y',
-        PortType::Json => b'j',
-        PortType::Ext => b'e',
-        PortType::Handle => b'h',
-        _ => return None,
-    })
+/// The `(ptr, len)` pair of a slice.
+#[inline]
+pub(crate) fn slice_pair<T>(s: &[T]) -> (u64, u64) {
+    (s.as_ptr() as usize as u64, s.len() as u64)
 }
 
-/// The port type a type code names.
-#[cfg(feature = "jit")]
-pub(crate) fn type_of_code(code: u8) -> PortType {
-    match code {
-        b'i' => PortType::I64,
-        b'f' => PortType::F64,
-        b'b' => PortType::Bool,
-        b's' => PortType::Str,
-        b'y' => PortType::Bytes,
-        b'j' => PortType::Json,
-        b'e' => PortType::Ext,
-        b'h' => PortType::Handle,
-        _ => PortType::U64,
-    }
+/// An empty pair for an unset `Ref2` slot: a dangling, non-null
+/// pointer with length zero, which every slice reader accepts.
+#[inline]
+pub(crate) fn empty_pair() -> (u64, u64) {
+    (
+        std::ptr::NonNull::<u8>::dangling().as_ptr() as usize as u64,
+        0,
+    )
 }
 
-/// An argument's slot bits as an owned `Value`, decoded by its type
-/// code through the table installed for the running native code.
+/// A `Value` as the slot bits its port type rides as: the bits of a
+/// scalar, or the borrowed pair of a `Ref2` kind. `None` when the
+/// value's variant has no compiled representation.
 #[cfg(feature = "jit")]
-pub(crate) fn arg_value(code: u8, bits: u64) -> Value {
-    let ty = type_of_code(code);
-    match ty.handle_kind() {
-        Some(crate::ast::HandleKind::Table) => {
-            crate::kernel::with_current_value_table(|t| t.read(bits))
+pub(crate) fn encode_slots(v: &Value, out: &mut [u64]) -> Option<()> {
+    match v {
+        Value::U64(x) => out[0] = *x,
+        Value::I64(x) => out[0] = *x as u64,
+        Value::F64(x) => out[0] = x.to_bits(),
+        Value::Bool(b) => out[0] = *b as u64,
+        _ => {
+            let (p, l) = borrow_pair(v)?;
+            out[0] = p;
+            out[1] = l;
         }
-        _ => decode_slot(bits, ty, &ValueTable::new(0)),
+    }
+    Some(())
+}
+
+/// The value a `Ref2` pair names, copied out as the `Value` its port
+/// type declares. Every read that leaves the compiled tier goes
+/// through here.
+///
+/// # Safety
+///
+/// The pair was published by a producer whose storage is alive: its
+/// own scratch, an extern's stored value, an interned constant, or a
+/// boundary value alive for the call (axioms S3, S4).
+pub(crate) unsafe fn decode_pair(ty: PortType, ptr: u64, len: u64) -> Value {
+    use crate::ast::SliceArc;
+    let (p, n) = (ptr as usize, len as usize);
+    // SAFETY: as documented on the function.
+    unsafe {
+        match ty {
+            PortType::Str => Value::Str(std::sync::Arc::from(std::str::from_utf8_unchecked(
+                std::slice::from_raw_parts(p as *const u8, n),
+            ))),
+            PortType::Bytes => Value::Bytes(std::sync::Arc::from(std::slice::from_raw_parts(
+                p as *const u8,
+                n,
+            ))),
+            PortType::Json | PortType::Ext | PortType::Handle => {
+                if n == 0 {
+                    Value::None
+                } else {
+                    (*(p as *const Value)).clone()
+                }
+            }
+            PortType::VecF32 => Value::VecF32(SliceArc::from_vec(
+                std::slice::from_raw_parts(p as *const f32, n).to_vec(),
+            )),
+            PortType::VecF64 => Value::VecF64(SliceArc::from_vec(
+                std::slice::from_raw_parts(p as *const f64, n).to_vec(),
+            )),
+            PortType::VecF16 => Value::VecF16(SliceArc::from_vec(
+                std::slice::from_raw_parts(p as *const half::f16, n).to_vec(),
+            )),
+            PortType::VecI8 => Value::VecI8(SliceArc::from_vec(
+                std::slice::from_raw_parts(p as *const i8, n).to_vec(),
+            )),
+            PortType::VecI16 => Value::VecI16(SliceArc::from_vec(
+                std::slice::from_raw_parts(p as *const i16, n).to_vec(),
+            )),
+            PortType::VecI32 => Value::VecI32(SliceArc::from_vec(
+                std::slice::from_raw_parts(p as *const i32, n).to_vec(),
+            )),
+            PortType::VecI64 => Value::VecI64(SliceArc::from_vec(
+                std::slice::from_raw_parts(p as *const i64, n).to_vec(),
+            )),
+            other => panic!("{other:?} is not a Ref2-colored port type"),
+        }
     }
 }
 
-/// An argument's slot bits as a borrowed view, decoded by its type
-/// code: nothing is copied. Strings are borrowed from the arena or the
-/// interner and table kinds from the installed table, both valid for
-/// the rest of the current native call.
-pub(crate) fn arg_ref(code: u8, bits: u64) -> crate::ast::ValueRef<'static> {
-    use crate::ast::ValueRef;
-    match code {
-        b'u' => ValueRef::U64(bits),
-        b'i' => ValueRef::I64(bits as i64),
-        b'f' => ValueRef::F64(f64::from_bits(bits)),
-        b'b' => ValueRef::Bool(bits != 0),
-        b's' => ValueRef::Str(crate::kernel::resolve_thread_str(bits)),
-        b'y' => ValueRef::Bytes(crate::kernel::resolve_thread_bytes(bits)),
-        _ => ValueRef::from(crate::kernel::current_table_value(bits)),
-    }
-}
-
-/// An argument as a format argument: strings are borrowed from the
-/// arena or the interner rather than copied.
-#[cfg(feature = "jit")]
-pub(crate) fn fmt_arg(code: u8, bits: u64) -> crate::library::format::FmtArg<'static> {
-    use crate::library::format::FmtArg;
-    match code {
-        b'u' => FmtArg::U64(bits),
-        b'f' => FmtArg::F64(f64::from_bits(bits)),
-        b'b' => FmtArg::Bool(bits != 0),
-        b's' => FmtArg::Str(crate::kernel::resolve_thread_str(bits)),
-        _ => FmtArg::Value(arg_value(code, bits)),
-    }
-}
-
-/// Slot bits as the `Value` their declared port type names, copied out
-/// of the arena or of `table` where the bits are a handle.
-pub(crate) fn decode_slot(bits: u64, ty: PortType, table: &ValueTable) -> Value {
+/// Slot bits as the `Value` their declared port type names, copied
+/// out where they are a pair.
+pub(crate) fn decode_slot(slots: &[u64], ty: PortType) -> Value {
     match ty {
-        PortType::F64 => Value::F64(f64::from_bits(bits)),
-        PortType::Bool => Value::Bool(bits != 0),
-        PortType::I64 => Value::I64(bits as i64),
-        PortType::Str => Value::Str(std::sync::Arc::from(crate::kernel::resolve_thread_str(
-            bits,
-        ))),
-        PortType::Bytes => Value::Bytes(std::sync::Arc::from(crate::kernel::resolve_thread_bytes(
-            bits,
-        ))),
-        PortType::Json | PortType::Ext | PortType::Handle => table.read(bits),
+        PortType::F64 => Value::F64(f64::from_bits(slots[0])),
+        PortType::Bool => Value::Bool(slots[0] != 0),
+        PortType::I64 => Value::I64(slots[0] as i64),
         // A signed narrow carrier rides sign-extended (alignment §8.1)
         // and is the `I64` value its `Wire` impl injects.
-        PortType::I8 | PortType::I16 | PortType::I32 => Value::I64(bits as i64),
-        _ => Value::U64(bits),
+        PortType::I8 | PortType::I16 | PortType::I32 => Value::I64(slots[0] as i64),
+        // SAFETY: the pair in a kernel's buffer was published by a
+        // producer whose storage is alive (axioms S3, S4).
+        ty if ty.slot_color() == crate::ast::SlotColor::Ref2 => unsafe {
+            decode_pair(ty, slots[0], slots[1])
+        },
+        _ => Value::U64(slots[0]),
     }
 }
 
 /// An output at `slot` of `buffer` as the `Value` its port type names:
-/// [`decode_slot`] for a one-slot carrier and the table kinds, and the
+/// [`decode_slot`] for a one-slot carrier and a `Ref2` pair, and the
 /// two-limb reassembly for a 128-bit integer or a register word, which
 /// ride two consecutive slots (alignment §8.4 layer 1). This is the
-/// typed read every compiled kernel's `get_value` makes; a vector
-/// output is read from the kernel's scratch before it reaches here.
-pub(crate) fn decode_output(
-    buffer: &[u64],
-    slot: usize,
-    ty: PortType,
-    table: &ValueTable,
-) -> Value {
-    use crate::ast::{Bits128, RegLanes};
-    if ty.slot_width() == 2 {
+/// typed read every compiled kernel's `get_value` makes.
+pub(crate) fn decode_output(buffer: &[u64], slot: usize, ty: PortType) -> Value {
+    use crate::ast::{Bits128, RegLanes, SlotColor};
+    if ty.slot_color() == SlotColor::Imm2 {
         let limbs = Bits128([buffer[slot], buffer[slot + 1]]);
         return match ty {
             PortType::U128 => Value::U128(limbs),
@@ -170,5 +170,43 @@ pub(crate) fn decode_output(
             _ => Value::Reg128(limbs, RegLanes::Raw),
         };
     }
-    decode_slot(buffer[slot], ty, table)
+    decode_slot(&buffer[slot..], ty)
+}
+
+/// An argument's slots as a borrowed view of the value, decoded by its
+/// port type: nothing is copied. A string, byte string, or value is
+/// borrowed through its pair, valid while its producer's storage is.
+///
+/// # Safety
+///
+/// As for [`decode_pair`].
+pub(crate) unsafe fn arg_ref<'a>(ty: PortType, slots: &'a [u64]) -> crate::ast::ValueRef<'a> {
+    use crate::ast::ValueRef;
+    let (p, n) = (
+        slots.first().copied().unwrap_or(0) as usize,
+        slots.get(1).copied().unwrap_or(0) as usize,
+    );
+    // SAFETY: as documented on the function.
+    unsafe {
+        match ty {
+            PortType::U64 => ValueRef::U64(slots[0]),
+            PortType::I64 | PortType::I8 | PortType::I16 | PortType::I32 => {
+                ValueRef::I64(slots[0] as i64)
+            }
+            PortType::F64 => ValueRef::F64(f64::from_bits(slots[0])),
+            PortType::Bool => ValueRef::Bool(slots[0] != 0),
+            PortType::Str => ValueRef::Str(std::str::from_utf8_unchecked(
+                std::slice::from_raw_parts(p as *const u8, n),
+            )),
+            PortType::Bytes => ValueRef::Bytes(std::slice::from_raw_parts(p as *const u8, n)),
+            PortType::Json | PortType::Ext | PortType::Handle => {
+                if n == 0 {
+                    ValueRef::None
+                } else {
+                    ValueRef::from(&*(p as *const Value))
+                }
+            }
+            _ => ValueRef::U64(slots[0]),
+        }
+    }
 }

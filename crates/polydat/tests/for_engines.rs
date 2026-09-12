@@ -17,7 +17,7 @@ use polydat::dsl::compile::{CompileOptions, compile_polydat_with_engine};
 use polydat::dsl::compile_polydat;
 use polydat::kernel::PolydatKernel;
 use polydat::kernel::activation::TraversalStream;
-use polydat::{Engine, Kernel, Provenance};
+use polydat::{Engine, JitMode, Kernel, Provenance};
 
 /// The tests share the process-wide program build counter, so they run
 /// one at a time.
@@ -141,7 +141,7 @@ fn compile_on(src: &str, engine: Engine) -> Box<dyn Kernel> {
 fn same_tier(a: Engine, b: Engine) -> bool {
     matches!(
         (a, b),
-        (Engine::Interpreter, Engine::Interpreter)
+        (Engine::Interpreter(_), Engine::Interpreter(_))
             | (Engine::Closures(_), Engine::Closures(_))
             | (Engine::Native(_), Engine::Native(_))
     )
@@ -159,7 +159,7 @@ fn a_compiled_parent_opens_a_traversal_as_the_interpreter_does() {
         let mut p1 = compile(src);
         p1.set_inputs(&[7]);
         let want_stream = p1.traverse(0).unwrap();
-        let want = trace_on(&want_stream, outputs, Engine::Interpreter);
+        let want = trace_on(&want_stream, outputs, Engine::Interpreter(JitMode::Auto));
         for engine in engines() {
             let mut root = compile_on(src, engine);
             assert!(
@@ -229,9 +229,9 @@ fn nest_on(engine: Engine, coord: u64) -> (Vec<NestRow>, Vec<Engine>) {
 #[test]
 fn a_nest_runs_compiled_at_every_level() {
     let _serial = serial();
-    let (want, p1) = nest_on(Engine::Interpreter, 5);
+    let (want, p1) = nest_on(Engine::Interpreter(JitMode::Auto), 5);
     assert_eq!(want.len(), 8);
-    assert!(p1.iter().all(|e| *e == Engine::Interpreter));
+    assert!(p1.iter().all(|e| *e == Engine::Interpreter(JitMode::Auto)));
     for (a, b, c, z) in &want {
         assert_eq!(*z, Value::U64(105 + a + b + c));
     }
@@ -268,7 +268,10 @@ fn a_body_with_its_own_traversal_opens_it_from_any_activation() {
             ["x"],
             "{engine}: the body cascades what it references"
         );
-        for e in engines().into_iter().chain([Engine::Interpreter]) {
+        for e in engines()
+            .into_iter()
+            .chain([Engine::Interpreter(JitMode::Auto)])
+        {
             let mut act = inner.activation_on(1, e).unwrap();
             assert_eq!(act.cycle(0).pull("y"), Value::U64(3), "{engine} -> {e}");
         }
@@ -296,7 +299,11 @@ fn a_kernel_created_from_a_compiled_program_opens_its_traversals() {
         assert_ne!(ga, gb, "{engine}");
         let mut p1 = compile(SWEEP);
         p1.set_inputs(&[3]);
-        let want = trace_on(&p1.traverse(0).unwrap(), &["g"], Engine::Interpreter);
+        let want = trace_on(
+            &p1.traverse(0).unwrap(),
+            &["g"],
+            Engine::Interpreter(JitMode::Auto),
+        );
         assert_eq!(ga, want, "{engine}");
     }
 }

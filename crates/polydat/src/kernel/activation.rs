@@ -210,8 +210,7 @@ impl TraversalStream {
             )
         })?;
         let program = self.traversal.program.clone();
-        // An activation runs inside the root's cycle (SRD 115, H5).
-        let mut kernel = PolydatKernel::from_program_nested(program);
+        let mut kernel = PolydatKernel::from_program(program);
         bind_by_name(&mut kernel, tuple);
         bind_by_name(&mut kernel, &self.cascade);
         let cursor = narrow_cursors(&mut kernel)?;
@@ -250,8 +249,7 @@ impl TraversalStream {
             .traversal
             .program_on(engine)
             .map_err(|e| e.to_string())?;
-        // An activation runs inside the root's cycle (SRD 115, H5).
-        let mut kernel = program.create_nested_kernel();
+        let mut kernel = program.create_kernel();
         bind_by_name_on(kernel.as_mut(), tuple)?;
         bind_by_name_on(kernel.as_mut(), &self.cascade)?;
         let cursor = narrow_cursors_on(kernel.as_mut())?;
@@ -358,12 +356,6 @@ impl PolydatKernel {
         })?;
         open_traversal(self, traversal)
     }
-
-    /// Open every top-level traversal, in document order.
-    pub fn traverse_all(&mut self) -> Result<Vec<TraversalStream>, String> {
-        let n = self.program().traversals().len();
-        (0..n).map(|i| self.traverse(i)).collect()
-    }
 }
 
 /// Identity of the program an activation runs over, for callers that
@@ -392,7 +384,7 @@ pub fn open_traversal(
         };
         cascade.push((name.clone(), value));
     }
-    let mut canonical = PolydatKernel::from_program_nested(traversal.program.clone());
+    let mut canonical = PolydatKernel::from_program(traversal.program.clone());
     bind_by_name(&mut canonical, &cascade);
     let params: HashMap<String, String> = HashMap::new();
     let tuples = evaluate_for_iteration(&traversal.comprehension, &canonical, &params, |_| Ok(()))

@@ -12,7 +12,7 @@ use polydat::dsl::compile::{
     compile_polydat_with, compile_polydat_with_log,
 };
 use polydat::dsl::events::CompileEventLog;
-use polydat::{Engine, Kernel, Provenance};
+use polydat::{Engine, JitMode, Kernel, Provenance};
 
 /// A node the host defines. The attribute registers it at link time
 /// under its function name, so DSL text compiled anywhere in this
@@ -179,7 +179,7 @@ fn section_externs() {
     fixed.set_inputs(&[7]);
     println!("transformed: {}", fixed.pull("key").as_str());
     // The interpreter has the same slots behind the same calls.
-    let mut p1 = compile_polydat_with(src, Engine::Interpreter).expect("compile");
+    let mut p1 = compile_polydat_with(src, Engine::Interpreter(JitMode::Auto)).expect("compile");
     p1.set_input("region", Value::Str("eu-west".into()))
         .expect("a str extern");
     p1.set_input("scale", Value::U64(1000))
@@ -437,7 +437,7 @@ fn section_engines() {
     println!("P3 plan: {}", p3.plan());
     // The interpreter is the oracle; every engine that accepted the
     // program computes the same values through the same calls.
-    let mut p1 = compile_polydat_with(src, Engine::Interpreter).unwrap();
+    let mut p1 = compile_polydat_with(src, Engine::Interpreter(JitMode::Auto)).unwrap();
     for cycle in [0u64, 1] {
         p1.set_inputs(&[cycle]);
         let want = p1.pull("j").to_display_string();

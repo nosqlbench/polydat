@@ -611,7 +611,7 @@ pub fn compile_ast_with_options(
     let mut prepared = Prepared::new(source, ast, options, log.as_deref_mut());
     let (compiler, filter) = prepared.parts();
     compiler
-        .compile_interpreter(ast, filter, log)
+        .compile_interpreter(ast, filter, log, crate::JitMode::Auto)
         .map_err(|e| e.to_string())
 }
 
@@ -2048,8 +2048,10 @@ impl Compiler {
         file: &PolydatFile,
         filter: Option<&[String]>,
         log: Option<&mut super::events::CompileEventLog>,
+        cones: crate::JitMode,
     ) -> Result<PolydatKernel, crate::KernelError> {
-        let (mut kernel, parent) = compile_file_with(self, file, filter, log, |asm, log| {
+        let (mut kernel, parent) = compile_file_with(self, file, filter, log, |mut asm, log| {
+            asm.set_jit_mode(cones);
             asm.compile_with_log(log)
                 .map_err(crate::KernelError::Assembly)
         })?;
@@ -2073,7 +2075,7 @@ impl Compiler {
         probe_compiler.context_label = format!("{} (element probe)", self.context_label);
         probe_compiler.module_cache = self.module_cache.clone();
         let k = probe_compiler
-            .compile_interpreter(&ast, None, None)
+            .compile_interpreter(&ast, None, None, crate::JitMode::Auto)
             .map_err(|e| e.to_string())?;
         k.program()
             .output_port_type("__probe")
@@ -2116,7 +2118,7 @@ impl Compiler {
             child_compiler.cursor_limit = self.cursor_limit;
             child_compiler.pragmas = self.pragmas.clone();
             let child_kernel = child_compiler
-                .compile_interpreter(&child, None, None)
+                .compile_interpreter(&child, None, None, crate::JitMode::Auto)
                 .map_err(|e| {
                     format!(
                         "`for {}` at line {}, col {}: body failed to compile: {e}",
@@ -2736,7 +2738,7 @@ fn compile_file_with<K: Built>(
         let traversals = compiler
             .compile_traversals(&for_stmts, &producers, &type_of)
             .map_err(KernelError::Source)?;
-        kernel.set_traversals(traversals, producers);
+        crate::kernel::KernelInternals::set_traversals(kernel, traversals, producers);
         // Tiles inside the bodies, typed in the child compilers.
         if let Some(log) = log {
             for e in compiler.tile_events.drain(..) {
@@ -2797,9 +2799,9 @@ pub(super) fn compile_file_on_engine(
     engine: crate::Engine,
     log: Option<&mut super::events::CompileEventLog>,
 ) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
-    if engine == crate::Engine::Interpreter {
+    if let crate::Engine::Interpreter(cones) = engine {
         return compiler
-            .compile_interpreter(file, filter, log)
+            .compile_interpreter(file, filter, log, cones)
             .map(|k| Box::new(k) as Box<dyn crate::Kernel>);
     }
     let (kernel, _) = compile_file_with(compiler, file, filter, log, |asm, log| {

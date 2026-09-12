@@ -156,7 +156,7 @@ The **Effectively-const buffer** (per the Graph Compiler's
 hoisting analysis) is the special case: its values are
 computed once at scope-init and never dirtied within the
 scope's lifetime. Their `node_clean[i]` stays `true`
-across every per-cycle pull; the walker visits them once
+across every later pull; the walker visits them once
 during scope-init and never re-evaluates.
 
 ### Axiom R1 — Per-eval clean-flag memoization
@@ -172,17 +172,17 @@ pseudocode above). The substrate's L1 (each layer owns its
 state) guarantees that `node_clean[i]` is owned by this
 fiber's `PolydatState`; no cross-fiber cache contention.
 
-### Sub-axiom R1.v — Volatility carves out per-cycle clean-flag memoization
+### Sub-axiom R1.v — Volatility carves out clean-flag memoization
 
 **A wire is *volatile* when its value is not a function of
-its declared inputs. Volatile wires opt out of per-cycle
-clean-flag memoization: every cycle (every `set_inputs`
-advance) re-evaluates the producing node on next pull,
+its declared inputs. Volatile wires opt out of clean-flag
+memoization across writes: every write (every `set_inputs`
+or `set_input`) re-evaluates the producing node on next pull,
 regardless of whether any of the node's declared inputs
-changed. Within a single cycle (between two `set_inputs`
-calls), the node is evaluated at most once and the result
-is cached for subsequent reads — this gives consumers
-within-cycle consistency. Volatility is contagious —
+changed. Between two writes, the node is evaluated at most
+once and the result is cached for subsequent reads — this
+gives consumers consistency within one evaluation round.
+Volatility is contagious —
 the compiler's lifecycle classifier propagates the Dynamic
 classification through the wire chain so every node whose
 dependency cone touches a volatile producer is itself
@@ -201,7 +201,7 @@ Volatility arises from two distinct sources:
 - **User opt-in.** A wire's binding declares the `volatile`
   modifier, marking the wire as must-not-be-const-folded.
   The author is asserting that the value should never be
-  cached across cycles even though the compiler can't infer
+  cached across writes even though the compiler can't infer
   it from the wire chain (e.g., a node that reads external
   mutable state the polydat layer cannot see).
 
@@ -214,14 +214,13 @@ Both sources produce identical runtime behavior:
 - The lifecycle classifier marks the producing node
   Dynamic; the fixed-point propagation pass then marks
   every downstream consumer Dynamic too. Dynamic nodes are
-  re-evaluated each cycle when their (now-dirty) inputs
+  re-evaluated after a write when their (now-dirty) inputs
   resolve.
 - For intrinsic-volatile nodes specifically (those with
   `Purity::Nondeterministic`), the `nondeterministic_nodes`
   list at construction time records them for unconditional
-  per-cycle dirty marking — `set_inputs(coords)` resets
-  their `node_clean` flag every cycle whether or not their
-  declared inputs changed.
+  dirty marking — every write resets their `node_clean` flag
+  whether or not their declared inputs changed.
 - The intrinsic declaration is authoritative: an absent
   user modifier does not override a library-declared
   volatile node, and a present user modifier on a wire that
@@ -229,16 +228,16 @@ Both sources produce identical runtime behavior:
   itself volatile (and contaminates its downstream via the
   lifecycle propagation).
 
-**Within-cycle consistency.** Within a single cycle's
-evaluation window, a volatile node is evaluated at most
-once and cached — consumers reading the same value
-multiple times during one op-execution observe a
-consistent value. The "every cycle re-evaluates" guarantee
-is at the cycle granularity, not per-individual-pull. This
-is the correct semantic for temporal nodes (a single op
-reading `current_epoch_millis` multiple times sees one
-consistent timestamp for that cycle) and matches the
-runtime mechanism polydat actually delivers.
+**Consistency between writes.** Between two writes, a
+volatile node is evaluated at most once and cached —
+consumers reading the same value multiple times during one
+op-execution observe a consistent value. The "every write
+re-evaluates" guarantee is at the granularity of the write,
+not per-individual-pull. This is the correct semantic for
+temporal nodes (a single op reading `current_epoch_millis`
+multiple times sees one consistent timestamp for that
+op-execution) and matches the runtime mechanism polydat
+actually delivers.
 
 What volatility is NOT for: ordinary external-write inputs
 (per composition_substrate S4). The provenance machinery
@@ -346,36 +345,34 @@ substrate's S5 is the only cross-tier write surface. SRD-67
 walls off any alternative construction path that could
 violate this.
 
-### Axiom R4 — Cycle ownership
+### Axiom R4 — Outputs are owned by their provenance
 
-**The kernel the host drives owns the thread's cycle: its
-input write (the interpreter) or its first evaluation after a
-write (a compiled kernel) begins the cycle, which resets the
-thread's cycle arena and advances the generation. A kernel
-that runs inside another's evaluation, a traversal activation,
-a projection body, a materialized subscope, is nested: it
-adopts the open cycle and never begins one. Constructing a
-kernel and compiling a program begin no cycle either, on any
-engine; a build's constant fold runs inside whatever cycle is
-open. A handle into the cycle arena lives for one cycle.**
+**Every output, immediate or by reference, stands from the
+run that produced it until an input in its provenance is
+written. Nothing reclaims an output on any other occasion:
+there is no evaluation round, generation, epoch, or thread
+boundary with a meaning of its own in the provenance rules,
+and no step is exempt from R1. Each state owns the storage
+behind its outputs (the interpreter's `Value` buffers; a
+compiled kernel's slot buffer and the scratch entries its
+steps publish `Ref2` pairs into), and no storage belongs to a
+thread. A read hands the reader an owned copy.**
 
-Why: native code and the compiled kernels hold strings and
-byte ranges as handles into the thread's cycle arena
-(`compiled_handles.md`, axiom H5). Anything that reset the
-arena while a kernel was evaluating would free the bytes
-behind the handles that evaluation still holds. The one reset
-per cycle, by the one kernel the host drives, is what makes a
-handle's lifetime knowable.
+Why: R1 is the whole caching contract, and its value is that
+invalidation is per input. A reset that reclaimed every string
+at every write would be an all-or-none invalidation the model
+does not have, and a step that had to rerun to survive it would
+be a hole in the model's caching. Storage owned by the state
+whose step wrote it has the output's own lifetime for free (L1
+at runtime, §5); storage owned by a thread has to have its
+lifetime legislated, and any such rule contradicts this one.
 
-Enforcement: `begin_root_cycle` is called from the root
-kernels' cycle begin alone; nested kernels are constructed
-nested (`create_nested_kernel`, `from_program_nested`) and
-never call it; construction seeds a state's inputs without
-opening a cycle (`PolydatState::seed_inputs`), and the compiled
-builders fold with cycle ownership off. Tripwire: in debug
-builds every kernel evaluation on a thread is counted
-(`arena::RunScope`), and a root cycle beginning while one is
-open fails at the reset, not in a stale handle later.
+Enforcement: `compiled_handles.md` §3 states the owner of every
+`Ref2` pair a compiled slot can hold; the S3/S4/S9 axioms of
+`jit_boundary.md` are the mechanism and its validator; the
+kernels' write-epoch bookkeeping (`ran`, `epoch`) decides only
+whether a step has run since the last write, and never what it
+holds.
 
 ---
 
@@ -390,8 +387,8 @@ realisations:
 | **L2** (two-lifecycle classification bridges layers) | Effectively-const wires are evaluated once during the kernel's scope-init phase; dynamic wires are evaluated on demand per `set_inputs` advance. The buffer layout reflects this — Effectively-const values live in a separate region computed at scope-init. |
 
 The runtime model is the *enactment* of the substrate's
-layered state contract: at every cycle, every layer's state
-is owned by its layer (L1); every cross-tier read goes
+layered state contract: at every evaluation, every layer's
+state is owned by its layer (L1); every cross-tier read goes
 through synthesised slots (S1+S2); every cross-tier write
 goes through S5's chokepoint. The runtime mechanism
 preserves the layering inherited from compilation.

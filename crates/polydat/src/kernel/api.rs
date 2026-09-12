@@ -1,36 +1,36 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Polydat context API — the public-facing surface of a Polydat context
-//! (compiled program + per-fiber evaluation state, fused as
-//! one thing for callers).
+//! The kernel API: one surface for every engine.
 //!
-//! ## Architecture
+//! A host holds a kernel as `Box<dyn Kernel>` whatever engine built
+//! it, and drives it through [`Kernel`]: the coordinate and extern
+//! writes that open a cycle, `pull` for one output and `eval` for
+//! every one, the names and types of its inputs and outputs, the
+//! traversals its program declares, its cells, and `into_program`, the
+//! program shared across threads that [`KernelProgram::create_kernel`]
+//! makes a kernel of per thread. Every engine that accepts a program
+//! computes what the interpreter computes, and every call means the
+//! same thing on every engine: the one write rule at `set_input`, one
+//! `invalidate_all`, outputs in declaration order, and a created kernel
+//! starting from the program's defaults.
 //!
-//! A "context" is the user's view of a Polydat Kernel. Internally it
-//! splits into:
+//! [`PolydatKernel`] is the interpreter's kernel as a concrete type:
+//! a program (immutable, shared through `Arc<PolydatProgram>`) and
+//! one evaluation state. It implements [`Kernel`] and keeps three
+//! traits of its own, for the interpreter alone:
 //!
-//! - **Compiled context** — the program (immutable, shared
-//!   across fibers via `Arc<PolydatProgram>`).
-//! - **Context state** — the per-fiber evaluation state (input
-//!   buffers, node output buffers, dirty flags). Each fiber has
-//!   its own state instance; the program is shared.
+//! - [`Dataflow`], the healing write: `set_wire` runs the boundary
+//!   adapter catalog before a typed rejection, where `Kernel::set_input`
+//!   refuses a value of another type outright.
+//! - [`Metadata`], structural queries the program answers directly.
+//! - [`Construction`], the subcontext protocol: a root from source
+//!   matter, a subscope built against this kernel with new matter.
 //!
-//! Externally there is one type ([`PolydatKernel`]) and three
-//! traits that partition its surface:
-//!
-//! - [`Dataflow`] — write inputs / read wires. Four core
-//!   methods: indexed `set_wire(idx, …)` / `get_wire(idx)` and
-//!   named `set_wire(name, …)` / `get_wire(name)`. All other
-//!   data accessors (memoized handles, plans, projections)
-//!   should build on these.
-//! - [`Metadata`] — read-only diagnostic and structural data
-//!   about the context: input/output names and types, scope
-//!   layering, Polydat graph matter, init-binding sets, scope
-//!   coordinates. No data flow.
-//! - [`Construction`] — the two sanctioned construction paths:
-//!   root from source matter, and subscope built against this
-//!   context with new Polydat matter.
+//! The construction-time hooks the compile path and the program
+//! sharing use (attaching traversals, resolving cursor extents,
+//! nesting) live on a sealed supertrait a host neither sees nor
+//! implements.
 //!
 //! [`PolydatKernel`]: super::PolydatKernel
 
@@ -192,10 +192,11 @@ impl WireKey for &String {
     }
 }
 
-/// Read-only metadata about a Polydat context: structural shape,
-/// types, names, scope layering. Everything that's a property
-/// of the compiled program (or fiber-state instance) but
-/// isn't itself a runtime value.
+/// Read-only metadata about the interpreter's kernel: structural
+/// shape, types, names, scope layering. Everything that's a property
+/// of the compiled program (or fiber-state instance) but isn't itself
+/// a runtime value. Interpreter-only: [`Kernel`] carries the names and
+/// types every engine reports.
 pub trait Metadata {
     /// Resolve an input name to its wire index, if present.
     fn find_input(&self, name: &str) -> Option<usize>;
@@ -228,17 +229,14 @@ pub trait Metadata {
     fn output_port_type(&self, name: &str) -> Option<PortType>;
 }
 
-/// Data interface to a Polydat context: write inputs, read wires.
+/// The interpreter kernel's healing write and raw read: write inputs,
+/// read wires.
 ///
-/// Four core methods. The indexed pair is the fast path;
-/// the named pair resolves against the context's metadata
-/// then delegates to the indexed pair.
-///
-/// Every other data accessor in the codebase (memoized
-/// handles, pull plans, named projections) is built on these
-/// four. Callers that don't need to peek at the compiled
-/// program or per-fiber state should use this trait
-/// exclusively.
+/// Four core methods. The indexed pair is the fast path; the named
+/// pair resolves against the context's metadata then delegates to the
+/// indexed pair. A write runs the boundary adapter catalog before a
+/// typed rejection, where [`Kernel::set_input`] refuses a value of
+/// another type outright. Interpreter-only.
 pub trait Dataflow: Metadata {
     /// Write a value to wire `idx` with typed enforcement.
     ///
@@ -328,15 +326,19 @@ pub trait Construction: Sized {
 /// as engine-specific extras; where a name is shared, the inherent
 /// method is the one a call on the concrete type reaches, and the
 /// trait's is reached through `dyn Kernel` or `Kernel::pull(&mut k, …)`.
-pub trait Kernel: Send {
+pub trait Kernel: Send + internals::KernelInternals {
     /// The engine this kernel runs on.
     fn engine(&self) -> crate::compile::select::Engine;
 
     /// Set the coordinate inputs for the next evaluation.
     fn set_inputs(&mut self, coords: &[u64]);
 
-    /// Set an extern by name. The value must be of the declared port
-    /// type; an unknown name is an error naming the known ones.
+    /// Set an extern by name. One rule on every engine: the value must
+    /// satisfy the declared port type (a carrier's bit-stuffed forms
+    /// included) or be `None`, which clears the extern; a value of
+    /// another type is refused at the write, never healed. A coordinate
+    /// is set with [`Self::set_inputs`], not here. An unknown name is
+    /// an error naming the known ones.
     fn set_input(&mut self, name: &str, value: Value) -> Result<(), String>;
 
     /// Narrow a cursor to one partition: its `Ext` slot and its six
@@ -439,42 +441,12 @@ pub trait Kernel: Send {
             .collect()
     }
 
-    /// Attach the traversals the program declares and the producer
-    /// bindings they may traverse; the compile path calls this once,
-    /// before the kernel is shared.
-    #[doc(hidden)]
-    fn set_traversals(
-        &mut self,
-        traversals: Vec<crate::dsl::traversal::Traversal>,
-        producers: Vec<crate::dsl::traversal::Producer>,
-    );
-
     /// Begin the next cycle with nothing current, so every step, a side
     /// channel included, runs again when pulled. The runtime model makes
     /// a cycle whose inputs did not move cost nothing; this is how a
     /// host runs such a cycle anyway, as the `polydat` binary does when
     /// every input is fixed.
     fn invalidate_all(&mut self);
-
-    /// The value at a buffer slot decoded as `ty`, for the compile log's
-    /// record of the constants folded at build; `None` on the interpreter,
-    /// whose program logs its own fold.
-    #[doc(hidden)]
-    fn slot_value(&self, _slot: usize, _ty: PortType) -> Value {
-        Value::None
-    }
-
-    /// The value the build folded for output `name`, if it folded one:
-    /// what the compile path reads to resolve a cursor extent computed
-    /// from constants, on every engine.
-    #[doc(hidden)]
-    fn folded_value(&self, name: &str) -> Option<Value>;
-
-    /// Record the extent of cursor `index` once the compile path has
-    /// resolved it from the folded constants; the compile path calls
-    /// this once, before the kernel is shared.
-    #[doc(hidden)]
-    fn set_cursor_extent(&mut self, index: usize, extent: u64);
 
     /// The cells this kernel's `shared` bindings are bound to (scope
     /// model §6): one register per binding, which every kernel holding
@@ -488,23 +460,50 @@ pub trait Kernel: Send {
     /// binding is an error naming the ones that are.
     fn attach_shared_cell(&mut self, name: &str, cell: SharedCell) -> Result<(), String>;
 
-    /// Start over from the program: every input at its declared
-    /// default, every `shared` binding with a cell of its own, nothing
-    /// current. What a kernel created from a shared program starts
-    /// with; the interpreter's is built that way and needs nothing.
-    #[doc(hidden)]
-    fn reset_to_program(&mut self) {}
-
-    /// Make this kernel a nested one: it runs inside the cycle of the
-    /// kernel that opened it (a traversal's activation inside its
-    /// root; SRD 115 §4), and so never begins a root cycle of its own.
-    #[doc(hidden)]
-    fn nest(&mut self);
-
     /// The program this kernel runs, shareable across threads: each
     /// thread creates its own kernel from it with
     /// [`KernelProgram::create_kernel`].
     fn into_program(self: Box<Self>) -> std::sync::Arc<dyn KernelProgram>;
+}
+
+/// The construction-time hooks of a kernel, sealed: the compile path
+/// and the program sharing call them once, before a kernel is shared,
+/// and a host neither sees nor implements them.
+pub(crate) mod internals {
+    use crate::ast::{PortType, Value};
+
+    pub trait KernelInternals {
+        /// Attach the traversals the program declares and the producer
+        /// bindings they may traverse.
+        fn set_traversals(
+            &mut self,
+            traversals: Vec<crate::dsl::traversal::Traversal>,
+            producers: Vec<crate::dsl::traversal::Producer>,
+        );
+
+        /// The value at a buffer slot decoded as `ty`, for the compile
+        /// log's record of the constants folded at build; `None` on the
+        /// interpreter, whose program logs its own fold.
+        fn slot_value(&self, _slot: usize, _ty: PortType) -> Value {
+            Value::None
+        }
+
+        /// The value the build folded for output `name`, if it folded
+        /// one: what the compile path reads to resolve a cursor extent
+        /// computed from constants, on every engine.
+        fn folded_value(&self, name: &str) -> Option<Value>;
+
+        /// Record the extent of cursor `index` once the compile path
+        /// has resolved it from the folded constants.
+        fn set_cursor_extent(&mut self, index: usize, extent: u64);
+
+        /// Start over from the program: every input at its declared
+        /// default, every `shared` binding with a cell of its own,
+        /// nothing current. What a kernel created from a shared program
+        /// starts with; the interpreter's is built that way and needs
+        /// nothing.
+        fn reset_to_program(&mut self) {}
+    }
 }
 
 /// A program on some engine, shared across threads through an `Arc`;
@@ -520,12 +519,13 @@ pub trait KernelProgram: Send + Sync {
     /// set to; every `shared` binding with a cell of its own.
     fn create_kernel(self: std::sync::Arc<Self>) -> Box<dyn Kernel>;
 
-    /// A kernel of this program that runs inside the cycle of the kernel
-    /// that opened it (SRD 115 §4): [`Self::create_kernel`], nested.
-    fn create_nested_kernel(self: std::sync::Arc<Self>) -> Box<dyn Kernel> {
-        let mut kernel = self.create_kernel();
-        kernel.nest();
-        kernel
+    /// The interpreter's program, when this is one: the graph a
+    /// diagnostic describes node by node. `None` for a compiled
+    /// engine's program.
+    fn as_interpreter(
+        self: std::sync::Arc<Self>,
+    ) -> Option<std::sync::Arc<crate::kernel::PolydatProgram>> {
+        None
     }
 }
 

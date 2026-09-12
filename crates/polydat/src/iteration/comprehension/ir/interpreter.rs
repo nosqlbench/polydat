@@ -178,6 +178,7 @@ fn literal_to_tuple_value(lv: &LiteralValue) -> TupleValue {
         LiteralValue::Float(f) => TupleValue::F64(*f),
         LiteralValue::String(s) => TupleValue::Str(s.clone()),
         LiteralValue::Bool(b) => TupleValue::Bool(*b),
+        LiteralValue::Json(j) => TupleValue::Str(j.to_string()),
     }
 }
 

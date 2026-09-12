@@ -580,7 +580,8 @@ proves it.
    `create_kernel` gives each thread its own kernel: the interpreter's
    program as before, and for a compiled kernel a clone that shares the
    steps, the nodes, and the native code (now `Arc`-held) and owns its
-   buffer, table, scratch, and externs. The older constructors remain as
+   buffer, scratch, and externs, with every reference pair republished
+   into its own storage. The older constructors remain as
    documented aliases; the raw slot readers, `eval(&[u64])`, and
    `engine_counts` remain as engine-specific extras. On the way the
    closure tier's refusal gained a reason (`build_p2_layout` returns it),
@@ -597,9 +598,8 @@ proves it.
    current until an input in its provenance changes, whichever call
    changed it, a coordinate through `set_inputs` or an extern or cursor
    through `set_input`; a nondeterministic step, or one downstream of
-   one, is never current, and is invalidated at every cycle as the
-   interpreter invalidates it at every `set_inputs`; a handle-writing
-   step runs every cycle (SRD 115 §4); a compile-constant step, one no
+   one, is never current, and is invalidated at every write as the
+   interpreter invalidates it at every `set_inputs`; a compile-constant step, one no
    input reaches, is folded at build, once, on every engine, which is
    the interpreter's fold at the same moment, so what is knowable at
    build is known at build and fails at build; and everything else
@@ -621,8 +621,8 @@ proves it.
    accept `None` emits `None` on every output without running, and
    `pull` returns `None` for such a slot; a node downstream of an
    extern without a default runs as a closure in a hybrid kernel, since
-   native code cannot carry `None`. The handle validators (H4, S9)
-   check only the slots the cycle wrote. The compile log names every
+   native code cannot carry `None`. The reference validator (S9)
+   checks only the slots a step wrote. The compile log names every
    extern without a default. The fuzzer drives every engine through
    `Kernel::pull` output by output and counts the rows a side channel
    emits per engine per cycle, with an `emit_row` arm; it caught, in
@@ -728,8 +728,7 @@ proves it.
    play, now runs every step straight through (`run_fresh`), a step's
    cycle number replaces a `ran` flag that had to be cleared, the raw
    and pull-only modes dirty only the side channels an input reaches
-   since nothing else consults a pure step's currency, the value table
-   is installed in place instead of moved out and back, and a
+   since nothing else consults a pure step's currency, and a
    passthrough (`identity`, `__port_`) is an inline slot copy rather
    than a closure call. And the step runners were not being inlined:
    `#[inline(always)]` on `run_step` and `run_hybrid_step` alone
@@ -749,18 +748,17 @@ proves it.
    assembler on the first request for an engine and caches the
    `KernelProgram`, so a body is one program per engine as it is one
    program per position (SRD 113 §5.1), and
-   `TraversalStream::activation_on(index, engine)` is a fresh nested
-   kernel from that program, driven through the `Kernel` trait: the
+   `TraversalStream::activation_on(index, engine)` is a fresh kernel
+   from that program, driven through the `Kernel` trait: the
    elements and the cascade bind by name through `set_input`, the
    cursors narrow through one routine for every engine
    (`cursor_over_partitions_on`, `cursor_extent_on`, `set_cursor`),
    which the interpreter's activation now uses too, and `cycle(i)`
    sets the coordinate and the cursor ordinal as before. `Activation`
    is generic over its kernel, the interpreter's by default, so every
-   host of the old form is unchanged. A nested kernel is a trait
-   matter now: `KernelProgram::create_nested_kernel` and
-   `Kernel::nest` mark a kernel as running inside the cycle of the
-   kernel that opened it (SRD 115 §4), on every engine. As first landed,
+   host of the old form is unchanged. An activation is a kernel like
+   any other, made through `KernelProgram::create_kernel` on every
+   engine, with a state of its own. As first landed,
    opening a traversal stayed on the interpreter, since the
    comprehension's sources evaluated against the kernel that opened
    it, so the root kernel and the activation of any body with a `for`

@@ -1168,13 +1168,30 @@ fn macro_jit_f64_return_writes_bit_pattern_to_u64_buffer() {
 }
 
 #[test]
-fn macro_jit_string_arg_node_emits_compiled_u64_via_arena() {
-    use polydat::ast::PolydatNode;
+fn macro_string_arg_node_has_a_slot_kit_and_no_u64_op() {
+    use polydat::ast::{PolydatNode, PortType, ScratchBuf};
     let node = MacroPilotStringPassthrough::default();
-    // Under SRD-111, String wire arguments emit Phase-2 compiled_u64 via CycleArena
+    // A string is a `Ref2` pair, never an immediate: the u64 kit is
+    // not emitted, and the slot kit copies the string out of the
+    // producer's pair into the step's own scratch entry (SRD 115).
     assert!(
-        node.compiled_u64().is_some(),
-        "String arg is JIT-eligible under SRD-111 via CycleArena"
+        node.compiled_u64().is_none(),
+        "a String arg has no u64 form"
+    );
+    let kit = node
+        .compiled_slot(&[PortType::Str])
+        .expect("a String in and a String out take the slot kit");
+    let mut scratch: Vec<ScratchBuf> = kit.scratch.iter().map(|e| ScratchBuf::new(*e)).collect();
+    assert_eq!(scratch.len(), 1, "one scratch entry for the string output");
+    let text = "pass-through";
+    let inputs = [text.as_ptr() as usize as u64, text.len() as u64];
+    let mut outputs = [0u64; 2];
+    (kit.op)(&inputs, &mut outputs, &mut scratch);
+    assert_eq!(scratch[0].to_value().as_str(), text);
+    assert_eq!(
+        (outputs[0], outputs[1]),
+        scratch[0].ptr_len(),
+        "the output pair is the step's own entry"
     );
 }
 

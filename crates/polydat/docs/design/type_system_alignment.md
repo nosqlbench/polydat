@@ -109,17 +109,18 @@ scalar left fold.
 
 | PortType | Runtime carrier | Compiled status | JSON behavior |
 |---|---|---|---|
-| `Str` | `Arc<str>` | `Hdl1` byte-string handle (interner or cycle arena); P2 closures and P3 helpers | string |
-| `Bytes` | `Arc<[u8]>` | `Hdl1` byte-string handle; P2 closures and P3 helpers | documented hex convention |
-| `Json` | `Arc<serde_json::Value>` | `Hdl1` value-table handle; P2 closures and P3 helpers | identity |
-| `Ext` | `Box<dyn ReflectedValue>` | `Hdl1` value-table handle; crosses compiled tiers, is forwarded or projected, never operated on natively | extension-defined reflected projection |
-| `Handle` | `Arc<dyn Any + Send + Sync>` | `Hdl1` value-table handle; crosses compiled tiers, never downcast natively | no general JSON identity |
+| `Str` | `Arc<str>` | `Ref2` pair of its bytes; P2 closures | string |
+| `Bytes` | `Arc<[u8]>` | `Ref2` pair of its bytes; P2 closures | documented hex convention |
+| `Json` | `Arc<serde_json::Value>` | `Ref2` pair to the `Value`; P2 closures | identity |
+| `Ext` | `Box<dyn ReflectedValue>` | `Ref2` pair to the `Value`; crosses compiled tiers, is forwarded or projected, never operated on natively | extension-defined reflected projection |
+| `Handle` | `Arc<dyn Any + Send + Sync>` | `Ref2` pair to the `Value`; crosses compiled tiers, never downcast natively | no general JSON identity |
 
 `Ext` and `Handle` are explicit escape types. They do not
 gain implicit structural adapters or JIT layout by resemblance
-to a built-in type. In the compiled tiers they are named by a
-value-table entry and come back as the same `Arc`
-([Compiled Non-Scalar Slots](compiled_handles.md) §3, §9).
+to a built-in type. In the compiled tiers a pair names the
+`Value` in its producing step's scratch, and every read copies
+the same `Arc` out
+([Compiled By-Reference Slots](compiled_handles.md) §3, §8).
 
 The crate enables serde_json's `preserve_order` feature so
 object iteration order does not depend on whether Polydat is
@@ -133,24 +134,22 @@ built alone or in a larger workspace.
 |---|---:|---|---|
 | `Imm1` | 1 | scalars | Immediate data; never interpreted as an address or a name. |
 | `Imm2` | 2 | `U128/I128`, all `Reg128` views | Two limbs of immediate data; never interpreted as an address. |
-| `Ref2` | 2 | all `Vec*` types | Engine-internal `(ptr, len)` pair with a proven owner. |
-| `Hdl1` | 1 | `Str`, `Bytes`, `Json`, `Ext`, `Handle` | A handle naming a value in the static interner, the cycle arena, or the state's value table ([Compiled Non-Scalar Slots](compiled_handles.md)). Opaque to generated code. |
+| `Ref2` | 2 | all `Vec*` types, `Str`, `Bytes`, `Json`, `Ext`, `Handle` | Engine-internal `(ptr, len)` pair with a proven owner ([Compiled By-Reference Slots](compiled_handles.md)). |
 
-`PortType::handle_kind()` refines `Hdl1`: `Str` and `Bytes` handles are
-byte-string handles (interner or arena); `Json`, `Ext`, and `Handle`
-handles name value-table entries. The kind is fixed by the port type, so
-no code branches on a handle's tag.
+`PortType::scratch_elem()` names the scratch entry a `Ref2` port's
+producer owns: an element type for a vector, `Str` or `Bytes` for a
+byte string, `Value` for the rest. The entry is fixed by the port type,
+so no code branches on what a pair names.
 
 The following are invariants:
 
 - all slots of one logical value share provenance;
 - port offsets are computed from cumulative slot widths;
 - `Imm2` and `Ref2` are never interchangeable even though
-  both occupy two slots, and `Imm1` and `Hdl1` are never
-  interchangeable even though both occupy one;
-- only engine-owned code dereferences `Ref2`, and only helpers and
-  boundary marshalling decode `Hdl1`;
-- vector output scratch has one logical writer;
+  both occupy two slots;
+- only engine-owned code, a closure or the boundary decode,
+  dereferences `Ref2`;
+- every `Ref2` output's scratch has one logical writer;
 - publication precedes any read;
 - a skipped producer cannot leave a consumer observing an
   incoherent pointer/length pair.
@@ -166,13 +165,12 @@ Type support and engine eligibility are separate:
   node implementation exists.
 - One-slot scalar nodes with a supported lowering may execute
   through P2 or P3.
-- Handle-bearing nodes (`Hdl1` ports) execute through P2 when
-  the macro emits a `compiled_u64` or `compiled_handle` kit for
-  them, and through P3 when `classify_node_typed` has a helper
-  for the operation; a node that dispatches on `Value` variants
-  lowers with the types of its wires fixed at classification, and
-  a wire of a type no helper takes keeps it on P1 ([Compiled
-  Non-Scalar Slots](compiled_handles.md) §6, §7).
+- By-reference nodes (`Ref2` ports of the string, byte-string,
+  JSON, extension, or handle kinds) execute through P2 when the
+  macro emits a `compiled_slot` kit for them, which it does for
+  every shape the kit accepts; native code carries no reference
+  pairs yet, so they stay closure steps beside native segments
+  ([Compiled By-Reference Slots](compiled_handles.md) §5, §6).
 - Register-plane nodes may execute through P2 and, when
   `classify_node` has a lowering for the operation, native P3
   SIMD. Unsupported register operations remain on a lower tier.
@@ -181,7 +179,7 @@ Type support and engine eligibility are separate:
   compiled SIMD helpers.
 - `U128/I128` operations and nodes that downcast an `Ext` or
   `Handle` remain P1; the values themselves cross compiled
-  tiers as table handles.
+  tiers as reference pairs.
 
 No compiler may coerce a value merely to make a higher engine
 tier available. Engine selection follows the typed graph; it

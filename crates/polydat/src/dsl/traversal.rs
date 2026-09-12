@@ -99,7 +99,7 @@ impl Traversal {
         &self,
         engine: crate::Engine,
     ) -> Result<Arc<dyn crate::kernel::KernelProgram>, crate::KernelError> {
-        if engine == crate::Engine::Interpreter {
+        if matches!(engine, crate::Engine::Interpreter(_)) {
             return Ok(self.program.clone());
         }
         let mut programs = self
@@ -307,6 +307,7 @@ fn source_type(
                     LiteralValue::Float(_) => PortType::F64,
                     LiteralValue::String(_) => PortType::Str,
                     LiteralValue::Bool(_) => PortType::Bool,
+                    LiteralValue::Json(_) => PortType::Json,
                 };
                 match ty {
                     None => ty = Some(t),

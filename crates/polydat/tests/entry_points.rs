@@ -15,14 +15,14 @@ use polydat::dsl::compile::{
     compile_polydat_with_engine, compile_polydat_with_log, compile_polydat_with_options,
 };
 use polydat::dsl::events::CompileEventLog;
-use polydat::{Engine, Kernel, KernelError, Provenance};
+use polydat::{Engine, JitMode, Kernel, KernelError, Provenance};
 
 const SRC: &str = "input cycle: u64\nh := hash(cycle)\nk := mod_wire(h, 7)\ns := \"k={k}\"\n";
 
 /// Every engine a build can name; a refusal is skipped, as elsewhere.
 fn engines() -> Vec<Engine> {
     let mut all = vec![
-        Engine::Interpreter,
+        Engine::Interpreter(JitMode::Auto),
         Engine::Closures(Provenance::Auto),
         Engine::Closures(Provenance::Raw),
     ];

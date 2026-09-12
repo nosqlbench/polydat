@@ -9,7 +9,7 @@
 
 use polydat::ast::Value;
 use polydat::dsl::compile::{compile_polydat_to_assembler, compile_polydat_with};
-use polydat::{Engine, Kernel, KernelError, Provenance};
+use polydat::{Engine, JitMode, Kernel, KernelError, Provenance};
 
 /// Every engine and provenance mode a host can name.
 fn engines() -> Vec<Engine> {
@@ -20,7 +20,7 @@ fn engines() -> Vec<Engine> {
         Provenance::PushPull,
         Provenance::Auto,
     ];
-    let mut all = vec![Engine::Interpreter];
+    let mut all = vec![Engine::Interpreter(JitMode::Auto)];
     for m in modes {
         all.push(Engine::Closures(m));
         all.push(Engine::Native(m));
@@ -88,8 +88,8 @@ fn same(want: &[Vec<Value>], got: &[Vec<Value>], engine: Engine) {
 #[test]
 fn every_engine_is_driven_alike_and_agrees_with_the_interpreter() {
     let cycles = [0u64, 1, 7, 250, 999];
-    let mut p1 = compile_polydat_with(SRC, Engine::Interpreter).unwrap();
-    assert_eq!(p1.engine(), Engine::Interpreter);
+    let mut p1 = compile_polydat_with(SRC, Engine::Interpreter(JitMode::Auto)).unwrap();
+    assert_eq!(p1.engine(), Engine::Interpreter(JitMode::Auto));
     let want = drive(p1.as_mut(), &cycles);
     // The extern writes took: the key names the region the host set.
     assert!(want[0][2].to_display_string().starts_with("eu-west/"));
@@ -111,7 +111,7 @@ fn every_engine_is_driven_alike_and_agrees_with_the_interpreter() {
         let mut k = kernel.unwrap_or_else(|e| panic!("{engine}: {e}"));
         assert!(matches!(
             (k.engine(), engine),
-            (Engine::Interpreter, Engine::Interpreter)
+            (Engine::Interpreter(_), Engine::Interpreter(_))
                 | (Engine::Closures(_), Engine::Closures(_))
                 | (Engine::Native(_), Engine::Native(_))
         ));
@@ -153,7 +153,7 @@ fn every_engine_is_driven_alike_and_agrees_with_the_interpreter() {
 #[test]
 fn a_program_is_shared_across_threads_on_every_engine() {
     let cycles = [3u64, 4, 5];
-    let mut p1 = compile_polydat_with(SRC, Engine::Interpreter).unwrap();
+    let mut p1 = compile_polydat_with(SRC, Engine::Interpreter(JitMode::Auto)).unwrap();
     let want = drive(p1.as_mut(), &cycles);
     for engine in engines() {
         let Ok(kernel) = compile_polydat_with(SRC, engine) else {
@@ -162,7 +162,7 @@ fn a_program_is_shared_across_threads_on_every_engine() {
         let program = kernel.into_program();
         assert!(matches!(
             (program.engine(), engine),
-            (Engine::Interpreter, Engine::Interpreter)
+            (Engine::Interpreter(_), Engine::Interpreter(_))
                 | (Engine::Closures(_), Engine::Closures(_))
                 | (Engine::Native(_), Engine::Native(_))
         ));
@@ -184,12 +184,19 @@ fn a_program_is_shared_across_threads_on_every_engine() {
     }
 }
 
+/// A node that keeps to the interpreter by declaration, so every
+/// compiled engine refuses a program that uses it.
+#[polydat::polydat_node(category = Diagnostic, no_jit)]
+fn interpreter_only_double(n: u64) -> u64 {
+    n * 2
+}
+
 #[test]
 fn a_refusal_names_the_engine_and_the_reason() {
-    // A vector-typed extern has no compiled passthrough, so every
-    // compiled engine refuses it by name.
-    let src = "input cycle: u64\nextern v: vec_f32\nout := cycle\n";
-    assert!(compile_polydat_with(src, Engine::Interpreter).is_ok());
+    // A node with no compiled form is refused by every compiled engine,
+    // by name.
+    let src = "input cycle: u64\nout := interpreter_only_double(cycle)\n";
+    assert!(compile_polydat_with(src, Engine::Interpreter(JitMode::Auto)).is_ok());
     for engine in engines().into_iter().skip(1) {
         match compile_polydat_with(src, engine) {
             Err(KernelError::Refused { engine: e, reason }) => {
@@ -261,7 +268,7 @@ fn the_compile_log_is_the_same_on_every_engine() {
             .map(|e| format!("{e:?}"))
             .collect::<Vec<_>>()
     };
-    let want = events(Engine::Interpreter);
+    let want = events(Engine::Interpreter(JitMode::Auto));
     assert!(
         want.iter().any(|e| e.starts_with("ConstantFolded")),
         "{want:?}"
@@ -287,7 +294,7 @@ fn invalidate_all_reruns_a_cycle_whose_inputs_did_not_move() {
     // moved it is current and silent, and `invalidate_all` runs it again.
     let src = "input cycle: u64\nextern tag: str = \"t\"\n__emit := emit_row(\"map\", \"cycle,tag\", cycle, tag)\n";
     for engine in [
-        Engine::Interpreter,
+        Engine::Interpreter(JitMode::Auto),
         Engine::Closures(Provenance::Auto),
         Engine::Native(Provenance::Auto),
     ] {
@@ -326,7 +333,7 @@ fn the_default_engine_is_compiled_code() {
         (k.engine(), want),
         (Engine::Native(_), Engine::Native(_)) | (Engine::Closures(_), Engine::Closures(_))
     ));
-    let mut p1 = compile_polydat_with(SRC, Engine::Interpreter).unwrap();
+    let mut p1 = compile_polydat_with(SRC, Engine::Interpreter(JitMode::Auto)).unwrap();
     k.set_inputs(&[7]);
     p1.set_inputs(&[7]);
     for name in p1.output_names() {
@@ -338,7 +345,7 @@ fn the_default_engine_is_compiled_code() {
 
 #[test]
 fn outputs_are_listed_in_declaration_order_on_every_engine() {
-    let p1 = compile_polydat_with(SRC, Engine::Interpreter).unwrap();
+    let p1 = compile_polydat_with(SRC, Engine::Interpreter(JitMode::Auto)).unwrap();
     for engine in [
         Engine::Closures(Provenance::Auto),
         Engine::Native(Provenance::Auto),
@@ -422,7 +429,7 @@ fn the_default_engine_forms_take_options_tiles_and_activations() {
 
 #[test]
 fn every_engine_reports_its_plan() {
-    let p1 = compile_polydat_with(SRC, Engine::Interpreter).unwrap();
+    let p1 = compile_polydat_with(SRC, Engine::Interpreter(JitMode::Auto)).unwrap();
     let nodes = polydat::dsl::compile_polydat(SRC)
         .unwrap()
         .program()
@@ -455,7 +462,7 @@ fn the_index_keyed_calls_agree_with_the_named_ones_on_every_engine() {
     // SRD 117 step 3: a host that binds the same inputs and reads the
     // same outputs every cycle resolves the names once.
     for engine in [
-        Engine::Interpreter,
+        Engine::Interpreter(JitMode::Auto),
         Engine::Closures(Provenance::Auto),
         Engine::Native(Provenance::Auto),
     ] {
@@ -497,15 +504,9 @@ fn the_index_keyed_calls_agree_with_the_named_ones_on_every_engine() {
         }
         // A coordinate is not set by index through an extern write, and
         // the wrong type is refused by name.
-        assert!(
-            by_index.set_input_at(0, Value::U64(1)).is_err() || engine == Engine::Interpreter,
-            "{engine}"
-        );
+        assert!(by_index.set_input_at(0, Value::U64(1)).is_err(), "{engine}");
         let err = by_index.set_input_at(scale, Value::Str("x".into()));
-        assert!(
-            err.is_err() || engine == Engine::Interpreter,
-            "{engine}: {err:?}"
-        );
+        assert!(err.is_err(), "{engine}: {err:?}");
     }
 }
 
@@ -541,5 +542,67 @@ fn a_created_kernel_starts_from_the_programs_defaults_on_every_engine() {
             fresh_key.as_str().starts_with("us-east/"),
             "{engine}: {fresh_key:?}"
         );
+    }
+}
+
+/// A program whose inputs span more than sixty-four slots builds and
+/// runs on every engine, and an extern past the sixty-fourth slot still
+/// invalidates what it reaches. The P3 kernel's provenance mask was one
+/// word, and shifted out of range at build for such a program.
+#[test]
+fn a_program_with_many_inputs_runs_on_every_engine() {
+    let count = 70;
+    let mut src = String::from("input cycle: u64\n");
+    for i in 0..count {
+        src.push_str(&format!("extern e{i}: u64 = {i}\n"));
+    }
+    src.push_str(&format!("s := e0 + e{} + cycle\n", count - 1));
+    for engine in engines() {
+        let mut k = match compile_polydat_with(&src, engine) {
+            Ok(k) => k,
+            Err(KernelError::Refused { .. }) => continue,
+            Err(e) => panic!("{engine}: {e}"),
+        };
+        k.set_inputs(&[1]);
+        assert_eq!(k.pull("s"), Value::U64(70), "{engine}");
+        k.set_input(&format!("e{}", count - 1), Value::U64(1000))
+            .unwrap();
+        k.set_inputs(&[1]);
+        assert_eq!(k.pull("s"), Value::U64(1001), "{engine}");
+        // The same coordinates again: the guard finds the cone clean.
+        k.set_inputs(&[1]);
+        assert_eq!(k.pull("s"), Value::U64(1001), "{engine}");
+        k.set_inputs(&[2]);
+        assert_eq!(k.pull("s"), Value::U64(1002), "{engine}");
+    }
+}
+
+/// One write rule on every engine: an extern takes a value of its
+/// declared type, a bit-stuffed carrier form of it, or `None`, and
+/// refuses anything else with the same message; a coordinate is set
+/// with `set_inputs`, never as an extern.
+#[test]
+fn the_write_rule_is_the_same_on_every_engine() {
+    let src = "input cycle: u64\nextern n: u64 = 1\nextern f: f64 = 1.0\nextern s: str = \"a\"\nout := to_f64(n) + f\n";
+    let mut messages: Vec<(Engine, String, String)> = Vec::new();
+    for engine in engines() {
+        let mut k = match compile_polydat_with(src, engine) {
+            Ok(k) => k,
+            Err(KernelError::Refused { .. }) => continue,
+            Err(e) => panic!("{engine}: {e}"),
+        };
+        assert!(k.set_input("n", Value::U64(5)).is_ok(), "{engine}");
+        assert!(k.set_input("f", Value::F64(2.5)).is_ok(), "{engine}");
+        assert!(k.set_input("s", Value::Str("b".into())).is_ok(), "{engine}");
+        let wrong = k.set_input("f", Value::Str("x".into())).unwrap_err();
+        let coordinate = k.set_input("cycle", Value::U64(1)).unwrap_err();
+        messages.push((engine, wrong, coordinate));
+        k.set_inputs(&[3]);
+        assert_eq!(k.pull("out"), Value::F64(7.5), "{engine}");
+    }
+    let (_, wrong, coordinate) = &messages[0];
+    for (engine, w, c) in &messages {
+        assert_eq!(w, wrong, "{engine}");
+        assert_eq!(c, coordinate, "{engine}");
     }
 }

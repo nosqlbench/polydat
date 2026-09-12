@@ -118,8 +118,9 @@ type ResolvedOutput = (usize, crate::ast::PortType, Option<std::sync::Arc<[usize
 
 /// Common fields shared by all hybrid kernel variants. A clone is a new
 /// state of the same program: the steps and the nodes are shared,
-/// everything else is the clone's own (engine_parity.md, step 4).
-#[derive(Clone)]
+/// everything else is the clone's own (engine_parity.md, step 4), and
+/// every pair in its buffer points into its own storage (axiom S3),
+/// never into the state it was cloned from.
 struct HybridCore {
     buffer: Vec<u64>,
     coord_count: usize,
@@ -134,20 +135,9 @@ struct HybridCore {
     ref_slots: Vec<bool>,
     /// Axiom S9(a): (first slot of a Ref pair → scratch index).
     ref_scratch: Vec<(usize, usize)>,
-    /// The kernel's value table (SRD 115 §3), shared by every JIT
-    /// segment; entries are numbered across segments at build.
-    table: crate::kernel::ValueTable,
-    /// `(slot, entry)` for every table-kind slot, from the JIT
-    /// segments and the handle closures; the H4 validator checks each
-    /// slot's handle names its own entry.
-    table_entries: Vec<(usize, usize)>,
     /// Port type of each named output, for `get_value`.
     output_types: HashMap<String, crate::ast::PortType>,
-    /// Per step, true when it writes a handle slot: such a step is
-    /// never marked clean, because its arena bytes or table entry
-    /// belong to the cycle that ran it (SRD 115 §4).
-    step_rerun: Vec<bool>,
-    /// The extern inputs, materialized at the start of every run.
+    /// The extern inputs, written through at every set.
     externs: crate::compile::externs::Externs,
     /// The traversals the program declares (SRD 113), opened through the
     /// `Kernel` trait.
@@ -158,20 +148,25 @@ struct HybridCore {
     /// Keep source nodes alive so JIT-baked pointers remain valid.
     _nodes: std::sync::Arc<Vec<Box<dyn PolydatNode>>>,
     /// The coordinates set through the `Kernel` trait, pending
-    /// evaluation; `stale` means the next evaluation begins a cycle.
+    /// evaluation; `stale` means a write happened since the last
+    /// evaluation round.
     drive: crate::compile::Drive,
     /// Per slot: the slot holds `None` (SRD-74 on a compiled kernel).
     none: Vec<bool>,
-    /// Per step: the cycle it last ran in, so a new cycle forgets every
-    /// run without a scan.
+    /// Per step: the evaluation round it last ran in, so a new round
+    /// forgets every run without a scan.
     ran: Vec<u64>,
-    /// The open cycle's number; 0 is never a cycle.
-    cycle: u64,
-    /// Every step ran in the open cycle: a full evaluation happened.
+    /// The evaluation round: advanced by the first evaluation after a
+    /// write, so a mode without per-step currency runs a step once per
+    /// round rather than once per reader. Bookkeeping only: it wipes
+    /// nothing, and every output stands until an input in its
+    /// provenance is written. 0 is never a round.
+    epoch: u64,
+    /// Every step ran in the round: a full evaluation happened.
     all_ran: bool,
     /// Per step: its outputs are current for the inputs it depends on.
     /// Cleared through the plan when an input changes, whichever call
-    /// changed it; never set for a volatile or handle-writing step.
+    /// changed it; never set for a volatile step.
     clean: Vec<bool>,
     /// Whether this kernel's provenance mode skips current steps.
     use_clean: bool,
@@ -203,49 +198,87 @@ struct HybridCore {
     /// the only way one enters (SRD-74). When none does, the steps run
     /// without the mask.
     any_none: bool,
-    /// The steps that are never current, invalidated at every cycle.
+    /// The steps that are never current, invalidated at every round.
     volatile_steps: std::sync::Arc<[usize]>,
-    /// True when a host drives this kernel directly, so each cycle is a
-    /// root cycle (SRD 115 §4); false when a state that owns the cycle
-    /// wraps it.
-    owns_cycle: bool,
 }
 
-/// Per-slot `Hdl1` mask over the nodes' output ports.
-fn handle_slot_mask_of(
-    nodes: &[Box<dyn PolydatNode>],
-    port_offsets: &[Vec<usize>],
-    total_slots: usize,
-) -> Vec<bool> {
-    let mut mask = vec![false; total_slots];
-    for (node_idx, node) in nodes.iter().enumerate() {
-        for (p, out) in node.meta().outs.iter().enumerate() {
-            if out.typ.slot_color() == crate::ast::SlotColor::Hdl1 {
-                mask[port_offsets[node_idx][p]] = true;
-            }
-        }
+impl Clone for HybridCore {
+    fn clone(&self) -> Self {
+        let mut core = HybridCore {
+            buffer: self.buffer.clone(),
+            coord_count: self.coord_count,
+            steps: self.steps.clone(),
+            output_map: self.output_map.clone(),
+            gather_buf: self.gather_buf.clone(),
+            scatter_buf: self.scatter_buf.clone(),
+            scratch: self.scratch.clone(),
+            ref_slots: self.ref_slots.clone(),
+            ref_scratch: self.ref_scratch.clone(),
+            output_types: self.output_types.clone(),
+            externs: self.externs.clone(),
+            traversals: self.traversals.clone(),
+            resolved_outputs: self.resolved_outputs.clone(),
+            _nodes: self._nodes.clone(),
+            drive: self.drive.clone(),
+            none: self.none.clone(),
+            ran: self.ran.clone(),
+            epoch: self.epoch,
+            all_ran: self.all_ran,
+            clean: self.clean.clone(),
+            use_clean: self.use_clean,
+            plan: self.plan.clone(),
+            volatile: self.volatile.clone(),
+            side: self.side.clone(),
+            slot_step: self.slot_step.clone(),
+            sites: self.sites.clone(),
+            cur_step: self.cur_step,
+            tracker: self.tracker,
+            all: self.all.clone(),
+            dirty: self.dirty.clone(),
+            any_none: self.any_none,
+            volatile_steps: self.volatile_steps.clone(),
+        };
+        core.republish_refs();
+        core
     }
-    mask
 }
 
 impl HybridCore {
-    /// Whether `step` ran in the open cycle.
-    #[inline]
-    fn has_run(&self, step: usize) -> bool {
-        self.all_ran || self.ran[step] == self.cycle
+    /// Point every pair in the buffer into this state's own storage: a
+    /// step's scratch entry for its `Ref2` outputs, the stored value
+    /// for an extern's (axiom S3). What a clone needs, whose buffer
+    /// was copied from a state whose storage it does not share.
+    fn republish_refs(&mut self) {
+        for &(slot, idx) in &self.ref_scratch {
+            let (p, l) = self.scratch[idx].ptr_len();
+            self.buffer[slot] = p;
+            self.buffer[slot + 1] = l;
+        }
+        self.externs.seed(&mut self.buffer, None);
     }
+}
 
+/// Whether a node has a `Ref2`-colored port on either side: such a
+/// node runs as a closure step until the native lowering carries
+/// reference pairs.
+#[cfg(feature = "jit")]
+fn has_ref_port(node: &dyn PolydatNode, wire_types: &[crate::ast::PortType]) -> bool {
+    let is_ref = |t: &crate::ast::PortType| t.slot_color() == crate::ast::SlotColor::Ref2;
+    wire_types.iter().any(is_ref) || node.meta().outs.iter().any(|o| is_ref(&o.typ))
+}
+
+impl HybridCore {
     /// Axiom S9(a) — deterministic Ref validation (see
     /// `jit_boundary.md` §"Slot-state axioms"). Gated to
     /// `debug_assertions` to match its call sites, which compile
     /// out in release.
     #[cfg(debug_assertions)]
     fn validate_refs(&self) {
-        // A step that did not run in this cycle, or that propagated
-        // `None`, left its slots as they were.
+        // A step that has never run, or that propagated `None`, left
+        // its slots as they were.
         let skip = |slot: usize| {
             self.none[slot]
-                || matches!(self.slot_step.get(slot), Some(Some(step)) if !self.has_run(*step))
+                || matches!(self.slot_step.get(slot), Some(Some(step)) if self.ran[*step] == 0)
         };
         for &(slot, idx) in &self.ref_scratch {
             if skip(slot) {
@@ -261,45 +294,16 @@ impl HybridCore {
                 self.buffer[slot + 1],
             );
         }
-        // SRD 115 axiom H4, the same check for handles: every
-        // table-kind slot names its own entry, in this generation.
-        for &(slot, entry) in &self.table_entries {
-            if skip(slot) {
-                continue;
-            }
-            let handle = self.buffer[slot];
-            assert_eq!(
-                handle & crate::kernel::TAG_MASK,
-                crate::kernel::TAG_RES,
-                "H4: slot {slot} should hold a table handle, holds {handle:#x}"
-            );
-            let (_, generation, named) = crate::kernel::decode_table_handle(handle);
-            assert_eq!(
-                named, entry,
-                "H4: slot {slot} names entry {named}; the layout assigned it entry {entry}"
-            );
-            assert_eq!(
-                generation,
-                self.table.generation() & 0xFF_FFFF,
-                "H3: slot {slot} holds a handle from another cycle generation"
-            );
-            assert!(
-                self.table.is_written(entry),
-                "H4: entry {entry} was not written by the run that produced slot {slot}"
-            );
-        }
     }
 
-    /// Axiom S2 guard for raw u64 readers, and SRD 115 axiom H1 for
-    /// handle slots.
+    /// Axiom S2 guard for raw u64 readers.
     #[inline]
     fn guard_ref_slot(&self, slot: usize) {
         if self.ref_slots.get(slot).copied().unwrap_or(false) {
             panic!(
-                "S2 pointer containment: slot {slot} is Ref2- or Hdl1-colored; raw \
-                 u64 readers would leak an interior address or a handle. Use the \
-                 typed borrow-checked accessor (read_vec_*), the boundary decode, \
-                 or copy out."
+                "S2 pointer containment: slot {slot} is Ref2-colored; raw u64 readers \
+                 would leak an interior address. Use the typed borrow-checked accessor \
+                 (read_vec_*), the boundary decode, or copy out."
             );
         }
     }
@@ -318,30 +322,18 @@ impl HybridCore {
 }
 
 impl HybridCore {
-    /// Begin a cycle (SRD 115 §4; engine_parity.md, step 5): a hybrid
-    /// kernel is driven by a host, never wrapped by a state, so the
-    /// cycle is a root one; the externs are written (an unset one as
-    /// `None`), what ran last cycle is forgotten, and the volatile
-    /// steps are invalidated, as the interpreter does at every
-    /// `set_inputs`.
+    /// Begin an evaluation round after a write: take what cells other
+    /// holders published, forget what ran in the last round, and
+    /// invalidate the volatile steps, as the interpreter does at every
+    /// write. Nothing else changes: every output stands until an input
+    /// in its provenance is written (runtime_model.md, R1).
     #[inline]
-    fn begin_cycle(&mut self) {
-        let generation = if self.owns_cycle {
-            crate::kernel::begin_root_cycle()
-        } else {
-            crate::kernel::cycle_generation()
-        };
-        self.table.set_generation(generation);
-        // Marks left by the last cycle's propagation are stale: the externs
-        // set this cycle's, and the steps propagate from there.
-        if self.any_none {
-            self.none.fill(false);
+    fn begin_epoch(&mut self) {
+        if self.externs.cells_dirty() {
+            self.externs.refresh_cells(&mut self.buffer);
         }
-        self.any_none =
-            self.externs
-                .materialize(&mut self.buffer, &mut self.table, Some(&mut self.none));
         self.dirty_refreshed();
-        self.cycle += 1;
+        self.epoch += 1;
         self.all_ran = false;
         for &i in self.volatile_steps.iter() {
             self.clean[i] = false;
@@ -424,52 +416,43 @@ impl HybridCore {
         }
     }
 
-    /// Run the steps of `order` that have not run in this cycle and are
+    /// Run the steps of `order` that have not run in this round and are
     /// not current, as the closure kernels do: one rule for every step,
-    /// whatever reaches it. A handle-writing step runs every cycle and
-    /// a volatile one is never current.
+    /// whatever reaches it; a volatile step is never current.
     #[inline]
     fn run_steps(&mut self, order: &[usize]) {
         self.run_guarded(|core| core.run_order(order));
     }
 
-    /// Run `body` with the value table installed around every step,
-    /// closures included, so handle closures write through it as the
-    /// segments' helpers do, and with the capture guard armed, so a
-    /// step's panic is recorded quietly and re-raised enriched, as the
-    /// interpreter re-raises a node's (A7).
+    /// Run `body` with the capture guard armed, so a step's panic is
+    /// recorded quietly and re-raised enriched, as the interpreter
+    /// re-raises a node's (A7).
     #[inline]
     fn run_guarded(&mut self, body: impl FnOnce(&mut Self)) {
-        let _run = crate::kernel::arena::RunScope::enter();
         let capture = crate::kernel::engines::EvalPanicCaptureGuard::arm();
-        // SAFETY: the table stays in place for the run; the steps reach it
-        // only through the installation, and the loop touches the other
-        // fields.
-        let installed = unsafe { crate::kernel::install_value_table_ptr(&mut self.table) };
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(self)));
-        drop(installed);
         drop(capture);
         if let Err(payload) = outcome {
             let sites = std::sync::Arc::clone(&self.sites);
             let node = self.steps[self.cur_step].failing_node(&self.buffer, self.tracker);
-            sites.reraise(payload, node, &self.buffer, Some(&self.none), &self.table);
+            sites.reraise(payload, node, &self.buffer, Some(&self.none));
         }
         #[cfg(debug_assertions)]
         self.validate_refs();
     }
 
-    /// The steps of `order` that have not run in the cycle, in order.
+    /// The steps of `order` that have not run in the round, in order.
     #[inline]
     fn run_order(&mut self, order: &[usize]) {
         let steps = &self.steps;
         let none_free = !self.any_none;
         for &i in order {
-            if self.all_ran || self.ran[i] == self.cycle {
+            if self.all_ran || self.ran[i] == self.epoch {
                 continue;
             }
-            let never = self.step_rerun[i] || self.volatile[i];
+            let never = self.volatile[i];
             if (self.use_clean || self.side[i]) && self.clean[i] && !never {
-                self.ran[i] = self.cycle;
+                self.ran[i] = self.epoch;
                 continue;
             }
             self.cur_step = i;
@@ -482,14 +465,14 @@ impl HybridCore {
                 &mut self.scatter_buf,
                 &mut self.scratch,
             );
-            self.ran[i] = self.cycle;
+            self.ran[i] = self.epoch;
             self.clean[i] = !never;
         }
     }
 
-    /// Every step, in order, in a cycle just begun, in a mode without
+    /// Every step, in order, in a round just begun, in a mode without
     /// per-step skipping and with no `None` in play: the same steps the
-    /// general loop would run, without the bookkeeping a partial cycle
+    /// general loop would run, without the bookkeeping a partial round
     /// needs. A current side channel is still skipped, since its run is
     /// observed.
     #[inline]
@@ -497,7 +480,7 @@ impl HybridCore {
         let steps = &self.steps;
         for (i, step) in steps.iter().enumerate() {
             if self.side[i] {
-                let never = self.step_rerun[i] || self.volatile[i];
+                let never = self.volatile[i];
                 if self.clean[i] && !never {
                     continue;
                 }
@@ -523,7 +506,7 @@ impl HybridCore {
     fn eval_all(&mut self) {
         let fresh = self.drive.stale;
         if fresh {
-            self.begin_cycle();
+            self.begin_epoch();
         } else {
             self.refresh_cells();
         }
@@ -538,7 +521,7 @@ impl HybridCore {
     /// The named output for the cycle's inputs, running only its cone.
     fn pull_named(&mut self, name: &str) -> crate::ast::Value {
         if self.drive.stale {
-            self.begin_cycle();
+            self.begin_epoch();
         } else {
             self.refresh_cells();
         }
@@ -582,7 +565,7 @@ impl HybridCore {
             self.resolved_outputs[index] = Some((slot, ty, cone));
         }
         if self.drive.stale {
-            self.begin_cycle();
+            self.begin_epoch();
         } else {
             self.refresh_cells();
         }
@@ -608,15 +591,12 @@ impl HybridCore {
     }
 
     /// The value at `slot` decoded as `ty`: `None` where the mask says
-    /// so, a Ref pair through its scratch, a handle through the table.
+    /// so, a Ref pair copied out through the pair.
     fn slot_value(&self, slot: usize, ty: crate::ast::PortType) -> crate::ast::Value {
         if self.none.get(slot).copied().unwrap_or(false) {
             return crate::ast::Value::None;
         }
-        if let Some(&(_, idx)) = self.ref_scratch.iter().find(|(s, _)| *s == slot) {
-            return self.scratch[idx].to_value();
-        }
-        crate::compile::marshal::decode_output(&self.buffer, slot, ty, &self.table)
+        crate::compile::marshal::decode_output(&self.buffer, slot, ty)
     }
 
     /// The native segments and the closure steps.
@@ -645,43 +625,6 @@ fn eval_all_hybrid_steps(core: &mut HybridCore) {
     core.eval_all();
 }
 
-/// Compute per-slot provenance bitmasks for the hybrid kernel.
-///
-/// Returns `slot_provenance[slot]` = bitmask of which inputs affect
-/// that buffer slot. Used by pull-side cone guard.
-fn compute_hybrid_slot_provenance(
-    coord_count: usize,
-    total_slots: usize,
-    step_dependents: &[Vec<usize>],
-    steps: &[HybridStep],
-) -> Vec<u64> {
-    let step_count = steps.len();
-    let mut step_prov = vec![0u64; step_count];
-    for (input_idx, deps) in step_dependents.iter().enumerate() {
-        for &step_idx in deps {
-            if step_idx < step_count {
-                step_prov[step_idx] |= 1u64 << input_idx;
-            }
-        }
-    }
-    let mut slot_provenance = vec![0u64; total_slots];
-    for (i, slot) in slot_provenance
-        .iter_mut()
-        .enumerate()
-        .take(coord_count.min(64))
-    {
-        *slot = 1u64 << i;
-    }
-    for (step_idx, step) in steps.iter().enumerate() {
-        for &slot in step.output_slots() {
-            if slot < slot_provenance.len() {
-                slot_provenance[slot] = step_prov[step_idx];
-            }
-        }
-    }
-    slot_provenance
-}
-
 // ═══════════════════════════════════════════════════════════════
 // Raw: no provenance, no cone guard. Eval runs all steps.
 // ═══════════════════════════════════════════════════════════════
@@ -703,18 +646,32 @@ impl HybridCore {
     /// what depends on it, as a changed coordinate is invalidated, and
     /// the next evaluation begins a cycle.
     fn set_extern(&mut self, name: &str, value: crate::ast::Value) -> Result<usize, String> {
-        let slot = self.externs.set(name, value, &mut self.buffer)?;
-        self.dirty_input(slot);
-        self.drive.stale = true;
+        let (slot, unset) = self.externs.set(name, value, &mut self.buffer)?;
+        self.extern_written(slot, unset);
         Ok(slot)
     }
 
     /// [`Self::set_extern`] by input index.
     fn set_extern_at(&mut self, index: usize, value: crate::ast::Value) -> Result<usize, String> {
-        let slot = self.externs.set_at(index, value, &mut self.buffer)?;
+        let (slot, unset) = self.externs.set_at(index, value, &mut self.buffer)?;
+        self.extern_written(slot, unset);
+        Ok(slot)
+    }
+
+    /// An extern was written: its dependents are no longer current, the
+    /// `None` mask records whether it is unset (SRD-74 on a compiled
+    /// kernel), and the next evaluation begins a round. When the last
+    /// unset extern is set, no slot can hold a `None` any more, so the
+    /// mask is cleared and the steps run without it.
+    fn extern_written(&mut self, slot: usize, unset: bool) {
+        self.none[slot] = unset;
+        let was = self.any_none;
+        self.any_none = self.externs.any_unset();
+        if was && !self.any_none {
+            self.none.fill(false);
+        }
         self.dirty_input(slot);
         self.drive.stale = true;
-        Ok(slot)
     }
 }
 
@@ -824,11 +781,6 @@ impl HybridKernelRaw {
         self.core.value_of(name)
     }
 
-    /// Entries in the kernel's value table.
-    pub fn table_len(&self) -> usize {
-        self.core.table.len()
-    }
-
     /// Number of coordinate inputs.
     pub fn coord_count(&self) -> usize {
         self.core.coord_count
@@ -865,8 +817,8 @@ impl HybridKernelRaw {
 #[derive(Clone)]
 pub struct HybridKernelPull {
     core: HybridCore,
-    slot_provenance: Vec<u64>,
-    changed_mask: u64,
+    slot_provenance: Vec<crate::kernel::ProvMask>,
+    changed_mask: crate::kernel::ProvMask,
     /// Set by `set_input`: an extern changed, so the next evaluation
     /// runs whatever the cone guard says.
     force_run: bool,
@@ -877,11 +829,11 @@ impl HybridKernelPull {
     /// their dependents through the plan, as in every mode.
     #[inline]
     fn set_inputs(&mut self, coords: &[u64]) {
-        self.changed_mask = 0;
+        self.changed_mask.clear();
         for (i, &c) in coords.iter().enumerate().take(self.core.coord_count) {
             if self.core.buffer[i] != c {
                 self.core.buffer[i] = c;
-                self.changed_mask |= 1u64 << i;
+                self.changed_mask.set(i);
                 self.core.dirty_input(i);
             }
         }
@@ -907,7 +859,7 @@ impl HybridKernelPull {
         self.set_inputs(coords);
         if !self.force_run
             && slot < self.slot_provenance.len()
-            && self.slot_provenance[slot] & self.changed_mask == 0
+            && !self.slot_provenance[slot].intersects(&self.changed_mask)
         {
             return self.core.buffer[slot];
         }
@@ -985,11 +937,6 @@ impl HybridKernelPull {
         self.core.value_of(name)
     }
 
-    /// Entries in the kernel's value table.
-    pub fn table_len(&self) -> usize {
-        self.core.table.len()
-    }
-
     /// Number of coordinate inputs.
     pub fn coord_count(&self) -> usize {
         self.core.coord_count
@@ -1028,8 +975,8 @@ impl HybridKernelPull {
 #[derive(Clone)]
 pub struct HybridKernelPushPull {
     core: HybridCore,
-    slot_provenance: Vec<u64>,
-    changed_mask: u64,
+    slot_provenance: Vec<crate::kernel::ProvMask>,
+    changed_mask: crate::kernel::ProvMask,
     /// Set by `set_input`: an extern changed, so the next evaluation
     /// runs whatever the cone guard says.
     force_run: bool,
@@ -1083,11 +1030,11 @@ impl HybridKernelPushPull {
     /// Track which inputs changed and dirty affected steps.
     #[inline]
     fn set_inputs(&mut self, coords: &[u64]) {
-        self.changed_mask = 0;
+        self.changed_mask.clear();
         for (i, &c) in coords.iter().enumerate().take(self.core.coord_count) {
             if self.core.buffer[i] != c {
                 self.core.buffer[i] = c;
-                self.changed_mask |= 1u64 << i;
+                self.changed_mask.set(i);
                 self.core.dirty_input(i);
             }
         }
@@ -1113,7 +1060,7 @@ impl HybridKernelPushPull {
         self.set_inputs(coords);
         if !self.force_run
             && slot < self.slot_provenance.len()
-            && self.slot_provenance[slot] & self.changed_mask == 0
+            && !self.slot_provenance[slot].intersects(&self.changed_mask)
         {
             return self.core.buffer[slot];
         }
@@ -1147,11 +1094,6 @@ impl HybridKernelPushPull {
     /// (SRD 115 §5), so the caller never holds a handle.
     pub fn get_value(&self, name: &str) -> crate::ast::Value {
         self.core.value_of(name)
-    }
-
-    /// Entries in the kernel's value table.
-    pub fn table_len(&self) -> usize {
-        self.core.table.len()
     }
 
     /// Number of coordinate inputs.
@@ -1272,11 +1214,6 @@ pub(crate) fn build_hybrid(
     let mut ref_scratch: Vec<(usize, usize)> = Vec::new();
     let mut max_inputs = 0usize;
     let mut max_outputs = 0usize;
-    // `(slot, entry)` of every table-kind slot across all JIT segments
-    // (SRD 115 §3); the kernel's value table is sized from it.
-    let mut table_entries: Vec<(usize, usize)> = Vec::new();
-    let handle_mask = handle_slot_mask_of(nodes, port_offsets, total_slots);
-    let mut step_rerun: Vec<bool> = Vec::new();
 
     // Classify each node
     let classifications: Vec<(JitOp, Vec<usize>, Vec<usize>)> = nodes
@@ -1296,7 +1233,13 @@ pub(crate) fn build_hybrid(
                     WireSource::NodeOutput(j, p) => nodes[*j].meta().outs[*p].typ,
                 })
                 .collect();
-            let jit_op = jit::classify_node_typed(node.as_ref(), &wire_types);
+            // A node with a `Ref2` port runs as a closure until the
+            // native lowering carries reference pairs.
+            let jit_op = if has_ref_port(node.as_ref(), &wire_types) {
+                JitOp::Fallback
+            } else {
+                jit::classify_node_typed(node.as_ref(), &wire_types)
+            };
 
             let input_slots = flatten_input_slots(
                 wiring,
@@ -1333,12 +1276,6 @@ pub(crate) fn build_hybrid(
         }
     }
 
-    let guarded_slots: Vec<usize> = ref_slots
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| **r)
-        .map(|(s, _)| s)
-        .collect();
     // Per node, the step it runs in: its own closure step or its segment.
     let mut node_step = vec![usize::MAX; nodes.len()];
     // Batch adjacent JIT-able nodes into segments
@@ -1350,9 +1287,6 @@ pub(crate) fn build_hybrid(
             let node = &nodes[i];
             let (_, ref input_slots, ref output_slots) = classifications[i];
             let scratch_start = scratch.len();
-            // A handle closure (SRD 115 §7) owns the next entries of
-            // the kernel's one table, numbered with the JIT segments'.
-            let entry_base = table_entries.len();
             let wire_types: Vec<crate::ast::PortType> = wiring[i]
                 .iter()
                 .map(|src| match src {
@@ -1363,48 +1297,19 @@ pub(crate) fn build_hybrid(
                     WireSource::NodeOutput(j, p) => nodes[*j].meta().outs[*p].typ,
                 })
                 .collect();
-            // A copy of a table handle re-enters the value (axiom H4),
-            // so it owns an entry like a handle closure does.
-            let table_op = crate::compile::assembly::table_copy_op(node.as_ref(), entry_base)
-                .or_else(|| {
-                    if node.compiled_u64().is_some() {
-                        None
-                    } else {
-                        node.compiled_handle(entry_base, &wire_types)
-                    }
-                });
-            let op = if let Some(op) = table_op {
-                let mut slot = output_slots.iter().copied();
-                for port in &node.meta().outs {
-                    let first = slot.next();
-                    for _ in 1..port.typ.slot_width() {
-                        slot.next();
-                    }
-                    if port.typ.handle_kind() == Some(crate::ast::HandleKind::Table)
-                        && let Some(first) = first
-                    {
-                        table_entries.push((first, table_entries.len()));
-                    }
-                }
-                ClosureOp::U64(op)
-            } else if let Some(op) = node.compiled_u64() {
+            let op = if let Some(op) = node.compiled_u64() {
                 ClosureOp::U64(op)
             } else if let Some(op) = crate::compile::assembly::identity_op(node.as_ref()) {
                 ClosureOp::U64(op)
-            } else if let Some(kit) = node.compiled_slot() {
+            } else if let Some(kit) = ref_copy_or_slot(node.as_ref(), &wire_types) {
                 scratch.extend(kit.scratch.iter().map(|e| crate::ast::ScratchBuf::new(*e)));
-                // Axiom S9(a): map this step's Ref output pairs to
-                // its scratch entries (port order — S3 contract).
                 let starts = flatten_ref_output_starts(nodes, i, port_offsets);
-                assert_eq!(
-                    starts.len(),
-                    kit.scratch.len(),
-                    "slot-op scratch/Ref-output mismatch on '{}'",
-                    node.meta().name
-                );
-                for (k, &slot) in starts.iter().enumerate() {
-                    ref_scratch.push((slot, scratch_start + k));
-                }
+                ref_scratch.extend(crate::compile::assembly::scratch_pairs(
+                    &node.meta().name,
+                    &starts,
+                    &kit.scratch,
+                    scratch_start,
+                ));
                 ClosureOp::Slot(kit.op)
             } else {
                 return Err(format!(
@@ -1412,7 +1317,6 @@ pub(crate) fn build_hybrid(
                     node.meta().name
                 ));
             };
-            step_rerun.push(output_slots.iter().any(|&s| handle_mask[s]));
             node_step[i] = steps.len();
             steps.push(HybridStep::Closure(ClosureStep {
                 op,
@@ -1462,14 +1366,7 @@ pub(crate) fn build_hybrid(
                 .iter()
                 .flat_map(|(_, _, o)| o.iter().copied())
                 .collect();
-            let (code_fn, module, entries) = jit::compile_jit_entry(
-                &batch,
-                table_entries.len(),
-                &guarded_slots,
-                Some(total_slots),
-            )?;
-            table_entries.extend(entries);
-            step_rerun.push(output_slots.iter().any(|&s| handle_mask[s]));
+            let (code_fn, module) = jit::compile_jit_entry(&batch, Some(total_slots))?;
             let segment = steps.len();
             for s in &mut node_step[batch_start..i] {
                 *s = segment;
@@ -1499,9 +1396,7 @@ pub(crate) fn build_hybrid(
         max_outputs,
         input_starts,
         input_widths,
-        table_entries,
         output_types,
-        step_rerun,
         externs,
         constant,
         volatile,
@@ -1566,9 +1461,6 @@ pub(crate) fn build_hybrid(
     let mut ref_scratch: Vec<(usize, usize)> = Vec::new();
     let mut max_inputs = 0usize;
     let mut max_outputs = 0usize;
-    let handle_mask = handle_slot_mask_of(nodes, port_offsets, total_slots);
-    let mut step_rerun: Vec<bool> = Vec::new();
-    let mut table_entries: Vec<(usize, usize)> = Vec::new();
 
     for (node_idx, node) in nodes.iter().enumerate() {
         let input_slots = flatten_input_slots(
@@ -1585,9 +1477,6 @@ pub(crate) fn build_hybrid(
         max_outputs = max_outputs.max(output_slots.len());
 
         let scratch_start = scratch.len();
-        // A handle closure (SRD 115 §7) owns the next entries of the
-        // kernel's one table, exactly as in the JIT-enabled builder.
-        let entry_base = table_entries.len();
         let wire_types: Vec<crate::ast::PortType> = wiring[node_idx]
             .iter()
             .map(|src| match src {
@@ -1598,53 +1487,23 @@ pub(crate) fn build_hybrid(
                 WireSource::NodeOutput(j, p) => nodes[*j].meta().outs[*p].typ,
             })
             .collect();
-        // A copy of a table handle re-enters the value (axiom H4), so
-        // it owns an entry like a handle closure does.
-        let table_op =
-            crate::compile::assembly::table_copy_op(node.as_ref(), entry_base).or_else(|| {
-                if node.compiled_u64().is_some() {
-                    None
-                } else {
-                    node.compiled_handle(entry_base, &wire_types)
-                }
-            });
-        let op = if let Some(op) = table_op {
-            let mut slot = output_slots.iter().copied();
-            for port in &node.meta().outs {
-                let first = slot.next();
-                for _ in 1..port.typ.slot_width() {
-                    slot.next();
-                }
-                if port.typ.handle_kind() == Some(crate::ast::HandleKind::Table)
-                    && let Some(first) = first
-                {
-                    table_entries.push((first, table_entries.len()));
-                }
-            }
-            ClosureOp::U64(op)
-        } else if let Some(op) = node.compiled_u64() {
+        let op = if let Some(op) = node.compiled_u64() {
             ClosureOp::U64(op)
         } else if let Some(op) = crate::compile::assembly::identity_op(node.as_ref()) {
             ClosureOp::U64(op)
-        } else if let Some(kit) = node.compiled_slot() {
+        } else if let Some(kit) = ref_copy_or_slot(node.as_ref(), &wire_types) {
             scratch.extend(kit.scratch.iter().map(|e| crate::ast::ScratchBuf::new(*e)));
-            // Axiom S9(a): map this step's Ref output pairs to
-            // its scratch entries (port order — S3 contract).
             let starts = flatten_ref_output_starts(nodes, node_idx, port_offsets);
-            assert_eq!(
-                starts.len(),
-                kit.scratch.len(),
-                "slot-op scratch/Ref-output mismatch on '{}'",
-                node.meta().name
-            );
-            for (k, &slot) in starts.iter().enumerate() {
-                ref_scratch.push((slot, scratch_start + k));
-            }
+            ref_scratch.extend(crate::compile::assembly::scratch_pairs(
+                &node.meta().name,
+                &starts,
+                &kit.scratch,
+                scratch_start,
+            ));
             ClosureOp::Slot(kit.op)
         } else {
             return Err(format!("node '{}' has no compiled form", node.meta().name));
         };
-        step_rerun.push(output_slots.iter().any(|&s| handle_mask[s]));
         steps.push(HybridStep::Closure(ClosureStep {
             op,
             input_slots,
@@ -1671,9 +1530,7 @@ pub(crate) fn build_hybrid(
         max_outputs,
         input_starts,
         input_widths,
-        table_entries,
         output_types,
-        step_rerun,
         externs,
         constant,
         volatile,
@@ -1702,17 +1559,14 @@ fn build_pushpull_from_steps(
     max_outputs: usize,
     _input_starts: &[usize],
     input_widths: &[usize],
-    mut table_entries: Vec<(usize, usize)>,
     output_types: HashMap<String, crate::ast::PortType>,
-    step_rerun: Vec<bool>,
-    mut externs: crate::compile::externs::Externs,
+    externs: crate::compile::externs::Externs,
     constant: Vec<bool>,
     volatile: Vec<bool>,
     attribution: std::sync::Arc<crate::compile::Attribution>,
     node_step: Vec<usize>,
 ) -> Result<HybridKernelPushPull, String> {
     let step_count = steps.len();
-    debug_assert_eq!(step_rerun.len(), step_count);
     debug_assert_eq!(node_step.len(), nodes.len());
     debug_assert!(node_step.iter().all(|&s| s < step_count));
     // Node lists from the runtime model become step lists: a segment
@@ -1723,13 +1577,10 @@ fn build_pushpull_from_steps(
         v.dedup();
         v
     };
-    // Table-kind externs own entries after every segment's and closure's.
-    externs.renumber_entries(table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0));
-    table_entries.extend(externs.table_entries());
-    let table_len = table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0);
     // One slot past the layout is the tracker (A7).
     let mut buffer = vec![0u64; total_slots + 1];
-    externs.seed(&mut buffer);
+    let mut none = vec![false; total_slots];
+    let any_none = externs.seed(&mut buffer, Some(&mut none));
 
     // Compute per-node provenance and invert into per-input step dependents.
     // Since each step currently maps to one node, step index == node index.
@@ -1750,8 +1601,9 @@ fn build_pushpull_from_steps(
         })
         .collect();
 
+    let step_outs: Vec<&[usize]> = steps.iter().map(|s| s.output_slots()).collect();
     let slot_provenance =
-        compute_hybrid_slot_provenance(coord_count, total_slots, &step_dependents, &steps);
+        crate::compile::slot_provenance(coord_count, total_slots, &step_outs, &step_dependents);
 
     // The runtime model's lifecycle classification, passed in per node
     // from the one rule the interpreter's fold applies, folded onto the
@@ -1801,10 +1653,7 @@ fn build_pushpull_from_steps(
             scratch,
             ref_slots,
             ref_scratch,
-            table: crate::kernel::ValueTable::new(table_len),
-            table_entries,
             output_types,
-            step_rerun,
             externs,
             traversals: Vec::new().into(),
             resolved_outputs: Vec::new(),
@@ -1813,9 +1662,9 @@ fn build_pushpull_from_steps(
                 coords: Vec::new(),
                 stale: true,
             },
-            none: vec![false; total_slots],
+            none,
             ran: vec![0; step_count],
-            cycle: 0,
+            epoch: 0,
             all_ran: false,
             clean: vec![false; step_count],
             use_clean: true,
@@ -1828,26 +1677,38 @@ fn build_pushpull_from_steps(
             tracker: total_slots,
             all: (0..step_count).collect::<Vec<usize>>().into(),
             dirty: dirty.into(),
-            any_none: false,
+            any_none,
             volatile_steps: volatile_steps.into(),
-            owns_cycle: true,
         },
         slot_provenance,
-        changed_mask: u64::MAX, // all dirty on first eval
+        changed_mask: crate::kernel::ProvMask::all_below(coord_count), // all dirty on first eval
         force_run: false,
     };
     // The compile-constant fold of the runtime model, on this engine: a
     // step no input reaches runs at build, once, and is current from
     // then on, so what is knowable at build is known at build and fails
-    // at build. The fold runs inside whatever cycle the thread has
-    // open: a build opens no root cycle of its own (axiom H5), since a
-    // program is compiled inside a root's cycle too.
-    kernel.core.owns_cycle = false;
-    kernel.core.begin_cycle();
+    // at build.
+    kernel.core.begin_epoch();
     kernel.core.run_steps(&constants);
-    kernel.core.owns_cycle = true;
     kernel.core.drive.stale = true;
     Ok(kernel)
+}
+
+/// The slot kit for a closure step: a copy of a `Ref2` value into the
+/// step's own scratch (`identity`, a `__port_` passthrough; axiom S3),
+/// else the node's own kit.
+fn ref_copy_or_slot(
+    node: &dyn PolydatNode,
+    wire_types: &[crate::ast::PortType],
+) -> Option<crate::ast::CompiledSlotKit> {
+    let meta = node.meta();
+    if (meta.name == "identity" || meta.name.starts_with("__port_"))
+        && meta.outs.len() == 1
+        && meta.outs[0].typ.slot_color() == crate::ast::SlotColor::Ref2
+    {
+        return crate::compile::assembly::ref_copy_kit(meta.outs[0].typ);
+    }
+    node.compiled_slot(wire_types)
 }
 
 // ── The engine-independent surface (engine_parity.md, step 4) ──────
@@ -1861,7 +1722,7 @@ impl HybridKernelRaw {
 impl HybridKernelPull {
     /// The next evaluation runs whatever the cone guard says.
     fn mark_all_dirty(&mut self) {
-        self.changed_mask = u64::MAX;
+        self.changed_mask = crate::kernel::ProvMask::all_below(self.core.coord_count);
         self.force_run = true;
     }
 }
@@ -1872,7 +1733,7 @@ impl HybridKernelPushPull {
         for c in &mut self.core.clean {
             *c = false;
         }
-        self.changed_mask = u64::MAX;
+        self.changed_mask = crate::kernel::ProvMask::all_below(self.core.coord_count);
         self.force_run = true;
     }
 
@@ -1890,10 +1751,11 @@ impl HybridKernelPushPull {
     pub(crate) fn into_pull(self) -> HybridKernelPull {
         let mut core = self.core;
         core.set_use_clean(false);
+        let changed_mask = crate::kernel::ProvMask::all_below(core.coord_count);
         HybridKernelPull {
             core,
             slot_provenance: self.slot_provenance,
-            changed_mask: u64::MAX,
+            changed_mask,
             force_run: false,
         }
     }
@@ -1932,11 +1794,6 @@ macro_rules! hybrid_drive {
                 let coords = std::mem::take(&mut self.core.drive.coords);
                 self.eval(&coords);
                 self.core.drive.coords = coords;
-            }
-            /// Whether each cycle is a root cycle (SRD 115 §4). A state that
-            /// owns the cycle and wraps this kernel sets this false.
-            pub(crate) fn set_owns_cycle(&mut self, owns: bool) {
-                self.core.owns_cycle = owns;
             }
         }
     };

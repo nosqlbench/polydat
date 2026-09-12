@@ -55,8 +55,8 @@
 pub mod activation;
 mod api;
 mod api_impl;
-pub mod arena;
 pub(crate) mod engines;
+pub mod intern;
 pub mod interp;
 mod manifest;
 mod opt;
@@ -64,29 +64,18 @@ mod program;
 mod scope;
 mod state;
 pub mod subcontext;
-pub mod value_table;
 pub use activation::{Activation, CursorSlice, TraversalStream};
 
 pub(crate) use api::SharedKernel;
+pub(crate) use api::internals::KernelInternals;
 pub use api::{Construction, Dataflow, Kernel, KernelProgram, Metadata, WireKey, WriteError};
-pub use arena::{
-    ArenaMark, ArenaWriter, CycleArena, StaticInterner, TAG_ARENA, TAG_MASK, TAG_RES, TAG_STATIC,
-    begin_root_cycle, cycle_arena_mark, cycle_arena_release, cycle_arena_used, cycle_generation,
-    decode_arena_handle, encode_arena_handle, put_thread_bytes, put_thread_str,
-    resolve_thread_bytes, resolve_thread_str, with_cycle_arena,
-};
 pub use engines::*;
+pub use intern::{StaticInterner, static_pair};
 pub use manifest::{ManifestEntry, extract_manifest};
 pub use opt::KernelOptLevel;
 pub use program::*;
 pub use scope::{ScopeCoord, format_scope_coordinate_path};
 pub use state::*;
-pub(crate) use value_table::install_value_table_ptr;
-pub use value_table::{
-    TableInstallation, ValueTable, current_table_value, decode_arg, decode_table_handle,
-    encode_arg, encode_table_handle, install_value_table, read_table_json,
-    with_current_value_table, with_value_table, write_table_entry,
-};
 
 use crate::ast::Value;
 

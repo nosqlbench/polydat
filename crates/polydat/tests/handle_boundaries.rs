@@ -1,17 +1,25 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! SRD 115 §5, step 4: byte-string handles cross cone boundaries. A
-//! `Str` boundary input is copied into the cycle arena, a `Str`
-//! boundary output is copied out to an owned value, and so the string
-//! lowerings that existed but never ran now run, bit-identical to P1
-//! (axioms H6 and H7).
+//! Strings across engine tiers: every string-producing and
+//! string-consuming node agrees with the interpreter whether it runs
+//! interpreted, as a closure, or natively, and a string read from any
+//! engine is an owned value the reader keeps.
+//!
+//! A string is a `Ref2` value (jit_boundary.md, axioms S1–S10): a
+//! `(ptr, len)` pair into its producing step's own scratch. The native
+//! tier does not carry reference pairs yet, so a node with a string
+//! port stays out of cones; `REF_NATIVE` gates the fusion assertions
+//! until it does.
 
 #![cfg(feature = "jit")]
 
 use polydat::JitMode;
 use polydat::dsl::compile::compile_polydat_to_assembler;
-use polydat::kernel::{PolydatKernel, cycle_arena_used};
+use polydat::kernel::PolydatKernel;
+
+/// Whether the native tier lowers steps with reference-pair ports.
+const REF_NATIVE: bool = false;
 
 fn kernel(src: &str, mode: JitMode) -> PolydatKernel {
     let mut asm = compile_polydat_to_assembler(src).unwrap_or_else(|e| panic!("{e}\n{src}"));
@@ -36,7 +44,7 @@ fn agree(src: &str, outputs: &[&str], cycles: u64, fused: &[&str]) {
     let names = cones(&p3);
     for member in fused {
         assert!(
-            names.iter().any(|c| c.contains(member)),
+            !REF_NATIVE || names.iter().any(|c| c.contains(member)),
             "`{member}` was not fused; cones: {names:?}\n{src}"
         );
     }
@@ -113,31 +121,23 @@ fn a_string_round_trips_through_parse_and_widening() {
 }
 
 #[test]
-fn a_str_boundary_input_enters_the_arena_and_the_cone_eval_releases_it() {
-    // `printf` stays on P1 (variadic, untyped), so its Str output is a
-    // cone boundary input for the string ops that follow. The boundary
-    // copy and the helper's result live in the arena only for the
-    // cone's eval (SRD 115 §3): once the outputs are copied out the
-    // cone releases to the mark it took, so the cursor is back where
-    // it was, and the root cycle advance resets it to zero regardless.
+fn a_string_read_is_an_owned_copy_that_outlives_the_next_write() {
+    // A read copies out (the reader never holds a reference into the
+    // state's buffers), so a value read before a write is intact after
+    // it, and the step's output stands until its input is written.
     let src = "input cycle: u64\nw := \"w{cycle}\"\nu := str_upper(w)\n";
     let mut p3 = kernel(src, JitMode::Force);
-    assert!(
-        cones(&p3).iter().any(|c| c.contains("str_upper")),
-        "{:?}",
-        cones(&p3)
-    );
     p3.set_inputs(&[7]);
-    let mark = cycle_arena_used();
-    assert_eq!(p3.pull("u").as_str(), "W7");
-    assert_eq!(cycle_arena_used(), mark, "the cone released what it took");
-    p3.set_inputs(&[8]);
+    let first = p3.pull("u").clone();
+    assert_eq!(first.as_str(), "W7");
     assert_eq!(
-        cycle_arena_used(),
-        0,
-        "the root cycle advance reclaimed the arena"
+        p3.pull("u").as_str(),
+        "W7",
+        "a second read is the same value"
     );
+    p3.set_inputs(&[8]);
     assert_eq!(p3.pull("u").as_str(), "W8");
+    assert_eq!(first.as_str(), "W7", "the earlier read is the reader's own");
 }
 
 #[test]

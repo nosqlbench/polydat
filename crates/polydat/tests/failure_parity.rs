@@ -13,7 +13,7 @@ use polydat::dsl::compile::compile_polydat_to_assembler;
 use polydat::{Engine, JitMode, Kernel, KernelError, Provenance};
 
 fn engines() -> Vec<Engine> {
-    let mut all = vec![Engine::Interpreter];
+    let mut all = vec![Engine::Interpreter(JitMode::Off)];
     for m in [
         Provenance::Raw,
         Provenance::Push,
@@ -79,7 +79,8 @@ fn failure_with(
 /// Every engine that accepts the program fails with the interpreter's
 /// message, location aside, and the message carries the attribution.
 fn assert_same_failure(src: &str, drive: &dyn Fn(&mut dyn Kernel), expect: &[&str]) {
-    let want = failure(src, Engine::Interpreter, drive).expect("the interpreter runs everything");
+    let want = failure(src, Engine::Interpreter(JitMode::Off), drive)
+        .expect("the interpreter runs everything");
     for e in expect {
         assert!(want.contains(e), "interpreter message lacks {e:?}:\n{want}");
     }
@@ -157,9 +158,12 @@ fn the_attribution_names_the_context_and_the_original_message() {
 #[test]
 fn a_cone_names_the_member_that_failed() {
     let src = "input cycle: u64\ndoubled := mul(cycle, 2)\nchecked := in_range(doubled, 0, 5)\n";
-    let got = failure_with(src, Engine::Interpreter, JitMode::Force, &|k| {
-        k.set_inputs(&[10])
-    })
+    let got = failure_with(
+        src,
+        Engine::Interpreter(JitMode::Force),
+        JitMode::Force,
+        &|k| k.set_inputs(&[10]),
+    )
     .expect("the interpreter runs everything");
     for e in [
         "in_range: value 20 outside [0, 5]",

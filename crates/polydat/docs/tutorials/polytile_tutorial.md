@@ -14,7 +14,7 @@ and what the engines guarantee. Every program here is run by
 [`examples/polytile_tutorial.rs`](../../examples/polytile_tutorial.rs);
 the quoted outputs are what it prints. The complete grammar and
 semantics are in [Polytile](../design/polytile.md) (SRD 114); the compiled
-representation is in [Compiled Non-Scalar
+representation is in [Compiled By-Reference
 Slots](../design/compiled_handles.md) (SRD 115).
 
 Part one, sections 1 to 10, is the basics. Part two, sections 11 to 16,
@@ -746,10 +746,11 @@ hole where no value can go is caught before the first render.
 Polydat runs a program on one of three engine levels: the interpreter
 (P1), closures over a flat slot buffer (P2), and native code (P3), the
 default, either as native segments in a compiled kernel or as fused
-cones inside the interpreter's graph. Strings, JSON values, and rendered documents ride through the
-compiled levels as handles into a per-cycle arena and a value table,
-and a tile renders there by the same code path it renders on the
-interpreter. The result is bit-identical on every level:
+cones inside the interpreter's graph. Strings, JSON values, and rendered
+documents ride through the compiled levels as reference pairs into
+storage the producing step owns, and a tile renders there by the same
+code path it renders on the interpreter. The result is bit-identical on
+every level:
 
 ```polydat
 input cycle: u64
@@ -778,11 +779,8 @@ changes its meaning when the engine changes. The differential suite in `tests/ha
 holds that line over random programs of string, JSON, and tile nodes,
 including every corner case in this tutorial.
 
-One rule belongs to hosts that drive a whole compiled kernel directly:
-read a kernel's handle outputs, through `get_value`, before running
-another root kernel on the same thread, because each root kernel's
-cycle advance resets the thread's arena. The interpreter never hands
-out a handle, so nothing about this applies to `pull`.
+Every read, `pull` or `get_value`, copies the value out, so what a host
+holds is its own whatever the kernel, or any other kernel, does next.
 
 ## What a tile compiles to
 

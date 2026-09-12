@@ -13,7 +13,6 @@
 //! encoded holes, selects branches, and re-runs projection bodies per
 //! tuple over a scratch state, using a skeleton it parses once at setup.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -261,10 +260,7 @@ fn lower_ops(ops: &[TileOp]) -> Vec<RtOp> {
     use crate::kernel::StaticInterner;
     ops.iter()
         .map(|op| match op {
-            TileOp::Static(s) => {
-                let handle = StaticInterner::intern(s);
-                RtOp::Copy(StaticInterner::resolve_handle(handle).expect("just interned"))
-            }
+            TileOp::Static(s) => RtOp::Copy(StaticInterner::intern(s)),
             TileOp::Hole(h) => {
                 let (source, enc) = lower_source(h);
                 RtOp::Hole(source, enc)
@@ -275,16 +271,13 @@ fn lower_ops(ops: &[TileOp]) -> Vec<RtOp> {
                 sep,
                 body,
                 generators,
-            } => {
-                let sep_handle = StaticInterner::intern(sep);
-                RtOp::Repeat {
-                    stream: Arc::new(StreamerValue::from_json(stream)),
-                    child: *child,
-                    sep: StaticInterner::resolve_handle(sep_handle).expect("just interned"),
-                    body: lower_ops(body),
-                    generators: generators.clone(),
-                }
-            }
+            } => RtOp::Repeat {
+                stream: Arc::new(StreamerValue::from_json(stream)),
+                child: *child,
+                sep: StaticInterner::intern(sep),
+                body: lower_ops(body),
+                generators: generators.clone(),
+            },
             TileOp::Branch {
                 cond,
                 then,
@@ -426,11 +419,9 @@ impl TileProgram {
                     .into_program()
             })
             .collect();
-        // Both kernels serve the comprehension evaluator inside a render,
-        // so neither is a root of its own cycle (SRD 115, axiom H5).
         let canonicals: Vec<Arc<PolydatKernel>> = children
             .iter()
-            .map(|p| Arc::new(PolydatKernel::from_program_nested(p.clone())))
+            .map(|p| Arc::new(PolydatKernel::from_program(p.clone())))
             .collect();
         let mut ops = lower_ops(&spec.ops);
         number_child_holes(&mut ops);
@@ -469,7 +460,7 @@ impl TileProgram {
     /// every compiled kernel, and the interpreter's again where the
     /// default engine refused the body.
     fn body_program_on(&self, child: usize, engine: crate::Engine) -> Arc<dyn KernelProgram> {
-        if engine == crate::Engine::Interpreter {
+        if matches!(engine, crate::Engine::Interpreter(_)) {
             return self.children[child].clone();
         }
         self.compiled[child]
@@ -526,26 +517,34 @@ impl TileProgram {
     }
 
     /// Render with the node's wire inputs, the hole values, on the
-    /// interpreter.
-    pub fn render(&self, inputs: &[Value]) -> String {
+    /// interpreter, over `bodies`, the rendering state's own kernels
+    /// for the projection bodies.
+    pub fn render(&self, inputs: &[Value], bodies: &mut BodyKernels) -> String {
         let refs: Vec<ValueRef<'_>> = inputs.iter().map(ValueRef::from).collect();
         let mut out = String::new();
-        self.render_into(&refs, crate::Engine::Interpreter, &mut out);
+        self.render_into(
+            &refs,
+            crate::Engine::Interpreter(crate::JitMode::Auto),
+            bodies,
+            &mut out,
+        );
         out
     }
 
     /// Render into any text sink from borrowed views of the hole
-    /// values: a `String` at P1, the cycle arena writer in a compiled
-    /// closure or helper (SRD 115 §6). Every hole is encoded here, from
-    /// the view straight into the sink, and a projection's body runs
-    /// on `engine`, the engine of the kernel rendering.
+    /// values: a `String` at P1, a step's own scratch in a compiled
+    /// closure. Every hole is encoded here, from the view straight into
+    /// the sink, and a projection's body runs on `engine`, the engine
+    /// of the kernel rendering, in a kernel the rendering state owns
+    /// (`bodies`) and reuses across renders.
     pub fn render_into<W: std::fmt::Write>(
         &self,
         inputs: &[ValueRef<'_>],
         engine: crate::Engine,
+        bodies: &mut BodyKernels,
         out: &mut W,
     ) {
-        self.render_ops(&self.ops, inputs, engine, None, out);
+        self.render_ops(&self.ops, inputs, engine, bodies, None, out);
     }
 
     fn render_ops<W: std::fmt::Write>(
@@ -553,6 +552,7 @@ impl TileProgram {
         ops: &[RtOp],
         inputs: &[ValueRef<'_>],
         engine: crate::Engine,
+        bodies: &mut BodyKernels,
         mut child: Option<&mut BodyEntry>,
         out: &mut W,
     ) {
@@ -581,7 +581,7 @@ impl TileProgram {
                 } => {
                     let c = self.truthy(cond, inputs, child.as_deref_mut());
                     let branch = if c { then } else { otherwise };
-                    self.render_ops(branch, inputs, engine, child.as_deref_mut(), out);
+                    self.render_ops(branch, inputs, engine, bodies, child.as_deref_mut(), out);
                 }
                 RtOp::Repeat {
                     stream,
@@ -624,11 +624,12 @@ impl TileProgram {
                     };
                     let child_spec = &self.spec.children[*child_idx];
                     // The body runs compiled wherever the kernel rendering
-                    // is compiled, as a nested kernel over the body's program
-                    // for the default engine, reused across renders on this
-                    // thread; on the interpreter it runs interpreted.
+                    // is compiled, as a kernel over the body's program for
+                    // the default engine, owned by the rendering state and
+                    // reused across its renders; on the interpreter it runs
+                    // interpreted.
                     let engine = match engine {
-                        crate::Engine::Interpreter => engine,
+                        crate::Engine::Interpreter(_) => engine,
                         _ => crate::Engine::default(),
                     };
                     let program = self.body_program_on(*child_idx, engine);
@@ -639,7 +640,7 @@ impl TileProgram {
                             self.spec.name
                         )
                     };
-                    with_body_kernel(&program, engine, |entry| {
+                    bodies.with(&program, engine, |entry, bodies| {
                         for (index, tuple) in tuples.iter().enumerate() {
                             if !first {
                                 out.put(sep);
@@ -684,7 +685,7 @@ impl TileProgram {
                                     }
                                 }
                             }
-                            self.render_ops(body, inputs, engine, Some(entry), out);
+                            self.render_ops(body, inputs, engine, bodies, Some(entry), out);
                         }
                     });
                 }
@@ -779,29 +780,38 @@ fn bind_generators(
                         _ => vec![raw.clone()],
                     },
                 };
+            // An element declared `json` takes every item as the JSON
+            // value it is, its kind kept, so the body's extern receives
+            // what it declares; another declared type takes the scalar.
+            let json_items = ty == "json";
             let values = items
                 .iter()
-                .map(|v| match v {
-                    Value::U64(n) => LiteralValue::Int(*n as i64),
-                    Value::I64(n) => LiteralValue::Int(*n),
-                    Value::F64(f) => LiteralValue::Float(*f),
-                    Value::Bool(b) => LiteralValue::Bool(*b),
-                    // JSON scalars carry their own kind.
-                    Value::Json(j) => match j.as_ref() {
-                        serde_json::Value::Number(n) if n.is_u64() => {
-                            LiteralValue::Int(n.as_u64().unwrap_or(0) as i64)
-                        }
-                        serde_json::Value::Number(n) if n.is_i64() => {
-                            LiteralValue::Int(n.as_i64().unwrap_or(0))
-                        }
-                        serde_json::Value::Number(n) => {
-                            LiteralValue::Float(n.as_f64().unwrap_or(0.0))
-                        }
-                        serde_json::Value::Bool(b) => LiteralValue::Bool(*b),
-                        serde_json::Value::String(s) => LiteralValue::String(s.clone()),
-                        other => LiteralValue::String(other.to_string()),
-                    },
-                    other => LiteralValue::String(other.to_display_string()),
+                .map(|v| {
+                    if json_items {
+                        return LiteralValue::Json(json_of(v));
+                    }
+                    match v {
+                        Value::U64(n) => LiteralValue::Int(*n as i64),
+                        Value::I64(n) => LiteralValue::Int(*n),
+                        Value::F64(f) => LiteralValue::Float(*f),
+                        Value::Bool(b) => LiteralValue::Bool(*b),
+                        // JSON scalars carry their own kind.
+                        Value::Json(j) => match j.as_ref() {
+                            serde_json::Value::Number(n) if n.is_u64() => {
+                                LiteralValue::Int(n.as_u64().unwrap_or(0) as i64)
+                            }
+                            serde_json::Value::Number(n) if n.is_i64() => {
+                                LiteralValue::Int(n.as_i64().unwrap_or(0))
+                            }
+                            serde_json::Value::Number(n) => {
+                                LiteralValue::Float(n.as_f64().unwrap_or(0.0))
+                            }
+                            serde_json::Value::Bool(b) => LiteralValue::Bool(*b),
+                            serde_json::Value::String(s) => LiteralValue::String(s.clone()),
+                            other => LiteralValue::String(other.to_string()),
+                        },
+                        other => LiteralValue::String(other.to_display_string()),
+                    }
                 })
                 .collect();
             K::Clause {
@@ -847,6 +857,23 @@ fn bind_generators(
 
 /// Recover a typed value from the display text a cascaded wire arrives
 /// as, using the child extern's declared type.
+/// A generator item as a JSON value: a JSON item as it is, a scalar as
+/// the JSON of its kind.
+fn json_of(v: &Value) -> serde_json::Value {
+    match v {
+        Value::Json(j) => j.as_ref().clone(),
+        Value::U64(n) => serde_json::Value::from(*n),
+        Value::I64(n) => serde_json::Value::from(*n),
+        Value::F64(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        Value::Bool(b) => serde_json::Value::Bool(*b),
+        Value::Str(s) => serde_json::Value::String(s.to_string()),
+        Value::None => serde_json::Value::Null,
+        other => serde_json::Value::String(other.to_display_string()),
+    }
+}
+
 fn retype(v: &Value, ty: &str) -> Value {
     let text = v.to_display_string();
     match PortType::from_keyword(ty) {
@@ -886,58 +913,122 @@ impl BodyEntry {
     }
 }
 
-thread_local! {
-    /// One kernel per projection body program and engine per thread,
-    /// reused across renders so a projection creates nothing per tuple.
-    static BODY_KERNELS: RefCell<HashMap<(usize, crate::Engine), BodyEntry>> = RefCell::new(HashMap::new());
-    /// Body kernels created on this thread, by engine: a diagnostic for
-    /// the tests.
-    static BODIES_CREATED: RefCell<HashMap<crate::Engine, u64>> = RefCell::new(HashMap::new());
+/// The kernels one rendering state keeps over its projection bodies:
+/// one per body program and engine, created on the first render that
+/// reaches the body and reused by every render after, so a projection
+/// creates nothing per tuple. A tile render node owns one of these in
+/// its scratch (axiom S3): the storage belongs to the state that
+/// renders, never to the node, which every state of the program
+/// shares. A clone is empty, since a clone of a state is a new state.
+#[derive(Default)]
+pub struct BodyKernels {
+    entries: HashMap<(usize, crate::Engine), BodyEntry>,
+    /// Kernels created so far, for the tests.
+    created: u64,
 }
 
-/// Distinct body programs one thread will keep kernels for before
-/// starting over. Bounds the cache when programs are compiled and
-/// dropped in a loop.
-const SCRATCH_LIMIT: usize = 64;
-
-/// Projection body kernels created on this thread for `engine`.
-#[doc(hidden)]
-pub fn body_kernels_created(engine: crate::Engine) -> u64 {
-    BODIES_CREATED.with(|m| m.borrow().get(&engine).copied().unwrap_or(0))
+impl Clone for BodyKernels {
+    fn clone(&self) -> Self {
+        Self::default()
+    }
 }
 
-fn with_body_kernel(
-    program: &Arc<dyn KernelProgram>,
-    engine: crate::Engine,
-    f: impl FnOnce(&mut BodyEntry),
-) {
-    // The entry pins its program so the address cannot be reused by a
-    // later program while a kernel built for this one is still cached.
-    let key = (Arc::as_ptr(program) as *const () as usize, engine);
-    let mut entry = BODY_KERNELS
-        .with(|m| m.borrow_mut().remove(&key))
-        .filter(|e| Arc::ptr_eq(&e.program, program))
-        .unwrap_or_else(|| {
-            // A body runs inside the enclosing cycle: it must never
-            // reset the thread's arena (SRD 115, axiom H5).
-            let kernel = program.clone().create_nested_kernel();
-            BODIES_CREATED.with(|m| *m.borrow_mut().entry(engine).or_insert(0) += 1);
-            BodyEntry {
-                program: program.clone(),
-                kernel,
-                elements: None,
-                cascade: None,
-                holes: Vec::new(),
-            }
-        });
-    f(&mut entry);
-    BODY_KERNELS.with(|m| {
-        let mut m = m.borrow_mut();
-        if m.len() >= SCRATCH_LIMIT {
-            m.clear();
+// SAFETY: the kernels are reached only through `&mut self` (`with`),
+// which the owning state holds exclusively; every `&self` method
+// (`created`, `clone`, `Debug`) reads a count and touches no kernel. A
+// set inside a program shared across threads is therefore never used
+// from more than one thread, and a state created from that program
+// starts with an empty set of its own.
+unsafe impl Sync for BodyKernels {}
+
+impl std::fmt::Debug for BodyKernels {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BodyKernels")
+            .field("entries", &self.entries.len())
+            .field("created", &self.created)
+            .finish()
+    }
+}
+
+/// The engine a body kernel is kept under: the interpreter's body
+/// program is one program whatever the enclosing kernel's cone mode.
+fn body_engine_key(engine: crate::Engine) -> crate::Engine {
+    match engine {
+        crate::Engine::Interpreter(_) => crate::Engine::Interpreter(crate::JitMode::Auto),
+        other => other,
+    }
+}
+
+impl BodyKernels {
+    /// Kernels this state has created so far.
+    pub fn created(&self) -> u64 {
+        self.created
+    }
+
+    /// The count and a clone, for the unit test of both.
+    #[cfg(test)]
+    fn clone_for_test(&self) -> (u64, BodyKernels) {
+        (self.created, self.clone())
+    }
+
+    /// Run `f` over the kernel for `program` on `engine`, created on
+    /// first use. The entry is taken out for the call, so a nested
+    /// projection's body finds the set free for its own kernels.
+    fn with(
+        &mut self,
+        program: &Arc<dyn KernelProgram>,
+        engine: crate::Engine,
+        f: impl FnOnce(&mut BodyEntry, &mut BodyKernels),
+    ) {
+        let engine = body_engine_key(engine);
+        // The entry pins its program so the address cannot be reused by
+        // a later program while a kernel built for this one is kept.
+        let key = (Arc::as_ptr(program) as *const () as usize, engine);
+        let mut entry = self
+            .entries
+            .remove(&key)
+            .filter(|e| Arc::ptr_eq(&e.program, program))
+            .unwrap_or_else(|| {
+                self.created += 1;
+                BodyEntry {
+                    program: program.clone(),
+                    kernel: program.clone().create_kernel(),
+                    elements: None,
+                    cascade: None,
+                    holes: Vec::new(),
+                }
+            });
+        f(&mut entry, self);
+        self.entries.insert(key, entry);
+    }
+}
+
+/// The tile render node's state: its projection bodies' kernels.
+pub(crate) mod render_state {
+    use super::{BodyKernels, TileRender};
+    use crate::ast::{ScratchBuf, ScratchElem, Value};
+
+    pub(crate) fn layout(_node: &TileRender) -> Vec<ScratchElem> {
+        vec![ScratchElem::Kernels]
+    }
+
+    pub(crate) fn eval(
+        node: &TileRender,
+        scratch: &mut [ScratchBuf],
+        inputs: &[Value],
+        outputs: &mut [Value],
+    ) {
+        let bodies = bodies_of(&mut scratch[0]);
+        outputs[0] = Value::Str(node.program.render(inputs, bodies).into());
+    }
+
+    /// The body kernel set a scratch entry holds.
+    pub(crate) fn bodies_of(entry: &mut ScratchBuf) -> &mut BodyKernels {
+        match entry {
+            ScratchBuf::Kernels(b) => b,
+            other => panic!("a tile render's scratch holds {other:?}, not its body kernels"),
         }
-        m.insert(key, entry);
-    });
+    }
 }
 
 /// A text sink that cannot fail: a `String`, or the cycle arena writer
@@ -1115,6 +1206,9 @@ fn formatted_text<'a>(
     let base = |value: ValueRef<'a>| -> Cow<'a, str> {
         match (ty, value) {
             (Some("bool"), v) => Cow::Owned(truthy_of(v).to_string()),
+            // Text quotes nothing: a JSON string in a text position is
+            // its text, as a `str` hole is.
+            (_, ValueRef::Json(serde_json::Value::String(s))) => Cow::Owned(s.clone()),
             (_, ValueRef::Json(j)) => Cow::Owned(j.to_string()),
             (_, v) => v.display(),
         }
@@ -1205,57 +1299,76 @@ fn tile_encode(
 /// arena; nothing is decoded into an owned `Value` on the way. A wire
 /// wider than one slot, or of a kind without a view, is read as a value
 /// through the typed decoder.
-fn tile_render_compiled(
-    node: &TileRender,
-    _entry_base: usize,
-    wire_types: &[PortType],
-) -> crate::ast::CompiledU64Op {
+fn tile_render_compiled(node: &TileRender, wire_types: &[PortType]) -> crate::ast::CompiledSlotKit {
     let program: &'static TileProgram = TileProgram::interned(&node.spec);
-    // Per wire: its first slot, its type, and its view code where the
-    // wire is one slot of a kind `arg_ref` reads.
-    let mut reads: Vec<(usize, PortType, Option<u8>)> = Vec::with_capacity(wire_types.len());
+    // Per wire: its first slot and its type; a one-slot carrier or a
+    // `Ref2` kind is viewed in place, a two-slot immediate is decoded.
+    let mut reads: Vec<(usize, PortType)> = Vec::with_capacity(wire_types.len());
     let mut offset = 0usize;
     for &ty in wire_types {
-        let code = if ty.slot_width() == 1 {
-            crate::compile::marshal::type_code(ty)
-        } else {
-            None
-        };
-        reads.push((offset, ty, code));
+        reads.push((offset, ty));
         offset += ty.slot_width().max(1);
     }
-    Box::new(move |inputs: &[u64], outputs: &mut [u64]| {
-        // Owned values only for the wires without a view; they keep
-        // their positions, so the views are built once they are all in
-        // place.
-        let owned_values: Vec<Value> = reads
-            .iter()
-            .filter(|(_, _, code)| code.is_none())
-            .map(|&(offset, ty, _)| {
-                crate::kernel::with_current_value_table(|t| {
-                    crate::compile::marshal::decode_output(inputs, offset, ty, t)
-                })
-            })
-            .collect();
-        let mut next_owned = 0usize;
-        let refs: Vec<ValueRef<'_>> = reads
-            .iter()
-            .map(|&(offset, _, code)| match code {
-                Some(code) => crate::compile::marshal::arg_ref(code, inputs[offset]),
-                None => {
-                    let v = ValueRef::from(&owned_values[next_owned]);
-                    next_owned += 1;
-                    v
-                }
-            })
-            .collect();
-        // A body runs compiled wherever the kernel rendering is compiled:
-        // this closure serves the closure tier and a hybrid kernel's
-        // closure steps alike, so the body takes the default engine.
-        let mut w = crate::kernel::ArenaWriter::new();
-        program.render_into(&refs, crate::Engine::default(), &mut w);
-        outputs[0] = w.finish();
-    })
+    crate::ast::CompiledSlotKit {
+        scratch: vec![
+            crate::ast::ScratchElem::Str,
+            crate::ast::ScratchElem::Kernels,
+        ],
+        op: Box::new(
+            move |inputs: &[u64], outputs: &mut [u64], scratch: &mut [crate::ast::ScratchBuf]| {
+                // Owned values only for the two-slot immediates; they keep
+                // their positions, so the views are built once they are
+                // all in place.
+                let owned_values: Vec<Value> = reads
+                    .iter()
+                    .filter(|(_, ty)| ty.slot_color() == crate::ast::SlotColor::Imm2)
+                    .map(|&(offset, ty)| crate::compile::marshal::decode_output(inputs, offset, ty))
+                    .collect();
+                let mut next_owned = 0usize;
+                let refs: Vec<ValueRef<'_>> = reads
+                    .iter()
+                    .map(|&(offset, ty)| {
+                        if ty.slot_color() == crate::ast::SlotColor::Imm2 {
+                            let v = ValueRef::from(&owned_values[next_owned]);
+                            next_owned += 1;
+                            v
+                        } else {
+                            // SAFETY: a pair in the buffer was published by
+                            // a producer whose storage is alive (S3, S4).
+                            unsafe { crate::compile::marshal::arg_ref(ty, &inputs[offset..]) }
+                        }
+                    })
+                    .collect();
+                // The document is rendered straight into this step's own
+                // scratch (axiom S3). A body runs compiled wherever the
+                // kernel rendering is compiled: this closure serves the
+                // closure tier and a hybrid kernel's closure steps alike,
+                // so the body takes the default engine.
+                let (text, bodies) = scratch.split_at_mut(1);
+                let crate::ast::ScratchBuf::Str(buf) = &mut text[0] else {
+                    unreachable!("the render step owns a string entry");
+                };
+                let bodies = render_state::bodies_of(&mut bodies[0]);
+                buf.clear();
+                let mut w = BytesSink(buf);
+                program.render_into(&refs, crate::Engine::default(), bodies, &mut w);
+                let (p, l) = scratch[0].ptr_len();
+                outputs[0] = p;
+                outputs[1] = l;
+            },
+        ),
+    }
+}
+
+/// A text sink over the bytes of a step's string scratch: what a
+/// compiled render writes into.
+pub(crate) struct BytesSink<'a>(pub(crate) &'a mut Vec<u8>);
+
+impl std::fmt::Write for BytesSink<'_> {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        self.0.extend_from_slice(s.as_bytes());
+        Ok(())
+    }
 }
 
 /// Render a compiled tile skeleton over its encoded hole texts. Authors
@@ -1263,19 +1376,51 @@ fn tile_render_compiled(
 #[crate::polydat_node(
     category = Formatting,
     variadic_min = 0,
-    compiled_handle = tile_render_compiled
+    compiled_slot = tile_render_compiled,
+    state = render_state
 )]
 fn tile_render(
     spec: Const<&str>,
     #[poly_const(TileProgram::from_json, from = spec)] program: &TileProgram,
     values: &[Value],
 ) -> String {
-    program.render(values)
+    // A render without a state's scratch (a node evaluated on its
+    // own): body kernels of the call's own.
+    program.render(values, &mut BodyKernels::default())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A rendering state's body kernels are created on the first
+    /// render that reaches a projection and reused by every render
+    /// after; a clone of the set is a new, empty set.
+    #[test]
+    fn body_kernels_are_created_once_per_state_and_reused() {
+        let src =
+            "input cycle: u64\ntile t : text := \"@for k in 0..3 sep \\\",\\\" {${k + cycle}}\"\n";
+        let mut k = crate::dsl::compile_polydat(src).unwrap();
+        let program = k.program();
+        let node = (0..program.node_count())
+            .find(|&i| program.node_meta(i).name == "tile_render")
+            .expect("the tile's render node");
+        let bodies_of = |k: &mut PolydatKernel| match &k.state().core.node_scratch[node][0] {
+            crate::ast::ScratchBuf::Kernels(b) => b.clone_for_test(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(bodies_of(&mut k).0, 0, "nothing before the first render");
+        k.set_inputs(&[10]);
+        assert_eq!(k.pull("t").as_str(), "10,11,12");
+        assert_eq!(bodies_of(&mut k).0, 1, "one kernel for the body");
+        for c in 0..5u64 {
+            k.set_inputs(&[c]);
+            let _ = k.pull("t");
+        }
+        let (created, clone) = bodies_of(&mut k);
+        assert_eq!(created, 1, "reused across renders");
+        assert_eq!(clone.created(), 0, "a clone is a new state's empty set");
+    }
 
     fn enc(
         encoding: &str,

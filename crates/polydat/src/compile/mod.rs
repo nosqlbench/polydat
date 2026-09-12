@@ -108,6 +108,43 @@ macro_rules! ref_readers {
 }
 pub(crate) use ref_readers;
 
+/// The provenance of every buffer slot: which input slots reach it,
+/// as an exact multi-word mask, for the pull-side cone guard of every
+/// compiled kernel. `input_dependents` is indexed by input slot (a
+/// multi-slot input repeats its list per slot) and lists the steps
+/// downstream of that slot; `step_output_slots` gives each step's
+/// output slots, which all take the step's mask. A coordinate slot's
+/// provenance is itself.
+pub(crate) fn slot_provenance(
+    coord_count: usize,
+    total_slots: usize,
+    step_output_slots: &[&[usize]],
+    input_dependents: &[Vec<usize>],
+) -> Vec<crate::kernel::ProvMask> {
+    use crate::kernel::ProvMask;
+    let step_count = step_output_slots.len();
+    let mut step_prov: Vec<ProvMask> = (0..step_count).map(|_| ProvMask::empty()).collect();
+    for (input_slot, deps) in input_dependents.iter().enumerate() {
+        for &step in deps {
+            if step < step_count {
+                step_prov[step].set(input_slot);
+            }
+        }
+    }
+    let mut slots: Vec<ProvMask> = (0..total_slots).map(|_| ProvMask::empty()).collect();
+    for (i, slot) in slots.iter_mut().enumerate().take(coord_count) {
+        slot.set(i);
+    }
+    for (step, outs) in step_output_slots.iter().enumerate() {
+        for &slot in outs.iter() {
+            if slot < slots.len() {
+                slots[slot] = step_prov[step].clone();
+            }
+        }
+    }
+    slots
+}
+
 /// The coordinates a host set last on a compiled kernel and whether
 /// they have been evaluated: what the [`Kernel`](crate::kernel::Kernel)
 /// trait's `set_inputs` and `pull` keep between calls.
@@ -231,6 +268,30 @@ macro_rules! impl_kernel_trait {
                 })?;
                 crate::kernel::activation::open_traversal(self, traversal)
             }
+            fn invalidate_all(&mut self) {
+                self.mark_all_dirty();
+                self.core.invalidate_all();
+            }
+            fn shared_cells(&self) -> Vec<crate::kernel::SharedCellEntry> {
+                self.core.externs.shared_cells()
+            }
+            fn attach_shared_cell(
+                &mut self,
+                name: &str,
+                cell: crate::kernel::SharedCell,
+            ) -> Result<(), String> {
+                self.core.attach_cell(name, cell)
+            }
+            fn into_program(
+                mut self: Box<Self>,
+            ) -> std::sync::Arc<dyn crate::kernel::KernelProgram> {
+                self.mark_all_dirty();
+                self.core.drive.stale = true;
+                std::sync::Arc::new(crate::kernel::SharedKernel(*self))
+            }
+        }
+
+        impl crate::kernel::KernelInternals for $ty {
             /// A compiled kernel keeps the traversals; each carries the
             /// comprehension its producer resolved to at compile time.
             fn set_traversals(
@@ -239,10 +300,6 @@ macro_rules! impl_kernel_trait {
                 _producers: Vec<crate::dsl::traversal::Producer>,
             ) {
                 self.core.traversals = traversals.into();
-            }
-            fn invalidate_all(&mut self) {
-                self.mark_all_dirty();
-                self.core.invalidate_all();
             }
             fn slot_value(&self, slot: usize, ty: crate::ast::PortType) -> crate::ast::Value {
                 self.core.slot_value(slot, ty)
@@ -255,29 +312,9 @@ macro_rules! impl_kernel_trait {
             fn set_cursor_extent(&mut self, index: usize, extent: u64) {
                 self.core.externs.set_cursor_extent(index, extent);
             }
-            fn nest(&mut self) {
-                self.set_owns_cycle(false);
-            }
-            fn shared_cells(&self) -> Vec<crate::kernel::SharedCellEntry> {
-                self.core.externs.shared_cells()
-            }
-            fn attach_shared_cell(
-                &mut self,
-                name: &str,
-                cell: crate::kernel::SharedCell,
-            ) -> Result<(), String> {
-                self.core.attach_cell(name, cell)
-            }
             fn reset_to_program(&mut self) {
                 self.core.externs.reset_to_program(&mut self.core.buffer);
                 self.mark_all_dirty();
-            }
-            fn into_program(
-                mut self: Box<Self>,
-            ) -> std::sync::Arc<dyn crate::kernel::KernelProgram> {
-                self.mark_all_dirty();
-                self.core.drive.stale = true;
-                std::sync::Arc::new(crate::kernel::SharedKernel(*self))
             }
         }
     };
@@ -366,17 +403,11 @@ pub(crate) struct NodeSite {
 }
 
 impl Attribution {
-    /// The inputs of `step` as diagnostic text, from the buffer: `None`
-    /// where the mask says so, the port type alone for a vector (as the
-    /// interpreter prints one), and the port type again where the slot
-    /// cannot be decoded, so the report itself never fails.
-    fn inputs_of(
-        &self,
-        step: usize,
-        buffer: &[u64],
-        none: Option<&[bool]>,
-        table: &crate::kernel::ValueTable,
-    ) -> Vec<String> {
+    /// The inputs of `step` as diagnostic text, from the buffer, each
+    /// copied out and printed as the interpreter prints the same value:
+    /// `None` where the mask says so, and the port type alone where the
+    /// slot cannot be decoded, so the report itself never fails.
+    fn inputs_of(&self, step: usize, buffer: &[u64], none: Option<&[bool]>) -> Vec<String> {
         let Some(site) = self.sites.get(step) else {
             return Vec::new();
         };
@@ -387,12 +418,9 @@ impl Attribution {
                 if none.is_some_and(|m| m.get(slot).copied().unwrap_or(false)) {
                     return "None".to_string();
                 }
-                if ty.slot_color() == crate::ast::SlotColor::Ref2 {
-                    return format!("{ty:?}");
-                }
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     crate::kernel::engines::format_value_for_diag(&marshal::decode_output(
-                        buffer, slot, ty, table,
+                        buffer, slot, ty,
                     ))
                 }))
                 .unwrap_or_else(|_| format!("{ty:?}"))
@@ -410,7 +438,6 @@ impl Attribution {
         step: usize,
         buffer: &[u64],
         none: Option<&[bool]>,
-        table: &crate::kernel::ValueTable,
     ) -> ! {
         let site = self.sites.get(step);
         let name = site
@@ -419,7 +446,7 @@ impl Attribution {
         let outputs: Vec<&str> = site
             .map(|s| s.outputs.iter().map(String::as_str).collect())
             .unwrap_or_default();
-        let inputs = self.inputs_of(step, buffer, none, table);
+        let inputs = self.inputs_of(step, buffer, none);
         let enriched =
             crate::kernel::engines::enrich_panic(payload, &name, &outputs, &self.context, &inputs);
         crate::kernel::engines::reraise_enriched(enriched)

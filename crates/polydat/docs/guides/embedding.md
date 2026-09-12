@@ -73,9 +73,10 @@ cycle 1: user_id=822465 score=0.230 label=user-822465
 cycle 2: user_id=348110 score=0.219 label=user-348110
 ```
 
-`set_inputs` writes the coordinate tuple and advances the cycle; `pull`
-evaluates the output's cone on demand and caches within the cycle, so
-pulling the same wire twice costs one evaluation. Values come back as
+`set_inputs` writes the coordinate tuple; `pull` evaluates the output's
+cone on demand and caches until an input the output depends on is
+written again, so pulling the same wire twice costs one evaluation.
+Values come back as
 an owned `Value` with typed accessors (`as_u64`, `as_f64`, `as_str`,
 `as_bool`) that panic on a type mismatch, which is a host bug: the
 program's types are known at compile time and the host is expected to
@@ -163,7 +164,7 @@ fixed.set_inputs(&[7]);
 println!("transformed: {}", fixed.pull("key").as_str());
 
 // The interpreter has the same slots behind the same calls.
-let mut p1 = compile_polydat_with(src, Engine::Interpreter)?;
+let mut p1 = compile_polydat_with(src, Engine::Interpreter(JitMode::Auto))?;
 p1.set_input("region", Value::Str("eu-west".into()))?;
 p1.set_input("scale", Value::U64(1000))?;
 p1.set_inputs(&[7]);
@@ -177,12 +178,13 @@ transformed: ap-south/7
 interpreter, overridden: eu-west/487
 ```
 
-Every engine treats an extern the same way. A compiled kernel gives it a
-slot after the coordinates, seeds the default when the kernel is built,
-and `set_input` by name writes a number or boolean into its slot at
-once and a string, JSON, or extension value afresh at the start of
-every run, so its handle always belongs to the cycle that reads it; the
-interpreter keeps it as a value in the state. Setting an extern marks
+Every engine treats an extern the same way. A compiled kernel gives it
+slots after the coordinates, seeds the default when the kernel is
+built, and `set_input` by name writes a number or boolean into its slot
+at once and a string, JSON, or extension value into the value the
+kernel stores for it, with the slots pointing at that value until the
+next write; the interpreter keeps it as a value in the state. Setting
+an extern marks
 everything downstream of it for recomputation. The compiled `set_input`
 checks the value against the declared port type and refuses a mismatch
 by name; the interpreter's checks a `shared` binding's cell and
@@ -317,8 +319,8 @@ constraints such as `#[constraint(NonZeroU64)]` on a parameter.
 Every node the attribute accepts runs on the interpreter, the closure
 tier, and hybrid kernels: the interpreter calls the body, and the
 closure tier calls the generated closure, which carries scalars in
-slots and strings, JSON, and host values through the handle boundary
-of [Compiled Non-Scalar Slots](../design/compiled_handles.md) (§7
+slots and strings, JSON, and host values as the reference pairs of
+[Compiled By-Reference Slots](../design/compiled_handles.md) (§5
 there describes the closure kits). Pure native code runs a node only
 when it has a native lowering; a host never needs one for correctness,
 only for speed, and [Engine Parity](../design/engine_parity.md) records
@@ -404,14 +406,14 @@ Three things to know about extension values:
   producers and consumers, and keep them in one crate so the downcast
   can see the concrete type.
 - **Extension nodes have a closure form but no native one.** An
-  extension value rides the compiled engines as a table handle, the same
-  way JSON does, so the closure tier and the hybrid kernel of §11 run a
-  node with an `Ext` signature as a closure step. Pure native code
-  refuses it. The scalar work around it is still native: in the run
-  above the hashing and scaling ran as native segments while the two
-  host nodes ran as closure steps, and a native neighbour reads the
-  value through the table handle described in
-  [Compiled Non-Scalar Slots](../design/compiled_handles.md).
+  extension value rides the compiled engines as a reference pair to
+  the value its producing step owns, the same way JSON does, so the
+  closure tier and the hybrid kernel of §11 run a node with an `Ext`
+  signature as a closure step. Pure native code refuses it. The scalar
+  work around it is still native: in the run above the hashing and
+  scaling ran as native segments while the two host nodes ran as
+  closure steps, passing the value between them as the pair described
+  in [Compiled By-Reference Slots](../design/compiled_handles.md).
 - **The value is cloned on every read.** `Ext<T>::extract` clones the
   boxed value, so a large host type should hold its payload in an `Arc`.
   The crate's own `Partition` and `Streamer` values do exactly that.
@@ -605,7 +607,7 @@ for engine in [
 let p3 = compile_polydat_kernel(src)?;
 println!("Engine::default() is {}", p3.engine());
 println!("P3 plan: {}", p3.plan());
-let mut p1 = compile_polydat_with(src, Engine::Interpreter)?;
+let mut p1 = compile_polydat_with(src, Engine::Interpreter(JitMode::Auto))?;
 for cycle in [0u64, 1] {
     p1.set_inputs(&[cycle]);
     let want = p1.pull("j").to_display_string();
@@ -620,7 +622,7 @@ for cycle in [0u64, 1] {
 
 ```text
 Engine::default() is native (Pull)
-P3 plan: 4 native segment(s), 3 closure step(s)
+P3 plan: 4 native segment(s), 6 closure step(s)
 cycle 0: j={"h": 16294208416658607535, "name": "user-16294208416658607535", "tag": "job-7535", "cell": "L4:10:13"}
   closures (Pull) agrees: true
   native (Pull) agrees: true
@@ -637,7 +639,7 @@ gets `Raw`. P3 runs its nineteen native-eligible nodes as four native
 segments, one per run of them between the host nodes and on either
 side of a compile-time constant, and the three host nodes as closure
 steps, with the extension value passing between
-two of them as a table handle; `plan()` is the only planning detail
+two of them as a reference pair; `plan()` is the only planning detail
 a kernel exposes, on every engine, so a host can see whether a program is mostly native before
 deciding to care. An engine that cannot run a program at all, the
 closure tier on a vector-typed extern for one, says so as the error,
@@ -661,14 +663,12 @@ consumer reads `None` through it; the compile log names each such
 extern.
 
 `pull` returns an owned value on every engine: a string, JSON document,
-or rendered tile is copied out of the arena or the value table the
-kernel produced it in, so a host holding a `dyn Kernel` never sees a
-handle. The concrete compiled kernel types keep their raw readers as
-extras (`get` for a scalar slot, `get_value` for a typed copy,
-`eval(&[u64])`), and those come with the one rule of
-[Compiled Non-Scalar Slots](../design/compiled_handles.md) §4, axiom H3:
-read a kernel's handle outputs before running another root kernel on
-the same thread, because the next kernel's cycle reclaims the arena.
+or rendered tile is copied out of the kernel's own storage, so a host
+holding a `dyn Kernel` never holds a reference into a kernel, and a
+value read before a write is intact after it. The concrete compiled
+kernel types keep their raw readers as extras (`get` for a scalar slot,
+`get_value` for a typed copy, `eval(&[u64])`); `get` refuses a
+by-reference slot, and `get_value` copies it out.
 
 A kernel on any engine shares its program across threads the way §4
 shows for the interpreter: `into_program` gives an
@@ -787,8 +787,8 @@ compile events: 4
   Info: TileHoleTyped { tile: "t", hole: "f | .2", wire_type: "f64", declared: None, expectation: "any JSON value (f64)", encoder: "json number, format .2", adapter: None }
   Info: TileCompiled { tile: "t", encoding: "json", statics: 3, static_bytes: 14, holes: 2, branches: 0, projections: 0, bodies: [] }
   Info: ConstantFolded { node: "const_f64", value: "3.0" }
-nodes: 3, deterministic: true
-node names: ["const_f64", "__port_cycle", "jit_cone[hash+to_f64+f64_div+tile_render]"]
+nodes: 4, deterministic: true
+node names: ["const_f64", "__port_cycle", "jit_cone[hash+to_f64+f64_div]", "tile_render"]
 compile events on the default engine: 4
 ```
 
@@ -804,8 +804,10 @@ list, so a host that wants a strict build can fail on any event whose
 level is a warning. Cone fusion is not an
 event: the node list shows what the interpreter's program is actually
 running, one constant, the passthrough that exposes the coordinate as
-an output, and one native cone that fused the hash, the conversion, the
-division, both hole encoders, and the tile renderer. The log is the
+an output, one native cone that fused the hash, the conversion, and the
+division, and the tile renderer, which produces a string and so runs
+as a node of its own until native code carries by-reference values
+(compiled_handles.md §6). The log is the
 same on every engine: the default engine records the same four events,
 the hole typings and the compiled tile from the assembly and the
 constant its own build folded, and every extern without a default is

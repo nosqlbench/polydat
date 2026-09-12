@@ -437,32 +437,33 @@ fn an_extern_set_to_the_wrong_type_is_refused_by_name() {
     assert_eq!(p2.externs().len(), 4);
 }
 
-/// Pure native code with externs. The program uses only nodes with a
-/// native form, so the whole kernel lowers; the externs, the extension
-/// value included, reach it through their passthroughs and are set by
-/// the host between runs.
+/// Pure native code with externs. Carrier externs reach native code
+/// through their slots and are set by the host between runs; a program
+/// whose externs feed nodes with a by-reference output is refused by
+/// name, since native code carries no reference slots yet
+/// (compiled_handles.md §6).
 #[cfg(feature = "jit")]
 #[test]
 fn externs_agree_between_interpreter_and_pure_native_code() {
     const SRC: &str = "input cycle: u64\n\
         extern scale: u64 = 10\n\
-        extern label: str = \"lbl\"\n\
-        extern doc: json\n\
-        extern region: ext\n\
+        extern offset: u64 = 3\n\
         h := hash(cycle)\n\
         id := mod_wire(h, scale)\n\
-        tag := str_concat(label, \"-\")\n\
-        text := json_to_str(doc)\n\
-        line := printf(\"{}/{}/{}\", tag, id, text)\n";
+        n := u64_add(id, offset)\n\
+        f := to_f64(n) / 2.0\n";
     let mut p1 = polydat::dsl::compile::compile_polydat(SRC).expect("interpreter");
     let mut p3 = compile_polydat_to_assembler(SRC)
         .unwrap()
         .try_compile_pure_jit()
-        .expect("pure native code with externs");
-    let all = ["id", "tag", "text", "line", "region"];
+        .expect("pure native code with carrier externs");
+    let all = ["id", "n", "f"];
     for round in 0..3u64 {
-        let (doc_n, region) = (round * 7, ["east", "west", "north"][round as usize]);
-        for (name, value) in host_values(doc_n, region) {
+        let host = [
+            ("scale", Value::U64(100 + round)),
+            ("offset", Value::U64(round * 7)),
+        ];
+        for (name, value) in host {
             p1.set_input(name, value.clone()).expect("P1 set_input");
             p3.set_input(name, value).expect("P3 set_input");
         }
@@ -486,4 +487,13 @@ fn externs_agree_between_interpreter_and_pure_native_code() {
             }
         }
     }
+    let err = compile_polydat_to_assembler(EXTERNS)
+        .unwrap()
+        .try_compile_pure_jit()
+        .err()
+        .expect("string, JSON, and extension externs feed by-reference outputs");
+    assert!(
+        err.contains("Ref2") && err.contains("reference slots"),
+        "the refusal names the color: {err}"
+    );
 }

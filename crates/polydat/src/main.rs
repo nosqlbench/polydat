@@ -24,7 +24,7 @@ use polydat::dsl::ast::TileOptions;
 use polydat::dsl::ast::{Statement, WireModifier};
 use polydat::dsl::events::{CompileEvent, CompileEventLog};
 use polydat::dsl::transform::{apply_tile_defaults, assign_values, parse_assignment};
-use polydat::dsl::{CompileOptions, compile_ast_with_engine, compile_ast_with_options};
+use polydat::dsl::{CompileOptions, compile_ast_with_engine};
 use polydat::iteration::cursor_partition::{Partition, cursor_over_partitions_on};
 use polydat::kernel::activation::Activation;
 use polydat::kernel::{KernelProgram, PolydatProgram, WireSource, extract_manifest};
@@ -65,13 +65,19 @@ struct CompileArgs {
     /// Reject implicit type coercions and require explicit inputs.
     #[arg(long)]
     strict: bool,
-    /// Execution engine: `auto` runs on the default engine, native code
-    /// where the build has it and closures otherwise; `off` runs on the
-    /// interpreter with no native code; `force` runs native code. The
-    /// interpreter's program, which `explain` and `--stats` describe,
-    /// embeds native cones under the same setting.
+    /// Execution engine: `auto` is the build's default, native code
+    /// where the build has it and closures otherwise; `interpreter`,
+    /// `closures`, and `native` name one.
     #[arg(long, value_enum, default_value_t = Engine::Auto)]
     engine: Engine,
+    /// Provenance mode of a compiled engine: how much work a cycle whose
+    /// inputs repeat skips. `auto` lets the selector choose.
+    #[arg(long, value_enum, default_value_t = ProvenanceArg::Auto)]
+    provenance: ProvenanceArg,
+    /// Native cones in the interpreter's program: the one `--engine
+    /// interpreter` runs and the one `explain` and `--stats` describe.
+    #[arg(long, value_enum, default_value_t = Cones::Auto)]
+    cones: Cones,
     /// Keep only these outputs and what they depend on. Repeatable.
     #[arg(long = "output", value_name = "NAME")]
     required: Vec<String>,
@@ -85,6 +91,42 @@ struct CompileArgs {
 }
 
 impl CompileArgs {
+    /// How much of the interpreter's program is fused into cones.
+    fn cones(&self) -> JitMode {
+        match (self.engine, self.cones) {
+            (Engine::Off, _) | (_, Cones::Off) => JitMode::Off,
+            (Engine::Force, _) | (_, Cones::Force) => JitMode::Force,
+            (_, Cones::Auto) => JitMode::Auto,
+        }
+    }
+
+    /// The provenance mode a compiled engine is built with.
+    fn provenance(&self) -> Provenance {
+        match self.provenance {
+            ProvenanceArg::Auto => Provenance::Auto,
+            ProvenanceArg::Raw => Provenance::Raw,
+            ProvenanceArg::Push => Provenance::Push,
+            ProvenanceArg::Pull => Provenance::Pull,
+            ProvenanceArg::PushPull => Provenance::PushPull,
+        }
+    }
+
+    /// The engine the run drives, from `--engine`, `--provenance`, and
+    /// `--cones`.
+    fn run_engine(&self) -> KernelEngine {
+        let provenance = self.provenance();
+        match self.engine {
+            Engine::Auto => match KernelEngine::default() {
+                KernelEngine::Native(_) => KernelEngine::Native(provenance),
+                KernelEngine::Closures(_) => KernelEngine::Closures(provenance),
+                other => other,
+            },
+            Engine::Interpreter | Engine::Off => KernelEngine::Interpreter(self.cones()),
+            Engine::Closures => KernelEngine::Closures(provenance),
+            Engine::Native | Engine::Force => KernelEngine::Native(provenance),
+        }
+    }
+
     /// The host's tile defaults, when any were given.
     fn tile_defaults(&self) -> Option<TileOptions> {
         if self.tile_delims.is_empty() && self.tile_sigil.is_none() {
@@ -215,10 +257,49 @@ struct VizArgs {
     format: VizFormat,
 }
 
+/// The engine a run drives.
 #[derive(Clone, Copy, ValueEnum, PartialEq, Eq)]
 enum Engine {
-    Off,
+    /// The build's default engine: native code where the build has it,
+    /// closures otherwise.
     Auto,
+    /// The interpreter, with native cones per `--cones`.
+    Interpreter,
+    /// The closure tier: every node runs its generated closure.
+    Closures,
+    /// Native code where a node has a lowering, its closure elsewhere.
+    Native,
+    /// `--engine interpreter --cones off`, under its old spelling.
+    #[value(hide = true)]
+    Off,
+    /// `--engine native --cones force`, under its old spelling.
+    #[value(hide = true)]
+    Force,
+}
+
+/// How much of a compiled engine's work is skipped when inputs repeat.
+#[derive(Clone, Copy, ValueEnum, PartialEq, Eq)]
+enum ProvenanceArg {
+    /// The selector's choice from the graph's shape.
+    Auto,
+    /// Every evaluation runs every step.
+    Raw,
+    /// A changed input reruns only the steps downstream of it.
+    Push,
+    /// An output whose cone no changed input reaches is not recomputed.
+    Pull,
+    /// Both: per-step skipping and the cone guard.
+    PushPull,
+}
+
+/// How much of the interpreter's graph is fused into native cones.
+#[derive(Clone, Copy, ValueEnum, PartialEq, Eq)]
+enum Cones {
+    /// Cones where the cost model says they pay.
+    Auto,
+    /// No native code: the differential baseline.
+    Off,
+    /// Every eligible node joins a cone.
     Force,
 }
 
@@ -288,12 +369,14 @@ fn main() {
 // Compilation shared by every command
 // ---------------------------------------------------------------------------
 
-/// Everything a compile produced: the kernel, its event log, and the
-/// audit lines the compiler wrote while it ran.
+/// Everything a compile produced: the program on the run engine, its
+/// event log, and the audit lines the compiler wrote while it ran.
 struct Compiled {
-    /// The interpreter's program: what `explain` and `--stats` describe,
-    /// and the record of the program's inputs and outputs.
-    program: Arc<PolydatProgram>,
+    /// The interpreter's program: what `explain` and `--stats` describe
+    /// node by node. The run's own when the run engine is the
+    /// interpreter; otherwise compiled by [`describe`] on demand, since
+    /// a run needs nothing from it.
+    program: Option<Arc<PolydatProgram>>,
     /// The program on the run engine: every fiber, warmup, cursor probe,
     /// and traversal root is a kernel created from it.
     root: Arc<dyn KernelProgram>,
@@ -370,26 +453,8 @@ fn parse_program(source: &str, args: &CompileArgs) -> Result<PolydatFile, String
     Ok(ast)
 }
 
-/// The engine a run drives, from `--engine`.
-fn run_engine(engine: Engine) -> KernelEngine {
-    match engine {
-        Engine::Off => KernelEngine::Interpreter,
-        Engine::Auto => KernelEngine::default(),
-        Engine::Force => KernelEngine::Native(Provenance::Auto),
-    }
-}
-
-fn compile_source(source: &str, args: &CompileArgs) -> Result<Compiled, String> {
-    let ast = parse_program(source, args)?;
-    compile_ast(&ast, source, args)
-}
-
-fn compile_ast(ast: &PolydatFile, source: &str, args: &CompileArgs) -> Result<Compiled, String> {
-    polydat::set_default_jit_mode(match args.engine {
-        Engine::Off => JitMode::Off,
-        Engine::Auto => JitMode::Auto,
-        Engine::Force => JitMode::Force,
-    });
+/// The options every command compiles under.
+fn compile_options(args: &CompileArgs) -> CompileOptions {
     // A bare file name has an empty parent; modules beside it live in
     // the current directory.
     let source_dir = args.file.parent().map(|p| {
@@ -399,26 +464,31 @@ fn compile_ast(ast: &PolydatFile, source: &str, args: &CompileArgs) -> Result<Co
             p.to_path_buf()
         }
     });
-    let options = CompileOptions {
+    CompileOptions {
         source_dir,
         lib_paths: args.libs.clone(),
         required_outputs: args.required.clone(),
         strict: args.strict,
         context: args.file.display().to_string(),
         cursor_limit: None,
-    };
+    }
+}
+
+/// Compile the program once, on the run engine.
+fn compile_ast(ast: &PolydatFile, source: &str, args: &CompileArgs) -> Result<Compiled, String> {
+    let options = compile_options(args);
+    let engine = args.run_engine();
     let mut events = CompileEventLog::new();
     take_audit();
     let start = Instant::now();
-    let kernel = compile_ast_with_options(ast, source, &options, Some(&mut events))?;
-    let engine = run_engine(args.engine);
-    let root =
-        compile_ast_with_engine(ast, source, &options, None, engine).map_err(|e| e.to_string())?;
+    let root = compile_ast_with_engine(ast, source, &options, Some(&mut events), engine)
+        .map_err(|e| e.to_string())?;
+    let elapsed = start.elapsed();
     let run_plan = root.plan();
     let root = root.into_program();
-    let elapsed = start.elapsed();
+    let program = root.clone().as_interpreter();
     Ok(Compiled {
-        program: kernel.into_program(),
+        program,
         root,
         engine,
         run_plan,
@@ -426,6 +496,40 @@ fn compile_ast(ast: &PolydatFile, source: &str, args: &CompileArgs) -> Result<Co
         audit: take_audit(),
         elapsed,
     })
+}
+
+/// The interpreter's program, for the commands that describe a program
+/// node by node: the run's own when the run engine is the interpreter,
+/// else compiled now under `--cones`, its events and audit lines
+/// replacing the run engine's in `compiled`.
+fn describe(
+    ast: &PolydatFile,
+    source: &str,
+    args: &CompileArgs,
+    compiled: &mut Compiled,
+) -> Result<Arc<PolydatProgram>, String> {
+    if let Some(program) = &compiled.program {
+        return Ok(program.clone());
+    }
+    let options = compile_options(args);
+    let mut events = CompileEventLog::new();
+    take_audit();
+    let kernel = compile_ast_with_engine(
+        ast,
+        source,
+        &options,
+        Some(&mut events),
+        KernelEngine::Interpreter(args.cones()),
+    )
+    .map_err(|e| e.to_string())?;
+    let program = kernel
+        .into_program()
+        .as_interpreter()
+        .expect("the interpreter's program");
+    compiled.events = events;
+    compiled.audit = take_audit();
+    compiled.program = Some(program.clone());
+    Ok(program)
 }
 
 // ---------------------------------------------------------------------------
@@ -448,8 +552,10 @@ fn run(args: RunArgs) -> Result<(), String> {
     let mut ast = parse_program(&source, &args.compile)?;
     assign_values(&mut ast, &assignments)?;
 
-    // Probe compile: discovers the declared outputs the emit transform names.
+    // Probe compile: discovers the declared outputs the emit transform
+    // names, read from a kernel of the run engine's program.
     let probe = compile_ast(&ast, &source, &args.compile)?;
+    let shape = probe.root.clone().create_kernel();
     let selected: Vec<String> = match &args.outputs {
         Some(list) => list
             .split(',')
@@ -457,29 +563,27 @@ fn run(args: RunArgs) -> Result<(), String> {
             .filter(|s| !s.is_empty())
             .collect(),
         None => {
-            let inputs = probe.program.input_names();
-            probe
-                .program
-                .own_output_names()
+            let inputs = shape.input_names();
+            shape
+                .output_names()
                 .into_iter()
                 .filter(|n| !n.starts_with("__") && !inputs.iter().any(|i| i == n))
-                .map(str::to_string)
                 .collect()
         }
     };
     // Selected outputs must exist where they will be pulled: in every
     // traversal body when the program traverses, else at the root.
-    if probe.program.traversals().is_empty() {
+    if shape.traversals().is_empty() {
         for name in &selected {
-            if probe.program.output_index(name).is_none() {
+            if shape.output_index(name).is_none() {
                 return Err(format!(
                     "no output named '{name}'; declared outputs: {}",
-                    probe.program.output_names().join(", ")
+                    shape.output_names().join(", ")
                 ));
             }
         }
     } else if args.outputs.is_some() {
-        for t in probe.program.traversals() {
+        for t in shape.traversals() {
             for name in &selected {
                 if t.program.output_index(name).is_none() {
                     return Err(format!(
@@ -497,7 +601,7 @@ fn run(args: RunArgs) -> Result<(), String> {
     // A program with top-level traversals runs in traversal mode: the
     // emit transform goes inside each for body, where it sees the
     // body's scope, and the run activates the traversals.
-    let traversal_mode = !probe.program.traversals().is_empty();
+    let traversal_mode = !shape.traversals().is_empty();
 
     // `--emit tile:<name>` selects the tile and the text format: the
     // tile's rendered text is the row. The tile lives where the emit
@@ -505,29 +609,22 @@ fn run(args: RunArgs) -> Result<(), String> {
     let (emit_format, selected) = match &args.emit {
         Some(EmitSpec::Tile(name)) => {
             let present = if traversal_mode {
-                probe
-                    .program
+                shape
                     .traversals()
                     .iter()
                     .all(|t| t.program.output_index(name).is_some())
             } else {
-                probe.program.output_index(name).is_some()
+                shape.output_index(name).is_some()
             };
             if !present {
                 let known: Vec<String> = if traversal_mode {
-                    probe
-                        .program
+                    shape
                         .traversals()
                         .iter()
                         .flat_map(|t| body_wire_names(&t.program))
                         .collect()
                 } else {
-                    probe
-                        .program
-                        .output_names()
-                        .iter()
-                        .map(|s| s.to_string())
-                        .collect()
+                    shape.output_names()
                 };
                 return Err(format!(
                     "no tile or output named '{name}'; declared outputs: {}",
@@ -578,12 +675,13 @@ fn run(args: RunArgs) -> Result<(), String> {
     } else {
         probe
     };
-    let program = compiled.program.clone();
+    let mut compiled = compiled;
 
     if args.events {
         print!("{}", compiled.events.format());
     }
     if args.stats {
+        let program = describe(&ast, &source, &args.compile, &mut compiled)?;
         print_stats(&program, &compiled, Report::Text);
     }
 
@@ -647,16 +745,18 @@ fn run(args: RunArgs) -> Result<(), String> {
     // Which outputs each cycle pulls. With emission, pulling `__emit`
     // pulls everything it names; without it, pull the selection.
     let pull_names: Vec<String> = if emit_format.is_some() {
-        program
+        compiled
+            .root
+            .clone()
+            .create_kernel()
             .output_index("__emit")
             .ok_or("emit transform did not produce __emit")?;
         vec!["__emit".to_string()]
     } else {
         selected.to_vec()
     };
-    let coord_count = (0..program.input_names().len())
-        .filter(|&i| program.input_kind(i) == Some(polydat::kernel::InputKind::Coordinate))
-        .count();
+    // The coordinates: every input that is not an extern.
+    let coord_count = shape.input_names().len() - shape.externs().len();
 
     let chunk = args.chunk.max(1);
     let total = args.cycles;
@@ -1100,8 +1200,10 @@ fn print_timing(
 fn check(args: CheckArgs) -> Result<(), String> {
     install_audit(true);
     let source = read_source(&args.compile.file)?;
-    let compiled = compile_source(&source, &args.compile)?;
-    let program = &compiled.program;
+    let ast = parse_program(&source, &args.compile)?;
+    let mut compiled = compile_ast(&ast, &source, &args.compile)?;
+    let program = describe(&ast, &source, &args.compile, &mut compiled)?;
+    let program = &program;
     match args.format {
         Report::Text => {
             println!(
@@ -1297,8 +1399,9 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
     // that fails later still explains its front end.
     let tokens = polydat::dsl::lexer::lex(&source)?;
     let ast = parse_program(&source, &args.compile)?;
-    let compiled = compile_source(&source, &args.compile)?;
-    let program = &compiled.program;
+    let mut compiled = compile_ast(&ast, &source, &args.compile)?;
+    let program = describe(&ast, &source, &args.compile, &mut compiled)?;
+    let program = &program;
     let events = compiled.events.events();
 
     let input_name = |idx: usize| program.input_name_by_idx(idx).unwrap_or("?").to_string();

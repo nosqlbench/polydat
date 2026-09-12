@@ -317,6 +317,7 @@ fn literal_to_value(lv: &LiteralValue) -> Value {
         LiteralValue::Float(f) => Value::F64(*f),
         LiteralValue::String(s) => Value::Str(Arc::from(s.as_str())),
         LiteralValue::Bool(b) => Value::Bool(*b),
+        LiteralValue::Json(j) => Value::Json(Arc::new(j.clone())),
     }
 }
 

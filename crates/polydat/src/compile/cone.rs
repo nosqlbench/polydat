@@ -17,46 +17,23 @@
 //! any JIT failure leaves the graph exactly as the interpreter
 //! would have compiled it.
 
-use std::sync::atomic::{AtomicU8, Ordering};
-
-/// Engine-mix selection for kernel compilation (SRD-105).
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+/// How much of the interpreter's graph is fused into native cones: the
+/// interpreter engine's one knob, carried by
+/// [`Engine::Interpreter`](crate::Engine::Interpreter) and settable per
+/// assembler with `set_jit_mode`. It is a property of the kernel being
+/// built, never of the process: two hosts in one process compiling
+/// under different modes get the kernels they each asked for.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum JitMode {
-    /// Pure interpreter — the escape hatch and differential baseline.
+    /// Pure interpreter, no native code: the differential baseline.
     Off,
-    /// Cone extraction with the cost model (fused cones of >= 2 nodes).
+    /// Cone extraction with the cost model (fused cones of >= 2 nodes):
+    /// what a host gets when it names none.
+    #[default]
     Auto,
     /// Every eligible node joins a cone (threshold 1). Used by the
     /// differential battery and for isolating marshalling regressions.
     Force,
-}
-
-/// Process default for [`JitMode`]: `Auto` — polydat compiles
-/// every program with the mixed engine by default (SRD-105 Push 3,
-/// gated on the differential battery: expression-level in
-/// `function_coverage`, workload-level in nbrs `jit_differential`,
-/// identity invariance in `cone_tests`). `jit=off` remains the
-/// escape hatch and differential baseline.
-static DEFAULT_JIT_MODE: AtomicU8 = AtomicU8::new(1);
-
-/// Set the process-default JIT mode used by kernel compiles that
-/// carry no per-assembler override.
-pub fn set_default_jit_mode(mode: JitMode) {
-    let v = match mode {
-        JitMode::Off => 0,
-        JitMode::Auto => 1,
-        JitMode::Force => 2,
-    };
-    DEFAULT_JIT_MODE.store(v, Ordering::Relaxed);
-}
-
-/// Read the process-default JIT mode.
-pub fn default_jit_mode() -> JitMode {
-    match DEFAULT_JIT_MODE.load(Ordering::Relaxed) {
-        1 => JitMode::Auto,
-        2 => JitMode::Force,
-        _ => JitMode::Off,
-    }
 }
 
 #[cfg(not(feature = "jit"))]
@@ -86,17 +63,11 @@ mod jit_impl {
     unsafe impl Send for ModuleHolder {}
     unsafe impl Sync for ModuleHolder {}
 
-    thread_local! {
-        /// Per-thread slot scratch shared by every cone node —
-        /// programs (and their nodes) are `Arc`-shared across
-        /// fibers, so eval must not serialize through per-node
-        /// state. Capacity is retained across evals.
-        static CONE_SCRATCH: std::cell::RefCell<Vec<u64>> =
-            const { std::cell::RefCell::new(Vec::new()) };
-    }
-
     /// A fused subgraph compiled to native code, standing in the
-    /// program as one ordinary node (SRD-105).
+    /// program as one ordinary node (SRD-105). The node is shared by
+    /// every state of the program; the slot buffer its native code
+    /// runs over belongs to the state that evaluates it, which hands
+    /// it in through [`PolydatNode::eval_in`] (axiom S3).
     pub(crate) struct JitConeNode {
         meta: NodeMeta,
         code_fn: unsafe fn(*const u64, *mut u64),
@@ -104,16 +75,12 @@ mod jit_impl {
         /// Where each member lives, for the failure path (A7): the
         /// member that failed is named inside the cone's own report.
         attribution: std::sync::Arc<crate::compile::Attribution>,
+        /// First buffer slot per boundary input, in port order.
+        in_slots: Vec<usize>,
         /// Buffer slot per output port, in `meta.outs` order.
         out_slots: Vec<usize>,
         in_types: Vec<PortType>,
         out_types: Vec<PortType>,
-        /// Value-table entry per boundary input, for the table-kind
-        /// inputs (SRD 115 §3); `None` for every other input.
-        in_entries: Vec<Option<usize>>,
-        /// Entries in the cone's value table: one per table-kind slot
-        /// the native code writes, then one per table-kind input.
-        table_len: usize,
         /// The original member nodes — kept alive for the LUT /
         /// constant memory the native code references, and walked
         /// by identity hashing (`fusion_subgraph`).
@@ -140,36 +107,50 @@ mod jit_impl {
             })
         }
 
-        /// One eval scopes every handle it makes to itself (SRD 115
-        /// §3, embedded cones): table entries and arena bytes are
-        /// taken before the native call and released once every
-        /// output is copied out, so nothing a cone allocates outlives
-        /// its eval and a cycle's use is bounded by its largest cone.
-        ///
-        /// The eval is re-entrant: a helper the native code calls may
-        /// run nested kernels (a tile projection re-runs its body
-        /// program per tuple), and those kernels may contain cones.
-        /// The scratch buffer and table are therefore taken out of
-        /// their thread-local cells for the duration of the call, so a
-        /// nested cone eval finds the cells free and uses its own, and
-        /// put back afterwards, on every exit path.
+        /// The state owns the cone's slot buffer (axiom S3): one
+        /// `Slots` entry, handed in at every evaluation.
+        fn scratch_layout(&self) -> Vec<crate::ast::ScratchElem> {
+            vec![crate::ast::ScratchElem::Slots]
+        }
+
+        fn eval_in(
+            &self,
+            scratch: &mut [crate::ast::ScratchBuf],
+            inputs: &[Value],
+            outputs: &mut [Value],
+        ) {
+            let crate::ast::ScratchBuf::Slots(buf) = &mut scratch[0] else {
+                unreachable!("a cone's scratch is its slot buffer");
+            };
+            self.eval_with(buf, inputs, outputs)
+        }
+
+        /// An evaluation without a state's scratch (a node evaluated
+        /// on its own): a buffer of the call's own.
         fn eval(&self, inputs: &[Value], outputs: &mut [Value]) {
-            let mut scratch = ConeScratch::take();
-            let (buf, table) = scratch.parts();
+            let mut buf = Vec::new();
+            self.eval_with(&mut buf, inputs, outputs)
+        }
+    }
+
+    impl JitConeNode {
+        /// Evaluate over `buf`: the boundary inputs are borrowed into
+        /// their slots for the duration of the call, the native code
+        /// runs, and every output is copied out as an owned `Value`
+        /// (the interpreter never holds a reference into a buffer).
+        fn eval_with(&self, buf: &mut Vec<u64>, inputs: &[Value], outputs: &mut [Value]) {
             buf.clear();
             buf.resize(self.total_slots + 1, 0);
-            table.resize(self.table_len);
-            table.set_generation(crate::kernel::cycle_generation());
-            let mark = crate::kernel::cycle_arena_mark();
             for (i, v) in inputs.iter().enumerate() {
-                buf[i] = encode_boundary(
-                    v,
-                    self.in_types[i],
-                    i,
-                    &self.meta.name,
-                    table,
-                    self.in_entries[i],
-                );
+                let start = self.in_slots[i];
+                if crate::compile::marshal::encode_slots(v, &mut buf[start..]).is_none() {
+                    panic!(
+                        "cone `{}` boundary input [{i}] expected {:?}, got {:?}",
+                        self.meta.name,
+                        self.in_types[i],
+                        v.port_type()
+                    );
+                }
             }
             // Native code names the member it is in before each helper
             // call (the slot past the layout); a failure is re-raised
@@ -180,106 +161,20 @@ mod jit_impl {
             let cp = buf.as_ptr();
             let mp = buf.as_mut_ptr();
             let capture = crate::kernel::engines::EvalPanicCaptureGuard::arm();
-            let outcome = crate::kernel::with_value_table(table, || {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    crate::compile::jit::invoke_with_catch(move || unsafe {
-                        (code_fn)(cp, mp);
-                    })
-                }))
-            });
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                crate::compile::jit::invoke_with_catch(move || unsafe {
+                    (code_fn)(cp, mp);
+                })
+            }));
             drop(capture);
             if let Err(payload) = outcome {
                 let step = buf[self.total_slots] as usize;
-                self.attribution.reraise(payload, step, buf, None, table);
+                self.attribution.reraise(payload, step, buf, None);
             }
             for (k, slot) in self.out_slots.iter().enumerate() {
-                outputs[k] = decode_boundary(buf[*slot], self.out_types[k], table);
-            }
-            table.clear();
-            crate::kernel::cycle_arena_release(mark);
-        }
-    }
-
-    thread_local! {
-        /// The value table a cone eval borrows (SRD 115 §3). Per
-        /// thread for the same reason as `CONE_SCRATCH`; sized to the
-        /// cone at the top of each eval and cleared at its end.
-        static CONE_TABLE: std::cell::RefCell<crate::kernel::ValueTable> =
-            std::cell::RefCell::new(crate::kernel::ValueTable::new(0));
-    }
-
-    /// The thread's cone scratch and table, taken out of their cells
-    /// for one eval and returned on drop (including on unwind). A
-    /// nested cone eval, run by a helper of this one, takes the cells'
-    /// contents in turn, which are empty at that point and grow to
-    /// its own size; whichever eval finishes last leaves the larger
-    /// buffers in the cells.
-    struct ConeScratch {
-        buf: Vec<u64>,
-        table: crate::kernel::ValueTable,
-    }
-
-    impl ConeScratch {
-        fn take() -> Self {
-            ConeScratch {
-                buf: CONE_SCRATCH.with(|c| std::mem::take(&mut *c.borrow_mut())),
-                table: CONE_TABLE.with(|c| std::mem::take(&mut *c.borrow_mut())),
+                outputs[k] = crate::compile::marshal::decode_output(buf, *slot, self.out_types[k]);
             }
         }
-
-        fn parts(&mut self) -> (&mut Vec<u64>, &mut crate::kernel::ValueTable) {
-            (&mut self.buf, &mut self.table)
-        }
-    }
-
-    impl Drop for ConeScratch {
-        fn drop(&mut self) {
-            let buf = std::mem::take(&mut self.buf);
-            let table = std::mem::take(&mut self.table);
-            CONE_SCRATCH.with(|c| {
-                let mut cell = c.borrow_mut();
-                if cell.capacity() < buf.capacity() {
-                    *cell = buf;
-                }
-            });
-            CONE_TABLE.with(|c| {
-                let mut cell = c.borrow_mut();
-                if cell.len() < table.len() {
-                    *cell = table;
-                }
-            });
-        }
-    }
-
-    /// `Value` → u64 slot bits at a cone boundary. The assembler
-    /// proved the types; a mismatch here means a type-stability
-    /// violation upstream, and the panic routes through the
-    /// standard eval_node enrichment.
-    fn encode_boundary(
-        v: &Value,
-        ty: PortType,
-        port: usize,
-        cone: &str,
-        table: &mut crate::kernel::ValueTable,
-        entry: Option<usize>,
-    ) -> u64 {
-        // SRD 115 §5: scalars ride as bits, byte strings enter the
-        // cycle arena, other non-scalars are written to the entry of
-        // the cone's table assigned to this input; the slot holds the
-        // handle (axiom H3).
-        crate::compile::marshal::encode_slot(v, table, entry).unwrap_or_else(|| {
-            panic!(
-                "cone `{cone}` boundary input [{port}] expected {ty:?}, \
-                 got {:?}",
-                v.port_type()
-            )
-        })
-    }
-
-    /// u64 slot bits → `Value` by the declared boundary type. A handle
-    /// is copied out to an owned value (axiom H6): P1 never holds one.
-    fn decode_boundary(bits: u64, ty: PortType, table: &crate::kernel::ValueTable) -> Value {
-        crate::compile::marshal::decode_slot(bits, ty, table)
     }
 
     /// A planned-but-rejected cone is diagnosable state, never
@@ -300,16 +195,11 @@ mod jit_impl {
     /// a narrow-typed node gains a JIT lowering; until then extra
     /// arms would be dead, untested marshalling.
     fn scalar_ok(ty: PortType) -> bool {
-        use crate::ast::{HandleKind, SlotColor};
+        use crate::ast::SlotColor;
         match ty.slot_color() {
             SlotColor::Imm1 => matches!(ty, PortType::U64 | PortType::F64 | PortType::Bool),
-            // SRD 115 §5: byte-string handles marshal in (arena copy)
-            // and out (copy to an owned value); table handles marshal
-            // through the cycle value table (§3).
-            SlotColor::Hdl1 => matches!(
-                ty.handle_kind(),
-                Some(HandleKind::Bytes | HandleKind::Table)
-            ),
+            // A reference pair joins a cone once the native lowering
+            // carries one; until then the node stays interpreted.
             SlotColor::Imm2 | SlotColor::Ref2 => false,
         }
     }
@@ -612,27 +502,13 @@ mod jit_impl {
             // port types do not bind its wires. Only the lowering
             // decides that: `str_concat` is variadic too, but its
             // helper takes strings, so its wires must be strings.
-            let member_wire_types: Vec<PortType> = dag.wiring[m]
-                .iter()
-                .map(|src| match src {
-                    WireSource::Input(i) => Some(dag.input_defs[*i].port_type),
-                    WireSource::NodeOutput(j, p) => {
-                        nodes[*j].as_ref().map(|nd| nd.meta().outs[*p].typ)
-                    }
-                })
-                .collect::<Option<Vec<_>>>()?;
-            let wires_typed_at_lowering = crate::compile::jit::wires_typed_at_lowering(
-                &classify_node_typed(member.as_ref(), &member_wire_types),
-            );
             for (k, src) in dag.wiring[m].iter().enumerate() {
                 let ty = match src {
                     WireSource::Input(i) => dag.input_defs[*i].port_type,
                     WireSource::NodeOutput(j, p) => nodes[*j].as_ref()?.meta().outs[*p].typ,
                 };
-                // Inside a cone every wire is exactly its port's type,
-                // unless the lowering fixed the wire types itself.
-                if !wires_typed_at_lowering
-                    && let Some(expected) = member_ports.get(k)
+                // Inside a cone every wire is exactly its port's type.
+                if let Some(expected) = member_ports.get(k)
                     && *expected != ty
                 {
                     audit_skip(
@@ -847,46 +723,24 @@ mod jit_impl {
                 return Err(e);
             }
         };
-        let (coord_count, total_slots, jit_steps, jit_outputs) = layout;
-        debug_assert_eq!(coord_count, plan.boundary_in.len());
-        // Boundary inputs occupy the first slots; the handle-colored
-        // ones are handle slots the H1 verifier tracks (SRD 115 §8).
-        let handle_inputs: Vec<usize> = plan
-            .in_types
-            .iter()
-            .enumerate()
-            .filter(|(_, ty)| ty.slot_color() == crate::ast::SlotColor::Hdl1)
-            .map(|(i, _)| i)
-            .collect();
-        let compiled = crate::compile::jit::compile_jit_entry(
-            &jit_steps,
-            0,
-            &handle_inputs,
-            Some(total_slots),
-        );
-        let (code_fn, module, table_entries) = match compiled {
+        let (coord_slots, total_slots, jit_steps, jit_outputs) = layout;
+        // Boundary inputs occupy the first slots, each as wide as its
+        // type.
+        let mut in_slots = Vec::with_capacity(plan.in_types.len());
+        let mut next = 0usize;
+        for ty in &plan.in_types {
+            in_slots.push(next);
+            next += ty.slot_width();
+        }
+        debug_assert_eq!(coord_slots, next);
+        let compiled = crate::compile::jit::compile_jit_entry(&jit_steps, Some(total_slots));
+        let (code_fn, module) = match compiled {
             Ok(parts) => parts,
             Err(e) => {
                 restore(sub.nodes, nodes);
                 return Err(e);
             }
         };
-        // The cone's table: the entries its native code writes, then
-        // one per table-kind boundary input, written by the boundary
-        // encode (SRD 115 §3).
-        let mut table_len = table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0);
-        let in_entries: Vec<Option<usize>> = plan
-            .in_types
-            .iter()
-            .map(|ty| {
-                if ty.handle_kind() == Some(crate::ast::HandleKind::Table) {
-                    table_len += 1;
-                    Some(table_len - 1)
-                } else {
-                    None
-                }
-            })
-            .collect();
 
         let out_slots: Vec<usize> = (0..plan.boundary_out.len())
             .map(|k| jit_outputs[&format!("o{k}")])
@@ -940,8 +794,7 @@ mod jit_impl {
         let attribution = std::sync::Arc::new(PolydatAssembler::attribution_of(&sub));
         Ok(JitConeNode {
             attribution,
-            in_entries,
-            table_len,
+            in_slots,
             meta,
             code_fn,
             total_slots,

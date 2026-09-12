@@ -251,8 +251,7 @@ fn run_all_functions_concurrency_benchmarks() {
         let mut p3_thru = [0.0; 3];
         if p3_eligible {
             let req_inputs = match &p3_op {
-                JitOp::StrConcat
-                | JitOp::U64Add2
+                JitOp::U64Add2
                 | JitOp::U64Sub2
                 | JitOp::U64Mul2
                 | JitOp::U64Div2

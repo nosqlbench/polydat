@@ -190,7 +190,7 @@ impl Construction for PolydatKernel {
 
 impl crate::kernel::Kernel for PolydatKernel {
     fn engine(&self) -> crate::compile::select::Engine {
-        crate::compile::select::Engine::Interpreter
+        crate::compile::select::Engine::Interpreter(self.program().cone_mode())
     }
     fn set_inputs(&mut self, coords: &[u64]) {
         PolydatKernel::set_inputs(self, coords);
@@ -261,23 +261,6 @@ impl crate::kernel::Kernel for PolydatKernel {
     fn traverse(&mut self, index: usize) -> Result<crate::kernel::TraversalStream, String> {
         PolydatKernel::traverse(self, index)
     }
-    fn set_traversals(
-        &mut self,
-        traversals: Vec<crate::dsl::traversal::Traversal>,
-        producers: Vec<crate::dsl::traversal::Producer>,
-    ) {
-        PolydatKernel::set_traversals(self, traversals, producers);
-    }
-    fn folded_value(&self, name: &str) -> Option<Value> {
-        self.get_constant(name).cloned()
-    }
-    fn set_cursor_extent(&mut self, index: usize, extent: u64) {
-        let mut schemas = self.program().cursor_schemas().to_vec();
-        if let Some(schema) = schemas.get_mut(index) {
-            schema.extent = Some(extent);
-            self.set_cursor_schemas(schemas);
-        }
-    }
     fn invalidate_all(&mut self) {
         self.state().invalidate_all();
     }
@@ -300,23 +283,40 @@ impl crate::kernel::Kernel for PolydatKernel {
         self.state().attach_shared_cell(idx, cell);
         Ok(())
     }
-    fn nest(&mut self) {
-        self.state().mark_nested();
-    }
     fn into_program(self: Box<Self>) -> std::sync::Arc<dyn crate::kernel::KernelProgram> {
         PolydatKernel::into_program(*self)
     }
 }
 
+impl crate::kernel::KernelInternals for PolydatKernel {
+    fn set_traversals(
+        &mut self,
+        traversals: Vec<crate::dsl::traversal::Traversal>,
+        producers: Vec<crate::dsl::traversal::Producer>,
+    ) {
+        PolydatKernel::set_traversals(self, traversals, producers);
+    }
+    fn folded_value(&self, name: &str) -> Option<Value> {
+        self.get_constant(name).cloned()
+    }
+    fn set_cursor_extent(&mut self, index: usize, extent: u64) {
+        let mut schemas = self.program().cursor_schemas().to_vec();
+        if let Some(schema) = schemas.get_mut(index) {
+            schema.extent = Some(extent);
+            self.set_cursor_schemas(schemas);
+        }
+    }
+}
+
 impl crate::kernel::KernelProgram for crate::kernel::PolydatProgram {
     fn engine(&self) -> crate::compile::select::Engine {
-        crate::compile::select::Engine::Interpreter
+        crate::compile::select::Engine::Interpreter(self.cone_mode())
+    }
+    fn as_interpreter(self: std::sync::Arc<Self>) -> Option<std::sync::Arc<Self>> {
+        Some(self)
     }
     fn create_kernel(self: std::sync::Arc<Self>) -> Box<dyn crate::kernel::Kernel> {
         Box::new(PolydatKernel::from_program(self))
-    }
-    fn create_nested_kernel(self: std::sync::Arc<Self>) -> Box<dyn crate::kernel::Kernel> {
-        Box::new(PolydatKernel::from_program_nested(self))
     }
 }
 

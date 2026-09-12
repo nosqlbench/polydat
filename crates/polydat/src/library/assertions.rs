@@ -121,28 +121,20 @@ impl PolydatNode for AssertType {
 
     /// The compiled form. In a slot buffer a wire's color is its type,
     /// so the variant check the interpreter makes has nothing to
-    /// observe there; the compiled step is the copy `identity` makes,
-    /// under the same two rules: a table handle re-enters the value
-    /// into this step's own entry (axiom H4), and a `Ref2` pair is
-    /// never forwarded (axiom S3), which leaves that one shape without
-    /// a compiled form.
-    fn compiled_handle(
-        &self,
-        entry_base: usize,
-        _wire_types: &[PortType],
-    ) -> Option<crate::ast::CompiledU64Op> {
+    /// observe there; the compiled step is the copy `identity` makes:
+    /// an immediate copied, a `Ref2` value copied into this step's own
+    /// scratch, since a pair is never forwarded (axiom S3).
+    fn compiled_u64(&self) -> Option<crate::ast::CompiledU64Op> {
         if self.expected.slot_color() == crate::ast::SlotColor::Ref2 {
             return None;
-        }
-        if self.expected.handle_kind() == Some(crate::ast::HandleKind::Table) {
-            return Some(Box::new(move |inputs: &[u64], outputs: &mut [u64]| {
-                let value = crate::kernel::current_table_value(inputs[0]).clone();
-                outputs[0] = crate::kernel::write_table_entry(entry_base, value);
-            }));
         }
         Some(Box::new(|inputs: &[u64], outputs: &mut [u64]| {
             outputs.copy_from_slice(inputs)
         }))
+    }
+
+    fn compiled_slot(&self, _wire_types: &[PortType]) -> Option<crate::ast::CompiledSlotKit> {
+        crate::compile::assembly::ref_copy_kit(self.expected)
     }
 }
 
@@ -272,16 +264,13 @@ impl PolydatNode for AssertValue {
 
     /// The compiled form: the same constraint checked against the slot,
     /// decoded by the asserted type, with the same message on failure.
-    /// A carrier reads as its integer, a float from its bits, a string
-    /// through its handle; the other shapes have no compiled form.
+    /// A carrier reads as its integer, a float from its bits; the
+    /// other shapes have no u64 form.
     fn compiled_u64(&self) -> Option<crate::ast::CompiledU64Op> {
         use crate::dsl::factory::ConstArg;
         let lift: fn(u64) -> ConstArg = match self.typ {
             PortType::U64 | PortType::U32 | PortType::U16 | PortType::U8 => ConstArg::Int,
             PortType::F64 => |slot| ConstArg::Float(f64::from_bits(slot)),
-            PortType::Str => {
-                |slot| ConstArg::Str(crate::kernel::resolve_thread_str(slot).to_string())
-            }
             _ => return None,
         };
         let name = self.meta.name.clone();
@@ -292,6 +281,39 @@ impl PolydatNode for AssertValue {
             }
             outputs[0] = inputs[0];
         }))
+    }
+
+    /// A string reads through its pair, is checked, and is copied into
+    /// this step's own scratch (axiom S3).
+    fn compiled_slot(&self, _wire_types: &[PortType]) -> Option<crate::ast::CompiledSlotKit> {
+        use crate::dsl::factory::ConstArg;
+        if self.typ != PortType::Str {
+            return None;
+        }
+        let name = self.meta.name.clone();
+        let constraint = self.constraint;
+        let copy = crate::compile::assembly::ref_copy_kit(PortType::Str)?;
+        Some(crate::ast::CompiledSlotKit {
+            scratch: copy.scratch,
+            op: Box::new(
+                move |inputs: &[u64],
+                      outputs: &mut [u64],
+                      scratch: &mut [crate::ast::ScratchBuf]| {
+                    // SAFETY: the pair was published by the producing
+                    // step into storage alive until it reruns (S3, S4).
+                    let text = unsafe {
+                        std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                            inputs[0] as usize as *const u8,
+                            inputs[1] as usize,
+                        ))
+                    };
+                    if let Err(msg) = constraint.check(&ConstArg::Str(text.to_string()), "value") {
+                        panic!("{name}: {msg}");
+                    }
+                    (copy.op)(inputs, outputs, scratch);
+                },
+            ),
+        })
     }
 }
 

@@ -185,9 +185,10 @@ pub enum Provenance {
 /// runs and nothing else (docs/design/engine_parity.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Engine {
-    /// The interpreter, with native cones per the assembler's
-    /// [`JitMode`](crate::JitMode): what `compile()` builds.
-    Interpreter,
+    /// The interpreter, with as much of its graph fused into native
+    /// cones as the [`JitMode`](crate::JitMode) says: what `compile()`
+    /// builds, under the assembler's mode.
+    Interpreter(crate::compile::cone::JitMode),
     /// The closure tier: every node runs its generated closure over
     /// one slot buffer.
     Closures(Provenance),
@@ -216,7 +217,13 @@ impl Default for Engine {
 impl std::fmt::Display for Engine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Engine::Interpreter => write!(f, "interpreter"),
+            Engine::Interpreter(crate::compile::cone::JitMode::Auto) => write!(f, "interpreter"),
+            Engine::Interpreter(crate::compile::cone::JitMode::Off) => {
+                write!(f, "interpreter (cones off)")
+            }
+            Engine::Interpreter(crate::compile::cone::JitMode::Force) => {
+                write!(f, "interpreter (cones forced)")
+            }
             Engine::Closures(p) => write!(f, "closures ({p:?})"),
             Engine::Native(p) => write!(f, "native ({p:?})"),
         }

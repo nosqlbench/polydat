@@ -293,6 +293,15 @@ fn tuple_scalar(tuple: &RuntimeTuple, name: &str) -> Option<Scalar> {
         Value::F64(f) => Some(Scalar::Float(*f)),
         Value::Str(s) => Some(Scalar::Str(s.to_string())),
         Value::Bool(b) => Some(Scalar::Bool(*b)),
+        // A JSON list's item compares as the scalar it carries.
+        Value::Json(j) => match j.as_ref() {
+            serde_json::Value::Number(n) if n.is_i64() => Some(Scalar::Int(n.as_i64()? as i128)),
+            serde_json::Value::Number(n) if n.is_u64() => Some(Scalar::Int(n.as_u64()? as i128)),
+            serde_json::Value::Number(n) => Some(Scalar::Float(n.as_f64()?)),
+            serde_json::Value::String(s) => Some(Scalar::Str(s.clone())),
+            serde_json::Value::Bool(b) => Some(Scalar::Bool(*b)),
+            _ => None,
+        },
         _ => None,
     }
 }

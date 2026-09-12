@@ -301,6 +301,9 @@ pub struct PolydatProgram {
     /// Source schemas declared in the Polydat program. The runtime queries
     /// these to discover data sources and their extents.
     cursor_schemas: Vec<crate::iteration::source::SourceSchema>,
+    /// How much of the graph was fused into native cones when the
+    /// program was built: what its kernels report as their engine.
+    cone_mode: crate::compile::cone::JitMode,
     /// Compiled `for` traversals declared at this program's top level,
     /// in document order (SRD 113). Each carries its child program.
     traversals: Vec<crate::dsl::traversal::Traversal>,
@@ -401,6 +404,7 @@ impl PolydatProgram {
             output_modifiers: HashMap::new(),
             inherited_outputs: std::collections::HashSet::new(),
             cursor_schemas: Vec::new(),
+            cone_mode: crate::compile::cone::JitMode::Off,
             traversals: Vec::new(),
             producers: Vec::new(),
             const_outputs: std::collections::HashSet::new(),
@@ -445,6 +449,7 @@ impl PolydatProgram {
             output_modifiers: HashMap::new(),
             inherited_outputs: std::collections::HashSet::new(),
             cursor_schemas: Vec::new(),
+            cone_mode: crate::compile::cone::JitMode::Off,
             traversals: Vec::new(),
             producers: Vec::new(),
             const_outputs: std::collections::HashSet::new(),
@@ -686,6 +691,15 @@ impl PolydatProgram {
         schemas: Vec<crate::iteration::source::SourceSchema>,
     ) {
         self.cursor_schemas = schemas;
+    }
+
+    /// How much of the graph was fused into native cones at build.
+    pub fn cone_mode(&self) -> crate::compile::cone::JitMode {
+        self.cone_mode
+    }
+
+    pub(crate) fn set_cone_mode(&mut self, mode: crate::compile::cone::JitMode) {
+        self.cone_mode = mode;
     }
 
     /// The `for` traversals declared at this program's top level, each
@@ -947,6 +961,21 @@ impl PolydatProgram {
         }
     }
 
+    /// The scratch every node of this program declares, one set per
+    /// node, for a state of its own (axiom S3): storage belongs to the
+    /// state, never to the shared node.
+    fn node_scratch(&self) -> Vec<Vec<crate::ast::ScratchBuf>> {
+        self.nodes
+            .iter()
+            .map(|n| {
+                n.scratch_layout()
+                    .into_iter()
+                    .map(crate::ast::ScratchBuf::new)
+                    .collect()
+            })
+            .collect()
+    }
+
     /// Build an EngineCore (shared by all state constructors).
     fn build_engine_core(&self) -> EngineCore {
         let buffers: Vec<Vec<Value>> = self
@@ -971,6 +1000,7 @@ impl PolydatProgram {
             // seed pass sizes it to match output count.
             output_cells: Vec::new(),
             input_scratch: vec![Value::None; max_inputs],
+            node_scratch: self.node_scratch(),
             // Per-scope intent-dirty vector + bit allocator
             // (cross_fiber_invalidation.md §3.1). Fresh atomic
             // per EngineCore — one per fiber state — so cells
@@ -1017,6 +1047,7 @@ impl PolydatProgram {
             // seed pass sizes it to match output count.
             output_cells: Vec::new(),
             input_scratch: vec![Value::None; max_inputs],
+            node_scratch: self.node_scratch(),
             // Per-scope intent-dirty vector + bit allocator
             // (cross_fiber_invalidation.md §3.1).
             scope_intent_words: Vec::new(),

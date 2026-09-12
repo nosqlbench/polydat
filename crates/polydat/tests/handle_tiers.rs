@@ -1,8 +1,9 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! SRD 115 §7, step 7: the P1↔P2↔P3 differential suite for handle
-//! slots. A grammar-directed generator emits random programs over the
+//! The P1↔P2↔P3 differential suite for by-reference values (strings,
+//! byte strings, JSON, extension values, handles: the `Ref2` kinds of
+//! jit_boundary.md). A grammar-directed generator emits random programs over the
 //! string, JSON, tile, partition, and streamer nodes with typed wires,
 //! extension values, a fallible construction, a mixed tuple return
 //! destructured through the compiler's copy steps, explicit copies of
@@ -13,11 +14,11 @@
 //! every program compiles on the interpreter (the oracle), with forced
 //! cone extraction, as a P2 closure kernel, as a hybrid kernel, and
 //! where every node lowers as a pure-P3 kernel, and every output agrees
-//! across the tiers by type and text for a run of cycles (axiom H7).
-//! The P2 push-pull kernel is driven over a repeating coordinate
-//! sequence as well, so the never-clean rule for handle steps is under
-//! the same oracle. The P2, P3, and hybrid kernels run the H4 validator
-//! after every run in these debug builds.
+//! across the tiers by type and text for a run of coordinates. The P2
+//! push-pull kernel is driven over a repeating coordinate sequence as
+//! well, so a reference output that stays current across repeated
+//! writes is under the same oracle. The P2 and hybrid kernels run the
+//! S9 reference validator after every run in these debug builds.
 //!
 //! `FUZZ_SEED` and `FUZZ_ITERATIONS` follow the other fuzzers.
 
@@ -1001,11 +1002,6 @@ fn check_with(src: &str, outputs: &[&str], cycles: u64, externs: &[(String, Valu
             .set_input(name, value.clone())
             .unwrap_or_else(|e| panic!("hybrid set_input: {e}\n{src}"));
     }
-    // Every kernel here is a root on this thread, and a root's cycle
-    // advance resets the arena (SRD 115 §4), so each kernel's outputs
-    // are copied out right after its own run, before the next root
-    // kernel runs. Reading them later would read through handles into
-    // storage another kernel has reused.
     // Every engine is driven through the `Kernel` trait, output by
     // output, so a compiled kernel runs each output's cone as the
     // interpreter does (engine parity step 5), and the side channel's
@@ -1055,9 +1051,9 @@ fn check_with(src: &str, outputs: &[&str], cycles: u64, externs: &[(String, Valu
             "hybrid: rows emitted at cycle {c}\n{src}"
         );
     }
-    // The push-pull kernel over a repeating sequence: clean-step
-    // skipping must never leave a handle slot pointing into storage the
-    // next root cycle reused (SRD 115 §4).
+    // The push-pull kernel over a repeating sequence: a reference
+    // output skipped as current must still be the value its inputs
+    // produced (axioms S3, S5).
     for &c in &[0u64, 1, 1, 2, 2, 2, 0, 3, 3, 1] {
         p1.set_inputs(&[c]);
         let want: Vec<Value> = outputs.iter().map(|o| p1.pull(o).clone()).collect();
@@ -1156,13 +1152,12 @@ fn the_corpus_agrees_across_every_tier() {
     }
 }
 
-/// A step that writes a handle slot is never marked clean in the
-/// provenance kernels (SRD 115 §4): with repeating coordinates the P2
-/// push-pull kernel and the hybrid kernel still recompute their string
-/// and JSON outputs each run, so no slot holds a handle into storage the
-/// root cycle has reset.
+/// A reference output is owned by its step and stands until an input
+/// in its provenance changes: with repeating coordinates the P2
+/// push-pull kernel and the hybrid kernel skip the current string and
+/// JSON steps and still read the values their inputs produced.
 #[test]
-fn provenance_kernels_rerun_handle_steps_on_repeated_coordinates() {
+fn provenance_kernels_keep_reference_outputs_current_on_repeated_coordinates() {
     let src = "input cycle: u64\nh := hash(cycle)\ns := __u64_to_string(h)\nj := to_json(s)\nt := json_to_str(j)\nn := __str_to_u64(s)\n";
     let mut p1 = kernel(src, JitMode::Off);
     let mut p2 = compile_polydat_to_assembler(src)
@@ -1207,17 +1202,16 @@ fn provenance_kernels_rerun_handle_steps_on_repeated_coordinates() {
     }
 }
 
-/// A P2 kernel owns a fixed table sized to its table-kind slots and
-/// replaces entries in place; the H4 validator ran after every eval
-/// above, in this debug build.
+/// A P2 kernel's JSON outputs are each owned by their step's scratch
+/// and replaced in place on every run; the S9 validator ran after
+/// every eval, in this debug build.
 #[test]
-fn a_p2_kernel_owns_a_fixed_table() {
+fn a_p2_kernel_replaces_reference_outputs_in_place() {
     let src = "input cycle: u64\nh := hash(cycle)\nj := __u64_to_json(h)\nk := to_json(h)\nt := json_to_str(k)\n";
     let mut p2 = compile_polydat_to_assembler(src)
         .unwrap()
         .try_compile_raw()
         .unwrap_or_else(|_| panic!("P2"));
-    assert_eq!(p2.table_len(), 2);
     for c in 0..50u64 {
         p2.eval(&[c]);
         assert_eq!(
@@ -1225,7 +1219,6 @@ fn a_p2_kernel_owns_a_fixed_table() {
             p2.get_value("j").to_display_string()
         );
     }
-    assert_eq!(p2.table_len(), 2);
 }
 
 /// Externs of every kind the compiled engines carry, through every

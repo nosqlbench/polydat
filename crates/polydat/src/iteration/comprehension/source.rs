@@ -111,6 +111,11 @@ pub enum LiteralValue {
     String(String),
     /// A boolean.
     Bool(bool),
+    /// A JSON value carrying its own kind: an item of a JSON list a
+    /// generator supplied at run time, bound where the element is
+    /// declared `json`. Last, so an untagged read tries the scalar
+    /// forms first.
+    Json(serde_json::Value),
 }
 
 impl Source {

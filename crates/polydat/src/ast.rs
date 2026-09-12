@@ -1375,42 +1375,50 @@ impl PortType {
             | Self::RegF32x4
             | Self::RegF64x2 => SlotColor::Imm2,
             // Heap slices: a (ptr, len) reference pair viewing
-            // kernel-owned scratch (§8.4 layer 3).
+            // kernel-owned scratch (§8.4 layer 3). A string and a
+            // byte string are slices of bytes; a JSON, extension, or
+            // handle value is a one-element slice holding the value.
             Self::VecF32
             | Self::VecI32
             | Self::VecF64
             | Self::VecI64
             | Self::VecF16
             | Self::VecI16
-            | Self::VecI8 => SlotColor::Ref2,
-            // Non-scalar values (SRD 115 §2): one slot holding a
-            // handle that names the value in the static interner,
-            // the cycle arena, or the state's value table. Never
-            // decoded by generated code.
-            Self::Str | Self::Bytes | Self::Json | Self::Ext | Self::Handle => SlotColor::Hdl1,
+            | Self::VecI8
+            | Self::Str
+            | Self::Bytes
+            | Self::Json
+            | Self::Ext
+            | Self::Handle => SlotColor::Ref2,
             // Everything else (incl. all narrow widths riding
             // their 64-bit carriers): one slot of immediate data.
             _ => SlotColor::Imm1,
         }
     }
 
-    /// Where a `Hdl1`-colored port's handles point (SRD 115 §2.2,
-    /// axiom H2): byte strings live in the static interner or the
-    /// cycle arena; every other non-scalar value lives in the state's
-    /// value table. `None` for every other color.
-    pub fn handle_kind(&self) -> Option<HandleKind> {
-        match self {
-            Self::Str | Self::Bytes => Some(HandleKind::Bytes),
-            Self::Json | Self::Ext | Self::Handle => Some(HandleKind::Table),
-            _ => None,
-        }
+    /// The scratch element a `Ref2`-colored port's producer owns
+    /// (axiom S3); `None` for an immediate color.
+    pub fn scratch_elem(&self) -> Option<ScratchElem> {
+        Some(match self {
+            Self::VecF32 => ScratchElem::F32,
+            Self::VecF64 => ScratchElem::F64,
+            Self::VecF16 => ScratchElem::F16,
+            Self::VecI8 => ScratchElem::I8,
+            Self::VecI16 => ScratchElem::I16,
+            Self::VecI32 => ScratchElem::I32,
+            Self::VecI64 => ScratchElem::I64,
+            Self::Str => ScratchElem::Str,
+            Self::Bytes => ScratchElem::Bytes,
+            Self::Json | Self::Ext | Self::Handle => ScratchElem::Value,
+            _ => return None,
+        })
     }
 
     /// Buffer slots this type occupies — derived from
     /// [`Self::slot_color`] per axiom S1.
     pub fn slot_width(&self) -> usize {
         match self.slot_color() {
-            SlotColor::Imm1 | SlotColor::Hdl1 => 1,
+            SlotColor::Imm1 => 1,
             SlotColor::Imm2 | SlotColor::Ref2 => 2,
         }
     }
@@ -1637,10 +1645,6 @@ pub enum JitType {
     F64,
     /// A boolean carrier, 0 or 1.
     Bool,
-    /// A string handle.
-    Str,
-    /// A byte-string handle.
-    Bytes,
     /// A `u8` carrier, zero-extended.
     U8,
     /// A `u16` carrier, zero-extended.
@@ -1872,7 +1876,8 @@ pub type CompiledU64Op = Box<dyn Fn(&[u64], &mut [u64]) + Send + Sync>;
 
 /// Element type of one kernel-owned scratch buffer
 /// (type_system_alignment.md §8.4 layer 3). One entry per
-/// vector-producing output port of a slot-compiled node.
+/// `Ref2`-colored output port of a slot-compiled node: a typed
+/// vector, a string, a byte string, or a value held by reference.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScratchElem {
     /// `f32` elements.
@@ -1889,12 +1894,27 @@ pub enum ScratchElem {
     I32,
     /// `i64` elements.
     I64,
+    /// The UTF-8 bytes of a string.
+    Str,
+    /// The bytes of a byte string.
+    Bytes,
+    /// One value held by reference (`Json`, `Ext`, `Handle`): the
+    /// pair is `(&Value, 1)`.
+    Value,
+    /// A buffer of 64-bit slots: a native cone's own slot buffer,
+    /// owned by the state that evaluates it.
+    Slots,
+    /// The kernels a tile render keeps over its projection bodies,
+    /// owned by the state that renders.
+    Kernels,
 }
 
 /// Slot color of a `PortType` in compiled kernel buffers —
 /// axiom S1: static, total, three-valued. `Imm*` slots carry
 /// immediate data only (never addresses); `Ref2` pairs carry a
-/// `(ptr, len)` reference into kernel-owned scratch and are
+/// `(ptr, len)` reference to storage with a proven owner: the
+/// step's own scratch, an extern's stored value, an interned
+/// constant, or a boundary value alive for the call. They are
 /// engine-internal per axiom S2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlotColor {
@@ -1904,30 +1924,15 @@ pub enum SlotColor {
     Imm2,
     /// Two slots holding a (ptr, len) reference pair.
     Ref2,
-    /// One slot holding a handle that names a non-scalar value
-    /// (SRD 115 §2): a static interner entry, a cycle-arena byte
-    /// range, or a value-table entry. Opaque to generated code, which
-    /// only loads, stores, and passes it to helpers (axiom H1).
-    Hdl1,
 }
 
-/// Where a handle-colored port's values live (SRD 115 §2.2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum HandleKind {
-    /// `Str` and `Bytes`: a static interner entry or a cycle-arena
-    /// range, valid for the current root cycle.
-    Bytes,
-    /// `Json`, `Ext`, `Handle`: an entry in the owning state's value
-    /// table, single-writer per entry.
-    Table,
-}
-
-/// One kernel-owned scratch buffer. A vector-producing port's
+/// One kernel-owned scratch buffer. A `Ref2` output port's
 /// `(ptr, len)` buffer slots view its scratch — the kernel owns
 /// the allocation, so the pointer is valid exactly as long as the
 /// producing step doesn't rerun (and a rerun rewrites the slots
-/// before any consumer reads them). No Arc traffic, no per-cycle
-/// allocation after warmup.
+/// before any consumer reads them). No Arc traffic, no allocation
+/// after warmup: a string or byte string is rewritten in place, a
+/// value is replaced.
 #[derive(Debug, Clone)]
 pub enum ScratchBuf {
     /// An `f32` buffer.
@@ -1944,6 +1949,17 @@ pub enum ScratchBuf {
     I32(Vec<i32>),
     /// An `i64` buffer.
     I64(Vec<i64>),
+    /// The UTF-8 bytes of a string.
+    Str(Vec<u8>),
+    /// The bytes of a byte string.
+    Bytes(Vec<u8>),
+    /// One value held by reference; empty until the step first runs.
+    Value(Vec<Value>),
+    /// A buffer of 64-bit slots (a native cone's own).
+    Slots(Vec<u64>),
+    /// The kernels a tile render keeps over its projection bodies. A
+    /// clone is empty: a new state builds its own.
+    Kernels(crate::library::tile_render::BodyKernels),
 }
 
 impl ScratchBuf {
@@ -1959,12 +1975,19 @@ impl ScratchBuf {
             ScratchBuf::I16(v) => (v.as_ptr() as usize as u64, v.len() as u64),
             ScratchBuf::I32(v) => (v.as_ptr() as usize as u64, v.len() as u64),
             ScratchBuf::I64(v) => (v.as_ptr() as usize as u64, v.len() as u64),
+            ScratchBuf::Str(v) | ScratchBuf::Bytes(v) => {
+                (v.as_ptr() as usize as u64, v.len() as u64)
+            }
+            ScratchBuf::Value(v) => (v.as_ptr() as usize as u64, v.len() as u64),
+            ScratchBuf::Slots(v) => (v.as_ptr() as usize as u64, v.len() as u64),
+            ScratchBuf::Kernels(_) => (0, 0),
         }
     }
 
-    /// The vector this entry holds as an owned `Value`, copied out:
-    /// the typed read of a vector output on a compiled kernel, which
-    /// is what the interpreter's `pull` returns for the same port.
+    /// What this entry holds as an owned `Value`, copied out: the
+    /// typed read of a `Ref2` output on a compiled kernel, which is
+    /// what the interpreter's `pull` returns for the same port. A
+    /// value entry that has not been written reads as `None`.
     pub fn to_value(&self) -> Value {
         match self {
             ScratchBuf::F32(v) => Value::VecF32(SliceArc::from_vec(v.clone())),
@@ -1974,6 +1997,53 @@ impl ScratchBuf {
             ScratchBuf::I16(v) => Value::VecI16(SliceArc::from_vec(v.clone())),
             ScratchBuf::I32(v) => Value::VecI32(SliceArc::from_vec(v.clone())),
             ScratchBuf::I64(v) => Value::VecI64(SliceArc::from_vec(v.clone())),
+            // SAFETY: a `Str` entry is written only from `&str` bytes.
+            ScratchBuf::Str(v) => {
+                Value::Str(Arc::from(unsafe { std::str::from_utf8_unchecked(v) }))
+            }
+            ScratchBuf::Bytes(v) => Value::Bytes(Arc::from(&v[..])),
+            ScratchBuf::Value(v) => v.first().cloned().unwrap_or(Value::None),
+            ScratchBuf::Slots(_) => panic!("a slot buffer is not a value"),
+            ScratchBuf::Kernels(_) => panic!("a body kernel set is not a value"),
+        }
+    }
+
+    /// Replace the string this entry holds, reusing its allocation.
+    /// The entry must be a `Str` entry.
+    #[inline]
+    pub fn set_str(&mut self, s: &str) {
+        match self {
+            ScratchBuf::Str(v) => {
+                v.clear();
+                v.extend_from_slice(s.as_bytes());
+            }
+            other => panic!("scratch entry holds {other:?}, not a string"),
+        }
+    }
+
+    /// Replace the byte string this entry holds, reusing its
+    /// allocation. The entry must be a `Bytes` entry.
+    #[inline]
+    pub fn set_bytes(&mut self, b: &[u8]) {
+        match self {
+            ScratchBuf::Bytes(v) => {
+                v.clear();
+                v.extend_from_slice(b);
+            }
+            other => panic!("scratch entry holds {other:?}, not a byte string"),
+        }
+    }
+
+    /// Replace the value this entry holds. The entry must be a
+    /// `Value` entry.
+    #[inline]
+    pub fn set_value(&mut self, value: Value) {
+        match self {
+            ScratchBuf::Value(v) => {
+                v.clear();
+                v.push(value);
+            }
+            other => panic!("scratch entry holds {other:?}, not a value"),
         }
     }
 
@@ -1987,6 +2057,11 @@ impl ScratchBuf {
             ScratchElem::I16 => ScratchBuf::I16(Vec::new()),
             ScratchElem::I32 => ScratchBuf::I32(Vec::new()),
             ScratchElem::I64 => ScratchBuf::I64(Vec::new()),
+            ScratchElem::Str => ScratchBuf::Str(Vec::new()),
+            ScratchElem::Bytes => ScratchBuf::Bytes(Vec::new()),
+            ScratchElem::Value => ScratchBuf::Value(Vec::new()),
+            ScratchElem::Slots => ScratchBuf::Slots(Vec::new()),
+            ScratchElem::Kernels => ScratchBuf::Kernels(Default::default()),
         }
     }
 }
@@ -2156,6 +2231,22 @@ pub trait PolydatNode: Send + Sync {
     /// the correct length and types matching `meta()`.
     fn eval(&self, inputs: &[Value], outputs: &mut [Value]);
 
+    /// The scratch entries a state owns for this node's evaluation
+    /// (axiom S3), one per entry in the order the node expects them
+    /// in [`Self::eval_in`]. Empty for a node that evaluates over
+    /// `Value`s alone, which is every node but a native cone.
+    fn scratch_layout(&self) -> Vec<ScratchElem> {
+        Vec::new()
+    }
+
+    /// [`Self::eval`] with the node's scratch, which the evaluating
+    /// state owns and hands in: storage belongs to the state, never to
+    /// the node, which is shared by every state of the program.
+    fn eval_in(&self, scratch: &mut [ScratchBuf], inputs: &[Value], outputs: &mut [Value]) {
+        let _ = scratch;
+        self.eval(inputs, outputs)
+    }
+
     /// Declare which inputs are interchangeable for this node.
     ///
     /// Override for commutative operations like `sum`, `product`,
@@ -2204,27 +2295,7 @@ pub trait PolydatNode: Send + Sync {
     /// Checked by the compiled-kernel builders AFTER
     /// [`Self::compiled_u64`] — pure-scalar nodes never need it.
     /// Default `None`: the node stays on typed eval.
-    fn compiled_slot(&self) -> Option<CompiledSlotKit> {
-        None
-    }
-
-    /// Return a compiled closure over handle slots (SRD 115 §7): the
-    /// same buffer contract as [`Self::compiled_u64`], with byte
-    /// strings as arena or static handles and `Json`, `Ext`, and
-    /// `Handle` values as entries of the value table the kernel
-    /// installs around each run. `entry_base` is the first table
-    /// entry this node owns, one per table-kind output port in port
-    /// order; `wire_types` is the type of each wire input, in slot
-    /// order, which a polymorphic or variadic port decodes by.
-    ///
-    /// Default: `None` (no handle-slot form). The `#[polydat_node]`
-    /// macro emits this for nodes with a JSON, polymorphic, or
-    /// variadic port whose other shapes fit the buffer.
-    fn compiled_handle(
-        &self,
-        _entry_base: usize,
-        _wire_types: &[PortType],
-    ) -> Option<CompiledU64Op> {
+    fn compiled_slot(&self, _wire_types: &[PortType]) -> Option<CompiledSlotKit> {
         None
     }
 

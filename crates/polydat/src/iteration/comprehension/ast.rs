@@ -373,6 +373,7 @@ fn literal_value_text(v: &super::source::LiteralValue) -> String {
             }
         }
         LiteralValue::Bool(b) => b.to_string(),
+        LiteralValue::Json(j) => j.to_string(),
         LiteralValue::String(s) => {
             let bare_ok = !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_');
             if bare_ok {

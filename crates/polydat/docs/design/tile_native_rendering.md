@@ -12,19 +12,26 @@ step 3 records: once the allocations and lookups were gone, the walk
 was not where the time was.
 
 **Depends on:** [Polytile](polytile.md) (SRD 114) for the skeleton and
-its semantics, [Compiled Non-Scalar Slots](compiled_handles.md) (SRD 115)
-for the arena, the handle boundary, and the helper ABI, and
+its semantics, [Compiled By-Reference Slots](compiled_handles.md)
+(SRD 115) for the reference-pair slots a rendered document rides in, and
 [Engine Parity](engine_parity.md) (SRD 116) for the `Kernel` trait every
-engine shares, which the projection bodies will use.
+engine shares, which the projection bodies use.
+
+*Since SRD 115's third revision the render node is a closure step on
+every compiled engine: native code carries no reference pairs yet, so
+what this plan measured as "P3" is now the render closure beside native
+segments, writing into the step's own scratch, and the helper it
+describes is gone. The measurements below are kept as the record of
+what each step bought; the mechanism they describe is the closure's.*
 
 ## 1. The problem
 
-A tile renders the same bytes on every engine (SRD 115 axiom H7), and on
-P3 it renders inside native code: `tile_encode` and `tile_render` lower
-to helpers that write straight into the cycle arena. That is the
-correctness result SRD 115 set out to reach. The cost result is not
-there yet, because the render path was assembled from the P1 pieces
-and each piece still does what it did on the interpreter:
+A tile renders the same bytes on every engine, and on P3 it rendered
+inside native code: `tile_encode` and `tile_render` lowered to helpers
+that wrote straight into a thread-local arena. That was the correctness
+result SRD 115 set out to reach. The cost result was not there,
+because the render path was assembled from the P1 pieces and each
+piece still did what it did on the interpreter:
 
 1. **A hole is encoded twice.** The compiler lowers every hole
    `${expr}` to its own binding, `__tile_<name>_hN := tile_encode(expr,
@@ -93,7 +100,8 @@ each measured:
    encoding carried in the skeleton (`HoleSource::Wire(i)` gains its
    `HoleEncoding`). The renderer encodes at the hole, from a borrowed
    `ValueRef` straight into the sink, on every tier: P1 into its
-   `String`, P2 and P3 into the arena writer. The `tile_encode` node
+   `String`, P2 and P3 into the step's own scratch entry through a
+   `BytesSink`. The `tile_encode` node
    stays in the library (a host may call it) but the compiler no longer
    emits it. On P3 the helper reads its arguments as `ValueRef` views
    over the slots (`marshal::arg_ref`, which the encoder already takes)
@@ -111,7 +119,7 @@ each measured:
    one) and passes the values to one `tile_render`. On P3 the helper
    builds views with `arg_refs`; on P2 and as a closure step in a
    hybrid kernel, `tile_render` supplies its own closure through the
-   new `compiled_handle = <path>` override of the node macro, reading
+   new `compiled_slot = <path>` override of the node macro, reading
    each slot as a view by the wire type the kernel fixed. The `None`
    rule is unchanged: a hole naming a kernel input reads it through the
    input passthrough, so the render node still fuses beside it. Bench
@@ -130,22 +138,18 @@ each measured:
    once, when the `TileProgram` is constructed, and reused. A body runs
    on the engine of the enclosing kernel: the `TileProgram` holds the
    body's program per engine, as `Traversal::program_on` does for a
-   `for` body, and the walk creates a nested kernel through the `Kernel`
+   `for` body, and the walk creates a body kernel through the `Kernel`
    trait, binds the tuple and the cascade with `set_input`, and reads
-   each body hole with `pull`, encoding from the returned value. Nested
-   kernels are created once per render node and reused, as the scratch
-   states are today. The comprehension evaluator is engine-neutral
-   already (SRD 116, step 8 addendum), so a comprehension that does read
-   a cascaded wire evaluates against the body kernel on any engine.
+   each body hole with `pull`, encoding from the returned value. Body
+   kernels are created once per rendering state and reused, in the
+   render node's own scratch. The comprehension evaluator is
+   engine-neutral already (SRD 116, step 8 addendum), so a
+   comprehension that does read a cascaded wire evaluates against the
+   body kernel on any engine.
 
    *Landed 2026-09-11, with two corrections to the design above.* The
    body's compiled program is built at `TileProgram` construction, not
-   on first render: a kernel's build folded its constants in a root
-   cycle of its own, which reset the arena a render was writing
-   (SRD 115, H5), and the first attempt did exactly that inside a cone's
-   helper. (The architecture review's F-K1 fix later made construction
-   and compilation open no cycle on any engine, `runtime_model.md`
-   axiom R4; the precompile stays, for the first render's cost.) Every
+   on first render, for the first render's cost. Every
    compiled kernel renders its bodies on
    `Engine::default()`, not on its own engine: the render node's closure
    serves the closure tier and a hybrid kernel's closure steps alike
@@ -155,9 +159,10 @@ each measured:
    the lock deadlocked the tutorial. The tuples of a comprehension with
    no generator clause and no placeholder are evaluated once at
    construction; the walk binds each tuple and the cascade through the
-   `Kernel` trait into one nested kernel per body, engine, and thread,
-   and reads each body hole with `pull`. `tests/tile_projections.rs`
-   checks the body's engine and the reuse. Bench: `projected` 8150 ns
+   `Kernel` trait into one body kernel per body program and engine,
+   owned by the rendering state, and reads each body hole with `pull`.
+   `tests/tile_projections.rs` checks the body's engine and
+   `library::tile_render::tests` the reuse. Bench: `projected` 8150 ns
    on P3 (was 8496), 8366 on P1 (was 8360): the step is functionally
    complete and nearly free of effect, because the cost was not where
    §1 put it. A probe of one nested body kernel (two holes) driven the
@@ -179,7 +184,7 @@ each measured:
    immediates, and a typed encoder per hole (`jit_encode_u64_json`,
    `jit_encode_str_json_quoted`, and so on, one per encoding, position,
    and wire type the classifier has already fixed), each appending to
-   the open arena writer, with integer and float text produced by the
+   the step's scratch entry, with integer and float text produced by the
    fast formatters rather than `Display`. A `Branch` is a native
    conditional over the condition slot. A skeleton with a `Repeat` keeps the helper of step
    2, since a projection's body is a program, not a sequence. This step
@@ -253,10 +258,10 @@ each measured:
 - **The typing.** Hole typing, adapters, the `TileHoleTyped` and
   `TileCompiled` events, and `explain tiles` are compile-time and are
   untouched; only the lowering after pass 5 of SRD 114 §6 changes.
-- **The arena discipline.** The renderer writes through `ArenaWriter`,
-  a projection's nested kernels allocate between the writer's pushes
-  and the writer relocates as it does today, nested kernels never reset
-  the arena (H5), and the cone eval stays re-entrant (SRD 115 §6.2).
+- **Ownership.** The renderer writes into the render step's own string
+  scratch, and a projection's body kernels live in the same step's
+  scratch, so a render touches no storage but its own state's
+  (SRD 115 §3).
 - **The host surfaces.** `polytile`, `polytile_json`, the `polydat::tile`
   functions, `apply_tile_defaults`, and `--emit tile:<name>` compile
   through the same lowering and are unaffected.
@@ -405,8 +410,8 @@ The unchanged cases (`reading`, `one_hole`) show the pair's drift, about
 - A tile whose hole is a vector-typed wire, or whose body contains a
   node with no closure form, follows the engine's ordinary rules for
   that node; this plan changes the renderer, not what an engine accepts.
-- Two renders of one tile in one cycle, or the same tile inside a
-  projection body and outside it, keep their own nested kernels; the
+- Two renders of one tile in one program, or the same tile inside a
+  projection body and outside it, keep their own body kernels; the
   plan never shares dispense state (SRD 114 §7.1).
 - Step 3 generates code per tile skeleton, so a program with many
   distinct tiles compiles more native code; the bench's `wide` case is

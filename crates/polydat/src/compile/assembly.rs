@@ -267,76 +267,126 @@ fn slot_layout(resolved: &ResolvedDag) -> SlotLayout {
     }
 }
 
-/// Compiled-op selection for one node: pure-scalar `compiled_u64`
-/// first (cheapest dispatch), then the handle closure for nodes with
-/// JSON, polymorphic, or variadic ports (SRD 115 §7), then the slot
-/// op for slice-bearing nodes (§8.4 layer 3), else `None` →
-/// typed-eval fallback. `entry_base` is the first value-table entry
-/// the node's table-kind outputs own; `wire_types` the type of each
-/// wire input.
+/// Compiled-op selection for one node: a copy step inline, then the
+/// pure-scalar `compiled_u64` (cheapest dispatch), then the slot kit
+/// for every other shape (§8.4 layer 3), else `None` → typed-eval
+/// fallback. `wire_types` is the type of each wire input.
 fn node_step_op(
     node: &dyn crate::ast::PolydatNode,
-    entry_base: usize,
     wire_types: &[PortType],
 ) -> Option<(
     crate::compile::closures::StepOp,
     Vec<crate::ast::ScratchElem>,
 )> {
-    if let Some(op) = table_copy_op(node, entry_base) {
-        return Some((crate::compile::closures::StepOp::U64(op), Vec::new()));
-    }
-    // A plain copy (`identity`, a `__port_` passthrough) of any color but
-    // `Ref2`, which axiom S3 forbids forwarding: an inline slot copy.
+    // A plain copy (`identity`, a `__port_` passthrough): an inline
+    // slot copy of an immediate; a `Ref2` value is copied into the
+    // step's own scratch, since a pair is never forwarded (axiom S3).
     let meta = node.meta();
-    if (meta.name == "identity" || meta.name.starts_with("__port_"))
-        && meta.outs.len() == 1
-        && meta.outs[0].typ.slot_color() != crate::ast::SlotColor::Ref2
-    {
-        return Some((crate::compile::closures::StepOp::Copy, Vec::new()));
+    if (meta.name == "identity" || meta.name.starts_with("__port_")) && meta.outs.len() == 1 {
+        return Some(match meta.outs[0].typ.slot_color() {
+            crate::ast::SlotColor::Ref2 => {
+                let kit = ref_copy_kit(meta.outs[0].typ)?;
+                (crate::compile::closures::StepOp::Slot(kit.op), kit.scratch)
+            }
+            _ => (crate::compile::closures::StepOp::Copy, Vec::new()),
+        });
     }
     if let Some(op) = node.compiled_u64() {
         return Some((crate::compile::closures::StepOp::U64(op), Vec::new()));
     }
-    if let Some(op) = node.compiled_handle(entry_base, wire_types) {
-        return Some((crate::compile::closures::StepOp::U64(op), Vec::new()));
-    }
-    if let Some(op) = identity_op(node) {
-        return Some((crate::compile::closures::StepOp::U64(op), Vec::new()));
-    }
-    node.compiled_slot()
+    node.compiled_slot(wire_types)
         .map(|kit| (crate::compile::closures::StepOp::Slot(kit.op), kit.scratch))
 }
 
-/// The compiled form of a copy step (`identity`, or the compiler's own
-/// `__port_<name>` passthrough) whose one output is a table kind. The
-/// layout gives every table-kind output its own entry, and axiom H4
-/// requires the slot to name that entry, so a copy of a table handle
-/// re-enters the value rather than forwarding the upstream handle: the
-/// value is read from the installed table and written to this step's
-/// entry. Copies of every other color remain plain slot copies.
-pub(crate) fn table_copy_op(
-    node: &dyn crate::ast::PolydatNode,
-    entry_base: usize,
-) -> Option<crate::ast::CompiledU64Op> {
-    let meta = node.meta();
-    let is_copy = meta.name == "identity" || meta.name.starts_with("__port_");
-    if !is_copy
-        || meta.outs.len() != 1
-        || meta.outs[0].typ.handle_kind() != Some(crate::ast::HandleKind::Table)
-    {
-        return None;
-    }
-    Some(Box::new(move |inputs: &[u64], outputs: &mut [u64]| {
-        let value = crate::kernel::current_table_value(inputs[0]).clone();
-        outputs[0] = crate::kernel::write_table_entry(entry_base, value);
-    }))
+/// Axiom S9(a): the `(first slot, scratch index)` pairs of a step's
+/// scratch-backed `Ref2` outputs. A kit's scratch entries pair with
+/// the step's `Ref2` output ports in port order, skipping the entries
+/// that publish no pair (a native cone's slot buffer, a render's body
+/// kernels); a `Ref2` output beyond the kit's publishing entries is
+/// not scratch-backed (a pair into interned bytes) and is validated by
+/// nothing. `base` is the index of the kit's first entry in the
+/// kernel's scratch. A kit with more publishing entries than the step
+/// has `Ref2` outputs is a macro or builder bug, caught at
+/// construction (axiom S3).
+pub(crate) fn scratch_pairs(
+    name: &str,
+    ref_starts: &[usize],
+    scratch: &[crate::ast::ScratchElem],
+    base: usize,
+) -> Vec<(usize, usize)> {
+    use crate::ast::ScratchElem;
+    let publishing: Vec<usize> = scratch
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| !matches!(e, ScratchElem::Slots | ScratchElem::Kernels))
+        .map(|(k, _)| base + k)
+        .collect();
+    assert!(
+        publishing.len() <= ref_starts.len(),
+        "slot-op step '{name}' declares {} publishing scratch entries for {} Ref output ports",
+        publishing.len(),
+        ref_starts.len()
+    );
+    ref_starts.iter().copied().zip(publishing).collect()
+}
+
+/// The compiled form of a copy of a `Ref2` value (`identity`, the
+/// compiler's `__port_<name>` passthrough, a type assertion): the pair
+/// is never forwarded (axiom S3), so the elements are copied into this
+/// step's own scratch entry and its pair is published. `None` for an
+/// immediate color, which is copied inline.
+pub(crate) fn ref_copy_kit(ty: PortType) -> Option<crate::ast::CompiledSlotKit> {
+    use crate::ast::ScratchBuf;
+    let elem = ty.scratch_elem()?;
+    Some(crate::ast::CompiledSlotKit {
+        scratch: vec![elem],
+        op: Box::new(
+            move |inputs: &[u64], outputs: &mut [u64], scratch: &mut [ScratchBuf]| {
+                let (p, n) = (inputs[0] as usize, inputs[1] as usize);
+                macro_rules! copy_into {
+                    ($v:expr, $t:ty) => {{
+                        $v.clear();
+                        // SAFETY: the pair was published by the producing
+                        // step into storage alive until it reruns (axioms
+                        // S3, S4), and the layout typed it `$t`.
+                        $v.extend_from_slice(unsafe {
+                            std::slice::from_raw_parts(p as *const $t, n)
+                        });
+                    }};
+                }
+                match &mut scratch[0] {
+                    ScratchBuf::Str(v) | ScratchBuf::Bytes(v) => copy_into!(v, u8),
+                    ScratchBuf::F32(v) => copy_into!(v, f32),
+                    ScratchBuf::F64(v) => copy_into!(v, f64),
+                    ScratchBuf::F16(v) => copy_into!(v, half::f16),
+                    ScratchBuf::I8(v) => copy_into!(v, i8),
+                    ScratchBuf::I16(v) => copy_into!(v, i16),
+                    ScratchBuf::I32(v) => copy_into!(v, i32),
+                    ScratchBuf::I64(v) => copy_into!(v, i64),
+                    ScratchBuf::Value(v) => {
+                        v.clear();
+                        if n > 0 {
+                            // SAFETY: as above; a value pair names one `Value`.
+                            v.push(unsafe { (*(p as *const crate::ast::Value)).clone() });
+                        }
+                    }
+                    ScratchBuf::Slots(_) | ScratchBuf::Kernels(_) => {
+                        unreachable!("a copy owns only a value entry")
+                    }
+                }
+                let (ptr, len) = scratch[0].ptr_len();
+                outputs[0] = ptr;
+                outputs[1] = len;
+            },
+        ),
+    })
 }
 
 /// The compiled form of `identity`, synthesized by the builder: a slot
-/// copy, for every port color except `Ref2`, whose pairs may not be
-/// forwarded by an identity-style step (engines.md §7, axiom S3). The
-/// node itself is polymorphic over `Value` and so has no kit of its
-/// own; the builder knows the resolved port type and can supply one.
+/// copy, for every port color except `Ref2`, which
+/// [`ref_copy_kit`] carries. The node itself is polymorphic over
+/// `Value` and so has no kit of its own; the builder knows the
+/// resolved port type and can supply one.
 pub(crate) fn identity_op(node: &dyn crate::ast::PolydatNode) -> Option<crate::ast::CompiledU64Op> {
     let meta = node.meta();
     if meta.name != "identity" || meta.outs.len() != 1 {
@@ -348,30 +398,6 @@ pub(crate) fn identity_op(node: &dyn crate::ast::PolydatNode) -> Option<crate::a
     Some(Box::new(|inputs: &[u64], outputs: &mut [u64]| {
         outputs.copy_from_slice(inputs)
     }))
-}
-
-/// The `(slot, entry)` pairs of a node's table-kind output ports,
-/// numbered from `entry_base` in port order (SRD 115 §3).
-fn table_entries_of(
-    resolved: &ResolvedDag,
-    layout: &SlotLayout,
-    node_idx: usize,
-    entry_base: usize,
-) -> Vec<(usize, usize)> {
-    let mut entries = Vec::new();
-    let mut slot = layout.output_slots(resolved, node_idx).into_iter();
-    for port in &resolved.nodes[node_idx].meta().outs {
-        let first = slot.next();
-        for _ in 1..port.typ.slot_width() {
-            slot.next();
-        }
-        if port.typ.handle_kind() == Some(crate::ast::HandleKind::Table)
-            && let Some(first) = first
-        {
-            entries.push((first, entry_base + entries.len()));
-        }
-    }
-    entries
 }
 
 impl SlotLayout {
@@ -418,11 +444,11 @@ impl SlotLayout {
             .collect()
     }
 
-    /// Axiom S2 and SRD 115 axiom H1: per-slot mask of the slots raw
-    /// readers must refuse, over the whole buffer — kernel inputs and
-    /// node outputs alike. Both slots of a Ref pair are masked; a
-    /// handle slot is masked because its bits name a value rather than
-    /// being one, and only a boundary decode may read it.
+    /// Axiom S2: per-slot mask of the slots raw readers must refuse,
+    /// over the whole buffer — kernel inputs and node outputs alike.
+    /// Both slots of a Ref pair are masked, since their bits are an
+    /// address and a length rather than a value; only a typed accessor
+    /// or a boundary decode may read them.
     fn ref_slot_mask(&self, resolved: &ResolvedDag) -> Vec<bool> {
         use crate::ast::SlotColor;
         let mut mask = vec![false; self.total_slots];
@@ -431,7 +457,6 @@ impl SlotLayout {
                 mask[start] = true;
                 mask[start + 1] = true;
             }
-            SlotColor::Hdl1 => mask[start] = true,
             SlotColor::Imm1 | SlotColor::Imm2 => {}
         };
         for (i, d) in resolved.input_defs.iter().enumerate() {
@@ -440,26 +465,6 @@ impl SlotLayout {
         for (n, node) in resolved.nodes.iter().enumerate() {
             for (p, out) in node.meta().outs.iter().enumerate() {
                 mark(self.port_offsets[n][p], out.typ.slot_color());
-            }
-        }
-        mask
-    }
-
-    /// Per-slot `Hdl1` mask (SRD 115): the slots that hold handles.
-    /// A step that writes one must run every cycle, since its arena
-    /// bytes or table entry belong to the cycle that ran it (§4).
-    fn handle_slot_mask(&self, resolved: &ResolvedDag) -> Vec<bool> {
-        let mut mask = vec![false; self.total_slots];
-        for (i, d) in resolved.input_defs.iter().enumerate() {
-            if d.port_type.slot_color() == crate::ast::SlotColor::Hdl1 {
-                mask[self.input_starts[i]] = true;
-            }
-        }
-        for (n, node) in resolved.nodes.iter().enumerate() {
-            for (p, out) in node.meta().outs.iter().enumerate() {
-                if out.typ.slot_color() == crate::ast::SlotColor::Hdl1 {
-                    mask[self.port_offsets[n][p]] = true;
-                }
             }
         }
         mask
@@ -532,8 +537,10 @@ pub struct PolydatAssembler {
     /// nondeterministic node no `volatile` output acknowledges, and a
     /// binding nothing reads are refused at build, on every engine.
     pub(crate) strict: bool,
-    /// SRD-105 per-assembler engine-mix override. `None` defers to
-    /// the process default ([`crate::compile::cone::default_jit_mode`]).
+    /// How much of the interpreter's graph `compile()` fuses into native
+    /// cones; `None` is [`JitMode::Auto`](crate::compile::cone::JitMode).
+    /// `compile_with(Engine::Interpreter(mode))` takes its mode from the
+    /// engine.
     pub(crate) jit_mode: Option<crate::compile::cone::JitMode>,
     /// The cursors the program declares (engine_parity.md, step 3), set
     /// by the DSL compiler so every kernel built from this assembler
@@ -779,9 +786,7 @@ impl PolydatAssembler {
         self,
         mut log: Option<&mut crate::dsl::events::CompileEventLog>,
     ) -> Result<PolydatKernel, AssemblyError> {
-        let jit_mode = self
-            .jit_mode
-            .unwrap_or_else(crate::compile::cone::default_jit_mode);
+        let jit_mode = self.jit_mode.unwrap_or_default();
         let strict = self.strict;
         let mut resolved = self.resolve_with_log(log.as_deref_mut())?;
         crate::compile::cone::extract_jit_cones(&mut resolved, jit_mode);
@@ -806,6 +811,7 @@ impl PolydatAssembler {
         if !cursors.is_empty() {
             kernel.set_cursor_schemas(cursors);
         }
+        kernel.set_cone_mode(jit_mode);
         Ok(kernel)
     }
 
@@ -1025,32 +1031,21 @@ impl PolydatAssembler {
         let mut compiled_ops = Vec::with_capacity(resolved.nodes.len());
         let mut extras = crate::compile::closures::P2Extras::default();
         for (node_idx, node) in resolved.nodes.iter().enumerate() {
-            let entry_base = extras.table_entries.len();
             compiled_ops.push(
-                node_step_op(
-                    node.as_ref(),
-                    entry_base,
-                    &wire_types_of(resolved, node_idx),
-                )
-                .ok_or_else(|| {
-                    format!(
-                        "node '{}' has no compiled form (docs/design/engine_parity.md)",
-                        node.meta().name
-                    )
-                })?,
+                node_step_op(node.as_ref(), &wire_types_of(resolved, node_idx)).ok_or_else(
+                    || {
+                        format!(
+                            "node '{}' has no compiled form (docs/design/engine_parity.md)",
+                            node.meta().name
+                        )
+                    },
+                )?,
             );
-            extras
-                .table_entries
-                .extend(table_entries_of(resolved, &layout, node_idx, entry_base));
         }
-        extras.handle_slots = layout.handle_slot_mask(resolved);
-        // Externs take the entries after the nodes'; the core seeds and
-        // materializes them (compile::externs).
         extras.externs = crate::compile::externs::Externs::new(
             &resolved.input_defs,
             resolved.coord_count,
             &layout.input_starts,
-            extras.table_entries.len(),
             &resolved.cursor_schemas,
             &shared_outputs_of(resolved),
         )?;
@@ -1082,14 +1077,11 @@ impl PolydatAssembler {
         let mut steps = Vec::with_capacity(resolved.nodes.len());
         for (node_idx, (op, scratch)) in compiled_ops.into_iter().enumerate() {
             steps.push(crate::compile::closures::P2Step {
+                name: resolved.nodes[node_idx].meta().name.clone(),
                 op,
                 input_slots: layout.input_slots(resolved, node_idx),
                 output_slots: layout.output_slots(resolved, node_idx),
-                ref_output_starts: if scratch.is_empty() {
-                    Vec::new()
-                } else {
-                    layout.ref_output_starts(resolved, node_idx)
-                },
+                ref_output_starts: layout.ref_output_starts(resolved, node_idx),
                 scratch,
                 accepts_none: resolved.nodes[node_idx].accepts_none_inputs(),
                 volatile: classes.nondeterministic[node_idx],
@@ -1137,9 +1129,7 @@ impl PolydatAssembler {
                     // through the arena (byte strings) or the cycle
                     // value table (everything else), and raw readers
                     // refuse it; it is legal in a pure-P3 layout.
-                    crate::ast::SlotColor::Hdl1
-                    | crate::ast::SlotColor::Imm1
-                    | crate::ast::SlotColor::Imm2 => {}
+                    crate::ast::SlotColor::Imm1 | crate::ast::SlotColor::Imm2 => {}
                 }
             }
         }
@@ -1259,14 +1249,13 @@ impl PolydatAssembler {
     }
 
     /// The extern inputs of a resolved graph, at the slots the layout
-    /// gives them; table-kind entries are numbered by the kernel.
+    /// gives them.
     fn externs_of(resolved: &ResolvedDag) -> Result<crate::compile::externs::Externs, String> {
         let layout = slot_layout(resolved);
         let mut externs = crate::compile::externs::Externs::new(
             &resolved.input_defs,
             resolved.coord_count,
             &layout.input_starts,
-            0,
             &resolved.cursor_schemas,
             &shared_outputs_of(resolved),
         )?;
@@ -2684,7 +2673,11 @@ impl PolydatAssembler {
         let refused = |reason: String| KernelError::Refused { engine, reason };
         let strict = self.strict;
         match engine {
-            Engine::Interpreter => Ok(Box::new(self.compile_with_log(log)?)),
+            Engine::Interpreter(cones) => {
+                let mut asm = self;
+                asm.jit_mode = Some(cones);
+                Ok(Box::new(asm.compile_with_log(log)?))
+            }
             Engine::Closures(prov) => {
                 let resolved = self.resolve_with_log(log.as_deref_mut())?;
                 if strict {
@@ -2771,7 +2764,7 @@ impl PolydatAssembler {
             return;
         };
         for (node, slot, ty) in sites {
-            let value = kernel.slot_value(slot, ty);
+            let value = crate::kernel::KernelInternals::slot_value(kernel, slot, ty);
             if !matches!(value, crate::ast::Value::None) {
                 log.push(crate::dsl::events::CompileEvent::ConstantFolded {
                     node,

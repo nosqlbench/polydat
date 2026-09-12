@@ -451,25 +451,10 @@ impl PolydatKernel {
     /// caches its program, and instantiates a fresh kernel per
     /// `run_phase` call against the cached program.
     pub(crate) fn from_program(program: Arc<PolydatProgram>) -> Self {
-        Self::build(program, false)
-    }
-
-    /// A kernel that runs inside another kernel's cycle (SRD 115 §4):
-    /// a traversal activation, a projection body, a materialized
-    /// subscope. It never resets the thread's cycle arena.
-    pub(crate) fn from_program_nested(program: Arc<PolydatProgram>) -> Self {
-        Self::build(program, true)
-    }
-
-    fn build(program: Arc<PolydatProgram>, nested: bool) -> Self {
         let mut state = program.create_state();
-        if nested {
-            state.mark_nested();
-        }
         // Populate buffers for folded constants so get_constant()
         // works on the new kernel, as `new_with_inputs` seeds them
-        // after the fold. Seeded, not set: constructing a kernel, root
-        // or nested, opens no cycle (axiom H5).
+        // after the fold.
         let dummy = vec![0u64; program.coord_count()];
         state.seed_inputs(&dummy);
         for name in program.output_names() {
@@ -619,6 +604,14 @@ impl PolydatKernel {
             .set_cursor_schemas(schemas);
     }
 
+    /// Record how much of the graph the build fused into native cones,
+    /// before the program is shared.
+    pub(crate) fn set_cone_mode(&mut self, mode: crate::compile::cone::JitMode) {
+        Arc::get_mut(&mut self.program)
+            .expect("set_cone_mode must be called before program is shared")
+            .set_cone_mode(mode);
+    }
+
     /// Attach the parsed AST as live program metadata. Called by
     /// every DSL compile entry point immediately after the
     /// assembler produces the kernel, while the program Arc is
@@ -673,6 +666,8 @@ impl PolydatKernel {
     }
 
     /// [`Self::set_input`] by input index, as `find_input` numbers them.
+    /// The one write rule of every engine: the value satisfies the
+    /// declared type or is `None`, and a coordinate is not written here.
     pub fn set_input_at(&mut self, idx: usize, value: Value) -> Result<(), String> {
         let Some(name) = self.program.input_name_by_idx(idx) else {
             return Err(format!(
@@ -680,16 +675,14 @@ impl PolydatKernel {
                 self.program.input_names()
             ));
         };
-        // A shared cell keeps one type for life (scope model §6.1): a
-        // write of another type fails at the write site, as it does on
-        // every compiled kernel.
-        if self.state.shared_cell(idx).is_some()
-            && value != Value::None
-            && let Some(declared) = self.program.input_port_type_by_idx(idx)
-            && value.port_type() != declared
+        if self.program.input_kind(idx) == Some(crate::kernel::InputKind::Coordinate) {
+            return Err(format!("'{name}' is a coordinate; set it with set_inputs"));
+        }
+        if let Some(declared) = self.program.input_port_type_by_idx(idx)
+            && !value.satisfies_slot(declared)
         {
             return Err(format!(
-                "shared binding '{name}' is declared {declared} but was set to a {} value",
+                "input '{name}' is declared {declared} but was set to a {} value",
                 value.port_type()
             ));
         }
@@ -730,14 +723,6 @@ impl PolydatKernel {
             partition,
         );
         Ok(())
-    }
-
-    /// Mark this kernel as nested inside another kernel's cycle (SRD 115
-    /// §4): a traversal activation, a projection body, a materialized
-    /// subscope. A nested kernel never resets the thread's cycle arena;
-    /// the root kernel the host drives does so on each cycle advance.
-    pub fn mark_nested(&mut self) {
-        self.state.mark_nested();
     }
 
     /// Read an input value by name. Cell-aware: cell-bound
@@ -976,9 +961,7 @@ impl PolydatKernel {
         program: Arc<PolydatProgram>,
         iter_bindings: &[(String, Value)],
     ) -> PolydatKernel {
-        // A materialized subscope runs inside its parent's cycle and
-        // never resets the thread's arena (SRD 115, axiom H5).
-        let mut child = PolydatKernel::from_program_nested(program);
+        let mut child = PolydatKernel::from_program(program);
         for (var, value) in iter_bindings {
             if let Some(idx) = child.program.find_input(var) {
                 child.state.set_input(idx, value.clone());

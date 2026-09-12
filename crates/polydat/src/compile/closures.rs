@@ -17,23 +17,15 @@
 use std::collections::HashMap;
 
 use crate::ast::{CompiledSlotOp, CompiledU64Op, PortType, ScratchBuf, ScratchElem};
-use crate::kernel::ValueTable;
 
-/// What a P2 kernel needs beyond its steps for handle slots (SRD 115
-/// §7): the `(slot, entry)` of every table-kind output, which sizes
-/// the kernel's value table and drives the H4 validator, and each
-/// named output's port type for the typed reader.
+/// What a P2 kernel needs beyond its steps: each named output's port
+/// type for the typed reader, the externs, the provenance, and the
+/// attribution for the failure path.
 #[derive(Default)]
 pub(crate) struct P2Extras {
-    pub(crate) table_entries: Vec<(usize, usize)>,
     pub(crate) output_types: HashMap<String, PortType>,
-    /// Per-slot `Hdl1` mask: a step that writes a handle slot is never
-    /// marked clean, because its arena bytes or table entry belong to
-    /// the cycle that ran it (SRD 115 §4); it recomputes from unchanged
-    /// inputs, as the P3 codegen does for the same steps.
-    pub(crate) handle_slots: Vec<bool>,
     /// The kernel's extern inputs: seeded at build, host-settable,
-    /// materialized every run (`compile::externs`).
+    /// written through at every set (`compile::externs`).
     pub(crate) externs: crate::compile::externs::Externs,
     /// Per input slot, coordinates and externs alike, the steps that
     /// depend on it: the provenance the plan is derived from.
@@ -54,6 +46,8 @@ pub(crate) enum StepOp {
 }
 /// One compiled step plus its slice of the scratch arena.
 pub(crate) struct P2Step {
+    /// The node's name, for construction-time diagnostics.
+    pub(crate) name: String,
     pub(crate) op: StepOp,
     pub(crate) input_slots: Vec<usize>,
     pub(crate) output_slots: Vec<usize>,
@@ -84,9 +78,6 @@ struct CompiledStep {
     input_slots: Vec<usize>,
     output_slots: Vec<usize>,
     scratch_range: (usize, usize),
-    /// True when an output is a handle slot: the step runs every
-    /// cycle regardless of the clean mask (SRD 115 §4).
-    rerun: bool,
     /// SRD-74 Rule 2: the closure runs on `None` inputs.
     accepts_none: bool,
     /// Never current: nondeterministic or downstream of one.
@@ -104,8 +95,9 @@ type ResolvedOutput = (usize, crate::ast::PortType, Option<std::sync::Arc<[usize
 
 /// Common fields shared by all kernel variants. A clone is a new state
 /// of the same program: the steps are shared, everything else is the
-/// clone's own (engine_parity.md, step 4).
-#[derive(Clone)]
+/// clone's own (engine_parity.md, step 4), and every pair in its buffer
+/// points into its own storage (axiom S3), never into the state it was
+/// cloned from.
 struct KernelCore {
     buffer: Vec<u64>,
     coord_count: usize,
@@ -122,20 +114,9 @@ struct KernelCore {
     /// Axiom S9(a): (first slot of a Ref pair → scratch arena
     /// index) for every scratch-backed Ref output.
     ref_scratch: Vec<(usize, usize)>,
-    /// The kernel's value table (SRD 115 §3): one entry per
-    /// table-kind output slot, owned for the kernel's lifetime and
-    /// installed around every run for the handle closures.
-    table: ValueTable,
-    /// `(slot, entry)` for every table-kind output slot; the H4
-    /// validator checks each slot's handle names its own entry.
-    table_entries: Vec<(usize, usize)>,
-    /// True when a host drives this kernel directly, so each run
-    /// begins a root cycle (SRD 115 §4); false when a state that owns
-    /// the cycle wraps it.
-    owns_cycle: bool,
     /// Port type of each named output, for `get_value`.
     output_types: HashMap<String, PortType>,
-    /// The extern inputs, materialized at the start of every run.
+    /// The extern inputs, written through at every set.
     externs: crate::compile::externs::Externs,
     /// The traversals the program declares (SRD 113), opened through the
     /// `Kernel` trait.
@@ -144,25 +125,30 @@ struct KernelCore {
     /// first index-keyed pull (SRD 117 step 3).
     resolved_outputs: Vec<Option<ResolvedOutput>>,
     /// The coordinates set through the `Kernel` trait, pending
-    /// evaluation; `stale` means the next evaluation begins a cycle.
+    /// evaluation; `stale` means a write happened since the last
+    /// evaluation round.
     drive: crate::compile::Drive,
     /// Per slot: the slot holds `None` (SRD-74 on a compiled kernel):
     /// an unset extern, or an output of a step that propagated one.
     none: Vec<bool>,
-    /// Per step: the cycle it last ran in, so a new cycle forgets every
-    /// run without a scan.
+    /// Per step: the evaluation round it last ran in, so a new round
+    /// forgets every run without a scan.
     ran: Vec<u64>,
-    /// The open cycle's number; 0 is never a cycle.
-    cycle: u64,
-    /// Every step ran in the open cycle: a full evaluation happened.
+    /// The evaluation round: advanced by the first evaluation after a
+    /// write, so a mode without per-step currency runs a step once per
+    /// round rather than once per reader. Bookkeeping only: it wipes
+    /// nothing, and every output stands until an input in its
+    /// provenance is written. 0 is never a round.
+    epoch: u64,
+    /// Every step ran in the round: a full evaluation happened.
     all_ran: bool,
     /// Per step: its outputs are current for the inputs it depends on.
     /// Cleared through the plan when an input changes, whichever call
-    /// changed it; never set for a volatile or handle-writing step.
+    /// changed it; never set for a volatile step.
     clean: Vec<bool>,
     /// Whether this kernel's provenance mode skips current steps
     /// (push-side); a mode without per-step skipping runs every step
-    /// in the cone once per cycle.
+    /// in the cone once per round.
     use_clean: bool,
     /// The dirty-register plan: what each input invalidates, what each
     /// output needs.
@@ -189,38 +175,71 @@ struct KernelCore {
     any_none: bool,
 }
 
-impl KernelCore {
-    /// Whether `step` ran in the open cycle.
-    #[inline]
-    fn has_run(&self, step: usize) -> bool {
-        self.all_ran || self.ran[step] == self.cycle
-    }
-
-    /// Begin a cycle (SRD 115 §4, §7; engine_parity.md, step 5): advance
-    /// or adopt the cycle generation, write the externs (an unset one
-    /// as `None`), forget what ran in the last cycle, and invalidate
-    /// the volatile steps, as the interpreter does at every
-    /// `set_inputs`.
-    #[inline]
-    fn begin_cycle(&mut self) {
-        let generation = if self.owns_cycle {
-            crate::kernel::begin_root_cycle()
-        } else {
-            crate::kernel::cycle_generation()
+impl Clone for KernelCore {
+    fn clone(&self) -> Self {
+        let mut core = KernelCore {
+            buffer: self.buffer.clone(),
+            coord_count: self.coord_count,
+            steps: self.steps.clone(),
+            output_map: self.output_map.clone(),
+            gather_buf: self.gather_buf.clone(),
+            scatter_buf: self.scatter_buf.clone(),
+            scratch: self.scratch.clone(),
+            ref_slots: self.ref_slots.clone(),
+            ref_scratch: self.ref_scratch.clone(),
+            output_types: self.output_types.clone(),
+            externs: self.externs.clone(),
+            traversals: self.traversals.clone(),
+            resolved_outputs: self.resolved_outputs.clone(),
+            drive: self.drive.clone(),
+            none: self.none.clone(),
+            ran: self.ran.clone(),
+            epoch: self.epoch,
+            all_ran: self.all_ran,
+            clean: self.clean.clone(),
+            use_clean: self.use_clean,
+            plan: self.plan.clone(),
+            slot_step: self.slot_step.clone(),
+            sites: self.sites.clone(),
+            cur_step: self.cur_step,
+            all: self.all.clone(),
+            dirty: self.dirty.clone(),
+            volatile_steps: self.volatile_steps.clone(),
+            any_none: self.any_none,
         };
-        self.table.set_generation(generation);
-        // Extern handles belong to this cycle: strings into the arena
-        // the cycle just reset, table kinds into their entries (H3, H4).
-        // Marks left by the last cycle's propagation are stale: the externs
-        // set this cycle's, and the steps propagate from there.
-        if self.any_none {
-            self.none.fill(false);
+        core.republish_refs();
+        core
+    }
+}
+
+impl KernelCore {
+    /// Point every pair in the buffer into this state's own storage: a
+    /// step's scratch entry for its `Ref2` outputs, the stored value
+    /// for an extern's (axiom S3). What a clone needs, whose buffer
+    /// was copied from a state whose storage it does not share.
+    fn republish_refs(&mut self) {
+        for &(slot, idx) in &self.ref_scratch {
+            let (p, l) = self.scratch[idx].ptr_len();
+            self.buffer[slot] = p;
+            self.buffer[slot + 1] = l;
         }
-        self.any_none =
-            self.externs
-                .materialize(&mut self.buffer, &mut self.table, Some(&mut self.none));
+        self.externs.seed(&mut self.buffer, None);
+    }
+}
+
+impl KernelCore {
+    /// Begin an evaluation round after a write: take what cells other
+    /// holders published, forget what ran in the last round, and
+    /// invalidate the volatile steps, as the interpreter does at every
+    /// write. Nothing else changes: every output stands until an input
+    /// in its provenance is written (runtime_model.md, R1).
+    #[inline]
+    fn begin_epoch(&mut self) {
+        if self.externs.cells_dirty() {
+            self.externs.refresh_cells(&mut self.buffer);
+        }
         self.dirty_refreshed();
-        self.cycle += 1;
+        self.epoch += 1;
         self.all_ran = false;
         for &i in self.volatile_steps.iter() {
             self.clean[i] = false;
@@ -281,58 +300,44 @@ impl KernelCore {
         }
     }
 
-    /// Run the steps of `order` that have not run in this cycle and are
-    /// not current: one rule for every step, whatever reaches it. A
-    /// handle-writing step runs every cycle (SRD 115 §4) and a volatile
-    /// one is never current.
+    /// Run the steps of `order` that have not run in this round and are
+    /// not current: one rule for every step, whatever reaches it; a
+    /// volatile step is never current.
     #[inline]
     fn run_steps(&mut self, order: &[usize]) {
         self.run_guarded(|core| core.run_order(order));
     }
 
-    /// Run `body` with the value table installed and the capture guard
-    /// armed, so a step's panic is recorded quietly and re-raised
-    /// enriched, as the interpreter re-raises a node's (A7).
+    /// Run `body` with the capture guard armed, so a step's panic is
+    /// recorded quietly and re-raised enriched, as the interpreter
+    /// re-raises a node's (A7).
     #[inline]
     fn run_guarded(&mut self, body: impl FnOnce(&mut Self)) {
-        let _run = crate::kernel::arena::RunScope::enter();
         let capture = crate::kernel::engines::EvalPanicCaptureGuard::arm();
-        // SAFETY: the table stays in place for the run; the steps reach it
-        // only through the installation, and the loop touches the other
-        // fields.
-        let installed = unsafe { crate::kernel::install_value_table_ptr(&mut self.table) };
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(self)));
-        drop(installed);
         drop(capture);
         if let Err(payload) = outcome {
             let sites = std::sync::Arc::clone(&self.sites);
-            sites.reraise(
-                payload,
-                self.cur_step,
-                &self.buffer,
-                Some(&self.none),
-                &self.table,
-            );
+            sites.reraise(payload, self.cur_step, &self.buffer, Some(&self.none));
         }
-        self.validate_table();
         #[cfg(debug_assertions)]
         self.validate_refs();
     }
 
-    /// The steps of `order` that have not run in the cycle, in order.
+    /// The steps of `order` that have not run in the round, in order.
     #[inline]
     fn run_order(&mut self, order: &[usize]) {
         let steps = &self.steps;
         let none_free = !self.any_none;
         for &i in order {
-            if self.all_ran || self.ran[i] == self.cycle {
+            if self.all_ran || self.ran[i] == self.epoch {
                 continue;
             }
             let step = &steps[i];
             // A pure step may be recomputed redundantly in a mode
             // without per-step skipping; a side channel may not.
-            if (self.use_clean || step.side) && self.clean[i] && !step.rerun && !step.volatile {
-                self.ran[i] = self.cycle;
+            if (self.use_clean || step.side) && self.clean[i] && !step.volatile {
+                self.ran[i] = self.epoch;
                 continue;
             }
             self.cur_step = i;
@@ -354,14 +359,14 @@ impl KernelCore {
                     &mut self.scratch,
                 );
             }
-            self.ran[i] = self.cycle;
-            self.clean[i] = !step.rerun && !step.volatile;
+            self.ran[i] = self.epoch;
+            self.clean[i] = !step.volatile;
         }
     }
 
-    /// Every step, in order, in a cycle just begun, in a mode without
+    /// Every step, in order, in a round just begun, in a mode without
     /// per-step skipping and with no `None` in play: the same steps the
-    /// general loop would run, without the bookkeeping a partial cycle
+    /// general loop would run, without the bookkeeping a partial round
     /// needs. A current side channel is still skipped, since its run is
     /// observed.
     #[inline]
@@ -369,10 +374,10 @@ impl KernelCore {
         let steps = &self.steps;
         for (i, step) in steps.iter().enumerate() {
             if step.side {
-                if self.clean[i] && !step.rerun && !step.volatile {
+                if self.clean[i] && !step.volatile {
                     continue;
                 }
-                self.clean[i] = !step.rerun && !step.volatile;
+                self.clean[i] = !step.volatile;
             }
             self.cur_step = i;
             run_step_fast(
@@ -386,13 +391,13 @@ impl KernelCore {
         self.all_ran = true;
     }
 
-    /// Evaluate every output: begin the cycle if none is open, then run
-    /// every step that has not run.
+    /// Evaluate every output: begin a round if a write happened, then
+    /// run every step that has not run.
     #[inline]
     fn eval_all(&mut self) {
         let fresh = self.drive.stale;
         if fresh {
-            self.begin_cycle();
+            self.begin_epoch();
         } else {
             self.refresh_cells();
         }
@@ -408,7 +413,7 @@ impl KernelCore {
     /// (A6): the interpreter's `pull`, on a compiled kernel.
     fn pull_named(&mut self, name: &str) -> crate::ast::Value {
         if self.drive.stale {
-            self.begin_cycle();
+            self.begin_epoch();
         } else {
             self.refresh_cells();
         }
@@ -452,7 +457,7 @@ impl KernelCore {
             self.resolved_outputs[index] = Some((slot, ty, cone));
         }
         if self.drive.stale {
-            self.begin_cycle();
+            self.begin_epoch();
         } else {
             self.refresh_cells();
         }
@@ -478,15 +483,12 @@ impl KernelCore {
     }
 
     /// The value at `slot` decoded as `ty`: `None` where the mask says
-    /// so, a Ref pair through its scratch, a handle through the table.
+    /// so, a Ref pair copied out through the pair.
     fn slot_value(&self, slot: usize, ty: crate::ast::PortType) -> crate::ast::Value {
         if self.none.get(slot).copied().unwrap_or(false) {
             return crate::ast::Value::None;
         }
-        if let Some(&(_, idx)) = self.ref_scratch.iter().find(|(s, _)| *s == slot) {
-            return self.scratch[idx].to_value();
-        }
-        crate::compile::marshal::decode_output(&self.buffer, slot, ty, &self.table)
+        crate::compile::marshal::decode_output(&self.buffer, slot, ty)
     }
 
     /// Every step is a closure.
@@ -508,54 +510,32 @@ impl KernelCore {
     /// what depends on it, as a changed coordinate is invalidated, and
     /// the next evaluation begins a cycle.
     fn set_extern(&mut self, name: &str, value: crate::ast::Value) -> Result<usize, String> {
-        let slot = self.externs.set(name, value, &mut self.buffer)?;
-        self.dirty_input(slot);
-        self.drive.stale = true;
+        let (slot, unset) = self.externs.set(name, value, &mut self.buffer)?;
+        self.extern_written(slot, unset);
         Ok(slot)
     }
 
     /// [`Self::set_extern`] by input index.
     fn set_extern_at(&mut self, index: usize, value: crate::ast::Value) -> Result<usize, String> {
-        let slot = self.externs.set_at(index, value, &mut self.buffer)?;
-        self.dirty_input(slot);
-        self.drive.stale = true;
+        let (slot, unset) = self.externs.set_at(index, value, &mut self.buffer)?;
+        self.extern_written(slot, unset);
         Ok(slot)
     }
 
-    /// The handle invariants (H3, H4) in debug builds, for every
-    /// table-kind slot written in this cycle: a step that did not run,
-    /// or that propagated `None`, left its slot as it was.
-    #[inline]
-    fn validate_table(&self) {
-        if cfg!(debug_assertions) {
-            for &(slot, entry) in &self.table_entries {
-                if let Some(Some(step)) = self.slot_step.get(slot)
-                    && (!self.has_run(*step) || self.none[slot])
-                {
-                    continue;
-                }
-                let handle = self.buffer[slot];
-                assert_eq!(
-                    handle & crate::kernel::TAG_MASK,
-                    crate::kernel::TAG_RES,
-                    "H4: slot {slot} should hold a table handle, holds {handle:#x}"
-                );
-                let (_, generation, named) = crate::kernel::decode_table_handle(handle);
-                assert_eq!(
-                    named, entry,
-                    "H4: slot {slot} names entry {named}; the layout assigned it entry {entry}"
-                );
-                assert_eq!(
-                    generation,
-                    self.table.generation() & 0xFF_FFFF,
-                    "H3: slot {slot} holds a handle from another cycle generation"
-                );
-                assert!(
-                    self.table.is_written(entry),
-                    "H4: entry {entry} was not written by the run that produced slot {slot}"
-                );
-            }
+    /// An extern was written: its dependents are no longer current, the
+    /// `None` mask records whether it is unset (SRD-74 on a compiled
+    /// kernel), and the next evaluation begins a round. When the last
+    /// unset extern is set, no slot can hold a `None` any more, so the
+    /// mask is cleared and the steps run without it.
+    fn extern_written(&mut self, slot: usize, unset: bool) {
+        self.none[slot] = unset;
+        let was = self.any_none;
+        self.any_none = self.externs.any_unset();
+        if was && !self.any_none {
+            self.none.fill(false);
         }
+        self.dirty_input(slot);
+        self.drive.stale = true;
     }
 
     /// Axiom S9(a) — deterministic Ref validation: every
@@ -567,9 +547,10 @@ impl KernelCore {
     #[cfg(debug_assertions)]
     fn validate_refs(&self) {
         for &(slot, idx) in &self.ref_scratch {
-            // A step that has not run in this cycle has not published.
+            // A step that has never run has not published; one that
+            // propagated `None` left its slots as they were.
             if let Some(Some(step)) = self.slot_step.get(slot)
-                && !self.has_run(*step)
+                && (self.ran[*step] == 0 || self.none[slot])
             {
                 continue;
             }
@@ -592,10 +573,9 @@ impl KernelCore {
     fn guard_ref_slot(&self, slot: usize) {
         if self.ref_slots.get(slot).copied().unwrap_or(false) {
             panic!(
-                "S2 pointer containment: slot {slot} is Ref2- or Hdl1-colored; raw \
-                 u64 readers would leak an interior address or a handle. Use the \
-                 typed borrow-checked accessor (read_vec_*), the boundary decode, \
-                 or copy out."
+                "S2 pointer containment: slot {slot} is Ref2-colored; raw u64 readers \
+                 would leak an interior address. Use the typed borrow-checked accessor \
+                 (read_vec_*), the boundary decode, or copy out."
             );
         }
     }
@@ -629,17 +609,11 @@ fn build_core(
     use_clean: bool,
 ) -> KernelCore {
     let P2Extras {
-        mut table_entries,
         output_types,
-        handle_slots,
         externs,
         input_dependents,
         attribution,
     } = extras;
-    // Table-kind externs own entries after the nodes' and are checked
-    // by the same validator.
-    table_entries.extend(externs.table_entries());
-    let table_len = table_entries.iter().map(|&(_, e)| e + 1).max().unwrap_or(0);
     let max_inputs = steps.iter().map(|s| s.input_slots.len()).max().unwrap_or(0);
     let max_outputs = steps
         .iter()
@@ -653,30 +627,17 @@ fn build_core(
         .map(|step| {
             let start = scratch.len();
             scratch.extend(step.scratch.iter().map(|e| ScratchBuf::new(*e)));
-            // Axiom S3: one scratch entry per Ref output, in port
-            // order — the CompiledSlotKit contract. A mismatch is
-            // a macro/builder bug, caught at construction.
-            assert_eq!(
-                step.ref_output_starts.len(),
-                step.scratch.len(),
-                "slot-op step declares {} scratch entries for {} Ref \
-                 output ports",
-                step.scratch.len(),
-                step.ref_output_starts.len(),
-            );
-            for (k, &slot) in step.ref_output_starts.iter().enumerate() {
-                ref_scratch.push((slot, start + k));
-            }
-            let rerun = step
-                .output_slots
-                .iter()
-                .any(|&s| handle_slots.get(s).copied().unwrap_or(false));
+            ref_scratch.extend(crate::compile::assembly::scratch_pairs(
+                &step.name,
+                &step.ref_output_starts,
+                &step.scratch,
+                start,
+            ));
             CompiledStep {
                 op: step.op,
                 input_slots: step.input_slots,
                 output_slots: step.output_slots,
                 scratch_range: (start, scratch.len()),
-                rerun,
                 accepts_none: step.accepts_none,
                 volatile: step.volatile,
                 constant: step.constant,
@@ -723,7 +684,8 @@ fn build_core(
         .filter(|&i| compiled_steps[i].volatile)
         .collect();
     let mut buffer = vec![0u64; total_slots];
-    externs.seed(&mut buffer);
+    let mut none = vec![false; total_slots];
+    let any_none = externs.seed(&mut buffer, Some(&mut none));
     let step_count = compiled_steps.len();
     let constants: Vec<usize> = compiled_steps
         .iter()
@@ -741,9 +703,6 @@ fn build_core(
         scratch,
         ref_slots,
         ref_scratch,
-        table: ValueTable::new(table_len),
-        table_entries,
-        owns_cycle: true,
         output_types,
         externs,
         traversals: Vec::new().into(),
@@ -752,9 +711,9 @@ fn build_core(
             coords: Vec::new(),
             stale: true,
         },
-        none: vec![false; total_slots],
+        none,
         ran: vec![0; step_count],
-        cycle: 0,
+        epoch: 0,
         all_ran: false,
         clean: vec![false; step_count],
         use_clean,
@@ -765,58 +724,28 @@ fn build_core(
         all: (0..step_count).collect::<Vec<usize>>().into(),
         dirty: dirty.into(),
         volatile_steps: volatile_steps.into(),
-        any_none: false,
+        any_none,
     };
     // The compile-constant fold of the runtime model, on this engine: a
     // step no input reaches runs at build, once, and is current from
     // then on, so what is knowable at build is known at build and fails
-    // at build. A handle-writing constant reruns per cycle as any
-    // handle writer does. The fold runs inside whatever cycle the
-    // thread has open: a build opens no root cycle of its own (axiom
-    // H5), since a program is compiled inside a root's cycle too.
-    core.owns_cycle = false;
-    core.begin_cycle();
+    // at build.
+    core.begin_epoch();
     core.run_steps(&constants);
-    core.owns_cycle = true;
     core.drive.stale = true;
     core
 }
 
-/// Compute per-slot provenance bitmasks from input_dependents.
-///
-/// Returns `slot_provenance[slot]` = exact multi-word mask of which inputs affect
-/// that buffer slot. Used by pull-side cone guard.
+/// The provenance of every slot, from the steps' output slots
+/// ([`crate::compile::slot_provenance`]).
 fn compute_slot_provenance(
     coord_count: usize,
     total_slots: usize,
     input_dependents: &[Vec<usize>],
     steps: &[CompiledStep],
 ) -> Vec<crate::kernel::ProvMask> {
-    let step_count = steps.len();
-    let mut step_prov: Vec<crate::kernel::ProvMask> = (0..step_count)
-        .map(|_| crate::kernel::ProvMask::empty())
-        .collect();
-    for (input_idx, deps) in input_dependents.iter().enumerate() {
-        for &step_idx in deps {
-            if step_idx < step_count {
-                step_prov[step_idx].set(input_idx);
-            }
-        }
-    }
-    let mut slot_provenance: Vec<crate::kernel::ProvMask> = (0..total_slots)
-        .map(|_| crate::kernel::ProvMask::empty())
-        .collect();
-    for (i, slot) in slot_provenance.iter_mut().enumerate().take(coord_count) {
-        slot.set(i);
-    }
-    for (step_idx, step) in steps.iter().enumerate() {
-        for &slot in &step.output_slots {
-            if slot < slot_provenance.len() {
-                slot_provenance[slot] = step_prov[step_idx].clone();
-            }
-        }
-    }
-    slot_provenance
+    let outs: Vec<&[usize]> = steps.iter().map(|s| s.output_slots.as_slice()).collect();
+    crate::compile::slot_provenance(coord_count, total_slots, &outs, input_dependents)
 }
 
 // ── Shared accessor methods ────────────────────────────────────
@@ -882,18 +811,6 @@ macro_rules! kernel_accessors {
             let coords = std::mem::take(&mut self.core.drive.coords);
             self.eval(&coords);
             self.core.drive.coords = coords;
-        }
-
-        /// Whether each run begins a root cycle (SRD 115 §4). A state
-        /// that owns the cycle and wraps this kernel sets this false.
-        #[allow(dead_code)]
-        pub(crate) fn set_owns_cycle(&mut self, owns: bool) {
-            self.core.owns_cycle = owns;
-        }
-
-        /// Entries in the kernel's value table.
-        pub fn table_len(&self) -> usize {
-            self.core.table.len()
         }
 
         /// Set an extern by name, as `PolydatState::set_input` does on

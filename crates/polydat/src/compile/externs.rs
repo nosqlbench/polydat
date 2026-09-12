@@ -12,19 +12,19 @@
 //!
 //! - **Layout.** Every input beyond the coordinates owns its slots in
 //!   the buffer, after the coordinates, at the width its port type
-//!   names. A table-kind extern (JSON, an extension value, a handle)
-//!   also owns one entry of the kernel's value table, numbered after
-//!   the entries the nodes own.
-//! - **Seeding.** A carrier (u64, i64, f64, bool) is written into its
-//!   slot once, when the kernel is built or the host sets it.
-//! - **Materialization.** A handle kind is written at the start of
-//!   every run: a string or byte string into the cycle arena, a table
-//!   kind into its entry, so the slot holds a handle of the current
-//!   generation (SRD 115 axiom H3) that names its own entry (H4). The
-//!   value itself lives here between runs.
+//!   names. A handle-kind extern (a string, a byte string, JSON, an
+//!   extension value, a handle) also owns one entry of the kernel's
+//!   value table, numbered after the entries the nodes own.
+//! - **Writing through.** Every write of an extern reaches the buffer
+//!   at once: a carrier (u64, i64, f64, bool) as its bits, a `Ref2`
+//!   kind (a string, a byte string, JSON, an extension value, a
+//!   handle) as a `(ptr, len)` pair into the value the extern stores,
+//!   which stands until the host writes the extern again (axioms S3,
+//!   S4). Nothing is rewritten on any other occasion: an extern is an
+//!   input, and its slot stands until it is set.
 //! - **Setting.** `set` type-checks the value against the declared
-//!   port type, stores it, and writes a carrier through immediately;
-//!   the kernel that owns the buffer marks the slot's dependents dirty.
+//!   port type, stores it, and writes it through; the kernel that owns
+//!   the buffer marks the slot's dependents dirty.
 //! - **Cells.** A `shared` binding's slot is bound to a `SharedCell`
 //!   (engine parity, step 9), the same cell type the interpreter
 //!   attaches: the cell is the register. `set` publishes through it,
@@ -35,18 +35,19 @@
 use std::collections::HashMap;
 
 use crate::ast::{PortType, Value};
-use crate::kernel::{InputDef, ValueTable};
+use crate::kernel::InputDef;
 
 /// One extern input of a compiled kernel.
 #[derive(Clone)]
 pub(crate) struct ExternSlot {
     pub name: String,
-    /// First buffer slot; every supported extern is one slot wide.
+    /// First buffer slot: one slot for a carrier, two for a `Ref2`
+    /// kind's pair.
     pub slot: usize,
     pub ty: PortType,
-    /// The value-table entry a table-kind extern owns.
-    pub entry: Option<usize>,
     /// The current value: the declared default until the host sets it.
+    /// A `Ref2` kind's pair points into this value, so it is written
+    /// only through `set_slot`, which republishes the pair.
     pub value: Value,
     /// The declared default, what a kernel created from the program
     /// starts with.
@@ -87,45 +88,34 @@ pub(crate) struct Externs {
 
 impl Externs {
     /// The externs among `input_defs` (every input after the first
-    /// `coord_count`), each at the slot `input_starts` gives it. Table
-    /// kinds take entries from `entry_base` on, in input order. An
-    /// extern wider than one slot has no compiled form.
+    /// `coord_count`), each at the slot `input_starts` gives it. An
+    /// extern is a one-slot carrier or a `Ref2` kind; a two-slot
+    /// immediate has no compiled form.
     pub(crate) fn new(
         input_defs: &[InputDef],
         coord_count: usize,
         input_starts: &[usize],
-        entry_base: usize,
         cursors: &[crate::iteration::source::SourceSchema],
         shared: &[&str],
     ) -> Result<Self, String> {
         let mut slots = Vec::new();
         let mut by_name = HashMap::new();
         let mut by_index = vec![None; input_defs.len()];
-        let mut next_entry = entry_base;
         for (i, def) in input_defs.iter().enumerate().skip(coord_count) {
-            if def.port_type.slot_width() != 1 {
+            if def.port_type.slot_color() == crate::ast::SlotColor::Imm2 {
                 return Err(format!(
-                    "extern '{}' has type {}, which spans {} slots; the compiled engines carry \
-                     one-slot externs (carriers, strings, JSON, extension values)",
-                    def.name,
-                    def.port_type,
-                    def.port_type.slot_width()
+                    "extern '{}' has type {}, a two-slot immediate; the compiled engines carry \
+                     one-slot carriers and by-reference externs (strings, byte strings, JSON, \
+                     extension values, handles)",
+                    def.name, def.port_type,
                 ));
             }
-            let entry = if def.port_type.handle_kind() == Some(crate::ast::HandleKind::Table) {
-                let e = next_entry;
-                next_entry += 1;
-                Some(e)
-            } else {
-                None
-            };
             by_name.insert(def.name.clone(), slots.len());
             by_index[i] = Some(slots.len());
             slots.push(ExternSlot {
                 name: def.name.clone(),
                 slot: input_starts[i],
                 ty: def.port_type,
-                entry,
                 value: def.default.clone(),
                 default: def.default.clone(),
                 cell: None,
@@ -239,10 +229,9 @@ impl Externs {
     }
 
     /// Take every cell's current value where its revision moved since
-    /// this kernel last read it: the value is stored, a carrier is
-    /// written through, and the slot is recorded for the kernel to mark
-    /// dirty (`take_changed`). A handle kind reaches the buffer at the
-    /// next `materialize`.
+    /// this kernel last read it: the value is stored and written
+    /// through, and the slot is recorded for the kernel to mark dirty
+    /// (`take_changed`).
     pub(crate) fn refresh_cells(&mut self, buffer: &mut [u64]) {
         for s in &mut self.slots {
             let Some(cell) = &s.cell else {
@@ -254,9 +243,7 @@ impl Externs {
             let (value, revision) = cell.snapshot();
             s.value = value;
             s.seen = Some(revision);
-            if s.ty.slot_color() != crate::ast::SlotColor::Hdl1 {
-                buffer[s.slot] = carrier_bits(&s.value);
-            }
+            write_through(s, buffer);
             self.changed.push(s.slot);
         }
     }
@@ -340,117 +327,53 @@ impl Externs {
         )
     }
 
-    /// Renumber the table-kind externs' entries from `base`, in input
-    /// order, for a kernel that learns how many entries its nodes own
-    /// only after they are compiled.
-    pub(crate) fn renumber_entries(&mut self, base: usize) {
-        let mut next = base;
-        for s in &mut self.slots {
-            if s.entry.is_some() {
-                s.entry = Some(next);
-                next += 1;
-            }
-        }
-    }
-
-    /// `(slot, entry)` for every table-kind extern, for the kernel's
-    /// H4 validator list.
-    pub(crate) fn table_entries(&self) -> Vec<(usize, usize)> {
-        self.slots
-            .iter()
-            .filter_map(|s| s.entry.map(|e| (s.slot, e)))
-            .collect()
-    }
-
-    /// The slots that hold handles, for a native verifier's list of
-    /// handle slots a caller fills before the call.
-    #[cfg(feature = "jit")]
-    pub(crate) fn handle_slots(&self) -> Vec<usize> {
-        self.slots
-            .iter()
-            .filter(|s| s.ty.slot_color() == crate::ast::SlotColor::Hdl1)
-            .map(|s| s.slot)
-            .collect()
-    }
-
-    /// Write every carrier extern into the buffer. Handle kinds wait
-    /// for `materialize`, which runs at the start of every run.
-    pub(crate) fn seed(&self, buffer: &mut [u64]) {
-        for s in &self.slots {
-            if s.ty.slot_color() != crate::ast::SlotColor::Hdl1 {
-                buffer[s.slot] = carrier_bits(&s.value);
-            }
-        }
-    }
-
-    /// Write every handle-kind extern for the run that is starting:
-    /// strings and byte strings into the arena, table kinds into their
-    /// entries. Called after the run's generation is set and before
-    /// any step reads an input.
-    /// Returns whether any slot was marked `None`, so a kernel knows
-    /// without scanning its mask.
-    pub(crate) fn materialize(
-        &mut self,
-        buffer: &mut [u64],
-        table: &mut ValueTable,
-        mut none: Option<&mut [bool]>,
-    ) -> bool {
-        // A cell another holder published to since the last run is read
-        // now, so the run sees the register's current value.
-        self.refresh_cells(buffer);
+    /// Write every extern into the buffer, and mark the unset ones in
+    /// `none` where the kernel keeps a mask; returns whether any is
+    /// unset. What a build and a reset do.
+    pub(crate) fn seed(&self, buffer: &mut [u64], mut none: Option<&mut [bool]>) -> bool {
         let mut any_none = false;
         for s in &self.slots {
-            // An unset extern is `None` (A12): the kernel that keeps a
-            // `None` mask marks the slot and its consumers propagate
-            // it as the interpreter does; a native kernel, which
-            // cannot, refuses to run.
-            if s.value == Value::None {
-                match none.as_deref_mut() {
-                    Some(mask) => {
-                        mask[s.slot] = true;
-                        any_none = true;
-                    }
-                    None if s.entry.is_some() => panic!(
-                        "extern '{}' ({}) has no value: it has no default, so set it with \
-                         set_input before the first run (native code cannot carry `None`; \
-                         docs/design/engine_parity.md, A12)",
-                        s.name, s.ty
-                    ),
-                    None => {}
-                }
-            } else if let Some(mask) = none.as_deref_mut() {
-                mask[s.slot] = false;
+            write_through(s, buffer);
+            let unset = s.value == Value::None;
+            any_none |= unset;
+            if let Some(mask) = none.as_deref_mut() {
+                mask[s.slot] = unset;
             }
-            if s.ty.slot_color() != crate::ast::SlotColor::Hdl1 {
-                continue;
-            }
-            buffer[s.slot] = match (&s.value, s.entry) {
-                (Value::Str(text), None) => crate::kernel::put_thread_str(text),
-                (Value::Bytes(bytes), None) => crate::kernel::put_thread_bytes(bytes),
-                // An unset string extern reads as empty where nothing
-                // keeps a `None` mask.
-                (Value::None, None) => crate::kernel::put_thread_str(""),
-                (other, None) => crate::kernel::put_thread_str(&other.to_display_string()),
-                // A table kind: the entry is written every run so the
-                // slot's handle names it in this generation; an unset
-                // one holds `None`, which decodes as `None`.
-                (v, Some(entry)) => table.write(entry, v.clone()),
-            };
         }
         any_none
     }
 
+    /// Whether any extern has no value (A12): the kernel that keeps a
+    /// `None` mask propagates it as the interpreter does; a native
+    /// kernel, which cannot, refuses to run.
+    pub(crate) fn any_unset(&self) -> bool {
+        self.slots.iter().any(|s| s.value == Value::None)
+    }
+
+    /// The name and type of an unset extern, for a native kernel's
+    /// refusal.
+    #[cfg(feature = "jit")]
+    pub(crate) fn first_unset(&self) -> Option<(&str, PortType)> {
+        self.slots
+            .iter()
+            .find(|s| s.value == Value::None)
+            .map(|s| (s.name.as_str(), s.ty))
+    }
+
     /// Set an extern by name. The value must be of the declared port
-    /// type; `Value::None` clears it to unset. A carrier is written
-    /// into `buffer` now; a handle kind is written at the next run.
-    /// Returns the extern's first slot, for the caller's dirty marking.
+    /// type; `Value::None` clears it to unset. The slot is written
+    /// through now. Returns the extern's first slot, for the caller's
+    /// dirty marking, and whether it is now unset.
     pub(crate) fn set(
         &mut self,
         name: &str,
         value: Value,
         buffer: &mut [u64],
-    ) -> Result<usize, String> {
+    ) -> Result<(usize, bool), String> {
         let Some(&i) = self.by_name.get(name) else {
+            if self.input_names.iter().any(|n| n == name) {
+                return Err(format!("'{name}' is a coordinate; set it with set_inputs"));
+            }
             let known: Vec<&str> = self.slots.iter().map(|s| s.name.as_str()).collect();
             return Err(format!(
                 "no extern named '{name}'; this kernel's externs are {known:?}"
@@ -466,21 +389,33 @@ impl Externs {
         index: usize,
         value: Value,
         buffer: &mut [u64],
-    ) -> Result<usize, String> {
+    ) -> Result<(usize, bool), String> {
         match self.by_index.get(index) {
             Some(Some(i)) => self.set_slot(*i, value, buffer),
-            _ => Err(format!(
-                "input {index} is not an extern; this kernel's inputs are {:?}",
+            Some(None) => Err(format!(
+                "'{}' is a coordinate; set it with set_inputs",
+                self.input_names[index]
+            )),
+            None => Err(format!(
+                "no input at index {index}; this program's inputs are {:?}",
                 self.input_names
             )),
         }
     }
 
-    fn set_slot(&mut self, i: usize, value: Value, buffer: &mut [u64]) -> Result<usize, String> {
+    /// The one write rule of every engine: the value satisfies the
+    /// declared type (a carrier's bit-stuffed forms included) or is
+    /// `None`, which clears the extern.
+    fn set_slot(
+        &mut self,
+        i: usize,
+        value: Value,
+        buffer: &mut [u64],
+    ) -> Result<(usize, bool), String> {
         let s = &mut self.slots[i];
-        if value != Value::None && value.port_type() != s.ty {
+        if !value.satisfies_slot(s.ty) {
             return Err(format!(
-                "extern '{}' is declared {} but was set to a {} value",
+                "input '{}' is declared {} but was set to a {} value",
                 s.name,
                 s.ty,
                 value.port_type()
@@ -494,25 +429,22 @@ impl Externs {
             cell.publish(s.value.clone());
             s.seen = Some(cell.revision.load(std::sync::atomic::Ordering::Acquire));
         }
-        if s.ty.slot_color() != crate::ast::SlotColor::Hdl1 {
-            buffer[s.slot] = carrier_bits(&s.value);
-        }
-        Ok(s.slot)
+        write_through(s, buffer);
+        Ok((s.slot, s.value == Value::None))
     }
 
     /// Start over from the program: every extern back at its declared
-    /// default, carriers written into `buffer` now and handle kinds at
-    /// the next run, and every `shared` binding with a cell of its own
-    /// holding that default. What a kernel created from a shared
-    /// program starts with, whatever the kernel it was cloned from had
-    /// been set to.
+    /// default, written through into `buffer`, and every `shared`
+    /// binding with a cell of its own holding that default. What a
+    /// kernel created from a shared program starts with, whatever the
+    /// kernel it was cloned from had been set to. Also what a clone
+    /// needs before its first run: its pairs must point into its own
+    /// stored values, not the original's.
     pub(crate) fn reset_to_program(&mut self, buffer: &mut [u64]) {
         for s in &mut self.slots {
             s.value = s.default.clone();
             s.seen = None;
-            if s.ty.slot_color() != crate::ast::SlotColor::Hdl1 {
-                buffer[s.slot] = carrier_bits(&s.value);
-            }
+            write_through(s, buffer);
         }
         self.reseed_cells();
     }
@@ -525,6 +457,32 @@ impl Externs {
     /// The externs by name and declared type, for diagnostics.
     pub(crate) fn names(&self) -> Vec<(&str, PortType)> {
         self.slots.iter().map(|s| (s.name.as_str(), s.ty)).collect()
+    }
+}
+
+/// Write an extern's current value into its slots: a carrier as its
+/// bits, a `Ref2` kind as the pair into the value the slot stores. An
+/// unset `Ref2` kind is an empty pair, which a string consumer reads
+/// as empty where nothing keeps a `None` mask and a value consumer
+/// reads as `None`.
+fn write_through(s: &ExternSlot, buffer: &mut [u64]) {
+    match s.ty.slot_color() {
+        crate::ast::SlotColor::Ref2 => {
+            let (p, l) = match &s.value {
+                Value::None => crate::compile::marshal::empty_pair(),
+                v => crate::compile::marshal::borrow_pair(v).unwrap_or_else(|| {
+                    panic!(
+                        "extern '{}' ({}) holds a {} value, which has no slot form",
+                        s.name,
+                        s.ty,
+                        v.port_type()
+                    )
+                }),
+            };
+            buffer[s.slot] = p;
+            buffer[s.slot + 1] = l;
+        }
+        _ => buffer[s.slot] = carrier_bits(&s.value),
     }
 }
 
