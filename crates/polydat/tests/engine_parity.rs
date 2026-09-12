@@ -319,6 +319,13 @@ fn check_reference_section(lines: &[String], overwrite: bool) {
             pure_refused.push(cols[0]);
         }
     }
+    // Listed by name, whatever order the cases ran in.
+    for names in refused_by_engine.values_mut() {
+        names.sort_unstable();
+        names.dedup();
+    }
+    pure_refused.sort_unstable();
+    pure_refused.dedup();
     let list = |names: &[&str]| {
         names
             .iter()

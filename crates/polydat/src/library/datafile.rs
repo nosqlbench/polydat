@@ -82,12 +82,15 @@ fn resolve_data_path(filename: &str) -> std::borrow::Cow<'_, str> {
 fn read_csv_column(filename: &str, column: &str) -> Vec<String> {
     let content = std::fs::read_to_string(resolve_data_path(filename).as_ref())
         .unwrap_or_else(|e| panic!("csv_field: failed to read '{filename}': {e}"));
-    let mut lines = content.lines();
+    let records =
+        split_csv_records(&content).unwrap_or_else(|e| panic!("csv_field: '{filename}': {e}"));
+    let mut lines = records.into_iter();
 
     let header_line = lines
         .next()
         .unwrap_or_else(|| panic!("csv_field: '{filename}' is empty"));
-    let headers: Vec<&str> = split_csv_line(header_line);
+    let headers = split_csv_line(header_line)
+        .unwrap_or_else(|e| panic!("csv_field: '{filename}' header: {e}"));
 
     let col_idx = if let Ok(idx) = column.parse::<usize>() {
         idx
@@ -104,9 +107,10 @@ fn read_csv_column(filename: &str, column: &str) -> Vec<String> {
     };
 
     let mut values = Vec::new();
-    for line in lines {
-        let fields: Vec<&str> = split_csv_line(line);
-        let val = fields.get(col_idx).unwrap_or(&"").trim().to_string();
+    for (row, line) in lines.enumerate() {
+        let fields = split_csv_line(line)
+            .unwrap_or_else(|e| panic!("csv_field: '{filename}' row {}: {e}", row + 1));
+        let val = fields.get(col_idx).map_or("", |f| f.trim()).to_string();
         values.push(val);
     }
 
@@ -123,6 +127,9 @@ fn read_csv_column(filename: &str, column: &str) -> Vec<String> {
 ///
 /// The file is read and the named column extracted at construction
 /// time. Header row is auto-detected. Ordinal wraps modulo row count.
+/// Fields follow RFC 4180 quoting: a `"`-wrapped field may hold
+/// commas, line breaks, and `""` for a literal quote; the value served
+/// is the unwrapped text.
 ///
 /// SRD-80b Phase E: migrated to `#[polydat_node]` via multi-source
 /// `#[poly_const(... from = (filename, column))]`.
@@ -139,14 +146,17 @@ fn csv_field(
     values[idx].clone()
 }
 
-/// Read all CSV data rows (skipping the header) as raw lines.
-/// Panics on read failure or empty file — workload-compile error
-/// path (preserves the original error-message format).
+/// Read all CSV data rows (skipping the header) as raw records — a
+/// quoted field's line breaks stay inside its row. Panics on read
+/// failure or empty file — workload-compile error path (preserves
+/// the original error-message format).
 fn read_csv_data_rows(filename: &str) -> Vec<String> {
     let content = std::fs::read_to_string(resolve_data_path(filename).as_ref())
         .unwrap_or_else(|e| panic!("csv_row: failed to read '{filename}': {e}"));
-    let rows: Vec<String> = content
-        .lines()
+    let records =
+        split_csv_records(&content).unwrap_or_else(|e| panic!("csv_row: '{filename}': {e}"));
+    let rows: Vec<String> = records
+        .into_iter()
         .skip(1) // skip header
         .filter(|l| !l.trim().is_empty())
         .map(|l| l.to_string())
@@ -162,8 +172,10 @@ fn read_csv_data_rows(filename: &str) -> Vec<String> {
 fn read_csv_row_count(filename: &str) -> u64 {
     let content = std::fs::read_to_string(resolve_data_path(filename).as_ref())
         .unwrap_or_else(|e| panic!("csv_row_count: failed to read '{filename}': {e}"));
-    content
-        .lines()
+    let records =
+        split_csv_records(&content).unwrap_or_else(|e| panic!("csv_row_count: '{filename}': {e}"));
+    records
+        .into_iter()
         .skip(1)
         .filter(|l| !l.trim().is_empty())
         .count() as u64
@@ -173,6 +185,9 @@ fn read_csv_row_count(filename: &str) -> u64 {
 ///
 /// Signature: `csv_row(ordinal: u64) -> (output: Str)`
 /// Const: `filename: Str`
+///
+/// The row is served as written in the file — quotes intact, and a
+/// quoted field's line breaks kept inside the row.
 ///
 /// SRD-80b Phase E: migrated to `#[polydat_node]`. Construction-time
 /// failure (missing file, empty file) panics via the setup function;
@@ -309,11 +324,126 @@ fn jsonl_row_count(
 
 // ─── Helpers ───────────────────────────────────────────────────
 
-/// Split a CSV line on commas, respecting quoted fields.
-fn split_csv_line(line: &str) -> Vec<&str> {
-    // Simple split — doesn't handle quoted commas.
-    // TODO: support RFC 4180 quoting for fields with embedded commas.
-    line.split(',').collect()
+// RFC 4180 quoting. A field that begins with `"` runs to the next
+// lone `"`; inside it, commas and line breaks are field content and
+// `""` is one literal `"`. Everything else is unchanged from the
+// plain comma split: unquoted fields are taken verbatim (a `"` in the
+// middle of one is just a character), and a record ends at LF with a
+// preceding CR dropped, exactly as `str::lines` did. Callers that
+// serve whole rows (`csv_row`) keep the record's source text, quotes
+// and all; `csv_field` sees the unescaped field.
+
+/// Split CSV content into raw records, honouring quoted line breaks.
+/// Each record is the source slice without its line terminator. An
+/// unterminated quote is reported with the line it opened on.
+fn split_csv_records(content: &str) -> Result<Vec<&str>, String> {
+    let bytes = content.as_bytes();
+    let mut records = Vec::new();
+    let mut start = 0;
+    let mut in_quotes = false;
+    let mut at_field_start = true;
+    let mut line = 1;
+    let mut quote_line = 1;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if in_quotes {
+            match b {
+                b'"' if bytes.get(i + 1) == Some(&b'"') => i += 1,
+                b'"' => {
+                    in_quotes = false;
+                    at_field_start = false;
+                }
+                b'\n' => line += 1,
+                _ => {}
+            }
+        } else {
+            match b {
+                b'"' if at_field_start => {
+                    in_quotes = true;
+                    quote_line = line;
+                }
+                b',' => at_field_start = true,
+                b'\n' => {
+                    let end = if i > start && bytes[i - 1] == b'\r' {
+                        i - 1
+                    } else {
+                        i
+                    };
+                    records.push(&content[start..end]);
+                    start = i + 1;
+                    line += 1;
+                    at_field_start = true;
+                }
+                _ => at_field_start = false,
+            }
+        }
+        i += 1;
+    }
+    if in_quotes {
+        return Err(format!(
+            "unterminated quoted field starting at line {quote_line}"
+        ));
+    }
+    if start < bytes.len() {
+        records.push(&content[start..]);
+    }
+    Ok(records)
+}
+
+/// Split one CSV record on commas, respecting quoted fields. Unquoted
+/// fields are borrowed verbatim; quoted fields are unwrapped and
+/// `""` collapsed to `"`.
+fn split_csv_line(line: &str) -> Result<Vec<std::borrow::Cow<'_, str>>, String> {
+    use std::borrow::Cow;
+    let bytes = line.as_bytes();
+    let mut fields = Vec::new();
+    let mut i = 0;
+    loop {
+        if bytes.get(i) == Some(&b'"') {
+            let mut field = String::new();
+            i += 1;
+            let mut seg = i;
+            loop {
+                match bytes.get(i) {
+                    None => return Err("unterminated quoted field".to_string()),
+                    Some(b'"') => {
+                        field.push_str(&line[seg..i]);
+                        if bytes.get(i + 1) == Some(&b'"') {
+                            field.push('"');
+                            i += 2;
+                            seg = i;
+                        } else {
+                            i += 1;
+                            break;
+                        }
+                    }
+                    Some(_) => i += 1,
+                }
+            }
+            fields.push(Cow::Owned(field));
+            match bytes.get(i) {
+                None => return Ok(fields),
+                Some(b',') => i += 1,
+                Some(_) => {
+                    return Err(format!(
+                        "unexpected text after the closing quote of field {}",
+                        fields.len()
+                    ));
+                }
+            }
+        } else {
+            let start = i;
+            while i < bytes.len() && bytes[i] != b',' {
+                i += 1;
+            }
+            fields.push(Cow::Borrowed(&line[start..i]));
+            if i == bytes.len() {
+                return Ok(fields);
+            }
+            i += 1;
+        }
+    }
 }
 
 /// Resolve a dot-separated JSON path. Returns the value as a string.
@@ -443,6 +573,144 @@ mod tests {
         let mut out = [Value::None];
         node.eval(&[], &mut out);
         assert_eq!(out[0].as_u64(), 3);
+    }
+
+    // ── RFC 4180 quoting ────────────────────────────────────────
+
+    fn fields(line: &str) -> Vec<String> {
+        split_csv_line(line)
+            .unwrap()
+            .into_iter()
+            .map(|f| f.into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn csv_quoted_field_keeps_embedded_comma() {
+        assert_eq!(
+            fields("\"Shook, Jonathan\",42"),
+            vec!["Shook, Jonathan", "42"]
+        );
+        let path = write_temp_csv(
+            "test_csv_quoted_comma.csv",
+            "name,age\n\"Shook, Jonathan\",42\nbob,25\n",
+        );
+        let node = CsvField::new(path.clone(), "name".to_string());
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(0)], &mut out);
+        assert_eq!(out[0].to_display_string(), "Shook, Jonathan");
+        // The comma inside the quotes does not shift the next column.
+        let node = CsvField::new(path, "age".to_string());
+        node.eval(&[Value::U64(0)], &mut out);
+        assert_eq!(out[0].to_display_string(), "42");
+    }
+
+    #[test]
+    fn csv_quoted_field_collapses_doubled_quote() {
+        assert_eq!(fields("\"say \"\"hi\"\"\",x"), vec!["say \"hi\"", "x"]);
+        assert_eq!(fields("\"\"\"\""), vec!["\""]);
+        let path = write_temp_csv("test_csv_quoted_dq.csv", "q\n\"say \"\"hi\"\"\"\n");
+        let node = CsvField::new(path, "q".to_string());
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(0)], &mut out);
+        assert_eq!(out[0].to_display_string(), "say \"hi\"");
+    }
+
+    #[test]
+    fn csv_quoted_field_keeps_embedded_newline() {
+        // LF and CR LF both stay inside the field; the record count
+        // and the row text follow the quotes, not the line breaks.
+        let path = write_temp_csv(
+            "test_csv_quoted_nl.csv",
+            "id,note\n1,\"line one\nline two\"\n2,\"crlf\r\nhere\"\r\n3,plain\n",
+        );
+        let node = CsvField::new(path.clone(), "note".to_string());
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(0)], &mut out);
+        assert_eq!(out[0].to_display_string(), "line one\nline two");
+        node.eval(&[Value::U64(1)], &mut out);
+        assert_eq!(out[0].to_display_string(), "crlf\r\nhere");
+        node.eval(&[Value::U64(2)], &mut out);
+        assert_eq!(out[0].to_display_string(), "plain");
+
+        let node = CsvRowCount::new(path.clone());
+        node.eval(&[], &mut out);
+        assert_eq!(out[0].as_u64(), 3);
+
+        // csv_row serves the record as written, quotes and break intact.
+        let node = CsvRow::new(path);
+        node.eval(&[Value::U64(0)], &mut out);
+        assert_eq!(out[0].to_display_string(), "1,\"line one\nline two\"");
+        node.eval(&[Value::U64(1)], &mut out);
+        assert_eq!(out[0].to_display_string(), "2,\"crlf\r\nhere\"");
+    }
+
+    #[test]
+    fn csv_empty_quoted_field() {
+        assert_eq!(fields("a,\"\",c"), vec!["a", "", "c"]);
+        assert_eq!(fields("\"\""), vec![""]);
+        assert_eq!(fields("\"\","), vec!["", ""]);
+        let path = write_temp_csv("test_csv_quoted_empty.csv", "a,b,c\n1,\"\",3\n");
+        let node = CsvField::new(path, "b".to_string());
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(0)], &mut out);
+        assert_eq!(out[0].to_display_string(), "");
+    }
+
+    #[test]
+    fn csv_mixed_quoted_and_unquoted_fields() {
+        // Unquoted fields are exactly what the plain split gave: taken
+        // verbatim, whitespace and interior quote characters included.
+        assert_eq!(
+            fields("plain,\"quoted, one\", spaced ,\"\",it\"s,\"last\""),
+            vec!["plain", "quoted, one", " spaced ", "", "it\"s", "last"]
+        );
+        assert_eq!(fields(""), vec![""]);
+        assert_eq!(fields("a,"), vec!["a", ""]);
+        let path = write_temp_csv(
+            "test_csv_quoted_mixed.csv",
+            "a,b,c,d\nplain,\"quoted, one\", spaced ,\"last\"\n",
+        );
+        let mut out = [Value::None];
+        for (col, want) in [
+            ("a", "plain"),
+            ("b", "quoted, one"),
+            ("c", "spaced"),
+            ("d", "last"),
+        ] {
+            let node = CsvField::new(path.clone(), col.to_string());
+            node.eval(&[Value::U64(0)], &mut out);
+            assert_eq!(out[0].to_display_string(), want, "column {col}");
+        }
+    }
+
+    #[test]
+    fn csv_unterminated_quote_is_an_error() {
+        let err = split_csv_records("a,b\n1,\"open\n2,x\n").unwrap_err();
+        assert_eq!(err, "unterminated quoted field starting at line 2");
+        assert_eq!(
+            split_csv_line("\"open").unwrap_err(),
+            "unterminated quoted field"
+        );
+        assert!(
+            split_csv_line("\"a\"b,c")
+                .unwrap_err()
+                .contains("after the closing quote")
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "csv_field: ")]
+    fn csv_field_unterminated_quote_panics_with_loader_error() {
+        let path = write_temp_csv("test_csv_unterminated.csv", "a,b\n1,\"open\n2,x\n");
+        let _ = CsvField::new(path, "b".to_string());
+    }
+
+    #[test]
+    #[should_panic(expected = "unterminated quoted field starting at line 2")]
+    fn csv_row_count_unterminated_quote_panics_with_loader_error() {
+        let path = write_temp_csv("test_csv_unterminated_count.csv", "a,b\n1,\"open\n2,x\n");
+        let _ = CsvRowCount::new(path);
     }
 
     #[test]

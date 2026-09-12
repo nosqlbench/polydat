@@ -2066,6 +2066,37 @@ fn const_expr_via_cli_cycles() {
 /// Verifies that every function in the registry can be compiled into a
 /// working Polydat Kernel. Test fixture files are created for I/O nodes.
 /// Vectordata nodes are tested separately (they require dataset downloads).
+/// RFC 4180 quoting through the DSL: a quoted field carries its
+/// comma, doubled quote, and line break into `csv_field`, while
+/// `csv_row` serves the record as written and `csv_row_count` counts
+/// records rather than lines.
+#[test]
+fn csv_field_honours_rfc4180_quoting() {
+    let csv_path = std::env::temp_dir().join("_polydat_coverage_quoted.csv");
+    std::fs::write(
+        &csv_path,
+        "name,note\n\"Shook, Jonathan\",\"says \"\"hi\"\"\"\nbob,\"two\nlines\"\n",
+    )
+    .unwrap();
+    let csv = csv_path.to_str().unwrap().replace('\\', "/");
+
+    let mut k = polydat(&format!("out := csv_field(cycle, \"{csv}\", \"name\")"));
+    assert_eq!(eval_str(&mut k, 0), "Shook, Jonathan");
+    assert_eq!(eval_str(&mut k, 1), "bob");
+
+    let mut k = polydat(&format!("out := csv_field(cycle, \"{csv}\", \"note\")"));
+    assert_eq!(eval_str(&mut k, 0), "says \"hi\"");
+    assert_eq!(eval_str(&mut k, 1), "two\nlines");
+
+    let mut k = polydat(&format!("out := csv_row(cycle, \"{csv}\")"));
+    assert_eq!(eval_str(&mut k, 1), "bob,\"two\nlines\"");
+
+    let mut k = polydat(&format!("out := csv_row_count(\"{csv}\")"));
+    assert_eq!(eval_u64(&mut k, 0), 2);
+
+    let _ = std::fs::remove_file(&csv_path);
+}
+
 #[test]
 fn every_registered_function_compiles() {
     use polydat::dsl::compile::compile_polydat;
