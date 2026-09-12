@@ -508,3 +508,38 @@ fn the_index_keyed_calls_agree_with_the_named_ones_on_every_engine() {
         );
     }
 }
+
+/// A kernel created from a program starts from the program on every
+/// engine: the externs at their declared defaults, whatever the kernel
+/// that became the program had been set to. The interpreter always
+/// built its created kernels that way; the compiled engines cloned the
+/// set values along.
+#[test]
+fn a_created_kernel_starts_from_the_programs_defaults_on_every_engine() {
+    for engine in engines() {
+        let Ok(mut kernel) = compile_polydat_with(SRC, engine) else {
+            continue;
+        };
+        kernel.set_input("scale", Value::U64(1000)).unwrap();
+        kernel
+            .set_input("region", Value::Str("eu-west".into()))
+            .unwrap();
+        kernel.set_inputs(&[3]);
+        let set_key = kernel.pull("key");
+        let program = kernel.into_program();
+        let mut fresh = program.create_kernel();
+        assert_eq!(fresh.input_value("scale"), Some(Value::U64(10)), "{engine}");
+        assert_eq!(
+            fresh.input_value("region"),
+            Some(Value::Str("us-east".into())),
+            "{engine}"
+        );
+        fresh.set_inputs(&[3]);
+        let fresh_key = fresh.pull("key");
+        assert_ne!(set_key, fresh_key, "{engine}");
+        assert!(
+            fresh_key.as_str().starts_with("us-east/"),
+            "{engine}: {fresh_key:?}"
+        );
+    }
+}

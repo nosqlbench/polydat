@@ -48,6 +48,9 @@ pub(crate) struct ExternSlot {
     pub entry: Option<usize>,
     /// The current value: the declared default until the host sets it.
     pub value: Value,
+    /// The declared default, what a kernel created from the program
+    /// starts with.
+    pub default: Value,
     /// The shared cell a `shared` binding's slot is bound to.
     pub cell: Option<crate::kernel::SharedCell>,
     /// The cell revision the slot last took its value from.
@@ -124,6 +127,7 @@ impl Externs {
                 ty: def.port_type,
                 entry,
                 value: def.default.clone(),
+                default: def.default.clone(),
                 cell: None,
                 seen: None,
             });
@@ -486,6 +490,23 @@ impl Externs {
             buffer[s.slot] = carrier_bits(&s.value);
         }
         Ok(s.slot)
+    }
+
+    /// Start over from the program: every extern back at its declared
+    /// default, carriers written into `buffer` now and handle kinds at
+    /// the next run, and every `shared` binding with a cell of its own
+    /// holding that default. What a kernel created from a shared
+    /// program starts with, whatever the kernel it was cloned from had
+    /// been set to.
+    pub(crate) fn reset_to_program(&mut self, buffer: &mut [u64]) {
+        for s in &mut self.slots {
+            s.value = s.default.clone();
+            s.seen = None;
+            if s.ty.slot_color() != crate::ast::SlotColor::Hdl1 {
+                buffer[s.slot] = carrier_bits(&s.value);
+            }
+        }
+        self.reseed_cells();
     }
 
     /// The current value of the extern `name`, if there is one.

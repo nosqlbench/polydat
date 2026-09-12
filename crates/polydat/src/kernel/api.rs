@@ -471,10 +471,12 @@ pub trait Kernel: Send {
     /// binding is an error naming the ones that are.
     fn attach_shared_cell(&mut self, name: &str, cell: SharedCell) -> Result<(), String>;
 
-    /// Give every `shared` binding a cell of its own again: what a
-    /// kernel created from a shared program starts with.
+    /// Start over from the program: every input at its declared
+    /// default, every `shared` binding with a cell of its own, nothing
+    /// current. What a kernel created from a shared program starts
+    /// with; the interpreter's is built that way and needs nothing.
     #[doc(hidden)]
-    fn reseed_shared_cells(&mut self) {}
+    fn reset_to_program(&mut self) {}
 
     /// Make this kernel a nested one: it runs inside the cycle of the
     /// kernel that opened it (a traversal's activation inside its
@@ -495,7 +497,10 @@ pub trait KernelProgram: Send + Sync {
     /// The engine the program was built for.
     fn engine(&self) -> crate::compile::select::Engine;
 
-    /// A kernel of this program for the calling thread.
+    /// A kernel of this program for the calling thread. It starts from
+    /// the program on every engine: every input at its declared
+    /// default, whatever the kernel that became the program had been
+    /// set to; every `shared` binding with a cell of its own.
     fn create_kernel(self: std::sync::Arc<Self>) -> Box<dyn Kernel>;
 
     /// A kernel of this program that runs inside the cycle of the kernel
@@ -518,9 +523,11 @@ impl<K: Kernel + Clone + Send + Sync + 'static> KernelProgram for SharedKernel<K
     }
     fn create_kernel(self: std::sync::Arc<Self>) -> Box<dyn Kernel> {
         let mut kernel = self.0.clone();
-        // A created kernel has cells of its own, as an interpreter state
-        // created from a program does; a host attaches what it shares.
-        kernel.reseed_shared_cells();
+        // A created kernel starts from the program, as an interpreter
+        // state created from one does: inputs at their defaults, cells
+        // of its own; a host sets what it wants and attaches what it
+        // shares.
+        kernel.reset_to_program();
         Box::new(kernel)
     }
 }

@@ -262,8 +262,9 @@ macro_rules! impl_kernel_trait {
             ) -> Result<(), String> {
                 self.core.attach_cell(name, cell)
             }
-            fn reseed_shared_cells(&mut self) {
-                self.core.externs.reseed_cells();
+            fn reset_to_program(&mut self) {
+                self.core.externs.reset_to_program(&mut self.core.buffer);
+                self.mark_all_dirty();
             }
             fn into_program(
                 mut self: Box<Self>,
