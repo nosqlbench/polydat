@@ -23,6 +23,7 @@ use crate::ast::{PortType, Value, ValueRef};
 use crate::iteration::comprehension::StreamerValue;
 use crate::iteration::comprehension::runtime::{RuntimeTuple, evaluate_for_iteration};
 use crate::kernel::{Kernel, KernelProgram, PolydatKernel, PolydatProgram};
+use crate::library::support::float_text;
 
 /// Where a hole sits in a `json` skeleton, which decides its encoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -968,22 +969,36 @@ pub fn encode_ref<W: std::fmt::Write>(value: ValueRef<'_>, enc: &HoleEncoding, o
         return;
     }
     let ty = enc.ty.as_deref();
-    // An integer with no format writes its digits straight into the
-    // sink (SRD 117 step 3): digits need no escaping in any encoding or
+    // A number with no format, or a float under a `.N` precision,
+    // writes its digits straight into the sink (SRD 117 step 3):
+    // digits, a sign, and a point need no escaping in any encoding or
+    // position, and a numeric type is written bare in a JSON value
     // position, so the text is the same as the general path's, without
-    // the `String` the general path builds.
-    if enc.format.is_none() && is_numeric_keyword(ty.unwrap_or("u64")) {
-        match value {
-            ValueRef::U64(n) => {
+    // the `String` the general path builds. The float writer is
+    // byte-identical to `format!` (`support::float_text`, proved by
+    // `tests/float_text.rs`).
+    if is_numeric_keyword(ty.unwrap_or("u64")) {
+        match (enc.format.as_deref(), value) {
+            (None, ValueRef::U64(n)) => {
                 put_u64(n, out);
                 return;
             }
-            ValueRef::I64(n) => {
+            (None, ValueRef::I64(n)) => {
                 if n < 0 {
                     out.put_char('-');
                 }
                 put_u64(n.unsigned_abs(), out);
                 return;
+            }
+            (None, ValueRef::F64(f)) => {
+                let _ = float_text::write_shortest(f, out);
+                return;
+            }
+            (Some(fmt), ValueRef::F64(_) | ValueRef::U64(_)) => {
+                if let (Some(prec), Some(f)) = (precision_of(fmt), as_f64(value)) {
+                    let _ = float_text::write_fixed(f, prec, out);
+                    return;
+                }
             }
             _ => {}
         }
@@ -1109,9 +1124,9 @@ fn formatted_text<'a>(
         return base(value);
     };
     let fmt = fmt.trim();
-    if let Some(prec) = fmt.strip_prefix('.').and_then(|p| p.parse::<usize>().ok()) {
+    if let Some(prec) = precision_of(fmt) {
         if let Some(f) = as_f64(value) {
-            return Cow::Owned(format!("{f:.prec$}"));
+            return Cow::Owned(float_text::fixed_string(f, prec));
         }
         return base(value);
     }
@@ -1147,6 +1162,13 @@ fn as_f64(v: ValueRef<'_>) -> Option<f64> {
         ValueRef::U64(n) => Some(n as f64),
         _ => None,
     }
+}
+
+/// The `N` of a `.N` precision format, after trimming.
+fn precision_of(fmt: &str) -> Option<usize> {
+    fmt.trim()
+        .strip_prefix('.')
+        .and_then(|p| p.parse::<usize>().ok())
 }
 
 fn push_json_escaped<W: std::fmt::Write>(s: &str, out: &mut W) {
@@ -1355,5 +1377,56 @@ mod tests {
             formatted_text(ValueRef::Str("ab"), None, Some(">4")),
             "  ab"
         );
+        assert_eq!(
+            formatted_text(ValueRef::F64(0.295), None, Some(".2")),
+            "0.29"
+        );
+        assert_eq!(
+            formatted_text(ValueRef::U64(7), None, Some(" .3 ")),
+            "7.000"
+        );
+    }
+
+    /// A float hole's bytes are `format!`'s, on the direct path and on
+    /// the general one, in every encoding and position.
+    #[test]
+    fn float_holes_write_rust_text() {
+        let cases: [(f64, Option<&str>, &str); 8] = [
+            (100.0, None, "100.0"),
+            (0.1, None, "0.1"),
+            (5e-5, None, "5e-5"),
+            (1e16, None, "1e16"),
+            (-0.0, None, "-0.0"),
+            (2.0 / 3.0, Some(".2"), "0.67"),
+            (0.295, Some(".2"), "0.29"),
+            (2.5, Some(".0"), "2"),
+        ];
+        for (f, fmt, want) in cases {
+            for (encoding, position) in [
+                ("text", HolePosition::Text),
+                ("json", HolePosition::Value),
+                ("json", HolePosition::InString),
+                ("csv", HolePosition::Text),
+            ] {
+                for ty in [None, Some("f64")] {
+                    let mut out = String::new();
+                    encode(
+                        &Value::F64(f),
+                        &enc(encoding, position, ty, fmt, false),
+                        &mut out,
+                    );
+                    assert_eq!(out, want, "{f:?} {fmt:?} {encoding} {position:?} {ty:?}");
+                }
+            }
+            // A non-numeric declared type takes the general path; the
+            // text is the same, quoted where the position quotes.
+            let mut out = String::new();
+            encode(
+                &Value::F64(f),
+                &enc("json", HolePosition::Value, Some("str"), fmt, false),
+                &mut out,
+            );
+            assert_eq!(out, format!("\"{want}\""));
+        }
     }
 }

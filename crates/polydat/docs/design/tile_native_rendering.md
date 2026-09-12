@@ -219,6 +219,20 @@ each measured:
    to 536 on P1; `flat`, with two integer holes among seven, within
    drift.
 
+   *Float writer, landed 2026-09-11.* A float hole with no format and a
+   float or integer hole under a `.N` precision now write their text
+   through `library::support::float_text`, byte-identical to Rust's
+   `Debug` form and to `format!("{:.N}")`: the shortest form takes
+   ryu's digits with Rust's layout, falling back to `format!` on an
+   exact tie between two shortest candidates, where ryu rounds to even
+   and Rust rounds up; the fixed form rounds the exact binary value in
+   `u128` arithmetic, half to even, falling back where the value does
+   not fit. `tests/float_text.rs` is the proof: edge values, arithmetic
+   series, and a million seeded bit patterns for the shortest form and
+   every precision 0 through 9, with a sixteen-million sweep behind
+   `--ignored`. Its paired measurement is pending a quiet machine and
+   will be recorded in §6 when taken.
+
 ## 3. What does not change
 
 - **The bytes.** Every step runs under `tests/handle_tiers.rs`, whose

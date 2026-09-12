@@ -3,7 +3,7 @@
 
 //! Support utilities used by Polydat function nodes.
 //!
-//! Both [`cache`] and [`audit`] are infrastructure that
+//! [`cache`], [`audit`], and [`float_text`] are infrastructure that
 //! library nodes consume — they're not part of the Polydat node
 //! contract, just helpers the implementations reach for. Kept
 //! co-located here so the library's internal dependency
@@ -11,3 +11,4 @@
 
 pub mod audit;
 pub mod cache;
+pub mod float_text;

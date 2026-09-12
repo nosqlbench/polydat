@@ -1555,6 +1555,7 @@ dependencies = [
  "polydat-derive",
  "rayon",
  "regex",
+ "ryu",
  "serde",
  "serde_json",
  "serde_yaml",
