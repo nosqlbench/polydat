@@ -119,7 +119,7 @@ pub(crate) struct Drive {
 
 /// The [`Kernel`](crate::kernel::Kernel) impl every compiled kernel
 /// shares: the type's inherent `eval`, `set_input`, `set_cursor`,
-/// `get_value`, `output_names`, `mark_all_dirty`, and a `core` with a
+/// `get_value`, `mark_all_dirty`, and a `core` with a
 /// `drive`, `externs`, `coord_count`, and `output_types`.
 macro_rules! impl_kernel_trait {
     ($ty:ident, $engine:expr) => {
@@ -154,18 +154,10 @@ macro_rules! impl_kernel_trait {
             fn input_names(&self) -> Vec<String> {
                 self.core.externs.input_names().to_vec()
             }
-            /// In declaration order, as the interpreter lists them; a kernel
-            /// built without a program surface lists its slots.
+            /// In declaration order, as the interpreter lists them: the
+            /// assembler sets them on every compiled kernel.
             fn output_names(&self) -> Vec<String> {
-                let declared = self.core.externs.output_names();
-                if declared.is_empty() {
-                    $ty::output_names(self)
-                        .into_iter()
-                        .map(String::from)
-                        .collect()
-                } else {
-                    declared.to_vec()
-                }
+                self.core.externs.output_names().to_vec()
             }
             fn output_type(&self, name: &str) -> Option<crate::ast::PortType> {
                 self.core.output_types.get(name).copied()

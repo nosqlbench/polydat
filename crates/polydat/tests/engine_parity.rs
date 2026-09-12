@@ -19,6 +19,7 @@
 
 mod common;
 
+use polydat::Kernel;
 use polydat::dsl::compile::compile_polydat_to_assembler;
 use std::path::Path;
 

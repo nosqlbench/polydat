@@ -828,11 +828,6 @@ macro_rules! kernel_accessors {
             self.core.output_map.get(name).copied()
         }
 
-        /// The named outputs.
-        pub fn output_names(&self) -> Vec<&str> {
-            self.core.output_map.keys().map(|s| s.as_str()).collect()
-        }
-
         /// Read an output by pre-resolved slot index. Panics on
         /// Ref2-colored slots (axiom S2) — use `read_vec_*`.
         #[inline]
