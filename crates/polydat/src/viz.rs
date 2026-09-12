@@ -10,15 +10,37 @@
 //! - Each node has named input ports (top) and output ports (bottom)
 //! - Edges connect from output ports to input ports
 //! - Dark theme colors via graph/node/edge attributes
+//!
+//! The program's inputs are drawn as port nodes at the top of the graph,
+//! distinct from the binding nodes that read them:
+//! - Coordinates (`input name: type`) share one `INPUTS` register with one
+//!   output port per coordinate.
+//! - External ports (`extern name: type [= default]`, the kernel's
+//!   `InputKind::ExternalWrite` slots the host writes between cycles) each
+//!   get their own register labeled with the port's kind, name, type, and
+//!   default, with one output port wired to every node that reads it.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::dsl::ast::*;
 use crate::dsl::{lexer, parser};
 
+/// How a visualization node is drawn.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum VizKind {
+    /// A binding: input ports | label | output ports.
+    Func,
+    /// The `INPUTS` or `OUTPUTS` register: coordinates or terminal wires
+    /// as ports, with the blue or green accent.
+    Register,
+    /// One external port (`extern name: type [= default]`): a register
+    /// with a single output port and the amber accent.
+    Extern,
+}
+
 /// A node in the visualization graph.
 struct VizNode {
-    /// Unique ID for DOT (e.g., "n0", "n1")
+    /// Unique ID for DOT (e.g., "n0", "n1", "x0")
     id: String,
     /// Display label (function name or binding expression)
     label: String,
@@ -26,8 +48,8 @@ struct VizNode {
     inputs: Vec<String>,
     /// Output wire names (what this node produces)
     outputs: Vec<String>,
-    /// Is this a coordinate input?
-    is_coord: bool,
+    /// How the node is drawn.
+    kind: VizKind,
 }
 
 /// An edge connecting an output to an input.
@@ -51,7 +73,21 @@ pub fn polydat_to_dot(source: &str) -> Result<String, String> {
     dot.push('\n');
 
     for node in &nodes {
-        if node.is_coord {
+        if node.kind == VizKind::Extern {
+            // External port: output port only (top of graph), amber accent
+            let ports: Vec<String> = node
+                .outputs
+                .iter()
+                .map(|name| format!("<o_{name}> {name}"))
+                .collect();
+            dot.push_str(&format!(
+                "    {} [label=\"{{ {} | {{ {} }} }}\", fillcolor=\"#0f3460\", \
+                 fontcolor=\"#ffb454\", color=\"#ffb454\", penwidth=2];\n",
+                node.id,
+                dot_escape(&node.label),
+                ports.join(" | "),
+            ));
+        } else if node.kind == VizKind::Register {
             // Register nodes (INPUTS / OUTPUTS): record with labeled ports
             if node.outputs.is_empty() && !node.inputs.is_empty() {
                 // OUTPUTS register: input ports only (bottom of graph)
@@ -152,10 +188,10 @@ pub fn polydat_to_mermaid(source: &str) -> Result<String, String> {
 
     for node in &nodes {
         let escaped = node.label.replace('"', "'");
-        if node.is_coord {
-            lines.push(format!("    {}([\"{}\"])", node.id, escaped));
-        } else {
+        if node.kind == VizKind::Func {
             lines.push(format!("    {}[\"{}\"]", node.id, escaped));
+        } else {
+            lines.push(format!("    {}([\"{}\"])", node.id, escaped));
         }
     }
 
@@ -178,8 +214,15 @@ pub fn polydat_to_mermaid(source: &str) -> Result<String, String> {
 
     lines.push("    classDef coord fill:#16213e,stroke:#4da6ff,color:#4da6ff".into());
     lines.push("    classDef func fill:#16213e,stroke:#0f3460,color:#e0e0e0".into());
+    if nodes.iter().any(|n| n.kind == VizKind::Extern) {
+        lines.push("    classDef extern fill:#16213e,stroke:#ffb454,color:#ffb454".into());
+    }
     for node in &nodes {
-        let class = if node.is_coord { "input" } else { "func" };
+        let class = match node.kind {
+            VizKind::Register => "input",
+            VizKind::Extern => "extern",
+            VizKind::Func => "func",
+        };
         lines.push(format!("    class {} {class}", node.id));
     }
 
@@ -226,8 +269,9 @@ fn build_graph(source: &str) -> Result<(Vec<VizNode>, Vec<VizEdge>), String> {
     let mut name_to_node_id: HashMap<String, String> = HashMap::new();
     let mut node_counter = 0usize;
 
-    // Collect coordinates and defined names
+    // Collect coordinates, external ports, and defined names
     let mut input_names: Vec<String> = Vec::new();
+    let mut externs: Vec<&ExternPort> = Vec::new();
     let mut defined_names: HashSet<String> = HashSet::new();
     let mut all_output_names: Vec<String> = Vec::new();
 
@@ -240,7 +284,8 @@ fn build_graph(source: &str) -> Result<(Vec<VizNode>, Vec<VizEdge>), String> {
                     all_output_names.push(t.clone());
                 }
             }
-            Statement::ModuleDef(_) | Statement::ExternPort(_) => {}
+            Statement::ExternPort(e) => externs.push(e),
+            Statement::ModuleDef(_) => {}
             Statement::Cursor(_) => {}
             Statement::Pragma { .. } => {}
             Statement::For(_) => {}
@@ -264,8 +309,9 @@ fn build_graph(source: &str) -> Result<(Vec<VizNode>, Vec<VizEdge>), String> {
             };
             collect_expr_idents(expr, &mut refs);
         }
+        let extern_names: HashSet<&str> = externs.iter().map(|e| e.name.as_str()).collect();
         for name in refs {
-            if !defined_names.contains(&name) {
+            if !defined_names.contains(&name) && !extern_names.contains(name.as_str()) {
                 input_names.push(name);
             }
         }
@@ -301,17 +347,44 @@ fn build_graph(source: &str) -> Result<(Vec<VizNode>, Vec<VizEdge>), String> {
         for name in &input_names {
             input_ports.push(name.clone());
         }
-        // TODO: add external ports here when capture wiring is implemented
         nodes.push(VizNode {
             id: inputs_id.clone(),
             label: "INPUTS".into(),
             inputs: vec![],
             outputs: input_ports,
-            is_coord: true,
+            kind: VizKind::Register,
         });
         for name in &input_names {
             name_to_node_id.insert(name.clone(), inputs_id.clone());
         }
+    }
+
+    // ─── External ports (top) ───────────────────────────
+    // One register per `extern name: type [= default]`. These are the
+    // kernel's `InputKind::ExternalWrite` slots: written by the host
+    // between cycles and read by nodes like any other input.
+    // The label carries kind, name, type, and default so a reader can
+    // tell a port with a declared default from one that is unset until
+    // the host writes it.
+    for (idx, port) in externs.iter().enumerate() {
+        let id = format!("x{idx}");
+        let label = match &port.default {
+            Some(default) => format!(
+                "extern {}: {} = {}",
+                port.name,
+                port.typ,
+                format_expr_short(default)
+            ),
+            None => format!("extern {}: {} (unset)", port.name, port.typ),
+        };
+        name_to_node_id.insert(port.name.clone(), id.clone());
+        nodes.push(VizNode {
+            id,
+            label,
+            inputs: vec![],
+            outputs: vec![port.name.clone()],
+            kind: VizKind::Extern,
+        });
     }
 
     // ─── Function nodes (middle) ────────────────────────
@@ -358,7 +431,7 @@ fn build_graph(source: &str) -> Result<(Vec<VizNode>, Vec<VizEdge>), String> {
                     label,
                     inputs: input_refs,
                     outputs: b.targets.clone(),
-                    is_coord: false,
+                    kind: VizKind::Func,
                 });
             }
         }
@@ -383,7 +456,7 @@ fn build_graph(source: &str) -> Result<(Vec<VizNode>, Vec<VizEdge>), String> {
             label: "OUTPUTS".into(),
             inputs: terminal_outputs,
             outputs: vec![],
-            is_coord: true, // use coord styling (blue accent)
+            kind: VizKind::Register,
         });
     }
 
@@ -536,5 +609,68 @@ mod tests {
         let dot = polydat_to_dot(src).unwrap();
         assert!(dot.contains("mixed_radix"));
         assert!(dot.contains("hash"));
+    }
+
+    /// One coordinate, one extern with a default, one extern without.
+    const EXTERN_POLYDAT: &str = "input cycle: u64\n\
+        extern balance: f64 = 0.5\n\
+        extern session_id: u64\n\
+        h := hash(cycle)\n\
+        scaled := f64_mul(balance, 2.0)\n\
+        token := u64_add(h, session_id)";
+
+    #[test]
+    fn extern_ports_are_drawn_with_edges() {
+        let dot = polydat_to_dot(EXTERN_POLYDAT).unwrap();
+        // The coordinate register is unchanged and holds only coordinates.
+        assert!(dot.contains("inputs [label=\"{ INPUTS | { <o_cycle> cycle } }\""));
+        // Each extern is its own port node, labeled kind / name / type / default.
+        assert!(
+            dot.contains("x0 [label=\"{ extern balance: f64 = 0.5 | { <o_balance> balance } }\"")
+        );
+        assert!(dot.contains(
+            "x1 [label=\"{ extern session_id: u64 (unset) | { <o_session_id> session_id } }\""
+        ));
+        // Externs carry their own accent, distinct from coordinates and outputs.
+        assert!(dot.contains("#ffb454"));
+        // Edges run from each input port to the node that reads it.
+        assert!(dot.contains("inputs:o_cycle -> n0:i_cycle;"));
+        assert!(dot.contains("x0:o_balance -> n1:i_balance;"));
+        assert!(dot.contains("x1:o_session_id -> n2:i_session_id;"));
+        assert!(dot.contains("n0:o_h -> n2:i_h;"));
+    }
+
+    #[test]
+    fn extern_ports_are_not_inferred_as_coordinates() {
+        // No `input` declaration: `cycle` is inferred, `k` is an extern.
+        let src = "extern k: u64 = 7\nh := hash(cycle)\nz := u64_add(h, k)";
+        let dot = polydat_to_dot(src).unwrap();
+        assert!(dot.contains("inputs [label=\"{ INPUTS | { <o_cycle> cycle } }\""));
+        assert!(dot.contains("x0 [label=\"{ extern k: u64 = 7 | { <o_k> k } }\""));
+        assert!(dot.contains("x0:o_k -> n1:i_k;"));
+    }
+
+    #[test]
+    fn extern_ports_in_mermaid_and_svg() {
+        let mermaid = polydat_to_mermaid(EXTERN_POLYDAT).unwrap();
+        assert!(mermaid.contains("x0([\"extern balance: f64 = 0.5\"])"));
+        assert!(mermaid.contains("x1([\"extern session_id: u64 (unset)\"])"));
+        assert!(mermaid.contains("x0 -->|balance| n1"));
+        assert!(mermaid.contains("classDef extern"));
+        assert!(mermaid.contains("class x0 extern"));
+
+        let svg = polydat_to_svg(EXTERN_POLYDAT).unwrap();
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("balance"));
+        assert!(svg.contains("session_id"));
+    }
+
+    #[test]
+    fn programs_without_externs_draw_no_extern_nodes() {
+        let dot = polydat_to_dot(SIMPLE_POLYDAT).unwrap();
+        assert!(!dot.contains("extern"));
+        assert!(!dot.contains("#ffb454"));
+        let mermaid = polydat_to_mermaid(SIMPLE_POLYDAT).unwrap();
+        assert!(!mermaid.contains("extern"));
     }
 }

@@ -162,17 +162,12 @@ over one slot buffer. Every engine accepts every program, so native
 eligibility is an optimization, not a requirement for a valid graph, and the
 interpreter is the oracle the others are checked against.
 
-One eleven-node graph with three inputs and four outputs, measured through all
-three engines on one core:
-
-| Engine | Time per cycle | Throughput | Relative to P1 |
-| --- | ---: | ---: | ---: |
-| P1 interpreter | 399 ns | 2.5 M cycles/s | 1.0x |
-| P2 closures | 94 ns | 10.7 M cycles/s | 4.3x |
-| P3 native | 46 ns | 21.8 M cycles/s | 8.7x |
-
-The graph, measurement contract, correctness gate, and benchmark command are in
-[Engine-ladder performance](crates/polydat/docs/guides/performance.md).
+One eleven-node graph with three inputs and four outputs is measured through
+every engine on one core, and one JSON document with a projection is rendered
+through them. The graphs, the measurement contract, the correctness gate, the
+benchmark commands, and the current numbers with their confidence intervals are
+in [Engine-ladder performance](crates/polydat/docs/guides/performance.md); the
+README keeps no copy of the table, so the two cannot disagree.
 
 ## Why one graph?
 
@@ -337,6 +332,11 @@ polydat explain graph.polydat
 polydat explain graph.polydat wires engines provenance
 polydat viz graph.polydat --format mermaid
 ```
+
+`viz` renders the program's graph as DOT, Mermaid, or SVG. Coordinates share
+one `INPUTS` register, and each `extern` port is drawn as its own port node
+labeled with its kind, name, type, and default, wired to every node that reads
+it.
 
 Optional behaviors are graph transforms rather than runtime decorators.
 `--emit` appends one `emit_row` binding that names the selected wires, so
