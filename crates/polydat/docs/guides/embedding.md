@@ -82,6 +82,38 @@ program's types are known at compile time and the host is expected to
 read what it declared. `engine()` reports what the selector built, here
 native code with push-pull provenance; §11 names the engines.
 
+`pull` looks its name up on every call. A host that reads the same
+outputs every cycle resolves each name once with `output_index` and
+pulls with `pull_at`, so no lookup runs per cycle. The index is the
+output's position in `output_names`, which lists the anonymous
+intermediate wires too, so the indices are not dense. The binary's
+fibers drive their runs this way.
+
+```rust
+let at: Vec<usize> = ["user_id", "score", "label"]
+    .iter()
+    .map(|n| kernel.output_index(n).expect("a named output"))
+    .collect();
+println!("output indices: {at:?}");
+for cycle in [3u64, 4] {
+    kernel.set_inputs(&[cycle]);
+    let user_id = kernel.pull_at(at[0]).as_u64();
+    let score = kernel.pull_at(at[1]).as_f64();
+    let label = kernel.pull_at(at[2]).as_str().to_string();
+    println!("cycle {cycle} by index: user_id={user_id} score={score:.3} label={label}");
+}
+```
+
+```text
+output indices: [2, 4, 5]
+cycle 3 by index: user_id=139053 score=0.350 label=user-139053
+cycle 4 by index: user_id=603978 score=0.869 label=user-603978
+```
+
+`output_index` returns `None` for a name the program does not bind;
+`pull_at` with an index past the outputs is a panic, a host bug of the
+same kind as a typed accessor on the wrong variant.
+
 The other entry points differ in what they take:
 
 | Function | Adds |
@@ -163,6 +195,30 @@ Prefer the transform when the value is fixed for the run: the compiler
 then sees a constant, folds it, and the native segments carry it as an
 immediate. Use `set_input` when the value genuinely varies per kernel,
 such as a per-thread shard label.
+
+When the value varies per cycle, resolve the slot once with
+`input_index` and write it with `set_input_at`. The index is the slot's
+position in `input_names`, the coordinates first, so an extern's index
+follows them. The write is the same typed write as `set_input`, with
+the same refusal of a mismatch, and no lookup runs per cycle.
+
+```rust
+let region = kernel.input_index("region").expect("a declared extern");
+let key = kernel.output_index("key").expect("a named output");
+println!("input index of region: {region}");
+for (cycle, name) in [(8u64, "us-east"), (9, "eu-west"), (10, "ap-south")] {
+    kernel.set_inputs(&[cycle]);
+    kernel.set_input_at(region, Value::Str(name.into()))?;
+    println!("cycle {cycle} by index: {}", kernel.pull_at(key).as_str());
+}
+```
+
+```text
+input index of region: 1
+cycle 8 by index: us-east/622
+cycle 9 by index: eu-west/228
+cycle 10 by index: ap-south/466
+```
 
 A `cursor` declared `over` a literal spec is resolved at build. The
 assembler and every kernel list each cursor with its partitions through

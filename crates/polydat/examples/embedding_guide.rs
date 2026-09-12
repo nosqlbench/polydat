@@ -129,6 +129,20 @@ fn section_compile_and_drive() {
         let label = kernel.pull("label").as_str().to_string();
         println!("cycle {cycle}: user_id={user_id} score={score:.3} label={label}");
     }
+    // A host that reads the same outputs every cycle resolves each name
+    // once and pulls by index, as the binary's fibers do.
+    let at: Vec<usize> = ["user_id", "score", "label"]
+        .iter()
+        .map(|n| kernel.output_index(n).expect("a named output"))
+        .collect();
+    println!("output indices: {at:?}");
+    for cycle in [3u64, 4] {
+        kernel.set_inputs(&[cycle]);
+        let user_id = kernel.pull_at(at[0]).as_u64();
+        let score = kernel.pull_at(at[1]).as_f64();
+        let label = kernel.pull_at(at[2]).as_str().to_string();
+        println!("cycle {cycle} by index: user_id={user_id} score={score:.3} label={label}");
+    }
     println!();
 }
 
@@ -172,6 +186,19 @@ fn section_externs() {
         .expect("a u64 extern");
     p1.set_inputs(&[7]);
     println!("interpreter, overridden: {}", p1.pull("key").as_str());
+    // An extern the host rewrites every cycle: resolve its slot once
+    // and write by index. The coordinates come first in `input_names`,
+    // so the extern's index follows them.
+    let region = kernel.input_index("region").expect("a declared extern");
+    let key = kernel.output_index("key").expect("a named output");
+    println!("input index of region: {region}");
+    for (cycle, name) in [(8u64, "us-east"), (9, "eu-west"), (10, "ap-south")] {
+        kernel.set_inputs(&[cycle]);
+        kernel
+            .set_input_at(region, Value::Str(name.into()))
+            .expect("a str extern");
+        println!("cycle {cycle} by index: {}", kernel.pull_at(key).as_str());
+    }
     println!();
 }
 

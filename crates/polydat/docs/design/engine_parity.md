@@ -105,7 +105,7 @@ name, signature, and meaning as the interpreter kernel.
 | Construct | `compile_polydat*`, `compile()` | `try_compile*` → `Result<_, Box<PolydatKernel>>` | `compile_hybrid` → `Result<_, String>` | `try_compile_jit*` → `Result<_, String>` |
 | Coordinates | `set_inputs(&[u64])` then `pull` | `eval(&[u64])` | `eval` | `eval` |
 | Externs | `set_input(name, Value)`, `get_input` | `set_input`, `externs()` | same | same |
-| Read a value | `pull(name) -> &Value` (lazy) | `get_value(name) -> Value` after `eval` | same | same |
+| Read a value | `pull(name) -> &Value` (lazy); `pull_at(index)` and `set_input_at(index, Value)` through `Kernel`, the names resolved once with `output_index` and `input_index` (SRD 117 step 3) | `get_value(name) -> Value` after `eval`; `pull_at` and `set_input_at` on every engine | same | same |
 | Read raw bits | none | `get`, `get_slot` (refuse handle slots) | same | same |
 | Read vectors | through `Value` | `read_vec_*` | `read_vec_*` | none (refused at compile) |
 | Introspect | `program()`, `input_names`, `output_names`, `get_constant`, `lookup`, `plan` | `output_names`, `resolve_output`, `coord_count` (counts slots), `plan` | same (`plan` counts native segments and closure steps) | `output_names`, `resolve_output`, `coord_count`, `plan` |
