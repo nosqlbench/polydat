@@ -1,11 +1,12 @@
 # Compilation Levels
 
 Polydat compiles a function graph at one of three levels. Every level
-accepts every program and computes the same values, and every level is
-driven through one trait, `Kernel`: set inputs, pull outputs, and read
-names and types the same way whatever the engine ([engine
-parity](../design/engine_parity.md)). Picking a level is a performance and
-build-size trade rather than a behaviour switch.
+accepts every program and computes the same values (the one exception: an
+extern wider than one slot, a vector or a 128-bit integer, runs on the
+interpreter only), and every level is driven through one trait, `Kernel`:
+set inputs, pull outputs, and read names and types the same way whatever
+the engine ([engine parity](../design/engine_parity.md)). Picking a level
+is a performance and build-size trade rather than a behaviour switch.
 
 | Level   | Mechanism                 | Measured, per cycle of an eleven-node graph | Feature |
 |---------|---------------------------|--------------------------------------------:|---------|

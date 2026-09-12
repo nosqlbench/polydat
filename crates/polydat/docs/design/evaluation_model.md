@@ -200,11 +200,9 @@ Reference points in the code:
 - `polydat::kernel::engines::PolydatState::seed_node_buffer` —
   primitive that writes a value into a node's buffer slot and
   marks it clean.
-- `nbrs_runtime::synthesis::OpBuilder::init_overrides` — the
-  per-activation snapshot that fiber state inherits.
 - `polydat::kernel::PolydatKernel::materialize_wiring_from_outer`
-  Step 3 — the per-const-output pull + non-None verification,
-  immediately after the extern-slot bind step.
+  Step 3 — the one pull of every const output, immediately after
+  the extern-slot bind step.
 
 ---
 
@@ -236,32 +234,32 @@ classification (above) and the const-binding check share the
 same upstream walk; the const check simply demands the upstream
 set be a subset of `{compile-foldable ∪ iteration externs}`.
 
-### Scope-Activation Check (Plan B)
+### Scope-Activation Pull (Plan B)
 
-After scope-init evaluation runs (the scope is activated,
-externs populated, the scope-init pull pass has stashed values),
-the kernel verifies:
+After the outer chain has populated the scope's input slots, the
+materializer pulls every `const` output once, so that its value
+is captured for the lifetime of the scope and every later read
+of the binding sees that one value.
 
-> Every binding declared `const` has produced a single concrete
-> value and is materialized as a leaf const-like node (ConstU64,
-> ConstF64, ConstStr, ConstHandle, etc.) or a populated buffer
-> on its node-backed output — no `Value::None`, no deferred eval.
-
-If any const binding fails to materialize — most commonly
-because its value type is not foldable to a leaf node, or its
-eval returned `Value::None`, or a panic was caught and the node
-was left unfolded — this is a **hard runtime error** at scope
-activation, before any cycles run. The phase fails to start;
-the diagnostic names the binding, the residual node type, and
-the eval result.
+A pull that panics is caught, not swallowed: the materializer
+prints one warning naming the binding and the panic text, and
+leaves the binding's buffer at `Value::None`. The scope still
+activates. The failure surfaces when the binding is consumed: a
+read of the `None` buffer falls through to the wired-in input
+where the conditional shadow allows it, and otherwise re-raises
+the node's failure with the consumer's full context. The scope
+does not refuse to start on a failed const pull, because a
+`const` may depend on resolution that is not ready until the
+workload runs (`dataset_prebuffer` and its kind), and a warning
+at activation plus the failure in context at first use is the
+diagnostic pair an operator can act on.
 
 Plan A is the type-system-style check that runs at compile time
 when iteration-extern values are unknown but the wire structure
-is fully visible. Plan B is the construction-correctness check
-that runs at scope activation when the values are known and the
-fold pass has had its chance. Together they ensure: a const
-binding either evaluates exactly once per scope activation, or
-the workload refuses to run.
+is fully visible. Plan B is the one pull at scope activation when
+the values are known and the fold pass has had its chance.
+Together: a const binding either evaluates exactly once per scope
+activation, or every use of it reports the one failure.
 
 ### Why Both Checks
 
@@ -278,18 +276,13 @@ a `cycle`-dependent node) to runtime, where the failure surface
 is larger and the diagnostic less localized to the source line.
 
 Both are cheap. Both run at most once per scope activation. The
-combined check is the contract.
+pair is the contract.
 
 ### Diagnostic Format
 
-Both checks emit the same shape — `const binding '<name>'
-violates the const contract: <reason>`. The reason names the
-offending wire (Plan A) or the runtime failure mode (Plan B).
-Plan B errors carry the executor's `polydat_context` prefix
-identifying the phase / scope.
-
-Plan A reasons (compile-time, from
-`fold_init_constants_impl`):
+Plan A fails compilation with `const binding '<name>' violates
+the const contract: <reason>`, the reason naming the offending
+wire:
 
 - **`wire on node '<n>' reaches coordinate input '<name>'
   (dynamic; changes every cycle)`** — const binding wired to a
@@ -307,15 +300,11 @@ Plan A reasons (compile-time, from
   immediate seed isn't one of the patterns above (e.g. a chain
   through a `do_while` counter).
 
-Plan B reasons (scope-activation, from
-`PolydatKernel::materialize_wiring_from_outer` Step 3):
-
-- **`scope-init pull returned Value::None`** — the eval function
-  signaled a fatal failure (e.g. `dataset_prebuffer` couldn't
-  resolve the source) and refused to produce a value.
-- **`scope-init pull panicked: <message>`** — the eval function
-  panicked; details captured via `catch_unwind`. The panic does
-  *not* poison the fiber pool; the phase fails to start cleanly.
+Plan B warns at scope activation with `warning: scope-init const
+pull failed for '<name>': <panic text>`, from
+`PolydatKernel::materialize_wiring_from_outer` step 3, and the
+node's own failure message, enriched with the consumer's context,
+is what a later read of the binding raises.
 
 ---
 
