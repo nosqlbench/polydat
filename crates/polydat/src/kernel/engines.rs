@@ -1118,18 +1118,12 @@ impl PolydatState {
         }
     }
 
-    /// Invalidate all state: reset all inputs to defaults and mark
-    /// every node dirty. Provides "clean slate" semantics.
-    pub fn invalidate_all(&mut self) {
-        self.core.inputs.clone_from_slice(&self.core.input_defaults);
-        for clean in &mut self.core.node_clean {
-            *clean = false;
-        }
-    }
-
     /// Mark every node dirty and leave the inputs as they are: every
-    /// node reruns at the next pull, as if the cycle had moved.
-    pub fn invalidate_outputs(&mut self) {
+    /// node reruns at the next pull, as if the cycle had moved. What
+    /// `Kernel::invalidate_all` means on every engine; a host that
+    /// wants the inputs back at their defaults calls
+    /// [`Self::reset_inputs_from`] as well.
+    pub fn invalidate_all(&mut self) {
         for clean in &mut self.core.node_clean {
             *clean = false;
         }

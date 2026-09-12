@@ -242,7 +242,7 @@ mod tests {
     }
 
     #[test]
-    fn invalidate_all_resets_everything() {
+    fn invalidate_all_keeps_inputs_and_reset_restores_defaults() {
         let program = Arc::new(PolydatProgram::with_inputs(
             vec![],
             vec![],
@@ -272,6 +272,9 @@ mod tests {
         state.set_input(1, Value::Str("alice".into()));
 
         state.invalidate_all();
+        assert_eq!(state.get_input(0), Value::U64(42));
+        assert_eq!(state.get_input(1), Value::Str("alice".into()));
+        state.reset_inputs_from(0);
         assert_eq!(state.get_input(0), Value::U64(0));
         assert_eq!(state.get_input(1), Value::Str("anon".into()));
     }

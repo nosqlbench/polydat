@@ -257,7 +257,7 @@ impl crate::kernel::Kernel for PolydatKernel {
         PolydatKernel::set_traversals(self, traversals, producers);
     }
     fn invalidate_all(&mut self) {
-        self.state().invalidate_outputs();
+        self.state().invalidate_all();
     }
     fn shared_cells(&self) -> Vec<crate::kernel::SharedCellEntry> {
         self.shared_cells_in_scope()
