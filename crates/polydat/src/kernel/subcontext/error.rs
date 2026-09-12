@@ -74,8 +74,16 @@ impl SourceContext {
 /// Variants per SRD-67 §"Cross-binding rules" plus the umbrella
 /// [`Self::Compile`] for errors raised by the Polydat compiler when
 /// the body fragment is converted into a program (typically an
-/// unbound identifier — Rule 1's catch-all under Phase 1
-/// semantics).
+/// unbound identifier in the body, which the compiler catches
+/// after `finalize`'s name-closure check on declared imports).
+///
+/// The active set is the design doc's §7 error contract:
+/// [`Self::UnboundImport`], [`Self::FinalShadow`],
+/// [`Self::DuplicateChild`], [`Self::Compile`], and
+/// [`Self::StrictNonePropagation`]. [`Self::Type`],
+/// [`Self::Modifier`], and [`Self::Phase2WriteThrough`] are
+/// retained as compatibility surface and are not emitted by the
+/// builder (design doc §2.2).
 #[derive(Debug, Clone)]
 pub enum ContractViolation {
     /// Rule 1 — Import resolution: an artifact import has no
@@ -118,13 +126,13 @@ pub enum ContractViolation {
     /// Rule 2 — Shared write-through rewrite was required but
     /// could not be performed.
     ///
-    /// Retained as a public variant for source compatibility
-    /// with Phase 1 callers that pattern-matched on it; Phase 2
-    /// (this push) implements the rewrite at finalize, so the
-    /// builder no longer raises this variant. New code should
-    /// match on the rewrite's success / failure via the
-    /// resulting [`super::ScopeModule::write_throughs`] and the
-    /// underlying [`Self::Compile`] surface.
+    /// Never emitted. The rewrite is implemented in
+    /// [`super::SubcontextBuilder::finalize`] (design doc §3.1),
+    /// which reports a rewrite that fails to produce its input
+    /// slot or synthetic output as [`Self::Compile`]; success is
+    /// visible as [`super::ScopeModule::write_throughs`]. The
+    /// variant is kept as compatibility surface for callers that
+    /// pattern-match on it (design doc §2.2).
     Phase2WriteThrough {
         /// The export the rewrite targeted.
         export: String,
@@ -204,7 +212,7 @@ impl std::fmt::Display for ContractViolation {
             ),
             Self::Phase2WriteThrough { export, site, note } => write!(
                 f,
-                "TODO(Phase 2): write-through rewrite for shared export `{export}` at {} — {note}",
+                "write-through rewrite for shared export `{export}` could not be performed at {} — {note}",
                 site.display()
             ),
             Self::DuplicateChild {

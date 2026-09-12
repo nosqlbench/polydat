@@ -1,10 +1,10 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! SRD-67 — parent-gated Polydat sub-context construction (Phase 1 surface).
+//! SRD-67 — parent-gated Polydat sub-context construction.
 //!
-//! This module is the **additive** typed entry point for constructing
-//! a Polydat child kernel as a function of a parent kernel. It implements
+//! This module is the typed entry point for constructing a Polydat
+//! child kernel as a function of a parent kernel. It implements
 //! the protocol from
 //! [subcontext_construction.md](../../../docs/design/subcontext_construction.md):
 //!
@@ -19,13 +19,15 @@
 //!
 //! ## Phase scope
 //!
-//! Phase 1 (shipped) is **additive** — it coexists with the
-//! existing `materialize_wiring_from_outer` / `from_program` / `compile_polydat`
-//! machinery. Phase 2 (this push) lands Rule 2 (write-through
-//! rewrite for shared exports) end-to-end and migrates the
-//! do-loop synthesiser to the builder protocol; the other
-//! synthesisers stay on their existing untyped paths until
-//! Phase 3.
+//! SRD-67's five phases have all landed: the typed surface
+//! (Phase 1), the Rule 2 write-through rewrite in
+//! [`SubcontextBuilder::finalize`] (Phase 2), the synthesiser
+//! migrations (Phase 3), the `pub(crate)` seal on the legacy
+//! construction primitives (Phase 4), and
+//! [`SubcontextBuilder::add_result_bindings`] (Phase 5). The
+//! design document is the implemented specification; "Phase N"
+//! in this module's comments names the push that landed a piece,
+//! not pending work.
 //!
 //! Cross-binding rules from SRD-67 §"Cross-binding rules" are
 //! enforced at [`SubcontextBuilder::finalize`] and

@@ -3,14 +3,19 @@
 
 //! Typed import / export contracts (per SRD-13e §1.2).
 //!
-//! Phase 1 ships a minimal shape sufficient to enforce
-//! SRD-67's Rule 1 (import resolution) and Rule 2 (export
-//! collision diagnostics). The full SRD-13e contract surface
-//! (lifecycle classifications, widening rules, modifier
-//! compatibility matrix) is captured here as data; the spawn
-//! step in [`crate::kernel::subcontext::ScopeKernel::spawn`] applies
-//! whichever rules Phase 1 can ground in the existing kernel
-//! semantics, and stubs / TODOs out the rest.
+//! The specs carry the SRD-13e taxonomy (lifecycle
+//! classifications, port types, binding modifiers) as data.
+//! What [`crate::kernel::subcontext::SubcontextBuilder::finalize`]
+//! enforces from them is fixed by
+//! `docs/design/subcontext_construction.md` §2.2: every import
+//! name must exist on the parent (`UnboundImport`), a child
+//! export may not shadow a parent `const` output (`FinalShadow`),
+//! and a child export matching an in-scope shared cell becomes a
+//! write-through binding. `port_type` and `classification` are
+//! preserved in the public `ScopeContract` but are not compared
+//! against a typed parent manifest; the child's input slots and
+//! shared-cell writes are protected by the compiler's slot type
+//! checks and by `kernel::state::check_write_through_type`.
 
 use crate::ast::PortType;
 use crate::dsl::ast::BindingModifier;

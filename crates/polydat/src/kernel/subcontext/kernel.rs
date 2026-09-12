@@ -243,12 +243,20 @@ impl<M> ScopeKernel<M> {
     /// kernel": this is the single chokepoint where every cross-
     /// binding is resolved.
     ///
-    /// Phase 1 implementation: applies Rules 1, 4, and 5 by
-    /// delegating to the existing `materialize_wiring_from_outer`. Rule 2
-    /// (write-through rewrite) and Rule 3 (init pull post-bind)
-    /// surface as diagnostics / TODOs for Phase 2 — the kernel
-    /// synthesis change required to rewrite assignment LHS into
-    /// shared-cell writes is out of scope here.
+    /// The artifact arrives with Rule 1 (name closure) and Rule 2
+    /// (the shared write-through rewrite) already applied by
+    /// [`SubcontextBuilder::finalize`]. Spawn materializes the
+    /// closed program under this parent via
+    /// `PolydatKernel::materialize_subscope`, whose
+    /// `materialize_wiring_from_outer` (kernel/state.rs) does the
+    /// live binding: attaches every parent-visible `SharedCell` to
+    /// a matching child slot and forwards the rest as transit
+    /// (Rule 2's cell attach, SC8), value-copies or cell-attaches
+    /// parent outputs into child externs (Rules 4 and 5), pulls
+    /// every `const` output once after wiring so scope-init values
+    /// see post-bind inputs (Rule 3), and freezes the scope
+    /// coordinates. Per-cycle publication to the cells is
+    /// [`Self::commit_write_throughs`].
     pub fn spawn(
         self: &Arc<Self>,
         name: ChildName,
@@ -385,28 +393,6 @@ pub(crate) fn wrap_root_kernel(
     Arc::new(ScopeKernel::new_internal(name, kernel, site, Vec::new()))
 }
 
-/// SRD-67 Phase 2 — synthesise a [`PolydatKernel`] under a borrowed
-/// parent kernel via the subcontext-builder protocol. The bridge
-/// migration callers (e.g. `build_do_loop_scope_kernel`) use to
-/// route through `spawn` without changing their call-site
-/// signatures.
-///
-/// Construction sequence:
-/// 1. Wrap a `from_program` clone of the parent in a transient
-///    `ScopeKernel<RootMarker>` so the builder can examine the
-///    parent's program shape (output names, modifiers, input
-///    ports) for Rule 1 / Rule 2 validation.
-/// 2. Run [`SubcontextBuilder::finalize`] — this is where the
-///    Rule 2 rewrite (parent `shared X` collision with child
-///    `X := <expr>`) and `mark_inherited_outputs` are applied
-///    to the freshly-compiled program.
-/// 3. Construct the child `PolydatKernel` from the closed program.
-///    Spawn-time cross-binding (cell attachment via
-///    `materialize_wiring_from_outer`) is applied against the **original**
-///    parent kernel so the child's input slots see live outer-
-///    scope values, not the `from_program` clone's default-zero
-///    state.
-///
 /// Typed Polydat matter accepted by both kernel-construction
 /// paths — root and subscope. Opaque externally: the only way
 /// to obtain a `PolydatMatter` value is via [`PolydatMatter::builder`].

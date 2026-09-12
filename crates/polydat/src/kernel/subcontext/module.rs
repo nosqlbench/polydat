@@ -41,10 +41,10 @@ pub enum BodyFragment {
 
 /// Typed handle bundle (per SRD-13e §1.2).
 ///
-/// Phase 1 keeps the bundle minimal: a typed handle for each
-/// declared import / export, identified by name + classification.
-/// Production handles (with cached program-slot indices) layer
-/// on in Phase 2 once the synthesisers migrate.
+/// The bundle is minimal by design: a handle for each declared
+/// import / export, identified by name. Slot resolution happens
+/// against the compiled program (`find_input` /
+/// `output_map_lookup`) rather than through cached indices here.
 ///
 /// `M` is the module-identity phantom — [`super::Child<P>`] for
 /// modules built under parent `P`. Handles issued by one module

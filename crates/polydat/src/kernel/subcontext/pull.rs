@@ -17,9 +17,9 @@
 //! accumulator surface unifies under
 //! [`crate::kernel::subcontext::SubcontextBuilder::register_pull`].
 //!
-//! Phase 2 (the synthesiser migration) is responsible for moving
-//! `ScopeFixture` to consume the consumers stored on a spawned
-//! [`crate::kernel::subcontext::ScopeKernel`].
+//! The host reads the registrations back through
+//! [`crate::kernel::subcontext::ScopeKernel::consumers`] on the
+//! spawned kernel (design doc §2.4).
 
 use std::sync::Arc;
 
@@ -51,9 +51,9 @@ pub trait PullConsumer: Send + Sync {
 ///
 /// Wraps an `Arc<dyn PullConsumer>` so consumers can be cheaply
 /// shared between the artifact and the spawned kernel without
-/// trait-object cloning. The activity layer's fixture adapter
-/// owns the seal step in Phase 2; Phase 1 simply records the
-/// consumer for later inspection.
+/// trait-object cloning. The host's fixture adapter owns the seal
+/// step; this type only records the consumer for later
+/// inspection.
 #[derive(Clone)]
 pub struct RegisteredPullConsumer {
     inner: Arc<dyn PullConsumer>,

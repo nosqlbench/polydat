@@ -401,10 +401,12 @@ impl<P> SubcontextBuilder<P> {
         let mut diagnostics: Vec<String> = Vec::new();
 
         // ----- Rule 1 — import resolution against parent
-        // exports (Phase 1: name-presence check + name-only
-        // closure validation; full type / modifier validation
-        // is Phase 2 once the parent kernel exposes typed
-        // export specs uniformly). -----
+        // exports: a name-closure check (design doc §2.2 / SC4).
+        // `ImportSpec::port_type` and `classification` are carried
+        // into the contract but not compared against the parent
+        // here; the compiler's slot type checks and
+        // `check_write_through_type` protect the actual child
+        // inputs and cell writes. -----
         let parent_inner = parent.lock_inner();
         let parent_outputs: std::collections::HashSet<String> = parent_inner
             .program()
