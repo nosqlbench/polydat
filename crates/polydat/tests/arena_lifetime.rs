@@ -79,3 +79,66 @@ fn traversal_activations_run_inside_the_root_cycle() {
     );
     assert_eq!(resolve_thread_str(h), "root cycle bytes");
 }
+
+/// Compiling a program and constructing a kernel open no cycle: both
+/// happen inside whatever cycle the thread has open, as when a compiled
+/// root opens a traversal whose body compiles on first activation. A
+/// build's constant fold once seeded a fresh state through `set_inputs`,
+/// which reset the root's arena under it.
+#[test]
+fn compiling_and_constructing_inside_a_cycle_leave_the_arena_alone() {
+    use polydat::Engine;
+    use polydat::dsl::compile::compile_polydat_with;
+    let mut root = compile_polydat_with(
+        "input cycle: u64\ns := \"row-{cycle}\"\n",
+        Engine::default(),
+    )
+    .unwrap();
+    root.set_inputs(&[7]);
+    assert_eq!(root.pull("s").as_str(), "row-7");
+    let g = cycle_generation();
+    let h = put_thread_str("held across construction");
+    let used = cycle_arena_used();
+    // Every way a kernel comes to be, inside the root's cycle: the
+    // interpreter with folded constants, the default engine with a
+    // traversal whose body is an interpreter program, a kernel created
+    // from a program, and a nested one.
+    let folded = compile_polydat("input cycle: u64\nk := 41 + 1\nname := \"c-{k}\"\n").unwrap();
+    assert_eq!(folded.get_constant("name").unwrap().as_str(), "c-42");
+    assert_eq!(
+        cycle_generation(),
+        g,
+        "an interpreter compile advanced the generation"
+    );
+    let with_body = compile_polydat_with(
+        "input cycle: u64\nfor k in 1..3 {\n  y := k * 10\n}\n",
+        Engine::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        cycle_generation(),
+        g,
+        "a default-engine compile advanced the generation"
+    );
+    let program = with_body.into_program();
+    assert_eq!(
+        cycle_generation(),
+        g,
+        "into_program advanced the generation"
+    );
+    let _created = std::sync::Arc::clone(&program).create_kernel();
+    assert_eq!(
+        cycle_generation(),
+        g,
+        "create_kernel advanced the generation"
+    );
+    let _nested = program.create_nested_kernel();
+    assert_eq!(
+        cycle_generation(),
+        g,
+        "create_nested_kernel advanced the generation"
+    );
+    assert!(cycle_arena_used() >= used, "construction reset the arena");
+    assert_eq!(resolve_thread_str(h), "held across construction");
+    assert_eq!(root.pull("s").as_str(), "row-7");
+}

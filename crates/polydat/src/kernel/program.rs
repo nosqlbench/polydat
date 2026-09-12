@@ -2038,10 +2038,13 @@ impl PolydatProgram {
             return Ok(0);
         }
 
-        // Phase 2: Evaluate init-time nodes.
+        // Phase 2: Evaluate init-time nodes, on a state seeded without
+        // opening a cycle: a program is compiled inside a root's cycle
+        // (a traversal body, a projection body) without resetting it
+        // (axiom H5).
         let mut state = self.create_state();
         let dummy_inputs = vec![0u64; self.coord_count];
-        state.set_inputs(&dummy_inputs);
+        state.seed_inputs(&dummy_inputs);
 
         for i in 0..n {
             if is_init[i] {

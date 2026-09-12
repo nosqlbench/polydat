@@ -410,9 +410,13 @@ SAFETY comment can cite the one it depends on.
   validity interval. This is S3 and S4 for the table. *Tripwire: the
   post-run validator of §3 in the P2, P3, and hybrid kernels.*
 - **H5 — Only the root resets.** The arena resets at a root kernel's
-  cycle advance and nowhere else; nested kernels never reset.
-  *Chokepoint: the nested flag set by the constructors that create
-  nested kernels.*
+  cycle advance and nowhere else; nested kernels never reset, and
+  constructing a kernel or compiling a program opens no cycle on any
+  engine (`runtime_model.md`, axiom R4). *Chokepoint: the nested flag
+  set by the constructors that create nested kernels, and construction
+  that seeds without a cycle. Tripwire: in debug builds every kernel
+  evaluation is counted, and a root cycle beginning while one is open
+  fails at the reset.*
 - **H6 — P1 never holds a handle.** Every `Hdl1` boundary output and
   every `get_value` read copies out to an owned `Value`. *Tripwire: no
   `Value` variant carries a raw handle.*

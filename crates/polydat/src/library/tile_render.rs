@@ -310,10 +310,9 @@ pub struct TileProgram {
     /// comprehension evaluator installs tuple values into.
     canonicals: Vec<Arc<PolydatKernel>>,
     /// Per body, its program on the default engine (SRD 117 step 2),
-    /// compiled here, at construction, never inside a cycle: a kernel's
-    /// build folds its constants in a root cycle of its own, which would
-    /// reset the arena a render is writing (SRD 115, H5). `None` where
-    /// the engine refused the body, which then renders interpreted.
+    /// compiled here, at construction, so the first render pays no
+    /// compile. `None` where the engine refused the body, which then
+    /// renders interpreted.
     compiled: Vec<Option<Arc<dyn KernelProgram>>>,
     /// Per body, its projection's tuples when the comprehension is the
     /// same every render: no generator clause and no placeholder in

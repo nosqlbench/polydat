@@ -711,6 +711,7 @@ impl EngineCore {
     /// Checks the clean flag, recursively evaluates upstream, gathers
     /// inputs, calls node.eval(), marks clean.
     pub fn eval_node(&mut self, program: &PolydatProgram, node_idx: usize) {
+        let _run = crate::kernel::arena::RunScope::enter();
         if self.node_clean[node_idx] {
             // Memoization hit candidate — confirm cell-bound
             // inputs in this node's cone are still at the
@@ -956,6 +957,19 @@ impl PolydatState {
     /// them at indices 0..N with per-input change detection.
     pub fn set_inputs(&mut self, coords: &[u64]) {
         self.begin_cycle_if_root();
+        self.write_coordinates(coords);
+    }
+
+    /// Write the coordinates without beginning a cycle: what
+    /// construction does to seed a state's folded constants, inside
+    /// whatever cycle is open on the thread (axiom H5: a kernel is
+    /// built and compiled inside a root's cycle without resetting it).
+    /// A host's write is [`Self::set_inputs`].
+    pub(crate) fn seed_inputs(&mut self, coords: &[u64]) {
+        self.write_coordinates(coords);
+    }
+
+    fn write_coordinates(&mut self, coords: &[u64]) {
         for (i, &c) in coords.iter().enumerate().take(self.core.inputs.len()) {
             self.core.inputs[i] = Value::U64(c);
             // Unconditional invalidation: the write itself is the

@@ -362,8 +362,9 @@ impl PolydatKernel {
         let program = Arc::new(program);
         let mut state = program.create_state();
         // Populate buffers for folded constants so get_constant() works.
+        // Seeded, not set: construction opens no cycle (axiom H5).
         let dummy = vec![0u64; program.coord_count()];
-        state.set_inputs(&dummy);
+        state.seed_inputs(&dummy);
         // Seed buffers for folded *constant* nullary nodes so
         // `get_constant()` works. Skip `Nondeterministic` nullary nodes
         // (live-metric readers, entropy, clocks): they have no
@@ -455,8 +456,7 @@ impl PolydatKernel {
 
     /// A kernel that runs inside another kernel's cycle (SRD 115 §4):
     /// a traversal activation, a projection body, a materialized
-    /// subscope. It is marked nested before construction seeds any
-    /// input, so it never resets the thread's cycle arena.
+    /// subscope. It never resets the thread's cycle arena.
     pub(crate) fn from_program_nested(program: Arc<PolydatProgram>) -> Self {
         Self::build(program, true)
     }
@@ -467,10 +467,11 @@ impl PolydatKernel {
             state.mark_nested();
         }
         // Populate buffers for folded constants so get_constant()
-        // works on the new kernel — mirrors the seeding done in
-        // `new_with_inputs` after fold.
+        // works on the new kernel, as `new_with_inputs` seeds them
+        // after the fold. Seeded, not set: constructing a kernel, root
+        // or nested, opens no cycle (axiom H5).
         let dummy = vec![0u64; program.coord_count()];
-        state.set_inputs(&dummy);
+        state.seed_inputs(&dummy);
         for name in program.output_names() {
             if let Some(&(node_idx, _)) = program.output_map.get(name)
                 && program.wiring[node_idx].is_empty()

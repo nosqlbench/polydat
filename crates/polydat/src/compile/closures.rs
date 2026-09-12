@@ -295,6 +295,7 @@ impl KernelCore {
     /// enriched, as the interpreter re-raises a node's (A7).
     #[inline]
     fn run_guarded(&mut self, body: impl FnOnce(&mut Self)) {
+        let _run = crate::kernel::arena::RunScope::enter();
         let capture = crate::kernel::engines::EvalPanicCaptureGuard::arm();
         // SAFETY: the table stays in place for the run; the steps reach it
         // only through the installation, and the loop touches the other
@@ -770,9 +771,13 @@ fn build_core(
     // step no input reaches runs at build, once, and is current from
     // then on, so what is knowable at build is known at build and fails
     // at build. A handle-writing constant reruns per cycle as any
-    // handle writer does.
+    // handle writer does. The fold runs inside whatever cycle the
+    // thread has open: a build opens no root cycle of its own (axiom
+    // H5), since a program is compiled inside a root's cycle too.
+    core.owns_cycle = false;
     core.begin_cycle();
     core.run_steps(&constants);
+    core.owns_cycle = true;
     core.drive.stale = true;
     core
 }

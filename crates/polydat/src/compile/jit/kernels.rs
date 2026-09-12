@@ -184,6 +184,7 @@ impl JitCore {
             crate::kernel::cycle_generation()
         };
         self.table.set_generation(generation);
+        let _run = crate::kernel::arena::RunScope::enter();
         // Extern handles belong to this run (H3, H4).
         let _ = self
             .externs

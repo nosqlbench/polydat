@@ -262,14 +262,57 @@ thread_local! {
     static CYCLE_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
+#[cfg(debug_assertions)]
+thread_local! {
+    /// How many kernel evaluations are open on this thread. A root
+    /// cycle may begin only when none is: a kernel evaluating on this
+    /// thread holds arena handles the reset would free (axiom H5).
+    static RUN_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// A kernel evaluation in progress on this thread: the H5 tripwire.
+/// While one is open no root cycle may begin, so a kernel run inside
+/// another's evaluation that was not nested, or a construction that
+/// opened a cycle, fails at the reset rather than in a stale handle
+/// later. Debug builds count; release builds carry nothing.
+pub(crate) struct RunScope;
+
+impl RunScope {
+    #[inline]
+    pub(crate) fn enter() -> Self {
+        #[cfg(debug_assertions)]
+        RUN_DEPTH.with(|d| d.set(d.get() + 1));
+        RunScope
+    }
+}
+
+impl Drop for RunScope {
+    #[inline]
+    fn drop(&mut self) {
+        #[cfg(debug_assertions)]
+        RUN_DEPTH.with(|d| d.set(d.get() - 1));
+    }
+}
+
 /// Begin a root cycle on this thread (SRD 115 §4, axiom H5): reset the
 /// cycle arena so its bytes are reused,
 /// and advance the generation so a handle held across the boundary can
-/// be recognised as stale. Only a root state calls this; nested kernels
-/// (traversal activations, projection bodies, materialized subscopes)
-/// run inside the root's cycle and never reset.
+/// be recognised as stale. Only the kernel the host drives calls this;
+/// nested kernels (traversal activations, projection bodies,
+/// materialized subscopes) run inside the root's cycle and never reset,
+/// and constructing or compiling a kernel opens no cycle either.
 #[inline]
 pub fn begin_root_cycle() -> u64 {
+    #[cfg(debug_assertions)]
+    RUN_DEPTH.with(|d| {
+        assert_eq!(
+            d.get(),
+            0,
+            "a root cycle began while a kernel was evaluating on this thread (SRD 115, \
+             axiom H5): only the kernel the host drives opens a cycle; a kernel run inside \
+             another's evaluation must be nested"
+        )
+    });
     THREAD_CYCLE_ARENA.with(|arena| arena.borrow_mut().reset());
     CYCLE_GENERATION.with(|g| {
         let next = g.get().wrapping_add(1);

@@ -564,9 +564,8 @@ result goes, per [Compiled Non-Scalar Slots](compiled_handles.md):
   `None` could reach it; a hole that names a kernel input reads it
   through the input passthrough and the node still fuses.
 - **Projections on the compiled engines.** A body's program is compiled
-  for `Engine::default()` when the tile program is constructed, never
-  inside a cycle, since a kernel's build folds its constants in a root
-  cycle of its own (SRD 115, H5); every compiled kernel renders its
+  for `Engine::default()` when the tile program is constructed, so the
+  first render pays no compile; every compiled kernel renders its
   bodies on that engine as nested kernels inside its closure or helper,
   and the cone eval is re-entrant so a body's own native code runs
   inside it. A body the default engine refuses renders interpreted.

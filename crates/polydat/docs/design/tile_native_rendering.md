@@ -140,10 +140,13 @@ each measured:
 
    *Landed 2026-09-11, with two corrections to the design above.* The
    body's compiled program is built at `TileProgram` construction, not
-   on first render: a kernel's build folds its constants in a root
-   cycle of its own, which would reset the arena a render is writing
+   on first render: a kernel's build folded its constants in a root
+   cycle of its own, which reset the arena a render was writing
    (SRD 115, H5), and the first attempt did exactly that inside a cone's
-   helper. Every compiled kernel renders its bodies on
+   helper. (The architecture review's F-K1 fix later made construction
+   and compilation open no cycle on any engine, `runtime_model.md`
+   axiom R4; the precompile stays, for the first render's cost.) Every
+   compiled kernel renders its bodies on
    `Engine::default()`, not on its own engine: the render node's closure
    serves the closure tier and a hybrid kernel's closure steps alike
    and has no engine to ask, and the default is the fastest engine the

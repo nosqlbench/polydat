@@ -346,6 +346,37 @@ substrate's S5 is the only cross-tier write surface. SRD-67
 walls off any alternative construction path that could
 violate this.
 
+### Axiom R4 — Cycle ownership
+
+**The kernel the host drives owns the thread's cycle: its
+input write (the interpreter) or its first evaluation after a
+write (a compiled kernel) begins the cycle, which resets the
+thread's cycle arena and advances the generation. A kernel
+that runs inside another's evaluation, a traversal activation,
+a projection body, a materialized subscope, is nested: it
+adopts the open cycle and never begins one. Constructing a
+kernel and compiling a program begin no cycle either, on any
+engine; a build's constant fold runs inside whatever cycle is
+open. A handle into the cycle arena lives for one cycle.**
+
+Why: native code and the compiled kernels hold strings and
+byte ranges as handles into the thread's cycle arena
+(`compiled_handles.md`, axiom H5). Anything that reset the
+arena while a kernel was evaluating would free the bytes
+behind the handles that evaluation still holds. The one reset
+per cycle, by the one kernel the host drives, is what makes a
+handle's lifetime knowable.
+
+Enforcement: `begin_root_cycle` is called from the root
+kernels' cycle begin alone; nested kernels are constructed
+nested (`create_nested_kernel`, `from_program_nested`) and
+never call it; construction seeds a state's inputs without
+opening a cycle (`PolydatState::seed_inputs`), and the compiled
+builders fold with cycle ownership off. Tripwire: in debug
+builds every kernel evaluation on a thread is counted
+(`arena::RunScope`), and a root cycle beginning while one is
+open fails at the reset, not in a stale handle later.
+
 ---
 
 ## 5. State-layering at runtime
