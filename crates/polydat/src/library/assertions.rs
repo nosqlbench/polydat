@@ -118,6 +118,32 @@ impl PolydatNode for AssertType {
         }
         outputs[0] = v.clone();
     }
+
+    /// The compiled form. In a slot buffer a wire's color is its type,
+    /// so the variant check the interpreter makes has nothing to
+    /// observe there; the compiled step is the copy `identity` makes,
+    /// under the same two rules: a table handle re-enters the value
+    /// into this step's own entry (axiom H4), and a `Ref2` pair is
+    /// never forwarded (axiom S3), which leaves that one shape without
+    /// a compiled form.
+    fn compiled_handle(
+        &self,
+        entry_base: usize,
+        _wire_types: &[PortType],
+    ) -> Option<crate::ast::CompiledU64Op> {
+        if self.expected.slot_color() == crate::ast::SlotColor::Ref2 {
+            return None;
+        }
+        if self.expected.handle_kind() == Some(crate::ast::HandleKind::Table) {
+            return Some(Box::new(move |inputs: &[u64], outputs: &mut [u64]| {
+                let value = crate::kernel::current_table_value(inputs[0]).clone();
+                outputs[0] = crate::kernel::write_table_entry(entry_base, value);
+            }));
+        }
+        Some(Box::new(|inputs: &[u64], outputs: &mut [u64]| {
+            outputs.copy_from_slice(inputs)
+        }))
+    }
 }
 
 fn value_matches(v: &Value, typ: PortType) -> bool {
@@ -242,6 +268,30 @@ impl PolydatNode for AssertValue {
             panic!("{}: {msg}", self.meta.name);
         }
         outputs[0] = inputs[0].clone();
+    }
+
+    /// The compiled form: the same constraint checked against the slot,
+    /// decoded by the asserted type, with the same message on failure.
+    /// A carrier reads as its integer, a float from its bits, a string
+    /// through its handle; the other shapes have no compiled form.
+    fn compiled_u64(&self) -> Option<crate::ast::CompiledU64Op> {
+        use crate::dsl::factory::ConstArg;
+        let lift: fn(u64) -> ConstArg = match self.typ {
+            PortType::U64 | PortType::U32 | PortType::U16 | PortType::U8 => ConstArg::Int,
+            PortType::F64 => |slot| ConstArg::Float(f64::from_bits(slot)),
+            PortType::Str => {
+                |slot| ConstArg::Str(crate::kernel::resolve_thread_str(slot).to_string())
+            }
+            _ => return None,
+        };
+        let name = self.meta.name.clone();
+        let constraint = self.constraint;
+        Some(Box::new(move |inputs: &[u64], outputs: &mut [u64]| {
+            if let Err(msg) = constraint.check(&lift(inputs[0]), "value") {
+                panic!("{name}: {msg}");
+            }
+            outputs[0] = inputs[0];
+        }))
     }
 }
 

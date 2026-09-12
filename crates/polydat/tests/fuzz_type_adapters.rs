@@ -953,3 +953,98 @@ fn sanity_f64_to_u64_rejects_without_cast() {
         "expected a type-mismatch error for narrowing, got: {err}"
     );
 }
+
+/// The strictness pragmas reach the graph on every entry point. The
+/// plain interpreter path once dropped them, so `pragma strict_values`
+/// inserted an assertion under the logged compile and not under
+/// `compile_polydat`; the two programs now have the same node count on
+/// every path, and so does the default engine's.
+#[test]
+fn strict_pragmas_reach_every_compile_path() {
+    let source = "\
+        pragma strict_values\n\
+        \n\
+        d := mod(hash(cycle), 100)\n\
+        b := mod_wire(cycle, d)\n\
+    ";
+    let lax = "\
+        d := mod(hash(cycle), 100)\n\
+        b := mod_wire(cycle, d)\n\
+    ";
+    let plain = compile_polydat(source).expect("plain compile");
+    let mut log = CompileEventLog::new();
+    let logged = compile_polydat_with_log(source, &mut log).expect("logged compile");
+    let lax_kernel = compile_polydat(lax).expect("lax compile");
+    let plain_nodes = plain.program().node_count();
+    assert_eq!(
+        plain_nodes,
+        logged.program().node_count(),
+        "the plain and logged interpreter paths must build the same graph"
+    );
+    assert!(
+        plain_nodes > lax_kernel.program().node_count(),
+        "strict_values must insert the assertion on the plain path too"
+    );
+    let mut default_log = CompileEventLog::new();
+    let compiled = polydat::dsl::compile::compile_polydat_kernel_with_options(
+        source,
+        &polydat::dsl::compile::CompileOptions::default(),
+        Some(&mut default_log),
+    )
+    .expect("default-engine compile");
+    let count = |log: &CompileEventLog| {
+        log.events()
+            .iter()
+            .filter(|e| matches!(e, CompileEvent::AssertionInserted { .. }))
+            .count()
+    };
+    assert_eq!(count(&log), count(&default_log));
+    assert!(count(&log) > 0);
+    drop(compiled);
+}
+
+/// The assertion `pragma strict_values` inserts fails the same way on
+/// the interpreter and on the default engine: the same node, the same
+/// message. Before the assertion nodes had a compiled form the default
+/// engine refused every strict program outright.
+#[test]
+fn strict_value_assertion_fails_alike_on_every_engine() {
+    use polydat::Kernel;
+    let source = "\
+        pragma strict_values\n\
+        input cycle: u64\n\
+        d := mod(cycle, 1)\n\
+        b := mod_wire(cycle, d)\n\
+    ";
+    // The message less the line that names where the panic was raised,
+    // which is the node's own eval on the interpreter and its compiled
+    // form elsewhere.
+    fn failure(kernel: &mut dyn Kernel) -> String {
+        kernel.set_inputs(&[7]);
+        let hit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| kernel.pull("b")));
+        let err = hit.expect_err("a zero divisor must trip the assertion");
+        let text = err
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| err.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default();
+        text.lines()
+            .filter(|l| !l.contains("panicked at"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+    let mut interpreter = compile_polydat(source).expect("interpreter compile");
+    let mut default = polydat::dsl::compile::compile_polydat_kernel_with_options(
+        source,
+        &polydat::dsl::compile::CompileOptions::default(),
+        None,
+    )
+    .expect("default-engine compile");
+    let on_interpreter = failure(&mut interpreter);
+    let on_default = failure(default.as_mut());
+    assert!(
+        on_interpreter.contains("assert_u64_nonzero"),
+        "interpreter failure names the assertion: {on_interpreter}"
+    );
+    assert_eq!(on_interpreter, on_default);
+}

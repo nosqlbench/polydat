@@ -396,18 +396,12 @@ pub fn compile_polydat_to_assembler_with(
         options.strict,
     );
     compiler.source_text = source.to_string();
-    compiler.context_label = if options.context.is_empty() {
-        "(polydat source)".into()
-    } else {
-        options.context.clone()
-    };
+    if !options.context.is_empty() {
+        compiler.context_label = options.context.clone();
+    }
     compiler.cursor_limit = options.cursor_limit;
     compiler.pragmas = pragmas;
-    let mut asm = compiler.assemble_parent(&ast, filter)?;
-    asm.set_strict_wires(
-        compiler.pragmas.strict_types(),
-        compiler.pragmas.strict_values(),
-    );
+    let asm = compiler.assemble_parent(&ast, filter)?;
     Ok(asm)
 }
 
@@ -692,7 +686,9 @@ pub fn compile_ast_with_options(
         options.strict,
     );
     compiler.source_text = source.to_string();
-    compiler.context_label = options.context.clone();
+    if !options.context.is_empty() {
+        compiler.context_label = options.context.clone();
+    }
     compiler.cursor_limit = options.cursor_limit;
     compiler.pragmas = pragmas;
     compiler.compile_filtered_with_log(ast, filter, log)
@@ -710,11 +706,7 @@ pub fn compile_polydat_with_log(
     let mut compiler = Compiler::new(None, false);
     compiler.source_text = source.to_string();
     compiler.pragmas = pragmas;
-    let mut asm = compiler.build_assembler(&ast)?;
-    asm.set_strict_wires(
-        compiler.pragmas.strict_types(),
-        compiler.pragmas.strict_values(),
-    );
+    let asm = compiler.build_assembler(&ast)?;
     for e in compiler.tile_events.drain(..) {
         log.push(e);
     }
@@ -2211,8 +2203,7 @@ impl Compiler {
         // One assembly path for every entry point: the assembler a host
         // gets from `compile_polydat_to_assembler` is the one the kernel
         // path compiles, externs, shared bindings, and cursors included.
-        let mut asm = self.assemble_parent(file, None)?;
-        asm.set_strict_wires(self.pragmas.strict_types(), self.pragmas.strict_values());
+        let asm = self.assemble_parent(file, None)?;
         Ok(asm)
     }
 
@@ -2747,6 +2738,9 @@ impl Compiler {
         }
 
         asm.set_context(&self.source_text, &self.context_label);
+        // The strictness pragmas reach every kernel built from this
+        // assembler, on every engine and on every entry point.
+        asm.set_strict_wires(self.pragmas.strict_types(), self.pragmas.strict_values());
         // The cursors, with their partitions resolved at build, reach
         // every kernel built from this assembler (engine_parity.md,
         // step 3).
@@ -2760,10 +2754,9 @@ impl Compiler {
         required_outputs: Option<&[String]>,
         log: Option<&mut super::events::CompileEventLog>,
     ) -> Result<PolydatKernel, String> {
-        let mut asm = self.assemble_parent(file, required_outputs)?;
+        let asm = self.assemble_parent(file, required_outputs)?;
         let mut kernel = match log {
             Some(log) if !self.strict => {
-                asm.set_strict_wires(self.pragmas.strict_types(), self.pragmas.strict_values());
                 for e in self.tile_events.drain(..) {
                     log.push(e);
                 }
@@ -2905,7 +2898,12 @@ pub fn compile_ast_with_engine(
         options.strict,
     );
     compiler.source_text = source.to_string();
-    compiler.context_label = options.context.clone();
+    // An empty context keeps the compiler's default label, the one the
+    // interpreter's entry points use, so a failure reads the same on
+    // every engine.
+    if !options.context.is_empty() {
+        compiler.context_label = options.context.clone();
+    }
     compiler.cursor_limit = options.cursor_limit;
     compiler.pragmas = pragmas;
     compile_file_on_engine(&mut compiler, ast, filter, engine, log)
@@ -2927,13 +2925,9 @@ pub(super) fn compile_file_on_engine(
     let (parent_file, for_stmts, producers) =
         super::traversal::strip_for_forms(file).map_err(KernelError::Source)?;
     compiler.producers_seen = producers.clone();
-    let mut asm = compiler
+    let asm = compiler
         .assemble_parent(&parent_file, filter)
         .map_err(KernelError::Source)?;
-    asm.set_strict_wires(
-        compiler.pragmas.strict_types(),
-        compiler.pragmas.strict_values(),
-    );
     // The tiles typed while assembling belong to this program's log, as
     // on the interpreter.
     if let Some(log) = log.as_deref_mut() {
