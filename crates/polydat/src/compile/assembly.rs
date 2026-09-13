@@ -302,7 +302,7 @@ fn node_step_op(
 /// scratch-backed `Ref2` outputs. A kit's scratch entries pair with
 /// the step's `Ref2` output ports in port order, skipping the entries
 /// that publish no pair (a native cone's slot buffer, a render's body
-/// kernels); a `Ref2` output beyond the kit's publishing entries is
+/// kernels, a node's own state); a `Ref2` output beyond the kit's publishing entries is
 /// not scratch-backed (a pair into interned bytes) and is validated by
 /// nothing. `base` is the index of the kit's first entry in the
 /// kernel's scratch. A kit with more publishing entries than the step
@@ -318,7 +318,12 @@ pub(crate) fn scratch_pairs(
     let publishing: Vec<usize> = scratch
         .iter()
         .enumerate()
-        .filter(|(_, e)| !matches!(e, ScratchElem::Slots | ScratchElem::Kernels))
+        .filter(|(_, e)| {
+            !matches!(
+                e,
+                ScratchElem::Slots | ScratchElem::Kernels | ScratchElem::State
+            )
+        })
         .map(|(k, _)| base + k)
         .collect();
     assert!(
@@ -370,7 +375,7 @@ pub(crate) fn ref_copy_kit(ty: PortType) -> Option<crate::ast::CompiledSlotKit> 
                             v.push(unsafe { (*(p as *const crate::ast::Value)).clone() });
                         }
                     }
-                    ScratchBuf::Slots(_) | ScratchBuf::Kernels(_) => {
+                    ScratchBuf::Slots(_) | ScratchBuf::Kernels(_) | ScratchBuf::State(_) => {
                         unreachable!("a copy owns only a value entry")
                     }
                 }

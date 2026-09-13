@@ -1907,6 +1907,56 @@ pub enum ScratchElem {
     /// The kernels a tile render keeps over its projection bodies,
     /// owned by the state that renders.
     Kernels,
+    /// State a node defines for itself per evaluating kernel state, a
+    /// memo of what it last derived from its inputs, created by the
+    /// node on first use; a clone starts empty.
+    State,
+}
+
+/// Node-defined state held by a kernel state (`ScratchElem::State`):
+/// what a node keeps between its evaluations in one state, typed by
+/// the node and never shared between states. Empty until the node
+/// first fills it; a clone is empty, since a clone of a state is a
+/// new state (compiled_handles.md §3).
+#[derive(Default)]
+pub struct NodeState(Option<Box<dyn std::any::Any + Send + Sync>>);
+
+impl NodeState {
+    /// The state as `T`, created by `init` when the entry is empty or
+    /// holds another type.
+    pub fn get_or_insert_with<T: std::any::Any + Send + Sync>(
+        &mut self,
+        init: impl FnOnce() -> T,
+    ) -> &mut T {
+        if !self.0.as_ref().is_some_and(|b| b.is::<T>()) {
+            self.0 = Some(Box::new(init()));
+        }
+        self.0
+            .as_mut()
+            .and_then(|b| b.downcast_mut::<T>())
+            .expect("the entry holds a T")
+    }
+
+    /// The state as `T`, if the node has filled it with one.
+    pub fn get<T: std::any::Any + Send + Sync>(&self) -> Option<&T> {
+        self.0.as_ref().and_then(|b| b.downcast_ref::<T>())
+    }
+}
+
+impl Clone for NodeState {
+    fn clone(&self) -> Self {
+        NodeState(None)
+    }
+}
+
+impl std::fmt::Debug for NodeState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "NodeState({})",
+            if self.0.is_some() { "filled" } else { "empty" }
+        )
+    }
 }
 
 /// Slot color of a `PortType` in compiled kernel buffers —
@@ -1960,6 +2010,9 @@ pub enum ScratchBuf {
     /// The kernels a tile render keeps over its projection bodies. A
     /// clone is empty: a new state builds its own.
     Kernels(crate::library::tile_render::BodyKernels),
+    /// State a node defines for itself, per kernel state. A clone is
+    /// empty: a new state derives its own.
+    State(NodeState),
 }
 
 impl ScratchBuf {
@@ -1980,7 +2033,7 @@ impl ScratchBuf {
             }
             ScratchBuf::Value(v) => (v.as_ptr() as usize as u64, v.len() as u64),
             ScratchBuf::Slots(v) => (v.as_ptr() as usize as u64, v.len() as u64),
-            ScratchBuf::Kernels(_) => (0, 0),
+            ScratchBuf::Kernels(_) | ScratchBuf::State(_) => (0, 0),
         }
     }
 
@@ -2005,6 +2058,16 @@ impl ScratchBuf {
             ScratchBuf::Value(v) => v.first().cloned().unwrap_or(Value::None),
             ScratchBuf::Slots(_) => panic!("a slot buffer is not a value"),
             ScratchBuf::Kernels(_) => panic!("a body kernel set is not a value"),
+            ScratchBuf::State(_) => panic!("a node's own state is not a value"),
+        }
+    }
+
+    /// The node-defined state this entry holds. The entry must be a
+    /// `State` entry.
+    pub fn node_state(&mut self) -> &mut NodeState {
+        match self {
+            ScratchBuf::State(s) => s,
+            other => panic!("scratch entry holds {other:?}, not a node's state"),
         }
     }
 
@@ -2062,6 +2125,7 @@ impl ScratchBuf {
             ScratchElem::Value => ScratchBuf::Value(Vec::new()),
             ScratchElem::Slots => ScratchBuf::Slots(Vec::new()),
             ScratchElem::Kernels => ScratchBuf::Kernels(Default::default()),
+            ScratchElem::State => ScratchBuf::State(NodeState::default()),
         }
     }
 }

@@ -21,9 +21,10 @@
 //!   wire (the Wire trait's `WIRE_COST = Config` const flows through
 //!   `Config<Arc<str>>` to the slot's `WireCost::Config` annotation,
 //!   so the compiler warns when the spec is bound to a cycle-time
-//!   source). The node memoizes the last spec it parsed and its
-//!   alias table, so repeated evaluations with the same spec do no
-//!   parsing; only a spec change re-parses.
+//!   source). The evaluating kernel state memoizes the last spec
+//!   parsed and its alias table in its own scratch, so repeated
+//!   evaluations with the same spec do no parsing; only a spec
+//!   change re-parses.
 
 use crate::ast::CompiledU64Op;
 use crate::compile::fusion::{DecomposedGraph, DecomposedWire};
@@ -303,13 +304,115 @@ fn weighted_pick(
 // DynamicWeightedSelect — the spec arrives on a `Config<T>` wire. The
 // Wire trait's `WIRE_COST` const flows through `Config<Arc<str>>` to
 // the slot's `WireCost::Config` annotation, so the compiler warns
-// when the spec is bound to a cycle-time source. The spec is parsed
-// on every evaluation: a node is shared by every state of its
-// program and holds nothing that changes, so a memo of the last
-// spec would have to live in the evaluating state's own storage,
-// which no scratch element carries yet. An init-time binding
-// evaluates the node once under R1 and pays the parse once.
+// when the spec is bound to a cycle-time source. The last spec parsed
+// and its alias table are a memo in the evaluating kernel state's own
+// scratch (`ScratchElem::State`; compiled_handles.md §3): the node is
+// shared by every state of its program and holds nothing that
+// changes, so the memo lives beside the state's other storage, and a
+// clone of a state starts with an empty one. A spec that repeats is
+// not parsed again; a spec that changes is followed at once.
 // ---------------------------------------------------------------------------
+
+/// The memo [`DynamicWeightedSelect`] keeps per kernel state: the
+/// last spec it parsed, with the value list and alias table built
+/// from it. `table` is `None` when the spec named no values.
+#[derive(Default)]
+pub struct DynamicWeightedMemo {
+    spec: String,
+    values: Vec<String>,
+    table: Option<AliasTableU64>,
+    parsed: bool,
+}
+
+impl DynamicWeightedMemo {
+    /// The pick for `selector` under `spec`, parsing the spec only
+    /// when it differs from the last one parsed.
+    fn select(&mut self, spec: &str, selector: u64) -> &str {
+        if !self.parsed || self.spec != spec {
+            let (values, weights) = parse_weighted_str_spec(spec);
+            self.table = if values.is_empty() {
+                None
+            } else {
+                Some(AliasTableU64::from_weights(&weights))
+            };
+            self.values = values;
+            self.spec.clear();
+            self.spec.push_str(spec);
+            self.parsed = true;
+        }
+        match &self.table {
+            Some(table) => &self.values[table.sample(selector) as usize],
+            None => "",
+        }
+    }
+
+    /// The spec the memo holds, for tests.
+    #[cfg(test)]
+    fn spec(&self) -> Option<&str> {
+        self.parsed.then_some(self.spec.as_str())
+    }
+}
+
+/// The node's state module: one `State` entry holding the memo.
+pub(crate) mod dynamic_weighted_state {
+    use super::{DynamicWeightedMemo, DynamicWeightedSelect};
+    use crate::ast::{ScratchBuf, ScratchElem, Value};
+
+    pub(crate) fn layout(_node: &DynamicWeightedSelect) -> Vec<ScratchElem> {
+        vec![ScratchElem::State]
+    }
+
+    pub(crate) fn eval(
+        _node: &DynamicWeightedSelect,
+        scratch: &mut [ScratchBuf],
+        inputs: &[Value],
+        outputs: &mut [Value],
+    ) {
+        let spec = inputs[1].to_display_string();
+        let memo = scratch[0]
+            .node_state()
+            .get_or_insert_with(DynamicWeightedMemo::default);
+        outputs[0] = Value::Str(memo.select(&spec, inputs[0].as_u64()).into());
+    }
+}
+
+/// The node's compiled form: the selector from its slot, the spec
+/// through its pair, the memo in the state's `State` entry, the pick
+/// written into the step's own string entry.
+fn dynamic_weighted_compiled(
+    _node: &DynamicWeightedSelect,
+    wire_types: &[crate::ast::PortType],
+) -> crate::ast::CompiledSlotKit {
+    use crate::ast::{PortType, ScratchBuf, ScratchElem};
+    let spec_ty = wire_types.get(1).copied().unwrap_or(PortType::Str);
+    crate::ast::CompiledSlotKit {
+        scratch: vec![ScratchElem::State, ScratchElem::Str],
+        op: Box::new(
+            move |inputs: &[u64], outputs: &mut [u64], scratch: &mut [ScratchBuf]| {
+                let selector = inputs[0];
+                let spec_value;
+                // SAFETY: the pair was published by the producing step
+                // into storage alive until it reruns (axioms S3, S4).
+                let spec: &str =
+                    match unsafe { crate::compile::marshal::arg_ref(spec_ty, &inputs[1..]) } {
+                        crate::ast::ValueRef::Str(s) => s,
+                        other => {
+                            spec_value = other.to_display_string();
+                            &spec_value
+                        }
+                    };
+                let (state, out) = scratch.split_at_mut(1);
+                let memo = state[0]
+                    .node_state()
+                    .get_or_insert_with(DynamicWeightedMemo::default);
+                out[0].set_str(memo.select(spec, selector));
+                let (ptr, len) = out[0].ptr_len();
+                outputs[0] = ptr;
+                outputs[1] = len;
+            },
+        ),
+    }
+}
 
 /// Dynamic weighted selection where the weight spec is a wire input.
 ///
@@ -321,21 +424,26 @@ fn weighted_pick(
 /// `Config<Arc<str>>` to mark it as a configuration-cost wire: the
 /// compiler warns when it is bound to a cycle-time source.
 ///
+/// The last parsed spec and its alias table are memoized in the
+/// evaluating kernel state's own scratch, so repeated evaluations with
+/// the same spec do no parsing and a changed spec is followed at once.
+///
 /// Typical use: wire `weights_spec` to an init-time constant or a
 /// rarely-changing captured value. Wire `selector` to a per-cycle
 /// hash for O(1) lookup once the alias table is built.
 ///
 /// Spec format: `"alpha:0.3;beta:0.5;gamma:0.2"`
-#[crate::polydat_node(category = Weighted)]
+#[crate::polydat_node(
+    category = Weighted,
+    compiled_slot = dynamic_weighted_compiled,
+    state = dynamic_weighted_state
+)]
 fn dynamic_weighted_select(selector: u64, weights_spec: Config<std::sync::Arc<str>>) -> String {
-    let spec: &str = weights_spec.0.as_ref();
-    let (values, weights) = parse_weighted_str_spec(spec);
-    if values.is_empty() {
-        return String::new();
-    }
-    let table = AliasTableU64::from_weights(&weights);
-    let idx = table.sample(selector) as usize;
-    values[idx].clone()
+    // The stateless evaluation (a node evaluated on its own, with no
+    // kernel state to keep a memo in): parse and pick.
+    DynamicWeightedMemo::default()
+        .select(weights_spec.0.as_ref(), selector)
+        .to_string()
 }
 
 #[cfg(test)]
@@ -567,6 +675,98 @@ mod tests {
         // A different spec is followed at once.
         node.eval(&[Value::U64(42), Value::Str("x:1.0".into())], &mut out);
         assert_eq!(out[0].as_str(), "x");
+    }
+
+    /// The memo lives in the evaluating state's scratch: a repeated
+    /// spec is not parsed again, a changed one replaces the memo, and
+    /// a clone of the state starts with an empty entry.
+    #[test]
+    fn dynamic_weighted_select_memoizes_in_the_state() {
+        use crate::ast::ScratchBuf;
+        let node = DynamicWeightedSelect::new();
+        let mut scratch: Vec<ScratchBuf> = node
+            .scratch_layout()
+            .iter()
+            .map(|e| ScratchBuf::new(*e))
+            .collect();
+        assert_eq!(scratch.len(), 1);
+        let mut out = [Value::None];
+        node.eval_in(
+            &mut scratch,
+            &[Value::U64(42), Value::Str("a:0.5;b:0.5".into())],
+            &mut out,
+        );
+        let first = out[0].as_str().to_string();
+        let memo = scratch[0]
+            .node_state()
+            .get::<DynamicWeightedMemo>()
+            .expect("filled on the first evaluation");
+        assert_eq!(memo.spec(), Some("a:0.5;b:0.5"));
+        let table_before = memo.table.as_ref().map(|t| t as *const AliasTableU64);
+        node.eval_in(
+            &mut scratch,
+            &[Value::U64(42), Value::Str("a:0.5;b:0.5".into())],
+            &mut out,
+        );
+        assert_eq!(out[0].as_str(), first);
+        let memo = scratch[0]
+            .node_state()
+            .get::<DynamicWeightedMemo>()
+            .unwrap();
+        assert_eq!(
+            memo.table.as_ref().map(|t| t as *const AliasTableU64),
+            table_before,
+            "the same spec keeps the table it built"
+        );
+        node.eval_in(
+            &mut scratch,
+            &[Value::U64(42), Value::Str("x:1.0".into())],
+            &mut out,
+        );
+        assert_eq!(out[0].as_str(), "x");
+        let memo = scratch[0]
+            .node_state()
+            .get::<DynamicWeightedMemo>()
+            .unwrap();
+        assert_eq!(memo.spec(), Some("x:1.0"));
+        let cloned = scratch[0].clone();
+        let mut cloned = cloned;
+        assert!(
+            cloned.node_state().get::<DynamicWeightedMemo>().is_none(),
+            "a clone of the state starts with an empty memo"
+        );
+    }
+
+    /// The compiled form keeps its memo in the kernel state's scratch
+    /// too, and agrees with the interpreter across a changing spec.
+    #[test]
+    fn dynamic_weighted_select_compiled_form_memoizes_and_agrees() {
+        use crate::ast::{PortType, ScratchBuf};
+        let node = DynamicWeightedSelect::new();
+        let kit = dynamic_weighted_compiled(&node, &[PortType::U64, PortType::Str]);
+        let mut scratch: Vec<ScratchBuf> =
+            kit.scratch.iter().map(|e| ScratchBuf::new(*e)).collect();
+        let mut outputs = [0u64; 2];
+        for (spec, selector) in [("a:0.5;b:0.5", 42u64), ("a:0.5;b:0.5", 7), ("z:1.0", 3)] {
+            let inputs = [selector, spec.as_ptr() as usize as u64, spec.len() as u64];
+            (kit.op)(&inputs, &mut outputs, &mut scratch);
+            let got = scratch[1].to_value();
+            let mut want = [Value::None];
+            node.eval(&[Value::U64(selector), Value::Str(spec.into())], &mut want);
+            assert_eq!(
+                got.as_str(),
+                want[0].as_str(),
+                "spec {spec}, selector {selector}"
+            );
+            assert_eq!((outputs[0], outputs[1]), scratch[1].ptr_len());
+            assert_eq!(
+                scratch[0]
+                    .node_state()
+                    .get::<DynamicWeightedMemo>()
+                    .and_then(|m| m.spec()),
+                Some(spec)
+            );
+        }
     }
 
     #[test]

@@ -296,7 +296,10 @@ renderer is the user. `state = <path>` names a module with
 `layout(&Node) -> Vec<ScratchElem>` and `eval(&Node, &mut
 [ScratchBuf], &[Value], &mut [Value])`, the node's per-state storage
 and its interpreter evaluation over it (`PolydatNode::scratch_layout`
-and `eval_in`). `jit_constants = <path>` supplies the constants a
+and `eval_in`); a `ScratchElem::State` entry holds whatever the node
+types for itself, filled on first use and empty in a clone, which is
+where a memo of the node's last derivation belongs
+(`dynamic_weighted_select` is the user). `jit_constants = <path>` supplies the constants a
 native lowering bakes, in the order that lowering reads them. An
 override wins over eligibility.
 

@@ -134,11 +134,13 @@ the copy's validity to a producer it does not depend on.
 
 Storage never belongs to a thread. Where a node needs state of its own
 to evaluate (a native cone's slot buffer; the kernels a tile render
-keeps over its projection bodies), it declares that state as scratch
-entries through `PolydatNode::scratch_layout`, and the state that
-evaluates it hands them in through `PolydatNode::eval_in`. The node
-itself is shared by every state of the program and holds nothing that
-changes. A clone of a state is a new state: its scratch entries and
+keeps over its projection bodies; the memo of the last spec a
+`dynamic_weighted_select` parsed, in a `ScratchElem::State` entry the
+node types for itself and fills on first use), it declares that state
+as scratch entries through `PolydatNode::scratch_layout`, and the
+state that evaluates it hands them in through `PolydatNode::eval_in`.
+The node itself is shared by every state of the program and holds
+nothing that changes. A clone of a state is a new state: its scratch entries and
 extern values are copies of its own, and every pair in its buffer is
 republished into them as it is made, so no state's buffer points into
 another's storage (S3); an entry that holds kernels starts empty.
@@ -191,7 +193,9 @@ scratch handed in:
   names. Dynamic returns and `Handle` downcasts stay on P1.
 - **Scratch from the kit.** The kit declares one scratch entry per
   `Ref2` output, in port order (`ScratchElem::Str`, `Bytes`, `Value`,
-  or a vector element), and the kernel allocates them in its state. A
+  or a vector element), beside any entry the node keeps for itself
+  (`Slots`, `Kernels`, `State`, which publish no pair), and the kernel
+  allocates them in its state. A
   `Ref2` return is written into its entry and its pair republished; a
   polymorphic return encodes by the node's resolved output type
   (`derive_support::write_poly`), which is the type of the first value
