@@ -26,10 +26,10 @@
 /// string.
 ///
 /// JIT level: P1 (String output; no compiled_u64 path).
-/// SRD-80 PR B.6 — derived state for `combinations`. Computed
-/// once per node instance via `from_pattern`; the macro stores
-/// the instance in a struct field and hands the eval body a
-/// `&ParsedCombinations` borrow each call.
+/// Derived state for `combinations`. Computed once per node
+/// instance via `from_pattern`; the macro stores the instance in a
+/// struct field and hands the eval body a `&ParsedCombinations`
+/// borrow each call.
 pub struct ParsedCombinations {
     /// The segments, in output order.
     pub segments: Vec<Segment>,
@@ -258,8 +258,6 @@ fn append_chunk_to_words(buf: &mut String, n: u32) {
 /// (RFC 4122) bits set per spec.
 ///
 /// Signature: `hashed_uuid(input: u64) -> (String)`
-///
-/// SRD-80 PR B.4 migration.
 #[crate::polydat_node(category = String)]
 fn hashed_uuid(input: u64) -> String {
     // Two hashes fill 128 bits.
@@ -305,7 +303,7 @@ fn hashed_uuid(input: u64) -> String {
 ///
 /// Signature: `char_buf(seed: u64, charset: &str, length: u64) -> (String)`
 /// Expand a charset spec like "A-Za-z0-9" into a Vec<char>.
-/// SRD-80 PR B.6 setup helper for `char_buf`.
+/// Setup helper for `char_buf`.
 fn expand_charset(charset: &str) -> Vec<char> {
     if charset.is_empty() {
         return ('a'..='z').collect();
@@ -332,7 +330,7 @@ fn expand_charset(charset: &str) -> Vec<char> {
 }
 
 /// Generate a deterministic string of a given length from a
-/// seed and character set. SRD-80 PR B.6 migration.
+/// seed and character set.
 #[crate::polydat_node(category = String)]
 fn char_buf(
     seed: u64,
@@ -376,10 +374,9 @@ fn read_file_lines(filename: &str) -> Vec<String> {
     lines
 }
 
-/// Cycle-time line lookup over a pre-loaded text file. SRD-80b
-/// Phase E migration: `filename` is read at construction time
-/// via `#[poly_const]`; the cycle input selects a line modulo
-/// the total count.
+/// Cycle-time line lookup over a pre-loaded text file. `filename`
+/// is read at construction time via `#[poly_const]`; the cycle
+/// input selects a line modulo the total count.
 #[crate::polydat_node(category = String)]
 fn file_line_at(
     index: u64,
@@ -408,7 +405,7 @@ fn file_line_at(
 ///
 /// Signature: `str_concat(in_0, in_1, ...) -> (String)`
 /// Concatenate N values, rendering each as its display form.
-/// SRD-80 PR B.9 — variadic over `&[Value]`. The body stringifies
+/// Variadic over `&[Value]`: the body stringifies
 /// per element so mixed-type inputs (Str + U64 + Bool, etc.)
 /// produce a single concatenated string; this matches the
 /// DSL's lowering of `+` between Str-typed operands.
@@ -440,8 +437,7 @@ fn str_concat(parts: &[polydat::ast::Value]) -> String {
 ///
 /// Signature: `str_lower(input: Str) -> (Str)`
 ///
-/// SRD-80 PR B.4 — migrated to `#[polydat_node]`. `String`
-/// (not `&str`) so `FromValue<String>` honors the legacy
+/// Takes `String` (not `&str`) so `FromValue<String>` honors the legacy
 /// "stringify any input via `to_display_string`" behavior;
 /// switching to `&str` would tighten this to require Str
 /// inputs only, which the type-checker doesn't yet enforce

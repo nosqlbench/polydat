@@ -9,7 +9,6 @@
 /// Param: `factor: u64` — milliseconds per input unit.
 ///
 /// Example: `EpochScale(1000)` treats input as seconds → millis.
-/// Scale a u64 to epoch milliseconds. SRD-80 PR B.13 migration.
 #[crate::polydat_node(category = Datetime)]
 fn epoch_scale(input: u64, #[poly_default(1u64)] factor: crate::derive_support::Const<u64>) -> u64 {
     input.wrapping_mul(*factor)
@@ -34,7 +33,7 @@ impl EpochScale {
     }
 }
 
-/// Add a base epoch offset to a u64 value. SRD-80 PR B.13 migration.
+/// Add a base epoch offset to a u64 value.
 #[crate::polydat_node(category = Datetime)]
 fn epoch_offset(
     input: u64,
@@ -60,15 +59,12 @@ impl EpochOffset {
 ///
 /// Produces: `"YYYY-MM-DDThh:mm:ss.mmmZ"`
 /// Uses a simple arithmetic calendar (no timezone, no leap second handling).
-/// Convert u64 epoch millis to ISO-8601 timestamp string.
-/// SRD-80 PR B.6 migration.
 #[crate::polydat_node(category = Datetime)]
 fn to_timestamp(input: u64) -> String {
     epoch_ms_to_iso(input)
 }
 
 /// Decompose epoch millis into date/time components.
-/// SRD-80 PR B.10 — tuple-return multi-output.
 #[crate::polydat_node(
     category = Datetime,
     output_names(year, month, day, hour, minute, second, millis),
@@ -155,35 +151,6 @@ fn epoch_ms_to_iso(epoch_ms: u64) -> String {
     format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}.{ms:03}Z")
 }
 
-// ---------------------------------------------------------------------------
-// Signature declarations for the DSL registry
-// ---------------------------------------------------------------------------
-
-use crate::dsl::registry::FuncSig;
-
-/// Signatures for datetime nodes.
-pub fn signatures() -> &'static [FuncSig] {
-    &[
-        // `epoch_scale` migrated to `#[polydat_node]` per SRD-80 PR B.13.
-        // `epoch_offset` migrated to `#[polydat_node]` per SRD-80 PR B.13.
-        // `to_timestamp` migrated to `#[polydat_node]` per SRD-80 PR B.6.
-        // `date_components` migrated to `#[polydat_node]` per SRD-80 PR B.10.
-    ]
-}
-
-/// Try to build a datetime node from a function name and const args.
-///
-/// Returns `None` if the name is not handled by this module.
-pub(crate) fn build_node(
-    _name: &str,
-    _wires: &[crate::compile::assembly::WireRef],
-    _wire_types: &[crate::ast::PortType],
-    _consts: &[crate::dsl::factory::ConstArg],
-) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
-    None
-}
-
-crate::register_nodes!(signatures, build_node);
 #[cfg(test)]
 mod tests {
     use super::*;

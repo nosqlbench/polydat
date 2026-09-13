@@ -10,13 +10,12 @@
 /// Emit a fixed f64 value.
 ///
 /// Signature: `() -> (f64)`
-/// Emit a fixed f64 value. SRD-80 PR B.15 migration.
 #[crate::polydat_node(category = Math)]
 fn const_f64(#[poly_default(0.0f64)] value: crate::derive_support::Const<f64>) -> f64 {
     *value
 }
 
-/// Emit a fixed bool value. SRD-80 PR B.15 migration.
+/// Emit a fixed bool value.
 #[crate::polydat_node(category = Math)]
 fn const_bool(#[poly_default(false)] value: crate::derive_support::Const<bool>) -> bool {
     *value
@@ -26,9 +25,8 @@ fn const_bool(#[poly_default(false)] value: crate::derive_support::Const<bool>) 
 // Fixed value lists (1→1 nodes, input selects by index)
 // =================================================================
 //
-// SRD-80b Phase C — migrated to `#[polydat_node]` via the
-// `Const<Vec<C>>` workload-list combinator. The macro recognises
-// the trailing `Const<Vec<C>>` arg and packages `consts[1..]`
+// These ride the `Const<Vec<C>>` workload-list combinator. The macro
+// recognises the trailing `Const<Vec<C>>` arg and packages `consts[1..]`
 // into a `Vec<C>` field at build time via
 // `<C as ConstSource>::extract` per element. Empty lists are
 // rejected in the body (the body panics) rather than at the
@@ -91,7 +89,7 @@ fn coin_flip_jit_constants(node: &CoinFlip) -> Vec<u64> {
 }
 
 /// Probabilistic boolean with a precomputed threshold from a
-/// const probability arg. SRD-80 PR B.15 migration.
+/// const probability arg.
 #[crate::polydat_node(category = Probability, jit_constants = coin_flip_jit_constants)]
 fn coin_flip(
     input: u64,
@@ -136,8 +134,8 @@ mod tests {
         assert_eq!(out[0].as_u64(), 10); // wraps
     }
 
-    // SRD-80b Phase C — `fixed_values_u64` migrated to the
-    // macro's `Const<Vec<u64>>` shape, which is JIT-ineligible
+    // `fixed_values_u64` rides the macro's `Const<Vec<u64>>`
+    // shape, which is JIT-ineligible
     // (the JIT u64 buffer has no slot shape for a variable-length
     // captured list). The eval-path test above still covers
     // correctness; a future `compiled_u64_override` could

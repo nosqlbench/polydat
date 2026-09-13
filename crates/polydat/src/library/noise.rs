@@ -199,10 +199,6 @@ fn simplex_2d_jit_constants(node: &Simplex2d) -> Vec<u64> {
 ///
 /// The u64 input is scaled to the float domain by `frequency`.
 /// Output is in [-1, 1]. For [0, 1], compose with a remap node.
-// SRD-80 PR B.6 — `perlin_1d`, `perlin_2d`, `simplex_2d`
-// migrated to `#[polydat_node]` with `PermTable` as a
-// setup-derived field. Macro generates structs `Perlin1d`,
-// `Perlin2d`, `Simplex2d` (snake_case → PascalCase).
 impl crate::derive_support::PolydatSetup for PermTable {}
 
 #[crate::polydat_node(category = Noise, jit_constants = perlin_1d_jit_constants)]

@@ -3,19 +3,10 @@
 
 //! Hash function nodes.
 //!
-//! SRD-80b S8 (Phase E): migrated from hand-written
-//! `impl PolydatNode for X` blocks to `#[polydat_node]`
-//! free-function authoring. The macro emits the struct,
-//! `new()`, `eval()`, `compiled_u64()` (auto-emitted because
-//! every arg + return maps to a `JitType`), `jit_constants()`
-//! (carrying the captured `Const<...>` field values), and
-//! the inventory registration.
-//!
-//! Greenfield rename: the historical `Hash64` Rust struct
-//! is now `Hash` — the macro derives PascalCase struct names
-//! from the snake_case function ident, and the operator-facing
-//! DSL name "hash" already matched. No alias shim per
-//! SRD-80b §"No transitional aliases".
+//! Every node here is JIT-eligible: each arg and return maps to a
+//! `JitType`, so the macro emits `compiled_u64()` and
+//! `jit_constants()` (carrying the captured `Const<...>` field
+//! values) alongside `eval()`.
 
 use crate::compile::fusion::{DecomposedGraph, DecomposedWire, FusedNode};
 use xxhash_rust::xxh3::xxh3_64;

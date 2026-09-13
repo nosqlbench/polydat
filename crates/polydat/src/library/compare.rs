@@ -23,22 +23,9 @@
 //! mix them with bitwise operators (`a < b & c < d`) without
 //! widening, and pass them as the `cond` input to `select_*`.
 
-// SRD-80 PR B.7 — `cmp_u64_node!` / `cmp_f64_node!` declarative
-// macros retired. The `#[polydat_node]` proc-macro auto-emits
-// the same Phase-2 closure + `jit_constants` from a typed
-// function signature; the declarative macros' purpose is
-// subsumed.
-
 // ---------------------------------------------------------------------------
 // Comparison nodes
 // ---------------------------------------------------------------------------
-
-// SRD-80 PR B.7 — comparison nodes migrated from
-// `cmp_u64_node!` / `cmp_f64_node!` declarative macros to
-// `#[polydat_node]`. JIT (Phase 2) emission is automatic from
-// the type signature; f64 wire args bit-reinterpret through
-// the u64 buffer transparently. Phase 3 classifier dispatch
-// (none of these have JitOp variants) is unaffected.
 
 #[crate::polydat_node(category = Comparison)]
 fn u64_eq(a: u64, b: u64) -> u64 {
@@ -109,7 +96,6 @@ fn f64_ge(a: f64, b: f64) -> u64 {
 // ---------------------------------------------------------------------------
 
 /// Pick between two u64 inputs based on a u64 condition.
-/// SRD-80 PR B.13 migration. JIT P2.
 #[crate::polydat_node(category = Comparison)]
 fn select_u64(cond: u64, a: u64, b: u64) -> u64 {
     if cond != 0 { a } else { b }
@@ -127,17 +113,6 @@ fn select_u64(cond: u64, a: u64, b: u64) -> u64 {
 /// Equality of two String wires. Returns 1 if equal else 0.
 ///
 /// Signature: `str_eq(a: String, b: String) -> (u64)`
-///
-/// SRD-80 PR B.3 — migrated to the `#[polydat_node]` derive.
-/// The previous hand-written `pub struct StrEq { meta:
-/// NodeMeta }`, its `new()`, the `impl PolydatNode` boxing/
-/// unboxing, the manual `FuncSig` entry in SIGS, and the
-/// `str_eq → Box::new(StrEq::new())` build-dispatch arm are
-/// all collapsed into the function below. The struct name
-/// `StrEq` is still emitted by the macro (snake_case →
-/// PascalCase rule); the FuncSig is registered link-time via
-/// inventory; build dispatch routes through
-/// `PolydatRuntime::build_from_factory`'s inventory fallback.
 #[crate::polydat_node(category = Comparison)]
 fn str_eq(a: &str, b: &str) -> u64 {
     if a == b { 1 } else { 0 }
@@ -152,8 +127,7 @@ fn str_ne(a: &str, b: &str) -> u64 {
 }
 
 /// Pick between two f64 inputs based on a u64 condition.
-/// SRD-80 PR B.13 migration. JIT P2 (f64s travel as raw u64
-/// bit patterns through the compiled buffer).
+/// f64s travel as raw u64 bit patterns through the compiled buffer.
 #[crate::polydat_node(category = Comparison)]
 fn select_f64(cond: u64, a: f64, b: f64) -> f64 {
     if cond != 0 { a } else { b }
@@ -161,57 +135,10 @@ fn select_f64(cond: u64, a: f64, b: f64) -> f64 {
 
 /// Pick between two String inputs based on a u64 condition.
 /// Any nonzero `cond` → `a`; zero → `b`.
-/// Pick between two String inputs based on a u64 condition.
-/// Any nonzero `cond` → `a`; zero → `b`. SRD-80 PR B.6 migration.
 #[crate::polydat_node(category = Comparison)]
 fn select_str(cond: u64, a: String, b: String) -> String {
     if cond != 0 { a } else { b }
 }
-
-// ---------------------------------------------------------------------------
-// Registry wiring
-// ---------------------------------------------------------------------------
-
-use crate::dsl::registry::FuncSig;
-
-// SELECT_*_PARAMS / SELECT_STR_PARAMS retired with the
-// select_{u64,f64,str} migrations to `#[polydat_node]`.
-// `STR_CMP_PARAMS` retired by SRD-80 PR B.3 — `str_eq` and
-// `str_ne` now register their ParamSpec slices via the
-// `#[polydat_node]`-emitted inventory entry.
-
-static SIGS: &[FuncSig] = &[
-    // u64 comparisons
-    // u64_* and f64_* comparisons migrated to `#[polydat_node]`
-    // per SRD-80 PR B.7 — registered link-time via inventory.
-    // string comparisons — registered link-time via the
-    // `#[polydat_node]` attribute on `fn str_eq` / `fn str_ne`
-    // above (SRD-80 PR B.3). The manual SIGS entries are
-    // therefore dropped; the unified registry surfaces them
-    // via the inventory collection.
-
-    // `select_u64` / `select_f64` / `select_str` migrated to
-    // `#[polydat_node]` per SRD-80 PR B.13 (PR B.6 for str).
-];
-
-/// The hand-registered signatures of this module.
-pub fn signatures() -> &'static [FuncSig] {
-    SIGS
-}
-
-// `cmp_sig` / `cmp_f64_sig` retired with the cmp_u64_*/cmp_f64_*
-// migration (SRD-80 PR B.7).
-
-pub(crate) fn build_node(
-    _name: &str,
-    _wires: &[crate::compile::assembly::WireRef],
-    _wire_types: &[crate::ast::PortType],
-    _consts: &[crate::dsl::factory::ConstArg],
-) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
-    None
-}
-
-crate::register_nodes!(signatures, build_node);
 
 #[cfg(test)]
 mod tests {

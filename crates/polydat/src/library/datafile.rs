@@ -8,21 +8,16 @@
 //! ordinal lookups at cycle time. Ordinals wrap via modulo so every
 //! u64 input is valid.
 //!
-//! SRD-80b Phase E: all six data-file nodes are authored via
-//! `#[polydat_node]`. The single-source nodes (`csv_row`,
-//! `csv_row_count`, `jsonl_row`, `jsonl_row_count`) use
-//! `#[poly_const(setup, from = filename)]`. The two two-source nodes
-//! (`csv_field`, `jsonl_field`) use multi-source
-//! `#[poly_const(setup, from = (filename, column|path))]` to build
-//! the per-ordinal value table at construction time.
+//! The single-source nodes (`csv_row`, `csv_row_count`, `jsonl_row`,
+//! `jsonl_row_count`) use `#[poly_const(setup, from = filename)]`.
+//! The two two-source nodes (`csv_field`, `jsonl_field`) use
+//! multi-source `#[poly_const(setup, from = (filename, column|path))]`
+//! to build the per-ordinal value table at construction time.
 //!
-//! Fallibility shift: hand-written `new()` returned
-//! `Result<Self, String>`. The macro-emitted `new()` is infallible;
-//! the setup function panics with the original formatted error on
-//! bad file content. The build closure carries the panic upward —
-//! workload compile still surfaces the same diagnostic text, just
-//! via panic propagation instead of structured `Err`. This matches
-//! the precedent in `library/regex.rs`'s
+//! The macro-emitted `new()` is infallible; the setup function panics
+//! with a formatted error on bad file content, and the build closure
+//! carries the panic upward so workload compile surfaces the
+//! diagnostic text. This matches `library/regex.rs`'s
 //! `compile_regex(...).expect("invalid regex")` setup.
 
 #[cfg(test)]
@@ -130,9 +125,6 @@ fn read_csv_column(filename: &str, column: &str) -> Vec<String> {
 /// Fields follow RFC 4180 quoting: a `"`-wrapped field may hold
 /// commas, line breaks, and `""` for a literal quote; the value served
 /// is the unwrapped text.
-///
-/// SRD-80b Phase E: migrated to `#[polydat_node]` via multi-source
-/// `#[poly_const(... from = (filename, column))]`.
 #[crate::polydat_node(category = Data)]
 fn csv_field(
     ordinal: u64,
@@ -189,9 +181,8 @@ fn read_csv_row_count(filename: &str) -> u64 {
 /// The row is served as written in the file — quotes intact, and a
 /// quoted field's line breaks kept inside the row.
 ///
-/// SRD-80b Phase E: migrated to `#[polydat_node]`. Construction-time
-/// failure (missing file, empty file) panics via the setup function;
-/// the build closure propagates the panic message.
+/// Construction-time failure (missing file, empty file) panics via
+/// the setup function; the build closure propagates the panic message.
 #[crate::polydat_node(category = Data)]
 fn csv_row(
     ordinal: u64,
@@ -207,8 +198,8 @@ fn csv_row(
 /// Signature: `csv_row_count() -> (output: u64)`
 /// Const: `filename: Str`
 ///
-/// SRD-80b Phase E: migrated to `#[polydat_node]`. The count is
-/// computed once at setup time; `eval` reads the cached value.
+/// The count is computed once at setup time; `eval` reads the
+/// cached value.
 #[crate::polydat_node(category = Data)]
 fn csv_row_count(
     filename: crate::derive_support::Const<&str>,
@@ -251,9 +242,6 @@ fn read_jsonl_field(filename: &str, path: &str) -> Vec<String> {
 /// Each line of the file is a JSON object. The field is extracted
 /// by name (top-level) or dot-path (nested) at construction time.
 /// Ordinal wraps modulo line count.
-///
-/// SRD-80b Phase E: migrated to `#[polydat_node]` via multi-source
-/// `#[poly_const(... from = (filename, path))]`.
 #[crate::polydat_node(category = Data)]
 fn jsonl_field(
     ordinal: u64,
@@ -296,8 +284,7 @@ fn read_jsonl_row_count(filename: &str) -> u64 {
 /// Signature: `jsonl_row(ordinal: u64) -> (output: Str)`
 /// Const: `filename: Str`
 ///
-/// SRD-80b Phase E: migrated to `#[polydat_node]`. Lines are
-/// captured at setup time.
+/// Lines are captured at setup time.
 #[crate::polydat_node(category = Data)]
 fn jsonl_row(
     ordinal: u64,
@@ -312,8 +299,6 @@ fn jsonl_row(
 ///
 /// Signature: `jsonl_row_count() -> (output: u64)`
 /// Const: `filename: Str`
-///
-/// SRD-80b Phase E: migrated to `#[polydat_node]`.
 #[crate::polydat_node(category = Data)]
 fn jsonl_row_count(
     filename: crate::derive_support::Const<&str>,
@@ -476,10 +461,6 @@ fn resolve_json_path(value: &serde_json::Value, path: &str) -> String {
         other => other.to_string(),
     }
 }
-
-// SRD-80b Phase E: all six data-file nodes register via the
-// `#[polydat_node]` macro's inventory emission. No explicit
-// FuncSig / build_node table needed.
 
 #[cfg(test)]
 mod tests {

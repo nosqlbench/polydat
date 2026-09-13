@@ -141,7 +141,7 @@ mod tests {
         assert!(ratio > 0.90, "outcome 0 should dominate, got {ratio}");
     }
 
-    // SRD-80b Phase C — `histribution` is JIT-ineligible by the
+    // `histribution` is JIT-ineligible by the
     // `#[poly_const]` cached-state design; the typed-eval path
     // above covers correctness.
 

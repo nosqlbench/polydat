@@ -25,12 +25,6 @@
 
 use crate::ast::Value;
 
-// SRD-80 PR B.8 — log_{debug,info,warn,error} migrated to
-// `#[polydat_node]` with `Value` PolyWire args. Each node
-// derives its own struct (LogDebug, LogInfo, LogWarn, LogError)
-// from snake_case → PascalCase; the runtime port type is
-// resolved by the assembler and passed to `new(value_type)`.
-
 fn log_at(level: crate::library::support::audit::LogLevel, fn_name: &str, value: &Value) {
     let msg = format!("{fn_name}: {}", value.to_display_string());
     crate::library::support::audit::log(level, &msg);
@@ -75,11 +69,6 @@ fn log_error(value: Value) -> Value {
     );
     value
 }
-
-// SRD-80 PR B.8 — every node in this module is registered
-// link-time via the proc-macro-emitted NodeRegistration. The
-// hand-maintained signatures()/build_node()/register_nodes!
-// plumbing is retired.
 
 #[cfg(test)]
 mod tests {

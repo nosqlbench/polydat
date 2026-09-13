@@ -99,12 +99,17 @@ fn elapsed_millis(#[poly_const(capture_epoch_millis, from = ())] start: &u64) ->
     purity = Nondeterministic("OS thread identity varies across fibers"),
 )]
 fn thread_id() -> u64 {
-    // `ThreadId` is opaque; we extract the numeric id via the
-    // Debug formatter (`ThreadId(N)`).
-    let id = std::thread::current().id();
-    let id_str = format!("{id:?}");
-    let num = id_str.trim_start_matches("ThreadId(").trim_end_matches(')');
-    num.parse().unwrap_or(0)
+    thread_local! {
+        // `ThreadId` is opaque; the numeric id is extracted once per
+        // thread via the Debug formatter (`ThreadId(N)`).
+        static THREAD_ID: u64 = {
+            let id = std::thread::current().id();
+            let id_str = format!("{id:?}");
+            let num = id_str.trim_start_matches("ThreadId(").trim_end_matches(')');
+            num.parse().unwrap_or(0)
+        };
+    }
+    THREAD_ID.with(|id| *id)
 }
 
 /// Environment variable read, frozen at construction.

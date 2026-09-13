@@ -1,5 +1,0 @@
-error: `adapter` value must be a string literal (the adapter's canonical registered name, e.g. `adapter = "cql"`).
- --> tests/ui/fail/adapter_not_string.rs:1:52
-  |
-1 | #[polydat::polydat_node(category = Math, adapter = cql)]
-  |                                                    ^^^

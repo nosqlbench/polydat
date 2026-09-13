@@ -244,9 +244,9 @@ impl AliasTableU64 {
 // Polydat node wrapping the alias table
 // -----------------------------------------------------------------
 //
-// SRD-80b Phase C migration: `AliasSample` flows through the
-// `Const<Vec<f64>>` workload-list combinator (weights) and the
-// `#[poly_const]` setup pattern (cached `AliasTableU64`). The
+// `AliasSample` flows through the `Const<Vec<f64>>` workload-list
+// combinator (weights) and the `#[poly_const]` setup pattern
+// (cached `AliasTableU64`). The
 // node is JIT-ineligible by the Const<Vec<_>> design — the JIT
 // u64 buffer has no slot shape for the variable-length table
 // captured in the struct field.
@@ -359,7 +359,7 @@ mod tests {
         assert!(out[0].as_u64() < 4);
     }
 
-    // SRD-80b Phase C — `alias_sample` is JIT-ineligible by the
+    // `alias_sample` is JIT-ineligible by the
     // `Const<Vec<C>>` design; the typed-eval path above covers
     // correctness. A future `compiled_u64_override` could
     // reinstate the closure form if perf demands it.

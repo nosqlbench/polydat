@@ -251,7 +251,7 @@ returns).
 `purity = <Purity>`, `identity = <expr>`, `commutativity =
 <Commutativity>`, `variadic_min = <int>`. Shapes: `output_names(...)`,
 `instantiate(...)`. Engines: `compiled_u64 = <path>`,
-`compiled_slot = <path>`, `state = <path>`, `jit_constants = <path>`, `no_jit`,
+`compiled_slot = <path>`, `state = <path>`, `jit_constants = <path>`,
 `decompose = <path>`, `simd = "<node>"`, `simd_total`. Per argument:
 `#[constraint(...)]` on a wire argument and `#[poly_const(...)]` as
 above.
@@ -279,7 +279,7 @@ order:
   in [Compiled By-Reference Slots](compiled_handles.md) §5.
 - **A fallible body** runs once at construction; the kit its return
   shape names replays the cached value every run.
-- **Outside every kit:** `DynamicOutputs<T>`, `no_jit`, and a node
+- **Outside every kit:** `DynamicOutputs<T>` and a node
   that downcasts a `Handle`. Such a node runs on the interpreter only.
 
 **Overrides.** `compiled_u64 = <path>` makes the macro emit

@@ -16,10 +16,9 @@
 //! - `{:b}` — binary (u64)
 //! - `{:o}` — octal (u64)
 //!
-//! SRD-80b Phase E: migrated from a hand-written `impl PolydatNode for
-//! Printf` to `#[polydat_node]` + `Const<&str>` (the format string) +
-//! `#[poly_const]` cached `ParsedFormat` + `&[Value]` variadic wires.
-//! The cached `ParsedFormat` is computed once at construction (in the
+//! `printf` takes a `Const<&str>` format string, a `#[poly_const]`
+//! cached `ParsedFormat`, and `&[Value]` variadic wires. The cached
+//! `ParsedFormat` is computed once at construction (in the
 //! `parse_format` setup-fn) so per-eval work is just iterating the
 //! pre-parsed segments.
 
@@ -463,10 +462,9 @@ mod tests {
     // None propagation (SRD-73 follow-up)
     //
     // String interpolation evaluates to Value::None when any
-    // referenced input is Value::None. Pre-migration, the body
-    // implemented this check directly. Post-migration (SRD-80b
-    // Phase E), the canonical None-propagation surface is the
-    // Polydat kernel's SRD-74 Rule 1 guard (engines.rs): any
+    // referenced input is Value::None. The canonical
+    // None-propagation surface is the Polydat kernel's SRD-74
+    // Rule 1 guard (engines.rs): any
     // node whose inputs include Value::None and which doesn't
     // override `accepts_none_inputs` emits None on every output
     // BEFORE the body is invoked. The body therefore never
@@ -475,10 +473,8 @@ mod tests {
     // End-to-end coverage of the kernel-level None-propagation
     // through printf lives in `tests/scope_composition.rs`
     // (`const_with_unbound_interpolation_falls_through_to_outer`).
-    // The direct-eval unit tests that previously asserted the
-    // redundant body-side check are intentionally retired —
-    // they tested defense-in-depth at a layer the macro
-    // migration removed.
+    // There are no direct-eval unit tests for a body-side check:
+    // the body never sees a None input.
     // ────────────────────────────────────────────────────────
 
     #[test]

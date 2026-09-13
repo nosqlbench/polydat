@@ -16,15 +16,12 @@
 //! The core algorithm is a Galois-configuration LFSR. The `Shuffle` Polydat
 //! node wraps it with range normalization and rejection sampling.
 //!
-//! SRD-80b Phase E — migrated from hand-written `impl PolydatNode for X`
-//! blocks to `#[polydat_node]` free-function authoring. The `feedback`
-//! polynomial is exposed explicitly as a Const arg so the macro can
-//! auto-emit the JIT-eligible `compiled_u64` / `jit_constants` hooks
-//! (Setup-derived state would disable the macro's auto-JIT emission, and
-//! the override path can't capture per-instance constants). Callers that
-//! previously used the `width_for_period` + bank-selection convenience now
-//! compute `feedback` themselves via [`feedback_for_width_and_bank`] or
-//! [`feedback_for_size`].
+//! The `feedback` polynomial is exposed explicitly as a Const arg so the
+//! macro can auto-emit the JIT-eligible `compiled_u64` / `jit_constants`
+//! hooks (Setup-derived state would disable the macro's auto-JIT
+//! emission, and the override path can't capture per-instance
+//! constants). Callers compute `feedback` via
+//! [`feedback_for_width_and_bank`] or [`feedback_for_size`].
 
 // -----------------------------------------------------------------
 // LFSR feedback polynomials (one per register width 4..64)

@@ -184,18 +184,22 @@ fn a_program_is_shared_across_threads_on_every_engine() {
     }
 }
 
-/// A node that keeps to the interpreter by declaration, so every
-/// compiled engine refuses a program that uses it.
-#[polydat::polydat_node(category = Diagnostic, no_jit)]
-fn interpreter_only_double(n: u64) -> u64 {
-    n * 2
+/// A node with no compiled form: its output count is decided at
+/// construction (`DynamicOutputs`), a shape outside every kit, so
+/// every compiled engine refuses a program that uses it.
+#[polydat::polydat_node(category = Diagnostic)]
+fn interpreter_only_double(
+    n: u64,
+    widths: polydat::derive_support::Const<Vec<u64>>,
+) -> polydat::derive_support::DynamicOutputs<u64> {
+    polydat::derive_support::DynamicOutputs(widths.iter().map(|w| n * 2 + w).collect())
 }
 
 #[test]
 fn a_refusal_names_the_engine_and_the_reason() {
     // A node with no compiled form is refused by every compiled engine,
     // by name.
-    let src = "input cycle: u64\nout := interpreter_only_double(cycle)\n";
+    let src = "input cycle: u64\n(a, b) := interpreter_only_double(cycle, 1, 2)\n";
     assert!(compile_polydat_with(src, Engine::Interpreter(JitMode::Auto)).is_ok());
     for engine in engines().into_iter().skip(1) {
         match compile_polydat_with(src, engine) {

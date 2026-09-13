@@ -1,4 +1,4 @@
-error: `compiled_u64` value must be a path to a free function with signature `fn(&[u64], &mut [u64])`.
+error: `compiled_u64` value must be a path to a free function with signature `fn(&Node) -> CompiledU64Op`.
  --> tests/ui/fail/compiled_u64_not_path.rs:1:57
   |
 1 | #[polydat::polydat_node(category = Math, compiled_u64 = 1)]

@@ -2,12 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Linear interpolation and range mapping nodes.
-//!
-//! SRD-80b PR B.15+ migration — every node in this module
-//! authors via `#[polydat_node]`. The hand-maintained
-//! `signatures()` / `build_node()` / `validate_node()` /
-//! `register_nodes!` plumbing is retired; macro-emitted
-//! `NodeRegistration` covers link-time discovery.
 
 use crate::compile::fusion::{DecomposedGraph, DecomposedWire, FusedNode};
 
@@ -98,10 +92,9 @@ impl FusedNode for ScaleRange {
 /// `inv_lerp(temperature, 32.0, 212.0)` normalizes Fahrenheit to
 /// `[0,1]`. Output is clamped, so out-of-range inputs saturate.
 ///
-/// Inverse linear interpolation. SRD-80 PR B.12 — inline
-/// compute; the per-call `1.0 / (b - a)` divide is acceptable
-/// versus the cost of a multi-source Setup mechanism that no
-/// other node would need.
+/// The per-call `1.0 / (b - a)` divide is computed inline; it is
+/// cheaper than a multi-source setup mechanism that no other node
+/// would need.
 #[crate::polydat_node(category = Interpolation)]
 fn inv_lerp(
     input: f64,
@@ -125,9 +118,7 @@ fn inv_lerp(
 /// extrapolation is possible.
 ///
 /// JIT level: P1 (no compiled_u64; f64 in/out without captured closure).
-/// SRD-80 PR B.12 — inline compute; one extra divide per call
-/// versus the multi-source Setup machinery that would have
-/// precomputed `1.0 / (in_max - in_min)`.
+/// The `1.0 / (in_max - in_min)` divide is computed inline per call.
 #[crate::polydat_node(category = Interpolation)]
 fn remap(
     input: f64,
@@ -153,18 +144,10 @@ fn remap(
 ///
 /// JIT level: P3 (macro-emitted; consts = `[step.to_bits()]`).
 ///
-/// Greenfield migration note: the prior hand-written
-/// `Quantize::new` asserted `step > 0.0`, and the prior
-/// `ParamSpec` carried a `PositiveFiniteF64` constraint that
-/// Pass 1 enforced. Both are retired with the macro
-/// migration (the macro doesn't yet support const-arg
-/// `ConstConstraint` metadata). Behavior mirrors the
-/// `div`/`mod_const` precedent (arithmetic.rs): a non-
-/// positive `step` propagates a NaN/inf through the body,
-/// surfacing at cycle time. If early-fail is required
-/// again, it lands via a future macro extension that
-/// plumbs `#[constraint(PositiveFiniteF64)]` onto const
-/// args (current support is wire-only).
+/// `step` is not validated at construction (the macro does not yet
+/// support const-arg `ConstConstraint` metadata). As with `div` /
+/// `mod_const` in arithmetic.rs, a non-positive `step` propagates a
+/// NaN/inf through the body, surfacing at cycle time.
 #[crate::polydat_node(category = Interpolation)]
 fn quantize(input: f64, #[poly_default(1.0f64)] step: crate::derive_support::Const<f64>) -> f64 {
     (input / *step).round() * *step

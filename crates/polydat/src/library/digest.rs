@@ -3,13 +3,12 @@
 
 //! Cryptographic digest and base encoding nodes.
 
-// SRD-80 PR B.11 — alias the upstream digest types so the
-// macro-generated `Sha256` / `Md5` structs don't collide.
+// Alias the upstream digest types so the macro-generated
+// `Sha256` / `Md5` structs don't collide.
 use md5::Md5 as Md5Hasher;
 use sha2::{Digest as Sha2Digest, Sha256 as Sha2_256};
 
-// SRD-80 PR B.11 — digest and base-encoding nodes migrated to
-// `#[polydat_node]` with native Rust types for Bytes:
+// Bytes travel as native Rust types:
 //   - input  Bytes:  `&[u8]` (borrow, zero-alloc)
 //   - output Bytes:  `Vec<u8>` (owned, becomes Arc<[u8]> via IntoValue)
 
@@ -53,12 +52,6 @@ fn from_base32(input: &str) -> Vec<u8> {
         .unwrap_or_default()
 }
 
-// ---------------------------------------------------------------------------
-// Signature declarations for the DSL registry
-// ---------------------------------------------------------------------------
-
-// SRD-80 PR B.11 — every node in this module registers
-// link-time via the proc-macro-emitted NodeRegistration.
 #[cfg(test)]
 mod tests {
     use super::*;

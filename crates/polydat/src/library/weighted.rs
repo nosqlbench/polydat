@@ -7,35 +7,23 @@
 //! value lookup in one step. They parse an inline spec string at init
 //! time and perform weighted selection at cycle time.
 //!
-//! SRD-80b Phase E migration status:
-//!
-//! * [`WeightedStrings`] / [`WeightedU64`] — migrated to `#[polydat_node]`.
-//!   The spec parser runs once at construction via a `#[poly_const]`
-//!   setup function, producing a derived `WeightedStrCache` /
-//!   `WeightedU64Cache` (parallel value+alias-table). The eval body
-//!   does a constant-time lookup.
-//! * [`WeightedPick`] — migrated to `#[polydat_node]` via the same
-//!   spec-string surface as `weighted_u64`. The DSL form is now
-//!   `weighted_pick(input, "v0:w0;v1:w1;...")`. The pre-Phase-E
-//!   interleaved-pair form is gone — `FusedNode::decomposed()` had
-//!   already declared the spec-string form is equivalent, so the
-//!   migration collapses both surfaces onto one. The
-//!   `compiled_u64`/`jit_constants` overrides survive intact; the
-//!   JIT extern (`jit_weighted_pick`) reads the same 5-u64
-//!   (values_ptr, biases_ptr, primaries_ptr, aliases_ptr, n)
-//!   constants slice as before.
-//! * [`DynamicWeightedSelect`] — migrated to `#[polydat_node]` via
-//!   the SRD-80b in-spirit `Config<T>` marker (the Wire trait's
-//!   `WIRE_COST = Config` const flows through `Config<Arc<str>>` to
-//!   the slot's `WireCost::Config` annotation, retaining the
-//!   load-bearing compile-warning behaviour exercised by tests).
-//!   Per-cycle behaviour: re-parses the spec on every call —
-//!   intentionally; the Mutex-backed cache from the pre-Phase-E
-//!   hand-written form depended on per-node interior-mutable state
-//!   that the macro doesn't emit. With `Config` cost, well-formed
-//!   workloads bind the spec at init-time, so the parse re-runs
-//!   only when the workload-level binding wakes; cycle-time binders
-//!   trip the compiler warning and get O(n) per cycle.
+//! * [`WeightedStrings`] / [`WeightedU64`] — the spec parser runs
+//!   once at construction via a `#[poly_const]` setup function,
+//!   producing a derived `WeightedStrCache` / `WeightedU64Cache`
+//!   (parallel value+alias-table). The eval body does a
+//!   constant-time lookup.
+//! * [`WeightedPick`] — the same spec-string surface as
+//!   `weighted_u64`: `weighted_pick(input, "v0:w0;v1:w1;...")`. The
+//!   `compiled_u64`/`jit_constants` overrides feed the JIT extern
+//!   (`jit_weighted_pick`), which reads a 5-u64 (values_ptr,
+//!   biases_ptr, primaries_ptr, aliases_ptr, n) constants slice.
+//! * [`DynamicWeightedSelect`] — takes its spec on a `Config<T>`
+//!   wire (the Wire trait's `WIRE_COST = Config` const flows through
+//!   `Config<Arc<str>>` to the slot's `WireCost::Config` annotation,
+//!   so the compiler warns when the spec is bound to a cycle-time
+//!   source). The node memoizes the last spec it parsed and its
+//!   alias table, so repeated evaluations with the same spec do no
+//!   parsing; only a spec change re-parses.
 
 use crate::ast::CompiledU64Op;
 use crate::compile::fusion::{DecomposedGraph, DecomposedWire};
@@ -77,7 +65,7 @@ fn parse_weighted_u64_spec(spec: &str) -> (Vec<u64>, Vec<f64>) {
 }
 
 // ---------------------------------------------------------------------------
-// WeightedStrings — migrated to #[polydat_node]
+// WeightedStrings
 // ---------------------------------------------------------------------------
 
 /// Derived state for [`WeightedStrings`]: the parsed value list and
@@ -115,7 +103,7 @@ fn weighted_strings(
 }
 
 // ---------------------------------------------------------------------------
-// WeightedU64 — migrated to #[polydat_node]
+// WeightedU64
 // ---------------------------------------------------------------------------
 
 /// Derived state for [`WeightedU64`]: the parsed value list and
@@ -151,15 +139,12 @@ fn weighted_u64(
 }
 
 // ---------------------------------------------------------------------------
-// WeightedPick — migrated to #[polydat_node] via the spec-string surface
+// WeightedPick — the spec-string surface
 //
-// The pre-Phase-E interleaved-pair DSL form (`weighted_pick(input, w0,
-// v0, w1, v1, ...)`) is gone. The FusedNode equivalence already
-// declared the spec-string form (`weighted_pick(input, "v0:w0;v1:w1;...")`)
-// is canonical; the migration collapses both surfaces onto one. The
-// override path keeps the `compiled_u64`/`jit_constants` closures —
-// the JIT extern `jit_weighted_pick` reads the same 5-u64 constants
-// slice (values_ptr, biases_ptr, primaries_ptr, aliases_ptr, n).
+// The DSL form is `weighted_pick(input, "v0:w0;v1:w1;...")`. The
+// `compiled_u64`/`jit_constants` overrides feed the JIT extern
+// `jit_weighted_pick`, which reads a 5-u64 constants slice
+// (values_ptr, biases_ptr, primaries_ptr, aliases_ptr, n).
 // ---------------------------------------------------------------------------
 
 /// Derived state for [`WeightedPick`]: parsed values, weights, and the
@@ -315,17 +300,15 @@ fn weighted_pick(
 }
 
 // ---------------------------------------------------------------------------
-// DynamicWeightedSelect — migrated to `#[polydat_node]` via the
-// `Config<T>` marker. The Wire trait's `WIRE_COST` const flows
-// through `Config<Arc<str>>` to the slot's `WireCost::Config`
-// annotation, retaining the load-bearing compile-warning behaviour
-// exercised by tests. The pre-Phase-E `Mutex<DynamicWeightedCache>`
-// is gone — the macro doesn't emit interior-mutable per-node state
-// — and the body now re-parses each cycle. Workloads that bind
-// `weights_spec` at init-time pay the parse cost once (the
-// underlying `Value::Str` Arc is shared) and never re-trigger;
-// workloads that bind from a cycle-time source already trip the
-// Config-wire warning and have opted in to the per-cycle cost.
+// DynamicWeightedSelect — the spec arrives on a `Config<T>` wire. The
+// Wire trait's `WIRE_COST` const flows through `Config<Arc<str>>` to
+// the slot's `WireCost::Config` annotation, so the compiler warns
+// when the spec is bound to a cycle-time source. The spec is parsed
+// on every evaluation: a node is shared by every state of its
+// program and holds nothing that changes, so a memo of the last
+// spec would have to live in the evaluating state's own storage,
+// which no scratch element carries yet. An init-time binding
+// evaluates the node once under R1 and pays the parse once.
 // ---------------------------------------------------------------------------
 
 /// Dynamic weighted selection where the weight spec is a wire input.
@@ -354,13 +337,6 @@ fn dynamic_weighted_select(selector: u64, weights_spec: Config<std::sync::Arc<st
     let idx = table.sample(selector) as usize;
     values[idx].clone()
 }
-
-// ---------------------------------------------------------------------------
-// All nodes in this module now self-register via `#[polydat_node]`;
-// the hand-written `signatures()` / `build_node()` / `validate_node()`
-// / `register_nodes!` entries from the pre-Phase-E form have been
-// removed.
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -579,20 +555,16 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_weighted_select_caches_table() {
+    fn dynamic_weighted_select_follows_its_spec() {
         let node = DynamicWeightedSelect::new();
         let spec = "a:0.5;b:0.5";
         let mut out = [Value::None];
-
-        // First call builds the table
         node.eval(&[Value::U64(42), Value::Str(spec.into())], &mut out);
         let first = out[0].as_str().to_string();
-
-        // Same spec → same table (cached), same result for same input
+        // The same spec and selector give the same pick.
         node.eval(&[Value::U64(42), Value::Str(spec.into())], &mut out);
         assert_eq!(out[0].as_str(), first);
-
-        // Different spec → rebuilds table
+        // A different spec is followed at once.
         node.eval(&[Value::U64(42), Value::Str("x:1.0".into())], &mut out);
         assert_eq!(out[0].as_str(), "x");
     }

@@ -1,4 +1,4 @@
-error: #[polydat_node] does not recognize flag `no_such_flag`. Flags: `no_jit`, `simd_total`.
+error: #[polydat_node] does not recognize flag `no_such_flag`. Flags: `simd_total`.
  --> tests/ui/fail/unknown_flag.rs:1:42
   |
 1 | #[polydat::polydat_node(category = Math, no_such_flag)]

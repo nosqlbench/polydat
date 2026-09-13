@@ -7,12 +7,6 @@
 //! or `scale_range` to transform normalized values into waveforms,
 //! angles, or other mathematical shapes.
 
-// SRD-80 PR B.7 — `unary_f64_node!` and `binary_f64_node!`
-// declarative macros retired. `#[polydat_node]` auto-emits the
-// same Phase 2 closure with f64↔u64 bit-reinterpret from the
-// typed signature. Struct names follow snake_case → PascalCase
-// (e.g. `f64_add` → `F64Add`, `abs_f64` → `AbsF64`).
-
 #[crate::polydat_node(category = Math)]
 fn sin(input: f64) -> f64 {
     input.sin()
@@ -99,28 +93,16 @@ fn f64_mod(a: f64, b: f64) -> f64 {
 /// coordinates to polar angle.
 ///
 /// JIT level: P2.
-/// Two-argument arc tangent. SRD-80 PR B.7 migration.
 #[crate::polydat_node(category = Math)]
 fn atan2(y: f64, x: f64) -> f64 {
     y.atan2(x)
 }
 
-/// Power: base^exponent. SRD-80 PR B.7 migration.
-///
-/// Note: the macro-emitted second arg name is `exponent` (from
-/// the function signature); workloads that bound that param by
-/// position keep working unchanged.
+/// Power: base^exponent.
 #[crate::polydat_node(category = Math)]
 fn pow(base: f64, exponent: f64) -> f64 {
     base.powf(exponent)
 }
-
-// ---------------------------------------------------------------------------
-// SRD-80 PR B.7 — every node in this module registers
-// link-time via the proc-macro-emitted NodeRegistration. The
-// hand-maintained signatures()/build_node()/register_nodes!
-// plumbing below is retained inside a never-compiled block so
-// the migration diff stays readable; remove on next pass.
 
 #[cfg(any())]
 #[cfg(test)]

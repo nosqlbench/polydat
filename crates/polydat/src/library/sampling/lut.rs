@@ -182,9 +182,9 @@ impl PolydatNode for LutSample {
     }
 }
 
-// `EmpiricalSample` migrated to `#[polydat_node]` via the
-// `#[poly_const]` setup pattern. Parses the spec at construction
-// time into a `LutF64`; eval samples from the cached table.
+// `EmpiricalSample` parses the spec at construction time into a
+// `LutF64` (`#[poly_const]` setup); eval samples from the cached
+// table.
 
 impl crate::derive_support::PolydatSetup for LutF64 {}
 

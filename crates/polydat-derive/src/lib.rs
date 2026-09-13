@@ -4,91 +4,68 @@
 //! `polydat-derive` — proc-macro implementation of
 //! [`#[polydat_node]`](polydat_node).
 //!
-//! See [`docs/SRD/80_node_function_macro_collapse.md`](https://github.com/jshook/nb-rs/blob/main/docs/SRD/80_node_function_macro_collapse.md)
-//! for the design, the 8 open design questions this proc-macro
-//! is closing one-at-a-time, and the migration plan against
-//! existing polydat library nodes.
+//! The attribute turns a typed free function into a polydat node.
+//! From one `fn` it emits the node struct (named after the function
+//! in PascalCase), its `new()` constructor, the `PolydatNode` impl
+//! (`meta`, `eval`, and the compiled forms the signature allows),
+//! and a link-time `NodeRegistration` carrying the `FuncSig` the
+//! DSL registry serves. The function's `///` comment becomes the
+//! struct's documentation and the signature's `description` (first
+//! paragraph) and `help` (the rest).
 //!
-//! ## Current scope (PR B.1)
+//! ## Arguments
 //!
-//! This is the SCAFFOLDING pass. The macro recognizes the
-//! simplest case only:
+//! Each argument is classified by its type and attributes:
 //!
-//! - A standalone `fn` (no `impl` block, no struct).
-//! - All wire input arguments are PRIMITIVES with implementations
-//!   of polydat's `FromValue` trait — concretely: `u64`, `f64`,
-//!   `bool`, `&str` (or owned `String`).
-//! - Return type is a PRIMITIVE with a `IntoValue` implementation —
-//!   same set.
-//! - No state, no const args, no JIT hooks, no variadic shapes,
-//!   no polymorphism.
+//! - **Wire** — a per-cycle input. Scalars (`u64`, `i64`, `f64`,
+//!   `bool`, the narrower ints, `f32`, `f16`, `u128`, `i128`),
+//!   strings (`&str`, `String`, `Arc<str>`), bytes (`&[u8]`,
+//!   `Vec<u8>`, `Arc<[u8]>`), JSON (`&serde_json::Value`,
+//!   `Arc<serde_json::Value>`), typed vectors (`&[f32]`, `Vec<i64>`,
+//!   ...), SIMD registers (`Bits128`, `[i32; 4]`, ...), `Arc<T>`
+//!   handles, and host `Ext` types. `Option<T>` marks an input that
+//!   may be unset; `Config<T>` marks a configuration-cost wire.
+//!   `#[constraint(Variant)]` attaches a `ConstConstraint` to a
+//!   wire input.
+//! - **PolyWire** — a `Value` argument: any runtime type; the output
+//!   type of a `Value` return tracks the first PolyWire input.
+//! - **Variadic** — a `&[T]` argument for `T` in `u64`, `bool`,
+//!   `&str`, `String`, `Value`; two consecutive slices form a
+//!   split-halves shape. `variadic_min` and `identity` describe the
+//!   arity.
+//! - **Const** — `Const<u64 | f64 | bool | &str>`, a workload
+//!   constant captured at construction; `#[poly_default(EXPR)]`
+//!   supplies its default. `Const<Vec<C>>` (last) captures every
+//!   trailing constant of the call.
+//! - **Setup** — a `&T` argument with
+//!   `#[poly_const(setup_fn, from = source)]`: derived state
+//!   computed once in `new()` from the named const arguments
+//!   (`from = ()` for none, `from = (a, b)` for several). `T`
+//!   implements `PolydatSetup`.
 //!
-//! Out of scope (deferred to later PR B.* batches):
+//! ## Returns
 //!
-//! - State-bearing nodes (probability PRNG, vectors readers).
-//! - JIT-eligible nodes (the `compiled_u64` hooks).
-//! - Const-arg parameters with `ConstConstraint`.
-//! - Variadic shapes (`Variadic<T>`, `&[T]`).
-//! - Polymorphic outputs (`SameAsInput`).
-//! - Ext-typed args / returns (adapter-contributed types).
+//! A single wire type; a tuple of wire types (multi-output, named
+//! by `output_names(...)`); `Value` (polymorphic); `Result<T, E>`
+//! for a body that runs once at construction and caches its value;
+//! or a dynamic-output list over a `Const<Vec<C>>` argument.
 //!
-//! ## Generated output (for the simple case)
+//! ## Attribute parameters
 //!
-//! Input:
-//!
-//! ```ignore
-//! #[polydat_node]
-//! fn str_eq(a: &str, b: &str) -> u64 {
-//!     if a == b { 1 } else { 0 }
-//! }
-//! ```
-//!
-//! Generated:
-//!
-//! ```ignore
-//! pub struct StrEq { meta: polydat::ast::NodeMeta }
-//! impl Default for StrEq { fn default() -> Self { Self::new() } }
-//! impl StrEq {
-//!     pub fn new() -> Self {
-//!         Self {
-//!             meta: polydat::ast::NodeMeta {
-//!                 name: "str_eq".into(),
-//!                 ins: vec![
-//!                     polydat::ast::Slot::Wire(polydat::ast::Port::new(
-//!                         "a", polydat::ast::PortType::Str)),
-//!                     polydat::ast::Slot::Wire(polydat::ast::Port::new(
-//!                         "b", polydat::ast::PortType::Str)),
-//!                 ],
-//!                 outs: vec![polydat::ast::Port::new(
-//!                     "output", polydat::ast::PortType::U64)],
-//!             },
-//!         }
-//!     }
-//! }
-//! impl polydat::ast::PolydatNode for StrEq {
-//!     fn meta(&self) -> &polydat::ast::NodeMeta { &self.meta }
-//!     fn eval(
-//!         &self,
-//!         inputs: &[polydat::ast::Value],
-//!         outputs: &mut [polydat::ast::Value],
-//!     ) {
-//!         let a = <&str as polydat::derive_support::FromValue>::from_value(&inputs[0]);
-//!         let b = <&str as polydat::derive_support::FromValue>::from_value(&inputs[1]);
-//!         let result: u64 = if a == b { 1 } else { 0 };
-//!         outputs[0] = <u64 as polydat::derive_support::IntoValue>::into_value(result);
-//!     }
-//! }
-//! ```
-//!
-//! The original `fn str_eq` is consumed by the macro — only the
-//! struct + impl is emitted. The body of `str_eq` becomes the
-//! body of the `eval` method (with parameter rebinding via
-//! `FromValue::from_value`).
-//!
-//! FuncSig registration via inventory or similar is deferred to
-//! PR B.2 — for now the macro just generates the struct + impl
-//! so we can validate the boxing/unboxing path with a pilot
-//! node.
+//! - `category = <FuncCategory>` — required.
+//! - `struct_name = <Ident>` — the Rust name of the node struct.
+//! - `compiled_u64 = <path>` — `fn(&Node) -> CompiledU64Op`,
+//!   replacing the macro's u64-buffer closure.
+//! - `compiled_handle = <path>` — `fn(&Node, usize, &[PortType]) ->
+//!   CompiledU64Op`, replacing the handle-kit closure.
+//! - `jit_constants = <path>` — `fn(&Node) -> Vec<u64>`.
+//! - `decompose = <path>` — `fn(&Node) -> DecomposedGraph`, emitting
+//!   `impl FusedNode`.
+//! - `simd = "<node>"`, `simd_total` — an exact register-typed
+//!   implementation of the scalar function.
+//! - `purity = <Purity>`, `identity = <expr>`,
+//!   `commutativity = <Commutativity>`, `variadic_min = <int>`.
+//! - `output_names(a, b, ...)` — the ports of a tuple return.
 
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
@@ -101,10 +78,10 @@ use syn::{
 /// `#[polydat_node]` — derive a polydat node from a typed Rust
 /// function signature.
 ///
-/// See the crate docs for the supported surface and what's
-/// out of scope for this scaffolding pass.
+/// See the crate docs for the argument and return shapes the
+/// macro accepts.
 ///
-/// ## Attribute parameters (PR B.2)
+/// ## Attribute parameters
 ///
 /// - `category = <ident>` — the polydat `FuncCategory` variant
 ///   the node belongs to (`Comparison`, `Math`, `String`, etc.).
@@ -127,184 +104,24 @@ pub fn polydat_node(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(e) => return e.to_compile_error().into(),
     };
 
-    // Adapter namespacing: when `adapter = "<name>"` is declared,
-    // the node's function name MUST start with `<name>_` so every
-    // adapter-provided node stays namespaced under the adapter's
-    // canonical registered name. Enforced here where the fn ident
-    // is in hand; validation-only (not threaded into codegen).
-    if let Some(adapter) = &attrs.adapter {
-        let fn_ident = &func.sig.ident;
-        let prefix = format!("{adapter}_");
-        if !fn_ident.to_string().starts_with(&prefix) {
-            let msg = format!(
-                "#[polydat_node(adapter = \"{adapter}\")] requires the node \
-                 name to start with \"{prefix}\" (found \"{fn_ident}\")",
-            );
-            return syn::Error::new_spanned(fn_ident, msg)
-                .to_compile_error()
-                .into();
-        }
-    }
-
-    // SRD-80b Phase D1 — generic-over-Wire fanout. When the
-    // operator declares `instantiate(T1, T2, ...)`, the macro
-    // emits one full registration per type (per-instantiation
-    // struct + impl + NodeRegistration). The DSL function name
-    // stays shared; the Rust struct names get type-derived
-    // suffixes (`PassthroughU64`, `PassthroughF64`, ...).
-    if attrs.instantiate.is_empty() {
-        return match generate(func, attrs, None) {
-            Ok(ts) => ts.into(),
-            Err(e) => e.to_compile_error().into(),
-        };
-    }
-    match instantiate_and_generate(func, attrs) {
+    match generate(func, attrs) {
         Ok(ts) => ts.into(),
         Err(e) => e.to_compile_error().into(),
     }
 }
 
-/// SRD-80b Phase D1 — fan out a generic-over-Wire function into
-/// one full instantiation per concrete type listed in
-/// `instantiate(...)`. Requires exactly one type parameter on
-/// the function; substitutes that parameter throughout args /
-/// return / body and emits a generate() call per instantiation
-/// with a type-derived struct-name suffix.
-fn instantiate_and_generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
-    let generics = &func.sig.generics;
-    // Exactly one type parameter is required. (Lifetimes and
-    // const params are not supported for instantiation.)
-    let type_params: Vec<&syn::TypeParam> = generics.type_params().collect();
-    if type_params.len() != 1 {
-        return Err(syn::Error::new_spanned(
-            &func.sig,
-            format!(
-                "#[polydat_node(instantiate(...))] requires exactly one type \
-                 parameter on the function (got {}). Declare the function as \
-                 `fn name<T: Wire>(...) -> ...` and list concrete `Wire`-impl \
-                 types in the `instantiate(...)` clause.",
-                type_params.len(),
-            ),
-        ));
-    }
-    // Every instantiation gets its own type-suffixed struct name, so
-    // a single `struct_name` cannot name them all.
-    if let Some(name) = &attrs.struct_name {
-        return Err(syn::Error::new_spanned(
-            name,
-            "`struct_name = ...` cannot be combined with `instantiate(...)`: \
-             each instantiation is named after its concrete type.",
-        ));
-    }
-    let type_param_ident = type_params[0].ident.clone();
-    let dsl_name = func.sig.ident.to_string();
-
-    let mut out = TokenStream2::new();
-    // Clone attrs minus the `instantiate` clause so the
-    // downstream generate() doesn't try to fan out again.
-    let mut shared_attrs = attrs.clone();
-    let instantiations = std::mem::take(&mut shared_attrs.instantiate);
-
-    for concrete in instantiations {
-        let mut inst_func = func.clone();
-        // Strip the generic parameter — the substituted form is
-        // no longer generic.
-        inst_func.sig.generics.params.clear();
-        inst_func.sig.generics.where_clause = None;
-        // Substitute T -> concrete throughout the function.
-        let mut subst = TypeSubst {
-            type_param: type_param_ident.clone(),
-            concrete: concrete.clone(),
-        };
-        syn::visit_mut::VisitMut::visit_item_fn_mut(&mut subst, &mut inst_func);
-        // Rename to a per-instantiation Rust identifier so the
-        // generated struct name carries the type suffix. The
-        // operator-facing DSL name stays `dsl_name`, passed
-        // through generate()'s name_override.
-        let suffix = type_suffix(&concrete);
-        let new_ident = syn::Ident::new(
-            &format!("{dsl_name}_{}", suffix.to_lowercase()),
-            inst_func.sig.ident.span(),
-        );
-        inst_func.sig.ident = new_ident;
-        let emit = generate(inst_func, shared_attrs.clone(), Some(dsl_name.clone()))?;
-        out.extend(emit);
-    }
-    Ok(out)
-}
-
-/// Derive a struct-name suffix from a Rust type. Used by Phase
-/// D1 instantiate to disambiguate the per-instantiation struct
-/// names. `u64` → "U64"; `String` → "String"; `Arc<[u8]>` →
-/// "ArcU8"; `SliceArc<f32>` → "SliceArcF32". The strategy
-/// strips angle brackets / refs / punctuation and uppercases
-/// each segment's first character.
-fn type_suffix(ty: &Type) -> String {
-    let raw = type_to_string(ty);
-    let mut out = String::new();
-    let mut capitalize_next = true;
-    for c in raw.chars() {
-        if c.is_alphanumeric() {
-            if capitalize_next {
-                out.extend(c.to_uppercase());
-                capitalize_next = false;
-            } else {
-                out.push(c);
-            }
-        } else {
-            capitalize_next = true;
-        }
-    }
-    if out.is_empty() {
-        "Inst".to_string()
-    } else {
-        out
-    }
-}
-
-/// syn visitor that substitutes a single named type parameter
-/// with a concrete type throughout an item function. Used by
-/// the SRD-80b Phase D1 fanout to produce per-instantiation
-/// copies of a generic-over-Wire function.
-struct TypeSubst {
-    type_param: syn::Ident,
-    concrete: Type,
-}
-
-impl syn::visit_mut::VisitMut for TypeSubst {
-    fn visit_type_mut(&mut self, ty: &mut Type) {
-        if let Type::Path(p) = ty
-            && p.qself.is_none()
-            && p.path.is_ident(&self.type_param)
-        {
-            *ty = self.concrete.clone();
-            return;
-        }
-        syn::visit_mut::visit_type_mut(self, ty);
-    }
-}
-
-// Make NodeAttrs cloneable for the Phase D1 fanout (we need a
-// copy per instantiation; the original parsed-once Attrs is the
-// shared template).
-
 /// Parsed `#[polydat_node(...)]` attribute parameters.
-#[derive(Clone)]
 struct NodeAttrs {
     /// `FuncCategory` variant name — required (no default).
     /// Forcing the operator to declare the category keeps the
     /// `describe` / help / categorization surface coherent.
     category: Ident,
-    /// SRD-80 PR B.7 — opt out of JIT (Phase-2/Phase-3) emission
-    /// even when the type signature qualifies. Use when body
-    /// has side effects the operator doesn't want JIT-dispatched
-    /// or when hand-written hooks override the macro version.
-    no_jit: bool,
     /// SRD-80 PR B.7 — override path for `compiled_u64()`. When
-    /// set, the macro emits `compiled_u64(&self) -> Some(Box::new(<path>))`
+    /// set, the macro emits `compiled_u64(&self) -> Some(<path>(self))`
     /// instead of building the closure from the body. Free-fn
-    /// signature: `fn(&[u64], &mut [u64])`. Escape hatch for
-    /// hand-tuned SIMD / FFI / unusual carriers.
+    /// signature: `fn(&Node) -> CompiledU64Op`, so setup-derived
+    /// state on the node is reachable. Escape hatch for hand-tuned
+    /// SIMD / FFI / unusual carriers.
     compiled_u64_override: Option<syn::ExprPath>,
     /// Override path for `compiled_slot()`. When set, the macro emits
     /// `compiled_slot(&self, wire_types) -> Some(<path>(self,
@@ -379,23 +196,6 @@ struct NodeAttrs {
     /// collide with a type the operator already has in scope,
     /// such as a `ReflectedValue` type the node produces.
     struct_name: Option<Ident>,
-    /// SRD-80b Phase D1 — generic-over-Wire instantiation policy
-    /// (SRD-80b §"Open questions" item 1). For a function
-    /// declared `fn pp<T: Wire>(input: T) -> T`, the macro emits
-    /// one full instantiation per type listed here (per-instance
-    /// struct + impl + NodeRegistration). The DSL function name
-    /// is shared across instantiations; per-instantiation build
-    /// closures guard on `<T as Wire>::PORT` so only the matching
-    /// one claims the call.
-    instantiate: Vec<Type>,
-    /// Adapter canonical-name prefix enforcement. When present
-    /// (`adapter = "cql"`), the macro validates at expansion time
-    /// that the annotated function's name starts with `"<name>_"`,
-    /// keeping adapter-provided nodes namespaced under the
-    /// adapter's registered name. Validation-only for now — not
-    /// threaded into codegen. Absent → core polydat nodes stay
-    /// unprefixed.
-    adapter: Option<String>,
 }
 
 fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
@@ -411,7 +211,6 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
     let items = parser.parse2(attr)?;
 
     let mut category: Option<Ident> = None;
-    let mut no_jit = false;
     let mut compiled_u64_override: Option<syn::ExprPath> = None;
     let mut state: Option<syn::ExprPath> = None;
     let mut compiled_slot_override: Option<syn::ExprPath> = None;
@@ -425,8 +224,6 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
     let mut variadic_min: Option<syn::LitInt> = None;
     let mut output_names: Option<Vec<Ident>> = None;
     let mut struct_name: Option<Ident> = None;
-    let mut instantiate: Vec<Type> = Vec::new();
-    let mut adapter: Option<String> = None;
 
     for item in items {
         match item {
@@ -441,9 +238,6 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                     })?
                     .clone();
                 match key.to_string().as_str() {
-                    "no_jit" => {
-                        no_jit = true;
-                    }
                     "simd_total" => {
                         simd_total = true;
                     }
@@ -452,7 +246,7 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                             &key,
                             format!(
                                 "#[polydat_node] does not recognize flag `{other}`. \
-                                 Flags: `no_jit`, `simd_total`.",
+                                 Flags: `simd_total`.",
                             ),
                         ));
                     }
@@ -495,7 +289,7 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                             return Err(syn::Error::new_spanned(
                                 &nv.value,
                                 "`compiled_u64` value must be a path to a free \
-                                 function with signature `fn(&[u64], &mut [u64])`.",
+                                 function with signature `fn(&Node) -> CompiledU64Op`.",
                             ));
                         };
                         compiled_u64_override = Some(p.clone());
@@ -633,39 +427,20 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                             ))?
                             .clone());
                     }
-                    "adapter" => {
-                        // Canonical-name prefix enforcement. The value is
-                        // the adapter's registered name; the node function
-                        // name must start with `<name>_` (validated in the
-                        // macro entry point where the fn ident is in hand).
-                        let syn::Expr::Lit(syn::ExprLit {
-                            lit: syn::Lit::Str(s),
-                            ..
-                        }) = &nv.value
-                        else {
-                            return Err(syn::Error::new_spanned(
-                                &nv.value,
-                                "`adapter` value must be a string literal \
-                                 (the adapter's canonical registered name, \
-                                 e.g. `adapter = \"cql\"`).",
-                            ));
-                        };
-                        adapter = Some(s.value());
-                    }
                     other => {
                         return Err(syn::Error::new_spanned(
                             &key,
                             format!(
                                 "#[polydat_node] does not recognize parameter `{other}`. \
                                  Registration: `category = <FuncCategory>`, \
-                                 `struct_name = <Ident>`, `adapter = \"<name>\"`. \
-                                 Engines: `no_jit`, `compiled_u64 = <path>`, \
+                                 `struct_name = <Ident>`. \
+                                 Engines: `compiled_u64 = <path>`, \
                                  `compiled_slot = <path>`, `state = <path>`, \
                                  `jit_constants = <path>`, `decompose = <path>`, \
                                  `simd = \"<node>\"`, `simd_total`. \
                                  Semantics: `purity = <Purity>`, `identity = <expr>`, \
                                  `commutativity = <Commutativity>`, `variadic_min = <int>`. \
-                                 Shapes: `output_names(...)`, `instantiate(...)`.",
+                                 Shapes: `output_names(...)`.",
                             ),
                         ));
                     }
@@ -694,25 +469,12 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                         }
                         output_names = Some(names.into_iter().collect());
                     }
-                    "instantiate" => {
-                        let types: Punctuated<Type, Token![,]> =
-                            list.parse_args_with(Punctuated::parse_terminated)?;
-                        if types.is_empty() {
-                            return Err(syn::Error::new_spanned(
-                                &list,
-                                "`instantiate(...)` requires at least one type. \
-                                 List the concrete `Wire`-impl types that should \
-                                 get their own per-instantiation registrations.",
-                            ));
-                        }
-                        instantiate = types.into_iter().collect();
-                    }
                     other => {
                         return Err(syn::Error::new_spanned(
                             &key,
                             format!(
                                 "#[polydat_node] does not recognize list-form key `{other}`. \
-                                 Recognised: `output_names(...)`, `instantiate(...)`.",
+                                 Recognised: `output_names(...)`.",
                             ),
                         ));
                     }
@@ -737,7 +499,6 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
 
     Ok(NodeAttrs {
         category,
-        no_jit,
         compiled_u64_override,
         compiled_slot_override,
         jit_constants_override,
@@ -751,8 +512,6 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
         variadic_min,
         output_names,
         struct_name,
-        instantiate,
-        adapter,
     })
 }
 
@@ -818,12 +577,6 @@ enum ArgKind {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum VariadicElement {
     U64,
-    /// Reserved: `&[f64]` now classifies as the `VecF64` vector
-    /// wire (see `classify_variadic`), so this variant is no longer
-    /// constructed — kept for the port-type / extract match arms and
-    /// a future explicit `Variadic<f64>` spelling.
-    #[allow(dead_code)]
-    F64,
     Bool,
     BorrowedStr,
     OwnedString,
@@ -841,7 +594,6 @@ impl VariadicElement {
         // its own dispatch on the Value variant.
         match self {
             VariadicElement::U64 => quote!(polydat::ast::PortType::U64),
-            VariadicElement::F64 => quote!(polydat::ast::PortType::F64),
             VariadicElement::Bool => quote!(polydat::ast::PortType::Bool),
             VariadicElement::BorrowedStr => quote!(polydat::ast::PortType::Str),
             VariadicElement::OwnedString => quote!(polydat::ast::PortType::Str),
@@ -854,7 +606,6 @@ impl VariadicElement {
     fn extract_from_value(self) -> TokenStream2 {
         match self {
             VariadicElement::U64 => quote!(|v: &polydat::ast::Value| v.as_u64()),
-            VariadicElement::F64 => quote!(|v: &polydat::ast::Value| v.as_f64()),
             VariadicElement::Bool => quote!(|v: &polydat::ast::Value| v.as_bool()),
             VariadicElement::BorrowedStr => quote!(|v: &polydat::ast::Value| v.as_str()),
             VariadicElement::OwnedString => {
@@ -1865,11 +1616,7 @@ fn classify_result_return(ty: &Type) -> Option<Type> {
     tys.next()
 }
 
-fn generate(
-    func: ItemFn,
-    attrs: NodeAttrs,
-    dsl_name_override: Option<String>,
-) -> syn::Result<TokenStream2> {
+fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
     let fn_name = &func.sig.ident;
     // SRD-80 PR B.7: strip `r#` from raw identifiers (`fn r#mod`,
     // `fn r#type`, etc.) so the Rust struct name comes out clean.
@@ -1882,12 +1629,7 @@ fn generate(
         .struct_name
         .clone()
         .unwrap_or_else(|| format_ident!("{}", to_camel_case(&rust_name_str)));
-    // SRD-80b Phase D1 — when instantiating a generic-over-Wire
-    // function, the per-instantiation copies have suffixed Rust
-    // names (`passthrough_u64`, `passthrough_f64`) but share a
-    // single DSL function name from the original declaration.
-    let is_instantiation = dsl_name_override.is_some();
-    let func_name_str = dsl_name_override.unwrap_or_else(|| rust_name_str.clone());
+    let func_name_str = rust_name_str.clone();
     let category = &attrs.category;
 
     // Classify each function arg: wire or const? Reject any
@@ -2999,46 +2741,6 @@ fn generate(
         }
     };
 
-    // SRD-80b Phase D1 — when multiple instantiations share a
-    // DSL function name, each per-instantiation build closure
-    // must claim only the call that matches its own concrete
-    // wire types. The guard checks `wire_types[i]` against
-    // `<#ty as Wire>::PORT` for every wire-position arg. The
-    // factory walks all matching registrations and the first to
-    // accept (return `Some(Ok(...))`) wins; mismatches fall
-    // through to the next instantiation.
-    let port_guard: TokenStream2 = if is_instantiation {
-        let mut wi: usize = 0;
-        let mut checks: Vec<TokenStream2> = Vec::new();
-        for a in &args {
-            match &a.kind {
-                ArgKind::Wire | ArgKind::PolyWire => {
-                    let i = syn::Index::from(wi);
-                    let ty = &a.declared_ty;
-                    // PolyWire stays opaque (Value isn't a Wire impl);
-                    // skip it from the guard.
-                    if !classify_polywire(ty) {
-                        checks.push(quote! {
-                            if _wire_types.get(#i) != Some(&<#ty as polydat::derive_support::Wire>::PORT) {
-                                return None;
-                            }
-                        });
-                    }
-                    wi += 1;
-                }
-                ArgKind::Variadic(_) => {
-                    // Variadic — claims any tail; instantiation
-                    // selection on variadic generic-over-Wire
-                    // isn't supported in this pass.
-                }
-                _ => {}
-            }
-        }
-        quote! { #( #checks )* }
-    } else {
-        quote!()
-    };
-
     // Emit `Default` only when there are no const args AND no
     // setup args. Both require captured values to construct.
     let has_non_wire = args.iter().any(|a| !matches!(a.kind, ArgKind::Wire));
@@ -3078,8 +2780,7 @@ fn generate(
     // carries non-primitive derived state that can't fit a u64
     // buffer). Override attributes (`compiled_u64 = ...`,
     // `jit_constants = ...`) bypass eligibility — they win
-    // unconditionally. `no_jit` blocks macro emission when no
-    // override is present.
+    // unconditionally.
 
     let has_setup = args.iter().any(|a| matches!(a.kind, ArgKind::Setup(_)));
     let ret_jit_type = wire_type_to_jit_type(&ret_ty);
@@ -3288,7 +2989,7 @@ fn generate(
         classify_elem(&ret_ty).map(SlotRet::Elem)
     };
     let slot_plan: Option<(Vec<SlotArg>, SlotRet)> = (|| {
-        if attrs.no_jit || is_fallible || dynamic_outputs_inner.is_some() {
+        if is_fallible || dynamic_outputs_inner.is_some() {
             return None;
         }
         let ret_shape = classify_ret_shape()?;
@@ -3365,7 +3066,7 @@ fn generate(
 
     // A fallible body ran once at construction; its cached value is
     // what every run writes. The shape decides which kit carries it.
-    let fallible_ret: Option<SlotRet> = if is_fallible && !attrs.no_jit {
+    let fallible_ret: Option<SlotRet> = if is_fallible {
         classify_ret_shape()
     } else {
         None
@@ -3713,9 +3414,6 @@ fn generate(
                         let owned = format_ident!("__{}_owned", a.name);
                         let (elem_ty, extract, width) = match elem {
                             VariadicElement::U64 => (quote!(u64), quote!(inputs[__i]), quote!(1)),
-                            VariadicElement::F64 => {
-                                (quote!(f64), quote!(f64::from_bits(inputs[__i])), quote!(1))
-                            }
                             VariadicElement::Bool => (quote!(bool), quote!(inputs[__i] != 0), quote!(1)),
                             VariadicElement::BorrowedStr => (quote!(&str), str_read.clone(), quote!(2)),
                             VariadicElement::OwnedString => {
@@ -3795,10 +3493,7 @@ fn generate(
         quote!()
     };
 
-    let emit_compiled_u64 =
-        attrs.compiled_u64_override.is_some() || (jit_eligible && !attrs.no_jit);
-    let emit_jit_constants =
-        attrs.jit_constants_override.is_some() || (jit_eligible && !attrs.no_jit);
+    let emit_jit_constants = attrs.jit_constants_override.is_some() || jit_eligible;
 
     // Body sharing: extract the function body into a private
     // associated fn `__polydat_body` when JIT is emitted. Both
@@ -3810,7 +3505,7 @@ fn generate(
     // (Setup-bearing nodes need this — their body references
     // setup-derived locals via `let n = &self.n` bindings).
 
-    let use_shared_body = (jit_eligible && (emit_compiled_u64 || !attrs.no_jit)) || slot_eligible;
+    let use_shared_body = jit_eligible || slot_eligible;
 
     // Body-fn parameter list — every arg in its DECLARED form
     // (wire as bare type, const as `Const<T>`, setup as `&T`).
@@ -4051,7 +3746,7 @@ fn generate(
                 }))
             }
         }
-    } else if jit_eligible && !attrs.no_jit {
+    } else if jit_eligible {
         // Per-arg jit handling. Wire args read from inputs at
         // the next sequential index. Const args capture by Copy
         // from self at closure-creation time, then re-wrap as
@@ -4269,8 +3964,6 @@ fn generate(
         },
     };
 
-    let _ = emit_compiled_u64; // referenced via the conditionals above
-
     // SRD-80 PR B.9: conditional FuncSig fields.
     let identity_field: TokenStream2 = if let Some(expr) = &attrs.identity {
         quote!(Some(#expr))
@@ -4479,7 +4172,9 @@ fn generate(
     // The node's documentation: the function's own doc comments on the
     // struct the macro generates, or a line naming the node, and a line
     // for the constructor, so a generated node is documented as the
-    // function that defines it is.
+    // function that defines it is. The same text fills the registered
+    // signature: the first paragraph is its `description`, the rest
+    // its `help`.
     let fn_docs: Vec<&syn::Attribute> = func
         .attrs
         .iter()
@@ -4491,6 +4186,9 @@ fn generate(
     } else {
         quote! { #( #fn_docs )* }
     };
+    let (description, help) = doc_text(&fn_docs);
+    let description_lit = syn::LitStr::new(&description, proc_macro2::Span::call_site());
+    let help_lit = syn::LitStr::new(&help, proc_macro2::Span::call_site());
     let result = quote! {
         #struct_doc
         pub struct #struct_name {
@@ -4544,8 +4242,8 @@ fn generate(
                     name: #func_name_str,
                     category: polydat::dsl::registry::FuncCategory::#category,
                     outputs: #output_count_lit,
-                    description: "",
-                    help: "",
+                    description: #description_lit,
+                    help: #help_lit,
                     identity: #identity_field,
                     variadic_ctor: #variadic_ctor_field,
                     params: &[ #( #param_specs ),* ],
@@ -4566,7 +4264,6 @@ fn generate(
                 consts: &[polydat::dsl::factory::ConstArg],
             ) -> Option<Result<Box<dyn polydat::ast::PolydatNode>, String>> {
                 if name != #func_name_str { return None; }
-                #port_guard
                 #( #const_extracts )*
                 #( #polywire_extracts )*
                 #variadic_n_wires_extract
@@ -4584,6 +4281,51 @@ fn generate(
     };
 
     Ok(result)
+}
+
+/// Split a function's `///` comments into the registered
+/// `description` (the first paragraph, joined onto one line) and
+/// `help` (every paragraph after it, lines kept). Each line loses
+/// the one space rustdoc puts after `///`.
+fn doc_text(doc_attrs: &[&syn::Attribute]) -> (String, String) {
+    let mut lines: Vec<String> = Vec::new();
+    for attr in doc_attrs {
+        if let syn::Meta::NameValue(nv) = &attr.meta
+            && let syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(s),
+                ..
+            }) = &nv.value
+        {
+            let raw = s.value();
+            lines.push(raw.strip_prefix(' ').unwrap_or(&raw).to_string());
+        }
+    }
+    while lines.first().is_some_and(|l| l.trim().is_empty()) {
+        lines.remove(0);
+    }
+    while lines.last().is_some_and(|l| l.trim().is_empty()) {
+        lines.pop();
+    }
+    let split = lines
+        .iter()
+        .position(|l| l.trim().is_empty())
+        .unwrap_or(lines.len());
+    let description = lines[..split]
+        .iter()
+        .map(|l| l.trim())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let rest = &lines[split..];
+    let rest_start = rest
+        .iter()
+        .position(|l| !l.trim().is_empty())
+        .unwrap_or(rest.len());
+    let help = rest[rest_start..]
+        .iter()
+        .map(|l| l.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (description, help)
 }
 
 /// `snake_case` → `PascalCase` (for the generated struct name).

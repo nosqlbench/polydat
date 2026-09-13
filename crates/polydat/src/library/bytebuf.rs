@@ -20,7 +20,6 @@ use crate::ast::{PolydatNode, Value};
 // =================================================================
 
 /// Convert a u64 to 8 bytes (little-endian).
-/// SRD-80 PR B.13 migration.
 #[crate::polydat_node(category = ByteBuffers)]
 fn u64_to_bytes(input: u64) -> Vec<u8> {
     input.to_le_bytes().to_vec()
@@ -28,7 +27,7 @@ fn u64_to_bytes(input: u64) -> Vec<u8> {
 
 /// Generate N deterministic bytes from a u64 seed via chained hashing.
 /// Each 8-byte chunk is `hash(seed + chunk_index)`. Buffer is fresh
-/// per cycle. SRD-80 PR B.13 migration.
+/// per cycle.
 #[crate::polydat_node(category = ByteBuffers)]
 fn bytes_from_hash(
     input: u64,
@@ -99,9 +98,9 @@ fn build_byte_image(image_size: u64, seed: u64) -> ByteImage {
 /// cycle, the input u64 selects the extraction offset via modular
 /// arithmetic and a `slice_size`-long span is copied out.
 ///
-/// SRD-80b Phase E: migrated to `#[polydat_node]` via multi-source
-/// `#[poly_const(... from = (image_size, seed))]`. `slice_size` stays
-/// a per-node `Const<u64>` consumed in the body.
+/// The image is a multi-source `#[poly_const(... from = (image_size,
+/// seed))]`; `slice_size` is a per-node `Const<u64>` consumed in the
+/// body.
 #[crate::polydat_node(category = ByteBuffers)]
 fn byte_image_extract(
     input: u64,
@@ -181,9 +180,6 @@ fn build_char_image(charset: &str, image_size: u64, seed: u64) -> CharImage {
 ///
 /// Equivalent to nosqlbench's `CharBufImage`. The image is filled
 /// from the charset at init time. Each cycle extracts a substring.
-///
-/// SRD-80b Phase E: migrated to `#[polydat_node]` via multi-source
-/// `#[poly_const(... from = (charset, image_size, seed))]`.
 #[crate::polydat_node(category = ByteBuffers)]
 fn char_image_extract(
     input: u64,
@@ -204,7 +200,6 @@ fn char_image_extract(
 // =================================================================
 
 /// Extract a sub-range from a byte buffer.
-/// SRD-80 PR B.13 migration.
 #[crate::polydat_node(category = ByteBuffers)]
 fn byte_slice(
     input: &[u8],
@@ -276,10 +271,6 @@ fn parse_charset(spec: &str) -> Vec<char> {
     chars
 }
 
-// All `#[polydat_node]`-authored byte-buffer nodes — including
-// `ByteImageExtract` and `CharImageExtract` (SRD-80b Phase E
-// multi-source `#[poly_const]` migration) — are auto-registered
-// via inventory.
 #[cfg(test)]
 mod tests {
     use super::*;

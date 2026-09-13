@@ -238,6 +238,9 @@ fn no_thread_local_value_storage_tripwire() {
         ("src/library/emit.rs", "side-channel row sink"),
         // The entropy state of the nondeterministic random nodes.
         ("src/library/random.rs", "entropy source"),
+        // The calling thread's own numeric id, a fact about the
+        // thread that `thread_id` reports, extracted once per thread.
+        ("src/library/context.rs", "the thread's own id"),
     ];
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut offending = Vec::new();

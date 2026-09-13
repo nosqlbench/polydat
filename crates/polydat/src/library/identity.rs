@@ -5,10 +5,9 @@
 
 use crate::ast::{NodeMeta, PolydatNode, Port, PortType, Slot, Value};
 
-/// Passthrough: output equals input. SRD-80 PR B.8 — polymorphic
-/// via PolyWire. The runtime port type is resolved by the
-/// assembler from the upstream wire's type and passed to
-/// `Identity::new(input_type)`.
+/// Passthrough: output equals input. Polymorphic via PolyWire: the
+/// runtime port type is resolved by the assembler from the upstream
+/// wire's type and passed to `Identity::new(input_type)`.
 ///
 /// JIT is disabled (Value isn't a u64-buffer carrier); for a
 /// u64-only fast path, the assembler can synthesize a typed
@@ -80,10 +79,7 @@ impl PolydatNode for PortPassthrough {
 /// JIT level: P2 (compiled_u64 emits a captured constant via the
 /// `#[polydat_node]`-emitted body capture).
 ///
-/// SRD-80b Phase E migration: `Const<u64>` arg → owned `u64` field;
-/// macro auto-emits the matching `compiled_u64()` constant-capture
-/// fast path. Operator-facing rename `const` → `const_u64` aligns
-/// with the per-type naming scheme already used for `const_f64` /
+/// Named per the per-type scheme shared with `const_f64` /
 /// `const_bool` (see `library::fixed`).
 #[crate::polydat_node(category = Math)]
 fn const_u64(value: crate::derive_support::Const<u64>) -> u64 {
@@ -102,12 +98,10 @@ fn const_u64(value: crate::derive_support::Const<u64>) -> u64 {
 /// JIT level: P2 stores the interned static handle; P3 lowers to an
 /// immediate static handle (SRD 115 §2.2).
 ///
-/// SRD-80b Phase E migration: `Const<&str>` source captures the
-/// owned `String`; `#[poly_const]` derives an `Arc<str>` cache at
-/// construction time, so per-cycle eval is a refcount bump on a
-/// single heap allocation — matches the previous shared-Arc
-/// behaviour (one heap allocation across every kernel using the
-/// node). The macro emits `ConstStr::new(value: String)`.
+/// The `Const<&str>` source captures the owned `String`;
+/// `#[poly_const]` derives an `Arc<str>` cache at construction time,
+/// so per-cycle eval is a refcount bump on a single heap allocation.
+/// The macro emits `ConstStr::new(value: String)`.
 fn const_str_arc(s: &str) -> std::sync::Arc<str> {
     std::sync::Arc::from(s)
 }

@@ -6,12 +6,10 @@
 //! These are development aids, not hot-path nodes. They let users
 //! inspect types and values flowing through the DAG.
 //!
-//! SRD-80b S8: `fft_analyze` migrated from a hand-written `impl
-//! PolydatNode for FftAnalyzer` to `#[polydat_node]` form. The
-//! cross-call eval state (buffer + lazy-open output file) lives
-//! in struct fields derived via `#[poly_const]` setup functions —
-//! one buffer setup keyed on `window_size`, one output setup
-//! keyed on `filename`. Lazy file open is preserved so
+//! `fft_analyze` keeps its cross-call eval state (buffer + lazy-open
+//! output file) in struct fields derived via `#[poly_const]` setup
+//! functions — one buffer setup keyed on `window_size`, one output
+//! setup keyed on `filename`. The file is opened lazily so
 //! describe/probe/dryrun paths that never feed samples leave
 //! nothing behind.
 
@@ -22,8 +20,6 @@ use crate::ast::Value;
 /// Signature: `(input: any) -> (String)`
 ///
 /// Returns "u64", "f64", "bool", "String", or "bytes".
-/// Return the input's port type as a string. SRD-80 PR B.8 —
-/// PolyWire input, Fixed Str output.
 #[crate::polydat_node(category = Diagnostic)]
 fn type_of(input: Value) -> String {
     input.port_type().to_string()
@@ -168,12 +164,6 @@ fn fft_analyze(
 
     current_len
 }
-
-// SRD-80 PR B.8 / SRD-80b S8 — every node in this module is
-// registered link-time via the proc-macro-emitted
-// `NodeRegistration`. The hand-maintained
-// `signatures()` / `build_node()` / `register_nodes!` plumbing
-// is retired.
 
 #[cfg(test)]
 mod tests {

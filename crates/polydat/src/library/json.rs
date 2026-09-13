@@ -8,12 +8,9 @@
 //! serialization/deserialization round-trips when passing structured
 //! data between nodes or to adapters that consume JSON natively.
 //!
-//! SRD-80b Phase E migration: every node in this module routes
-//! through `#[polydat_node]`. `JsonObject`'s historical "interleaved
-//! key/value pairs" gap (SRD-80b §"open question 2") is resolved
-//! compositionally: `json_with(key, value)` produces a single-pair
-//! partial Json, and the variadic `json_object(parts...)` merges
-//! them. Workload syntax:
+//! Objects are built compositionally: `json_with(key, value)`
+//! produces a single-pair partial Json, and the variadic
+//! `json_object(parts...)` merges them. Workload syntax:
 //!
 //! ```text
 //! record := json_object(
@@ -41,11 +38,6 @@ use serde_json::json;
 ///   - Bool → JSON bool
 ///   - Str → JSON string
 ///   - Json → nested as-is
-///
-/// SRD-80b Phase E migration — resolves the historical "interleaved
-/// key/value pairs" gap (open question 2) by splitting the operator:
-/// const key paired with a single PolyWire value, no per-slot
-/// type modelling needed.
 #[crate::polydat_node(category = Json)]
 fn json_with(
     key: crate::derive_support::Const<&str>,
@@ -65,10 +57,6 @@ fn json_with(
 /// variants are silently skipped — keeping the operator
 /// composable with conditional `if(...)` branches that may yield
 /// `null`. Later parts shadow earlier on key collision.
-///
-/// SRD-80b Phase E migration — variadic `&[Value]`. Replaces the
-/// hand-written `JsonObject` which couldn't express interleaved
-/// const keys + per-slot wires in the workload DSL.
 #[crate::polydat_node(category = Json, variadic_min = 0)]
 fn json_object(parts: &[Value]) -> std::sync::Arc<serde_json::Value> {
     std::sync::Arc::new(json_object_of(parts))
@@ -112,13 +100,8 @@ pub(crate) fn json_array_of(elems: &[Value]) -> serde_json::Value {
 ///
 /// Signature: `(elem_0: any, elem_1: any, ...) -> (json)`
 ///
-/// SRD-80b Phase E migration — `&[Value]` variadic. Per-element
-/// type fidelity isn't surfaced at eval (the body walks the
-/// elements through `value_to_json`, which dispatches on the
-/// `Value` variant), so the macro-emitted variadic shape is
-/// behaviourally equivalent to the hand-written per-slot-typed
-/// version. The macro emits `JsonArray::new(n_wires)` for the
-/// programmatic-construction signature.
+/// Each element is converted through `value_to_json`, which
+/// dispatches on the `Value` variant.
 #[crate::polydat_node(category = Json, variadic_min = 0)]
 fn json_array(elems: &[Value]) -> std::sync::Arc<serde_json::Value> {
     std::sync::Arc::new(json_array_of(elems))
@@ -129,10 +112,7 @@ fn json_array(elems: &[Value]) -> std::sync::Arc<serde_json::Value> {
 /// Signature: `(input: any) -> (json)`
 ///
 /// Useful for promoting a scalar to JSON for further composition.
-/// SRD-80b Phase E — PolyWire input, Json output. The macro's
-/// SameAsInput dispatch isn't applicable here (return type is
-/// Json, not Value), so the body coerces each variant through
-/// `value_to_json`.
+/// Each variant is coerced through `value_to_json`.
 #[crate::polydat_node(category = Json)]
 fn to_json(input: Value) -> std::sync::Arc<serde_json::Value> {
     std::sync::Arc::new(value_to_json(&input))
@@ -141,9 +121,6 @@ fn to_json(input: Value) -> std::sync::Arc<serde_json::Value> {
 /// Merge two JSON objects into one (shallow merge, right wins).
 ///
 /// Signature: `(left: json, right: json) -> (json)`
-///
-/// SRD-80b Phase E migration — `&serde_json::Value` inputs,
-/// `Arc<serde_json::Value>` output.
 #[crate::polydat_node(category = Json)]
 fn json_merge(
     left: &serde_json::Value,
@@ -169,24 +146,20 @@ fn json_merge(
 /// Signature: `json_to_str(input: json) -> (String)`
 ///
 /// Workload-callable AND the auto-adapter the assembly phase inserts
-/// on Json → Str boundaries. SRD-80b Phase E migration —
-/// `&serde_json::Value` input. The struct name `JsonToStr`
-/// follows the snake_case → PascalCase rule and is what
-/// `compile::assembly` constructs for the auto-adapter slot.
+/// on Json → Str boundaries; `compile::assembly` constructs the
+/// `JsonToStr` struct for the auto-adapter slot.
 #[crate::polydat_node(category = Conversions)]
 fn json_to_str(input: &serde_json::Value) -> String {
     input.to_string()
 }
 
 /// Serialize a JSON value to a pretty-printed string.
-/// SRD-80 PR B.11 migration — `&serde_json::Value` input.
 #[crate::polydat_node(category = Json)]
 fn json_to_str_pretty(input: &serde_json::Value) -> String {
     serde_json::to_string_pretty(input).unwrap_or_default()
 }
 
 /// Parse a JSON string into a JSON value.
-/// SRD-80 PR B.11 migration — `Arc<serde_json::Value>` output.
 #[crate::polydat_node(category = Json)]
 fn str_to_json(input: &str) -> std::sync::Arc<serde_json::Value> {
     let parsed = serde_json::from_str(input).unwrap_or(serde_json::Value::Null);
@@ -200,8 +173,6 @@ fn str_to_json(input: &str) -> std::sync::Arc<serde_json::Value> {
 /// Escape a string for embedding inside JSON. Escapes `"`,
 /// `\`, control characters, etc. Does NOT add surrounding
 /// quotes — the result is the interior of a JSON string.
-///
-/// SRD-80 PR B.4 migration.
 #[crate::polydat_node(category = Json)]
 fn escape_json(input: String) -> String {
     // serde_json::to_string adds quotes; strip them for interior-only.
@@ -217,7 +188,6 @@ fn escape_json(input: String) -> String {
 ///
 /// Extract a single field by key from a JSON object input.
 /// Returns the field's value (or `null` if missing).
-/// SRD-80b Phase E migration via scalar Const + borrow Json input.
 #[crate::polydat_node(category = Json)]
 fn json_field(
     input: &serde_json::Value,
@@ -270,11 +240,11 @@ pub(crate) fn json_of_ref(v: ValueRef<'_>) -> serde_json::Value {
 /// the upstream wire is forced through a `JsonToStr` adapter
 /// that escapes newlines as `\n` literals.
 ///
-/// SRD-80b Phase E migration — PolyWire input so non-Json values
-/// fall through their display form (a Str input is already
-/// textual; numeric/bool scalars render naturally), useful when
-/// the upstream wire is heterogeneous (e.g. a body extern that
-/// sometimes carries a string, sometimes a JSON value).
+/// The input is a PolyWire so non-Json values fall through their
+/// display form (a Str input is already textual; numeric/bool
+/// scalars render naturally), useful when the upstream wire is
+/// heterogeneous (e.g. a body extern that sometimes carries a
+/// string, sometimes a JSON value).
 #[crate::polydat_node(category = Json)]
 fn json_text(input: Value) -> String {
     json_text_of(&input)
@@ -361,9 +331,9 @@ fn walk_json_leaves<W: std::fmt::Write>(j: &serde_json::Value, out: &mut W, firs
 /// `extract_indices_from_json` JSON-walk so workloads can swap to
 /// this typed-wire path without recall-value drift.
 ///
-/// SRD-80b Phase E migration — PolyWire body so the non-Json
-/// fallback ("empty vector, no panic") stays intact; `column`
-/// is a const string with no default (required workload arg).
+/// The body is a PolyWire so the non-Json fallback ("empty vector,
+/// no panic") applies; `column` is a const string with no default
+/// (required workload arg).
 #[crate::polydat_node(category = Json)]
 fn body_column_i32(body: Value, column: crate::derive_support::Const<&str>) -> Vec<i32> {
     let json = match &body {
@@ -436,8 +406,6 @@ fn json_value_as_i32(v: &serde_json::Value) -> Option<i32> {
 /// effectively zero.
 ///
 /// Signature: `normalize_vector(vector: Str) -> (output: Str)`
-///
-/// SRD-80b Phase E migration.
 #[crate::polydat_node(category = Json)]
 fn normalize_vector(vector: &str) -> String {
     let trimmed = vector.trim();
@@ -465,8 +433,6 @@ fn normalize_vector(vector: &str) -> String {
 ///
 /// Signature: `random_vector(seed: u64, dim: u64) -> (output: Str)`
 /// Consts: `min: f64 = 0.0`, `max: f64 = 1.0`
-///
-/// SRD-80b Phase E migration.
 #[crate::polydat_node(category = Json)]
 fn random_vector(
     seed: u64,
@@ -496,8 +462,6 @@ fn random_vector(
 ///
 /// Parses `[a,b,c,...]` and counts elements. Returns 0 for empty
 /// arrays or non-array input.
-///
-/// SRD-80b Phase E migration.
 #[crate::polydat_node(category = Json)]
 fn array_len(input: &str) -> u64 {
     let trimmed = input.trim();
@@ -515,8 +479,6 @@ fn array_len(input: &str) -> u64 {
 ///
 /// `array_at(array_str, index)` → string element at position.
 /// Index wraps modulo array length. Returns "" for empty arrays.
-///
-/// SRD-80b Phase E migration.
 #[crate::polydat_node(category = Json)]
 fn array_at(array: &str, index: u64) -> String {
     let trimmed = array.trim();
@@ -532,12 +494,6 @@ fn array_at(array: &str, index: u64) -> String {
         String::new()
     }
 }
-
-// SRD-80b Phase E: `signatures()` / `build_node()` / `register_nodes!`
-// retired — every node above registers via the proc-macro's
-// `NodeRegistration` inventory submission. `JsonObject` is now
-// macro-emitted variadic; the historical hand-written struct is
-// gone.
 
 #[cfg(test)]
 mod tests {

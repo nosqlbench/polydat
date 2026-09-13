@@ -65,9 +65,8 @@ fn next_f64() -> f64 {
 // Non-deterministic random nodes (0→1)
 // =================================================================
 
-/// Random u64 in [min, max). SRD-80 PR B.13 migration —
-/// inline-compute `range = max - min` per call (non-det node,
-/// per-call subtraction is noise).
+/// Random u64 in [min, max). `range = max - min` is computed inline
+/// per call (non-det node, per-call subtraction is noise).
 #[crate::polydat_node(
     category = Probability,
     purity = Nondeterministic("thread-local PRNG"),
@@ -83,7 +82,7 @@ fn random_range(
     *min + (next_u64() % range)
 }
 
-/// Random f64 in [min, max). SRD-80 PR B.13 migration.
+/// Random f64 in [min, max).
 #[crate::polydat_node(
     category = Probability,
     purity = Nondeterministic("thread-local PRNG"),
@@ -95,7 +94,7 @@ fn random_f64(
     *min + next_f64() * (*max - *min)
 }
 
-/// Random byte buffer. SRD-80 PR B.13 migration.
+/// Random byte buffer.
 #[crate::polydat_node(
     category = Probability,
     purity = Nondeterministic("thread-local PRNG"),
@@ -110,10 +109,25 @@ fn random_bytes(#[poly_default(8u64)] size: crate::derive_support::Const<u64>) -
     buf
 }
 
-/// Random string from a character set. Charset parsed each
-/// call — for hot-path use, prefer the deterministic
-/// `combinations` node which precompiles the charset.
-/// SRD-80 PR B.13 migration.
+/// Expanded character set for `random_string`, parsed once per
+/// node instance from the charset spec via `parse`.
+pub struct Charset(pub Vec<char>);
+
+impl crate::derive_support::PolydatSetup for Charset {}
+
+impl Charset {
+    /// Single-call setup. The `#[polydat_node]` macro invokes
+    /// this exactly once in the generated `RandomString::new()`.
+    pub fn parse(spec: &str) -> Self {
+        Self(parse_charset(spec))
+    }
+}
+
+/// Random string from a character set.
+///
+/// The charset spec (e.g. `"A-Za-z0-9"`) is expanded once at
+/// construction; each call draws `length` characters from it.
+/// For deterministic output, use `combinations` or `char_buf`.
 #[crate::polydat_node(
     category = Probability,
     purity = Nondeterministic("thread-local PRNG"),
@@ -121,8 +135,10 @@ fn random_bytes(#[poly_default(8u64)] size: crate::derive_support::Const<u64>) -
 fn random_string(
     #[poly_default("A-Za-z0-9")] charset: crate::derive_support::Const<&str>,
     #[poly_default(8u64)] length: crate::derive_support::Const<u64>,
+    #[poly_const(Charset::parse, from = charset)] chars: &Charset,
 ) -> String {
-    let chars = parse_charset(&charset);
+    let _ = charset; // expanded into `chars` at construction
+    let chars = &chars.0;
     if chars.is_empty() {
         return String::new();
     }
@@ -131,7 +147,7 @@ fn random_string(
         .collect()
 }
 
-/// Random boolean with probability of true. SRD-80 PR B.13.
+/// Random boolean with probability of true.
 #[crate::polydat_node(
     category = Probability,
     purity = Nondeterministic("thread-local PRNG"),
@@ -157,8 +173,7 @@ impl RandomString {
 ///
 /// Signature: `hashed_lorem_extract(input: u64, min_len: u64, max_len: u64) -> String`
 ///
-/// SRD-80b Phase E migration — equivalent to nosqlbench's
-/// `HashedLoremExtractToString`.
+/// Equivalent to nosqlbench's `HashedLoremExtractToString`.
 #[crate::polydat_node(category = String)]
 fn hashed_lorem_extract(
     input: u64,
@@ -184,8 +199,8 @@ fn hashed_lorem_extract(
 }
 
 /// Pre-split list of non-empty lines from a bundled text source.
-/// SRD-80b Phase E — derived state for `hashed_line_to_string`,
-/// computed once per node instance via `split_lines`.
+/// Derived state for `hashed_line_to_string`, computed once per
+/// node instance via `split_lines`.
 pub struct HashedLines(pub Vec<String>);
 
 impl crate::derive_support::PolydatSetup for HashedLines {}
@@ -209,9 +224,9 @@ impl HashedLines {
 ///
 /// Signature: `hashed_line_to_string(input: u64, source: &str) -> String`
 ///
-/// SRD-80b Phase E migration — equivalent to nosqlbench's
-/// `HashedLineToString`. The text source is split into lines at
-/// node-construction time (setup-derived state).
+/// Equivalent to nosqlbench's `HashedLineToString`. The text source
+/// is split into lines at node-construction time (setup-derived
+/// state).
 #[crate::polydat_node(category = String)]
 fn hashed_line_to_string(
     input: u64,

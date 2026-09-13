@@ -1,5 +1,0 @@
-error: `struct_name = ...` cannot be combined with `instantiate(...)`: each instantiation is named after its concrete type.
- --> tests/ui/fail/struct_name_with_instantiate.rs:1:56
-  |
-1 | #[polydat::polydat_node(category = Math, struct_name = Pass, instantiate(u64, f64))]
-  |                                                        ^^^^

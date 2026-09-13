@@ -12,14 +12,13 @@
 //! error injection, bimodal distributions), but usable anywhere in a
 //! Polydat pipeline.
 //!
-//! SRD-80b Phase E migration: every probability node goes through
-//! `#[polydat_node]`. `DefaultOr` rides the SRD-80b in-spirit rule
-//! that PolyWire (`Value`-typed) args auto-emit
-//! `accepts_none_inputs() -> true`, so the body's coalesce logic
-//! sees `Value::None` instead of the kernel's Rule 1 short-circuit.
+//! `DefaultOr` rides the rule that PolyWire (`Value`-typed) args
+//! auto-emit `accepts_none_inputs() -> true`, so the body's coalesce
+//! logic sees `Value::None` instead of the kernel's Rule 1
+//! short-circuit.
 //!
 //! `OneOf` rides the `Const<Vec<String>>` workload-list shape; its
-//! non-empty-values check now fires at eval time rather than at
+//! non-empty-values check fires at eval time rather than at
 //! construction (the macro-emitted `new()` is infallible).
 //! `OneOfWeighted` rides the `#[poly_const]` setup pattern, parsing
 //! the spec once into a cached `WeightedTable`.
@@ -181,10 +180,9 @@ fn chance(input: u64, p: Const<f64>) -> u64 {
 /// ```
 ///
 /// Both `n` and `m` are init-time constant parameters. Panics if
-/// `m == 0` or `n > m` (preserved from the Phase E migration —
-/// the relational check can't ride on a per-param `ParamSpec`
-/// constraint, so the assertion lives in the body and fires on
-/// the first eval).
+/// `m == 0` or `n > m` (the relational check can't ride on a
+/// per-param `ParamSpec` constraint, so the assertion lives in the
+/// body and fires on the first eval).
 ///
 /// JIT level: P2 — macro-emitted compiled closure captures n and m.
 #[crate::polydat_node(category = Probability)]
@@ -234,13 +232,9 @@ pub(crate) fn n_of_m_eval(input: u64, n: u64, m: u64) -> u64 {
 // ---------------------------------------------------------------------------
 // OneOf: uniform selection from a Const<Vec<String>> workload-list.
 //
-// SRD-80b Phase E: migrated via `Const<Vec<C>>`. The macro's
-// VariadicConsts arity consumes every trailing string literal in
-// the call site as the `values` vector, matching the pre-migration
-// "all constants" call shape. Non-empty check stays in the body
-// and fires on first eval; the workload-author-facing
-// `validate_node` entry below trips at assembly time so a bad
-// `one_of(cycle)` call never reaches eval.
+// The macro's VariadicConsts arity consumes every trailing string
+// literal in the call site as the `values` vector. The non-empty
+// check lives in the body and fires on first eval.
 // ---------------------------------------------------------------------------
 
 /// Uniform selection from N constant string values.
@@ -271,12 +265,11 @@ fn one_of(input: u64, values: Const<Vec<String>>) -> String {
 // ---------------------------------------------------------------------------
 // OneOfWeighted: weighted selection driven by a parsed const spec.
 //
-// SRD-80b Phase E: migrated via `#[poly_const]` setup. The spec
-// is parsed once at construction into a `WeightedTable`, then a
-// borrow of the cached struct is handed to the eval body. Bad
-// specs panic inside `parse_weighted_spec`, which the macro
-// invokes from `OneOfWeighted::new`, preserving the
-// construction-time panic contract.
+// The spec is parsed once at construction (`#[poly_const]` setup)
+// into a `WeightedTable`, then a borrow of the cached struct is
+// handed to the eval body. Bad specs panic inside
+// `WeightedTable::parse`, which the macro invokes from
+// `OneOfWeighted::new`, so a malformed spec fails at construction.
 // ---------------------------------------------------------------------------
 
 /// Pre-parsed value table for `one_of_weighted`. The cumulative
@@ -296,8 +289,7 @@ impl PolydatSetup for WeightedTable {}
 impl WeightedTable {
     /// Single-call setup. The `#[polydat_node]` macro invokes
     /// this exactly once in the generated `OneOfWeighted::new()`.
-    /// Panics on a malformed spec — same diagnostics as the
-    /// pre-migration hand-written constructor.
+    /// Panics on a malformed spec.
     pub fn parse(spec: &str) -> Self {
         let mut values = Vec::new();
         let mut weights = Vec::new();
@@ -435,7 +427,7 @@ fn blend(a: u64, b: u64, mix: Const<f64>) -> u64 {
 /// `Option::unwrap_or`. The node is polymorphic over the `Value`
 /// variant — it passes whatever variant comes in (U64 / F64 / Bool /
 /// Str / etc.) through unchanged. The output port type tracks the
-/// first PolyWire arg's runtime port type via SRD-80b
+/// first PolyWire arg's runtime port type via
 /// `OutputType::SameAsInput`.
 #[crate::polydat_node(category = Probability)]
 fn default_or(value: Value, fallback: Value) -> Value {
@@ -445,10 +437,6 @@ fn default_or(value: Value, fallback: Value) -> Value {
         value
     }
 }
-
-// `default_or` now self-registers via `#[polydat_node]`; the
-// hand-written `signatures()` / `build_node()` / `register_nodes!`
-// entries from the pre-Phase-E form have been removed.
 
 #[cfg(test)]
 mod tests {
@@ -577,8 +565,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "unfair_coin probability p must be in [0.0, 1.0]")]
     fn unfair_coin_rejects_invalid_p() {
-        // SRD-80b Phase E: range assertion now fires on eval rather
-        // than at construction (macro-emitted `new` is infallible).
+        // The range assertion fires on eval rather than at
+        // construction (macro-emitted `new` is infallible).
         let node = UnfairCoin::new(1.5);
         let mut out = [Value::None];
         node.eval(&[Value::U64(0)], &mut out);
@@ -755,8 +743,8 @@ mod tests {
     #[test]
     #[should_panic(expected = "n_of: m must be > 0")]
     fn n_of_m_rejects_zero_m() {
-        // SRD-80b Phase E: relational check fires on eval (macro-emitted
-        // `new` is infallible; `validate_node` covers the assembly path).
+        // The relational check fires on eval (macro-emitted `new`
+        // is infallible).
         let node = NOf::new(0, 0);
         let mut out = [Value::None];
         node.eval(&[Value::U64(0)], &mut out);
@@ -863,9 +851,9 @@ mod tests {
     #[test]
     #[should_panic(expected = "one_of: values must be non-empty")]
     fn one_of_rejects_empty() {
-        // SRD-80b Phase E: non-empty check fires on eval (macro-emitted
-        // `new` is infallible). Workload-author-facing assembly path
-        // catches this earlier via the macro's VariadicConsts arity.
+        // The non-empty check fires on eval (macro-emitted `new` is
+        // infallible). The assembly path catches this earlier via
+        // the macro's VariadicConsts arity.
         let node = OneOf::new(vec![]);
         let mut out = [Value::None];
         node.eval(&[Value::U64(0)], &mut out);
@@ -1044,7 +1032,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "blend: mix must be in [0.0, 1.0]")]
     fn blend_rejects_invalid_mix() {
-        // SRD-80b Phase E: range assertion fires on eval.
+        // The range assertion fires on eval.
         let node = Blend::new(1.5);
         let mut out = [Value::None];
         node.eval(&[Value::U64(0), Value::U64(0)], &mut out);
@@ -1064,7 +1052,7 @@ mod tests {
     fn default_or_returns_value_when_not_none() {
         // Macro-emitted `new(value_type, fallback_type)` — PolyWire
         // args contribute a `<argname>_type: PortType` ctor param
-        // each (SRD-80b).
+        // each.
         let node = DefaultOr::new(PortType::Str, PortType::Str);
         let mut out = [Value::None];
         node.eval(

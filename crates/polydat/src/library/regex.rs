@@ -8,8 +8,8 @@ use regex::Regex;
 impl crate::derive_support::PolydatSetup for Regex {}
 
 /// Regex replace: substitute all matches of a pattern with the
-/// replacement string. SRD-80b Phase E migration via two
-/// Const<&str> args + cached compiled Regex.
+/// replacement string. The compiled `Regex` is cached at
+/// construction.
 #[crate::polydat_node(category = Regex)]
 fn regex_replace(
     input: &str,
@@ -31,7 +31,6 @@ fn compile_regex(pattern: &str) -> Regex {
 }
 
 /// Regex match: test if input matches a pattern.
-/// SRD-80 PR B.6 migration.
 #[crate::polydat_node(category = Regex)]
 fn regex_match(
     input: &str,
@@ -57,7 +56,6 @@ fn regex_match(
 }
 
 /// Regex extract: extract the first capture group (or full match).
-/// SRD-80 PR B.6 migration.
 #[crate::polydat_node(category = Regex)]
 fn regex_extract(
     input: &str,

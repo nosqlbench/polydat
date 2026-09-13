@@ -10,12 +10,6 @@ use crate::ast::Value;
 // HTML entity encoding
 // =================================================================
 
-// SRD-80 PR B.4 — encoding/decoding nodes migrated to
-// `#[polydat_node]`. The struct names HtmlEncode / HtmlDecode /
-// UrlEncode / UrlDecode are emitted by the macro's
-// snake_case → PascalCase rule, matching the existing names
-// the tests below reference.
-
 /// Encode HTML special characters as entities (`& < > " '`).
 #[crate::polydat_node(category = Encoding)]
 fn html_encode(input: String) -> String {
@@ -84,19 +78,6 @@ fn url_decode(input: String) -> String {
     String::from_utf8_lossy(&result).into_owned()
 }
 
-// ---------------------------------------------------------------------------
-// Signature declarations for the DSL registry
-// ---------------------------------------------------------------------------
-
-// SRD-80 PR B.4: FuncSig / ParamSpec / SlotType / Arity /
-// FuncCategory imports retired with the manual signatures()
-// function — the proc-macro emits the equivalent types
-// internally via its `polydat::dsl::registry::...` paths.
-
-// SRD-80 PR B.4 — every node in this module is registered
-// link-time via `#[polydat_node]`'s NodeRegistration emission.
-// No `register_nodes!` call needed; no manual signatures()/
-// build_node() to maintain.
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -12,20 +12,14 @@
 //! distribution) and returns a String. Weighted variants select
 //! proportionally to Census frequency data.
 //!
-//! SRD-80b Phase E: migrated to `#[polydat_node]`. The bundled
-//! datasets are parsed once into process-global `OnceLock`s
-//! (the samplers are stateless after construction and the data
-//! is `include_str!`-baked, so there's nothing per-instance to
-//! configure). Hand-written `impl PolydatNode for X` blocks and
-//! the `signatures()` / `build_node` / `register_nodes!` trio
-//! deleted; the macro emits the registry entries directly.
+//! The bundled datasets are parsed once into process-global
+//! `OnceLock`s (the samplers are stateless after construction and
+//! the data is `include_str!`-baked, so there's nothing
+//! per-instance to configure).
 //!
-//! Naming change: the previous `FirstNames` struct had two Rust
-//! constructors `female()` / `male()` but the DSL registry only
-//! exposed the female variant. After migration, `first_names`
-//! (struct `FirstNames`) keeps the female-by-default behaviour
-//! (no regression) and `first_names_male` (struct `FirstNamesMale`)
-//! makes the male variant a first-class DSL node.
+//! `first_names` (struct `FirstNames`) samples female names and
+//! `first_names_male` (struct `FirstNamesMale`) samples male names;
+//! both are first-class DSL nodes.
 
 use crate::library::sampling::alias::AliasTableU64;
 use std::sync::OnceLock;

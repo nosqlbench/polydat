@@ -16,12 +16,11 @@
 //! - [`PcgStream`] — fixed seed, both position and stream are wire inputs
 //! - [`CycleWalk`] — bijective permutation of `[0, range)` via cycle-walking
 //!
-//! SRD-80b Phase E — all three nodes are macro-authored via
-//! `#[polydat_node]`. `CycleWalk` uses multi-source `#[poly_const]`
-//! to derive a `CycleWalkState` from `(range, seed, stream)` at
-//! construction time, plus `compiled_u64 = ...` / `jit_constants
-//! = ...` overrides that capture the cached Feistel state by Copy
-//! and publish `[range, seed, inc]` to the JIT classifier.
+//! `CycleWalk` uses multi-source `#[poly_const]` to derive a
+//! `CycleWalkState` from `(range, seed, stream)` at construction
+//! time, plus `compiled_u64 = ...` / `jit_constants = ...` overrides
+//! that capture the cached Feistel state by Copy and publish
+//! `[range, seed, inc]` to the JIT classifier.
 
 use crate::ast::CompiledU64Op;
 #[cfg(test)]
@@ -187,9 +186,9 @@ pub(crate) fn build_cycle_walk_state(range: u64, seed: u64, stream: u64) -> Cycl
 
 /// `compiled_u64` override — captures the pre-computed Feistel
 /// state from `&Self` by Copy and returns a closure that walks
-/// the input through the bijection. SRD-80b in-spirit refinement:
-/// the override receives `&Self` so setup-derived state is reachable
-/// without exposing the macro-internal struct shape to user code.
+/// the input through the bijection. The override receives `&Self`
+/// so setup-derived state is reachable without exposing the
+/// macro-internal struct shape to user code.
 fn cycle_walk_jit(node: &CycleWalk) -> CompiledU64Op {
     let range = node.range;
     let half_bits = node.state.half_bits;
@@ -310,10 +309,6 @@ pub(crate) fn cycle_walk_inner(
         }
     }
 }
-
-// CycleWalk now self-registers via `#[polydat_node]`; the
-// hand-written `signatures()` / `build_node()` / `register_nodes!`
-// entries from the pre-Phase-E form have been removed.
 
 #[cfg(test)]
 mod tests {

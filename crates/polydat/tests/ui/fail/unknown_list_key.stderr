@@ -1,4 +1,4 @@
-error: #[polydat_node] does not recognize list-form key `extras`. Recognised: `output_names(...)`, `instantiate(...)`.
+error: #[polydat_node] does not recognize list-form key `extras`. Recognised: `output_names(...)`.
  --> tests/ui/fail/unknown_list_key.rs:1:42
   |
 1 | #[polydat::polydat_node(category = Math, extras(1))]

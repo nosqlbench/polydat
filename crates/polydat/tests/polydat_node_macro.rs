@@ -1094,13 +1094,6 @@ fn macro_pilot_with_setup(
     input + state.doubled
 }
 
-// no_jit opt-out: type signature qualifies but the operator
-// declared `no_jit`. Macro must skip JIT emission.
-#[polydat::polydat_node(category = Math, no_jit)]
-fn macro_pilot_no_jit(input: u64) -> u64 {
-    input + 7
-}
-
 #[test]
 fn macro_jit_eligible_node_emits_compiled_u64() {
     use polydat::ast::PolydatNode;
@@ -1209,21 +1202,6 @@ fn macro_jit_ineligible_setup_arg_node_skips_compiled_u64() {
         node.jit_constants(),
         Vec::<u64>::new(),
         "Setup-bearing node also skips jit_constants (no Phase-3 dispatch)"
-    );
-}
-
-#[test]
-fn macro_no_jit_attr_blocks_emission_even_when_types_qualify() {
-    use polydat::ast::PolydatNode;
-    let node = MacroPilotNoJit::default();
-    assert!(
-        node.compiled_u64().is_none(),
-        "no_jit attr blocks Phase-2 emission even for qualifying type signature"
-    );
-    assert_eq!(
-        node.jit_constants(),
-        Vec::<u64>::new(),
-        "no_jit attr blocks jit_constants emission too"
     );
 }
 
