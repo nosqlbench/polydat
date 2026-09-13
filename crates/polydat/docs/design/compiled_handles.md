@@ -260,9 +260,19 @@ compiled from the program.
 
 A slot call costs what the closure step it replaces cost, less the
 step runner: one helper call, a gather and a scatter through the frame.
-A named native lowering of a hot string or JSON operation, writing
-into the step's entry directly, remains open as an optimization on
-this same ownership; nothing in §3 changes for it.
+The string producers whose kits allocate an intermediate `String`
+have a named lowering on the same ownership that writes into the
+step's entry directly: `__u64_to_string`, `__i64_to_string`, and
+`__f64_to_string` format their digits into the entry, `str_concat`
+over string wires appends each input pair's bytes, and `json_to_str`
+serializes the value the pair names into the entry
+(`jit_u64_to_str` and siblings, jit_boundary.md). Each takes the
+state's scratch and the step's entry index, the buffer and the output
+slot, and its typed arguments, and publishes the pair itself; the
+bytes are the ones the node's body produces on the interpreter, since
+each uses the same formatter. Nothing in §3 changes for them, and a
+shape the named lowering does not take (a concatenation over a mixed
+wire) takes the slot call.
 
 ## 7. Axioms
 

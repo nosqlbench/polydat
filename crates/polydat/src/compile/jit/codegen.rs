@@ -744,8 +744,14 @@ impl JitOp {
 
     /// The scratch entries the step needs in the state that runs it.
     pub(crate) fn scratch_elems(&self) -> &[crate::ast::ScratchElem] {
+        const STR_ENTRY: [crate::ast::ScratchElem; 1] = [crate::ast::ScratchElem::Str];
         match self {
             JitOp::SlotCall { kit, .. } => &kit.0.scratch,
+            JitOp::U64ToStr { .. }
+            | JitOp::I64ToStr { .. }
+            | JitOp::F64ToStr { .. }
+            | JitOp::StrConcat { .. }
+            | JitOp::JsonToStr { .. } => &STR_ENTRY,
             _ => &[],
         }
     }
@@ -753,10 +759,141 @@ impl JitOp {
     /// Place the step's scratch entries at `base` in the state's
     /// scratch; the builder that lays the state out calls this once.
     pub(crate) fn place_scratch(&mut self, base: usize) {
-        if let JitOp::SlotCall { scratch_base, .. } = self {
-            *scratch_base = base;
+        match self {
+            JitOp::SlotCall { scratch_base, .. }
+            | JitOp::U64ToStr { scratch_base }
+            | JitOp::I64ToStr { scratch_base }
+            | JitOp::F64ToStr { scratch_base }
+            | JitOp::StrConcat { scratch_base }
+            | JitOp::JsonToStr { scratch_base } => *scratch_base = base,
+            _ => {}
         }
     }
+}
+
+/// Write a string into the step's own entry and publish its pair into
+/// the output slots: what every named string lowering does around its
+/// formatting. `f` fills the cleared entry.
+///
+/// # Safety
+/// Called only from the helpers below, with the state's scratch and
+/// the entry index the builder placed for the step, and the buffer and
+/// output slot the step writes.
+unsafe fn write_str_entry(
+    scratch: *mut crate::ast::ScratchBuf,
+    base: u64,
+    buffer: *mut u64,
+    out_slot: u64,
+    f: impl FnOnce(&mut Vec<u8>),
+) {
+    unsafe {
+        let entry = &mut *scratch.add(base as usize);
+        let crate::ast::ScratchBuf::Str(v) = entry else {
+            panic!("a string lowering's scratch entry is not a string");
+        };
+        v.clear();
+        f(v);
+        *buffer.add(out_slot as usize) = v.as_ptr() as usize as u64;
+        *buffer.add(out_slot as usize + 1) = v.len() as u64;
+    }
+}
+
+/// `__u64_to_string` natively: the digits straight into the entry.
+extern "C" fn jit_u64_to_str(
+    scratch: *mut crate::ast::ScratchBuf,
+    base: u64,
+    buffer: *mut u64,
+    out_slot: u64,
+    value: u64,
+) {
+    use std::io::Write;
+    guarded(|| unsafe {
+        write_str_entry(scratch, base, buffer, out_slot, |v| {
+            write!(v, "{value}").expect("a vector accepts every write")
+        })
+    })
+}
+
+/// `__i64_to_string` natively.
+extern "C" fn jit_i64_to_str(
+    scratch: *mut crate::ast::ScratchBuf,
+    base: u64,
+    buffer: *mut u64,
+    out_slot: u64,
+    value: u64,
+) {
+    use std::io::Write;
+    guarded(|| unsafe {
+        write_str_entry(scratch, base, buffer, out_slot, |v| {
+            write!(v, "{}", value as i64).expect("a vector accepts every write")
+        })
+    })
+}
+
+/// `__f64_to_string` natively: `Display`, which is what `to_string`
+/// writes on the interpreter.
+extern "C" fn jit_f64_to_str(
+    scratch: *mut crate::ast::ScratchBuf,
+    base: u64,
+    buffer: *mut u64,
+    out_slot: u64,
+    bits: u64,
+) {
+    use std::io::Write;
+    guarded(|| unsafe {
+        write_str_entry(scratch, base, buffer, out_slot, |v| {
+            write!(v, "{}", f64::from_bits(bits)).expect("a vector accepts every write")
+        })
+    })
+}
+
+/// `str_concat` over string wires natively: every pair's bytes
+/// appended in order. `pairs` holds `n` `(ptr, len)` pairs the
+/// generated code stored into its frame.
+extern "C" fn jit_str_concat(
+    scratch: *mut crate::ast::ScratchBuf,
+    base: u64,
+    buffer: *mut u64,
+    out_slot: u64,
+    pairs: *const u64,
+    n: u64,
+) {
+    guarded(|| unsafe {
+        let words = std::slice::from_raw_parts(pairs, 2 * n as usize);
+        write_str_entry(scratch, base, buffer, out_slot, |v| {
+            for pair in words.chunks_exact(2) {
+                // SAFETY: each pair was published by its producing step
+                // into storage alive until that step reruns (axioms S3,
+                // S4), and the wire is a string.
+                let bytes =
+                    std::slice::from_raw_parts(pair[0] as usize as *const u8, pair[1] as usize);
+                v.extend_from_slice(bytes);
+            }
+        })
+    })
+}
+
+/// `json_to_str` natively: the compact serialization straight into
+/// the entry, the bytes `serde_json::Value::to_string` produces.
+extern "C" fn jit_json_to_str(
+    scratch: *mut crate::ast::ScratchBuf,
+    base: u64,
+    buffer: *mut u64,
+    out_slot: u64,
+    ptr: u64,
+    len: u64,
+) {
+    guarded(|| unsafe {
+        let pair = [ptr, len];
+        let value = crate::derive_support::ref_value(&pair);
+        let json = match value {
+            crate::ast::Value::Json(j) => j.as_ref(),
+            other => panic!("expected Json wire, got {other:?}"),
+        };
+        write_str_entry(scratch, base, buffer, out_slot, |v| {
+            serde_json::to_writer(v, json).expect("a vector accepts every write")
+        })
+    })
 }
 
 /// Classify a node with the types of its wire inputs known. A node
@@ -777,6 +914,20 @@ pub fn classify_node_typed(node: &dyn PolydatNode, wire_types: &[crate::ast::Por
     };
     let meta = node.meta();
     let named = match meta.name.as_str() {
+        // The string producers with a lowering that writes straight
+        // into the step's entry (compiled_handles.md §6).
+        "__u64_to_string" => JitOp::U64ToStr { scratch_base: 0 },
+        "__i64_to_string" => JitOp::I64ToStr { scratch_base: 0 },
+        "__f64_to_string" => JitOp::F64ToStr { scratch_base: 0 },
+        "json_to_str" if wire_types == [crate::ast::PortType::Json] => {
+            JitOp::JsonToStr { scratch_base: 0 }
+        }
+        "str_concat"
+            if !wire_types.is_empty()
+                && wire_types.iter().all(|t| *t == crate::ast::PortType::Str) =>
+        {
+            JitOp::StrConcat { scratch_base: 0 }
+        }
         // The compiler's input passthrough and `default_or(value,
         // fallback)` (`value` unless it is `None`, which a compiled slot
         // never carries; engine_parity.md, A12): a slot copy of an
@@ -945,6 +1096,37 @@ pub enum JitOp {
         kit: SlotKitRef,
         /// Index of the kit's first scratch entry in the state's
         /// scratch, assigned by the builder that lays the state out.
+        scratch_base: usize,
+    },
+
+    // --- Named lowerings that write a string into the step's own
+    // entry (compiled_handles.md §6): no intermediate `String`, no
+    // frame, the pair published by the helper. Each owns one `Str`
+    // scratch entry at `scratch_base`.
+    /// `output = decimal digits of input[0] as a u64`
+    U64ToStr {
+        /// The step's string entry in the state's scratch.
+        scratch_base: usize,
+    },
+    /// `output = decimal digits of input[0] as an i64`
+    I64ToStr {
+        /// The step's string entry in the state's scratch.
+        scratch_base: usize,
+    },
+    /// `output = Display form of input[0] as an f64`
+    F64ToStr {
+        /// The step's string entry in the state's scratch.
+        scratch_base: usize,
+    },
+    /// `output = the concatenation of every input pair's bytes`, for
+    /// a `str_concat` whose wires are all strings.
+    StrConcat {
+        /// The step's string entry in the state's scratch.
+        scratch_base: usize,
+    },
+    /// `output = compact serialization of the JSON value input[0..2] names`
+    JsonToStr {
+        /// The step's string entry in the state's scratch.
         scratch_base: usize,
     },
 
@@ -1888,8 +2070,14 @@ fn compile_jit_impl(
     jit_builder.symbol("jit_is_positive_fail", jit_is_positive_fail as *const u8);
     jit_builder.symbol("jit_in_range_fail", jit_in_range_fail as *const u8);
     jit_builder.symbol("jit_is_one_of_fail", jit_is_one_of_fail as *const u8);
-    // A node's slot kit, called from native code (compiled_handles.md §6).
+    // A node's slot kit, called from native code (compiled_handles.md §6),
+    // and the string producers that write into the step's entry directly.
     jit_builder.symbol("jit_slot_call", jit_slot_call as *const u8);
+    jit_builder.symbol("jit_u64_to_str", jit_u64_to_str as *const u8);
+    jit_builder.symbol("jit_i64_to_str", jit_i64_to_str as *const u8);
+    jit_builder.symbol("jit_f64_to_str", jit_f64_to_str as *const u8);
+    jit_builder.symbol("jit_str_concat", jit_str_concat as *const u8);
+    jit_builder.symbol("jit_json_to_str", jit_json_to_str as *const u8);
     // Math externs
     jit_builder.symbol("jit_sin", jit_sin as *const u8);
     jit_builder.symbol("jit_cos", jit_cos as *const u8);
@@ -2192,6 +2380,24 @@ fn compile_jit_impl(
             .map_err(|e| format!("declare jit_slot_call: {e}"))?
     };
 
+    // Declare the string producers: (scratch, base, buffer, out_slot,
+    // value) for the scalar conversions, (…, ptr, len) for the JSON
+    // serialization and (…, pairs ptr, n) for the concatenation.
+    let mut declare_str = |name: &str, args: usize| -> Result<cranelift_module::FuncId, String> {
+        let mut sig = module.make_signature();
+        for _ in 0..args {
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        module
+            .declare_function(name, Linkage::Import, &sig)
+            .map_err(|e| format!("declare {name}: {e}"))
+    };
+    let u64_to_str_id = declare_str("jit_u64_to_str", 5)?;
+    let i64_to_str_id = declare_str("jit_i64_to_str", 5)?;
+    let f64_to_str_id = declare_str("jit_f64_to_str", 5)?;
+    let str_concat_id = declare_str("jit_str_concat", 6)?;
+    let json_to_str_id = declare_str("jit_json_to_str", 6)?;
+
     // Function signature depends on provenance mode:
     // Without: fn(coords: *const u64, buffer: *mut u64, scratch: *mut ScratchBuf)
     // With:    fn(coords, buffer, scratch, clean: *mut u8)
@@ -2237,6 +2443,11 @@ fn compile_jit_impl(
         let in_range_fail_ref = module.declare_func_in_func(in_range_fail_id, builder.func);
         let is_one_of_fail_ref = module.declare_func_in_func(is_one_of_fail_id, builder.func);
         let slot_call_ref = module.declare_func_in_func(slot_call_id, builder.func);
+        let u64_to_str_ref = module.declare_func_in_func(u64_to_str_id, builder.func);
+        let i64_to_str_ref = module.declare_func_in_func(i64_to_str_id, builder.func);
+        let f64_to_str_ref = module.declare_func_in_func(f64_to_str_id, builder.func);
+        let str_concat_ref = module.declare_func_in_func(str_concat_id, builder.func);
+        let json_to_str_ref = module.declare_func_in_func(json_to_str_id, builder.func);
         let pcg_func_ref = module.declare_func_in_func(pcg_func_id, builder.func);
         let pcg_stream_func_ref = module.declare_func_in_func(pcg_stream_func_id, builder.func);
         let n_of_func_ref = module.declare_func_in_func(n_of_func_id, builder.func);
@@ -3552,6 +3763,56 @@ fn compile_jit_impl(
                             .stack_load(types::I64, out_frame, (k * 8) as i32);
                         store_slot(&mut builder, buffer_ptr, s, v);
                     }
+                }
+
+                JitOp::U64ToStr { scratch_base }
+                | JitOp::I64ToStr { scratch_base }
+                | JitOp::F64ToStr { scratch_base } => {
+                    // The helper writes the digits into the step's entry
+                    // and publishes the pair into the output slots.
+                    let func = match jit_op {
+                        JitOp::U64ToStr { .. } => u64_to_str_ref,
+                        JitOp::I64ToStr { .. } => i64_to_str_ref,
+                        _ => f64_to_str_ref,
+                    };
+                    let value = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                    let base_v = builder.ins().iconst(types::I64, *scratch_base as i64);
+                    let out_v = builder.ins().iconst(types::I64, output_slots[0] as i64);
+                    builder
+                        .ins()
+                        .call(func, &[scratch_ptr, base_v, buffer_ptr, out_v, value]);
+                }
+                JitOp::JsonToStr { scratch_base } => {
+                    let ptr = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                    let len = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                    let base_v = builder.ins().iconst(types::I64, *scratch_base as i64);
+                    let out_v = builder.ins().iconst(types::I64, output_slots[0] as i64);
+                    builder.ins().call(
+                        json_to_str_ref,
+                        &[scratch_ptr, base_v, buffer_ptr, out_v, ptr, len],
+                    );
+                }
+                JitOp::StrConcat { scratch_base } => {
+                    // The input pairs go into the frame in order; the
+                    // helper appends each one's bytes into the entry.
+                    let n_words = input_slots.len();
+                    let frame = builder.create_sized_stack_slot(ir::StackSlotData::new(
+                        ir::StackSlotKind::ExplicitSlot,
+                        (n_words.max(1) * 8) as u32,
+                        3,
+                    ));
+                    for (k, &s) in input_slots.iter().enumerate() {
+                        let v = load_slot(&mut builder, buffer_ptr, s);
+                        builder.ins().stack_store(v, frame, (k * 8) as i32);
+                    }
+                    let pairs_ptr = builder.ins().stack_addr(types::I64, frame, 0);
+                    let n_v = builder.ins().iconst(types::I64, (n_words / 2) as i64);
+                    let base_v = builder.ins().iconst(types::I64, *scratch_base as i64);
+                    let out_v = builder.ins().iconst(types::I64, output_slots[0] as i64);
+                    builder.ins().call(
+                        str_concat_ref,
+                        &[scratch_ptr, base_v, buffer_ptr, out_v, pairs_ptr, n_v],
+                    );
                 }
 
                 JitOp::Fallback => {

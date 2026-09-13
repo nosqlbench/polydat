@@ -10,10 +10,10 @@
 //! chains, shared cells, None propagation, node_clean caching, and
 //! the enrich-and-re-raise panic contract all see a plain node.
 //!
-//! Boundary marshalling covers the one-slot carriers (U64 / F64 /
-//! Bool) and every `Ref2` kind, borrowed into its pair for the call
-//! and copied out after it; interior fusion follows whatever the P3
-//! classifier accepts. Extraction is recoverable:
+//! Boundary marshalling covers every one-slot immediate and every
+//! `Ref2` kind, borrowed into its pair for the call and copied out
+//! after it; interior fusion follows whatever the P3 classifier
+//! accepts. Extraction is recoverable:
 //! member nodes move into the cone only after codegen succeeds, so
 //! any JIT failure leaves the graph exactly as the interpreter
 //! would have compiled it.
@@ -212,17 +212,17 @@ mod jit_impl {
         ));
     }
 
-    /// Marshalable boundary types: the one-slot carriers the boundary
-    /// encodes as bits, and every `Ref2` kind, borrowed into its pair
-    /// for the call and copied out after it (compiled_handles.md §4).
-    /// The narrow scalar bridges (`__u32_to_u64`, `__f32_to_f64`, …)
-    /// and the 128-bit immediates stay out until they have a boundary
-    /// encoding of their own.
+    /// Marshalable boundary types: every one-slot immediate, encoded
+    /// as the bits its `Wire` impl injects (a signed narrow carrier
+    /// sign-extended, an unsigned or float one as its bits;
+    /// type_system_alignment.md §8.1), and every `Ref2` kind, borrowed
+    /// into its pair for the call and copied out after it
+    /// (compiled_handles.md §4). The 128-bit immediates stay out until
+    /// they have a boundary encoding of their own.
     fn scalar_ok(ty: PortType) -> bool {
         use crate::ast::SlotColor;
         match ty.slot_color() {
-            SlotColor::Imm1 => matches!(ty, PortType::U64 | PortType::F64 | PortType::Bool),
-            SlotColor::Ref2 => true,
+            SlotColor::Imm1 | SlotColor::Ref2 => true,
             SlotColor::Imm2 => false,
         }
     }

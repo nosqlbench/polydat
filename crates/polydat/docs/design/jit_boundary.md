@@ -334,6 +334,9 @@ Slots](compiled_handles.md) §6):
 | Extern | Arity | Called from |
 |---|---|---|
 | `jit_slot_call` | `(kit, inputs ptr, n_in, outputs ptr, n_out, scratch ptr, base, n_scratch)`, no return | `JitOp::SlotCall` |
+| `jit_u64_to_str`, `jit_i64_to_str`, `jit_f64_to_str` | `(scratch ptr, base, buffer ptr, out slot, bits)`, no return; the digits into the step's entry, the pair published | `JitOp::U64ToStr` and siblings |
+| `jit_str_concat` | `(scratch ptr, base, buffer ptr, out slot, pairs ptr, n)`, no return; every pair's bytes appended into the entry | `JitOp::StrConcat` |
+| `jit_json_to_str` | `(scratch ptr, base, buffer ptr, out slot, ptr, len)`, no return; the compact serialization into the entry | `JitOp::JsonToStr` |
 
 The generated code stores the step's input slots into a frame array,
 calls the helper with the kit's address (an immediate; the kit is
