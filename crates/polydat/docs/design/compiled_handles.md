@@ -283,6 +283,28 @@ each uses the same formatter. Nothing in §3 changes for them, and a
 shape the named lowering does not take (a concatenation over a mixed
 wire) takes the slot call.
 
+The vector and register groups have named lowerings on the same
+ownership. A vector producer (`vec_add`, `vec_scale`, `vec_norm`,
+`hash_vec`, `xxhash3_vec`, `reg_to_vec_f32`) owns one `F32` entry and
+its helper writes the result there and publishes the pair; a vector
+reduction (`vec_dot`, `vec_l2`, `vec_cosine`, `lid_mle`) returns its
+`f64` bits; a register lane read (`reg_lane_f32`, `reg_lane_i16`,
+`reg_lane_i64`) returns the lane as the word its port stores, and a
+register producer whose body checks a bound or does what Cranelift has
+no instruction for (`reg_with_lane_f32`, `reg_gather_f32`,
+`vec_to_reg_f32`, `reg_mul_i8`) writes its word into the output slots.
+Each helper takes the step's input words in order, and each runs the
+function the node's body runs (`library::vector_math` and
+`library::register` share those functions between the body and the
+helper), so the bytes and the failure messages are the body's,
+including which SIMD kernel or scalar loop computed a dot product.
+`reg_dot_f32` and `reg_shuffle_bytes` are inline instructions: the
+former the body's fixed tree at f32 precision (`fmul.f32x4`, four
+lane extracts, three adds, a promotion), the latter one `shuffle` with
+the mask the node exposes as its constants. Each lowering is keyed on
+the exact wire types its body is written for, and any adapted shape
+takes the slot call.
+
 ## 7. Axioms
 
 The slot-state axioms S1–S10 of [JIT Boundary](jit_boundary.md) are
@@ -339,6 +361,8 @@ citations a SAFETY comment or a test needs are:
 | Value-port nodes, JSON, and tiles across tiers; a hybrid kernel's string output owned by its step | `tests/variadic_lowering.rs` |
 | Tier differential: random string, JSON, and tile programs across the interpreter, forced cones, P2, and hybrid; the corpus; repeated coordinates keep reference outputs current; JSON outputs replaced in place | `tests/handle_tiers.rs` (`FUZZ_SEED`, `FUZZ_ITERATIONS`) |
 | Extension values and externs of every kind across tiers | `tests/ext_tiers.rs` |
+| Every node at the corners of its inputs (the `u64` edges of a coordinate, the special values of an `f64` extern), every output compared bit for bit with the interpreter's on P2, P3, and pure native code, failures compared by message | `tests/equivalence_corners.rs` (ignored by default; `-- --ignored`) |
+| The vector and register classifier picks the named lowering for each node's wire shape; a program over both groups is one pure native function that agrees with the interpreter | `tests/handle_boundaries.rs` |
 | A kernel created from a shared program points its pairs into its own storage, read after the source state is dropped | `tests/slot_state_axioms.rs` |
 | A rendering state's body kernels created once and reused; a clone starts empty | `library::tile_render::tests` |
 | S9(a) validator | every P2, hybrid, pure native, and cone run in debug builds |

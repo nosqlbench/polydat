@@ -304,11 +304,15 @@ one program per node, compiled and run on the interpreter, the closure tier,
 P3, and the pure tier, every output compared with the interpreter's, and the
 node-by-engine matrix generated into the [node reference](../reference/nodes.md)
 so the documented feature set and the tested one are one file. Beside it
-stand the differential suites for by-reference nodes (random programs over
-the string, JSON, and tile nodes read through the typed readers), the
-slot-state axioms, the cone tests, the failure parity suite, the traversal
-and shared-cell suites on every engine, and the engine ladder, which the
-performance guide records.
+stand the corner suite (`tests/equivalence_corners.rs`, run with
+`-- --ignored`), which drives every node's program through the edges of
+a `u64` coordinate and the special values of an `f64` extern and
+compares every output bit for bit with the interpreter's, failures by
+message; the differential suites for by-reference nodes (random programs
+over the string, JSON, and tile nodes read through the typed readers);
+the slot-state axioms; the cone tests; the failure parity suite; the
+traversal and shared-cell suites on every engine; and the engine ladder,
+which the performance guide records.
 
 ## 8. What every engine accepts, and what stays where
 

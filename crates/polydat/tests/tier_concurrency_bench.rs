@@ -256,6 +256,8 @@ fn run_all_functions_concurrency_benchmarks() {
                 | JitOp::U64Mul2
                 | JitOp::U64Div2
                 | JitOp::U64Mod2
+                | JitOp::U64DivWire
+                | JitOp::U64ModWire
                 | JitOp::F64Add
                 | JitOp::F64Sub
                 | JitOp::F64Mul

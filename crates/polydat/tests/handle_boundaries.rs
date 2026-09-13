@@ -194,6 +194,159 @@ fn named_string_lowerings_are_chosen_and_agree() {
 }
 
 #[test]
+fn the_vector_and_register_groups_have_named_lowerings() {
+    use polydat::ast::PortType as PT;
+    use polydat::compile::jit::{
+        JitOp, RegLaneRead, RegProducer, VecProducer, VecReducer, classify_node_typed,
+    };
+    use polydat::library::{register, vector_math};
+    let vec2 = [PT::VecF32, PT::VecF32];
+    assert_eq!(
+        classify_node_typed(&vector_math::VecAdd::new(), &vec2),
+        JitOp::VecProduce {
+            kind: VecProducer::Add,
+            scratch_base: 0
+        }
+    );
+    assert_eq!(
+        classify_node_typed(&vector_math::VecScale::new(), &[PT::VecF32, PT::F64]),
+        JitOp::VecProduce {
+            kind: VecProducer::Scale,
+            scratch_base: 0
+        }
+    );
+    assert_eq!(
+        classify_node_typed(&vector_math::VecNorm::new(), &[PT::VecF32]),
+        JitOp::VecProduce {
+            kind: VecProducer::Norm,
+            scratch_base: 0
+        }
+    );
+    assert_eq!(
+        classify_node_typed(&vector_math::HashVec::new(), &[PT::U64, PT::U64]),
+        JitOp::VecProduce {
+            kind: VecProducer::HashVec,
+            scratch_base: 0
+        }
+    );
+    assert_eq!(
+        classify_node_typed(&vector_math::Xxhash3Vec::new(), &[PT::U64, PT::U64]),
+        JitOp::VecProduce {
+            kind: VecProducer::XxHash3Vec,
+            scratch_base: 0
+        }
+    );
+    assert_eq!(
+        classify_node_typed(&register::RegToVecF32::new(), &[PT::RegF32x4]),
+        JitOp::VecProduce {
+            kind: VecProducer::RegToVec,
+            scratch_base: 0
+        }
+    );
+    assert_eq!(
+        classify_node_typed(&vector_math::VecDot::new(), &vec2),
+        JitOp::VecReduce(VecReducer::Dot)
+    );
+    assert_eq!(
+        classify_node_typed(&vector_math::VecL2::new(), &vec2),
+        JitOp::VecReduce(VecReducer::L2)
+    );
+    assert_eq!(
+        classify_node_typed(&vector_math::VecCosine::new(), &vec2),
+        JitOp::VecReduce(VecReducer::Cosine)
+    );
+    assert_eq!(
+        classify_node_typed(&vector_math::LidMle::new(), &[PT::VecF32, PT::F64]),
+        JitOp::VecReduce(VecReducer::LidMle)
+    );
+    assert_eq!(
+        classify_node_typed(&register::RegLaneF32::new(), &[PT::RegF32x4, PT::U64]),
+        JitOp::RegLane(RegLaneRead::F32)
+    );
+    assert_eq!(
+        classify_node_typed(&register::RegLaneI16::new(), &[PT::RegI16x8, PT::U64]),
+        JitOp::RegLane(RegLaneRead::I16)
+    );
+    assert_eq!(
+        classify_node_typed(&register::RegLaneI64::new(), &[PT::RegI64x2, PT::U64]),
+        JitOp::RegLane(RegLaneRead::I64)
+    );
+    assert_eq!(
+        classify_node_typed(
+            &register::RegWithLaneF32::new(),
+            &[PT::RegF32x4, PT::U64, PT::F64]
+        ),
+        JitOp::RegProduce(RegProducer::WithLaneF32)
+    );
+    assert_eq!(
+        classify_node_typed(&register::RegGatherF32::new(), &[PT::VecF32, PT::U64]),
+        JitOp::RegProduce(RegProducer::GatherF32)
+    );
+    assert_eq!(
+        classify_node_typed(&register::VecToRegF32::new(), &[PT::VecF32]),
+        JitOp::RegProduce(RegProducer::VecToRegF32)
+    );
+    assert_eq!(
+        classify_node_typed(&register::RegMulI8::new(), &[PT::RegI8x16, PT::RegI8x16]),
+        JitOp::RegProduce(RegProducer::MulI8)
+    );
+    assert_eq!(
+        classify_node_typed(&register::RegDotF32::new(), &[PT::RegF32x4, PT::RegF32x4]),
+        JitOp::RegDotF32
+    );
+    let mask: Vec<u64> = (0..16).rev().collect();
+    assert_eq!(
+        classify_node_typed(&register::RegShuffleBytes::new(mask), &[PT::Reg128]),
+        JitOp::RegShuffleConst([15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0])
+    );
+    // Every one of them lowers, so a program over the two groups is
+    // one native function on pure native code, and it agrees with
+    // the interpreter bit for bit.
+    let src = "input cycle: u64\n\
+        a := hash_vec(cycle, 8)\n\
+        b := xxhash3_vec(cycle, 8)\n\
+        sum := vec_add(a, b)\n\
+        scaled := vec_scale(sum, 0.5)\n\
+        unit := vec_norm(scaled)\n\
+        dot := vec_dot(a, b)\n\
+        dist := vec_l2(a, b)\n\
+        cos := vec_cosine(a, unit)\n\
+        lid := lid_mle(vec_norm(a), 4.0)\n\
+        r := reg_gather_f32(a, 4)\n\
+        r2 := vec_to_reg_f32(reg_to_vec_f32(r))\n\
+        lane := reg_lane_f32(r2, 3)\n\
+        r3 := reg_with_lane_f32(r, mod(cycle, 4), lane)\n\
+        rd := reg_dot_f32(r, r3)\n\
+        i16 := reg_lane_i16(reg_splat_i16(cycle), 7)\n\
+        i64 := reg_lane_i64(reg_splat_i64(cycle), 1)\n\
+        prod := reg_mul_i8(reg_splat_i8(cycle), reg_splat_i8(u64_add(cycle, 3)))\n\
+        rev := reg_shuffle_bytes(prod, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)\n";
+    agree(
+        src,
+        &[
+            "sum", "scaled", "unit", "dot", "dist", "cos", "lid", "r", "r2", "lane", "r3", "rd",
+            "i16", "i64", "prod", "rev",
+        ],
+        8,
+        &[],
+    );
+    let mut pure = compile_polydat_to_assembler(src)
+        .unwrap()
+        .try_compile_pure_jit()
+        .expect("every node of the two groups lowers");
+    let mut p1 = kernel(src, JitMode::Off);
+    for c in 0..8 {
+        polydat::Kernel::set_inputs(&mut pure, &[c]);
+        p1.set_inputs(&[c]);
+        for name in ["unit", "cos", "rd", "rev", "i16", "i64", "lid"] {
+            let want = p1.pull(name).clone();
+            let got = polydat::Kernel::pull(&mut pure, name).clone();
+            assert_eq!(got, want, "{name} at cycle {c}");
+        }
+    }
+}
+
+#[test]
 fn a_string_read_is_an_owned_copy_that_outlives_the_next_write() {
     // A read copies out (the reader never holds a reference into the
     // state's buffers), so a value read before a write is intact after

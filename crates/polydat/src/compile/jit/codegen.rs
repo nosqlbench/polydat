@@ -609,6 +609,28 @@ extern "C" fn jit_in_range_fail(value: u64, lo: u64, hi: u64) -> u64 {
     jit_violation_longjmp(format!("in_range: value {value} outside [{lo}, {hi}]"));
 }
 
+/// Extern function: the failure a node whose body divides by a wire
+/// or constant raises on a zero divisor, in the words the interpreter
+/// raises it (Rust's own): `kind` 0 for a quotient, 1 for a remainder.
+extern "C" fn jit_div_zero_fail(kind: u64) -> u64 {
+    jit_violation_longjmp(
+        if kind == 0 {
+            "attempt to divide by zero"
+        } else {
+            "attempt to calculate the remainder with a divisor of zero"
+        }
+        .to_string(),
+    );
+}
+
+/// `f64_mod` natively: the body itself, since Rust's `%` on floats is
+/// the truncated remainder with the dividend's sign, which no sequence
+/// of Cranelift float instructions reproduces for every input.
+extern "C" fn jit_f64_mod(a_bits: u64, b_bits: u64) -> u64 {
+    let (a, b) = (f64::from_bits(a_bits), f64::from_bits(b_bits));
+    (if b != 0.0 { a % b } else { 0.0 }).to_bits()
+}
+
 /// Extern function: longjmp back to the enclosing wrapper with
 /// an `is_one_of` violation message, carrying the allow-list
 /// contents so the message matches the interpreter's byte for
@@ -745,6 +767,7 @@ impl JitOp {
     /// The scratch entries the step needs in the state that runs it.
     pub(crate) fn scratch_elems(&self) -> &[crate::ast::ScratchElem] {
         const STR_ENTRY: [crate::ast::ScratchElem; 1] = [crate::ast::ScratchElem::Str];
+        const F32_ENTRY: [crate::ast::ScratchElem; 1] = [crate::ast::ScratchElem::F32];
         match self {
             JitOp::SlotCall { kit, .. } => &kit.0.scratch,
             JitOp::U64ToStr { .. }
@@ -752,6 +775,7 @@ impl JitOp {
             | JitOp::F64ToStr { .. }
             | JitOp::StrConcat { .. }
             | JitOp::JsonToStr { .. } => &STR_ENTRY,
+            JitOp::VecProduce { .. } => &F32_ENTRY,
             _ => &[],
         }
     }
@@ -765,11 +789,245 @@ impl JitOp {
             | JitOp::I64ToStr { scratch_base }
             | JitOp::F64ToStr { scratch_base }
             | JitOp::StrConcat { scratch_base }
-            | JitOp::JsonToStr { scratch_base } => *scratch_base = base,
+            | JitOp::JsonToStr { scratch_base }
+            | JitOp::VecProduce { scratch_base, .. } => *scratch_base = base,
             _ => {}
         }
     }
 }
+
+/// The vector producers with a named lowering (compiled_handles.md
+/// §6): each writes its result into the step's own `F32` entry and
+/// publishes the pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VecProducer {
+    /// `vec_add(a, b)` over two `vec_f32` wires.
+    Add,
+    /// `vec_scale(a, k)` over a `vec_f32` and an `f64` wire.
+    Scale,
+    /// `vec_norm(a)` over a `vec_f32` wire.
+    Norm,
+    /// `hash_vec(seed, dim)`.
+    HashVec,
+    /// `xxhash3_vec(seed, dim)`.
+    XxHash3Vec,
+    /// `reg_to_vec_f32(r)`.
+    RegToVec,
+}
+
+/// The vector reductions with a named lowering: each returns the
+/// bits of its `f64` result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VecReducer {
+    /// `vec_dot(a, b)`.
+    Dot,
+    /// `vec_l2(a, b)`.
+    L2,
+    /// `vec_cosine(a, b)`.
+    Cosine,
+    /// `lid_mle(distances, k)`.
+    LidMle,
+}
+
+/// The register lane reads with a named lowering: each returns the
+/// lane as the slot word its port stores.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegLaneRead {
+    /// `reg_lane_f32(r, i)`, widened to f64.
+    F32,
+    /// `reg_lane_i16(r, i)`, sign-extended.
+    I16,
+    /// `reg_lane_i64(r, i)`.
+    I64,
+}
+
+/// The register producers that run through a helper: a bounds check
+/// on a wire index, or a lane operation Cranelift has no instruction
+/// for. Each writes its word into the output slots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegProducer {
+    /// `reg_with_lane_f32(r, i, v)`.
+    WithLaneF32,
+    /// `reg_gather_f32(v, offset)`.
+    GatherF32,
+    /// `vec_to_reg_f32(v)`.
+    VecToRegF32,
+    /// `reg_mul_i8(a, b)`.
+    MulI8,
+}
+
+/// The `vec_f32` slice a wire's pair names.
+///
+/// # Safety
+/// The pair was published by its producing step into storage alive
+/// until that step reruns (axioms S3, S4), and the wire is a `vec_f32`.
+unsafe fn vec_f32_of<'a>(ptr: u64, len: u64) -> &'a [f32] {
+    if len == 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(ptr as usize as *const f32, len as usize) }
+    }
+}
+
+/// Write a vector into the step's own `F32` entry and publish its
+/// pair into the output slots: what every vector producer's lowering
+/// does around its arithmetic. `f` fills the entry.
+///
+/// # Safety
+/// As for [`write_str_entry`].
+unsafe fn write_f32_entry(
+    scratch: *mut crate::ast::ScratchBuf,
+    base: u64,
+    buffer: *mut u64,
+    out_slot: u64,
+    f: impl FnOnce(&mut Vec<f32>),
+) {
+    unsafe {
+        let entry = &mut *scratch.add(base as usize);
+        let crate::ast::ScratchBuf::F32(v) = entry else {
+            panic!("a vector lowering's scratch entry is not an f32 vector");
+        };
+        f(v);
+        *buffer.add(out_slot as usize) = v.as_ptr() as usize as u64;
+        *buffer.add(out_slot as usize + 1) = v.len() as u64;
+    }
+}
+
+/// The vector producers natively: the step's input words in order
+/// (`w0..w3`, zero past the last), the same body the node runs, into
+/// the entry.
+macro_rules! vec_producer {
+    ($name:ident, |$out:ident, $w0:ident, $w1:ident, $w2:ident, $w3:ident| $body:expr) => {
+        extern "C" fn $name(
+            scratch: *mut crate::ast::ScratchBuf,
+            base: u64,
+            buffer: *mut u64,
+            out_slot: u64,
+            $w0: u64,
+            $w1: u64,
+            $w2: u64,
+            $w3: u64,
+        ) {
+            guarded(|| unsafe {
+                let _ = ($w2, $w3);
+                write_f32_entry(scratch, base, buffer, out_slot, |$out| $body)
+            })
+        }
+    };
+}
+
+vec_producer!(jit_vec_add, |out, a_ptr, a_len, b_ptr, b_len| {
+    let (a, b) = (vec_f32_of(a_ptr, a_len), vec_f32_of(b_ptr, b_len));
+    crate::library::vector_math::check_lens("vec_add", a.len(), b.len());
+    crate::library::vector_math::add_f32_into(a, b, out)
+});
+vec_producer!(jit_vec_scale, |out, a_ptr, a_len, k_bits, _z| {
+    let a = vec_f32_of(a_ptr, a_len);
+    crate::library::vector_math::scale_f32_into(a, f64::from_bits(k_bits) as f32, out)
+});
+vec_producer!(jit_vec_norm, |out, a_ptr, a_len, _y, _z| {
+    crate::library::vector_math::norm_f32_into(vec_f32_of(a_ptr, a_len), out)
+});
+vec_producer!(jit_hash_vec, |out, seed, dim, _y, _z| {
+    crate::library::vector_math::hash_vec_into(seed, dim, out)
+});
+vec_producer!(jit_xxhash3_vec, |out, seed, dim, _y, _z| {
+    crate::library::vector_math::xxhash3_vec_into(seed, dim, out)
+});
+vec_producer!(jit_reg_to_vec_f32, |out, lo, hi, _y, _z| {
+    out.clear();
+    out.extend_from_slice(&crate::ast::Bits128([lo, hi]).lanes_f32())
+});
+
+/// The vector reductions natively: the input words in order, the
+/// result's bits back.
+macro_rules! vec_reducer {
+    ($name:ident, |$w0:ident, $w1:ident, $w2:ident, $w3:ident| $body:expr) => {
+        extern "C" fn $name($w0: u64, $w1: u64, $w2: u64, $w3: u64) -> u64 {
+            guarded(|| unsafe {
+                let _ = ($w2, $w3);
+                let r: f64 = $body;
+                r.to_bits()
+            })
+        }
+    };
+}
+
+vec_reducer!(jit_vec_dot, |a_ptr, a_len, b_ptr, b_len| {
+    let (a, b) = (vec_f32_of(a_ptr, a_len), vec_f32_of(b_ptr, b_len));
+    crate::library::vector_math::check_lens("vec_dot", a.len(), b.len());
+    crate::library::vector_math::dot_f32(a, b) as f64
+});
+vec_reducer!(jit_vec_l2, |a_ptr, a_len, b_ptr, b_len| {
+    let (a, b) = (vec_f32_of(a_ptr, a_len), vec_f32_of(b_ptr, b_len));
+    crate::library::vector_math::check_lens("vec_l2", a.len(), b.len());
+    (crate::library::vector_math::l2sq_f32(a, b) as f64).sqrt()
+});
+vec_reducer!(jit_vec_cosine, |a_ptr, a_len, b_ptr, b_len| {
+    let (a, b) = (vec_f32_of(a_ptr, a_len), vec_f32_of(b_ptr, b_len));
+    crate::library::vector_math::check_lens("vec_cosine", a.len(), b.len());
+    crate::library::vector_math::cosine_f32(a, b)
+});
+vec_reducer!(jit_lid_mle, |d_ptr, d_len, k_bits, _z| {
+    crate::library::vector_math::lid_mle_of(vec_f32_of(d_ptr, d_len), f64::from_bits(k_bits))
+});
+
+/// `reg_lane_f32` natively: the lane widened, as f64 bits.
+extern "C" fn jit_reg_lane_f32(lo: u64, hi: u64, i: u64) -> u64 {
+    guarded(|| crate::library::register::lane_f32(crate::ast::Bits128([lo, hi]), i).to_bits())
+}
+
+/// `reg_lane_i16` natively: the lane sign-extended into the slot word.
+extern "C" fn jit_reg_lane_i16(lo: u64, hi: u64, i: u64) -> u64 {
+    guarded(|| crate::library::register::lane_i16(crate::ast::Bits128([lo, hi]), i) as i64 as u64)
+}
+
+/// `reg_lane_i64` natively.
+extern "C" fn jit_reg_lane_i64(lo: u64, hi: u64, i: u64) -> u64 {
+    guarded(|| crate::library::register::lane_i64(crate::ast::Bits128([lo, hi]), i) as u64)
+}
+
+/// The register producers natively: the input words in order, the
+/// word into the two output slots.
+macro_rules! reg_producer {
+    ($name:ident, |$w0:ident, $w1:ident, $w2:ident, $w3:ident| $body:expr) => {
+        extern "C" fn $name(
+            buffer: *mut u64,
+            out_slot: u64,
+            $w0: u64,
+            $w1: u64,
+            $w2: u64,
+            $w3: u64,
+        ) {
+            guarded(|| unsafe {
+                let _ = ($w2, $w3);
+                let r: crate::ast::Bits128 = $body;
+                *buffer.add(out_slot as usize) = r.0[0];
+                *buffer.add(out_slot as usize + 1) = r.0[1];
+            })
+        }
+    };
+}
+
+reg_producer!(jit_reg_with_lane_f32, |lo, hi, i, v_bits| {
+    crate::library::register::with_lane_f32(
+        crate::ast::Bits128([lo, hi]),
+        i,
+        f64::from_bits(v_bits),
+    )
+});
+reg_producer!(jit_reg_gather_f32, |v_ptr, v_len, offset, _z| {
+    crate::library::register::gather_f32(vec_f32_of(v_ptr, v_len), offset)
+});
+reg_producer!(jit_vec_to_reg_f32, |v_ptr, v_len, _y, _z| {
+    crate::library::register::to_reg_f32(vec_f32_of(v_ptr, v_len))
+});
+reg_producer!(jit_reg_mul_i8, |a_lo, a_hi, b_lo, b_hi| {
+    crate::library::register::mul_i8(
+        crate::ast::Bits128([a_lo, a_hi]),
+        crate::ast::Bits128([b_lo, b_hi]),
+    )
+});
 
 /// Write a string into the step's own entry and publish its pair into
 /// the output slots: what every named string lowering does around its
@@ -905,7 +1163,12 @@ extern "C" fn jit_json_to_str(
 /// never-current step on pure native code). A node with neither stays
 /// interpreted.
 pub fn classify_node_typed(node: &dyn PolydatNode, wire_types: &[crate::ast::PortType]) -> JitOp {
+    use crate::ast::PortType as PT;
     let is_ref = |t: &crate::ast::PortType| t.slot_color() == crate::ast::SlotColor::Ref2;
+    let vec_produce = |kind: VecProducer| JitOp::VecProduce {
+        kind,
+        scratch_base: 0,
+    };
     let ref_copy = |ty: crate::ast::PortType| {
         crate::compile::assembly::ref_copy_kit(ty)
             .map(|kit| JitOp::SlotCall {
@@ -930,6 +1193,41 @@ pub fn classify_node_typed(node: &dyn PolydatNode, wire_types: &[crate::ast::Por
         {
             JitOp::StrConcat { scratch_base: 0 }
         }
+        // The vector group: each lowering runs the node's own body on
+        // the wires' slices and writes into the step's entry or
+        // returns its scalar. Keyed on the exact wire types the body
+        // is written for; any adapted shape takes the kit.
+        "vec_add" if wire_types == [PT::VecF32, PT::VecF32] => vec_produce(VecProducer::Add),
+        "vec_scale" if wire_types == [PT::VecF32, PT::F64] => vec_produce(VecProducer::Scale),
+        "vec_norm" if wire_types == [PT::VecF32] => vec_produce(VecProducer::Norm),
+        "hash_vec" if wire_types == [PT::U64, PT::U64] => vec_produce(VecProducer::HashVec),
+        "xxhash3_vec" if wire_types == [PT::U64, PT::U64] => vec_produce(VecProducer::XxHash3Vec),
+        "reg_to_vec_f32" if wire_types == [PT::RegF32x4] => vec_produce(VecProducer::RegToVec),
+        "vec_dot" if wire_types == [PT::VecF32, PT::VecF32] => JitOp::VecReduce(VecReducer::Dot),
+        "vec_l2" if wire_types == [PT::VecF32, PT::VecF32] => JitOp::VecReduce(VecReducer::L2),
+        "vec_cosine" if wire_types == [PT::VecF32, PT::VecF32] => {
+            JitOp::VecReduce(VecReducer::Cosine)
+        }
+        "lid_mle" if wire_types == [PT::VecF32, PT::F64] => JitOp::VecReduce(VecReducer::LidMle),
+        // The register group: the lane reads and the producers with a
+        // bounds check run through a helper; the dot product and the
+        // byte shuffle are inline vector instructions.
+        "reg_lane_f32" if wire_types == [PT::RegF32x4, PT::U64] => JitOp::RegLane(RegLaneRead::F32),
+        "reg_lane_i16" if wire_types == [PT::RegI16x8, PT::U64] => JitOp::RegLane(RegLaneRead::I16),
+        "reg_lane_i64" if wire_types == [PT::RegI64x2, PT::U64] => JitOp::RegLane(RegLaneRead::I64),
+        "reg_with_lane_f32" if wire_types == [PT::RegF32x4, PT::U64, PT::F64] => {
+            JitOp::RegProduce(RegProducer::WithLaneF32)
+        }
+        "reg_gather_f32" if wire_types == [PT::VecF32, PT::U64] => {
+            JitOp::RegProduce(RegProducer::GatherF32)
+        }
+        "vec_to_reg_f32" if wire_types == [PT::VecF32] => {
+            JitOp::RegProduce(RegProducer::VecToRegF32)
+        }
+        "reg_mul_i8" if wire_types == [PT::RegI8x16, PT::RegI8x16] => {
+            JitOp::RegProduce(RegProducer::MulI8)
+        }
+        "reg_dot_f32" if wire_types == [PT::RegF32x4, PT::RegF32x4] => JitOp::RegDotF32,
         // The compiler's input passthrough and `default_or(value,
         // fallback)` (`value` unless it is `None`, which a compiled slot
         // never carries; engine_parity.md, A12): a slot copy of an
@@ -1015,7 +1313,8 @@ pub enum JitOp {
     UnitInterval,
     /// `output[0] = f64::from_bits(input[0]) as u64`  (f64 bits → u64, truncate)
     F64ToU64,
-    /// `output[0] = f64::from_bits(input[0]).round() as u64`
+    /// `output[0] = f64::from_bits(input[0]).round() as u64`: half
+    /// away from zero, as Rust rounds, then the saturating conversion.
     RoundToU64,
     /// `output[0] = f64::from_bits(input[0]).floor() as u64`
     FloorToU64,
@@ -1079,8 +1378,14 @@ pub enum JitOp {
     F64Mul,
     /// output = f64(a) / f64(b) (0 if b==0)
     F64Div,
-    /// output = f64(a) % f64(b) (0 if b==0)
+    /// output = f64(a) % f64(b) (0 if b==0), through `jit_f64_mod`
     F64Mod,
+    /// `output[0] = input[0] / input[1]`, failing on a zero divisor as
+    /// the body's `/` does (`div_wire`)
+    U64DivWire,
+    /// `output[0] = input[0] % input[1]`, failing on a zero divisor as
+    /// the body's `%` does (`mod_wire`)
+    U64ModWire,
 
     /// A call of the node's own slot kit from native code
     /// (compiled_handles.md §6): the inputs are gathered into the
@@ -1128,6 +1433,30 @@ pub enum JitOp {
         /// The step's string entry in the state's scratch.
         scratch_base: usize,
     },
+
+    // --- The vector and register groups (compiled_handles.md §6) ---
+    /// `output = a vec_f32 written into the step's own `F32` entry`
+    /// by the producer's body over the input words.
+    VecProduce {
+        /// Which producer.
+        kind: VecProducer,
+        /// The step's `F32` entry in the state's scratch.
+        scratch_base: usize,
+    },
+    /// `output[0] = f64 bits of the reduction over the input words`
+    VecReduce(VecReducer),
+    /// `output[0] = lane input[2] of the register word input[0..2]`,
+    /// bounds-checked by the helper.
+    RegLane(RegLaneRead),
+    /// `output[0..2] = the producer's word over the input words`
+    RegProduce(RegProducer),
+    /// `output[0] = ((a0*b0 + a1*b1) + (a2*b2 + a3*b3)) as f64`, the
+    /// fixed tree of `reg_dot_f32`, over f32x4 words: one `fmul`,
+    /// four lane extracts, three adds, one promotion.
+    RegDotF32,
+    /// `output[0..2] = byte permutation of input[0..2]` by a baked
+    /// 16-entry mask, one `shuffle`.
+    RegShuffleConst([u8; 16]),
 
     /// Parameter predicate: pass `input[0]` through to `output[0]`;
     /// if `input[0]` == 0, call `jit_is_positive_fail` (panics)
@@ -1259,9 +1588,9 @@ pub enum JitOp {
     CheckedSub,
     /// Checked unsigned multiplication: `output[0]` = a.checked_mul(b).unwrap_or(0)
     CheckedMul,
-    /// Smallest multiple of multiple >= value: `output[0]` = if m == 0 { v } else { ((v + m - 1) / m) * m }
+    /// Smallest multiple of multiple >= value: `output[0]` = if m == 0 { v } else { v.div_ceil(m).saturating_mul(m) }
     CeilToMultiple,
-    /// Multiples at least: `output[0]` = if m == 0 { 0 } else { (v + m - 1) / m }
+    /// Multiples at least: `output[0]` = if m == 0 { 0 } else { v.div_ceil(m) }
     MultiplesAtLeast,
 
     // --- Probability & permutations (SRD 110) ---
@@ -1485,9 +1814,19 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
         "reg_sub_i8" => JitOp::RegBinOp(0, 1),
         // `imul.i8x16` has no cranelift lowering (x86 has no
         // byte-lane multiply short of AVX-512; cranelift 0.116
-        // rejects it in ISLE) — the closure path handles i8
-        // multiplies.
-        "reg_mul_i8" => JitOp::Fallback,
+        // rejects it in ISLE); `classify_node_typed` lowers
+        // `reg_mul_i8` through its helper.
+        "reg_shuffle_bytes" => {
+            let mut mask = [0u8; 16];
+            if consts.len() == 16 && consts.iter().all(|&m| m < 16) {
+                for (m, &c) in mask.iter_mut().zip(consts.iter()) {
+                    *m = c as u8;
+                }
+                JitOp::RegShuffleConst(mask)
+            } else {
+                JitOp::Fallback
+            }
+        }
         "reg_add_i16" => JitOp::RegBinOp(1, 0),
         "reg_sub_i16" => JitOp::RegBinOp(1, 1),
         "reg_mul_i16" => JitOp::RegBinOp(1, 2),
@@ -1537,8 +1876,8 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
         "select_f64" => JitOp::SelectF64,
 
         // ── Wire Arithmetic & Multiples (SRD 110) ────────────────
-        "div_wire" => JitOp::U64Div2,
-        "mod_wire" => JitOp::U64Mod2,
+        "div_wire" => JitOp::U64DivWire,
+        "mod_wire" => JitOp::U64ModWire,
         "ceil_to_multiple" => JitOp::CeilToMultiple,
         "multiples_at_least" => JitOp::MultiplesAtLeast,
         "checked_add" => JitOp::CheckedAdd,
@@ -1726,8 +2065,10 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
         | "__f64_to_u128"
         | "__f32_to_u128"
         | "__f16_to_u128"
-        | "round_u64"
         | "trunc_u64" => JitOp::F64ToU64,
+        // `round_u64` rounds half away from zero before the saturating
+        // conversion, which is what `round_to_u64` does too.
+        "round_u64" => JitOp::RoundToU64,
 
         "f64_to_i64" | "__f64_to_i64" | "f64_to_i32" | "__f64_to_i32" | "f32_to_i64"
         | "__f32_to_i64" | "f32_to_i32" | "__f32_to_i32" | "__f64_to_i16" | "f64_to_i16"
@@ -2115,6 +2456,23 @@ fn compile_jit_impl(
     jit_builder.symbol("jit_f64_to_str", jit_f64_to_str as *const u8);
     jit_builder.symbol("jit_str_concat", jit_str_concat as *const u8);
     jit_builder.symbol("jit_json_to_str", jit_json_to_str as *const u8);
+    jit_builder.symbol("jit_vec_add", jit_vec_add as *const u8);
+    jit_builder.symbol("jit_vec_scale", jit_vec_scale as *const u8);
+    jit_builder.symbol("jit_vec_norm", jit_vec_norm as *const u8);
+    jit_builder.symbol("jit_hash_vec", jit_hash_vec as *const u8);
+    jit_builder.symbol("jit_xxhash3_vec", jit_xxhash3_vec as *const u8);
+    jit_builder.symbol("jit_reg_to_vec_f32", jit_reg_to_vec_f32 as *const u8);
+    jit_builder.symbol("jit_vec_dot", jit_vec_dot as *const u8);
+    jit_builder.symbol("jit_vec_l2", jit_vec_l2 as *const u8);
+    jit_builder.symbol("jit_vec_cosine", jit_vec_cosine as *const u8);
+    jit_builder.symbol("jit_lid_mle", jit_lid_mle as *const u8);
+    jit_builder.symbol("jit_reg_lane_f32", jit_reg_lane_f32 as *const u8);
+    jit_builder.symbol("jit_reg_lane_i16", jit_reg_lane_i16 as *const u8);
+    jit_builder.symbol("jit_reg_lane_i64", jit_reg_lane_i64 as *const u8);
+    jit_builder.symbol("jit_reg_with_lane_f32", jit_reg_with_lane_f32 as *const u8);
+    jit_builder.symbol("jit_reg_gather_f32", jit_reg_gather_f32 as *const u8);
+    jit_builder.symbol("jit_vec_to_reg_f32", jit_vec_to_reg_f32 as *const u8);
+    jit_builder.symbol("jit_reg_mul_i8", jit_reg_mul_i8 as *const u8);
     // Math externs
     jit_builder.symbol("jit_sin", jit_sin as *const u8);
     jit_builder.symbol("jit_cos", jit_cos as *const u8);
@@ -2143,6 +2501,8 @@ fn compile_jit_impl(
     jit_builder.symbol("jit_round_nearest", jit_round_nearest as *const u8);
     jit_builder.symbol("jit_round_floor", jit_round_floor as *const u8);
     jit_builder.symbol("jit_round_ceiling", jit_round_ceiling as *const u8);
+    jit_builder.symbol("jit_f64_mod", jit_f64_mod as *const u8);
+    jit_builder.symbol("jit_div_zero_fail", jit_div_zero_fail as *const u8);
 
     let mut module = JITModule::new(jit_builder);
 
@@ -2391,7 +2751,19 @@ fn compile_jit_impl(
         "jit_round_nearest",
         "jit_round_floor",
         "jit_round_ceiling",
+        "jit_f64_mod",
     ];
+    const F64_MOD_HELPER: usize = 5;
+
+    // Declare the zero-divisor failure: jit_div_zero_fail(kind) -> u64
+    let div_zero_fail_id = {
+        let mut sig = module.make_signature();
+        sig.params.push(AbiParam::new(types::I64));
+        sig.returns.push(AbiParam::new(types::I64));
+        module
+            .declare_function("jit_div_zero_fail", Linkage::Import, &sig)
+            .map_err(|e| format!("declare div_zero_fail: {e}"))?
+    };
     let mut math_binary_ids = Vec::new();
     for name in &math_binary_names {
         let mut sig = module.make_signature();
@@ -2434,6 +2806,85 @@ fn compile_jit_impl(
     let f64_to_str_id = declare_str("jit_f64_to_str", 5)?;
     let str_concat_id = declare_str("jit_str_concat", 6)?;
     let json_to_str_id = declare_str("jit_json_to_str", 6)?;
+
+    // Declare the vector and register helpers: a producer takes
+    // (scratch, base, buffer, out_slot, w0..w3), a reducer (w0..w3)
+    // and returns bits, a lane read (lo, hi, i) and returns the word,
+    // a register producer (buffer, out_slot, w0..w3).
+    let mut declare_words =
+        |name: &str, args: usize, returns: bool| -> Result<cranelift_module::FuncId, String> {
+            let mut sig = module.make_signature();
+            for _ in 0..args {
+                sig.params.push(AbiParam::new(types::I64));
+            }
+            if returns {
+                sig.returns.push(AbiParam::new(types::I64));
+            }
+            module
+                .declare_function(name, Linkage::Import, &sig)
+                .map_err(|e| format!("declare {name}: {e}"))
+        };
+    let vec_producer_ids = [
+        (VecProducer::Add, declare_words("jit_vec_add", 8, false)?),
+        (
+            VecProducer::Scale,
+            declare_words("jit_vec_scale", 8, false)?,
+        ),
+        (VecProducer::Norm, declare_words("jit_vec_norm", 8, false)?),
+        (
+            VecProducer::HashVec,
+            declare_words("jit_hash_vec", 8, false)?,
+        ),
+        (
+            VecProducer::XxHash3Vec,
+            declare_words("jit_xxhash3_vec", 8, false)?,
+        ),
+        (
+            VecProducer::RegToVec,
+            declare_words("jit_reg_to_vec_f32", 8, false)?,
+        ),
+    ];
+    let vec_reducer_ids = [
+        (VecReducer::Dot, declare_words("jit_vec_dot", 4, true)?),
+        (VecReducer::L2, declare_words("jit_vec_l2", 4, true)?),
+        (
+            VecReducer::Cosine,
+            declare_words("jit_vec_cosine", 4, true)?,
+        ),
+        (VecReducer::LidMle, declare_words("jit_lid_mle", 4, true)?),
+    ];
+    let reg_lane_ids = [
+        (
+            RegLaneRead::F32,
+            declare_words("jit_reg_lane_f32", 3, true)?,
+        ),
+        (
+            RegLaneRead::I16,
+            declare_words("jit_reg_lane_i16", 3, true)?,
+        ),
+        (
+            RegLaneRead::I64,
+            declare_words("jit_reg_lane_i64", 3, true)?,
+        ),
+    ];
+    let reg_producer_ids = [
+        (
+            RegProducer::WithLaneF32,
+            declare_words("jit_reg_with_lane_f32", 6, false)?,
+        ),
+        (
+            RegProducer::GatherF32,
+            declare_words("jit_reg_gather_f32", 6, false)?,
+        ),
+        (
+            RegProducer::VecToRegF32,
+            declare_words("jit_vec_to_reg_f32", 6, false)?,
+        ),
+        (
+            RegProducer::MulI8,
+            declare_words("jit_reg_mul_i8", 6, false)?,
+        ),
+    ];
 
     // Function signature depends on provenance mode:
     // Without: fn(coords: *const u64, buffer: *mut u64, scratch: *mut ScratchBuf)
@@ -2478,6 +2929,7 @@ fn compile_jit_impl(
             module.declare_func_in_func(weighted_pick_func_id, builder.func);
         let is_positive_fail_ref = module.declare_func_in_func(is_positive_fail_id, builder.func);
         let in_range_fail_ref = module.declare_func_in_func(in_range_fail_id, builder.func);
+        let div_zero_fail_ref = module.declare_func_in_func(div_zero_fail_id, builder.func);
         let is_one_of_fail_ref = module.declare_func_in_func(is_one_of_fail_id, builder.func);
         let slot_call_ref = module.declare_func_in_func(slot_call_id, builder.func);
         let u64_to_str_ref = module.declare_func_in_func(u64_to_str_id, builder.func);
@@ -2485,6 +2937,22 @@ fn compile_jit_impl(
         let f64_to_str_ref = module.declare_func_in_func(f64_to_str_id, builder.func);
         let str_concat_ref = module.declare_func_in_func(str_concat_id, builder.func);
         let json_to_str_ref = module.declare_func_in_func(json_to_str_id, builder.func);
+        let vec_producer_refs: Vec<(VecProducer, ir::FuncRef)> = vec_producer_ids
+            .iter()
+            .map(|(k, id)| (*k, module.declare_func_in_func(*id, builder.func)))
+            .collect();
+        let vec_reducer_refs: Vec<(VecReducer, ir::FuncRef)> = vec_reducer_ids
+            .iter()
+            .map(|(k, id)| (*k, module.declare_func_in_func(*id, builder.func)))
+            .collect();
+        let reg_lane_refs: Vec<(RegLaneRead, ir::FuncRef)> = reg_lane_ids
+            .iter()
+            .map(|(k, id)| (*k, module.declare_func_in_func(*id, builder.func)))
+            .collect();
+        let reg_producer_refs: Vec<(RegProducer, ir::FuncRef)> = reg_producer_ids
+            .iter()
+            .map(|(k, id)| (*k, module.declare_func_in_func(*id, builder.func)))
+            .collect();
         let pcg_func_ref = module.declare_func_in_func(pcg_func_id, builder.func);
         let pcg_stream_func_ref = module.declare_func_in_func(pcg_stream_func_id, builder.func);
         let n_of_func_ref = module.declare_func_in_func(n_of_func_id, builder.func);
@@ -2557,27 +3025,50 @@ fn compile_jit_impl(
                     let result = builder.ins().imul(val, c_val);
                     store_slot(&mut builder, buffer_ptr, output_slots[0], result);
                 }
-                JitOp::DivConst(c) => {
+                JitOp::DivConst(c) | JitOp::ModConst(c) => {
+                    // The body's `/` or `%` by the constant: a zero
+                    // constant fails at every evaluation as it does.
+                    let is_div = matches!(jit_op, JitOp::DivConst(_));
                     let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
                     if *c == 0 {
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], zero);
+                        let kind = builder.ins().iconst(types::I64, if is_div { 0 } else { 1 });
+                        let _ = builder.ins().call(div_zero_fail_ref, &[kind]);
+                        store_slot(&mut builder, buffer_ptr, output_slots[0], val);
                     } else {
                         let c_val = builder.ins().iconst(types::I64, *c as i64);
-                        let result = builder.ins().udiv(val, c_val);
+                        let result = if is_div {
+                            builder.ins().udiv(val, c_val)
+                        } else {
+                            builder.ins().urem(val, c_val)
+                        };
                         store_slot(&mut builder, buffer_ptr, output_slots[0], result);
                     }
                 }
-                JitOp::ModConst(c) => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    if *c == 0 {
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], zero);
+                JitOp::U64DivWire | JitOp::U64ModWire => {
+                    // The body's `/` or `%` by the wire: a zero divisor
+                    // fails as it does there; `udiv` and `urem` trap on
+                    // one, so the failure branches first.
+                    let is_div = matches!(jit_op, JitOp::U64DivWire);
+                    let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                    let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                    let zero = builder.ins().iconst(types::I64, 0);
+                    let is_zero = builder.ins().icmp(ir::condcodes::IntCC::Equal, b, zero);
+                    let fail_block = builder.create_block();
+                    let ok_block = builder.create_block();
+                    builder.ins().brif(is_zero, fail_block, &[], ok_block, &[]);
+                    builder.switch_to_block(fail_block);
+                    builder.seal_block(fail_block);
+                    let kind = builder.ins().iconst(types::I64, if is_div { 0 } else { 1 });
+                    let _ = builder.ins().call(div_zero_fail_ref, &[kind]);
+                    builder.ins().jump(ok_block, &[]);
+                    builder.switch_to_block(ok_block);
+                    builder.seal_block(ok_block);
+                    let result = if is_div {
+                        builder.ins().udiv(a, b)
                     } else {
-                        let c_val = builder.ins().iconst(types::I64, *c as i64);
-                        let result = builder.ins().urem(val, c_val);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
+                        builder.ins().urem(a, b)
+                    };
+                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
                 }
                 JitOp::ClampConst(min, max) => {
                     let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
@@ -2784,7 +3275,7 @@ fn compile_jit_impl(
                 }
                 JitOp::RoundToU64 => {
                     let fval = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
-                    let rounded = builder.ins().nearest(fval);
+                    let rounded = round_half_away(&mut builder, fval);
                     let result = builder.ins().fcvt_to_uint_sat(types::I64, rounded);
                     store_slot(&mut builder, buffer_ptr, output_slots[0], result);
                 }
@@ -2804,8 +3295,7 @@ fn compile_jit_impl(
                     let fval = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
                     let fmin = builder.ins().f64const(f64::from_bits(*min_bits));
                     let fmax = builder.ins().f64const(f64::from_bits(*max_bits));
-                    let clamped = builder.ins().fmax(fval, fmin);
-                    let clamped = builder.ins().fmin(clamped, fmax);
+                    let clamped = clamp_ir(&mut builder, fval, fmin, fmax);
                     store_slot_f64(&mut builder, buffer_ptr, output_slots[0], clamped);
                 }
                 JitOp::LerpConst(a_bits, b_bits) => {
@@ -2835,7 +3325,7 @@ fn compile_jit_impl(
                     let fval = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
                     let step = builder.ins().f64const(f64::from_bits(*step_bits));
                     let divided = builder.ins().fdiv(fval, step);
-                    let rounded = builder.ins().nearest(divided);
+                    let rounded = round_half_away(&mut builder, divided);
                     let result = builder.ins().fmul(rounded, step);
                     store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
                 }
@@ -2859,8 +3349,7 @@ fn compile_jit_impl(
                     let frange_m_eps = builder.ins().f64const(range - f64::EPSILON);
                     let frange = builder.ins().f64const(range);
                     let fbuckets = builder.ins().f64const(*buckets as f64);
-                    let clamped = builder.ins().fmax(fval, fzero);
-                    let clamped = builder.ins().fmin(clamped, frange_m_eps);
+                    let clamped = clamp_ir(&mut builder, fval, fzero, frange_m_eps);
                     let divided = builder.ins().fdiv(clamped, frange);
                     let scaled = builder.ins().fmul(divided, fbuckets);
                     let as_u64 = builder.ins().fcvt_to_uint_sat(types::I64, scaled);
@@ -3087,17 +3576,14 @@ fn compile_jit_impl(
                     store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
                 }
                 JitOp::F64Mod => {
-                    let a = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
-                    let b = load_slot_f64(&mut builder, buffer_ptr, input_slots[1]);
-                    // a % b = a - floor(a / b) * b, guarded for b == 0
-                    let zero = builder.ins().f64const(0.0);
-                    let is_zero = builder.ins().fcmp(ir::condcodes::FloatCC::Equal, b, zero);
-                    let quotient = builder.ins().fdiv(a, b);
-                    let floored = builder.ins().floor(quotient);
-                    let product = builder.ins().fmul(floored, b);
-                    let mod_result = builder.ins().fsub(a, product);
-                    let result = builder.ins().select(is_zero, zero, mod_result);
-                    store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
+                    // The body through its helper: Rust's `%` on floats.
+                    let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                    let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                    let call = builder
+                        .ins()
+                        .call(math_binary_refs[F64_MOD_HELPER], &[a, b]);
+                    let result = builder.inst_results(call)[0];
+                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
                 }
 
                 JitOp::IsPositiveCheck { name_ptr, name_len } => {
@@ -3412,18 +3898,15 @@ fn compile_jit_impl(
                     let a_f = f64::from_bits(*a_bits);
                     let b_f = f64::from_bits(*b_bits);
                     let a_val = builder.ins().f64const(a_f);
-                    let span = b_f - a_f;
-                    let res_f = if span == 0.0 {
-                        builder.ins().f64const(0.0)
-                    } else {
-                        let inv_span = builder.ins().f64const(1.0 / span);
-                        let diff = builder.ins().fsub(in_f, a_val);
-                        let t = builder.ins().fmul(diff, inv_span);
-                        let zero = builder.ins().f64const(0.0);
-                        let one = builder.ins().f64const(1.0);
-                        let clamped_low = builder.ins().fmax(t, zero);
-                        builder.ins().fmin(clamped_low, one)
-                    };
+                    // The body's operations in its order: the reciprocal
+                    // of the span (infinite for an empty one), the
+                    // product, the clamp.
+                    let inv_span = builder.ins().f64const(1.0 / (b_f - a_f));
+                    let diff = builder.ins().fsub(in_f, a_val);
+                    let t = builder.ins().fmul(diff, inv_span);
+                    let zero = builder.ins().f64const(0.0);
+                    let one = builder.ins().f64const(1.0);
+                    let res_f = clamp_ir(&mut builder, t, zero, one);
                     let res = builder
                         .ins()
                         .bitcast(types::I64, ir::MemFlags::new(), res_f);
@@ -3438,19 +3921,17 @@ fn compile_jit_impl(
                     let in_max = f64::from_bits(*in_max_bits);
                     let out_min = f64::from_bits(*out_min_bits);
                     let out_max = f64::from_bits(*out_max_bits);
-                    let in_span = in_max - in_min;
+                    // The body's operations in its order: a division by
+                    // the span (not a product with its reciprocal, which
+                    // differs in the last bit), then the affine step.
+                    let in_span_val = builder.ins().f64const(in_max - in_min);
                     let in_min_val = builder.ins().f64const(in_min);
                     let out_min_val = builder.ins().f64const(out_min);
                     let out_span_val = builder.ins().f64const(out_max - out_min);
-                    let res_f = if in_span == 0.0 {
-                        out_min_val
-                    } else {
-                        let inv_in_span = builder.ins().f64const(1.0 / in_span);
-                        let diff = builder.ins().fsub(in_f, in_min_val);
-                        let t = builder.ins().fmul(diff, inv_in_span);
-                        let scaled = builder.ins().fmul(t, out_span_val);
-                        builder.ins().fadd(out_min_val, scaled)
-                    };
+                    let diff = builder.ins().fsub(in_f, in_min_val);
+                    let t = builder.ins().fdiv(diff, in_span_val);
+                    let scaled = builder.ins().fmul(t, out_span_val);
+                    let res_f = builder.ins().fadd(out_min_val, scaled);
                     let res = builder
                         .ins()
                         .bitcast(types::I64, ir::MemFlags::new(), res_f);
@@ -3613,10 +4094,18 @@ fn compile_jit_impl(
                         .brif(is_zero, merge_block, &[val], calc_block, &[]);
                     builder.switch_to_block(calc_block);
                     builder.seal_block(calc_block);
-                    let m_minus_1 = builder.ins().isub(m, one);
-                    let num = builder.ins().iadd(val, m_minus_1);
-                    let div = builder.ins().udiv(num, m);
-                    let mul = builder.ins().imul(div, m);
+                    // `div_ceil` without the sum that overflows near the
+                    // top, then the saturating product: the body's.
+                    let div = div_ceil(&mut builder, val, m, one);
+                    let high = builder.ins().umulhi(div, m);
+                    let low = builder.ins().imul(div, m);
+                    let zero_hi = builder.ins().iconst(types::I64, 0);
+                    let overflows =
+                        builder
+                            .ins()
+                            .icmp(ir::condcodes::IntCC::NotEqual, high, zero_hi);
+                    let max = builder.ins().iconst(types::I64, -1);
+                    let mul = builder.ins().select(overflows, max, low);
                     builder.ins().jump(merge_block, &[mul]);
                     builder.switch_to_block(merge_block);
                     builder.seal_block(merge_block);
@@ -3683,9 +4172,7 @@ fn compile_jit_impl(
                         .brif(is_zero, merge_block, &[zero], calc_block, &[]);
                     builder.switch_to_block(calc_block);
                     builder.seal_block(calc_block);
-                    let m_minus_1 = builder.ins().isub(m, one);
-                    let num = builder.ins().iadd(val, m_minus_1);
-                    let div = builder.ins().udiv(num, m);
+                    let div = div_ceil(&mut builder, val, m, one);
                     builder.ins().jump(merge_block, &[div]);
                     builder.switch_to_block(merge_block);
                     builder.seal_block(merge_block);
@@ -3852,6 +4339,71 @@ fn compile_jit_impl(
                     );
                 }
 
+                JitOp::VecProduce { kind, scratch_base } => {
+                    // The helper runs the node's body over the input
+                    // words and publishes the pair from the step's
+                    // entry.
+                    let func = func_of(&vec_producer_refs, *kind);
+                    let base_v = builder.ins().iconst(types::I64, *scratch_base as i64);
+                    let out_v = builder.ins().iconst(types::I64, output_slots[0] as i64);
+                    let words = load_words(&mut builder, buffer_ptr, input_slots, 4);
+                    let mut args = vec![scratch_ptr, base_v, buffer_ptr, out_v];
+                    args.extend(words);
+                    builder.ins().call(func, &args);
+                }
+                JitOp::VecReduce(kind) => {
+                    let func = func_of(&vec_reducer_refs, *kind);
+                    let words = load_words(&mut builder, buffer_ptr, input_slots, 4);
+                    let call = builder.ins().call(func, &words);
+                    let bits = builder.inst_results(call)[0];
+                    store_slot(&mut builder, buffer_ptr, output_slots[0], bits);
+                }
+                JitOp::RegLane(kind) => {
+                    let func = func_of(&reg_lane_refs, *kind);
+                    let words = load_words(&mut builder, buffer_ptr, input_slots, 3);
+                    let call = builder.ins().call(func, &words);
+                    let word = builder.inst_results(call)[0];
+                    store_slot(&mut builder, buffer_ptr, output_slots[0], word);
+                }
+                JitOp::RegProduce(kind) => {
+                    let func = func_of(&reg_producer_refs, *kind);
+                    let out_v = builder.ins().iconst(types::I64, output_slots[0] as i64);
+                    let words = load_words(&mut builder, buffer_ptr, input_slots, 4);
+                    let mut args = vec![buffer_ptr, out_v];
+                    args.extend(words);
+                    builder.ins().call(func, &args);
+                }
+                JitOp::RegDotF32 => {
+                    // The products at f32 precision, then the fixed
+                    // tree ((p0+p1)+(p2+p3)) at f32, then widened: the
+                    // node's body, operation for operation.
+                    let a = load_reg128(&mut builder, buffer_ptr, input_slots[0], types::F32X4);
+                    let b = load_reg128(&mut builder, buffer_ptr, input_slots[2], types::F32X4);
+                    let p = builder.ins().fmul(a, b);
+                    let p0 = builder.ins().extractlane(p, 0);
+                    let p1 = builder.ins().extractlane(p, 1);
+                    let p2 = builder.ins().extractlane(p, 2);
+                    let p3 = builder.ins().extractlane(p, 3);
+                    let s01 = builder.ins().fadd(p0, p1);
+                    let s23 = builder.ins().fadd(p2, p3);
+                    let s = builder.ins().fadd(s01, s23);
+                    let wide = builder.ins().fpromote(types::F64, s);
+                    store_slot_f64(&mut builder, buffer_ptr, output_slots[0], wide);
+                }
+                JitOp::RegShuffleConst(mask) => {
+                    // Output byte i is input byte mask[i]: the word's
+                    // bytes lie in memory in little-endian order, which
+                    // is the order `shuffle` numbers its lanes.
+                    let x = load_reg128(&mut builder, buffer_ptr, input_slots[0], types::I8X16);
+                    let imm = builder
+                        .func
+                        .dfg
+                        .immediates
+                        .push(ir::ConstantData::from(&mask[..]));
+                    let r = builder.ins().shuffle(x, x, imm);
+                    store_reg128(&mut builder, buffer_ptr, output_slots[0], r);
+                }
+
                 JitOp::Fallback => {
                     // Can't JIT this node — skip (caller should
                     // not include fallback ops in JIT steps)
@@ -3975,6 +4527,82 @@ fn store_reg128(
     builder
         .ins()
         .store(ir::MemFlags::new(), value, buffer_ptr, offset);
+}
+
+/// `x` rounded half away from zero, as `f64::round` rounds: the
+/// truncation, plus one in the sign of `x` when the fraction's
+/// magnitude reaches a half. Exact: where the fraction is nonzero the
+/// truncation is below 2^52, so the step is representable.
+fn round_half_away(builder: &mut FunctionBuilder, x: ir::Value) -> ir::Value {
+    let t = builder.ins().trunc(x);
+    let frac = builder.ins().fsub(x, t);
+    let mag = builder.ins().fabs(frac);
+    let half = builder.ins().f64const(0.5);
+    let reaches = builder
+        .ins()
+        .fcmp(ir::condcodes::FloatCC::GreaterThanOrEqual, mag, half);
+    let one = builder.ins().f64const(1.0);
+    let step = builder.ins().fcopysign(one, x);
+    let up = builder.ins().fadd(t, step);
+    builder.ins().select(reaches, up, t)
+}
+
+/// `x.clamp(lo, hi)` as `f64::clamp` computes it: `lo` when `x < lo`,
+/// `hi` when `x > hi`, else `x` itself, so a negative zero and a NaN
+/// pass through as they do there (`fmax`/`fmin` would return the
+/// bound's zero for `-0.0`).
+fn clamp_ir(
+    builder: &mut FunctionBuilder,
+    x: ir::Value,
+    lo: ir::Value,
+    hi: ir::Value,
+) -> ir::Value {
+    let below = builder.ins().fcmp(ir::condcodes::FloatCC::LessThan, x, lo);
+    let above = builder
+        .ins()
+        .fcmp(ir::condcodes::FloatCC::GreaterThan, x, hi);
+    let capped = builder.ins().select(above, hi, x);
+    builder.ins().select(below, lo, capped)
+}
+
+/// `val.div_ceil(m)` for a nonzero `m`: the quotient, plus one when
+/// the remainder is nonzero, with no sum that can overflow.
+fn div_ceil(
+    builder: &mut FunctionBuilder,
+    val: ir::Value,
+    m: ir::Value,
+    one: ir::Value,
+) -> ir::Value {
+    let q = builder.ins().udiv(val, m);
+    let r = builder.ins().urem(val, m);
+    let zero = builder.ins().iconst(types::I64, 0);
+    let inexact = builder.ins().icmp(ir::condcodes::IntCC::NotEqual, r, zero);
+    let q1 = builder.ins().iadd(q, one);
+    builder.ins().select(inexact, q1, q)
+}
+
+/// The function reference declared for one helper of a group.
+fn func_of<K: PartialEq + Copy>(refs: &[(K, ir::FuncRef)], key: K) -> ir::FuncRef {
+    refs.iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, r)| *r)
+        .expect("every helper of the group is declared")
+}
+
+/// Load a step's input words in order, zero past the last, as the
+/// arguments of a helper that takes a fixed count of words.
+fn load_words(
+    builder: &mut FunctionBuilder,
+    buffer_ptr: ir::Value,
+    input_slots: &[usize],
+    n: usize,
+) -> Vec<ir::Value> {
+    (0..n)
+        .map(|k| match input_slots.get(k) {
+            Some(&s) => load_slot(builder, buffer_ptr, s),
+            None => builder.ins().iconst(types::I64, 0),
+        })
+        .collect()
 }
 
 /// Load an f64 from buffer[slot] (bitcast from i64).

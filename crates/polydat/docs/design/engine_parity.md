@@ -427,7 +427,11 @@ bindings and this item (`assembly::shared_binding_refusal`).
 *Closed by step 7 with A4: no host-visible engine refuses a vector
 node. Closed on the pure tier too by the slot call of SRD 115 §6: a
 `Ref2` port keeps no node off native code, since native code runs the
-node's kit over the state's own scratch.*
+node's kit over the state's own scratch. The vector and register groups
+have named lowerings since 2026-09-13 (SRD 115 §6): each runs the
+body's own function from native code, into the step's entry or back as
+a word, and `reg_dot_f32` and `reg_shuffle_bytes` are inline vector
+instructions.*
 
 The hybrid kernel and pure native code read a vector output with
 `read_vec_*` or the typed reader, a copy out of the producing step's

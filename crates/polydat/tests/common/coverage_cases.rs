@@ -289,7 +289,40 @@ pub fn overrides(csv: &str, jsonl: &str, txt: &str) -> HashMap<&'static str, Str
 /// `(name, source)`. Adapters (`__*`) and dataset-backed nodes
 /// (`RealData`) are excluded, as the coverage test excludes them.
 pub fn programs() -> Vec<(String, String)> {
+    programs_over("input cycle: u64", "cycle", true)
+}
+
+/// The call synthesized from a node's signature with `wire` on every
+/// wire parameter, or `None` for a node whose call is written by hand
+/// (an override).
+pub fn synthesized_call(sig: &polydat::dsl::registry::FuncSig, wire: &str) -> Option<String> {
     use polydat::ast::SlotType;
+    let (csv, jsonl, txt) = fixtures();
+    if overrides(&csv, &jsonl, &txt).contains_key(sig.name) {
+        return None;
+    }
+    let mut args: Vec<String> = Vec::new();
+    for p in sig.params {
+        match p.slot_type {
+            SlotType::Wire => args.push(wire.into()),
+            SlotType::ConstU64 => args.push("100".into()),
+            SlotType::ConstF64 => args.push("1.0".into()),
+            SlotType::ConstStr => args.push("\"test\"".into()),
+            SlotType::ConstVecU64 => args.push("100".into()),
+            SlotType::ConstVecF64 => args.push("1.0".into()),
+            SlotType::ConstVec => args.push("100".into()),
+        }
+    }
+    if args.is_empty() && sig.is_variadic() {
+        args.push(wire.into());
+    }
+    Some(format!("{}({})", sig.name, args.join(", ")))
+}
+
+/// The programs over a declared input: `decl` declares it, `wire`
+/// names it in every synthesized call, and the hand-written cases
+/// (which are over `cycle`) are included only when asked.
+pub fn programs_over(decl: &str, wire: &str, with_overrides: bool) -> Vec<(String, String)> {
     use polydat::dsl::registry;
     let (csv, jsonl, txt) = fixtures();
     let overrides = overrides(&csv, &jsonl, &txt);
@@ -298,25 +331,11 @@ pub fn programs() -> Vec<(String, String)> {
         if sig.category == registry::FuncCategory::RealData || sig.name.starts_with("__") {
             continue;
         }
-        let src = if let Some(s) = overrides.get(sig.name) {
-            s.clone()
-        } else {
-            let mut args: Vec<String> = Vec::new();
-            for p in sig.params {
-                match p.slot_type {
-                    SlotType::Wire => args.push("cycle".into()),
-                    SlotType::ConstU64 => args.push("100".into()),
-                    SlotType::ConstF64 => args.push("1.0".into()),
-                    SlotType::ConstStr => args.push("\"test\"".into()),
-                    SlotType::ConstVecU64 => args.push("100".into()),
-                    SlotType::ConstVecF64 => args.push("1.0".into()),
-                    SlotType::ConstVec => args.push("100".into()),
-                }
-            }
-            if args.is_empty() && sig.is_variadic() {
-                args.push("cycle".into());
-            }
-            format!("input cycle: u64\nout := {}({})", sig.name, args.join(", "))
+        let src = match (overrides.get(sig.name), synthesized_call(sig, wire)) {
+            (Some(s), _) if with_overrides => s.clone(),
+            (Some(_), _) => continue,
+            (None, Some(call)) => format!("{decl}\nout := {call}"),
+            (None, None) => continue,
         };
         out.push((sig.name.to_string(), src));
     }

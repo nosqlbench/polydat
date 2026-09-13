@@ -320,10 +320,32 @@ symbol table so the emitted native code can call them.
 | `jit_is_positive_fail` | `(u64, ptr, len) -> u64` (value, control name) | `JitOp::IsPositiveCheck` |
 | `jit_in_range_fail` | `(u64, u64, u64) -> u64` (value, lo, hi) | `JitOp::InRangeCheck` |
 | `jit_is_one_of_fail` | `(u64, ptr, len) -> u64` (value, allowed set) | `JitOp::IsOneOfCheck` |
+| `jit_div_zero_fail` | `(kind) -> u64` (0 a quotient, 1 a remainder); the words Rust's `/` and `%` fail with | `JitOp::U64DivWire`, `JitOp::U64ModWire`, `JitOp::DivConst(0)`, `JitOp::ModConst(0)` |
 
 The `u64` return type matches the extern-function ABI the JIT
 uses; since each helper ends in `_longjmp` (which is `-> !`),
 the return is unreachable.
+
+### Bit-exactness
+
+A named lowering computes the bits the node's body computes, not a
+value near them. Where Cranelift's instruction differs from the Rust
+operation the body uses, the lowering spells the body's operation out
+or calls it: `f64::round` rounds half away from zero, so `round_to_u64`,
+`round_u64`, and `quantize` truncate and step by a signed one where the
+fraction reaches a half rather than using `nearest`, which rounds to
+even; `f64::clamp` keeps a negative zero and a NaN, so `clamp_f64`,
+`inv_lerp`, and `discretize` select on two comparisons rather than
+using `fmax`/`fmin`, which return the bound's zero; a division in the
+body is a division in the code (`remap`), never a product with a
+reciprocal, which differs in the last bit; `div_ceil` is the quotient
+plus one on a nonzero remainder, never `(v + m - 1) / m`, whose sum
+overflows near the top (`ceil_to_multiple`, `multiples_at_least`);
+`f64_mod` calls the body itself, since Rust's `%` on floats has no
+Cranelift equivalent; and `div_wire`, `mod_wire`, `div`, and `mod` fail
+on a zero divisor in the body's words, where `u64_div` and `u64_mod`,
+whose bodies check, yield zero. The corner suite
+(`tests/equivalence_corners.rs`) is the standing check.
 
 ### The slot-call helper
 
@@ -337,6 +359,11 @@ Slots](compiled_handles.md) §6):
 | `jit_u64_to_str`, `jit_i64_to_str`, `jit_f64_to_str` | `(scratch ptr, base, buffer ptr, out slot, bits)`, no return; the digits into the step's entry, the pair published | `JitOp::U64ToStr` and siblings |
 | `jit_str_concat` | `(scratch ptr, base, buffer ptr, out slot, pairs ptr, n)`, no return; every pair's bytes appended into the entry | `JitOp::StrConcat` |
 | `jit_json_to_str` | `(scratch ptr, base, buffer ptr, out slot, ptr, len)`, no return; the compact serialization into the entry | `JitOp::JsonToStr` |
+| `jit_vec_add`, `jit_vec_scale`, `jit_vec_norm`, `jit_hash_vec`, `jit_xxhash3_vec`, `jit_reg_to_vec_f32` | `(scratch ptr, base, buffer ptr, out slot, w0, w1, w2, w3)`, no return; the input words in order, zero past the last; the vector into the step's `F32` entry, the pair published | `JitOp::VecProduce` |
+| `jit_vec_dot`, `jit_vec_l2`, `jit_vec_cosine`, `jit_lid_mle` | `(w0, w1, w2, w3) -> bits` of the `f64` result | `JitOp::VecReduce` |
+| `jit_reg_lane_f32`, `jit_reg_lane_i16`, `jit_reg_lane_i64` | `(lo, hi, i) -> word`; the lane as its port stores it, the bound checked | `JitOp::RegLane` |
+| `jit_reg_with_lane_f32`, `jit_reg_gather_f32`, `jit_vec_to_reg_f32`, `jit_reg_mul_i8` | `(buffer ptr, out slot, w0, w1, w2, w3)`, no return; the word into the two output slots | `JitOp::RegProduce` |
+| `jit_f64_mod` | `(bits, bits) -> bits`; the body's `%` | `JitOp::F64Mod` |
 
 The generated code stores the step's input slots into a frame array,
 calls the helper with the kit's address (an immediate; the kit is

@@ -162,6 +162,25 @@ fn reg_splat_i64(k: u64) -> [i64; 2] {
 /// math downstream).
 #[crate::polydat_node(category = Arithmetic)]
 fn reg_gather_f32(v: &[f32], offset: u64) -> [f32; 4] {
+    gather_f32(v, offset).lanes_f32()
+}
+
+/// `vec_to_reg_f32(v)` — a length-4 `vec_f32` IS a `reg_f32x4`;
+/// panics on any other length.
+#[crate::polydat_node(category = Conversions)]
+fn vec_to_reg_f32(v: &[f32]) -> [f32; 4] {
+    to_reg_f32(v).lanes_f32()
+}
+
+// ── The bodies the nodes and their native lowerings share ──────
+//
+// Each register node with a lowering through a helper
+// (compiled_handles.md §6) runs the same function the node's body
+// runs, on the word as the slots hold it, so the two produce the
+// same bits and the same message on a bad lane or window.
+
+/// The word of lanes `[offset, offset+4)` of `v`.
+pub(crate) fn gather_f32(v: &[f32], offset: u64) -> Bits128 {
     let o = offset as usize;
     if o + 4 > v.len() {
         panic!(
@@ -170,20 +189,58 @@ fn reg_gather_f32(v: &[f32], offset: u64) -> [f32; 4] {
             v.len()
         );
     }
-    [v[o], v[o + 1], v[o + 2], v[o + 3]]
+    Bits128::from_lanes_f32([v[o], v[o + 1], v[o + 2], v[o + 3]])
 }
 
-/// `vec_to_reg_f32(v)` — a length-4 `vec_f32` IS a `reg_f32x4`;
-/// panics on any other length.
-#[crate::polydat_node(category = Conversions)]
-fn vec_to_reg_f32(v: &[f32]) -> [f32; 4] {
+/// The word of a four-element `v`.
+pub(crate) fn to_reg_f32(v: &[f32]) -> Bits128 {
     if v.len() != 4 {
         panic!(
             "vec_to_reg_f32: expected exactly 4 elements, got {}",
             v.len()
         );
     }
-    [v[0], v[1], v[2], v[3]]
+    Bits128::from_lanes_f32([v[0], v[1], v[2], v[3]])
+}
+
+/// Lane `i` of `r` as f32 lanes, widened.
+pub(crate) fn lane_f32(r: Bits128, i: u64) -> f64 {
+    if i >= 4 {
+        panic!("reg_lane_f32: lane {i} out of range 0..4");
+    }
+    r.lanes_f32()[i as usize] as f64
+}
+
+/// `r` with f32 lane `i` replaced by `v`.
+pub(crate) fn with_lane_f32(r: Bits128, i: u64, v: f64) -> Bits128 {
+    if i >= 4 {
+        panic!("reg_with_lane_f32: lane {i} out of range 0..4");
+    }
+    let mut out = r.lanes_f32();
+    out[i as usize] = v as f32;
+    Bits128::from_lanes_f32(out)
+}
+
+/// Lane `i` of `r` as i16 lanes.
+pub(crate) fn lane_i16(r: Bits128, i: u64) -> i16 {
+    if i >= 8 {
+        panic!("reg_lane_i16: lane {i} out of range 0..8");
+    }
+    r.lanes_i16()[i as usize]
+}
+
+/// Lane `i` of `r` as i64 lanes.
+pub(crate) fn lane_i64(r: Bits128, i: u64) -> i64 {
+    if i >= 2 {
+        panic!("reg_lane_i64: lane {i} out of range 0..2");
+    }
+    r.lanes_i64()[i as usize]
+}
+
+/// The wrapping product of `a` and `b` as i8 lanes.
+pub(crate) fn mul_i8(a: Bits128, b: Bits128) -> Bits128 {
+    let (a, b) = (a.lanes_i8(), b.lanes_i8());
+    Bits128::from_lanes_i8(core::array::from_fn(|i| a[i].wrapping_mul(b[i])))
 }
 
 /// `reg_to_vec_f32(r)` — the inverse projection.
@@ -199,40 +256,26 @@ fn reg_to_vec_f32(r: [f32; 4]) -> Vec<f32> {
 /// `reg_lane_f32(r, i)` — read lane `i` (0..4), widened to f64.
 #[crate::polydat_node(category = Arithmetic)]
 fn reg_lane_f32(r: [f32; 4], i: u64) -> f64 {
-    if i >= 4 {
-        panic!("reg_lane_f32: lane {i} out of range 0..4");
-    }
-    r[i as usize] as f64
+    lane_f32(Bits128::from_lanes_f32(r), i)
 }
 
 /// `reg_with_lane_f32(r, i, v)` — copy of `r` with lane `i`
 /// replaced by `v` (at f32 precision).
 #[crate::polydat_node(category = Arithmetic)]
 fn reg_with_lane_f32(r: [f32; 4], i: u64, v: f64) -> [f32; 4] {
-    if i >= 4 {
-        panic!("reg_with_lane_f32: lane {i} out of range 0..4");
-    }
-    let mut out = r;
-    out[i as usize] = v as f32;
-    out
+    with_lane_f32(Bits128::from_lanes_f32(r), i, v).lanes_f32()
 }
 
 /// `reg_lane_i16(r, i)` — read lane `i` (0..8).
 #[crate::polydat_node(category = Arithmetic)]
 fn reg_lane_i16(r: [i16; 8], i: u64) -> i16 {
-    if i >= 8 {
-        panic!("reg_lane_i16: lane {i} out of range 0..8");
-    }
-    r[i as usize]
+    lane_i16(Bits128::from_lanes_i16(r), i)
 }
 
 /// `reg_lane_i64(r, i)` — read lane `i` (0..2).
 #[crate::polydat_node(category = Arithmetic)]
 fn reg_lane_i64(r: [i64; 2], i: u64) -> i64 {
-    if i >= 2 {
-        panic!("reg_lane_i64: lane {i} out of range 0..2");
-    }
-    r[i as usize]
+    lane_i64(Bits128::from_lanes_i64(r), i)
 }
 
 // =================================================================
@@ -279,9 +322,12 @@ fn reg_sub_i8(a: [i8; 16], b: [i8; 16]) -> [i8; 16] {
     core::array::from_fn(|i| a[i].wrapping_sub(b[i]))
 }
 
+/// `reg_mul_i8(a, b)` — the wrapping product per lane. x86 has no
+/// byte-lane multiply short of AVX-512 and Cranelift lowers none, so
+/// native code runs this body through a helper.
 #[crate::polydat_node(category = Arithmetic)]
 fn reg_mul_i8(a: [i8; 16], b: [i8; 16]) -> [i8; 16] {
-    core::array::from_fn(|i| a[i].wrapping_mul(b[i]))
+    mul_i8(Bits128::from_lanes_i8(a), Bits128::from_lanes_i8(b)).lanes_i8()
 }
 
 #[crate::polydat_node(category = Arithmetic)]
@@ -351,8 +397,9 @@ fn reg_dot_f32(a: [f32; 4], b: [f32; 4]) -> f64 {
 /// mask is a 16-entry const list, each entry < 16 (panic
 /// otherwise, at build time). Duplicate indices broadcast; this
 /// is the SWAR / state-word workhorse for lane rearrangement
-/// under any view.
-#[crate::polydat_node(category = Arithmetic)]
+/// under any view. Native code bakes the mask into one `shuffle`
+/// instruction, so the node exposes it as its constants.
+#[crate::polydat_node(category = Arithmetic, jit_constants = reg_shuffle_bytes_jit_constants)]
 fn reg_shuffle_bytes(x: Bits128, mask: crate::derive_support::Const<Vec<u64>>) -> Bits128 {
     let m = &*mask;
     if m.len() != 16 {
@@ -370,6 +417,10 @@ fn reg_shuffle_bytes(x: Bits128, mask: crate::derive_support::Const<Vec<u64>>) -
         out[i] = src[idx as usize];
     }
     Bits128::from_le_bytes(out)
+}
+
+fn reg_shuffle_bytes_jit_constants(node: &RegShuffleBytes) -> Vec<u64> {
+    node.mask.clone()
 }
 
 #[cfg(test)]
