@@ -21,14 +21,17 @@ use crate::kernel::ProvMask;
 /// kernel clone is a new state over the same code. The slot kits the
 /// code calls by address live beside it, for as long as it does.
 #[derive(Clone)]
-pub struct JitCode(#[allow(dead_code)] std::sync::Arc<FinalizedModule>);
+pub struct JitCode(std::sync::Arc<FinalizedModule>);
 
-/// A JIT module after finalization, which nothing writes again, and
-/// the kits its code calls.
-struct FinalizedModule(
-    #[allow(dead_code)] JITModule,
-    #[allow(dead_code)] Vec<super::codegen::SlotKitRef>,
-);
+/// A JIT module after finalization, which nothing writes again, the
+/// kits its code calls, and whether the code calls anything at all.
+struct FinalizedModule {
+    #[allow(dead_code)]
+    module: JITModule,
+    #[allow(dead_code)]
+    kits: Vec<super::codegen::SlotKitRef>,
+    fallible: bool,
+}
 
 /// The scratch a native kernel's state owns: one entry per entry the
 /// steps' kits declare, and the `(first slot, entry)` pairs of the
@@ -45,8 +48,26 @@ unsafe impl Send for FinalizedModule {}
 unsafe impl Sync for FinalizedModule {}
 
 impl JitCode {
-    pub(crate) fn new(module: JITModule, kits: Vec<super::codegen::SlotKitRef>) -> Self {
-        JitCode(std::sync::Arc::new(FinalizedModule(module, kits)))
+    pub(crate) fn new(
+        module: JITModule,
+        kits: Vec<super::codegen::SlotKitRef>,
+        fallible: bool,
+    ) -> Self {
+        JitCode(std::sync::Arc::new(FinalizedModule {
+            module,
+            kits,
+            fallible,
+        }))
+    }
+
+    /// Whether the code can fail: it calls a helper, and a helper can
+    /// raise a node's failure through the longjmp catch. Code with no
+    /// call is arithmetic over the buffer, which cannot fail, so the
+    /// site that runs it needs no catch around it (the jump buffer, the
+    /// panic capture, and the unwind guard are the fixed cost of an
+    /// evaluation on the pure tier).
+    pub(crate) fn fallible(&self) -> bool {
+        self.0.fallible
     }
 }
 
@@ -74,6 +95,8 @@ pub(super) struct JitCore {
     /// `Kernel` trait.
     pub(super) traversals: std::sync::Arc<[crate::dsl::traversal::Traversal]>,
     pub(super) _module: JitCode,
+    /// Whether the code calls a helper, and so runs under the catch.
+    pub(super) fallible: bool,
     pub(super) _nodes: std::sync::Arc<Vec<Box<dyn PolydatNode>>>,
     /// The coordinates set through the `Kernel` trait, pending
     /// evaluation.
@@ -108,6 +131,7 @@ impl Clone for JitCore {
             externs: self.externs.clone(),
             traversals: self.traversals.clone(),
             _module: self._module.clone(),
+            fallible: self.fallible,
             _nodes: self._nodes.clone(),
             drive: self.drive.clone(),
             sites: self.sites.clone(),
@@ -164,6 +188,7 @@ impl JitCore {
             output_types: HashMap::new(),
             externs: crate::compile::externs::Externs::default(),
             traversals: Vec::new().into(),
+            fallible: code.fallible(),
             _module: code,
             _nodes: std::sync::Arc::new(nodes),
             drive: crate::compile::Drive::default(),
@@ -242,20 +267,25 @@ impl JitCore {
                  docs/design/engine_parity.md, A12)"
             );
         }
-        // Native code names the step it is in before each helper call;
+        // Code that calls no helper cannot fail: it runs bare. Otherwise
+        // native code names the step it is in before each helper call;
         // a failure before any names none. The capture guard is armed
         // for the run, so the helper's panic is recorded quietly and
         // re-raised enriched, as the interpreter re-raises a node's (A7).
-        self.buffer[self.tracker] = u64::MAX;
-        let capture = crate::kernel::engines::EvalPanicCaptureGuard::arm();
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            super::codegen::invoke_with_catch(native)
-        }));
-        drop(capture);
-        if let Err(payload) = outcome {
-            let step = self.buffer[self.tracker] as usize;
-            let sites = std::sync::Arc::clone(&self.sites);
-            sites.reraise(payload, step, &self.buffer, None);
+        if !self.fallible {
+            native();
+        } else {
+            self.buffer[self.tracker] = u64::MAX;
+            let capture = crate::kernel::engines::EvalPanicCaptureGuard::arm();
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                super::codegen::invoke_with_catch(native)
+            }));
+            drop(capture);
+            if let Err(payload) = outcome {
+                let step = self.buffer[self.tracker] as usize;
+                let sites = std::sync::Arc::clone(&self.sites);
+                sites.reraise(payload, step, &self.buffer, None);
+            }
         }
         #[cfg(debug_assertions)]
         self.validate_refs();
@@ -438,8 +468,14 @@ impl JitKernelRaw {
     /// handles the transition back to Rust land.
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
-        self.core.buffer[..self.core.coord_count.min(coords.len())]
-            .copy_from_slice(&coords[..self.core.coord_count.min(coords.len())]);
+        // Written one by one, as the other kernels write them: a slice
+        // copy of a runtime length is a call to memcpy, which costs
+        // more than the three stores it replaces.
+        for (i, &c) in coords.iter().enumerate().take(self.core.coord_count) {
+            if self.core.buffer[i] != c {
+                self.core.buffer[i] = c;
+            }
+        }
         let code_fn = self.code_fn;
         let buf_ptr_const = self.core.buffer.as_ptr();
         let buf_ptr_mut = self.core.buffer.as_mut_ptr();

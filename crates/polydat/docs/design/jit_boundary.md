@@ -29,7 +29,13 @@ fn(coords: *const u64, buffer: *mut u64,
 
 The Rust side owns the buffer and the scratch and calls the function
 pointer. Native code runs in three places, and every one of them calls
-through `codegen::invoke_with_catch`:
+through `codegen::invoke_with_catch` when the code can fail, that is,
+when it calls a helper (`JitCode::fallible`, decided at finalization
+by whether the function holds a call instruction). Code with no call
+is arithmetic over the buffer and cannot fail, so the site runs it
+bare, without the jump buffer, the panic capture, or the unwind
+guard: on the engine ladder's graph those were 20 ns of a 50 ns
+evaluation, the generated code itself being 30 ns.
 
 | Site | What runs natively | Where |
 |---|---|---|

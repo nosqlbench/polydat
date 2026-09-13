@@ -43,6 +43,9 @@ struct JitSegment {
     /// The finalized native code, shared by every kernel created from
     /// one program.
     _module: crate::compile::jit::JitCode,
+    /// Whether the code calls a helper, and so runs under the longjmp
+    /// catch; code with no call runs bare.
+    fallible: bool,
     /// The slots the segment reads and writes, for cones and for the
     /// `None` check native code cannot make itself.
     input_slots: Vec<usize>,
@@ -1386,6 +1389,7 @@ pub(crate) fn build_hybrid(
             }
             steps.push(HybridStep::Jit(JitSegment {
                 code_fn,
+                fallible: code.fallible(),
                 _module: code,
                 input_slots,
                 output_slots,
@@ -1850,15 +1854,20 @@ fn run_hybrid_step(
     match step {
         #[cfg(feature = "jit")]
         HybridStep::Jit(seg) => {
-            // Through the setjmp wrapper, so a helper's failure is the
-            // longjmp the kernel catches rather than an abort.
+            // Through the setjmp wrapper when the code calls a helper,
+            // so its failure is the longjmp the kernel catches rather
+            // than an abort; bare when it calls nothing.
             let code_fn = seg.code_fn;
             let buf_const = buffer.as_ptr();
             let buf_mut = buffer.as_mut_ptr();
             let sc = scratch.as_mut_ptr();
-            crate::compile::jit::invoke_with_catch(move || unsafe {
-                (code_fn)(buf_const, buf_mut, sc);
-            });
+            if seg.fallible {
+                crate::compile::jit::invoke_with_catch(move || unsafe {
+                    (code_fn)(buf_const, buf_mut, sc);
+                });
+            } else {
+                unsafe { (code_fn)(buf_const, buf_mut, sc) };
+            }
         }
         HybridStep::Closure(cs) => {
             for (i, &slot) in cs.input_slots.iter().enumerate() {

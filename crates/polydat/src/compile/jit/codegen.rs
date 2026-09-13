@@ -4435,6 +4435,14 @@ fn compile_jit_impl(
         builder.ins().return_(&[]);
         builder.finalize();
     }
+    // Code that calls nothing cannot fail: no helper, no longjmp, no
+    // panic. The kernel that runs it skips the catch.
+    let fallible = ctx.func.layout.blocks().any(|block| {
+        ctx.func
+            .layout
+            .block_insts(block)
+            .any(|inst| ctx.func.dfg.insts[inst].opcode().is_call())
+    });
 
     module
         .define_function(func_id, &mut ctx)
@@ -4450,7 +4458,7 @@ fn compile_jit_impl(
         .iter()
         .filter_map(|(op, _, _)| op.slot_kit().cloned())
         .collect();
-    let code = super::kernels::JitCode::new(module, kits);
+    let code = super::kernels::JitCode::new(module, kits, fallible);
 
     if provenance {
         let prov_fn: NativeProvFn = unsafe { mem::transmute(code_ptr) };

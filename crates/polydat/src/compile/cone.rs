@@ -88,6 +88,9 @@ mod jit_impl {
         /// The finalized code and the kits it calls, kept alive for
         /// the life of the program.
         _module: crate::compile::jit::JitCode,
+        /// Whether the code calls a helper, and so runs under the
+        /// catch; code with no call runs bare.
+        fallible: bool,
     }
 
     impl PolydatNode for JitConeNode {
@@ -170,21 +173,26 @@ mod jit_impl {
             // call (the slot past the layout); a failure is re-raised
             // attributed to that member with the program's context and
             // output names, and the interpreter re-raises it as is (A7).
-            buf[self.total_slots] = u64::MAX;
             let code_fn = self.code_fn;
             let cp = buf.as_ptr();
             let mp = buf.as_mut_ptr();
             let sc = members.as_mut_ptr();
-            let capture = crate::kernel::engines::EvalPanicCaptureGuard::arm();
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                crate::compile::jit::invoke_with_catch(move || unsafe {
-                    (code_fn)(cp, mp, sc);
-                })
-            }));
-            drop(capture);
-            if let Err(payload) = outcome {
-                let step = buf[self.total_slots] as usize;
-                self.attribution.reraise(payload, step, buf, None);
+            if !self.fallible {
+                // Code that calls no helper cannot fail: it runs bare.
+                unsafe { (code_fn)(cp, mp, sc) };
+            } else {
+                buf[self.total_slots] = u64::MAX;
+                let capture = crate::kernel::engines::EvalPanicCaptureGuard::arm();
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    crate::compile::jit::invoke_with_catch(move || unsafe {
+                        (code_fn)(cp, mp, sc);
+                    })
+                }));
+                drop(capture);
+                if let Err(payload) = outcome {
+                    let step = buf[self.total_slots] as usize;
+                    self.attribution.reraise(payload, step, buf, None);
+                }
             }
             #[cfg(debug_assertions)]
             for &(slot, idx) in &self.scratch.refs {
@@ -868,6 +876,7 @@ mod jit_impl {
             sub_wiring: sub.wiring,
             out_ports,
             scratch,
+            fallible: code.fallible(),
             _module: code,
         })
     }
