@@ -152,8 +152,9 @@ fn the_attribution_names_the_context_and_the_original_message() {
 }
 
 /// With cones on, the interpreter's program holds the fused node; its
-/// failure names the member that failed inside the cone's own report,
-/// then the cone as the program's node.
+/// failure names the member that failed, that member's outputs as the
+/// program names them, and the program, exactly as the same failure
+/// reads on the native engine (A7). The cone is not a frame of its own.
 #[cfg(feature = "jit")]
 #[test]
 fn a_cone_names_the_member_that_failed() {
@@ -167,12 +168,21 @@ fn a_cone_names_the_member_that_failed() {
     .expect("the interpreter runs everything");
     for e in [
         "in_range: value 20 outside [0, 5]",
-        "↳ in node `in_range` (output o",
-        ") while evaluating jit_cone[mul+in_range]",
+        "↳ in node `in_range` (output checked) while evaluating (polydat)",
         "↳ inputs: [[0]=U64(20)]",
-        "↳ in node `jit_cone[mul+in_range]` (outputs checked, doubled)",
-        "↳ inputs: [[0]=U64(10)]",
     ] {
         assert!(got.contains(e), "cone failure lacks {e:?}:\n{got}");
     }
+    assert!(!got.contains("jit_cone"), "the cone is not a frame:\n{got}");
+    let native = failure_with(
+        src,
+        Engine::Native(Provenance::Auto),
+        JitMode::Force,
+        &|k| k.set_inputs(&[10]),
+    )
+    .expect("native code runs everything");
+    assert_eq!(
+        got, native,
+        "the fused interpreter and the native engine read alike"
+    );
 }

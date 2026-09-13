@@ -17,12 +17,13 @@ its semantics, [Compiled By-Reference Slots](compiled_handles.md)
 [Engine Parity](engine_parity.md) (SRD 116) for the `Kernel` trait every
 engine shares, which the projection bodies use.
 
-*Since SRD 115's third revision the render node is a closure step on
-every compiled engine: native code carries no reference pairs yet, so
-what this plan measured as "P3" is now the render closure beside native
-segments, writing into the step's own scratch, and the helper it
-describes is gone. The measurements below are kept as the record of
-what each step bought; the mechanism they describe is the closure's.*
+*Since SRD 115's third revision the render node is one closure on
+every compiled engine, which native code calls in place through the
+slot-call helper (compiled_handles.md §6): what this plan measured as
+"P3" is now that closure inside the native segment or cone, writing
+into the step's own scratch, and the tile-specific helper it describes
+is gone. The measurements below are kept as the record of what each
+step bought; the mechanism they describe is the closure's.*
 
 ## 1. The problem
 

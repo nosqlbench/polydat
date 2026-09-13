@@ -424,13 +424,14 @@ bindings and this item (`assembly::shared_binding_refusal`).
 
 ### A11. Vectors have no native form — functional, by design
 
-*Closed by step 7 with A4: no host-visible engine refuses a vector node.*
+*Closed by step 7 with A4: no host-visible engine refuses a vector
+node. Closed on the pure tier too by the slot call of SRD 115 §6: a
+`Ref2` port keeps no node off native code, since native code runs the
+node's kit over the state's own scratch.*
 
-Every `Ref2` port keeps a node off pure native code
-(`build_jit_layout`: "pure-P3 kernels carry no reference slots"). The
-hybrid kernel runs vector nodes as closures and reads them with
-`read_vec_*`. Under A4 this stops being host-visible; it remains a
-limit of the pure tier and belongs in the SIMD and register documents.
+The hybrid kernel and pure native code read a vector output with
+`read_vec_*` or the typed reader, a copy out of the producing step's
+entry.
 
 ### A12. An unset extern is a `None` on the interpreter and a refusal elsewhere — semantic
 
@@ -675,9 +676,11 @@ proves it.
    past the layout before each helper call, the one way native code
    fails; the store is removed again from a step of inline arithmetic,
    so a step that cannot fail pays nothing. A cone (SRD-105) does the
-   same for its members and re-raises attributed to the member, and
-   the interpreter's own enrichment then names the cone, so a failure
-   inside a fused node reads member first, cone second. Every native
+   same for its members and re-raises attributed to the member, with
+   the program's context and the program's names for the member's
+   outputs, and the interpreter re-raises that report as it is, so a
+   failure inside a fused node reads as it reads on the native engine
+   and the cone is no frame of its own. Every native
    helper runs under `guarded` now, except the three predicate-fail
    helpers that are the longjmp themselves, so a helper's panic is the
    longjmp the kernel catches and never a process abort; the longjmp

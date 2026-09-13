@@ -405,15 +405,14 @@ Three things to know about extension values:
   then panics with both type names. Give distinct host types distinct
   producers and consumers, and keep them in one crate so the downcast
   can see the concrete type.
-- **Extension nodes have a closure form but no native one.** An
+- **Extension nodes run on every engine through their closure.** An
   extension value rides the compiled engines as a reference pair to
-  the value its producing step owns, the same way JSON does, so the
-  closure tier and the hybrid kernel of §11 run a node with an `Ext`
-  signature as a closure step. Pure native code refuses it. The scalar
-  work around it is still native: in the run above the hashing and
-  scaling ran as native segments while the two host nodes ran as
-  closure steps, passing the value between them as the pair described
-  in [Compiled By-Reference Slots](../design/compiled_handles.md).
+  the value its producing step owns, the same way JSON does. The
+  closure tier runs a node with an `Ext` signature as a closure step,
+  and native code calls the same closure in place, inside the segment
+  with the hashing and scaling around it, passing the value between
+  the nodes as the pair described in
+  [Compiled By-Reference Slots](../design/compiled_handles.md).
 - **The value is cloned on every read.** `Ext<T>::extract` clones the
   boxed value, so a large host type should hold its payload in an `Arc`.
   The crate's own `Partition` and `Streamer` values do exactly that.
@@ -622,7 +621,7 @@ for cycle in [0u64, 1] {
 
 ```text
 Engine::default() is native (Pull)
-P3 plan: 4 native segment(s), 6 closure step(s)
+P3 plan: 2 native segment(s)
 cycle 0: j={"h": 16294208416658607535, "name": "user-16294208416658607535", "tag": "job-7535", "cell": "L4:10:13"}
   closures (Pull) agrees: true
   native (Pull) agrees: true
@@ -787,8 +786,8 @@ compile events: 4
   Info: TileHoleTyped { tile: "t", hole: "f | .2", wire_type: "f64", declared: None, expectation: "any JSON value (f64)", encoder: "json number, format .2", adapter: None }
   Info: TileCompiled { tile: "t", encoding: "json", statics: 3, static_bytes: 14, holes: 2, branches: 0, projections: 0, bodies: [] }
   Info: ConstantFolded { node: "const_f64", value: "3.0" }
-nodes: 4, deterministic: true
-node names: ["const_f64", "__port_cycle", "jit_cone[hash+to_f64+f64_div]", "tile_render"]
+nodes: 3, deterministic: true
+node names: ["const_f64", "__port_cycle", "jit_cone[hash+to_f64+f64_div+tile_render]"]
 compile events on the default engine: 4
 ```
 
@@ -804,10 +803,10 @@ list, so a host that wants a strict build can fail on any event whose
 level is a warning. Cone fusion is not an
 event: the node list shows what the interpreter's program is actually
 running, one constant, the passthrough that exposes the coordinate as
-an output, one native cone that fused the hash, the conversion, and the
-division, and the tile renderer, which produces a string and so runs
-as a node of its own until native code carries by-reference values
-(compiled_handles.md §6). The log is the
+an output, and one native cone that fused the hash, the conversion,
+the division, and the tile renderer, whose closure the cone calls in
+place over the state's own scratch (compiled_handles.md §6). The log
+is the
 same on every engine: the default engine records the same four events,
 the hole typings and the compiled tile from the assembly and the
 constant its own build folded, and every extern without a default is

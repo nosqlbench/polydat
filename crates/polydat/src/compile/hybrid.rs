@@ -39,7 +39,7 @@ enum HybridStep {
 
 #[cfg(feature = "jit")]
 struct JitSegment {
-    code_fn: unsafe fn(*const u64, *mut u64),
+    code_fn: crate::compile::jit::NativeFn,
     /// The finalized native code, shared by every kernel created from
     /// one program.
     _module: crate::compile::jit::JitCode,
@@ -256,15 +256,6 @@ impl HybridCore {
         }
         self.externs.seed(&mut self.buffer, None);
     }
-}
-
-/// Whether a node has a `Ref2`-colored port on either side: such a
-/// node runs as a closure step until the native lowering carries
-/// reference pairs.
-#[cfg(feature = "jit")]
-fn has_ref_port(node: &dyn PolydatNode, wire_types: &[crate::ast::PortType]) -> bool {
-    let is_ref = |t: &crate::ast::PortType| t.slot_color() == crate::ast::SlotColor::Ref2;
-    wire_types.iter().any(is_ref) || node.meta().outs.iter().any(|o| is_ref(&o.typ))
 }
 
 impl HybridCore {
@@ -1233,13 +1224,7 @@ pub(crate) fn build_hybrid(
                     WireSource::NodeOutput(j, p) => nodes[*j].meta().outs[*p].typ,
                 })
                 .collect();
-            // A node with a `Ref2` port runs as a closure until the
-            // native lowering carries reference pairs.
-            let jit_op = if has_ref_port(node.as_ref(), &wire_types) {
-                JitOp::Fallback
-            } else {
-                jit::classify_node_typed(node.as_ref(), &wire_types)
-            };
+            let jit_op = jit::classify_node_typed(node.as_ref(), &wire_types);
 
             let input_slots = flatten_input_slots(
                 wiring,
@@ -1332,12 +1317,31 @@ pub(crate) fn build_hybrid(
             // folded at build only if every member is compile-constant, so
             // a constant node never joins a segment that is not, or the
             // constant steps after it would run before their producer.
+            // A segment is one step to the plan, so a volatile node
+            // never joins pure ones: the segment would be never
+            // current and rerun them at every round.
             let batch_start = i;
             while i < classifications.len()
                 && !matches!(classifications[i].0, JitOp::Fallback)
                 && constant[i] == constant[batch_start]
+                && volatile[i] == volatile[batch_start]
             {
                 i += 1;
+            }
+            // Each step's scratch entries are placed in the kernel's
+            // scratch (axiom S3), and its reference outputs recorded
+            // for the validator (S9(a)).
+            for k in batch_start..i {
+                let base = scratch.len();
+                classifications[k].0.place_scratch(base);
+                let elems = classifications[k].0.scratch_elems().to_vec();
+                ref_scratch.extend(crate::compile::assembly::scratch_pairs(
+                    &nodes[k].meta().name,
+                    &flatten_ref_output_starts(nodes, k, port_offsets),
+                    &elems,
+                    base,
+                ));
+                scratch.extend(elems.iter().map(|e| crate::ast::ScratchBuf::new(*e)));
             }
             // One native segment for the batch: its boundary inputs are
             // the slots the batch reads and does not write, its outputs
@@ -1366,14 +1370,14 @@ pub(crate) fn build_hybrid(
                 .iter()
                 .flat_map(|(_, _, o)| o.iter().copied())
                 .collect();
-            let (code_fn, module) = jit::compile_jit_entry(&batch, Some(total_slots))?;
+            let (code_fn, code) = jit::compile_jit_entry(&batch, Some(total_slots))?;
             let segment = steps.len();
             for s in &mut node_step[batch_start..i] {
                 *s = segment;
             }
             steps.push(HybridStep::Jit(JitSegment {
                 code_fn,
-                _module: crate::compile::jit::JitCode::new(module),
+                _module: code,
                 input_slots,
                 output_slots,
                 nodes: (batch_start..i).collect(),
@@ -1842,8 +1846,9 @@ fn run_hybrid_step(
             let code_fn = seg.code_fn;
             let buf_const = buffer.as_ptr();
             let buf_mut = buffer.as_mut_ptr();
+            let sc = scratch.as_mut_ptr();
             crate::compile::jit::invoke_with_catch(move || unsafe {
-                (code_fn)(buf_const, buf_mut);
+                (code_fn)(buf_const, buf_mut, sc);
             });
         }
         HybridStep::Closure(cs) => {

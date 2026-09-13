@@ -981,8 +981,14 @@ fn strict_pragmas_reach_every_compile_path() {
         logged.program().node_count(),
         "the plain and logged interpreter paths must build the same graph"
     );
+    // The assertion node may be fused into a cone, whose label names
+    // its members, so look for it by name rather than by node count.
+    let has_assertion = |k: &polydat::kernel::PolydatKernel| {
+        let p = k.program();
+        (0..p.node_count()).any(|i| p.node_meta(i).name.contains("assert_u64_nonzero"))
+    };
     assert!(
-        plain_nodes > lax_kernel.program().node_count(),
+        has_assertion(&plain) && !has_assertion(&lax_kernel),
         "strict_values must insert the assertion on the plain path too"
     );
     let mut default_log = CompileEventLog::new();

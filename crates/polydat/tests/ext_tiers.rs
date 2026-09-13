@@ -1,11 +1,12 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Extension values on the closure tier. A host type that implements
+//! Extension values on every engine. A host type that implements
 //! `ReflectedValue` rides a wire as `Value::Ext`; nodes take and return
-//! it through `Ext<T>`. Such a node has a handle closure (SRD 115 §7)
-//! that reads and writes the value table, so the closure tier and the
-//! hybrid kernel run it, while pure native code still refuses it.
+//! it through `Ext<T>`. Such a node has a slot kit (SRD 115 §5) that
+//! reads the value through its pair and writes its own into the step's
+//! scratch, which the closure tier runs as a step and native code calls
+//! in place (SRD 115 §6).
 
 use polydat::ast::{ReflectedValue, Value};
 use polydat::derive_support::Ext;
@@ -133,33 +134,52 @@ fn extension_nodes_agree_between_interpreter_closures_and_hybrid() {
     }
 }
 
+/// An extension node runs as a slot call of its kit inside native
+/// code (compiled_handles.md §6): the whole program is one segment on
+/// the hybrid kernel and one function on pure native code, and the
+/// extension value crosses nowhere as anything but the pair into its
+/// producing step's scratch.
 #[test]
-fn extension_nodes_are_closure_steps_never_native() {
+fn extension_nodes_run_as_slot_calls_in_native_code() {
     let hybrid = compile_polydat_to_assembler(SRC)
         .unwrap()
         .compile_hybrid()
         .expect("hybrid");
     let (native, closures) = hybrid.engine_counts();
-    assert!(
-        closures >= 3,
-        "the three extension nodes and the text node should be closure steps, got {closures}"
-    );
     #[cfg(feature = "jit")]
     {
+        assert_eq!(
+            closures, 0,
+            "every node has a kit, so none is a closure step"
+        );
         assert!(
             native >= 1,
-            "the scalar prefix should still be native, got {native}"
+            "the program runs as native segments, got {native}"
         );
-        assert!(
-            compile_polydat_to_assembler(SRC)
-                .unwrap()
-                .try_compile_pure_jit()
-                .is_err(),
-            "pure native code has no form for an extension node"
-        );
+        let mut p1 = compile_polydat_to_assembler(SRC).unwrap();
+        p1.set_jit_mode(polydat::JitMode::Off);
+        let mut p1 = p1.compile().expect("P1");
+        let mut pure = compile_polydat_to_assembler(SRC)
+            .unwrap()
+            .try_compile_pure_jit()
+            .expect("pure native code calls the extension nodes' kits");
+        for cycle in [0u64, 1, 1, 9] {
+            p1.set_inputs(&[cycle]);
+            pure.eval(&[cycle]);
+            for name in ["n", "label", "doc"] {
+                assert_eq!(
+                    pure.get_value(name).to_display_string(),
+                    p1.pull(name).to_display_string(),
+                    "cycle {cycle}: pure native `{name}`"
+                );
+            }
+        }
     }
     #[cfg(not(feature = "jit"))]
-    assert_eq!(native, 0, "nothing is native without the jit feature");
+    {
+        assert_eq!(native, 0, "nothing is native without the jit feature");
+        assert!(closures >= 3, "the nodes are closure steps, got {closures}");
+    }
 }
 
 // ── Fallible construction and tuple returns on the closure tier ──
@@ -281,9 +301,16 @@ fn fallible_and_tuple_nodes_agree_between_interpreter_closures_and_hybrid() {
             );
         }
     }
-    let (_, closures) = hybrid.engine_counts();
+    let (native, closures) = hybrid.engine_counts();
+    #[cfg(feature = "jit")]
     assert!(
-        closures >= 5,
+        native >= 1 && closures == 0,
+        "the fallible and tuple nodes run as slot calls inside native segments, got \
+         {native} native and {closures} closure steps"
+    );
+    #[cfg(not(feature = "jit"))]
+    assert!(
+        native == 0 && closures >= 5,
         "the fallible and tuple nodes run as closure steps, got {closures}"
     );
 }
@@ -438,10 +465,11 @@ fn an_extern_set_to_the_wrong_type_is_refused_by_name() {
 }
 
 /// Pure native code with externs. Carrier externs reach native code
-/// through their slots and are set by the host between runs; a program
-/// whose externs feed nodes with a by-reference output is refused by
-/// name, since native code carries no reference slots yet
-/// (compiled_handles.md §6).
+/// through their slots; a string, JSON, or extension extern reaches it
+/// as the pair into the value the state stores, and the nodes over
+/// them run as slot calls inside the one native function
+/// (compiled_handles.md §6). Every extern is set by the host between
+/// runs.
 #[cfg(feature = "jit")]
 #[test]
 fn externs_agree_between_interpreter_and_pure_native_code() {
@@ -487,13 +515,37 @@ fn externs_agree_between_interpreter_and_pure_native_code() {
             }
         }
     }
-    let err = compile_polydat_to_assembler(EXTERNS)
+    // Every kind of extern, read through by-reference nodes.
+    let mut p1 = polydat::dsl::compile::compile_polydat(EXTERNS).expect("interpreter");
+    let mut p3 = compile_polydat_to_assembler(EXTERNS)
         .unwrap()
         .try_compile_pure_jit()
-        .err()
-        .expect("string, JSON, and extension externs feed by-reference outputs");
-    assert!(
-        err.contains("Ref2") && err.contains("reference slots"),
-        "the refusal names the color: {err}"
-    );
+        .expect("pure native code with string, JSON, and extension externs");
+    let read = ["id", "tag", "text", "code", "line"];
+    for round in 0..3u64 {
+        let (doc_n, region) = (round * 7, ["east", "west", "north"][round as usize]);
+        for (name, value) in host_values(doc_n, region) {
+            p1.set_input(name, value.clone()).expect("P1 set_input");
+            p3.set_input(name, value).expect("P3 set_input");
+        }
+        for cycle in [0u64, 1, 1, 2, 2, 0] {
+            p1.set_inputs(&[cycle]);
+            let want: Vec<(polydat::ast::PortType, String)> = read
+                .iter()
+                .map(|o| {
+                    let v = p1.pull(o);
+                    (v.port_type(), v.to_display_string())
+                })
+                .collect();
+            p3.eval(&[cycle]);
+            for (i, o) in read.iter().enumerate() {
+                let v = p3.get_value(o);
+                assert_eq!(
+                    (v.port_type(), v.to_display_string()),
+                    want[i],
+                    "round {round} cycle {cycle}: pure native `{o}`"
+                );
+            }
+        }
+    }
 }

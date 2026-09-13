@@ -6,9 +6,10 @@
 //! interpreter on every engine tier, whatever the types of their wires.
 //!
 //! Their string and JSON ports are `Ref2` values (jit_boundary.md,
-//! axioms S1–S10), and the native tier does not carry reference pairs
-//! yet, so these nodes run as closure steps beside the native ones;
-//! `REF_NATIVE` gates the fusion assertions until it does.
+//! axioms S1–S10), which the native tier carries through slot calls of
+//! the nodes' kits (compiled_handles.md §6), so these nodes join the
+//! native segments and cones; `REF_NATIVE` names the fusion assertions
+//! that rest on it.
 
 #![cfg(feature = "jit")]
 
@@ -18,7 +19,7 @@ use polydat::dsl::compile::compile_polydat_to_assembler;
 use polydat::kernel::PolydatKernel;
 
 /// Whether the native tier lowers steps with reference-pair ports.
-const REF_NATIVE: bool = false;
+const REF_NATIVE: bool = true;
 
 fn kernel(src: &str, mode: JitMode) -> PolydatKernel {
     let mut asm = compile_polydat_to_assembler(src).unwrap_or_else(|e| panic!("{e}\n{src}"));
@@ -98,11 +99,22 @@ fn printf_lowers_with_its_wire_types_and_every_spec_agrees() {
 }
 
 #[test]
-fn printf_on_a_p1_produced_string_takes_it_as_a_boundary_input() {
-    // `str_concat` with a u64 wire stays on P1 (untyped edge), so its
-    // Str output enters the printf cone as a boundary handle.
+fn printf_on_a_produced_string_reads_its_pair_inside_the_cone() {
+    // `str_concat` over a u64 wire lowers with that wire type, and
+    // its Str output reaches `printf` as the pair into its own scratch
+    // entry, inside one cone.
     let src = "input cycle: u64\nh := hash(cycle)\nc := str_concat(h, \"-x\")\nout := printf(\"[{:>30}]\", c)\n";
-    agree(src, &["out"], 5, &["printf"], &["str_concat"]);
+    agree(src, &["out"], 5, &["printf", "str_concat"], &[]);
+}
+
+#[test]
+fn a_string_from_an_interpreted_node_enters_a_cone_as_a_boundary_input() {
+    // `default_or` tolerates a `None` input and reads a kernel input
+    // here, so it may not sit inside a cone (SRD-74) and stays
+    // interpreted; the string it produces enters the printf cone
+    // borrowed into its pair for the call.
+    let src = "input cycle: u64\nextern label: str = \"abc\"\nh := hash(cycle)\nc := default_or(label, \"x\")\nout := printf(\"[{:>30}] {}\", c, h)\n";
+    agree(src, &["out"], 5, &["printf"], &["default_or"]);
 }
 
 #[test]
@@ -115,12 +127,13 @@ fn json_constructors_lower_and_agree() {
         &["json_array", "json_to_str"],
         &[],
     );
-    // `json_with` has no lowering, so its Json outputs enter the
-    // `json_object` cone as table-kind boundary inputs.
+    // `json_with` lowers as a slot call of its kit, so its Json
+    // outputs reach `json_object` inside the cone as pairs into its
+    // own scratch entries.
     let src = format!(
         "{WIRES}obj := json_object(json_with(\"id\", h), json_with(\"name\", s), json_with(\"ok\", b))\nt := json_to_str(obj)\n"
     );
-    let mut p3 = agree(&src, &["obj", "t"], 6, &["json_object"], &["json_with"]);
+    let mut p3 = agree(&src, &["obj", "t"], 6, &["json_object", "json_with"], &[]);
     p3.set_inputs(&[3]);
     let obj = p3.pull("obj").clone();
     assert!(matches!(obj, Value::Json(_)));
@@ -231,17 +244,22 @@ fn a_projection_tile_renders_on_the_hybrid_kernel() {
     }
 }
 
-/// A pure native kernel carries no reference pairs yet: a program with
-/// a string output is refused by name, and runs on the hybrid kernel.
+/// A pure native kernel carries a reference output: the producing
+/// node runs as a slot call inside the one native function, its pair
+/// names the state's own scratch, and the typed read copies it out.
 #[test]
-fn a_pure_native_kernel_refuses_a_reference_output() {
+fn a_pure_native_kernel_carries_a_reference_output() {
     let src = "input cycle: u64\nh := hash(cycle)\ns := __u64_to_string(h)\n";
-    let err = compile_polydat_to_assembler(src)
+    let mut pure = compile_polydat_to_assembler(src)
         .unwrap()
         .try_compile_pure_jit()
-        .err()
-        .expect("a string output has no pure native form yet");
-    assert!(err.contains("Ref2"), "{err}");
+        .expect("a string output runs as a slot call in native code");
+    let mut p1 = kernel(src, JitMode::Off);
+    for c in [3u64, 4, 4, 5] {
+        pure.eval(&[c]);
+        p1.set_inputs(&[c]);
+        assert_eq!(pure.get_value("s").as_str(), p1.pull("s").as_str());
+    }
 }
 
 /// A hybrid kernel's string output is owned by its step: it stands

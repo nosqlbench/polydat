@@ -589,10 +589,13 @@ result goes, per [Compiled By-Reference Slots](compiled_handles.md):
   body kernels of a projection live in the same step's scratch. One
   rule keeps semantics exact: the render node tolerates a `None` input
   (it writes `null`), so it takes its value through the `None` mask.
-- **P3.** Native code carries no reference pairs yet, so the render
-  node is a closure step in a hybrid kernel and never a member of a
-  native segment or a cone; a program whose tile is its only
-  by-reference work still runs its scalar steps natively around it.
+- **P3.** Native code calls the same closure in place
+  ([Compiled By-Reference Slots](compiled_handles.md) §6): the render
+  node joins the segment or the cone its holes are computed in, its
+  inputs gathered from their slots into the native frame, and it
+  writes into the same entry of the state's scratch it would as a
+  closure step, so the hole values never leave native code before
+  they are encoded.
 - **Projections on the compiled engines.** Every compiled kernel renders
   its bodies on `Engine::default()`, not on its own engine: the render
   node's closure serves the closure tier and a hybrid kernel's closure

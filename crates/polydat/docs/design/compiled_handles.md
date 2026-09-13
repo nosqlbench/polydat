@@ -226,15 +226,43 @@ entry of the rendering state.
 
 ## 6. The native tier
 
-Native code carries `Ref2` pairs for typed vectors nowhere yet, and the
-same holds for the five by-reference types: a node with a `Ref2` port
-on either side classifies as a fallback and runs as a closure step in a
-hybrid kernel, or interpreted, and a pure native layout refuses a graph
-with a `Ref2` output by name. Native lowering of reference pairs is one
-piece of work for all twelve types: helpers that take pairs and write
-into the calling step's scratch entry, the pair republished on return.
-Nothing in this document changes when it lands; §3 already says who
-owns the storage such a helper writes into.
+Native code carries a `Ref2` pair as it carries any slot: it loads the
+two words, passes them, and stores them, and never dereferences one.
+The work on a by-reference value is done by the node's own kit (§5),
+which native code calls in place through one helper, `jit_slot_call`:
+the generated code gathers the step's input slots into its frame,
+calls the helper with the kit's address, the frame, and the evaluating
+state's scratch with the index of the step's first entry, and scatters
+the outputs the kit wrote back into their slots. The kit writes the
+value into the step's own entry and publishes the pair exactly as it
+does when the step is a closure step, so §3 holds unchanged: the owner
+of every pair native code produces is the entry the builder placed for
+that step in the state that runs it. Every native function therefore
+takes the state's scratch beside its slot buffer
+(`fn(coords, buffer, scratch)`), and every site that runs native code
+hands its own in: a hybrid kernel its scratch vector, a pure native
+kernel its own, and a cone node the entries its `scratch_layout`
+declares after its slot buffer.
+
+The classifier lowers a pure node this way whenever it has no named
+native lowering and a kit exists (`JitOp::SlotCall`), whatever the
+colors of its ports, so the twelve `Ref2` types and every immediate
+shape a kit accepts join segments and cones alike; a variadic or
+polymorphic node's kit is built for the types of its wires, so inside a
+cone its wires are read as the graph typed them, not as its ports
+advertise. A nondeterministic node or a side channel keeps its own
+step, so that its currency is its own and a segment of pure nodes is
+never made never-current or observably rerun by it. A node with
+neither a lowering nor a kit stays interpreted, and only such a node
+keeps a program off pure native code. The kits a function calls are
+kept alive beside its code (`JitCode`), shared by every kernel
+compiled from the program.
+
+A slot call costs what the closure step it replaces cost, less the
+step runner: one helper call, a gather and a scatter through the frame.
+A named native lowering of a hot string or JSON operation, writing
+into the step's entry directly, remains open as an optimization on
+this same ownership; nothing in §3 changes for it.
 
 ## 7. Axioms
 
@@ -287,12 +315,12 @@ citations a SAFETY comment or a test needs are:
 
 | Check | Where |
 |---|---|
-| Slot color, width, and scratch element of every by-reference type; raw readers refuse the pair; the pure native layout refuses a `Ref2` output | `tests/slot_state_axioms.rs` |
+| Slot color, width, and scratch element of every by-reference type; raw readers refuse the pair on every compiled engine; pure native code carries a `Ref2` output through a slot call | `tests/slot_state_axioms.rs` |
 | Strings across tiers; a read is an owned copy that outlives the next write | `tests/handle_boundaries.rs` |
 | Value-port nodes, JSON, and tiles across tiers; a hybrid kernel's string output owned by its step | `tests/variadic_lowering.rs` |
 | Tier differential: random string, JSON, and tile programs across the interpreter, forced cones, P2, and hybrid; the corpus; repeated coordinates keep reference outputs current; JSON outputs replaced in place | `tests/handle_tiers.rs` (`FUZZ_SEED`, `FUZZ_ITERATIONS`) |
 | Extension values and externs of every kind across tiers | `tests/ext_tiers.rs` |
 | A kernel created from a shared program points its pairs into its own storage, read after the source state is dropped | `tests/slot_state_axioms.rs` |
 | A rendering state's body kernels created once and reused; a clone starts empty | `library::tile_render::tests` |
-| S9(a) validator | every P2 and hybrid run in debug builds |
+| S9(a) validator | every P2, hybrid, pure native, and cone run in debug builds |
 | S10 source scan; no `thread_local!` holds a value, a pointer, or a state | `tests/slot_state_axioms.rs` |

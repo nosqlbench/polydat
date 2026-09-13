@@ -143,8 +143,10 @@ typed readers decode them. Each compiled kernel carries a
 `compile::Attribution` built from the resolved graph, so a failing step is
 named as its node; pure native code names the step it is in through a
 tracker slot before each helper call; a cone re-raises attributed to the
-member, and the interpreter's enrichment then names the cone, so a failure
-inside a fused node reads member first, cone second. Every native helper
+member, with the program's context and the program's names for the
+member's outputs, and the interpreter re-raises that report as it is, so a
+failure inside a fused node reads exactly as the same failure reads on the
+native engine, and the cone is no frame of its own. Every native helper
 runs under `guarded`, so a helper's panic is the longjmp the kernel catches
 and never a process abort ([jit_boundary.md](jit_boundary.md)).
 
@@ -315,20 +317,30 @@ accepts, with the two refusals named below, and computes what the
 interpreter computes. The other distinctions are placements inside an engine,
 not refusals:
 
-- A node without a native lowering runs its closure, as a closure step of
-  P3 and on the interpreter as itself; only pure native code, the
-  differential tier, refuses it.
-- A Ref-bearing value cannot cross a P3 cone boundary or be forwarded by an
-  identity-style compiled step; such nodes are closure steps.
-- A node whose variadic wires carry a type its helper cannot decode runs its
-  closure; the classifier never re-types a wire to admit it.
+- A pure node without a named native lowering runs its kit from native
+  code, called in place over the state's own scratch
+  ([Compiled By-Reference Slots](compiled_handles.md) §6); a
+  nondeterministic node or a side channel runs its closure as a step of
+  its own, so its currency is its own; a node with no kit runs on the
+  interpreter as itself, and only pure native code, the differential
+  tier, refuses it.
+- A by-reference value crosses a cone boundary borrowed into its pair
+  for the call and copied out after it, and a copy of one inside native
+  code copies into the copying step's own scratch; a pair is never
+  forwarded.
+- A variadic or polymorphic node's kit is built for the types of its
+  wires, so it reads each wire as the graph typed it; the classifier
+  never re-types a wire to admit a named lowering.
 - A P3 segment is a run of consecutive native-eligible nodes of one
-  lifecycle; a compile-constant node never joins a segment that is not, or a
-  constant step downstream of it would run at build before its producer.
-- The two refusals: an extern wider than one slot (a vector, or a 128-bit
-  integer) has no compiled form, because the compiled engines seed and
-  publish externs one slot at a time; and a build without the `jit` feature
-  has no P3. Each is refused by name with its reason
+  lifecycle and one volatility; a compile-constant node never joins a segment
+  that is not, or a constant step downstream of it would run at build before
+  its producer, and a volatile node never joins pure ones, or the segment
+  would be never current and rerun them at every round.
+- The two refusals: an extern of a two-slot immediate type (a 128-bit
+  integer or a register word) has no compiled form, because the compiled
+  engines write an extern through as one carrier or as the pair into the
+  value the state stores; and a build without the `jit` feature has no P3.
+  Each is refused by name with its reason
   (`KernelError::Refused`); a program with such an extern runs on the
   interpreter.
 - SIMD scalar-flow promotion is not selected by ordinary engine choice; it has

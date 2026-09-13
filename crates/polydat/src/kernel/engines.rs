@@ -814,6 +814,17 @@ impl EngineCore {
         }));
         drop(guard);
         if let Err(e) = payload {
+            // A native cone re-raises its member's failure already
+            // enriched with the member's name, its inputs, and this
+            // program's context (A7); the cone itself is not a frame,
+            // so the report reads as it does on every other engine.
+            if program.nodes[node_idx].fusion_subgraph().is_some()
+                && e.downcast_ref::<String>()
+                    .is_some_and(|s| s.contains("↳ in node"))
+            {
+                let enriched = *e.downcast::<String>().expect("checked above");
+                reraise_enriched(enriched);
+            }
             let enriched =
                 enrich_eval_panic(e, program, node_idx, &self.input_scratch[..input_count]);
             reraise_enriched(enriched);

@@ -178,8 +178,8 @@ inputs through the one failure contract ([Engines](engines.md)).
 `Partition` and `PartitionList` ride wires as `Value::Ext` reflected
 values (`iteration/cursor_partition.rs`); the partition nodes in
 `library/partition.rs` are how workload-author code reads and derives
-them, and they run on every engine through the general closure kit's
-`Ext<T>` shape (no partition node has a native form). The partition
+them, and they run on every engine through the slot kit's `Ext<T>`
+shape, which native code calls in place. The partition
 value is effectively-const for a scope activation, so each eval
 reduces to constant arithmetic. The partition grammar and the axioms
 behind the nodes are in [Cursor Partitions](cursor_partitions.md);
@@ -308,8 +308,10 @@ name in the classifier (`classify_node` and `classify_node_typed` in
 `src/compile/jit/codegen.rs`): each arm names a `JitOp`, reads the
 node's `jit_constants()` positionally, and, for a node whose body
 dispatches on `Value` variants, decides by the types of its wires. A
-node with no arm classifies `Fallback` and runs as a closure step in
-the P3 kernel. The macro emits `jit_constants` in declaration order
+pure node with no arm runs its kit from native code through the
+slot-call helper ([Compiled By-Reference Slots](compiled_handles.md)
+§6); a nondeterministic node or a side channel with no arm runs as a
+closure step of its own. The macro emits `jit_constants` in declaration order
 for a node the u64 kit carries; a node whose lowering reads its
 constants in another order supplies `jit_constants = <path>`.
 

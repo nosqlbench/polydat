@@ -560,14 +560,17 @@ type P2Layout = (
     crate::compile::closures::P2Extras,
 );
 
-/// `(coord_slots, total_slots, JIT steps, named outputs)` — the
-/// JIT compiled layout shared by the native kernel builders.
+/// `(coord_slots, total_slots, JIT steps, named outputs, scratch)` —
+/// the JIT compiled layout shared by the native kernel builders; the
+/// scratch is what a state owns for the steps' kits, with each step's
+/// entries placed.
 #[cfg(feature = "jit")]
 type JitLayout = (
     usize,
     usize,
     Vec<(crate::compile::jit::JitOp, Vec<usize>, Vec<usize>)>,
     HashMap<String, usize>,
+    crate::compile::jit::ScratchPlan,
 );
 
 impl PolydatAssembler {
@@ -1110,46 +1113,37 @@ impl PolydatAssembler {
     pub(crate) fn build_jit_layout(resolved: &ResolvedDag) -> Result<JitLayout, String> {
         let layout = slot_layout(resolved);
 
-        // P3 corollary (jit_boundary.md slot-state axioms): a
-        // pure-P3 kernel must contain no Ref2-colored ports —
-        // slice-bearing nodes classify Fallback, but enforce the
-        // axiom directly rather than relying on classification.
-        for node in &resolved.nodes {
-            for out in &node.meta().outs {
-                match out.typ.slot_color() {
-                    crate::ast::SlotColor::Ref2 => {
-                        return Err(format!(
-                            "node '{}' has a Ref2-colored output ({}); pure-P3 \
-                             kernels carry no reference slots",
-                            node.meta().name,
-                            out.typ
-                        ));
-                    }
-                    // An immediate rides in its slot as bits and is
-                    // legal in a pure-P3 layout.
-                    crate::ast::SlotColor::Imm1 | crate::ast::SlotColor::Imm2 => {}
-                }
-            }
-        }
-
+        // Every step's scratch entries are placed in the state's
+        // scratch as the steps are laid out (axiom S3): a reference
+        // output's pair names its own entry, wherever the step runs.
+        let mut scratch = crate::compile::jit::ScratchPlan::default();
         let mut jit_steps = Vec::new();
         for (node_idx, node) in resolved.nodes.iter().enumerate() {
-            let jit_op = crate::compile::jit::classify_node_typed(
+            let mut jit_op = crate::compile::jit::classify_node_typed(
                 node.as_ref(),
                 &wire_types_of(resolved, node_idx),
             );
+            if matches!(jit_op, crate::compile::jit::JitOp::Fallback) {
+                return Err(format!(
+                    "node '{}' has no native form and no kit; pure native code cannot run it",
+                    node.meta().name
+                ));
+            }
+            let base = scratch.elems.len();
+            jit_op.place_scratch(base);
+            let elems = jit_op.scratch_elems().to_vec();
+            scratch.refs.extend(scratch_pairs(
+                &node.meta().name,
+                &layout.ref_output_starts(resolved, node_idx),
+                &elems,
+                base,
+            ));
+            scratch.elems.extend(elems);
             jit_steps.push((
                 jit_op,
                 layout.input_slots(resolved, node_idx),
                 layout.output_slots(resolved, node_idx),
             ));
-        }
-
-        if jit_steps
-            .iter()
-            .any(|(op, _, _)| matches!(op, crate::compile::jit::JitOp::Fallback))
-        {
-            return Err("some nodes cannot be JIT-compiled".into());
         }
 
         let output_map = layout.named_outputs(resolved);
@@ -1158,6 +1152,7 @@ impl PolydatAssembler {
             layout.total_slots,
             jit_steps,
             output_map,
+            scratch,
         ))
     }
 
@@ -1221,7 +1216,8 @@ impl PolydatAssembler {
         resolved: ResolvedDag,
     ) -> Result<crate::compile::jit::JitKernelPushPull, String> {
         let _coord_names = resolved.input_names();
-        let (coord_count, total_slots, jit_steps, output_map) = Self::build_jit_layout(&resolved)?;
+        let (coord_count, total_slots, jit_steps, output_map, scratch) =
+            Self::build_jit_layout(&resolved)?;
         let (guard, types) = Self::jit_slot_info(&resolved);
         let deps = slot_layout(&resolved).expand_dependents(
             &resolved,
@@ -1240,6 +1236,7 @@ impl PolydatAssembler {
             resolved.nodes,
             deps,
             externs,
+            scratch,
         )?;
         k.set_slot_info(guard, types);
         k.set_attribution(attribution);
@@ -1320,7 +1317,8 @@ impl PolydatAssembler {
     #[cfg(feature = "jit")]
     fn jit_raw_from(resolved: ResolvedDag) -> Result<crate::compile::jit::JitKernelRaw, String> {
         let _coord_names = resolved.input_names();
-        let (coord_count, total_slots, jit_steps, output_map) = Self::build_jit_layout(&resolved)?;
+        let (coord_count, total_slots, jit_steps, output_map, scratch) =
+            Self::build_jit_layout(&resolved)?;
         let (guard, types) = Self::jit_slot_info(&resolved);
         let externs = Self::externs_of(&resolved)?;
         let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
@@ -1331,6 +1329,7 @@ impl PolydatAssembler {
             output_map,
             resolved.nodes,
             externs,
+            scratch,
         )?;
         k.set_slot_info(guard, types);
         k.set_attribution(attribution);
@@ -1368,7 +1367,8 @@ impl PolydatAssembler {
     #[cfg(feature = "jit")]
     fn jit_push_from(resolved: ResolvedDag) -> Result<crate::compile::jit::JitKernelPush, String> {
         let _coord_names = resolved.input_names();
-        let (coord_count, total_slots, jit_steps, output_map) = Self::build_jit_layout(&resolved)?;
+        let (coord_count, total_slots, jit_steps, output_map, scratch) =
+            Self::build_jit_layout(&resolved)?;
         let deps = slot_layout(&resolved).expand_dependents(
             &resolved,
             &PolydatProgram::compute_dependents(
@@ -1387,6 +1387,7 @@ impl PolydatAssembler {
             resolved.nodes,
             deps,
             externs,
+            scratch,
         )?;
         k.set_slot_info(guard, types);
         k.set_attribution(attribution);
@@ -1404,7 +1405,8 @@ impl PolydatAssembler {
     #[cfg(feature = "jit")]
     fn jit_pull_from(resolved: ResolvedDag) -> Result<crate::compile::jit::JitKernelPull, String> {
         let _coord_names = resolved.input_names();
-        let (coord_count, total_slots, jit_steps, output_map) = Self::build_jit_layout(&resolved)?;
+        let (coord_count, total_slots, jit_steps, output_map, scratch) =
+            Self::build_jit_layout(&resolved)?;
         let deps = slot_layout(&resolved).expand_dependents(
             &resolved,
             &PolydatProgram::compute_dependents(
@@ -1423,6 +1425,7 @@ impl PolydatAssembler {
             resolved.nodes,
             &deps,
             externs,
+            scratch,
         )?;
         k.set_slot_info(guard, types);
         k.set_attribution(attribution);

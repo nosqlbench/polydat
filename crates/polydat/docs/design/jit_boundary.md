@@ -16,23 +16,26 @@ the boundary is in [runtime_model.md](runtime_model.md) (R-axioms).
 
 ## Call boundary overview
 
-Native code compiles to a function over the slot buffer:
+Native code compiles to a function over the slot buffer and the
+evaluating state's scratch, the entries the steps' kits write
+by-reference values into (compiled_handles.md §3, §6):
 
 ```text
-fn(coords: *const u64, buffer: *mut u64)        // raw
 fn(coords: *const u64, buffer: *mut u64,
-   clean:  *mut u8)                             // provenance variant
+   scratch: *mut ScratchBuf)                    // raw
+fn(coords: *const u64, buffer: *mut u64,
+   scratch: *mut ScratchBuf, clean: *mut u8)    // provenance variant
 ```
 
-The Rust side owns the buffer and calls the function pointer. Native
-code runs in three places, and every one of them calls through
-`codegen::invoke_with_catch`:
+The Rust side owns the buffer and the scratch and calls the function
+pointer. Native code runs in three places, and every one of them calls
+through `codegen::invoke_with_catch`:
 
 | Site | What runs natively | Where |
 |---|---|---|
-| An embedded cone | A fused subgraph of an interpreter kernel, one native function per cone, over a slot buffer the evaluating state owns as the cone node's scratch | `compile/cone.rs`, the cone node's `eval_in` |
-| A segment of the P3 kernel | A run of consecutive native-eligible nodes of one lifecycle, one native function per segment, over the kernel's own buffer; the nodes between segments run as closure steps | `compile/hybrid.rs`, the step runner |
-| The pure native tier | The whole program as one native function, with the provenance variant where the kernel tracks clean flags | `compile/jit/kernels.rs`, `JitCore::run` |
+| An embedded cone | A fused subgraph of an interpreter kernel, one native function per cone, over a slot buffer and the members' scratch entries, which the evaluating state owns as the cone node's scratch | `compile/cone.rs`, the cone node's `eval_in` |
+| A segment of the P3 kernel | A run of consecutive native-eligible nodes of one lifecycle and one volatility, one native function per segment, over the kernel's own buffer and scratch; the nodes between segments run as closure steps | `compile/hybrid.rs`, the step runner |
+| The pure native tier | The whole program as one native function over the kernel's buffer and scratch, with the provenance variant where the kernel tracks clean flags | `compile/jit/kernels.rs`, `JitCore::run` |
 
 The pure native tier is the differential reference for native
 lowering and the carrier of the Tier-1 register kernel
@@ -322,10 +325,25 @@ The `u64` return type matches the extern-function ABI the JIT
 uses; since each helper ends in `_longjmp` (which is `-> !`),
 the return is unreachable.
 
-Native code carries no `Ref2` pairs yet, so no helper takes or returns
-a string, byte string, JSON, extension, or handle value; a node with
-such a port runs as a closure step ([Compiled By-Reference
-Slots](compiled_handles.md) §6).
+### The slot-call helper
+
+Every node with no named lowering and a kit runs its kit from native
+code through one helper ([Compiled By-Reference
+Slots](compiled_handles.md) §6):
+
+| Extern | Arity | Called from |
+|---|---|---|
+| `jit_slot_call` | `(kit, inputs ptr, n_in, outputs ptr, n_out, scratch ptr, base, n_scratch)`, no return | `JitOp::SlotCall` |
+
+The generated code stores the step's input slots into a frame array,
+calls the helper with the kit's address (an immediate; the kit is
+shared by every kernel compiled from the program and kept alive
+beside the code), the frame, and the state's scratch with the index of
+the step's first entry, then loads the outputs from the frame into
+their slots. The helper runs the kit's closure under the same panic
+guard as every other helper, so a node's failure surfaces as the
+interpreter surfaces it (A7). A `Ref2` pair reaches and leaves the
+helper as two slots; only the kit dereferences it (S7).
 
 The message formatting happens at the Rust side, inside the
 helper:

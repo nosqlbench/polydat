@@ -1808,6 +1808,58 @@ impl PolydatProgram {
         self.fold_init_constants_impl(log, false)
     }
 
+    /// Every config wire fed by a cycle-time source, as `(node, port)`
+    /// by the node's own name. A node fused into a native cone is
+    /// checked through the cone's members: a member fed by another
+    /// member reads a cycle-time value (every member is dynamic), and a
+    /// member fed by a boundary input reads what the cone's own wire
+    /// carries.
+    pub(crate) fn config_wires_fed_by_cycle(
+        nodes: &[Box<dyn PolydatNode>],
+        wiring: &[Vec<WireSource>],
+        is_init: &[bool],
+    ) -> Vec<(String, String)> {
+        let outer_is_cycle = |src: &WireSource| match src {
+            WireSource::Input(_) => true,
+            WireSource::NodeOutput(src_idx, _) => !is_init[*src_idx],
+        };
+        let mut found = Vec::new();
+        for (node, wires) in nodes.iter().zip(wiring.iter()) {
+            if let Some(sub) = node.fusion_subgraph() {
+                for (m, member) in sub.members.iter().enumerate() {
+                    let ports = member.meta().wire_inputs();
+                    for (k, src) in sub.wiring[m].iter().enumerate() {
+                        let Some(port) = ports.get(k) else { break };
+                        if port.wire_cost != crate::ast::WireCost::Config {
+                            continue;
+                        }
+                        let cycle = match src {
+                            WireSource::Input(bi) => wires.get(*bi).is_none_or(outer_is_cycle),
+                            WireSource::NodeOutput(..) => true,
+                        };
+                        if cycle {
+                            found.push((member.meta().name.clone(), port.name.clone()));
+                        }
+                    }
+                }
+                continue;
+            }
+            let wire_inputs = node.meta().wire_inputs();
+            for (port_idx, wire_source) in wires.iter().enumerate() {
+                let Some(port) = wire_inputs.get(port_idx) else {
+                    break;
+                };
+                if port.wire_cost != crate::ast::WireCost::Config {
+                    continue;
+                }
+                if outer_is_cycle(wire_source) {
+                    found.push((node.meta().name.clone(), port.name.clone()));
+                }
+            }
+        }
+        found
+    }
+
     /// What strict mode refuses in a resolved graph, on every engine: a
     /// config wire fed from a cycle-time source, a nondeterministic
     /// node no `volatile` output acknowledges, and a binding nothing
@@ -1823,28 +1875,15 @@ impl PolydatProgram {
         output_modifiers: &HashMap<String, crate::dsl::ast::BindingModifier>,
     ) -> Option<String> {
         let n = nodes.len();
-        for (node, wires) in nodes.iter().zip(wiring.iter()) {
-            let wire_inputs = node.meta().wire_inputs();
-            for (port_idx, wire_source) in wires.iter().enumerate() {
-                if port_idx >= wire_inputs.len() {
-                    break;
-                }
-                if wire_inputs[port_idx].wire_cost != crate::ast::WireCost::Config {
-                    continue;
-                }
-                let source_is_cycle = match wire_source {
-                    WireSource::Input(_) => true,
-                    WireSource::NodeOutput(src_idx, _) => !is_init[*src_idx],
-                };
-                if source_is_cycle {
-                    return Some(format!(
-                        "strict mode: config wire '{}' on node '{}' is connected to a \
-                         cycle-time source.",
-                        wire_inputs[port_idx].name,
-                        node.meta().name
-                    ));
-                }
-            }
+        if let Some((node_name, port_name)) =
+            Self::config_wires_fed_by_cycle(nodes, wiring, is_init)
+                .into_iter()
+                .next()
+        {
+            return Some(format!(
+                "strict mode: config wire '{port_name}' on node '{node_name}' is connected \
+                 to a cycle-time source."
+            ));
         }
         let mut feeds_volatile = vec![false; n];
         for (out_name, (node_idx, _)) in output_map.iter() {
@@ -2011,34 +2050,21 @@ impl PolydatProgram {
             return Err(violation);
         }
 
-        // Wire cost check
-        for i in 0..n {
-            let wire_inputs = self.nodes[i].meta().wire_inputs();
-            for (port_idx, wire_source) in self.wiring[i].iter().enumerate() {
-                if port_idx >= wire_inputs.len() {
-                    break;
-                }
-                if wire_inputs[port_idx].wire_cost != crate::ast::WireCost::Config {
-                    continue;
-                }
-                let source_is_cycle = match wire_source {
-                    WireSource::Input(_) => true,
-                    WireSource::NodeOutput(src_idx, _) => !is_init[*src_idx],
-                };
-                if source_is_cycle {
-                    let node_name = &self.nodes[i].meta().name;
-                    let port_name = &wire_inputs[port_idx].name;
-                    crate::library::support::audit::warn(&format!(
-                        "config wire '{port_name}' on node '{node_name}' is connected to a \
-                         cycle-time source."
-                    ));
-                    if let Some(ref mut log) = log {
-                        log.push(crate::dsl::events::CompileEvent::ConfigWireCycleWarning {
-                            node: node_name.clone(),
-                            port: port_name.clone(),
-                        });
-                    }
-                }
+        // Wire cost check: a config wire fed by a cycle-time source
+        // warns, by the node's own name and port, through the cone's
+        // members where the node was fused.
+        for (node_name, port_name) in
+            Self::config_wires_fed_by_cycle(&self.nodes, &self.wiring, &is_init)
+        {
+            crate::library::support::audit::warn(&format!(
+                "config wire '{port_name}' on node '{node_name}' is connected to a \
+                 cycle-time source."
+            ));
+            if let Some(ref mut log) = log {
+                log.push(crate::dsl::events::CompileEvent::ConfigWireCycleWarning {
+                    node: node_name,
+                    port: port_name,
+                });
             }
         }
 

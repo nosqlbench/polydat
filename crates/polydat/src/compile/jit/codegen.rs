@@ -675,29 +675,149 @@ fn guarded<T>(body: impl FnOnce() -> T) -> T {
     }
 }
 
+/// A node's slot kit as native code holds it: shared by every kernel
+/// compiled from the program, compared by identity.
+#[derive(Clone)]
+pub struct SlotKitRef(pub std::sync::Arc<crate::ast::CompiledSlotKit>);
+
+impl SlotKitRef {
+    fn new(kit: crate::ast::CompiledSlotKit) -> Self {
+        SlotKitRef(std::sync::Arc::new(kit))
+    }
+}
+
+impl std::fmt::Debug for SlotKitRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "SlotKitRef({:p}, {} scratch)",
+            std::sync::Arc::as_ptr(&self.0),
+            self.0.scratch.len()
+        )
+    }
+}
+
+impl PartialEq for SlotKitRef {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// The helper behind [`JitOp::SlotCall`]: run a kit's closure over
+/// inputs gathered into the native frame, outputs to scatter from it,
+/// and the state's scratch entries from `base`. A panic in the closure
+/// is the node's own failure and is re-raised through the longjmp path
+/// like every other helper's.
+///
+/// # Safety
+/// Called only from generated code, which passes the kit the step was
+/// compiled with (kept alive by the code that calls it), frame arrays
+/// of the stated lengths, and the scratch the calling state owns, laid
+/// out as the builder placed the kit's entries.
+extern "C" fn jit_slot_call(
+    kit: *const crate::ast::CompiledSlotKit,
+    inputs: *const u64,
+    n_in: u64,
+    outputs: *mut u64,
+    n_out: u64,
+    scratch: *mut crate::ast::ScratchBuf,
+    base: u64,
+    n_scratch: u64,
+) {
+    guarded(|| unsafe {
+        let kit = &*kit;
+        let ins = std::slice::from_raw_parts(inputs, n_in as usize);
+        let outs = std::slice::from_raw_parts_mut(outputs, n_out as usize);
+        let sc = std::slice::from_raw_parts_mut(scratch.add(base as usize), n_scratch as usize);
+        (kit.op)(ins, outs, sc)
+    })
+}
+
+impl JitOp {
+    /// The kit a slot call runs, if this is one.
+    pub(crate) fn slot_kit(&self) -> Option<&SlotKitRef> {
+        match self {
+            JitOp::SlotCall { kit, .. } => Some(kit),
+            _ => None,
+        }
+    }
+
+    /// The scratch entries the step needs in the state that runs it.
+    pub(crate) fn scratch_elems(&self) -> &[crate::ast::ScratchElem] {
+        match self {
+            JitOp::SlotCall { kit, .. } => &kit.0.scratch,
+            _ => &[],
+        }
+    }
+
+    /// Place the step's scratch entries at `base` in the state's
+    /// scratch; the builder that lays the state out calls this once.
+    pub(crate) fn place_scratch(&mut self, base: usize) {
+        if let JitOp::SlotCall { scratch_base, .. } = self {
+            *scratch_base = base;
+        }
+    }
+}
+
 /// Classify a node with the types of its wire inputs known. A node
-/// with a `Ref2` port on either side has no native lowering yet and
-/// stays on the closure tier or the interpreter; everything else
-/// classifies as [`classify_node`] does.
+/// with a named native lowering takes it; any other pure node with a
+/// kit is a [`JitOp::SlotCall`] of that kit, so a reference pair on
+/// either side is no bar to native code; a node with neither, a
+/// nondeterministic node, or a side channel stays a closure step or
+/// interpreted, where its currency is its own.
 pub fn classify_node_typed(node: &dyn PolydatNode, wire_types: &[crate::ast::PortType]) -> JitOp {
     let is_ref = |t: &crate::ast::PortType| t.slot_color() == crate::ast::SlotColor::Ref2;
-    if wire_types.iter().any(is_ref) || node.meta().outs.iter().any(|o| is_ref(&o.typ)) {
-        return JitOp::Fallback;
-    }
-    match node.meta().name.as_str() {
-        // The compiler's input passthrough: a slot copy of any carrier
-        // or 128-bit immediate.
-        n if n.starts_with("__port_") => JitOp::Identity,
-        // `default_or(value, fallback)` is `value` unless it is `None`,
-        // and a compiled slot never carries `None` (engine_parity.md,
-        // A12), so natively it is a copy of the value.
-        "default_or" => JitOp::Identity,
-        // A select is native only between one-slot immediates.
+    let ref_copy = |ty: crate::ast::PortType| {
+        crate::compile::assembly::ref_copy_kit(ty)
+            .map(|kit| JitOp::SlotCall {
+                kit: SlotKitRef::new(kit),
+                scratch_base: 0,
+            })
+            .unwrap_or(JitOp::Fallback)
+    };
+    let meta = node.meta();
+    let named = match meta.name.as_str() {
+        // The compiler's input passthrough and `default_or(value,
+        // fallback)` (`value` unless it is `None`, which a compiled slot
+        // never carries; engine_parity.md, A12): a slot copy of an
+        // immediate, a copy into the step's own scratch of a reference
+        // value (axiom S3: a pair is never forwarded).
+        n if n.starts_with("__port_") || n == "default_or" => match meta.outs.first() {
+            Some(o) if is_ref(&o.typ) => return ref_copy(o.typ),
+            _ => JitOp::Identity,
+        },
+        // The named selects are native only between one-slot
+        // immediates; any other shape takes the node's kit below.
         "select" | "select_u64" if wire_types.iter().skip(1).any(|t| t.slot_width() != 1) => {
             JitOp::Fallback
         }
+        _ if wire_types.iter().any(is_ref) || meta.outs.iter().any(|o| is_ref(&o.typ)) => {
+            JitOp::Fallback
+        }
         _ => classify_node(node),
+    };
+    if !matches!(named, JitOp::Fallback) {
+        return named;
     }
+    if !matches!(node.purity(), crate::ast::Purity::Pure) {
+        return JitOp::Fallback;
+    }
+    if let Some(kit) = node.compiled_slot(wire_types) {
+        return JitOp::SlotCall {
+            kit: SlotKitRef::new(kit),
+            scratch_base: 0,
+        };
+    }
+    if let Some(op) = node.compiled_u64() {
+        return JitOp::SlotCall {
+            kit: SlotKitRef::new(crate::ast::CompiledSlotKit {
+                scratch: Vec::new(),
+                op: Box::new(move |inputs, outputs, _| op(inputs, outputs)),
+            }),
+            scratch_base: 0,
+        };
+    }
+    JitOp::Fallback
 }
 
 // ── JitOp ──────────────────────────────────────────────────
@@ -811,6 +931,22 @@ pub enum JitOp {
     F64Div,
     /// output = f64(a) % f64(b) (0 if b==0)
     F64Mod,
+
+    /// A call of the node's own slot kit from native code
+    /// (compiled_handles.md §6): the inputs are gathered into the
+    /// frame, `jit_slot_call` runs the kit's closure over them and the
+    /// state's scratch entries at `scratch_base`, and the outputs are
+    /// scattered back. Every node with a kit lowers this way, so a
+    /// reference pair rides through a segment or a cone as it rides
+    /// through a closure step.
+    SlotCall {
+        /// The kit, shared by every kernel compiled from the program
+        /// and kept alive by the code that calls it.
+        kit: SlotKitRef,
+        /// Index of the kit's first scratch entry in the state's
+        /// scratch, assigned by the builder that lays the state out.
+        scratch_base: usize,
+    },
 
     /// Parameter predicate: pass `input[0]` through to `output[0]`;
     /// if `input[0]` == 0, call `jit_is_positive_fail` (panics)
@@ -1569,6 +1705,7 @@ pub fn compile_jit_raw(
         output_map,
         nodes,
         crate::compile::externs::Externs::default(),
+        super::kernels::ScratchPlan::default(),
     )
 }
 
@@ -1581,9 +1718,10 @@ pub(crate) fn compile_jit_raw_with(
     output_map: HashMap<String, usize>,
     nodes: Vec<Box<dyn PolydatNode>>,
     externs: crate::compile::externs::Externs,
+    scratch: super::kernels::ScratchPlan,
 ) -> Result<JitKernelRaw, String> {
-    let (raw_fn, _, module) = compile_jit_impl(&steps, false, Some(total_slots))?;
-    let mut core = JitCore::new(total_slots, coord_count, output_map, module, nodes);
+    let (raw_fn, _, code) = compile_jit_impl(&steps, false, Some(total_slots))?;
+    let mut core = JitCore::new(total_slots, coord_count, output_map, code, nodes, scratch);
     core.set_externs(externs);
     Ok(JitKernelRaw {
         core,
@@ -1594,20 +1732,21 @@ pub(crate) fn compile_jit_raw_with(
 /// A compiled segment for an engine that owns its own buffer: the
 /// entry point and the module that keeps it alive (SRD-105 cones,
 /// hybrid JIT segments).
-pub(crate) type JitSegmentCode = (unsafe fn(*const u64, *mut u64), JITModule);
+pub(crate) type JitSegmentCode = (NativeFn, super::kernels::JitCode);
 
 /// SRD-105 cone entry: codegen only, no kernel wrapper — the cone
-/// node owns the function pointer and module directly, and the state
-/// evaluating it provides the buffer.
+/// node owns the function pointer and code directly, and the state
+/// evaluating it provides the buffer and the scratch.
 pub(crate) fn compile_jit_entry(
     steps: &[(JitOp, Vec<usize>, Vec<usize>)],
     tracker: Option<usize>,
 ) -> Result<JitSegmentCode, String> {
-    let (raw_fn, _, module) = compile_jit_impl(steps, false, tracker)?;
-    Ok((raw_fn, module))
+    let (raw_fn, _, code) = compile_jit_impl(steps, false, tracker)?;
+    Ok((raw_fn, code))
 }
 
 /// Compile a set of JIT steps into a push (per-node dirty tracking) native kernel.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compile_jit_push(
     coord_count: usize,
     total_slots: usize,
@@ -1616,10 +1755,11 @@ pub(crate) fn compile_jit_push(
     nodes: Vec<Box<dyn PolydatNode>>,
     input_dependents: Vec<Vec<usize>>,
     externs: crate::compile::externs::Externs,
+    scratch: super::kernels::ScratchPlan,
 ) -> Result<JitKernelPush, String> {
     let step_count = steps.len();
-    let (_, prov_fn, module) = compile_jit_impl(&steps, true, Some(total_slots))?;
-    let mut core = JitCore::new(total_slots, coord_count, output_map, module, nodes);
+    let (_, prov_fn, code) = compile_jit_impl(&steps, true, Some(total_slots))?;
+    let mut core = JitCore::new(total_slots, coord_count, output_map, code, nodes, scratch);
     core.set_externs(externs);
     Ok(JitKernelPush {
         core,
@@ -1630,6 +1770,7 @@ pub(crate) fn compile_jit_push(
 }
 
 /// Compile a set of JIT steps into a pull (cone guard) native kernel.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compile_jit_pull(
     coord_count: usize,
     total_slots: usize,
@@ -1638,14 +1779,15 @@ pub(crate) fn compile_jit_pull(
     nodes: Vec<Box<dyn PolydatNode>>,
     input_dependents: &[Vec<usize>],
     externs: crate::compile::externs::Externs,
+    scratch: super::kernels::ScratchPlan,
 ) -> Result<JitKernelPull, String> {
     let buffer_len = total_slots;
     // Pull uses the RAW jit function (no per-node clean checks)
-    let (raw_fn, _, module) = compile_jit_impl(&steps, false, Some(total_slots))?;
+    let (raw_fn, _, code) = compile_jit_impl(&steps, false, Some(total_slots))?;
     let step_outs: Vec<&[usize]> = steps.iter().map(|(_, _, o)| o.as_slice()).collect();
     let slot_provenance =
         crate::compile::slot_provenance(coord_count, buffer_len, &step_outs, input_dependents);
-    let mut core = JitCore::new(total_slots, coord_count, output_map, module, nodes);
+    let mut core = JitCore::new(total_slots, coord_count, output_map, code, nodes, scratch);
     core.set_externs(externs);
     Ok(JitKernelPull {
         core,
@@ -1657,6 +1799,7 @@ pub(crate) fn compile_jit_pull(
 }
 
 /// Compile a set of JIT steps into a push+pull (full optimization) native kernel.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compile_jit_push_pull(
     coord_count: usize,
     total_slots: usize,
@@ -1665,14 +1808,15 @@ pub(crate) fn compile_jit_push_pull(
     nodes: Vec<Box<dyn PolydatNode>>,
     input_dependents: Vec<Vec<usize>>,
     externs: crate::compile::externs::Externs,
+    scratch: super::kernels::ScratchPlan,
 ) -> Result<JitKernelPushPull, String> {
     let step_count = steps.len();
     let buffer_len = total_slots;
-    let (_, prov_fn, module) = compile_jit_impl(&steps, true, Some(total_slots))?;
+    let (_, prov_fn, code) = compile_jit_impl(&steps, true, Some(total_slots))?;
     let step_outs: Vec<&[usize]> = steps.iter().map(|(_, _, o)| o.as_slice()).collect();
     let slot_provenance =
         crate::compile::slot_provenance(coord_count, buffer_len, &step_outs, &input_dependents);
-    let mut core = JitCore::new(total_slots, coord_count, output_map, module, nodes);
+    let mut core = JitCore::new(total_slots, coord_count, output_map, code, nodes, scratch);
     core.set_externs(externs);
     Ok(JitKernelPushPull {
         core,
@@ -1687,16 +1831,17 @@ pub(crate) fn compile_jit_push_pull(
 
 // ── Core Cranelift IR generation ───────────────────────────
 
-/// `(raw_fn, prov_fn, module)` — produced by the core JIT compile: the
-/// scalar entry point, the provenance-tracking entry point, and the
-/// owning module that keeps both alive.
-type JitCompiled = (
-    unsafe fn(*const u64, *mut u64),
-    unsafe fn(*const u64, *mut u64, *mut u8),
-    JITModule,
-);
+/// A native entry point over a state's slot buffer and scratch.
+pub type NativeFn = unsafe fn(*const u64, *mut u64, *mut crate::ast::ScratchBuf);
+/// The provenance variant: a clean flag per step follows the scratch.
+pub type NativeProvFn = unsafe fn(*const u64, *mut u64, *mut crate::ast::ScratchBuf, *mut u8);
 
-/// Core JIT compilation. Returns (raw_fn, prov_fn, module).
+/// `(raw_fn, prov_fn, code)` — produced by the core JIT compile: the
+/// scalar entry point, the provenance-tracking entry point, and the
+/// finalized code that keeps both alive with the kits they call.
+type JitCompiled = (NativeFn, NativeProvFn, super::kernels::JitCode);
+
+/// Core JIT compilation. Returns (raw_fn, prov_fn, code).
 /// If provenance=false, prov_fn is a dummy transmute of raw_fn.
 /// If provenance=true, raw_fn is a dummy transmute of prov_fn.
 fn compile_jit_impl(
@@ -1743,6 +1888,8 @@ fn compile_jit_impl(
     jit_builder.symbol("jit_is_positive_fail", jit_is_positive_fail as *const u8);
     jit_builder.symbol("jit_in_range_fail", jit_in_range_fail as *const u8);
     jit_builder.symbol("jit_is_one_of_fail", jit_is_one_of_fail as *const u8);
+    // A node's slot kit, called from native code (compiled_handles.md §6).
+    jit_builder.symbol("jit_slot_call", jit_slot_call as *const u8);
     // Math externs
     jit_builder.symbol("jit_sin", jit_sin as *const u8);
     jit_builder.symbol("jit_cos", jit_cos as *const u8);
@@ -2033,12 +2180,25 @@ fn compile_jit_impl(
         );
     }
 
+    // Declare extern: jit_slot_call(kit, inputs, n_in, outputs, n_out,
+    // scratch, base, n_scratch)
+    let slot_call_id = {
+        let mut sig = module.make_signature();
+        for _ in 0..8 {
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        module
+            .declare_function("jit_slot_call", Linkage::Import, &sig)
+            .map_err(|e| format!("declare jit_slot_call: {e}"))?
+    };
+
     // Function signature depends on provenance mode:
-    // Without: fn(coords: *const u64, buffer: *mut u64)
-    // With:    fn(coords: *const u64, buffer: *mut u64, clean: *mut u8)
+    // Without: fn(coords: *const u64, buffer: *mut u64, scratch: *mut ScratchBuf)
+    // With:    fn(coords, buffer, scratch, clean: *mut u8)
     let mut sig = module.make_signature();
     sig.params.push(AbiParam::new(types::I64)); // coords ptr
     sig.params.push(AbiParam::new(types::I64)); // buffer ptr
+    sig.params.push(AbiParam::new(types::I64)); // scratch ptr
     if provenance {
         sig.params.push(AbiParam::new(types::I64)); // clean ptr
     }
@@ -2059,8 +2219,9 @@ fn compile_jit_impl(
 
         let _coords_ptr = builder.block_params(block)[0];
         let buffer_ptr = builder.block_params(block)[1];
+        let scratch_ptr = builder.block_params(block)[2];
         let clean_ptr = if provenance {
-            Some(builder.block_params(block)[2])
+            Some(builder.block_params(block)[3])
         } else {
             None
         };
@@ -2075,6 +2236,7 @@ fn compile_jit_impl(
         let is_positive_fail_ref = module.declare_func_in_func(is_positive_fail_id, builder.func);
         let in_range_fail_ref = module.declare_func_in_func(in_range_fail_id, builder.func);
         let is_one_of_fail_ref = module.declare_func_in_func(is_one_of_fail_id, builder.func);
+        let slot_call_ref = module.declare_func_in_func(slot_call_id, builder.func);
         let pcg_func_ref = module.declare_func_in_func(pcg_func_id, builder.func);
         let pcg_stream_func_ref = module.declare_func_in_func(pcg_stream_func_id, builder.func);
         let n_of_func_ref = module.declare_func_in_func(n_of_func_id, builder.func);
@@ -3341,6 +3503,57 @@ fn compile_jit_impl(
                     store_slot(&mut builder, buffer_ptr, output_slots[0], result);
                 }
 
+                JitOp::SlotCall { kit, scratch_base } => {
+                    // Gather the inputs into the frame, call the kit
+                    // over them and the state's scratch, scatter the
+                    // outputs back. The kit's address is an immediate:
+                    // the kit is shared by every kernel compiled from
+                    // the program and outlives the code.
+                    let n_in = input_slots.len();
+                    let n_out = output_slots.len();
+                    let frame = |builder: &mut FunctionBuilder, n: usize| {
+                        builder.create_sized_stack_slot(ir::StackSlotData::new(
+                            ir::StackSlotKind::ExplicitSlot,
+                            (n.max(1) * 8) as u32,
+                            3,
+                        ))
+                    };
+                    let in_frame = frame(&mut builder, n_in);
+                    let out_frame = frame(&mut builder, n_out);
+                    for (k, &s) in input_slots.iter().enumerate() {
+                        let v = load_slot(&mut builder, buffer_ptr, s);
+                        builder.ins().stack_store(v, in_frame, (k * 8) as i32);
+                    }
+                    let kit_ptr = builder
+                        .ins()
+                        .iconst(types::I64, std::sync::Arc::as_ptr(&kit.0) as usize as i64);
+                    let in_ptr = builder.ins().stack_addr(types::I64, in_frame, 0);
+                    let n_in_v = builder.ins().iconst(types::I64, n_in as i64);
+                    let out_ptr = builder.ins().stack_addr(types::I64, out_frame, 0);
+                    let n_out_v = builder.ins().iconst(types::I64, n_out as i64);
+                    let base_v = builder.ins().iconst(types::I64, *scratch_base as i64);
+                    let n_sc_v = builder.ins().iconst(types::I64, kit.0.scratch.len() as i64);
+                    builder.ins().call(
+                        slot_call_ref,
+                        &[
+                            kit_ptr,
+                            in_ptr,
+                            n_in_v,
+                            out_ptr,
+                            n_out_v,
+                            scratch_ptr,
+                            base_v,
+                            n_sc_v,
+                        ],
+                    );
+                    for (k, &s) in output_slots.iter().enumerate() {
+                        let v = builder
+                            .ins()
+                            .stack_load(types::I64, out_frame, (k * 8) as i32);
+                        store_slot(&mut builder, buffer_ptr, s, v);
+                    }
+                }
+
                 JitOp::Fallback => {
                     // Can't JIT this node — skip (caller should
                     // not include fallback ops in JIT steps)
@@ -3382,16 +3595,21 @@ fn compile_jit_impl(
         .map_err(|e| format!("finalize: {e}"))?;
 
     let code_ptr = module.get_finalized_function(func_id);
+    // The kits the code calls, kept alive beside it.
+    let kits: Vec<SlotKitRef> = steps
+        .iter()
+        .filter_map(|(op, _, _)| op.slot_kit().cloned())
+        .collect();
+    let code = super::kernels::JitCode::new(module, kits);
 
     if provenance {
-        let prov_fn: unsafe fn(*const u64, *mut u64, *mut u8) = unsafe { mem::transmute(code_ptr) };
-        let dummy_raw: unsafe fn(*const u64, *mut u64) = unsafe { mem::transmute(code_ptr) };
-        Ok((dummy_raw, prov_fn, module))
+        let prov_fn: NativeProvFn = unsafe { mem::transmute(code_ptr) };
+        let dummy_raw: NativeFn = unsafe { mem::transmute(code_ptr) };
+        Ok((dummy_raw, prov_fn, code))
     } else {
-        let raw_fn: unsafe fn(*const u64, *mut u64) = unsafe { mem::transmute(code_ptr) };
-        let dummy_prov: unsafe fn(*const u64, *mut u64, *mut u8) =
-            unsafe { mem::transmute(code_ptr) };
-        Ok((raw_fn, dummy_prov, module))
+        let raw_fn: NativeFn = unsafe { mem::transmute(code_ptr) };
+        let dummy_prov: NativeProvFn = unsafe { mem::transmute(code_ptr) };
+        Ok((raw_fn, dummy_prov, code))
     }
 }
 

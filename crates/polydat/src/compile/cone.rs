@@ -10,9 +10,10 @@
 //! chains, shared cells, None propagation, node_clean caching, and
 //! the enrich-and-re-raise panic contract all see a plain node.
 //!
-//! Boundary marshalling is restricted to single-slot scalar port
-//! types (U64 / F64 / Bool) in this push; interior fusion follows
-//! whatever the P3 classifier accepts. Extraction is recoverable:
+//! Boundary marshalling covers the one-slot carriers (U64 / F64 /
+//! Bool) and every `Ref2` kind, borrowed into its pair for the call
+//! and copied out after it; interior fusion follows whatever the P3
+//! classifier accepts. Extraction is recoverable:
 //! member nodes move into the cone only after codegen succeeds, so
 //! any JIT failure leaves the graph exactly as the interpreter
 //! would have compiled it.
@@ -51,29 +52,22 @@ mod jit_impl {
     use crate::kernel::{InputDef, InputKind, WireSource};
     use std::collections::HashMap;
 
-    /// Cranelift's `JITModule` owns the executable code memory the
-    /// cone's function pointer targets; dropping it frees that
-    /// memory, so the cone node must keep it alive for the life of
-    /// the program. It is never accessed after finalization.
-    struct ModuleHolder(#[allow(dead_code)] cranelift_jit::JITModule);
-    // Safety: the module is write-once — finalized before the cone
-    // node is constructed and never touched again; only the emitted
-    // (reentrant) code runs concurrently. Same precedent as
-    // `SimdKernels` in compile/jit/simd.rs.
-    unsafe impl Send for ModuleHolder {}
-    unsafe impl Sync for ModuleHolder {}
-
     /// A fused subgraph compiled to native code, standing in the
     /// program as one ordinary node (SRD-105). The node is shared by
     /// every state of the program; the slot buffer its native code
-    /// runs over belongs to the state that evaluates it, which hands
-    /// it in through [`PolydatNode::eval_in`] (axiom S3).
+    /// runs over, and the scratch entries its members' kits write
+    /// into, belong to the state that evaluates it, which hands them
+    /// in through [`PolydatNode::eval_in`] (axiom S3).
     pub(crate) struct JitConeNode {
         meta: NodeMeta,
-        code_fn: unsafe fn(*const u64, *mut u64),
+        code_fn: crate::compile::jit::NativeFn,
         total_slots: usize,
+        /// The members' scratch entries, after the slot buffer in the
+        /// cone's scratch layout, with the validator's pairs.
+        scratch: crate::compile::jit::ScratchPlan,
         /// Where each member lives, for the failure path (A7): the
-        /// member that failed is named inside the cone's own report.
+        /// member that failed is named as the program names it, with
+        /// its outputs under the program's names; the cone is no frame.
         attribution: std::sync::Arc<crate::compile::Attribution>,
         /// First buffer slot per boundary input, in port order.
         in_slots: Vec<usize>,
@@ -91,7 +85,9 @@ mod jit_impl {
         sub_wiring: Vec<Vec<WireSource>>,
         /// Per output port: (local member index, member port).
         out_ports: Vec<(usize, usize)>,
-        _module: ModuleHolder,
+        /// The finalized code and the kits it calls, kept alive for
+        /// the life of the program.
+        _module: crate::compile::jit::JitCode,
     }
 
     impl PolydatNode for JitConeNode {
@@ -107,10 +103,14 @@ mod jit_impl {
             })
         }
 
-        /// The state owns the cone's slot buffer (axiom S3): one
-        /// `Slots` entry, handed in at every evaluation.
+        /// The state owns the cone's slot buffer and its members'
+        /// scratch entries (axiom S3): one `Slots` entry, then the
+        /// entries the members' kits declared, handed in at every
+        /// evaluation.
         fn scratch_layout(&self) -> Vec<crate::ast::ScratchElem> {
-            vec![crate::ast::ScratchElem::Slots]
+            let mut layout = vec![crate::ast::ScratchElem::Slots];
+            layout.extend(self.scratch.elems.iter().copied());
+            layout
         }
 
         fn eval_in(
@@ -119,26 +119,40 @@ mod jit_impl {
             inputs: &[Value],
             outputs: &mut [Value],
         ) {
-            let crate::ast::ScratchBuf::Slots(buf) = &mut scratch[0] else {
+            let (slots, members) = scratch.split_at_mut(1);
+            let crate::ast::ScratchBuf::Slots(buf) = &mut slots[0] else {
                 unreachable!("a cone's scratch is its slot buffer");
             };
-            self.eval_with(buf, inputs, outputs)
+            self.eval_with(buf, members, inputs, outputs)
         }
 
         /// An evaluation without a state's scratch (a node evaluated
-        /// on its own): a buffer of the call's own.
+        /// on its own): a buffer and entries of the call's own.
         fn eval(&self, inputs: &[Value], outputs: &mut [Value]) {
             let mut buf = Vec::new();
-            self.eval_with(&mut buf, inputs, outputs)
+            let mut members: Vec<crate::ast::ScratchBuf> = self
+                .scratch
+                .elems
+                .iter()
+                .map(|e| crate::ast::ScratchBuf::new(*e))
+                .collect();
+            self.eval_with(&mut buf, &mut members, inputs, outputs)
         }
     }
 
     impl JitConeNode {
-        /// Evaluate over `buf`: the boundary inputs are borrowed into
-        /// their slots for the duration of the call, the native code
-        /// runs, and every output is copied out as an owned `Value`
-        /// (the interpreter never holds a reference into a buffer).
-        fn eval_with(&self, buf: &mut Vec<u64>, inputs: &[Value], outputs: &mut [Value]) {
+        /// Evaluate over `buf` and the members' scratch: the boundary
+        /// inputs are borrowed into their slots for the duration of the
+        /// call, the native code runs, and every output is copied out
+        /// as an owned `Value` (the interpreter never holds a reference
+        /// into a buffer).
+        fn eval_with(
+            &self,
+            buf: &mut Vec<u64>,
+            members: &mut [crate::ast::ScratchBuf],
+            inputs: &[Value],
+            outputs: &mut [Value],
+        ) {
             buf.clear();
             buf.resize(self.total_slots + 1, 0);
             for (i, v) in inputs.iter().enumerate() {
@@ -154,22 +168,34 @@ mod jit_impl {
             }
             // Native code names the member it is in before each helper
             // call (the slot past the layout); a failure is re-raised
-            // attributed to that member, and the program's own
-            // enrichment then names the cone (A7).
+            // attributed to that member with the program's context and
+            // output names, and the interpreter re-raises it as is (A7).
             buf[self.total_slots] = u64::MAX;
             let code_fn = self.code_fn;
             let cp = buf.as_ptr();
             let mp = buf.as_mut_ptr();
+            let sc = members.as_mut_ptr();
             let capture = crate::kernel::engines::EvalPanicCaptureGuard::arm();
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 crate::compile::jit::invoke_with_catch(move || unsafe {
-                    (code_fn)(cp, mp);
+                    (code_fn)(cp, mp, sc);
                 })
             }));
             drop(capture);
             if let Err(payload) = outcome {
                 let step = buf[self.total_slots] as usize;
                 self.attribution.reraise(payload, step, buf, None);
+            }
+            #[cfg(debug_assertions)]
+            for &(slot, idx) in &self.scratch.refs {
+                let (p, l) = members[idx].ptr_len();
+                assert!(
+                    buf[slot] == p && buf[slot + 1] == l,
+                    "S9 ref-validator: cone `{}` slot pair ({slot}, {}) does not name \
+                     scratch[{idx}]",
+                    self.meta.name,
+                    slot + 1
+                );
             }
             for (k, slot) in self.out_slots.iter().enumerate() {
                 outputs[k] = crate::compile::marshal::decode_output(buf, *slot, self.out_types[k]);
@@ -186,21 +212,18 @@ mod jit_impl {
         ));
     }
 
-    /// Marshalable boundary scalars. U64/F64/Bool covers every
-    /// port type the P3 classifier currently lowers — the narrow
-    /// scalar bridges (`__u32_to_u64`, `__f32_to_f64`, …) classify
-    /// Fallback, so no fusable node carries I64/I32/U32/F32 ports
-    /// today (verified 2026-07-09, catchup item A3). WIDEN THIS
-    /// (encode/decode + the jit_boundary.md slot conventions) when
-    /// a narrow-typed node gains a JIT lowering; until then extra
-    /// arms would be dead, untested marshalling.
+    /// Marshalable boundary types: the one-slot carriers the boundary
+    /// encodes as bits, and every `Ref2` kind, borrowed into its pair
+    /// for the call and copied out after it (compiled_handles.md §4).
+    /// The narrow scalar bridges (`__u32_to_u64`, `__f32_to_f64`, …)
+    /// and the 128-bit immediates stay out until they have a boundary
+    /// encoding of their own.
     fn scalar_ok(ty: PortType) -> bool {
         use crate::ast::SlotColor;
         match ty.slot_color() {
             SlotColor::Imm1 => matches!(ty, PortType::U64 | PortType::F64 | PortType::Bool),
-            // A reference pair joins a cone once the native lowering
-            // carries one; until then the node stays interpreted.
-            SlotColor::Imm2 | SlotColor::Ref2 => false,
+            SlotColor::Ref2 => true,
+            SlotColor::Imm2 => false,
         }
     }
 
@@ -497,18 +520,27 @@ mod jit_impl {
             let member = nodes[m].as_ref()?;
             let member_ports: Vec<PortType> =
                 member.meta().wire_inputs().iter().map(|p| p.typ).collect();
-            // A variadic node that inspects `Value`s at P1 lowers with
-            // its wire types fixed (SRD 115 §6), so its advertised
-            // port types do not bind its wires. Only the lowering
-            // decides that: `str_concat` is variadic too, but its
-            // helper takes strings, so its wires must be strings.
+            let wire_types: Vec<PortType> = dag.wiring[m]
+                .iter()
+                .map(|src| match src {
+                    WireSource::Input(i) => Some(dag.input_defs[*i].port_type),
+                    WireSource::NodeOutput(j, p) => Some(nodes[*j].as_ref()?.meta().outs[*p].typ),
+                })
+                .collect::<Option<_>>()?;
+            // A node that lowers as a slot call runs the kit built for
+            // its wire types (compiled_handles.md §6), so its advertised
+            // port types do not bind its wires: a variadic that inspects
+            // `Value`s at P1 reads each wire as the wire is. A named
+            // native lowering takes its ports as declared.
+            let typed_by_wires = matches!(
+                classify_node_typed(member.as_ref(), &wire_types),
+                JitOp::SlotCall { .. }
+            );
             for (k, src) in dag.wiring[m].iter().enumerate() {
-                let ty = match src {
-                    WireSource::Input(i) => dag.input_defs[*i].port_type,
-                    WireSource::NodeOutput(j, p) => nodes[*j].as_ref()?.meta().outs[*p].typ,
-                };
+                let ty = wire_types[k];
                 // Inside a cone every wire is exactly its port's type.
-                if let Some(expected) = member_ports.get(k)
+                if !typed_by_wires
+                    && let Some(expected) = member_ports.get(k)
                     && *expected != ty
                 {
                     audit_skip(
@@ -625,11 +657,18 @@ mod jit_impl {
         })
     }
 
+    /// A boundary input's declared default, of its own type; the cone
+    /// is always evaluated with its inputs bound, so the default is
+    /// never read, but the definition is typed like any input's.
     fn default_for(ty: PortType) -> Value {
         match ty {
             PortType::F64 => Value::F64(0.0),
             PortType::Bool => Value::Bool(false),
-            _ => Value::U64(0),
+            PortType::Str => Value::Str("".into()),
+            PortType::Bytes => Value::Bytes(Vec::new().into()),
+            PortType::Json => Value::Json(std::sync::Arc::new(serde_json::Value::Null)),
+            PortType::U64 => Value::U64(0),
+            _ => Value::None,
         }
     }
 
@@ -695,7 +734,7 @@ mod jit_impl {
             .collect();
         let member_label = cone_label(&taken);
 
-        let sub = ResolvedDag {
+        let mut sub = ResolvedDag {
             nodes: taken,
             wiring: sub_wiring,
             input_defs: sub_input_defs,
@@ -704,7 +743,10 @@ mod jit_impl {
             output_order: sub_output_order,
             cursor_schemas: Vec::new(),
             source: String::new(),
-            context: member_label.clone(),
+            // A member's failure is reported against the program the
+            // cone stands in, as the same node's failure is reported on
+            // every other engine (A7); the cone is not a frame of its own.
+            context: dag.context.clone(),
             output_modifiers: HashMap::new(),
             const_outputs: std::collections::HashSet::new(),
         };
@@ -723,7 +765,7 @@ mod jit_impl {
                 return Err(e);
             }
         };
-        let (coord_slots, total_slots, jit_steps, jit_outputs) = layout;
+        let (coord_slots, total_slots, jit_steps, jit_outputs, scratch) = layout;
         // Boundary inputs occupy the first slots, each as wide as its
         // type.
         let mut in_slots = Vec::with_capacity(plan.in_types.len());
@@ -734,7 +776,7 @@ mod jit_impl {
         }
         debug_assert_eq!(coord_slots, next);
         let compiled = crate::compile::jit::compile_jit_entry(&jit_steps, Some(total_slots));
-        let (code_fn, module) = match compiled {
+        let (code_fn, code) = match compiled {
             Ok(parts) => parts,
             Err(e) => {
                 restore(sub.nodes, nodes);
@@ -791,7 +833,28 @@ mod jit_impl {
             .iter()
             .map(|(j, p)| (local[j], *p))
             .collect();
+        // A member's failure names the member's outputs as the program
+        // names them (A7), not as the cone numbers them: the boundary
+        // outputs take the program's names for the attribution.
+        let mut named = sub.output_map.clone();
+        for (k, (j, p)) in plan.boundary_out.iter().enumerate() {
+            let names: Vec<String> = dag
+                .output_map
+                .iter()
+                .filter(|(_, v)| **v == (*j, *p))
+                .map(|(n, _)| n.clone())
+                .collect();
+            if !names.is_empty()
+                && let Some(target) = named.remove(&format!("o{k}"))
+            {
+                for n in names {
+                    named.insert(n, target);
+                }
+            }
+        }
+        let numbered = std::mem::replace(&mut sub.output_map, named);
         let attribution = std::sync::Arc::new(PolydatAssembler::attribution_of(&sub));
+        sub.output_map = numbered;
         Ok(JitConeNode {
             attribution,
             in_slots,
@@ -804,7 +867,8 @@ mod jit_impl {
             members: sub.nodes,
             sub_wiring: sub.wiring,
             out_ports,
-            _module: ModuleHolder(module),
+            scratch,
+            _module: code,
         })
     }
 

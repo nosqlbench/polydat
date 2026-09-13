@@ -8,9 +8,10 @@
 //!
 //! A string is a `Ref2` value (jit_boundary.md, axioms S1–S10): a
 //! `(ptr, len)` pair into its producing step's own scratch. The native
-//! tier does not carry reference pairs yet, so a node with a string
-//! port stays out of cones; `REF_NATIVE` gates the fusion assertions
-//! until it does.
+//! tier carries the pair through a slot call of the producing node's
+//! kit (compiled_handles.md §6), so a node with a string port joins
+//! cones and segments; `REF_NATIVE` names the fusion assertions that
+//! rest on it.
 
 #![cfg(feature = "jit")]
 
@@ -19,7 +20,7 @@ use polydat::dsl::compile::compile_polydat_to_assembler;
 use polydat::kernel::PolydatKernel;
 
 /// Whether the native tier lowers steps with reference-pair ports.
-const REF_NATIVE: bool = false;
+const REF_NATIVE: bool = true;
 
 fn kernel(src: &str, mode: JitMode) -> PolydatKernel {
     let mut asm = compile_polydat_to_assembler(src).unwrap_or_else(|e| panic!("{e}\n{src}"));
@@ -141,17 +142,12 @@ fn a_string_read_is_an_owned_copy_that_outlives_the_next_write() {
 }
 
 #[test]
-fn an_untyped_variadic_edge_keeps_the_node_on_p1() {
-    // `str_concat` takes any wire untyped at P1; a cone cannot, so a
-    // u64 wire on its Str port keeps it out of the cone.
+fn an_untyped_variadic_edge_lowers_with_its_wire_types() {
+    // `str_concat` takes any wire untyped at P1; its kit is built for
+    // the wire types the graph fixed, so a u64 wire on its Str port
+    // is read as a u64 inside the cone, as P1 reads it.
     let src = "input cycle: u64\nh := hash(cycle)\nc := str_concat(h, h)\n";
-    agree(src, &["c"], 4, &[]);
-    let p3 = kernel(src, JitMode::Force);
-    assert!(
-        !cones(&p3).iter().any(|c| c.contains("str_concat")),
-        "{:?}",
-        cones(&p3)
-    );
+    agree(src, &["c"], 4, &["str_concat"]);
 }
 
 #[test]

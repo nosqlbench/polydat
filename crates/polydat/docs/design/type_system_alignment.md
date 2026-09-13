@@ -176,21 +176,20 @@ Type support and engine eligibility are separate:
   pairs over the step's own scratch, vectors and by-reference
   values alike ([Compiled By-Reference Slots](compiled_handles.md)
   §5).
-- P3 is native where a node has a lowering and its closure
-  elsewhere. The native form is the node's own: the classifier
-  (`classify_node_typed`) selects it from the node and the
-  types of its wires, fixed at classification; a wire of a type
-  no lowering takes leaves the node on its closure. Native code
-  carries no reference pairs yet, so a node with a `Ref2` port
-  on either side keeps its closure beside the native segments
-  ([Compiled By-Reference Slots](compiled_handles.md) §6).
-  Register-plane operations with a lowering run as native SIMD;
-  slice-bearing nodes' internal vector math may call compiled
-  SIMD helpers from their closure.
+- P3 is native for every pure node: a named lowering where the
+  node has one, selected by the classifier (`classify_node_typed`)
+  from the node and the types of its wires, and otherwise a call of
+  the node's kit from native code, over the state's own scratch,
+  whatever the colors of its ports ([Compiled By-Reference
+  Slots](compiled_handles.md) §6). A nondeterministic node or a
+  side channel keeps a closure step of its own, so its currency is
+  its own. Register-plane operations with a lowering run as native
+  SIMD; slice-bearing nodes' internal vector math may call compiled
+  SIMD helpers from their kit.
 - `U128/I128` operations and nodes that downcast an `Ext` or
-  `Handle` have no native form and run as closure steps; the
-  values themselves cross compiled tiers as two immediate slots
-  and as reference pairs respectively.
+  `Handle` run through their kits where they have one; the values
+  themselves cross compiled tiers as two immediate slots and as
+  reference pairs respectively.
 
 The one typed read is `Kernel::pull`: on every engine it
 returns the named output as the `Value` its port type names,

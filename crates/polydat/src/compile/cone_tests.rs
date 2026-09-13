@@ -132,21 +132,22 @@ fn auto_requires_two_members() {
 }
 
 #[test]
-fn violation_inside_cone_attributes_members() {
-    // A predicate violation in native code must surface through
-    // invoke_with_catch → eval_node enrichment, naming both the
-    // violated predicate and the cone (whose label lists the fused
-    // member functions).
+fn violation_inside_cone_attributes_the_member() {
+    // A predicate violation in native code surfaces through
+    // invoke_with_catch and the cone's own attribution, naming the
+    // violated predicate as the program's node with the program's
+    // output name and context; the cone is no frame of its own, so the
+    // report reads as it reads on every other engine (A7).
     let src = "input (x: u64)\n\
                checked := is_positive(mul(x, 0))\n";
     let msg = capture_violation(src, JitMode::Force, 5);
     assert!(
-        msg.contains("is_positive"),
-        "violation names the predicate: {msg}"
+        msg.contains("↳ in node `is_positive` (output checked) while evaluating"),
+        "violation names the predicate as the program's node: {msg}"
     );
     assert!(
-        msg.contains("jit_cone["),
-        "enrichment names the cone with its members: {msg}"
+        !msg.contains("jit_cone["),
+        "the cone is not a frame of the report: {msg}"
     );
 }
 

@@ -18,12 +18,26 @@ use crate::kernel::ProvMask;
 /// Finalized native code, shared by every kernel created from one
 /// program. The module's memory is never written after finalization,
 /// so sharing it across threads is sound; the wrapper exists so a
-/// kernel clone is a new state over the same code.
+/// kernel clone is a new state over the same code. The slot kits the
+/// code calls by address live beside it, for as long as it does.
 #[derive(Clone)]
 pub struct JitCode(#[allow(dead_code)] std::sync::Arc<FinalizedModule>);
 
-/// A JIT module after finalization, which nothing writes again.
-struct FinalizedModule(#[allow(dead_code)] JITModule);
+/// A JIT module after finalization, which nothing writes again, and
+/// the kits its code calls.
+struct FinalizedModule(
+    #[allow(dead_code)] JITModule,
+    #[allow(dead_code)] Vec<super::codegen::SlotKitRef>,
+);
+
+/// The scratch a native kernel's state owns: one entry per entry the
+/// steps' kits declare, and the `(first slot, entry)` pairs of the
+/// scratch-backed `Ref2` outputs among them (axiom S9(a)).
+#[derive(Clone, Default)]
+pub(crate) struct ScratchPlan {
+    pub(crate) elems: Vec<crate::ast::ScratchElem>,
+    pub(crate) refs: Vec<(usize, usize)>,
+}
 
 // SAFETY: the module is finalized before it is wrapped and never
 // touched again; only its code runs, from any thread.
@@ -31,13 +45,13 @@ unsafe impl Send for FinalizedModule {}
 unsafe impl Sync for FinalizedModule {}
 
 impl JitCode {
-    pub(crate) fn new(module: JITModule) -> Self {
-        JitCode(std::sync::Arc::new(FinalizedModule(module)))
+    pub(crate) fn new(module: JITModule, kits: Vec<super::codegen::SlotKitRef>) -> Self {
+        JitCode(std::sync::Arc::new(FinalizedModule(module, kits)))
     }
 }
 
 /// A raw native kernel taken apart: its entry point and its code.
-pub type JitParts = (unsafe fn(*const u64, *mut u64), JitCode);
+pub type JitParts = (super::codegen::NativeFn, JitCode);
 
 /// Shared fields for all JIT kernel variants. A clone is a new state
 /// of the same program: the code and the nodes are shared, everything
@@ -69,6 +83,12 @@ pub(super) struct JitCore {
     /// The slot past the layout where native code names the step it
     /// is in before calling a helper; `u64::MAX` before any.
     pub(super) tracker: usize,
+    /// The scratch entries the steps' kits write into, owned by this
+    /// state (axiom S3); native code receives the base pointer.
+    pub(super) scratch: Vec<crate::ast::ScratchBuf>,
+    /// Axiom S9(a): (first slot of a Ref pair → scratch index) for
+    /// every scratch-backed Ref output.
+    pub(super) ref_scratch: Vec<(usize, usize)>,
 }
 
 impl Clone for JitCore {
@@ -86,9 +106,16 @@ impl Clone for JitCore {
             drive: self.drive.clone(),
             sites: self.sites.clone(),
             tracker: self.tracker,
+            scratch: self.scratch.clone(),
+            ref_scratch: self.ref_scratch.clone(),
         };
-        // An extern's pair points into the value the state stores
-        // (axiom S3), which a clone stores again.
+        // Every pair points into this state's own storage (axiom S3):
+        // a step's scratch entry, the value an extern stores.
+        for &(slot, idx) in &core.ref_scratch {
+            let (p, l) = core.scratch[idx].ptr_len();
+            core.buffer[slot] = p;
+            core.buffer[slot + 1] = l;
+        }
         core.externs.seed(&mut core.buffer, None);
         core
     }
@@ -117,8 +144,9 @@ impl JitCore {
         total_slots: usize,
         coord_count: usize,
         output_map: HashMap<String, usize>,
-        module: JITModule,
+        code: JitCode,
         nodes: Vec<Box<dyn PolydatNode>>,
+        scratch: ScratchPlan,
     ) -> Self {
         Self {
             buffer: vec![0u64; total_slots + 1],
@@ -128,11 +156,34 @@ impl JitCore {
             output_types: HashMap::new(),
             externs: crate::compile::externs::Externs::default(),
             traversals: Vec::new().into(),
-            _module: JitCode::new(module),
+            _module: code,
             _nodes: std::sync::Arc::new(nodes),
             drive: crate::compile::Drive::default(),
             sites: std::sync::Arc::default(),
             tracker: total_slots,
+            scratch: scratch
+                .elems
+                .iter()
+                .map(|e| crate::ast::ScratchBuf::new(*e))
+                .collect(),
+            ref_scratch: scratch.refs,
+        }
+    }
+
+    /// Axiom S9(a): every scratch-backed pair in the buffer names its
+    /// own entry, checked after a run in debug builds.
+    #[cfg(debug_assertions)]
+    fn validate_refs(&self) {
+        for &(slot, idx) in &self.ref_scratch {
+            let (p, l) = self.scratch[idx].ptr_len();
+            assert!(
+                self.buffer[slot] == p && self.buffer[slot + 1] == l,
+                "S9 ref-validator: slot pair ({slot}, {}) = ({:#x}, {}) does not match \
+                 scratch[{idx}] = ({p:#x}, {l})",
+                slot + 1,
+                self.buffer[slot],
+                self.buffer[slot + 1],
+            );
         }
     }
 
@@ -190,6 +241,8 @@ impl JitCore {
             let sites = std::sync::Arc::clone(&self.sites);
             sites.reraise(payload, step, &self.buffer, None);
         }
+        #[cfg(debug_assertions)]
+        self.validate_refs();
     }
 }
 
@@ -356,7 +409,7 @@ macro_rules! jit_accessors {
 #[doc(hidden)]
 pub struct JitKernelRaw {
     pub(super) core: JitCore,
-    pub(super) code_fn: unsafe fn(*const u64, *mut u64),
+    pub(super) code_fn: super::codegen::NativeFn,
 }
 
 impl JitKernelRaw {
@@ -374,8 +427,9 @@ impl JitKernelRaw {
         let code_fn = self.code_fn;
         let buf_ptr_const = self.core.buffer.as_ptr();
         let buf_ptr_mut = self.core.buffer.as_mut_ptr();
+        let sc = self.core.scratch.as_mut_ptr();
         self.core.run(move || unsafe {
-            (code_fn)(buf_ptr_const, buf_ptr_mut);
+            (code_fn)(buf_ptr_const, buf_ptr_mut, sc);
         });
     }
 
@@ -405,7 +459,7 @@ impl JitKernelRaw {
 #[doc(hidden)]
 pub struct JitKernelPush {
     pub(super) core: JitCore,
-    pub(super) code_fn_prov: unsafe fn(*const u64, *mut u64, *mut u8),
+    pub(super) code_fn_prov: super::codegen::NativeProvFn,
     pub(super) node_clean: Vec<u8>,
     pub(super) input_dependents: Vec<Vec<usize>>,
 }
@@ -437,9 +491,10 @@ impl JitKernelPush {
         let code_fn = self.code_fn_prov;
         let buf_const = self.core.buffer.as_ptr();
         let buf_mut = self.core.buffer.as_mut_ptr();
+        let sc = self.core.scratch.as_mut_ptr();
         let clean_mut = self.node_clean.as_mut_ptr();
         self.core.run(move || unsafe {
-            (code_fn)(buf_const, buf_mut, clean_mut);
+            (code_fn)(buf_const, buf_mut, sc, clean_mut);
         });
     }
 
@@ -461,7 +516,7 @@ impl JitKernelPush {
 #[doc(hidden)]
 pub struct JitKernelPull {
     pub(super) core: JitCore,
-    pub(super) code_fn: unsafe fn(*const u64, *mut u64),
+    pub(super) code_fn: super::codegen::NativeFn,
     pub(super) slot_provenance: Vec<ProvMask>,
     pub(super) changed_mask: ProvMask,
     /// Set by `set_input`: an extern changed, so the next evaluation
@@ -495,8 +550,9 @@ impl JitKernelPull {
         let code_fn = self.code_fn;
         let buf_const = self.core.buffer.as_ptr();
         let buf_mut = self.core.buffer.as_mut_ptr();
+        let sc = self.core.scratch.as_mut_ptr();
         self.core.run(move || unsafe {
-            (code_fn)(buf_const, buf_mut);
+            (code_fn)(buf_const, buf_mut, sc);
         });
     }
 
@@ -515,8 +571,9 @@ impl JitKernelPull {
         let code_fn = self.code_fn;
         let buf_const = self.core.buffer.as_ptr();
         let buf_mut = self.core.buffer.as_mut_ptr();
+        let sc = self.core.scratch.as_mut_ptr();
         self.core.run(move || unsafe {
-            (code_fn)(buf_const, buf_mut);
+            (code_fn)(buf_const, buf_mut, sc);
         });
         self.core.buffer[slot]
     }
@@ -531,7 +588,7 @@ impl JitKernelPull {
 #[doc(hidden)]
 pub struct JitKernelPushPull {
     pub(super) core: JitCore,
-    pub(super) code_fn_prov: unsafe fn(*const u64, *mut u64, *mut u8),
+    pub(super) code_fn_prov: super::codegen::NativeProvFn,
     pub(super) node_clean: Vec<u8>,
     pub(super) input_dependents: Vec<Vec<usize>>,
     pub(super) slot_provenance: Vec<ProvMask>,
@@ -577,9 +634,10 @@ impl JitKernelPushPull {
         let code_fn = self.code_fn_prov;
         let buf_const = self.core.buffer.as_ptr();
         let buf_mut = self.core.buffer.as_mut_ptr();
+        let sc = self.core.scratch.as_mut_ptr();
         let clean_mut = self.node_clean.as_mut_ptr();
         self.core.run(move || unsafe {
-            (code_fn)(buf_const, buf_mut, clean_mut);
+            (code_fn)(buf_const, buf_mut, sc, clean_mut);
         });
     }
 
@@ -598,9 +656,10 @@ impl JitKernelPushPull {
         let code_fn = self.code_fn_prov;
         let buf_const = self.core.buffer.as_ptr();
         let buf_mut = self.core.buffer.as_mut_ptr();
+        let sc = self.core.scratch.as_mut_ptr();
         let clean_mut = self.node_clean.as_mut_ptr();
         self.core.run(move || unsafe {
-            (code_fn)(buf_const, buf_mut, clean_mut);
+            (code_fn)(buf_const, buf_mut, sc, clean_mut);
         });
         self.core.buffer[slot]
     }

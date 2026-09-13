@@ -162,8 +162,13 @@ fn s10_from_raw_parts_tripwire() {
         // governed by SliceArc's owner-lifetime contract.
         ("src/ast.rs", "SliceArc as_slice"),
         // JIT extern helpers reading node-owned const tables baked
-        // at compile time (retain_nodes keeps them alive).
-        ("src/compile/jit/codegen.rs", "extern const-table reads"),
+        // at compile time (retain_nodes keeps them alive), and the
+        // slot-call helper's view of the native frame and the state's
+        // scratch (compiled_handles.md §6).
+        (
+            "src/compile/jit/codegen.rs",
+            "extern const-table reads; slot-call frames",
+        ),
         // Dataset accessor reading an mmap-backed uniform facet
         // (vectordata owner-lifetime contract).
         ("src/library/vectors.rs", "dataset facet view"),
@@ -324,20 +329,15 @@ fn ref2_is_the_color_of_by_reference_types() {
     assert_eq!(PortType::U128.scratch_elem(), None);
 }
 
-/// Axiom S2 for by-reference outputs on the hybrid kernel: the raw
-/// readers refuse a `Ref2` slot, and the typed reader copies the value
-/// out. A pure native layout carries no reference pairs yet and says so.
+/// Axiom S2 for by-reference outputs on the hybrid kernel and on pure
+/// native code: the raw readers refuse a `Ref2` slot, and the typed
+/// reader copies the value out. Native code carries the pair through
+/// a slot call of the producing node's kit (compiled_handles.md §6).
 #[cfg(feature = "jit")]
 #[test]
-fn hybrid_kernels_guard_reference_slots_and_copy_them_out() {
+fn native_kernels_guard_reference_slots_and_copy_them_out() {
     let src =
         "input cycle: u64\nh := hash(cycle)\nj := __u64_to_json(h)\ns := __u64_to_string(h)\n";
-    let err = compile_polydat_to_assembler(src)
-        .unwrap()
-        .try_compile_pure_jit()
-        .err()
-        .expect("a reference output has no pure native layout yet");
-    assert!(err.contains("Ref2"), "{err}");
     let mut k = compile_polydat_to_assembler(src)
         .unwrap()
         .compile_hybrid()
@@ -349,6 +349,18 @@ fn hybrid_kernels_guard_reference_slots_and_copy_them_out() {
     let h = k.get("h");
     assert_eq!(k.get_value("s").as_str(), h.to_string());
     assert_eq!(k.get_value("j").to_display_string(), h.to_string());
+    let mut pure = compile_polydat_to_assembler(src)
+        .unwrap()
+        .try_compile_pure_jit()
+        .expect("pure native code carries reference pairs through slot calls");
+    pure.eval(&[3]);
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pure.get("s")));
+    assert!(
+        r.is_err(),
+        "a raw read of a reference slot must be refused natively too"
+    );
+    assert_eq!(pure.get_value("s").as_str(), h.to_string());
+    assert_eq!(pure.get_value("j").to_display_string(), h.to_string());
 }
 
 /// A program with a string extern and string and JSON outputs, for the
