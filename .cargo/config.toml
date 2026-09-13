@@ -1,0 +1,8 @@
+# Link with rust-lld, which ships with the toolchain, in place of MSVC
+# link.exe: measured 2026-09-12 on the all-features test build (63
+# binaries), a cold build went from 880 s to 560 s, relinking every
+# binary after a library change from 377 s to 226 s, and one touched
+# test file from 22 s to 9 s. The native-code, longjmp, and failure
+# attribution tests pass from the lld-linked binaries.
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"
