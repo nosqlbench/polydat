@@ -311,10 +311,10 @@ name in the classifier (`classify_node` and `classify_node_typed` in
 `src/compile/jit/codegen.rs`): each arm names a `JitOp`, reads the
 node's `jit_constants()` positionally, and, for a node whose body
 dispatches on `Value` variants, decides by the types of its wires. A
-pure node with no arm runs its kit from native code through the
-slot-call helper ([Compiled By-Reference Slots](compiled_handles.md)
-§6); a nondeterministic node or a side channel with no arm runs as a
-closure step of its own. The macro emits `jit_constants` in declaration order
+node with no arm runs its kit from native code through the slot-call
+helper ([Compiled By-Reference Slots](compiled_handles.md) §6), a
+nondeterministic node or a side channel in a segment of its own on the
+P3 kernel. The macro emits `jit_constants` in declaration order
 for a node the u64 kit carries; a node whose lowering reads its
 constants in another order supplies `jit_constants = <path>`.
 

@@ -1318,14 +1318,23 @@ pub(crate) fn build_hybrid(
             // a constant node never joins a segment that is not, or the
             // constant steps after it would run before their producer.
             // A segment is one step to the plan, so a volatile node
-            // never joins pure ones: the segment would be never
-            // current and rerun them at every round.
+            // never joins pure ones (the segment would be never current
+            // and rerun them at every round), and a side channel never
+            // joins any other node (it would fire whenever the segment
+            // ran, rather than when its own inputs changed).
+            let is_side =
+                |k: usize| matches!(nodes[k].purity(), crate::ast::Purity::SideChannel { .. });
             let batch_start = i;
             while i < classifications.len()
                 && !matches!(classifications[i].0, JitOp::Fallback)
                 && constant[i] == constant[batch_start]
                 && volatile[i] == volatile[batch_start]
+                && !is_side(i)
+                && !is_side(batch_start)
             {
+                i += 1;
+            }
+            if i == batch_start {
                 i += 1;
             }
             // Each step's scratch entries are placed in the kernel's

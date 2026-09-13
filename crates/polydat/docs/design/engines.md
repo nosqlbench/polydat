@@ -317,13 +317,14 @@ accepts, with the two refusals named below, and computes what the
 interpreter computes. The other distinctions are placements inside an engine,
 not refusals:
 
-- A pure node without a named native lowering runs its kit from native
-  code, called in place over the state's own scratch
+- A node without a named native lowering runs its kit from native code,
+  called in place over the state's own scratch
   ([Compiled By-Reference Slots](compiled_handles.md) §6); a
-  nondeterministic node or a side channel runs its closure as a step of
-  its own, so its currency is its own; a node with no kit runs on the
-  interpreter as itself, and only pure native code, the differential
-  tier, refuses it.
+  nondeterministic node or a side channel does too, as a segment of its
+  own on the P3 kernel and a never-current step on pure native code, so
+  its currency is its own; a node with no kit runs on the interpreter
+  as itself, and only pure native code, the differential tier, refuses
+  it.
 - A by-reference value crosses a cone boundary borrowed into its pair
   for the call and copied out after it, and a copy of one inside native
   code copies into the copying step's own scratch; a pair is never

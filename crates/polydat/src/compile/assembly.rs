@@ -565,10 +565,11 @@ type P2Layout = (
     crate::compile::closures::P2Extras,
 );
 
-/// `(coord_slots, total_slots, JIT steps, named outputs, scratch)` —
-/// the JIT compiled layout shared by the native kernel builders; the
-/// scratch is what a state owns for the steps' kits, with each step's
-/// entries placed.
+/// `(coord_slots, total_slots, JIT steps, named outputs, scratch,
+/// volatile steps)` — the JIT compiled layout shared by the native
+/// kernel builders; the scratch is what a state owns for the steps'
+/// kits, with each step's entries placed, and the volatile steps are
+/// the never-current ones (runtime_model.md, R1.v).
 #[cfg(feature = "jit")]
 type JitLayout = (
     usize,
@@ -576,6 +577,7 @@ type JitLayout = (
     Vec<(crate::compile::jit::JitOp, Vec<usize>, Vec<usize>)>,
     HashMap<String, usize>,
     crate::compile::jit::ScratchPlan,
+    Vec<usize>,
 );
 
 impl PolydatAssembler {
@@ -1152,12 +1154,26 @@ impl PolydatAssembler {
         }
 
         let output_map = layout.named_outputs(resolved);
+        // The runtime model's lifecycle classification, the one rule the
+        // interpreter's fold applies: a nondeterministic node, or one
+        // downstream of it, is never current on any engine.
+        let classes = PolydatProgram::classify_lifecycle(
+            &resolved.nodes,
+            &resolved.wiring,
+            &resolved.input_defs,
+            &resolved.output_map,
+            &resolved.output_modifiers,
+        );
+        let volatile: Vec<usize> = (0..resolved.nodes.len())
+            .filter(|&i| classes.nondeterministic[i])
+            .collect();
         Ok((
             layout.coord_slots,
             layout.total_slots,
             jit_steps,
             output_map,
             scratch,
+            volatile,
         ))
     }
 
@@ -1221,7 +1237,7 @@ impl PolydatAssembler {
         resolved: ResolvedDag,
     ) -> Result<crate::compile::jit::JitKernelPushPull, String> {
         let _coord_names = resolved.input_names();
-        let (coord_count, total_slots, jit_steps, output_map, scratch) =
+        let (coord_count, total_slots, jit_steps, output_map, scratch, volatile) =
             Self::build_jit_layout(&resolved)?;
         let (guard, types) = Self::jit_slot_info(&resolved);
         let deps = slot_layout(&resolved).expand_dependents(
@@ -1242,6 +1258,7 @@ impl PolydatAssembler {
             deps,
             externs,
             scratch,
+            volatile,
         )?;
         k.set_slot_info(guard, types);
         k.set_attribution(attribution);
@@ -1322,7 +1339,7 @@ impl PolydatAssembler {
     #[cfg(feature = "jit")]
     fn jit_raw_from(resolved: ResolvedDag) -> Result<crate::compile::jit::JitKernelRaw, String> {
         let _coord_names = resolved.input_names();
-        let (coord_count, total_slots, jit_steps, output_map, scratch) =
+        let (coord_count, total_slots, jit_steps, output_map, scratch, volatile) =
             Self::build_jit_layout(&resolved)?;
         let (guard, types) = Self::jit_slot_info(&resolved);
         let externs = Self::externs_of(&resolved)?;
@@ -1335,6 +1352,7 @@ impl PolydatAssembler {
             resolved.nodes,
             externs,
             scratch,
+            volatile,
         )?;
         k.set_slot_info(guard, types);
         k.set_attribution(attribution);
@@ -1372,7 +1390,7 @@ impl PolydatAssembler {
     #[cfg(feature = "jit")]
     fn jit_push_from(resolved: ResolvedDag) -> Result<crate::compile::jit::JitKernelPush, String> {
         let _coord_names = resolved.input_names();
-        let (coord_count, total_slots, jit_steps, output_map, scratch) =
+        let (coord_count, total_slots, jit_steps, output_map, scratch, volatile) =
             Self::build_jit_layout(&resolved)?;
         let deps = slot_layout(&resolved).expand_dependents(
             &resolved,
@@ -1393,6 +1411,7 @@ impl PolydatAssembler {
             deps,
             externs,
             scratch,
+            volatile,
         )?;
         k.set_slot_info(guard, types);
         k.set_attribution(attribution);
@@ -1410,7 +1429,7 @@ impl PolydatAssembler {
     #[cfg(feature = "jit")]
     fn jit_pull_from(resolved: ResolvedDag) -> Result<crate::compile::jit::JitKernelPull, String> {
         let _coord_names = resolved.input_names();
-        let (coord_count, total_slots, jit_steps, output_map, scratch) =
+        let (coord_count, total_slots, jit_steps, output_map, scratch, volatile) =
             Self::build_jit_layout(&resolved)?;
         let deps = slot_layout(&resolved).expand_dependents(
             &resolved,
@@ -1431,6 +1450,7 @@ impl PolydatAssembler {
             &deps,
             externs,
             scratch,
+            volatile,
         )?;
         k.set_slot_info(guard, types);
         k.set_attribution(attribution);

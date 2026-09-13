@@ -89,6 +89,12 @@ pub(super) struct JitCore {
     /// Axiom S9(a): (first slot of a Ref pair → scratch index) for
     /// every scratch-backed Ref output.
     pub(super) ref_scratch: Vec<(usize, usize)>,
+    /// The steps that are never current (runtime_model.md, R1.v): a
+    /// nondeterministic node or one downstream of it. The kernels
+    /// with a clean flag per step clear theirs at every write, and
+    /// the kernels with a cone guard run whenever one exists and a
+    /// write happened, since one native function is the program.
+    pub(super) volatile_steps: Vec<usize>,
 }
 
 impl Clone for JitCore {
@@ -108,6 +114,7 @@ impl Clone for JitCore {
             tracker: self.tracker,
             scratch: self.scratch.clone(),
             ref_scratch: self.ref_scratch.clone(),
+            volatile_steps: self.volatile_steps.clone(),
         };
         // Every pair points into this state's own storage (axiom S3):
         // a step's scratch entry, the value an extern stores.
@@ -147,6 +154,7 @@ impl JitCore {
         code: JitCode,
         nodes: Vec<Box<dyn PolydatNode>>,
         scratch: ScratchPlan,
+        volatile_steps: Vec<usize>,
     ) -> Self {
         Self {
             buffer: vec![0u64; total_slots + 1],
@@ -167,7 +175,15 @@ impl JitCore {
                 .map(|e| crate::ast::ScratchBuf::new(*e))
                 .collect(),
             ref_scratch: scratch.refs,
+            volatile_steps,
         }
+    }
+
+    /// Whether a write must run the program regardless of the cone
+    /// guard: a never-current step exists (R1.v).
+    #[inline]
+    fn has_volatile(&self) -> bool {
+        !self.volatile_steps.is_empty()
     }
 
     /// Axiom S9(a): every scratch-backed pair in the buffer names its
@@ -473,14 +489,22 @@ impl JitKernelPush {
                 self.mark_input_changed(i);
             }
         }
+        // A write makes every never-current step run again (R1.v).
+        for &step_idx in &self.core.volatile_steps {
+            self.node_clean[step_idx] = 0;
+        }
     }
 
-    /// Every step downstream of the slot reruns.
+    /// Every step downstream of the slot reruns, and every
+    /// never-current step with it (R1.v).
     fn mark_input_changed(&mut self, slot: usize) {
         if slot < self.input_dependents.len() {
             for &step_idx in &self.input_dependents[slot] {
                 self.node_clean[step_idx] = 0;
             }
+        }
+        for &step_idx in &self.core.volatile_steps {
+            self.node_clean[step_idx] = 0;
         }
     }
 
@@ -533,6 +557,11 @@ impl JitKernelPull {
                 self.core.buffer[i] = c;
                 self.changed_mask.set(i);
             }
+        }
+        // A never-current step runs again after every write (R1.v),
+        // and one native function is the program.
+        if self.core.has_volatile() {
+            self.force_run = true;
         }
     }
 
@@ -613,6 +642,14 @@ impl JitKernelPushPull {
                 }
             }
         }
+        // A write makes every never-current step run again (R1.v),
+        // whatever the cone guard would say of the pulled output.
+        if self.core.has_volatile() {
+            for &step_idx in &self.core.volatile_steps {
+                self.node_clean[step_idx] = 0;
+            }
+            self.force_run = true;
+        }
     }
 
     /// Every step downstream of the slot reruns, and the next
@@ -622,6 +659,9 @@ impl JitKernelPushPull {
             for &step_idx in &self.input_dependents[slot] {
                 self.node_clean[step_idx] = 0;
             }
+        }
+        for &step_idx in &self.core.volatile_steps {
+            self.node_clean[step_idx] = 0;
         }
         self.force_run = true;
     }

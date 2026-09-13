@@ -897,11 +897,13 @@ extern "C" fn jit_json_to_str(
 }
 
 /// Classify a node with the types of its wire inputs known. A node
-/// with a named native lowering takes it; any other pure node with a
-/// kit is a [`JitOp::SlotCall`] of that kit, so a reference pair on
-/// either side is no bar to native code; a node with neither, a
-/// nondeterministic node, or a side channel stays a closure step or
-/// interpreted, where its currency is its own.
+/// with a named native lowering takes it; any other node with a kit
+/// is a [`JitOp::SlotCall`] of that kit, so a reference pair on either
+/// side is no bar to native code, and neither is nondeterminism or a
+/// side effect: the kernels that run the code keep such a step's
+/// currency its own (a segment of its own on the hybrid kernel, a
+/// never-current step on pure native code). A node with neither stays
+/// interpreted.
 pub fn classify_node_typed(node: &dyn PolydatNode, wire_types: &[crate::ast::PortType]) -> JitOp {
     let is_ref = |t: &crate::ast::PortType| t.slot_color() == crate::ast::SlotColor::Ref2;
     let ref_copy = |ty: crate::ast::PortType| {
@@ -949,9 +951,6 @@ pub fn classify_node_typed(node: &dyn PolydatNode, wire_types: &[crate::ast::Por
     };
     if !matches!(named, JitOp::Fallback) {
         return named;
-    }
-    if !matches!(node.purity(), crate::ast::Purity::Pure) {
-        return JitOp::Fallback;
     }
     if let Some(kit) = node.compiled_slot(wire_types) {
         return JitOp::SlotCall {
@@ -1888,11 +1887,13 @@ pub fn compile_jit_raw(
         nodes,
         crate::compile::externs::Externs::default(),
         super::kernels::ScratchPlan::default(),
+        Vec::new(),
     )
 }
 
 /// `compile_jit_raw` for a graph with extern inputs: their defaults
 /// are written through into the buffer at build.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compile_jit_raw_with(
     coord_count: usize,
     total_slots: usize,
@@ -1901,9 +1902,18 @@ pub(crate) fn compile_jit_raw_with(
     nodes: Vec<Box<dyn PolydatNode>>,
     externs: crate::compile::externs::Externs,
     scratch: super::kernels::ScratchPlan,
+    volatile: Vec<usize>,
 ) -> Result<JitKernelRaw, String> {
     let (raw_fn, _, code) = compile_jit_impl(&steps, false, Some(total_slots))?;
-    let mut core = JitCore::new(total_slots, coord_count, output_map, code, nodes, scratch);
+    let mut core = JitCore::new(
+        total_slots,
+        coord_count,
+        output_map,
+        code,
+        nodes,
+        scratch,
+        volatile,
+    );
     core.set_externs(externs);
     Ok(JitKernelRaw {
         core,
@@ -1938,10 +1948,19 @@ pub(crate) fn compile_jit_push(
     input_dependents: Vec<Vec<usize>>,
     externs: crate::compile::externs::Externs,
     scratch: super::kernels::ScratchPlan,
+    volatile: Vec<usize>,
 ) -> Result<JitKernelPush, String> {
     let step_count = steps.len();
     let (_, prov_fn, code) = compile_jit_impl(&steps, true, Some(total_slots))?;
-    let mut core = JitCore::new(total_slots, coord_count, output_map, code, nodes, scratch);
+    let mut core = JitCore::new(
+        total_slots,
+        coord_count,
+        output_map,
+        code,
+        nodes,
+        scratch,
+        volatile,
+    );
     core.set_externs(externs);
     Ok(JitKernelPush {
         core,
@@ -1962,6 +1981,7 @@ pub(crate) fn compile_jit_pull(
     input_dependents: &[Vec<usize>],
     externs: crate::compile::externs::Externs,
     scratch: super::kernels::ScratchPlan,
+    volatile: Vec<usize>,
 ) -> Result<JitKernelPull, String> {
     let buffer_len = total_slots;
     // Pull uses the RAW jit function (no per-node clean checks)
@@ -1969,7 +1989,15 @@ pub(crate) fn compile_jit_pull(
     let step_outs: Vec<&[usize]> = steps.iter().map(|(_, _, o)| o.as_slice()).collect();
     let slot_provenance =
         crate::compile::slot_provenance(coord_count, buffer_len, &step_outs, input_dependents);
-    let mut core = JitCore::new(total_slots, coord_count, output_map, code, nodes, scratch);
+    let mut core = JitCore::new(
+        total_slots,
+        coord_count,
+        output_map,
+        code,
+        nodes,
+        scratch,
+        volatile,
+    );
     core.set_externs(externs);
     Ok(JitKernelPull {
         core,
@@ -1991,6 +2019,7 @@ pub(crate) fn compile_jit_push_pull(
     input_dependents: Vec<Vec<usize>>,
     externs: crate::compile::externs::Externs,
     scratch: super::kernels::ScratchPlan,
+    volatile: Vec<usize>,
 ) -> Result<JitKernelPushPull, String> {
     let step_count = steps.len();
     let buffer_len = total_slots;
@@ -1998,7 +2027,15 @@ pub(crate) fn compile_jit_push_pull(
     let step_outs: Vec<&[usize]> = steps.iter().map(|(_, _, o)| o.as_slice()).collect();
     let slot_provenance =
         crate::compile::slot_provenance(coord_count, buffer_len, &step_outs, &input_dependents);
-    let mut core = JitCore::new(total_slots, coord_count, output_map, code, nodes, scratch);
+    let mut core = JitCore::new(
+        total_slots,
+        coord_count,
+        output_map,
+        code,
+        nodes,
+        scratch,
+        volatile,
+    );
     core.set_externs(externs);
     Ok(JitKernelPushPull {
         core,

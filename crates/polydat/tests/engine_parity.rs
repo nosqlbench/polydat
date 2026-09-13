@@ -19,8 +19,9 @@
 
 mod common;
 
-use polydat::Kernel;
 use polydat::dsl::compile::compile_polydat_to_assembler;
+use polydat::dsl::compile::compile_polydat_with;
+use polydat::{Engine, JitMode, Kernel, Provenance};
 use std::path::Path;
 
 /// The text of a panic payload.
@@ -279,6 +280,85 @@ fn the_engines_agree_on_every_node() {
 
 /// The interpreter accepts every program; that is the oracle the plan
 /// measures the other engines against.
+/// A nondeterministic node and a side channel run on pure native code
+/// as they run on every other engine: the never-current step reruns
+/// after every write, so a counter advances once per write on each
+/// engine, and a side channel fires once per evaluation in which it
+/// is not current, so the rows it emits agree in number when every
+/// engine is driven through the same writes and evaluations.
+#[cfg(feature = "jit")]
+#[test]
+fn nondeterministic_and_side_channel_nodes_run_alike_on_pure_native_code() {
+    let src = "input cycle: u64\n\
+        n := counter()\n\
+        h := hash(cycle)\n\
+        line := \"{n}:{h}\"\n\
+        rows := emit_row(\"csv\", \"n,h\", n, h)\n";
+    let mut kernels: Vec<(&str, Box<dyn Kernel>)> = vec![
+        (
+            "interpreter",
+            compile_polydat_with(src, Engine::Interpreter(JitMode::Off)).unwrap(),
+        ),
+        (
+            "closures",
+            compile_polydat_with(src, Engine::Closures(Provenance::PushPull)).unwrap(),
+        ),
+        (
+            "native",
+            compile_polydat_with(src, Engine::Native(Provenance::PushPull)).unwrap(),
+        ),
+        (
+            "pure native",
+            Box::new(
+                compile_polydat_to_assembler(src)
+                    .unwrap()
+                    .try_compile_pure_jit()
+                    .expect("pure native code runs a counter and a side channel"),
+            ),
+        ),
+    ];
+    let _ = polydat::library::emit::take_rows();
+    // The same writes on every engine, repeats included: a write is a
+    // write to a never-current step.
+    let writes = [1u64, 2, 2, 3, 3, 3, 4];
+    let mut counts: Vec<(String, Vec<u64>, usize)> = Vec::new();
+    for (name, k) in kernels.iter_mut() {
+        let _ = polydat::library::emit::take_rows();
+        let mut seen = Vec::new();
+        for &c in &writes {
+            k.set_inputs(&[c]);
+            k.eval();
+            seen.push(k.pull("n").as_u64());
+            assert_eq!(
+                k.pull("line").as_str(),
+                format!("{}:{}", seen.last().unwrap(), k.pull("h").as_u64()),
+                "{name}: the line reads the counter of this write"
+            );
+        }
+        counts.push((
+            name.to_string(),
+            seen,
+            polydat::library::emit::take_rows().len(),
+        ));
+    }
+    let (_, want_seen, want_rows) = &counts[0];
+    assert_eq!(
+        want_seen,
+        &[0u64, 1, 2, 3, 4, 5, 6],
+        "the interpreter counts every write"
+    );
+    for (name, seen, rows) in &counts[1..] {
+        assert_eq!(
+            seen, want_seen,
+            "{name}: the counter advances once per write"
+        );
+        assert_eq!(
+            rows, want_rows,
+            "{name}: the side channel fires once per evaluation"
+        );
+    }
+}
+
 #[test]
 fn the_interpreter_accepts_every_node() {
     let mut failures = Vec::new();
@@ -349,12 +429,19 @@ fn check_reference_section(lines: &[String], overwrite: bool) {
             section.push_str(&format!("Not on {engine}: {}.\n", list(names)));
         }
     }
-    section.push_str(&format!(
-        "\nPure native code, the differential tier behind P3, has no lowering for \
-         these {} nodes, which P3 runs as closure steps:\n\n{}.\n\n",
-        pure_refused.len(),
-        list(&pure_refused)
-    ));
+    if pure_refused.is_empty() {
+        section.push_str(
+            "\nPure native code, the differential tier behind P3, runs every one of \
+             them as well.\n\n",
+        );
+    } else {
+        section.push_str(&format!(
+            "\nPure native code, the differential tier behind P3, has no lowering for \
+             these {} nodes, which P3 runs as closure steps:\n\n{}.\n\n",
+            pure_refused.len(),
+            list(&pure_refused)
+        ));
+    }
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("docs/reference/nodes.md");
     let doc = std::fs::read_to_string(&path)
         .unwrap_or_default()

@@ -23,9 +23,7 @@ when the runtime diverges, the source files are authoritative.
 The engine parity suite drives 294 coverage programs, one per node or node form, through every engine a host can choose.
 Every one of them runs on the interpreter, the closure tier, and P3 (native code where a node has a lowering, its closure elsewhere).
 
-Pure native code, the differential tier behind P3, has no lowering for these 15 nodes, which P3 runs as closure steps:
-
-`counter`, `elapsed_millis`, `emit_row`, `fft_analyze`, `inspect`, `is_stable`, `log_debug`, `log_error`, `log_info`, `log_warn`, `random_bool`, `random_bytes`, `random_f64`, `random_range`, `random_string`.
+Pure native code, the differential tier behind P3, runs every one of them as well.
 
 <!-- /engine matrix -->
 

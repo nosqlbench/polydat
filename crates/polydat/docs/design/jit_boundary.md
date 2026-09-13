@@ -34,7 +34,7 @@ through `codegen::invoke_with_catch`:
 | Site | What runs natively | Where |
 |---|---|---|
 | An embedded cone | A fused subgraph of an interpreter kernel, one native function per cone, over a slot buffer and the members' scratch entries, which the evaluating state owns as the cone node's scratch | `compile/cone.rs`, the cone node's `eval_in` |
-| A segment of the P3 kernel | A run of consecutive native-eligible nodes of one lifecycle and one volatility, one native function per segment, over the kernel's own buffer and scratch; the nodes between segments run as closure steps | `compile/hybrid.rs`, the step runner |
+| A segment of the P3 kernel | A run of consecutive native-eligible nodes of one lifecycle and one volatility, with a side channel always a segment by itself, one native function per segment, over the kernel's own buffer and scratch; the nodes between segments run as closure steps | `compile/hybrid.rs`, the step runner |
 | The pure native tier | The whole program as one native function over the kernel's buffer and scratch, with the provenance variant where the kernel tracks clean flags | `compile/jit/kernels.rs`, `JitCore::run` |
 
 The pure native tier is the differential reference for native

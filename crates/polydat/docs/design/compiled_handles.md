@@ -254,11 +254,16 @@ colors of its ports, so the twelve `Ref2` types and every immediate
 shape a kit accepts join segments and cones alike; a variadic or
 polymorphic node's kit is built for the types of its wires, so inside a
 cone its wires are read as the graph typed them, not as its ports
-advertise. A nondeterministic node or a side channel keeps its own
-step, so that its currency is its own and a segment of pure nodes is
-never made never-current or observably rerun by it. A node with
-neither a lowering nor a kit stays interpreted, and only such a node
-keeps a program off pure native code. The kits a function calls are
+advertise. A nondeterministic node or a side channel lowers the same
+way, and the kernel that runs the code keeps its currency its own: on
+the hybrid kernel it is a segment by itself, so a segment of pure
+nodes is never made never-current or observably rerun by it; on pure
+native code a never-current step's clean flag is cleared at every
+write and the cone guard yields to a write while one exists (R1.v),
+and a side channel runs at every evaluation in which it is not
+current, which on that tier is what a pull is. A node with no kit
+stays interpreted, and only such a node keeps a program off pure
+native code. The kits a function calls are
 kept alive beside its code (`JitCode`), shared by every kernel
 compiled from the program.
 

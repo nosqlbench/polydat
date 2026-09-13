@@ -176,14 +176,14 @@ Type support and engine eligibility are separate:
   pairs over the step's own scratch, vectors and by-reference
   values alike ([Compiled By-Reference Slots](compiled_handles.md)
   §5).
-- P3 is native for every pure node: a named lowering where the
-  node has one, selected by the classifier (`classify_node_typed`)
-  from the node and the types of its wires, and otherwise a call of
-  the node's kit from native code, over the state's own scratch,
-  whatever the colors of its ports ([Compiled By-Reference
-  Slots](compiled_handles.md) §6). A nondeterministic node or a
-  side channel keeps a closure step of its own, so its currency is
-  its own. Register-plane operations with a lowering run as native
+- P3 is native for every node with a kit: a named lowering where
+  the node has one, selected by the classifier
+  (`classify_node_typed`) from the node and the types of its wires,
+  and otherwise a call of the node's kit from native code, over the
+  state's own scratch, whatever the colors of its ports ([Compiled
+  By-Reference Slots](compiled_handles.md) §6). A nondeterministic
+  node or a side channel is a segment of its own, so its currency
+  is its own. Register-plane operations with a lowering run as native
   SIMD; slice-bearing nodes' internal vector math may call compiled
   SIMD helpers from their kit.
 - `U128/I128` operations and nodes that downcast an `Ext` or

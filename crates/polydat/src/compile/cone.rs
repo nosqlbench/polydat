@@ -765,7 +765,7 @@ mod jit_impl {
                 return Err(e);
             }
         };
-        let (coord_slots, total_slots, jit_steps, jit_outputs, scratch) = layout;
+        let (coord_slots, total_slots, jit_steps, jit_outputs, scratch, _volatile) = layout;
         // Boundary inputs occupy the first slots, each as wide as its
         // type.
         let mut in_slots = Vec::with_capacity(plan.in_types.len());
