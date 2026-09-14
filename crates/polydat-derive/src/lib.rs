@@ -1465,16 +1465,12 @@ fn borrow_port_type(shape: &BorrowWire) -> TokenStream2 {
 /// `&[T]`. The element type's last path segment selects the
 /// `WrapperWire::Vec*` variant.
 fn classify_vec_wire(ty: &Type) -> Option<WrapperWire> {
-    // Try to extract the element type from any of the three shapes:
-    let elem: Type = if let Some(elem) = strip_vec(ty) {
-        elem.clone()
-    } else if let Some(elem) = strip_slice_arc(ty) {
-        elem.clone()
-    } else if let Some(elem) = strip_borrowed_slice(ty) {
-        elem.clone()
-    } else {
-        return None;
-    };
+    // Extract the element type from whichever of the three shapes
+    // matches; none matching means this is not a typed vector.
+    let elem: Type = strip_vec(ty)
+        .or_else(|| strip_slice_arc(ty))
+        .or_else(|| strip_borrowed_slice(ty))?
+        .clone();
 
     let syn::Type::Path(p) = &elem else {
         return None;
@@ -3034,10 +3030,8 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                             } else {
                                 ConfigInner::Jit(wire_type_to_jit_type(inner)?)
                             })
-                        } else if let Some(jt) = wire_type_to_jit_type(ty) {
-                            SlotArg::Jit(jt)
                         } else {
-                            return None;
+                            SlotArg::Jit(wire_type_to_jit_type(ty)?)
                         }
                     }
                 },
