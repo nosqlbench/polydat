@@ -1516,7 +1516,7 @@ dependencies = [
 
 [[package]]
 name = "polydat"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "clap",
  "criterion",
@@ -1534,7 +1534,7 @@ dependencies = [
 
 [[package]]
 name = "polydat-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64",
  "cranelift-codegen",
@@ -1561,7 +1561,7 @@ dependencies = [
 
 [[package]]
 name = "polydat-derive"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1570,7 +1570,7 @@ dependencies = [
 
 [[package]]
 name = "polydat-grammar"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "layout-rs",
  "serde",
@@ -1580,7 +1580,7 @@ dependencies = [
 
 [[package]]
 name = "polydat-nodes"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "base64",
  "data-encoding",
