@@ -1746,7 +1746,7 @@ impl PolydatAssembler {
                             log.push(crate::dsl::events::CompileEvent::AssertionInserted {
                                 from_node: from_name,
                                 to_node: all_nodes[node_idx].name.clone(),
-                                kind: format!("{:?} value-assert {:?}", expected_type, &constraint),
+                                kind: format!("{:?} value-assert {:?}", expected_type, constraint),
                             });
                         }
 

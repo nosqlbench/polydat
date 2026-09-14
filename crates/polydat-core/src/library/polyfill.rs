@@ -588,8 +588,10 @@ fn __bytes_to_vec_f32(b: &[u8]) -> Vec<f32> {
             b.len()
         );
     }
-    b.chunks_exact(4)
-        .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+    b.as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| f32::from_le_bytes(*c))
         .collect()
 }
 
@@ -601,8 +603,10 @@ fn __bytes_to_vec_i32(b: &[u8]) -> Vec<i32> {
             b.len()
         );
     }
-    b.chunks_exact(4)
-        .map(|c| i32::from_le_bytes(c.try_into().unwrap()))
+    b.as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| i32::from_le_bytes(*c))
         .collect()
 }
 

@@ -262,8 +262,10 @@ fn __bytes_to_vec_f16(b: &[u8]) -> Vec<half::f16> {
             b.len()
         );
     }
-    b.chunks_exact(2)
-        .map(|c| half::f16::from_bits(u16::from_le_bytes(c.try_into().unwrap())))
+    b.as_chunks::<2>()
+        .0
+        .iter()
+        .map(|c| half::f16::from_bits(u16::from_le_bytes(*c)))
         .collect()
 }
 

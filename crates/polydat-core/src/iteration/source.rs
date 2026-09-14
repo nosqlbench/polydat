@@ -1181,10 +1181,8 @@ impl ExtensionPolicy for AndPolicy {
     fn next_extension(&self, ctx: &ExtensionContext) -> Option<u64> {
         let mut min_delta = u64::MAX;
         for p in &self.policies {
-            match p.next_extension(ctx) {
-                Some(d) => min_delta = min_delta.min(d),
-                None => return None,
-            }
+            let d = p.next_extension(ctx)?;
+            min_delta = min_delta.min(d);
         }
         if min_delta == u64::MAX || min_delta == 0 {
             None

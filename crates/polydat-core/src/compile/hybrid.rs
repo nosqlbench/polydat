@@ -1764,9 +1764,7 @@ impl HybridKernelPull {
 impl HybridKernelPushPull {
     /// Every step reruns at the next evaluation.
     fn mark_all_dirty(&mut self) {
-        for c in &mut self.core.clean {
-            *c = false;
-        }
+        self.core.clean.fill(false);
         self.changed_mask = crate::kernel::ProvMask::all_below(self.core.coord_count);
         self.force_run = true;
     }

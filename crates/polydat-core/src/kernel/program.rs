@@ -133,9 +133,7 @@ impl ProvMask {
     /// per-cycle reset for hot-path change masks (no
     /// reallocation once sized).
     pub fn clear(&mut self) {
-        for w in &mut self.words {
-            *w = 0;
-        }
+        self.words.fill(0);
     }
 
     /// Set bit `idx`; returns `true` when the bit was newly set
