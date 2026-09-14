@@ -1,21 +1,24 @@
+# Copyright 2024-2026 Jonathan Shook
+# SPDX-License-Identifier: Apache-2.0
+#
+# `polydat` — the facade: the runtime (`polydat-core`), the node
+# library (`polydat-nodes`), and the language (`polydat-grammar`),
+# each re-exported at the paths it always had, plus the `polydat`
+# binary. Programs, tests, benches, and examples link this crate.
+
 [package]
 name = "polydat"
-# Polydat is published independently of the nbrs workspace —
-# its release cadence isn't tied to the workspace's version bump.
-# Override `version.workspace = true` with a local pin so polydat
-# can rev (e.g., 0.1.1, 0.2.0) without dragging the workspace.
-version = "0.2.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Polydat — a variates construction engine"
 keywords = ["nosqlbench", "workload", "benchmark", "data-generation"]
 categories = ["command-line-utilities", "simulation"]
-repository = "https://github.com/nosqlbench/polydat"
-homepage = "https://github.com/nosqlbench/polydat"
+repository.workspace = true
+homepage.workspace = true
 documentation = "https://docs.rs/polydat"
-# Local override — `readme.workspace = true` resolves to the
-# workspace-root README, not polydat's own. The README that ships
-# in the crates.io package needs to be the polydat-specific one.
+# The crate's own README ships in the package; the workspace-root
+# README describes the whole repository.
 readme = "README.md"
 # The integration tests are one binary, tests/suite.rs, with every
 # file under tests/ as a module (one link against the library, not
@@ -36,9 +39,9 @@ exclude = [
 # The facade: the runtime, the node library, and the language, each
 # re-exported at the paths it always had. The binary and every test,
 # bench, and example link this crate.
-polydat-core = { path = "../polydat-core", version = "0.2.0", default-features = false }
-polydat-nodes = { path = "../polydat-nodes", version = "0.2.0", default-features = false }
-polydat-grammar = { path = "../polydat-grammar", version = "0.2.0" }
+polydat-core.workspace = true
+polydat-nodes.workspace = true
+polydat-grammar.workspace = true
 # Command-line harness (`polydat` binary). Optional so library
 # consumers who disable default features do not pull it in.
 clap = { version = "4", features = ["derive"], optional = true }
@@ -50,6 +53,11 @@ default = ["jit", "cli"]
 cli = ["dep:clap"]
 vectordata = ["polydat-core/vectordata"]
 jit = ["polydat-core/jit", "polydat-nodes/jit"]
+
+# docs.rs builds with every feature so the native tier and the
+# optional integrations are documented.
+[package.metadata.docs.rs]
+all-features = true
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

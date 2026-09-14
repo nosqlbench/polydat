@@ -8,14 +8,14 @@
 
 [package]
 name = "polydat-grammar"
-version = "0.2.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "The Polydat language: lexer, parser, AST, and pretty-printer, without the runtime"
 keywords = ["nosqlbench", "workload", "grammar", "parser"]
 categories = ["parser-implementations"]
-repository = "https://github.com/nosqlbench/polydat"
-homepage = "https://github.com/nosqlbench/polydat"
+repository.workspace = true
+homepage.workspace = true
 documentation = "https://docs.rs/polydat-grammar"
 readme = "README.md"
 

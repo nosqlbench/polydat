@@ -9,10 +9,27 @@ members = [
 resolver = "3"
 
 [workspace.package]
+# Every crate ships at one version and is released together; a
+# facade at one version depending on a runtime at another has no
+# meaning to a consumer, so the version lives here and each crate
+# inherits it.
+version = "0.3.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/nosqlbench/polydat"
 homepage = "https://github.com/nosqlbench/polydat"
+
+# The internal crates, declared once so every dependency edge names
+# the same path and the same published version. The runtime and the
+# node library are declared without their default features: every
+# crate that links them chooses the feature set (`jit` rides the
+# facade's own feature), and cargo does not let a member switch a
+# workspace dependency's defaults off at the edge.
+[workspace.dependencies]
+polydat-derive = { path = "crates/polydat-derive", version = "0.3.0" }
+polydat-grammar = { path = "crates/polydat-grammar", version = "0.3.0" }
+polydat-core = { path = "crates/polydat-core", version = "0.3.0", default-features = false }
+polydat-nodes = { path = "crates/polydat-nodes", version = "0.3.0", default-features = false }
 
 [profile.release]
 lto = "thin"
