@@ -1518,30 +1518,43 @@ dependencies = [
 name = "polydat"
 version = "0.2.0"
 dependencies = [
- "base64",
  "clap",
+ "criterion",
+ "half",
+ "inventory",
+ "polydat-core",
+ "polydat-grammar",
+ "polydat-nodes",
+ "rayon",
+ "serde_json",
+ "tokio",
+ "trybuild",
+ "xxhash-rust",
+]
+
+[[package]]
+name = "polydat-core"
+version = "0.2.0"
+dependencies = [
+ "base64",
  "cranelift-codegen",
  "cranelift-frontend",
  "cranelift-jit",
  "cranelift-module",
  "cranelift-native",
- "criterion",
  "data-encoding",
  "half",
  "indexmap",
  "inventory",
- "md-5",
  "paste",
  "polydat-derive",
  "polydat-grammar",
- "rayon",
  "regex",
  "ryu",
  "serde",
  "serde_json",
  "sha2",
  "tokio",
- "trybuild",
  "vectordata",
  "xxhash-rust",
 ]
@@ -1563,6 +1576,22 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+]
+
+[[package]]
+name = "polydat-nodes"
+version = "0.2.0"
+dependencies = [
+ "base64",
+ "data-encoding",
+ "inventory",
+ "md-5",
+ "polydat-core",
+ "polydat-derive",
+ "regex",
+ "serde_json",
+ "sha2",
+ "xxhash-rust",
 ]
 
 [[package]]

@@ -4,7 +4,7 @@ error[E0624]: associated function `from_program` is private
 8 |     let _ = PolydatKernel::from_program(kernel.program().clone());
   |                            ^^^^^^^^^^^^ private associated function
   |
- ::: src/kernel/state.rs
+ ::: $WORKSPACE/crates/polydat-core/src/kernel/state.rs
   |
   |     pub(crate) fn from_program(program: Arc<PolydatProgram>) -> Self {
   |     ---------------------------------------------------------------- private associated function defined here

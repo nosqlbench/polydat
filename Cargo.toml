@@ -2,6 +2,8 @@
 members = [
     "crates/polydat",
     "crates/polydat-grammar",
+    "crates/polydat-core",
+    "crates/polydat-nodes",
     "crates/polydat-derive",
 ]
 resolver = "3"

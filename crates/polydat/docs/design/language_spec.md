@@ -568,7 +568,7 @@ host concern.)
 
 ## Node Contract
 
-Every node implements `PolydatNode` (defined in `src/ast.rs`).
+Every node implements `PolydatNode` (defined in `polydat-core/src/ast.rs`).
 The trait's behavioral surface is:
 
 ```rust

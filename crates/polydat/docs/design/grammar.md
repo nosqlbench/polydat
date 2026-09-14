@@ -739,4 +739,4 @@ on extension internals.
 [Expression Engine]: expression_engine.md
 [`dsl::ast`]: ../../../polydat-grammar/src/ast.rs
 [`dsl::parser`]: ../../../polydat-grammar/src/parser.rs
-[`dsl::compile`]: ../../src/dsl/compile.rs
+[`dsl::compile`]: ../../../polydat-core/src/dsl/compile.rs

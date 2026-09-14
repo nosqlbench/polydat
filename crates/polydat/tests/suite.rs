@@ -28,6 +28,8 @@ mod argv_assignment;
 mod bench_graphs;
 #[path = "binary_run.rs"]
 mod binary_run;
+#[path = "core_with_library.rs"]
+mod core_with_library;
 #[path = "cursor_tiers.rs"]
 mod cursor_tiers;
 #[path = "doc_examples_test.rs"]

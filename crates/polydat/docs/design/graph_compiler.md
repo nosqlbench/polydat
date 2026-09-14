@@ -665,9 +665,9 @@ under every earlier registered rule.
 
 ---
 
-[`ast`]: ../../src/ast.rs
-[`kernel`]: ../../src/kernel/mod.rs
-[`compile::assembly`]: ../../src/compile/assembly.rs
-[`compile::fusion`]: ../../src/compile/fusion.rs
-[`compile::hybrid`]: ../../src/compile/hybrid.rs
-[`compile::select`]: ../../src/compile/select.rs
+[`ast`]: ../../../polydat-core/src/ast.rs
+[`kernel`]: ../../../polydat-core/src/kernel/mod.rs
+[`compile::assembly`]: ../../../polydat-core/src/compile/assembly.rs
+[`compile::fusion`]: ../../../polydat-core/src/compile/fusion.rs
+[`compile::hybrid`]: ../../../polydat-core/src/compile/hybrid.rs
+[`compile::select`]: ../../../polydat-core/src/compile/select.rs

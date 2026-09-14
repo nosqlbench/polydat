@@ -1231,12 +1231,12 @@ the interpreter's kernel.
 
 ---
 
-[`crate::ast`]: ../../src/ast.rs
-[`crate::kernel`]: ../../src/kernel/mod.rs
-[`crate::dsl::compile::eval_const_expr`]: ../../src/dsl/compile.rs
-[`crate::dsl::compile::compile_polydat`]: ../../src/dsl/compile.rs
-[`crate::dsl::factories::register_extern_resolver`]: ../../src/dsl/factories.rs
-[`crate::kernel::interp::interpolate_via_kernel`]: ../../src/kernel/interp.rs
-[`crate::iteration::comprehension::eval::evaluate_spec`]: ../../src/iteration/comprehension/eval.rs
-[`library::convert`]: ../../src/library/convert.rs
+[`crate::ast`]: ../../../polydat-core/src/ast.rs
+[`crate::kernel`]: ../../../polydat-core/src/kernel/mod.rs
+[`crate::dsl::compile::eval_const_expr`]: ../../../polydat-core/src/dsl/compile.rs
+[`crate::dsl::compile::compile_polydat`]: ../../../polydat-core/src/dsl/compile.rs
+[`crate::dsl::factories::register_extern_resolver`]: ../../../polydat-core/src/dsl/factories.rs
+[`crate::kernel::interp::interpolate_via_kernel`]: ../../../polydat-core/src/kernel/interp.rs
+[`crate::iteration::comprehension::eval::evaluate_spec`]: ../../../polydat-core/src/iteration/comprehension/eval.rs
+[`library::convert`]: ../../../polydat-core/src/library/convert.rs
 [Runtime Model]: runtime_model.md

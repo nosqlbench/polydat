@@ -33,62 +33,23 @@ exclude = [
 ]
 
 [dependencies]
-# SRD-80 — proc-macro derive crate ( `#[polydat_node]` ).
-# `inventory` (used for link-time FuncSig registration) is
-# already a polydat dep further down — used by the existing
-# kernel-tracking infrastructure too.
-polydat-derive = { path = "../polydat-derive", version = "0.2.0" }
-# The language itself: lexer, parser, AST, comprehension algebra,
-# tile template parsers, and the port type vocabulary. Re-exported at
-# the paths they always had.
+# The facade: the runtime, the node library, and the language, each
+# re-exported at the paths it always had. The binary and every test,
+# bench, and example link this crate.
+polydat-core = { path = "../polydat-core", version = "0.2.0", default-features = false }
+polydat-nodes = { path = "../polydat-nodes", version = "0.2.0", default-features = false }
 polydat-grammar = { path = "../polydat-grammar", version = "0.2.0" }
-# Token-pasting for the macro-generated matrix-completion adapter
-# family (`library/polyfill_complete.rs`) — builds `#[polydat_node]`
-# fn names like `__u64_to_u8` from type-pair lists so the ~130
-# trivial conversion nodes aren't hand-written.
-paste = "1"
-xxhash-rust = { version = "0.8", features = ["xxh3"] }
-sha2 = "0.10"
-md-5 = "0.10"
-base64 = "0.22"
-data-encoding = "2"
-regex = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["preserve_order"] }
-# Shortest round-trip float digits for tile holes
-# (`library::support::float_text`); already a transitive dependency
-# through serde_json.
-ryu = "1"
-vectordata = { version = "1.2", optional = true }
-cranelift-jit = { version = "0.116", optional = true }
-cranelift-module = { version = "0.116", optional = true }
-cranelift-codegen = { version = "0.116", optional = true }
-cranelift-frontend = { version = "0.116", optional = true }
-cranelift-native = { version = "0.116", optional = true }
-inventory = "0.3.24"
-# Only the vectordata catalog bridge needs tokio: `block_in_place`
-# around its blocking HTTP client when an outer runtime is current
-# (`library::vectors::run_blocking_io`), so it rides the feature.
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"], optional = true }
-# Insertion-ordered map. Used by `kernel::ScopeCoord` so the
-# coordinate names within a scope appear in clause-declaration
-# order — matching the comprehension's source-level intent.
-# See `kernel::scope_coords` doc.
-indexmap = "2"
-# IEEE 754 half-precision float (`f16`). Used by the
-# `Value::VecF16` / `PortType::VecF16` carrier so embeddings
-# stored as half-precision flow through the kernel without
-# widening to f32 at the boundary.
-half = "2"
 # Command-line harness (`polydat` binary). Optional so library
 # consumers who disable default features do not pull it in.
 clap = { version = "4", features = ["derive"], optional = true }
+# The binary's JSON output.
+serde_json = { version = "1", features = ["preserve_order"] }
 
 [features]
 default = ["jit", "cli"]
 cli = ["dep:clap"]
-vectordata = ["dep:vectordata", "dep:tokio"]
-jit = ["dep:cranelift-jit", "dep:cranelift-module", "dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-native"]
+vectordata = ["polydat-core/vectordata"]
+jit = ["polydat-core/jit", "polydat-nodes/jit"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -98,6 +59,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 # time varies widely; rayon's stealing scheduler keeps every core
 # fed where fixed chunking leaves stragglers).
 rayon = "1"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+half = "2"
+inventory = "0.3.24"
 trybuild = "1.0.121"
 
 [lib]

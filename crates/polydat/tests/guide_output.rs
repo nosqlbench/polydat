@@ -382,7 +382,7 @@ fn performance_guide_describes_the_graph() {
             "consumed output `{name}` is not a binding in the graph"
         );
     }
-    let manifest = read("Cargo.toml");
+    let manifest = read("../polydat-core/Cargo.toml");
     let cranelift = manifest
         .lines()
         .find(|l| l.starts_with("cranelift-jit = "))
@@ -404,7 +404,7 @@ fn performance_guide_describes_the_graph() {
 #[test]
 fn compilation_guide_names_real_features() {
     let doc = read("docs/guides/compilation.md");
-    let manifest = read("Cargo.toml");
+    let manifest = read("../polydat-core/Cargo.toml");
     let features: Vec<&str> = manifest
         .split("\n[features]\n")
         .nth(1)

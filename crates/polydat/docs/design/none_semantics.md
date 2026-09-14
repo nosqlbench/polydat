@@ -106,7 +106,7 @@ an authored value, never an implicit rendering rule.
 
 ### Rule 3 — Op-template render refuses silent None
 
-`Value::to_display_strict` lives in `src/ast.rs` and returns
+`Value::to_display_strict` lives in `polydat-core/src/ast.rs` and returns
 `Option<String>`: `None` for `Value::None` and `Some(text)` otherwise.
 Any host wire renderer must use this strict primitive and report an
 explicit error naming the bind point when it returns `None`. Calling

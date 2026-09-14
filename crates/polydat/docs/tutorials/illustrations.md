@@ -94,7 +94,7 @@ kernel.set_inputs(&[12_345]);
 // device=45, reading=123, q_temp=0.019101, q_humid=0.155169
 ```
 
-The grammar fits on one page (see [`src/dsl/`](../../src/dsl/)) but the
+The grammar fits on one page (see [`polydat-core/src/dsl/`](../../../polydat-core/src/dsl/)) but the
 graphs you can build are arbitrarily wide and deep. The compiler
 tracks each wire's port type (u64, f64, str, bool, bytes, json,
 vectors…) and rejects mismatches at compile time, before the kernel
@@ -166,7 +166,7 @@ let mut kernel = polydat::dsl::compile_polydat_kernel_with_options(
 ).expect("compile failed");
 ```
 
-The shipped [`stdlib/`](../../stdlib/) directory has more examples:
+The shipped [`stdlib/`](../../../polydat-core/stdlib/) directory has more examples:
 `identity.polydat`, `distributions.polydat`, `hashing.polydat`, `modeling.polydat`, etc.
 Each is loadable the same way.
 

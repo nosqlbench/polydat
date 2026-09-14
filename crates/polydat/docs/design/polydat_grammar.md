@@ -778,7 +778,7 @@ pragma strict_types
 
 The complete set of type keywords usable in `input x: T`, `extern x: T`,
 `<expr> as T`, and module signatures is fixed by `PortType::from_keyword`
-(`src/ast.rs`):
+(`polydat-core/src/ast.rs`):
 
 ```text
 u64 f64  u32 i32  i64 f32  u8 i8  u16 i16  f16  u128 i128

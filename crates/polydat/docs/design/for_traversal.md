@@ -122,7 +122,7 @@ sampled  := for base order halton/50
 A derivation is resolved at compile time against the producer bound
 earlier in the same scope: the filter and the order are applied to the
 base producer's comprehension AST (`resolve_source` in
-`src/dsl/traversal.rs`), so derivations chain, a derivation of a
+`polydat-core/src/dsl/traversal.rs`), so derivations chain, a derivation of a
 derivation is a comprehension like any other, and a traversal over a
 derivation resolves its element names from the base. A producer
 expression is comprehension text or a derivation; a bare producer name
@@ -287,7 +287,7 @@ dispense state.
    interpreter; the child program is stored on the parent program keyed
    by the `for` statement's lexical position, per §5.1.
 5. **Body source.** Beside the interpreter's program the parent keeps the
-   body as it lowered it (`BodySource` in `src/dsl/traversal.rs`): the
+   body as it lowered it (`BodySource` in `polydat-core/src/dsl/traversal.rs`): the
    child file, its source text, and the compiler settings the parent
    used, which are the source directory, the library paths, strictness,
    the diagnostic context label, the cursor limit, the pragma set, and
@@ -363,7 +363,7 @@ program cache in §5.1 is what Polydat guarantees.
   body's scope, the body's interpreter program with the cascaded wires
   bound, and evaluates the comprehension there through the evaluator's
   `Lookup` view, with a tuple's own elements layered in front of the
-  scope as the tuple is built (`Layered` in `src/kernel/interp.rs`). A
+  scope as the tuple is built (`Layered` in `polydat-core/src/kernel/interp.rs`). A
   source or predicate resolves every name it can reference in that
   scope, so the opening kernel contributes only the snapshot and opening
   needs no kernel of the engine that opened it.

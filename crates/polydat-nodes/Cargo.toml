@@ -1,0 +1,42 @@
+# Copyright 2024-2026 Jonathan Shook
+# SPDX-License-Identifier: Apache-2.0
+#
+# `polydat-nodes` — the node library: every function a Polydat
+# program can call that the compiler does not synthesize itself.
+# Each node is a `#[polydat_node]` function over `polydat-core`'s
+# value model and registers into the registry at link time; the
+# numeric bodies the native lowerings share live in the core, and
+# the nodes here are thin wrappers over them. A third-party node
+# crate is built the same way.
+
+[package]
+name = "polydat-nodes"
+version = "0.2.0"
+edition.workspace = true
+license.workspace = true
+description = "Polydat node library: hashing, sampling, strings, encodings, noise, vectors, and more"
+keywords = ["nosqlbench", "workload", "benchmark", "data-generation"]
+categories = ["simulation"]
+repository = "https://github.com/nosqlbench/polydat"
+homepage = "https://github.com/nosqlbench/polydat"
+documentation = "https://docs.rs/polydat-nodes"
+readme = "README.md"
+
+[lib]
+doctest = false
+
+[dependencies]
+polydat-core = { path = "../polydat-core", version = "0.2.0", default-features = false }
+polydat-derive = { path = "../polydat-derive", version = "0.2.0" }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+sha2 = "0.10"
+md-5 = "0.10"
+base64 = "0.22"
+data-encoding = "2"
+regex = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
+inventory = "0.3.24"
+
+[features]
+default = ["jit"]
+jit = ["polydat-core/jit"]

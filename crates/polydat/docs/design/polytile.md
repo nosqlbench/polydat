@@ -510,7 +510,7 @@ module prefix ([Module System](module_system.md) §7).
 A projection body compiles with the default compiler settings: it sees
 registered nodes and the embedded library, not the enclosing program's
 source directory, library paths, pragmas, or program-local modules
-(`src/dsl/tile_lower.rs`, `src/library/tile_render.rs`). A `for` body
+(`polydat-core/src/dsl/tile_lower.rs`, `polydat-core/src/library/tile_render.rs`). A `for` body
 inherits all of those from its parent; the two lowerings differ here.
 
 ## 7. Runtime

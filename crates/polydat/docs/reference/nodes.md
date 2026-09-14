@@ -14,7 +14,7 @@ nodes into the graph. The catalog below is the menu the resolver picks
 from, not a usage manual.
 
 **Inventory:** Built-in nodes live in
-[`src/library/`](../../src/library/). This file is a hand-curated snapshot;
+[`polydat-core/src/library/`](../../../polydat-core/src/library/). This file is a hand-curated snapshot;
 when the runtime diverges, the source files are authoritative.
 
 ## Engines
@@ -202,7 +202,7 @@ runtime PortType for debugging type-error chains.
 
 ### `realer` — bundled human-readable datasets
 `first_names`, `full_names`, `country_names`, `state_codes`. Backed by
-CSV files in [`data/`](../../data/) — Census names, ISO country codes,
+CSV files in [`data/`](../../../polydat-nodes/data/) — Census names, ISO country codes,
 US state abbreviations.
 
 ### `datafile` — ordinal access to user-provided files
@@ -249,38 +249,38 @@ const-constraint contracts at wire boundaries.
 
 | File | Nodes |
 |------|------:|
-| [`vectors.rs`](../../src/library/vectors.rs) | 35 |
-| [`math.rs`](../../src/library/math.rs) | 17 |
-| [`compare.rs`](../../src/library/compare.rs) | 17 |
-| [`probability.rs`](../../src/library/probability.rs) | 12 |
-| [`bitwise.rs`](../../src/library/bitwise.rs) | 14 |
-| [`arithmetic.rs`](../../src/library/arithmetic.rs) | 12 |
-| [`convert.rs`](../../src/library/convert.rs) | 11 |
-| [`json.rs`](../../src/library/json.rs) | 10 |
+| [`vectors.rs`](../../../polydat-core/src/library/vectors.rs) | 35 |
+| [`math.rs`](../../../polydat-nodes/src/math.rs) | 17 |
+| [`compare.rs`](../../../polydat-nodes/src/compare.rs) | 17 |
+| [`probability.rs`](../../../polydat-nodes/src/probability.rs) | 12 |
+| [`bitwise.rs`](../../../polydat-nodes/src/bitwise.rs) | 14 |
+| [`arithmetic.rs`](../../../polydat-nodes/src/arithmetic.rs) | 12 |
+| [`convert.rs`](../../../polydat-core/src/library/convert.rs) | 11 |
+| [`json.rs`](../../../polydat-core/src/library/json.rs) | 10 |
 | Runtime-control nodes (externally registered) | 9 |
-| [`context.rs`](../../src/library/context.rs) | 9 |
-| [`partition.rs`](../../src/library/partition.rs) | 8 |
-| [`string.rs`](../../src/library/string.rs) | 8 |
+| [`context.rs`](../../../polydat-core/src/library/context.rs) | 9 |
+| [`partition.rs`](../../../polydat-nodes/src/partition.rs) | 8 |
+| [`string.rs`](../../../polydat-nodes/src/string.rs) | 8 |
 | `nbrs-metrics::polydat_nodes` (externally registered) | 8 |
-| [`param_helpers.rs`](../../src/library/param_helpers.rs) | 6 |
-| [`datafile.rs`](../../src/library/datafile.rs) | 6 |
-| [`noise.rs`](../../src/library/noise.rs) | 5 |
-| [`weighted.rs`](../../src/library/weighted.rs) | 4 |
-| [`log_levels.rs`](../../src/library/log_levels.rs) | 4 |
-| [`digest.rs`](../../src/library/digest.rs) | 4 |
-| [`encoding.rs`](../../src/library/encoding.rs) | 4 |
-| [`pcg.rs`](../../src/library/pcg.rs) | 4 |
-| [`bytebuf.rs`](../../src/library/bytebuf.rs) | 4 |
-| [`realer.rs`](../../src/library/realer.rs) | 4 |
-| [`datetime.rs`](../../src/library/datetime.rs) | 4 |
-| [`diagnostic.rs`](../../src/library/diagnostic.rs) | 4 |
-| [`lerp.rs`](../../src/library/lerp.rs) | 3 |
-| [`regex.rs`](../../src/library/regex.rs) | 2 |
-| [`hash.rs`](../../src/library/hash.rs) | 1 |
-| [`format.rs`](../../src/library/format.rs) | 1 |
-| [`exactly_one.rs`](../../src/library/exactly_one.rs) | 1 |
-| [`assertions.rs`](../../src/library/assertions.rs) | (typed family — not name-registered) |
-| [`pick.rs`](../../src/library/pick.rs) | (op-template dispatch primitive) |
-| [`random.rs`](../../src/library/random.rs) | (non-deterministic prototyping) |
-| [`fixed.rs`](../../src/library/fixed.rs) | (const / fixed-value family) |
-| [`identity.rs`](../../src/library/identity.rs) | (identity / constant) |
+| [`param_helpers.rs`](../../../polydat-nodes/src/param_helpers.rs) | 6 |
+| [`datafile.rs`](../../../polydat-core/src/library/datafile.rs) | 6 |
+| [`noise.rs`](../../../polydat-nodes/src/noise.rs) | 5 |
+| [`weighted.rs`](../../../polydat-nodes/src/weighted.rs) | 4 |
+| [`log_levels.rs`](../../../polydat-core/src/library/log_levels.rs) | 4 |
+| [`digest.rs`](../../../polydat-nodes/src/digest.rs) | 4 |
+| [`encoding.rs`](../../../polydat-nodes/src/encoding.rs) | 4 |
+| [`pcg.rs`](../../../polydat-nodes/src/pcg.rs) | 4 |
+| [`bytebuf.rs`](../../../polydat-nodes/src/bytebuf.rs) | 4 |
+| [`realer.rs`](../../../polydat-nodes/src/realer.rs) | 4 |
+| [`datetime.rs`](../../../polydat-nodes/src/datetime.rs) | 4 |
+| [`diagnostic.rs`](../../../polydat-core/src/library/diagnostic.rs) | 4 |
+| [`lerp.rs`](../../../polydat-nodes/src/lerp.rs) | 3 |
+| [`regex.rs`](../../../polydat-nodes/src/regex.rs) | 2 |
+| [`hash.rs`](../../../polydat-nodes/src/hash.rs) | 1 |
+| [`format.rs`](../../../polydat-core/src/library/format.rs) | 1 |
+| [`exactly_one.rs`](../../../polydat-core/src/library/exactly_one.rs) | 1 |
+| [`assertions.rs`](../../../polydat-core/src/library/assertions.rs) | (typed family — not name-registered) |
+| [`pick.rs`](../../../polydat-nodes/src/pick.rs) | (op-template dispatch primitive) |
+| [`random.rs`](../../../polydat-nodes/src/random.rs) | (non-deterministic prototyping) |
+| [`fixed.rs`](../../../polydat-core/src/library/fixed.rs) | (const / fixed-value family) |
+| [`identity.rs`](../../../polydat-core/src/library/identity.rs) | (identity / constant) |

@@ -12,7 +12,7 @@
 //! primitives that have no DSL surface.
 //!
 //! Adding a hand-written `impl PolydatNode for X` to any other
-//! `polydat/src/library/**` file fails this test. The escape
+//! `polydat-core/src/library/**` or `polydat-nodes/src/**` file fails this test. The escape
 //! hatch is to either (a) migrate to `#[polydat_node]`, or (b)
 //! add an entry to `CARVEOUT_FILES` below with a doc-style
 //! comment justifying the architectural exception.
@@ -29,38 +29,43 @@ const CARVEOUT_FILES: &[&str] = &[
     // Compiler-synthesised infrastructure: PortPassthrough
     // (extern-port nodes), ConstHandle / ConstExt (fold-pass
     // synthesised from runtime Handle/Ext values).
-    "src/library/identity.rs",
+    "../polydat-core/src/library/identity.rs",
     // Compiler-synthesised: AssertType / AssertValue (assembled
     // by `assert_type_node` / `assert_value_node`, runtime
     // PortType / ConstConstraint dispatched).
-    "src/library/assertions.rs",
+    "../polydat-core/src/library/assertions.rs",
     // Cursor-compiler synthesised: CursorLimit (built by the
     // cursor materialiser; not workload-callable).
-    "src/library/context.rs",
+    "../polydat-core/src/library/context.rs",
     // Rust-internal composition primitive: LutSample backs the
     // `dist_*` family; no DSL surface (the `dist_*` functions
     // are the workload-callable wrappers).
-    "src/library/sampling/lut.rs",
+    "../polydat-nodes/src/sampling/lut.rs",
     // Compiler-synthesised: RegView (free-bitcast retag adapter,
     // auto-inserted by `auto_adapter` for reg→reg wires; runtime
     // PortType dispatched like AssertType — not workload-callable).
-    "src/library/register.rs",
+    "../polydat-core/src/library/register_view.rs",
 ];
 
 #[test]
 fn srd80b_no_handwritten_polydat_node_impl_outside_carveouts() {
     let crate_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let library_root = crate_root.join("src/library");
-    assert!(
-        library_root.exists(),
-        "expected polydat/src/library to exist at {}",
-        library_root.display(),
-    );
+    // The nodes the compiler keeps, and the node library.
+    let roots = [
+        crate_root.join("../polydat-core/src/library"),
+        crate_root.join("../polydat-nodes/src"),
+    ];
+    for root in &roots {
+        assert!(root.exists(), "expected {} to exist", root.display());
+    }
 
     let mut offending: Vec<String> = Vec::new();
-    let carveout: HashSet<PathBuf> = CARVEOUT_FILES.iter().map(|p| crate_root.join(p)).collect();
+    let carveout: HashSet<PathBuf> = CARVEOUT_FILES
+        .iter()
+        .map(|p| crate_root.join(p).components().collect())
+        .collect();
 
-    visit_rust_files(&library_root, &mut |path| {
+    let mut check = |path: &Path| {
         if carveout.contains(path) {
             return;
         }
@@ -88,7 +93,10 @@ fn srd80b_no_handwritten_polydat_node_impl_outside_carveouts() {
                 ));
             }
         }
-    });
+    };
+    for root in &roots {
+        visit_rust_files(root, &mut check);
+    }
 
     assert!(
         offending.is_empty(),

@@ -1,0 +1,230 @@
+// Copyright 2024-2026 Jonathan Shook
+// SPDX-License-Identifier: Apache-2.0
+
+//! # polydat (formerly nbrs-variates)
+//!
+//! Deterministic variate generation kernel (GK) for workload testing.
+//!
+//! Transforms named `u64` coordinate tuples into typed output variates
+//! via a compiled DAG of composable function nodes. The same coordinate
+//! always produces the same outputs — deterministic, reproducible, and
+//! parallelizable with zero shared mutable state.
+//!
+//! ## Quick Start
+//!
+//! ### From DSL source
+//!
+//! The simplest way to build a kernel is from Polydat DSL source, on the
+//! default engine (native code with the `jit` feature, closures without):
+//!
+//! ```rust
+//! use polydat::dsl::compile_polydat_kernel;
+//!
+//! let mut kernel = compile_polydat_kernel(r#"
+//!     input cycle: u64
+//!     hashed := hash(cycle)
+//!     user_id := mod(hashed, 1000000)
+//! "#).unwrap();
+//!
+//! kernel.set_inputs(&[42]);
+//! let user_id = kernel.pull("user_id").as_u64();
+//! assert!(user_id < 1_000_000);
+//! ```
+//!
+//! ### From the assembler API
+//!
+//! For programmatic construction:
+//!
+//! ```rust
+//! use polydat::compile::assembly::{PolydatAssembler, WireRef};
+//! use polydat::library::hash::Hash;
+//! use polydat::library::arithmetic::Mod;
+//!
+//! let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
+//! asm.add_node("hashed", Box::new(Hash::new()), vec![WireRef::input("cycle")]);
+//! asm.add_node("user_id", Box::new(Mod::new(1_000_000)), vec![WireRef::node("hashed")]);
+//! asm.add_output("user_id", WireRef::node("user_id"));
+//!
+//! let mut kernel = asm.compile().unwrap();
+//! kernel.set_inputs(&[42]);
+//! assert!(kernel.pull("user_id").as_u64() < 1_000_000);
+//! ```
+//!
+//! ## Documentation
+//!
+//! The rustdoc covers the API. The narrative documentation lives in the
+//! repository under `crates/polydat/docs/`, organized by the
+//! [documentation index](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/README.md):
+//!
+//! - Tutorials with real, test-checked output:
+//!   [illustrations](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/tutorials/illustrations.md),
+//!   the [Polytile tutorial](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/tutorials/polytile_tutorial.md),
+//!   and a [toy test definition](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/tutorials/toy_test_definition.md).
+//! - Guides: [embedding Polydat in a host](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/guides/embedding.md),
+//!   [compilation levels](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/guides/compilation.md),
+//!   and [engine-ladder performance](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/guides/performance.md).
+//! - Reference: the [node library](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/reference/nodes.md).
+//! - Design: the [specifications](https://github.com/nosqlbench/polydat/tree/main/crates/polydat/docs/design)
+//!   the code implements, with their axioms and landing records.
+//!
+//! ## Architecture
+//!
+//! ```text
+//! coordinates (u64 tuple)
+//!     │
+//!     ▼
+//! ┌─────────────────────────┐
+//! │  PolydatProgram (immutable)  │  Shared via Arc across threads
+//! │  - nodes: Vec<PolydatNode>   │
+//! │  - wiring: Vec<Vec<..>> │
+//! │  - output_map           │
+//! └──────────┬──────────────┘
+//!            │
+//!     ┌──────┴──────┐
+//!     │  PolydatState    │  One per thread — no locks
+//!     │  - buffers  │
+//!     │  - coords   │
+//!     └──────┬──────┘
+//!            │
+//!            ▼
+//!     pull("user_id") → Value::U64(527897)
+//! ```
+//!
+//! ## Compilation Levels
+//!
+//! The kernel supports three compilation levels:
+//!
+//! - **Phase 1** (default): Pull-through interpreter.
+//! - **Phase 2**: Compiled `u64` closures, measured 3.65× faster than Phase 1.
+//! - **Phase 3**: Cranelift native code for every node that has a lowering
+//!   and the node's closure elsewhere, measured 5.81× faster than Phase 1.
+//!   Requires the `jit` feature (enabled by default).
+//!
+//! The ratios are the reference run in the engine-ladder performance
+//! guide linked above: one graph on one machine, not a constant.
+//!
+//! ## Features
+//!
+//! - **`jit`** (default): Cranelift JIT compilation for Phase 3.
+//!   Disable with `default-features = false` for a lighter build.
+//! - **`vectordata`**: Vector dataset access nodes for ML/AI workloads.
+//!
+//! ## Modules
+//!
+//! - [`ast`]: Core types — [`ast::Value`], [`ast::PolydatNode`] trait,
+//!   [`ast::Port`], [`ast::PortType`]
+//! - [`kernel`]: Runtime — [`kernel::PolydatProgram`], [`kernel::PolydatKernel`],
+//!   [`kernel::PolydatState`]
+//! - [`compile`]: DAG construction + compilation strategies —
+//!   [`compile::assembly::PolydatAssembler`], [`compile::fusion`],
+//!   [`compile::closures`] (Phase 2), [`compile::hybrid`]
+//!   (per-node optimal), `compile::jit` (Phase 3 Cranelift,
+//!   feature-gated)
+//! - [`dsl`]: Polydat language — [`dsl::compile_polydat_kernel`], [`dsl::compile_polydat`] (the interpreter), lexer, parser, registry
+//! - [`library`]: 250+ built-in function nodes (hash, arithmetic, string,
+//!   math, distributions, datetime, noise, etc.) plus `polydat_nodes::sampling`
+//!   (alias tables, LUT interpolation, ICD) and [`library::support`]
+//!   (library-internal cache + audit infrastructure)
+//! - [`viz`]: DAG visualization (DOT, Mermaid)
+
+// Unit tests use round-number float literals (`3.14`, `1.57`,
+// `2.71`, …) as arbitrary fixture data. clippy's `approx_constant`
+// is a deny-by-default correctness lint that reads those as
+// fat-fingered `std::f*::consts::*` — true for production code,
+// noise for test data. Scope the allowance to `cfg(test)` so the
+// lint still guards real code.
+#![cfg_attr(test, allow(clippy::approx_constant))]
+#![warn(missing_docs)]
+
+// SRD-80 PR B.3 — let the `#[polydat_node]` macro's emitted
+// `polydat::...` paths resolve when the macro is invoked from
+// INSIDE the polydat crate itself (library nodes migrating to
+// the macro form). External callers don't need this — they
+// reference `polydat` via the regular crate-name lookup.
+extern crate self as polydat;
+
+pub mod ast;
+pub mod binder;
+pub mod compile;
+pub mod dsl;
+pub mod iteration;
+pub mod kernel;
+pub mod library;
+pub mod numeric;
+pub use polydat_grammar::viz;
+
+/// Polytile at the host boundary (SRD 114 §5.6): build a tile from
+/// template text, from structural JSON text, or from a parsed JSON
+/// value, then compile it with a program via
+/// [`tile::compile_polydat_with_tiles`].
+pub mod tile {
+    pub use crate::dsl::ast::{TileBodyKind, TileDef, TileOptions, TilePiece};
+    pub use crate::dsl::compile::{compile_polydat_kernel_with_tiles, compile_polydat_with_tiles};
+    pub use crate::dsl::lexer::Span;
+    pub use crate::dsl::tile::{parse_template, render_template};
+    pub use crate::dsl::tile_structural::{
+        ENCODINGS, template_text_from_value, tile_from_json_text, tile_from_json_value,
+        tile_from_text,
+    };
+}
+
+// SRD-104 — dependency-inverted resource-accessor bridge. A
+// type-erased trait + process-global install point by which a
+// kernel node reaches a live, host-owned resource by fingerprint,
+// without polydat depending on the host runtime.
+pub mod resource;
+
+// SRD-80 — proc-macro trait surface. The `polydat-derive`
+// crate emits paths like `polydat::derive_support::FromValue` /
+// `IntoValue` that resolve here.
+pub mod derive_support;
+
+// SRD-80 PR B.5 — `Const<T>` wrapper re-exported at crate root
+// for ergonomic use in `#[polydat_node]` function signatures.
+pub use derive_support::Const;
+
+/// How much of the interpreter's graph is fused into native cones:
+/// what `Engine::Interpreter` carries.
+pub use compile::cone::JitMode;
+/// The engine a host chooses and the one error of every constructor
+/// that takes it (docs/design/engine_parity.md, step 4).
+pub use compile::select::{Engine, EnginePlan, KernelError, Provenance};
+/// One kernel API for every engine.
+pub use kernel::{Kernel, KernelProgram};
+
+// SRD-82 §"Panic reporting: one full render" — host runtimes with
+// their own panic reporting declare it so the eval-panic hook
+// prints a short notice instead of the full diagnostic.
+pub use kernel::set_panic_reporting_downstream;
+
+// SRD-80 — re-export the `#[polydat_node]` attribute so
+// library callers can write `#[polydat::polydat_node]` without
+// a separate `use polydat_derive::polydat_node;` line.
+pub use polydat_derive::polydat_node;
+
+// SRD-80 — re-export `inventory` so the macro's emitted
+// `::polydat::inventory::submit!` path resolves at every call
+// site without users having to add `inventory` to their own
+// dependencies.
+pub use inventory;
+
+/// Re-exported for `#[polydat_node]`-generated Phase-2 buffer
+/// casts on `half::f16`-typed wires (the generated code spells
+/// `polydat::half::f16`, which `extern crate self as polydat`
+/// resolves inside this crate too).
+pub use half;
+
+/// SRD-104 — the resource-accessor bridge at the crate root so the
+/// host installs via `polydat::RESOURCE_ACCESSOR` and nodes resolve
+/// via `polydat::resource_lookup`, without reaching a deep module
+/// path (D6).
+pub use resource::{RESOURCE_ACCESSOR, ResourceAccessor, resource_lookup};
+
+/// Host-log sink bridge — the sanctioned public path for installing
+/// a leveled log sink into the kernel (`set_log_fn`) and for emitting
+/// through it (`warn` / `info` / …). The activity runner installs its
+/// `observer::log` here so polydat's cycle-time data-source audit lines
+/// land in `session.log`. This is the one public entry point for the
+/// audit channel; the implementation lives under `library::support`,
+/// which is library-internal and must not be reached directly.
+pub use library::support::audit;

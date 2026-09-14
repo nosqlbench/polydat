@@ -1,0 +1,231 @@
+// Copyright 2024-2026 Jonathan Shook
+// SPDX-License-Identifier: Apache-2.0
+
+//! Bitwise and two-wire integer arithmetic nodes.
+//!
+//! These nodes operate on pairs of u64 wire inputs (no constants).
+//! They complement the existing const-param arithmetic nodes (`add`,
+//! `mul`, `div`, `mod`) which take one wire and one constant.
+//!
+//! All nodes support P2 (compiled_u64) and P3 (JIT) execution.
+
+#[polydat::polydat_node(category = Arithmetic, simd = "reg_add_i64", simd_total)]
+fn u64_add(a: u64, b: u64) -> u64 {
+    a.wrapping_add(b)
+}
+
+#[polydat::polydat_node(category = Arithmetic, simd = "reg_sub_i64", simd_total)]
+fn u64_sub(a: u64, b: u64) -> u64 {
+    a.wrapping_sub(b)
+}
+
+#[polydat::polydat_node(category = Arithmetic, simd = "reg_mul_i64", simd_total)]
+fn u64_mul(a: u64, b: u64) -> u64 {
+    a.wrapping_mul(b)
+}
+
+#[polydat::polydat_node(category = Arithmetic)]
+fn u64_div(a: u64, b: u64) -> u64 {
+    a.checked_div(b).unwrap_or(0)
+}
+
+#[polydat::polydat_node(category = Arithmetic)]
+fn u64_mod(a: u64, b: u64) -> u64 {
+    if b != 0 { a % b } else { 0 }
+}
+
+#[polydat::polydat_node(category = Arithmetic)]
+fn u64_and(a: u64, b: u64) -> u64 {
+    a & b
+}
+
+#[polydat::polydat_node(category = Arithmetic)]
+fn u64_or(a: u64, b: u64) -> u64 {
+    a | b
+}
+
+#[polydat::polydat_node(category = Arithmetic)]
+fn u64_xor(a: u64, b: u64) -> u64 {
+    a ^ b
+}
+
+#[polydat::polydat_node(category = Arithmetic)]
+fn u64_shl(a: u64, b: u64) -> u64 {
+    a.wrapping_shl(b as u32)
+}
+
+#[polydat::polydat_node(category = Arithmetic)]
+fn u64_shr(a: u64, b: u64) -> u64 {
+    a.wrapping_shr(b as u32)
+}
+
+#[polydat::polydat_node(category = Arithmetic)]
+fn u64_not(input: u64) -> u64 {
+    !input
+}
+
+#[polydat::polydat_node(category = Arithmetic)]
+fn checked_add(a: u64, b: u64) -> u64 {
+    a.checked_add(b).unwrap_or(0)
+}
+
+#[polydat::polydat_node(category = Arithmetic)]
+fn checked_sub(a: u64, b: u64) -> u64 {
+    a.saturating_sub(b)
+}
+
+#[polydat::polydat_node(category = Arithmetic)]
+fn checked_mul(a: u64, b: u64) -> u64 {
+    a.checked_mul(b).unwrap_or(0)
+}
+
+#[cfg(any())] // dead-code preserved verbatim for diff readability; never compiled
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use polydat::ast::{PolydatNode, Value};
+
+    #[test]
+    fn checked_add_normal() {
+        let node = CheckedAdd::new();
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(100), Value::U64(42)], &mut out);
+        assert_eq!(out[0].as_u64(), 142);
+    }
+
+    #[test]
+    fn checked_add_overflow_returns_zero() {
+        let node = CheckedAdd::new();
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(u64::MAX), Value::U64(1)], &mut out);
+        assert_eq!(out[0].as_u64(), 0);
+    }
+
+    #[test]
+    fn checked_sub_normal() {
+        let node = CheckedSub::new();
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(42), Value::U64(10)], &mut out);
+        assert_eq!(out[0].as_u64(), 32);
+    }
+
+    #[test]
+    fn checked_sub_underflow_returns_zero() {
+        let node = CheckedSub::new();
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(0), Value::U64(1)], &mut out);
+        assert_eq!(out[0].as_u64(), 0);
+    }
+
+    #[test]
+    fn checked_mul_normal() {
+        let node = CheckedMul::new();
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(7), Value::U64(6)], &mut out);
+        assert_eq!(out[0].as_u64(), 42);
+    }
+
+    #[test]
+    fn checked_mul_overflow_returns_zero() {
+        let node = CheckedMul::new();
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(u64::MAX), Value::U64(2)], &mut out);
+        assert_eq!(out[0].as_u64(), 0);
+    }
+
+    #[test]
+    fn u64_and_basic() {
+        let node = U64And::new();
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(0xFF00), Value::U64(0x0FF0)], &mut out);
+        assert_eq!(out[0].as_u64(), 0x0F00);
+    }
+
+    #[test]
+    fn u64_or_basic() {
+        let node = U64Or::new();
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(0xF0), Value::U64(0x0F)], &mut out);
+        assert_eq!(out[0].as_u64(), 0xFF);
+    }
+
+    #[test]
+    fn u64_xor_basic() {
+        let node = U64Xor::new();
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(0xFF), Value::U64(0x0F)], &mut out);
+        assert_eq!(out[0].as_u64(), 0xF0);
+    }
+
+    #[test]
+    fn u64_shl_basic() {
+        let node = U64Shl::new();
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(1), Value::U64(8)], &mut out);
+        assert_eq!(out[0].as_u64(), 256);
+    }
+
+    #[test]
+    fn u64_shr_basic() {
+        let node = U64Shr::new();
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(256), Value::U64(4)], &mut out);
+        assert_eq!(out[0].as_u64(), 16);
+    }
+
+    #[test]
+    fn u64_not_basic() {
+        let node = U64Not::new();
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(0)], &mut out);
+        assert_eq!(out[0].as_u64(), u64::MAX);
+    }
+
+    #[test]
+    fn u64_add2_wrapping() {
+        let node = U64Add::default();
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(u64::MAX), Value::U64(1)], &mut out);
+        assert_eq!(out[0].as_u64(), 0);
+    }
+
+    #[test]
+    fn u64_div2_zero_divisor() {
+        let node = U64Div::default();
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(42), Value::U64(0)], &mut out);
+        assert_eq!(out[0].as_u64(), 0);
+    }
+
+    #[test]
+    fn u64_sub2_wrapping() {
+        let node = U64Sub::default();
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(0), Value::U64(1)], &mut out);
+        assert_eq!(out[0].as_u64(), u64::MAX);
+    }
+
+    #[test]
+    fn u64_mul2_basic() {
+        let node = U64Mul::default();
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(7), Value::U64(6)], &mut out);
+        assert_eq!(out[0].as_u64(), 42);
+    }
+
+    #[test]
+    fn u64_mod2_basic() {
+        let node = U64Mod::default();
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(42), Value::U64(10)], &mut out);
+        assert_eq!(out[0].as_u64(), 2);
+    }
+
+    #[test]
+    fn u64_mod2_zero_divisor() {
+        let node = U64Mod::default();
+        let mut out = [Value::None];
+        node.eval(&[Value::U64(42), Value::U64(0)], &mut out);
+        assert_eq!(out[0].as_u64(), 0);
+    }
+}

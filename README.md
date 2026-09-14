@@ -377,17 +377,27 @@ polydat = { version = "0.2", default-features = false }
 
 ## Workspace and development
 
-This repository contains three Rust 2024 crates:
+This repository contains five Rust 2024 crates:
 
-- [`polydat`](crates/polydat) — public types, graph compiler, execution
-  engines, iteration/comprehension runtime, standard node library, and
-  runtime. It re-exports the grammar crate at the paths below.
+- [`polydat`](crates/polydat) — the facade every program links: it
+  re-exports the three crates below at the paths they always had
+  (`polydat::dsl`, `polydat::compile`, `polydat::library`, …) and holds
+  the binary, the tests, the benches, the examples, and the docs.
 - [`polydat-grammar`](crates/polydat-grammar) — the language without the
   runtime: lexer, parser, AST and projector, the comprehension
-  sub-language and its algebra, the tile template parsers, and the port
-  type vocabulary. Reachable through `polydat::dsl`,
-  `polydat::iteration::comprehension`, and `polydat::ast::PortType`; a
-  tool that only reads or prints Polydat source links this crate alone.
+  sub-language and its algebra, the tile template parsers, the AST
+  visualizer, and the port type vocabulary. A tool that only reads or
+  prints Polydat source links this crate alone.
+- [`polydat-core`](crates/polydat-core) — the runtime: the value model,
+  the graph compiler, the execution engines, the kernels, the
+  comprehension runtime, the node macro's support surface, the nodes the
+  compiler itself synthesizes (adapters, passthroughs, constants, tile
+  rendering), and the numeric bodies the native lowerings share with the
+  node library (`polydat::numeric`).
+- [`polydat-nodes`](crates/polydat-nodes) — the node library: every
+  function a program can call that the compiler does not synthesize,
+  as `#[polydat_node]` functions over the core, registered at link time.
+  A third-party node crate is built the same way.
 - [`polydat-derive`](crates/polydat-derive) — implementation of the
   `#[polydat_node]` procedural macro.
 

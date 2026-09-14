@@ -1,0 +1,64 @@
+# Copyright 2024-2026 Jonathan Shook
+# SPDX-License-Identifier: Apache-2.0
+#
+# `polydat-core` — the runtime: the value model, the graph compiler,
+# the execution engines, the kernels, the comprehension runtime, the
+# node macro's support surface, the nodes the compiler itself
+# synthesizes (adapters, passthroughs, constants, tile rendering),
+# and the numeric bodies the native lowerings share with the node
+# library. The node library is `polydat-nodes`; `polydat` is the
+# facade that re-exports both at the paths they always had.
+
+[package]
+name = "polydat-core"
+version = "0.2.0"
+edition.workspace = true
+license.workspace = true
+description = "Polydat runtime: value model, graph compiler, execution engines, kernels"
+keywords = ["nosqlbench", "workload", "benchmark", "data-generation"]
+categories = ["simulation"]
+repository = "https://github.com/nosqlbench/polydat"
+homepage = "https://github.com/nosqlbench/polydat"
+documentation = "https://docs.rs/polydat-core"
+readme = "README.md"
+
+[lib]
+# No doctests: the workspace suite runs under nextest, and the
+# rustdoc examples are tests of the `polydat` facade.
+doctest = false
+
+[dependencies]
+polydat-derive = { path = "../polydat-derive", version = "0.2.0" }
+polydat-grammar = { path = "../polydat-grammar", version = "0.2.0" }
+# Token-pasting for the macro-generated matrix-completion adapter
+# family (`library/polyfill_complete.rs`).
+paste = "1"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+sha2 = "0.10"
+base64 = "0.22"
+data-encoding = "2"
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+# Shortest round-trip float digits for tile holes
+# (`library::support::float_text`).
+ryu = "1"
+vectordata = { version = "1.2", optional = true }
+cranelift-jit = { version = "0.116", optional = true }
+cranelift-module = { version = "0.116", optional = true }
+cranelift-codegen = { version = "0.116", optional = true }
+cranelift-frontend = { version = "0.116", optional = true }
+cranelift-native = { version = "0.116", optional = true }
+inventory = "0.3.24"
+# Only the vectordata catalog bridge needs tokio: `block_in_place`
+# around its blocking HTTP client when an outer runtime is current
+# (`library::vectors::run_blocking_io`), so it rides the feature.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"], optional = true }
+# Insertion-ordered map for `kernel::ScopeCoord`.
+indexmap = "2"
+half = "2"
+
+[features]
+default = ["jit"]
+vectordata = ["dep:vectordata", "dep:tokio"]
+jit = ["dep:cranelift-jit", "dep:cranelift-module", "dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-native"]

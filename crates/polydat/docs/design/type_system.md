@@ -4,10 +4,10 @@ The static `PortType` contract on wires, its runtime
 `Value` representation, and the adapter catalog that
 moves values between types.
 
-Implementation: `src/ast.rs` (`PortType`,
-`Value`), `src/library/convert.rs` (adapter
-nodes), `src/compile/assembly.rs::auto_adapter`
-(catalog dispatch), `src/kernel/state.rs::adapt_boundary_value`
+Implementation: `polydat-core/src/ast.rs` (`PortType`,
+`Value`), `polydat-core/src/library/convert.rs` (adapter
+nodes), `polydat-core/src/compile/assembly.rs::auto_adapter`
+(catalog dispatch), `polydat-core/src/kernel/state.rs::adapt_boundary_value`
 (boundary application).
 
 ---
@@ -651,7 +651,7 @@ into a U32 slot — the adapter MUST run.
 Nodes that perform deliberately lossy, formatted, or
 parameterized conversions are NOT in the auto_adapter
 catalog. Users place them deliberately by name.
-Defined in `polydat/src/library/convert.rs`:
+Defined in `polydat-core/src/library/convert.rs`:
 
 | Node | Signature | Semantics |
 | --- | --- | --- |
@@ -760,13 +760,13 @@ to an empty string implicitly.
   §T2, §T3 — the typed-slot axioms this catalog enforces.
 - [none_semantics.md](none_semantics.md) — `Value::None`
   propagation, the absent-sentinel rule.
-- [`src/ast.rs`](../../src/ast.rs) — `PortType`, `Value`,
+- [`polydat-core/src/ast.rs`](../../../polydat-core/src/ast.rs) — `PortType`, `Value`,
   `satisfies_slot`, the carriers.
-- [`src/compile/assembly.rs`](../../src/compile/assembly.rs) —
+- [`polydat-core/src/compile/assembly.rs`](../../../polydat-core/src/compile/assembly.rs) —
   `auto_adapter` / `boundary_adapter` (catalog dispatch) and the
   wire resolution that inserts adapters.
-- [`src/kernel/state.rs`](../../src/kernel/state.rs) —
+- [`polydat-core/src/kernel/state.rs`](../../../polydat-core/src/kernel/state.rs) —
   `adapt_boundary_value`, boundary-time application.
-- [`src/library/convert.rs`](../../src/library/convert.rs) — the
+- [`polydat-core/src/library/convert.rs`](../../../polydat-core/src/library/convert.rs) — the
   core adapter nodes; the narrow-width, 128-bit, and
   matrix-completion adapters are its `polyfill_*` companions.

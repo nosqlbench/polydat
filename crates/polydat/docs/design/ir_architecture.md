@@ -31,7 +31,7 @@ behavior.
 
 ## How interpretation works
 
-The [`interpret`](../../src/iteration/comprehension/ir/interpreter.rs)
+The [`interpret`](../../../polydat-core/src/iteration/comprehension/ir/interpreter.rs)
 function walks the IR opcode sequence **once**, manipulating
 the stream stack:
 

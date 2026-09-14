@@ -5,7 +5,7 @@ for data generation. Nodes are registered in the DSL compiler's
 function registry and available by name in `.polydat` source.
 
 This document is the design rationale for the library
-(`polydat/src/library/`): what a node is, the authoring contract, the
+(`polydat-nodes/src/`, with the nodes the compiler synthesizes under `polydat-core/src/library/`): what a node is, the authoring contract, the
 cost classes, and why the registry is open. It is not a listing; the
 nodes themselves are in the [node reference](../reference/nodes.md). The
 node-metadata contract that every entry satisfies is specified in
@@ -308,7 +308,7 @@ override wins over eligibility.
 A node's closure form is declared by its shape and emitted by the
 macro; its native form is not. Native lowerings are matched by node
 name in the classifier (`classify_node` and `classify_node_typed` in
-`src/compile/jit/codegen.rs`): each arm names a `JitOp`, reads the
+`polydat-core/src/compile/jit/codegen.rs`): each arm names a `JitOp`, reads the
 node's `jit_constants()` positionally, and, for a node whose body
 dispatches on `Value` variants, decides by the types of its wires. A
 node with no arm runs its kit from native code through the slot-call
@@ -328,7 +328,7 @@ remains callable as a node.
 Hand-written `impl PolydatNode for X` blocks exist only where the
 node cannot be expressed as a function of typed arguments, and the
 hand-written-impl invariant test's `CARVEOUT_FILES` allowlist is the
-list; any new hand-written impl under `polydat/src/library/**`
+list; any new hand-written impl under `polydat-nodes/src/**` or `polydat-core/src/library/**`
 outside it fails that test. The families outside the attribute, and
 why:
 
