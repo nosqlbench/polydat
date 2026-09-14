@@ -163,4 +163,4 @@ jobs:
       # The integration tests are one binary, `suite`, with each file
       # a module, so the case is addressed by its module path.
       - name: Node attribute diagnostics (trybuild)
-        run: cargo nextest run -p polydat --all-features --test suite --run-ignored ignored-only ui::
+        run: "cargo nextest run -p polydat --all-features --test suite --run-ignored ignored-only ui::"
