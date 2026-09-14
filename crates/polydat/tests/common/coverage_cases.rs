@@ -9,19 +9,31 @@
 use std::collections::HashMap;
 
 /// Fixture files the file-reading nodes need, created under the temp
-/// directory: `(csv, jsonl, txt)` paths.
+/// directory: `(csv, jsonl, txt)` paths. Written once per process,
+/// under names that carry the process id: test binaries run
+/// concurrently under nextest, and a shared name would let one
+/// process truncate a file while another reads it.
 pub fn fixtures() -> (String, String, String) {
-    let csv_path = std::env::temp_dir().join("_polydat_coverage_test.csv");
-    std::fs::write(&csv_path, "name,age\nalice,30\nbob,25\n").unwrap();
-    let jsonl_path = std::env::temp_dir().join("_polydat_coverage_test.jsonl");
-    std::fs::write(&jsonl_path, "{\"name\":\"alice\"}\n{\"name\":\"bob\"}\n").unwrap();
-    let txt_path = std::env::temp_dir().join("_polydat_coverage_test.txt");
-    std::fs::write(&txt_path, "hello\nworld\n").unwrap();
-    (
-        csv_path.to_str().unwrap().to_string(),
-        jsonl_path.to_str().unwrap().to_string(),
-        txt_path.to_str().unwrap().to_string(),
-    )
+    static FIXTURES: std::sync::OnceLock<(String, String, String)> = std::sync::OnceLock::new();
+    FIXTURES
+        .get_or_init(|| {
+            let pid = std::process::id();
+            let path = |ext: &str| {
+                std::env::temp_dir().join(format!("_polydat_coverage_test_{pid}.{ext}"))
+            };
+            let csv_path = path("csv");
+            std::fs::write(&csv_path, "name,age\nalice,30\nbob,25\n").unwrap();
+            let jsonl_path = path("jsonl");
+            std::fs::write(&jsonl_path, "{\"name\":\"alice\"}\n{\"name\":\"bob\"}\n").unwrap();
+            let txt_path = path("txt");
+            std::fs::write(&txt_path, "hello\nworld\n").unwrap();
+            (
+                csv_path.to_str().unwrap().to_string(),
+                jsonl_path.to_str().unwrap().to_string(),
+                txt_path.to_str().unwrap().to_string(),
+            )
+        })
+        .clone()
 }
 
 /// The explicit cases: nodes whose synthesized call would not type or

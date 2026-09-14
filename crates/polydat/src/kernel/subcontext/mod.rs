@@ -69,27 +69,11 @@
 //! of a compiled program, `chain_kernel_under_parent` for top-
 //! level kernel chaining.
 //!
-//! The following compile-fail doctests guard the seal — if any
-//! of them starts compiling, the seal is broken and a Phase 4
+//! The compile-fail cases under `tests/ui/seal/` guard the seal: one
+//! calls `materialize_wiring_from_outer` from outside the crate, one
+//! calls `PolydatKernel::from_program`, and neither may compile. If
+//! either starts compiling, the seal is broken and a Phase 4
 //! invariant has regressed.
-//!
-//! `materialize_wiring_from_outer` is not public:
-//!
-//! ```compile_fail
-//! use polydat::dsl::compile::compile_polydat;
-//! let mut inner = compile_polydat("input cycle: u64\n").unwrap();
-//! let outer = compile_polydat("input cycle: u64\n").unwrap();
-//! inner.materialize_wiring_from_outer(&outer); // pub(crate) — must not compile
-//! ```
-//!
-//! `PolydatKernel::from_program` is not public:
-//!
-//! ```compile_fail
-//! use polydat::dsl::compile::compile_polydat;
-//! use polydat::kernel::PolydatKernel;
-//! let kernel = compile_polydat("input cycle: u64\n").unwrap();
-//! let _ = PolydatKernel::from_program(kernel.program().clone()); // pub(crate)
-//! ```
 
 mod builder;
 mod error;

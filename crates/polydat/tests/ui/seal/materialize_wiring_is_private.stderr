@@ -1,0 +1,10 @@
+error[E0624]: method `materialize_wiring_from_outer` is private
+ --> tests/ui/seal/materialize_wiring_is_private.rs:8:11
+  |
+8 |     inner.materialize_wiring_from_outer(&outer);
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ private method
+  |
+ ::: src/kernel/state.rs
+  |
+  |     fn materialize_wiring_from_outer(&mut self, outer: &PolydatKernel) {
+  |     ------------------------------------------------------------------ private method defined here

@@ -394,8 +394,9 @@ This repository contains three Rust 2024 crates:
 Useful commands:
 
 ```text
-# Full workspace correctness suite
-cargo test --workspace
+# Full workspace correctness suite (one process per test; the crates
+# run no doctests, their rustdoc examples are tests of their own)
+cargo nextest run --workspace
 
 # Verify the non-JIT build
 cargo check -p polydat --no-default-features

@@ -1,0 +1,22 @@
+# cargo-nextest configuration for the workspace.
+#
+# The suite runs one process per test. Several tests install a
+# process-wide panic hook, the native tier keeps its jump buffer and
+# capture flag in thread-locals, and the resource accessor is a
+# process-global install point; a process per test keeps every one of
+# those to the test that set it. Test binaries run concurrently, so a
+# leg's wall time is its longest binary rather than the sum.
+
+[profile.default]
+# Every test reports; the gate reads the whole list, not the first failure.
+fail-fast = false
+# A test past a minute is reported as slow and left to finish; the
+# ignored corner suites take minutes by design and run explicitly.
+slow-timeout = { period = "60s" }
+
+[profile.ci]
+fail-fast = false
+slow-timeout = { period = "60s" }
+
+[profile.ci.junit]
+path = "junit.xml"

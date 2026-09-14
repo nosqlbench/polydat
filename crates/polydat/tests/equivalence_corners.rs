@@ -19,6 +19,7 @@
 //!
 //! ```sh
 //! cargo test -p polydat --test equivalence_corners -- --ignored
+//! cargo nextest run -p polydat --test equivalence_corners --run-ignored ignored-only
 //! ```
 
 #![cfg(feature = "jit")]

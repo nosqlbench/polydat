@@ -25,3 +25,13 @@ fn node_attribute_diagnostics() {
     t.pass("tests/ui/pass/*.rs");
     t.compile_fail("tests/ui/fail/*.rs");
 }
+
+/// The subcontext seal (`kernel/subcontext`): the two crate-private
+/// entry points a caller could use to bypass the typed child
+/// construction must not compile from outside the crate. Two compiles,
+/// so this one runs by default.
+#[test]
+fn kernel_seal() {
+    let t = trybuild::TestCases::new();
+    t.compile_fail("tests/ui/seal/*.rs");
+}

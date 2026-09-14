@@ -946,17 +946,10 @@ impl PolydatKernel {
     ///
     /// # Side-channel lock
     ///
-    /// `materialize_wiring_from_outer` is private to this impl block. The
-    /// following must NOT compile (anyone trying to bypass the
-    /// typed primitive should be caught at the compiler):
-    ///
-    /// ```compile_fail,E0624
-    /// use polydat::kernel::PolydatKernel;
-    /// use polydat::dsl::compile::compile_polydat;
-    /// let parent = compile_polydat("input cycle: u64\n").unwrap();
-    /// let mut child = compile_polydat("input cycle: u64\n").unwrap();
-    /// child.materialize_wiring_from_outer(&parent); // ← private; refuses to compile
-    /// ```
+    /// `materialize_wiring_from_outer` is private to this impl block, so
+    /// a caller cannot bypass the typed primitive; the compile-fail
+    /// case `tests/ui/seal/materialize_wiring_is_private.rs` holds
+    /// that at the compiler.
     pub(crate) fn materialize_subscope(
         &self,
         program: Arc<PolydatProgram>,
