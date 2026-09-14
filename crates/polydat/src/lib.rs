@@ -150,7 +150,7 @@ pub mod dsl;
 pub mod iteration;
 pub mod kernel;
 pub mod library;
-pub mod viz;
+pub use polydat_grammar::viz;
 
 /// Polytile at the host boundary (SRD 114 §5.6): build a tile from
 /// template text, from structural JSON text, or from a parsed JSON

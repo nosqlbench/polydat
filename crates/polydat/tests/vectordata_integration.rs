@@ -5,7 +5,7 @@
 //!
 //! These tests use the "glove-100" dataset and require network access.
 //! They are #[ignore] by default — run explicitly with:
-//!   cargo test -p polydat --test vectordata_integration -- --ignored
+//!   cargo test -p polydat --features vectordata --test suite vectordata_integration:: -- --ignored
 //!
 //! Per SRD 53 §"Native Vector Binding", vector accessors produce
 //! typed `Value::VecF32` / `Value::VecI32` directly. Display

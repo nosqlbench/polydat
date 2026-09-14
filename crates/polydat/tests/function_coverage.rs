@@ -9,7 +9,7 @@ use polydat::ast::Value;
 use polydat::dsl::compile::{compile_polydat, compile_polydat_to_assembler};
 use polydat::kernel::PolydatKernel;
 
-mod common;
+use super::common;
 
 // ---------------------------------------------------------------------------
 // Helper functions

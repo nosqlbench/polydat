@@ -18,13 +18,13 @@
 //! The suite is optional: it is ignored by default and runs with
 //!
 //! ```sh
-//! cargo test -p polydat --test equivalence_corners -- --ignored
-//! cargo nextest run -p polydat --test equivalence_corners --run-ignored ignored-only
+//! cargo test -p polydat --test suite equivalence_corners:: -- --ignored
+//! cargo nextest run -p polydat --test suite equivalence_corners:: --run-ignored ignored-only
 //! ```
 
 #![cfg(feature = "jit")]
 
-mod common;
+use super::common;
 
 use polydat::ast::{Purity, Slot, Value};
 use polydat::dsl::compile::compile_polydat_to_assembler;

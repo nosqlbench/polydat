@@ -8,7 +8,7 @@
 # reports its own signal.
 #
 #   test — 4-way matrix, each leg running the workspace test
-#     suite twice, then clippy and rustdoc with warnings as errors
+#     suite twice under nextest, then clippy and rustdoc with warnings as errors
 #     under the same two feature sets:
 #       default features   — exercises the cranelift JIT, which
 #                            emits different machine code per
@@ -79,16 +79,24 @@ jobs:
         with:
           shared-key: polydat-${{ matrix.target }}
 
+      # The suite runs under nextest: one process per test, the test
+      # binaries concurrently (.config/nextest.toml). The crates run
+      # no doctests; the rustdoc examples are tests of their own.
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
       # Default features = `jit`. This is the run that validates
       # cranelift codegen on each target architecture.
       - name: Test (default features, JIT)
-        run: cargo test --workspace
+        run: cargo nextest run --workspace --profile ci
 
       # Interpreter-only path. Shares the same cache key — the
       # feature split changes which deps compile, and rust-cache
       # handles mixed-feature target dirs fine.
       - name: Test (no default features, interpreter only)
-        run: cargo test --workspace --no-default-features
+        run: cargo nextest run --workspace --no-default-features --profile ci
 
       # The same two feature sets under clippy and rustdoc, with
       # warnings as errors, on every platform: a lint or a doc link
@@ -129,8 +137,13 @@ jobs:
       - name: Rustfmt (check)
         run: cargo fmt --all --check
 
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
       - name: Test (all features)
-        run: cargo test --workspace --all-features
+        run: cargo nextest run --workspace --all-features --profile ci
 
       # Rustdoc is kept warning-free: a broken intra-doc link or a
       # link to a private item fails the build here.
@@ -147,5 +160,7 @@ jobs:
 
       # The node attribute's compile-fail suite is ignored by default
       # because every case is a separate compile; CI always runs it.
+      # The integration tests are one binary, `suite`, with each file
+      # a module, so the case is addressed by its module path.
       - name: Node attribute diagnostics (trybuild)
-        run: cargo test -p polydat --all-features --test ui -- --ignored
+        run: cargo nextest run -p polydat --all-features --test suite --run-ignored ignored-only ui::

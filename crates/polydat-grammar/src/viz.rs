@@ -22,8 +22,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::dsl::ast::*;
-use crate::dsl::{lexer, parser};
+use crate::ast::*;
+use crate::{lexer, parser};
 
 /// How a visualization node is drawn.
 #[derive(Clone, Copy, PartialEq, Eq)]

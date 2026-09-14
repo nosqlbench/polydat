@@ -17,6 +17,10 @@ documentation = "https://docs.rs/polydat"
 # workspace-root README, not polydat's own. The README that ships
 # in the crates.io package needs to be the polydat-specific one.
 readme = "README.md"
+# The integration tests are one binary, tests/suite.rs, with every
+# file under tests/ as a module (one link against the library, not
+# one per file); see the suite root for how a test is addressed.
+autotests = false
 
 # Exclude bench-output artifacts and large perf-test fixtures from
 # the published package. The benches themselves (`benches/`) stay —
@@ -55,9 +59,6 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # (`library::support::float_text`); already a transitive dependency
 # through serde_json.
 ryu = "1"
-serde_yaml = "0.9"
-petgraph = "0.8"
-layout-rs = "0.1"
 vectordata = { version = "1.2", optional = true }
 cranelift-jit = { version = "0.116", optional = true }
 cranelift-module = { version = "0.116", optional = true }
@@ -65,10 +66,10 @@ cranelift-codegen = { version = "0.116", optional = true }
 cranelift-frontend = { version = "0.116", optional = true }
 cranelift-native = { version = "0.116", optional = true }
 inventory = "0.3.24"
-# Needed for runtime-context nodes' task-local FiberContext
-# (`task_local!` lives in `rt`) and for `block_in_place` at the
-# vectordata catalog bridge (`rt-multi-thread`).
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"] }
+# Only the vectordata catalog bridge needs tokio: `block_in_place`
+# around its blocking HTTP client when an outer runtime is current
+# (`library::vectors::run_blocking_io`), so it rides the feature.
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"], optional = true }
 # Insertion-ordered map. Used by `kernel::ScopeCoord` so the
 # coordinate names within a scope appear in clause-declaration
 # order — matching the comprehension's source-level intent.
@@ -86,7 +87,7 @@ clap = { version = "4", features = ["derive"], optional = true }
 [features]
 default = ["jit", "cli"]
 cli = ["dep:clap"]
-vectordata = ["dep:vectordata"]
+vectordata = ["dep:vectordata", "dep:tokio"]
 jit = ["dep:cranelift-jit", "dep:cranelift-module", "dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-native"]
 
 [dev-dependencies]
@@ -109,6 +110,33 @@ doctest = false
 name = "polydat"
 path = "src/main.rs"
 required-features = ["cli"]
+
+[[test]]
+name = "suite"
+path = "tests/suite.rs"
+
+# Each of these defines nodes of its own and so stays a binary of its
+# own: a node registers at link time, and the suite's registry-walking
+# tests must see the library alone.
+[[test]]
+name = "ext_tiers"
+path = "tests/ext_tiers.rs"
+
+[[test]]
+name = "handle_tiers"
+path = "tests/handle_tiers.rs"
+
+[[test]]
+name = "kernel_api"
+path = "tests/kernel_api.rs"
+
+[[test]]
+name = "polydat_node_macro"
+path = "tests/polydat_node_macro.rs"
+
+[[test]]
+name = "srd80b_invariant"
+path = "tests/srd80b_invariant.rs"
 
 [[bench]]
 name = "polydat_throughput"

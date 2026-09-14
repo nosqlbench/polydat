@@ -5,7 +5,7 @@
 //! attribute can emit has a case under `tests/ui/fail/`, and the
 //! expected compiler output lives beside it in a `.stderr` file. A
 //! change to a message shows up as a diff here; regenerate the
-//! snapshots with `TRYBUILD=overwrite cargo test --test ui` and review
+//! snapshots with `TRYBUILD=overwrite cargo test --test suite ui::` and review
 //! the diff. `tests/ui/pass/` holds the shapes that must keep
 //! compiling.
 //!
@@ -13,7 +13,7 @@
 //! minute. It is ignored by default and run explicitly:
 //!
 //! ```sh
-//! cargo test --test ui -- --ignored
+//! cargo test --test suite ui:: -- --ignored
 //! ```
 //!
 //! CI runs it on every push.

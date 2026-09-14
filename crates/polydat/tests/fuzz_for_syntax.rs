@@ -462,7 +462,7 @@ fn run_wellformed_pass(seed: u64, iterations: usize) -> Vec<String> {
     let mut failures = Vec::new();
     let repro = |i: usize| {
         format!(
-            "reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test -p polydat --test fuzz_for_syntax wellformed",
+            "reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test -p polydat --test suite fuzz_for_syntax::wellformed",
             i + 1
         )
     };
@@ -652,7 +652,7 @@ fn run_mutation_pass(seed: u64, iterations: usize) -> Vec<String> {
     let mut failures = Vec::new();
     let repro = |i: usize| {
         format!(
-            "reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test -p polydat --test fuzz_for_syntax mutated",
+            "reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test -p polydat --test suite fuzz_for_syntax::mutated",
             i + 1
         )
     };

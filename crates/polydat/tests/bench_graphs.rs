@@ -340,7 +340,7 @@ mod tests {
     // --- Generate files ---
 
     #[test]
-    #[ignore] // Run manually: cargo test --test bench_graphs -- --ignored
+    #[ignore] // Run manually: cargo test --test suite bench_graphs:: -- --ignored
     fn write_bench_graph_files() {
         generate_all();
     }

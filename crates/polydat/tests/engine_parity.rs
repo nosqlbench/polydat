@@ -10,14 +10,14 @@
 //! change in either direction fails the test: a regression on an engine
 //! that accepted a node, and a step of the true-up plan that lands
 //! without recording its gain. Regenerate the table after an intended
-//! change with `ENGINE_PARITY=overwrite cargo test --test engine_parity`
+//! change with `ENGINE_PARITY=overwrite cargo test --test suite engine_parity::`
 //! and review the diff.
 //!
 //! The matrix needs every engine, so it runs with the `jit` feature.
 
 #![cfg(feature = "jit")]
 
-mod common;
+use super::common;
 
 use polydat::dsl::compile::compile_polydat_to_assembler;
 use polydat::dsl::compile::compile_polydat_with;

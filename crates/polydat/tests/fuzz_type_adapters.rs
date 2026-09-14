@@ -436,7 +436,7 @@ fn run_fuzz_pass(seed: u64, iterations: usize) -> Vec<String> {
     let repro = |i: usize| {
         format!(
             "reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test --workspace \
-         --test fuzz_type_adapters random_dags",
+         --test suite fuzz_type_adapters::random_dags",
             i + 1
         )
     };
@@ -550,7 +550,7 @@ fn random_dags_compile_or_fail_cleanly() {
 /// afford. `#[ignore]`d; run it deliberately:
 ///
 /// ```text
-/// cargo test --workspace --test fuzz_type_adapters -- --ignored
+/// cargo test -p polydat --test suite fuzz_type_adapters:: -- --ignored
 /// ```
 ///
 /// Sweeps `SUPERFUZZ_SEEDS` seeds (default 64) × `FUZZ_ITERATIONS`

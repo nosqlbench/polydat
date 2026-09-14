@@ -107,11 +107,13 @@ fn parse_source_specifier(source: &str) -> (&str, &str) {
 /// ([`load_dataset_group`], [`load_uniform_facet`],
 /// [`GenericFacetDataset::load`]).
 fn run_blocking_io<R>(body: impl FnOnce() -> R) -> R {
+    // tokio rides the `vectordata` feature: without the crate there is
+    // no HTTP client to park a worker for.
+    #[cfg(feature = "vectordata")]
     if tokio::runtime::Handle::try_current().is_ok() {
-        tokio::task::block_in_place(body)
-    } else {
-        body()
+        return tokio::task::block_in_place(body);
     }
+    body()
 }
 
 /// Load a dataset group by name.

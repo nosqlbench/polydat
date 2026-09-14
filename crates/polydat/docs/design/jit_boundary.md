@@ -554,7 +554,7 @@ aliasing validity of the `from_raw_parts` pattern. Lane command
 
 ```sh
 cargo +nightly miri test -p polydat --no-default-features \
-    --test slot_state_axioms
+    --test suite slot_state_axioms::
 ```
 
 Stacked Borrows accepts the pattern (the S5 oracle passes under Miri

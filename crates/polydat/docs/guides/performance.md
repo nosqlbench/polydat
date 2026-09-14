@@ -197,7 +197,7 @@ rungs within one run.
 Run the semantic gate first:
 
 ```sh
-cargo test -p polydat --test engine_ladder_equivalence
+cargo nextest run -p polydat --test suite engine_ladder_equivalence::
 ```
 
 Then run only the focused performance target:
