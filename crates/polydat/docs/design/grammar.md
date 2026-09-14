@@ -737,6 +737,6 @@ on extension internals.
 [Graph Compiler]: graph_compiler.md
 [Runtime Model]: runtime_model.md
 [Expression Engine]: expression_engine.md
-[`dsl::ast`]: ../../src/dsl/ast.rs
-[`dsl::parser`]: ../../src/dsl/parser.rs
+[`dsl::ast`]: ../../../polydat-grammar/src/ast.rs
+[`dsl::parser`]: ../../../polydat-grammar/src/parser.rs
 [`dsl::compile`]: ../../src/dsl/compile.rs

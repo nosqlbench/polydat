@@ -24,11 +24,26 @@ the algebra behind the `for` construct (§[16](#sec-for)),
 (§[17](#sec-tiles)), and [`type_system.md`](type_system.md) the adapter
 machinery behind the type keywords.
 
+The language is its own crate, `polydat-grammar`: the lexer, the
+parser, the AST and its projector, the free-name collector, pragmas,
+the diagnostic types, the tile template parsers, the comprehension
+sub-language with its algebra, and the port type vocabulary, with no
+runtime behind them. `polydat` depends on it and re-exports every
+module at the path it always had (`polydat::dsl::ast`,
+`polydat::dsl::parser`, `polydat::iteration::comprehension::parse`,
+`polydat::ast::PortType`), so nothing that compiles against `polydat`
+changes; a tool that only reads, checks, or prints Polydat source links
+the grammar crate alone. What a type means to a compiled buffer (its
+slot color and width) is the runtime's reading of it, an extension
+trait in `polydat::ast`, and what a comprehension evaluates to, what a
+tile renders, and what a cursor sugar rewrites into are likewise the
+runtime's.
+
 <a id="sec-roundtrip"></a>
 ### 0.1 How the examples are verified — the round-trip contract
 
 Polydat ships a projector,
-[`polydat::dsl::pprint::pp_file`](../../src/dsl/pprint.rs), that turns a
+[`polydat::dsl::pprint::pp_file`](../../../polydat-grammar/src/pprint.rs), that turns a
 parsed AST back into canonical `.polydat` source. Throughout this spec,
 **“the syntax the runtime gives back”** means the output of `pp_file`.
 

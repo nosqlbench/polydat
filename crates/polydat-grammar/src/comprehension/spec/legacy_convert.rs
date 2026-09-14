@@ -7,12 +7,12 @@
 //! (`polydat::iteration::comprehension::parse::*`) for structural shape
 //! recognition, then converts the legacy `Comprehension`
 //! flat-struct AST to the new algebra-layer operator-tree
-//! [`crate::iteration::comprehension::ast::Comprehension`].
+//! [`crate::comprehension::ast::Comprehension`].
 //!
 //! Source-string typing is handled by
 //! [`super::source_parser::parse_source`] — the legacy AST
 //! carries source expressions as raw strings; the algebra
-//! layer requires typed [`crate::iteration::comprehension::source::Source`]
+//! layer requires typed [`crate::comprehension::source::Source`]
 //! values at AST construction time so the validator and
 //! metadata propagator can do their work statically.
 //!
@@ -22,13 +22,13 @@
 //! turning YAML / text into legacy ASTs; polydat owns the
 //! conversion onward.
 
-use crate::iteration::comprehension::ast::Comprehension as AlgebraAst;
-use crate::iteration::comprehension::ast_legacy::{
+use crate::comprehension::ast::Comprehension as AlgebraAst;
+use crate::comprehension::ast_legacy::{
     Clause as LegacyClause, ClauseSource as LegacyClauseSource, Comprehension as LegacyAst,
     ComprehensionMode as LegacyMode, Subspace as LegacySubspace, TraversalOrder as LegacyOrder,
     ZipMode as LegacyZipMode,
 };
-use crate::iteration::comprehension::strategy::{StrategyName, ZipMode as AlgebraZipMode};
+use crate::comprehension::strategy::{StrategyName, ZipMode as AlgebraZipMode};
 
 use super::source_parser::{SourceParseError, parse_source};
 
@@ -251,7 +251,7 @@ fn convert_order(order: &LegacyOrder) -> Result<(StrategyName, Option<u64>), Con
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::iteration::comprehension::source::{LiteralValue, Source};
+    use crate::comprehension::source::{LiteralValue, Source};
 
     fn legacy_clause(var: &str, source: &str) -> LegacyClause {
         LegacyClause::new(var, source)
@@ -451,7 +451,7 @@ mod tests {
         let algebra = legacy_to_algebra(&legacy).unwrap();
         match algebra {
             AlgebraAst::Clause { source, .. } => match source {
-                crate::iteration::comprehension::source::Source::Generator { expr, .. } => {
+                crate::comprehension::source::Source::Generator { expr, .. } => {
                     assert_eq!(expr, "totally nonsense");
                 }
                 other => panic!("expected Generator, got {other:?}"),

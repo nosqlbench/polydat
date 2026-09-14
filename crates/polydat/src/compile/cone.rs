@@ -46,7 +46,7 @@ pub(crate) use jit_impl::extract_jit_cones;
 #[cfg(feature = "jit")]
 mod jit_impl {
     use super::JitMode;
-    use crate::ast::{NodeMeta, PolydatNode, Port, PortType, Purity, Slot, Value};
+    use crate::ast::{NodeMeta, PolydatNode, Port, PortType, Purity, Slot, SlotShape, Value};
     use crate::compile::assembly::{PolydatAssembler, ResolvedDag};
     use crate::compile::jit::{JitOp, classify_node_typed};
     use crate::kernel::{InputDef, InputKind, WireSource};

@@ -30,8 +30,8 @@
 //! consumer treats this as a parse error to surface to the
 //! workload author.
 
-use crate::iteration::comprehension::cardinality::{Interval, ProductMeasure};
-use crate::iteration::comprehension::source::{LiteralValue, Source};
+use crate::comprehension::cardinality::{Interval, ProductMeasure};
+use crate::comprehension::source::{LiteralValue, Source};
 
 /// Parse a source-expression string into a typed [`Source`].
 pub fn parse_source(text: &str) -> Result<Source, SourceParseError> {

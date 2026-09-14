@@ -77,7 +77,7 @@ pub enum TokenKind {
     /// into a [`TokenKind::TileBody`] when it is a block or heredoc.
     Tile,
     /// A raw tile body and how it was written.
-    TileBody(String, crate::dsl::ast::TileBodyKind),
+    TileBody(String, crate::ast::TileBodyKind),
     /// `.` (field access: `base.ordinal`)
     Dot,
     /// Integer literal: `1000`, `0xFF`
@@ -838,14 +838,14 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
 /// is returned. On success returns the body, its kind, the chars
 /// consumed from `start`, the newlines crossed, and the column after
 /// the body.
-type TileBodyCapture = (String, crate::dsl::ast::TileBodyKind, usize, usize, usize);
+type TileBodyCapture = (String, crate::ast::TileBodyKind, usize, usize, usize);
 
 fn capture_tile_body(
     chars: &[char],
     start: usize,
     start_col: usize,
 ) -> Result<Option<TileBodyCapture>, String> {
-    use crate::dsl::ast::TileBodyKind;
+    use crate::ast::TileBodyKind;
     let mut pos = start;
     let mut col = start_col;
     let mut newlines = 0;

@@ -6,7 +6,7 @@
 //! delimiters and sigil. The textual front end for Polytile; the
 //! structural front end (§3) lowers to the same pieces.
 
-use crate::ast::PortType;
+use crate::PortType;
 
 use super::ast::{Expr, TileHole, TileOptions, TilePiece};
 use super::lexer::{Span, lex};
@@ -424,7 +424,7 @@ fn split_sep(header: &str) -> (String, Option<String>) {
     (t.to_string(), None)
 }
 
-pub(super) fn parse_hole_expr(text: &str) -> Result<Expr, String> {
+pub fn parse_hole_expr(text: &str) -> Result<Expr, String> {
     let tokens = lex(text)?;
     parse_expression(tokens)
 }

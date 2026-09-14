@@ -6,7 +6,7 @@
 //! Every error includes a source location (line:col), the relevant
 //! source text, and a clear message with suggestions where possible.
 
-use crate::dsl::lexer::Span;
+use crate::lexer::Span;
 use std::fmt;
 
 /// Severity level for diagnostics.

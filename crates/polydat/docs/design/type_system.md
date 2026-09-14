@@ -727,7 +727,7 @@ crossing into inner kernels via the `set:` /
 ## 7. Interpolation type boundary
 
 The DSL parser
-(`polydat/src/dsl/parser.rs::parse_interpolated_string`)
+(`polydat-grammar/src/parser.rs::parse_interpolated_string`)
 turns every interpolated string literal into a
 `printf` call:
 

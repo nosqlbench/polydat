@@ -20,6 +20,7 @@ use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{Linkage, Module};
 
 use crate::ast::PolydatNode;
+use crate::ast::SlotShape;
 
 use super::kernels::{JitCore, JitKernelPull, JitKernelPush, JitKernelPushPull, JitKernelRaw};
 

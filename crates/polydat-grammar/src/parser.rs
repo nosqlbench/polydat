@@ -40,8 +40,8 @@
 //! `Value::to_display_string()` renders each input into its slot.
 //! No special runtime support is needed beyond `printf`.
 
-use crate::dsl::ast::*;
-use crate::dsl::lexer::{Span, Token, TokenKind};
+use crate::ast::*;
+use crate::lexer::{Span, Token, TokenKind};
 
 /// Parser state.
 struct Parser {
@@ -451,7 +451,7 @@ fn expect_string(p: &mut Parser, what: &str) -> Result<String, String> {
 }
 
 /// Classify and parse the text after `for`.
-pub(crate) fn for_source_from_text(
+pub fn for_source_from_text(
     text: &str,
     span: Span,
     allow_producer: bool,
@@ -484,7 +484,7 @@ pub(crate) fn for_source_from_text(
     // A derivation: `<producer> [where <pred>] [order <spec>]`. The
     // head is a bare identifier and the text has no `in` clause.
     {
-        use crate::iteration::comprehension::parse::{split_at_order, split_at_where};
+        use crate::comprehension::parse::{split_at_order, split_at_where};
         let (head, order) = split_at_order(text);
         let (base, filter) = split_at_where(&head);
         let base = base.trim();
@@ -506,9 +506,9 @@ pub(crate) fn for_source_from_text(
             });
         }
     }
-    let legacy = crate::iteration::comprehension::parse::parse_comprehension_text(text)
+    let legacy = crate::comprehension::parse::parse_comprehension_text(text)
         .map_err(|e| format!("`for {text}` at line {}, col {}: {e}", span.line, span.col))?;
-    let algebra = crate::iteration::comprehension::spec::legacy_to_algebra(&legacy)
+    let algebra = crate::comprehension::spec::legacy_to_algebra(&legacy)
         .map_err(|e| format!("`for {text}` at line {}, col {}: {e}", span.line, span.col))?;
     Ok(ForSource {
         text: text.to_string(),
@@ -910,7 +910,7 @@ fn parse_postfix_as(p: &mut Parser, mut expr: Expr) -> Result<Expr, String> {
             other => return Err(format!("expected a type name after `as`, found {other:?}")),
         };
         p.advance(); // consume the type name
-        let port_type = crate::ast::PortType::from_keyword(&ty_name)
+        let port_type = crate::PortType::from_keyword(&ty_name)
             .ok_or_else(|| format!("unknown type `{ty_name}` in `... as {ty_name}` cast"))?;
         expr = Expr::Cast(Box::new(expr), port_type, span);
     }
@@ -1305,7 +1305,7 @@ fn parse_placeholder_body(body: &str, _span: Span) -> Result<Expr, String> {
     if body.is_empty() {
         return Err("empty placeholder".into());
     }
-    let tokens = crate::dsl::lexer::lex(body)?;
+    let tokens = crate::lexer::lex(body)?;
     parse_expression(tokens)
 }
 
@@ -1400,7 +1400,7 @@ fn parse_array_lit(p: &mut Parser) -> Result<Expr, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dsl::lexer::lex;
+    use crate::lexer::lex;
 
     fn parse_str(s: &str) -> PolydatFile {
         let tokens = lex(s).unwrap();
@@ -1471,19 +1471,6 @@ mod tests {
         );
     }
 
-    /// End-to-end: compile a tiny Polydat source with a `volatile`
-    /// binding and verify the named output reaches the compiled
-    /// program. Catches regressions where the modifier flag
-    /// somehow filters the binding out of the output set.
-    #[test]
-    fn volatile_binding_compiles_to_named_output() {
-        let kernel = crate::dsl::compile_polydat("volatile y := 42\n").expect("compile volatile y");
-        let names = kernel.program().output_names();
-        assert!(names.contains(&"y"), "output names: {names:?}");
-        let m = kernel.program().output_modifier("y");
-        assert!(m.is_volatile(), "modifier should record volatile");
-    }
-
     #[test]
     fn parse_volatile_const_binding() {
         // `volatile const x := 42` — const binding with volatile
@@ -1552,7 +1539,7 @@ mod tests {
     #[test]
     fn parse_input_tuple_empty_rejected() {
         // `input ()` is malformed — to declare zero inputs, omit the line.
-        let tokens = crate::dsl::lexer::lex("input ()").unwrap();
+        let tokens = crate::lexer::lex("input ()").unwrap();
         let err = parse(tokens).unwrap_err();
         assert!(
             err.contains("empty"),

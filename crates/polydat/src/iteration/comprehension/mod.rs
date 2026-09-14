@@ -57,19 +57,22 @@
 //!
 //! All three flow through this module's canonical algebra AST.
 
-// --- Algebra modules — the canonical comprehension layer.
-pub mod ast;
-pub mod cardinality;
+// --- The sub-language: its text form, the flat form text parses to,
+// the canonical algebra with its sources, strategies, cardinalities,
+// and metadata, and the spec forms between them. These live in
+// `polydat_grammar`, reachable here at the paths they always had.
+pub use polydat_grammar::comprehension::{
+    ast, ast_legacy, cardinality, metadata, parse, source, spec, strategy,
+};
+
+// --- The runtime's reading of the algebra.
 pub mod eval_source;
 pub mod ir;
-pub mod metadata;
 pub mod optimize;
 pub mod predicate;
 pub mod runtime;
-pub mod source;
-pub mod spec;
+pub mod source_values;
 pub mod strategies;
-pub mod strategy;
 pub mod surfaces;
 pub mod validate;
 
@@ -80,9 +83,7 @@ pub mod validate;
 // `spec::legacy_to_algebra`. `eval` is the runtime-evaluation
 // helper used by both the algebra runtime evaluator and the
 // scope-walker.
-pub mod ast_legacy;
 pub mod eval;
-pub mod parse;
 pub mod streamer_value;
 pub use streamer_value::StreamerValue;
 

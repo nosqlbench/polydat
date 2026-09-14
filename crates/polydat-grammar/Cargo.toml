@@ -1,0 +1,25 @@
+# Copyright 2024-2026 Jonathan Shook
+# SPDX-License-Identifier: Apache-2.0
+#
+# `polydat-grammar` — the Polydat language with no runtime: the
+# lexer, the parser, the AST, the pretty-printer, the comprehension
+# sub-language, the tile template parsers, and the port type
+# vocabulary. `polydat` compiles and runs what this crate parses.
+
+[package]
+name = "polydat-grammar"
+version = "0.2.0"
+edition.workspace = true
+license.workspace = true
+description = "The Polydat language: lexer, parser, AST, and pretty-printer, without the runtime"
+keywords = ["nosqlbench", "workload", "grammar", "parser"]
+categories = ["parser-implementations"]
+repository = "https://github.com/nosqlbench/polydat"
+homepage = "https://github.com/nosqlbench/polydat"
+documentation = "https://docs.rs/polydat-grammar"
+readme = "README.md"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml = "0.9"

@@ -46,7 +46,7 @@
 //!
 //! The friendly surface delegates **structural parsing** to
 //! the existing legacy parsers in
-//! [`crate::iteration::comprehension::parse`] — `parse_clause_list`,
+//! [`crate::comprehension::parse`] — `parse_clause_list`,
 //! `parse_comprehension_text`, `parse_order_spec`. Those
 //! parsers produce a legacy `Comprehension` AST with raw
 //! string sources. The [`legacy_convert`] module then walks
@@ -71,7 +71,7 @@ pub use text::{TextParseError, parse_text};
 // Leaf grammar utilities — re-exported here so external
 // consumers (nbrs-workload, nbrs-runtime) reach the polydat
 // grammar through a single chokepoint module. The
-// implementations live in `crate::iteration::comprehension::parse` but
+// implementations live in `crate::comprehension::parse` but
 // that module is not external API after Surface 1.
 //
 // What's re-exported (leaf utilities, no comprehension-build
@@ -89,6 +89,6 @@ pub use text::{TextParseError, parse_text};
 //   `ComprehensionSpec::into_legacy` / `into_algebra`.
 // - `split_at_order`, `split_at_where`, `split_respecting_parens` —
 //   internal parser helpers.
-pub use crate::iteration::comprehension::parse::{
+pub use crate::comprehension::parse::{
     parse_clause, parse_clause_list, parse_comprehension_text, parse_order_spec,
 };

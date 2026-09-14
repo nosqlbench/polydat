@@ -29,7 +29,7 @@
 //! synthesizer's output is not user-facing; legibility is not a
 //! concern.
 
-use crate::dsl::ast::{
+use crate::ast::{
     Arg, BinOpKind, Binding, BindingModifier, CallExpr, CursorDecl, Expr, ExternPort, ForStmt,
     ModuleDef, PolydatFile, Statement, TileBodyKind, TileDef, TileOptions, WireModifier,
 };
@@ -285,7 +285,7 @@ fn format_float(v: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dsl::{lexer, parser};
+    use crate::{lexer, parser};
 
     fn parse(src: &str) -> PolydatFile {
         let tokens = lexer::lex(src).expect("lex");

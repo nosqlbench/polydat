@@ -15,7 +15,7 @@
 //! sharper error messages for JSON authors.
 
 use super::serde_form::{ComprehensionSpec, SpecConvertError};
-use crate::iteration::comprehension::ast::Comprehension as AlgebraAst;
+use crate::comprehension::ast::Comprehension as AlgebraAst;
 
 /// Parse a YAML or JSON text block describing a comprehension
 /// into the algebra-layer AST.
@@ -64,7 +64,7 @@ impl std::error::Error for TextParseError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::iteration::comprehension::strategy::StrategyName;
+    use crate::comprehension::strategy::StrategyName;
 
     #[test]
     fn yaml_text_block() {

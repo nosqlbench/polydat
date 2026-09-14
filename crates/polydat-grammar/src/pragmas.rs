@@ -21,7 +21,7 @@
 //! same way other statements are. They're not comments — distinct
 //! syntactic construct, distinguishable from `//`/`#` line comments.
 //!
-//! [`Statement::Pragma`]: crate::dsl::ast::Statement::Pragma
+//! [`Statement::Pragma`]: crate::ast::Statement::Pragma
 //!
 //! ## Recognised pragma names
 //!
@@ -164,8 +164,8 @@ fn is_known(name: &str) -> bool {
 /// [`PragmaSet`]. This is the canonical extraction path — pragmas
 /// are first-class grammar (the `pragma` keyword) and the parser
 /// produces them as proper statements.
-pub fn collect_from_ast(file: &crate::dsl::ast::PolydatFile) -> PragmaSet {
-    use crate::dsl::ast::Statement;
+pub fn collect_from_ast(file: &crate::ast::PolydatFile) -> PragmaSet {
+    use crate::ast::Statement;
     let mut entries = Vec::new();
     for stmt in &file.statements {
         if let Statement::Pragma { name, span } = stmt {
@@ -201,8 +201,8 @@ pub struct PragmaConflict {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dsl::lexer::lex;
-    use crate::dsl::parser::parse;
+    use crate::lexer::lex;
+    use crate::parser::parse;
 
     fn pragmas_from(src: &str) -> PragmaSet {
         let tokens = lex(src).expect("lex");

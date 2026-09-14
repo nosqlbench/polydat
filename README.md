@@ -377,10 +377,17 @@ polydat = { version = "0.2", default-features = false }
 
 ## Workspace and development
 
-This repository contains two Rust 2024 crates:
+This repository contains three Rust 2024 crates:
 
-- [`polydat`](crates/polydat) — public types, DSL, graph compiler, execution
-  engines, iteration/comprehension system, standard node library, and runtime.
+- [`polydat`](crates/polydat) — public types, graph compiler, execution
+  engines, iteration/comprehension runtime, standard node library, and
+  runtime. It re-exports the grammar crate at the paths below.
+- [`polydat-grammar`](crates/polydat-grammar) — the language without the
+  runtime: lexer, parser, AST and projector, the comprehension
+  sub-language and its algebra, the tile template parsers, and the port
+  type vocabulary. Reachable through `polydat::dsl`,
+  `polydat::iteration::comprehension`, and `polydat::ast::PortType`; a
+  tool that only reads or prints Polydat source links this crate alone.
 - [`polydat-derive`](crates/polydat-derive) — implementation of the
   `#[polydat_node]` procedural macro.
 

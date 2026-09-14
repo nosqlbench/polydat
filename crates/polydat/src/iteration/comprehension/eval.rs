@@ -111,7 +111,7 @@ fn evaluate_spec_internal(spec_text: &str, kernel: &dyn Lookup) -> Result<Vec<Va
         // is NOT silently bound as its own name-string.
         return match kernel.lookup(spec_text.trim()) {
             Some(v) => Ok(
-                match crate::iteration::comprehension::source::iteration_interior(&v) {
+                match crate::iteration::comprehension::source_values::iteration_interior(&v) {
                     Some(interior) => interior,
                     None => vec![v],
                 },
@@ -176,7 +176,7 @@ fn evaluate_spec_internal(spec_text: &str, kernel: &dyn Lookup) -> Result<Vec<Va
         // the former per-type arms (Str→comma-split,
         // PartitionList→unpack, other→wrap).
         Ok(v) => Ok(
-            match crate::iteration::comprehension::source::iteration_interior(&v) {
+            match crate::iteration::comprehension::source_values::iteration_interior(&v) {
                 Some(interior) => interior,
                 None => vec![v],
             },
@@ -207,7 +207,11 @@ fn evaluate_spec_internal(spec_text: &str, kernel: &dyn Lookup) -> Result<Vec<Va
             if looks_like_literal_list(&interpolated) {
                 // A bare unquoted token list strips on the same
                 // separator rule as a string comprehension.
-                Ok(crate::iteration::comprehension::source::strip_string_tokens(&interpolated))
+                Ok(
+                    crate::iteration::comprehension::source_values::strip_string_tokens(
+                        &interpolated,
+                    ),
+                )
             } else {
                 Err(format!(
                     "for_each clause expression failed to evaluate: {eval_err}\n\
@@ -276,7 +280,7 @@ fn try_eval_bracket_list(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<V
         }
         let value = eval_element_value(expr, kernel)?;
         if spread {
-            match crate::iteration::comprehension::source::iteration_interior(&value) {
+            match crate::iteration::comprehension::source_values::iteration_interior(&value) {
                 Some(interior) => out.extend(interior),
                 None => {
                     return Err(format!(
@@ -400,18 +404,18 @@ pub fn pre_evaluate_clause(
     if is_single_bare_ident(spec_text) {
         let name = spec_text.trim();
         if let Some(pv) = probes.get(name) {
-            return Ok(crate::iteration::comprehension::source::strip_string_tokens(pv));
+            return Ok(crate::iteration::comprehension::source_values::strip_string_tokens(pv));
         }
         if let Some(v) = parent_kernel.lookup(name) {
             return Ok(
-                match crate::iteration::comprehension::source::iteration_interior(&v) {
+                match crate::iteration::comprehension::source_values::iteration_interior(&v) {
                     Some(interior) => interior,
                     None => vec![v],
                 },
             );
         }
         if let Some(s) = workload_params.get(name) {
-            return Ok(crate::iteration::comprehension::source::strip_string_tokens(s));
+            return Ok(crate::iteration::comprehension::source_values::strip_string_tokens(s));
         }
         return Err(format!(
             "comprehension source `{name}` did not resolve to a value — no wire, \

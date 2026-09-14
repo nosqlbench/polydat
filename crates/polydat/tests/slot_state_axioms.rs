@@ -300,7 +300,7 @@ fn lookup_does_not_allocate_per_call() {
 /// element its producer owns; the scalar colors are untouched.
 #[test]
 fn ref2_is_the_color_of_by_reference_types() {
-    use polydat::ast::{PortType, ScratchElem, SlotColor};
+    use polydat::ast::{PortType, ScratchElem, SlotColor, SlotShape};
     for (ty, elem) in [
         (PortType::Str, ScratchElem::Str),
         (PortType::Bytes, ScratchElem::Bytes),

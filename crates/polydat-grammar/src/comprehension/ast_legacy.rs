@@ -30,7 +30,7 @@
 //! ## Detection rule
 //!
 //! When a YAML / textual form lists multiple clauses, the
-//! parser (`crate::iteration::comprehension::parse`, Phase B) decides
+//! parser (`crate::comprehension::parse`, Phase B) decides
 //! which mode to emit by checking variable names: if any
 //! name repeats across the supplied pairs, it's
 //! [`ComprehensionMode::Union`] (the repetition is the
@@ -42,11 +42,11 @@
 //!
 //! At run time, each iteration of a comprehension scope has
 //! its scope-coordinate set
-//! ([`crate::kernel::ScopeCoord`]) populated with one
+//! (the runtime's `ScopeCoord`) populated with one
 //! `(name, value)` for every distinct variable name the
 //! comprehension declares. The names come from
 //! [`Comprehension::coordinate_names`]; the values come
-//! from [`crate::iteration::comprehension::eval::enumerate_tuples`]
+//! from the runtime's `enumerate_tuples`
 //! (Phase C). With this AST in place, that wiring is a
 //! 1:1 structural mapping rather than a string-parse
 //! round-trip.
@@ -755,7 +755,7 @@ impl fmt::Display for Comprehension {
 }
 
 /// Render a [`TraversalOrder`] as text matching
-/// [`crate::iteration::comprehension::parse::parse_order_spec`]'s
+/// [`crate::comprehension::parse::parse_order_spec`]'s
 /// accepted forms.
 fn format_order(order: &TraversalOrder) -> String {
     fn count_suffix(n: Option<usize>) -> String {

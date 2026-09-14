@@ -3165,7 +3165,11 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                 let elems: Vec<TokenStream2> = e.scratch_elem().into_iter().collect();
                 quote!(vec![ #( #elems ),* ])
             }
-            SlotRet::Poly => quote!(__out_type.scratch_elem().into_iter().collect::<Vec<_>>()),
+            SlotRet::Poly => quote!(
+                polydat::ast::SlotShape::scratch_elem(&__out_type)
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            ),
             SlotRet::Tuple(elems) => {
                 let elems: Vec<TokenStream2> =
                     elems.iter().filter_map(|e| e.scratch_elem()).collect();
@@ -3191,7 +3195,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
         };
         quote! {
             let __out_type: polydat::ast::PortType = #resolve;
-            if __out_type.slot_color() != self.meta().outs[0].typ.slot_color() {
+            if polydat::ast::SlotShape::slot_color(&__out_type) != polydat::ast::SlotShape::slot_color(&self.meta().outs[0].typ) {
                 return None;
             }
         }
@@ -3394,7 +3398,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                     SlotArg::Poly => quote! {
                         let #n: polydat::ast::Value =
                             polydat::derive_support::read_poly(__wire_types[__p], &inputs[__i..]);
-                        __i += __wire_types[__p].slot_width();
+                        __i += polydat::ast::SlotShape::slot_width(&__wire_types[__p]);
                         __p += 1;
                     },
                     SlotArg::Variadic(elem) => {
@@ -3422,7 +3426,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                             VariadicElement::Value => (
                                 quote!(polydat::ast::Value),
                                 quote!(polydat::derive_support::read_poly(__wire_types[__p], &inputs[__i..])),
-                                quote!(__wire_types[__p].slot_width()),
+                                quote!(polydat::ast::SlotShape::slot_width(&__wire_types[__p])),
                             ),
                         };
                         quote! {

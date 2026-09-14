@@ -24,11 +24,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::iteration::comprehension::ast::Comprehension as AlgebraAst;
-use crate::iteration::comprehension::ast_legacy::{
-    Clause as LegacyClause, Comprehension as LegacyAst,
-};
-use crate::iteration::comprehension::parse::{
+use crate::comprehension::ast::Comprehension as AlgebraAst;
+use crate::comprehension::ast_legacy::{Clause as LegacyClause, Comprehension as LegacyAst};
+use crate::comprehension::parse::{
     comprehension_from_subspaces, parse_clause_list, parse_order_spec,
 };
 
@@ -53,7 +51,7 @@ pub struct ComprehensionSpec {
     #[serde(default, rename = "where", skip_serializing_if = "Option::is_none")]
     pub r#where: Option<String>,
     /// Optional traversal-order spec. See
-    /// [`crate::iteration::comprehension::parse::parse_order_spec`] for
+    /// [`crate::comprehension::parse::parse_order_spec`] for
     /// the accepted syntax (`lex`, `halton/50`,
     /// `shells(origin=center, depth=3)`, etc.).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -253,7 +251,7 @@ impl ForSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::iteration::comprehension::strategy::StrategyName;
+    use crate::comprehension::strategy::StrategyName;
 
     #[test]
     fn inline_single_clause() {
@@ -409,7 +407,7 @@ mod tests {
         let algebra = spec.into_algebra().expect("permissive accept");
         match algebra {
             AlgebraAst::Clause { source, .. } => match source {
-                crate::iteration::comprehension::source::Source::Generator { expr, .. } => {
+                crate::comprehension::source::Source::Generator { expr, .. } => {
                     assert_eq!(expr, "something-weird");
                 }
                 other => panic!("expected Generator, got {other:?}"),

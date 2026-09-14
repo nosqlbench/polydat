@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 
+use crate::ast::SlotShape;
 use crate::ast::{PolydatNode, PortType};
 use crate::compile::closures::{
     CompiledKernelPull, CompiledKernelPush, CompiledKernelPushPull, CompiledKernelRaw,

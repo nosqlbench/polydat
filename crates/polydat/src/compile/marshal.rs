@@ -17,6 +17,7 @@
 //! interpreter and the host never hold a reference into a state's
 //! buffers.
 
+use crate::ast::SlotShape;
 use crate::ast::{PortType, Value};
 
 /// The `(ptr, len)` pair a `Ref2`-kind value is borrowed as: into the

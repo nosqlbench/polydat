@@ -18,6 +18,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::ast::SlotShape;
 use crate::ast::{PortType, Value, ValueRef};
 use crate::iteration::comprehension::StreamerValue;
 use crate::iteration::comprehension::runtime::{RuntimeTuple, evaluate_for_iteration};
@@ -760,7 +761,7 @@ fn bind_generators(
             };
             let raw = inputs.get(*idx).map(|v| owned(*v)).unwrap_or(Value::None);
             let items: Vec<Value> =
-                match crate::iteration::comprehension::source::iteration_interior(&raw) {
+                match crate::iteration::comprehension::source_values::iteration_interior(&raw) {
                     Some(interior) => interior,
                     None => match &raw {
                         Value::Str(text) => {

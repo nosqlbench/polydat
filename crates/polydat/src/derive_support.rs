@@ -32,6 +32,7 @@
 
 use std::sync::Arc;
 
+use crate::ast::SlotShape;
 use crate::ast::{JitType, PortType, ReflectedValue, SliceArc, SlotType, Value};
 use crate::dsl::factory::ConstArg;
 

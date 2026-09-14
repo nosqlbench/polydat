@@ -21,6 +21,7 @@
 
 use std::collections::HashMap;
 
+use crate::ast::SlotShape;
 use crate::ast::{CompiledU64Op, PolydatNode};
 use crate::kernel::WireSource;
 

@@ -3,7 +3,7 @@
 
 //! Abstract syntax tree for the Polydat DSL.
 
-use crate::dsl::lexer::Span;
+use crate::lexer::Span;
 
 /// A complete `.polydat` file.
 #[derive(Debug, Clone)]
@@ -211,7 +211,7 @@ pub enum ForSourceKind {
     /// expression elsewhere in scope.
     Producer(String),
     /// Comprehension text, parsed to the algebra AST.
-    Comprehension(crate::iteration::comprehension::Comprehension),
+    Comprehension(crate::comprehension::Comprehension),
     /// A derivation of a bound producer: `base where <pred>`,
     /// `base order <spec>`, or both (SRD 113 §3.1). Resolved against
     /// the producer at compile time.
@@ -535,7 +535,7 @@ pub enum Expr {
     /// inner expression's type already matches the target, otherwise
     /// the compiler inserts the SRD-79 fusion adapter (or errors if no
     /// valid fusion exists). The cast's type is its target.
-    Cast(Box<Expr>, crate::ast::PortType, Span),
+    Cast(Box<Expr>, crate::PortType, Span),
     /// `for <comprehension>` in expression position — a comprehension
     /// producer (SRD 113 §3.1). Binds a `Streamer` wire.
     For(Box<ForSource>),

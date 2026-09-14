@@ -3,11 +3,17 @@
 
 //! Polydat DSL: lexer, parser, and AST for `.polydat` kernel definition files.
 
-pub mod ast;
+// The language itself lives in `polydat_grammar`: the lexer, the
+// parser, the AST, the pretty-printer, the free-name collector,
+// pragmas, the diagnostic types, and the tile template
+// parsers. Each is reachable here at the path it always had.
+pub use polydat_grammar::{
+    ast, error, lexer, parser, pprint, pragmas, refs, tile, tile_structural,
+};
+
 pub mod compile;
 pub mod const_constraints;
 pub mod cursor_sugar;
-pub mod error;
 pub mod events;
 pub mod factories;
 /// External-facing factory module. Made `pub` (was `pub(crate)`) so
@@ -15,22 +21,12 @@ pub mod factories;
 /// (host runtimes) can reach `ConstArg`, `compile_ctx`,
 /// and `build_node` from their `register_nodes!` invocations.
 pub mod factory;
-pub mod lexer;
-pub mod parser;
-pub mod pprint;
-pub mod pragmas;
 pub mod registry;
-pub mod tile;
 pub mod tile_lower;
-pub mod tile_structural;
 pub mod transform;
 pub mod traversal;
 pub(crate) mod validate;
 
-/// Grammar-based free-name extraction — the canonical way for
-/// validators and the YAML-fusion layer to learn which names an
-/// expression references (no byte-scanning). See [`refs`].
-pub mod refs;
 pub mod stub;
 
 /// Re-exported for external crates that register Polydat nodes via `register_nodes!`.

@@ -30,6 +30,7 @@
 //! — these nodes are also user-callable from Polydat source for ad-hoc
 //! guards.
 
+use crate::ast::SlotShape;
 use crate::ast::{NodeMeta, PolydatNode, Port, PortType, Slot, Value};
 use crate::dsl::const_constraints::ConstConstraint;
 

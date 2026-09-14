@@ -14,7 +14,7 @@
 //!   `Comprehension`. There is no auxiliary value type at the
 //!   AST level.
 //! - C2 — well-formedness is decidable in one bottom-up pass
-//!   (the [`validate`](mod@crate::iteration::comprehension::validate) module
+//!   (the `validate` module of the runtime
 //!   implements the check).
 
 use serde::{Deserialize, Serialize};
@@ -166,7 +166,7 @@ impl Comprehension {
     /// workload params, outer iter-vars, and wires that a
     /// `Generator` spec (`concat(foo)`, bare `eh_values`)
     /// consumes. Each spec is parsed with the canonical Polydat
-    /// expression grammar (`crate::dsl::refs::referenced_names`)
+    /// expression grammar (`crate::refs::referenced_names`)
     /// rather than byte-scanned, so a bare source reference is
     /// recognised exactly as the kernel compiler would resolve
     /// it. `WorkloadParamList { name }` contributes `name`
@@ -188,8 +188,8 @@ impl Comprehension {
                 // string-interpolation, not expression syntax —
                 // so the expression parser alone wouldn't see
                 // them). Collect both.
-                out.extend(crate::dsl::refs::referenced_names(expr));
-                crate::dsl::refs::collect_string_interpolation_refs(expr, &mut out);
+                out.extend(crate::refs::referenced_names(expr));
+                crate::refs::collect_string_interpolation_refs(expr, &mut out);
             }
             Source::Literal { .. }
             | Source::IntRange { .. }
@@ -388,7 +388,7 @@ fn literal_value_text(v: &super::source::LiteralValue) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::iteration::comprehension::source::{LiteralValue, Source};
+    use crate::comprehension::source::{LiteralValue, Source};
 
     fn lit_int_clause(name: &str, values: &[i64]) -> Comprehension {
         Comprehension::clause(
@@ -416,7 +416,7 @@ mod tests {
         // must use a float-preserving format ("1.0..5.0"), else a
         // downstream type-probe re-parses "1..5" and types the
         // iter-var `U64` — silently corrupting a float optimize axis.
-        use crate::iteration::comprehension::cardinality::{Interval, ProductMeasure};
+        use crate::comprehension::cardinality::{Interval, ProductMeasure};
         let c = Comprehension::clause(
             "ef",
             Source::ContinuousInterval {
@@ -433,7 +433,7 @@ mod tests {
         assert_eq!(var, "ef");
         // Re-parsing the reconstructed text must yield a continuous
         // interval again — the round-trip the kernel-type probe relies on.
-        let reparsed = crate::iteration::comprehension::spec::parse_source(&spec_text).unwrap();
+        let reparsed = crate::comprehension::spec::parse_source(&spec_text).unwrap();
         assert!(
             matches!(reparsed, Source::ContinuousInterval { .. }),
             "reconstructed '{spec_text}' re-parsed to {reparsed:?}, expected ContinuousInterval"

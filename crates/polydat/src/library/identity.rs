@@ -3,6 +3,7 @@
 
 //! Identity and constant nodes.
 
+use crate::ast::SlotShape;
 use crate::ast::{NodeMeta, PolydatNode, Port, PortType, Slot, Value};
 
 /// Passthrough: output equals input. Polymorphic via PolyWire: the

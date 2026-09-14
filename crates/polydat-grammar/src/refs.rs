@@ -14,8 +14,8 @@
 //! tokens the kernel compiler does.
 //!
 //! The extractor is built on the canonical lexer + expression
-//! parser ([`crate::dsl::lexer::lex`] +
-//! [`crate::dsl::parser::parse_expression`]) so a reference is
+//! parser ([`crate::lexer::lex`] +
+//! [`crate::parser::parse_expression`]) so a reference is
 //! recognised exactly when the compiler would treat it as one.
 //! `FieldAccess` (`base.vector`) contributes its `source` name;
 //! `StringLit` contributes the `{name}` interpolation references
@@ -24,7 +24,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::dsl::ast::{Arg, Expr};
+use crate::ast::{Arg, Expr};
 
 /// Parse `text` as a single Polydat expression and return the
 /// set of free names it references — wire/param/coordinate
@@ -46,8 +46,8 @@ pub fn referenced_names(text: &str) -> BTreeSet<String> {
 /// Polydat expression. Use when a parse failure should surface
 /// to the operator rather than silently yield no references.
 pub fn try_referenced_names(text: &str) -> Result<BTreeSet<String>, String> {
-    let tokens = crate::dsl::lexer::lex(text)?;
-    let expr = crate::dsl::parser::parse_expression(tokens)?;
+    let tokens = crate::lexer::lex(text)?;
+    let expr = crate::parser::parse_expression(tokens)?;
     let mut out = BTreeSet::new();
     collect_expr_refs(&expr, &mut out);
     Ok(out)
@@ -55,7 +55,7 @@ pub fn try_referenced_names(text: &str) -> Result<BTreeSet<String>, String> {
 
 /// Walk a parsed [`Expr`], inserting every free name reference
 /// into `out`. The traversal mirrors
-/// `crate::dsl::validate::validate_expr`'s reference-collection
+/// `crate::validate::validate_expr`'s reference-collection
 /// arm minus the diagnostics, so the two stay in lockstep about
 /// what counts as a reference.
 pub fn collect_expr_refs(expr: &Expr, out: &mut BTreeSet<String>) {
@@ -65,7 +65,7 @@ pub fn collect_expr_refs(expr: &Expr, out: &mut BTreeSet<String>) {
             // arrive as `Expr::Ident`. They are keyword literals,
             // not wire references (every typed evaluator special-
             // cases them), so they must not count as references —
-            // matches `crate::dsl::validate::collect_references`.
+            // matches `crate::validate::collect_references`.
             if name != "true" && name != "false" {
                 out.insert(name.clone());
             }

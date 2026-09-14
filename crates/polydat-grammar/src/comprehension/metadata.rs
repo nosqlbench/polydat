@@ -838,7 +838,7 @@ fn extract_source_refs(source: &Source, out: &mut Vec<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::iteration::comprehension::source::{LiteralValue, Source};
+    use crate::comprehension::source::{LiteralValue, Source};
 
     fn clause(name: &str, vs: &[i64]) -> Comprehension {
         Comprehension::clause(

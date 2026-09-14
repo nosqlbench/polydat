@@ -1553,6 +1553,7 @@ dependencies = [
  "paste",
  "petgraph",
  "polydat-derive",
+ "polydat-grammar",
  "rayon",
  "regex",
  "ryu",
@@ -1573,6 +1574,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "polydat-grammar"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "serde_yaml",
 ]
 
 [[package]]

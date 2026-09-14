@@ -34,6 +34,7 @@
 
 use std::collections::HashMap;
 
+use crate::ast::SlotShape;
 use crate::ast::{PortType, Value};
 use crate::kernel::InputDef;
 
