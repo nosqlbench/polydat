@@ -406,6 +406,14 @@ The unchanged cases (`reading`, `one_hole`) show the pair's drift, about
 5 to 15% slower in the second run; against that, the projection fell
 15% on P3 and 14% on P2.
 
+**Current record** (2026-09-14, the 0.3.0 tree on the Intel machine of the
+performance guide): the table lives in the
+[performance guide](../guides/performance.md) beside the engine ladder.
+Two things changed since the step 3 pair: every node with a kit lowers
+natively, so pure native code runs every case rather than `one_hole`
+alone, and the machine is a different one, so the absolute times are not
+comparable with the tables above.
+
 ## 7. Boundaries
 
 - A tile whose hole is a vector-typed wire, or whose body contains a
