@@ -13,3 +13,6 @@ edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/nosqlbench/polydat"
 homepage = "https://github.com/nosqlbench/polydat"
+
+[profile.release]
+lto = "thin"
