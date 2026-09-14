@@ -1267,9 +1267,21 @@ pub(crate) fn build_hybrid(
 
     // Per node, the step it runs in: its own closure step or its segment.
     let mut node_step = vec![usize::MAX; nodes.len()];
+    // The step order: every compile-constant node first, then the rest
+    // in the graph's order. A constant depends on constants alone, so
+    // hoisting them keeps every dependency ahead of its consumer, and
+    // it keeps the cycle-time nodes contiguous: a literal between two
+    // cycle-time statements no longer cuts a segment in two (the tile
+    // ladder's twenty-hole case ran as dozens of segments that way,
+    // each paying the segment's catch and step bookkeeping).
+    let order: Vec<usize> = (0..nodes.len())
+        .filter(|&k| constant[k])
+        .chain((0..nodes.len()).filter(|&k| !constant[k]))
+        .collect();
     // Batch adjacent JIT-able nodes into segments
-    let mut i = 0;
-    while i < classifications.len() {
+    let mut pos = 0;
+    while pos < order.len() {
+        let i = order[pos];
         if matches!(classifications[i].0, JitOp::Fallback) {
             // This node needs a closure — scalar u64 op preferred,
             // slot op for slice-bearing nodes (§8.4 layer 3).
@@ -1315,7 +1327,7 @@ pub(crate) fn build_hybrid(
                 accepts_none: node.accepts_none_inputs(),
                 node: i,
             }));
-            i += 1;
+            pos += 1;
         } else {
             // Batch consecutive JIT-able nodes of one lifecycle: a segment is
             // folded at build only if every member is compile-constant, so
@@ -1328,23 +1340,25 @@ pub(crate) fn build_hybrid(
             // ran, rather than when its own inputs changed).
             let is_side =
                 |k: usize| matches!(nodes[k].purity(), crate::ast::Purity::SideChannel { .. });
-            let batch_start = i;
-            while i < classifications.len()
-                && !matches!(classifications[i].0, JitOp::Fallback)
-                && constant[i] == constant[batch_start]
-                && volatile[i] == volatile[batch_start]
-                && !is_side(i)
-                && !is_side(batch_start)
+            let batch_start = pos;
+            let first = order[batch_start];
+            while pos < order.len()
+                && !matches!(classifications[order[pos]].0, JitOp::Fallback)
+                && constant[order[pos]] == constant[first]
+                && volatile[order[pos]] == volatile[first]
+                && !is_side(order[pos])
+                && !is_side(first)
             {
-                i += 1;
+                pos += 1;
             }
-            if i == batch_start {
-                i += 1;
+            if pos == batch_start {
+                pos += 1;
             }
+            let members: Vec<usize> = order[batch_start..pos].to_vec();
             // Each step's scratch entries are placed in the kernel's
             // scratch (axiom S3), and its reference outputs recorded
             // for the validator (S9(a)).
-            for k in batch_start..i {
+            for &k in &members {
                 let base = scratch.len();
                 classifications[k].0.place_scratch(base);
                 let elems = classifications[k].0.scratch_elems().to_vec();
@@ -1365,8 +1379,10 @@ pub(crate) fn build_hybrid(
             // may only load, store, and pass. Native code names the
             // member it is in through the tracker slot, for the failure
             // path (A7).
-            let batch: Vec<(JitOp, Vec<usize>, Vec<usize>)> =
-                classifications[batch_start..i].to_vec();
+            let batch: Vec<(JitOp, Vec<usize>, Vec<usize>)> = members
+                .iter()
+                .map(|&k| classifications[k].clone())
+                .collect();
             let written: std::collections::HashSet<usize> = batch
                 .iter()
                 .flat_map(|(_, _, o)| o.iter().copied())
@@ -1385,8 +1401,8 @@ pub(crate) fn build_hybrid(
                 .collect();
             let (code_fn, code) = jit::compile_jit_entry(&batch, Some(total_slots))?;
             let segment = steps.len();
-            for s in &mut node_step[batch_start..i] {
-                *s = segment;
+            for &k in &members {
+                node_step[k] = segment;
             }
             steps.push(HybridStep::Jit(JitSegment {
                 code_fn,
@@ -1394,7 +1410,7 @@ pub(crate) fn build_hybrid(
                 _module: code,
                 input_slots,
                 output_slots,
-                nodes: (batch_start..i).collect(),
+                nodes: members,
             }));
         }
     }
