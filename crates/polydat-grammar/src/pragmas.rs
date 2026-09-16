@@ -27,7 +27,7 @@
 //!
 //! - `strict_types` — auto-insert type assertion nodes on wires
 //!   whose source can't be statically proven to deliver the right
-//!   `PortType`. *Design target* — see SRD 15 §"Strict Wire Mode".
+//!   `PortType`. See SRD 15 §"Strict Wire Mode".
 //! - `strict_values` — auto-insert value assertion nodes on wires
 //!   whose downstream node declares a value constraint the source
 //!   can't satisfy at compile time.
@@ -40,13 +40,13 @@
 //!
 //! ## Scoping (SRD 15 §"Pragma Scope")
 //!
-//! Each Polydat graph or module has its own [`PragmaSet`]. Inner
-//! contexts inherit the outer scope's pragmas automatically — an
-//! enclosing `strict_values` applies to every nested module body
-//! attached to it. On conflict (an inner pragma whose effective
-//! value disagrees with an outer one), the outer scope wins; a
-//! warning is emitted in non-strict compilation, and the conflict
-//! becomes a hard error in `--strict` mode.
+//! Each Polydat program has its own [`PragmaSet`], collected once at
+//! the root by [`collect_from_ast`]. Inner contexts inherit the outer
+//! scope's pragmas: a `for` body compiles under a clone of its
+//! parent's set, so an enclosing `strict_values` applies to every
+//! nested body. [`PragmaSet::attach_to`] and [`PragmaConflict`]
+//! model a parent chain with outer-wins conflict resolution; the
+//! compiler does not use them today.
 
 /// One pragma entry parsed from the source.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,8 +60,9 @@ pub struct Pragma {
 }
 
 /// All pragmas declared in one Polydat scope. Multiple `PragmaSet`s
-/// chain via `PragmaSet::with_parent` to model nested scopes
-/// (workload → phase → `for_each` iteration). Per SRD 13b
+/// chain through their `parent` field, set by
+/// [`PragmaSet::attach_to`], to model nested scopes
+/// (program → `for` body). Per SRD 13b
 /// §"Scope composition" + SRD 15 §"Pragma Scope": each scope is
 /// its own `PragmaSet`, the chain is walked at lookup time, and
 /// outer scopes win on conflict.
@@ -123,7 +124,9 @@ impl PragmaSet {
     ///
     /// Today's pragma vocabulary is presence-only so `args` is
     /// always empty; conflicts are degenerate. The framework is
-    /// in place for future value-bearing pragmas.
+    /// in place for future value-bearing pragmas. The compiler
+    /// does not call this today: a `for` body inherits a clone of
+    /// its parent's set.
     pub fn attach_to(self, outer: std::sync::Arc<PragmaSet>) -> (PragmaSet, Vec<PragmaConflict>) {
         let mut conflicts = Vec::new();
         for entry in &self.entries {

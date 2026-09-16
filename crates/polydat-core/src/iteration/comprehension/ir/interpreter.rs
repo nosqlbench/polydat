@@ -580,10 +580,9 @@ impl TupleStream for OrderMaterializeStream {
 /// - `{name} in [v1, v2, ...]` discrete-set membership.
 /// - Literal `true` / `false`.
 ///
-/// Anything else evaluates to `true` (passes through). A
-/// production interpreter would wire polydat's Polydat expression
-/// evaluator; this Phase 7 evaluator is sufficient for
-/// algebra-layer tests and the §11 worked examples.
+/// Anything else evaluates to `true` (passes through). This
+/// evaluator serves the IR surfaces; the production `runtime`
+/// walker evaluates richer predicates through the scope.
 fn evaluate_predicate(predicate: &str, tuple: &Tuple) -> bool {
     let trimmed = predicate.trim();
     if trimmed.eq_ignore_ascii_case("true") {

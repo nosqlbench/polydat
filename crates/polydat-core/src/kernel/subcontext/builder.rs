@@ -104,7 +104,7 @@ pub struct SubcontextBuilder<P> {
     context: SourceContext,
     /// Names to apply via `mark_inherited_outputs` on the
     /// compiled kernel before its program Arc is shared. Set by
-    /// the legacy-synthesis bridge ([`super::build_kernel_under_parent`])
+    /// `PolydatKernel::build_subscope` from `PolydatMatter`'s `inherited_outputs`
     /// to preserve the pre-SRD-67 ordering of cascade-extern
     /// names; explicit synthesisers that don't need cascade
     /// pass-through leave this empty.
@@ -149,9 +149,8 @@ impl<P> SubcontextBuilder<P> {
     /// names flagged via `mark_inherited_outputs` before its
     /// program Arc is shared.
     ///
-    /// Used by `super::build_kernel_under_parent` to migrate
-    /// `build_do_loop_scope_kernel` and similar synthesisers
-    /// without semantic drift; explicit-import callers leave this
+    /// Set from `PolydatMatter`'s `inherited_outputs` by
+    /// `PolydatKernel::build_subscope`; explicit-import callers leave this
     /// empty.
     pub fn mark_inherited_outputs(&mut self, names: Vec<String>) -> &mut Self {
         self.inherited_outputs = names;
@@ -191,8 +190,7 @@ impl<P> SubcontextBuilder<P> {
 
     /// Register a [`PullConsumer`]. Per SRD-67 §"Decision 7"
     /// this is the single init-time accumulator surface;
-    /// SRD-32's `ScopeFixture::register_consumer` migrates to
-    /// this entry point in Phase 2.
+    /// the surface a host's fixture adapter registers through.
     pub fn register_pull(&mut self, consumer: Arc<dyn PullConsumer>) -> &mut Self {
         self.consumers.push(RegisteredPullConsumer::new(consumer));
         self
@@ -577,14 +575,9 @@ impl<P> SubcontextBuilder<P> {
         // produce a single `PolydatSource(String)` body so this path
         // is the byte-identical replacement.
         //
-        // If a Rule 2 write-through rewrite needs to fire AND
-        // compile-options are set, the caller's source string
-        // would no longer reflect the rewritten AST. None of the
-        // current Phase 3 migration sites combine the two
-        // (for_each / op-template / phase scopes don't collide
-        // with `shared` parent exports). Reject the combination
-        // explicitly so a future caller hits a clear diagnostic
-        // rather than silently dropping the rewrite.
+        // A rewritten AST (a Rule 2 write-through fired) or a
+        // `Statements` body compiles through `compile_ast_with_options`
+        // with the full options, so the two combine freely.
         let dsl_options = DslOptions {
             source_dir: compile_options.workload_dir.clone(),
             lib_paths: compile_options.polydat_lib_paths.clone(),

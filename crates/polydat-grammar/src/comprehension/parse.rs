@@ -283,8 +283,8 @@ pub fn parse_comprehension_text(text: &str) -> Result<Comprehension, String> {
 }
 
 /// Backward-compat shim — call [`Comprehension::validate`]
-/// instead. Kept so external host callers don't
-/// need a same-day update; will be retired once those move.
+/// instead. Kept for external callers; the workspace no longer
+/// calls it.
 #[deprecated(note = "use Comprehension::validate() — single source of truth for AST invariants")]
 pub fn validate_order_for_mode(
     mode: &super::ast_legacy::ComprehensionMode,

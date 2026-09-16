@@ -10,7 +10,8 @@ use sha2::{Digest as Sha2Digest, Sha256 as Sha2_256};
 
 // Bytes travel as native Rust types:
 //   - input  Bytes:  `&[u8]` (borrow, zero-alloc)
-//   - output Bytes:  `Vec<u8>` (owned, becomes Arc<[u8]> via IntoValue)
+//   - output Bytes:  `Vec<u8>` (owned, becomes `Arc<[u8]>` through the
+//     `Wire` impl's `inject`)
 
 #[polydat::polydat_node(category = Digest)]
 fn sha256(input: &[u8]) -> Vec<u8> {

@@ -8,48 +8,42 @@
 //! ```text
 //! PolydatProgram (Arc, immutable, shared across all fibers)
 //! ┌──────────────────────────────────────────────────────────────┐
-//! │  nodes[]         — Box<dyn PolydatNode> in topological order     │
-//! │  wiring[]        — per-node input source tables              │
-//! │  input_names[]   — graph input dimension names ("cycle")     │
-//! │  output_map      — name → (node_idx, port_idx)               │
-//! │  (workload params injected as Polydat constant bindings)          │
-//! │  ports           — external port definitions (captures)      │
+//! │  nodes[]           — Box<dyn PolydatNode> in topological order│
+//! │  wiring[]          — per-node input source tables            │
+//! │  input_defs[]      — coordinates first, then externs          │
+//! │  output_map/list   — name → (node_idx, port_idx), in order   │
+//! │  input_dependents  — per input, the nodes downstream of it   │
+//! │  traversals[]      — the `for` bodies, one program each      │
+//! │  ledger            — the tree's CompileLedger                │
 //! └──────────────────────────────────────────────────────────────┘
 //!
 //! PolydatState (per-fiber, mutable, private — never shared)
 //! ┌──────────────────────────────────────────────────────────────┐
-//! │  inputs[]            — current input values (e.g., [cycle])  │
-//! │  generation          — advances on set_inputs(), used for    │
-//! │                        memoization (skip re-evaluation)      │
-//! │  node_generation[]   — last-evaluated generation per node    │
-//! │  buffers[][]         — per-node output value slots:          │
-//! │    ┌───────────┐                                             │
-//! │    │ node 0    │ [Value, Value, ...]  (one per output port)  │
-//! │    │ node 1    │ [Value]                                     │
-//! │    │ node 2    │ [Value, Value]                              │
-//! │    │ ...       │                                             │
-//! │    └───────────┘                                             │
-//! │  port_values[]       — external port values (captures)        │
-//! │  port_defaults[]     — initial values for ports              │
-//! │  input_scratch[]     — temp buffer for node input gathering  │
+//! │  EngineCore:                                                 │
+//! │    buffers[][]       — per-node output value slots:          │
+//! │      ┌───────────┐                                           │
+//! │      │ node 0    │ [Value, Value, ...]  (one per output port)│
+//! │      │ node 1    │ [Value]                                   │
+//! │      └───────────┘                                           │
+//! │    node_clean[]      — whether a node's buffers are current  │
+//! │    inputs[]          — current input values, coords + externs│
+//! │    input_defaults[]  — what reset restores                   │
+//! │    shared_cells[]    — cell-bound input slots                 │
+//! │    output_cells[]    — cell-bound `shared` outputs            │
+//! │    input_scratch[]   — temp buffer for node input gathering  │
+//! │    node_scratch[]    — per-node memo space                   │
 //! └──────────────────────────────────────────────────────────────┘
 //!
 //! Evaluation:
-//!   1. fiber.set_inputs(&[cycle])  → state.inputs = [cycle],
-//!                                    dirty affected nodes
-//!   2. state.pull(program, "name") → walk topologically, skip nodes
-//!                                    already evaluated this generation,
-//!                                    return &buffers[node][port]
+//!   1. kernel.set_inputs(&[cycle])  → writes the coordinates and
+//!                                     marks their dependents unclean
+//!   2. kernel.pull("name")          → walks the output's cone, skips
+//!                                     clean nodes, returns the buffer
 //!
 //! Workload params:
-//!   Numeric and string workload params are injected into the GK
+//!   Numeric and string workload params are injected into the Polydat
 //!   source as constant bindings before compilation. They resolve
 //!   as normal Polydat outputs — no separate globals mechanism needed.
-//! ```
-//!
-//! Buffer layout in PolydatState:
-//! ```text
-//! coords[0..C) | ports[0..P) | node_buffers[...]
 //! ```
 
 pub mod activation;
@@ -91,7 +85,7 @@ pub enum WireSource {
 
 /// Classification of a named input by its evaluation lifecycle.
 ///
-/// See [evaluation_model.md](../../docs/design/evaluation_model.md) for the lifecycle classification.
+/// See `crates/polydat/docs/design/evaluation_model.md` for the lifecycle classification.
 /// The init-binding contract uses this to decide whether a wire
 /// to an `Input(idx)` is effectively-const at scope-init time:
 /// `IterationExtern` slots count as effectively-const (rebound
@@ -131,11 +125,9 @@ pub struct InputDef {
     /// The declared port type for this input. Used by the assembler
     /// for type checking when wiring nodes to this input.
     pub port_type: crate::ast::PortType,
-    /// Lifecycle classification. Defaults to `Coordinate` so
-    /// existing call sites that construct `InputDef` directly
-    /// (tests, legacy paths) keep their previous semantics.
-    /// The DSL compiler sets this explicitly for iteration
-    /// externs and external-write ports.
+    /// Lifecycle classification. The assembler's coordinate inputs
+    /// are `Coordinate`; the DSL compiler sets `IterationExtern` for
+    /// iteration externs and `ExternalWrite` for `extern` ports.
     pub kind: InputKind,
 }
 

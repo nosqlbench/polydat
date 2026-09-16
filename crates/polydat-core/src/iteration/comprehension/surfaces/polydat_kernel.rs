@@ -11,11 +11,8 @@
 //! primitive for "materialize a fresh per-iteration child of
 //! `parent` based on `canonical` with these bindings."
 //!
-//! This is the load-bearing bridge for the PR 9 migration:
-//! once `KernelScope for PolydatKernelScope` exists, the algebra-
-//! layer `ScopedKernelStream<PolydatKernelScope>` can replace
-//! the legacy `ComprehensionIter` everywhere nb-activity
-//! drives comprehension dispatch.
+//! This bridge lets `ScopedKernelStream<PolydatKernelScope>`
+//! drive per-iteration kernels from the compiled IR.
 
 use std::sync::Arc;
 
@@ -83,12 +80,13 @@ impl KernelScope for PolydatKernelScope {
 /// Convert an algebra-layer [`TupleValue`] to a polydat
 /// [`Value`].
 ///
-/// The algebra layer's `TupleValue::I64` doesn't exist in
-/// polydat's `Value`; integers there are unconditionally
-/// `U64`. We bitcast `i64 as u64` — for the comprehension
-/// use case (iteration coordinates, typically non-negative
-/// integers), this preserves the bit pattern; consumers that
-/// care about signedness should use `as i64` to recover.
+/// `TupleValue::I64` is mapped to `Value::U64` by
+/// bit-reinterpretation (`i64 as u64`) for historical reasons;
+/// `Value::I64` exists and is not mapped back to
+/// `TupleValue::I64`. For the comprehension use case
+/// (iteration coordinates, typically non-negative integers)
+/// this preserves the bit pattern; consumers that care about
+/// signedness should use `as i64` to recover.
 pub fn tuple_value_to_polydat_value(val: &TupleValue) -> Value {
     match val {
         TupleValue::U64(n) => Value::U64(*n),

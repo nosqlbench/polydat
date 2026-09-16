@@ -4,9 +4,13 @@
 //! Phase 3: Cranelift JIT compilation of Polydat Kernels.
 //!
 //! Generates native machine code from the DAG. The entire kernel
-//! becomes a single function: `fn(coords: *const u64, buffer: *mut u64)`.
-//! No closures, no function pointers, no gather/scatter — direct
-//! buffer reads and writes with inlined arithmetic.
+//! becomes a single function over the state's slot buffer and
+//! scratch: `fn(coords: *const u64, buffer: *mut u64, scratch: *mut ScratchBuf)`
+//! (plus a clean-flag pointer on the provenance variant).
+//! Arithmetic is inlined over the buffer; a node with no named
+//! lowering runs its own slot kit through one helper call
+//! (`JitOp::SlotCall`), with the inputs gathered into the native
+//! frame and the outputs scattered back.
 //!
 //! The buffer is `Vec<u64>`. For f64 values, they are stored as their
 //! bit representation (`f64::to_bits()` / `f64::from_bits()`). The JIT
@@ -15,9 +19,10 @@
 //!
 //! Feature-gated behind `jit`.
 //!
-//! For nodes that can't be JIT-compiled inline (hash, shuffle, interleave),
-//! we emit a call to an extern function. Simple ops are fully inlined,
-//! complex ops are extern calls with zero overhead beyond the call itself.
+//! Simple ops are fully inlined (hash is an inline splitmix64); ops
+//! with a body Cranelift cannot express (xxhash3, shuffle, interleave,
+//! the math functions) call an extern helper, and any other node with
+//! a kit calls the kit in place.
 
 #[cfg(feature = "jit")]
 mod codegen;

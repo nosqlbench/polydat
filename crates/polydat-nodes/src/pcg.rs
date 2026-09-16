@@ -48,10 +48,8 @@ pub use polydat::numeric::pcg::{
 /// pseudo-random value suitable for feeding into range reduction,
 /// unit-interval mapping, or distribution sampling.
 ///
-/// JIT level: P2 (auto-emitted `compiled_u64` closure with captured
-/// `seed` and `stream`; the body recomputes `inc = 2*stream + 1`
-/// per call — a single mul+add, negligible vs the seek work).
-/// `jit_constants`: `[seed, stream]` in declaration order.
+/// JIT level: P3 (named JitOp; `jit_constants` `[seed, stream]` in
+/// declaration order).
 #[polydat::polydat_node(category = Permutation)]
 fn pcg(
     input: u64,
@@ -74,8 +72,8 @@ fn pcg(
 /// Use this when the stream identity is data-dependent (e.g., derived
 /// from a partition key) and cannot be fixed at assembly time.
 ///
-/// JIT level: P2 (auto-emitted `compiled_u64` closure with captured
-/// `seed`; `inc` derives from the wire-fed `stream` each call).
+/// JIT level: P3 (named JitOp; `inc` derives from the wire-fed
+/// `stream` each call).
 #[polydat::polydat_node(category = Permutation)]
 fn pcg_stream(input: u64, stream: u64, #[poly_default(0u64)] seed: Const<u64>) -> u64 {
     let inc = 2u64.wrapping_mul(stream).wrapping_add(1);
@@ -120,9 +118,10 @@ fn cycle_walk_jit_constants(node: &CycleWalk) -> Vec<u64> {
 ///
 /// The `range`, `seed`, and `stream` are init-time constants.
 ///
-/// JIT level: P2 — macro-authored via `compiled_u64 = ...` /
-/// `jit_constants = ...` overrides that capture the pre-computed
-/// `CycleWalkState`. Exposes `jit_constants`: `[range, seed, inc]`.
+/// JIT level: P3 (named JitOp consuming `[range, seed, inc]` from
+/// the `jit_constants` override); the `compiled_u64` override
+/// serves the closure tier. Both read the pre-computed
+/// `CycleWalkState`.
 #[polydat::polydat_node(
     category = Permutation,
     compiled_u64 = cycle_walk_jit,
@@ -277,10 +276,9 @@ mod tests {
     #[test]
     fn pcg_jit_constants() {
         // Macro auto-emits jit_constants in declaration order:
-        // [seed, stream]. Phase-3 classifier doesn't special-case
-        // pcg (it rides the Fallback path), so the precise layout
-        // is informational; the contract is "values the closure
-        // depends on", and the body recomputes inc from stream.
+        // [seed, stream]. The Phase-3 classifier reads these
+        // constants for its `pcg` JitOp; the body recomputes inc
+        // from stream.
         let node = Pcg::new(42, 7);
         let consts = node.jit_constants();
         assert_eq!(consts.len(), 2);

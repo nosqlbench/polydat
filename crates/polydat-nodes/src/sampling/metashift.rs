@@ -18,9 +18,10 @@
 //!
 //! The `feedback` polynomial is exposed explicitly as a Const arg so the
 //! macro can auto-emit the JIT-eligible `compiled_u64` / `jit_constants`
-//! hooks (Setup-derived state would disable the macro's auto-JIT
-//! emission, and the override path can't capture per-instance
-//! constants). Callers compute `feedback` via
+//! hooks (Setup-derived state disables the macro's auto-emitted u64
+//! kit; a `compiled_u64 = ...` / `jit_constants = ...` override, as
+//! `cycle_walk` uses, could capture it instead). Callers compute
+//! `feedback` via
 //! [`feedback_for_width_and_bank`] or [`feedback_for_size`].
 
 // -----------------------------------------------------------------

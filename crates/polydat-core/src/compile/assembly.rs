@@ -230,10 +230,9 @@ impl ResolvedDag {
 }
 
 /// Per-port slot layout for compiled kernels
-/// (type_system_alignment.md §8.4 layer 1). Each port occupies
-/// `PortType::slot_width()` consecutive buffer slots; for the
-/// all-scalar kernels that exist today this degenerates exactly
-/// to the historical "one slot per port" layout.
+/// (type_system_alignment.md §6). Each port occupies
+/// `PortType::slot_width()` consecutive buffer slots: an immediate
+/// is one slot; a 128-bit value or a `Ref2` pair is two.
 struct SlotLayout {
     /// Per kernel input: first slot index.
     input_starts: Vec<usize>,
@@ -272,7 +271,8 @@ fn slot_layout(resolved: &ResolvedDag) -> SlotLayout {
 
 /// Compiled-op selection for one node: a copy step inline, then the
 /// pure-scalar `compiled_u64` (cheapest dispatch), then the slot kit
-/// for every other shape (§8.4 layer 3), else `None` → typed-eval
+/// for every other shape (type_system_alignment.md §4,
+/// compiled_handles.md §3), else `None` → typed-eval
 /// fallback. `wire_types` is the type of each wire input.
 fn node_step_op(
     node: &dyn crate::ast::PolydatNode,
@@ -650,7 +650,7 @@ impl PolydatAssembler {
     }
 
     /// Override the engine-mix mode for this compile (SRD-105).
-    /// Unset assemblers defer to the process default.
+    /// Unset means `JitMode::Auto`.
     pub fn set_jit_mode(&mut self, mode: crate::compile::cone::JitMode) {
         self.jit_mode = Some(mode);
     }
@@ -707,7 +707,8 @@ impl PolydatAssembler {
     /// Added after coordinate inputs. Nodes wire to it via
     /// `WireRef::input(name)` — same as coordinate inputs.
     /// `kind` controls the lifecycle classification used by the
-    /// init-binding contract (see [evaluation_model.md](../../docs/design/evaluation_model.md)
+    /// init-binding contract (see
+    /// `crates/polydat/docs/design/evaluation_model.md`
     /// §"Effectively-Const Nodes"): `IterationExtern` for slots
     /// populated by `materialize_wiring_from_outer`, `ExternalWrite` for slots
     /// written by capture extraction.
@@ -864,8 +865,9 @@ impl PolydatAssembler {
 
     /// Validate, resolve, and attempt Phase 2 compilation.
     ///
-    /// Returns `Ok(CompiledKernelPushPull)` if all nodes are u64-only and provide
-    /// `compiled_u64()`. Falls back to `Err(Box<PolydatKernel>)` (a working
+    /// Returns `Ok(CompiledKernelPushPull)` if every node has a compiled
+    /// form (a copy, a `compiled_u64` op, or a slot kit). Falls back to
+    /// `Err(Box<PolydatKernel>)` (a working
     /// Phase 1 kernel; boxed so the happy-path `Result` stays small) if any
     /// node cannot be compiled.
     pub fn try_compile(self) -> Result<CompiledKernelPushPull, Box<PolydatKernel>> {
@@ -1048,9 +1050,7 @@ impl PolydatAssembler {
     }
 
     /// Shared: extract P2 compiled steps + slot layout from resolved DAG.
-    /// Returns None if any node lacks a compiled form. Table-kind
-    /// output slots are assigned value-table entries in node and port
-    /// order (SRD 115 §3, §7).
+    /// Returns None if any node lacks a compiled form.
     fn build_p2_layout(resolved: &ResolvedDag) -> Result<P2Layout, String> {
         let layout = slot_layout(resolved);
 
@@ -2125,36 +2125,6 @@ fn assertion_skip_reason(
     }
 }
 
-/// Return an auto-insert edge adapter for common coercions, if one exists.
-/// Look up an auto-conversion adapter for type pairs (γ-5 / spec
-/// expression_engine.md §5.4). The catalog is intra-graph
-/// today plus the boundary-adapter sites that γ-5 + γ-6
-/// extend it to. Returns `None` for type pairs the catalog
-/// doesn't cover — callers must surface a typed
-/// `TypeMismatch` error in that case.
-/// Intra-graph wire adapter catalog. Consulted by the assembler
-/// during construction to heal mismatched producer/consumer
-/// `PortType` pairs. Strict: only adapters whose `eval` is
-/// total over the input domain (never panics on any valid
-/// runtime value of `from`). Lossy or parseable adapters
-/// belong in [`boundary_adapter`] only.
-/// Nodes whose `&[Value]` variadic inputs take every wire as it is.
-///
-/// The macro types a `&[Value]` port as `Str`, which would put a
-/// to-string adapter on every non-string wire. These nodes inspect the
-/// `Value` variant themselves (formatting, JSON construction, selection,
-/// emission, tile rendering), so the wire is connected untyped and the
-/// value arrives with its own kind: `json_array(cycle)` holds a number,
-/// not the text of one.
-/// The port type of each wire input of a node, from its sources: the
-/// type a compiled lowering sees (SRD 115 §6).
-/// Why a compiled engine refuses this graph on account of a `shared`
-/// binding, if it has one. Only the interpreter state attaches the
-/// cross-fiber cell, commits write-throughs, and advances broadcasts;
-/// on a compiled kernel the binding would be an ordinary input that
-/// nothing publishes, so the graph is refused rather than run with
-/// other semantics (engine_parity.md, A10) until the cell protocol
-/// reaches compiled kernels.
 /// The `shared` bindings of a resolved graph, by name: each is an
 /// extern the compiled kernels bind to a cell (engine parity, step 9).
 pub(crate) fn shared_outputs_of(resolved: &ResolvedDag) -> Vec<&str> {
@@ -2168,6 +2138,8 @@ pub(crate) fn shared_outputs_of(resolved: &ResolvedDag) -> Vec<&str> {
     shared
 }
 
+/// The port type of each wire input of a node, from its sources: the
+/// type a compiled lowering sees (SRD 115 §6).
 pub(crate) fn wire_types_of(resolved: &ResolvedDag, node_idx: usize) -> Vec<PortType> {
     resolved.wiring[node_idx]
         .iter()
@@ -2178,6 +2150,14 @@ pub(crate) fn wire_types_of(resolved: &ResolvedDag, node_idx: usize) -> Vec<Port
         .collect()
 }
 
+/// Nodes whose `&[Value]` variadic inputs take every wire as it is.
+///
+/// The macro types a `&[Value]` port as `Str`, which would put a
+/// to-string adapter on every non-string wire. These nodes inspect the
+/// `Value` variant themselves (formatting, JSON construction, selection,
+/// emission, tile rendering), so the wire is connected untyped and the
+/// value arrives with its own kind: `json_array(cycle)` holds a number,
+/// not the text of one.
 pub(crate) const UNTYPED_VARIADIC_NODES: &[&str] = &[
     "printf",
     "pick",
@@ -2270,7 +2250,7 @@ pub fn auto_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>
         // ── Narrow cranelift widths (u8/i8/u16/i16/f16) ─────────
         // Lossless widenings + Display renders + Bool maps + LE
         // byte / JSON wraps, mirroring the u32/i32/f32 rows.
-        // (type_system_alignment.md §8.1)
+        // (type_system_alignment.md §2)
         (PortType::U8, PortType::U64) => Some(Box::new(N::U8ToU64::new())),
         (PortType::U8, PortType::U32) => Some(Box::new(N::U8ToU32::new())),
         (PortType::U8, PortType::U16) => Some(Box::new(N::U8ToU16::new())),
@@ -2361,7 +2341,7 @@ pub fn auto_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>
         // ── Register views (free bitcasts) ──────────────────────
         // Any reg→reg pair heals with a zero-cost retag — the
         // materialized "views are free bitcasts" rule
-        // (type_system_alignment.md §8.4 layer 2).
+        // (type_system_alignment.md §3).
         (from, to)
             if crate::library::register_view::is_reg_port(from)
                 && crate::library::register_view::is_reg_port(to) =>

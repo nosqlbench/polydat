@@ -7,7 +7,6 @@
 
 use crate::derive_support::PolydatSetup;
 
-/// LCG multiplier for the 64-bit state.
 /// The LCG multiplier of the 64-bit state.
 pub const MULT: u64 = 6364136223846793005;
 

@@ -4,7 +4,7 @@
 //! The port type vocabulary: every type a wire, a port, a cast, or a
 //! declaration can name, with its keyword. What a type means to a
 //! compiled buffer (its slot color, width, and scratch element) is
-//! the runtime's, defined on this type by `polydat`.
+//! the runtime's, defined on this type by `polydat-core`.
 
 use std::fmt;
 
@@ -12,15 +12,15 @@ use std::fmt;
 ///
 /// **Narrow types and runtime storage:**
 ///
-/// `PortType` includes narrow integer and float variants (U32, I32,
-/// I64, F32) that have no corresponding `Value` variant. At runtime,
-/// narrow values are stored inside `Value::U64` (for integers) or
-/// `Value::F64` (for f32), with the assumption that the bits fit:
+/// `PortType` includes narrow integer and float variants (U8/U16/U32,
+/// I8/I16/I32, F16/F32) that have no `Value` of their own. At
+/// runtime, narrow values are stored in the wide `Value` of their
+/// kind, with the assumption that the bits fit:
 ///
-/// - `u32` → zero-extended in `Value::U64`
-/// - `i32` → sign-extended or bit-reinterpreted in `Value::U64`
-/// - `i64` → bit-reinterpreted in `Value::U64`
-/// - `f32` → losslessly widened in `Value::F64`
+/// - unsigned (`u8`, `u16`, `u32`) → zero-extended in `Value::U64`
+/// - signed (`i8`, `i16`, `i32`) → sign-extended in `Value::I64`
+/// - `f32` → losslessly widened in `Value::F64` (`f16` rides
+///   `Value::U64` as its bit pattern; see [`PortType::F16`])
 ///
 /// The narrow `PortType` variants exist for compile-time type
 /// checking and auto-adapter insertion (`U32ToU64`, `F32ToF64`).
@@ -77,7 +77,8 @@ pub enum PortType {
     F16,
     /// 128-bit unsigned integer (cranelift I128, unsigned
     /// interpretation). Real `Value::U128` two-limb carrier — a
-    /// 128-bit value cannot ride a 64-bit slot. Interpreter-only.
+    /// 128-bit value cannot ride a 64-bit slot. Rides two
+    /// consecutive u64 slots (a limb pair) on the compiled engines.
     U128,
     /// 128-bit signed integer (cranelift I128, signed
     /// interpretation). Same carrier story as `U128`.
@@ -242,7 +243,7 @@ impl PortType {
     /// diagnostic rather than silently coercing to a default.
     ///
     /// Used by the DSL `extern <name>: <keyword>` parser
-    /// (`polydat/src/dsl/compile.rs`). Round-trips cleanly with
+    /// (`polydat-core/src/dsl/compile.rs`). Round-trips cleanly with
     /// any source `to_keyword` emits.
     pub fn from_keyword(name: &str) -> Option<Self> {
         match name {
@@ -286,7 +287,7 @@ impl PortType {
 
     /// Workload-author-facing parser for the `{name:<keyword>}`
     /// lvalue-spec surface. Strict subset of [`Self::from_keyword`]
-    /// — `handle`, `ext`, and `none` are rejected because they're
+    /// — `handle` and `ext` are rejected because they're
     /// internal-only types a workload author should never assert.
     ///
     /// Returns `None` for any unrecognized name; the caller

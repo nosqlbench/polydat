@@ -9,9 +9,10 @@
 //! generically dispatch variadic functions.
 //!
 //! Categories are a type-safe enum — every function must declare one.
-//! The `describe wiring functions` command groups by category automatically.
-//! Stdlib modules declare their category via `// @category: Name`
-//! comment syntax.
+//! Categories group the registry for listings (`by_category`). The
+//! stdlib files carry a `// @category: Name` line for readers;
+//! `FuncCategory::parse` maps that text but no compile path consumes
+//! it.
 //!
 //! Signatures are owned by their respective node modules. This file
 //! defines the shared types and the collector function.
@@ -107,7 +108,7 @@ macro_rules! register_nodes {
 /// Functional category for a Polydat node function.
 ///
 /// Every native node and stdlib module belongs to exactly one category.
-/// Categories drive the `describe wiring functions` grouping and provide
+/// Categories group the registry for listings (`by_category`) and provide
 /// semantic organization for documentation and discovery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FuncCategory {
@@ -194,8 +195,9 @@ impl FuncCategory {
         }
     }
 
-    /// Parse a category name from a string (case-insensitive).
-    /// Used for `// @category: Name` syntax in stdlib modules.
+    /// Parse a category name from a string (case-insensitive): the
+    /// text of a stdlib file's `// @category: Name` line. No compile
+    /// path consumes it.
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_lowercase().as_str() {
             "hashing" => Some(Self::Hashing),
@@ -333,8 +335,8 @@ pub enum Arity {
 /// `NodeMeta`. Some — `log_info`, `identity`, anything documented
 /// as "pass-through" — produce an output whose type matches one
 /// of their inputs. Declaring this here makes the contract visible
-/// to the assembler, the build-node dispatch path, `describe wiring
-/// functions`, and any future static analysis, instead of being
+/// to the assembler, the build-node dispatch path, registry
+/// listings, and any future static analysis, instead of being
 /// buried inside an `eval` that silently passes values through a
 /// wire whose declared type lies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -364,7 +366,7 @@ pub struct FuncSig {
     /// Short description for help/error messages.
     pub description: &'static str,
     /// Detailed help text: theory, usage examples, parameter meanings.
-    /// Displayed in the graph editor help panel.
+    /// Long-form help text for listings and documentation.
     pub help: &'static str,
     /// For variadic functions: the identity element for zero inputs.
     pub identity: Option<u64>,

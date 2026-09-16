@@ -447,10 +447,9 @@ extern "C" fn jit_current_epoch_millis() -> u64 {
 //     The extern helpers themselves hold no resources.
 //   - The thread-local buffer is per-thread, so concurrent
 //     kernels on different tokio worker threads don't share
-//     state. Nesting a kernel.eval inside another kernel.eval
-//     on the same thread would clobber the buffer — we don't
-//     do that anywhere today; if it becomes a concern, push a
-//     stack of buffers instead of a single slot.
+//     state. A nested evaluation on the same thread installs
+//     its own buffer and `JmpBufGuard` restores the enclosing
+//     one on every exit path, so the slot behaves as a stack.
 
 /// Platform-independent jmp_buf shim. Allocated oversize (512
 /// bytes, 16-aligned) so the biggest real platform buffer
@@ -540,10 +539,11 @@ impl Drop for JmpBufGuard {
     }
 }
 
-/// Wrapper used by every kernel variant's `eval` to set up the
-/// setjmp sentinel, run the closure (which calls into JIT
-/// code), and translate a longjmp return into a Rust panic
-/// carrying the violation message. The panic happens in Rust
+/// Wrapper the kernels, cones, and hybrid segments run fallible
+/// native code under (code that calls a helper); code with no
+/// helper call runs bare. Sets up the setjmp sentinel, runs the
+/// closure (which calls into JIT code), and translates a longjmp
+/// return into a Rust panic carrying the violation message. The panic happens in Rust
 /// land, so `catch_unwind` catches it normally.
 ///
 /// Both entry/exit paths flow through the [`JmpBufGuard`] so a
@@ -587,7 +587,7 @@ pub(crate) fn invoke_with_catch<F: FnOnce()>(f: F) {
 extern "C" fn jit_is_positive_fail(value: u64, name_ptr: u64, name_len: u64) -> u64 {
     // The pointer targets the `name` const in the node's NodeMeta;
     // the node is kept alive for the life of the compiled code by
-    // `JitCore::_nodes` / the cone node's `_members`, so the str
+    // `JitCore::_nodes` / the cone node's `members`, so the str
     // data is stable. (ptr, len) == (0, 0) means the default name.
     let name = if name_ptr != 0 {
         unsafe {
@@ -1278,7 +1278,7 @@ pub fn classify_node_typed(node: &dyn PolydatNode, wire_types: &[crate::ast::Por
 #[derive(Debug, Clone, PartialEq)]
 pub enum JitOp {
     // --- u64 integer ops ---
-    /// `output[0] = input[0]`  (identity / copy)
+    /// `output[i] = input[i]` for every slot the port spans  (identity / copy)
     Identity,
     /// `output[0] = input[0] + constant`
     AddConst(u64),
@@ -1338,9 +1338,13 @@ pub enum JitOp {
 
     /// Unary f64 math function via extern call. The u8 identifies which function.
     /// 0=sin 1=cos 2=tan 3=asin 4=acos 5=atan 6=sqrt 7=abs 8=ln 9=exp
+    /// 10=floor_base10 11=ceiling_base10 12=closest_base10
+    /// 13=floor_decade 14=ceiling_decade 15=closest_decade
+    /// 16=floor_binomial 17=ceiling_binomial 18=closest_binomial
+    /// 19=floor_fibonacci 20=ceiling_fibonacci 21=closest_fibonacci
     MathUnary(u8),
     /// Binary f64 math function via extern call.
-    /// 0=atan2 1=pow
+    /// 0=atan2 1=pow 2=round_nearest 3=round_floor 4=round_ceiling
     MathBinary(u8),
 
     // --- Two-wire u64 integer ops ---
@@ -1491,7 +1495,7 @@ pub enum JitOp {
         set_len: u64,
     },
 
-    // --- Register-plane ops (§8.4 layer 2: native SIMD) ---
+    // --- Register-plane ops (type_system_alignment.md §3, native tier of §7) ---
     // A register value occupies two consecutive u64 slots; the
     // codegen emits one unaligned 128-bit load/store per value
     // (buffer is only 8-aligned) and a single vector instruction.
@@ -1618,7 +1622,8 @@ pub enum JitOp {
     /// N-of-M selection with constant n and m: (n, m)
     NOfConst(u64, u64),
 
-    /// Fallback: call the Phase 2 closure
+    /// Fallback: no native lowering; the node runs as a closure step
+    /// on the hybrid kernel and stays interpreted otherwise.
     Fallback,
 }
 
@@ -1810,7 +1815,7 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
         "u64_shr" => JitOp::U64Shr,
         "u64_not" => JitOp::U64Not,
 
-        // ── Register plane (§8.4 layer 2) ──────────────────────
+        // ── Register plane (type_system_alignment.md §3, native tier of §7) ──
         "reg_add_i8" => JitOp::RegBinOp(0, 0),
         "reg_sub_i8" => JitOp::RegBinOp(0, 1),
         // `imul.i8x16` has no cranelift lowering (x86 has no
@@ -2190,18 +2195,10 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
                 }
             }
         }
-        // The remaining param helpers stay on the Phase-2
-        // `compiled_u64` closure — by design, not oversight:
-        //   * `required` / `this_or` rely on `Value::None`
-        //     sentinel semantics that don't round-trip through
-        //     the JIT's u64 buffer without tagging.
-        //   * `matches` is regex-backed; the regex object lives
-        //     on the node struct and can't be JIT-inlined.
-        // Runtime-context nodes (`control`, `rate`, `concurrency`,
-        // `phase`, `cycle`) all read from runtime globals /
-        // thread-locals and return f64 or String — values that
-        // don't belong on the JIT happy path. They're correctly
-        // fast at Phase-1/2.
+        // Every other node with a kit (`required`, `this_or`,
+        // `matches`, the context nodes) takes `JitOp::SlotCall` in
+        // `classify_node_typed`; only a node with no kit stays
+        // interpreted.
         _ => JitOp::Fallback,
     }
 }
@@ -2268,9 +2265,9 @@ pub(crate) fn compile_jit_raw_with(
 /// hybrid JIT segments).
 pub(crate) type JitSegmentCode = (NativeFn, super::kernels::JitCode);
 
-/// SRD-105 cone entry: codegen only, no kernel wrapper — the cone
-/// node owns the function pointer and code directly, and the state
-/// evaluating it provides the buffer and the scratch.
+/// An entry with no kernel wrapper: a cone node or a hybrid segment
+/// owns the function pointer and code, and the state evaluating it
+/// provides the buffer and the scratch.
 pub(crate) fn compile_jit_entry(
     steps: &[(JitOp, Vec<usize>, Vec<usize>)],
     tracker: Option<usize>,
@@ -2412,11 +2409,10 @@ fn compile_jit_impl(
 ) -> Result<JitCompiled, String> {
     let mut flag_builder = settings::builder();
     flag_builder.set("opt_level", "speed").unwrap();
-    // Emit DWARF/SEH unwind tables so a panic raised from an
-    // `extern "C-unwind"` helper (e.g. param-helper predicate
-    // failures) can unwind through the JIT frame back to the
-    // Rust caller. Without this Cranelift emits bare frames and
-    // the libstd unwinder aborts on panic.
+    // Unwind tables and frame pointers are kept for debuggers and
+    // profilers walking JIT frames; failures never unwind through
+    // native code, they longjmp past it (see the setjmp section
+    // above).
     flag_builder.set("unwind_info", "true").unwrap();
     flag_builder.set("preserve_frame_pointers", "true").unwrap();
     let isa = super::host_isa::build_host_isa(flag_builder)?;
@@ -4184,7 +4180,7 @@ fn compile_jit_impl(
                 JitOp::BlendConst(mix_bits) => {
                     // The body reinterprets both inputs' bits as f64
                     // and returns the mix's bits (`blend` in
-                    // library/probability.rs); the lowering does the
+                    // polydat-nodes `probability.rs`); the lowering does the
                     // same, not a numeric conversion.
                     let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
                     let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
@@ -4510,7 +4506,7 @@ fn reg_lane_type(lane: u8) -> ir::Type {
 }
 
 /// Load a 128-bit register value from its two consecutive slots
-/// (layer-1 flattening guarantees adjacency). The buffer is only
+/// (an `Imm2` port occupies two consecutive slots, axiom S1). The buffer is only
 /// 8-aligned, so the load must NOT carry the aligned flag —
 /// `MemFlags::new()` permits unaligned 128-bit access.
 fn load_reg128(
@@ -4998,14 +4994,9 @@ mod tests {
         assert_eq!(kernel.get("out"), 100);
     }
 
-    // Violation paths for both predicates abort the process
-    // (see [`jit_is_positive_fail`] for the rationale) and
-    // therefore aren't exercised as in-process unit tests — a
-    // JIT-frame abort tears down the whole test runner rather
-    // than failing a single case. The Phase-1 and Phase-2 paths
-    // in `param_helpers.rs` cover the violation messages via
-    // `#[should_panic]`, which is the right tool for catching
-    // the same logical failure when unwinding is available.
+    // Violation paths longjmp back to `invoke_with_catch` and
+    // surface as ordinary panics; the tests below catch them
+    // in-process.
 
     #[test]
     fn jit_is_one_of_check_passes_allowed_values() {

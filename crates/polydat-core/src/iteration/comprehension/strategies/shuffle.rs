@@ -5,16 +5,13 @@
 //!
 //! Random permutation. PRNG seed captured at materialization
 //! per spec §3.6 — same comprehension instance produces the
-//! same shuffle on every dispense pass. Different
-//! `PolyStreamer` instances against the same comprehension get
-//! independent shuffles (the seed is captured per-streamer per
-//! spec §9.5.2 independence contract).
+//! same shuffle on every dispense pass. Spec §9.5.2's
+//! independence contract has different `CoordinateStream`
+//! instances against the same comprehension get independent
+//! shuffles via a per-streamer seed.
 //!
-//! For the algebra-layer implementation here, the seed is
-//! derived from a stable function of the strategy arguments
-//! (truncation + a default starter constant). When integrated
-//! into the IR interpreter (Phase 7), the seed will be
-//! threaded from the streamer's per-instance state instead.
+//! The seed here is a module constant plus the input length;
+//! per-streamer seeding is not implemented.
 //!
 //! ## References
 //!
@@ -43,9 +40,8 @@ use crate::iteration::comprehension::strategy::StrategyName;
 /// A seeded permutation.
 pub struct Shuffle;
 
-/// Algebra-layer default seed. Production wiring (Phase 7)
-/// replaces this with a per-streamer seed captured at
-/// materialization.
+/// Seed base; the input length is added per call. Per-streamer
+/// seeding is not implemented.
 const DEFAULT_SEED: u64 = 0xD1CE_5EED_C0FF_EE42;
 
 impl Strategy for Shuffle {

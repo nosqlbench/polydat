@@ -3,8 +3,10 @@
 The Polydat runtime: the value model, the graph compiler, the three
 execution engines, the kernels, the comprehension runtime, the node
 macro's support surface, the nodes the compiler synthesizes itself
-(adapters, passthroughs, constants, tile rendering), and the numeric
-bodies the native lowerings share with the node library.
+(adapters, passthroughs, constants, tile rendering) and the runtime's
+own node modules (formatting, JSON, data files, diagnostics, context,
+logging, vector datasets), and the numeric bodies the native lowerings
+share with the node library.
 
 Most programs should depend on [`polydat`](https://crates.io/crates/polydat),
 the facade that re-exports this crate together with the node library

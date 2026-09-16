@@ -54,10 +54,10 @@ pub fn try_referenced_names(text: &str) -> Result<BTreeSet<String>, String> {
 }
 
 /// Walk a parsed [`Expr`], inserting every free name reference
-/// into `out`. The traversal mirrors
-/// `crate::validate::validate_expr`'s reference-collection
-/// arm minus the diagnostics, so the two stay in lockstep about
-/// what counts as a reference.
+/// into `out`. The traversal mirrors the runtime's
+/// `dsl::validate::validate_expr` (in `polydat-core`)
+/// reference-collection arm minus the diagnostics, so the two stay
+/// in lockstep about what counts as a reference.
 pub fn collect_expr_refs(expr: &Expr, out: &mut BTreeSet<String>) {
     match expr {
         Expr::Ident(name, _) => {
@@ -65,7 +65,8 @@ pub fn collect_expr_refs(expr: &Expr, out: &mut BTreeSet<String>) {
             // arrive as `Expr::Ident`. They are keyword literals,
             // not wire references (every typed evaluator special-
             // cases them), so they must not count as references —
-            // matches `crate::validate::collect_references`.
+            // matches the runtime's `dsl::validate::collect_references`
+            // in `polydat-core`.
             if name != "true" && name != "false" {
                 out.insert(name.clone());
             }
@@ -226,7 +227,7 @@ mod tests {
     fn numeric_and_bool_literals_are_not_references() {
         assert!(names("1000").is_empty());
         assert!(names("3.14").is_empty());
-        // `true` / `false` lex as keyword literals, not idents.
+        // `true` / `false` lex as identifiers and are excluded by name.
         assert!(names("true").is_empty());
     }
 

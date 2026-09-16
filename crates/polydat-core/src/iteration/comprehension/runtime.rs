@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Runtime evaluator — walks an algebra [`Comprehension`] AST
-//! against a live parent kernel context to produce typed
-//! coordinate tuples.
+//! against a [`Lookup`] scope (a `PolydatKernel` or a `Layered`
+//! view) to produce typed coordinate tuples.
 //!
 //! ## Why this is separate from the static IR interpreter
 //!
@@ -23,15 +23,16 @@
 //!   workload params.
 //! - **Cartesian is dependent-tuple, not independent.** Clause
 //!   N's spec text may reference iter-vars from clauses
-//!   1..N-1. Per-branch kernels (via
-//!   `PolydatKernel::materialize_subscope`) carry the prior
-//!   values forward so each clause evaluates against the
+//!   1..N-1. Prior-axis values are layered in front of the
+//!   scope (`Layered`) so each clause evaluates against the
 //!   correct context. This is SRD-18b §"Dependent Tuple
 //!   Iteration".
-//! - **Filter predicates evaluate against per-tuple kernels.**
-//!   The predicate text is interpolated against a kernel with
-//!   every tuple value installed, then run through
-//!   `eval_const_expr`.
+//! - **Filter predicates evaluate against per-tuple scopes.**
+//!   Predicates in the comprehension grammar are evaluated
+//!   directly against the tuple with no kernel and no compile;
+//!   anything richer is interpolated against a `Layered` view
+//!   of the scope and evaluated with `eval_const_expr_for`,
+//!   charged to the scope's ledger.
 //!
 //! All three depend on polydat-side primitives that exist
 //! today; this evaluator is the algebra-typed entry point for
@@ -40,8 +41,8 @@
 //! ## What this owns
 //!
 //! [`evaluate_for_iteration`] is the public surface:
-//! `(algebra AST + parent kernel + canonical kernel +
-//! workload params) → Vec<RuntimeTuple>`. The returned tuples
+//! `(algebra AST + scope + workload params + on_empty) →
+//! Vec<RuntimeTuple>`. The returned tuples
 //! carry polydat [`Value`]s ready for per-iteration kernel
 //! construction via [`PolydatKernel::for_iteration`](crate::kernel::PolydatKernel::for_iteration).
 //!
@@ -180,13 +181,11 @@ impl std::fmt::Display for RuntimeError {
 
 impl std::error::Error for RuntimeError {}
 
-/// Evaluate a comprehension against the parent kernel and
-/// produce the typed coordinate-tuple list.
+/// Evaluate a comprehension against a scope and produce the
+/// typed coordinate-tuple list.
 ///
-/// `canonical` is the comprehension scope's kernel program
-/// (used for per-branch `materialize_subscope` calls).
-/// `parent` is the runtime parent — the kernel chain root for
-/// all source evaluation and shadow resolution.
+/// `scope` is where names resolve: the body's kernel with the
+/// parent's cascaded wires (any `Lookup`).
 /// `workload_params` provides the fallback for
 /// `Source::WorkloadParamList` names not yet promoted into
 /// the kernel chain.
@@ -447,10 +446,10 @@ struct EvalState<'a, F> {
     /// `evaluate_spec` already routes through the parent
     /// kernel chain for shadow-aware resolution (SRD-21),
     /// so this is unused at the runtime evaluator level —
-    /// kept on the surface for symmetry with the legacy
-    /// `iterate_scope` signature in case some future
-    /// `Source` variant needs param-aware evaluation that
-    /// can't go through the kernel.
+    /// kept on the surface for callers that pass workload
+    /// params, in case some future `Source` variant needs
+    /// param-aware evaluation that can't go through the
+    /// kernel.
     #[allow(dead_code)]
     workload_params: &'a HashMap<String, String>,
     on_empty: F,
@@ -1021,8 +1020,8 @@ mod tests {
 
     /// Canonical kernel with `extern k: u64` so the runtime
     /// evaluator can install per-clause `k` values via
-    /// materialize_subscope — matches the shape
-    /// `build_for_each_scope_kernel` produces in production.
+    /// materialize_subscope — the shape the traversal lowering
+    /// produces.
     fn canonical_with_k() -> Arc<PolydatKernel> {
         Arc::new(crate::dsl::compile_polydat("extern k: u64\n").unwrap())
     }

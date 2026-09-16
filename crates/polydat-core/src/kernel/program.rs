@@ -12,7 +12,7 @@ use crate::ast::{PolydatNode, Value};
 use crate::dsl::ast::{PolydatFile, Statement};
 
 /// Evaluation lifecycle classification used by the init-binding
-/// contract (see [evaluation_model.md](../../docs/design/evaluation_model.md)).
+/// contract (see `crates/polydat/docs/design/evaluation_model.md`).
 ///
 /// The variants are *ordered* — `Dynamic > ScopeInit > CompileConst`
 /// — so propagation along wires is a `max()` operation: a node's
@@ -345,8 +345,8 @@ pub struct PolydatProgram {
     ///
     /// Carried on the program — not just on the kernel — so any
     /// kernel built from this program automatically inherits the
-    /// bindings. Without this, the per-fiber rebuild path
-    /// (`bind_program_under_parent` from a cached program) would
+    /// bindings. Without this, a kernel created from the cached
+    /// program (`from_program` / `create_kernel`) would
     /// produce a kernel with empty write-throughs and the
     /// per-cycle commit would silently no-op.
     pub(crate) write_throughs: Vec<crate::kernel::KernelWriteThrough>,
@@ -740,41 +740,6 @@ impl PolydatProgram {
         deps
     }
 
-    /// THE node-inventory walker — the ONE forward pass over the
-    /// wire graph that computes every per-node reachability
-    /// attribute the program carries:
-    ///
-    /// - **input provenance** — which inputs transitively feed
-    ///   each node, as an exact multi-word [`ProvMask`] (the
-    ///   one-word ≥63 saturation this replaces aliased every
-    ///   high input into bit 63 — conservative for engine
-    ///   invalidation, but lossy for SRD-107's consumed-params
-    ///   projection on many-param workload roots);
-    /// - **nondeterminism contagion** — nullary or
-    ///   `Purity::Nondeterministic` nodes and everything
-    ///   downstream of them (per R1.v's intrinsic-volatility
-    ///   carve-out; consumers of a volatile producer must not
-    ///   retain stale cached values across cycles);
-    /// - **side-channel contagion** — nodes whose dependency
-    ///   cone contains a `Purity::SideChannel` node (`log_*`,
-    ///   diagnostics), so the per-cycle fire-side-effects pass
-    ///   knows which outputs to pull.
-    ///
-    /// Every other consumer — engine invalidation
-    /// (`compute_dependents` → `input_dependents`, and the JIT's
-    /// slot provenance derived from it), `extern_closure`,
-    /// `cone_has_side_channel`, the two state constructors — is
-    /// a PROJECTION of this inventory. Do not add another
-    /// traversal over `wiring` for a per-node attribute; add a
-    /// field here. (The engine cone guards — JIT and closure
-    /// kernels' slot provenance / changed masks — carry the same
-    /// multi-word [`ProvMask`] shape host-side; the generated
-    /// machine code never sees a mask.)
-    ///
-    /// Fixpoint iteration (not a single topo pass) so the
-    /// inventory is correct regardless of node ordering; the
-    /// graphs are DAGs, so it converges in at most graph-depth
-    /// rounds and in practice two.
     /// Thin projection for callers that need only the provenance
     /// masks (assembly/select/hybrid feed them straight into
     /// [`Self::compute_dependents`]). Same ONE walker underneath.
@@ -872,6 +837,41 @@ impl PolydatProgram {
         }
     }
 
+    /// THE node-inventory walker — the ONE forward pass over the
+    /// wire graph that computes every per-node reachability
+    /// attribute the program carries:
+    ///
+    /// - **input provenance** — which inputs transitively feed
+    ///   each node, as an exact multi-word [`ProvMask`] (the
+    ///   one-word ≥63 saturation this replaces aliased every
+    ///   high input into bit 63 — conservative for engine
+    ///   invalidation, but lossy for SRD-107's consumed-params
+    ///   projection on many-param workload roots);
+    /// - **nondeterminism contagion** — nullary or
+    ///   `Purity::Nondeterministic` nodes and everything
+    ///   downstream of them (per R1.v's intrinsic-volatility
+    ///   carve-out; consumers of a volatile producer must not
+    ///   retain stale cached values across cycles);
+    /// - **side-channel contagion** — nodes whose dependency
+    ///   cone contains a `Purity::SideChannel` node (`log_*`,
+    ///   diagnostics), so the per-cycle fire-side-effects pass
+    ///   knows which outputs to pull.
+    ///
+    /// Every other consumer — engine invalidation
+    /// (`compute_dependents` → `input_dependents`, and the JIT's
+    /// slot provenance derived from it), `extern_closure`,
+    /// `cone_has_side_channel`, the two state constructors — is
+    /// a PROJECTION of this inventory. Do not add another
+    /// traversal over `wiring` for a per-node attribute; add a
+    /// field here. (The engine cone guards — JIT and closure
+    /// kernels' slot provenance / changed masks — carry the same
+    /// multi-word [`ProvMask`] shape host-side; the generated
+    /// machine code never sees a mask.)
+    ///
+    /// Fixpoint iteration (not a single topo pass) so the
+    /// inventory is correct regardless of node ordering; the
+    /// graphs are DAGs, so it converges in at most graph-depth
+    /// rounds and in practice two.
     pub(crate) fn compute_node_inventory(
         nodes: &[Box<dyn PolydatNode>],
         wiring: &[Vec<WireSource>],
@@ -1081,9 +1081,6 @@ impl PolydatProgram {
         self.input_defs.get(idx).map(|d| d.port_type)
     }
 
-    /// Lookup the declared name of an input by index. Used by
-    /// the typed-write API to render diagnostic messages
-    /// referencing the slot the caller addressed.
     /// The declared default for input `idx` — the wire's initial
     /// element. The capture layer's reset semantics (an empty
     /// min/max fold restores the wire to its author-declared
@@ -1248,48 +1245,6 @@ impl PolydatProgram {
         true
     }
 
-    /// Canonical content-addressable hash of this program.
-    ///
-    /// SHA-256 over a deterministic byte sequence describing
-    /// every node's kind + constant slots, every wiring edge,
-    /// and the named input / output declarations. Stable
-    /// across compilations of equivalent input — two programs
-    /// produced from identical source + identical workload-
-    /// scope state hash to the same value, and a change that
-    /// affects what the program actually computes (a renamed
-    /// output, a new node, a const-slot value change, a
-    /// re-routed wire) shifts the hash.
-    ///
-    /// Used by checkpointing (SRD-44 §"Why hash the compiled
-    /// program, not the YAML body") for per-phase identity:
-    /// the resume planner skips a phase only when the saved
-    /// hash matches the freshly-compiled program's hash, so a
-    /// `{dataset}` change that ripples into a phase's
-    /// compiled form correctly invalidates that phase's
-    /// saved status, while phases whose programs are
-    /// unaffected stay skip-eligible.
-    ///
-    /// ## Determinism contract
-    ///
-    /// - Outputs are emitted in alphabetical order (not the
-    ///   compiler's declaration order, which can shuffle
-    ///   slightly across compilation passes).
-    /// - For each output, the producing node and its
-    ///   transitive input chain are walked in deterministic
-    ///   order — wire-source list iterated in port-position
-    ///   order, recursion uses the producer's stable
-    ///   (already-canonical) hash as the wire reference.
-    /// - Const slots are iterated in `NodeMeta.ins` order,
-    ///   which is the DSL-declared positional order and is
-    ///   compiler-invariant.
-    /// - `Input(idx)` wires are translated to the input's
-    ///   *name* (stable across runs) rather than its index
-    ///   (a compile-time positional choice).
-    /// - Floating-point constants hash via their bit
-    ///   representation, so 0.0 vs -0.0 hash differently and
-    ///   NaNs are distinguishable from each other only by
-    ///   their bit pattern (rare but consistent).
-    ///
     /// Aggregate identity over this program **plus** an outer
     /// chain of ancestor programs (innermost first; the
     /// workload-root program is last). The result is a
@@ -1419,8 +1374,47 @@ impl PolydatProgram {
         unresolved.into_iter().collect()
     }
 
-    /// A SHA-256 over the program's structure: the nodes, their wiring,
-    /// inputs, and outputs, as a stable identity for caching.
+    /// Canonical content-addressable hash of this program.
+    ///
+    /// SHA-256 over a deterministic byte sequence describing
+    /// every node's kind + constant slots, every wiring edge,
+    /// and the named input / output declarations. Stable
+    /// across compilations of equivalent input — two programs
+    /// produced from identical source + identical workload-
+    /// scope state hash to the same value, and a change that
+    /// affects what the program actually computes (a renamed
+    /// output, a new node, a const-slot value change, a
+    /// re-routed wire) shifts the hash.
+    ///
+    /// Used by checkpointing (SRD-44 §"Why hash the compiled
+    /// program, not the YAML body") for per-phase identity:
+    /// the resume planner skips a phase only when the saved
+    /// hash matches the freshly-compiled program's hash, so a
+    /// `{dataset}` change that ripples into a phase's
+    /// compiled form correctly invalidates that phase's
+    /// saved status, while phases whose programs are
+    /// unaffected stay skip-eligible.
+    ///
+    /// ## Determinism contract
+    ///
+    /// - Outputs are emitted in alphabetical order (not the
+    ///   compiler's declaration order, which can shuffle
+    ///   slightly across compilation passes).
+    /// - For each output, the producing node and its
+    ///   transitive input chain are walked in deterministic
+    ///   order — wire-source list iterated in port-position
+    ///   order, recursion uses the producer's stable
+    ///   (already-canonical) hash as the wire reference.
+    /// - Const slots are iterated in `NodeMeta.ins` order,
+    ///   which is the DSL-declared positional order and is
+    ///   compiler-invariant.
+    /// - `Input(idx)` wires are translated to the input's
+    ///   *name* (stable across runs) rather than its index
+    ///   (a compile-time positional choice).
+    /// - Floating-point constants hash via their bit
+    ///   representation, so 0.0 vs -0.0 hash differently and
+    ///   NaNs are distinguishable from each other only by
+    ///   their bit pattern (rare but consistent).
     pub fn canonical_hash(&self) -> [u8; 32] {
         use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
@@ -1747,12 +1741,6 @@ impl PolydatProgram {
         self.node_compile_level(self.nodes.len() - 1)
     }
 
-    /// Fold init-time constant nodes.
-    ///
-    /// Returns `Err` only when the init-binding contract (SRD 11
-    /// §"Init Binding Contract" Plan A) is violated; non-fatal
-    /// warnings (config-wire / non-determinism / implicit coercion)
-    /// continue to be log-emitted and don't surface here.
     /// True when no node declares `Purity::Nondeterministic`: the
     /// program's outputs are a pure function of its inputs, so two
     /// kernels compiled from the same source produce bit-identical

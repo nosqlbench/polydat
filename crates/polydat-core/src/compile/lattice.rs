@@ -6,13 +6,14 @@
 //! Walks a compiled program and reports its engine mix: which
 //! cones formed (members, boundary shape), which nodes stayed on
 //! the interpreter, and the lattice headroom per node — P3
-//! classifiability and P2 (`compiled_u64`) capability. The
-//! headroom column is the standing evidence feed for the parked
-//! "P2 closures at cone boundaries" extension (SRD-105 §Rejected
-//! alternatives addendum): nodes that are u64-capable but not
-//! JIT-classifiable currently run P1 dyn dispatch.
+//! classifiability and whether the node carries a `compiled_u64`
+//! op, the cheapest P2 form (a node with a slot kit runs on P2
+//! too). The headroom column is the standing evidence feed for the
+//! parked "P2 closures at cone boundaries" extension (SRD-105
+//! §Rejected alternatives addendum): nodes that are u64-capable but
+//! not JIT-classifiable currently run P1 dyn dispatch.
 //!
-//! Rendered by `nbrs bench wiring <expr> --cones`.
+//! Used by the cone-formation tests (`tests/core_with_library.rs`).
 
 use crate::kernel::PolydatProgram;
 
@@ -35,8 +36,9 @@ pub struct ResidueEntry {
     /// The P3 classifier can lower this node (it stayed unfused
     /// for lifecycle / threshold / boundary reasons).
     pub p3_classifiable: bool,
-    /// The node carries a `compiled_u64` closure — the P2 middle
-    /// rung could run it even though P3 can't.
+    /// The node carries a `compiled_u64` op, the cheapest P2 form,
+    /// so the P2 middle rung could run it even though P3 can't. A
+    /// node with a slot kit runs on P2 too but is not counted here.
     pub p2_capable: bool,
 }
 
@@ -48,8 +50,9 @@ pub struct LatticeReport {
     pub fused_nodes: usize,
     /// The nodes left on the interpreter, in program order.
     pub residue: Vec<ResidueEntry>,
-    /// Residue nodes with a P2 closure but no P3 classification —
-    /// the "P2 closures at cone boundaries" candidate set.
+    /// Residue nodes with a `compiled_u64` op but no P3
+    /// classification — the "P2 closures at cone boundaries"
+    /// candidate set.
     pub p2_headroom: usize,
     /// Residue nodes the P3 classifier CAN lower that still ended
     /// up interpreted (const/scope-init lifecycle, threshold,

@@ -16,8 +16,8 @@
 //!   (any nonzero → first arg, zero → second). Used to desugar
 //!   `if(cond, a, b)` once the compiler knows the result type.
 //!   Both branches always evaluate — no short-circuit. JIT level:
-//!   P2 (compiled closure; could become a P3 conditional select
-//!   in a future pass).
+//!   P3 (`JitOp::SelectU64` / `SelectF64`, a native conditional
+//!   select).
 //!
 //! Output of every comparison node is u64 so downstream code can
 //! mix them with bitwise operators (`a < b & c < d`) without
@@ -105,8 +105,9 @@ fn select_u64(cond: u64, a: u64, b: u64) -> u64 {
 // String comparisons
 // ---------------------------------------------------------------------------
 //
-// Strings live on the heap; the compiled-u64 fast path can't carry
-// them in raw u64 buffers, so these are eval-only. The DSL desugar
+// Strings ride (ptr, len) pairs: these nodes have no inline lowering
+// and run through their slot kit, called from native code on P3.
+// The DSL desugar
 // in `binding.rs` picks `str_eq` / `str_ne` over the u64 / f64
 // variants when either operand has `PortType::Str`.
 

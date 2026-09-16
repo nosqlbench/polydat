@@ -79,8 +79,8 @@ impl HoleEncoding {
         )
     }
 
-    /// The encoding for a spec, interned for the process (SRD 115 §6)
-    /// so the compiled lowering of `tile_encode` can bake its address.
+    /// The encoding for a spec, interned for the process so the same
+    /// spec parses once.
     pub fn interned(spec: &str) -> &'static HoleEncoding {
         use std::sync::RwLock;
         static ENCODINGS: RwLock<Option<HashMap<String, &'static HoleEncoding>>> =
@@ -502,8 +502,7 @@ impl TileProgram {
         leaked
     }
 
-    /// True when any op re-runs a projection body: such a skeleton
-    /// stays on P1 until projection bodies activate as `for` bodies do.
+    /// True when any op re-runs a projection body.
     pub fn has_projections(&self) -> bool {
         fn walk(ops: &[RtOp]) -> bool {
             ops.iter().any(|op| match op {
@@ -1032,9 +1031,9 @@ pub(crate) mod render_state {
     }
 }
 
-/// A text sink that cannot fail: a `String`, or the cycle arena writer
-/// in a compiled helper. `fmt::Write`'s results are ignored because
-/// neither sink reports an error.
+/// A text sink that cannot fail: a `String`, or the `BytesSink` over a
+/// step's string scratch in the compiled closure. `fmt::Write`'s
+/// results are ignored because neither sink reports an error.
 pub(crate) trait Sink: std::fmt::Write {
     fn put(&mut self, s: &str) {
         let _ = self.write_str(s);
@@ -1052,8 +1051,8 @@ pub fn encode<W: std::fmt::Write>(value: &Value, enc: &HoleEncoding, out: &mut W
 }
 
 /// Encode a borrowed view of a value (SRD 115 §6.1): the compiled
-/// helper calls this on its slot without owning a `Value`, and a
-/// string hole is encoded from the arena in place.
+/// closure calls this on its slot without owning a `Value`, and a
+/// string hole is encoded from its producer's scratch in place.
 pub fn encode_ref<W: std::fmt::Write>(value: ValueRef<'_>, enc: &HoleEncoding, out: &mut W) {
     if enc.cond {
         out.put_char(if truthy_of(value) { '1' } else { '0' });
@@ -1296,8 +1295,9 @@ fn tile_encode(
 
 /// The closure-tier form of `tile_render` (SRD 117 step 1): every hole
 /// value is read from its slot as a borrowed view, by the wire type the
-/// kernel fixed, and the document is rendered straight into the cycle
-/// arena; nothing is decoded into an owned `Value` on the way. A wire
+/// kernel fixed, and the document is rendered straight into the step's
+/// own string scratch through a `BytesSink`; nothing is decoded into
+/// an owned `Value` on the way. A wire
 /// wider than one slot, or of a kind without a view, is read as a value
 /// through the typed decoder.
 fn tile_render_compiled(node: &TileRender, wire_types: &[PortType]) -> crate::ast::CompiledSlotKit {

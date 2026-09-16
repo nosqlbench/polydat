@@ -47,7 +47,7 @@ fn seed_shared_cells(state: &mut PolydatState, program: &PolydatProgram) {
 /// γ-5 boundary-adapter helper: when the outer-scope binding's
 /// runtime value type doesn't match the inner kernel's
 /// declared slot type, consult the catalog
-/// (`compile::assembly::auto_adapter`) and apply the adapter
+/// (`compile::assembly::boundary_adapter`) and apply the adapter
 /// if one exists. Returns the (possibly adapted) value to set
 /// in the slot.
 ///
@@ -312,7 +312,7 @@ impl PolydatKernel {
     /// Returns `Err` for init-binding contract violations (SRD 11
     /// §"Init Binding Contract" Plan A); these are always fatal
     /// regardless of strict mode.
-    // Twelve parameters describe one thing — a compiled program
+    // Thirteen parameters describe one thing — a compiled program
     // definition. A params struct is the right end state, but it
     // belongs to the construction-protocol reshape (SRD-13e
     // scope-as-module territory), not lint cleanup — this fn is
@@ -504,8 +504,8 @@ impl PolydatKernel {
     /// attached to the parent's `SharedCell` at
     /// `materialize_wiring_from_outer` time, the write fans through.
     ///
-    /// The bridge (`build_kernel_under_parent_full`) sets these
-    /// in one shot at construction; per-cycle code never mutates
+    /// `SubcontextBuilder::finalize` bakes these onto the program and
+    /// `from_program` seeds them on every kernel built from it; per-cycle code never mutates
     /// them.
     // Used only by the SRD-67 subcontext tests today — the
     // production path auto-seeds write-throughs in
@@ -906,28 +906,6 @@ impl PolydatKernel {
         None
     }
 
-    /// Bind this kernel's extern inputs from an outer scope kernel.
-    ///
-    /// For each output in the outer kernel that matches an input
-    /// name in this kernel:
-    /// - If outer has a `SharedCell` attached to its
-    ///   matching input slot (set up at outer's construction
-    ///   for `shared`-modifier outputs that have a backing
-    ///   input slot — see SRD-16 §"Mutability Rules: Shared
-    ///   Mutable"), share that cell with this kernel's slot.
-    ///   Both sides' `set_input` calls write through the cell;
-    ///   `refresh_shared` syncs reads from it.
-    /// - Otherwise, copy outer's current value into this
-    ///   kernel's input slot via [`Self::lookup`] (one-way at
-    ///   bind time, no live link).
-    ///
-    /// Outer is `&self` — cells are created at outer's
-    /// construction time, so no mutation of outer is needed at
-    /// bind time. Many concurrent inners can share the same
-    /// outer-owned cell.
-    ///
-    /// Call this after construction, before moving the kernel
-    /// into an `OpBuilder`.
     /// Materialize a sub-scope kernel under this kernel as
     /// parent. THE single primitive for parent → child kernel
     /// construction with cell propagation.
@@ -952,7 +930,7 @@ impl PolydatKernel {
     ///
     /// `materialize_wiring_from_outer` is private to this impl block, so
     /// a caller cannot bypass the typed primitive; the compile-fail
-    /// case `tests/ui/seal/materialize_wiring_is_private.rs` holds
+    /// case `crates/polydat/tests/ui/seal/materialize_wiring_is_private.rs` holds
     /// that at the compiler.
     pub(crate) fn materialize_subscope(
         &self,
@@ -974,8 +952,8 @@ impl PolydatKernel {
     /// transit cells). The cell handles are Arc-shared; the
     /// returned kernel reads/writes the same cells as `self`.
     ///
-    /// Used by the typed-builder bridge
-    /// (`build_kernel_under_parent_full`) when it needs an
+    /// Used by `build_subscope`'s transient typed parent
+    /// (`transient_typed_parent`) when it needs an
     /// `Arc<ScopeKernel<RootMarker>>` standing in for a borrowed
     /// `&PolydatKernel` — the wrapping must reflect the LIVE parent's
     /// cell view, not just its program shape, otherwise Rule 2
@@ -1022,8 +1000,8 @@ impl PolydatKernel {
     /// transit-forward for cells with no matching local slot.
     ///
     /// Private; the only sanctioned construction path is
-    /// `build_subscope` (which calls `materialize_subscope` /
-    /// `adopt_subscope` internally). External callers don't see
+    /// `build_subscope` (which calls `materialize_subscope`
+    /// internally). External callers don't see
     /// this operation directly.
     fn materialize_wiring_from_outer(&mut self, outer: &PolydatKernel) {
         // Step 1 — typed shared-cell cascade. Compute every

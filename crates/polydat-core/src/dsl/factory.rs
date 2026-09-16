@@ -81,16 +81,6 @@ impl ConstArg {
     }
 }
 
-/// Build a node from a function name and its arguments.
-///
-/// `wires` are the cycle-time wire inputs.
-/// `consts` are the assembly-time constant arguments.
-///
-/// Dispatch order:
-/// 1. Per-module `build_node` functions (one per node module)
-/// 2. Sampling functions not covered by a node module
-/// 3. Registry variadic fallback
-///
 /// Source-binding attribution, set by the compiler before each
 /// `build_node` call and read by factories that want to record
 /// which DSL binding caused the node to exist. The
@@ -133,6 +123,10 @@ pub mod compile_ctx {
 /// Build the node `func` takes for the given wires, their types, and
 /// constant arguments, through the registry; an unknown function or a
 /// mismatched signature is an error naming it.
+///
+/// Dispatch order: inventory registrations (constraint checks, then
+/// the module validator, then `build`), then the registry's variadic
+/// fallback.
 pub fn build_node(
     func: &str,
     wires: &[WireRef],

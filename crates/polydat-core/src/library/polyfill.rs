@@ -21,8 +21,8 @@
 //!   `Str→Json` and shape-validating parses elsewhere.
 //! - Vec↔{Str, Bytes, Json} serdes; `VecF32↔VecI32` casts.
 //!
-//! See `polydat/src/compile/assembly.rs::auto_adapter` and
-//! `::boundary_adapter` for catalog registration. The split is
+//! See `compile::assembly::auto_adapter` / `boundary_adapter` for
+//! catalog registration. The split is
 //! by failure mode: anything that can panic on input the
 //! assembler couldn't verify (range, parse, shape) lives in
 //! `boundary_adapter` only; lossless widenings live in both

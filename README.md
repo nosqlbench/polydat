@@ -152,7 +152,8 @@ Three engines share one semantic model:
 - **P1** is the typed interpreter. It supports the complete value and node
   model and is the semantic host and fallback for everything else.
 - **P2** compiles nodes to closures over flat slots. It is used for testing,
-  equivalence work, and specialized callers.
+  equivalence work, and specialized callers, and is the default engine of a
+  build without `jit`.
 - **P3** lowers eligible graph cones through Cranelift to host-native machine
   code.
 
@@ -192,7 +193,7 @@ and node library rather than being only a collection of random generators.
 | Iteration | Data-source factories, ranges and extending sources, cursor partitioning, typed projections, and structural comprehensions over Cartesian, zip, union, filter, and order forms. |
 | Function library | Numeric and bitwise operations, hashes and digests, probability and sampling, strings and formatting, JSON, bytes and encodings, datetime, noise, interpolation, vector math, assertions, data files, and context-aware nodes. |
 | Extensibility | `#[polydat_node]` derives node metadata and adapters from typed Rust functions and registers nodes through link-time inventory. Host applications can also provide reflected values, handles, resources, and logging bridges. |
-| Inspection | Compiler events, program manifests, source-aware errors, graph round-trip checks, and DOT/Mermaid visualization. |
+| Inspection | Compiler events, program manifests, source-aware errors, graph round-trip checks, and DOT, Mermaid, and SVG visualization. |
 
 The compiler also embeds reusable `.polydat` modules for hashing, strings,
 distributions, latency, time series, waves, Fourier helpers, and modeling.
@@ -225,17 +226,18 @@ allowed to run.
 ## Execution engines
 
 Polydat uses static wire types, node signatures, lifecycle metadata, and purity
-contracts to determine which graph regions can run as native code. The normal
-production form is an interpreter-hosted mixed kernel:
+contracts to determine which graph regions can run as native code. The kernel a
+host gets by default is the native engine:
 
+- Native code runs where a node has a lowering, and the node's closure runs
+  elsewhere, over one slot buffer. Native eligibility is an optimization
+  decision, not a requirement for a valid graph.
 - P1 owns the complete semantic graph and supports the full value and node
-  model.
-- With the default `jit` feature and `JitMode::Auto`, eligible dynamic cones can
-  be compiled as embedded P3 Cranelift segments containing native machine code.
-- Unsupported nodes and boundary types stay in the interpreter; JIT eligibility
-  is an optimization decision, not a requirement for a valid graph.
-- P2 closure kernels and whole-kernel P3 variants remain available for testing,
-  equivalence work, and specialized callers.
+  model. The interpreter, with native cones per `JitMode`, is a choice
+  (`Engine::Interpreter`, `--engine interpreter --cones`) and the oracle the
+  compiled engines are checked against.
+- P2 closure kernels are the default of a build without `jit` and remain
+  available for testing, equivalence work, and specialized callers.
 - Provenance-aware pull guards and push-side invalidation avoid recomputing
   unaffected graph regions.
 
@@ -368,7 +370,7 @@ disable default features do not pull in its dependencies.
 | `cli` | yes | The `polydat` command-line harness. |
 | `vectordata` | no | Vector-dataset access nodes for ML/AI-oriented workloads. |
 
-For an interpreter-capable library build without Cranelift or the binary:
+For an interpreter-and-closures library build without Cranelift or the binary:
 
 ```toml
 [dependencies]
@@ -384,7 +386,7 @@ This repository contains five Rust 2024 crates:
   (`polydat::dsl`, `polydat::compile`, `polydat::library`, …) and holds
   the binary, the tests, the benches, the examples, and the docs.
 - [`polydat-grammar`](crates/polydat-grammar) — the language without the
-  runtime: lexer, parser, AST and projector, the comprehension
+  runtime: lexer, parser, AST and pretty-printer, the comprehension
   sub-language and its algebra, the tile template parsers, the AST
   visualizer, and the port type vocabulary. A tool that only reads or
   prints Polydat source links this crate alone.

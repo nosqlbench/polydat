@@ -54,26 +54,26 @@ pub mod sobol;
 /// `Hybrid`).
 ///
 /// `MultiIndex` is the indexed-form output type. The R2 IR
-/// opcode emitted by the optimizer consumes these and resolves
+/// opcode emitted by the IR compiler consumes these and resolves
 /// each through the input's `IndexFn` to dispense the actual
 /// tuple.
 pub type MultiIndex = Vec<u64>;
 
-/// A named-tuple value. Subset of the polydat `Value` set
-/// sufficient for naïve-form strategy testing; the production
-/// strategy layer will operate on the full polydat `Value` type
-/// via the IR interpreter (Phase 7). For the strategy module
-/// in isolation, this lightweight type lets tests run without
-/// pulling in the broader runtime.
+/// A named-tuple value. Subset of the polydat `Value` set that
+/// is the strategy layer's currency; the runtime walker
+/// converts `Value`s to it before `apply` and maps results
+/// back. For the strategy module in isolation, this
+/// lightweight type lets tests run without pulling in the
+/// broader runtime.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tuple {
     /// The tuple's `(name, value)` pairs, in shape order.
     pub bindings: Vec<(String, TupleValue)>,
 }
 
-/// Subset of polydat's `Value` enum used by strategy tests.
-/// Production-side `naive_apply` will wrap polydat's full
-/// `Value`; this type is the algebraic-layer testing currency.
+/// Subset of polydat's `Value` enum. `TupleValue` is the
+/// strategy layer's currency; the runtime walker converts
+/// `Value`s to it before `apply` and maps results back.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TupleValue {
     /// An unsigned integer.
@@ -133,10 +133,9 @@ pub struct EvaluatedInput {
 ///
 /// Implementations are stateless — every call to [`apply`](Strategy::apply)
 /// produces the same output given the same inputs
-/// (deterministic). PRNG-based strategies (`Shuffle`) take
-/// their seed from the truncation companion — the seed is
-/// captured at the `Comprehension::Order { strategy, truncation }`
-/// level by the runtime, not by the strategy itself.
+/// (deterministic). PRNG-based strategies (`Shuffle`, `Lhs`)
+/// derive their seed from a module constant plus the input
+/// length; no per-streamer seed is threaded.
 pub trait Strategy {
     /// The strategy's name. Mirrors [`StrategyName`].
     fn name(&self) -> StrategyName;

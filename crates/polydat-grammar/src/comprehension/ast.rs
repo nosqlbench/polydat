@@ -150,10 +150,9 @@ impl Comprehension {
     /// legacy form — `IntRange { 1, 10, 1 }` → `"1..10"`,
     /// `Literal { [10, 100] }` → `"10, 100"`, etc.
     ///
-    /// Used by the runtime's per-iter scope-kernel synthesis
-    /// to construct a `[(var, spec_expr)]` list for type
-    /// detection (per `build_for_each_scope_kernel`'s probe
-    /// pre-evaluation).
+    /// Gives a consumer a `[(var, spec_expr)]` list for type
+    /// detection, the spec-text shape the runtime's probe
+    /// pre-evaluation (`pre_evaluate_clause`) takes.
     pub fn coordinate_specs(&self) -> Vec<(String, String)> {
         let mut acc = Vec::new();
         let mut seen = std::collections::HashSet::new();
@@ -358,9 +357,7 @@ impl Comprehension {
 ///
 /// Numeric / bool variants render bare; identifier-like
 /// strings render bare; strings with special characters
-/// render quoted with backslash escapes. Matches the
-/// round-trip rendering in `algebra::spec::legacy_convert`'s
-/// `literal_value_to_legacy_text`.
+/// render quoted with backslash escapes.
 fn literal_value_text(v: &super::source::LiteralValue) -> String {
     use super::source::LiteralValue;
     match v {

@@ -49,9 +49,8 @@ pub enum TokenKind {
     Extern,
     /// `shared` keyword
     Shared,
-    /// `volatile` keyword (SRD-44 + design memo
-    /// `resumable_test_fixture.md`). Wire-coloring modifier
-    /// excluding the binding's value from `hash_const`.
+    /// `volatile` keyword. Wire-coloring modifier excluding the
+    /// binding's value from `hash_const`.
     Volatile,
     /// `cursor` keyword
     Cursor,
@@ -89,8 +88,9 @@ pub enum TokenKind {
     /// `:=` (binding operator, used by every binding shape:
     /// cycle bindings, `const`, `shared`, `volatile`)
     ColonEq,
-    /// `=` (reserved for future use in expression-level
-    /// comparisons; not currently emitted by any binding form)
+    /// `=` — the extern default (`extern name: type = default`)
+    /// and the cursor declaration (`cursor name = expr`); bindings
+    /// use `:=`.
     Eq,
     /// `(`
     LParen,

@@ -19,8 +19,7 @@ pub enum ProvMode {
     /// Zero overhead on all-dirty graphs.
     Pull,
     /// Push + pull. Per-node dirty tracking in `set_inputs` +
-    /// cone guard. Only selected when output cones are large AND
-    /// partially stable.
+    /// cone guard. Selected whenever the graph has two or more inputs.
     PushPull,
 }
 
@@ -126,7 +125,7 @@ fn compute_cone_size(node_idx: usize, wiring: &[Vec<WireSource>]) -> usize {
 
 /// Select the optimal provenance mode based on graph analysis.
 ///
-/// Heuristic (from benchmark findings in memo 09):
+/// Heuristic (`crates/polydat/docs/design/engines.md`):
 /// - Pull has zero overhead on all-dirty graphs (cone check ~2ns)
 /// - Pull is the safe default for selective output access
 /// - PushPull when multiple inputs exist (push skip helps within

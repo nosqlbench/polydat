@@ -24,8 +24,7 @@
 //! > compiled IR but allocate their own per-streamer state.
 //!
 //! The entry point is [`CompiledComprehension`], obtained via
-//! `Comprehension::compile` (an extension method on the AST
-//! type).
+//! [`compile`]`(&ast)` or `CompiledComprehension::from_ast`.
 
 use std::sync::Arc;
 

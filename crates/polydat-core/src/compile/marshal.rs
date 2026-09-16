@@ -137,7 +137,7 @@ pub(crate) fn decode_slot(slots: &[u64], ty: PortType) -> Value {
         PortType::F64 => Value::F64(f64::from_bits(slots[0])),
         PortType::Bool => Value::Bool(slots[0] != 0),
         PortType::I64 => Value::I64(slots[0] as i64),
-        // A signed narrow carrier rides sign-extended (alignment §8.1)
+        // A signed narrow carrier rides sign-extended (alignment §2)
         // and is the `I64` value its `Wire` impl injects.
         PortType::I8 | PortType::I16 | PortType::I32 => Value::I64(slots[0] as i64),
         // SAFETY: the pair in a kernel's buffer was published by a
@@ -152,7 +152,7 @@ pub(crate) fn decode_slot(slots: &[u64], ty: PortType) -> Value {
 /// An output at `slot` of `buffer` as the `Value` its port type names:
 /// `decode_slot` for a one-slot carrier and a `Ref2` pair, and the
 /// two-limb reassembly for a 128-bit integer or a register word, which
-/// ride two consecutive slots (alignment §8.4 layer 1). This is the
+/// ride two consecutive slots (alignment §6). This is the
 /// typed read every compiled kernel's `get_value` makes.
 pub fn decode_output(buffer: &[u64], slot: usize, ty: PortType) -> Value {
     use crate::ast::{Bits128, RegLanes, SlotColor};

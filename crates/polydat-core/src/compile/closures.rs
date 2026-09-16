@@ -1,11 +1,14 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Phase 2: compiled u64-only kernels with flat buffer evaluation.
+//! The closure tier: every node runs its generated op over a flat u64
+//! slot buffer, by-reference outputs as `Ref2` pairs into step-owned
+//! scratch (compiled_handles.md).
 //!
-//! Four monomorphic kernel types, each produced by a distinct compiler
-//! path. No runtime branching for optimization strategy — the eval
-//! loop is baked in at construction time.
+//! Four kernel types, each produced by a distinct compiler path. They
+//! differ in what `set_inputs` marks and whether `eval_for_slot`
+//! consults the cone guard; the shared step loop reads the mode's
+//! `use_clean` flag per step.
 //!
 //! | Type | Push (per-node skip) | Pull (cone guard) |
 //! |------|---------------------|-------------------|
@@ -36,7 +39,8 @@ pub(crate) struct P2Extras {
 
 /// A single evaluation step in the compiled kernel.
 /// A compiled step's op: pure-scalar u64 closure, or a slot op
-/// with kernel-owned scratch for typed-slice ports (§8.4 L3).
+/// with kernel-owned scratch for typed-slice ports
+/// (type_system_alignment.md §4, compiled_handles.md §3).
 pub(crate) enum StepOp {
     U64(CompiledU64Op),
     Slot(CompiledSlotOp),
@@ -106,7 +110,8 @@ struct KernelCore {
     gather_buf: Vec<u64>,
     scatter_buf: Vec<u64>,
     /// Kernel-owned vector storage; vector-producing ports'
-    /// (ptr, len) slots view entries here (§8.4 layer 3).
+    /// (ptr, len) slots view entries here (type_system_alignment.md
+    /// §4, compiled_handles.md §3).
     scratch: Vec<ScratchBuf>,
     /// Axiom S2: per-slot Ref2 mask — the raw readers panic on
     /// these instead of leaking addresses.
@@ -567,8 +572,7 @@ impl KernelCore {
         }
     }
 
-    /// Axiom S2 guard for the raw u64 readers, and SRD 115 axiom H1
-    /// for handle slots.
+    /// Axiom S2 guard for the raw u64 readers.
     #[inline]
     fn guard_ref_slot(&self, slot: usize) {
         if self.ref_slots.get(slot).copied().unwrap_or(false) {
@@ -780,9 +784,9 @@ macro_rules! kernel_accessors {
         }
 
         /// The named output as a typed `Value`, decoded by its port
-        /// type: a handle slot is copied out of the arena or the value
-        /// table (SRD 115 §5), so the caller never holds a handle; a
-        /// slot that holds `None` reads as `None`.
+        /// type: a `Ref2` output is copied out through its pair
+        /// (compiled_handles.md §4), so the caller never holds a
+        /// pointer; a slot that holds `None` reads as `None`.
         pub fn get_value(&self, name: &str) -> crate::ast::Value {
             self.core.value_of(name)
         }
@@ -815,9 +819,8 @@ macro_rules! kernel_accessors {
 
         /// Set an extern by name, as `PolydatState::set_input` does on
         /// the interpreter. The value must be of the declared port
-        /// type. A carrier takes effect at once; a string, JSON, or
-        /// extension value is written at the start of the next run, and
-        /// every step downstream of the extern reruns.
+        /// type. Every kind is written through at once, and every step
+        /// downstream of the extern reruns.
         pub fn set_input(&mut self, name: &str, value: crate::ast::Value) -> Result<(), String> {
             let slot = self.core.set_extern(name, value)?;
             self.mark_input_changed(slot);

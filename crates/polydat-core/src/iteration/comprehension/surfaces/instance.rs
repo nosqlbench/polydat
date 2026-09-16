@@ -6,8 +6,9 @@
 //!
 //! `KernelScope` is the algebra-layer abstraction over
 //! "a thing that can be scoped to a coordinate tuple."
-//! nb-rs's `PolydatKernel` implements it; tests can implement it
-//! with a lightweight mock so the surfaces can be exercised
+//! polydat-core's `PolydatKernelScope` (`surfaces/polydat_kernel.rs`)
+//! implements it over a `PolydatKernel` pair; tests can implement
+//! it with a lightweight mock so the surfaces can be exercised
 //! without pulling in the full Polydat runtime.
 
 use crate::iteration::comprehension::strategies::Tuple;
@@ -16,10 +17,10 @@ use crate::iteration::comprehension::strategies::Tuple;
 /// producing an instance of `Self::Scoped`. Spec §9.5.3 names
 /// this the "one-shot scope function."
 ///
-/// For polydat's Polydat Kernels this is `bind_outer_scope` +
-/// per-tuple `set_input` followed by `evaluate_inits`. For
-/// tests it can be any type that derives a scoped value from
-/// a tuple.
+/// For polydat kernels this is
+/// `PolydatKernel::for_iteration(&canonical, &parent, &bindings)`.
+/// For tests it can be any type that derives a scoped value
+/// from a tuple.
 pub trait KernelScope {
     /// The scoped value produced by `scope`.
     type Scoped;

@@ -10,9 +10,9 @@ use crate::ast::{NodeMeta, PolydatNode, Port, PortType, Slot, Value};
 /// runtime port type is resolved by the assembler from the upstream
 /// wire's type and passed to `Identity::new(input_type)`.
 ///
-/// JIT is disabled (Value isn't a u64-buffer carrier); for a
-/// u64-only fast path, the assembler can synthesize a typed
-/// alternative.
+/// Compiled as a slot copy on every tier: an immediate is copied in
+/// place, a `Ref2` value into the step's own scratch (`assembly.rs`,
+/// axiom S3); the native lowering is `JitOp::Identity`.
 #[crate::polydat_node(category = Diagnostic)]
 fn identity(input: Value) -> Value {
     input
@@ -55,9 +55,9 @@ impl PolydatNode for PortPassthrough {
     /// A passthrough copies its slots, on every color but `Ref2`, whose
     /// pairs may not be forwarded by an identity-style step (axiom S3).
     /// Byte-string handles copy like scalars: a handle is a name (SRD
-    /// 115 H1). A table-kind output is not copied here: the builders
-    /// give it `assembly::table_copy_op`, which re-enters the value so
-    /// the slot names its own entry (H4).
+    /// 115 H1). A `Ref2` output returns `None` here; the builders copy
+    /// it into the step's own scratch through `assembly::ref_copy_kit`
+    /// (axiom S3).
     fn compiled_u64(&self) -> Option<crate::ast::CompiledU64Op> {
         if self.meta.outs[0].typ.slot_color() == crate::ast::SlotColor::Ref2 {
             return None;
@@ -96,8 +96,8 @@ fn const_u64(value: crate::derive_support::Const<u64>) -> u64 {
 /// fixed table name, a static label, or a separator for string
 /// concatenation pipelines.
 ///
-/// JIT level: P2 stores the interned static handle; P3 lowers to an
-/// immediate static handle (SRD 115 §2.2).
+/// The compiled form publishes the `(ptr, len)` pair of the interned
+/// text (axiom S7); P3 lowers the same pair as immediates.
 ///
 /// The `Const<&str>` source captures the owned `String`;
 /// `#[poly_const]` derives an `Arc<str>` cache at construction time,

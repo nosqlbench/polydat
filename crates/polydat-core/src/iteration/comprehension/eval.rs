@@ -21,7 +21,8 @@
 //!   interpolate_via_kernel  ← {name} → kernel.lookup(name)
 //!       │
 //!       ▼
-//!   eval_const_expr         ← optional: Polydat expression eval
+//!   eval_const_expr_for     ← optional: Polydat expression eval,
+//!                              charged to scope.ledger()
 //!       │
 //!       ▼
 //!   parse_list_with_types   ← comma-split, per-element type
@@ -35,7 +36,7 @@
 //! Pre-Phase-C this code lived in the host. The lift was driven by
 //! the principle that Polydat is the canonical owner of what a
 //! comprehension *means*, including how its spec strings resolve
-//! (see [comprehension_forms.md](../../../docs/design/comprehension_forms.md)).
+//! (see `crates/polydat/docs/design/comprehension_forms.md`).
 //! The host now consumes this
 //! API rather than implementing it.
 
@@ -47,13 +48,14 @@ use crate::kernel::PolydatKernel;
 use crate::kernel::interp::Lookup;
 use crate::kernel::interp::{interpolate_via_kernel, interpolate_with_lookup};
 
-/// Evaluate a comprehension clause's spec text against a kernel.
+/// Evaluate a comprehension clause's spec text against a `Lookup` scope.
 ///
 /// Steps:
 ///  1. [`interpolate_via_kernel`] resolves `{name}` placeholders
 ///     against the kernel's in-scope name space (own outputs +
 ///     inherited extern values).
-///  2. Try `dsl::compile::eval_const_expr` on the result. On
+///  2. Try `dsl::compile::eval_const_expr_for(…, kernel.ledger())`
+///     on the result. On
 ///     success with a `Str` value, re-parse as a comma-separated
 ///     list with per-element type detection. Other typed
 ///     variants become a single-element typed list.
@@ -613,7 +615,7 @@ fn is_valid_ident(s: &str) -> bool {
 /// - `a..=b..s`     closed with step `s`
 ///
 /// Bounds and step are Polydat const expressions; this function
-/// evaluates each segment via `eval_const_expr`. Numeric
+/// evaluates each segment via `eval_const_expr_for(segment, ledger)`. Numeric
 /// type follows the bounds: if both are integers, the
 /// emitted list is `Value::U64`; otherwise `Value::F64`.
 ///
@@ -1194,7 +1196,7 @@ fn generate_binomial(n: u64) -> Vec<Value> {
 /// kernel's scope chain to a `Partition` (typically an iter-var
 /// bound by an enclosing `for:` clause) and split it into `n`
 /// sub-partitions, same boundary math as the `subdivide(p, n)`
-/// stdlib node and the `*/N` spec token:
+/// node in polydat-nodes and the `*/N` spec token:
 ///
 /// ```yaml
 /// - for: "outer in partitions(\"50%,*\", 1000)"
@@ -1352,7 +1354,7 @@ fn try_eval_partition_call(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec
 /// `.partitions` projection selects the partition-spec desugaring (as opposed
 /// to the string→token-list desugaring a bare string source would get),
 /// expanding it into the same `PartitionList` that `partitions(spec)` yields.
-/// Resolution uses the `partitions(spec)` node's default extent (100, pct
+/// Resolution uses the `partitions(spec)` node's (polydat-nodes) default extent (100, pct
 /// space); the cursor's `over p` clause re-scales each partition's percentages
 /// to its actual declared range.
 ///
@@ -1833,15 +1835,16 @@ pub fn value_to_polydat_type_name(v: &Value) -> &'static str {
 ///
 /// Walks the dependent-tuple tree depth-first using fresh
 /// per-branch kernels. Each branch installs the prior clauses'
-/// typed values as inputs on a fresh kernel
-/// (`PolydatKernel::from_program` + `PolydatKernel::materialize_wiring_from_outer`),
+/// typed values as inputs on a fresh subscope kernel
+/// (`PolydatKernel::materialize_subscope`),
 /// then evaluates the next clause's spec against that kernel.
 /// This is the kernel-per-logical-subspace rule from SRD-18b
 /// §"Dependent Tuple Iteration".
 ///
 /// `filter`, when provided, is evaluated against each fully-bound
 /// tuple — the predicate text is interpolated against a kernel
-/// with all clause values installed, then `eval_const_expr` runs
+/// with all clause values installed, then `eval_const_expr_for`
+/// (charged to the scope's ledger) runs
 /// it to a `Value::Bool`. Tuples where the predicate is `false`
 /// are skipped. Predicate evaluation errors (non-Bool result,
 /// unresolved name, etc.) abort enumeration. See
@@ -2057,7 +2060,7 @@ where
 //
 // `interpolate_via_kernel`, `interpolate_with_lookup`, and the
 // internal `one_pass` / `first_unresolved` / `unescape` helpers
-// moved to `polydat::kernel::interp` in PR 9c-3 (Surface #5).
+// live in `crate::kernel::interp`.
 // `interpolate_via_kernel` and `interpolate_with_lookup` are
 // imported above for internal use; external callers use the
 // `polydat::kernel::interp` module directly.

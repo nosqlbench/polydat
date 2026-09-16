@@ -12,10 +12,10 @@
 //! V4 (per-strategy input-shape contract) fires in two
 //! tiers per spec §10.7.8:
 //!
-//! 1. **Compile-time best-effort** — this module, against the
-//!    AST's static metadata-derived [`IndexFn`]. Fires for
-//!    every comprehension at parse time; catches shape
-//!    violations the static estimate can prove. For
+//! 1. **Compile-time best-effort** — this module, when a caller
+//!    runs `validate` on the AST, against the AST's static
+//!    metadata-derived [`IndexFn`]; catches shape violations
+//!    the static estimate can prove. For
 //!    [`crate::iteration::comprehension::eval_source::EvalClass::Static`]
 //!    sources the static IndexFn equals the runtime IndexFn,
 //!    so this fire is exact; for `ContextRequired` sources
@@ -98,16 +98,10 @@ pub enum ValidationError {
         unresolved: Vec<String>,
     },
 
-    /// V4 — strategy applied to an input whose shape it cannot
-    /// accept. The Phase 2 stub form rejects:
-    ///   - non-`Lex` strategy whose input is a raw `Filter`
-    ///     node (filter destroys index addressability;
-    ///     V5's one-layer look-through is enforced by checking
-    ///     that the filter's child is addressable);
-    ///   - lattice-geometric strategy whose input is a `Union`
-    ///     or a 1-axis `Clause` (per §3.6 strategy table).
-    ///
-    /// Phase 3 will replace this with the full IndexFn check.
+    /// V4 — strategy applied to an input whose metadata-derived
+    /// [`IndexFn`] it cannot accept (per-strategy table in
+    /// `check_strategy_input_shape`). V5's one-filter
+    /// look-through is honoured; nested filters are rejected.
     V4InputShape {
         /// The strategy applied.
         strategy: StrategyName,
@@ -296,11 +290,10 @@ fn visit_zip(
             .push(ValidationWarning::SingletonCombinator { combinator: "zip" });
     }
 
-    // V6: Strict/Truncate require bounded children. We can
-    // only fully validate this once Phase 3's metadata
-    // propagation lands; at this layer we check the source-
-    // level cardinality on direct-clause children as a
-    // best-effort gate.
+    // V6: Strict/Truncate require bounded children. Checked
+    // here on direct-clause children via source cardinality;
+    // combinator children are left to the metadata-based
+    // checks.
     if matches!(mode, ZipMode::Strict | ZipMode::Truncate) {
         for child in children {
             if let Some(card) = direct_source_cardinality(child)
@@ -374,9 +367,8 @@ fn visit_filter(
     // we only error here when there's clearly nothing the
     // parent could possibly provide. For now, emit no error —
     // just record candidates for downstream consumption.
-    // (When Phase 3 + consumer wiring land, this becomes a
-    // structured "carry the unresolved set to the consumer"
-    // hand-off.)
+    // (A structured "carry the unresolved set to the consumer"
+    // hand-off is not implemented.)
     let _ = unresolved;
 
     // §5.8 warnings for trivially-true / trivially-false
@@ -639,8 +631,9 @@ fn contains_continuous_source(c: &Comprehension) -> bool {
 }
 
 /// Return the source's cardinality if `c` is a direct clause;
-/// `None` otherwise. Used as a best-effort cardinality check
-/// for V6 prior to Phase 3's metadata propagation.
+/// `None` otherwise. Used by the V6 check on direct-clause
+/// children; combinator children are covered by the
+/// metadata-based checks.
 fn direct_source_cardinality(c: &Comprehension) -> Option<CardinalityClass> {
     match c {
         Comprehension::Clause { source, .. } => Some(source.cardinality()),

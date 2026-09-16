@@ -253,11 +253,10 @@ fn weighted_pick_jit_constants(node: &WeightedPick) -> Vec<u64> {
 /// sum to 1); each must be positive and finite. Internally builds
 /// an alias table at construction for O(1) sampling.
 ///
-/// JIT level: P2 — `compiled_u64` is supplied by
+/// JIT level: P3 (extern call `jit_weighted_pick` fed by the
+/// 5-u64 slice from [`weighted_pick_jit_constants`]);
 /// [`weighted_pick_jit`] (closure with captured alias-table
-/// arrays); `jit_constants` is supplied by
-/// [`weighted_pick_jit_constants`] (5-u64 slice for the
-/// `jit_weighted_pick` extern).
+/// arrays) serves the closure tier.
 ///
 /// Example: `weighted_pick(hash(cycle), "100:0.5;200:0.3;300:0.2")`.
 /// `weighted_pick(input, "v0:w0;v1:w1;...")` is equivalent to

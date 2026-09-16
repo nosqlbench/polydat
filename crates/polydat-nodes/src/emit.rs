@@ -7,8 +7,8 @@
 //! appends one binding, `__emit := emit_row(format, names, a, b, ...)`,
 //! to the program. The node sees every wire it names through ordinary
 //! wiring, so emission is part of the kernel rather than a decorator
-//! around it. When the `for` construct lands, the same binding is
-//! inserted inside the traversed block and observes that block's
+//! around it. In a program with top-level `for` traversals the binding
+//! is appended inside each traversal body and observes that body's
 //! scope.
 //!
 //! Rows accumulate in a thread-local buffer so concurrent fibers never
@@ -103,7 +103,8 @@ pub fn take_rows() -> Vec<String> {
 }
 
 /// Append one formatted row to the calling thread's buffer and return
-/// the number of values emitted. `format` is `map`, `csv`, or `jsonl`;
+/// the number of values emitted. `format` is `map`, `csv`, `jsonl`, or
+/// `text`;
 /// `names` is the comma-separated list of wire names in the same order
 /// as the variadic values.
 #[polydat::polydat_node(category = Diagnostic, purity = SideChannel(Other), variadic_min = 0)]

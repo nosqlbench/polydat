@@ -26,10 +26,10 @@
 //!   §3.4.2 Algorithm P).
 //!
 //! Determinism: same `(seed, stream)` → same sequence on
-//! every materialization. The strategy layer captures the
-//! seed at order-instantiation time (per spec §3.6's
-//! "Shuffle: PRNG seed captured at materialization"); Phase 7
-//! wires the per-streamer seed into the IR interpreter.
+//! every materialization. Spec §3.6 calls for the seed to be
+//! captured at materialization; the strategy layer currently
+//! uses a module constant plus input length, and per-streamer
+//! seeding is not implemented.
 
 use crate::numeric::pcg::pcg_seek;
 

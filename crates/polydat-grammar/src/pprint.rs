@@ -3,14 +3,11 @@
 
 //! AST → `.polydat` source pretty-printer.
 //!
-//! Used by the subscope synthesizer (SRD-13f §"Wire-reference
-//! classification") to re-emit retained AST statements pulled
-//! from a parent program's `binding_ast_for` into a child scope's
-//! source-text input. The pretty-printer is the bridge between
-//! AST-as-metadata (canonical) and the current string-based
-//! synthesizer pipeline. A direct AST-mode compile path is the
-//! eventual end state, but until then the synthesizer needs a
-//! faithful AST → source round-trip.
+//! The printer gives a compiled `for` body its source text for
+//! diagnostics (`pp_file`), re-emits rewritten expressions in
+//! module inlining and tile lowering (`pp_expr`), and prints
+//! expressions in `polydat explain`. The runtime compiles from the
+//! AST; the printer is a faithful AST → source round-trip beside it.
 //!
 //! ## Round-trip contract
 //!
@@ -25,9 +22,9 @@
 //!
 //! `BinOp` expressions are emitted with parens around the whole
 //! expression. This is uniformly safe — re-parsing produces the
-//! same tree structure — at the cost of extra parens. The
-//! synthesizer's output is not user-facing; legibility is not a
-//! concern.
+//! same tree structure — at the cost of extra parens. The output
+//! is the canonical spelling; the parens are uniform for round-trip
+//! safety.
 
 use crate::ast::{
     Arg, BinOpKind, Binding, BindingModifier, CallExpr, CursorDecl, Expr, ExternPort, ForStmt,

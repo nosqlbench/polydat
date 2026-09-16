@@ -3,14 +3,15 @@
 
 //! Lowering a `tile` statement to a program (SRD 114 §6).
 //!
-//! Each hole becomes a `tile_encode` binding in the enclosing scope
-//! whose constant spec carries the tile's encoding, the hole's position,
-//! its declared type, its format, and its raw flag. Static runs fold
-//! into single instructions. Projections compile their body into a
-//! child program text whose holes are `tile_encode` bindings too; the
-//! render node compiles that body once at setup and re-runs it per
-//! tuple. The tile itself becomes a `tile_render` call over the encoded
-//! hole wires and any wires a body imports.
+//! Each hole becomes a binding of its expression in the enclosing
+//! scope (or the wire itself); the render node carries the hole's
+//! encoding spec (the tile's encoding, the hole's position, its
+//! declared type, its format, and its raw flag) and encodes the value
+//! at the hole. Static runs fold into single instructions. Projection
+//! bodies lower the same way in a child program; the render node
+//! compiles that body once at setup and re-runs it per tuple. The tile
+//! itself becomes a `tile_render` call over the hole wires and any
+//! wires a body imports.
 
 use std::collections::BTreeSet;
 

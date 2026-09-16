@@ -108,9 +108,8 @@ fn printf(
 /// One argument to a format, as the formatter needs it: a scalar by
 /// value, a string by reference, anything else as the `Value` whose
 /// display form is used. The P1 node builds these from its `Value`
-/// inputs and the compiled helper from slot bits and handles, so both
-/// tiers run the same formatting code (SRD 115 §6, axiom H7) and a
-/// string argument is formatted without being copied first.
+/// inputs so a string argument is formatted without being copied
+/// first.
 pub enum FmtArg<'a> {
     /// An unsigned integer.
     U64(u64),
@@ -148,10 +147,8 @@ impl ParsedFormat {
     }
 
     /// The parsed form of a format string, interned for the process
-    /// (SRD 115 §6): the compiled lowering of `printf` bakes its
-    /// address, so it must outlive every kernel compiled from it, and
-    /// the same text parses once. Immutable once made, like a static
-    /// string.
+    /// so the same text parses once. Immutable once made, like a
+    /// static string.
     pub fn interned(fmt: &str) -> &'static ParsedFormat {
         use std::sync::RwLock;
         static FORMATS: RwLock<Option<std::collections::HashMap<String, &'static ParsedFormat>>> =
@@ -183,8 +180,7 @@ impl ParsedFormat {
         result
     }
 
-    /// Render into any text sink: a `String` at P1, the cycle arena
-    /// writer in the compiled helper (SRD 115 §6).
+    /// Render into any text sink.
     pub fn render_into<'a, W: std::fmt::Write>(
         &self,
         argc: usize,

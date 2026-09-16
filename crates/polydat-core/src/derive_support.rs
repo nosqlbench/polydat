@@ -641,10 +641,10 @@ impl<T: Wire> Wire for Config<T> {
 ///
 /// ```ignore
 /// fn matching_profiles(
-///     group: Resolved<GroupResolver, vectordata::TestDataGroup>,
+///     group: Resolved<GroupResolver, DatasetHandle>,
 ///     prefix: &str,
 /// ) -> Vec<String> {
-///     let group: &vectordata::TestDataGroup = &group;
+///     let group: &TestDataGroup = group_of(&group);
 ///     // ... use group methods directly
 /// }
 /// ```

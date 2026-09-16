@@ -8,20 +8,27 @@
 //! and how to partition across concurrent fibers.
 //!
 //! Sources replace the `cycles` counter as the workload iteration driver.
-//! The Polydat graph declares sources via the `source` keyword. The runtime
-//! pulls from sources to drive op dispatch. When a source is exhausted,
-//! the phase is done.
+//! A Polydat program declares one with the `cursor` keyword
+//! (`cursor q = range(0, N) [over <partition>]`). A host pulls from
+//! sources to drive dispatch; when a source is exhausted, the activation
+//! is done.
 //!
 //! ## Source Types
 //!
-//! - **Range**: `range(0, N)` — finite sequence of ordinals. Replaces `cycles: N`.
-//! - **Dataset**: `dataset_source("example:label_00", "base")` — vectors, queries, etc.
-//! - **Derived**: any Polydat binding promoted to a source via the `source` keyword.
+//! - **Range**: `range(0, N)` — a finite sequence of ordinals, served by
+//!   [`RangeSourceFactory`]. Replaces `cycles: N`.
+//! - **Extending**: `until_elapsed(base, min_ms[, delta])` and the other
+//!   `until_*` constructors, compiled to a `CursorKind::Extending*` and
+//!   served by [`ExtendingRangeSourceFactory`].
+//! - **Host-supplied**: any [`DataSourceFactory`] a host implements, such
+//!   as a dataset reader whose items carry vectors or metadata; this
+//!   crate ships only the range factories.
 //!
 //! ## Crate Sovereignty
 //!
-//! All source API surface lives here in polydat. The runtime crates
-//! (host runtime, adapters) consume these types but don't define them.
+//! All source API surface lives here in `polydat-core`, re-exported by
+//! `polydat` at `polydat::iteration::source`. Host runtimes and adapters
+//! consume these types but don't define them.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -153,27 +160,26 @@ pub struct SourceSchema {
     /// function calls). The compiler also writes back to `extent` if both
     /// values fold to constants at compile time.
     pub extent_outputs: Option<(String, String)>,
-    /// Optional cursor limit clamp (from `--limit` / `limit=` param).
+    /// Optional cursor limit clamp, taken from
+    /// `CompileOptions::cursor_limit` (a host's `--limit`-style option).
     /// Applied after runtime extent evaluation.
     pub extent_limit: Option<u64>,
-    /// What kind of cursor this is. Default `Range` (the legacy
-    /// bounded-finite cursor); `ExtendingTimed { ... }` declares
-    /// the cursor as runtime-extending under a wall-clock
-    /// minimum-duration policy. The executor branches on this
-    /// to pick between `RangeSourceFactory` and
-    /// `ExtendingRangeSourceFactory` at phase setup.
+    /// What kind of cursor this is. Default `Range`, the bounded
+    /// `range(start, end)` cursor; the `Extending*` variants declare a
+    /// runtime-extending cursor under a wall-clock, count, or
+    /// predicate policy. A host picks [`ExtendingRangeSourceFactory`]
+    /// for those, and `cursor_over_partitions` treats them as
+    /// open-extent when it resolves an `over` clause.
     pub cursor_kind: CursorKind,
     /// SRD 71: name of the kernel output that carries the
     /// partition-narrowing source (the `over <expr>` clause on
-    /// the cursor declaration). The executor pulls this output
-    /// at phase setup and applies it to the source factory's
-    /// `[start, end)` range. The output value's type drives
-    /// the resolution:
-    /// - `Value::Str(s)`         — parse `s` as a partition spec, resolve, use partition 0.
-    /// - `Value::Ext(Partition)` — use the resolved partition's `start_ord` / `end_ord`.
-    /// - `Value::Ext(PartitionSpec)` — resolve against the cursor's extent, use partition 0.
-    /// - `Value::Ext(PartitionList)` — use partition 0.
-    /// - `Value::None`           — no narrowing (cursor uses its full extent).
+    /// the cursor declaration). `cursor_over_partitions` pulls it and
+    /// resolves it through `cursor_partition::resolve_over` into the
+    /// full partition list: a spec string or a `PartitionSpec`
+    /// resolves against the cursor's extent, a `Partition` or a
+    /// `PartitionList` is re-projected onto it, and `Value::None`
+    /// yields no partitions. A host, such as activation setup,
+    /// selects one partition and writes it with `set_cursor`.
     ///
     /// `None` means the cursor was declared without an `over`
     /// clause; the cursor uses its full declared extent.
@@ -370,20 +376,16 @@ pub trait DataSourceFactory: Send + Sync {
 
     /// Rewind the factory's shared cursor to the start so a
     /// subsequent `create_reader()` produces a fresh stream
-    /// covering the same ordinal range. SRD-75 phase-poll uses
-    /// this between iterations: after each poll round
-    /// exhausts the source, the activity calls this and
-    /// re-creates the reader to drive another round of cycles
-    /// before the predicate is re-checked.
+    /// covering the same ordinal range: what a host that re-runs a
+    /// source between poll rounds calls after each round exhausts it.
     ///
     /// Default impl: returns `false` to signal the factory
     /// doesn't support rewinding. Factories that DO support it
     /// (RangeSourceFactory, ExtendingRangeSourceFactory)
     /// override and reset their internal cursor / extent
-    /// state. Phase-poll synthesis rejects workloads whose
-    /// source factory returns `false` so the operator gets a
-    /// clear diagnostic instead of a silent first-iteration
-    /// completion.
+    /// state. A host that needs to rewind should reject a factory
+    /// that returns `false` with a clear diagnostic rather than
+    /// complete silently after the first round.
     fn rewind_for_poll(&self) -> bool {
         false
     }
@@ -394,7 +396,7 @@ pub trait DataSourceFactory: Send + Sync {
 // =========================================================================
 
 /// Factory for range sources. Shared atomic cursor distributes
-/// ordinals across fibers. Replaces `CycleSource`.
+/// ordinals across fibers.
 pub struct RangeSourceFactory {
     cursor: Arc<AtomicU64>,
     end: u64,
@@ -886,8 +888,8 @@ impl std::error::Error for CursorBatchError {}
 /// Provenance-driven advancer that targets only the cursor nodes
 /// relevant to a specific set of output fields.
 ///
-/// Built at phase setup by tracing Polydat provenance from the op template's
-/// referenced fields back to root cursor nodes. Only those cursors
+/// Built by a host from the output names it will read, tracing Polydat
+/// provenance from those fields back to root cursor nodes. Only those cursors
 /// advance — unused cursors are left untouched.
 pub struct Cursors {
     targets: Vec<CursorTarget>,
@@ -1026,19 +1028,19 @@ impl Cursors {
 
     /// Inject the current cursor values into a Polydat state.
     ///
-    /// Sets each cursor's ordinal at its input index, plus any
-    /// field projections from the source item.
+    /// Sets each cursor's ordinal at its input index. Field projections
+    /// are not written here; a host reads them from `last_items()`.
     pub fn inject_into_state(&self, state: &mut crate::kernel::PolydatState) {
         for (i, target) in self.targets.iter().enumerate() {
             if let Some(ref item) = self.last_items[i] {
                 state.set_input(target.input_index, crate::ast::Value::U64(item.ordinal));
-                // Inject field projections (e.g., base__vector)
-                // These are handled by set_source_item on the FiberBuilder
+                // Field projections (e.g. base__vector) are the host's to
+                // write from `last_items()`; only the ordinal lands here.
             }
         }
     }
 
-    /// Get the last items read from all targets (for FiberBuilder injection).
+    /// The last items read from all targets, for a host to project fields from.
     pub fn last_items(&self) -> &[Option<SourceItem>] {
         &self.last_items
     }

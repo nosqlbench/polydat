@@ -56,8 +56,10 @@
 //! - `struct_name = <Ident>` — the Rust name of the node struct.
 //! - `compiled_u64 = <path>` — `fn(&Node) -> CompiledU64Op`,
 //!   replacing the macro's u64-buffer closure.
-//! - `compiled_handle = <path>` — `fn(&Node, usize, &[PortType]) ->
-//!   CompiledU64Op`, replacing the handle-kit closure.
+//! - `compiled_slot = <path>` — `fn(&Node, &[PortType]) ->
+//!   CompiledSlotKit`, replacing the slot kit's closure.
+//! - `state = <path>` — per-state scratch: `scratch_layout` and
+//!   `eval_in` delegate to `<path>::layout` / `<path>::eval`.
 //! - `jit_constants = <path>` — `fn(&Node) -> Vec<u64>`.
 //! - `decompose = <path>` — `fn(&Node) -> DecomposedGraph`, emitting
 //!   `impl FusedNode`.
@@ -85,7 +87,7 @@ use syn::{
 ///
 /// - `category = <ident>` — the polydat `FuncCategory` variant
 ///   the node belongs to (`Comparison`, `Math`, `String`, etc.).
-///   Defaults to `Misc` when unspecified.
+///   Required; there is no default.
 /// - `struct_name = <Ident>` — the Rust name of the generated node
 ///   struct. Defaults to the function name in PascalCase, so a node
 ///   `fn geo_cell` produces `struct GeoCell`; set this when that name
@@ -549,7 +551,7 @@ enum ArgKind {
     /// the tail of `consts[..]` into a `Vec<inner>` field.
     /// Eval hands the body a `Const(self.field.clone())`.
     ConstVec(ConstShape),
-    /// `&T` argument with `#[poly_setup(<fn_path>, from = <arg>)]`.
+    /// `&T` argument with `#[poly_const(<fn_path>, from = <arg>)]`.
     /// Generates a struct field of type `T`, computed once in
     /// `new()` by calling `<fn_path>(<source>)` where `<source>`
     /// is the field-access expression for the named `from` arg.
@@ -691,8 +693,8 @@ impl ConstShape {
 
 /// SRD-80 PR B.7 — primitive types that fit the JIT u64 buffer.
 /// A node is Phase-2 eligible iff every wire arg / const arg /
-/// return type maps to a `JitType` and no `Setup<T>` arg is
-/// declared (Setup carries non-primitive derived state).
+/// return type maps to a `JitType` and no `#[poly_const]` setup arg
+/// is declared (setup carries non-primitive derived state).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum JitType {
     U64,
@@ -1361,10 +1363,10 @@ enum BorrowWire {
     ),
 }
 
-/// `Ext<T>` for some `T`: an extension value that rides a table
-/// handle (SRD 115 §3) and reaches the body through `Wire::extract`.
-/// The generic path already handles it on the interpreter; this
-/// recognizer lets the handle closure carry it too.
+/// `Ext<T>` for some `T`: an extension value that rides a `Ref2`
+/// pair into step-owned scratch (SRD 115) and reaches the body
+/// through `Wire::extract`. The generic path already handles it on
+/// the interpreter; this recognizer lets the slot kit carry it too.
 fn is_ext_wire(ty: &Type) -> bool {
     let s = type_to_string(ty);
     s.starts_with("Ext <") || s.contains(":: Ext <")
@@ -2772,9 +2774,9 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
     // ── SRD-80 PR B.7 — JIT eligibility + hook emission ──
     //
     // A node is Phase-2 eligible when every arg + return maps
-    // to a `JitType` and no `Setup<T>` arg is declared (Setup
-    // carries non-primitive derived state that can't fit a u64
-    // buffer). Override attributes (`compiled_u64 = ...`,
+    // to a `JitType` and no `#[poly_const]` setup arg is declared
+    // (setup carries non-primitive derived state that can't fit a
+    // u64 buffer). Override attributes (`compiled_u64 = ...`,
     // `jit_constants = ...`) bypass eligibility — they win
     // unconditionally.
 

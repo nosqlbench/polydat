@@ -58,7 +58,7 @@ fn scale_range(
 
 /// JIT-constants override for `scale_range`: emit the
 /// `(min, range)` layout that `JitOp::ScaleRangeConst`
-/// (polydat/src/compile/jit/codegen.rs) consumes.
+/// (polydat-core/src/compile/jit/codegen.rs) consumes.
 fn scale_range_jit_constants(node: &ScaleRange) -> Vec<u64> {
     vec![node.min.to_bits(), (node.max - node.min).to_bits()]
 }
@@ -117,8 +117,9 @@ fn inv_lerp(
 /// Celsius. Unlike `inv_lerp`, the output is not clamped, so
 /// extrapolation is possible.
 ///
-/// JIT level: P1 (no compiled_u64; f64 in/out without captured closure).
-/// The `1.0 / (in_max - in_min)` divide is computed inline per call.
+/// JIT level: P3 (named JitOp; the constants are the four f64 bit
+/// patterns). The `1.0 / (in_max - in_min)` divide is computed inline
+/// per call.
 #[polydat::polydat_node(category = Interpolation)]
 fn remap(
     input: f64,
@@ -146,7 +147,7 @@ fn remap(
 ///
 /// `step` is not validated at construction (the macro does not yet
 /// support const-arg `ConstConstraint` metadata). As with `div` /
-/// `mod_const` in arithmetic.rs, a non-positive `step` propagates a
+/// `mod` in arithmetic.rs, a non-positive `step` propagates a
 /// NaN/inf through the body, surfacing at cycle time.
 #[polydat::polydat_node(category = Interpolation)]
 fn quantize(input: f64, #[poly_default(1.0f64)] step: polydat::derive_support::Const<f64>) -> f64 {

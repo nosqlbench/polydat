@@ -48,16 +48,15 @@ fn nbrs_dirty_debug_enabled() -> bool {
 ///   write. Consumer fibers cache the last revision they
 ///   observed in their per-fiber `last_seen` map; a mismatch
 ///   tells the cone walker to re-evaluate.
-/// - `scope_intent_dirty: Arc<AtomicU64>` — bit-vector shared
-///   with every other cell defined in this cell's scope. The
+/// - `scope_intent_dirty: Arc<AtomicU64>` — one intent word, shared
+///   with every other cell allocated from the same word. The
 ///   cell's `bit` position is set on every write, allowing
 ///   consumers to do an O(1) bulk check ("any cell in this
 ///   scope dirty?") before drilling down to the per-cell
 ///   revision compare.
-/// - `bit: u8` — this cell's position in the scope's intent-
-///   dirty vector. Allocated at cell creation by the defining
-///   scope's `EngineCore::allocate_cell_bit`. Bounded at 64
-///   for the first cut; spill-to-`Vec<AtomicU64>` is deferred.
+/// - `bit: u8` — this cell's position within its word. The scope
+///   keeps one `Arc<AtomicU64>` per 64 cells, grown on demand by
+///   the defining scope's `EngineCore::allocate_cell_bit`.
 ///
 /// The reader contract (S5 §1.1) is preserved: a producer's
 /// `publish` writes value + revision + intent bit in three
@@ -440,10 +439,9 @@ pub struct EngineCore {
     /// Per-node: true = cached output is valid, false = needs eval.
     pub(crate) node_clean: Vec<bool>,
     /// Current input values (coordinates + captures, all unified).
-    /// For `shared`-bound slots, this holds a local snapshot of
-    /// the cell value — `refresh_shared` re-syncs it from the
-    /// cell, and `set_input` writes through to both the cell
-    /// and the snapshot.
+    /// For a cell-bound slot this entry is unused: the cell is the
+    /// slot's only register (`read_input` reads it, `set_input`
+    /// publishes to it).
     pub(crate) inputs: Vec<Value>,
     /// Default values for each input (used by reset_inputs).
     pub(crate) input_defaults: Vec<Value>,
@@ -913,7 +911,8 @@ impl EngineCore {
 ///
 /// On `set_input()`, only nodes that depend on the changed input
 /// are dirtied. O(affected_nodes) per input change.
-/// This is the default engine for production use.
+/// This is the interpreter's state, the default of its three; the
+/// default engine for engine-less entry points is the compiled P3 engine.
 pub struct PolydatState {
     /// Shared evaluation core (buffers, clean flags, inputs).
     pub core: EngineCore,

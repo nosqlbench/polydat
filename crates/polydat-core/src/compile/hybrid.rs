@@ -11,7 +11,9 @@
 //! This is the "best of all worlds" kernel — no node pays more
 //! overhead than it needs to.
 //!
-//! Three monomorphic kernel types, each with no runtime branching:
+//! Three kernel types. They differ in what `set_inputs` marks and
+//! whether `eval_for_slot` consults the cone guard; the shared step
+//! loop reads the mode's `use_clean` flag per step:
 //!
 //! | Type | Push (per-step skip) | Pull (cone guard) |
 //! |------|---------------------|-------------------|
@@ -98,7 +100,8 @@ impl HybridStep {
 }
 
 /// A closure step's op: pure-scalar u64 closure, or a slot op
-/// with kernel-owned scratch for typed-slice ports (§8.4 L3).
+/// with kernel-owned scratch for typed-slice ports
+/// (type_system_alignment.md §4, compiled_handles.md §3).
 enum ClosureOp {
     U64(CompiledU64Op),
     Slot(crate::ast::CompiledSlotOp),
@@ -133,7 +136,8 @@ struct HybridCore {
     gather_buf: Vec<u64>,
     scatter_buf: Vec<u64>,
     /// Kernel-owned vector storage; vector-producing ports'
-    /// (ptr, len) slots view entries here (§8.4 layer 3).
+    /// (ptr, len) slots view entries here (type_system_alignment.md
+    /// §4, compiled_handles.md §3).
     scratch: Vec<crate::ast::ScratchBuf>,
     /// Axiom S2: per-slot Ref2 mask — raw readers panic on these.
     ref_slots: Vec<bool>,
@@ -770,8 +774,8 @@ impl HybridKernelRaw {
     crate::compile::ref_readers!();
 
     /// The named output as a typed `Value`, decoded by its port type:
-    /// a handle slot is copied out of the arena or the value table
-    /// (SRD 115 §5), so the caller never holds a handle.
+    /// a `Ref2` output is copied out through its pair
+    /// (compiled_handles.md §4), so the caller never holds a pointer.
     pub fn get_value(&self, name: &str) -> crate::ast::Value {
         self.core.value_of(name)
     }
@@ -864,9 +868,8 @@ impl HybridKernelPull {
     }
 
     /// Set an extern by name, as `PolydatState::set_input` does on the
-    /// interpreter. A carrier takes effect at once; a string, JSON, or
-    /// extension value is written at the start of the next run, which
-    /// runs whatever the cone guard says.
+    /// interpreter. Every kind is written through at once, and the
+    /// next run runs whatever the cone guard says.
     pub fn set_input(&mut self, name: &str, value: crate::ast::Value) -> Result<(), String> {
         self.core.set_extern(name, value)?;
         self.force_run = true;
@@ -926,8 +929,8 @@ impl HybridKernelPull {
     crate::compile::ref_readers!();
 
     /// The named output as a typed `Value`, decoded by its port type:
-    /// a handle slot is copied out of the arena or the value table
-    /// (SRD 115 §5), so the caller never holds a handle.
+    /// a `Ref2` output is copied out through its pair
+    /// (compiled_handles.md §4), so the caller never holds a pointer.
     pub fn get_value(&self, name: &str) -> crate::ast::Value {
         self.core.value_of(name)
     }
@@ -979,10 +982,9 @@ pub struct HybridKernelPushPull {
 
 impl HybridKernelPushPull {
     /// Set an extern by name, as `PolydatState::set_input` does on the
-    /// interpreter. A carrier takes effect at once; a string, JSON, or
-    /// extension value is written at the start of the next run. Every
-    /// step downstream of the extern reruns, and the next evaluation
-    /// runs whatever the cone guard says.
+    /// interpreter. Every kind is written through at once. Every step
+    /// downstream of the extern reruns, and the next evaluation runs
+    /// whatever the cone guard says.
     pub fn set_input(&mut self, name: &str, value: crate::ast::Value) -> Result<(), String> {
         self.core.set_extern(name, value)?;
         self.force_run = true;
@@ -1085,8 +1087,8 @@ impl HybridKernelPushPull {
     crate::compile::ref_readers!();
 
     /// The named output as a typed `Value`, decoded by its port type:
-    /// a handle slot is copied out of the arena or the value table
-    /// (SRD 115 §5), so the caller never holds a handle.
+    /// a `Ref2` output is copied out through its pair
+    /// (compiled_handles.md §4), so the caller never holds a pointer.
     pub fn get_value(&self, name: &str) -> crate::ast::Value {
         self.core.value_of(name)
     }
@@ -1115,13 +1117,12 @@ impl HybridKernelPushPull {
 
 /// Type alias for the default hybrid kernel (PushPull — full optimization).
 ///
-/// Assembler and bench code that references `HybridKernel` uses the full
-/// push+pull variant. Rename uses to the concrete type if different
-/// optimization trade-offs are needed.
+/// The assembler's `compile_hybrid` returns this alias. Rename uses to
+/// the concrete type if different optimization trade-offs are needed.
 pub type HybridKernel = HybridKernelPushPull;
 
 /// Flattened slot list for one node's wire inputs under per-port
-/// widths (type_system_alignment.md §8.4 layer 1): every source
+/// widths (type_system_alignment.md §6): every source
 /// contributes `slot_width` consecutive slots.
 fn flatten_input_slots(
     wiring: &[Vec<WireSource>],
@@ -1284,7 +1285,8 @@ pub(crate) fn build_hybrid(
         let i = order[pos];
         if matches!(classifications[i].0, JitOp::Fallback) {
             // This node needs a closure — scalar u64 op preferred,
-            // slot op for slice-bearing nodes (§8.4 layer 3).
+            // slot op for slice-bearing nodes (type_system_alignment.md
+            // §4, compiled_handles.md §3).
             let node = &nodes[i];
             let (_, ref input_slots, ref output_slots) = classifications[i];
             let scratch_start = scratch.len();
@@ -1372,10 +1374,8 @@ pub(crate) fn build_hybrid(
             }
             // One native segment for the batch: its boundary inputs are
             // the slots the batch reads and does not write, its outputs
-            // every slot it writes. Table-kind slots are numbered across
-            // every segment so the kernel's one value table serves them
-            // all (SRD 115 §3); slots closures fill with handles or Ref
-            // pairs are handle slots to the H1 verifier, which a segment
+            // every slot it writes. Slots closures fill with Ref pairs
+            // are Ref2 slots to the S2/S9 validator, which a segment
             // may only load, store, and pass. Native code names the
             // member it is in through the tracker slot, for the failure
             // path (A7).
@@ -1617,10 +1617,11 @@ fn build_pushpull_from_steps(
     let any_none = externs.seed(&mut buffer, Some(&mut none));
 
     // Compute per-node provenance and invert into per-input step dependents.
-    // Since each step currently maps to one node, step index == node index.
-    // Dependents come back per-INPUT; expand to per-SLOT so the kernels'
-    // slot-indexed dirty tracking / changed-mask bits stay coherent under
-    // multi-slot inputs (§8.4 layer 1). Identity for all-scalar inputs.
+    // Dependents come back per node; `to_steps` folds them onto steps (a
+    // segment depends on what any member depends on). They also come back
+    // per-INPUT; expand to per-SLOT so the kernels' slot-indexed dirty
+    // tracking / changed-mask bits stay coherent under multi-slot inputs
+    // (type_system_alignment.md §6). Identity for all-scalar inputs.
     let node_provenance = crate::kernel::PolydatProgram::compute_provenance(nodes, wiring);
     let input_dependents: Vec<Vec<usize>> =
         crate::kernel::PolydatProgram::compute_dependents(&node_provenance, input_widths.len())
@@ -1801,8 +1802,8 @@ crate::compile::impl_kernel_trait!(HybridKernelPull, Engine::Native(Provenance::
 crate::compile::impl_kernel_trait!(HybridKernelPushPull, Engine::Native(Provenance::PushPull));
 
 /// The pending coordinates through the `Kernel` trait, for the hybrid
-/// kernels: every evaluation runs the whole program until the hybrid
-/// kernel keeps the closure tier's cone and `None` bookkeeping.
+/// kernels: `pull_value`/`pull_value_at` apply them and run the
+/// output's cone; `eval_pending` applies them and runs every step.
 macro_rules! hybrid_drive {
     ($ty:ident, $set_coords:ident) => {
         impl $ty {

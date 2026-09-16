@@ -41,8 +41,8 @@ pub const DEFAULT_RESOLUTION: usize = 1000;
 /// `inv_lerp`. The mapping is `input as f64 / u64::MAX as f64`, so
 /// 0 maps to 0.0 and u64::MAX maps to ~1.0.
 ///
-/// JIT level: P2 (auto-emitted `compiled_u64` from the body via
-/// the `#[polydat_node]` macro; single division).
+/// JIT level: P3 (`JitOp::UnitInterval`, inline u64→f64 convert and
+/// multiply).
 #[polydat::polydat_node(category = Conversions)]
 fn unit_interval(input: u64) -> f64 {
     input as f64 / u64::MAX as f64
@@ -633,10 +633,11 @@ fn dist_zipf(
 }
 
 // ---------------------------------------------------------------------------
-// Inventory stub: histribution / dist_empirical / lut_sample register
-// themselves via their own modules (histribution.rs and lut.rs). This
-// module no longer hand-rolls a signatures() vec — every DSL node here
-// self-registers via `#[polydat_node]`.
+// Inventory stub: histribution and dist_empirical register themselves
+// via their own modules; `LutSample` (lut.rs) is a programmatic node
+// (not DSL-registered). This module no longer hand-rolls a
+// signatures() vec — every DSL node here self-registers via
+// `#[polydat_node]`.
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]

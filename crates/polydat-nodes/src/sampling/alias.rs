@@ -9,8 +9,9 @@
 //!
 //! Two variants:
 //! - [`AliasTable<T>`]: generic, works with any `Clone` outcome type.
-//! - [`AliasTableU64`]: flat parallel arrays, optimized for the Phase 2
-//!   compiled kernel path where outcomes are indices 0..N.
+//! - [`AliasTableU64`]: flat parallel arrays, optimized for the compiled
+//!   kernel paths (closure tier and the `jit_weighted_pick` extern)
+//!   where outcomes are indices 0..N.
 
 use std::collections::VecDeque;
 
@@ -246,10 +247,9 @@ impl AliasTableU64 {
 //
 // `AliasSample` flows through the `Const<Vec<f64>>` workload-list
 // combinator (weights) and the `#[poly_const]` setup pattern
-// (cached `AliasTableU64`). The
-// node is JIT-ineligible by the Const<Vec<_>> design — the JIT
-// u64 buffer has no slot shape for the variable-length table
-// captured in the struct field.
+// (cached `AliasTableU64`). The node has no u64 kit
+// (`Const<Vec<_>>`); it lowers through its slot kit, called from
+// native code.
 
 use polydat::derive_support::PolydatSetup;
 
@@ -359,10 +359,9 @@ mod tests {
         assert!(out[0].as_u64() < 4);
     }
 
-    // `alias_sample` is JIT-ineligible by the
-    // `Const<Vec<C>>` design; the typed-eval path above covers
-    // correctness. A future `compiled_u64_override` could
-    // reinstate the closure form if perf demands it.
+    // `alias_sample` has no named JitOp; it runs through its slot
+    // kit on every engine. The typed-eval path above covers
+    // correctness.
 
     #[test]
     fn single_outcome() {

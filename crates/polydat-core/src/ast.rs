@@ -6,7 +6,9 @@
 //! The Polydat type system has three layers:
 //!
 //! 1. **Runtime values** ([`Value`]) — the enum that flows through
-//!    the DAG at evaluation time. Every buffer slot holds a `Value`.
+//!    the DAG at evaluation time. Every interpreter buffer slot holds
+//!    a `Value`; compiled kernels carry the same values as typed
+//!    `u64` slots.
 //!
 //! 2. **Port types** ([`PortType`]) — compile-time type tags on
 //!    node input/output ports. The assembler validates that wiring
@@ -154,32 +156,6 @@ impl<T: fmt::Debug + 'static> fmt::Debug for SliceArc<T> {
     }
 }
 
-/// A value flowing through the DAG at runtime.
-///
-/// This is the universal runtime representation for all Polydat data.
-/// Every node input and output is a `Value`. The variant determines
-/// the data type:
-///
-/// | Variant | Rust type | Polydat DSL type | Usage |
-/// |---------|-----------|-------------|-------|
-/// | `U64` | `u64` | `u64` | Cycle counters, hashes, IDs, bitwise ops |
-/// | `F64` | `f64` | `f64` | Floating point math, distributions, noise |
-/// | `Bool` | `bool` | `bool` | Conditions, flags |
-/// | `Str` | `String` | `String` | Names, formatted output, templates |
-/// | `Bytes` | `Vec<u8>` | `bytes` | Raw binary data, digests |
-/// | `Json` | `serde_json::Value` | `json` | Structured data, vectors |
-/// | `Ext` | `Box<dyn ReflectedValue>` | adapter-specific | CQL UUIDs, timestamps, etc. |
-/// | `None` | — | — | Uninitialized buffer slot (never flows through wiring) |
-///
-/// The assembly phase validates type correctness at compile time.
-/// Runtime code can safely use `as_u64()`, `as_f64()`, etc. — a
-/// type mismatch is a compiler bug, not a user error.
-///
-/// `Ext` enables adapter-contributed types (e.g., `uuid::Uuid` from
-/// the CQL adapter) to flow through the DAG without the kernel
-/// knowing the concrete type. Any consumer can display, serialize,
-/// or inspect an Ext value via [`ReflectedValue`]. The producing
-/// adapter can downcast via `as_any()`.
 /// Two-limb carrier for 128-bit integers inside [`Value`].
 ///
 /// Limbs are little-endian (`[lo, hi]`). Using `[u64; 2]` instead
@@ -314,10 +290,10 @@ pub enum Value {
     /// Unsigned 128-bit integer (cranelift I128, unsigned
     /// interpretation). Carried as two u64 limbs ([`Bits128`],
     /// little-endian limb order) so `Value` keeps alignment 8 —
-    /// see the `value_size_probe` test. Interpreter-only until
-    /// the two-slot JIT ABI lands (type_system_alignment.md
-    /// §8.1). JSON projection is a decimal string (JSON Number
-    /// cannot carry 128-bit magnitude).
+    /// see the `value_size_probe` test. Carried as two immediate
+    /// slots (`SlotColor::Imm2`) in compiled kernels. JSON
+    /// projection is a decimal string (JSON Number cannot carry
+    /// 128-bit magnitude).
     U128(Bits128),
     /// Signed 128-bit integer (cranelift I128, signed
     /// interpretation). Same limb carrier and conventions as
@@ -415,9 +391,9 @@ pub enum Value {
     /// (type_system_alignment.md §8.2). Unsigned byte buffers are
     /// spelled `Bytes`.
     VecI8(SliceArc<i8>),
-    /// Sentinel for uninitialized buffer slots. Never appears in
-    /// wiring — only in freshly allocated state buffers before
-    /// first evaluation.
+    /// The absent value (SRD-74): fresh buffer slots start as
+    /// `None`, and the kernel propagates it through nodes that do
+    /// not `accepts_none_inputs`.
     None,
 }
 
@@ -700,7 +676,7 @@ impl Value {
     /// Used at the typed-write residual check
     /// (`Dataflow::set_wire_idx`) AFTER the boundary adapter has
     /// already converted/validated the value — see
-    /// `polydat/src/kernel/api_impl.rs`. The pre-adapter check in
+    /// `kernel/api_impl.rs`. The pre-adapter check in
     /// `adapt_boundary_value` stays strict (`port_type ==
     /// slot_type`) so an unadapted Value::U64 can never silently
     /// truncate into a narrower slot.
@@ -993,7 +969,7 @@ impl Value {
     /// `'source_model': ''` to a CQL cluster when the intended
     /// shadow didn't bind). Render paths use this primitive and
     /// surface a clear error when an unresolved bind-point reaches
-    /// them. See [none_semantics.md](../docs/design/none_semantics.md)
+    /// them. See `crates/polydat/docs/design/none_semantics.md`
     /// (the render-refuses-silent-None rule).
     pub fn to_display_strict(&self) -> Option<String> {
         match self {
@@ -1374,14 +1350,11 @@ impl SlotType {
 
 /// JIT-compatible primitive carriers.
 ///
-/// The Rust types that can ride in the Phase-2 `u64` buffer
-/// without lossy conversion: `u64` as-is, `i64` via bit-reinterpret
-/// (`i64 as u64` round-trips exactly), `f64` via bit-reinterpret,
-/// `bool` as 0/1. This is the CL ∩ JSON scalar core from
-/// `polydat/docs/design/type_system_alignment.md` §4 — exactly the
-/// types both cranelift and the JSON AST can express. Every other
-/// wire/const shape is JIT-ineligible and falls through to the
-/// Phase-1 typed-eval path.
+/// The carriers that ride compiled slot buffers: the 64-bit scalars
+/// (`u64` as-is, `i64` and `f64` as their bits, `bool` as 0/1), the
+/// narrow integers and floats zero/sign-extended or as bits, and the
+/// 128-bit words in two slots. The 64-bit core is the CL ∩ JSON
+/// scalar set from `polydat/docs/design/type_system_alignment.md` §4.
 ///
 /// Referenced by `polydat::derive_support::Wire::JIT` to tag each
 /// Wire-typed Rust value with its JIT carrier (or `None`).
@@ -1916,8 +1889,8 @@ pub struct CompiledSlotKit {
 /// nodes additionally have internal eval-call-spanning state
 /// that affects future evaluations.
 ///
-/// [spec]: ../docs/design/runtime_model.md
-/// [substrate]: ../docs/design/composition_substrate.md
+/// [spec]: https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/design/runtime_model.md
+/// [substrate]: https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/design/composition_substrate.md
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Purity {
     /// Pure function — `eval(inputs)` is a function of inputs,
@@ -1941,8 +1914,8 @@ pub enum Purity {
     /// eval-call-spanning internal state mutated by prior calls.
     /// In either case, the runtime's `node_clean` caching model
     /// must opt the node out of within-cycle memoization
-    /// suppression; the lifecycle classifier marks the node as
-    /// nondeterministic per `kernel/engines.rs::nondeterministic_nodes`.
+    /// suppression; the assembler's lifecycle classes mark the node
+    /// as nondeterministic (`PolydatProgram::nondeterministic`).
     /// The `reason` string documents the source of
     /// non-determinism (e.g., "reads system clock",
     /// "monotonic counter incremented per call",
@@ -2031,10 +2004,10 @@ impl SimdVariant {
 
 /// Runtime evaluation interface for a Polydat node.
 ///
-/// Phase 1: called via `dyn PolydatNode` (dynamic dispatch with `Value` enum).
-/// Phase 2: if all nodes in the DAG are u64-only and provide a
-/// `compiled_u64` implementation, the assembly phase compiles the DAG
-/// into a flat buffer evaluator with direct function calls.
+/// Every engine drives this trait: the interpreter through `eval`,
+/// the closure and native engines through `compiled_u64` /
+/// `compiled_slot` where a node offers them and the node's own
+/// closure elsewhere.
 pub trait PolydatNode: Send + Sync {
     /// Return this node's metadata (port names and types).
     fn meta(&self) -> &NodeMeta;
@@ -2081,7 +2054,7 @@ pub trait PolydatNode: Send + Sync {
     /// Override-true nodes are responsible for handling
     /// `Value::None` in their own `eval` implementation.
     ///
-    /// See [none_semantics.md](../docs/design/none_semantics.md)
+    /// See `crates/polydat/docs/design/none_semantics.md`
     /// (string-interpolation propagates None) — the
     /// rule is general (lifted to the kernel level) rather than
     /// per-node; this flag is the opt-out for legitimate None-
@@ -2140,9 +2113,9 @@ pub trait PolydatNode: Send + Sync {
     ///   side channel fires once per dirty-to-clean
     ///   transition (not on every pull).
     /// - `Purity::Nondeterministic` nodes opt out of `node_clean`
-    ///   caching at the construction tier (assembly marks
-    ///   them as nondeterministic per
-    ///   `kernel/engines.rs::nondeterministic_nodes`).
+    ///   caching at the construction tier (the assembler's
+    ///   lifecycle classes mark them as nondeterministic,
+    ///   `PolydatProgram::nondeterministic`).
     /// - Hosts inspecting an expression's determinism
     ///   profile via D2 read this declaration to know
     ///   whether the constituent node has side channels.
@@ -2150,7 +2123,7 @@ pub trait PolydatNode: Send + Sync {
     /// Default: `Purity::Pure`. Most nodes are pure
     /// functions over their inputs.
     ///
-    /// [spec]: ../docs/design/runtime_model.md
+    /// [spec]: https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/design/runtime_model.md
     fn purity(&self) -> Purity {
         Purity::Pure
     }

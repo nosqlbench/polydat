@@ -1,14 +1,10 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Trait implementations of the Polydat context API ([`Metadata`],
-//! [`Dataflow`], [`Construction`]) on [`PolydatKernel`].
-//!
-//! PolydatKernel is the singular caller-facing interface that fuses
-//! the compiled context (program) and per-fiber state. All
-//! external (non-GK-internal) callers should reach the kernel
-//! exclusively through these three traits — `state()` /
-//! `state_ref()` / `program()` are kernel-internal hooks.
+//! Trait implementations on the interpreter kernel: the
+//! engine-independent [`Kernel`](crate::kernel::Kernel) surface every
+//! engine shares, and the three interpreter-only traits ([`Metadata`],
+//! [`Dataflow`], [`Construction`]).
 
 use crate::ast::{PortType, Value};
 use crate::kernel::{Construction, Dataflow, Metadata, PolydatKernel};

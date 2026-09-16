@@ -17,7 +17,8 @@
 /// feeds a String port. Users rarely reference this directly; prefer
 /// `format_u64` or `zero_pad_u64` when explicit formatting is wanted.
 ///
-/// JIT level: P1 (String output; no compiled_u64 path).
+/// Lowered natively: the digits are written straight into the step's
+/// entry (`JitOp::U64ToStr`).
 // SRD-80 PR B.14 — edge adapter family migrated to
 // `#[polydat_node]`. Underscore-prefixed names denote
 // assembly-phase auto-inserted bridges, not workload-callable
@@ -198,7 +199,6 @@ fn coercion_diagnostic(raw: &str, target: &str, detail: &str) -> String {
 /// after trimming surrounding whitespace. Any other input
 /// panics with a diagnostic.
 ///
-/// JIT level: P1 (Str input; no compiled_u64 path).
 /// The adapter's parse, shared with the native helper so a failure is
 /// the same diagnostic on every engine.
 pub(crate) fn parse_bool(input: &str) -> bool {
@@ -270,7 +270,7 @@ fn __str_to_f64(input: &str) -> f64 {
 /// round-to-nearest, floor, or ceil semantics, use the dedicated
 /// `round_to_u64`, `floor_to_u64`, or `ceil_to_u64` nodes instead.
 ///
-/// JIT level: P2 (compiled_u64 via f64::from_bits truncation).
+/// JIT level: P3 (native lowering, `JitOp::F64ToU64`).
 #[crate::polydat_node(category = Conversions)]
 fn f64_to_u64(input: f64) -> u64 {
     input as u64
@@ -294,7 +294,7 @@ fn floor_to_u64(input: f64) -> u64 {
 /// large as the continuous input, for example computing a minimum
 /// allocation size or page count from a byte length.
 ///
-/// JIT level: P2 (compiled_u64 via f64::from_bits + ceil).
+/// JIT level: P3 (native lowering, `JitOp::CeilToU64`).
 #[crate::polydat_node(category = Conversions)]
 fn ceil_to_u64(input: f64) -> u64 {
     input.ceil() as u64

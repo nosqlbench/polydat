@@ -4,9 +4,10 @@
 //! [`ScopeKernel<M>`] — typed wrapper around [`crate::kernel::PolydatKernel`].
 //!
 //! Per SRD-67 §"Walled-off invariant", `ScopeKernel<M>` is the
-//! typed surface; the underlying `PolydatKernel` stays public for
-//! Phase 1 (legacy call sites still construct it directly), and
-//! becomes `pub(crate)` in Phase 4 once the migration lands.
+//! typed surface; the underlying `PolydatKernel` stays public, and its
+//! construction primitives are sealed (`from_program` is crate-private,
+//! `materialize_wiring_from_outer` private), so a child is built only
+//! through the typed surface.
 //!
 //! The kernel exposes:
 //! - [`Self::subcontext_builder`] — yields a typed
@@ -105,7 +106,8 @@ impl<M> std::fmt::Debug for ScopeKernel<M> {
 ///    body never references the name.
 ///
 /// Both cases are answered by walking the parent's input
-/// slots and reading `crate::kernel::engines::Engines::shared_cell`.
+/// slots and reading `PolydatState::shared_cell` for each (see
+/// `PolydatKernel::shared_cells_in_scope`).
 #[derive(Clone)]
 pub struct SharedCellInScope {
     /// The binding's name.
@@ -190,10 +192,8 @@ impl<M> ScopeKernel<M> {
 
     /// Borrow the underlying `PolydatKernel` for read-only
     /// operations. The lock is released when the returned guard
-    /// is dropped. Phase 1 exposes this so legacy call sites
-    /// (and tests) can still drive the kernel via the existing
-    /// API; Phase 4 narrows or removes it once the migration
-    /// completes.
+    /// is dropped. Exposed for callers that drive the kernel directly
+    /// (the builder's `finalize` does, as do tests).
     pub fn lock_inner(&self) -> std::sync::MutexGuard<'_, PolydatKernel> {
         self.inner
             .lock()
@@ -380,9 +380,8 @@ impl<M> ScopeKernel<M> {
 /// already have a kernel and want to use it as the parent of a
 /// typed sub-context.
 ///
-/// In Phase 4 once the migration completes, the workload-root
-/// path will produce a `ScopeKernel<RootMarker>` directly from
-/// the workload-load entry point.
+/// Used by `PolydatKernel::build_subscope` to stand up the transient
+/// typed parent.
 pub(crate) fn wrap_root_kernel(
     kernel: PolydatKernel,
     label: impl Into<String>,
@@ -681,7 +680,7 @@ fn enforce_l2f_strict(
 //   1. Root kernel built from source via `compile_polydat` (and family).
 //   2. Subscope kernel materialized by a parent kernel via
 //      [`PolydatKernel::materialize_subscope`] or
-//      [`PolydatKernel::build_subscope_from_source`] — all methods on
+//      [`PolydatKernel::build_subscope`] — all methods on
 //      `PolydatKernel` itself, parent-supervised, typed.
 //
 // External callers go through these PolydatKernel-controlled paths
@@ -693,7 +692,7 @@ fn enforce_l2f_strict(
 //   1. Root kernel built from source via `compile_polydat` family.
 //   2. Subscope kernel materialized by an existing parent
 //      kernel via `PolydatKernel::materialize_subscope` or
-//      `PolydatKernel::build_subscope_from_source`.
+//      `PolydatKernel::build_subscope`.
 //
 // Tests that need a kernel from pre-compiled program matter use
 // `PolydatAssembler::compile()` (which returns a root kernel) directly.

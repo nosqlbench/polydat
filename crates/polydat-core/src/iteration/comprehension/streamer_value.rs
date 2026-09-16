@@ -6,8 +6,9 @@
 //! `name := for ...` binds a comprehension as a value. The wire is a
 //! `Streamer`, realized as a reflected `Ext` value so it rides the
 //! existing type-erased extension point of the type plane. It carries
-//! the comprehension's text and validated algebra AST, and exposes the
-//! three consumption surfaces as factories. Every factory call compiles
+//! the comprehension's text and validated algebra AST, and exposes
+//! `compiled()` (from which all three consumption surfaces hang) and
+//! `coordinate_stream()` as factories. Every factory call compiles
 //! a fresh stream, so streams obtained from one wire never share
 //! dispense state (§9.5.2 of Comprehension Forms).
 

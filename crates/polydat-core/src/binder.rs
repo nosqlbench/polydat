@@ -193,19 +193,6 @@ pub struct BinderViolation {
     pub message: String,
 }
 
-/// Verify each binder slot's rvalue (wire) type against its
-/// declared lvalue type, using the lookup closure to resolve
-/// wire names to their `PortType`. The closure returns `None`
-/// for unknown wires.
-///
-/// Returns every violation found (not just the first) so the
-/// operator fixes them in one pass.
-///
-/// Why a closure instead of `&PolydatProgram`: the verifier
-/// shouldn't be coupled to one program/kernel surface. Callers
-/// supply whatever lookup matches their wire-resolution
-/// context — kernel program output table, scope-init constants,
-/// auto-externed parent-scope wires, or test fixtures.
 /// Verify binders against a [`crate::kernel::PolydatKernel`] directly,
 /// returning `Ok(())` when every slot's rvalue→lvalue check
 /// passes and `Err(Vec<BinderViolation>)` listing every failure
@@ -247,6 +234,20 @@ pub fn verify_against_kernel(
 
 /// Every slot whose wire type cannot satisfy its lvalue type, given a
 /// lookup from wire name to the program's type for it.
+///
+/// Verify each binder slot's rvalue (wire) type against its
+/// declared lvalue type, using the lookup closure to resolve
+/// wire names to their `PortType`. The closure returns `None`
+/// for unknown wires.
+///
+/// Returns every violation found (not just the first) so the
+/// operator fixes them in one pass.
+///
+/// Why a closure instead of `&PolydatProgram`: the verifier
+/// shouldn't be coupled to one program/kernel surface. Callers
+/// supply whatever lookup matches their wire-resolution
+/// context — kernel program output table, scope-init constants,
+/// auto-externed parent-scope wires, or test fixtures.
 pub fn verify_binders(
     binders: &[Binder],
     wire_type: impl Fn(&str) -> Option<PortType>,

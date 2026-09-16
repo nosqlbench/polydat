@@ -25,7 +25,8 @@
 /// `cardinality()`, so every value in the cycle space maps to a valid
 /// string.
 ///
-/// JIT level: P1 (String output; no compiled_u64 path).
+/// JIT level: no u64 kit (String output); lowered through its slot
+/// kit, called from native code.
 /// Derived state for `combinations`. Computed once per node
 /// instance via `from_pattern`; the macro stores the instance in a
 /// struct field and hands the eval body a `&ParsedCombinations`
@@ -140,7 +141,8 @@ fn parse_charset(spec: &str) -> Vec<char> {
 /// produces "one thousand". Supports the full u64 range up through
 /// quintillions.
 ///
-/// JIT level: P1 (String output; no compiled_u64 path).
+/// JIT level: no u64 kit (String output); lowered through its slot
+/// kit, called from native code.
 #[polydat::polydat_node(category = String)]
 fn number_to_words(input: u64) -> String {
     u64_to_words(input)
@@ -432,11 +434,9 @@ fn str_concat(parts: &[polydat::ast::Value]) -> String {
 ///
 /// Signature: `str_lower(input: Str) -> (Str)`
 ///
-/// Takes `String` (not `&str`) so `FromValue<String>` honors the legacy
-/// "stringify any input via `to_display_string`" behavior;
-/// switching to `&str` would tighten this to require Str
-/// inputs only, which the type-checker doesn't yet enforce
-/// (deferred to SRD-79's type-driven resolution).
+/// Takes `String`; non-Str upstream wires reach it through
+/// assembler-inserted Str adapters (e.g. polyfill U64ToStr), not
+/// through value coercion.
 #[polydat::polydat_node(category = String)]
 fn str_lower(input: String) -> String {
     input.to_lowercase()

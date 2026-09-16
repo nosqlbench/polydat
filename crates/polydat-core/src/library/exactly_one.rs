@@ -11,11 +11,10 @@
 //! non-unary body must surface a clear shape diagnostic, not silently
 //! diverge from intent.
 //!
-//! Push 1 implements the assertion against the existing `Value`
-//! variants (Str, Bool, U64, F64, VecF32, VecI32, None). Push 2 will
-//! settle the structural body type (`Json` or similar) and extend
-//! this node to walk row × column structure with the diagnostic
-//! format from SRD-66 §"Surface 4 §Semantics":
+//! Scalars pass through; typed vectors must have exactly one element;
+//! a `Json` body is walked as rows × columns × leaf and rejected with
+//! the diagnostic below when not unary (SRD-66 §"Surface 4
+//! §Semantics"):
 //!
 //! ```text
 //! exactly_one_value: expected unary structure (1 row × 1 column),

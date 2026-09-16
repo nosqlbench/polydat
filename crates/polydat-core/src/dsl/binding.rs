@@ -26,9 +26,6 @@ use crate::library::identity::*;
 use super::compile::Compiler;
 use crate::dsl::lexer::Span;
 
-/// Wrap an expression in a `to_f64(expr)` call. Used by the
-/// `if(cond, a, b)` desugar to widen a u64 branch when the other
-/// branch is f64.
 /// Does the string literal contain at least one `{...}` placeholder
 /// whose body is *not* literal content (a quoted JSON / CQL map
 /// fragment)? Used by the binding compiler to decide whether to
@@ -117,6 +114,9 @@ fn render_list_literal(elems: &[Expr]) -> String {
     elems.iter().map(elem).collect::<Vec<_>>().join(", ")
 }
 
+/// Wrap an expression in a `to_f64(expr)` call. Used by the
+/// `if(cond, a, b)` desugar to widen a u64 branch when the other
+/// branch is f64.
 fn wrap_to_f64(inner: Expr) -> Expr {
     let span = expr_span(&inner);
     Expr::Call(crate::dsl::ast::CallExpr {
@@ -144,12 +144,14 @@ fn flatten_str_add(expr: &Expr, out: &mut Vec<Expr>) {
 
 /// Infer the output `PortType` of an expression without compiling it.
 ///
-/// Uses heuristics to determine whether an expression produces a u64 or f64
-/// value. This drives type-aware operator dispatch: when both operands of
-/// an arithmetic operator are u64, the compiler selects the u64 variant
-/// (e.g. `u64_mul`) instead of the f64 variant (`f64_mul`).
+/// Uses heuristics to infer the output port type (u64, f64, str, a
+/// cast's target, `Ext` for a `for` producer, a registered function's
+/// `output_port`). This drives type-aware operator dispatch: when both
+/// operands of an arithmetic operator are u64, the compiler selects
+/// the u64 variant (e.g. `u64_mul`) instead of the f64 variant
+/// (`f64_mul`).
 ///
-/// For unknown cases, defaults to `PortType::U64`.
+/// Unknown cases default to `PortType::U64`.
 pub(super) fn infer_expr_type(
     expr: &Expr,
     asm: &PolydatAssembler,

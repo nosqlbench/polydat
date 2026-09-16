@@ -39,10 +39,11 @@ pub enum Statement {
     ///   know which path the runtime takes — the contract is
     ///   "fixed once, then immutable."
     /// - **`shared`** — cell-backed, mutable across kernel
-    ///   instances in the same lineage. See SRD-16
-    ///   §"Mutability Rules: Shared Mutable".
+    ///   instances in the same lineage. See
+    ///   `crates/polydat/docs/design/scope_model.md` §6
+    ///   "Shared mutable bindings".
     /// - **`volatile`** — per-cycle, excluded from
-    ///   `hash_const`. See SRD-44.
+    ///   `hash_const`.
     ///
     /// Surface forms:
     /// ```text
@@ -67,7 +68,7 @@ pub enum Statement {
     /// `CompileEvent::UnknownPragma` and are otherwise ignored
     /// (forward-compatible).
     Pragma {
-        /// The pragma's name, after the `#`.
+        /// The pragma's name, after the `pragma` keyword.
         name: String,
         /// Where the pragma appears.
         span: Span,
@@ -320,8 +321,7 @@ pub enum WireModifier {
     /// (the const-folded identity hash). Authors mark wires
     /// whose value should NOT contribute to resume-identity
     /// even when the source's structural detection would
-    /// otherwise allow folding. See SRD-44 + design memo
-    /// `resumable_test_fixture.md`.
+    /// otherwise allow folding.
     Volatile,
 }
 

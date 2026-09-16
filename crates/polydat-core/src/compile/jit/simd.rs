@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Cranelift-SIMD compute kernels for element-wise vector math
-//! (type_system_alignment.md §8.2, execution level).
+//! (type_system_alignment.md §4 heap-slice plane, §7 execution
+//! eligibility).
 //!
 //! Four f32-lane kernels are compiled once per process through the
-//! same cranelift JIT engine the scalar kernels use, with
-//! `enable_simd` on. Each kernel processes the slice body in
+//! same host ISA the graph JIT uses (`host_isa::build_host_isa`);
+//! SIMD types are unconditional in Cranelift IR. Each kernel
+//! processes the slice body in
 //! `F32X4` chunks (unaligned 128-bit loads — `SliceArc<f32>` data
 //! is only 4-aligned) and finishes the remainder in a scalar loop:
 //!
@@ -18,9 +20,10 @@
 //! - `scale_f32(a, k, out, len)` — scalar broadcast multiply
 //!   (`splat`).
 //!
-//! Consumers are the `vec_*` library nodes in
-//! `crate::library::vector_math`, which fall back to scalar Rust
-//! loops when the JIT feature is off or ISA construction fails.
+//! Consumers are the f32 bodies in `crate::numeric::vector`, shared
+//! by the `vec_*` nodes (polydat-nodes `vector_math`) and by the
+//! JIT's vector helpers; each body falls back to its scalar loop
+//! when the `jit` feature is off or the kernels failed to compile.
 //! SIMD accumulation reassociates floating-point addition, so
 //! results may differ from the scalar reference in the final
 //! ulps; the equivalence tests compare with relative tolerance.
@@ -58,8 +61,8 @@ unsafe impl Sync for SimdKernels {}
 static KERNELS: OnceLock<Option<SimdKernels>> = OnceLock::new();
 
 /// The process-wide SIMD kernel set, compiled on first use.
-/// `None` when the host ISA can't be constructed with SIMD
-/// enabled — callers fall back to their scalar loops.
+/// `None` when the host ISA cannot be built or the kernels fail
+/// to compile — callers fall back to their scalar loops.
 pub fn kernels() -> Option<&'static SimdKernels> {
     KERNELS.get_or_init(|| compile_kernels().ok()).as_ref()
 }
@@ -369,7 +372,7 @@ mod tests {
         let Some(k) = super::kernels() else {
             panic!(
                 "SIMD kernels failed to compile on this host — \
-                    the cranelift ISA should support enable_simd"
+                    the host ISA should compile the SIMD kernels"
             );
         };
         // Cover: empty, sub-chunk, exact-chunk, chunk+tail sizes.

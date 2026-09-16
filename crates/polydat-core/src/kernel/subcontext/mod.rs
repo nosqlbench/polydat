@@ -6,7 +6,7 @@
 //! This module is the typed entry point for constructing a Polydat
 //! child kernel as a function of a parent kernel. It implements
 //! the protocol from
-//! [subcontext_construction.md](../../../docs/design/subcontext_construction.md):
+//! `crates/polydat/docs/design/subcontext_construction.md`:
 //!
 //! 1. Parent yields a builder via [`ScopeKernel::subcontext_builder`].
 //! 2. Builder accumulates module matter (imports, exports, body
@@ -49,7 +49,7 @@
 //! ## Cross-crate boundary
 //!
 //! [`PullConsumer`] is defined as a trait so that `nbrs-runtime`'s
-//! `ScopeFixture` can implement it without `polydat`
+//! `ScopeFixture` can implement it without `polydat-core`
 //! depending on `nbrs-runtime` (the crate dependency runs the
 //! other way). Phase 1 ships a minimal trait shape — the names a
 //! consumer wants to pull at cycle time — sufficient for the
@@ -61,15 +61,14 @@
 //! ## Walled-off invariant (SRD-67 Phase 4)
 //!
 //! Per SRD-67 §"Walled-off invariant", the legacy
-//! cross-binding primitives `PolydatKernel::materialize_wiring_from_outer` and
-//! `PolydatKernel::from_program` are `pub(crate)` after Phase 4.
+//! cross-binding primitives are sealed: `PolydatKernel::from_program` is
+//! `pub(crate)` and `materialize_wiring_from_outer` is private to the kernel.
 //! External consumers must go through the typed surface:
-//! [`SubcontextBuilder`] / [`ScopeKernel::spawn`] for child
-//! construction, `instance_program` for parentless re-instancing
-//! of a compiled program, `chain_kernel_under_parent` for top-
-//! level kernel chaining.
+//! [`SubcontextBuilder`] / [`ScopeKernel::spawn`] or `PolydatKernel::build_subscope`
+//! for child construction, and `Construction::root` / `KernelProgram::create_kernel`
+//! for parentless re-instancing of a compiled program.
 //!
-//! The compile-fail cases under `tests/ui/seal/` guard the seal: one
+//! The compile-fail cases under the facade crate's `crates/polydat/tests/ui/seal/` guard the seal: one
 //! calls `materialize_wiring_from_outer` from outside the crate, one
 //! calls `PolydatKernel::from_program`, and neither may compile. If
 //! either starts compiling, the seal is broken and a Phase 4

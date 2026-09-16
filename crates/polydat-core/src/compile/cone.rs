@@ -223,7 +223,7 @@ mod jit_impl {
     /// Marshalable boundary types: every one-slot immediate, encoded
     /// as the bits its `Wire` impl injects (a signed narrow carrier
     /// sign-extended, an unsigned or float one as its bits;
-    /// type_system_alignment.md §8.1), and every `Ref2` kind, borrowed
+    /// type_system_alignment.md §2), and every `Ref2` kind, borrowed
     /// into its pair for the call and copied out after it
     /// (compiled_handles.md §4). The 128-bit immediates stay out until
     /// they have a boundary encoding of their own.
@@ -593,9 +593,10 @@ mod jit_impl {
                 in_types.push(ty);
             }
         }
-        // SRD-105: cones are bounded at 64 boundary inputs (one
-        // provenance word) so Pull-variant cones remain reachable
-        // without a re-split.
+        // SRD-105: cones are bounded at 64 boundary inputs. The bound
+        // is a size cap on a cone's boundary, kept from when a
+        // provenance mask was one word (`ProvMask` is now multi-word);
+        // a cone over it is skipped rather than re-split.
         if boundary_in.len() > 64 {
             audit_skip(
                 members.len(),

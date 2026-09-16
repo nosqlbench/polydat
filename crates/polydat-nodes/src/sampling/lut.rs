@@ -120,13 +120,14 @@ impl LutF64 {
 /// table holds an inverse CDF, a transfer function, or anything else.
 ///
 /// Use as the low-level building block for any precomputed f64-to-f64
-/// mapping. Distribution sampling (via `IcdSample`), custom transfer
-/// curves, and empirical data all route through this node at runtime.
+/// mapping. Distribution sampling (the `dist_*`/`icd_*` nodes sample a
+/// `LutF64` the same way), custom transfer curves, and empirical data
+/// all route through this node at runtime.
 /// The lookup is O(1): a single array index plus one linear
 /// interpolation, with no branching on distribution type.
 ///
-/// JIT level: P3 (compiled_u64 with jit_constants exposing the LUT
-/// pointer and length for potential native code generation).
+/// JIT level: P3 (`JitOp::LutSampleConst`: an extern call with the LUT
+/// pointer and length from `jit_constants`).
 pub struct LutSample {
     meta: NodeMeta,
     table: LutF64,

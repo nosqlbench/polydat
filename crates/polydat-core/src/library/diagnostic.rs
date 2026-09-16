@@ -19,7 +19,8 @@ use crate::ast::Value;
 ///
 /// Signature: `(input: any) -> (String)`
 ///
-/// Returns "u64", "f64", "bool", "String", or "bytes".
+/// Returns the port type's display name (`u64`, `f64`, `bool`,
+/// `String`, `bytes`, `json`, `vec_f32`, …).
 #[crate::polydat_node(category = Diagnostic)]
 fn type_of(input: Value) -> String {
     input.port_type().to_string()

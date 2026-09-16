@@ -6,8 +6,9 @@
 //! Value types and a small spec language following the token
 //! grammar `chunking [in window] [order]`:
 //!
-//! - [`PartitionSpec`] — the parsed-but-unresolved form of a
-//!   `cursor=...` argument: a [`Chunking`] (Form 1 single
+//! - [`PartitionSpec`] — the parsed-but-unresolved form of a partition
+//!   spec string (an `over "..."` clause, a `partitions(spec, n)`
+//!   argument, or a host's cursor parameter): a [`Chunking`] (Form 1 single
 //!   sub-range, Form 2 delta list, or Form 3 pre-baked recipe,
 //!   as typed [`Bound`]s), an optional `in start..end` window,
 //!   and a [`PartitionOrder`].
@@ -15,9 +16,11 @@
 //!   absolute ordinals, computed by [`resolve`] from a
 //!   `PartitionSpec` against a known base extent.
 //!
-//! The parser and resolution math live
-//! here; the DSL `over` clause and cursor source factory
-//! integration live in their own modules. The Polydat `Value`
+//! The parser, the resolution math, and the host-side `over` narrowing
+//! helpers (`resolve_over`, `cursor_over_partitions[_on]`, `narrow_cursor`)
+//! live here; the compiler's handling of the `over` clause is in
+//! `dsl::compile` and the cursor source factories are in
+//! `iteration::source`. The Polydat `Value`
 //! integration rides on the existing [`Value::Ext`] /
 //! [`ReflectedValue`] mechanism — see the impls below.
 
@@ -141,7 +144,7 @@ impl fmt::Display for Bound {
 ///
 /// `unchanged` and `random` are a **common-subset vocabulary**
 /// shared conceptually with comprehension traversal orders
-/// (SRD 18c) — where a word exists in both places it means the
+/// (`polydat/docs/design/comprehension_forms.md`) — where a word exists in both places it means the
 /// same thing, while comprehensions additionally offer
 /// algorithm-specific strategies (sobol, halton, lhs, …) that
 /// do not apply to partition lists.
@@ -219,7 +222,7 @@ pub enum Chunking {
     },
 }
 
-/// Parsed `cursor=...` argument:
+/// A parsed partition spec:
 ///
 /// ```text
 /// spec   := chunking [ "in" window ] [ order ]
@@ -306,7 +309,7 @@ impl Partition {
 // Parser
 // =========================================================================
 
-/// Parse a `cursor=...` spec string into a [`PartitionSpec`].
+/// Parse a partition spec string into a [`PartitionSpec`].
 ///
 /// Accepts all three forms documented in SRD 71:
 ///
@@ -1390,7 +1393,7 @@ fn delta_exact_ordinals(b: &Bound, extent: u64) -> f64 {
 ///
 /// Errors when `n` is 0 or exceeds the partition's cardinality
 /// (every sub-partition must be non-empty). This is the shared
-/// engine behind the `subdivide(p, n)` stdlib node (which
+/// engine behind the `subdivide(p, n)` node in `polydat-nodes` (which
 /// panics per node convention) and the comprehension-source
 /// form (`for: "inner in subdivide(outer, n)"`, which surfaces
 /// the error as a clause diagnostic).
@@ -1431,7 +1434,7 @@ pub fn subdivide_partition(p: &Partition, n: u64) -> Result<Vec<Partition>, Stri
 /// accumulating in the last one. `n` must be >= 1.
 ///
 /// Shared between the `*/N` spec tail token and the
-/// `subdivide(p, n)` stdlib node so both produce identical
+/// `subdivide(p, n)` node in `polydat-nodes` so both produce identical
 /// boundaries.
 pub fn split_evenly(start_ord: u64, end_ord: u64, n: u64) -> Vec<(u64, u64)> {
     debug_assert!(n >= 1, "split_evenly requires n >= 1");

@@ -1,14 +1,15 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Standard Polydat function-node library + sampling primitives + library-internal support.
+//! The nodes that ship with the runtime: the adapters, passthroughs,
+//! constants, assertions, and tile nodes the compiler synthesizes, the
+//! formatting/JSON/data-file/diagnostic/context/logging nodes, and the
+//! library-internal support.
 //!
-//! - Function-node modules (`arithmetic`, `string`, `hash`, …):
-//!   the 250+ built-in [`crate::ast::PolydatNode`] implementations
-//!   workload authors compose into kernels.
-//! - `polydat_nodes::sampling`: alias tables, LUT interpolation, ICD —
-//!   variate-sampling building blocks consumed by
-//!   distribution-emitting nodes (weighted, probability, etc.).
+//! - The standard function nodes (`arithmetic`, `string`, `hash`, …)
+//!   live in `polydat-nodes` and register through inventory at link
+//!   time; they are [`crate::ast::PolydatNode`] implementations like
+//!   the ones here.
 //! - [`support`]: library-internal infrastructure
 //!   ([`support::cache`], [`support::audit`]) used by nodes
 //!   like `vectors` for caching dataset handles and

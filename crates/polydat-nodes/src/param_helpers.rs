@@ -103,10 +103,10 @@ fn in_range(
 
 /// Assert that a u64 value is one of an enumerated allow-list.
 /// SRD-80b Phase C migration via `Const<Vec<C>>` combinator.
-/// JIT-lowered as unrolled inline comparisons
-/// (`JitOp::IsOneOfCheck`); the fail path calls an extern that
-/// carries the allow-list contents for message parity with this
-/// body's panic.
+/// Lowered through its slot kit (called from native code);
+/// `classify_node` returns Fallback for it because a
+/// `Const<Vec<u64>>` node publishes no `jit_constants`, so the
+/// `JitOp::IsOneOfCheck` arm never fires.
 #[polydat::polydat_node(category = Arithmetic)]
 fn is_one_of(input: u64, allowed: polydat::derive_support::Const<Vec<u64>>) -> u64 {
     if !allowed.contains(&input) {

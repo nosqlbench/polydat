@@ -5,8 +5,10 @@
 //!
 //! `Program` is the public surface of the compiled IR. It's
 //! `#[non_exhaustive]` and accessible by value but cannot be
-//! mutated after construction: the optimizer (§10) is the only
-//! path from AST to IR, and the resulting program is frozen.
+//! mutated after construction: `ir::compile::compile` is the
+//! only path from AST to IR (the optimizer (§10) is a separate
+//! AST→AST pass callers may run first), and the resulting
+//! program is frozen.
 
 use serde::{Deserialize, Serialize};
 
@@ -16,8 +18,9 @@ use super::op::Op;
 /// [`Op`]s ending in [`Op::Dispense`].
 ///
 /// `Program` is the load-bearing immutable public API per
-/// spec §9.1. The optimizer is the only constructor; consumers
-/// read via `ops` and [`stack_depth`](Program::stack_depth).
+/// spec §9.1. `ir::compile::compile` is the only constructor;
+/// consumers read via `ops` and
+/// [`stack_depth`](Program::stack_depth).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Program {

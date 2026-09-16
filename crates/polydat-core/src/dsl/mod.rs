@@ -1,7 +1,10 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Polydat DSL: lexer, parser, and AST for `.polydat` kernel definition files.
+//! The Polydat compiler: from a parsed `.polydat` program to an
+//! assembler and a kernel. The language itself (lexer, parser, AST,
+//! pretty printer, pragmas, tile templates) lives in
+//! `polydat_grammar` and is re-exported here at its old paths.
 
 // The language itself lives in `polydat_grammar`: the lexer, the
 // parser, the AST, the pretty-printer, the free-name collector,

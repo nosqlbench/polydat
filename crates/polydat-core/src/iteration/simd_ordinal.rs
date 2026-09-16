@@ -4,7 +4,7 @@
 //! Offset-stamped SIMD batching for stable ordinal streams.
 //!
 //! This is the Tier-1 execution primitive from
-//! `docs/design/simd_isa_autopromotion.md`: one stable-by-ordinal source, one
+//! `polydat/docs/design/simd_isa_autopromotion.md`: one stable-by-ordinal source, one
 //! lane-independent transform over a power-of-two 128-bit lane shape, one
 //! ordered consumer, and explicit handling for lease fragments. It is not a
 //! general scalar↔register type adapter; the compiler supplies only qualified

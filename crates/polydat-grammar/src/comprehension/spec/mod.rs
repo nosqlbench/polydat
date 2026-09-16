@@ -68,11 +68,10 @@ pub use serde_form::{ComprehensionSpec, ForSpec, SpecConvertError, parse_inline}
 pub use source_parser::{SourceParseError, parse_source};
 pub use text::{TextParseError, parse_text};
 
-// Leaf grammar utilities — re-exported here so external
-// consumers (nbrs-workload, nbrs-runtime) reach the polydat
-// grammar through a single chokepoint module. The
-// implementations live in `crate::comprehension::parse` but
-// that module is not external API after Surface 1.
+// Leaf grammar utilities — re-exported here so consumers reach
+// them through one module. The implementations live in
+// `crate::comprehension::parse`, which is also public as the full
+// parser.
 //
 // What's re-exported (leaf utilities, no comprehension-build
 // pipeline):
@@ -83,12 +82,13 @@ pub use text::{TextParseError, parse_text};
 //   text → legacy `Comprehension` (used for inline-text shapes
 //   where the where/order are not separate keys).
 //
-// What's deliberately NOT re-exported (comprehension-build
-// pipeline — callers route through [`ComprehensionSpec`]):
-// - `comprehension_from_subspaces` — internal to
+// Not re-exported here (comprehension-build pipeline — callers
+// route through [`ComprehensionSpec`]; reach them at
+// `crate::comprehension::parse` if needed):
+// - `comprehension_from_subspaces` — used by
 //   `ComprehensionSpec::into_legacy` / `into_algebra`.
 // - `split_at_order`, `split_at_where`, `split_respecting_parens` —
-//   internal parser helpers.
+//   parser helpers.
 pub use crate::comprehension::parse::{
     parse_clause, parse_clause_list, parse_comprehension_text, parse_order_spec,
 };

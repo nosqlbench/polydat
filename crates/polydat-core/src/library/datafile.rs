@@ -17,7 +17,7 @@
 //! The macro-emitted `new()` is infallible; the setup function panics
 //! with a formatted error on bad file content, and the build closure
 //! carries the panic upward so workload compile surfaces the
-//! diagnostic text. This matches `library/regex.rs`'s
+//! diagnostic text. This matches `polydat-nodes`' `regex.rs`
 //! `compile_regex(...).expect("invalid regex")` setup.
 
 #[cfg(test)]

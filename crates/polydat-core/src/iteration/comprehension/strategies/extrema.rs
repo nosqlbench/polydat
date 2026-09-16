@@ -3,27 +3,25 @@
 
 //! `Extrema` strategy — spec §3.6.
 //!
-//! Emits the K-D lattice corners (2^N tuples), ordered by distance
-//! from the center, truncated to a number of complete *strata*.
+//! Enumerates the whole index space of a discrete `Lattice`,
+//! stratified by *interior count* — the number of axes whose
+//! index is not at `0` or `len-1`. Stratum 0 is the 2^N corners,
+//! stratum 1 the edges, stratum 2 the faces, …, stratum N the
+//! single all-interior point. Strata are emitted corners-first,
+//! Lex within a stratum; `/N` keeps the first N complete strata.
+//! See `extrema_multi_indices`.
 //!
 //! - Discrete `Lattice` with N≥2 axes is the native shape; 1-D
 //!   collapses to `{first, last}` (degenerate).
-//! - Continuous box: the 2^N corners are the per-axis interval
-//!   endpoints (with appropriate open/closed treatment).
-//!
-//! Distance metric: distance from the lattice center, with
-//! lex order as tiebreak. Specifically, for axis sizes
-//! `(s_0, …, s_{N-1})` the center is `(s_i / 2, …)`; a corner
-//! position `(c_0, …, c_{N-1})` has distance `Σ|c_i - center_i|`.
-//! Corners equidistant from center are emitted in Lex order.
+//! - The continuous box is not implemented; the runtime rejects
+//!   Extrema over continuous sources.
 //!
 //! **Truncation is by complete strata, never mid-stratum.** Every
-//! corner of a hypercube is equidistant from the center (each axis
-//! contributes the same `(s-1)/2` whichever extreme is taken), so all
+//! corner of a hypercube has interior count 0, so all
 //! `2^N` corners form a *single* stratum. Consequently `extrema` is
 //! the whole corner SET and `extrema/N` for any `N ≥ 1` yields all of
-//! it — the `/N` selects strata, and partial counts within an
-//! equidistant set are not a meaningful subset (use `lex/N` /
+//! it — the `/N` selects strata, and partial counts within a
+//! stratum are not a meaningful subset (use `lex/N` /
 //! `halton/N` / `sobol/N` for count subsampling, `shells/N` for
 //! concentric-shell depth). See `take_n_strata`.
 

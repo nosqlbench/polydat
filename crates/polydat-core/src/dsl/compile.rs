@@ -4,7 +4,8 @@
 //! DSL-to-assembly bridge: compile a parsed Polydat AST into a runtime kernel.
 //!
 //! Walks the AST, resolves function names to node constructors, wires
-//! the `PolydatAssembler`, and produces a `PolydatKernel`.
+//! the `PolydatAssembler`, and produces the interpreter's
+//! `PolydatKernel` or any engine's boxed `Kernel`.
 
 use std::path::{Path, PathBuf};
 
@@ -23,18 +24,16 @@ use super::modules::ResolvedModule;
 
 /// Typed error ontology for the embedded-evaluation surface.
 ///
-/// Per [`expression_engine.md`'s §6 Error Ontology][spec], every
-/// failure mode the embedding surface can produce maps to one of
-/// these variants. Hosts pattern-match on the variant to drive
-/// UX, recovery, or logging without parsing message strings.
+/// Per `expression_engine.md` §6 Error Ontology (under
+/// `crates/polydat/docs/design/`), every failure mode the embedding
+/// surface can produce maps to one of these variants. Hosts
+/// pattern-match on the variant to drive UX, recovery, or logging
+/// without parsing message strings.
 ///
-/// **Status** (γ-1): the enum is introduced additively. Existing
-/// surfaces still return `Result<_, String>`; this enum is
-/// reachable via construction and converts to `String` via the
-/// `From<EmbeddingError> for String` impl below. γ-3 migrates the
-/// surfaces to return this type directly.
-///
-/// [spec]: ../../docs/design/expression_engine.md
+/// The embedding surfaces (`eval_const_expr*`, the typed surfaces,
+/// `interpolate_via_kernel`) return this type; the `compile_polydat*`
+/// entry points return `String` errors, and `From<EmbeddingError>
+/// for String` bridges the two.
 #[derive(Debug, Clone)]
 pub enum EmbeddingError {
     /// Text could not be parsed as polydat expression source.
@@ -125,9 +124,10 @@ pub enum EmbeddingError {
     },
 
     /// A `Value::None` propagated to the expression's output
-    /// when the host called a strict accessor (`as_bool` on
-    /// `Value::None`, etc.). Produced at the host's
-    /// accessor call, not by polydat directly. See SRD-74.
+    /// where a concrete value was required. Produced by a
+    /// `HostType::from_value` conversion that meets `Value::None`,
+    /// or by a host's own strict accessor (`as_bool` on
+    /// `Value::None`, etc.). See SRD-74.
     NonePropagated {
         /// The accessor the host called.
         accessor: &'static str,
@@ -148,11 +148,10 @@ pub enum EmbeddingError {
         deadline_ms: u64,
     },
 
-    /// The runtime node registry (`PolydatRuntime`) is in a state
-    /// where required factories were not registered before
-    /// the embedding call. Includes the list of node names
-    /// the expression referenced but couldn't resolve due to
-    /// registry incompleteness.
+    /// A node the expression references is absent from the
+    /// link-time node registry. Carries the node names that
+    /// could not be resolved. Not produced by any current
+    /// surface.
     RegistryNotInitialised {
         /// The node names that could not be resolved.
         missing: Vec<String>,
@@ -256,10 +255,8 @@ impl std::fmt::Display for EmbeddingError {
 
 impl std::error::Error for EmbeddingError {}
 
-/// `From` impl that preserves backward compatibility while γ-1
-/// is in place: existing call sites that still expect
-/// `Result<_, String>` continue to work via `.map_err(Into::into)`.
-/// γ-3 removes the need for this impl by migrating surfaces.
+/// Renders the error as its message for callers on the
+/// `Result<_, String>` entry points.
 impl From<EmbeddingError> for String {
     fn from(e: EmbeddingError) -> String {
         e.to_string()
@@ -270,7 +267,8 @@ impl From<EmbeddingError> for String {
 ///
 /// Each entry is (filename, source). Multiple modules per file —
 /// each top-level binding is a separate module, resolved by name.
-/// Searched as the final fallback after workload-local and --polydat-lib paths.
+/// Searched as the final fallback after the source directory and
+/// `CompileOptions::lib_paths` (the binary's `--lib`).
 pub(super) static STDLIB_MODULES: &[(&str, &str)] = &[
     (
         "hashing.polydat",
@@ -440,21 +438,21 @@ pub fn compile_polydat_with_outputs(
     compile_polydat_with_options(source, &options, None)
 }
 
-/// `init <name> = <expr>` declares a side-effect-carrying init-time
+/// `const name := expr` declares a side-effect-carrying compile-time
 /// computation: download a dataset, prebuffer a facet, register a
 /// resource, etc. The user's signal that they want it evaluated is
 /// the `const` keyword itself, not a downstream wire reference. Yet
 /// the assembler's DCE pass walks back from the requested-outputs
 /// set and prunes anything not in that ancestry, which silently
-/// removes init bindings whose result nothing reads.
+/// removes const bindings whose result nothing reads.
 ///
 /// This helper extends a caller-supplied `required_outputs` list
-/// with every `init <name> = ...` LHS in the source. Two effects:
+/// with every `const` binding target in the source. Two effects:
 /// the assembler keeps those nodes during DCE, and constant
-/// folding then evaluates them at compile time — running the side
-/// effect exactly once, before any cycle dispatch.
+/// folding then evaluates them once at compile time — running the
+/// side effect exactly once, before any dispatch.
 ///
-/// Cycle bindings (`name := ...`) are *not* added; they only run
+/// Plain bindings (`name := ...`) are *not* added; they only run
 /// when consumed. Modules and other statements are likewise not
 /// auto-promoted.
 fn extend_required_with_const_bindings(
@@ -631,22 +629,13 @@ pub fn compile_polydat_with_log(
     compile_polydat_with_options(source, &CompileOptions::default(), Some(log))
 }
 
-/// Scan the source for module-level `// @pragma: …` directives and
-/// record one event per pragma in the supplied log:
+/// Record one event per pragma in `set`: `PragmaAcknowledged`
+/// (advisory) for `strict_types`/`strict_values`/`strict`,
+/// `UnknownPragma` (warning) for the rest. Forward-compatible: an
+/// unknown pragma never blocks compilation.
 ///
-/// - Recognised pragmas → `PragmaAcknowledged` (advisory).
-/// - Unrecognised pragmas → `UnknownPragma` (warning) — pragmas are
-///   forward-compatible, so the compile keeps going.
-///
-/// Hooked into every `compile_polydat_with_log`-shaped entry point. The
-/// extracted [`PragmaSet`] can also be re-fetched directly via
-/// [`crate::dsl::pragmas::extract_pragmas`] when downstream graph
-/// transforms need it.
-///
-/// [`PragmaSet`]: crate::dsl::pragmas::PragmaSet
-/// Emit `PragmaAcknowledged` (advisory) for recognised pragma
-/// names and `UnknownPragma` (warning) for the rest. Forward-
-/// compatible: an unknown pragma never blocks compilation.
+/// Called from `Prepared::new` for every entry point given a log;
+/// the set comes from `pragmas::collect_from_ast`.
 pub(crate) fn record_pragma_events(
     set: &super::pragmas::PragmaSet,
     log: &mut super::events::CompileEventLog,
@@ -721,22 +710,6 @@ pub fn compile_polydat_checked(
     }
 }
 
-/// Evaluate a Polydat expression as a compile-time constant.
-///
-/// The expression must have no input dependencies. It is compiled
-/// as a zero-input program and constant-folded. Returns the folded
-/// value, or an error if the expression depends on runtime inputs
-/// or fails to compile.
-///
-/// # Examples
-///
-/// ```
-/// use polydat::dsl::compile::eval_const_expr;
-/// let v = eval_const_expr("4 * 4").unwrap();
-/// assert_eq!(v.as_u64(), 16);  // both int literals → u64_mul
-/// let v = eval_const_expr("4.0 * 4.0").unwrap();
-/// assert_eq!(v.as_f64(), 16.0);  // both float literals → f64_mul
-/// ```
 /// Cache of constant-expression results keyed by source text. A const
 /// expression compiles with no inputs, so its value is a pure function
 /// of its text; caching is exact. Bounded so a pathological caller
@@ -755,6 +728,16 @@ const CONST_EXPR_CACHE_CAP: usize = 8192;
 /// input is a lifecycle error. The compile, when there is one, is
 /// recorded in a ledger of its own; [`eval_const_expr_for`] charges
 /// it to a tree's.
+///
+/// # Examples
+///
+/// ```
+/// use polydat::dsl::compile::eval_const_expr;
+/// let v = eval_const_expr("4 * 4").unwrap();
+/// assert_eq!(v.as_u64(), 16);  // both int literals → u64_mul
+/// let v = eval_const_expr("4.0 * 4.0").unwrap();
+/// assert_eq!(v.as_f64(), 16.0);  // both float literals → f64_mul
+/// ```
 pub fn eval_const_expr(source: &str) -> Result<crate::ast::Value, EmbeddingError> {
     eval_const_expr_for(source, &crate::kernel::CompileLedger::new())
 }
@@ -892,11 +875,11 @@ pub trait HostType: Sized {
     /// time type-mismatch detection.
     fn target_port_type() -> crate::ast::PortType;
 
-    /// Convert a polydat [`crate::ast::Value`] of the matching
-    /// port type into the host Rust type. Returns a typed
-    /// [`EmbeddingError::TypeMismatch`] when the value's
-    /// variant doesn't match this `HostType`'s expected
-    /// `PortType`.
+    /// Convert a polydat [`crate::ast::Value`] into the host Rust
+    /// type. Returns a typed [`EmbeddingError::TypeMismatch`] when
+    /// the value cannot be represented as the host type; the impls
+    /// accept the lossless widenings (`U64` → `bool`/`f64`, scalars
+    /// → `String`).
     fn from_value(v: crate::ast::Value) -> Result<Self, EmbeddingError>;
 }
 
@@ -1159,12 +1142,6 @@ fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
-/// Evaluate an `extern name: type = default` default expression
-/// to a typed `Value`. Accepts literal forms only (`IntLit`,
-/// `FloatLit`, `StringLit`, plus identifiers `true`/`false` for
-/// `bool` ports). Non-literal expressions are rejected with a
-/// clear error; complex defaults belong in a binding, not on
-/// the extern declaration.
 /// Run one of the assembler's str-to-typed coercion nodes over a string
 /// literal at compile time, turning the node's panic diagnostic into a
 /// compile error.
@@ -1197,6 +1174,14 @@ fn coercion_panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
+/// Evaluate an `extern name: type = default` default expression
+/// to a typed `Value`. Accepts literal forms only (`IntLit`,
+/// `FloatLit`, `StringLit`, plus identifiers `true`/`false` for
+/// `bool` ports). A string literal fuses to the declared type
+/// through the same `StrToU64`/`StrToF64`/`StrToBool` coercions
+/// the assembler inserts. Non-literal expressions are rejected
+/// with a clear error; complex defaults belong in a binding, not
+/// on the extern declaration.
 fn evaluate_default_expr(
     expr: &crate::dsl::ast::Expr,
     port_type: crate::ast::PortType,
@@ -1266,6 +1251,7 @@ fn evaluate_default_expr(
 ///   value is Str in either case.
 /// - Integer literal → `U64`.
 /// - Float literal → `F64`.
+/// - `true`/`false` → `Bool`.
 /// - Bare identifier referencing an already-declared input →
 ///   the referenced input's `PortType`. Threading reference
 ///   types lets `const X := other_extern` propagate types
@@ -1273,11 +1259,15 @@ fn evaluate_default_expr(
 /// - Binary op → the operand types (preferring LHS when both
 ///   resolve and match; both `Add`/`Sub`/`Mul`/`Div`/`Mod`
 ///   preserve operand type). `Pow` always returns F64.
-/// - Unary negation → operand type.
-/// - Function calls, array literals, field access → `None`
-///   (Ext fallback). These produce types the assembler knows
-///   only after node attachment; inferring here would need a
-///   full second-pass.
+/// - Unary negation and bitwise not → operand type.
+/// - Cast → its target type.
+/// - `for` producer → `Ext`.
+/// - Calls to `printf`/`concat`/`format`/`str` → `Str`; to
+///   `dataset_prebuffer`/`const_handle` → `Handle`.
+/// - Other function calls, array literals, field access →
+///   `None` (Ext fallback). These produce types the assembler
+///   knows only after node attachment; inferring here would
+///   need a full second pass.
 ///
 /// ## Tradeoffs not covered
 ///
@@ -1328,16 +1318,10 @@ fn infer_auto_extern_type(
         Expr::Call(call) => {
             // Each call we recognize here is one fewer
             // boundary-adapter `… → Ext` warning at runtime.
-            // The function name → output `PortType` table below
-            // is the practical-shipping subset; ideally this
-            // lookup would consult the DSL registry's
-            // `FuncSig.output_type` directly, but `FuncSig`
-            // today carries only "Fixed vs SameAsInput(idx)"
-            // without the actual PortType, so the answer for
-            // the `Fixed` case still has to come from somewhere.
-            // Adding entries here as workloads surface new
-            // `→ Ext` warnings is the closed-loop fix until
-            // the registry grows the missing column.
+            // Consult `registry::lookup(f).and_then(|s| s.output_port)`
+            // first; the function name → output `PortType` table
+            // below remains only for hand registrations without
+            // one.
             //
             // Categories:
             //
@@ -1362,7 +1346,7 @@ fn infer_auto_extern_type(
 /// Try to fold a `shared X := <expr>` initializer to a typed
 /// `(Value, PortType)`. Returns `Some` for literal forms (the
 /// shareable-cell case); returns `None` for non-literal
-/// expressions (which keep the legacy cycle-binding shape — the
+/// expressions (which keep the ordinary binding shape — the
 /// `shared` keyword carries metadata only and the binding has
 /// no cross-scope mutability today).
 ///
@@ -1371,8 +1355,8 @@ fn infer_auto_extern_type(
 /// `SharedCell` between this slot and inner kernels' matching
 /// inputs. Non-literal shared bindings retain the
 /// computation-node shape; full cross-scope mutability for
-/// those is future work (see SRD-16 §"Open: concurrent shared
-/// mutation").
+/// those is future work (see scope_model.md §6.2 "Concurrent
+/// semantics").
 fn try_fold_shared_init(
     expr: &crate::dsl::ast::Expr,
 ) -> Option<(crate::ast::Value, crate::ast::PortType)> {
@@ -1534,7 +1518,8 @@ pub(super) struct Compiler {
     /// Additional library directories for module resolution.
     ///
     /// Searched after `source_dir` but before the embedded stdlib.
-    /// Populated via `--polydat-lib=path` CLI flags.
+    /// Populated from `CompileOptions::lib_paths` (the binary's
+    /// `--lib`).
     pub(super) polydat_lib_paths: Vec<PathBuf>,
     /// Cache of already-resolved module ASTs: module_name → (inputs, statements).
     pub(super) module_cache: std::collections::HashMap<String, ResolvedModule>,
@@ -2593,9 +2578,11 @@ impl Compiler {
 /// the hybrid kernel, or pure native code. Every engine accepts every
 /// program the interpreter accepts, or refuses it with a reason
 /// ([`crate::KernelError::Refused`]); a host drives the result through
-/// [`crate::Kernel`] without knowing which engine it holds. The other
-/// `compile_polydat*` entry points build the interpreter kernel and
-/// remain for that.
+/// [`crate::Kernel`] without knowing which engine it holds. The
+/// `compile_polydat_kernel*` and `compile_polydat_checked` entry
+/// points are this on `Engine::default()`; `compile_polydat`,
+/// `compile_polydat_with_options`, and the deprecated forms build
+/// the interpreter's kernel.
 pub fn compile_polydat_with(
     source: &str,
     engine: crate::Engine,
@@ -3220,7 +3207,6 @@ mod tests {
 
     // --- Dead code elimination tests ---
 
-    /// Every function registered in the FuncSig registry must be
     // --- Strict mode comprehensive tests ---
 
     // --- eval_const_expr tests ---

@@ -5,9 +5,12 @@
 //!
 //! The Polydat runtime: the value model, the graph compiler, the
 //! execution engines, the kernels, the comprehension runtime, the node
-//! macro's support surface, the nodes the compiler synthesizes itself,
-//! and the numeric bodies the native lowerings share with the node
-//! library.
+//! macro's support surface, the nodes the compiler synthesizes
+//! (adapters, passthroughs, constants, assertions, tile rendering)
+//! together with the nodes that stay with the runtime (formatting,
+//! JSON, data files, diagnostics, context, logging, and the
+//! `vectordata` accessors), and the numeric bodies the native
+//! lowerings share with the node library.
 //!
 //! A program declares typed inputs and a graph of named functions; the
 //! compiler produces a kernel whose named outputs are pulled on demand.
@@ -119,11 +122,13 @@
 //!   traversal activation.
 //! - [`iteration`]: comprehensions, cursors, partitions, and the
 //!   coordinate algebra.
-//! - [`library`]: the nodes the compiler keeps: adapters
-//!   ([`library::polyfill`]), assertions, constants, identity,
-//!   formatting, tile rendering ([`library::tile_render`]), and the
-//!   library-internal support ([`library::support`]). The node library
-//!   proper is `polydat-nodes`.
+//! - [`library`]: the nodes the compiler synthesizes (adapters via
+//!   [`library::polyfill`], passthroughs, constants, assertions, tile
+//!   rendering via [`library::tile_render`]) together with the nodes
+//!   that stay with the runtime: formatting, JSON, data files,
+//!   diagnostics, context/environment, logging, and the `vectordata`
+//!   accessors; plus the library-internal support
+//!   ([`library::support`]). Every other node is in `polydat-nodes`.
 //! - [`numeric`]: the numeric bodies shared by the node library and the
 //!   native lowerings.
 //! - [`tile`]: Polytile at the host boundary.

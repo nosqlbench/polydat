@@ -13,7 +13,7 @@
 //!
 //! Lives in the kernel module because the data it carries is
 //! pure Polydat metadata — name, port type, binding modifier — all
-//! of which already have homes in `kernel` / `node` / `dsl`.
+//! of which already have homes in `kernel` / `ast` / `dsl`.
 
 use crate::ast::PortType;
 use crate::dsl::ast::BindingModifier;

@@ -53,7 +53,8 @@
 //!   injections for workload params the spec interpolates, etc.
 //! - The **executor** (in the host) needs to
 //!   enumerate the iteration tuples, drive the per-iteration
-//!   `materialize_wiring_from_outer`, and run the children.
+//!   `PolydatKernel::for_iteration` (which wires the parent scope
+//!   internally), and run the children.
 //!
 //! All three flow through this module's canonical algebra AST.
 
@@ -101,8 +102,7 @@ pub use validate::{Mode, ValidationError, ValidationReport, ValidationWarning, v
 // utilities used by the algebra runtime evaluator and the
 // scope-walker — not part of the comprehension AST surface.
 //
-// `enumerate_tuples` and `parse_list_with_types` are crate-
-// private — only `runtime` and `eval` use them internally
-// after the synthesis dissolve. Kept available via
-// `eval::*` for crate-internal callers.
+// `enumerate_tuples` and `parse_list_with_types` are not
+// re-exported at this level; they remain reachable as
+// `eval::enumerate_tuples` / `eval::parse_list_with_types`.
 pub use eval::{evaluate_spec, pre_evaluate_clause, value_to_polydat_type_name};

@@ -120,7 +120,7 @@ fn clamp_in(n: u64, partition: Ext<Partition>) -> u64 {
 
 /// `random_in(p, seed)` — deterministic hash-mapped ordinal
 /// inside the partition: `p.start_ord + hash(seed) mod
-/// cardinality(p)`. Same xxHash3 entropy source as `hash(...)`,
+/// cardinality(p)`. Same SplitMix64 entropy source as `hash(...)`,
 /// so equal seeds always land on the same ordinal. Use for
 /// random-access patterns that must stay inside the active
 /// partition; prefer `mod_in` when sequential coverage matters.

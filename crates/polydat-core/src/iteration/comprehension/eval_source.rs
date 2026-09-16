@@ -39,15 +39,15 @@
 //!
 //! | Class | Variants | `evaluate(None)` works? |
 //! |---|---|---|
-//! | [`EvalClass::Static`] | `Literal`, `IntRange`, `ContinuousInterval`, `Distribution` (and registry-recognized `Generator`s, once PR β lands) | yes |
-//! | [`EvalClass::ContextRequired`] | `Generator` outside the registry, `WorkloadParamList` | no — needs `&Context` |
+//! | [`EvalClass::Static`] | `Literal`, `IntRange` | yes |
+//! | [`EvalClass::ContextRequired`] | `Generator`, `WorkloadParamList` | no — needs `&Context` |
 //! | [`EvalClass::Distribution`] | `ContinuousInterval`, `Distribution` (in their "not yet sampled" state) | yes, but `values` is empty — enclosing `Order(_, sampling-strategy, Some(n))` materializes |
 //!
-//! The classifier on [`SourceEval::eval_class`] is the
-//! compile-time signal: if a comprehension's entire source set
-//! is `Static`, the IR planner can fire V4 early as a
-//! usability nicety; otherwise V4 fires at strategy-invocation
-//! time per spec §10.7.8.
+//! [`SourceEval::eval_class`] classifies a source for callers
+//! that want to know whether `evaluate(None)` will succeed; the
+//! compile-time V4 check in `validate` works from AST metadata
+//! and does not consult it. V4 otherwise fires at
+//! strategy-invocation time per spec §10.7.8.
 //!
 //! ## What this module DOES NOT own
 //!
@@ -90,11 +90,10 @@ pub struct EvaluatedSource {
 
 /// Spec §10.7.0 partitioning.
 ///
-/// Used by the IR planner's compile-time V4 best-effort fire:
-/// if every clause in a comprehension reports
-/// [`EvalClass::Static`], the planner can pre-evaluate them
-/// with `ctx = None` and run V4 early; otherwise V4 fires at
-/// strategy-invocation time only.
+/// Tells a caller whether a source can be materialized with
+/// `ctx = None`. The compile-time V4 check in `validate` works
+/// from AST metadata and does not consult this; V4 otherwise
+/// fires at strategy-invocation time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvalClass {
     /// Statically evaluable with no kernel / param context.
@@ -156,7 +155,7 @@ impl std::error::Error for EvalError {}
 /// spec-text and `Source::WorkloadParamList` lookups resolve.
 /// `var_name` lets the source synthesise a useful error
 /// message; `prefix` is the prior-axis bindings the evaluator
-/// installs via `PolydatKernel::materialize_subscope` so dependent
+/// layers in front of `scope` (via `Layered`) so dependent
 /// sources see earlier-axis values.
 pub struct EvalContext<'a> {
     /// The clause's element name, for messages.
@@ -180,9 +179,9 @@ pub trait SourceEval {
 
     /// Materialize this source.
     ///
-    /// Static sources (Literal / IntRange / ContinuousInterval
-    /// / Distribution) accept `ctx = None`. Context-required
-    /// sources (Generator / WorkloadParamList) require
+    /// Literal / IntRange (`Static`) and ContinuousInterval /
+    /// Distribution (`Distribution`) accept `ctx = None`.
+    /// Generator / WorkloadParamList (`ContextRequired`) require
     /// `Some(ctx)` and return [`EvalError::NeedsContext`]
     /// otherwise.
     fn evaluate(&self, ctx: Option<&EvalContext<'_>>) -> Result<EvaluatedSource, EvalError>;
@@ -195,10 +194,8 @@ impl SourceEval for Source {
             Source::ContinuousInterval { .. } | Source::Distribution { .. } => {
                 EvalClass::Distribution
             }
-            // Pre-PR β every Generator is context-required.
-            // PR β promotes registry-recognized generators to
-            // Static by inspecting `expr` against the
-            // built-in generator catalog.
+            // Every Generator is context-required; a static
+            // generator catalogue is not implemented.
             Source::Generator { .. } => EvalClass::ContextRequired,
             Source::WorkloadParamList { .. } => EvalClass::ContextRequired,
         }
@@ -294,16 +291,16 @@ impl SourceEval for Source {
 
 /// Classify a materialized value list by observed shape.
 ///
-/// Naïve PR α path (the "expand-then-classify" stage of spec
-/// §10.7.6 / §10.7.8): a numeric arithmetic progression →
+/// The "expand-then-classify" stage of spec §10.7.6 / §10.7.8:
+/// a numeric arithmetic progression →
 /// `Lattice { axis_sizes: [N] }` reflecting the regular stride.
 /// Non-numeric or non-progression value lists → a plain
 /// `Lattice { axis_sizes: [N] }` whose only shape claim is
 /// length. Either way the strategy gets a useful 1-axis Lattice
 /// for indexed-form dispatch.
 ///
-/// PR β replaces this for registry-recognized generators where
-/// the shape is declared from args without expansion.
+/// A static generator catalogue that declares shape from args
+/// without expansion is not implemented.
 fn classify_observed_values(vals: &[Value]) -> IndexFn {
     let n = vals.len() as u64;
     IndexFn::Lattice {

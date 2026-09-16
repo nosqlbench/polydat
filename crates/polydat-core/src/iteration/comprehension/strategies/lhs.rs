@@ -43,7 +43,8 @@ use crate::iteration::comprehension::strategy::StrategyName;
 /// Latin hypercube samples.
 pub struct Lhs;
 
-/// Algebra-layer seed; replaced by per-streamer seed in Phase 7.
+/// Seed base; the input length is added per call. Per-streamer
+/// seeding is not implemented.
 const SEED: u64 = 0x1A50_4577_3EED_BEEF;
 
 impl Strategy for Lhs {

@@ -8,7 +8,8 @@
 //! Runs during assembly after wiring resolution, before dead code
 //! elimination and topological sort.
 //!
-//! See [graph_compiler.md](../../docs/design/graph_compiler.md) §Node Fusion for the full design.
+//! See `crates/polydat/docs/design/graph_compiler.md` §5 for the full
+//! design.
 
 use std::borrow::Cow;
 

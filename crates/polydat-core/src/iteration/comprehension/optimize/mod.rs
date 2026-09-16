@@ -25,10 +25,10 @@
 //!   combinators, trivially-true filter, `order(Lex, None)`.
 //! - **R0b — associativity flattening** (A1, A2): nested
 //!   union / cartesian collapse to n-ary form.
-//! - **R1 — `order(Lex)` → `ORDER_STREAMING`**: metadata-
-//!   driven. The IR compiler (Phase 7) reads
-//!   `metadata.materialization == Streaming` for
-//!   `order(Lex, _)` and emits `ORDER_STREAMING`. Not an AST
+//! - **R1 — `order(Lex)` → `ORDER_STREAMING`**: the IR
+//!   compiler emits `ORDER_STREAMING` for `order(Lex, _)` and
+//!   `ORDER_MATERIALIZE { indexed }` otherwise, with `indexed`
+//!   taken from `metadata.index_addressable`. Not an AST
 //!   rewrite; recorded in the reducibility catalog as an
 //!   IR-compilation eligibility.
 //! - **R2 — `order(c, strategy, Some(n))` → `indexed_order`**:

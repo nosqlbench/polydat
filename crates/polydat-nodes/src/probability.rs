@@ -50,8 +50,7 @@ fn hash_to_unit(v: u64) -> f64 {
 ///
 /// Deterministic: the same input always produces the same output.
 ///
-/// JIT level: P2 — the macro auto-emits `compiled_u64` from the
-/// scalar `u64 -> u64` body.
+/// JIT level: P3 (`JitOp::FairCoin`, inlined SplitMix + mask).
 #[polydat::polydat_node(category = Probability)]
 fn fair_coin(input: u64) -> u64 {
     let h = crate::hash::splitmix64_u64(input);
@@ -84,7 +83,7 @@ fn fair_coin(input: u64) -> u64 {
 /// sample sizes the fraction converges to `p`, but any given
 /// window may vary.
 ///
-/// JIT level: P2 — macro-emitted compiled closure captures `p`.
+/// JIT level: P3 (`JitOp::UnfairCoinConst`).
 #[polydat::polydat_node(category = Probability)]
 fn unfair_coin(input: u64, p: Const<f64>) -> u64 {
     if !(0.0..=1.0).contains(&*p) {
@@ -117,8 +116,7 @@ fn unfair_coin(input: u64, p: Const<f64>) -> u64 {
 /// Combine with `fair_coin`, `unfair_coin`, or `n_of` for the condition,
 /// and any pair of compatible values for the branches.
 ///
-/// JIT level: P3 — macro-emitted compiled closure is a branchless
-/// conditional move when the LLVM optimiser folds the if.
+/// JIT level: P3 (`JitOp::SelectU64`, a native conditional select).
 #[polydat::polydat_node(category = Probability)]
 fn select(cond: u64, if_true: u64, if_false: u64) -> u64 {
     if cond != 0 { if_true } else { if_false }
@@ -138,12 +136,12 @@ fn select(cond: u64, if_true: u64, if_false: u64) -> u64 {
 /// arithmetic without an explicit type conversion step:
 ///
 /// ```polydat
-/// surcharge := mul(chance(cycle, 0.3), 0.05)
+/// surcharge := f64_mul(chance(cycle, 0.3), 0.05)
 /// ```
 ///
 /// The `p` parameter is an init-time constant in [0.0, 1.0].
 ///
-/// JIT level: P2 — macro-emitted compiled closure captures `p`.
+/// JIT level: P3 (`JitOp::ChanceConst`).
 #[polydat::polydat_node(category = Probability)]
 fn chance(input: u64, p: Const<f64>) -> u64 {
     if !(0.0..=1.0).contains(&*p) {
@@ -184,7 +182,7 @@ fn chance(input: u64, p: Const<f64>) -> u64 {
 /// per-param `ParamSpec` constraint, so the assertion lives in the
 /// body and fires on the first eval).
 ///
-/// JIT level: P2 — macro-emitted compiled closure captures n and m.
+/// JIT level: P3 (`JitOp::NOfConst`).
 #[polydat::polydat_node(category = Probability)]
 fn n_of(input: u64, n: Const<u64>, m: Const<u64>) -> u64 {
     if *m == 0 {
@@ -221,8 +219,8 @@ pub use polydat::numeric::n_of_m::n_of_m_eval;
 /// color := one_of(cycle, "red", "green", "blue")
 /// ```
 ///
-/// JIT level: P1 only — `Const<Vec<C>>` is JIT-ineligible by design
-/// (per derive_support), so no compiled_u64 path.
+/// JIT level: no u64 kit (`Const<Vec<_>>`); lowered through its slot
+/// kit, called from native code on P3.
 #[polydat::polydat_node(category = Probability)]
 fn one_of(input: u64, values: Const<Vec<String>>) -> String {
     assert!(!values.is_empty(), "one_of: values must be non-empty");
@@ -322,7 +320,8 @@ impl WeightedTable {
 /// status := one_of_weighted(cycle, "200:80,404:10,500:5,503:5")
 /// ```
 ///
-/// JIT level: P1 only (String output prevents compiled_u64).
+/// JIT level: no u64 kit (String output); lowered through its slot
+/// kit from native code.
 #[polydat::polydat_node(category = Probability)]
 fn one_of_weighted(
     input: u64,
@@ -365,7 +364,7 @@ fn one_of_weighted(
 /// blended := blend(fast_latency, slow_latency, 0.3)
 /// ```
 ///
-/// JIT level: P2 — macro-emitted compiled closure captures `mix`.
+/// JIT level: P3 (`JitOp::BlendConst`).
 #[polydat::polydat_node(category = Probability)]
 fn blend(a: u64, b: u64, mix: Const<f64>) -> u64 {
     if !(0.0..=1.0).contains(&*mix) {

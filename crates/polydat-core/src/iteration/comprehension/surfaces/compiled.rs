@@ -42,8 +42,8 @@ impl CompiledComprehension {
         }
     }
 
-    /// Wrap an already-compiled program (the optimizer is the
-    /// canonical caller; tests use this for hand-built IR).
+    /// Wrap an already-compiled program (tests use this for
+    /// hand-built IR).
     pub fn from_program(program: Arc<Program>) -> Self {
         Self { program }
     }

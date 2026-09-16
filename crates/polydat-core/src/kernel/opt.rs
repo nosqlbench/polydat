@@ -23,8 +23,8 @@
 //! unchanged — the extra slots have no eval cone hanging off them.
 //!
 //! The knob threads through [`crate::kernel::subcontext::CompileOptions`]
-//! and is consulted at op-template synthesis. A host CLI exposes
-//! it as `--kernel-opt=release|diagnostic` (default `release`).
+//! and is consulted by `SubcontextBuilder::add_result_bindings`. The
+//! polydat binary does not expose it; a host may map a CLI flag onto it.
 
 /// Optimization level for op-template kernel synthesis.
 ///

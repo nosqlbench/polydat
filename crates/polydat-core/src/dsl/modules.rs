@@ -9,7 +9,8 @@
 //! 1. In-process cache (already-resolved modules)
 //! 2. `<name>.polydat` in the workload-local `source_dir`
 //! 3. Any `.polydat` file in `source_dir` that exports a binding named `<name>`
-//! 4. The same two searches repeated for each `--polydat-lib` path
+//! 4. The same two searches repeated for each library path
+//!    (`CompileOptions::lib_paths`, the binary's `--lib`)
 //! 5. The embedded standard library
 
 use std::collections::HashSet;
@@ -882,7 +883,8 @@ impl Compiler {
     /// 1. Cache (already resolved)
     /// 2. `<name>.polydat` in `source_dir` (workload-local)
     /// 3. Any `.polydat` in `source_dir` containing a matching binding
-    /// 4. Same two searches for each `--polydat-lib` path
+    /// 4. Same two searches for each library path
+    ///    (`CompileOptions::lib_paths`, the binary's `--lib`)
     /// 5. Embedded stdlib
     pub(super) fn resolve_module(&mut self, name: &str) -> Result<Option<&ResolvedModule>, String> {
         if self.module_cache.contains_key(name) {
@@ -939,11 +941,8 @@ impl Compiler {
         Ok(None)
     }
 
-    /// Parse a `.polydat` source and extract a module by name.
+    /// Insert the file's formal module definitions into the cache.
     ///
-    /// First checks for a formal `ModuleDef` statement matching the name.
-    /// If found, uses its typed signature and body directly.
-    /// Otherwise, falls back to subgraph extraction by binding name.
     /// Make every formal module defined in `file` resolvable by name in
     /// this compile, ahead of the filesystem and the embedded library.
     /// A definition in the program shadows a library node of the same

@@ -63,8 +63,7 @@ fn json_object(parts: &[Value]) -> std::sync::Arc<serde_json::Value> {
 }
 
 /// The merge `json_object` performs, over borrowed views (SRD 115
-/// §6.1), so both tiers run one body: P1 views its `Value` inputs, the
-/// compiled helper views its slots.
+/// §6.1): the body the node calls on its `Value` inputs.
 pub(crate) fn json_object_of_refs<'a>(
     parts: impl IntoIterator<Item = ValueRef<'a>>,
 ) -> serde_json::Value {
@@ -204,8 +203,8 @@ pub(crate) fn value_to_json(v: &Value) -> serde_json::Value {
     json_of_ref(ValueRef::from(v))
 }
 
-/// The JSON coercion over a borrowed view (SRD 115 §6.1): the compiled
-/// helpers call this on their slots without owning a `Value`.
+/// The JSON coercion over a borrowed view (SRD 115 §6.1), so a caller
+/// need not own a `Value`.
 pub(crate) fn json_of_ref(v: ValueRef<'_>) -> serde_json::Value {
     match v {
         // Bytes uses base64 here (JSON-payload convention) instead of
@@ -250,15 +249,14 @@ fn json_text(input: Value) -> String {
     json_text_of(&input)
 }
 
-/// The text `json_text` produces, shared with its compiled helper.
+/// The text `json_text` produces, as an owned `String`.
 pub(crate) fn json_text_of(input: &Value) -> String {
     let mut buf = String::new();
     json_text_into(input, &mut buf);
     buf
 }
 
-/// The text `json_text` produces, written into any text sink (the
-/// cycle arena writer in the compiled helper, SRD 115 §6).
+/// The text `json_text` produces, written into any text sink.
 pub(crate) fn json_text_into<W: std::fmt::Write>(input: &Value, out: &mut W) {
     json_text_ref_into(ValueRef::from(input), out);
 }

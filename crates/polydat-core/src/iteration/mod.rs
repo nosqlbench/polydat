@@ -14,9 +14,9 @@
 //! - [`source`]: workload-facing data-source abstraction —
 //!   the typed sequences that drive cycle dispense (range
 //!   factories, extension policies, cursor kinds).
-//! - [`cursor_partition`]: SRD-71 cursor partition specs —
-//!   how the operator slices a source's index range across
-//!   concurrent fibers.
+//! - [`cursor_partition`]: SRD 71 partition specs, their resolution
+//!   into `Partition` values, and the `over`-clause narrowing helpers
+//!   (`cursor_over_partitions_on`, `narrow_cursor`) every engine shares.
 //! - [`simd_ordinal`]: offset-stamped SIMD batching for stable ordinal
 //!   streams, with burst-resumable ordered scalar drain.
 

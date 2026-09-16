@@ -92,7 +92,8 @@ fn f64_mod(a: f64, b: f64) -> f64 {
 /// point (x, y). Output in (-pi, pi]. Use for converting Cartesian
 /// coordinates to polar angle.
 ///
-/// JIT level: P2.
+/// JIT level: P3 (`JitOp::MathBinary`, extern libm call from native
+/// code).
 #[polydat::polydat_node(category = Math)]
 fn atan2(y: f64, x: f64) -> f64 {
     y.atan2(x)

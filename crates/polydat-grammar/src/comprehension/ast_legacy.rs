@@ -46,8 +46,8 @@
 //! `(name, value)` for every distinct variable name the
 //! comprehension declares. The names come from
 //! [`Comprehension::coordinate_names`]; the values come
-//! from the runtime's `enumerate_tuples`
-//! (Phase C). With this AST in place, that wiring is a
+//! from the runtime's `evaluate_for_iteration` (in
+//! `polydat-core`). With this AST in place, that wiring is a
 //! 1:1 structural mapping rather than a string-parse
 //! round-trip.
 

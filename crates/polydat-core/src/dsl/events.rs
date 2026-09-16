@@ -3,9 +3,11 @@
 
 //! Polydat compiler diagnostic event stream.
 //!
-//! The compiler emits typed events for each step: parsing, binding
+//! The compiler emits typed events for each step: binding
 //! resolution, module inlining, type adaptation, constant folding,
-//! fusion, and compilation level selection.
+//! fusion, and compilation level selection. `Parsed`,
+//! `OutputDeclared`, `ParamInjected`, and `Summary` are reserved;
+//! no compile path emits them.
 //!
 //! Events are tagged with severity levels:
 //! - **Info**: normal compilation steps (parsed, resolved, folded)
@@ -20,7 +22,8 @@ pub enum EventLevel {
     /// Normal compilation step — informational only.
     Info,
     /// Design advisory — implicit conversion or coercion that the user
-    /// should review for module quality. Query with `--diagnose`.
+    /// should review for module quality. Surfaced by the binary's
+    /// `--stats` and `explain`.
     Advisory,
     /// Potential performance or correctness issue.
     Warning,
@@ -137,8 +140,8 @@ pub enum CompileEvent {
     },
     /// A module-level pragma was acknowledged. Recorded once per
     /// recognised `// @pragma: <name>` directive at the top of the
-    /// source. Lets `--diagnose` show which graph transforms the
-    /// module asked for.
+    /// source. Lets the binary's `--stats` and `explain` show which
+    /// graph transforms the module asked for.
     PragmaAcknowledged {
         /// The pragma's name.
         name: String,
@@ -284,7 +287,8 @@ impl CompileEventLog {
     }
 
     /// Return only advisory-level events (type coercions, widenings).
-    /// These are the "module design quality" messages users query with --diagnose.
+    /// These are the "module design quality" messages surfaced by the
+    /// binary's `--stats` and `explain`.
     pub fn advisories(&self) -> Vec<&CompileEvent> {
         self.events
             .iter()

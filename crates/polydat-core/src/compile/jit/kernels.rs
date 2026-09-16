@@ -311,8 +311,8 @@ macro_rules! jit_accessors {
         }
 
         /// Returns the raw u64 value stored at the given buffer slot
-        /// index. Refuses a reference or handle slot (axioms S2, H1):
-        /// read those through [`Self::get_value`].
+        /// index. Refuses a `Ref2` slot (axiom S2): read those
+        /// through [`Self::get_value`].
         #[inline]
         pub fn get_slot(&self, slot: usize) -> u64 {
             if self.core.guard_slots.get(slot).copied().unwrap_or(false) {
@@ -359,9 +359,9 @@ macro_rules! jit_accessors {
 
         /// Set an extern by name, as `PolydatState::set_input` does on
         /// the interpreter. The value must be of the declared port
-        /// type. A carrier takes effect at once; a string, JSON, or
-        /// extension value is written at the start of the next run, and
-        /// every step downstream of the extern reruns.
+        /// type. The value is written through into the buffer at once,
+        /// whatever its color, and every step downstream of the extern
+        /// reruns at the next evaluation.
         pub fn set_input(&mut self, name: &str, value: crate::ast::Value) -> Result<(), String> {
             let slot = self.core.set_extern(name, value)?;
             self.mark_input_changed(slot);
@@ -465,7 +465,9 @@ impl JitKernelRaw {
     /// `is_one_of`) from JIT-lowered code surface as normal
     /// Rust panics carrying the violation message. The
     /// longjmp wrapper in `super::codegen::invoke_with_catch`
-    /// handles the transition back to Rust land.
+    /// handles the transition back to Rust land when the code
+    /// calls a helper; code that calls none cannot fail and
+    /// runs bare.
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         // Written one by one, as the other kernels write them: a slice

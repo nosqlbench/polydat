@@ -368,11 +368,9 @@ mod codegen {
     #[test]
     fn classify_routes_is_one_of_to_fallback() {
         // SRD-80b Phase C — `is_one_of` migrated to the macro's
-        // `Const<Vec<C>>` shape, which is JIT-ineligible (the JIT
-        // u64 buffer has no slot shape for a variable-length
-        // captured list). The node now runs on the typed-eval
-        // path. A future `compiled_u64_override` could reinstate
-        // the JIT lowering if perf demands it.
+        // `Const<Vec<C>>` shape. classify_node returns Fallback
+        // (no `jit_constants` from a `Const<Vec<_>>` node); P3
+        // runs it through its slot kit.
         use crate::param_helpers::IsOneOf;
         let n = IsOneOf::new(vec![1, 3, 5, 7]);
         assert!(matches!(classify_node(&n), JitOp::Fallback));

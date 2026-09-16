@@ -70,7 +70,7 @@ fn r#mod(input: u64, modulus: Const<u64>) -> u64 {
 /// the const case, prefer [`Mod`] which is faster (the divisor
 /// is baked into the JIT closure as a constant).
 ///
-/// JIT level: P2 (compiled_u64 closure; not const-foldable).
+/// JIT level: P3 (`urem` on two wire slots; `JitOp::U64ModWire`).
 /// Modulo of a u64 by a wire-fed divisor. SRD-80 PR B.14
 /// migration — the `#[constraint(NonZeroU64)]` attribute carries
 /// the strict-wire-mode assertion contract.
@@ -103,11 +103,11 @@ fn div_wire(input: u64, #[constraint(NonZeroU64)] divisor: u64) -> u64 {
 ///   - alignment: pad an offset up to a chunk boundary
 ///   - bucketing: snap a value up to the next bin edge
 ///
-/// JIT level: P2 (uses `u64::div_ceil`).
+/// JIT level: P3 (`JitOp::CeilToMultiple`, inline).
 /// Smallest multiple of `multiple` that is ≥ `value`. SRD-80
 /// PR B.13. `multiple == 0` is a soft no-op (returns value
 /// unchanged) so a transient zero from a wire-bound extern
-/// doesn't break a binding mid-evaluation. JIT P2.
+/// doesn't break a binding mid-evaluation.
 #[polydat::polydat_node(category = Arithmetic)]
 fn ceil_to_multiple(value: u64, multiple: u64) -> u64 {
     if multiple == 0 {
@@ -183,7 +183,8 @@ fn multiples_at_least(value: u64, multiple: u64) -> u64 {
 /// fallback and race on the cell write; whichever writes last
 /// wins, but they're writing the same value anyway.
 ///
-/// JIT level: P3 (single compare + select).
+/// JIT level: P3 through its slot kit (no named JitOp); the body
+/// is the compare+select.
 //
 // SRD-80b Phase E: migrated to `#[polydat_node]`. Struct
 // renamed from `SetOrGetU64` to `SetOrGet` (greenfield
@@ -228,12 +229,10 @@ fn clamp(input: u64, min: Const<u64>, max: Const<u64>) -> u64 {
 ///
 /// JIT level: P3 (unrolled urem/udiv chain).
 //
-// SRD-80b Phase E: kept hand-written. The macro doesn't
-// currently support nodes whose output port count is
-// `MixedRadix` migrated to `#[polydat_node]` via the SRD-80b
-// `DynamicOutputs<T>` shape — the output port count is
-// determined at construction time from the `radixes`
-// `Const<Vec<u64>>` arg's length.
+// Migrated to `#[polydat_node]` via the `Const<Vec<u64>>` +
+// `DynamicOutputs<T>` shape; the output port count comes from
+// `radixes.len()` at construction. The `compiled_u64` /
+// `jit_constants` overrides feed `JitOp::MixedRadixConst`.
 fn mixed_radix_jit(node: &MixedRadix) -> CompiledU64Op {
     let radixes = node.radixes.clone();
     Box::new(move |inputs, outputs| {
@@ -290,7 +289,8 @@ fn mixed_radix(
 ///
 /// Use for combining multiple values into a single aggregate.
 ///
-/// JIT level: P2 (closure with loop).
+/// JIT level: P3 (unrolled chain, `JitOp::VariadicSum`; likewise
+/// product/min/max).
 // SRD-80 PR B.9 — variadic N-ary u64 reductions migrated to
 // `#[polydat_node]`. Macro generates Sum/Product/Min/Max
 // structs with `new(n_wires)` ctors and auto-emits Phase 2

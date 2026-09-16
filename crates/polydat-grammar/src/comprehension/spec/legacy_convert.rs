@@ -4,7 +4,7 @@
 //! Legacy → algebra AST converter.
 //!
 //! Reuses the existing legacy parsers
-//! (`polydat::iteration::comprehension::parse::*`) for structural shape
+//! ([`crate::comprehension::parse`]) for structural shape
 //! recognition, then converts the legacy `Comprehension`
 //! flat-struct AST to the new algebra-layer operator-tree
 //! [`crate::comprehension::ast::Comprehension`].

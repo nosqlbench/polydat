@@ -1,5 +1,5 @@
 // Copyright 2024-2026 Jonathan Shook
-// SPDX-Licene-Ientifier: Apache-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 //! Extern on the compiled engines.
 //!
@@ -12,9 +12,9 @@
 //!
 //! - **Layout.** Every input beyond the coordinates owns its slots in
 //!   the buffer, after the coordinates, at the width its port type
-//!   names. A handle-kind extern (a string, a byte string, JSON, an
-//!   extension value, a handle) also owns one entry of the kernel's
-//!   value table, numbered after the entries the nodes own.
+//!   names. A `Ref2`-kind extern (a string, a byte string, JSON, an
+//!   extension value, a handle) owns two slots: the pair into the
+//!   value it stores.
 //! - **Writing through.** Every write of an extern reaches the buffer
 //!   at once: a carrier (u64, i64, f64, bool) as its bits, a `Ref2`
 //!   kind (a string, a byte string, JSON, an extension value, a
@@ -158,8 +158,9 @@ impl Externs {
     }
 
     /// A cell of this kernel's scope holding `initial`, with the next
-    /// bit of the intent word (the word is bounded at 64 bits, as the
-    /// interpreter's is; later cells share the last bit).
+    /// bit of the intent word. The compiled kernel keeps one intent
+    /// word, so cells past the 64th share bit 63, where the
+    /// interpreter opens a new word (`allocate_cell_bit`).
     fn new_cell(&mut self, initial: Value) -> crate::kernel::SharedCell {
         let bit = self.next_bit;
         self.next_bit = self.next_bit.saturating_add(1).min(63);

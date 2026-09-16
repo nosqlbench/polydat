@@ -1,12 +1,13 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Polydat runtime: unified compilation context with factory registration.
+//! Host-side registry view and extern resolvers.
 //!
-//! The `PolydatRuntime` holds the complete set of available node functions
-//! (built-in + factory-provided), module search paths, and stdlib.
-//! All compilation goes through the runtime — there is no separate
-//! "built-in" vs "external" distinction visible to the user.
+//! `PolydatRuntime` unions the link-time registry with host factories
+//! for listing, and carries module search paths; node construction
+//! goes through `factory::build_node` and the inventory, not through
+//! this type. The extern-resolver registry is what the kernel consults
+//! at runtime.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -68,7 +69,7 @@ pub fn clear_extern_resolvers() {
 /// first `Some(value)` whose type matches `slot_type`
 /// (or whose type the catalog can adapt to `slot_type`).
 ///
-/// Called by `crate::kernel::state::materialize_wiring_from_outer`
+/// Called by `PolydatKernel::materialize_wiring_from_outer`
 /// as a fall-through after outer-chain lookup.
 pub(crate) fn resolve_extern(slot_name: &str, slot_type: PortType) -> Option<Value> {
     let r = RESOLVERS.lock().unwrap();
@@ -119,19 +120,21 @@ pub trait NodeFactory: Send + Sync {
     ) -> Result<Box<dyn PolydatNode>, String>;
 }
 
-/// The Polydat runtime: unified compilation context.
+/// A host-side registry view.
 ///
-/// Holds the complete function registry (built-in + factory-provided),
-/// factory instances for node construction, module search paths, and
-/// stdlib sources. All compilation goes through the runtime.
+/// Unions the link-time registry with host factories for listing, and
+/// carries module search paths and stdlib sources. Node construction
+/// goes through `factory::build_node` and the inventory, not through
+/// this type.
 ///
 /// Multiple runtimes can coexist with different factory sets.
 pub struct PolydatRuntime {
-    /// Registered factories. Built-in nodes are handled separately
-    /// (they're hardcoded in build_node), but their signatures are
-    /// included in the unified registry.
+    /// Registered factories. Built-in nodes register through
+    /// `register_nodes!`/`#[polydat_node]` into the link-time
+    /// inventory; their signatures are included in the unified
+    /// registry.
     factories: Vec<Box<dyn NodeFactory>>,
-    /// Additional module search paths (from --polydat-lib).
+    /// Additional module search paths (the `--lib` search paths).
     polydat_lib_paths: Vec<PathBuf>,
 }
 
@@ -152,7 +155,7 @@ impl PolydatRuntime {
         self.factories.push(factory);
     }
 
-    /// Add a module search path (from --polydat-lib).
+    /// Add a module search path (one of the `--lib` search paths).
     pub fn add_polydat_lib(&mut self, path: PathBuf) {
         self.polydat_lib_paths.push(path);
     }
@@ -209,7 +212,7 @@ impl PolydatRuntime {
         self.factories.len()
     }
 
-    /// The --polydat-lib search paths.
+    /// The `--lib` search paths.
     pub fn polydat_lib_paths(&self) -> &[PathBuf] {
         &self.polydat_lib_paths
     }

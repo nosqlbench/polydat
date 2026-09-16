@@ -8,26 +8,41 @@
 //! pipeline:
 //!
 //! ```text
-//! PolydatAssembler  ──(fusion pass)──▶  fused DAG
-//!                                       │
-//!                            (select::choose_kernel)
-//!                                       │
-//!                  ┌────────────────────┼────────────────────┐
-//!                  ▼                    ▼                    ▼
-//!         closures::Kernel       hybrid::Kernel       jit::Kernel
-//!         (Phase 2 u64 closures) (per-node optimal)   (Phase 3 native)
+//! PolydatAssembler ──resolve──▶ ResolvedDag ──compile_with(Engine)──┐
+//!   (fusion, adapters,                                              │
+//!    round-trip lint,          ┌────────────────────────────────────┤
+//!    topo sort)                ▼                  ▼                 ▼
+//!                  Interpreter(JitMode)  Closures(Provenance)  Native(Provenance)
+//!                  cone::extract_jit_cones  closures::           hybrid::
+//!                  → PolydatKernel          CompiledKernel*      HybridKernel*
 //! ```
 //!
+//! The host names the engine ([`select::Engine`]); under
+//! `Provenance::Auto` the selector picks the provenance mode from the
+//! graph's shape. Pure native code (`jit::JitKernel*`) is the
+//! differential tier behind the hybrid kernel.
+//!
 //! - [`assembly`]: the public construction surface
-//!   ([`assembly::PolydatAssembler`] + [`assembly::WireRef`]).
+//!   ([`assembly::PolydatAssembler`] + [`assembly::WireRef`]) and
+//!   the per-engine compile paths.
 //! - [`fusion`]: graph-level subgraph fusion pass; runs during
 //!   assembly after wiring resolution.
-//! - [`select`]: variant-selection heuristic; chooses the
-//!   monomorphic kernel type at construction time.
-//! - [`closures`]: Phase 2 monomorphic u64-only kernels.
-//! - [`hybrid`]: per-node optimal kernel (JIT segments + closure
-//!   segments sharing a flat u64 buffer).
-//! - `jit`: Phase 3 Cranelift JIT compilation
+//! - [`roundtrip_lint`]: the structural type-round-trip lint run at
+//!   resolution.
+//! - [`cone`]: cone-level JIT inside the interpreter kernel
+//!   (SRD-105), under a [`cone::JitMode`].
+//! - [`lattice`]: the engine-mix report of a compiled program.
+//! - [`select`]: the engine and provenance enums, and the heuristic
+//!   that picks a provenance mode under `Provenance::Auto`.
+//! - [`closures`]: the closure tier, one generated op per node over
+//!   a flat u64 slot buffer, by-reference outputs as `Ref2` pairs.
+//! - [`hybrid`]: the native engine (native segments + closure steps
+//!   sharing a flat u64 buffer).
+//! - [`marshal`]: the boundary marshalling between slots and `Value`s.
+//! - `externs`: extern inputs and `shared` cells on the compiled
+//!   engines.
+//! - [`simd_plan`], `simd_tier1`: scalar-flow SIMD promotion.
+//! - `jit`: Cranelift lowering and the pure native kernels
 //!   (feature-gated on `jit`).
 
 pub mod assembly;
@@ -158,9 +173,12 @@ pub(crate) struct Drive {
 }
 
 /// The [`Kernel`](crate::kernel::Kernel) impl every compiled kernel
-/// shares: the type's inherent `eval`, `set_input`, `set_cursor`,
-/// `get_value`, `mark_all_dirty`, and a `core` with a
-/// `drive`, `externs`, `coord_count`, and `output_types`.
+/// shares: the type's inherent `eval_pending`, `pull_value`,
+/// `pull_value_at`, `set_input`, `set_input_at`, `set_cursor`,
+/// `mark_all_dirty`, and a `core` with `drive`, `externs`,
+/// `coord_count`, `output_types`, `output_map`, `buffer`,
+/// `traversals`, and `plan`/`invalidate_all`/`attach_cell`/
+/// `slot_value`.
 macro_rules! impl_kernel_trait {
     ($ty:ident, $engine:expr) => {
         impl crate::kernel::Kernel for $ty {
@@ -390,8 +408,10 @@ impl Invalidation {
 /// boundary and re-raised enriched exactly as the interpreter enriches
 /// a node's: the node's name, the outputs it feeds, the program's
 /// diagnostic context, and its input values decoded from the buffer
-/// where the slot types allow. Step index is node index on every
-/// compiled engine.
+/// where the slot types allow. `sites` is indexed by program node:
+/// the closure and pure-native kernels have one step per node, and
+/// the hybrid kernel names the failing member of a segment through
+/// its tracker slot.
 #[derive(Default)]
 pub(crate) struct Attribution {
     pub(crate) sites: Vec<NodeSite>,

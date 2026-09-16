@@ -141,9 +141,8 @@ mod tests {
         assert!(ratio > 0.90, "outcome 0 should dominate, got {ratio}");
     }
 
-    // `histribution` is JIT-ineligible by the
-    // `#[poly_const]` cached-state design; the typed-eval path
-    // above covers correctness.
+    // `histribution` has no named JitOp; it lowers through its
+    // slot kit. The typed-eval path above covers correctness.
 
     #[test]
     fn histribution_deterministic() {

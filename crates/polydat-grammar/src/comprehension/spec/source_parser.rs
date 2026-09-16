@@ -26,9 +26,9 @@
 //! | `fib(8)` (or any `ident(...)`) | `Generator { expr, cardinality_hint: None }` |
 //! | `0.0..1.0` | `ContinuousInterval { interval, measure: Uniform }` |
 //!
-//! Unknown shapes return `SourceParseError::Unrecognized`. The
-//! consumer treats this as a parse error to surface to the
-//! workload author.
+//! Any other text is a `Generator` expression the runtime
+//! evaluates; `SourceParseError::Unrecognized` is not produced by
+//! this path.
 
 use crate::comprehension::cardinality::{Interval, ProductMeasure};
 use crate::comprehension::source::{LiteralValue, Source};
