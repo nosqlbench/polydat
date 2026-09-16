@@ -38,7 +38,7 @@ the catalog where it can heal a mismatch.
 | `Ext`     | adapter-contributed | `Value::Ext(Box<dyn ReflectedValue>)` | UUIDs, timestamps, IPs |
 | `Handle`  | type-erased Arc  | `Value::Handle(Arc<dyn Any + Send + Sync>)` | Datasets, prepared stmts |
 | `VecF32`/`VecF64`/`VecF16` | float lanes | `Value::Vec*(SliceArc<T>)` | Typed slices; native CQL vector binding |
-| `VecI8`/`VecI16`/`VecI32`/`VecI64` | int lanes | `Value::Vec*(SliceArc<T>)` | Complete cranelift lane family (alignment §8.2) |
+| `VecI8`/`VecI16`/`VecI32`/`VecI64` | int lanes | `Value::Vec*(SliceArc<T>)` | Complete cranelift lane family (alignment §4) |
 
 The scalar-width set is the full cranelift scalar vocabulary
 (every integer width in both signednesses, f16/f32/f64) minus
@@ -136,7 +136,7 @@ forms for both: the bit-stuffed `Value::U64` a node produces
 and the materialised `Value::F64` a host writes (§4).
 
 - **`F128` is absent** — stable Rust has no `f128` carrier, so the
-  scalar float set stops at `F64` (alignment §8.1).
+  scalar float set stops at `F64` (alignment §2).
 - **Conversions** — `f16 → f32 → f64` widens exactly (every `f16`
   is exact in `f32`/`f64`). `int → f64` is always class A (total,
   rounds above 2⁵³); `int → f32`/`f16` is class A only when the
@@ -170,7 +170,7 @@ word:
 
 - **Views are free bitcasts** — every reg→reg wire is healed by
   the assembler with a [`RegView`] retag node that changes the
-  `RegLanes` tag and touches **no bits** (alignment §8.4 layer 2).
+  `RegLanes` tag and touches **no bits** (alignment §3).
   A word can be `[i64; 2]` for one op, raw bytes for a shuffle, and
   `[f32; 4]` for a dot product, at zero cost. This is the one
   family where every intra-plane conversion is class A and every
@@ -213,7 +213,7 @@ Typed slices (`Value::Vec*(SliceArc<T>)`) that flow vector data
 from accessors to native-binding adapters with **no per-cycle
 string-format or byte-serialise step**. The element set is every
 cranelift lane type that has a JSON Number projection — completing
-the lane family alongside the register plane (alignment §8.2).
+the lane family alongside the register plane (alignment §4).
 
 - **[`SliceArc<T>`]** — a typed slice handle with two storage
   modes: *owned* (`Arc<[T]>`, one allocation) or *zero-copy* (a raw
