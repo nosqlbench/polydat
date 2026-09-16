@@ -112,8 +112,10 @@ flowchart LR
 
 The P2, P3, and pure `raw` variants are deliberate. Every cycle changes the driving
 input and all four outputs are consumed, so the test isolates execution-level
-overhead without mixing in provenance strategies. Production `JitMode::Auto`
-instead keeps P1 as the semantic host and embeds eligible P3 cones.
+overhead without mixing in provenance strategies. A host's default,
+`Engine::default()`, is the P3 hybrid kernel with provenance chosen by the
+selector; `JitMode::Auto` applies only when the interpreter is named, where
+it keeps P1 as the host and embeds eligible cones.
 
 ## Measurement contract
 

@@ -110,7 +110,8 @@ escape      ::= open open                               (* a literal open delimi
 ```
 
 `open` and `close` default to `${` and `}`; `sigil` defaults to `@`.
-Both are overridable per tile (§2.3) and per host (§5).
+Both are overridable per tile (§2.3) and per program by a host
+(`apply_tile_defaults`, §5.6).
 
 - A **hole** is a Polydat expression in the enclosing scope. `:type` is a
   declared type (§4). `|format` is a printf format spec applied before
@@ -179,7 +180,8 @@ make a tile portable into those places.
 
 1. **Delimiters are declarable.** `tile t (delims "<%" "%>")`
    uses `<%expr%>` for holes; `(sigil "#")` uses `#for` and `#if`. A
-   host may also set defaults for every tile it passes in (§5). The
+   host may also set defaults for every tile in a program it compiles
+   (`apply_tile_defaults`, §5.6). The
    canonical defaults are `${`, `}`, and `@`, chosen because they are
    inert in JSON, CQL, SQL, YAML double-quoted strings, and Markdown, and
    because `{name}` interpolation inside Polydat strings is untouched.
@@ -190,8 +192,8 @@ make a tile portable into those places.
    can choose delimiters the carrier never uses.
 3. **The tile keyword is optional at the host boundary.** A host that
    holds only a string can hand it to Polydat as a tile without wrapping
-   it in a statement: the `polytile(encoding, text)` node and the
-   `compile_tile` API (§5) accept bare template text, so a YAML value
+   it in a statement: the `polytile(encoding, text)` binding form and
+   the `tile_from_text` API (§5.6) accept bare template text, so a YAML value
    `body: '{"tenant": ${tenant_id}}'` becomes a tile with no grammar the
    YAML author has to learn beyond the hole syntax.
 4. **Nested carriers compose by encoding, not by text.** A tile that is
@@ -274,8 +276,9 @@ single byte ranges exactly as in the textual form; the only difference
 is that the structural form is validated by construction rather than by
 parsing the template with placeholders.
 
-A host may hand Polydat a `serde_json::Value` directly through the
-`compile_tile_value` API, or embed the document in a Polydat file as a
+A host may hand Polydat a `serde_json::Value` directly through
+`tile_from_json_value` (§5.6) and compile it with
+`compile_polydat_with_tiles`, or embed the document in a Polydat file as a
 `json` tile body, which is the textual form of the same thing. The two
 forms are interconvertible: a structural template pretty-prints as a
 valid textual `json` tile, and a textual `json` tile parses to the same
@@ -344,8 +347,8 @@ was chosen, so the typing of a document is inspectable before it runs.
 
 ### 5.1 A tile is a wire
 
-A tile binds a wire named by its definition. Its port type is `Str` for
-text encodings and `Bytes` for binary ones. Its value is the byte
+A tile binds a wire named by its definition. Its port type is `Str`; a
+future binary encoding (§9) would bind `Bytes`. Its value is the byte
 sequence obtained by substituting each hole's encoded text into the
 template, in order. Its lifecycle follows its holes: a tile whose holes
 are all const is const, and any dynamic hole makes it dynamic. A tile
@@ -447,24 +450,26 @@ document is `"body": ${msg}` and arrives quoted and escaped.
 Beyond the statement form, hosts build tiles from what they hold:
 
 ```text
-tile_from_text(name, encoding, text, options)   textual body, bare
-tile_from_json_text(name, json, options)        structural body as text
-tile_from_json_value(name, value, options)      structural body, already parsed
-compile_polydat_with_tiles(source, tiles)       compile them with a program
+tile_from_text(name, encoding, text, options, span)   textual body, bare
+tile_from_json_text(name, json, options, span)        structural body as text
+tile_from_json_value(name, value, options, span)      structural body, already parsed
+compile_polydat_with_tiles(source, tiles)             compile them with a program
 
 name := polytile(encoding, body, options...)    in source; body is a string or heredoc
 name := polytile_json(body, options...)         in source; structural JSON
 ```
 
-The Rust functions live in `polydat::tile` and each returns the
-`TileDef` the `tile` keyword produces. `polytile` and `polytile_json`
+The Rust functions live in `polydat::tile`; the three `tile_from_*`
+functions each return `Result<TileDef, String>`, the `TileDef` the
+`tile` keyword produces. `polytile` and `polytile_json`
 are binding forms the parser rewrites into `tile` statements, so a host
 that only has strings, such as a YAML workload runner, lowers
 `body: '{"tenant": ${tenant_id}}'` to `doc := polytile("json", "...")`
 as a program transform and never touches a runtime decorator. The body
-is taken raw, never evaluated. Options `open`, `close`, `sigil`, and
-`strict` are named arguments, and a host may set process defaults for
-all of them.
+is taken raw, never evaluated. Options `open`, `close`, `sigil`,
+`strict`, and `instring` are named arguments; a host gives every tile
+in a program its own delimiters with the `apply_tile_defaults` program
+transform before compiling.
 
 ## 6. Compilation
 
@@ -663,9 +668,11 @@ fixed.
 
 The toy test definition's load statement as a tile, with a JSON document
 per reading written in the structural form as it would sit in a
-workload file, and its textual twin. The textual form is the definition
-itself
-([`examples/toy_test_definition.polydat`](../../examples/toy_test_definition.polydat)):
+workload file, and its textual twin. The textual form is an abridged
+twin of the definition
+([`examples/toy_test_definition.polydat`](../../examples/toy_test_definition.polydat);
+the file adds `kind` and `flagged` holes and writes its string holes
+bare, quoted by their wire type):
 
 ```json
 {

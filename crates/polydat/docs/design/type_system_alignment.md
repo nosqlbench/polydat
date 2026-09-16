@@ -39,7 +39,7 @@ engine may restate widths independently.
 | `F16/F32` | low-bit IEEE pattern in `Value::U64` for node outputs; accepted host carrier as specified by `satisfies_slot` | F16/F32 operation where supported, one u64 slot | JSON number after widening |
 | `F64` | `Value::F64` | F64, one u64 slot by bitcast | JSON number when finite |
 | `Bool` | `Value::Bool` | 0/1 integer convention, one u64 slot | JSON bool |
-| `U128/I128` | `Value::U128/I128(Bits128)` | no native lowering; two immediate slots, run as a closure step | decimal JSON string |
+| `U128/I128` | `Value::U128/I128(Bits128)` | no named native lowering; two immediate slots, P2 closure, P3 slot call of the kit | decimal JSON string |
 
 Cranelift integer types are sign-agnostic; signedness is chosen
 by operations. Polydat keeps signedness in `PortType` and,
@@ -49,10 +49,10 @@ for 64-bit runtime/interchange honesty, in distinct
 `F128` is excluded. Stable Rust and the pinned backend path do
 not provide the complete carrier and lowering contract Polydat
 requires. `U128/I128` are valid typed runtime values with no
-native lowering: they occupy two immediate slots (`Imm2`, never
-a pointer), and a node over them runs as a closure step on the
-closure tier and the native engine, with the same result as on
-the interpreter.
+named native lowering: they occupy two immediate slots (`Imm2`,
+never a pointer), and a node over them runs its closure on the
+closure tier and as a native slot call of its kit on the native
+engine, with the same result as on the interpreter.
 
 ## 3. Register-value plane
 
@@ -111,9 +111,9 @@ scalar left fold.
 
 | PortType | Runtime carrier | Compiled status | JSON behavior |
 |---|---|---|---|
-| `Str` | `Arc<str>` | `Ref2` pair of its bytes; P2 closures | string |
-| `Bytes` | `Arc<[u8]>` | `Ref2` pair of its bytes; P2 closures | documented hex convention |
-| `Json` | `Arc<serde_json::Value>` | `Ref2` pair to the `Value`; P2 closures | identity |
+| `Str` | `Arc<str>` | `Ref2` pair of its bytes; P2 closure, P3 slot call of the kit (named lowerings for the string producers) | string |
+| `Bytes` | `Arc<[u8]>` | `Ref2` pair of its bytes; P2 closure, P3 slot call of the kit | documented hex convention |
+| `Json` | `Arc<serde_json::Value>` | `Ref2` pair to the `Value`; P2 closure, P3 slot call of the kit | identity |
 | `Ext` | `Box<dyn ReflectedValue>` | `Ref2` pair to the `Value`; crosses compiled tiers, is forwarded or projected, never operated on natively | extension-defined reflected projection |
 | `Handle` | `Arc<dyn Any + Send + Sync>` | `Ref2` pair to the `Value`; crosses compiled tiers, never downcast natively | no general JSON identity |
 

@@ -225,9 +225,9 @@ A compiled kernel keeps no cone cache and reads no intent
 word. Its extern table polls: `cells_dirty` loads every
 cell's revision (Acquire) and compares it with the slot's
 `seen`; `refresh_cells` takes the value of each cell whose
-revision moved, writes a carrier through into the slot
-buffer (a handle kind is written at the next
-materialization), records the revision as seen, and lists
+revision moved, writes it through into the slot buffer at
+once — the carrier for a one-slot type, the pair for a
+`Ref2` type — records the revision as seen, and lists
 the slot as changed. The kernel then marks every step the
 slot's dependents list names as not current and not run
 since the last write. The poll runs at the first evaluation after a write (inside the

@@ -14,7 +14,7 @@
 **Subtitle:** The Grammar Substrate.
 
 Formalises polydat's Polydat grammar as a substrate the other
-three design docs depend on. Where SRD-10 describes the
+three design docs depend on. Where the Language Spec describes the
 language *prosaically*, this doc states the grammar's
 productions formally and identifies the distinctive
 properties that make the other docs' axioms possible. Names
@@ -30,13 +30,14 @@ formal productions, the type inference rules, and the
 distinctive commitments (G-axioms) that make the
 [Composition Substrate], [Graph Compiler], [Runtime Model],
 and [Expression Engine] docs' axioms achievable at the
-language level. SRD-10 owns the prosaic specification (the
-DSL syntax, the parser pipeline, the type system); this
-doc owns the *grammar-level invariants* the SRD's syntax
-preserves. Apparent contradictions between SRD-10 and this
-document resolve in favor of this document on grammar-
-structural matters; SRD-10 remains authoritative on
-specific syntax forms and on rejection rules.
+language level. The [Language Spec](language_spec.md) owns
+the prosaic specification (the DSL syntax, the parser
+pipeline, the type system); this doc owns the *grammar-level
+invariants* that syntax preserves. Apparent contradictions
+between the Language Spec and this document resolve in favor
+of this document on grammar-structural matters; the Language
+Spec remains authoritative on specific syntax forms and on
+rejection rules.
 
 ## Companion documents
 
@@ -58,18 +59,18 @@ specific syntax forms and on rejection rules.
   for embedding. E4 (library inheritance) works because
   the grammar guarantees G6 (single grammar for
   expressions and full programs).
-- [SRD-10: Polydat Language and Compilation](language_spec.md)
-  — prosaic specification. This doc complements SRD-10
-  by formalising the grammar-level invariants SRD-10's
-  syntax assumes.
-- [SRD-11: Polydat Evaluation Model](evaluation_model.md)
+- [Language Spec](language_spec.md)
+  — prosaic specification. This doc complements the
+  Language Spec by formalising the grammar-level invariants
+  its syntax assumes.
+- [Evaluation Model](evaluation_model.md)
   — two-lifecycle classification. G5 names this as a
-  grammar-level commitment SRD-11's lifecycle taxonomy
-  builds on.
-- [SRD-13c: Polydat Scope Model](scope_model.md)
+  grammar-level commitment the Evaluation Model's lifecycle
+  taxonomy builds on.
+- [Scope Model](scope_model.md)
   — auto-extern + scope-chain composition. G1 and G3 are
-  the grammar-level commitments SRD-13c's scope mechanism
-  rests on.
+  the grammar-level commitments the Scope Model's scope
+  mechanism rests on.
 
 The forcing question: **the substrate, compiler, runtime,
 and embedding docs each make load-bearing claims that
@@ -111,16 +112,16 @@ G-axioms are not optimisations; they are load-bearing
 properties without which the substrate / compiler /
 runtime / embedding stories would collapse.
 
-The grammar is small (one expression type with seven
-constructors, six statement types) but does an unusual
-amount of work. This is the "unusually capable substrate"
+The grammar is small (one expression type with eight
+non-sugar constructors and four sugar forms, eight statement
+kinds) but does an unusual amount of work. This is the "unusually capable substrate"
 the focal-point treatment names.
 
 ---
 
 ## 2. The grammar productions
 
-The grammar in formal (EBNF-ish) form. Where SRD-10
+The grammar in formal (EBNF-ish) form. Where the Language Spec
 describes each form prosaically, this section lays the
 productions out for cross-reference.
 
@@ -135,6 +136,8 @@ statement      ::= input_decl
                 |  extern_port
                 |  cursor_decl
                 |  pragma
+                |  for_stmt                   (* polydat_grammar.md §16 *)
+                |  tile_def                   (* polydat_grammar.md §17 *)
 ```
 
 A polydat `.polydat` source is a sequence of statements. The
@@ -187,7 +190,7 @@ identifier binds the corresponding element.
 
 ```ebnf
 module_def     ::= ident "(" typed_param_list ")"
-                   ("->" "(" typed_param_list ")")?
+                   "->" "(" typed_param_list ")"
                    ":=" "{" statement* "}"
 
 typed_param    ::= ident ":" type
@@ -211,6 +214,7 @@ expr           ::= ident
                 |  unary_expr
                 |  cast_expr
                 |  field_access
+                |  for_expr                   (* polydat_grammar.md §16 *)
 
 cast_expr      ::= expr "as" type             (* postfix; binds to the atom *)
 
@@ -229,7 +233,7 @@ unary_expr     ::= "-" expr                   (* arithmetic neg *)
 
 field_access   ::= ident "." ident            (* source field projection *)
 
-string_literal ::= "\"" ( char | "{" ident "}" )* "\""
+string_literal ::= ("\"" | "'") ( char | "{" expr "}" | "{{" | "}}" )* (matching quote)
 
 array_literal  ::= "[" (expr ("," expr)*)? "]"
 ```
@@ -241,17 +245,19 @@ parenthesize to cast a whole sub-expression. `type` is any port-type
 keyword. The cast's meaning is in [Language Spec](language_spec.md)
 §"Type Inference Details".
 
-Eight expression constructors. Six lifecycle-typed kinds
+Twelve expression constructors: eight non-sugar kinds
 (`Ident`, `IntLit`, `FloatLit`, `StringLit`, `ArrayLit`,
-`Call`) plus four sugar-only kinds (`BinOp`, `UnaryNeg`,
-`UnaryBitNot`, `Cast`) that desugar to `Call` (a `Cast` to the
-catalog adapter node, or to a passthrough when the types already
-agree).
+`Call`, `FieldAccess`, `For`) plus four sugar kinds (`BinOp`,
+`UnaryNeg`, `UnaryBitNot`, `Cast`) that desugar to `Call` (a
+`Cast` to the catalog adapter node, or to a passthrough when
+the types already agree). Block `if` desugars at parse time
+to the `if(...)` call (§4, G6.i).
 
-`FieldAccess` (the seventh non-sugar form) is a source
-field projection — reads a field from a typed source
-binding. Its semantics depend on the source's declared
-type and are part of the type-inference rules (§3).
+`FieldAccess` is a source field projection — reads a field
+from a typed source binding. Its semantics depend on the
+source's declared type and are part of the type-inference
+rules (§3). `For` is the comprehension form of the `for`
+construct (polydat_grammar.md §16).
 
 ### 2.6 Pragmas
 
@@ -266,9 +272,13 @@ forward-compatible (warning, not error).
 
 ## 3. Type inference rules
 
-The grammar's type system is `PortType`:
-`U64`, `F64`, `Bool`, `Str`, `Bytes`, `Json`, `VecF32`,
-`VecI32`, plus extension types via `Ext`. Every well-
+The grammar's type system is `PortType`: the scalar widths
+(`U64`, `F64`, `U32`, `I32`, `I64`, `F32`, `U8`, `I8`, `U16`,
+`I16`, `F16`, `U128`, `I128`), the register lanes (`Reg128`,
+`RegI8x16` … `RegF64x2`), `Bool`, `Str`, `Bytes`, `Json`,
+`Handle`, the vectors (`VecF32`, `VecI32`, `VecF64`, `VecI64`,
+`VecF16`, `VecI16`, `VecI8`), plus extension types via `Ext`;
+the keyword spellings are polydat_grammar.md §15. Every well-
 formed expression has an output type derivable from its
 structure.
 
@@ -336,13 +346,13 @@ BinOps desugar to function calls. The desugaring rule:
 ```text
 T-BinOp-Add:    a : U64, b : U64    ⊢  a + b  ≡  u64_add(a, b)  :  U64
                 a : F64, b : F64    ⊢  a + b  ≡  f64_add(a, b)  :  F64
-                a : U64, b : F64    ⊢  a + b  ≡  f64_add(u64_to_f64(a), b) : F64
+                a : U64, b : F64    ⊢  a + b  ≡  f64_add(to_f64(a), b) : F64
                                                 (adapter from §5.4 of expression_engine)
 ```
 
 Cross-type BinOps trigger adapter insertion per the
 adapter catalog. Comparison operators (`==`, `!=`, `<`,
-etc.) produce `Bool`.
+etc.) produce a `u64` `0`/`1`, not `Bool`.
 
 ### 3.5 Field access rules
 
@@ -419,7 +429,7 @@ What this enables:
 - The substrate's L2 (two-lifecycle classification
   bridges layers). The grammar exposes the classification
   at the surface; the compiler enforces it.
-- SRD-11's const-binding contract. Plan A (compile-time
+- The Evaluation Model's const-binding contract. Plan A (compile-time
   structural check) verifies the declaration; Plan B
   (scope-init pull) materialises the value once.
 - The runtime model's R1 (per-generation memoization).
@@ -557,8 +567,9 @@ The intrinsic catalog is part of the grammar's
 time and are not extensible by library code. The specific
 catalog (currently `if(cond, a, b)` and its block spelling
 `if cond { a } else { b }`, literal promotion in
-wire position, and string-interpolation desugar to
-`printf(...)`) is delegated to
+wire position, string-interpolation desugar to
+`printf(...)`, and the `polytile`/`polytile_json` rewrites
+into `tile` statements) is delegated to
 [language_spec.md §"Conditional Selection" + §"Literal
 Promotion" + §"String Interpolation"](language_spec.md).
 
@@ -659,10 +670,10 @@ the substrate doesn't have to repeat.
 | [Graph Compiler](graph_compiler.md) | H/CF/NF axioms. G2+G5 underwrite H1+H2; G1 underwrites CF1; G4 underwrites NF1. |
 | [Runtime Model](runtime_model.md) | R/D axioms. G4 underwrites D1; G5 underwrites R1+D3; G3 underwrites L1's runtime realisation. |
 | [Expression Engine](expression_engine.md) | E-axioms. G3+G6 underwrite E1+E4; G4 underwrites E2; G6 underwrites the expression-as-kernel correspondence. |
-| [SRD-10](language_spec.md) | DSL syntax. This doc's productions (§2) formalise the syntax SRD-10 describes prosaically. |
-| [SRD-11](evaluation_model.md) | Two-lifecycle classification. G2+G5 are the grammar-level commitments SRD-11's lifecycle taxonomy rests on. |
-| [SRD-13c](scope_model.md) | Scope-composition mechanism. G1+G3 are the grammar-level commitments for auto-extern discovery and parent-gated materialization. |
-| [SRD-13f](wire_materialization.md) | Cross-scope read/write. G1's auto-extern discovery is what SRD-13f's gradient classification operates over. |
+| [Language Spec](language_spec.md) | DSL syntax. This doc's productions (§2) formalise the syntax the Language Spec describes prosaically. |
+| [Evaluation Model](evaluation_model.md) | Two-lifecycle classification. G2+G5 are the grammar-level commitments the Evaluation Model's lifecycle taxonomy rests on. |
+| [Scope Model](scope_model.md) | Scope-composition mechanism. G1+G3 are the grammar-level commitments for auto-extern discovery and parent-gated materialization. |
+| [Wire Materialization](wire_materialization.md) | Cross-scope read/write. G1's auto-extern discovery is what Wire Materialization's gradient classification operates over. |
 
 ---
 
@@ -670,21 +681,24 @@ the substrate doesn't have to repeat.
 
 - **Lexer-level concerns.** Tokenisation, whitespace,
   comments, and string-literal escape rules live in
-  `dsl/lexer.rs`. Not formalised here.
+  `polydat-grammar/src/lexer.rs`. Not formalised here.
 - **Per-node semantics.** What `hash` or `mod` does is the
   per-node implementation's responsibility (and the
   library catalog's documentation). The grammar names the
   call form; the semantics live elsewhere.
 - **Parse-error recovery.** The parser's error reporting
-  + recovery strategies are implementation concerns. SRD-10
-  describes them prosaically; not formalised here.
+  + recovery strategies are implementation concerns. The
+  Language Spec describes them prosaically; not formalised
+  here.
 - **Source modules and includes.** The module-resolution
-  pipeline (`dsl/modules.rs`) is implementation; this doc
-  treats modules as a `ModuleDef` statement form and stops.
+  pipeline (`polydat-core/src/dsl/modules.rs`) is
+  implementation; this doc treats modules as a `ModuleDef`
+  statement form and stops.
 - **Pragma semantics.** Specific pragma names and their
-  semantics are documented per-pragma in `dsl/pragmas.rs`
-  and SRD-15. The grammar treats pragmas as forward-
-  compatible name-bearing statements.
+  semantics are documented per-pragma in
+  `polydat-grammar/src/pragmas.rs` and polydat_grammar.md
+  §14. The grammar treats pragmas as forward-compatible
+  name-bearing statements.
 
 ---
 

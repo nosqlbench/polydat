@@ -58,12 +58,10 @@ can be named anything and any cursor shape (single, nested,
 decomposed via `mixed_radix`) is fine. The engine treats
 `cycle` identically to any other user-named input.
 
-> **Note:** `inputs` is the only accepted keyword. The legacy
-> `coordinates` alias is gone — the lexer rejects it. Some
-> internal AST/struct names (`Statement::Coordinates`, `coord_count`,
-> `coord_names`) retain historical naming for AST stability;
-> these are implementation details and don't surface in user-
-> visible source or error messages.
+> **Note:** `input` is the only keyword; there is no `coordinates`
+> form. The program still counts its leading coordinate inputs as
+> `coord_count`; that is an implementation detail and doesn't surface
+> in user-visible source or error messages.
 
 ### Coordinate Decomposition
 
@@ -154,9 +152,9 @@ temporarily disabling sections.
 
 Polydat supports arithmetic, bitwise, comparison, and power
 operators with standard precedence. Operators desugar to
-function calls in the DAG — `a + b` becomes `f64_add(a, b)`,
-`a & b` becomes `u64_and(a, b)`, `a < b` becomes `u64_lt(a, b)`
-or `f64_lt(a, b)`.
+function calls in the DAG — `a + b` becomes `u64_add(a, b)` or
+`f64_add(a, b)` by operand type, `a & b` becomes `u64_and(a, b)`,
+`a < b` becomes `u64_lt(a, b)` or `f64_lt(a, b)`.
 
 ```
 // Arithmetic (f64)
@@ -200,8 +198,8 @@ parses as `(a + b) < (c * d)`. Equality is below relational, so
 
 | Operator | Node function |
 |----------|--------------|
-| `+` `-` `*` `/` | `f64_add`, `f64_sub`, `f64_mul`, `f64_div` |
-| `%` | `f64_mod` |
+| `+` `-` `*` `/` | `u64_add`, `u64_sub`, `u64_mul`, `u64_div` when both operands are u64; otherwise `f64_add`, `f64_sub`, `f64_mul`, `f64_div` |
+| `%` | `u64_mod` or `f64_mod` by operand type |
 | `**` | `pow` |
 | `&` `\|` `^` | `u64_and`, `u64_or`, `u64_xor` |
 | `<<` `>>` | `u64_shl`, `u64_shr` |
@@ -218,9 +216,9 @@ intrinsic below.
 ### Conditional Selection — `if(cond, a, b)` and `if cond { a } else { b }`
 
 `if` is a compiler intrinsic, not a registered function: at
-compile time it desugars to `select_u64(cond, a, b)` or
-`select_f64(cond, a, b)` based on the inferred types of `a`
-and `b`. When one branch is u64 and the other f64, the u64
+compile time it desugars to `select_u64(cond, a, b)`,
+`select_f64(cond, a, b)`, or `select_str(cond, a, b)` based on
+the inferred types of `a` and `b`. When one branch is u64 and the other f64, the u64
 branch is auto-widened via `to_f64`. The condition is u64 —
 any nonzero value selects `a`, zero selects `b`.
 
@@ -337,13 +335,14 @@ auto-inserts a conversion adapter:
 
 | From | To | Adapter |
 |------|----|---------|
-| u64 | String | `__u64_to_str` (decimal) |
-| f64 | String | `__f64_to_str` |
+| u64 | String | `__u64_to_string` (decimal) |
+| f64 | String | `__f64_to_string` |
 | bool | String | `__bool_to_str` ("true"/"false") |
-| JSON | String | `__json_to_str` (compact JSON) |
+| JSON | String | `json_to_str` (compact JSON) |
 
 These are inserted transparently. The compiler emits an
-advisory event for each insertion, queryable via `--diagnose`.
+advisory event for each insertion, queryable with
+`polydat explain <file> types`.
 
 ### Compiler Diagnostics
 
@@ -355,11 +354,11 @@ The compiler emits tagged diagnostic events at three levels:
 | Advisory | `polydat[advisory]` | Implicit conversions, type widenings — review for module design quality |
 | Warning | `polydat[warning]` | Potential performance or correctness issues |
 
-Query advisories with `--diagnose` to review all implicit
-conversions in your module:
+Query advisories with `polydat explain <file> types` to review all
+implicit conversions in your module:
 
 ```bash
-nbrs bench Polydat mymodule.gk --explain
+polydat explain mymodule.polydat types
 # Shows: polydat[advisory]: type adapter U64→F64: cycle → sin
 # Shows: polydat[advisory]: widening u64 → f64 in operator *
 ```
@@ -400,25 +399,16 @@ prefix `!` to `u64_not`.
 
 ---
 
-## Const Expression Syntax
+## Const Expressions at the Host Boundary
 
-Braces in binding values trigger compile-time evaluation:
-
-```
-dim := {vector_dim("glove-25-angular")}    // implicit
-dim := {:=vector_dim("...")}              // explicit-open
-dim := {:=vector_dim("..."):=}            // explicit-bracketed
-```
-
-Resolution: named-binding lookup first, then const-eval
-fallback (per [Evaluation Model](evaluation_model.md)'s
-compile-const lifecycle), then error. The explicit `{:=...}`
-forms bypass the binding lookup and force const evaluation.
-
-The same `{...}` form is what activity config fields parse
-— the syntax is shared across the DSL and the YAML config
-surface. The const-evaluation API and embedding mechanics
-are formalised in
+Braces are not a Polydat expression form: in Polydat source, `{name}`
+has meaning only inside a string literal, as interpolation. A host
+whose config fields carry brace-delimited expressions (for example
+`dim: {vector_dim("glove-25-angular")}` in a YAML workload) evaluates
+the inner text itself with `eval_const_expr` /
+`eval_const_expr_for`, per [Evaluation Model](evaluation_model.md)'s
+compile-const lifecycle. The const-evaluation API and embedding
+mechanics are formalised in
 [expression_engine.md §3.1](../design/expression_engine.md);
 the host-side resolution order and param-substitution
 interaction are a host concern.
@@ -475,7 +465,7 @@ Parse ─────────▶ AST (assignments, function calls, wiring)
   │
   ▼
 Desugar ───────▶ Normalize sugar forms:
-  │               - String interpolation → StringBuild nodes
+  │               - String interpolation → `printf` calls
   │               - Inline nesting → auto-named intermediates
   │               - Bare {name} → wire references
   │
@@ -534,10 +524,10 @@ inserts type adapter nodes where wiring crosses types (e.g.,
 `u64 → f64` auto-conversion). Type mismatches that can't be
 adapted are compile-time errors.
 
-Type names in the DSL and diagnostics use Rust-standard names:
-`u64`, `f64`, `bool`, `String`, `Vec<u8>`. These are familiar to
-Rust users and unambiguous. The internal `Value` enum mirrors
-these names directly, avoiding any mapping layer.
+Type keywords are `u64`, `i64`, `f64`, `bool`, `str`, `bytes`,
+`json`, `ext`, `handle`, and the `vec_*`/`reg_*` families;
+`String` is accepted as an alias of `str`. The internal `Value`
+enum mirrors these types directly, avoiding any mapping layer.
 
 `Handle` is the typed-resource carrier (`PortType::Handle`):
 an `Arc<dyn Any + Send + Sync>` produced by resolver nodes
@@ -548,17 +538,15 @@ zero allocations) — the design that lets resolved resources
 flow on wires between scope-stable resolvers (compile-const or
 scope-init) and per-cycle readers without re-doing the
 resolution work. See
-[Evaluation Model](evaluation_model.md) §"Three
+[Evaluation Model](evaluation_model.md) §"Two
 Evaluation Lifecycles" for the lifecycle taxonomy; the host's
 dataset-handle surface is the canonical use case.
 
 `VecF32` / `VecI32` are typed-vector carriers
 (`PortType::VecF32`, `PortType::VecI32`) — `Arc<[f32]>` and
 `Arc<[i32]>` respectively. They flow on wires the same as any
-other value, but adapter binding code can serialize them
-directly (`SerializeValue` for `[T]` writes wire bytes
-without intermediate boxing). Cloning is one `Arc::clone`,
-zero allocations. The `to_display_string()` fallback renders
+other value. Cloning is one `Arc::clone`, zero allocations.
+The `to_display_string()` fallback renders
 them as JSON-array text (`"[0.1,0.2,...]"`), so workloads can
 mix typed-vector and string-substitution paths without a
 separate node family. (Adapter-side native-vector binding is a
@@ -575,10 +563,12 @@ The trait's behavioral surface is:
 pub trait PolydatNode: Send + Sync {
     fn meta(&self) -> &NodeMeta;
     fn eval(&self, inputs: &[Value], outputs: &mut [Value]);
+    fn scratch_layout(&self) -> Vec<ScratchElem> { Vec::new() }
+    fn eval_in(&self, scratch: &mut [ScratchBuf], inputs: &[Value], outputs: &mut [Value]) { self.eval(inputs, outputs) }
     fn commutativity(&self) -> Commutativity { Commutativity::Positional }
     fn accepts_none_inputs(&self) -> bool { false }
     fn compiled_u64(&self) -> Option<CompiledU64Op> { None }
-    fn compiled_slot(&self) -> Option<CompiledSlotKit> { None }
+    fn compiled_slot(&self, wire_types: &[PortType]) -> Option<CompiledSlotKit> { None }
     fn jit_constants(&self) -> Vec<u64> { Vec::new() }
     fn purity(&self) -> Purity { Purity::Pure }
     fn simd_variant(&self) -> Option<SimdVariant> { None }
@@ -650,14 +640,13 @@ contract and its invariants are in
 
 ## Polydat Scope Model
 
-Polydat programs exist within a scope hierarchy formed by the
-scenario tree (workload root, phases, `for_each` iterations,
-scope groups). Each scope is a self-contained kernel that
-sees its outer scopes' values via auto-generated `extern`
-input slots. The full model — scope hierarchy, visibility
-and mutability rules, lifecycle configuration
-(`loop_scope` / `iter_scope`), and the auto-extern
-composition mechanism — is specified in
+Polydat programs exist within a scope hierarchy (root program,
+`for` traversal bodies, module bodies). Each scope is a
+self-contained kernel that sees its outer scopes' values via
+auto-generated `extern` input slots. The full model — scope
+hierarchy, visibility and mutability rules, input lifecycle
+classes, and the auto-extern composition mechanism — is
+specified in
 [scope_model.md](scope_model.md), with axiom-level
 coverage in
 [composition_substrate.md](composition_substrate.md).

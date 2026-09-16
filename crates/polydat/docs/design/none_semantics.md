@@ -49,7 +49,7 @@ desugar (and any other "shadow if present" pattern) relies on.
 
 A source-level string literal containing one or more `{X_i}`
 placeholders desugars (via `parse_interpolated_string` in
-`dsl/parser.rs`) to a `printf(fmt, X_1, ..., X_n)` call. The
+`polydat-grammar/src/parser.rs`) to a `printf(fmt, X_1, ..., X_n)` call. The
 `Printf` node's `eval` applies:
 
 > If any input slot referenced by a `{}` placeholder holds
@@ -80,7 +80,7 @@ which would be returned by `get_constant` and incorrectly shadow
 an outer binding for `X`.
 
 Rule 1 is enforced on every engine, and for every node, not
-only `printf`: the interpreter's `PolydatState::eval_node`
+only `printf`: the interpreter's `EngineCore::eval_node`
 guards each node before invoking it; the closure tier and the
 hybrid kernel keep a None mask over the slot buffer, and a step
 whose node does not accept None marks every output None without
@@ -209,7 +209,7 @@ inner const evaluates to None.
 
 ## Implementation correspondence
 
-- `PolydatState::eval_node` enforces Rule 1 on the interpreter
+- `EngineCore::eval_node` enforces Rule 1 on the interpreter
   for `Printf` and every node that does not opt into
   `accepts_none_inputs`; the closure tier's step guard and the
   hybrid kernel's `run_hybrid_step` enforce it through the None

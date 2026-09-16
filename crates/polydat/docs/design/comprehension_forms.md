@@ -144,8 +144,10 @@ state. No buffering at the clause level.
 
 A clause's `source` is resolved into a **bound sequence** — the
 ordered `Vec<Value>` the clause iterates, binding `name` to each
-element — by `iteration::comprehension::eval::evaluate_spec`
-against the enclosing kernel scope. The only structural operation
+element — by
+`polydat_core::iteration::comprehension::eval::evaluate_spec(spec_text, &dyn Lookup)`
+against a `Lookup` view of the enclosing scope (a `PolydatKernel`
+or a `Layered` prefix over it). The only structural operation
 resolution performs is **peeling exactly one level**:
 
 - A *sequence form* (`[…]` list, `a..b` range, a generator, a
@@ -171,7 +173,7 @@ the resolution **semantics** that surface maps to.
 #### 3.1.2 The `iteration_interior` predicate
 
 The peel/wrap decision is made in exactly one place —
-`iteration::comprehension::source::iteration_interior(&Value) ->
+`polydat_core::iteration::comprehension::source_values::iteration_interior(&Value) ->
 Option<Vec<Value>>` — replacing the former scattered per-type arms
 (`PartitionList`-unpack / `Str`-split / `Ok(other)`-wrap) in the
 evaluator. `Some(interior)` ⇒ iterable, peel one level; `None` ⇒
@@ -179,11 +181,11 @@ iteration scalar, wrap as a singleton.
 
 | `Value` | interior |
 |---|---|
-| `VecF32` / `VecF64` / `VecF16` / `VecI16` / `VecI32` / `VecI64` (native vectors) | the element values (numeric) |
+| `VecF32` / `VecF64` / `VecF16` / `VecI8` / `VecI16` / `VecI32` / `VecI64` (native vectors); `Reg128` with a lane view (the `Raw` view is a scalar) | the element values (numeric) |
 | `Json` that is an array | the element values (each carried as `Json`) |
 | `Ext` exposing a `PartitionList` ([Cursor Partitions](cursor_partitions.md)) | the partition entries |
 | `Str` | its **string-comprehension tokens** (§3.1.3) |
-| `U64` / `F64` / `Bool` / `Bytes` / `Handle` / `None` / non-array `Json` / opaque `Ext` | none (scalar) |
+| `U64` / `I64` / `U128` / `I128` / `F64` / `Bool` / `Bytes` / `Handle` / `None` / non-array `Json` / opaque `Ext` / `Reg128` in the `Raw` view | none (scalar) |
 
 **String position is resolved at parse, not in the predicate.**
 The parser resolves quote-kind at
@@ -207,8 +209,10 @@ runs.
 | `x in 'a, b; c'` (single-quoted) | `["a, b; c"]` | the whole string, once (atomic) |
 | `x in S` (relaxed / bare) | infers: if `S` has an iteration interior → as `[S…]`; else → as `[S]` | each interior element, or `S` whole |
 
-**String-comprehension striping** (`source::split_string_comprehension`
-/ `strip_string_tokens`, double-quoted only): split on runs of
+**String-comprehension striping**
+(`polydat_grammar::comprehension::source::split_string_comprehension`
+at parse, `polydat_core::iteration::comprehension::source_values::strip_string_tokens`
+at eval; double-quoted only): split on runs of
 **comma, semicolon, and ASCII whitespace**; every other character
 — notably `:` (k:v tuples), `.` (floats), `-`, `/` — stays inside
 the token. Each token is typed like a literal-list element
@@ -263,13 +267,14 @@ splits the `[…]` form into two compilation paths:
   list element reference a wire, or splice a list-valued param,
   that isn't known until scope-init.
 
-**Validator support.** `Comprehension::referenced_source_names()`
+**Cascade support.** `Comprehension::referenced_source_names()`
 (`ast.rs`) walks every leaf `Source` and returns the free names
 its specs reference — `WorkloadParamList` names directly, and for
 a `Generator` spec both the grammar-parsed free identifiers
 (`concat(foo)` → `foo`) and `{name}` interpolation placeholders —
-so the workload validator's declared-but-unreferenced check sees a
-bare source reference exactly as the kernel compiler resolves it.
+so the `for` construct's cascade computation (`dsl/traversal.rs`)
+sees every outer wire a source references and cascades it into the
+body's scope exactly as the kernel compiler resolves it.
 
 ### 3.2 `cartesian(c1, c2, ..., cN)` — dependent product combinator
 
@@ -346,8 +351,11 @@ longest.
 - Children must have **disjoint name sets** (same as cartesian).
 - Children must be **bounded** under `Strict` and `Truncate`
   (cardinality must be known to compute the diagonal endpoint).
-  `Cycle` permits one unbounded child with the others bounded;
-  cardinality is the unbounded child's cardinality.
+  Under `Cycle` every child is materialized (the IR interpreter
+  caches all children, the runtime evaluates them to vectors); the
+  longest child sets the length. All zip children must be finite
+  in practice; `Unbounded` here means "count unknown", not
+  infinite.
 
 **Tuple shape:** disjoint union of children's tuple shapes.
 **Cardinality:** `min`, `min`, or `max` of children's
@@ -373,13 +381,15 @@ declaration order.
   came from.
 - Children's tuple-name set order is checked structurally; if
   child A produces `(k, limit)` and child B produces
-  `(limit, k)`, the parser rejects (despite the same name set).
+  `(limit, k)`, V2 rejects (via `validate`) despite the same name
+  set.
 
 **Tuple shape:** equal to (and inherited from) any child's tuple
 shape.
 **Cardinality:** sum of children's cardinalities. Unbounded if
 any child is unbounded; if a child appearing before another is
-unbounded, the later children are unreachable (compile warning).
+unbounded, the later children are unreachable (no diagnostic is
+emitted for later children).
 
 ### 3.5 `filter(c, predicate)` — selection modifier
 
@@ -435,17 +445,38 @@ behavior over discrete vs. Continuous inputs. The validator
 strategy's requirement; V8 additionally requires Continuous
 inputs to be wrapped in a strategy that supports them.
 
-**Strategy invocation surface.** Strategies have a single
-entry point, `apply(evaluated: &[EvaluatedSource],
-truncation: Option<u64>)`, where each [`EvaluatedSource`]
-(##10.7.6) carries its values, cardinality, and `IndexFn`.
+**Strategy invocation surface.** Every strategy implements
+`trait Strategy` (`polydat_core::iteration::comprehension::strategies`):
+
+```rust
+pub trait Strategy {
+    fn name(&self) -> StrategyName;
+    /// V4 input-shape check; `None` is "no closed-form index
+    /// function", which only `Lex` accepts.
+    fn accepts_input(&self, idx: Option<&IndexFn>) -> bool;
+    /// R2 push-down eligibility over the given input shape.
+    fn has_closed_form_for(&self, idx: &IndexFn) -> bool;
+    /// Infallible: the caller has already fired V4.
+    fn apply(&self, input: &EvaluatedInput, truncation: Option<u64>) -> Vec<Tuple>;
+}
+
+pub struct EvaluatedInput {
+    pub tuples: Vec<Tuple>,
+    pub cardinality: u64,
+    pub index_fn: IndexFn,
+}
+```
+
 There is no split between "metadata-bearing" and
 "metadata-naive" apply paths — the strategy reads the
-`IndexFn` from the evaluated inputs and routes accordingly.
+`IndexFn` from the evaluated input and routes accordingly.
+V4 is the **caller's** check: `runtime::apply_order` calls
+`accepts_input(input.index_fn.as_ref())` before `apply` and
+surfaces a rejection as `RuntimeError::StrategyRejectsInput`.
 This is what makes V4 enforceable at strategy-invocation
 time independent of how the source was authored (literal,
-range, registry-recognized generator, or workload-param):
-the shape is *always* known by the time `apply` runs.
+range, generator, or workload-param): the shape is *always*
+known by the time `apply` runs.
 
 | Strategy | Input requirement | Discrete behavior | Continuous behavior |
 |---|---|---|---|
@@ -455,7 +486,7 @@ the shape is *always* known by the time `apply` runs.
 | `Halton` | any non-`None` | K-D Halton over Lattice; 1-D Halton sequence over Lockstep / Modular / Concatenation | **Native** — K-D Halton over `[0,1)^K` mapped to the input's interval(s); the canonical use case |
 | `Sobol` | any non-`None` | K-D Sobol over Lattice; 1-D Sobol over single-axis index spaces | **Native** — same shape as Halton, Sobol generator |
 | `Lhs` | any non-`None` | K-D stratified per-axis permutation over Lattice; uniform random over single-axis index spaces (degenerate) | **Native** — K-D Latin Hypercube over `[0,1)^K` mapped to the input's interval(s) |
-| `Extrema` | any non-`None` | K-D lattice corners over Lattice with N≥2 axes; {first, last} over 1-D (degenerate) | K-D box corners over a Continuous Lattice (interval endpoints on each axis); 2K extrema for K-D |
+| `Extrema` | any non-`None` discrete | K-D lattice corners over Lattice with N≥2 axes; {first, last} over 1-D (degenerate) | Rejected (not implemented) — the continuous box-corner form is not implemented; the runtime rejects `Extrema` over a continuous source |
 | `Shells` | any non-`None` discrete | Concentric shells around lattice center; concentric pairs over 1-D (degenerate) | Rejected — "shells" in continuous space is ill-defined without a discretization parameter |
 | `Diagonal` / `Antidiagonal` | any non-`None` discrete | Diagonal walk over Lattice with N≥2 axes; trivial over 1-D (degenerate) | Rejected — continuous diagonal would emit uncountably many points; no canonical "step" |
 
@@ -465,6 +496,19 @@ sweeps — these are precisely the low-discrepancy quasi-random
 sequences whose mathematical definition lives in continuous
 space, and discretization is the special case. Workloads that
 sample real-valued ranges should default to one of these three.
+
+**What the runtime implements today.** Continuous sampling
+(`runtime::sample_continuous`) accepts exactly `Halton`, `Sobol`,
+`Lhs`, and `Shuffle`, and requires a truncation count. Each draw
+is a 53-bit fraction of `[0,1)` mapped **affinely** onto its
+axis's interval under `ProductMeasure::Uniform`; there is no
+inverse-CDF mapping. A named measure (`Normal`, `Exponential`,
+…) is validated for integrability (V8) but is sampled uniformly
+over its declared support. Hybrid discrete×continuous sampling is
+not implemented: `runtime::continuous_axes` returns `None` as
+soon as any clause is discrete, so a mixed comprehension is never
+routed to the sampler, and the IR interpreter cannot emit
+continuous tuples at all.
 
 **Degenerate compositions are not errors.** A strategy applied
 to an input that mathematically satisfies its requirement but
@@ -590,13 +634,12 @@ strategy-invocation time against the
 [`EvaluatedSource`](#1076-the-evaluatedsource-contract) the strategy receives. For
 comprehensions whose sources are all statically evaluable
 (per §10.7.0's eval-class partitioning — `Literal` /
-`IntRange` / `ContinuousInterval` / registry-recognized
-generators per §10.7.7), the compile-time IR planner runs
-evaluation and fires V4 early as a usability nicety —
-malformed shapes error at parse time. For context-required
-sources, the early fire is skipped; runtime fire at strategy
-invocation is the load-bearing check. Either way, the axiom
-is the same.
+`IntRange`), callers that run `validate` on the AST get a
+best-effort V4 against static metadata as a usability nicety.
+The production path (`for` traversals, tile projections) does
+not run `validate`; it fires V4 only at strategy invocation in
+`runtime::apply_order`, which is the load-bearing check. Either
+way, the axiom is the same.
 
 **V4 + dependent Cartesian.** When a `cartesian`'s children
 have cross-references (dependent product per §3.2), the
@@ -654,10 +697,13 @@ discrete inputs).** `order` with a materializing strategy
 `Truncate` mode require their discrete input to have known
 finite cardinality (`Bounded(n)` or `BoundedAtMost(n)`).
 Applying these to an `Unbounded` discrete comprehension is
-invalid; the parser rejects with a clear "cannot
-reorder/zip an unbounded stream" message. *Reason:*
-materialization assumes the stream fits in memory; we
-refuse to enable a runtime OOM.
+invalid; it is rejected by `validate` (V6) with a clear "cannot
+reorder/zip an unbounded stream" message. The text front end
+does not run `validate`, and V6 is not checked at runtime: on
+the production path every source is evaluated to a finite
+vector before any barrier, so `Unbounded` there means "count
+unknown", not infinite. *Reason:* materialization assumes the
+stream fits in memory; we refuse to enable a runtime OOM.
 
 V6 is the **discrete unboundedness** rejection. The companion
 rejection for `Continuous` / `ContinuousAtMost` inputs is V8 —
@@ -671,12 +717,16 @@ sampling order.
 
 **Axiom V7 (zip cardinality contract).** A `zip` under `Strict`
 mode requires all children's cardinalities equal. Mismatch is
-a load-time validation error (catches some via static analysis)
-or a runtime error at the first cardinality measurement (covers
-the cases where cardinality is data-dependent). Additionally,
-**all children of a `zip` (under any mode) must be discrete**
-(`Bounded`, `BoundedAtMost`, or `Unbounded`). Continuous or
-mixed-class children are rejected at parse time. *Reason:*
+rejected by `validate` (V7) when a caller runs it against
+static metadata; on the production path (which does not run
+`validate`) the check that actually fires is
+`RuntimeError::UnsupportedShape` ("zip strict: child lengths
+differ") at evaluation, once every child's length is known.
+Additionally, **all children of a `zip` (under any mode) must
+be discrete** (`Bounded`, `BoundedAtMost`, or `Unbounded`).
+Continuous or mixed-class children are rejected by `validate`
+(V7); the text front end cannot write a continuous source, so
+this case is reachable only from a constructed AST. *Reason:*
 zip's lockstep semantics require an integer "i-th element"
 notion; continuous sources have no integer index. Authors who
 want two continuous coordinates paired together should either
@@ -691,18 +741,25 @@ measure).** A comprehension whose cardinality is `Continuous` or
 `ContinuousAtMost` cannot be dispensed directly. It MUST be wrapped
 in an `order(_, strategy, Some(n))`
 where the strategy accepts a Continuous input (per §3.6's
-per-strategy input table) and `n` is finite.
+per-strategy input table) and `n` is finite. This is rejected by
+`validate` (V8) when a caller runs it; the text front end does
+not run `validate` (and cannot write a continuous source), so on
+the production path an unsampled continuous clause evaluates to
+an empty value set and falls to the runtime's empty-clause
+policy, while an `order` with no count or a non-sampling strategy
+surfaces as `RuntimeError::OrderEval`.
 
 Additionally, every `Continuous` source must declare an
 **integrable measure** — a measure with finite total mass that
-can be normalized to a probability distribution. The check
-happens at parse time on the source:
+can be normalized to a probability distribution. The check is
+`ProductMeasure::is_integrable`, applied by `validate` (V8) to
+the source:
 
 | Source shape | Integrable? | V8 verdict |
 |---|---|---|
 | Bounded real interval + `Uniform` (e.g. `0.0..1.0`) | Yes (Lebesgue measure scaled by interval width) | Accepted |
 | Unbounded real interval + named distribution (Normal, Exponential, Pareto, Beta on `[0,1]`, ...) | Yes (these distributions have proper probability measures even with unbounded support) | Accepted |
-| Unbounded real interval + `Uniform` (e.g. `0.0..` with no distribution) | No (uniform on unbounded support has no normalizable density) | Rejected at parse |
+| Unbounded real interval + `Uniform` (e.g. `0.0..` with no distribution) | No (uniform on unbounded support has no normalizable density) | Rejected by `validate` |
 | Bounded interval + `Named(D)` where `D`'s support is incompatible with the interval | Case-dependent | Validator consults the distribution's declared support |
 
 *Reasons:* a continuous measure has no canonical enumeration
@@ -712,8 +769,11 @@ deterministic, named traversal from the measure. Sampling
 strategies (Halton, Sobol, Lhs) work by inverse-CDF mapping or
 density-weighted point selection; both require a normalizable
 density. Unbounded-uniform has no density, so no sampling
-strategy can produce well-defined draws — rejecting at parse
-prevents a runtime sampling failure with confusing root cause.
+strategy can produce well-defined draws — rejecting in
+`validate` prevents a runtime sampling failure with confusing
+root cause. (The runtime sampler today maps draws affinely under
+a uniform measure regardless of the declared distribution; see
+§3.6 "What the runtime implements today.")
 
 V8 is checked at the comprehension's outermost level. Continuous
 subexpressions deep inside an AST are fine as long as some
@@ -730,7 +790,10 @@ is integrable.
 **Axiom V9 (union class uniformity).** All children of a
 `union` must be discrete (`Bounded`, `BoundedAtMost`, or
 `Unbounded`). Continuous or mixed-class children are rejected
-at parse time. *Reason:* union concatenates dispense sequences,
+by `validate` (V9); the text front end does not run `validate`
+and cannot write a continuous source, so this case is reachable
+only from a constructed AST. *Reason:* union concatenates
+dispense sequences,
 and continuous sources have no sequence to concatenate — the
 mathematical object is a measure, not a stream. Authors who want
 "samples from interval A or interval B" should sample each
@@ -763,8 +826,8 @@ Two validation modes:
   output; consumers (workload loader, REPL, tooling) decide
   whether to print or filter them.
 - **Strict (`polydat::iteration::comprehension::validate::Mode::Strict`).** Promotes
-  every `ValidationWarning` to a hard error. Used by
-  workload-loading paths that want a clean bill of health.
+  every `ValidationWarning` to a hard error. Available to hosts
+  that run `validate` themselves; no built-in path uses it.
 
 The degenerate-composition catalog (initial):
 
@@ -814,7 +877,7 @@ Polydat distinguishes six cardinality classes:
   etc.). Cannot enumerate; must be sampled via an enclosing
   `order(_, strategy, Some(n))` per V8. The integrability
   constraint is V8's responsibility: unbounded interval +
-  Uniform is rejected at parse (no normalizable density);
+  Uniform is rejected by `validate` (no normalizable density);
   unbounded interval + a named distribution like Normal or
   Exponential is accepted (these are proper probability
   measures). Note `intervals` is a vector: a clause over a
@@ -876,7 +939,7 @@ materialization barriers documented below.
 | `clause` | O(1) above source's per-tuple state | Source is a stream producer (§3.1); one Value in flight per active position |
 | `cartesian` | O(N) for an N-child node | One position cursor per child; one tuple in flight at the output |
 | `zip` (Strict/Truncate) | O(N) for an N-child node | Lockstep walk; one tuple per child in flight |
-| `zip` (Cycle) | O(N) + O(cycled-child's cardinality) per child that's not the longest | Cycling re-emits earlier values; the shorter children must replay, so they hold their own buffered values. The longest child still streams. |
+| `zip` (Cycle) | O(Σ children's cardinalities) | Both executors drain every child before emitting (the IR interpreter caches all children; the runtime evaluates them to vectors); the longest child sets the length and no child streams. |
 | `union` | O(active child's footprint) | One child active at a time; previous children released before next starts |
 | `filter` | O(child's footprint) + O(1) per-tuple | Stream the child; evaluate predicate per tuple; emit or drop |
 | `order` with `Lex` (un-truncated) | O(child's footprint) | Lex IS the enumeration order; identity I5 applies; no buffering |
@@ -921,12 +984,14 @@ to produce correct output:
   push-down (§10) compiles the halton sequence to direct
   index selection over the cartesian lattice. Naïve unfused
   compilation has barrier of size `|c|`.
-- `order(c, extrema/k)` — barrier of size `O(k * d)` where d
-  is cartesian dimensionality, IF push-down compiles "extrema
-  enumeration" against the lattice index space; full input
-  size otherwise.
-- `zip(Cycle)` shorter children — barrier of size = each
-  shorter child's cardinality.
+- `order(c, extrema/k)` — `extrema/k` keeps the first k
+  *strata* (k=1: all 2^d corners of a d-axis lattice), not k
+  tuples; the strategy's own work is O(2^d) for the corner
+  stratum, but the barrier still holds the full input, so its
+  working set is the input cardinality (`metadata` sizes it
+  that way).
+- `zip(Cycle)` — every child is materialized (§6.2); barrier of
+  size = the sum of the children's cardinalities.
 
 Push-down (§10) is **the** mechanism that keeps these working
 sets small. Naïve compilation produces correct output but at
@@ -969,7 +1034,8 @@ where it matters for canonicalization or for performance.
 `zip(a, zip(b, c))` in general (the inner zip's tuple shape
 becomes part of the outer's name set, changing what zips against
 what). Flat `zip(a, b, c, modes...)` is the only canonical form;
-nested zips are a parse error.
+nested zips cannot be written in the text surface and are not
+flattened (R0b does not touch zip).
 
 ### 7.2 Filter conjunction
 
@@ -1079,8 +1145,17 @@ for var1 in src1, var2 in src2, ...            → cartesian(clause(var1, src1),
 for (var1, var2) in (src1, src2)               → zip([clause(var1, src1), clause(var2, src2)], Strict)
 for (var1, var2) in zip_truncate(src1, src2)   → zip([...], Truncate)
 for (var1, var2) in zip_cycle(src1, src2)      → zip([...], Cycle)
-for [ comprehension1, comprehension2, ... ]    → union(c1, c2, ...)
+for k in ..., k in ...  (repeated names)       → union(cartesian(...), cartesian(...))   (§8.4)
 ```
+
+Union is reached from text only through the inferred form of
+§8.4 (repeated names); there is no bracketed `for [ … ]` form.
+The `for` grammar is `clause ("," clause)* ("where" …)? ("order"
+…)?`. The text front end also rejects any non-`Lex` `order` over
+a union (the legacy `Comprehension::validate` check), so an
+index-space strategy over a union is writable only by
+constructing the AST (`Comprehension::union` /
+`Comprehension::order`).
 
 The trailing modifiers append `filter` and `order` nodes:
 
@@ -1100,20 +1175,27 @@ rules in §3.1.1–§3.1.4 (semantics); the surface forms are
 
 ### 8.2 Recursive composition
 
-Wherever the surface allows a `<comprehension>`, the full set
-of for-forms applies. This is the regularity property:
+At the algebra level every constructor accepts any
+`Comprehension` as a child. This is the regularity property; it
+is reached through the AST constructors, since the text surface
+has no nesting form:
 
-```text
-for [
-    for k in 10, limit in 10..20 where {limit} > 15,
-    for k in 100, limit in 100..200 order halton/5,
-]
+```rust
+Comprehension::union(vec![
+    Comprehension::cartesian(vec![clause("k", lit([10])), clause("limit", range(10, 20))])
+        .with_filter("{limit} > 15"),
+    Comprehension::order(
+        Comprehension::cartesian(vec![clause("k", lit([100])), clause("limit", range(100, 200))]),
+        StrategyName::Halton,
+        Some(5),
+    ),
+])
 ```
 
-The strings-as-sub-spaces shorthand (`for ["k in 10, ..."]`)
-remains valid as a parsing convenience — each string is parsed
-as a comprehension expression. The bracketed-comprehension form
-and the bracketed-string form are equivalent at the AST level.
+In text, the same union is written with repeated names
+(§8.4) — `for k in 10, limit in 10..20, k in 100, limit in
+100..200` — with a single trailing `where` / `order` applying to
+the whole union, and only `lex` accepted as the order.
 
 ### 8.3 Comprehensions as named values
 
@@ -1146,9 +1228,10 @@ a mutable evaluation cursor.
 The parser supports `for k in 10, limit in ..., k in 100,
 limit in ...` with repeated names inferring `union`. Under the
 regular algebra this is a parser convenience — the disambiguation
-runs after clause-list parsing and lifts to `union(cartesian(...),
-cartesian(...))`. The canonical form is the explicit bracketed
-union.
+runs after clause-list parsing
+(`parse::comprehension_from_subspaces`) and lifts to
+`union(cartesian(...), cartesian(...))`. This is the only text
+spelling of a union; the canonical form is the `Union` AST node.
 
 ---
 
@@ -1251,8 +1334,10 @@ exposed via `polydat::iteration::comprehension::ir::Program` as a
 `#[non_exhaustive]` `Vec<Op>` accessible by value. Consumers
 may inspect the sequence (e.g. for cost estimation, tracing,
 or alternative backends) but cannot mutate it post-compile —
-the optimizer (§10) is the only path from AST to IR, and the
-resulting program is frozen. This is the user feedback on
+`ir::compile::compile` is the only path from AST to IR, and the
+resulting program is frozen (the optimizer of §10 is a separate
+AST→AST pass a caller runs beforehand if it wants §10's
+rewrites). This is the user feedback on
 §14's "expose IR or not" question: expose it, immutable.
 
 ### 9.2 Correctness contract
@@ -1297,10 +1382,15 @@ The barrier working-set sizes are:
   (it must replay).
 - `ORDER_MATERIALIZE` without push-down: input cardinality
   (the strategy needs to inspect everything).
-- `ORDER_MATERIALIZE` with push-down (§10): the strategy-
-  specific minimum — for halton/n over a cartesian, O(n); for
-  extrema/k, O(k·d); for shuffle/n with cartesian input,
-  O(n) index draws.
+- `ORDER_MATERIALIZE` with push-down (§10): the strategy's own
+  work is the strategy-specific minimum — for halton/n over a
+  cartesian, O(n) index draws; for extrema/k, O(2^d) corners
+  for the first stratum; for `Shuffle` with truncation n over a
+  cartesian, O(n) index draws — but the interpreter's barrier
+  still drains
+  the whole input into a buffer before `Strategy::apply` runs
+  (§10.2 R2), so the actual working set remains the input
+  cardinality.
 
 There are NO hidden buffering, copy, or fan-out terms. Every
 opcode either streams (O(operator-local state) per pull) or
@@ -1308,12 +1398,14 @@ declares its materialization at compile time. The "basic
 combinatoric tracking data" budget the user asks for is exactly
 this closed-form sum.
 
-The compile-time bound checker computes this expression
-symbolically from the AST. A consumer can ask: "what is the
-maximum memory this comprehension will hold at steady state?"
-and get a numeric answer (when sources are bounded) or a
-symbolic Unbounded with the barrier identified (when sources
-are unbounded but the barrier-policy permits it via push-down).
+The bound checker (`ir::bounds::check_bounds`) computes this
+expression from the compiled program. A consumer can ask: "what
+is the maximum memory this comprehension will hold at steady
+state?" and get a numeric answer (when sources are bounded) or a
+symbolic Unbounded with the barrier identified. For an
+`ORDER_MATERIALIZE` it reports the barrier's declared truncation
+as a conservative lower bound; the interpreter's actual working
+set is the input cardinality (§6.3).
 
 ### 9.4 Compile-time guarantees
 
@@ -1340,11 +1432,13 @@ imply:
    validation (Axiom V8) — neither reaches compile.
 
 All five guarantees assume the IR was produced from an
-*optimized* AST. §10's post-parse optimizer is a required pass
-upstream of §9.1's compilation — it converts user-authored
-expressions into the push-down forms whose closed-form working
-sets the bounds above describe. The un-optimized AST is the
-correctness reference, not the runtime input.
+*optimized* AST. The optimizer is available
+(`optimize::optimize`) and is exercised by the equivalence
+tests; no production caller runs it. `for` traversals and tile
+projections evaluate the authored AST directly through
+`runtime::evaluate_for_iteration`, so §9.3's bounds describe the
+IR model, not the traversal path. The un-optimized AST is the
+correctness reference.
 
 ### 9.5 Consumption surfaces
 
@@ -1380,7 +1474,13 @@ first. The two are independent first-class streams (see §9.5.2).
 
 The surfaces are factories on the compiled comprehension
 (`surfaces::CompiledComprehension`, obtained by `compile(&ast)`,
-`from_ast`, or `from_program`):
+`from_ast`, or `from_program`). They run the IR interpreter,
+which enumerates only statically-resolvable sources (`Literal`
+lists and `IntRange`s); they are a library/host API, not the
+path `for` traversals or tile projections take (those call
+`runtime::evaluate_for_iteration`). A `StreamerValue` exposes
+`compiled()` and `coordinate_stream()`; the kernel-scoping
+surfaces live on the `CompiledComprehension`:
 
 ```text
 CompiledComprehension::coordinate_stream(&self) -> CoordinateStream
@@ -1509,10 +1609,11 @@ sections above:
   IR program, but each owns its dispense cursor, strategy state,
   buffers, and kernel state; advancing one consumer cannot advance or
   invalidate another (§9.5.2, §14.3).
-- **Deterministic seeded strategies.** Seeded strategies derive their
-  state from the authored seed and stable structural identity. Thread
-  scheduling, address layout, and iteration among sibling consumers
-  do not alter the sequence (§3.6).
+- **Deterministic PRNG strategies.** The PRNG strategies (`Shuffle`,
+  `Lhs`) seed from a per-strategy module constant plus the input
+  length; no seed is authored or threaded per streamer, so equal
+  inputs give equal sequences. Thread scheduling, address layout, and
+  iteration among sibling consumers do not alter the sequence (§3.6).
 
 `EvaluatedSource` distinguishes source values from source
 indexability: `IndexFn` is a runtime query over the evaluated source,
@@ -1527,7 +1628,10 @@ locations or context preserves the underlying category and causal
 chain:
 
 - parse and serde shape errors originate in `spec`;
-- algebra validity errors originate in `validate`;
+- algebra validity errors originate in `validate` when a caller
+  runs it; on the traversal/tile path shape violations surface as
+  `RuntimeError::StrategyRejectsInput` / `UnsupportedShape` or as
+  text-front-end errors;
 - bound and IR-shape errors originate in `ir`;
 - runtime source, interpolation, predicate, and strategy errors
   originate in `runtime`;
@@ -1554,11 +1658,14 @@ extract 30 tuples. That is not "bounded by the AST's declared
 barriers" in any useful sense — the bound exists but is
 catastrophic.
 
-The fix is **required**, not optional: a post-parse pass that
-rewrites the AST into a form whose materialization barriers are
-sized by the *output*, not the *input*. This pass is the
-optimizer. It is part of the compilation contract — running it
-is mandatory before §9.1's IR compilation.
+The fix is a post-parse pass that rewrites the AST into a form
+whose materialization barriers are sized by the *output*, not
+the *input*. This pass is the optimizer (`optimize::optimize`).
+It is available and exercised by the equivalence tests, but no
+production caller runs it: `for` traversals and tile projections
+evaluate the authored AST directly through
+`runtime::evaluate_for_iteration`, so the rewrites below describe
+the IR model rather than the traversal path.
 
 ### 10.1 What "push-down" means here
 
@@ -1667,32 +1774,31 @@ push-down rules:
   indices over `[0, |c1|) × [0, |c2|) × ... × [0, |cN|)`, look
   up each multi-index in the cartesian's enumeration. For
   `Continuous`, emit n K-D Halton points in `[0,1)^K` and map
-  each to the input's intervals (affine for Uniform measure;
-  inverse-CDF for named measures). For `Hybrid`, mix the two:
-  discrete axes get integer Halton lookups, continuous axes
-  get interval-mapped points. Working set: O(n) draws plus
+  each to the input's intervals affinely under a uniform
+  measure (the runtime does not implement inverse-CDF mapping
+  for named measures). `Hybrid` discrete × continuous sampling
+  is not implemented (§3.6). Strategy work: O(n) draws plus
   per-axis cursors. Halton is deterministic and self-
   correlating; the K-D continuous form is the strategy's
   *native* mathematical definition.
 - **Sobol**: same shape as Halton, with a Sobol generator —
-  also native to continuous, also handles Lattice / Continuous
-  / Hybrid uniformly.
+  also native to continuous; Lattice and Continuous inputs,
+  no Hybrid.
 - **Lhs**: for discrete, pre-stratify the n samples by axis
   (one permutation of `0..n` per axis), then emit n tuples by
   zipping the per-axis permutations. For `Continuous`,
   stratify each axis's interval into n equal-measure bins,
   draw one sample per bin, zip them; this is the classical
-  Latin Hypercube design over a real K-D box. For Hybrid,
-  combine the two per axis. Working set: O(n · N).
-- **Extrema** (k corners): for discrete `Lattice`, enumerate
-  the 2^N lattice corner positions, sort by the strategy's
-  distance metric (per §3.6's named-strategy semantics), emit
-  the top k. Working set: O(2^N · log(2^N)) = O(N · 2^N),
-  independent of input cardinality. For N>20 the optimizer
-  keeps a heap of size k instead of materializing all corners.
-  For Continuous, the corners are the 2^N tuples formed from
-  each axis's interval endpoints (with appropriate open/closed
-  treatment); same selection logic.
+  Latin Hypercube design over a real K-D box. No Hybrid.
+  Strategy work: O(n · N).
+- **Extrema** (`/k` strata): for discrete `Lattice`, enumerate
+  the index space stratified by interior count; stratum 0 is
+  the 2^N corners, and `/k` keeps the first k complete strata
+  (k=1: all 2^N corners, never a partial stratum). Strategy
+  work for the corner stratum: O(2^N), independent of input
+  cardinality. The continuous box-corner form is not
+  implemented; the runtime rejects `Extrema` over a continuous
+  source (§3.6).
 - **Diagonal / Antidiagonal**: discrete `Lattice` only —
   per §3.6, these strategies reject Continuous inputs (no
   canonical step in a continuous space). Emit tuples whose
@@ -1705,8 +1811,13 @@ push-down rules:
   strategy's shell partition). Working set: O(N) per
   emitted tuple plus a small per-shell counter.
 
-For strategies in this list, R2 collapses `ORDER_MATERIALIZE`
-to a strategy-aware streaming source. The barrier disappears.
+For strategies in this list, R2 marks the `ORDER_MATERIALIZE`
+opcode `indexed = true` so the strategy selects tuples by
+closed-form index lookup and its own work is O(n). The barrier
+does **not** disappear: `OrderMaterializeStream::materialize`
+still drains the entire input into a `Vec` before
+`Strategy::apply` runs, so the working set is the input
+cardinality until a lazy index-lookup source exists.
 
 **R3 — `order(filter(c, p), lex, None)` → `filter(order(c, lex,
 None), p)`** by N2: when un-truncated, filter and Lex order
@@ -1769,9 +1880,12 @@ The optimizer recognizes:
 
 So R2 generalizes to zip-with-Cycle: emit 100 Halton draws over
 `0..1_000_000`, look each draw up against the zip's index
-function. Working set: 100 indices + 3 buffered colors (for the
-zip's shorter-child barrier from §6.3). Per-pull cost: one
-Halton draw + two modulo operations.
+function. Strategy work: 100 indices; per-pull cost: one Halton
+draw + two modulo operations. The interpreter's barrier still
+drains the zip's 1,000,000 tuples into a buffer before the
+lookup (§10.2 R2), so the working set today is the input
+cardinality; the O(n) figure is what a lazy index-lookup source
+would achieve.
 
 This is the load-bearing case the user named. The optimizer's
 existence (not its merely being present, but its *running before
@@ -1785,8 +1899,10 @@ The same pattern extends to other strategies whose input
 requirement Halton shares:
 - `zip_strict(...) order halton/n` — index space is the common
   length (`IndexFn::Lockstep`); emit n Halton-indexed tuples.
-- `zip_cycle(...) order shuffle/n` — emit n PRNG-shuffled
-  indices, look up against the Modular index function.
+- `Shuffle` over a zip — emit n PRNG-shuffled indices, look up
+  against the Modular index function. `Shuffle` has no text
+  spelling; it is reachable only by constructing the AST
+  (`Comprehension::order(_, StrategyName::Shuffle, _)`).
 - `zip_strict(...) order sobol/n` — same shape, Sobol generator.
 
 Strategies that require a multi-axis `Lattice` (Extrema,
@@ -1810,44 +1926,59 @@ After R2 fires:
 2. PUSH_CLAUSE limit, source `1..1_000_000`.
 3. CARTESIAN(2) — produces an index-addressable stream of size
    10¹², with one cursor per axis.
-4. ORDER_MATERIALIZE(Halton, 30) → rewritten to indexed_halton
-   over the cartesian's lattice. Emit 30 Halton draws in
-   `[0, 1_000_000) × [0, 1_000_000)`, look up each.
+4. ORDER_MATERIALIZE(Halton, 30, indexed=true) — the strategy's
+   indexed form over the cartesian's lattice. Emit 30 Halton
+   draws in `[0, 1_000_000) × [0, 1_000_000)`, look up each.
 5. DISPENSE.
 
-Working set: 30 draws + 2 cursors. The barrier remains a barrier
-in spirit (we still don't emit tuples until the strategy decides
-on the indices), but its size is O(output), not O(input).
+Strategy work: 30 draws + 2 cursors. The barrier remains a
+barrier: the interpreter drains the cartesian into a buffer
+before the strategy runs (§10.2 R2), so the working set is the
+input cardinality; O(output) is the target a lazy index-lookup
+source would reach.
 
 ### 10.5 Worked example: filter distribution shrinking a barrier
 
+The text front end rejects a non-`Lex` order over a union
+(§8.1), so this example is stated at the algebra level; the
+union itself is the repeated-name text `for k in 1..1000, x in
+1..1000, k in 1..1000, x in 1001..2000 where {k} > 500`.
+
 ```text
-for [
-  for k in 1..1000, x in 1..1000,
-  for k in 1..1000, x in 1001..2000,
-]
-where {k} > 500
-order halton/50
+order(
+  filter(
+    union(
+      cartesian(clause(k, 1..1000), clause(x, 1..1000)),
+      cartesian(clause(k, 1..1000), clause(x, 1001..2000)),
+    ),
+    "{k} > 500",
+  ),
+  Halton, Some(50),
+)
 ```
 
 After R4 (filter distributes over union):
 
 ```text
-for [
-  for k in 1..1000, x in 1..1000 where {k} > 500,
-  for k in 1..1000, x in 1001..2000 where {k} > 500,
-]
-order halton/50
+order(
+  union(
+    filter(cartesian(clause(k, 1..1000), clause(x, 1..1000)), "{k} > 500"),
+    filter(cartesian(clause(k, 1..1000), clause(x, 1001..2000)), "{k} > 500"),
+  ),
+  Halton, Some(50),
+)
 ```
 
 After R5 (per-axis filter pushed into each cartesian):
 
 ```text
-for [
-  for k in 501..1000, x in 1..1000,
-  for k in 501..1000, x in 1001..2000,
-]
-order halton/50
+order(
+  union(
+    cartesian(clause(k, 501..1000), clause(x, 1..1000)),
+    cartesian(clause(k, 501..1000), clause(x, 1001..2000)),
+  ),
+  Halton, Some(50),
+)
 ```
 
 Each filtered sub-cartesian has cardinality 500 × 1000 = 500_000
@@ -1866,19 +1997,21 @@ index function to either `cartesian_0[i]` (i < 500_000) or
 `cartesian_1[i - 500_000]` (i ≥ 500_000), then descend into the
 chosen cartesian's lattice.
 
-Working set after all four rewrites (R4 → R5 → R2): 50 Halton
-draws + per-axis cursors. Sources stream. Total per-pull O(1)
-above the cursor count.
+Strategy work after all four rewrites (R4 → R5 → R2): 50 Halton
+draws + per-axis cursors, and the filter no longer runs per
+tuple. The interpreter's barrier still drains the 1_000_000
+tuples of the union before the lookup (§10.2 R2), so the
+working set is the input cardinality.
 
-If the author's intent was per-sub-space Halton (15 spread points
-per sub-space rather than 50 spread across the combined
+If the author's intent was per-sub-space Halton (25 spread
+points per sub-space rather than 50 spread across the combined
 concatenation), N1 says they must author that form explicitly:
 
 ```text
-for [
-  for k in 501..1000, x in 1..1000 order halton/25,
-  for k in 501..1000, x in 1001..2000 order halton/25,
-]
+union(
+  order(cartesian(clause(k, 501..1000), clause(x, 1..1000)), Halton, Some(25)),
+  order(cartesian(clause(k, 501..1000), clause(x, 1001..2000)), Halton, Some(25)),
+)
 ```
 
 The two forms emit different tuple sets; the optimizer never
@@ -1961,22 +2094,22 @@ specifies *when* it becomes knowable.
 
 Sources are partitioned into three **eval classes**:
 
-- **Statically evaluable**: `Literal { values }`,
-  `IntRange { lo, hi, step }`, `ContinuousInterval { … }`,
-  and any `Generator` polydat recognizes as built-in (the set
-  enumerated in §10.7.6). For these, evaluation succeeds with
-  no kernel context — `source.evaluate(None)` returns
-  `EvaluatedSource` — and the compile-time planner computes
-  the full metadata bundle during parse / R0–R7 optimization.
-- **Context-required**: `WorkloadParamList { name }` and
-  `Generator` outside the built-in set. For these,
-  `source.evaluate(None)` returns `NeedsContext`; the runtime
-  evaluator supplies a kernel context at evaluation time.
-  The metadata becomes knowable then — same rules,
-  later firing.
-- **Distribution**: not enumerated until an enclosing
-  `Order(_, sampling-strategy, Some(n))` discharges V8;
-  evaluation is the sampling pass itself.
+- **Static**: `Literal { values }` and `IntRange { lo, hi,
+  step }`. For these, evaluation succeeds with no kernel
+  context — `source.evaluate(None)` returns `EvaluatedSource`
+  — and the metadata bundle is computable from the AST alone.
+- **ContextRequired**: every `Generator` (there is no static
+  generator registry; see §10.7.7) and `WorkloadParamList {
+  name }`. For these, `source.evaluate(None)` returns
+  `NeedsContext`; the runtime evaluator supplies a `Lookup`
+  scope at evaluation time. The metadata becomes knowable then
+  — same rules, later firing.
+- **Distribution**: `ContinuousInterval { … }` and
+  `Distribution { … }`. `evaluate(None)` succeeds with empty
+  `values` and a `Continuous` `IndexFn`; the values are not
+  enumerated until an enclosing `Order(_, sampling-strategy,
+  Some(n))` discharges V8 — evaluation is the sampling pass
+  itself.
 
 The propagation rules in §10.7.1–§10.7.5 are unchanged. What
 the rules describe is what holds *once the source has been
@@ -2001,13 +2134,13 @@ Metadata {
 }
 
 enum IndexFn {                            // closed-form addressing schemes only
-  Lattice       { axis_sizes: Vec<usize> },           // cartesian (discrete)
-  Lockstep      { length: usize },                    // zip(Strict|Truncate)
-  Modular       { axis_sizes: Vec<usize> },           // zip(Cycle)
-  Concatenation { segment_sizes: Vec<usize> },        // union
+  Lattice       { axis_sizes: Vec<u64> },             // cartesian (discrete)
+  Lockstep      { length: u64 },                      // zip(Strict|Truncate)
+  Modular       { axis_sizes: Vec<u64> },             // zip(Cycle)
+  Concatenation { segment_sizes: Vec<u64> },          // union
   Continuous    { intervals: Vec<Interval>,           // cartesian-of-continuous (K-D box)
                   measure: ProductMeasure },          //   1-D scalar range when intervals.len() == 1
-  Hybrid        { discrete_axes: Vec<usize>,          // mixed discrete × continuous cartesian
+  Hybrid        { discrete_axes: Vec<u64>,            // mixed discrete × continuous cartesian
                   continuous_axes: Vec<Interval>,
                   measure: ProductMeasure },
 }
@@ -2029,7 +2162,7 @@ enum NaturalOrder {
 
 enum Materialization {
   Streaming,
-  BoundedBarrier { working_set_size: usize },
+  BoundedBarrier { working_set_size: u64 },
   UnboundedBarrier,                // invalid by V6
 }
 ```
@@ -2173,45 +2306,43 @@ metadata field is read.
 
 The single surface every consumer (IR interpreter, strategies,
 V4) uses to read a source's enumerated form. Produced by
-`Source::evaluate(Option<&Context>)`.
+`SourceEval::evaluate(Option<&EvalContext<'_>>)`
+(`polydat_core::iteration::comprehension::eval_source`).
 
-```text
-struct EvaluatedSource {
-  /// Concrete typed values the source dispenses, in
-  /// declaration / enumeration order.
-  values: Vec<polydat::ast::Value>,
-
-  /// Cardinality — same enum as §6.1's CardinalityClass, but
-  /// `Bounded(values.len())` for any successfully-evaluated
-  /// discrete source. `Continuous` marks a distribution-like
-  /// source that requires an enclosing sampler under V8.
-  cardinality: CardinalityClass,
-
-  /// Closed-form addressing scheme — same enum as §10.7.1's
-  /// IndexFn. For evaluated discrete sources this is
-  /// always `Lattice { axis_sizes: [values.len()] }` at the
-  /// clause level; combinators compose it per §10.7.2's
-  /// rules.
-  index_fn: Option<IndexFn>,
+```rust
+pub struct EvaluatedSource {
+    /// The values, in dispense order.
+    pub values: Vec<Value>,
+    /// How many values; zero for an unsampled continuous source.
+    pub cardinality: u64,
+    /// The addressing scheme the values satisfy. For an
+    /// evaluated discrete clause this is
+    /// `Lattice { axis_sizes: [values.len()] }`; combinators
+    /// compose it per §10.7.2's rules.
+    pub index_fn: IndexFn,
 }
 
-enum EvalError {
-  /// Source's eval class is context-required, but
-  /// evaluate(None) was called. Caller is expected to
-  /// supply a kernel context.
-  NeedsContext,
-  /// Source evaluation against the provided context
-  /// failed (interpolation error, eval_const_expr
-  /// failure, registry-unknown generator, etc.).
-  EvalFailed { spec_text: String, reason: String },
+pub enum EvalError {
+    /// The source needs a kernel context that wasn't provided.
+    NeedsContext,
+    /// Evaluation against the supplied context failed. `var`
+    /// names the clause; `source` is the spec text or
+    /// description; `message` carries the underlying reason.
+    EvalFailed { var: String, source: String, message: String },
 }
 
-trait Source {
-  fn eval_class(&self) -> EvalClass;
-  fn evaluate(&self, ctx: Option<&Context>) -> Result<EvaluatedSource, EvalError>;
+pub struct EvalContext<'a> {
+    pub var_name: &'a str,
+    pub scope: &'a dyn Lookup,
+    pub prefix: &'a [(String, Value)],
 }
 
-enum EvalClass { Static, ContextRequired, Distribution }
+pub trait SourceEval {
+    fn eval_class(&self) -> EvalClass;
+    fn evaluate(&self, ctx: Option<&EvalContext<'_>>) -> Result<EvaluatedSource, EvalError>;
+}
+
+pub enum EvalClass { Static, ContextRequired, Distribution }
 ```
 
 Calling `evaluate(None)` on a `Static` source always succeeds
@@ -2227,70 +2358,67 @@ produces n drawn points which become the EvaluatedSource's
 `values`. Bare Distribution clauses (no enclosing sampler) are
 V8-rejected at compile time.
 
-#### 10.7.7 Built-in generator registry
+#### 10.7.7 The runtime generator catalogue
 
-The polydat-owned set of generators whose `evaluate(None)`
-succeeds without a kernel context. These move from
-`ContextRequired` to `Static` for planning purposes.
+There is no static generator registry: every `Source::Generator`
+is `ContextRequired` and is evaluated only by the runtime
+(`eval::evaluate_spec` with a `Lookup`), even when its arguments
+are literals. Integer ranges are not generators — `lo..hi` parses
+to `Source::IntRange`, which is `Static`.
+
+The named generators the runtime evaluator recognizes are:
 
 | Generator | Signature | Cardinality |
 |---|---|---|
-| `range(lo, hi)` | int literals | `⌈(hi-lo)⌉` |
-| `range(lo, hi, step)` | int literals | `⌈(hi-lo)/step⌉` |
-| `fib(n)` | int literal | `n` |
-| `pow2(n)` | int literal | `n` |
-| `linear_steps(n)` | int literal | `n` |
-| `geometric(n, base, ratio)` | int + numeric literals | `n` |
-| `concat(s₁, s₂, …, sₖ)` | each sᵢ is itself a registered generator or static source | `Σᵢ |sᵢ|` |
-| `partitions("linear:N")` | literal spec | `N` |
-| `partitions("hash:N")` | literal spec | `N` |
-| `subdivide(lo, hi, n)` | numeric literals | `n` |
-| `bucket(...)`, `concat_seq(...)`, `interval_seq(...)` | literal args | per definition |
+| `fib(n)`, `fib_until(max)` | int literal | `n` / until bound |
+| `pow2(n)`, `pow2_until(max)` | int literal | `n` / until bound |
+| `binomial(...)` | int literals | per definition |
+| `linear_steps(n)`, `linear_starts(...)`, `log_steps(...)` | int / numeric | `n` / per definition |
+| `geometric(n, base, ratio)`, `geometric_until(...)` | int + numeric | `n` / until bound |
+| `subdivide(lo, hi, n)` | numeric | `n` |
+| `partitions("linear:N")`, `partitions("hash:N")`, `profile_partitions(...)` | spec text | `N` / per definition |
+| `concat(s₁, …, sₖ)`, `unique`, `intersect`, `subtract`, `interleave`, `cycle`, `reverse`, `take`, `skip` | set-ops over sequences | per definition |
+| `bucket(...)`, `concat_seq(...)`, `interval_seq(...)` | sequencers | per definition |
 
-A generator is "registry-recognized" when (a) its name matches
-a registry entry and (b) its argument expressions are all
-literal-resolvable without context (recursively for `concat`).
-Mixed cases (`concat({workload_param}, fib(8))`) are
-`ContextRequired` — the recursion bottoms out at a non-static
-piece.
-
-Workload authors do not interact with the registry directly;
-it is Polydat-internal. Every built-in generator has a registry
-entry. Generators *outside* the registry
-(notably the activity-side or adapter-defined ones) remain
-context-required.
+The metadata bundle for a generator clause therefore becomes
+knowable at evaluation time (§10.7.0), never at parse.
 
 #### 10.7.8 Strategy invocation contract
 
-Strategies (§3.6) implement one method:
+Strategies (§3.6) implement `trait Strategy`
+(`polydat_core::iteration::comprehension::strategies`):
 
-```text
-trait Strategy {
-  fn apply(
-    &self,
-    evaluated: &EvaluatedSource,
-    truncation: Option<u64>,
-  ) -> Result<Vec<Tuple>, StrategyError>;
+```rust
+pub trait Strategy {
+    fn name(&self) -> StrategyName;
+    fn accepts_input(&self, idx: Option<&IndexFn>) -> bool;
+    fn has_closed_form_for(&self, idx: &IndexFn) -> bool;
+    fn apply(&self, input: &EvaluatedInput, truncation: Option<u64>) -> Vec<Tuple>;
+}
+
+pub struct EvaluatedInput {
+    pub tuples: Vec<Tuple>,
+    pub cardinality: u64,
+    pub index_fn: IndexFn,
 }
 ```
 
-The strategy queries `evaluated.index_fn` and
-`evaluated.values` to compute its permutation. The earlier
-`naive_apply` / `indexed_apply` split retires — there's one
-method, and the question "does the strategy have lattice
-metadata to work with?" is answered by inspecting the
-`EvaluatedSource` it receives.
+`apply` is infallible: the strategy queries `input.index_fn`
+and `input.tuples` to compute its permutation, dispatching to
+the indexed form when `has_closed_form_for` holds and to a
+per-strategy reorder over the tuples otherwise. There is no
+`StrategyError`; the earlier `naive_apply` / `indexed_apply`
+split retires into that single method.
 
 **§V4 enforcement timing.** V4 ("non-`Lex` strategies require
-the input's `IndexFn` to be non-`None`") fires at
-strategy-invocation time, against the `EvaluatedSource`. The
-compile-time IR planner may *additionally* fire V4 early as a
-usability nicety — when an AST's sources are all statically
-evaluable, the planner runs evaluation and surfaces V4
-failures at compile time. For ASTs with context-required
-sources, the early fire is skipped; runtime fire is the load-
-bearing one. Either way, V4 is the same axiom; only the
-*when* changes.
+the input's `IndexFn` to be non-`None`") is the caller's
+check: `runtime::apply_order` calls
+`accepts_input(input.index_fn.as_ref())` before `apply` and
+surfaces a rejection as `RuntimeError::StrategyRejectsInput`.
+Callers that run `validate` on the AST get a best-effort V4
+against static metadata; the production path (`for` traversals,
+tile projections) fires V4 only at strategy invocation. Either
+way, V4 is the same axiom; only the *when* changes.
 
 #### 10.7.9 Why this matters
 
@@ -2309,14 +2437,15 @@ worst-case working set?" reads metadata, not IR. The two
 surfaces together let external tooling reason about
 comprehension cost without recompiling.
 
-The eval-class partitioning (§10.7.0) plus the registry
-(§10.7.7) keep the static-evaluable subset broad without
-introducing a static / runtime semantic split: it's one
-metadata algebra, run twice for context-required cases (once
-optimistically at compile time, once definitively at strategy
-invocation). The runtime second-fire produces the same
-metadata bundle the static path would have, only with values
-the planner didn't know yet.
+The eval-class partitioning (§10.7.0) keeps the static-evaluable
+subset (`Literal` / `IntRange`) and the context-required subset
+(every `Generator`, `WorkloadParamList`; §10.7.7) under one
+metadata algebra without a static / runtime semantic split:
+the same propagation rules run from the AST for a caller that
+wants static metadata, and definitively at strategy invocation
+on the runtime path. The runtime fire produces the same
+metadata bundle the static path would have, only with the
+values the static path could not know.
 
 ### 10.8 What the optimizer doesn't do
 
@@ -2615,13 +2744,14 @@ back.
 #### 10.10.1 Inputs
 
 ```text
-analyze_reducibility(c: &Ast, m: &Metadata) -> ReducibilityFinding
+analyze_reducibility(ast: &Comprehension) -> ReducibilityFinding { reduction, rule, improvement }
 ```
 
-- `c`: the AST node under consideration (and, recursively, its
+- `ast`: the AST node under consideration (and, recursively, its
   children).
-- `m`: the metadata bundle for `c` propagated per §10.7. The
-  analyzer reads `m` exhaustively but **never reads `c`
+- `m`: the metadata bundle for `ast`, derived from the AST on
+  each call per §10.7 (it is not a separate parameter). The
+  analyzer reads `m` exhaustively but **never reads `ast`
   beyond what metadata surfaces** — that is, no peeking into
   Polydat expression internals, source-expression internals, or
   any field of `c` that §10.7's propagation rules did not
@@ -2835,8 +2965,11 @@ for k in 1..100, limit in 1..100
 
 AST: `order(filter(cartesian(clause(k, 1..100), clause(limit, 1..100)), "{k} * {limit} <= 1000"), Extrema, Some(5))`
 
-- Cardinality: `BoundedAtMost(5)` (truncation cap + filter
-  survival).
+- Cardinality: `BoundedAtMost(…)` — `extrema/5` keeps the first
+  5 *strata* (interior count 0..4), not 5 tuples; over a 2-axis
+  lattice that is the whole space (strata 0, 1, 2 exist), so
+  the cap is the filter's survivor count. `extrema/1` would
+  keep exactly the 2² = 4 corners.
 - Validity: V4 passes — Extrema requires a non-`None` Lattice
   with ≥2 axes; V5's look-through rule lets the filter sit
   between Extrema and its cartesian input without breaking the
@@ -2846,25 +2979,34 @@ AST: `order(filter(cartesian(clause(k, 1..100), clause(limit, 1..100)), "{k} * {
   inspects all surviving tuples to find extrema, so the barrier
   holds up to 10,000 candidates in the worst case.
 - Footprint (post-R2): Extrema over a 2-axis Lattice has a
-  closed-form push-down — enumerate the 2² = 4 lattice corners,
-  apply the strategy's distance metric, emit the top 5
-  (truncates to 4 since only 4 corners exist). Working set:
-  O(2^N · log 2^N) = O(N · 2^N) = O(2 · 4) = ~8 cells,
-  independent of input size. The filter still runs per
-  emitted-candidate tuple (V5 transparency), but the candidate
-  set is the small corner set, not the 10,000-element filtered
-  survivors.
+  closed-form indexed form — enumerate the lattice's multi-
+  indices stratified by interior count and look each up. The
+  strategy's own work for the corner stratum is O(2^N) = 4
+  cells, but the barrier still drains the filtered input into
+  a buffer before `apply` (§10.2 R2), and `metadata` sizes the
+  working set as the input cardinality (up to 10,000 here).
+  The filter runs once per input tuple during that drain.
 - IR (after R2): `PUSH_CLAUSE k` + `PUSH_CLAUSE limit` +
   `CARTESIAN(2)` + `FILTER("{k} * {limit} <= 1000")` +
-  `ORDER_MATERIALIZE(IndexedExtrema, 5)` + `DISPENSE`.
+  `ORDER_MATERIALIZE(Extrema, 5, indexed=true)` + `DISPENSE`.
 
 ### 11.3 Union of differently-modified sub-spaces
 
-```text
-for [
-    for k in 10, limit in 1..50 where {limit} > 10,
-    for k in 100, limit in 1..500 order halton/20,
-]
+Per-child `where` / `order` inside a union has no text spelling
+(§8.1: a `for` carries one trailing `where` and one `order` over
+the whole comprehension), so this example is built at the
+algebra level:
+
+```rust
+Comprehension::union(vec![
+    Comprehension::cartesian(vec![clause("k", lit([10])), clause("limit", range(1, 50))])
+        .with_filter("{limit} > 10"),
+    Comprehension::order(
+        Comprehension::cartesian(vec![clause("k", lit([100])), clause("limit", range(1, 500))]),
+        StrategyName::Halton,
+        Some(20),
+    ),
+])
 ```
 
 AST: `union(filter(cartesian(clause(k, 10), clause(limit, 1..50)), "{limit} > 10"), order(cartesian(clause(k, 100), clause(limit, 1..500)), Halton, Some(20)))`
@@ -2880,26 +3022,27 @@ AST: `union(filter(cartesian(clause(k, 10), clause(limit, 1..50)), "{limit} > 10
   `ORDER_MATERIALIZE(Halton, 20)` would inspect all 500
   cartesian tuples in the naïve form.
 - Footprint (post-R2): Halton over a 2-axis Lattice has a
-  closed-form push-down. The inner halton/20 emits 20 Halton
-  draws over the `[0, 100) × [0, 500)` index space, looking
-  each up against the cartesian's enumeration. Working set:
-  20 indices + per-axis cursors. The union activates one
+  closed-form indexed form. The inner halton/20 emits 20 Halton
+  draws over the `[0, 1) × [0, 500)` index space, looking each
+  up against the cartesian's enumeration. Strategy work: 20
+  indices + per-axis cursors; the barrier still drains the 500
+  cartesian tuples first (§10.2 R2). The union activates one
   sub-space at a time, so the first sub-space's state is
   released before the second begins.
 - IR (after R2): `PUSH_CLAUSE k` (=10) + `PUSH_CLAUSE limit`
   (1..50) + `CARTESIAN(2)` + `FILTER("{limit} > 10")` + sub-
   space-A end → `PUSH_CLAUSE k` (=100) + `PUSH_CLAUSE limit`
-  (1..500) + `CARTESIAN(2)` + `ORDER_MATERIALIZE(IndexedHalton,
-  20)` + sub-space-B end → `UNION(2)` + `DISPENSE`.
+  (1..500) + `CARTESIAN(2)` + `ORDER_MATERIALIZE(Halton, 20,
+  indexed=true)` + sub-space-B end → `UNION(2)` + `DISPENSE`.
 
 ### 11.4 Union with outer reordering
 
 ```text
-for [
-    for k in 10, limit in 1..50,
-    for k in 100, limit in 1..50,
-] order lex/30
+for k in 10, limit in 1..50, k in 100, limit in 1..50 order lex/30
 ```
+
+(the repeated names infer the union per §8.4; `lex` is the one
+order the text front end accepts over a union)
 
 AST: `order(union(cartesian(clause(k, 10), clause(limit, 1..50)), cartesian(clause(k, 100), clause(limit, 1..50))), Lex, Some(30))`
 
@@ -2915,11 +3058,18 @@ AST: `order(union(cartesian(clause(k, 10), clause(limit, 1..50)), cartesian(clau
 
 ### 11.5 Halton over a union (combined index space)
 
-```text
-for [
-    for k in 10, limit in 1..50,
-    for k in 100, limit in 1..50,
-] order halton/30
+The text front end rejects a non-`Lex` order over a union
+(§8.1), so this form is reachable only by constructing the AST:
+
+```rust
+Comprehension::order(
+    Comprehension::union(vec![
+        Comprehension::cartesian(vec![clause("k", lit([10])), clause("limit", range(1, 50))]),
+        Comprehension::cartesian(vec![clause("k", lit([100])), clause("limit", range(1, 50))]),
+    ]),
+    StrategyName::Halton,
+    Some(30),
+)
 ```
 
 AST: `order(union(cartesian(clause(k, 10), clause(limit, 1..50)), cartesian(clause(k, 100), clause(limit, 1..50))), Halton, Some(30))`
@@ -2947,33 +3097,38 @@ AST: `order(union(cartesian(clause(k, 10), clause(limit, 1..50)), cartesian(clau
   author's form is the intended semantic":
 
 ```text
-for [
-    for k in 10, limit in 1..50 order halton/15,
-    for k in 100, limit in 1..50 order halton/15,
-]
+union(
+    order(cartesian(clause(k, 10), clause(limit, 1..50)), Halton, Some(15)),
+    order(cartesian(clause(k, 100), clause(limit, 1..50)), Halton, Some(15)),
+)
 ```
 
 ### 11.6 Filter then order vs order then filter
 
+A single `for` carries at most one `where` and one `order`, and
+the derivation form is `for <name> ("where" …)? ("order" …)?`
+(§8.3), so the two compositions are written as chained
+derivations:
+
 ```text
 // Form A — order, then filter
-fast_corner := (for k in 1..10, limit in 1..10 order extrema/4)
-               where {k} * {limit} > 50
+fast_corner := for k in 1..10, limit in 1..10 order extrema/1
+filtered    := for fast_corner where {k} * {limit} > 50
 
 // Form B — filter, then order
-corner_of_high := (for k in 1..10, limit in 1..10 where {k} * {limit} > 50)
-                  order extrema/4
+high           := for k in 1..10, limit in 1..10 where {k} * {limit} > 50
+corner_of_high := for high order extrema/1
 ```
 
-AST A: `filter(order(cartesian(...), Extrema, Some(4)), "{k} * {limit} > 50")`
-AST B: `order(filter(cartesian(...), "{k} * {limit} > 50"), Extrema, Some(4))`
+AST A: `filter(order(cartesian(...), Extrema, Some(1)), "{k} * {limit} > 50")`
+AST B: `order(filter(cartesian(...), "{k} * {limit} > 50"), Extrema, Some(1))`
 
-- Form A: pick the 4 extrema (corners) of (k, limit), then drop
-  those whose product ≤ 50. Could emit 0-4 tuples depending on
-  which corners survive.
+- Form A: pick the corner stratum (`extrema/1` = all 2² = 4
+  corners) of (k, limit), then drop those whose product ≤ 50.
+  Could emit 0-4 tuples depending on which corners survive.
 - Form B: filter to high-product tuples first, then pick the
-  4 extrema of *those*. The "corners" are computed relative to
-  the surviving set (which still uses original lattice
+  corner stratum of *those*. The "corners" are computed relative
+  to the surviving set (which still uses original lattice
   positions per V5, but the survivors are a different set).
 - Both are valid. They emit different tuples. The user's
   authored form is the intended semantic; N1 says the optimizer
@@ -2995,29 +3150,33 @@ AST: `zip([clause(x, 1..10), clause(y, 100..200..10)], Strict)`
 - Metadata: `index_addressable = Some(Lockstep { length: 10 })`;
   `natural_order = Lockstep`; `materialization = Streaming`.
 
-### 11.8 Cycle zip with one unbounded child
+### 11.8 Cycle zip with one unhinted child
 
 ```text
-for (cycle, color) in zip_cycle({cycle_stream}, [red, green, blue])
+for (id, color) in zip_cycle({id_list}, [red, green, blue])
 ```
 
-AST: `zip([clause(cycle, {cycle_stream}), clause(color, [red, green, blue])], Cycle)`
+AST: `zip([clause(id, {id_list}), clause(color, [red, green, blue])], Cycle)`
 
-- Cardinality: `Unbounded` (cycle_stream is unbounded;
-  color repeats indefinitely).
-- Footprint: O(3) for the colors buffer (cycling requires re-
-  emit); O(1) for the unbounded `cycle` stream's per-tuple
-  state.
+- Cardinality: `Unbounded` in the static metadata — `{id_list}`
+  is a workload param whose count is unknown until evaluation
+  (`Unbounded` means "count unknown", not infinite; §3.3). At
+  evaluation the length is `max(|id_list|, 3)`.
+- Footprint: every child is materialized (§6.2) — the runtime
+  evaluates `{id_list}` to a vector and holds the 3 colors; the
+  tuple at index i is `(id_list[i mod |id_list|], color[i mod
+  3])`.
 - Validity: V6 satisfied — no materializing order applied to
-  this; zip Cycle accepts one unbounded child.
+  this. In practice all zip children must be finite; an
+  infinite `id_list` would never finish draining.
 
 ### 11.9 Derived streamers from one base
 
 ```text
 base       := for k in 1..100, limit in 1..100
-sampled    := base order halton/50
-boundary   := base where {k} == 1 || {k} == 100 || {limit} == 1 || {limit} == 100
-hot_corner := boundary order extrema/1
+sampled    := for base order halton/50
+boundary   := for base where {k} == 1 || {k} == 100 || {limit} == 1 || {limit} == 100
+hot_corner := for boundary order extrema/1
 ```
 
 ASTs:
@@ -3046,40 +3205,37 @@ The two continuous coordinates form a 2-D `cartesian`, not a
 Some(100))` discharges V8 by sampling 100 quasi-random points
 from the box.
 
-Hybrid discrete-and-continuous variant — vary `k` over a small
-integer set and `theta` over a continuous angle:
+**Boundary — hybrid discrete × continuous sampling is not
+implemented.** A comprehension that mixes a discrete axis with a
+continuous one, such as
+`order(cartesian(clause(k, [1, 2, 4, 8]), clause(theta, 0.0..2π)), Lhs, Some(50))`,
+has the `Hybrid` metadata shape of §10.7.1, but the runtime does
+not sample it: `runtime::continuous_axes` returns `None` as soon
+as any clause is discrete, so the `order` is never routed to
+`sample_continuous`, and the IR interpreter cannot emit
+continuous tuples at all. Authors who need this shape sample
+the continuous axis on its own and combine the two discrete
+results with a `cartesian` (§11.11 shows the analogous
+sample-then-zip idiom). Also note that the continuous source
+itself has no text spelling (§8.1); the first form above is
+built from the AST.
 
-```text
-for k in [1, 2, 4, 8], theta in 0.0..2*pi order lhs/50
-```
-
-AST: `order(cartesian(clause(k, [1, 2, 4, 8]), clause(theta, 0.0..2*pi)), Lhs, Some(50))`
-
-- Cardinality (first form): `Bounded(100)` — V8 discharged by
-  the outer `order(_, Halton, Some(100))`; Halton over a
-  Continuous 2-D box samples 100 quasi-random points.
-- Cardinality (hybrid form): `Bounded(50)` — V8 discharged by
-  the outer `order(_, Lhs, Some(50))`; Lhs over a Hybrid
-  4-element × continuous-interval space stratifies both axes
-  and emits 50 paired samples.
-- Validity: V4 passes (Halton/Lhs both accept Continuous and
-  Hybrid `IndexFn` per §3.6); V7 not invoked (no zip in either
-  AST); V8 passes (both wrap their continuous coordinates in
-  an `order(_, _, Some(n))`).
-- Footprint: O(1) per cursor (clause sources stream — for
-  continuous, the "cursor" is the sampling-strategy's draw
-  state, not a buffer of the interval); `ORDER_MATERIALIZE`
-  barrier of size O(100) (or O(50)) for the drawn samples
-  after R2 push-down. The 2-D continuous interval itself is
-  never materialized.
-- IR (first form, after R2): `PUSH_CLAUSE alpha (0.0..1.0)` +
-  `PUSH_CLAUSE beta (0.0..1.0)` + `CARTESIAN(2)` +
-  `ORDER_MATERIALIZE(IndexedHalton, 100)` + `DISPENSE`. The
-  IndexedHalton variant draws 100 K-D Halton points in
-  `[0,1)^2` and emits each as a `(alpha, beta)` tuple by
-  affine mapping the unit square onto the input intervals
-  (which are also `[0,1)`, so the mapping is identity).
-- Metadata (first form): `cardinality = Continuous {
+- Cardinality: `Bounded(100)` — V8 discharged by the outer
+  `order(_, Halton, Some(100))`; Halton over a Continuous 2-D
+  box samples 100 quasi-random points.
+- Validity: V4 passes (Halton accepts a Continuous `IndexFn`
+  per §3.6); V7 not invoked (no zip); V8 passes (the continuous
+  coordinates are wrapped in an `order(_, _, Some(n))`).
+- Footprint: `runtime::sample_continuous` produces the 100
+  drawn tuples directly from the intervals; the 2-D continuous
+  interval itself is never materialized. Working set: O(100).
+- Runtime path: the `order` sees an empty evaluated child with
+  continuous axes and calls `sample_continuous`, which draws
+  100 K-D Halton points in `[0,1)^2` and emits each as an
+  `(alpha, beta)` tuple by affine mapping the unit square onto
+  the input intervals under a uniform measure (which are also
+  `[0,1)`, so the mapping is identity).
+- Metadata: `cardinality = Continuous {
   intervals: [(0,1), (0,1)], measure: Uniform }` *before*
   the outer order, `Bounded(100)` after; `index_addressable =
   Some(Continuous { ... })` before, `None` at the order's
@@ -3154,34 +3310,45 @@ sweep := for k in 1..10, profile in {profiles}
 
 AST: `cartesian(clause(k, 1..10), clause(profile, {profiles}))` — same as §11.1.
 
-Three consumption patterns from the same `sweep`:
+Three consumption patterns from the same `sweep` (a
+`StreamerValue`). These surfaces run the IR interpreter, so
+they serve statically-resolvable sources (`1..10` here; a
+`{profiles}` param would need the runtime path); they are a
+library/host API, not what a `for` traversal uses (§9.5.2).
+`PolydatKernelScope::new(canonical, parent)` takes two
+`Arc<PolydatKernel>`s and is the `KernelScope` implementation
+for polydat kernels:
 
 ```rust
+let compiled: CompiledComprehension = sweep.compiled();
+
 // First-order: a stream of coordinate tuples.
-let coords: CoordinateStream = sweep.coordinate_stream();
+let mut coords: CoordinateStream = compiled.coordinate_stream();
 while let Some(tuple) = coords.advance() {
     log::info!("coords: {tuple:?}");
 }
 
 // Second-order: a stream of scoped kernel instances.
-let kernels: ScopedKernelStream<MyKernel> =
-    sweep.scoped_kernel_stream(&parent_kernel);
+let scope = PolydatKernelScope::new(canonical.clone(), parent.clone());
+let mut kernels: ScopedKernelStream<PolydatKernelScope> =
+    compiled.scoped_kernel_stream(scope);
 while let Some(scoped) = kernels.advance() {
     let result = scoped.run();
     record(result);
 }
 
 // One-shot: scope a specific coordinate tuple into a kernel instance.
+let scope = PolydatKernelScope::new(canonical.clone(), parent.clone());
 let replay_coords = load_from_log("entry-42");
-let scoped = sweep.scope_once(&parent_kernel, &replay_coords);
+let scoped = compiled.scope_once(&scope, &replay_coords);
 let result = scoped.run();
 ```
 
 Properties illustrated:
 
 - The three surfaces are constructed by three independent
-  factory calls on `sweep`. Each returns a fresh handle with
-  its own dispense state.
+  factory calls on the compiled comprehension. Each returns a
+  fresh handle with its own dispense state.
 - `coords` and `kernels` produced from the same `sweep`
   advance independently. Pulling 5 tuples from `coords` does
   not move `kernels`'s cursor; `kernels` still emits its full
@@ -3236,21 +3403,37 @@ Under this specification:
 
 ## 13. Implementation correspondence
 
-- `iteration::comprehension::ast::Comprehension` is the
+The grammar-side modules live in `polydat_grammar::comprehension`
+and are re-exported under `polydat_core::iteration::comprehension`;
+the evaluation-side modules are `polydat_core` only.
+
+- `polydat_grammar::comprehension::ast::Comprehension` is the
   canonical six-variant operator tree.
-- The text front end (`parse::parse_comprehension_text`, reached
-  from the `for` token) produces a flat clause/predicate/order form
-  that `spec::legacy_to_algebra` converts into that tree before
-  validation or retention; the flat form is the parser's
-  intermediate, never a retained representation. `spec::parse_text`
+- The text front end (`polydat_grammar::comprehension::parse::parse_comprehension_text`,
+  reached from the `for` token) produces a flat
+  clause/predicate/order form that `spec::legacy_to_algebra`
+  converts into that tree before retention; the flat form is the
+  parser's intermediate, never a retained representation, and the
+  only validation it runs is the legacy `Comprehension::validate`
+  (duplicate names; non-`Lex` order over a union). `spec::parse_text`
   and `spec::ComprehensionSpec` are the same normalization for text
-  and serde input handed in directly.
-- `validate` enforces V1–V9; `metadata` performs bottom-up
-  propagation; `optimize` applies §10; `ir` owns the immutable
-  stack program.
-- `surfaces` owns the static algebra consumers (§9.5), while
-  `runtime::evaluate_for_iteration` owns scope-dependent tuple
-  evaluation against a `Lookup` view of the scope.
+  and serde input handed in directly. `metadata`, `cardinality`,
+  `strategy`, and `source` are likewise grammar-side.
+- **Production path** (what `for` traversals in
+  `dsl/traversal.rs` and tile projections in `dsl/tile_lower.rs`
+  call): `polydat_core::iteration::comprehension::runtime::evaluate_for_iteration`
+  evaluates the authored AST against a `Lookup` view of the
+  scope, through `eval` / `eval_source` / `source_values` for
+  the clause sources and `strategies` for `order`;
+  `streamer_value` is the `Ext` carrier a comprehension binds
+  to.
+- **Library-only** (no production caller; exercised by tests and
+  hosts): `validate` enforces V1–V9 for callers that run it;
+  `optimize` applies §10 as a separate AST→AST pass; `ir` owns
+  the immutable stack program (`ir::compile::compile` is the
+  only AST→IR path) and its interpreter over `Literal` /
+  `IntRange` sources; `surfaces` owns the static algebra
+  consumers (§9.5); `predicate` is the §10.9 analyzer.
 - Strategy selection uses the closed `StrategyName` enum. There
   is no user-callback ordering escape hatch: the text front end
   still recognizes `custom(fn)`, and the conversion to the tree

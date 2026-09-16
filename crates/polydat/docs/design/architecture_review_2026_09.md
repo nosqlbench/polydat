@@ -1,7 +1,8 @@
 # Architecture review, September 2026
 
-Six read-only reviews of the crate as it stands after engine parity and native tile
-rendering landed: execution engines and the native boundary; the compiler front end and
+Six read-only reviews of the crate (now the
+`polydat-core`/`polydat-nodes`/`polydat-grammar`/`polydat` workspace) as it stood after
+engine parity and native tile rendering landed: execution engines and the native boundary; the compiler front end and
 the graph it builds; the kernel runtime, cells, scopes and cursors; the language and its
 constructs (DSL, tiles, comprehensions, traversals); the node library and the node macro;
 and the host-facing surface (entry points, assembler, binary, guides). Each review read
@@ -10,9 +11,15 @@ questions: what is wrong or duplicated, what the documents say that is no longer
 what the documents should say instead.
 
 This file is the digest for decision. The full reports, with file and line citations for
-every claim, are scratch under `target/review/{engines,compiler,kernel,dsl,library,host}.md`.
+every claim, were scratch under `target/review/` and are not retained.
 
-Nothing here has been changed yet. Section 1 lists the findings ranked; section 2 proposes
+Recorded 2026-09-11. Status as of 2026-09-16: the step-1 fixes (F-C1, F-N3, F-N11, F-E4,
+F-E5, F-E13 stated, F-C12 documented, F-K2), F-K1, F-E3, F-E6, groups B (in part), C, I,
+and the `Lookup` half of group E have landed, and the runtime, node library, and language
+have since been split into their own crates; section 3's weeding pass landed except the
+deletions; groups A, D (in part), F, G, H, J, K, L, M remain open. Of section 5's
+decisions, 4 and 6 were taken by stating the behaviour as it is; the rest remain open.
+Section 1 lists the findings ranked; section 2 proposes
 an order of work; section 3 is the weeding map for every design document; section 4 lists
 the rules the documents must newly state; section 5 lists the decisions that are the
 project's to make before the work starts.
@@ -126,7 +133,7 @@ mechanism on every engine.
 | wire_materialization.md | The cross-scope read invariant and materialization gradient | **Rewrite** the gradient bullets to the code's order; strip nbrs vocabulary and SRD-18 references; state the gradient holds on compiled engines. Delete the preamble link block and "what this SRD covers". |
 | evaluation_model.md | Program/state split, two lifecycles, input spaces | **Rewrite** the folding phases, scope-init pull, diagnostics, compilation levels ("the host chooses an Engine; default is P3"). Delete the prior-model paragraph, the extends-list, the code reference points. Overlaps runtime_model §3-§5; consider merging into it. |
 | graph_compiler.md | The compiler's construction contract (H, CF, NF axioms) | **Rewrite** §2 table and §6 diagram to the actual pass order; §5 to two mechanisms (adapter insertion at wire resolution; subgraph fusion); §4.2 to `materialize_subscope`. Delete the ownership declaration and SRD list, §3.5, §7, §9, NF3's unimplemented sentence, the "engine selection" pass. State the pipeline is engine-neutral to `ResolvedDag`. |
-| ir_architecture.md | Reference for the comprehension IR | **Weed.** Rewrite the boundary paragraph as the rule; delete the file-layout table; note the evaluator is engine-neutral. |
+| ir_architecture.md | Reference for the comprehension IR | **Weed** (landed). Rewrite the boundary paragraph as the rule; delete the file-layout table; note the evaluator is engine-neutral. |
 | expression_engine.md | Host-facing evaluation contract (E-axioms) | **Rewrite** §3.2-3.4 signatures to the real ones; fix E4 vs §5.5; §6 to emitted variants. Delete §7, §10, §11, the ownership declaration. |
 | type_system.md | Value types, adapters, strictness | **Weed.** Fix U128/I128 claims; drop nbrs-runtime reference; SRD refs to links; §8 to four anchors. |
 | type_system_alignment.md | The four-plane alignment and slot-color contract | **Weed** §7 only: closure form derived from signature, native form declared by the node; P2 total, P3 native-where-lowered. State that `EnginePlan` makes eligibility observable. |
@@ -136,13 +143,13 @@ mechanism on every engine.
 | polydat_grammar.md | The normative, test-checked language spec | **Rewrite** to absorb grammar.md §3-§5, `for` (both readings), tiles, the `if` block, `shared x: T`, the `as` catalog; fix the keyword count, the `as` rule, the shuffle claim. |
 | grammar.md | none | **Delete** after its G-axioms with rationale and its type rules merge into polydat_grammar.md. |
 | language_spec.md | none | **Delete** after Conditional Selection, the `as` paragraph, the dispatch table, and the pipeline move to polydat_grammar.md and graph_compiler.md. |
-| polydat_grammar_programmatic.md | Proof that the builder path projects to the parsed path | **Keep.** Drop the `pp_cursor` remark; add paired `for` and `tile` examples. |
+| polydat_grammar_programmatic.md | Proof that the builder path projects to the parsed path | **Keep** (landed; the `for` and `tile` examples are written but not yet paired in the test). Drop the `pp_cursor` remark; add paired `for` and `tile` examples. |
 | for_traversal.md | The `for` construct: readings, semantics, compiled form, activation, axioms | **Weed.** Keep §1-§3, §5.1-5.4, §6, §7, §9. Rewrite §4 and §5.2 to present tense on every engine. Fold three §11 rationale bullets into §3/§5. Delete status, §8, §10's option list, §11. |
 | polytile.md | Tile grammar, structure, typing, semantics, skeleton, runtime, axioms | **Weed.** Keep §1-§9, §11. Fold §13's rules into §3.2, §5.4, §7.3. Delete status, revision log, §10, §12, §13. State the SRD 117 outcome (hole values, precompiled bodies on `Engine::default()` and why, memoized tuples, index-keyed binding, byte-identical writers, interning lifetime). |
 | comprehension_forms.md | The comprehension algebra and its verification rule | **Rewrite** the preamble, §8 (Polydat's own surface, fix `Ext` and `for base where`), §9.5 (the surfaces that exist); absorb the plan's six invariants, the cutover's error-ownership table, the gate's oracle. Delete §15. |
-| comprehension_implementation_plan.md | none | **Delete.** |
-| comprehension_cutover_contact_surfaces.md | none | **Delete** after §5 moves to the runtime doc and §8 to forms §14. |
-| comprehension_migration_gate.md | none | **Delete** after its oracle moves to forms §10.6. |
+| comprehension_implementation_plan.md | none | **Delete** (open). |
+| comprehension_cutover_contact_surfaces.md | none | **Delete** (open) after §5 moves to the runtime doc and §8 to forms §14. |
+| comprehension_migration_gate.md | none | **Delete** (open) after its oracle moves to forms §10.6. |
 
 Outside `docs/design`:
 

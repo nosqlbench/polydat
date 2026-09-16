@@ -103,10 +103,9 @@ impl std::fmt::Display for WriteError {
                     write!(
                         f,
                         " — collection → scalar requires an explicit \
-                         choice; use `vec_len(v)` for the element \
-                         count, `vec_first(v)` / `vec_last(v)` for an \
-                         element, `vec_sum(v)` / `vec_mean(v)` for an \
-                         aggregate"
+                         reduction node in the program (the library \
+                         provides none; `vec_dot` and `vec_norm` are \
+                         the vector reductions that exist)"
                     )?;
                 }
                 Ok(())

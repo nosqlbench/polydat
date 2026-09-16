@@ -149,8 +149,8 @@ the comprehension grammar's reference form, `{name}`, as in
 `partitions("*/4", {total})`. The reference is resolved against the
 enclosing kernel's current values when the traversal is opened, so a
 host can change an extern and re-open the traversal without recompiling.
-A source that depends on a per-cycle wire is an error at that point: a
-producer is a scope-init value and cannot vary per cycle.
+The source is snapshotted at that point: a producer is a scope-init
+value and does not vary per cycle.
 
 ### 3.2 Traversal
 
@@ -192,11 +192,11 @@ Element types are determined at compile time from the source:
 | --- | --- |
 | Integer literal list or `lo..hi` range | `u64` |
 | Float literal list or continuous interval | `f64` |
-| String literal list or string comprehension | `String` |
+| String literal list or string comprehension | `Str` |
 | Boolean literal list | `Bool` |
 | `partitions(...)`, `subdivide(...)`, `<name>.partitions` | `Ext` carrying `Partition` |
 | A generator node call | The node's declared return type |
-| A bound `Streamer` used as a source | `Streamer` |
+| A generator expression naming a `Streamer` wire | `Ext` (the probe's type) |
 
 An integer among floats widens the element to `f64`; a list that mixes
 numbers and strings is a compile error. A generator call is typed by
@@ -268,8 +268,8 @@ dispense state.
 
 ## 4. Compilation
 
-1. **Parse.** `for_expr` produces `Expr::For(ForSource)`. `for_stmt`
-   produces `Statement::For { source, body }`, where `source` is
+1. **Parse.** `for_expr` produces `Expr::For(Box<ForSource>)`. `for_stmt`
+   produces `Statement::For(ForStmt)`, whose `source` is
    comprehension text parsed to the algebra, a producer reference, or a
    derivation.
 2. **Strip.** The compiler removes every `for` statement from the parent
@@ -438,8 +438,9 @@ and therefore the same on every engine:
    cursor's ordinal (`<cursor>__ordinal`) before the pull.
 
 The resolution routines (`cursor_over_partitions_on`, `cursor_extent_on`)
-live in the cursor partition module and are the ones the `polydat` binary
-uses at fiber setup.
+live in `iteration::cursor_partition`; the `polydat` binary resolves its
+cursors with `cursor_over_partitions_on` and narrows them with
+`set_cursor` at fiber setup.
 
 ### 5.4 Fibers
 
@@ -481,9 +482,17 @@ Not specified here, and deliberately left to hosts:
 Not supported, and reported as compile errors rather than silently
 accepted:
 
-- a producer whose source depends on a per-cycle wire;
-- a body that declares an `input` other than `cycle`;
-- `over` naming a wire that is not `Partition`-typed at compile time.
+- a body that declares an `input` other than `cycle`.
+
+Not supported, and reported when the traversal is opened or an
+activation resolves its cursor rather than at compile time:
+
+- a producer whose source depends on a per-cycle wire: opening
+  snapshots the source from the kernel's current values, so a
+  per-cycle dependency is read once, not checked;
+- `over` naming a wire whose value is not a partition: `resolve_over`
+  rejects a value that is not a `Partition`, `PartitionSpec`, or
+  `PartitionList` (or a spec string) when the activation resolves it.
 
 ## 8. Worked example
 

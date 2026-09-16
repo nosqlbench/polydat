@@ -62,13 +62,13 @@ See [`examples/assembler.rs`](../../examples/assembler.rs).
 
 ---
 
-The README claims polydat is seven things at once. Each section below
-shows one of those facets in a small, runnable form so the claim isn't
+The README's capabilities table says what polydat does. Each section
+below shows one capability in a small, runnable form so the claim isn't
 just an assertion.
 
 ## A function graph grammar
 
-GK source is a literal grammar for declaring function graphs. Each
+Polydat source is a literal grammar for declaring function graphs. Each
 `name := expr` line is a graph node; the expressions reference other
 nodes by name, forming directed edges. The compiler topologically
 sorts the result and refuses cycles.
@@ -94,7 +94,7 @@ kernel.set_inputs(&[12_345]);
 // device=45, reading=123, q_temp=0.019101, q_humid=0.155169
 ```
 
-The grammar fits on one page (see [`polydat-core/src/dsl/`](../../../polydat-core/src/dsl/)) but the
+The grammar fits on one page (see [`polydat-grammar/src/`](../../../polydat-grammar/src/) or [the grammar](../design/grammar.md)) but the
 graphs you can build are arbitrarily wide and deep. The compiler
 tracks each wire's port type (u64, f64, str, bool, bytes, json,
 vectors…) and rejects mismatches at compile time, before the kernel
@@ -149,16 +149,16 @@ callable from your DSL by name as if they were built in.
 
 ```rust
 let stdlib = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-    .join("stdlib").join("identity.polydat");
+    .join("..").join("polydat-core").join("stdlib");
 
 let mut kernel = polydat::dsl::compile_polydat_kernel_with_options(
     r#"
         input cycle: u64
-        // `hashed_id` is loaded from identity.polydat, not a built-in.
+        // `hashed_id` comes from the embedded standard library.
         uid := hashed_id(cycle, 1000000)
     "#,
     &CompileOptions {
-        lib_paths: vec![stdlib],   // explicit library paths
+        lib_paths: vec![stdlib],   // a directory of modules, searched first
         context: "library example".into(),
         ..CompileOptions::default() // no source directory, every output, not strict
     },
@@ -166,7 +166,9 @@ let mut kernel = polydat::dsl::compile_polydat_kernel_with_options(
 ).expect("compile failed");
 ```
 
-The shipped [`stdlib/`](../../../polydat-core/stdlib/) directory has more examples:
+`hashed_id` comes from the embedded standard library and needs no path;
+a `lib_paths` directory adds the host's own modules ahead of it. The
+shipped [`stdlib/`](../../../polydat-core/stdlib/) directory has more examples:
 `identity.polydat`, `distributions.polydat`, `hashing.polydat`, `modeling.polydat`, etc.
 Each is loadable the same way.
 
@@ -181,7 +183,7 @@ the typed payload through to the consumer, who reads it through a
 typed accessor.
 
 ```rust
-use polydat::node::Value;
+use polydat::ast::Value;
 
 let mut kernel = polydat::dsl::compile_polydat_kernel(r#"
     input cycle: u64
@@ -207,8 +209,8 @@ code.
 
 Note: polydat's comparison family (`u64_gt`, `u64_lt`, `f64_eq`, …)
 returns `u64` (0 or 1) rather than `Bool`. The `Bool` variant of
-`Value` exists and is used by `regex_match`, `control_bool`, and a
-few others, but most comparison-driven workloads stay in u64 for
+`Value` exists and is used by `regex_match`, `random_bool`, `const_bool`,
+and a few others, but most comparison-driven workloads stay in u64 for
 fast-path math.
 
 See [`examples/type_safety.rs`](../../examples/type_safety.rs).
@@ -540,7 +542,7 @@ at each call.
 
 ```rust
 let stdlib = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-    .join("stdlib").join("identity.polydat");
+    .join("..").join("polydat-core").join("stdlib");
 
 let mut kernel = polydat::dsl::compile_polydat_kernel_with_options(
     r#"
@@ -556,8 +558,8 @@ let mut kernel = polydat::dsl::compile_polydat_kernel_with_options(
 ```
 
 The polydat-direct form is single-file kernel composition like the
-above. The heavier `polydat::subcontext` API (`SubcontextBuilder`,
-`ScopeKernel`, `PolydatMatter`) is what nbrs uses for layering entire
+above. The heavier `polydat::kernel::subcontext` API (`SubcontextBuilder`,
+`ScopeKernel`, `PolydatMatter`) is what nmbrs uses for layering entire
 scope-trees over parent kernels — with typed import/export contracts
 at every boundary. The principle is the same; the multi-scope case
 just needs more bookkeeping.

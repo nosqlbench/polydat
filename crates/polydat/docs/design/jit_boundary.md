@@ -439,15 +439,17 @@ SIMD types (`F32X4`): `dot_f32`, `l2sq_f32`, `add_f32`,
 (unaligned loads — `SliceArc<f32>` data is only 4-aligned) with a
 scalar tail loop, and reducing kernels finish with an
 `extractlane` horizontal sum. Consumers are the `vec_*` nodes in
-`library/vector_math.rs`, which fall back to scalar Rust loops
-when the `jit` feature is off or host-ISA construction fails.
+`polydat-nodes/src/vector_math.rs`, which fall back to scalar Rust
+loops when the `jit` feature is off or host-ISA construction fails.
 This is also usable through the slot ABI ([Type-System
-Alignment](type_system_alignment.md) §8.2). Typed slice values
+Alignment](type_system_alignment.md) §6). Typed slice values
 cross compiled steps as `(ptr, len)` slot pairs and
 `CompiledSlotOp` publishes vector results through kernel-owned
-scratch. Scalar-only native segments retain the compact
-`fn(coords, buffer)` shape; slice-bearing steps use the wider
-compiled-op contract described by the slot-state axioms below.
+scratch. Every native function, scalar or not, takes the state's
+scratch beside its buffer (`fn(coords, buffer, scratch)`); a
+slice-bearing step runs its kit through `jit_slot_call` or a named
+helper that publishes into the step's entry, under the slot-state
+axioms below.
 
 SIMD accumulation reassociates float addition, so reduced results
 may differ from the scalar reference in the final ulps; the
@@ -482,7 +484,8 @@ equivalence tests compare with relative tolerance.
 ## Slot-state axioms (S1–S10)
 
 The normative contract for compiled-kernel buffer state under the
-§8.4 vector substrate (`type_system_alignment.md`). These are
+heap-slice plane and slot-color contract (`type_system_alignment.md`
+§4, §6). These are
 axioms in the SYSREF sense: load-bearing, cited by SAFETY
 comments, and enforced by tripwires rather than comments.
 
@@ -526,7 +529,9 @@ input-change sequences.
 **S6 — Sequential-by-axiom; parallelism is a redesign gate.**
 Kernel state (buffer + scratch) is single-threaded by
 construction: one state per thread; cross-thread sharing only via
-`Arc<PolydatProgram>`; values cross threads only as owned copies.
+a shared program (`into_program`, an `Arc<dyn KernelProgram>`;
+`PolydatProgram` on the interpreter); values cross threads only as
+owned copies.
 Intra-kernel parallel step execution is FORBIDDEN until S4 is
 replaced with a new ordering proof (epochs/generations).
 
@@ -572,11 +577,12 @@ sites; each SAFETY comment cites the axioms it relies on (S3,
 S4). A CI tripwire fails when `from_raw_parts` appears outside
 the allowlisted files.
 
-**Native corollary.** Pure native kernels contain no Ref slots by
-construction (slice-bearing nodes classify `Fallback`, and
-`build_jit_layout` rejects Fallback); the JIT builders enforce
-this defensively. The P3 kernel carries Ref slots only in closure
-steps.
+**Native corollary.** Native code carries a `Ref2` pair as two
+words and never dereferences it (S7 belongs to the helper); a pure
+native kernel and a P3 segment hold Ref slots wherever a slot call
+or a named string/vector lowering produces one, and
+`build_jit_layout` rejects only a node with neither a lowering nor
+a kit.
 
 **Forwarding boundary.** Ref-pair pass-through is not a native
 optimization. A Ref output is scratch-backed, and S9(a)'s validator

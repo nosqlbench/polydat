@@ -345,7 +345,7 @@ declaration against the wire chain, it does not infer it.
 | Modifier | Meaning |
 |---|---|
 | `const` | Effectively-const: materialised once per scope activation, then frozen. Cannot be shadowed by an inner scope. |
-| `shared` | A mutable cell that propagates upward to the enclosing scope after a `for_each`. Last-write-wins by default. |
+| `shared` | A mutable cell that propagates upward to the enclosing scope after a `for` traversal body. Last-write-wins by default. |
 | `volatile` | Per-cycle, but forced Dynamic: excluded from compile-time folding and from program-identity hashing. |
 
 ```polydat compile
@@ -778,7 +778,7 @@ pragma strict_types
 
 The complete set of type keywords usable in `input x: T`, `extern x: T`,
 `<expr> as T`, and module signatures is fixed by `PortType::from_keyword`
-(`polydat-core/src/ast.rs`):
+(`polydat-grammar/src/port_type.rs`, re-exported as `polydat::ast::PortType`):
 
 ```text
 u64 f64  u32 i32  i64 f32  u8 i8  u16 i16  f16  u128 i128

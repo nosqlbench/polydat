@@ -43,12 +43,15 @@ KernelProgram (Arc, immutable, shared across threads)
 
 Kernel (per thread, mutable, private)
   interpreter realisation — PolydatState:
-    ├── buffers[][]        — per-node output value slots
-    ├── node_clean[]       — per-node cache validity (bool)
-    ├── inputs[]           — non-cell input registers
-    ├── input_defaults[]   — reset values
-    ├── shared_cells[]     — optional cell register per input
-    └── cell-cone/revision state
+    ├── core: EngineCore
+    │   ├── buffers[][]        — per-node output value slots
+    │   ├── node_clean[]       — per-node cache validity (bool)
+    │   ├── inputs[]           — non-cell input registers
+    │   ├── input_defaults[]   — reset values
+    │   ├── shared_cells[]     — optional cell register per input
+    │   └── cell-cone state
+    ├── input_dependents[] — per-input transitive dependents
+    └── nondeterministic_nodes[] — never cached
   compiled realisation — one u64 slot buffer, its None mask,
     the per-step current-ness of the provenance mode, and the
     scratch entries its steps publish pairs into
@@ -69,7 +72,6 @@ are invalidated. Nodes depending on unchanged inputs stay cached.
 
 ```
 1. kernel.set_inputs(&[cycle])
-   → open the cycle
    → write each coordinate input in the leading coordinate prefix
    → dirty every transitive dependent of each written coordinate
    → dirty every non-deterministic node
@@ -88,8 +90,9 @@ and does not compare rich `Value` instances for equality.
 This is the one evaluation rule, and it holds on every engine:
 a step is current until an input in its provenance changes; a
 nondeterministic node is never current; compile-constant nodes
-are folded once at build; `set_inputs` opens the cycle and
-`pull` evaluates the named output's cone and no more — on the
+are folded once at build; `set_inputs` writes the coordinate
+prefix and `pull` evaluates the named output's cone and no
+more — on the
 interpreter, the closure tier, and the hybrid kernel alike
 (pure native code, being one function, evaluates the program).
 The provenance mode a compiled engine is built with (`Raw`,
@@ -136,22 +139,22 @@ is itself effectively-const.
 | Literal in source | Yes | Resolved at parse / compile. |
 | Compile-const fold result | Yes | Already a leaf const node. |
 | Workload param (`const` binding) | Yes | Bound once at workload-kernel init, never reassigned. |
-| `for_each` / `for_combinations` iteration extern | Yes — *for the duration of one activation* | Injected during each child construction; held constant for every cycle within that iteration. |
+| `for` traversal element / `extern` with no default (iteration extern) | Yes — *for one activation* | Bound when the activation is created (`activation_on`) or the child is materialised; fixed for every coordinate of that activation. |
 | `do_while` / `do_until` counter | **No** | Dynamic — ticks within the scope's own evaluation; not stable for the activation. |
 | Graph input (e.g. `cycle`) | **No** | Dynamic — changes every cycle. |
-| External-write input | **No** | Dynamic — mutated by external writes between pulls. |
+| External-write input | **No** | Dynamic — written by the host between pulls. |
 | Non-deterministic source (`counter`, `current_epoch_millis`, `elapsed_millis`, `thread_id`) | **No** | Excluded by construction even when wires would suggest otherwise. |
 
-The iteration-extern row is the load-bearing case. A leaf phase
-nested inside `for_combinations [profile, table]` sees `profile`
-and `table` as input slots; a purely data-flow view would flag
-any binding downstream of those slots as dynamic and refuse to
-fold it. But `profile` is rebound exactly once per phase
-activation and held fixed for every cycle — the same stability
-guarantee as a folded literal. Treating iteration externs as
+The iteration-extern row is the load-bearing case. The body of
+`for profile in ..., table in ... { ... }` sees `profile` and
+`table` as input slots; a purely data-flow view would flag any
+binding downstream of those slots as dynamic and refuse to
+fold it. But `profile` is bound exactly once per activation and
+held fixed for every coordinate — the same stability guarantee
+as a folded literal. Treating iteration externs as
 effectively-const is what permits
 `const prebuffered := dataset_prebuffer("{dataset}:{profile}")`
-to be a legal const binding inside such a scope.
+to be a legal const binding inside such a body.
 
 ### Compile-Time Constant Folding
 
@@ -165,7 +168,7 @@ Phase 1: Classify each node — PolydatProgram::classify_lifecycle
                                   → dynamic
   - NodeOutput whose source is dynamic
                                   → dynamic (propagates)
-  - Wire to an iteration extern (for_each / for_combinations)
+  - Wire to an iteration extern (`for` element / `extern` with no default)
                                   → scope-init: not foldable at
                                     build. Extern values are unknown
                                     until scope activation; folding is
@@ -308,7 +311,7 @@ the wire the fold found first:
   (dynamic; changes every cycle)`** — const binding wired to a
   graph input declared by `input ...: u64`.
 - **`wire on node '<n>' reaches external-write port '<name>'
-  (dynamic; mutated by external writes)`** — const binding
+  (dynamic; mutated by op execution)`** — const binding
   wired to an `extern X: T = default` input (the polydat
   external-write surface; hosts use it for runtime injection
   patterns).

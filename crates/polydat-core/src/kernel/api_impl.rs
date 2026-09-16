@@ -402,8 +402,8 @@ mod tests {
     }
 
     /// The `WriteError::TypeMismatch` Display impl includes a
-    /// vec → scalar hint pointing at the explicit helpers when
-    /// the rejected `got` is a Vec type and the `expected` is
+    /// vec → scalar hint naming the reduction the program needs
+    /// when the rejected `got` is a Vec type and the `expected` is
     /// not a collection-compatible type.
     #[test]
     fn vec_to_scalar_diagnostic_mentions_explicit_helpers() {
@@ -413,8 +413,11 @@ mod tests {
             got: PortType::VecF32,
         };
         let msg = err.to_string();
-        assert!(msg.contains("vec_len"), "missing vec_len hint: {msg}");
-        assert!(msg.contains("vec_first"), "missing vec_first hint: {msg}");
+        assert!(
+            msg.contains("reduction node"),
+            "missing reduction hint: {msg}"
+        );
+        assert!(msg.contains("vec_dot"), "missing vec_dot hint: {msg}");
     }
 
     /// S4 type-adapt: a healable mismatch (u64 → f64) routes

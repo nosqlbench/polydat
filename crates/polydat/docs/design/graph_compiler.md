@@ -98,12 +98,12 @@ what runs the resolved graph.
 
 | Pass | Where | What it does |
 |---|---|---|
-| Parse | `dsl::lexer`, `dsl::parser` | Source to AST. |
+| Parse | `polydat_grammar::lexer` / `parser` (re-exported as `dsl::lexer`, `dsl::parser`) | Source to AST. |
 | Prologue | `dsl::compile` (`Prepared`) | One prologue for every entry point: the compile options, the required outputs, the pragmas, the data-file base directory. |
 | Bind | `dsl::compile::assemble_parent` | One lowering for every entry point: bindings become assembler nodes; every referenced name not defined locally becomes an input slot (the conditional-shadow rule of [none_semantics.md](none_semantics.md)); tiles are typed. `for` statements are lifted out first and their bodies compiled as traversals. |
 | Wire resolution + adapter insertion | `compile::assembly::resolve_with_log` | Arity is checked; each wire's producer type is compared with the consumer's declared input type; a mismatch heals through `auto_adapter` (the adapter node is inserted and `TypeAdapterInserted` logged) or fails as `AssemblyError::TypeMismatch`; strict mode refuses the implicit coercion instead. |
 | Strict-wire assertions | same pass | Under `strict_values`, an `AssertValue` node is spliced in front of every constrained sink port whose source is not already proven (`AssertionInserted` / `AssertionSkipped`). |
-| Node Fusion | same pass, `compile::fusion::apply_fusions` | `fusion::default_rules` applied to a fixpoint; `FusionApplied` logged. |
+| Node Fusion | same pass, `compile::fusion::apply_fusions` | `fusion::default_rules` (every rule the linked node crates register, in priority order) applied to a fixpoint; `FusionApplied` logged. |
 | Dead-code elimination | same pass | Nodes not reachable from a declared output are dropped; the side-channel `log_*` nodes are pinned alive. |
 | Topological sort | same pass | Kahn's algorithm over the live nodes; a cycle is `CycleDetected`. |
 | Round-trip lint | same pass, `compile::roundtrip_lint` | A value modulated `T → Y → … → T` through pure conversion machinery is a warning, and an error under `strict_values`. |
@@ -210,7 +210,7 @@ upstream pins the node to the per-cycle path.
 This is a property of the wire chain, not of the node.
 Concrete consequences:
 
-- A `hash(k)` node where `k` is a for_each iter-var is
+- A `hash(k)` node where `k` is a `for` traversal element is
   hoistable — `k` is `IterationExtern` (Effectively-const for
   the scope's lifetime).
 - A `hash(cycle)` node is *not* hoistable — `cycle` is a
@@ -446,10 +446,13 @@ validate their inputs at eval.
 
 After every wire is resolved,
 `compile::fusion::apply_fusions` rewrites recognised
-subgraphs into single fused nodes. The catalog is
-`fusion::default_rules`: `hash_mod_to_hash_range`,
-`hash_unit_lerp_to_hash_interval`, and
-`unit_lerp_to_scale_range`. A `FusionRule` is a pattern, a
+subgraphs into single fused nodes. The catalog is whatever
+the linked node crates register through
+`FusionRuleRegistration` (inventory), collected by
+`fusion::default_rules` in ascending priority, ties by name;
+polydat-nodes contributes `hash_mod_to_hash_range` (10),
+`hash_unit_lerp_to_hash_interval` (20), and
+`unit_lerp_to_scale_range` (30). A `FusionRule` is a pattern, a
 replacement factory, and the names of the captured wires that
 become the fused node's inputs. Every fused node implements
 `FusedNode::decomposed`, which rebuilds the unfused subgraph
@@ -655,13 +658,14 @@ ownership, invalidation, and per-fiber state boundaries.
 ### 8.3 Node Fusion order
 
 Fusion is deterministic for a fixed graph and rule catalog.
-Each fixed-point round examines rules in registration order
-and nodes in ascending graph index, applies the first valid
-match, then recomputes consumer counts and restarts. Interior
-nodes with external consumers or named-output references are
-not consumed. Rule registration order is therefore part of
-the compiler contract; new rules must be equivalence-correct
-under every earlier registered rule.
+Each fixed-point round examines rules in ascending `priority`
+(ties by name) and nodes in ascending graph index, applies
+the first valid match, then recomputes consumer counts and
+restarts. Interior nodes with external consumers or
+named-output references are not consumed. A rule's
+`priority` is therefore part of the compiler contract; a new
+rule must be equivalence-correct under every lower-priority
+rule.
 
 ---
 

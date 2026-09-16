@@ -242,8 +242,9 @@ how every hole was typed and encoded.
 
 The whole flow is declared in the grammar: the comprehension, the
 partitioning, the per-activation cursor, and the statements. Polydat
-compiles the body once and the binary activates it sixteen times; the
-build counter stays flat while it does. What the file does not decide is
+compiles the body once and the binary activates it sixteen times, and the
+program tree's compile ledger records no further build while it does.
+What the file does not decide is
 scheduling: how many fibers, how many cycles per activation, and what to
 do with each statement are the host's choices, and the binary exposes
 them as options. The contract is [The `for` Construct](../design/for_traversal.md);

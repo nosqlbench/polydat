@@ -5,7 +5,7 @@ for data generation. Nodes are registered in the DSL compiler's
 function registry and available by name in `.polydat` source.
 
 This document is the design rationale for the library
-(`polydat-nodes/src/`, with the nodes the compiler synthesizes under `polydat-core/src/library/`): what a node is, the authoring contract, the
+(`polydat-nodes/src/`, the node library; `polydat-core/src/library/` holds the adapters, passthroughs, constants, assertions, and tile nodes the compiler synthesizes plus the conversion, formatting, JSON, data-file, diagnostic, context, logging, vector, and fixed-value nodes the runtime ships itself): what a node is, the authoring contract, the
 cost classes, and why the registry is open. It is not a listing; the
 nodes themselves are in the [node reference](../reference/nodes.md). The
 node-metadata contract that every entry satisfies is specified in
@@ -33,7 +33,7 @@ Node metadata declares the cost class of each input port through
 
 The compiler warns when a `config` wire is connected to a
 cycle-time source. Strict mode promotes that diagnostic to a
-compile error. `WireCost` is a `PortMeta` annotation rather than a
+compile error. `WireCost` is a `Port` field (`Port::wire_cost`) rather than a
 runtime type rule; a data wire and a configuration wire carry
 values through the same typed slot ABI.
 
@@ -85,12 +85,12 @@ than the interleaved form's "value missing in last pair".
 - Mixing types in the value slots is a compile-time error
   pointing at the first mismatched index.
 
-**Variadic registration.** Registers via
-`Arity::VariadicWires { min_wires: 2 }`. The variadic
-constructor takes `n: usize` (total wire count) and validates
-`n` is even and `n ≥ 2`; the half-point `N = n / 2` is stored
-so eval-time indexing is direct: selectors at `inputs[0..N]`,
-values at `inputs[N..2N]`.
+**Variadic registration.** Registers through the macro's
+split-halves variadic shape (two `&[T]` arguments,
+`variadic_min = 1`), which advertises
+`Arity::VariadicWires { min_wires: 2 }`, checks the even total
+at assembly, and hands the body the two halves directly:
+selectors at `inputs[0..N]`, values at `inputs[N..2N]`.
 
 **Diagnostic guidance** is a static suffix added by the
 `pick` node's panic handler — generic enough to fit every
@@ -177,7 +177,7 @@ inputs through the one failure contract ([Engines](engines.md)).
 
 `Partition` and `PartitionList` ride wires as `Value::Ext` reflected
 values (`iteration/cursor_partition.rs`); the partition nodes in
-`library/partition.rs` are how workload-author code reads and derives
+`polydat-nodes/src/partition.rs` are how workload-author code reads and derives
 them, and they run on every engine through the slot kit's `Ext<T>`
 shape, which native code calls in place. The partition
 value is effectively-const for a scope activation, so each eval
@@ -200,12 +200,12 @@ table below, and a new node uses one of them.
 // `category` + `purity` / `commutativity` per attribute.
 #[polydat_node(category = Hashing)]
 fn hash(input: u64) -> u64 {
-    xxh3_64(&input.to_le_bytes())
+    splitmix64_u64(input)
 }
 
 // Const arg — `Const<T>` wraps a workload-supplied literal.
 #[polydat_node(category = Arithmetic)]
-fn mod_u64(input: u64, modulus: Const<u64>) -> u64 {
+fn r#mod(input: u64, modulus: Const<u64>) -> u64 {
     input % modulus.0
 }
 ```
@@ -247,14 +247,14 @@ only, run once at construction, whose cached value every evaluation
 returns).
 
 **Attributes.** Registration: `category = <FuncCategory>` (required),
-`struct_name = <Ident>`, `adapter = "<name>"`. Semantics:
+`struct_name = <Ident>`. Semantics:
 `purity = <Purity>`, `identity = <expr>`, `commutativity =
-<Commutativity>`, `variadic_min = <int>`. Shapes: `output_names(...)`,
-`instantiate(...)`. Engines: `compiled_u64 = <path>`,
+<Commutativity>`, `variadic_min = <int>`. Shapes: `output_names(...)`.
+Engines: `compiled_u64 = <path>`,
 `compiled_slot = <path>`, `state = <path>`, `jit_constants = <path>`,
 `decompose = <path>`, `simd = "<node>"`, `simd_total`. Per argument:
-`#[constraint(...)]` on a wire argument and `#[poly_const(...)]` as
-above.
+`#[constraint(...)]` on a wire argument, `#[poly_default(...)]` on a
+const argument, and `#[poly_const(...)]` as above.
 
 ### The kit each shape yields
 
@@ -291,8 +291,9 @@ the macro emit `compiled_slot(&self, wire_types)` as
 `Some(<path>(self, wire_types))`, with `<path>: fn(&Node,
 &[PortType]) -> CompiledSlotKit`; it exists for a node whose closure
 must read its slots as borrowed views rather than as owned body
-arguments, or that keeps state of its own in its scratch — the tile
-renderer is the user. `state = <path>` names a module with
+arguments, or that keeps state of its own in its scratch — the string
+constant (`const_str_compiled`), the tile renderer, and
+`dynamic_weighted_select` are the users. `state = <path>` names a module with
 `layout(&Node) -> Vec<ScratchElem>` and `eval(&Node, &mut
 [ScratchBuf], &[Value], &mut [Value])`, the node's per-state storage
 and its interpreter evaluation over it (`PolydatNode::scratch_layout`
@@ -318,8 +319,8 @@ P3 kernel. The macro emits `jit_constants` in declaration order
 for a node the u64 kit carries; a node whose lowering reads its
 constants in another order supplies `jit_constants = <path>`.
 
-The tile hole encoder, `tile_encode`, is a library node with a native
-lowering that the compiler no longer emits: the renderer encodes each
+The tile hole encoder, `tile_encode`, is a library node carried by the
+slot kit; the compiler no longer emits it: the renderer encodes each
 hole where it stands in the skeleton ([Polytile](polytile.md) §7). It
 remains callable as a node.
 
@@ -334,13 +335,15 @@ why:
 
 - **Compiler-synthesised nodes dispatched on a runtime port type or
   constraint** — `PortPassthrough`, `ConstHandle`, `ConstExt`
-  (`identity.rs`), `AssertType`, `AssertValue` (`assertions.rs`),
-  `RegView` (`register.rs`). The macro fixes a node's port types from
+  (`polydat-core/src/library/identity.rs`), `AssertType`, `AssertValue`
+  (`polydat-core/src/library/assertions.rs`), `RegView`
+  (`polydat-core/src/library/register_view.rs`). The macro fixes a node's port types from
   its signature; these take theirs from the value or wire the compiler
   is synthesising for, and are not DSL-callable.
-- **Cursor-compiler synthesised** — `CursorLimit` (`context.rs`), built
-  by the cursor materialiser with no workload signature.
+- **Cursor-compiler synthesised** — `CursorLimit`
+  (`polydat-core/src/library/context.rs`), built by the cursor
+  materialiser with no workload signature.
 - **Rust-internal composition primitives** — `LutSample`
-  (`sampling/lut.rs`), the primitive behind the `dist_*` family, which
+  (`polydat-nodes/src/sampling/lut.rs`), the primitive behind the `dist_*` family, which
   has no DSL surface of its own; the `dist_*` functions are the
   workload-callable wrappers.

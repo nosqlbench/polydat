@@ -122,8 +122,9 @@ The **effectively-const** steps (per the Graph Compiler's
 hoisting analysis) are the special case of the rule with no
 dynamic input in their provenance: computed once at scope-init
 and current for the scope's lifetime. Provenance modes on the
-compiled engines (`Raw`, `Pull`, `PushPull`;
-[engines.md](engines.md) §3) decide how much of the bookkeeping
+compiled engines (`Raw`, `Push`, `Pull`, `PushPull`, with
+`Auto` choosing among them; [engines.md](engines.md) §4)
+decide how much of the bookkeeping
 a kernel keeps; they are optimisations over this rule and never
 change what a pull returns.
 
@@ -328,7 +329,7 @@ realisations alongside R1/R2/R3:
 | S-axiom | Runtime realisation |
 |---|---|
 | **S4** (external-write synthesis, open granularity) | External-write input slots are populated through the kernel's typed writes (`set_input`, `set_input_at`, `set_cursor`) at any granularity the producer chooses; provenance (R2) marks consumers not current on write; currency (R1) re-evaluates on next pull. Volatility (R1.v) is the explicit marker for wires whose value is not a function of declared inputs and so cannot be cached even between writes. |
-| **S5** (compile-emit write-through, cross-tier path) | `SharedCell` write-through routes a writing node's output to a parent-tier cell at compile-emit time (per Graph Compiler §5); at runtime the write fires as an ordinary node output, intercepted by the chain and published through the cell. The outer cell's slot is filled through the standard slot-filling contract; L1's layer-ownership guarantee holds because the outer cell remains the canonical state holder. |
+| **S5** (compile-emit write-through, cross-tier path) | `SharedCell` write-through routes a writing node's output to a parent-tier cell at compile-emit time (per [subcontext_construction.md](subcontext_construction.md) §3.1, the shared write-through rewrite, and §5); at runtime the write fires as an ordinary node output, intercepted by the chain and published through the cell. The outer cell's slot is filled through the standard slot-filling contract; L1's layer-ownership guarantee holds because the outer cell remains the canonical state holder. |
 
 ### Shared cells on every engine
 
@@ -431,7 +432,7 @@ D1 is the composition of R1 (currency), R3 (forward-only data
 flow), T1+T2 (typed slot contract), and the substrate's L1
 (per-kernel state ownership). The compiler's H3 (hoisting
 preserves value) seals the property at the construction tier.
-The engines' equivalence contract ([engines.md](engines.md) §6)
+The engines' equivalence contract ([engines.md](engines.md) §7)
 extends it across engines: the same program, inputs, and pull
 sequence yield the same values on each.
 

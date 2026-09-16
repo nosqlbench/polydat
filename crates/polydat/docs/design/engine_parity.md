@@ -17,8 +17,9 @@ API that names them. A host chooses an engine for speed and for nothing
 else.
 
 **Companion documents.** [Engines](engines.md) (the lattice and the
-equivalence contract this document tightens), [Compiled Non-Scalar
-Slots](compiled_handles.md) (the handle tiers), [Runtime
+equivalence contract this document tightens), [Compiled By-Reference
+Slots](compiled_handles.md) (the `Ref2` representation of by-reference
+values), [Runtime
 Model](runtime_model.md), [The `for` Construct](for_traversal.md),
 [Cursor Partitions](cursor_partitions.md), and the
 [embedding guide](../guides/embedding.md), which is the documented API a
@@ -56,8 +57,8 @@ Three surveys, all reproducible from the tree at this revision:
   interpreter with cones off, the raw closure kernel, the hybrid kernel,
   and the pure native push-pull kernel. The review's first pass probed
   the 96 nodes with explicit cases; the permanent test of §5 step 1
-  covers all 294 registered names (296 programs, two names being
-  registered twice) and is the matrix recorded below.
+  covers all 294 registered names (294 programs) and is the matrix
+  recorded below.
 - **Constructs and runtime interactions**, probed one program each:
   register inputs, vectors, cursors, `shared` bindings, `for`
   traversals and producers, side-channel nodes, externs with and
@@ -68,8 +69,9 @@ Three surveys, all reproducible from the tree at this revision:
   and the count of public items with no documentation
   (`RUSTDOCFLAGS=-W missing_docs`).
 
-The matrix as pinned in `tests/engine_parity.txt` (296 programs), as
-the review found it and after step 2:
+The matrix as pinned in `tests/engine_parity.txt` (294 programs today;
+the counts below are the review's, taken over 296), as the review
+found it and after step 2:
 
 | Engine | Accepts | Refuses at compile | Fails at run | After step 2 |
 | --- | ---: | ---: | ---: | --- |
@@ -235,7 +237,8 @@ constant at build, so the common case needs no host call on any engine.
 ### A4. Pure native code refuses half the library — functional
 
 *Closed by step 7: the hybrid kernel is the public P3 (`Engine::Native`,
-`try_compile_jit*`, `P3Engine`), and pure native code is the differential
+`try_compile_jit*`; the `P3Engine` selector it first had was removed on
+2026-09-12), and pure native code is the differential
 tier behind it, reachable through the hidden `try_compile_pure_jit*`. The
 record below is the state the review found.*
 
@@ -443,7 +446,7 @@ entry.
 carry a `None` mask per slot and propagate it as SRD-74 Rule 1 says;
 the compile log names every extern without a default
 (`CompileEvent::ExternWithoutDefault`). Pure native code cannot carry
-`None` and still refuses to run with an unset table-kind extern.*
+`None` and still refuses to run with any unset extern.*
 
 An `extern` without a default and never set is `Value::None` on the
 interpreter, which propagates to its consumers' outputs. On a compiled
@@ -523,7 +526,7 @@ proves it.
    plan covers setups (recomputed from consts, or cloned from the node
    when session-static), byte-string arguments, const lists, `Config`
    and `Option` wires, split variadics, two-slot carriers, and
-   polymorphic returns (`kernel::encode_arg`); the slot kit takes a
+   polymorphic returns (`derive_support::write_poly`); the slot kit takes a
    polymorphic argument; `limit` has a closure by hand. Every
    registered node now compiles on the closure tier and in hybrid
    kernels, and the JIT-less build runs the whole library compiled;
@@ -546,7 +549,8 @@ proves it.
      coin when it had no constant), and `default_or` lowered as a
      three-way select that returned the fallback for any non-zero
      value; a native select between two handles also tripped the
-     handle discipline, so `select` over handles stays a closure.
+     handle discipline, so `select` over references takes the slot
+     call of its kit (SRD 115 §6) rather than the named select.
    `shared` is refused on every compiled engine (A10).
 
    *Step 3 landed 2026-09-09.* The compiler resolves a cursor's `over`
@@ -685,8 +689,9 @@ proves it.
    outputs, and the interpreter re-raises that report as it is, so a
    failure inside a fused node reads as it reads on the native engine
    and the cone is no frame of its own. Every native
-   helper runs under `guarded` now, except the three predicate-fail
-   helpers that are the longjmp themselves, so a helper's panic is the
+   helper runs under `guarded` now, except the fail helpers that are
+   the longjmp themselves (four today; `jit_div_zero_fail` joined on
+   2026-09-13), so a helper's panic is the
    longjmp the kernel catches and never a process abort; the longjmp
    wrapper re-raises with `resume_unwind`, so the hook does not record
    its own location over the helper's. On the way the native string
@@ -695,8 +700,9 @@ proves it.
    `y`, and anything else read as false); they call the adapters'
    parse functions now, so the diagnostic is the library's on every
    engine. `tests/failure_parity.rs` drives a predicate violation and
-   a string coercion failure through the thirteen engine-and-mode
-   combinations and requires the interpreter's message, the `panicked
+   a string coercion failure through the nine engine-and-mode
+   combinations (the interpreter and every provenance mode of the
+   closure tier and P3) and requires the interpreter's message, the `panicked
    at` line aside, since that line names the engine's own code; the
    agreement test compares failure messages the same way for every
    coverage program that fails. Cost: a `catch_unwind` frame per
@@ -708,14 +714,15 @@ proves it.
    ladder.
 
    *Step 7 landed 2026-09-10.* `Engine::Native`, `try_compile_jit*`,
-   `P3Engine`, and `auto_compile_p3` build the hybrid kernel: native
+   `P3Engine`, and `auto_compile_p3` (the latter two selectors removed
+   on 2026-09-12) build the hybrid kernel: native
    code for every node that has a lowering and the node's closure
    elsewhere, so P3 accepts every program the closure tier accepts
    (A4, A11). `Engine::Hybrid` is gone, being the same thing. The pure
    native kernels are the differential tier behind P3, `#[doc(hidden)]`
    and reachable only through `try_compile_pure_jit*`; the matrix's
    columns are P1, P2, P3, and `pure`, and the differential suites
-   (`handle_tiers`, `ext_tiers`, `slot_state_axioms`, `value_table`,
+   (`handle_tiers`, `ext_tiers`, `slot_state_axioms`,
    `variadic_lowering`, the register and SIMD lowerings) drive the pure
    tier by that name. On the way the ladder benchmark showed the
    hybrid kernel no faster than the interpreter and the closure tier at
@@ -792,8 +799,9 @@ proves it.
    `Engine::default()` and opens every level on it. `tests/for_engines.rs`
    traces every activation and cycle of a sweep and of a
    partition-sliced cursor body on every engine against the
-   interpreter's, checks one program per engine with the build counter
-   flat across activations, opens the same traversals from a compiled
+   interpreter's, checks one program per engine with the compile
+   ledger's program count flat across activations, opens the same
+   traversals from a compiled
    root with the same tuples, cursors, and trace, and runs a
    three-level nest with every kernel on the chosen engine.
 9. **Shared cells on compiled engines** (A10) through `compile::externs`
@@ -827,8 +835,8 @@ proves it.
     engines document updated to state that every engine accepts every
     program.
 
-    *Step 10 landed 2026-09-10.* The crate declares
-    `#![warn(missing_docs)]`, and since CI runs rustdoc and clippy with
+    *Step 10 landed 2026-09-10.* polydat-core and the polydat facade
+    declare `#![warn(missing_docs)]`, and since CI runs rustdoc and clippy with
     warnings as errors on every feature set, an undocumented public item
     fails the build. The count went from 2,251 to zero in two moves.
     The node macro emits every node's struct, constructor, and constant
@@ -844,10 +852,9 @@ proves it.
     into the node reference (`docs/reference/nodes.md`, between
     markers), compared on every run and rewritten with
     `ENGINE_PARITY=overwrite`, so the documented feature set and the
-    tested one are one file: today it states that every one of the 296
-    coverage programs runs on the interpreter, the closure tier, and P3,
-    and names the 127 nodes pure native code has no lowering for, which
-    P3 runs as closure steps. The engines document's §7 now describes
+    tested one are one file: today it states that every one of the 294
+    coverage programs runs on the interpreter, the closure tier, P3,
+    and pure native code alike. The engines document's §7 now describes
     placements within an engine rather than refusals, and the
     compilation guide's "same shape at each level" claim is the `Kernel`
     trait. With this step the plan's ten steps have landed.
@@ -873,8 +880,11 @@ build, reading the folded value back through the hidden
 (`tests/kernel_api.rs`). And the `polydat` binary drove its cycles on
 interpreter states while its traversals opened on the default engine;
 it now creates every fiber, the warmup, the cursor probe, and the
-traversal root from one program on the run engine, `--engine off` being
-the interpreter, `auto` the default, and `force` native code, narrowing
+traversal root from one program on the run engine, `--engine
+interpreter` being the interpreter (its cones per `--cones`), `auto`
+the default, `closures` the closure tier, and `native` native code, the
+mode per `--provenance` (`off` and `force` remain as hidden
+spellings), narrowing
 cursors through `cursor_over_partitions_on` and `set_cursor`. A cycle
 whose inputs did not move is `Kernel::invalidate_all` on every engine,
 which reruns every step at the next pull and keeps the inputs, so a run

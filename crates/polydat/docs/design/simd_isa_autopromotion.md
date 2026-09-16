@@ -518,14 +518,15 @@ shared-state, per-lane error, or automatic-selection semantics.
 
 The behavior is covered by two complementary suites.
 
-`compile::simd_tier1` verifies:
+The tier-1 executor tests (`tests/core_with_library.rs`) verify:
 
 - selected scalar-cone discovery and typed register-plan compilation;
 - scope-stable scalar broadcasts;
 - arbitrary drain bursts and unaligned lease fragments;
 - recovery after part of a register packet has committed;
-- out-of-order lease rejection with ownership returned; and
-- rejection of a second externally writable input.
+- out-of-order lease rejection with ownership returned;
+- rejection of a second externally writable input; and
+- an explicit Cranelift `i32x4` register graph.
 
 `iteration::simd_ordinal` verifies:
 
@@ -534,9 +535,8 @@ The behavior is covered by two complementary suites.
 - packet reuse across arbitrary burst partitions;
 - scalar and padded fragment policies without out-of-lease visibility;
 - payload-free checkpoint rematerialization by ordinal;
-- dependency invalidation without consumer-frontier rewind;
-- stream, generation, activation, and lease identity checks; and
-- an explicit Cranelift `i32x4` register graph.
+- dependency invalidation without consumer-frontier rewind; and
+- stream, generation, activation, and lease identity checks.
 
 Every change to Tier-1 qualification or execution must preserve AP1–AP12 and
 must compare the promoted result stream with the retained scalar oracle.

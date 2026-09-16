@@ -23,15 +23,16 @@ use polydat::dsl::{CompileOptions, compile_polydat_kernel_with_options};
 
 fn main() {
     let lib_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("stdlib")
-        .join("identity.polydat");
+        .join("..")
+        .join("polydat-core")
+        .join("stdlib");
 
     let mut kernel = compile_polydat_kernel_with_options(
         r#"
             input cycle: u64
             (tenant, device) := mixed_radix(cycle, 100, 0)
 
-            // `hashed_id` is a stdlib library function loaded from
+            // `hashed_id` is a stdlib library function from
             // identity.polydat. The two calls below layer the SAME compiled
             // function over two different contexts: each call site
             // gets its own input (tenant vs device) and emits an

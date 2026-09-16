@@ -171,10 +171,10 @@ contract.
 - Arithmetic: `{1000 * 1000}`, `{4 ** 0.5}`
 - Function calls with constant args: `{hash(42)}`, `{mod(hash(42), 100)}`
 - Catalog-registered metadata accessors (e.g.
-  `{vector_count("example")}`)
-- Nested: `{vector_count("{dataset}") / 10}` (after the host's
-  param substitution pass — itself outside the embedding
-  contract)
+  `{vector_count(h)}`, where `h` is a dataset handle wire)
+- Nested: `{vector_count(h) / 10}` (after the host's
+  param substitution pass has bound `h` — itself outside
+  the embedding contract)
 
 **What does NOT work:**
 
@@ -260,15 +260,18 @@ substituted text. A `{name}` whose lookup yields nothing
 `UnresolvedPlaceholder`.
 
 `Lookup` (`kernel::interp::Lookup`) is the name resolution a
-placeholder reads: the interpreter kernel implements it, and
+placeholder reads plus the compile ledger a source or
+predicate that has to compile is charged to (`lookup` and
+`ledger`): the interpreter kernel implements it, and
 `Layered` puts a tuple's bindings in front of any other
-lookup. The typed kernel-bound surfaces,
+lookup, forwarding both. The typed kernel-bound surfaces,
 `eval_kernel_bound_typed::<T>(text, &PolydatKernel)` and its
 `_strict` variant (§5.3), compose interpolation with the
 typed const fold; they take the interpreter's kernel, so a
 host holding a `Box<dyn Kernel>` on another engine
 interpolates by supplying its own `Lookup` over the values
-it reads with `Kernel::pull` and `Kernel::input_value`.
+it reads with `Kernel::pull` and `Kernel::input_value` and
+a `CompileLedger` of its own.
 
 The canonical two-step composition:
 
@@ -316,8 +319,9 @@ current scope's iter-vars:
 
 and the current kernel's bindings are
 `dataset = "sift1m"`, `k = 10`, `limit = 100` (typical
-post-Context-Fusion state in a `for_each (k, limit)` scope
-running over a configured dataset). The host's code:
+post-Context-Fusion state in a `for k in …, limit in … { … }`
+traversal body running over a configured dataset). The
+host's code:
 
 ```rust
 use polydat::kernel::interp::interpolate_via_kernel;
@@ -376,7 +380,7 @@ back to typed literal-list parsing (`1` → `U64`, `1.5` →
 vector of values per the recognised form's expansion.
 
 Use case: comprehension clause-source expansion (the source
-of every `for_each k in <text>` clause). The host text can
+of every `k in <text>` clause of a `for` comprehension). The host text can
 declare a *list* of values, not just a single value, and
 `evaluate_spec` does the expansion against the scope's
 `Lookup` — which is why a traversal opens on every engine:
@@ -416,8 +420,8 @@ Use case: host crates that pre-compile expressions for
 repeated evaluation. A kernel becomes a shareable program
 with `Kernel::into_program` (`Arc<dyn KernelProgram>`), and
 each thread creates its own kernel from the program with
-`create_kernel`; the interpreter's `PolydatKernel::from_program`
-is the same operation on the concrete type.
+`create_kernel`; the interpreter's `PolydatKernel::into_program`
+yields the concrete `Arc<PolydatProgram>`.
 
 Cost: one full compile (~ms scale for small expressions).
 Subsequent kernels from the program are fast (the program is
@@ -701,9 +705,10 @@ a non-empty set of `Value` variants that satisfy it.
   returned to the host carries its `PortType` via the enum
   variant. The host accesses it through typed accessors
   (`Value::as_u64`, `Value::as_f64`, etc.) or
-  pattern-matching. Strict accessors panic on type
-  mismatch; non-strict accessors (`try_as_*`) return
-  `Option`.
+  pattern-matching. The accessors (`as_u64`, `as_bool`, …)
+  panic on a type mismatch; a host that must not panic
+  pattern-matches on the `Value` variant or uses the typed
+  surfaces (§5.3).
 
 - **Errors (polydat → host):** the `EmbeddingError` enum
   (§6) is itself typed — every error class is a
@@ -767,7 +772,7 @@ The Graph Compiler's wire resolution
 this via the catalog of known conversions in
 [`library::convert`] and its polyfill companions:
 `__u64_to_string`, `__f64_to_string`, `__u64_to_f64`,
-`__json_to_str`, and so on. Each catalog entry is itself a
+`json_to_str`, and so on. Each catalog entry is itself a
 `PolydatNode` with declared input and output `PortType`s;
 the assembler inserts the appropriate adapter node when a
 wire's source type differs from its consumer's expectation
@@ -837,7 +842,7 @@ Across all three sites, the rules are uniform:
 Compiler-visible node extensions use the same link-time
 `NodeRegistration` inventory as Polydat's built-in library.
 Host crates contribute registrations with `register_nodes!` or
-the `#[polydat_node]` derive. Each registration supplies static
+the `#[polydat_node]` attribute macro. Each registration supplies static
 `FuncSig` metadata, a builder, and an optional constant validator.
 The standard compiler's `registry()` and `build_node()` paths
 consult that inventory directly.
@@ -1037,7 +1042,7 @@ order — which is itself deterministic from R3 (forward-
 only flow along the wire chain).
 
 For the canonical formal statement of these properties,
-see [Runtime Model §6 (D-axioms)](runtime_model.md).
+see [Runtime Model §7 (D-axioms)](runtime_model.md).
 
 ---
 
@@ -1084,8 +1089,8 @@ pub enum EmbeddingError {
     },
 
     /// A node mentioned in the expression is not registered.
-    /// `suggestion` carries a close known name when one is
-    /// found.
+    /// `suggestion` is reserved for a close known name; the
+    /// current surfaces set it to `None`.
     UnknownNode {
         name: String,
         source: String,
@@ -1130,8 +1135,8 @@ pub enum EmbeddingError {
 | `Parse` | Lexer/parser rejects the input; or interpolation does not stabilise. | Surface the parse position to the user; the input is malformed expression text. |
 | `UnresolvedPlaceholder` | `{name}` has no binding in the lookup (an unset extern reads as none). | Check the kernel's inputs and outputs; suggest declaring the name as a workload param or fixing the spelling. |
 | `LifecycleMismatch` | `eval_const_expr` was called on text reaching a dynamic input. | Either: (a) use the two-step interpolate-then-eval pattern to resolve dynamic names, or (b) accept the expression must be evaluated per-cycle via a compiled kernel + cycle dispatch. |
-| `UnknownNode` | A node call uses a name not in the registry. | If `suggestion` is `Some`, render it; otherwise tell the user to check the available node catalog. Host crates that register custom nodes must link the registration. |
-| `TypeMismatch` | Wire types incompatible and no auto-adapter exists; or the typed surface's target has no adapter. | Surface the from/to node and types; suggest inserting an explicit conversion (e.g., `u64_to_str(x)`) or using a different node. |
+| `UnknownNode` | A node call uses a name not in the registry. | Tell the user to check the available node catalog (`suggestion` is currently always `None`). Host crates that register custom nodes must link the registration. |
+| `TypeMismatch` | Wire types incompatible and no auto-adapter exists; or the typed surface's target has no adapter. | Surface the from/to node and types; suggest an explicit conversion (`x as str`, `format_u64(x)`, `to_f64(x)`) or a different node. |
 | `NodeEvalPanic` | A node panicked during the fold. | Surface the panic message; this is typically a node-internal contract violation (invalid argument range, etc.). Forwarded to the user with provenance. |
 | `NonePropagated` | A typed surface's result was `Value::None`. | Use the raw-`Value` surface and handle the None, or surface it to the user with context about which input was missing. See [none_semantics.md](none_semantics.md). |
 

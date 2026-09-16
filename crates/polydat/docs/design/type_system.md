@@ -29,7 +29,7 @@ the catalog where it can heal a mismatch.
 | `F64`     | 64-bit float    | `Value::F64(f64)` | IEEE 754 double |
 | `F32`     | 32-bit float    | `Value::U64` (as `f32::to_bits() as u64`) | Bit-stuffed; widens to `F64` |
 | `F16`     | 16-bit float    | `Value::U64` (as `f16::to_bits() as u64`) | binary16; widens exactly to F32/F64 |
-| `U128`/`I128` | 128-bit int | `Value::U128`/`I128(Bits128)` | Two u64 limbs (keeps `Value` at align 8); no native lowering — a closure step on the compiled engines |
+| `U128`/`I128` | 128-bit int | `Value::U128`/`I128(Bits128)` | Two u64 limbs (keeps `Value` at align 8); no named native lowering — a closure on the closure tier, a slot call of the kit on the native engine |
 | `Reg128`, `RegI8x16`, `RegI16x8`, `RegI32x4`, `RegI64x2`, `RegF16x8`, `RegF32x4`, `RegF64x2` | 128-bit SIMD word | `Value::Reg128(Bits128, RegLanes)` | One register word under 8 lane-views; reg→reg is a free bitcast retag (alignment §8.4) |
 | `Bool`    | logical          | `Value::Bool(bool)` | Distinct runtime variant |
 | `Str`     | UTF-8 string     | `Value::Str(Arc<str>)` | Cheap-clone via Arc |
@@ -57,8 +57,10 @@ carries them:
   narrow widths are *bit-stuffed* into it (the `PortType` says how
   to read the bits). JIT-eligible at P3.
 - **Two-limb 128-bit** (`U128`, `I128`) — `Bits128([u64; 2])`;
-  two immediate slots (`Imm2`) in the compiled layout, where a
-  128-bit node runs as its closure step; no native lowering.
+  two immediate slots (`Imm2`) in the compiled layout; no *named*
+  native lowering — a 128-bit node runs its closure on the closure
+  tier and is a slot call of its kit from native code on the native
+  engine.
 - **128-bit SIMD register plane** (`Reg128` + 7 lane-views) — a
   16-byte word with a `RegLanes` view tag; reg→reg retags are free
   bitcasts and the arithmetic ops JIT to native SIMD.
@@ -105,10 +107,11 @@ each carrying a [`Bits128`] — two little-endian `u64` limbs
 `Value`'s alignment at 8 and its footprint inside the 40-byte
 buffer-slot envelope (the `value_size_probe` test guards this).
 
-- **No native lowering** — 128-bit integer operations run as
-  ordinary evals on the interpreter and as closure steps over two
-  immediate slots on the closure tier and the native engine, with
-  the same result on every engine. The carrier reassembles to a
+- **No *named* native lowering** — 128-bit integer operations run
+  as ordinary evals on the interpreter; on the closure tier the node
+  runs its closure, and on the native engine it is a slot call of
+  its kit from native code (`JitOp::SlotCall`), over two immediate
+  slots, with the same result on every engine. The carrier reassembles to a
   native `u128`/`i128` in two register moves for the arithmetic,
   then re-splits.
 - **JSON** — projects as a **decimal string**, not a JSON Number
@@ -128,8 +131,9 @@ float and the canonical widening target. `F32` and `F16` are
 `f32::to_bits() as u64` in `Value::U64` (and `F16` stores its
 16-bit pattern the same way), so they cost one slot and JIT like
 integers. A *host-written* float slot may instead arrive as a
-materialised `Value::F64`; [`Value::satisfies_slot`] accepts both
-forms (§4).
+materialised `Value::F64`; [`Value::satisfies_slot`] accepts the
+materialised `Value::F64` for both, and the bit-stuffed
+`Value::U64` form for `F16` (§4).
 
 - **`F128` is absent** — stable Rust has no `f128` carrier, so the
   scalar float set stops at `F64` (alignment §8.1).
@@ -182,7 +186,8 @@ word:
   across machines (determinism rule D2).
 - **Use** — SWAR/state-word algorithms, fixed-width SIMD kernels,
   and `reg_shuffle_bytes` (arbitrary byte permutation from a
-  16-entry const mask). Nodes live in `library/register.rs`.
+  16-entry const mask). Nodes live in `polydat-nodes/src/register.rs`;
+  the `RegView` retag node in `polydat-core/src/library/register_view.rs`.
 
 ### 1.6 Strings, bytes, JSON — `Str` / `Bytes` / `Json`
 
@@ -224,7 +229,9 @@ the lane family alongside the register plane (alignment §8.2).
   class B, panic-on-bad-element like the scalar adapters) and each
   serialises to / parses from `Bytes` / `Json` / `Str` (§3). Only
   `Vec → scalar` is intentionally absent (no canonical reduction —
-  use `vec_len` / `vec_first` / `vec_sum` / `vec_mean`).
+  the library provides no scalar reduction node; an author writes
+  the reduction node they mean, or uses `vec_dot` / `vec_norm` where
+  those are the reduction wanted).
 
 ### 1.8 Type-erased — `Ext` / `Handle`
 
@@ -234,7 +241,8 @@ never in the adapter catalog (§3).
 - **`Ext`** — `Box<dyn ReflectedValue>`. Protocol-native values
   (UUIDs, timestamps, inet addresses) that flow through Polydat
   without boxing to strings. Consumers reach typed access via
-  `ReflectedValue::try_as_str` / `as_json` / … at the consume site.
+  `ReflectedValue::try_as_str` / `try_as_u64` / `to_json_value` / …
+  at the consume site.
 - **`Handle`** — `Arc<dyn Any + Send + Sync>`. A resolved resource
   (dataset, prepared statement); the producer node (`dataset_open`,
   …) populates it and the consumer downcasts with
@@ -251,11 +259,11 @@ slots:
 
 ```rust
 pub enum Value {
-    U64(u64),                          // also stores U32/U16/U8 (zero-extended)
+    U64(u64),                          // also U32/U16/U8 (zero-extended) and the F32/F16 bit patterns
     I64(i64),                          // honest signed carrier; also I32/I16/I8 (sign-extended)
     U128(Bits128), I128(Bits128),      // two u64 limbs (align-8 envelope)
     Reg128(Bits128, RegLanes),         // 128-bit SIMD word + its current lane-view tag
-    F64(f64),                          // also stores F32/F16 bits via to_bits()
+    F64(f64),                          // F64; a host-written F32/F16 slot may arrive materialised here
     Bool(bool),
     Str(Arc<str>),
     Bytes(Arc<[u8]>),
@@ -270,7 +278,7 @@ pub enum Value {
 ```
 
 Note the floats: an `F32`-typed *node output* carries its bit
-pattern in `Value::U64` (the macro's `IntoValue for f32`), while
+pattern in `Value::U64` (the `Wire for f32` impl in `derive_support.rs`), while
 a host-written `F32` slot value may arrive as `Value::F64`;
 `satisfies_slot` accepts both. `F16` follows the same dual
 convention.
@@ -326,7 +334,7 @@ declares `None`, and `port_type()` reports `U64` as a placeholder.
 ## 3. Adapter catalogs
 
 Two catalogs live in
-`polydat/src/compile/assembly.rs`:
+`polydat-core/src/compile/assembly.rs`:
 
 ```rust
 pub fn auto_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>>;
@@ -343,9 +351,10 @@ pub fn boundary_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatN
 - **`boundary_adapter`** — host-boundary writes via
   `adapt_boundary_value`. A strict superset of
   `auto_adapter`: delegates to it first, then adds
-  boundary-only parser adapters (`Str→{Bool, U64,
-  F64}`) for the workload-param flow where the
-  source is intrinsically textual.
+  every class-B adapter of §3 — the narrowings, and
+  the `Str`/`Bytes`/`Json` parsers and extractors —
+  for the boundary flows whose source is textual or
+  lossy.
 
 When either function returns `Some(node)`, the wire
 chain inserts that adapter node. When it returns
@@ -410,9 +419,10 @@ v8        ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   
 The grid is **complete**: every meaningful pair has an adapter.
 The only `·` cells are **scalar ↔ vector**, which is intentionally
 undefined — a scalar has no canonical vector length and a vector
-no canonical scalar reduction (use `vec_len` / `vec_first` /
-`vec_sum` / `vec_mean` for the deliberate reductions). Two type
-groups carry no row or column at all (omitted from the grid):
+no canonical scalar reduction (the library provides no scalar
+reduction node; an author writes the reduction they mean, or uses
+`vec_dot` / `vec_norm` where those are the reduction wanted). Two
+type groups carry no row or column at all (omitted from the grid):
 
 - **Register views** (`Reg128`, `RegI8x16` … `RegF64x2`) — any
   reg→reg pair is class A via a zero-cost `RegView` retag; reg ↔
@@ -442,18 +452,21 @@ and proves `auto_adapter` covers all of it:
   in both directions, including `U128`/`I128`.
 - **X → Bytes** — little-endian serialize for every
   scalar numeric (narrow + 128-bit included), Bool,
-  and the `VecF32`/`VecI32` sources; always succeeds.
+  and every `Vec*` lane; always succeeds.
 - **X → Json** — wraps as the corresponding
   `Json::Number` / `Json::Bool` / `Json::Array` (or
   a decimal string for `U128`/`I128`, which JSON
   numbers can't hold). Integer and Bool sources
-  never panic; `VecI32` is in this class because
-  `i32` is always representable. `F64→Json`,
-  `F32→Json`, `F16→Json`, and `VecF32→Json` are
-  class B because non-finite floats are not
-  representable in standard JSON.
-- **VecI32 → VecF32** — lossless cast of every
-  element.
+  never panic; the integer lanes (`VecI8`…`VecI64`)
+  are in this class because every integer element is
+  representable. `F64/F32/F16→Json` and the float
+  lanes `VecF32/VecF64/VecF16→Json` are class B
+  because non-finite floats are not representable in
+  standard JSON.
+- **Widening lane casts** — every element-wise
+  widening (`VecI8`→any, `VecI16`→…,
+  `VecI32→VecF32/VecF64/VecI64`, `VecI64→VecF64`,
+  `VecF16→VecF32/VecF64`), lossless per element.
 
 **Class B — can panic on input** (lossy, parseable,
 or shape-checking):
@@ -466,34 +479,36 @@ or shape-checking):
   reachable from the wide carriers
   (`{U64,U32,U16,I64,F64}→U8`,
   `{U64,U32,I64,F64}→U16`, the `I*→I8/I16` set,
-  `{F64,F32,U64}→F16`); 128-bit narrows only as
-  `U128→U64`, `I128→I64`, and the `U128↔I128` /
-  `I64→U128` / `F64→{U128,I128}` casts.
+  `{F64,F32,U64}→F16`); 128-bit narrows to every
+  ≤64-bit numeric (`U128/I128→{u8…i64, f16, f32}`),
+  the cross-sign `U128↔I128`, and every
+  `{f16,f32,f64}→{U128,I128}` cast.
 - **Str → X parsers** — every scalar numeric
   (`Str→{Bool, U8…I128, F16…F64}`) plus
-  `Str→{Bytes, Json, VecF32, VecI32}`. Trim +
+  `Str→{Bytes, Json}` and `Str→` every `Vec*` lane. Trim +
   parse; panic on unparseable. Workload-param flow
   (YAML interpolation, comma-split iter-values)
   lives here.
 - **Bytes → X parsers** — length-checked, little-
   endian decode into every scalar numeric (narrow +
-  128-bit), `Bool`, `Str`, `Json`, `VecF32`,
-  `VecI32`. Numeric targets require exactly
+  128-bit), `Bool`, `Str`, `Json`, and every `Vec*`
+  lane. Numeric targets require exactly
   `sizeof(N)` bytes; Vec targets require a multiple
   of `sizeof(element)`; panic on wrong length.
 - **Json → X extractors** — shape-checked into every
   scalar numeric (narrow + 128-bit), `Bool`,
-  `Bytes`, `VecF32`, `VecI32`. `Json::Number`
+  `Bytes`, and every `Vec*` lane. `Json::Number`
   expected for numerics, `Json::Bool` for Bool,
   `Json::Array` for Vec, `Json::String` (hex) for
   Bytes. Panic on mismatch.
-- **`F64→Json`, `F32→Json`, `VecF32→Json`,
-  `VecF32→Str`** — class B because
-  `serde_json::Number::from_f64` rejects non-finite
-  floats; the adapter panics with a useful
-  diagnostic.
-- **`VecF32→VecI32`** — round each element; panic
-  on non-finite or out-of-range.
+- **Every float scalar / lane → `Json` / `Str`**
+  (`F64/F32/F16→Json`, `VecF32/VecF64/VecF16→Json`,
+  `VecF32/VecF64/VecF16→Str`) — class B because a
+  non-finite value can appear and
+  `serde_json::Number::from_f64` rejects it; the
+  adapter panics with a useful diagnostic.
+- **Every float lane → integer lane** — round each
+  element; panic on non-finite or out-of-range.
 
 **Class · — not in either catalog.** The matrix is complete
 (§3.3), so every `·` is an **intentional** exclusion:
@@ -504,10 +519,11 @@ or shape-checking):
   collection length) is natural (first? last? length?
   sum? mean?). When the
   boundary rejects this pair, `WriteError::TypeMismatch`
-  appends a hint pointing at the explicit helpers:
-  `vec_len(v)` for the element count,
-  `vec_first(v)` / `vec_last(v)` for an element,
-  `vec_sum(v)` / `vec_mean(v)` for an aggregate.
+  appends a hint that the reduction is the author's
+  choice. The library provides no scalar reduction
+  node; an author writes the reduction node they mean
+  (or uses `vec_dot` / `vec_norm` where those are the
+  reduction wanted).
 - **`Ext` / `Handle`** — never in the auto-adapter
   catalog. `Ext` exposes typed access via
   `ReflectedValue::try_as_str` etc. at consume
@@ -528,14 +544,14 @@ or shape-checking):
 **Little-endian** matches native CPU layout
 (x86_64, ARM64) and the binary protocols this
 substrate adapts to (CQL `vector<float, N>`, Postgres
-binary). Authors who need big-endian byte order use
-explicit `pack_u64_be` / `unpack_u64_be` nodes
-(not provided by polyfill).
+binary). Authors who need big-endian byte order write
+their own node; polyfill provides none.
 
 **Lowercase hex** for Bytes ↔ Str round-trip avoids
 the URL-safety question entirely and reads
 unambiguously in logs. Compact base64 encoding is
-available as an explicit `base64_encode` node when
+available through the explicit `to_base64` /
+`from_base64` nodes (polydat-nodes `digest.rs`) when
 size matters.
 
 ### 3.2 Str → Json convention: try-parse-or-error-wrap
@@ -593,10 +609,10 @@ The bulk of these (~130 trivial transforms) are macro-generated in
 The **only** `·` cells are **scalar ↔ vector**, and that is a
 deliberate exclusion, not a gap: a scalar carries no canonical
 vector length, and a vector no canonical scalar reduction. The
-explicit reductions are named nodes — `vec_len(v)`,
-`vec_first(v)` / `vec_last(v)`, `vec_sum(v)` / `vec_mean(v)` — and
-`TypeMismatch` on a rejected `vec → scalar` pair points the author
-at them.
+library provides no scalar reduction node; an author writes the
+reduction node they mean (or uses `vec_dot` / `vec_norm` where
+those are the reduction wanted), and `TypeMismatch` on a rejected
+`vec → scalar` pair tells the author the choice is theirs.
 
 ---
 
@@ -701,7 +717,7 @@ engine.
 
 ### 6.2 Boundary — `adapt_boundary_value`
 
-`polydat/src/kernel/state.rs::adapt_boundary_value`
+`polydat-core/src/kernel/state.rs::adapt_boundary_value`
 applies the catalog at runtime mismatches where the
 assembler has no view — outer scope values
 crossing into inner kernels via the `set:` /

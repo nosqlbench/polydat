@@ -117,8 +117,8 @@ each measured:
    `&[ValueRef]` and encodes at the hole, and a branch reads its
    condition's truth. The compiler binds each hole expression
    (`__tile_<name>_hN := expr`, or the wire itself when the hole names
-   one) and passes the values to one `tile_render`. On P3 the helper
-   builds views with `arg_refs`; on P2 and as a closure step in a
+   one) and passes the values to one `tile_render`. On P3 the closure
+   builds views with `marshal::arg_ref`; on P2 and as a closure step in a
    hybrid kernel, `tile_render` supplies its own closure through the
    new `compiled_slot = <path>` override of the node macro, reading
    each slot as a view by the wire type the kernel fixed. The `None`
@@ -239,8 +239,8 @@ each measured:
    not fit. `tests/float_text.rs` is the proof: edge values, arithmetic
    series, and a million seeded bit patterns for the shortest form and
    every precision 0 through 9, with a sixteen-million sweep behind
-   `--ignored`. Its paired measurement is pending a quiet machine and
-   will be recorded in §6 when taken.
+   `--ignored`. Its paired measurement was not taken; the 0.3.0 tile
+   ladder in the performance guide (§6) includes it.
 
 ## 3. What does not change
 
@@ -249,8 +249,9 @@ each measured:
   raw hole, splice, branch, and projection that has landed, on every
   tier against the interpreter (H7), and under the tutorial's quoted
   output (`tests/guide_output.rs`), which must not change by a byte.
-- **The `None` rule.** `tile_encode` writes `null` for a `None` input,
-  and a render node fed straight by a kernel input therefore stays a
+- **The `None` rule.** The encoder writes `null` for a `None` hole
+  value, and `tile_render` accepts `None` inputs, so a render node fed
+  straight by a kernel input stays a
   closure step on the hybrid kernel and takes its value through the
   `None` mask (SRD 115 §9, SRD 114 §7.2). With encoding at the hole the
   same rule applies to the fused node: the classifier keeps a
@@ -285,9 +286,10 @@ cases per engine, each one complete cycle that pulls the rendered tile:
 | `wide` | the flat document with twenty holes of three types: how cost scales with hole count |
 
 The engines are the four of the engine ladder: P1 with `JitMode::Off`,
-P2, P3 (the hybrid kernel), and pure native code, the last only where
-every node of the case lowers (`hashed_uuid` and `weighted_strings`
-keep the reading off it, so `one_hole` is its only case). The bench records
+P2, P3 (the hybrid kernel), and pure native code, which at the time of
+the plan ran `one_hole` only (`hashed_uuid` and `weighted_strings` had
+no lowering); since every node with a kit lowers, it runs every case
+(§6). The bench records
 nanoseconds per cycle and is run against a same-hour baseline worktree
 before and after every step, as the performance guide does for the
 ladder. The numbers before step 1 are the baseline this plan is judged
@@ -422,7 +424,6 @@ comparable with the tables above.
 - Two renders of one tile in one program, or the same tile inside a
   projection body and outside it, keep their own body kernels; the
   plan never shares dispense state (SRD 114 §7.1).
-- Step 3 generates code per tile skeleton, so a program with many
-  distinct tiles compiles more native code; the bench's `wide` case is
-  the only place that cost is measured, and a skeleton above a fixed
-  size keeps the step 2 helper.
+- Step 3 generated no skeleton code (§2), so a tile adds no native
+  code of its own; the render is the one closure on every engine,
+  called in place from native code.

@@ -218,9 +218,9 @@ interpreter; the binder's value copies; write-through
 commits), a healable mismatch such as a lossless widening is
 healed; a mismatch nothing heals is an error at the write
 site, naming the slot, its declared type, and the type given.
-A compiled kernel checks every extern write; the interpreter's
-`set_input` checks a cell-bound slot and otherwise trusts the
-caller's type. T1 + T2 are enforced at this boundary; the
+Every engine checks every extern write: the value satisfies the
+declared type (`satisfies_slot`, bit-stuffed forms included) or
+is `None`. T1 + T2 are enforced at this boundary; the
 kernel makes no assumption about who the producer is, when it
 writes, or what host-level semantic the write carries — the
 contract is generic external-port population, and downstream
@@ -380,10 +380,11 @@ fixed by its port type at build.
 
 The adapter catalog operates at three sites: intra-graph
 wire validation (assembly's wire resolution, inserting edge
-adapters from the conversion library), the binder's boundary
-value copies (`adapt_boundary_value`), and the typed-embedding
-return path. The catalog is the single source of truth across
-all three sites.
+adapters from the conversion library), the boundary value
+copies (`adapt_boundary_value` — the binder's and
+`set_wire_idx`'s), and the write-through commit's
+type-stability check on a shared cell. The catalog is the
+single source of truth across all three sites.
 
 **The assembly pass validates every wire's source `PortType`
 against its consumer's expectation. A direct mismatch fails

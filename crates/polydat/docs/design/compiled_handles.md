@@ -6,8 +6,8 @@ and no cycle. A by-reference value in a compiled slot is a `Ref2` pair
 under the slot-state axioms of [JIT Boundary](jit_boundary.md), owned
 by the step that produced it, exactly as a typed vector is.
 
-**Purpose.** The compiled tiers (P2 closures, P3 native code, and the
-hybrid kernel) run over a flat buffer of `u64` slots. A string, byte
+**Purpose.** The compiled tiers (the closure tier P2, P3, and the pure
+native tier behind it) run over a flat buffer of `u64` slots. A string, byte
 string, JSON value, extension value, or handle value does not fit a
 slot, so it needs a slot representation that keeps the runtime model's
 one rule ([Runtime Model](runtime_model.md), R1): an output stands
@@ -215,9 +215,11 @@ scratch handed in:
   from consts is a pure function of them, so the kit recomputes it from
   the captured consts at construction, once. A session-static setup
   (`from = ()`) is cloned from the node.
-- **`Option<T>` is always present.** A compiled kernel refuses to run
-  native code with an unset extern and carries no `None` on an
-  immediate slot, so an `Option<T>` argument reads as `Some`.
+- **`Option<T>` reads as `Some` in the kit.** The kit sees slot bits
+  and no mask; a `None` on the closure tier and P3 is the kernel's
+  per-slot mask (a step whose node does not accept `None` emits `None`
+  without running, [Engine Parity](engine_parity.md) step 5), and pure
+  native code refuses to run with an unset extern.
 
 A node that supplies its own closure names it with
 `compiled_slot = <path>` (`fn(&Node, &[PortType]) -> CompiledSlotKit`);
@@ -294,9 +296,10 @@ register producer whose body checks a bound or does what Cranelift has
 no instruction for (`reg_with_lane_f32`, `reg_gather_f32`,
 `vec_to_reg_f32`, `reg_mul_i8`) writes its word into the output slots.
 Each helper takes the step's input words in order, and each runs the
-function the node's body runs (`library::vector_math` and
-`library::register` share those functions between the body and the
-helper), so the bytes and the failure messages are the body's,
+function the node's body runs (`polydat_core::numeric::vector` and
+`numeric::register` hold those functions; the node bodies in
+`polydat-nodes` and the helpers both call them), so the bytes and the
+failure messages are the body's,
 including which SIMD kernel or scalar loop computed a dot product.
 `reg_dot_f32` and `reg_shuffle_bytes` are inline instructions: the
 former the body's fixed tree at f32 precision (`fmul.f32x4`, four
@@ -323,8 +326,9 @@ citations a SAFETY comment or a test needs are:
   run, which R1 makes the output's own lifetime.
 - **S7** — one dereference, in the closure or the boundary decode,
   never in generated code. *Tripwire: S10's source scan lists
-  `compile::marshal`, the copy step, and the string assertion as the
-  only `from_raw_parts` sites outside the vector substrate.*
+  `compile::marshal`, the copy step, the string assertion, and the
+  slot-call helper's frame view in `jit/codegen.rs` as the only
+  `from_raw_parts` sites outside the vector substrate.*
 - **S8** — P1 is the oracle. *Tripwire: `tests/handle_tiers.rs`, the
   random and corpus differentials over every tier, and
   `tests/ext_tiers.rs` for host-defined values.*

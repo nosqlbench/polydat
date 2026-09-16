@@ -5,8 +5,8 @@
 This guide shows, for a selection of the spec's examples, how to build
 the **same kernel** in Rust through the public AST types — without ever
 writing a source string. Each example here is cross-linked to its spec
-section. The paired examples (§2 to §7) are **machine-verified**: the
-test
+section. The paired examples (§2 to §7) are **machine-verified** (§8
+and §9 are not yet paired in the test): the test
 [`polydat/tests/doc_examples_test.rs`](../../tests/doc_examples_test.rs)
 asserts that the hand-built AST and the spec's grammar source **project
 to identical canonical syntax**:
@@ -26,7 +26,7 @@ silently drift from the code that runs.
 > syntax the runtime gives back*. Building a `PolydatFile` and projecting
 > it with `pp_file` is the most direct expression of that: it compares
 > construction paths at the canonical-syntax layer. For driving a
-> compiled kernel (`set_inputs`/`pull`, the typed `Dataflow` path), see
+> kernel (`set_inputs`/`pull`, the typed `Dataflow` path), see
 > §[10](#sec-driving) at the end.
 
 <a id="sec-setup"></a>
@@ -303,11 +303,13 @@ the body text; a heredoc is `TileBodyKind::Heredoc` with the text between
 `<<<` and `>>>`.
 
 <a id="sec-driving"></a>
-## 10. Driving a compiled kernel (reference)
+## 10. Driving a kernel (reference)
 
 The builders above are verified at the *syntax* layer. To verify at the
 *behaviour* layer, compile and drive a kernel. The simplest path is from
 source; the typed, non-panicking path is the `Dataflow` trait.
+`compile_polydat` yields the interpreter kernel; `compile_polydat_kernel`
+is the same program on the default engine (P3).
 
 ```rust
 use polydat::dsl::compile_polydat;

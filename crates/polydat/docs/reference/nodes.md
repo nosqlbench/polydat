@@ -14,8 +14,11 @@ nodes into the graph. The catalog below is the menu the resolver picks
 from, not a usage manual.
 
 **Inventory:** Built-in nodes live in
-[`polydat-core/src/library/`](../../../polydat-core/src/library/). This file is a hand-curated snapshot;
-when the runtime diverges, the source files are authoritative.
+[`polydat-nodes/src/`](../../../polydat-nodes/src/) (the node library) and,
+for the nodes the runtime itself needs,
+[`polydat-core/src/library/`](../../../polydat-core/src/library/). This
+file is a hand-curated snapshot; when the runtime diverges, the source
+files are authoritative.
 
 ## Engines
 
@@ -81,8 +84,13 @@ spread across a population — without shared state, without RNG
 seeding.
 
 ### `hash` — the source of all randomness
-`hash`. A 64-bit hash of one or more u64 inputs. Chaining `hash(hash(x))`
-produces independent streams from the same coordinate without an RNG.
+`hash`, `splitmix64`, `scatter`, `xxhash3`, `xxh3`, `hash_range`,
+`hash_interval`. `hash` maps one `u64` to a 64-bit SplitMix64 hash
+(`splitmix64` and `scatter` are the same permutation under explicit
+names; `xxhash3`/`xxh3` are the xxHash3 digest); `hash_range` and
+`hash_interval` fold the hash into a bounded `u64` range or an `f64`
+interval. Chaining `hash(hash(x))` produces independent streams from
+the same coordinate without an RNG.
 
 ### `pcg` — PCG-RXS-M-XS 64/64 random sequences
 `pcg`, `pcg_stream`, `shuffle`, `cycle_walk`. Used when a single
@@ -170,21 +178,24 @@ hash-derived.
 `counter`, `current_epoch_millis`, `session_start_millis`,
 `elapsed_millis`, `thread_id`, `tmp_dir`, `env`, `env_or`, `limit`.
 
-### `runtime_context` — declared controls + Polydat runtime axes
-`cycle`, `phase`, `rate`, `concurrency`, `control`, `control_u64`,
-`control_str`, `control_bool`, `control_set`. The `control` family
-reads dynamic controls (SRD-23) declared on the active component.
+### Registered by hosts (not in this workspace)
 
-### Live-metric nodes (registered externally)
-`metric`, `metric_window`, `rate`, `mean`, `p50`, `p99`, `cycles`,
-`errors`. These read live values from a session's metrics store and
-are useful inside `relevancy:` / stop-condition expressions. They
-live in the **`nbrs-metrics`** crate (`polydat_nodes` module),
-registered into polydat's node catalog at link time via the
-`inventory` channel — polydat's published surface doesn't include
-them. Build a binary that links `nbrs-metrics` (or call
-`nbrs_metrics::polydat_nodes::set_global_query` from your runner) to
-get them.
+None of the names below is registered by any crate in this workspace.
+A host such as nmbrs registers them into polydat's node catalog at link
+time through the `inventory` channel, so they resolve only in a binary
+that links the host crate that defines them.
+
+- **Runtime-context nodes** — declared controls and the host's runtime
+  axes: `cycle`, `phase`, `rate`, `concurrency`, `control`,
+  `control_u64`, `control_str`, `control_bool`, `control_set`. The
+  `control` family reads dynamic controls (SRD-23) declared on the
+  active component.
+- **Live-metric nodes** — `metric`, `metric_window`, `rate`, `mean`,
+  `p50`, `p99`, `cycles`, `errors`. These read live values from a
+  session's metrics store and are useful inside `relevancy:` /
+  stop-condition expressions. They live in the host's metrics crate,
+  registered through `inventory`; the host's runner installs the query
+  hook they read from.
 
 ### `log_levels` — pass-through logging at each level
 `log_debug`, `log_info`, `log_warn`, `log_error`. Each takes a value,
@@ -233,7 +244,7 @@ time rather than letting a bad param surface at cycle dispatch.
 
 ### `exactly_one` — explicit unary unwrap
 `exactly_one_value`. Asserts a multi-element structural body has
-exactly one element and returns it. SRD-66 §"Surface 3" details
+exactly one element and returns it. SRD-66 §"Surface 4" details
 the dispatch contract.
 
 ### `assertions` — type and value assertions
@@ -249,19 +260,25 @@ const-constraint contracts at wire boundaries.
 
 | File | Nodes |
 |------|------:|
+| [`polyfill_narrow.rs`](../../../polydat-core/src/library/polyfill_narrow.rs) | 87 (narrow-width adapters: `u8`/`i8`/`u16`/`i16`/`f16`) |
+| [`polyfill.rs`](../../../polydat-core/src/library/polyfill.rs) | 83 (type-matrix edge adapters: narrowings, sign changes, byte/text views) |
+| [`polyfill_128.rs`](../../../polydat-core/src/library/polyfill_128.rs) | 37 (128-bit integer adapters: `u128`/`i128`) |
 | [`vectors.rs`](../../../polydat-core/src/library/vectors.rs) | 35 |
+| [`polyfill_complete.rs`](../../../polydat-core/src/library/polyfill_complete.rs) | 27 attribute sites, macro-expanded (matrix-completion class-B adapters) |
 | [`math.rs`](../../../polydat-nodes/src/math.rs) | 17 |
 | [`compare.rs`](../../../polydat-nodes/src/compare.rs) | 17 |
+| [`round_numbers.rs`](../../../polydat-nodes/src/round_numbers.rs) | 15 (round-number selectors: base10, decade, fibonacci, binomial, interval) |
 | [`probability.rs`](../../../polydat-nodes/src/probability.rs) | 12 |
 | [`bitwise.rs`](../../../polydat-nodes/src/bitwise.rs) | 14 |
 | [`arithmetic.rs`](../../../polydat-nodes/src/arithmetic.rs) | 12 |
 | [`convert.rs`](../../../polydat-core/src/library/convert.rs) | 11 |
 | [`json.rs`](../../../polydat-core/src/library/json.rs) | 10 |
-| Runtime-control nodes (externally registered) | 9 |
 | [`context.rs`](../../../polydat-core/src/library/context.rs) | 9 |
+| [`vector_math.rs`](../../../polydat-nodes/src/vector_math.rs) | 9 (element-wise vector math: `vec_add`, `vec_dot`, `vec_l2`, `vec_cosine`, `hash_vec`, …) |
+| [`sampling/icd.rs`](../../../polydat-nodes/src/sampling/icd.rs) | 9 (inverse-CDF distributions: `dist_normal`, `dist_exponential`, `dist_zipf`, `unit_interval`, …) |
 | [`partition.rs`](../../../polydat-nodes/src/partition.rs) | 8 |
 | [`string.rs`](../../../polydat-nodes/src/string.rs) | 8 |
-| `nbrs-metrics::polydat_nodes` (externally registered) | 8 |
+| [`hash.rs`](../../../polydat-nodes/src/hash.rs) | 7 |
 | [`param_helpers.rs`](../../../polydat-nodes/src/param_helpers.rs) | 6 |
 | [`datafile.rs`](../../../polydat-core/src/library/datafile.rs) | 6 |
 | [`noise.rs`](../../../polydat-nodes/src/noise.rs) | 5 |
@@ -276,9 +293,16 @@ const-constraint contracts at wire boundaries.
 | [`diagnostic.rs`](../../../polydat-core/src/library/diagnostic.rs) | 4 |
 | [`lerp.rs`](../../../polydat-nodes/src/lerp.rs) | 3 |
 | [`regex.rs`](../../../polydat-nodes/src/regex.rs) | 2 |
-| [`hash.rs`](../../../polydat-nodes/src/hash.rs) | 1 |
+| [`sampling/metashift.rs`](../../../polydat-nodes/src/sampling/metashift.rs) | 2 (LFSR permutations: `shuffle`, `lfsr_step`) |
+| [`tile_render.rs`](../../../polydat-core/src/library/tile_render.rs) | 2 (the tile nodes: `tile_encode`, `tile_render`) |
 | [`format.rs`](../../../polydat-core/src/library/format.rs) | 1 |
 | [`exactly_one.rs`](../../../polydat-core/src/library/exactly_one.rs) | 1 |
+| [`emit.rs`](../../../polydat-nodes/src/emit.rs) | 1 (`emit_row`, the binary's `--emit` transform) |
+| [`stability.rs`](../../../polydat-nodes/src/stability.rs) | 1 (`is_stable`, steady-state detection) |
+| [`streamer.rs`](../../../polydat-nodes/src/streamer.rs) | 1 (`streamer`, the `for` producer node) |
+| [`sampling/alias.rs`](../../../polydat-nodes/src/sampling/alias.rs) | 1 (`alias_sample`, Vose alias-table sampling) |
+| [`sampling/histribution.rs`](../../../polydat-nodes/src/sampling/histribution.rs) | 1 (`histribution`, inline discrete histogram) |
+| [`sampling/lut.rs`](../../../polydat-nodes/src/sampling/lut.rs) | 1 (`dist_empirical`, interpolating lookup table) |
 | [`assertions.rs`](../../../polydat-core/src/library/assertions.rs) | (typed family — not name-registered) |
 | [`pick.rs`](../../../polydat-nodes/src/pick.rs) | (op-template dispatch primitive) |
 | [`random.rs`](../../../polydat-nodes/src/random.rs) | (non-deterministic prototyping) |

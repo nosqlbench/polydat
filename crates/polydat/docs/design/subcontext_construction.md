@@ -85,7 +85,9 @@ remain protected by the compiler and kernel slot type checks.
 
 ### 2.3 Compile options
 
-`CompileOptions` carries the compile-time inputs that affect the child program:
+The subcontext builder's `CompileOptions` (`kernel::subcontext::CompileOptions`,
+distinct from `dsl::compile::CompileOptions`, into which `finalize` maps it)
+carries the compile-time inputs that affect the child program:
 
 ```text
 workload_dir
@@ -97,8 +99,12 @@ cursor_limit
 kernel_opt
 ```
 
-Default options use the direct AST compiler. Non-default options use the
-libraries-aware compiler while preserving AST rewrites. `KernelOptLevel` also
+All options go through the one compiler: default options compile the
+statements under the default `dsl::compile::CompileOptions` (charged to the
+parent's ledger); non-default options are mapped into
+`dsl::compile::CompileOptions` and compile the (possibly rewritten)
+statements, or the re-joined source when no rewrite fired and every fragment
+is source. `KernelOptLevel` also
 controls whether result binding support keeps only referenced injected slots or
 retains all diagnostic slots.
 
@@ -123,7 +129,9 @@ transport.
    an ancestor.
 5. Parse every source body fragment and concatenate all statements.
 6. Rewrite shared export collisions into explicit write-through form.
-7. Compile the rewritten statements with the requested compile options.
+7. Compile the rewritten statements with the requested compile options,
+   charging the compile to the parent's `CompileLedger`; the module's
+   program carries that ledger.
 8. Apply inherited-output marking before the program `Arc` is shared.
 9. Bake write-through metadata into the compiled program.
 10. Diagnose declared imports not represented in the compiled input/output
@@ -267,9 +275,13 @@ parent live
 - Hot rebinding and multi-parent construction are unsupported.
 
 Direct compilation (`compile_polydat_with`) creates a root kernel on any
-engine, but it does not create a typed child relationship. Internal bridges
-wrap a root or bind a compiled program under a parent by routing through the
-same finalize/materialize rules.
+engine, but it does not create a typed child relationship. The second
+sanctioned construction path is `PolydatKernel::build_subscope(PolydatMatter)`:
+matter built by `PolydatMatter::builder()` from source, pre-parsed statements,
+or a compiled program (exactly one). Source and statement matter route through
+a transient typed parent (`wrap_root_kernel`) and this protocol's `finalize`;
+program matter is materialised directly with its iteration bindings. No
+free-function bridge remains.
 
 ---
 

@@ -326,9 +326,10 @@ not refusals:
   ([Compiled By-Reference Slots](compiled_handles.md) §6); a
   nondeterministic node or a side channel does too, as a segment of its
   own on the P3 kernel and a never-current step on pure native code, so
-  its currency is its own; a node with no kit runs on the interpreter
-  as itself, and only pure native code, the differential tier, refuses
-  it.
+  its currency is its own; a node with no kit runs only on the
+  interpreter engine; the closure tier, P3, and pure native code refuse
+  a program containing one by name (`KernelError::Refused`); today
+  every registered node has a kit.
 - A by-reference value crosses a cone boundary borrowed into its pair
   for the call and copied out after it, and a copy of one inside native
   code copies into the copying step's own scratch; a pair is never

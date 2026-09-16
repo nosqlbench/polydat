@@ -55,8 +55,9 @@ provenance rules as if it were the only state
 with `KernelProgram::create_kernel`; the spawn path creates the interpreter
 child before binding it.
 
-`PolydatKernel::materialize_wiring_from_outer` and `materialize_subscope`
-are crate-private implementation chokepoints. Callers cannot construct two
+`PolydatKernel::materialize_subscope` is crate-private and
+`materialize_wiring_from_outer` is private to `PolydatKernel`'s impl; both
+are implementation chokepoints. Callers cannot construct two
 independent kernels and bind them as parent and child afterward. This keeps
 a child from bypassing the parent's live shared-cell view or lifecycle
 checks. The one public binding a host may make after construction is

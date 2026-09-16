@@ -119,7 +119,7 @@ The other entry points differ in what they take:
 
 | Function | Adds |
 | --- | --- |
-| `compile_polydat_kernel_with_options(src, &options, log)` | `CompileOptions`: the source directory, so relative `import` paths resolve; library directories (§8); required outputs; strict typing, where implicit adapters are errors; a context label for errors; a cursor limit. And the compile event log (§13). |
+| `compile_polydat_kernel_with_options(src, &options, log)` | `CompileOptions`: the source directory, so relative `import` paths resolve; library directories (§8); required outputs; strict typing, where implicit adapters are errors; a context label for errors; a cursor limit; and the compile ledger to charge (`ledger`), by default a new one for the program tree, or the parent's when a host compiles a subscope. And the compile event log (§13). |
 | `compile_polydat_kernel_with_tiles(src, tiles)` | tile statements built from host data (§10) |
 | `compile_polydat_with(src, engine)` | the engine by name (§11); `compile_polydat_with_engine(src, engine, &options, log)` takes the options and the log as well |
 | `compile_polydat(src)`, `compile_polydat_with_options(src, &options, log)`, `compile_polydat_with_log(src, log)` | the interpreter kernel, `PolydatKernel`, as a concrete type: the oracle every engine is checked against (§11) and the program a diagnostic inspects (§13). The older `compile_polydat_with_*` forms with the options as separate parameters are deprecated wrappers of `compile_polydat_with_options`. |
@@ -562,7 +562,7 @@ doc: {"id": 4, "label": "row-4", "points": [{"n": 0, "v": 4},{"n": 1, "v": 5}]}
 
 `tile_from_text` and `tile_from_json_text` are the other two entry
 points. The [Polytile tutorial](../tutorials/polytile_tutorial.md) covers
-the template language; [Polytile](../design/polytile.md) §6 specifies the
+the template language; [Polytile](../design/polytile.md) §3 specifies the
 structural JSON form the value above uses.
 
 ## 11. Compiled kernels
@@ -634,15 +634,16 @@ Both engines accept the program and compute what the interpreter
 computes; `engine()` on a kernel reports the provenance the selector
 chose, the same choice on either compiled engine: this graph has one
 input, so the cone guard alone (`Pull`); the smaller first example above
-gets `Raw`. P3 runs its nineteen native-eligible nodes as four native
-segments, one per run of them between the host nodes and on either
-side of a compile-time constant, and the three host nodes as closure
+gets `Raw`. P3 runs the native-eligible nodes as two native
+segments, one per run of them between the host nodes, and the three
+host nodes as closure
 steps, with the extension value passing between
 two of them as a reference pair; `plan()` is the only planning detail
 a kernel exposes, on every engine, so a host can see whether a program is mostly native before
-deciding to care. An engine that cannot run a program at all, the
-closure tier on a vector-typed extern for one, says so as the error,
-with the engine and the node named. A `shared` binding runs on every
+deciding to care. An engine that cannot run a program at all, either
+compiled engine on an extern of a 128-bit integer or register word
+type for one, says so as the error, with the engine and the port
+named. A `shared` binding runs on every
 engine with the interpreter's cell: `shared_cells` on a kernel lists
 its cells and `attach_shared_cell` binds one kernel's cell into
 another, so both read and write one register.
