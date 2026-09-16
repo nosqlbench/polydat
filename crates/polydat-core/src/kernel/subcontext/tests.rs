@@ -54,6 +54,27 @@ fn finalize_compiles_simple_polydat_source_block() {
     assert_eq!(module.context().label, "simple-polydat-source");
 }
 
+/// A subscope is a program of the parent's tree: its compile records
+/// in the parent's ledger, and the module's program carries that
+/// ledger.
+#[test]
+fn finalize_charges_the_subscope_compile_to_the_parents_ledger() {
+    let parent = parent_kernel();
+    let ledger = parent.lock_inner().program().ledger().clone();
+    let before = ledger.programs();
+    let mut b = parent.subcontext_builder();
+    b.context(SourceContext::new("charged"));
+    b.body(BodyFragment::PolydatSource(
+        "input cycle: u64\nx := 5\n".to_string(),
+    ));
+    let module = b.finalize().expect("finalize should succeed");
+    assert!(Arc::ptr_eq(module.program().ledger(), &ledger));
+    assert!(
+        ledger.programs() > before,
+        "the subscope compile was not recorded"
+    );
+}
+
 #[test]
 fn finalize_compiles_a_caller_native_expr_stub() {
     // SRD-84 Part 3, end to end: a binding built in Rust becomes a real

@@ -458,6 +458,9 @@ impl<P> SubcontextBuilder<P> {
             .map(|c| (c.name.as_str(), c))
             .collect();
         let parent_inner = parent.lock_inner();
+        // A subscope is a program of the parent's tree: its compile is
+        // charged to the parent's ledger.
+        let ledger = parent_inner.program().ledger().clone();
         let mut write_through_specs: Vec<(String, PortType)> = Vec::new();
         for exp in &exports {
             let parent_modifier = parent_inner.program().output_modifier(&exp.name);
@@ -592,7 +595,7 @@ impl<P> SubcontextBuilder<P> {
                 .clone()
                 .unwrap_or_else(|| context.label.clone()),
             cursor_limit: compile_options.cursor_limit,
-            ledger: None,
+            ledger: Some(ledger.clone()),
         };
         let mut kernel = if compile_options.is_default() {
             compile_ast_with_options(
@@ -600,7 +603,10 @@ impl<P> SubcontextBuilder<P> {
                     statements: statements.clone(),
                 },
                 "",
-                &DslOptions::default(),
+                &DslOptions {
+                    ledger: Some(ledger),
+                    ..DslOptions::default()
+                },
                 None,
             )
             .map_err(ContractViolation::Compile)?
