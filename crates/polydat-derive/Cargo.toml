@@ -4,17 +4,17 @@
 # `polydat-derive` — proc-macro crate that derives polydat node
 # metadata (struct, NodeMeta, impl PolydatNode, FuncSig
 # registration) from a single typed Rust function signature.
-# See docs/SRD/80_node_function_macro_collapse.md for the
-# design and migration plan.
 
 [package]
 name = "polydat-derive"
-version = "0.2.0"
+version.workspace = true
 edition.workspace = true
-license-file = "../../LICENSE"
+license.workspace = true
 description = "Proc-macro support for polydat — derive node metadata from typed function signatures"
-repository = "https://github.com/nosqlbench/polydat"
-homepage = "https://github.com/nosqlbench/polydat"
+keywords = ["nosqlbench", "workload", "proc-macro", "data-generation"]
+categories = ["development-tools::procedural-macro-helpers"]
+repository.workspace = true
+homepage.workspace = true
 documentation = "https://docs.rs/polydat-derive"
 readme = "README.md"
 

@@ -1122,9 +1122,7 @@ impl PolydatState {
     /// wants the inputs back at their defaults calls
     /// [`Self::reset_inputs_from`] as well.
     pub fn invalidate_all(&mut self) {
-        for clean in &mut self.core.node_clean {
-            *clean = false;
-        }
+        self.core.node_clean.fill(false);
     }
 
     /// Pull a named output variate from the program.
@@ -1253,9 +1251,7 @@ impl RawState {
         for (i, &c) in coords.iter().enumerate().take(self.core.inputs.len()) {
             self.core.inputs[i] = Value::U64(c);
         }
-        for clean in &mut self.core.node_clean {
-            *clean = false;
-        }
+        self.core.node_clean.fill(false);
     }
 
     /// Pull a named output variate from the program.

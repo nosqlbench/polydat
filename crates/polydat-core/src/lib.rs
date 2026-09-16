@@ -1,131 +1,144 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! # polydat (formerly nbrs-variates)
+//! # polydat-core
 //!
-//! Deterministic variate generation kernel (GK) for workload testing.
+//! The Polydat runtime: the value model, the graph compiler, the
+//! execution engines, the kernels, the comprehension runtime, the node
+//! macro's support surface, the nodes the compiler synthesizes itself,
+//! and the numeric bodies the native lowerings share with the node
+//! library.
 //!
-//! Transforms named `u64` coordinate tuples into typed output variates
-//! via a compiled DAG of composable function nodes. The same coordinate
-//! always produces the same outputs — deterministic, reproducible, and
-//! parallelizable with zero shared mutable state.
+//! A program declares typed inputs and a graph of named functions; the
+//! compiler produces a kernel whose named outputs are pulled on demand.
+//! The same inputs always yield the same outputs, on any thread, any
+//! host, and any engine, with no state carried between evaluations.
 //!
-//! ## Quick Start
+//! Most programs depend on the `polydat` facade, which re-exports this
+//! crate together with the node library (`polydat-nodes`) and the
+//! language (`polydat-grammar`) at the paths they always had. Depend on
+//! `polydat-core` directly to assemble your own node set without the
+//! standard library linked, or to build a tool that needs the compiler
+//! and engines alone.
 //!
-//! ### From DSL source
+//! ## Quick start
 //!
-//! The simplest way to build a kernel is from Polydat DSL source, on the
-//! default engine (native code with the `jit` feature, closures without):
+//! The runtime compiles any program whose functions are linked. The
+//! standard functions such as `hash` live in `polydat-nodes` and
+//! register at link time, so a program that calls them needs that
+//! crate linked as well:
 //!
-//! ```rust
-//! use polydat::dsl::compile_polydat_kernel;
+//! ```rust,ignore
+//! use polydat_core::dsl::compile_polydat_with;
+//! use polydat_core::{Engine, Provenance};
 //!
-//! let mut kernel = compile_polydat_kernel(r#"
-//!     input cycle: u64
-//!     hashed := hash(cycle)
-//!     user_id := mod(hashed, 1000000)
-//! "#).unwrap();
+//! let mut kernel = compile_polydat_with(
+//!     r#"
+//!         input cycle: u64
+//!         id := mod(hash(cycle), 1000)
+//!     "#,
+//!     Engine::Closures(Provenance::PushPull),
+//! )?;
 //!
-//! kernel.set_inputs(&[42]);
-//! let user_id = kernel.pull("user_id").as_u64();
-//! assert!(user_id < 1_000_000);
+//! kernel.set_inputs(&[7]);
+//! assert!(kernel.pull("id").as_u64() < 1000);
 //! ```
 //!
-//! ### From the assembler API
+//! For programmatic construction, [`compile::assembly::PolydatAssembler`]
+//! wires boxed nodes by name and compiles the result the same way.
 //!
-//! For programmatic construction:
+//! ## Engines
 //!
-//! ```rust
-//! use polydat::compile::assembly::{PolydatAssembler, WireRef};
-//! use polydat::library::hash::Hash;
-//! use polydat::library::arithmetic::Mod;
+//! One program compiles to any of three engines and gives the same
+//! values on each; the host names one with [`Engine`], and
+//! [`Engine::default`] is the fastest the build has.
 //!
-//! let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
-//! asm.add_node("hashed", Box::new(Hash::new()), vec![WireRef::input("cycle")]);
-//! asm.add_node("user_id", Box::new(Mod::new(1_000_000)), vec![WireRef::node("hashed")]);
-//! asm.add_output("user_id", WireRef::node("user_id"));
+//! - [`Engine::Interpreter`]: boxed nodes over typed value buffers,
+//!   with as much of the graph fused into native cones as its
+//!   [`JitMode`] allows.
+//! - [`Engine::Closures`]: one generated closure per node over a flat
+//!   slot buffer.
+//! - [`Engine::Native`]: Cranelift machine code where a node has a
+//!   lowering and the node's closure elsewhere. Needs the `jit`
+//!   feature.
 //!
-//! let mut kernel = asm.compile().unwrap();
-//! kernel.set_inputs(&[42]);
-//! assert!(kernel.pull("user_id").as_u64() < 1_000_000);
-//! ```
+//! [`Provenance`] chooses how much re-evaluation a changed input
+//! triggers; it is an optimization and never changes a result. Every
+//! engine accepts every program the interpreter accepts and drives it
+//! through the one [`Kernel`] trait.
 //!
-//! ## Documentation
-//!
-//! The rustdoc covers the API. The narrative documentation lives in the
-//! repository under `crates/polydat/docs/`, organized by the
-//! [documentation index](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/README.md):
-//!
-//! - Tutorials with real, test-checked output:
-//!   [illustrations](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/tutorials/illustrations.md),
-//!   the [Polytile tutorial](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/tutorials/polytile_tutorial.md),
-//!   and a [toy test definition](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/tutorials/toy_test_definition.md).
-//! - Guides: [embedding Polydat in a host](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/guides/embedding.md),
-//!   [compilation levels](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/guides/compilation.md),
-//!   and [engine-ladder performance](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/guides/performance.md).
-//! - Reference: the [node library](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/reference/nodes.md).
-//! - Design: the [specifications](https://github.com/nosqlbench/polydat/tree/main/crates/polydat/docs/design)
-//!   the code implements, with their axioms and landing records.
-//!
-//! ## Architecture
+//! ## Program and state
 //!
 //! ```text
-//! coordinates (u64 tuple)
+//! inputs (u64 tuple, cursors, externs)
 //!     │
 //!     ▼
-//! ┌─────────────────────────┐
-//! │  PolydatProgram (immutable)  │  Shared via Arc across threads
-//! │  - nodes: Vec<PolydatNode>   │
-//! │  - wiring: Vec<Vec<..>> │
-//! │  - output_map           │
-//! └──────────┬──────────────┘
-//!            │
-//!     ┌──────┴──────┐
-//!     │  PolydatState    │  One per thread — no locks
-//!     │  - buffers  │
-//!     │  - coords   │
-//!     └──────┬──────┘
-//!            │
-//!            ▼
-//!     pull("user_id") → Value::U64(527897)
+//! ┌──────────────────────────────────┐
+//! │ KernelProgram   immutable, Arc   │  shared by every thread
+//! │  nodes · wiring · outputs · consts│
+//! └───────────────┬──────────────────┘
+//!                 │ create_kernel()
+//!                 ▼
+//! ┌──────────────────────────────────┐
+//! │ Kernel          one per thread   │  no locks, no shared writes
+//! │  slot buffers · provenance masks │
+//! └───────────────┬──────────────────┘
+//!                 ▼
+//!          pull("id") → Value
 //! ```
 //!
-//! ## Compilation Levels
+//! A [`KernelProgram`] is the compiled, immutable half, shared by
+//! reference; a [`Kernel`] is one thread's private state over it.
+//! Outputs are owned by their provenance: a value stands until an
+//! input that reaches it is written.
 //!
-//! The kernel supports three compilation levels:
+//! ## Cargo features
 //!
-//! - **Phase 1** (default): Pull-through interpreter.
-//! - **Phase 2**: Compiled `u64` closures, measured 3.65× faster than Phase 1.
-//! - **Phase 3**: Cranelift native code for every node that has a lowering
-//!   and the node's closure elsewhere, measured 5.81× faster than Phase 1.
-//!   Requires the `jit` feature (enabled by default).
-//!
-//! The ratios are the reference run in the engine-ladder performance
-//! guide linked above: one graph on one machine, not a constant.
-//!
-//! ## Features
-//!
-//! - **`jit`** (default): Cranelift JIT compilation for Phase 3.
-//!   Disable with `default-features = false` for a lighter build.
-//! - **`vectordata`**: Vector dataset access nodes for ML/AI workloads.
+//! - **`jit`** (default): the native engine, on Cranelift.
+//! - **`vectordata`**: vector-dataset access nodes for ML/AI-oriented
+//!   workloads.
 //!
 //! ## Modules
 //!
-//! - [`ast`]: Core types — [`ast::Value`], [`ast::PolydatNode`] trait,
-//!   [`ast::Port`], [`ast::PortType`]
-//! - [`kernel`]: Runtime — [`kernel::PolydatProgram`], [`kernel::PolydatKernel`],
-//!   [`kernel::PolydatState`]
-//! - [`compile`]: DAG construction + compilation strategies —
-//!   [`compile::assembly::PolydatAssembler`], [`compile::fusion`],
-//!   [`compile::closures`] (Phase 2), [`compile::hybrid`]
-//!   (per-node optimal), `compile::jit` (Phase 3 Cranelift,
-//!   feature-gated)
-//! - [`dsl`]: Polydat language — [`dsl::compile_polydat_kernel`], [`dsl::compile_polydat`] (the interpreter), lexer, parser, registry
-//! - [`library`]: 250+ built-in function nodes (hash, arithmetic, string,
-//!   math, distributions, datetime, noise, etc.) plus `polydat_nodes::sampling`
-//!   (alias tables, LUT interpolation, ICD) and [`library::support`]
-//!   (library-internal cache + audit infrastructure)
-//! - [`viz`]: DAG visualization (DOT, Mermaid)
+//! - [`ast`]: the value model and node contract: [`ast::Value`],
+//!   the [`ast::PolydatNode`] trait, [`ast::Port`].
+//! - [`dsl`]: compiling Polydat source:
+//!   [`dsl::compile_polydat_with`] for a chosen engine,
+//!   [`dsl::compile_polydat_kernel`] for the default, and
+//!   [`dsl::compile_polydat`] for the interpreter kernel; the node
+//!   registry, factories, and compile events.
+//! - [`compile`]: graph construction and the engines:
+//!   [`compile::assembly`] (the assembler and adapter insertion),
+//!   [`compile::fusion`], [`compile::closures`], [`compile::hybrid`]
+//!   (the native engine's kernel), `compile::jit` (Cranelift lowering,
+//!   feature-gated), [`compile::select`] (engine and provenance
+//!   selection).
+//! - [`kernel`]: the runtime: the [`Kernel`] and [`KernelProgram`]
+//!   traits, the interpreter's [`kernel::PolydatProgram`] and
+//!   [`kernel::PolydatState`], shared cells, scopes, subcontexts,
+//!   traversal activation.
+//! - [`iteration`]: comprehensions, cursors, partitions, and the
+//!   coordinate algebra.
+//! - [`library`]: the nodes the compiler keeps: adapters
+//!   ([`library::polyfill`]), assertions, constants, identity,
+//!   formatting, tile rendering ([`library::tile_render`]), and the
+//!   library-internal support ([`library::support`]). The node library
+//!   proper is `polydat-nodes`.
+//! - [`numeric`]: the numeric bodies shared by the node library and the
+//!   native lowerings.
+//! - [`tile`]: Polytile at the host boundary.
+//! - [`binder`], [`derive_support`], [`resource`], [`audit`]: the typed
+//!   binding contracts, the `#[polydat_node]` macro's support surface,
+//!   the host resource bridge, and the log sink.
+//! - [`viz`]: AST and graph visualization, re-exported from the grammar.
+//!
+//! The narrative documentation lives in the repository under
+//! `crates/polydat/docs/`, organized by the
+//! [documentation index](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/README.md);
+//! the [runtime model](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/design/runtime_model.md),
+//! the [graph compiler](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/design/graph_compiler.md),
+//! and the [engines](https://github.com/nosqlbench/polydat/blob/main/crates/polydat/docs/design/engines.md)
+//! design documents are the ones to read first.
 
 // Unit tests use round-number float literals (`3.14`, `1.57`,
 // `2.71`, …) as arbitrary fixture data. clippy's `approx_constant`

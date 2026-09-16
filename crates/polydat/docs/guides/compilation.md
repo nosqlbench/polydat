@@ -10,9 +10,9 @@ is a performance and build-size trade rather than a behaviour switch.
 
 | Level   | Mechanism                 | Measured, per cycle of an eleven-node graph | Feature |
 |---------|---------------------------|--------------------------------------------:|---------|
-| Phase 1 | Pull-through interpreter  | 441.83 ns                                   | always  |
-| Phase 2 | Compiled u64 closures     | 121.05 ns, 3.65× faster than Phase 1        | always  |
-| Phase 3 | Native segments, closures elsewhere | 76.104 ns, 5.81× faster than Phase 1 | `jit`   |
+| Phase 1 | Pull-through interpreter  | 322.25 ns                                   | always  |
+| Phase 2 | Compiled u64 closures     | 71.006 ns, 4.54× faster than Phase 1        | always  |
+| Phase 3 | Native segments, closures elsewhere | 25.347 ns, 12.71× faster than Phase 1 | `jit`   |
 
 The measured column is the reference run recorded in
 [Engine-ladder performance](performance.md): one graph, one machine, one

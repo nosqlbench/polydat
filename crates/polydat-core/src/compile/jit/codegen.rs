@@ -1120,7 +1120,7 @@ extern "C" fn jit_str_concat(
     guarded(|| unsafe {
         let words = std::slice::from_raw_parts(pairs, 2 * n as usize);
         write_str_entry(scratch, base, buffer, out_slot, |v| {
-            for pair in words.chunks_exact(2) {
+            for pair in words.as_chunks::<2>().0 {
                 // SAFETY: each pair was published by its producing step
                 // into storage alive until that step reruns (axioms S3,
                 // S4), and the wire is a string.

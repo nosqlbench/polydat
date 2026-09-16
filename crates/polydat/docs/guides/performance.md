@@ -135,48 +135,48 @@ same four `u64` values as P1. It also checks all bounded outputs.
 
 ## Local reference result
 
-The following run was recorded on 2026-09-10. Each interval is Criterion's
+The following run was recorded on 2026-09-14. Each interval is Criterion's
 reported confidence interval; the middle value is the point estimate. Because
 one benchmark element is one complete graph cycle, `Melem/s` is reported here as
 million cycles per second.
 
 | Level | Time per cycle | Throughput | Speed relative to P1 |
 | --- | ---: | ---: | ---: |
-| P1 interpreter | 441.83 ns `[433.52, 451.01]` | 2.263 M cycles/s `[2.217, 2.307]` | 1.00× |
-| P2 closures | 121.05 ns `[119.64, 122.51]` | 8.261 M cycles/s `[8.162, 8.358]` | 3.65× |
-| P3 native segments | 76.104 ns `[73.329, 79.892]` | 13.140 M cycles/s `[12.517, 13.637]` | 5.81× |
-| pure native code | 75.942 ns `[74.665, 77.382]` | 13.168 M cycles/s `[12.923, 13.393]` | 5.82× |
+| P1 interpreter | 322.25 ns `[322.13, 322.38]` | 3.103 M cycles/s `[3.102, 3.104]` | 1.00× |
+| P2 closures | 71.006 ns `[70.958, 71.057]` | 14.083 M cycles/s `[14.073, 14.093]` | 4.54× |
+| P3 native segments | 25.347 ns `[25.332, 25.364]` | 39.452 M cycles/s `[39.426, 39.475]` | 12.71× |
+| pure native code | 14.212 ns `[14.181, 14.250]` | 70.363 M cycles/s `[70.174, 70.517]` | 22.67× |
 
 For this graph, moving from typed node dispatch to flat-slot closures removes
-most of the execution cost. Native lowering then provides another 1.59× over
+most of the execution cost. Native lowering then provides another 2.80× over
 P2. Every node of this graph lowers, so P3 is one native segment; pure native
-code is the same function with a clean flag per node, and the two rungs
+code is the same function without a clean flag per step, and the two rungs
 differ in that bookkeeping and in how each keeps a nondeterministic node or a
-side channel current. These are end-to-end cycle measurements, including input copies
-and four output reads, rather than isolated instruction timings.
+side channel current. These are end-to-end cycle measurements, including
+input copies and four output reads, rather than isolated instruction timings.
 
 Reference environment:
 
-- AMD Ryzen 9 3900X, 12 cores and 24 logical processors;
-- Windows NT 10.0.26200.0, `x86_64-pc-windows-msvc`;
-- Rust and Cargo 1.96.0, optimized `bench` profile;
-- Cranelift 0.116.1, the engine parity step 7 tree; and
+- Intel Xeon Platinum 8375C at 2.90 GHz, 64 cores and 128 logical
+  processors across two sockets;
+- Linux 6.8.0-1047-aws, `x86_64-unknown-linux-gnu`;
+- Rust and Cargo 1.98.0, optimized `bench` profile with thin LTO;
+- Cranelift 0.116.1, the 0.3.0 release tree at commit b3a7fa5; and
 - 60 samples per level after a two-second warm-up, with a three-second
-  measurement window.
+  measurement window, on an otherwise idle machine.
 
 This graph uses scalar `u64` operations. The P3 result demonstrates native
 machine-code lowering, not SIMD auto-promotion.
 
-The previous record, from 2026-08-21 on the same machine, read 398.66 ns,
-93.855 ns, and 45.923 ns for P1, P2, and native code. Two things changed in
-the code between the records: since 2026-09-09 every compiled kernel carries
-one passthrough step per input, so that the same source yields the same
-graph on every engine, and since 2026-09-10 every engine catches a node's
-failure at the step boundary and attributes it (engine parity, step 6). The
-rest is the machine: native timings drifted between 57 ns and 76 ns across
-runs on the day of this record, and the step 4 tree, benchmarked in the same
-hour, measured 136 ns for P2 and 57 ns for native code. Compare rungs within
-one run, not runs across days.
+The previous record, from 2026-09-10 on an AMD Ryzen 9 3900X under Windows,
+read 441.83 ns, 121.05 ns, 76.104 ns, and 75.942 ns for P1, P2, P3, and
+pure native code, with P3 at 5.81× P1. The machine changed between the
+records, so the absolute times are not comparable; the ratios moved for
+reasons in the code as well. Since 2026-09-13 every node with a kit lowers
+natively, native code that calls no helper runs without the failure-catching
+trampoline, and the hybrid kernel schedules its constant steps first. On the
+earlier machine, native timings drifted between 57 ns and 76 ns across runs
+in one day. Compare rungs within one run, not runs across days or machines.
 
 ## The tile ladder
 
@@ -186,11 +186,30 @@ cases: the reading's wires with no tile, a one-hole floor, the document
 without its projection, the document as written with a four-tuple
 projection, and a twenty-hole variant. Its design, its baseline, and the
 measurement after each step of the rendering work are recorded in
-[Native Tile Rendering](../design/tile_native_rendering.md) §6. The last
-paired run there, on this machine on 2026-09-11, put the document with its
-projection at 7949 ns on P1, 7104 on P2, and 6693 on P3, from 18810, 17479,
-and 14851 before the work began. The same drift caveat applies: compare
-rungs within one run.
+[Native Tile Rendering](../design/tile_native_rendering.md) §6.
+
+The current record, taken on 2026-09-14 in the same session as the engine
+ladder above, on the same machine and tree. Each entry is Criterion's point
+estimate in nanoseconds per cycle. Pure native code now runs every case,
+since every node lowers; when the tile work was measured it ran the
+one-hole case alone.
+
+| Case | P1 interpreter | P2 closures | P3 native segments | pure native |
+| --- | ---: | ---: | ---: | ---: |
+| `reading` | 1490 | 1145 | 1073 | 1049 |
+| `one_hole` | 190 | 140 | 141 | 136 |
+| `flat` | 2389 | 1518 | 1401 | 1365 |
+| `projected` | 3732 | 2906 | 2675 | 2651 |
+| `wide` | 4000 | 2877 | 2349 | 2312 |
+
+Taking each case less `reading`: the seven-hole `flat` document costs about
+330 ns on P3 and 900 ns on P1, under 50 ns and 130 ns per hole; the
+twenty-hole `wide` document costs 1.3 µs on P3, 64 ns per hole; and the
+four-tuple projection adds 1.3 µs on P3 over `flat`, about 320 ns per tuple.
+The last paired run on the earlier machine, on 2026-09-11, put `projected`
+at 7949 ns on P1, 7104 on P2, and 6693 on P3, from 18810, 17479, and 14851
+before the work began. The same drift caveat applies: compare rungs within
+one run.
 
 ## Run it locally
 

@@ -11,23 +11,28 @@
 
 [package]
 name = "polydat-nodes"
-version = "0.2.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Polydat node library: hashing, sampling, strings, encodings, noise, vectors, and more"
 keywords = ["nosqlbench", "workload", "benchmark", "data-generation"]
 categories = ["simulation"]
-repository = "https://github.com/nosqlbench/polydat"
-homepage = "https://github.com/nosqlbench/polydat"
+repository.workspace = true
+homepage.workspace = true
 documentation = "https://docs.rs/polydat-nodes"
 readme = "README.md"
+
+# docs.rs builds with every feature so the native tier and the
+# optional integrations are documented.
+[package.metadata.docs.rs]
+all-features = true
 
 [lib]
 doctest = false
 
 [dependencies]
-polydat-core = { path = "../polydat-core", version = "0.2.0", default-features = false }
-polydat-derive = { path = "../polydat-derive", version = "0.2.0" }
+polydat-core.workspace = true
+polydat-derive.workspace = true
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 sha2 = "0.10"
 md-5 = "0.10"

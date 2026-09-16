@@ -11,16 +11,21 @@
 
 [package]
 name = "polydat-core"
-version = "0.2.0"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Polydat runtime: value model, graph compiler, execution engines, kernels"
 keywords = ["nosqlbench", "workload", "benchmark", "data-generation"]
 categories = ["simulation"]
-repository = "https://github.com/nosqlbench/polydat"
-homepage = "https://github.com/nosqlbench/polydat"
+repository.workspace = true
+homepage.workspace = true
 documentation = "https://docs.rs/polydat-core"
 readme = "README.md"
+
+# docs.rs builds with every feature so the native tier and the
+# optional integrations are documented.
+[package.metadata.docs.rs]
+all-features = true
 
 [lib]
 # No doctests: the workspace suite runs under nextest, and the
@@ -28,8 +33,8 @@ readme = "README.md"
 doctest = false
 
 [dependencies]
-polydat-derive = { path = "../polydat-derive", version = "0.2.0" }
-polydat-grammar = { path = "../polydat-grammar", version = "0.2.0" }
+polydat-derive.workspace = true
+polydat-grammar.workspace = true
 # Token-pasting for the macro-generated matrix-completion adapter
 # family (`library/polyfill_complete.rs`).
 paste = "1"
