@@ -691,13 +691,14 @@ impl Value {
         }
         matches!(
             (value_type, slot_type),
-            // Legacy bit-stuffed forms (pre-alignment producers may
-            // still emit U64 storage for signed slots during the
-            // honest-I64 migration). U8/U16 zero-extend into U64
-            // storage; F16 rides its bit pattern in U64 like F32.
+            // Bit-stuffed forms: U8/U16/U32 zero-extend into U64
+            // storage, the signed narrow types may still arrive as
+            // U64 storage from a pre-alignment producer, and F32 and
+            // F16 ride their bit patterns in U64 (`Wire for f32` and
+            // `Wire for f16` inject them so).
             (PortType::U64, PortType::U32 | PortType::I64 | PortType::I32
                 | PortType::U8 | PortType::U16 | PortType::I8 | PortType::I16
-                | PortType::F16)
+                | PortType::F32 | PortType::F16)
                 | (PortType::F64, PortType::F32 | PortType::F16)
                 // Honest signed carrier: I64 storage serves the
                 // I64 slot and the sign-extended narrow signed
@@ -2423,5 +2424,26 @@ impl<'a> ValueRef<'a> {
             ValueRef::None => Value::None.to_json_value(),
             ValueRef::Other(v) => v.to_json_value(),
         }
+    }
+}
+
+#[cfg(test)]
+mod satisfies_slot_tests {
+    use super::*;
+
+    /// A float node output rides its bit pattern in `Value::U64`
+    /// (`Wire for f32` / `Wire for f16` inject it so), and a host may
+    /// write the materialised `Value::F64` instead; a float slot
+    /// accepts both, and a `U64` slot does not accept a float.
+    #[test]
+    fn float_slots_accept_the_bit_stuffed_and_materialised_forms() {
+        let f32_bits = Value::U64(1.5f32.to_bits() as u64);
+        let f16_bits = Value::U64(half::f16::from_f32(1.5).to_bits() as u64);
+        assert!(f32_bits.satisfies_slot(PortType::F32));
+        assert!(f16_bits.satisfies_slot(PortType::F16));
+        assert!(Value::F64(1.5).satisfies_slot(PortType::F32));
+        assert!(Value::F64(1.5).satisfies_slot(PortType::F16));
+        assert!(!Value::F64(1.5).satisfies_slot(PortType::U64));
+        assert!(!Value::Str("1.5".into()).satisfies_slot(PortType::F32));
     }
 }

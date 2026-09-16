@@ -30,7 +30,7 @@ the catalog where it can heal a mismatch.
 | `F32`     | 32-bit float    | `Value::U64` (as `f32::to_bits() as u64`) | Bit-stuffed; widens to `F64` |
 | `F16`     | 16-bit float    | `Value::U64` (as `f16::to_bits() as u64`) | binary16; widens exactly to F32/F64 |
 | `U128`/`I128` | 128-bit int | `Value::U128`/`I128(Bits128)` | Two u64 limbs (keeps `Value` at align 8); no named native lowering — a closure on the closure tier, a slot call of the kit on the native engine |
-| `Reg128`, `RegI8x16`, `RegI16x8`, `RegI32x4`, `RegI64x2`, `RegF16x8`, `RegF32x4`, `RegF64x2` | 128-bit SIMD word | `Value::Reg128(Bits128, RegLanes)` | One register word under 8 lane-views; reg→reg is a free bitcast retag (alignment §8.4) |
+| `Reg128`, `RegI8x16`, `RegI16x8`, `RegI32x4`, `RegI64x2`, `RegF16x8`, `RegF32x4`, `RegF64x2` | 128-bit SIMD word | `Value::Reg128(Bits128, RegLanes)` | One register word under 8 lane-views; reg→reg is a free bitcast retag (alignment §3) |
 | `Bool`    | logical          | `Value::Bool(bool)` | Distinct runtime variant |
 | `Str`     | UTF-8 string     | `Value::Str(Arc<str>)` | Cheap-clone via Arc |
 | `Bytes`   | raw bytes        | `Value::Bytes(Arc<[u8]>)` | Cheap-clone via Arc |
@@ -131,9 +131,9 @@ float and the canonical widening target. `F32` and `F16` are
 `f32::to_bits() as u64` in `Value::U64` (and `F16` stores its
 16-bit pattern the same way), so they cost one slot and JIT like
 integers. A *host-written* float slot may instead arrive as a
-materialised `Value::F64`; [`Value::satisfies_slot`] accepts the
-materialised `Value::F64` for both, and the bit-stuffed
-`Value::U64` form for `F16` (§4).
+materialised `Value::F64`; [`Value::satisfies_slot`] accepts both
+forms for both: the bit-stuffed `Value::U64` a node produces
+and the materialised `Value::F64` a host writes (§4).
 
 - **`F128` is absent** — stable Rust has no `f128` carrier, so the
   scalar float set stops at `F64` (alignment §8.1).

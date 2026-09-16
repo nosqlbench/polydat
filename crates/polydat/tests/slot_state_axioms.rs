@@ -147,10 +147,91 @@ fn s2_typed_accessor_rejects_wrong_lane_type() {
     assert!(r.is_err(), "f32 scratch must not read as i32");
 }
 
-/// S10 — every `from_raw_parts` in the workspace's polydat crates
-/// sits in the enumerated allowlist. Anything else is a new
-/// Ref-deref unsafe site that must be brought under the axioms
-/// (SAFETY comment citing S3/S4) and added here deliberately.
+/// The crates a source tripwire scans: every crate of the workspace,
+/// so a site that moves between crates stays under the scan.
+const WORKSPACE_CRATES: &[&str] = &[
+    "polydat",
+    "polydat-core",
+    "polydat-nodes",
+    "polydat-grammar",
+    "polydat-derive",
+];
+
+/// Every `.rs` file under a workspace crate's `src/` whose text
+/// contains one of `needles`, as `<crate>/src/<path>` with forward
+/// slashes.
+fn workspace_sources_containing(needles: &[&str]) -> Vec<String> {
+    let crates = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("the facade crate sits under crates/")
+        .to_path_buf();
+    let mut hits = Vec::new();
+    for name in WORKSPACE_CRATES {
+        let root = crates.join(name).join("src");
+        assert!(
+            root.is_dir(),
+            "workspace crate source missing: {}",
+            root.display()
+        );
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("read_dir") {
+                let path = entry.expect("entry").path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path).expect("read");
+                    if needles.iter().any(|n| text.contains(n)) {
+                        let rel = path
+                            .strip_prefix(&crates)
+                            .unwrap()
+                            .to_string_lossy()
+                            .replace('\\', "/");
+                        hits.push(rel);
+                    }
+                }
+            }
+        }
+    }
+    hits.sort();
+    hits
+}
+
+/// A source tripwire: every file containing one of `needles` is in
+/// `allow`, and every `allow` entry still names a file that contains
+/// one, so the allowlist neither leaks a new site nor goes stale.
+fn assert_tripwire(what: &str, needles: &[&str], allow: &[(&str, &str)], advice: &str) {
+    let hits = workspace_sources_containing(needles);
+    let offending: Vec<&String> = hits
+        .iter()
+        .filter(|rel| !allow.iter().any(|(f, _)| rel == f))
+        .collect();
+    assert!(
+        offending.is_empty(),
+        "{what} tripwire: a site outside the allowlist ({advice}):\n{}",
+        offending
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    let stale: Vec<&str> = allow
+        .iter()
+        .map(|(f, _)| *f)
+        .filter(|f| !hits.iter().any(|h| h == f))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "{what} tripwire: an allowlist entry names a file with no such site \
+         (the scan or the entry is stale):\n{}",
+        stale.join("\n"),
+    );
+}
+
+/// S10 — every `from_raw_parts` in the workspace's crates sits in
+/// the enumerated allowlist. Anything else is a new Ref-deref unsafe
+/// site that must be brought under the axioms (SAFETY comment citing
+/// S3/S4) and added here deliberately.
 // Miri runs with FS isolation; the tripwire is a source scan, not
 // an aliasing concern — native test runs cover it.
 #[cfg_attr(miri, ignore)]
@@ -160,56 +241,49 @@ fn s10_from_raw_parts_tripwire() {
     let allow: &[(&str, &str)] = &[
         // SliceArc's own borrow projection — predates the axioms,
         // governed by SliceArc's owner-lifetime contract.
-        ("src/ast.rs", "SliceArc as_slice"),
+        ("polydat-core/src/ast.rs", "SliceArc as_slice"),
         // JIT extern helpers reading node-owned const tables baked
         // at compile time (retain_nodes keeps them alive), and the
         // slot-call helper's view of the native frame and the state's
         // scratch (compiled_handles.md §6).
         (
-            "src/compile/jit/codegen.rs",
+            "polydat-core/src/compile/jit/codegen.rs",
             "extern const-table reads; slot-call frames",
         ),
         // Dataset accessor reading an mmap-backed uniform facet
         // (vectordata owner-lifetime contract).
-        ("src/library/vectors.rs", "dataset facet view"),
+        ("polydat-core/src/library/vectors.rs", "dataset facet view"),
         // The one place a `Ref2` pair is dereferenced on the way out of
         // the compiled tier (S7): the boundary decode, under S3/S4.
-        ("src/compile/marshal.rs", "reference pair decode"),
+        (
+            "polydat-core/src/compile/marshal.rs",
+            "reference pair decode",
+        ),
         // A copy step reads its producer's pair into its own scratch
         // (S3: pairs are never forwarded).
-        ("src/compile/assembly.rs", "reference copy into own scratch"),
+        (
+            "polydat-core/src/compile/assembly.rs",
+            "reference copy into own scratch",
+        ),
         // A string assertion reads its producer's pair before copying
         // it into its own scratch (S3).
-        ("src/library/assertions.rs", "string assertion read"),
+        (
+            "polydat-core/src/library/assertions.rs",
+            "string assertion read",
+        ),
+        // The slot kit the node macro emits reads a `Ref2` input's pair
+        // as a borrowed view for the body, under S3/S4: the producer's
+        // storage outlives the call (compiled_handles.md §6).
+        (
+            "polydat-derive/src/lib.rs",
+            "the emitted slot kit's pair view",
+        ),
     ];
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut offending = Vec::new();
-    let mut stack = vec![root.clone()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).expect("read_dir") {
-            let path = entry.expect("entry").path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.extension().is_some_and(|e| e == "rs") {
-                let text = std::fs::read_to_string(&path).expect("read");
-                if text.contains("from_raw_parts") {
-                    let rel = path
-                        .strip_prefix(root.parent().unwrap())
-                        .unwrap()
-                        .to_string_lossy()
-                        .replace('\\', "/");
-                    if !allow.iter().any(|(f, _)| rel == *f) {
-                        offending.push(rel);
-                    }
-                }
-            }
-        }
-    }
-    assert!(
-        offending.is_empty(),
-        "S10 tripwire: from_raw_parts outside the allowlist (bring the \
-         site under the slot-state axioms and add it here deliberately):\n{}",
-        offending.join("\n"),
+    assert_tripwire(
+        "S10",
+        &["from_raw_parts"],
+        allow,
+        "bring the site under the slot-state axioms and add it here deliberately",
     );
 }
 
@@ -228,53 +302,39 @@ fn no_thread_local_value_storage_tripwire() {
     let allow: &[(&str, &str)] = &[
         // The longjmp target while native code runs: control flow for
         // the panic path, holding no value.
-        ("src/compile/jit/codegen.rs", "native panic return target"),
+        (
+            "polydat-core/src/compile/jit/codegen.rs",
+            "native panic return target",
+        ),
         // The binding name a node is built under, for attribution
         // during one synchronous build call.
-        ("src/dsl/factory.rs", "build-time attribution context"),
+        (
+            "polydat-core/src/dsl/factory.rs",
+            "build-time attribution context",
+        ),
         // A flag that a node eval runs under the enrichment catch, so
         // the panic hook stays quiet.
-        ("src/kernel/engines.rs", "panic-capture flag"),
+        ("polydat-core/src/kernel/engines.rs", "panic-capture flag"),
         // The directory relative data-file paths resolve against, set
         // for the duration of one compile.
-        ("src/library/datafile.rs", "compile-time base directory"),
+        (
+            "polydat-core/src/library/datafile.rs",
+            "compile-time base directory",
+        ),
         // The rows a side-channel node emitted, a sink the harness
         // drains; no kernel reads them back.
-        ("src/library/emit.rs", "side-channel row sink"),
+        ("polydat-nodes/src/emit.rs", "side-channel row sink"),
         // The entropy state of the nondeterministic random nodes.
-        ("src/library/random.rs", "entropy source"),
+        ("polydat-nodes/src/random.rs", "entropy source"),
         // The calling thread's own numeric id, a fact about the
         // thread that `thread_id` reports, extracted once per thread.
-        ("src/library/context.rs", "the thread's own id"),
+        ("polydat-core/src/library/context.rs", "the thread's own id"),
     ];
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut offending = Vec::new();
-    let mut stack = vec![root.clone()];
-    while let Some(dir) = stack.pop() {
-        for entry in std::fs::read_dir(&dir).expect("read_dir") {
-            let path = entry.expect("entry").path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.extension().is_some_and(|e| e == "rs") {
-                let text = std::fs::read_to_string(&path).expect("read");
-                if text.contains("thread_local!") || text.contains("#[thread_local]") {
-                    let rel = path
-                        .strip_prefix(root.parent().unwrap())
-                        .unwrap()
-                        .to_string_lossy()
-                        .replace('\\', "/");
-                    if !allow.iter().any(|(f, _)| rel == *f) {
-                        offending.push(rel);
-                    }
-                }
-            }
-        }
-    }
-    assert!(
-        offending.is_empty(),
-        "thread-local tripwire: a thread_local! outside the allowlist (no value, \
-         pointer, or state is stored per thread; see compiled_handles.md §3):\n{}",
-        offending.join("\n"),
+    assert_tripwire(
+        "thread-local",
+        &["thread_local!", "#[thread_local]"],
+        allow,
+        "no value, pointer, or state is stored per thread; see compiled_handles.md §3",
     );
 }
 

@@ -326,8 +326,9 @@ citations a SAFETY comment or a test needs are:
   run, which R1 makes the output's own lifetime.
 - **S7** — one dereference, in the closure or the boundary decode,
   never in generated code. *Tripwire: S10's source scan lists
-  `compile::marshal`, the copy step, the string assertion, and the
-  slot-call helper's frame view in `jit/codegen.rs` as the only
+  `compile::marshal`, the copy step, the string assertion, the
+  slot-call helper's frame view in `jit/codegen.rs`, and the pair view
+  the node macro emits in its slot kit as the only
   `from_raw_parts` sites outside the vector substrate.*
 - **S8** — P1 is the oracle. *Tripwire: `tests/handle_tiers.rs`, the
   random and corpus differentials over every tier, and
