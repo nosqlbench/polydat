@@ -274,6 +274,7 @@ impl PolydatKernel {
         output_map: HashMap<String, (usize, usize)>,
         source: &str,
         context: &str,
+        ledger: Arc<crate::kernel::CompileLedger>,
     ) -> Self {
         let coord_count = input_names.len();
         let input_defs: Vec<InputDef> = input_names
@@ -299,6 +300,7 @@ impl PolydatKernel {
             context,
             None,
             false,
+            ledger,
         )
         .unwrap()
     }
@@ -329,6 +331,7 @@ impl PolydatKernel {
         context: &str,
         log: Option<&mut crate::dsl::events::CompileEventLog>,
         strict: bool,
+        ledger: Arc<crate::kernel::CompileLedger>,
     ) -> Result<Self, String> {
         let mut program = PolydatProgram::with_inputs(
             nodes,
@@ -339,6 +342,7 @@ impl PolydatKernel {
             output_order,
             source,
             context,
+            ledger,
         );
         // Mark const bindings BEFORE fold runs so the compile-time
         // check (Plan A) can validate each one's upstream chain.

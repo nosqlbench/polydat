@@ -139,7 +139,7 @@ fn evaluate_spec_internal(spec_text: &str, kernel: &dyn Lookup) -> Result<Vec<Va
     // (`a..b`, `a..=b`, `a..b..s`, `a..=b..s`). Bounds and
     // step are Polydat const expressions evaluated at this
     // (post-interpolation) point.
-    if let Some(values) = try_eval_range(&interpolated)? {
+    if let Some(values) = try_eval_range(&interpolated, kernel.ledger())? {
         return Ok(values);
     }
     // SRD-18c Layer 3 / SRD-18e Push 7: named generators.
@@ -166,7 +166,7 @@ fn evaluate_spec_internal(spec_text: &str, kernel: &dyn Lookup) -> Result<Vec<Va
     if let Some(values) = try_eval_param_partitions(&interpolated, kernel)? {
         return Ok(values);
     }
-    match crate::dsl::compile::eval_const_expr(&interpolated) {
+    match crate::dsl::compile::eval_const_expr_for(&interpolated, kernel.ledger()) {
         // SRD-18f relaxed source resolution: a resolved value is
         // peeled one level if it has an iteration interior
         // (native vector, JSON array, PartitionList per SRD-71,
@@ -316,7 +316,7 @@ fn eval_element_value(expr: &str, kernel: &dyn Lookup) -> Result<Value, String> 
             )
         });
     }
-    crate::dsl::compile::eval_const_expr(e)
+    crate::dsl::compile::eval_const_expr_for(e, kernel.ledger())
         .map_err(|err| format!("list element `{e}` failed to evaluate: {err}"))
 }
 
@@ -436,7 +436,7 @@ pub fn pre_evaluate_clause(
     })?;
 
     // Push 3: range operator on the pre-evaluation path too.
-    if let Some(values) = try_eval_range(&interpolated)? {
+    if let Some(values) = try_eval_range(&interpolated, parent_kernel.ledger())? {
         return Ok(values);
     }
     // Push 7 / 9 / 8 — same generator / set-op / sequencer
@@ -463,41 +463,42 @@ pub fn pre_evaluate_clause(
     if let Some(values) = try_eval_param_partitions(&interpolated, parent_kernel)? {
         return Ok(values);
     }
-    let value_str = match crate::dsl::compile::eval_const_expr(&interpolated) {
-        Ok(Value::Str(s)) => s.to_string(),
-        // SRD 71: `<param>.partitions` and `partitions(spec, ...)`
-        // both evaluate to a `PartitionList` Ext value. Unpack
-        // its entries into a vec of individual `Partition`
-        // values so the for-clause iterates partition-by-
-        // partition.
-        Ok(ref v) if v.as_partition_list().is_some() => {
-            let list = v.as_partition_list().unwrap();
-            return Ok(list
-                .as_slice()
-                .iter()
-                .map(|p| Value::from_partition(*p))
-                .collect());
-        }
-        Ok(other) => return Ok(vec![other]),
-        // Mirrors `evaluate_spec`'s gating: only fall back to
-        // parse_list_with_types when the text is unambiguously a
-        // literal list. See `looks_like_literal_list` for the
-        // rationale.
-        Err(eval_err) => {
-            if looks_like_literal_list(&interpolated) {
-                interpolated
-            } else {
-                return Err(format!(
-                    "for_each clause expression failed to evaluate: {eval_err}\n\
+    let value_str =
+        match crate::dsl::compile::eval_const_expr_for(&interpolated, parent_kernel.ledger()) {
+            Ok(Value::Str(s)) => s.to_string(),
+            // SRD 71: `<param>.partitions` and `partitions(spec, ...)`
+            // both evaluate to a `PartitionList` Ext value. Unpack
+            // its entries into a vec of individual `Partition`
+            // values so the for-clause iterates partition-by-
+            // partition.
+            Ok(ref v) if v.as_partition_list().is_some() => {
+                let list = v.as_partition_list().unwrap();
+                return Ok(list
+                    .as_slice()
+                    .iter()
+                    .map(|p| Value::from_partition(*p))
+                    .collect());
+            }
+            Ok(other) => return Ok(vec![other]),
+            // Mirrors `evaluate_spec`'s gating: only fall back to
+            // parse_list_with_types when the text is unambiguously a
+            // literal list. See `looks_like_literal_list` for the
+            // rationale.
+            Err(eval_err) => {
+                if looks_like_literal_list(&interpolated) {
+                    interpolated
+                } else {
+                    return Err(format!(
+                        "for_each clause expression failed to evaluate: {eval_err}\n\
                      spec: {interpolated}\n\
                      If this was meant as a literal list (e.g. `1, 10, 100`), \
                      it should contain only literal values separated by commas. \
                      If it was meant as an expression, fix the underlying \
                      evaluation error."
-                ));
+                    ));
+                }
             }
-        }
-    };
+        };
     Ok(parse_list_with_types(&value_str))
 }
 
@@ -624,7 +625,10 @@ fn is_valid_ident(s: &str) -> bool {
 /// - `Err(...)` when the form matches but evaluation fails
 ///   (bound non-numeric, step is zero, bounds diverge from
 ///   step direction, etc.).
-fn try_eval_range(text: &str) -> Result<Option<Vec<Value>>, String> {
+fn try_eval_range(
+    text: &str,
+    ledger: &std::sync::Arc<crate::kernel::CompileLedger>,
+) -> Result<Option<Vec<Value>>, String> {
     let trimmed = text.trim();
     let chars: Vec<char> = trimmed.chars().collect();
 
@@ -696,10 +700,10 @@ fn try_eval_range(text: &str) -> Result<Option<Vec<Value>>, String> {
         _ => unreachable!(),
     };
 
-    let start_val = eval_range_segment(&start_text, "range start")?;
-    let end_val = eval_range_segment(&mid_text, "range end")?;
+    let start_val = eval_range_segment(&start_text, "range start", ledger)?;
+    let end_val = eval_range_segment(&mid_text, "range end", ledger)?;
     let step_val = match step_text {
-        Some(s) => Some(eval_range_segment(&s, "range step")?),
+        Some(s) => Some(eval_range_segment(&s, "range step", ledger)?),
         None => None,
     };
 
@@ -708,12 +712,16 @@ fn try_eval_range(text: &str) -> Result<Option<Vec<Value>>, String> {
     )?))
 }
 
-fn eval_range_segment(text: &str, what: &str) -> Result<Value, String> {
+fn eval_range_segment(
+    text: &str,
+    what: &str,
+    ledger: &std::sync::Arc<crate::kernel::CompileLedger>,
+) -> Result<Value, String> {
     let trimmed = text.trim();
     if trimmed.is_empty() {
         return Err(format!("range expression: {what} is empty"));
     }
-    crate::dsl::compile::eval_const_expr(trimmed)
+    crate::dsl::compile::eval_const_expr_for(trimmed, ledger)
         .map_err(|e| format!("range expression: {what} '{trimmed}' did not const-fold — {e}"))
 }
 
@@ -1903,8 +1911,11 @@ where
             let kernel = parent.materialize_subscope(canonical.program().clone(), &bindings_owned);
             let interpolated = interpolate_via_kernel(predicate, &kernel)
                 .map_err(|e| format!("comprehension filter '{predicate}': {e}"))?;
-            let result = crate::dsl::compile::eval_const_expr(&interpolated)
-                .map_err(|e| format!("comprehension filter '{predicate}': {e}"))?;
+            let result = crate::dsl::compile::eval_const_expr_for(
+                &interpolated,
+                canonical.program().ledger(),
+            )
+            .map_err(|e| format!("comprehension filter '{predicate}': {e}"))?;
             // Polydat comparison operators return U64 (0/1); accept
             // any truthy/falsy scalar uniformly, matching the
             // do-loop condition handler.

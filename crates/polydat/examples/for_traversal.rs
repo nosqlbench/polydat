@@ -7,8 +7,6 @@
 //! `over` an element is narrowed per activation, and its slice sets the
 //! activation's cycles.
 
-use polydat::kernel::programs_built;
-
 fn main() {
     let mut kernel = polydat::dsl::compile_polydat_kernel(
         r#"
@@ -41,7 +39,8 @@ fn main() {
     // The body compiles for the engine on the first activation; every
     // activation after it shares that program.
     drop(stream.activate(0).expect("first activation"));
-    let built_before = programs_built();
+    let ledger = kernel.ledger().clone();
+    let built_before = ledger.programs();
     println!();
     println!("act  p          scale  cycles  first row  first v");
     for index in 0..stream.len() {
@@ -60,6 +59,6 @@ fn main() {
     println!();
     println!(
         "programs built after the first activation: {}",
-        programs_built() - built_before
+        ledger.programs() - built_before
     );
 }

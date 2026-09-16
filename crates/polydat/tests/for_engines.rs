@@ -10,7 +10,7 @@
 //! activation computes; and a body's own traversals open from that
 //! activation, so every level of a nest runs compiled.
 
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 
 use polydat::ast::Value;
 use polydat::dsl::compile::{CompileOptions, compile_polydat_with_engine};
@@ -18,13 +18,6 @@ use polydat::dsl::compile_polydat;
 use polydat::kernel::PolydatKernel;
 use polydat::kernel::activation::TraversalStream;
 use polydat::{Engine, JitMode, Kernel, Provenance};
-
-/// The tests share the process-wide program build counter, so they run
-/// one at a time.
-fn serial() -> MutexGuard<'static, ()> {
-    static LOCK: Mutex<()> = Mutex::new(());
-    LOCK.lock().unwrap_or_else(|e| e.into_inner())
-}
 
 fn compile(src: &str) -> PolydatKernel {
     compile_polydat(src).unwrap_or_else(|e| panic!("compile failed: {e}\n{src}"))
@@ -74,7 +67,6 @@ const SWEEP: &str = "input cycle: u64\nbase := hash(cycle)\nfor k in 1..4, limit
 
 #[test]
 fn activations_on_every_engine_compute_what_the_interpreters_do() {
-    let _serial = serial();
     for engine in engines() {
         let (want, got) = traces(SWEEP, &[7], &["f", "g"], engine);
         assert_eq!(want.len(), 18);
@@ -86,7 +78,6 @@ const SLICED: &str = "input cycle: u64\nfor p in partitions(\"*/4\", 1000) {\n  
 
 #[test]
 fn cursors_narrow_and_iterate_their_slice_on_every_engine() {
-    let _serial = serial();
     for engine in engines() {
         let (want, got) = traces(SLICED, &[0], &["n", "o", "v"], engine);
         // Four partitions of 250 ordinals, one cycle per ordinal.
@@ -97,16 +88,16 @@ fn cursors_narrow_and_iterate_their_slice_on_every_engine() {
 
 #[test]
 fn a_body_compiles_once_per_engine_and_every_activation_shares_it() {
-    let _serial = serial();
     let mut k = compile(SWEEP);
     k.set_inputs(&[1]);
     let stream = k.traverse(0).unwrap();
     for engine in engines() {
         let a = stream.activation_on(0, engine).unwrap();
-        let built = polydat::kernel::programs_built();
+        let ledger = k.program().ledger().clone();
+        let built = ledger.programs();
         let b = stream.activation_on(8, engine).unwrap();
         // T2: the second activation builds nothing.
-        assert_eq!(polydat::kernel::programs_built(), built, "{engine}");
+        assert_eq!(ledger.programs(), built, "{engine}");
         assert_eq!(a.kernel.engine(), b.kernel.engine());
         let first = stream.traversal().program_on(engine).unwrap();
         let again = stream.traversal().program_on(engine).unwrap();
@@ -149,7 +140,6 @@ fn same_tier(a: Engine, b: Engine) -> bool {
 
 #[test]
 fn a_compiled_parent_opens_a_traversal_as_the_interpreter_does() {
-    let _serial = serial();
     for src in [SWEEP, SLICED] {
         let outputs: &[&str] = if src == SWEEP {
             &["f", "g"]
@@ -228,7 +218,6 @@ fn nest_on(engine: Engine, coord: u64) -> (Vec<NestRow>, Vec<Engine>) {
 
 #[test]
 fn a_nest_runs_compiled_at_every_level() {
-    let _serial = serial();
     let (want, p1) = nest_on(Engine::Interpreter(JitMode::Auto), 5);
     assert_eq!(want.len(), 8);
     assert!(p1.iter().all(|e| *e == Engine::Interpreter(JitMode::Auto)));
@@ -249,7 +238,6 @@ fn a_nest_runs_compiled_at_every_level() {
 
 #[test]
 fn a_body_with_its_own_traversal_opens_it_from_any_activation() {
-    let _serial = serial();
     let src = "input cycle: u64\nfor a in 1..3 {\n    x := u64_add(a, cycle)\n    for b in 1..3 {\n        y := u64_add(x, b)\n    }\n}\n";
     let mut k = compile(src);
     k.set_inputs(&[0]);
@@ -280,7 +268,6 @@ fn a_body_with_its_own_traversal_opens_it_from_any_activation() {
 
 #[test]
 fn a_kernel_created_from_a_compiled_program_opens_its_traversals() {
-    let _serial = serial();
     for engine in engines() {
         let root = compile_on(SWEEP, engine);
         let program = root.into_program();

@@ -333,10 +333,13 @@ for p in partitions("*/4", 1000000) {            // program A, compiled once
 Three programs exist for the life of the root program, however many
 tuples the traversal dispenses. The 4 × 20 × 50 = 4000 innermost
 activations share program C. Each activation is a fresh kernel over that
-program with its own tuple bound. `kernel::programs_built()` counts every
-program constructed in the process and `program_count(program)` counts
-the root plus one program per body at every depth, so a host can verify
-the property.
+program with its own tuple bound. Every program built for a tree is
+recorded in the tree's `CompileLedger`, reached through `ledger()` on
+the kernel or the program, and `program_count(program)` counts the root
+plus one program per body at every depth, so a host can verify the
+property. Two trees never share a ledger, whatever thread or process
+runs them; a host that wants several trees on one ledger passes it in
+`CompileOptions::ledger`.
 
 ### 5.2 Affine activation
 
@@ -408,8 +411,9 @@ comprehension grammar, `{name}` compared to a literal or another element
 and joined by `&&`, `||`, `!`, or `in [...]`, evaluate directly against
 each tuple with no kernel and no compilation; only a predicate outside
 that grammar takes the kernel path, which is likewise cached by
-interpolated text. `kernel::programs_built()` exposes the process-wide
-build count so a host can verify these properties.
+interpolated text. A source or predicate that does compile is charged
+to the ledger of the tree that opened it, so a host can verify these
+properties on the kernel it holds.
 
 Hosts may also elide a traversal whose body adds no matter beyond its
 parent. Elision is likewise host policy; the runtime provides the

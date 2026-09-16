@@ -66,7 +66,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::ast::Value;
-use crate::dsl::compile::eval_const_expr;
+use crate::dsl::compile::eval_const_expr_for;
 use crate::iteration::comprehension::ast::Comprehension;
 use crate::iteration::comprehension::eval_source::{EvalContext, SourceEval};
 use crate::iteration::comprehension::metadata::IndexFn;
@@ -744,9 +744,11 @@ where
                     message: e.to_string(),
                 }
             })?;
-            let result = eval_const_expr(&interpolated).map_err(|e| RuntimeError::FilterEval {
-                predicate: predicate.to_string(),
-                message: e.to_string(),
+            let result = eval_const_expr_for(&interpolated, self.scope.ledger()).map_err(|e| {
+                RuntimeError::FilterEval {
+                    predicate: predicate.to_string(),
+                    message: e.to_string(),
+                }
             })?;
             let keep = match result {
                 Value::Bool(b) => b,

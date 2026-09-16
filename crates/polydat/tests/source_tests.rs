@@ -724,6 +724,7 @@ fn limit_node_compiles_and_clamps_extent() {
     let options = CompileOptions {
         context: "(test)".into(),
         cursor_limit: Some(100),
+        ledger: None,
         ..CompileOptions::default()
     };
     let kernel = compile_polydat_with_options(src, &options, None).unwrap();
@@ -745,6 +746,7 @@ fn limit_node_not_inserted_when_no_limit() {
     let options = CompileOptions {
         context: "(test)".into(),
         cursor_limit: None,
+        ledger: None,
         ..CompileOptions::default()
     };
     let kernel = compile_polydat_with_options(src, &options, None).unwrap();
@@ -764,6 +766,7 @@ fn limit_larger_than_extent_preserves_extent() {
     let options = CompileOptions {
         context: "(test)".into(),
         cursor_limit: Some(1000),
+        ledger: None,
         ..CompileOptions::default()
     };
     let kernel = compile_polydat_with_options(src, &options, None).unwrap();

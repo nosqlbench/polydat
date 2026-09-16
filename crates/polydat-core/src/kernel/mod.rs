@@ -176,6 +176,7 @@ mod tests {
             Vec::new(),
             "",
             "(test)",
+            crate::kernel::CompileLedger::new(),
         ));
         let mut state = program.create_state();
 
@@ -219,6 +220,7 @@ mod tests {
             Vec::new(),
             "",
             "(test)",
+            crate::kernel::CompileLedger::new(),
         ));
         let mut state = program.create_state();
 
@@ -254,6 +256,7 @@ mod tests {
             Vec::new(),
             "",
             "(test)",
+            crate::kernel::CompileLedger::new(),
         ));
         let mut state = program.create_state();
 

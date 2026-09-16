@@ -217,17 +217,41 @@ pub(crate) struct LifecycleClasses {
     pub nondeterministic: Vec<bool>,
 }
 
-/// The immutable compiled DAG. Shared across fibers via `Arc`.
-/// Process-wide count of programs constructed. A diagnostic for the
-/// program-invariance property (SRD 113 §5.1): compiling a program with
-/// `for` bodies builds one program per body, and activation builds
-/// none. Hosts and tests read it before and after an operation.
-static PROGRAMS_BUILT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// The compile accounting of one program tree: how many programs have
+/// been built for it, on any engine, over its lifetime. A root compile
+/// mints a ledger, and every program built on the tree's behalf
+/// records into the same one: each `for` body, each engine variant of
+/// a body, and each constant expression a traversal source or
+/// predicate compiles at open. A host reads it before and after an
+/// operation to verify the program-invariance property (SRD 113 §5.1):
+/// compiling builds one program per body, and activation builds none.
+///
+/// Two trees never share a ledger, whatever thread or process runs
+/// them; two kernels over one program do. A compile charged to a
+/// ledger a host already holds is requested through
+/// [`CompileOptions::ledger`](crate::dsl::compile::CompileOptions).
+#[derive(Debug, Default)]
+pub struct CompileLedger {
+    programs: std::sync::atomic::AtomicU64,
+}
 
-/// Number of [`PolydatProgram`] values constructed so far in this
-/// process, across every compile path.
-pub fn programs_built() -> u64 {
-    PROGRAMS_BUILT.load(std::sync::atomic::Ordering::Relaxed)
+impl CompileLedger {
+    /// A fresh ledger with nothing recorded, shared as every holder
+    /// keeps it.
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self::default())
+    }
+
+    /// The programs built for this tree so far, on every engine.
+    pub fn programs(&self) -> u64 {
+        self.programs.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Record one program built.
+    pub(crate) fn record(&self) {
+        self.programs
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// Count the programs reachable from `program`: itself plus every
@@ -337,6 +361,9 @@ pub struct PolydatProgram {
     /// legacy / programmatic construction paths that bypass the
     /// parser; the DSL entry points always populate this.
     pub(crate) ast: Option<Arc<PolydatFile>>,
+    /// The ledger this program was recorded in: the root's, shared by
+    /// every program of the tree.
+    ledger: Arc<CompileLedger>,
 }
 
 unsafe impl Send for PolydatProgram {}
@@ -353,71 +380,12 @@ impl std::fmt::Debug for PolydatProgram {
 }
 
 impl PolydatProgram {
-    /// Create a program from pre-validated, topologically-sorted components.
-    /// All inputs are treated as coordinates.
-    #[allow(dead_code)]
-    pub(crate) fn new(
-        nodes: Vec<Box<dyn PolydatNode>>,
-        wiring: Vec<Vec<WireSource>>,
-        input_names: Vec<String>,
-        output_map: HashMap<String, (usize, usize)>,
-        source: &str,
-        context: &str,
-    ) -> Self {
-        PROGRAMS_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let coord_count = input_names.len();
-        let input_defs: Vec<InputDef> = input_names
-            .into_iter()
-            .map(|name| InputDef {
-                name,
-                default: Value::U64(0),
-                port_type: crate::ast::PortType::U64,
-                kind: crate::kernel::InputKind::Coordinate,
-            })
-            .collect();
-        let inventory = Self::compute_node_inventory(&nodes, &wiring);
-        let input_dependents =
-            Self::compute_dependents(&inventory.input_provenance, input_defs.len());
-        // No declaration order available — fall back to sorted by node index
-        let fallback_order: Vec<String> = {
-            let mut v: Vec<(String, usize, usize)> = output_map
-                .iter()
-                .map(|(n, &(ni, pi))| (n.clone(), ni, pi))
-                .collect();
-            v.sort_by_key(|(_, ni, pi)| (*ni, *pi));
-            v.into_iter().map(|(n, _, _)| n).collect()
-        };
-        let output_list = Self::build_output_list(&fallback_order, &output_map);
-        Self {
-            nodes,
-            wiring,
-            input_defs,
-            coord_count,
-            output_map,
-            output_list,
-            input_provenance: inventory.input_provenance,
-            input_dependents,
-            nondet_nodes: inventory.nondet_nodes,
-            side_channel_nodes: inventory.side_channel_nodes,
-            source: Arc::new(source.to_string()),
-            context: Arc::new(context.to_string()),
-            output_modifiers: HashMap::new(),
-            inherited_outputs: std::collections::HashSet::new(),
-            cursor_schemas: Vec::new(),
-            cone_mode: crate::compile::cone::JitMode::Off,
-            traversals: Vec::new(),
-            producers: Vec::new(),
-            const_outputs: std::collections::HashSet::new(),
-            write_throughs: Vec::new(),
-            ast: None,
-        }
-    }
-
-    /// Create a program with explicit input definitions and output ordering.
-    // Eight parameters describe one compiled program definition; a
+    /// Create a program with explicit input definitions and output
+    /// ordering, recorded in `ledger`.
+    // Nine parameters describe one compiled program definition; a
     // params struct belongs to the construction-protocol reshape
     // (SRD-13e), not lint cleanup — see `PolydatKernel::new_with_inputs`.
-    #[allow(dead_code, clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_inputs(
         nodes: Vec<Box<dyn PolydatNode>>,
         wiring: Vec<Vec<WireSource>>,
@@ -427,8 +395,9 @@ impl PolydatProgram {
         output_order: Vec<String>,
         source: &str,
         context: &str,
+        ledger: Arc<CompileLedger>,
     ) -> Self {
-        PROGRAMS_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        ledger.record();
         let inventory = Self::compute_node_inventory(&nodes, &wiring);
         let input_dependents =
             Self::compute_dependents(&inventory.input_provenance, input_defs.len());
@@ -455,6 +424,7 @@ impl PolydatProgram {
             const_outputs: std::collections::HashSet::new(),
             write_throughs: Vec::new(),
             ast: None,
+            ledger,
         }
     }
 
@@ -498,6 +468,11 @@ impl PolydatProgram {
     /// programs built via programmatic (non-DSL) paths.
     pub fn ast(&self) -> Option<&Arc<PolydatFile>> {
         self.ast.as_ref()
+    }
+
+    /// The compile ledger of the tree this program belongs to.
+    pub fn ledger(&self) -> &Arc<CompileLedger> {
+        &self.ledger
     }
 
     /// Find the `Statement` that defines binding `name` in this

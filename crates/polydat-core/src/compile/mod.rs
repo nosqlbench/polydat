@@ -292,6 +292,9 @@ macro_rules! impl_kernel_trait {
                 self.core.drive.stale = true;
                 std::sync::Arc::new(crate::kernel::SharedKernel(*self))
             }
+            fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger> {
+                self.core.externs.ledger()
+            }
         }
 
         impl crate::kernel::KernelInternals for $ty {

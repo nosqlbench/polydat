@@ -55,11 +55,18 @@ use crate::kernel::PolydatKernel;
 pub trait Lookup {
     /// The value `name` denotes here, if any.
     fn lookup(&self, name: &str) -> Option<Value>;
+
+    /// The compile ledger of the program tree this scope belongs to:
+    /// what a source or predicate that has to compile is charged to.
+    fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger>;
 }
 
 impl Lookup for PolydatKernel {
     fn lookup(&self, name: &str) -> Option<Value> {
         PolydatKernel::lookup(self, name)
+    }
+    fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger> {
+        self.program().ledger()
     }
 }
 
@@ -78,6 +85,9 @@ impl Lookup for Layered<'_> {
             return Some(v.clone());
         }
         self.inner.lookup(name)
+    }
+    fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger> {
+        self.inner.ledger()
     }
 }
 

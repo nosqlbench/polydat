@@ -495,6 +495,7 @@ pub fn compile_polydat_with_libs(
         strict,
         context: context.to_string(),
         cursor_limit: None,
+        ledger: None,
     };
     compile_polydat_with_options(source, &options, None)
 }
@@ -538,6 +539,7 @@ pub fn compile_polydat_with_libs_and_limit(
         strict,
         context: context.to_string(),
         cursor_limit,
+        ledger: None,
     };
     compile_polydat_with_options(source, &options, None)
 }
@@ -582,6 +584,10 @@ pub struct CompileOptions {
     pub context: String,
     /// A limit on every cursor's extent, if any.
     pub cursor_limit: Option<u64>,
+    /// The compile ledger to record this program tree in: a host that
+    /// holds one charges the compile to it; `None` mints a fresh one,
+    /// read back through the kernel's `ledger()`.
+    pub ledger: Option<std::sync::Arc<crate::kernel::CompileLedger>>,
 }
 
 /// Compile Polydat source into the interpreter's kernel under
@@ -746,8 +752,20 @@ const CONST_EXPR_CACHE_CAP: usize = 8192;
 /// program: what a comprehension source such as `partitions("*\/4", 1000)`
 /// goes through. Cached by source text, so the same text compiles once
 /// per process (SRD 113 §5.2). An expression that reaches a dynamic
-/// input is a lifecycle error.
+/// input is a lifecycle error. The compile, when there is one, is
+/// recorded in a ledger of its own; [`eval_const_expr_for`] charges
+/// it to a tree's.
 pub fn eval_const_expr(source: &str) -> Result<crate::ast::Value, EmbeddingError> {
+    eval_const_expr_for(source, &crate::kernel::CompileLedger::new())
+}
+
+/// [`eval_const_expr`] with its compile, when the text is not cached,
+/// recorded in `ledger`: what a traversal source or predicate that has
+/// to compile charges to the tree that opened it.
+pub fn eval_const_expr_for(
+    source: &str,
+    ledger: &std::sync::Arc<crate::kernel::CompileLedger>,
+) -> Result<crate::ast::Value, EmbeddingError> {
     let cache =
         CONST_EXPR_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
     if let Ok(map) = cache.lock()
@@ -755,7 +773,7 @@ pub fn eval_const_expr(source: &str) -> Result<crate::ast::Value, EmbeddingError
     {
         return Ok(v.clone());
     }
-    let result = eval_const_expr_uncached(source);
+    let result = eval_const_expr_uncached(source, ledger);
     if let Ok(v) = &result
         && let Ok(mut map) = cache.lock()
     {
@@ -767,9 +785,16 @@ pub fn eval_const_expr(source: &str) -> Result<crate::ast::Value, EmbeddingError
     result
 }
 
-fn eval_const_expr_uncached(source: &str) -> Result<crate::ast::Value, EmbeddingError> {
+fn eval_const_expr_uncached(
+    source: &str,
+    ledger: &std::sync::Arc<crate::kernel::CompileLedger>,
+) -> Result<crate::ast::Value, EmbeddingError> {
     let wrapped = format!("\nout := {source}");
     let source_owned = source.to_string();
+    let options = CompileOptions {
+        ledger: Some(ledger.clone()),
+        ..CompileOptions::default()
+    };
     // Constant-folding inside `compile_polydat` invokes node `eval`
     // for inputs-free DAGs, so any node that panics on bad data
     // (e.g. `handle_of(&Value::None)` after a failed
@@ -781,7 +806,7 @@ fn eval_const_expr_uncached(source: &str) -> Result<crate::ast::Value, Embedding
     let source_for_panic = source_owned.clone();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
         move || -> Result<crate::ast::Value, EmbeddingError> {
-            let kernel = compile_polydat(&wrapped)
+            let kernel = compile_polydat_with_options(&wrapped, &options, None)
                 .map_err(|msg| classify_compile_error(&source_owned, msg))?;
             kernel
                 .get_constant("out")
@@ -1493,6 +1518,7 @@ pub fn compile_ast_with_libs(
         strict,
         context: context.to_string(),
         cursor_limit: None,
+        ledger: None,
     };
     compile_ast_with_options(file, "", &options, None)
 }
@@ -1546,6 +1572,9 @@ pub(super) struct Compiler {
     /// compile event log so `explain tiles` can show how each hole was
     /// typed and encoded.
     pub(super) tile_events: Vec<super::events::CompileEvent>,
+    /// The compile ledger of the tree being compiled: the root's, handed
+    /// to every body compiler and to the assembler of every program.
+    pub(super) ledger: std::sync::Arc<crate::kernel::CompileLedger>,
 }
 
 /// Records a cursor whose `range(...)` bounds reference const
@@ -1586,6 +1615,7 @@ impl Compiler {
             tiles: Vec::new(),
             producers_seen: Vec::new(),
             tile_events: Vec::new(),
+            ledger: crate::kernel::CompileLedger::new(),
         }
     }
 
@@ -2110,6 +2140,8 @@ impl Compiler {
             // The body sees every module the parent resolved, its own
             // definitions included, wherever it compiles.
             child_compiler.module_cache = self.module_cache.clone();
+            // The body's program is one of the tree's.
+            child_compiler.ledger = self.ledger.clone();
             child_compiler.source_text = super::pprint::pp_file(&child);
             child_compiler.context_label = format!(
                 "{} :: for {} (line {}, col {})",
@@ -2137,6 +2169,7 @@ impl Compiler {
                 pragmas: self.pragmas.clone(),
                 modules: self.module_cache.clone(),
                 programs: std::sync::Mutex::new(std::collections::HashMap::new()),
+                ledger: self.ledger.clone(),
             };
             out.push(Traversal {
                 span: f.span,
@@ -2167,6 +2200,7 @@ impl Compiler {
         compiler.cursor_limit = body.cursor_limit;
         compiler.pragmas = body.pragmas.clone();
         compiler.module_cache = body.modules.clone();
+        compiler.ledger = body.ledger.clone();
         compile_file_on_engine(&mut compiler, &body.file, None, engine, None)
     }
 
@@ -2242,6 +2276,7 @@ impl Compiler {
         // Zero inferred inputs means all bindings are constants — valid.
 
         let mut asm = PolydatAssembler::new(self.input_names.clone());
+        asm.ledger = self.ledger.clone();
         for (name, ty) in declared_input_types(file) {
             asm.set_input_type(&name, ty);
         }
@@ -2667,6 +2702,9 @@ impl Prepared {
         }
         compiler.cursor_limit = options.cursor_limit;
         compiler.pragmas = pragmas;
+        if let Some(ledger) = &options.ledger {
+            compiler.ledger = ledger.clone();
+        }
         Prepared {
             compiler,
             required,

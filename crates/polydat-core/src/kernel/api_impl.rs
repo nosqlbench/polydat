@@ -138,6 +138,7 @@ impl Construction for PolydatKernel {
                         .clone()
                         .unwrap_or_else(|| s.label.clone()),
                     cursor_limit: s.options.cursor_limit,
+                    ledger: None,
                 };
                 crate::dsl::compile::compile_polydat_with_options(&s.body, &options, None)
                     .map_err(crate::kernel::subcontext::ContractViolation::Compile)
@@ -161,6 +162,7 @@ impl Construction for PolydatKernel {
                         .clone()
                         .unwrap_or_else(|| s.label.clone()),
                     cursor_limit: None,
+                    ledger: None,
                 };
                 crate::dsl::compile::compile_ast_with_options(&file, "", &options, None)
                     .map_err(crate::kernel::subcontext::ContractViolation::Compile)
@@ -286,6 +288,9 @@ impl crate::kernel::Kernel for PolydatKernel {
     fn into_program(self: Box<Self>) -> std::sync::Arc<dyn crate::kernel::KernelProgram> {
         PolydatKernel::into_program(*self)
     }
+    fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger> {
+        self.program().ledger()
+    }
 }
 
 impl crate::kernel::KernelInternals for PolydatKernel {
@@ -317,6 +322,9 @@ impl crate::kernel::KernelProgram for crate::kernel::PolydatProgram {
     }
     fn create_kernel(self: std::sync::Arc<Self>) -> Box<dyn crate::kernel::Kernel> {
         Box::new(PolydatKernel::from_program(self))
+    }
+    fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger> {
+        crate::kernel::PolydatProgram::ledger(self)
     }
 }
 

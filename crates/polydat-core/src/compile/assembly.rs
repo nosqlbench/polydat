@@ -215,6 +215,8 @@ pub(crate) struct ResolvedDag {
     pub(crate) const_outputs: std::collections::HashSet<String>,
     /// The cursors the program declares.
     pub(crate) cursor_schemas: Vec<crate::iteration::source::SourceSchema>,
+    /// The compile ledger every program built from this graph records in.
+    pub(crate) ledger: std::sync::Arc<crate::kernel::CompileLedger>,
 }
 
 impl ResolvedDag {
@@ -548,6 +550,10 @@ pub struct PolydatAssembler {
     /// `compile_with(Engine::Interpreter(mode))` takes its mode from the
     /// engine.
     pub(crate) jit_mode: Option<crate::compile::cone::JitMode>,
+    /// The compile ledger every program built from this assembler
+    /// records in: a fresh one unless the compiler hands down the
+    /// tree's.
+    pub(crate) ledger: std::sync::Arc<crate::kernel::CompileLedger>,
     /// The cursors the program declares (engine_parity.md, step 3), set
     /// by the DSL compiler so every kernel built from this assembler
     /// knows them.
@@ -609,6 +615,7 @@ impl PolydatAssembler {
             strict: false,
             jit_mode: None,
             cursor_schemas: Vec::new(),
+            ledger: crate::kernel::CompileLedger::new(),
         }
     }
 
@@ -817,6 +824,7 @@ impl PolydatAssembler {
             &resolved.context,
             log,
             strict,
+            resolved.ledger.clone(),
         )
         .map_err(AssemblyError::Other)?;
         if !cursors.is_empty() {
@@ -875,6 +883,7 @@ impl PolydatAssembler {
                         resolved.output_map,
                         &resolved.source,
                         &resolved.context,
+                        resolved.ledger.clone(),
                     )));
                 }
             };
@@ -908,6 +917,7 @@ impl PolydatAssembler {
                     HashMap::new(),
                     "",
                     "(fallback)",
+                    crate::kernel::CompileLedger::new(),
                 )));
             }
         };
@@ -923,6 +933,7 @@ impl PolydatAssembler {
                         resolved.output_map,
                         &resolved.source,
                         &resolved.context,
+                        resolved.ledger.clone(),
                     )));
                 }
             };
@@ -948,6 +959,7 @@ impl PolydatAssembler {
                     HashMap::new(),
                     "",
                     "(fallback)",
+                    crate::kernel::CompileLedger::new(),
                 )));
             }
         };
@@ -963,6 +975,7 @@ impl PolydatAssembler {
                         resolved.output_map,
                         &resolved.source,
                         &resolved.context,
+                        resolved.ledger.clone(),
                     )));
                 }
             };
@@ -996,6 +1009,7 @@ impl PolydatAssembler {
                     HashMap::new(),
                     "",
                     "(fallback)",
+                    crate::kernel::CompileLedger::new(),
                 )));
             }
         };
@@ -1011,6 +1025,7 @@ impl PolydatAssembler {
                         resolved.output_map,
                         &resolved.source,
                         &resolved.context,
+                        resolved.ledger.clone(),
                     )));
                 }
             };
@@ -1059,6 +1074,7 @@ impl PolydatAssembler {
             &layout.input_starts,
             &resolved.cursor_schemas,
             &shared_outputs_of(resolved),
+            resolved.ledger.clone(),
         )?;
         extras.externs.set_output_names(&resolved.output_order);
         extras.output_types = resolved
@@ -1276,6 +1292,7 @@ impl PolydatAssembler {
             &layout.input_starts,
             &resolved.cursor_schemas,
             &shared_outputs_of(resolved),
+            resolved.ledger.clone(),
         )?;
         externs.set_output_names(&resolved.output_order);
         Ok(externs)
@@ -2033,6 +2050,7 @@ impl PolydatAssembler {
             output_modifiers: self.output_modifiers,
             const_outputs: self.const_outputs,
             cursor_schemas: self.cursor_schemas,
+            ledger: self.ledger,
         })
     }
 }

@@ -85,6 +85,10 @@ pub(crate) struct Externs {
     /// Slots whose value a cell refresh changed, for the kernel to mark
     /// dirty; drained after every refresh.
     changed: Vec<usize>,
+    /// The compile ledger of the tree this kernel's program belongs
+    /// to, recorded in at build: what the compiled engines keep of
+    /// the program tree's identity.
+    ledger: std::sync::Arc<crate::kernel::CompileLedger>,
 }
 
 impl Externs {
@@ -98,6 +102,7 @@ impl Externs {
         input_starts: &[usize],
         cursors: &[crate::iteration::source::SourceSchema],
         shared: &[&str],
+        ledger: std::sync::Arc<crate::kernel::CompileLedger>,
     ) -> Result<Self, String> {
         let mut slots = Vec::new();
         let mut by_name = HashMap::new();
@@ -133,6 +138,7 @@ impl Externs {
             intent: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             next_bit: 0,
             changed: Vec::new(),
+            ledger,
         };
         for name in shared {
             if let Some(&i) = externs.by_name.get(*name) {
@@ -141,7 +147,14 @@ impl Externs {
                 externs.slots[i].cell = Some(cell);
             }
         }
+        // One compiled program of the tree, whichever engine it is on.
+        externs.ledger.record();
         Ok(externs)
+    }
+
+    /// The compile ledger of the tree this kernel's program belongs to.
+    pub(crate) fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger> {
+        &self.ledger
     }
 
     /// A cell of this kernel's scope holding `initial`, with the next

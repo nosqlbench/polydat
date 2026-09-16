@@ -463,7 +463,8 @@ let stream = kernel.traverse(0).expect("open traversal");
 // The body compiles for the engine on the first activation; every
 // activation after it shares that program.
 drop(stream.activate(0).expect("first activation"));
-let built_before = programs_built();
+let ledger = kernel.ledger().clone();
+let built_before = ledger.programs();
 for index in 0..stream.len() {
     let mut act = stream.activate(index).expect("activation");
     let slice = act.cursor.clone().expect("cursor slice");
@@ -471,7 +472,7 @@ for index in 0..stream.len() {
     let kernel = act.cycle(0);
     // ... print index, slice, scale, cycle count, row, v
 }
-println!("programs built after the first activation: {}", programs_built() - built_before);
+println!("programs built after the first activation: {}", ledger.programs() - built_before);
 ```
 
 ```text

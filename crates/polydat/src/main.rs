@@ -471,6 +471,7 @@ fn compile_options(args: &CompileArgs) -> CompileOptions {
         strict: args.strict,
         context: args.file.display().to_string(),
         cursor_limit: None,
+        ledger: None,
     }
 }
 

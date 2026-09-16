@@ -757,6 +757,10 @@ mod jit_impl {
             context: dag.context.clone(),
             output_modifiers: HashMap::new(),
             const_outputs: std::collections::HashSet::new(),
+            // A cone is a fragment of the program that stands in the
+            // tree's ledger already, not a program of its own: its
+            // kernel is recorded nowhere.
+            ledger: crate::kernel::CompileLedger::new(),
         };
 
         let restore = |sub_nodes: Vec<Box<dyn PolydatNode>>,

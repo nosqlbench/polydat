@@ -877,6 +877,7 @@ pub(crate) fn compile_tier1_ordinal(
         vec![output.to_string()],
         &resolved.source,
         &resolved.context,
+        resolved.ledger.clone(),
     ));
     let scalar = PolydatKernel::from_program(scalar_program);
 

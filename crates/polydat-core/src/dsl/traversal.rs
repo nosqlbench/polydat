@@ -70,6 +70,9 @@ pub struct BodySource {
     pub(super) modules: HashMap<String, super::modules::ResolvedModule>,
     /// The body's program per engine, built on first use.
     pub(crate) programs: Mutex<HashMap<crate::Engine, Arc<dyn crate::kernel::KernelProgram>>>,
+    /// The compile ledger of the tree, for the body's programs on every
+    /// engine.
+    pub(crate) ledger: Arc<crate::kernel::CompileLedger>,
 }
 
 impl BodySource {

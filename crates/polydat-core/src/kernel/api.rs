@@ -464,6 +464,10 @@ pub trait Kernel: Send + internals::KernelInternals {
     /// thread creates its own kernel from it with
     /// [`KernelProgram::create_kernel`].
     fn into_program(self: Box<Self>) -> std::sync::Arc<dyn KernelProgram>;
+
+    /// The compile ledger of the program tree this kernel belongs to:
+    /// what compiling it and everything opened from it has built.
+    fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger>;
 }
 
 /// The construction-time hooks of a kernel, sealed: the compile path
@@ -527,6 +531,9 @@ pub trait KernelProgram: Send + Sync {
     ) -> Option<std::sync::Arc<crate::kernel::PolydatProgram>> {
         None
     }
+
+    /// The compile ledger of the program tree this program belongs to.
+    fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger>;
 }
 
 /// A compiled kernel as a shared program: its steps are shared, and a
@@ -546,5 +553,8 @@ impl<K: Kernel + Clone + Send + Sync + 'static> KernelProgram for SharedKernel<K
         // shares.
         kernel.reset_to_program();
         Box::new(kernel)
+    }
+    fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger> {
+        self.0.ledger()
     }
 }
