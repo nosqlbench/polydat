@@ -25,6 +25,7 @@ use crate::dsl::traversal::Traversal;
 use crate::iteration::comprehension::runtime::{RuntimeTuple, evaluate_for_iteration};
 use crate::iteration::cursor_partition::{cursor_extent_on, cursor_over_partitions_on};
 use crate::kernel::Kernel;
+use crate::kernel::interp::Layered;
 
 use super::{PolydatKernel, PolydatProgram};
 
@@ -365,7 +366,8 @@ pub fn program_identity(kernel: &PolydatKernel) -> *const PolydatProgram {
 }
 
 /// Open `traversal` against `parent`'s current values, on any engine
-/// (engine parity, step 8): the cascaded wires are snapshotted through
+/// (engine parity, step 8): the cascaded wires and the wires the
+/// sources reference are snapshotted through
 /// the [`Kernel`] trait, and the comprehension is evaluated in the
 /// body's scope, the body's program with those wires bound, where a
 /// source or predicate resolves every name it can reference and a
@@ -386,8 +388,31 @@ pub fn open_traversal(
     }
     let mut canonical = PolydatKernel::from_program(traversal.program.clone());
     bind_by_name(&mut canonical, &cascade);
+    // The sources' own references are captured from the parent here,
+    // whatever their provenance (a coordinate input as much as an
+    // extern) and even where the body declares the same name, as every
+    // body declares `cycle`: a source belongs to the enclosing scope,
+    // and a traversal reads that frame once, when it opens
+    // (for_traversal.md §3.1). A name the parent has no wire for is a
+    // coordinate of the comprehension itself, layered in as the tuple
+    // is built, or an error the evaluator reports.
+    let mut captured: Vec<(String, Value)> = Vec::new();
+    for name in traversal.comprehension.referenced_source_names() {
+        let value = if parent.output_type(&name).is_some() {
+            parent.pull(&name)
+        } else if let Some(value) = parent.input_value(&name) {
+            value
+        } else {
+            continue;
+        };
+        captured.push((name, value));
+    }
+    let scope = Layered {
+        prefix: &captured,
+        inner: &canonical,
+    };
     let params: HashMap<String, String> = HashMap::new();
-    let tuples = evaluate_for_iteration(&traversal.comprehension, &canonical, &params, |_| Ok(()))
+    let tuples = evaluate_for_iteration(&traversal.comprehension, &scope, &params, |_| Ok(()))
         .map_err(|e| {
             format!(
                 "`for {}` at line {}, col {}: {e}",

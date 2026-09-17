@@ -204,7 +204,7 @@ impl std::fmt::Display for ValidationError {
             Self::StrictWarning(w) => write!(f, "strict mode: {w}"),
             Self::ContextRequired { name, references } => write!(
                 f,
-                "clause '{name}' needs a scope to bind {}; a coordinate stream has none: \n                 traverse it with `for`, which binds those names",
+                "clause '{name}' needs a scope to bind {}; a coordinate stream has none: \n                 traverse it with `for`, which captures those names when it opens",
                 references.join(", ")
             ),
             Self::V9UnionClassMismatch { reason } => {

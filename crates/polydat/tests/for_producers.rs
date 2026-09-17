@@ -247,3 +247,36 @@ fn a_context_required_producer_traverses_but_has_no_coordinate_stream() {
     let text = err.to_string();
     assert!(text.contains("'p'") && text.contains("total"), "{text}");
 }
+
+/// A traversal captures its sources' references from the enclosing
+/// scope when it opens (for_traversal.md §3.1): a coordinate input as
+/// much as an extern, read once, so an open traversal is a snapshot and
+/// the next open reads the new values.
+#[test]
+fn a_traversal_captures_its_sources_references_when_it_opens() {
+    let mut k = compile(
+        "input cycle: u64\nparts := for p in partitions(\"*/2\", {cycle})\nfor parts {\n    n := cardinality(p)\n}\n",
+    );
+    let counts = |k: &mut polydat::kernel::PolydatKernel| -> Vec<u64> {
+        let mut stream = k.traverse(0).unwrap();
+        let mut seen = Vec::new();
+        while let Some(mut a) = stream.advance().unwrap() {
+            seen.push(a.cycle(0).pull("n").as_u64());
+        }
+        seen
+    };
+    k.set_inputs(&[8]);
+    assert_eq!(counts(&mut k), vec![4, 4]);
+    k.set_inputs(&[100]);
+    assert_eq!(counts(&mut k), vec![50, 50]);
+    // An open traversal is a snapshot: a change after the open does not
+    // reach it.
+    k.set_inputs(&[8]);
+    let mut stream = k.traverse(0).unwrap();
+    k.set_inputs(&[100]);
+    let mut seen = Vec::new();
+    while let Some(mut a) = stream.advance().unwrap() {
+        seen.push(a.cycle(0).pull("n").as_u64());
+    }
+    assert_eq!(seen, vec![4, 4]);
+}

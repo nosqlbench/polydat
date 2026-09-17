@@ -153,8 +153,11 @@ the comprehension grammar's reference form, `{name}`, as in
 `partitions("*/4", {total})`. The reference is resolved against the
 enclosing kernel's current values when the traversal is opened, so a
 host can change an extern and re-open the traversal without recompiling.
-A source that depends on a per-cycle wire is an error at that point: a
-producer is a scope-init value and cannot vary per cycle.
+Every wire a source references is captured then, whatever its provenance:
+a coordinate input as much as an extern, from the enclosing kernel's values
+at the moment the traversal opens, even where the body declares the same
+name. The tuple set is materialized at open, so a change upstream does not
+reach an open traversal; the next open reads the new values.
 
 ### 3.2 Traversal
 
@@ -486,7 +489,6 @@ Not specified here, and deliberately left to hosts:
 Not supported, and reported as compile errors rather than silently
 accepted:
 
-- a producer whose source depends on a per-cycle wire;
 - a body that declares an `input` other than `cycle`;
 - `over` naming a wire that is not `Partition`-typed at compile time.
 
