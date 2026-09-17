@@ -1558,7 +1558,6 @@ sections above:
   a child scope over a tuple is built by the traversal activation
   protocol ([The `for` Construct](for_traversal.md) §3.2).
 
-
 `EvaluatedSource` distinguishes source values from source
 indexability: `IndexFn` is a runtime query over the evaluated source,
 not a promise inferred from source syntax alone, and a caller consults
