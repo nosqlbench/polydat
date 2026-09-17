@@ -104,7 +104,6 @@ pub use validate::{Mode, ValidationError, ValidationReport, ValidationWarning, v
 // utilities used by the algebra runtime evaluator and the
 // scope-walker — not part of the comprehension AST surface.
 //
-// `enumerate_tuples` and `parse_list_with_types` are not
-// re-exported at this level; they remain reachable as
-// `eval::enumerate_tuples` / `eval::parse_list_with_types`.
+// `parse_list_with_types` is not re-exported at this level; it
+// remains reachable as `eval::parse_list_with_types`.
 pub use eval::{evaluate_spec, pre_evaluate_clause, value_to_polydat_type_name};

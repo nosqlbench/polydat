@@ -59,8 +59,7 @@
 //!   tuples; the caller (executor or stream surface) builds
 //!   the per-iter kernel via `PolydatKernel::for_iteration`.
 //! - Empty-clause policy (strict / warn). The caller passes
-//!   an `on_empty` callback the same way `enumerate_tuples`
-//!   does today.
+//!   an `on_empty` callback and decides the policy.
 
 use std::collections::HashMap;
 #[cfg(test)]
@@ -194,8 +193,7 @@ impl std::error::Error for RuntimeError {}
 ///
 /// `on_empty` is called with each empty clause (zero values
 /// after evaluation). Caller decides whether to abort (strict)
-/// or warn-and-skip (relaxed) — same shape as
-/// `enumerate_tuples`'s callback.
+/// or warn-and-skip (relaxed).
 pub fn evaluate_for_iteration<F>(
     comp: &Comprehension,
     scope: &dyn Lookup,

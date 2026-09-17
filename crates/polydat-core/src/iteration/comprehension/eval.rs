@@ -41,17 +41,15 @@
 //! API rather than implementing it.
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use crate::ast::Value;
-use crate::kernel::PolydatKernel;
 use crate::kernel::interp::Lookup;
-use crate::kernel::interp::{interpolate_via_kernel, interpolate_with_lookup};
+use crate::kernel::interp::interpolate_with_lookup;
 
 /// Evaluate a comprehension clause's spec text against a `Lookup` scope.
 ///
 /// Steps:
-///  1. [`interpolate_via_kernel`] resolves `{name}` placeholders
+///  1. [`interpolate_via_kernel`](crate::kernel::interp::interpolate_via_kernel) resolves `{name}` placeholders
 ///     against the kernel's in-scope name space (own outputs +
 ///     inherited extern values).
 ///  2. Try `dsl::compile::eval_const_expr_for(…, kernel.ledger())`
@@ -1831,230 +1829,6 @@ pub fn value_to_polydat_type_name(v: &Value) -> &'static str {
     v.port_type().to_keyword()
 }
 
-/// Enumerate the typed tuples a Cartesian comprehension produces.
-///
-/// Walks the dependent-tuple tree depth-first using fresh
-/// per-branch kernels. Each branch installs the prior clauses'
-/// typed values as inputs on a fresh subscope kernel
-/// (`PolydatKernel::materialize_subscope`),
-/// then evaluates the next clause's spec against that kernel.
-/// This is the kernel-per-logical-subspace rule from SRD-18b
-/// §"Dependent Tuple Iteration".
-///
-/// `filter`, when provided, is evaluated against each fully-bound
-/// tuple — the predicate text is interpolated against a kernel
-/// with all clause values installed, then `eval_const_expr_for`
-/// (charged to the scope's ledger) runs
-/// it to a `Value::Bool`. Tuples where the predicate is `false`
-/// are skipped. Predicate evaluation errors (non-Bool result,
-/// unresolved name, etc.) abort enumeration. See
-/// [`Comprehension::filter`](super::ast_legacy::Comprehension::filter).
-///
-/// Empty-clause handling is delegated to `on_empty_clause`: the
-/// caller decides whether to propagate as a hard error (strict
-/// mode) or warn-and-skip (relaxed mode). The callback receives
-/// the offending `Clause` (which carries both single-var and
-/// parallel-iter shapes) and returns `Result<(), String>` —
-/// returning `Err` aborts enumeration, `Ok(())` skips the
-/// branch.
-pub fn enumerate_tuples<F>(
-    canonical: &Arc<PolydatKernel>,
-    parent: &Arc<PolydatKernel>,
-    clauses: &[super::ast_legacy::Clause],
-    filter: Option<&str>,
-    mut on_empty_clause: F,
-) -> Result<Vec<Vec<(String, Value)>>, String>
-where
-    F: FnMut(&super::ast_legacy::Clause) -> Result<(), String>,
-{
-    let mut out = Vec::new();
-    enumerate_into(
-        canonical,
-        parent,
-        clauses,
-        filter,
-        0,
-        &Vec::new(),
-        &mut out,
-        &mut on_empty_clause,
-    )?;
-    Ok(out)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn enumerate_into<F>(
-    canonical: &Arc<PolydatKernel>,
-    parent: &Arc<PolydatKernel>,
-    clauses: &[super::ast_legacy::Clause],
-    filter: Option<&str>,
-    idx: usize,
-    prefix: &[(String, Value)],
-    out: &mut Vec<Vec<(String, Value)>>,
-    on_empty_clause: &mut F,
-) -> Result<(), String>
-where
-    F: FnMut(&super::ast_legacy::Clause) -> Result<(), String>,
-{
-    use super::ast_legacy::ClauseSource;
-
-    if idx == clauses.len() {
-        // Apply the filter, if any, against a fresh kernel with
-        // every tuple value installed. If the predicate evaluates
-        // to false, skip this tuple; if true (or filter absent),
-        // emit it.
-        if let Some(predicate) = filter {
-            // Iter-var values from the prefix flow through the
-            // parent's typed materialize step; this also gives
-            // the cell cascade the prefix snapshot before the
-            // bind, matching for_iteration's contract.
-            let bindings_owned: Vec<(String, Value)> = prefix
-                .iter()
-                .map(|(v, val)| ((*v).to_string(), val.clone()))
-                .collect();
-            let kernel = parent.materialize_subscope(canonical.program().clone(), &bindings_owned);
-            let interpolated = interpolate_via_kernel(predicate, &kernel)
-                .map_err(|e| format!("comprehension filter '{predicate}': {e}"))?;
-            let result = crate::dsl::compile::eval_const_expr_for(
-                &interpolated,
-                canonical.program().ledger(),
-            )
-            .map_err(|e| format!("comprehension filter '{predicate}': {e}"))?;
-            // Polydat comparison operators return U64 (0/1); accept
-            // any truthy/falsy scalar uniformly, matching the
-            // do-loop condition handler.
-            let keep = match result {
-                Value::Bool(b) => b,
-                Value::U64(n) => n != 0,
-                Value::F64(n) => n != 0.0,
-                other => {
-                    return Err(format!(
-                        "comprehension filter '{predicate}': expected bool/u64/f64, got {other:?}"
-                    ));
-                }
-            };
-            if keep {
-                out.push(prefix.to_vec());
-            }
-        } else {
-            out.push(prefix.to_vec());
-        }
-        return Ok(());
-    }
-    let bindings_owned: Vec<(String, Value)> = prefix
-        .iter()
-        .map(|(v, val)| ((*v).to_string(), val.clone()))
-        .collect();
-    let kernel = parent.materialize_subscope(canonical.program().clone(), &bindings_owned);
-
-    let clause = &clauses[idx];
-    match &clause.source {
-        ClauseSource::Single(spec_text) => {
-            let var = clause.var();
-            let values = evaluate_spec(spec_text, &kernel)
-                .map_err(|e| format!("for_each clause '{var} in {spec_text}': {e}"))?;
-
-            if values.is_empty() {
-                on_empty_clause(clause)?;
-                return Ok(());
-            }
-
-            for value in values {
-                let mut next_prefix = prefix.to_vec();
-                next_prefix.push((var.to_string(), value));
-                enumerate_into(
-                    canonical,
-                    parent,
-                    clauses,
-                    filter,
-                    idx + 1,
-                    &next_prefix,
-                    out,
-                    on_empty_clause,
-                )?;
-            }
-        }
-        ClauseSource::Parallel { mode, exprs } => {
-            // Layer 7a: evaluate each expr in the group, then zip
-            // them. The zip mode (Strict / Truncate / Cycle)
-            // controls length-balancing; Strict is the default
-            // for the bare `(e1, e2)` syntax.
-            use super::ast_legacy::ZipMode;
-            let group_label = format!(
-                "({}) in {}({})",
-                clause.vars.join(", "),
-                match mode {
-                    ZipMode::Strict => "",
-                    ZipMode::Truncate => "zip_truncate",
-                    ZipMode::Cycle => "zip_cycle",
-                },
-                exprs.join(", "),
-            );
-            let mut columns: Vec<Vec<Value>> = Vec::with_capacity(exprs.len());
-            for expr in exprs {
-                let values = evaluate_spec(expr, &kernel)
-                    .map_err(|e| format!("for_each parallel clause '{group_label}': {e}"))?;
-                columns.push(values);
-            }
-            let lens: Vec<usize> = columns.iter().map(|c| c.len()).collect();
-            let len = match mode {
-                ZipMode::Strict => {
-                    let len0 = lens[0];
-                    for (i, &l) in lens.iter().enumerate().skip(1) {
-                        if l != len0 {
-                            return Err(format!(
-                                "for_each parallel clause '{group_label}': \
-                                 length mismatch — expr 0 produced {len0} values, \
-                                 expr {i} produced {l} (use zip_truncate(...) or \
-                                 zip_cycle(...) to opt into truncate/cycle semantics)"
-                            ));
-                        }
-                    }
-                    len0
-                }
-                ZipMode::Truncate => *lens.iter().min().unwrap(),
-                ZipMode::Cycle => {
-                    // Reject empty columns under Cycle — there's
-                    // no value to repeat. Fall through to the
-                    // empty-clause callback below by using len=0.
-                    if lens.contains(&0) {
-                        0
-                    } else {
-                        *lens.iter().max().unwrap()
-                    }
-                }
-            };
-            if len == 0 {
-                on_empty_clause(clause)?;
-                return Ok(());
-            }
-            for step in 0..len {
-                let mut next_prefix = prefix.to_vec();
-                for (var, col) in clause.vars.iter().zip(columns.iter()) {
-                    // Cycle: index modulo column length so shorter
-                    // columns repeat; Strict / Truncate: direct.
-                    let i = if matches!(mode, ZipMode::Cycle) {
-                        step % col.len()
-                    } else {
-                        step
-                    };
-                    next_prefix.push((var.clone(), col[i].clone()));
-                }
-                enumerate_into(
-                    canonical,
-                    parent,
-                    clauses,
-                    filter,
-                    idx + 1,
-                    &next_prefix,
-                    out,
-                    on_empty_clause,
-                )?;
-            }
-        }
-    }
-    Ok(())
-}
-
 // Expand `{name}` placeholders in `text`, resolving each leaf
 // placeholder against `kernel`'s in-scope name space.
 //
@@ -2068,6 +1842,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kernel::PolydatKernel;
+    use crate::kernel::interp::interpolate_via_kernel;
 
     fn h(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs
