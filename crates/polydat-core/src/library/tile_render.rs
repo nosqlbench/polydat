@@ -1576,4 +1576,80 @@ mod tests {
             assert_eq!(out, format!("\"{want}\""));
         }
     }
+
+    /// A tile's ops say whether rendering it re-runs a projection body
+    /// (`TileProgram::has_projections`): a body inside a branch arm
+    /// counts, and the answer agrees with the compiled body programs.
+    #[test]
+    fn a_tile_reports_whether_any_op_re_runs_a_projection() {
+        fn wire(index: usize) -> HoleSource {
+            HoleSource::Wire {
+                index,
+                spec: "text|text".into(),
+            }
+        }
+        fn program(ops: Vec<TileOp>, children: Vec<ChildSpec>) -> TileProgram {
+            TileProgram::from_json(
+                &TileSpec {
+                    name: "t".into(),
+                    encoding: "text".into(),
+                    ops,
+                    children,
+                }
+                .to_json(),
+            )
+        }
+        let body = || ChildSpec {
+            source: "input cycle: u64\nextern k: u64\nout := u64_add(k, 0)\n".to_string(),
+            cascade: Vec::new(),
+        };
+        let repeat = |child: usize| TileOp::Repeat {
+            stream: StreamerValue::parse_text("k in 0..3").unwrap().to_json(),
+            child,
+            sep: ",".into(),
+            body: vec![TileOp::Hole(HoleSource::Child {
+                name: "out".into(),
+                spec: "text|text".into(),
+            })],
+            generators: Vec::new(),
+        };
+
+        // Statics, holes, and a branch over them: nothing re-runs.
+        let flat = program(
+            vec![
+                TileOp::Static("a=".into()),
+                TileOp::Hole(wire(0)),
+                TileOp::Branch {
+                    cond: wire(1),
+                    then: vec![TileOp::Static("yes".into())],
+                    otherwise: vec![TileOp::Hole(wire(0))],
+                },
+            ],
+            Vec::new(),
+        );
+        assert!(!flat.has_projections());
+        assert!(flat.children.is_empty());
+
+        // A projection at the top level.
+        let top = program(vec![TileOp::Static("[".into()), repeat(0)], vec![body()]);
+        assert!(top.has_projections());
+        assert_eq!(top.children.len(), 1);
+
+        // A projection inside a branch arm: the walk recurses, so the
+        // arm that holds it is found whichever arm it is.
+        for (then, otherwise) in [
+            (vec![repeat(0)], vec![TileOp::Static("none".into())]),
+            (vec![TileOp::Static("none".into())], vec![repeat(0)]),
+        ] {
+            let branched = program(
+                vec![TileOp::Branch {
+                    cond: wire(0),
+                    then,
+                    otherwise,
+                }],
+                vec![body()],
+            );
+            assert!(branched.has_projections());
+        }
+    }
 }
