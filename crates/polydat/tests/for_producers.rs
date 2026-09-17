@@ -247,3 +247,29 @@ fn a_context_required_producer_traverses_but_has_no_coordinate_stream() {
     let text = err.to_string();
     assert!(text.contains("'p'") && text.contains("total"), "{text}");
 }
+
+/// A producer is a scope-init value (for_traversal.md §3.1, §7): a
+/// source that references a per-cycle wire, the coordinate itself or a
+/// wire derived from it, is a compile error naming the producer, the
+/// reference, and why it is per-cycle.
+#[test]
+fn a_producer_source_over_a_per_cycle_wire_is_a_compile_error() {
+    let err = compile_polydat(
+        "input cycle: u64\nparts := for p in partitions(\"*/2\", {cycle})\nfor parts {\n    n := cardinality(p)\n}\n",
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("producer 'parts'") && err.contains("references 'cycle'"),
+        "{err}"
+    );
+    assert!(err.contains("coordinate input 'cycle'"), "{err}");
+    let err = compile_polydat(
+        "input cycle: u64\ntotal := u64_add(cycle, 2)\nparts := for p in partitions(\"*/2\", {total})\n",
+    )
+    .unwrap_err();
+    assert!(
+        err.contains("references 'total'") && err.contains("cycle"),
+        "{err}"
+    );
+    // An extern is scope-init and stays accepted (the test above this one).
+}
