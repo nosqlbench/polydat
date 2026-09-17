@@ -56,6 +56,8 @@ mod float_text;
 mod for_compile;
 #[path = "for_engines.rs"]
 mod for_engines;
+#[path = "for_flatten.rs"]
+mod for_flatten;
 #[path = "for_invariance.rs"]
 mod for_invariance;
 #[path = "for_producers.rs"]

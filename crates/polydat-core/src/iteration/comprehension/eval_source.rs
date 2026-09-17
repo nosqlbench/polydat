@@ -39,9 +39,16 @@
 //!
 //! | Class | Variants | `evaluate(None)` works? |
 //! |---|---|---|
-//! | [`EvalClass::Static`] | `Literal`, `IntRange` | yes |
-//! | [`EvalClass::ContextRequired`] | `Generator`, `WorkloadParamList` | no — needs `&Context` |
+//! | [`EvalClass::Static`] | `Literal`, `IntRange`, a `Generator` whose expression references no name | yes |
+//! | [`EvalClass::ContextRequired`] | `WorkloadParamList`, a `Generator` whose expression references a name | no — needs `&Context` |
 //! | [`EvalClass::Distribution`] | `ContinuousInterval`, `Distribution` (in their "not yet sampled" state) | yes, but `values` is empty — enclosing `Order(_, sampling-strategy, Some(n))` materializes |
+//!
+//! The class of a generator is decided by its expression's free
+//! names ([`Source::referenced_names`]), never by a table of
+//! generator names: a context-free call evaluates in the empty
+//! scope ([`crate::kernel::interp::NoScope`]), and the compile
+//! flattens it into a literal of its values
+//! (`comprehension::flatten`).
 //!
 //! [`SourceEval::eval_class`] classifies a source for callers
 //! that want to know whether `evaluate(None)` will succeed; the
@@ -179,11 +186,12 @@ pub trait SourceEval {
 
     /// Materialize this source.
     ///
-    /// Literal / IntRange (`Static`) and ContinuousInterval /
-    /// Distribution (`Distribution`) accept `ctx = None`.
-    /// Generator / WorkloadParamList (`ContextRequired`) require
-    /// `Some(ctx)` and return [`EvalError::NeedsContext`]
-    /// otherwise.
+    /// Literal / IntRange (`Static`), a context-free Generator
+    /// (`Static`, evaluated in the empty scope), and
+    /// ContinuousInterval / Distribution (`Distribution`) accept
+    /// `ctx = None`. A Generator that references a name and a
+    /// WorkloadParamList (`ContextRequired`) require `Some(ctx)` and
+    /// return [`EvalError::NeedsContext`] otherwise.
     fn evaluate(&self, ctx: Option<&EvalContext<'_>>) -> Result<EvaluatedSource, EvalError>;
 }
 
@@ -194,8 +202,9 @@ impl SourceEval for Source {
             Source::ContinuousInterval { .. } | Source::Distribution { .. } => {
                 EvalClass::Distribution
             }
-            // Every Generator is context-required; a static
-            // generator catalogue is not implemented.
+            // A generator's class is its expression's: context-free
+            // when it references no name (spec §10.7.0).
+            Source::Generator { .. } if self.referenced_names().is_empty() => EvalClass::Static,
             Source::Generator { .. } => EvalClass::ContextRequired,
             Source::WorkloadParamList { .. } => EvalClass::ContextRequired,
         }
@@ -239,19 +248,35 @@ impl SourceEval for Source {
                 })
             }
             Source::Generator { .. } | Source::WorkloadParamList { .. } => {
-                let ctx = ctx.ok_or(EvalError::NeedsContext)?;
                 let spec_text = match self {
                     Source::Generator { expr, .. } => expr.clone(),
                     Source::WorkloadParamList { name, .. } => format!("{{{name}}}"),
                     _ => unreachable!(),
                 };
-                let scope = Layered {
-                    prefix: ctx.prefix,
-                    inner: ctx.scope,
+                // A context-free generator evaluates in the empty
+                // scope; anything that references a name needs the
+                // caller's.
+                let empty = crate::kernel::interp::NoScope::new();
+                let (var_name, scope): (&str, Layered<'_>) = match ctx {
+                    Some(ctx) => (
+                        ctx.var_name,
+                        Layered {
+                            prefix: ctx.prefix,
+                            inner: ctx.scope,
+                        },
+                    ),
+                    None if self.eval_class() == EvalClass::Static => (
+                        "<context-free>",
+                        Layered {
+                            prefix: &[],
+                            inner: &empty,
+                        },
+                    ),
+                    None => return Err(EvalError::NeedsContext),
                 };
                 let vals = crate::iteration::comprehension::eval::evaluate_spec(&spec_text, &scope)
                     .map_err(|e| EvalError::EvalFailed {
-                        var: ctx.var_name.to_string(),
+                        var: var_name.to_string(),
                         source: spec_text,
                         message: e.to_string(),
                     })?;
@@ -355,9 +380,20 @@ mod tests {
     }
 
     #[test]
+    fn a_context_free_generator_evaluates_without_context() {
+        let s = Source::Generator {
+            expr: "fib(6)".into(),
+            cardinality_hint: None,
+        };
+        assert_eq!(s.eval_class(), EvalClass::Static);
+        let ev = s.evaluate(None).unwrap();
+        assert_eq!(ev.cardinality, 6);
+    }
+
+    #[test]
     fn generator_without_context_errors() {
         let s = Source::Generator {
-            expr: "range(0, 10)".into(),
+            expr: "range(0, {n})".into(),
             cardinality_hint: Some(10),
         };
         assert_eq!(s.eval_class(), EvalClass::ContextRequired);

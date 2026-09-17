@@ -16,11 +16,13 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
 use crate::ast::PortType;
+use crate::iteration::comprehension::flatten::flatten_static_sources;
 use crate::iteration::comprehension::source::{LiteralValue, Source};
 use crate::iteration::comprehension::{
     Comprehension, Mode as ValidationMode, StreamerValue, ValidationWarning,
 };
 use crate::kernel::PolydatProgram;
+use crate::kernel::interp::{Lookup, NoScope};
 
 use super::ast::{
     Arg, Binding, BindingModifier, CallExpr, Expr, ExternPort, ForSource, ForSourceKind, ForStmt,
@@ -146,6 +148,7 @@ pub struct Producer {
 pub fn strip_for_forms(
     file: &PolydatFile,
     mode: ValidationMode,
+    scope: &dyn Lookup,
     events: &mut Vec<super::events::CompileEvent>,
 ) -> Result<(PolydatFile, Vec<ForStmt>, Vec<Producer>), String> {
     let mut parent = Vec::with_capacity(file.statements.len());
@@ -158,7 +161,8 @@ pub fn strip_for_forms(
                 let Expr::For(source) = &b.value else {
                     unreachable!()
                 };
-                let (comprehension, warnings) = resolve_source_with(source, &producers, mode)?;
+                let (comprehension, warnings) =
+                    resolve_source_with(source, &producers, mode, scope)?;
                 events.extend(warning_events(source, &warnings));
                 let name = b.targets.join(",");
                 let value = StreamerValue::new(source.text.clone(), comprehension.clone());
@@ -190,7 +194,13 @@ pub fn strip_for_forms(
 /// producer reference to the producer bound in the same scope, and a
 /// derivation to the base producer with its filter and order applied.
 pub fn resolve_source(source: &ForSource, producers: &[Producer]) -> Result<Comprehension, String> {
-    resolve_source_with(source, producers, ValidationMode::Permissive).map(|(c, _)| c)
+    resolve_source_with(
+        source,
+        producers,
+        ValidationMode::Permissive,
+        &NoScope::new(),
+    )
+    .map(|(c, _)| c)
 }
 
 /// The compile events for the validator's warnings on `source`, each
@@ -217,6 +227,7 @@ pub fn resolve_source_with(
     source: &ForSource,
     producers: &[Producer],
     mode: ValidationMode,
+    scope: &dyn Lookup,
 ) -> Result<(Comprehension, Vec<ValidationWarning>), String> {
     let find = |name: &str| -> Result<Comprehension, String> {
         producers
@@ -260,6 +271,10 @@ pub fn resolve_source_with(
             c
         }
     };
+    // Context-free sources are flattened first (comprehension_forms.md
+    // §10.7.0): a generator that references no name is evaluated here,
+    // charged to the program tree, and traversed as a literal.
+    let comprehension = flatten_static_sources(&comprehension, scope);
     // Validation is a stage of the compile (comprehension_forms.md §5):
     // a comprehension that violates a V-axiom is refused at the
     // statement that names it, whether written inline or derived.

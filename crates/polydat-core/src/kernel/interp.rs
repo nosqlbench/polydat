@@ -70,6 +70,43 @@ impl Lookup for PolydatKernel {
     }
 }
 
+/// The empty scope: no name resolves in it, and what has to compile
+/// under it is charged to the ledger it holds. A context-free source,
+/// one whose expression references no name, evaluates in this scope
+/// (comprehension_forms.md §10.7.0), at compile time or wherever no
+/// kernel is at hand.
+pub struct NoScope {
+    ledger: std::sync::Arc<crate::kernel::CompileLedger>,
+}
+
+impl NoScope {
+    /// An empty scope charging to a fresh ledger of its own.
+    pub fn new() -> Self {
+        Self::charged_to(crate::kernel::CompileLedger::new())
+    }
+
+    /// An empty scope charging to `ledger`: the program tree's, when
+    /// the evaluation is part of that tree's compile.
+    pub fn charged_to(ledger: std::sync::Arc<crate::kernel::CompileLedger>) -> Self {
+        Self { ledger }
+    }
+}
+
+impl Default for NoScope {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Lookup for NoScope {
+    fn lookup(&self, _name: &str) -> Option<Value> {
+        None
+    }
+    fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger> {
+        &self.ledger
+    }
+}
+
 /// Bindings in front of another lookup: a tuple's elements over the
 /// scope they were drawn in.
 pub struct Layered<'a> {

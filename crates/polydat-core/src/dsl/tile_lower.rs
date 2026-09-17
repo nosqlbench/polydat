@@ -328,6 +328,7 @@ impl TileLowering {
                         source,
                         &compiler.producers_seen,
                         compiler.validation_mode(),
+                        &compiler.source_scope(),
                     )
                     .map_err(|e| format!("tile '{}': projection: {e}", self.tile_name))?;
                     compiler
@@ -803,6 +804,7 @@ impl TileLowering {
             source,
             &compiler.producers_seen,
             compiler.validation_mode(),
+            &compiler.source_scope(),
         )
         .map_err(|e| format!("tile '{}': nested projection: {e}", self.tile_name))?;
         compiler

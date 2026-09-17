@@ -454,7 +454,7 @@ There is no split between "metadata-bearing" and
 `IndexFn` from the evaluated input and routes accordingly.
 This is what makes V4 enforceable at strategy-invocation
 time independent of how the source was authored (literal,
-range, registry-recognized generator, or workload-param):
+range, context-free generator, or workload-param):
 the shape is *always* known by the time `apply` runs.
 
 | Strategy | Input requirement | Discrete behavior | Continuous behavior |
@@ -600,8 +600,8 @@ strategy-invocation time against the
 [`EvaluatedSource`](#1076-the-evaluatedsource-contract) the strategy receives. For
 comprehensions whose sources are all statically evaluable
 (per §10.7.0's eval-class partitioning — `Literal` /
-`IntRange` / `ContinuousInterval` / registry-recognized
-generators per §10.7.7), the compile stage (`validate`, run by
+`IntRange` / `ContinuousInterval` / context-free
+generators flattened per §10.7.7), the compile stage (`validate`, run by
 `CompiledComprehension::from_ast` and by the `for` lowering) fires
 V4 early as a usability nicety —
 malformed shapes error at parse time. For context-required
@@ -1982,13 +1982,14 @@ Sources are partitioned into three **eval classes**:
 
 - **Statically evaluable**: `Literal { values }`,
   `IntRange { lo, hi, step }`, `ContinuousInterval { … }`,
-  and any `Generator` polydat recognizes as built-in (the set
-  enumerated in §10.7.6). For these, evaluation succeeds with
+  and any `Generator` whose expression references no name (a
+  context-free call, §10.7.7). For these, evaluation succeeds with
   no kernel context — `source.evaluate(None)` returns
   `EvaluatedSource` — and the compile-time planner computes
   the full metadata bundle during parse / R0–R7 optimization.
-- **Context-required**: `WorkloadParamList { name }` and
-  `Generator` outside the built-in set. For these,
+- **Context-required**: `WorkloadParamList { name }` and a
+  `Generator` whose expression references a name (an outer
+  coordinate, a parameter, a wire). For these,
   `source.evaluate(None)` returns `NeedsContext`; the runtime
   evaluator supplies a kernel context at evaluation time.
   The metadata becomes knowable then — same rules,
@@ -2222,7 +2223,7 @@ enum EvalError {
   NeedsContext,
   /// Source evaluation against the provided context
   /// failed (interpolation error, eval_const_expr
-  /// failure, registry-unknown generator, etc.). `var`
+  /// failure, unknown generator, etc.). `var`
   /// names the clause; `source` is the spec text or
   /// description; `message` carries the reason.
   EvalFailed { var: String, source: String, message: String },
@@ -2255,36 +2256,43 @@ produces n drawn points which become the EvaluatedSource's
 `values`. Bare Distribution clauses (no enclosing sampler) are
 V8-rejected at compile time.
 
-#### 10.7.7 Built-in generator registry
+#### 10.7.7 Context-free generators are flattened at compile
 
-The polydat-owned set of generators whose `evaluate(None)`
-succeeds without a kernel context. These move from
-`ContextRequired` to `Static` for planning purposes.
+Whether a generator call can be evaluated before traversal is a
+property of its **expression**, never of its name: there is no
+table of generator names, in the spec or in the code. A call's
+free names (`Source::referenced_names`: the parsed identifiers of
+the expression and its `{name}` interpolation placeholders) decide
+its eval class (§10.7.0). A call with no free names is
+**context-free**; a call that references a coordinate the
+comprehension binds, a parameter, or a wire is context-required.
 
-| Generator | Signature | Cardinality |
-|---|---|---|
-| `fib(n)` | int literal | `n` |
-| `pow2(n)` | int literal | `n` |
-| `linear_steps(n)` | int literal | `n` |
-| `geometric(n, base, ratio)` | int + numeric literals | `n` |
-| `concat(s₁, s₂, …, sₖ)` | each sᵢ is itself a registered generator or static source | `Σᵢ |sᵢ|` |
-| `partitions("linear:N")` | literal spec | `N` |
-| `partitions("hash:N")` | literal spec | `N` |
-| `subdivide(lo, hi, n)` | numeric literals | `n` |
-| `bucket(...)`, `concat_seq(...)`, `interval_seq(...)` | literal args | per definition |
+The compile stage (`comprehension::flatten`, run by the `for`
+lowering and by `CompiledComprehension::from_ast`) evaluates every
+context-free generator once, in the empty scope
+(`kernel::interp::NoScope`, charged to the program tree's ledger),
+and rewrites its clause to the `Literal` of the values it produced.
+From there the clause is `Bounded(n)` by construction, so V4 and
+V6 fire at compile against the real shape, the same evaluation
+the runtime would have repeated on every activation happens once,
+and the values are what the traversal binds.
 
-A generator is "registry-recognized" when (a) its name matches
-a registry entry and (b) its argument expressions are all
-literal-resolvable without context (recursively for `concat`).
-Mixed cases (`concat({workload_param}, fib(8))`) are
-`ContextRequired` — the recursion bottoms out at a non-static
-piece.
+Two cases keep the call:
 
-Workload authors do not interact with the registry directly;
-it is Polydat-internal. Every built-in generator has a registry
-entry. Generators *outside* the registry
-(notably the activity-side or adapter-defined ones) remain
-context-required.
+- a context-free call whose values have no literal form (a
+  partition list, for one) keeps its expression and gains the
+  evaluated count as its `cardinality_hint`, so its cardinality is
+  exact while the runtime still evaluates it for the values;
+- a context-free call that evaluates to nothing keeps its
+  expression with a count of `0`, so the traversal's empty-clause
+  policy decides, not a literal with nothing in it.
+
+A context-free call the compile cannot evaluate (a node call the
+const evaluator does not fold; a tile binds such a call through its
+kernel) is left to the traversal, whose error it is if that cannot
+evaluate it either. A context-required call is untouched: its
+cardinality is `Unbounded` until the traversal evaluates it in the scope that
+binds its names, exactly as §10.7.0 describes.
 
 #### 10.7.8 Strategy invocation contract
 
@@ -2341,7 +2349,7 @@ worst-case working set?" reads metadata, not IR. The two
 surfaces together let external tooling reason about
 comprehension cost without recompiling.
 
-The eval-class partitioning (§10.7.0) plus the registry
+The eval-class partitioning (§10.7.0) plus compile-time flattening
 (§10.7.7) keep the static-evaluable subset broad without
 introducing a static / runtime semantic split: it's one
 metadata algebra, run twice for context-required cases (once

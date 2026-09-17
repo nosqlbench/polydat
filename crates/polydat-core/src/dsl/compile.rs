@@ -1590,6 +1590,13 @@ impl Compiler {
         }
     }
 
+    /// The scope a context-free source evaluates in during this
+    /// compile (comprehension_forms.md §10.7.0): no name resolves, and
+    /// what has to compile is charged to the program tree's ledger.
+    pub(super) fn source_scope(&self) -> crate::kernel::interp::NoScope {
+        crate::kernel::interp::NoScope::charged_to(self.ledger.clone())
+    }
+
     pub(super) fn with_lib_paths(
         source_dir: Option<PathBuf>,
         polydat_lib_paths: Vec<PathBuf>,
@@ -2123,8 +2130,12 @@ impl Compiler {
         };
         let mut out = Vec::with_capacity(for_stmts.len());
         for f in for_stmts {
-            let (comprehension, warnings) =
-                resolve_source_with(&f.source, producers, self.validation_mode())?;
+            let (comprehension, warnings) = resolve_source_with(
+                &f.source,
+                producers,
+                self.validation_mode(),
+                &self.source_scope(),
+            )?;
             self.tile_events
                 .extend(warning_events(&f.source, &warnings));
             let mut probe = |expr: &str| self.probe_element_type(expr);
@@ -2749,6 +2760,7 @@ fn compile_file_with<K: Built>(
     let (parent_file, for_stmts, producers) = super::traversal::strip_for_forms(
         file,
         compiler.validation_mode(),
+        &compiler.source_scope(),
         &mut compiler.tile_events,
     )
     .map_err(KernelError::Source)?;

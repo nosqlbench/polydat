@@ -68,6 +68,7 @@ pub use polydat_grammar::comprehension::{
 
 // --- The runtime's reading of the algebra.
 pub mod eval_source;
+pub mod flatten;
 pub mod ir;
 pub mod measure;
 pub mod optimize;

@@ -50,12 +50,19 @@ pub enum Source {
     },
 
     /// Generator function call expressed as a Polydat source string.
-    /// Resolved at clause construction; cardinality may be
-    /// `Unbounded` if the generator is open-ended.
+    /// Its eval class follows its free names (spec §10.7.0): an
+    /// expression that references no name is context-free and is
+    /// evaluated at compile, so a clause over it becomes a literal of
+    /// its values; one that references a name (an outer coordinate,
+    /// a parameter, a wire) is evaluated at traversal.
     Generator {
         /// The generator call, as Polydat source.
         expr: String,
-        /// How many values it yields, when known.
+        /// How many values it yields, when known: the count the
+        /// compile established by evaluating a context-free call
+        /// whose values are not literal-representable (a partition
+        /// list, for one). `None` for a call evaluated at traversal,
+        /// whose cardinality is `Unbounded` until then.
         cardinality_hint: Option<u64>,
     },
 
@@ -121,6 +128,29 @@ pub enum LiteralValue {
 }
 
 impl Source {
+    /// The names this source references (spec §10.7.0): a generator
+    /// expression's parsed free identifiers (`concat(foo)`) and its
+    /// `{name}` interpolation placeholders, and a workload parameter
+    /// list's own name. Literals, ranges, and intervals reference
+    /// nothing. A source with no references is context-free.
+    pub fn referenced_names(&self) -> std::collections::BTreeSet<String> {
+        let mut out = std::collections::BTreeSet::new();
+        match self {
+            Source::WorkloadParamList { name, .. } => {
+                out.insert(name.clone());
+            }
+            Source::Generator { expr, .. } => {
+                out.extend(crate::refs::referenced_names(expr));
+                crate::refs::collect_string_interpolation_refs(expr, &mut out);
+            }
+            Source::Literal { .. }
+            | Source::IntRange { .. }
+            | Source::ContinuousInterval { .. }
+            | Source::Distribution { .. } => {}
+        }
+        out
+    }
+
     /// Declare this source's cardinality class for use by
     /// `clause` metadata propagation.
     pub fn cardinality(&self) -> CardinalityClass {

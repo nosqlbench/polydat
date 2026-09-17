@@ -191,28 +191,8 @@ impl Comprehension {
     /// nothing. Used by the workload validator's
     /// declared-but-unreferenced check.
     pub fn referenced_source_names(&self) -> std::collections::BTreeSet<String> {
-        use super::source::Source;
         let mut out = std::collections::BTreeSet::new();
-        self.walk_sources(&mut |source| match source {
-            Source::WorkloadParamList { name, .. } => {
-                out.insert(name.clone());
-            }
-            Source::Generator { expr, .. } => {
-                // A generator spec references names two ways: as
-                // parsed free identifiers (`concat(foo)`) and as
-                // `{name}` interpolation placeholders
-                // (`concat({foo_values})`, where the braces are
-                // string-interpolation, not expression syntax —
-                // so the expression parser alone wouldn't see
-                // them). Collect both.
-                out.extend(crate::refs::referenced_names(expr));
-                crate::refs::collect_string_interpolation_refs(expr, &mut out);
-            }
-            Source::Literal { .. }
-            | Source::IntRange { .. }
-            | Source::ContinuousInterval { .. }
-            | Source::Distribution { .. } => {}
-        });
+        self.walk_sources(&mut |source| out.extend(source.referenced_names()));
         out
     }
 

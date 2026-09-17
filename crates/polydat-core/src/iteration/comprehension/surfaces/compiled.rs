@@ -14,11 +14,14 @@
 use std::sync::Arc;
 
 use crate::iteration::comprehension::ast::Comprehension;
+use crate::iteration::comprehension::flatten::flatten_static_sources;
 use crate::iteration::comprehension::ir::{Program, compile as compile_to_ir};
 use crate::iteration::comprehension::optimize::optimize;
 use crate::iteration::comprehension::validate::{
     Mode, ValidationError, ValidationReport, validate,
 };
+
+use crate::kernel::interp::NoScope;
 
 use super::coord_stream::CoordinateStream;
 use super::instance::{KernelScope, ScopedKernelInstance};
@@ -53,15 +56,19 @@ impl CompiledComprehension {
     /// (comprehension_forms.md §5.8), with the validator's report: in
     /// `Permissive` mode a degenerate composition is a warning in the
     /// report and the comprehension compiles; in `Strict` mode it is
-    /// the error.
+    /// the error. Context-free sources are flattened first
+    /// (§10.7.0): a generator that references no name is evaluated
+    /// here, in the empty scope, and validated as the literal of its
+    /// values.
     pub fn from_ast_with(
         ast: &Comprehension,
         mode: Mode,
     ) -> Result<(Self, ValidationReport), ValidationError> {
-        let report = validate(ast, mode)?;
+        let ast = flatten_static_sources(ast, &NoScope::new());
+        let report = validate(&ast, mode)?;
         Ok((
             Self {
-                program: Arc::new(compile_to_ir(&optimize(ast.clone()))),
+                program: Arc::new(compile_to_ir(&optimize(ast))),
             },
             report,
         ))

@@ -360,6 +360,7 @@ impl Compiler {
                         &rewritten,
                         &self.producers_seen,
                         self.validation_mode(),
+                        &self.source_scope(),
                     )
                     .map_err(|e| {
                         format!(
