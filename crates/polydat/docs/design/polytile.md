@@ -426,6 +426,7 @@ projects when its order names a sampling strategy (`halton`, `sobol`,
 intervals, or `extrema` with a strata count, which takes the box's corners
 (comprehension_forms.md §3.6); for tiles and `for` alike. A discrete
 clause beside a continuous one is sampled by position in the same draw.
+
 A projection over a bound producer dispenses the producer's stream at
 render time. Two renders of the same tile never share dispense state.
 
