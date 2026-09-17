@@ -507,9 +507,9 @@ impl PolydatKernel {
     /// `SubcontextBuilder::finalize` bakes these onto the program and
     /// `from_program` seeds them on every kernel built from it; per-cycle code never mutates
     /// them.
-    // Used only by the SRD-67 subcontext tests today — the
-    // production path auto-seeds write-throughs in
-    // `from_program`, never needing a post-construction setter.
+    // Used only by the SRD-67 subcontext tests today: `from_program`
+    // auto-seeds write-throughs on every kernel built from the
+    // program, so nothing needs a post-construction setter.
     // Kept for the test surface; dead-code-lint silenced.
     #[allow(dead_code)]
     pub(crate) fn set_write_throughs(&mut self, write_throughs: Vec<KernelWriteThrough>) {

@@ -24,9 +24,9 @@ The files `ast_legacy.rs`, `parse.rs`, and
 internals. They may accept established source forms, but no
 runtime or host model may retain a legacy AST after conversion
 to the canonical `Comprehension` tree. `eval.rs` is the
-production clause-source evaluator (`eval::evaluate_spec`);
+runtime's clause-source evaluator (`eval::evaluate_spec`);
 its only legacy item is `eval::enumerate_tuples`, which nothing
-on the production path calls.
+in polydat calls.
 
 ## Compilation pipeline
 
@@ -155,10 +155,11 @@ index-sampling strategy.
 
 ## Optimization contract
 
-Optimization is a caller-invoked, semantics-preserving pass
-(see the compilation pipeline above); the in-tree surfaces do
-not run it. When run, it applies the implemented rules to a
-deterministic fixed point. A rule
+Optimization is a semantics-preserving pass the caller runs
+before compiling (see the compilation pipeline above);
+`surfaces::compile` and `CompiledComprehension::from_ast` do
+not run it on the caller's behalf. When run, it applies the
+implemented rules to a deterministic fixed point. A rule
 may fire only when its structural, cardinality, order,
 dependency, predicate, and materialization preconditions are
 proven by current metadata.

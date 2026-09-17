@@ -39,8 +39,8 @@ Every successful input path ends in
 recognize established grammar. Their types must not cross the
 canonical public boundary or be retained in a workload model.
 `eval::evaluate_spec` (in `polydat-core`) is the runtime's
-clause-source evaluator; only `eval::enumerate_tuples` is legacy
-and unused on the production path.
+clause-source evaluator; only `eval::enumerate_tuples` is legacy,
+and nothing in polydat calls it.
 
 Input-shape detection belongs at this surface. Downstream
 stages receive one canonical operator tree and must not branch
@@ -73,10 +73,10 @@ duplicate V1–V9, infer a competing cardinality model, or skip
 mandatory optimization while claiming the canonical compiled
 semantics.
 
-Validation and optimization are caller-invoked passes. The
-in-tree consumers (`surfaces::compile`,
-`CompiledComprehension::from_ast`, `evaluate_for_iteration`) do
-not run them: the surfaces go straight to `ir::compile`, and the
+Validation and optimization are passes the caller runs.
+`surfaces::compile`, `CompiledComprehension::from_ast`, and
+`evaluate_for_iteration` do not run them on the caller's behalf:
+the surfaces go straight to `ir::compile`, and the
 runtime evaluator enforces V4 at strategy invocation
 (`Strategy::accepts_input`).
 

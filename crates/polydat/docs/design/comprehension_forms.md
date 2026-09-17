@@ -636,10 +636,10 @@ comprehensions whose sources are all statically evaluable
 (per §10.7.0's eval-class partitioning — `Literal` /
 `IntRange`), callers that run `validate` on the AST get a
 best-effort V4 against static metadata as a usability nicety.
-The production path (`for` traversals, tile projections) does
-not run `validate`; it fires V4 only at strategy invocation in
-`runtime::apply_order`, which is the load-bearing check. Either
-way, the axiom is the same.
+`for` traversals and tile projections do not run `validate`;
+they fire V4 at strategy invocation in `runtime::apply_order`,
+which is the load-bearing check. Either way, the axiom is the
+same.
 
 **V4 + dependent Cartesian.** When a `cartesian`'s children
 have cross-references (dependent product per §3.2), the
@@ -699,10 +699,10 @@ finite cardinality (`Bounded(n)` or `BoundedAtMost(n)`).
 Applying these to an `Unbounded` discrete comprehension is
 invalid; it is rejected by `validate` (V6) with a clear "cannot
 reorder/zip an unbounded stream" message. The text front end
-does not run `validate`, and V6 is not checked at runtime: on
-the production path every source is evaluated to a finite
-vector before any barrier, so `Unbounded` there means "count
-unknown", not infinite. *Reason:* materialization assumes the
+does not run `validate`, and V6 is not checked at runtime: the
+runtime evaluates every source to a finite vector before any
+barrier, so `Unbounded` there means "count unknown", not
+infinite. *Reason:* materialization assumes the
 stream fits in memory; we refuse to enable a runtime OOM.
 
 V6 is the **discrete unboundedness** rejection. The companion
@@ -718,8 +718,7 @@ sampling order.
 **Axiom V7 (zip cardinality contract).** A `zip` under `Strict`
 mode requires all children's cardinalities equal. Mismatch is
 rejected by `validate` (V7) when a caller runs it against
-static metadata; on the production path (which does not run
-`validate`) the check that actually fires is
+static metadata; at evaluation the check that fires is
 `RuntimeError::UnsupportedShape` ("zip strict: child lengths
 differ") at evaluation, once every child's length is known.
 Additionally, **all children of a `zip` (under any mode) must
@@ -743,10 +742,9 @@ in an `order(_, strategy, Some(n))`
 where the strategy accepts a Continuous input (per §3.6's
 per-strategy input table) and `n` is finite. This is rejected by
 `validate` (V8) when a caller runs it; the text front end does
-not run `validate` (and cannot write a continuous source), so on
-the production path an unsampled continuous clause evaluates to
-an empty value set and falls to the runtime's empty-clause
-policy, while an `order` with no count or a non-sampling strategy
+not run `validate` (and cannot write a continuous source), so at
+evaluation an unsampled continuous clause evaluates to an empty
+value set and falls to the runtime's empty-clause policy, while an `order` with no count or a non-sampling strategy
 surfaces as `RuntimeError::OrderEval`.
 
 Additionally, every `Continuous` source must declare an
@@ -826,8 +824,8 @@ Two validation modes:
   output; consumers (workload loader, REPL, tooling) decide
   whether to print or filter them.
 - **Strict (`polydat::iteration::comprehension::validate::Mode::Strict`).** Promotes
-  every `ValidationWarning` to a hard error. Available to hosts
-  that run `validate` themselves; no built-in path uses it.
+  every `ValidationWarning` to a hard error. A mode of `validate`
+  for the caller that runs it; polydat's own paths do not.
 
 The degenerate-composition catalog (initial):
 
@@ -1432,12 +1430,11 @@ imply:
    validation (Axiom V8) — neither reaches compile.
 
 All five guarantees assume the IR was produced from an
-*optimized* AST. The optimizer is available
-(`optimize::optimize`) and is exercised by the equivalence
-tests; no production caller runs it. `for` traversals and tile
+*optimized* AST. The optimizer (`optimize::optimize`) is a pass
+the caller runs before compiling. `for` traversals and tile
 projections evaluate the authored AST directly through
-`runtime::evaluate_for_iteration`, so §9.3's bounds describe the
-IR model, not the traversal path. The un-optimized AST is the
+`runtime::evaluate_for_iteration` without it, so §9.3's bounds
+describe the IR model, not what a traversal does. The un-optimized AST is the
 correctness reference.
 
 ### 9.5 Consumption surfaces
@@ -1476,9 +1473,9 @@ The surfaces are factories on the compiled comprehension
 (`surfaces::CompiledComprehension`, obtained by `compile(&ast)`,
 `from_ast`, or `from_program`). They run the IR interpreter,
 which enumerates only statically-resolvable sources (`Literal`
-lists and `IntRange`s); they are a library/host API, not the
-path `for` traversals or tile projections take (those call
-`runtime::evaluate_for_iteration`). A `StreamerValue` exposes
+lists and `IntRange`s); a caller drives them directly, while
+`for` traversals and tile projections call
+`runtime::evaluate_for_iteration` instead. A `StreamerValue` exposes
 `compiled()` and `coordinate_stream()`; the kernel-scoping
 surfaces live on the `CompiledComprehension`:
 
@@ -1660,12 +1657,11 @@ catastrophic.
 
 The fix is a post-parse pass that rewrites the AST into a form
 whose materialization barriers are sized by the *output*, not
-the *input*. This pass is the optimizer (`optimize::optimize`).
-It is available and exercised by the equivalence tests, but no
-production caller runs it: `for` traversals and tile projections
-evaluate the authored AST directly through
-`runtime::evaluate_for_iteration`, so the rewrites below describe
-the IR model rather than the traversal path.
+the *input*. This pass is the optimizer (`optimize::optimize`),
+which the caller runs before compiling to IR. `for` traversals
+and tile projections evaluate the authored AST directly through
+`runtime::evaluate_for_iteration` without it, so the rewrites
+below describe the IR model rather than what a traversal does.
 
 ### 10.1 What "push-down" means here
 
@@ -2416,9 +2412,9 @@ check: `runtime::apply_order` calls
 `accepts_input(input.index_fn.as_ref())` before `apply` and
 surfaces a rejection as `RuntimeError::StrategyRejectsInput`.
 Callers that run `validate` on the AST get a best-effort V4
-against static metadata; the production path (`for` traversals,
-tile projections) fires V4 only at strategy invocation. Either
-way, V4 is the same axiom; only the *when* changes.
+against static metadata; `for` traversals and tile projections
+fire V4 at strategy invocation. Either way, V4 is the same
+axiom; only the *when* changes.
 
 #### 10.7.9 Why this matters
 
@@ -3313,8 +3309,9 @@ AST: `cartesian(clause(k, 1..10), clause(profile, {profiles}))` — same as §11
 Three consumption patterns from the same `sweep` (a
 `StreamerValue`). These surfaces run the IR interpreter, so
 they serve statically-resolvable sources (`1..10` here; a
-`{profiles}` param would need the runtime path); they are a
-library/host API, not what a `for` traversal uses (§9.5.2).
+`{profiles}` param needs `runtime::evaluate_for_iteration`); a
+caller drives them directly, and a `for` traversal does not
+use them (§9.5.2).
 `PolydatKernelScope::new(canonical, parent)` takes two
 `Arc<PolydatKernel>`s and is the `KernelScope` implementation
 for polydat kernels:
@@ -3419,16 +3416,16 @@ the evaluation-side modules are `polydat_core` only.
   and `spec::ComprehensionSpec` are the same normalization for text
   and serde input handed in directly. `metadata`, `cardinality`,
   `strategy`, and `source` are likewise grammar-side.
-- **Production path** (what `for` traversals in
-  `dsl/traversal.rs` and tile projections in `dsl/tile_lower.rs`
-  call): `polydat_core::iteration::comprehension::runtime::evaluate_for_iteration`
+- **What `for` traversals (`dsl/traversal.rs`) and tile
+  projections (`dsl/tile_lower.rs`) call**:
+  `polydat_core::iteration::comprehension::runtime::evaluate_for_iteration`
   evaluates the authored AST against a `Lookup` view of the
   scope, through `eval` / `eval_source` / `source_values` for
   the clause sources and `strategies` for `order`;
   `streamer_value` is the `Ext` carrier a comprehension binds
   to.
-- **Library-only** (no production caller; exercised by tests and
-  hosts): `validate` enforces V1–V9 for callers that run it;
+- **What a caller drives directly** (polydat's own paths do not
+  call these): `validate` enforces V1–V9 for callers that run it;
   `optimize` applies §10 as a separate AST→AST pass; `ir` owns
   the immutable stack program (`ir::compile::compile` is the
   only AST→IR path) and its interpreter over `Literal` /
