@@ -324,9 +324,15 @@ impl TileLowering {
                     // The same resolution the `for` construct uses, so
                     // inline text, bound producers, and derivations
                     // (`base where ... order ...`) all project.
-                    let comprehension =
-                        super::traversal::resolve_source(source, &compiler.producers_seen)
-                            .map_err(|e| format!("tile '{}': projection: {e}", self.tile_name))?;
+                    let (comprehension, warnings) = super::traversal::resolve_source_with(
+                        source,
+                        &compiler.producers_seen,
+                        compiler.validation_mode(),
+                    )
+                    .map_err(|e| format!("tile '{}': projection: {e}", self.tile_name))?;
+                    compiler
+                        .tile_events
+                        .extend(super::traversal::warning_events(source, &warnings));
                     self.check_bounded(&comprehension, &source.text)?;
                     self.check_predicates(&comprehension, &source.text)?;
                     let stream =
@@ -790,8 +796,15 @@ impl TileLowering {
     ) -> Result<TileOp, String> {
         // Validate the nested source here, in the enclosing scope, so a
         // bad source is this tile's error and its element names are known.
-        let comprehension = super::traversal::resolve_source(source, &compiler.producers_seen)
-            .map_err(|e| format!("tile '{}': nested projection: {e}", self.tile_name))?;
+        let (comprehension, warnings) = super::traversal::resolve_source_with(
+            source,
+            &compiler.producers_seen,
+            compiler.validation_mode(),
+        )
+        .map_err(|e| format!("tile '{}': nested projection: {e}", self.tile_name))?;
+        compiler
+            .tile_events
+            .extend(super::traversal::warning_events(source, &warnings));
         self.check_bounded(&comprehension, &source.text)?;
         self.check_predicates(&comprehension, &source.text)?;
         let mut probe = |expr: &str| self.generator_type(compiler, asm, expr, Some(&*ctx));

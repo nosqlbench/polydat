@@ -17,7 +17,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::ast::PortType;
 use crate::iteration::comprehension::source::{LiteralValue, Source};
-use crate::iteration::comprehension::{Comprehension, StreamerValue};
+use crate::iteration::comprehension::{
+    Comprehension, Mode as ValidationMode, StreamerValue, ValidationWarning,
+};
 use crate::kernel::PolydatProgram;
 
 use super::ast::{
@@ -143,6 +145,8 @@ pub struct Producer {
 /// producers bound earlier in the file, in document order.
 pub fn strip_for_forms(
     file: &PolydatFile,
+    mode: ValidationMode,
+    events: &mut Vec<super::events::CompileEvent>,
 ) -> Result<(PolydatFile, Vec<ForStmt>, Vec<Producer>), String> {
     let mut parent = Vec::with_capacity(file.statements.len());
     let mut fors = Vec::new();
@@ -154,7 +158,8 @@ pub fn strip_for_forms(
                 let Expr::For(source) = &b.value else {
                     unreachable!()
                 };
-                let comprehension = resolve_source(source, &producers)?;
+                let (comprehension, warnings) = resolve_source_with(source, &producers, mode)?;
+                events.extend(warning_events(source, &warnings));
                 let name = b.targets.join(",");
                 let value = StreamerValue::new(source.text.clone(), comprehension.clone());
                 parent.push(Statement::Binding(Binding {
@@ -185,6 +190,34 @@ pub fn strip_for_forms(
 /// producer reference to the producer bound in the same scope, and a
 /// derivation to the base producer with its filter and order applied.
 pub fn resolve_source(source: &ForSource, producers: &[Producer]) -> Result<Comprehension, String> {
+    resolve_source_with(source, producers, ValidationMode::Permissive).map(|(c, _)| c)
+}
+
+/// The compile events for the validator's warnings on `source`, each
+/// placed at the statement that names the comprehension.
+pub(super) fn warning_events(
+    source: &ForSource,
+    warnings: &[ValidationWarning],
+) -> Vec<super::events::CompileEvent> {
+    warnings
+        .iter()
+        .map(|w| super::events::CompileEvent::ComprehensionWarning {
+            source: source.text.clone(),
+            line: source.span.line,
+            col: source.span.col,
+            warning: w.to_string(),
+        })
+        .collect()
+}
+
+/// [`resolve_source`] under a validation mode (comprehension_forms.md
+/// §5.8): a strict compile refuses a degenerate composition, a
+/// permissive one returns it as a warning for the compile event log.
+pub fn resolve_source_with(
+    source: &ForSource,
+    producers: &[Producer],
+    mode: ValidationMode,
+) -> Result<(Comprehension, Vec<ValidationWarning>), String> {
     let find = |name: &str| -> Result<Comprehension, String> {
         producers
             .iter()
@@ -230,12 +263,9 @@ pub fn resolve_source(source: &ForSource, producers: &[Producer]) -> Result<Comp
     // Validation is a stage of the compile (comprehension_forms.md §5):
     // a comprehension that violates a V-axiom is refused at the
     // statement that names it, whether written inline or derived.
-    crate::iteration::comprehension::validate(
-        &comprehension,
-        crate::iteration::comprehension::Mode::Permissive,
-    )
-    .map_err(|e| at(&e))?;
-    Ok(comprehension)
+    let report =
+        crate::iteration::comprehension::validate(&comprehension, mode).map_err(|e| at(&e))?;
+    Ok((comprehension, report.warnings))
 }
 
 /// Parse an `order` spec such as `halton/5` into the algebra's strategy

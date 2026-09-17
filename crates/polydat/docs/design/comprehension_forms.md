@@ -767,10 +767,14 @@ Two validation modes:
   the location, the degeneracy reason, and a suggested
   alternative if one exists. The comprehension compiles and
   runs. Warnings surface through the validator's structured
-  output; consumers (workload loader, REPL, tooling) decide
+  output (`from_ast_with`) and, in a compile, as
+  `ComprehensionWarning` events in the compile event log; consumers
+  (workload loader, REPL, tooling) decide
   whether to print or filter them.
 - **Strict (`polydat::iteration::comprehension::validate::Mode::Strict`).** Promotes
-  every `ValidationWarning` to a hard error. Used by
+  every `ValidationWarning` to a hard error. Selected by a strict
+  compile (`CompileOptions::strict`, the binary's `--strict`) and by
+  `CompiledComprehension::from_ast_with(_, Mode::Strict)`. Used by
   workload-loading paths that want a clean bill of health.
 
 The degenerate-composition catalog (initial):

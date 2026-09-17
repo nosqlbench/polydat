@@ -16,7 +16,9 @@ use std::sync::Arc;
 use crate::iteration::comprehension::ast::Comprehension;
 use crate::iteration::comprehension::ir::{Program, compile as compile_to_ir};
 use crate::iteration::comprehension::optimize::optimize;
-use crate::iteration::comprehension::validate::{Mode, ValidationError, validate};
+use crate::iteration::comprehension::validate::{
+    Mode, ValidationError, ValidationReport, validate,
+};
 
 use super::coord_stream::CoordinateStream;
 use super::instance::{KernelScope, ScopedKernelInstance};
@@ -44,10 +46,25 @@ impl CompiledComprehension {
     /// violates a V-axiom is refused here, and the §9.3 resource
     /// bounds hold for the program this returns.
     pub fn from_ast(ast: &Comprehension) -> Result<Self, ValidationError> {
-        validate(ast, Mode::Permissive)?;
-        Ok(Self {
-            program: Arc::new(compile_to_ir(&optimize(ast.clone()))),
-        })
+        Self::from_ast_with(ast, Mode::Permissive).map(|(compiled, _)| compiled)
+    }
+
+    /// [`from_ast`](Self::from_ast) under a validation mode
+    /// (comprehension_forms.md §5.8), with the validator's report: in
+    /// `Permissive` mode a degenerate composition is a warning in the
+    /// report and the comprehension compiles; in `Strict` mode it is
+    /// the error.
+    pub fn from_ast_with(
+        ast: &Comprehension,
+        mode: Mode,
+    ) -> Result<(Self, ValidationReport), ValidationError> {
+        let report = validate(ast, mode)?;
+        Ok((
+            Self {
+                program: Arc::new(compile_to_ir(&optimize(ast.clone()))),
+            },
+            report,
+        ))
     }
 
     /// Wrap an already-compiled program (tests use this for
@@ -159,6 +176,24 @@ mod tests {
             "{err}"
         );
         assert!(err.to_string().starts_with("V1:"), "{err}");
+    }
+
+    /// Validation modes (comprehension_forms.md §5.8): a degenerate
+    /// composition is a warning in the permissive report and the error
+    /// of a strict compile.
+    #[test]
+    fn from_ast_with_reports_or_refuses_a_degenerate_composition() {
+        use crate::iteration::comprehension::strategy::StrategyName;
+        use crate::iteration::comprehension::validate::ValidationWarning;
+        let ast = Comprehension::order(clause("k", &[1, 2, 3]), StrategyName::Extrema, Some(1));
+        let (_, report) = CompiledComprehension::from_ast_with(&ast, Mode::Permissive).unwrap();
+        assert!(matches!(
+            report.warnings.as_slice(),
+            [ValidationWarning::DegenerateGeometric { .. }]
+        ));
+        let err = CompiledComprehension::from_ast_with(&ast, Mode::Strict).unwrap_err();
+        assert!(matches!(err, ValidationError::StrictWarning(_)), "{err}");
+        assert!(err.to_string().starts_with("strict mode:"), "{err}");
     }
 
     #[test]

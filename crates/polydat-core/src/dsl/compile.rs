@@ -1553,8 +1553,10 @@ pub(super) struct Compiler {
     /// Producer bindings seen so far, so tile projections over a
     /// producer can type their elements.
     pub(super) producers_seen: Vec<super::traversal::Producer>,
-    /// SRD 114 §4.4: one `TileHoleTyped` event per hole, handed to the
-    /// compile event log so `explain tiles` can show how each hole was
+    /// Events raised while lowering, handed to the compile event log:
+    /// one `TileHoleTyped` per hole (SRD 114 §4.4), so `explain tiles`
+    /// can show how each hole was typed and encoded, and one
+    /// `ComprehensionWarning` per degenerate composition (§5.8).
     /// typed and encoded.
     pub(super) tile_events: Vec<super::events::CompileEvent>,
     /// The compile ledger of the tree being compiled: the root's, handed
@@ -1577,6 +1579,17 @@ pub(super) struct DeferredExtent {
 }
 
 impl Compiler {
+    /// The comprehension validation mode of this compile
+    /// (comprehension_forms.md §5.8): a strict compile refuses a
+    /// degenerate composition, a lax one warns about it.
+    pub(super) fn validation_mode(&self) -> crate::iteration::comprehension::Mode {
+        if self.strict {
+            crate::iteration::comprehension::Mode::Strict
+        } else {
+            crate::iteration::comprehension::Mode::Permissive
+        }
+    }
+
     pub(super) fn with_lib_paths(
         source_dir: Option<PathBuf>,
         polydat_lib_paths: Vec<PathBuf>,
@@ -2105,10 +2118,15 @@ impl Compiler {
         producers: &[super::traversal::Producer],
         type_of: &dyn Fn(&str) -> Option<crate::ast::PortType>,
     ) -> Result<Vec<super::traversal::Traversal>, String> {
-        use super::traversal::{Traversal, child_file, element_types, resolve_source};
+        use super::traversal::{
+            Traversal, child_file, element_types, resolve_source_with, warning_events,
+        };
         let mut out = Vec::with_capacity(for_stmts.len());
         for f in for_stmts {
-            let comprehension = resolve_source(&f.source, producers)?.clone();
+            let (comprehension, warnings) =
+                resolve_source_with(&f.source, producers, self.validation_mode())?;
+            self.tile_events
+                .extend(warning_events(&f.source, &warnings));
             let mut probe = |expr: &str| self.probe_element_type(expr);
             let elements = element_types(&comprehension, &mut probe).map_err(|e| {
                 format!(
@@ -2728,8 +2746,12 @@ fn compile_file_with<K: Built>(
     ) -> Result<K, crate::KernelError>,
 ) -> Result<(K, PolydatFile), crate::KernelError> {
     use crate::KernelError;
-    let (parent_file, for_stmts, producers) =
-        super::traversal::strip_for_forms(file).map_err(KernelError::Source)?;
+    let (parent_file, for_stmts, producers) = super::traversal::strip_for_forms(
+        file,
+        compiler.validation_mode(),
+        &mut compiler.tile_events,
+    )
+    .map_err(KernelError::Source)?;
     compiler.producers_seen = producers.clone();
     let asm = compiler
         .assemble_parent(&parent_file, filter)

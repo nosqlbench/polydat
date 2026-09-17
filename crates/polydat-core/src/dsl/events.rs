@@ -116,6 +116,19 @@ pub enum CompileEvent {
         /// Where the widening was inserted.
         context: String,
     },
+    /// A degenerate composition the comprehension validator warns
+    /// about (comprehension_forms.md §5.8): the comprehension
+    /// compiles and runs; a strict compile refuses it instead.
+    ComprehensionWarning {
+        /// The comprehension text as written.
+        source: String,
+        /// Line of the statement that names it.
+        line: usize,
+        /// Column of the statement that names it.
+        col: usize,
+        /// The warning, rendered.
+        warning: String,
+    },
     /// Warning during compilation.
     Warning {
         /// The warning text.
@@ -245,6 +258,7 @@ impl CompileEvent {
             } => EventLevel::Advisory,
             CompileEvent::TypeAdapterInserted { .. } => EventLevel::Advisory,
             CompileEvent::TypeWidening { .. } => EventLevel::Advisory,
+            CompileEvent::ComprehensionWarning { .. } => EventLevel::Advisory,
             CompileEvent::LegacyTranslated { .. } => EventLevel::Advisory,
             CompileEvent::PragmaAcknowledged { .. } => EventLevel::Advisory,
             CompileEvent::AssertionInserted { .. } => EventLevel::Advisory,
@@ -336,6 +350,8 @@ impl CompileEventLog {
                 format!("param '{name}' = {value}"),
             CompileEvent::ConfigWireCycleWarning { node, port } =>
                 format!("config wire '{port}' on '{node}' connected to cycle-time source"),
+            CompileEvent::ComprehensionWarning { source, line, col, warning } =>
+                format!("`for {source}` at line {line}, col {col}: {warning}"),
             CompileEvent::TypeWidening { from, to, context } =>
                 format!("widening {from} → {to} in {context}"),
             CompileEvent::Warning { message } =>

@@ -356,15 +356,20 @@ impl Compiler {
                                 func_name
                             )
                         })?;
-                    let comprehension =
-                        super::traversal::resolve_source(&rewritten, &self.producers_seen)
-                            .map_err(|e| {
-                                format!(
-                                    "producer '{}' inside module '{}': {e}",
-                                    b.targets.join(","),
-                                    func_name
-                                )
-                            })?;
+                    let (comprehension, warnings) = super::traversal::resolve_source_with(
+                        &rewritten,
+                        &self.producers_seen,
+                        self.validation_mode(),
+                    )
+                    .map_err(|e| {
+                        format!(
+                            "producer '{}' inside module '{}': {e}",
+                            b.targets.join(","),
+                            func_name
+                        )
+                    })?;
+                    self.tile_events
+                        .extend(super::traversal::warning_events(&rewritten, &warnings));
                     let name = format!("{prefix}{}", b.targets.join(","));
                     let value = crate::iteration::comprehension::StreamerValue::new(
                         rewritten.text.clone(),

@@ -142,6 +142,10 @@ pub enum ValidationError {
         /// Which child mismatches, and how.
         reason: String,
     },
+
+    /// Strict mode (spec §5.8): a degenerate composition the
+    /// permissive mode only warns about.
+    StrictWarning(ValidationWarning),
 }
 
 impl std::fmt::Display for ValidationError {
@@ -188,6 +192,7 @@ impl std::fmt::Display for ValidationError {
             Self::V8ContinuousRequirement { reason } => {
                 write!(f, "V8: continuous source: {reason}")
             }
+            Self::StrictWarning(w) => write!(f, "strict mode: {w}"),
             Self::V9UnionClassMismatch { reason } => {
                 write!(f, "V9: union children differ in class: {reason}")
             }
@@ -232,6 +237,29 @@ pub enum ValidationWarning {
     },
 }
 
+impl std::fmt::Display for ValidationWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DegenerateGeometric { strategy } => write!(
+                f,
+                "`{strategy:?}` over a one-axis input collapses to its ends; use `Lex` with a truncation, or restate over a multi-axis cartesian"
+            ),
+            Self::LhsDegenerate => {
+                write!(f, "`Lhs` over a one-axis input is `Shuffle`; say `Shuffle`")
+            }
+            Self::TriviallyTrueFilter => write!(f, "the filter is always true; drop it"),
+            Self::TriviallyFalseFilter => write!(
+                f,
+                "the filter is always false; the comprehension dispenses nothing"
+            ),
+            Self::SingletonCombinator { combinator } => write!(
+                f,
+                "`{combinator}` over one child is that child; the wrapper adds nothing"
+            ),
+        }
+    }
+}
+
 /// Validate a comprehension AST per spec §5.
 ///
 /// In `Permissive` mode, V1-V9 errors abort with a typed
@@ -244,20 +272,11 @@ pub fn validate(c: &Comprehension, mode: Mode) -> Result<ValidationReport, Valid
     };
     visit(c, &mut report)?;
     if mode == Mode::Strict
-        && let Some(_warning) = report.warnings.first()
+        && let Some(warning) = report.warnings.first()
     {
-        // Strict-mode promotion: encode the first warning as a
-        // V8-like error using a synthetic reason. We don't
-        // currently have a dedicated ValidationError variant
-        // for "warning promoted"; the diagnostic is still
-        // useful because the warning itself carries the
-        // location-equivalent context.
-        return Err(ValidationError::V8ContinuousRequirement {
-            reason: format!(
-                "strict mode: warning promoted: {:?}",
-                report.warnings.first().unwrap()
-            ),
-        });
+        // Strict-mode promotion (spec §5.8): the first degenerate
+        // composition is the error.
+        return Err(ValidationError::StrictWarning(warning.clone()));
     }
     Ok(report)
 }
