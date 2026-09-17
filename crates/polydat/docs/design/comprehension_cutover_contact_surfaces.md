@@ -39,8 +39,9 @@ Every successful input path ends in
 recognize established grammar. Their types must not cross the
 canonical public boundary or be retained in a workload model.
 `eval::evaluate_spec` (in `polydat-core`) is the runtime's
-clause-source evaluator; only `eval::enumerate_tuples` is legacy,
-and nothing in polydat calls it.
+clause-source evaluator. `eval::enumerate_tuples` enumerates the
+`ast_legacy` clause form directly; polydat's own paths call
+`runtime::evaluate_for_iteration`.
 
 Input-shape detection belongs at this surface. Downstream
 stages receive one canonical operator tree and must not branch

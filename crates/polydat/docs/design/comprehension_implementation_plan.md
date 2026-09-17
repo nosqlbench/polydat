@@ -25,8 +25,8 @@ internals. They may accept established source forms, but no
 runtime or host model may retain a legacy AST after conversion
 to the canonical `Comprehension` tree. `eval.rs` is the
 runtime's clause-source evaluator (`eval::evaluate_spec`);
-its only legacy item is `eval::enumerate_tuples`, which nothing
-in polydat calls.
+`eval::enumerate_tuples` enumerates the `ast_legacy` clause form
+directly; polydat's own paths call `runtime::evaluate_for_iteration`.
 
 ## Compilation pipeline
 

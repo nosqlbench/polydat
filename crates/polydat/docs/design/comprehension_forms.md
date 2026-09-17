@@ -1150,7 +1150,7 @@ Union is reached from text only through the inferred form of
 §8.4 (repeated names); there is no bracketed `for [ … ]` form.
 The `for` grammar is `clause ("," clause)* ("where" …)? ("order"
 …)?`. The text front end also rejects any non-`Lex` `order` over
-a union (the legacy `Comprehension::validate` check), so an
+a union (`ast_legacy::Comprehension::validate`), so an
 index-space strategy over a union is writable only by
 constructing the AST (`Comprehension::union` /
 `Comprehension::order`).
@@ -3411,7 +3411,7 @@ the evaluation-side modules are `polydat_core` only.
   clause/predicate/order form that `spec::legacy_to_algebra`
   converts into that tree before retention; the flat form is the
   parser's intermediate, never a retained representation, and the
-  only validation it runs is the legacy `Comprehension::validate`
+  only validation it runs is `ast_legacy::Comprehension::validate`
   (duplicate names; non-`Lex` order over a union). `spec::parse_text`
   and `spec::ComprehensionSpec` are the same normalization for text
   and serde input handed in directly. `metadata`, `cardinality`,
