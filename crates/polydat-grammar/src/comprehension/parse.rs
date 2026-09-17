@@ -282,20 +282,6 @@ pub fn parse_comprehension_text(text: &str) -> Result<Comprehension, String> {
     Ok(comp)
 }
 
-/// Backward-compat shim — call [`Comprehension::validate`]
-/// instead. Kept for external callers; the workspace no longer
-/// calls it.
-#[deprecated(note = "use Comprehension::validate() — single source of truth for AST invariants")]
-pub fn validate_order_for_mode(
-    mode: &super::ast_legacy::ComprehensionMode,
-    order: &Option<TraversalOrder>,
-) -> Result<(), String> {
-    // An order over a union is decided by the algebra's V4 at compile
-    // (comprehension_forms.md §5), not by the text front end.
-    let _ = (mode, order);
-    Ok(())
-}
-
 /// Parse an order spec string into a [`TraversalOrder`].
 ///
 /// Three syntactic shapes (per SRD-18d §"GK text grammar"):
