@@ -527,10 +527,6 @@ pub struct PolydatAssembler {
     /// Names declared with the `const` keyword. Subject to the
     /// init-binding contract (SRD 11 §"Init Binding Contract").
     const_outputs: std::collections::HashSet<String>,
-    /// Wires that must not vary per cycle, each
-    /// with the context that requires it (a producer's source reference,
-    /// for_traversal.md §3.1); `resolve` refuses one that does.
-    per_cycle_obligations: Vec<(String, String)>,
     /// SRD 15 §"Strict Wire Mode": when true, the resolver
     /// auto-inserts `AssertValue` nodes in front of every wire
     /// input whose declared `Port.constraint` can't be statically
@@ -614,7 +610,6 @@ impl PolydatAssembler {
             context: "(assembler)".into(),
             output_modifiers: HashMap::new(),
             const_outputs: std::collections::HashSet::new(),
-            per_cycle_obligations: Vec::new(),
             strict_values: false,
             strict_types: false,
             strict: false,
@@ -1540,110 +1535,14 @@ impl PolydatAssembler {
     }
 
     /// Internal: validate, resolve wiring, insert adapters, topological sort.
-    /// Require `name` not to vary per cycle: its wire chain reaches no
-    /// coordinate input and no nondeterministic node. `context` says
-    /// who requires it and heads the error `resolve` raises otherwise.
-    /// An extern, a host-written port included, is read when the scope
-    /// opens and passes (for_traversal.md §3.1: a producer is a
-    /// scope-init value and cannot vary per cycle).
-    pub fn require_not_per_cycle(&mut self, name: impl Into<String>, context: impl Into<String>) {
-        self.per_cycle_obligations
-            .push((name.into(), context.into()));
-    }
-
-    /// The per-cycle obligations against the resolved graph: a walk up
-    /// each named wire's chain for a coordinate input or a
-    /// nondeterministic node, the two things that change a value from
-    /// one cycle to the next.
-    fn check_not_per_cycle(
-        nodes: &[Box<dyn PolydatNode>],
-        wiring: &[Vec<WireSource>],
-        input_defs: &[crate::kernel::InputDef],
-        output_map: &HashMap<String, (usize, usize)>,
-        output_modifiers: &HashMap<String, crate::dsl::ast::BindingModifier>,
-        obligations: &[(String, String)],
-    ) -> Result<(), AssemblyError> {
-        use crate::kernel::InputKind;
-        if obligations.is_empty() {
-            return Ok(());
-        }
-        let classes = PolydatProgram::classify_lifecycle(
-            nodes,
-            wiring,
-            input_defs,
-            output_map,
-            output_modifiers,
-        );
-        let coordinate = |idx: usize| -> Option<String> {
-            let def = input_defs.get(idx)?;
-            matches!(def.kind, InputKind::Coordinate)
-                .then(|| format!("coordinate input '{}' changes every cycle", def.name))
-        };
-        fn per_cycle_reason(
-            nodes: &[Box<dyn PolydatNode>],
-            wiring: &[Vec<WireSource>],
-            nondeterministic: &[bool],
-            coordinate: &dyn Fn(usize) -> Option<String>,
-            node_idx: usize,
-            seen: &mut Vec<bool>,
-        ) -> Option<String> {
-            if std::mem::replace(&mut seen[node_idx], true) {
-                return None;
-            }
-            if nondeterministic[node_idx] {
-                return Some(format!(
-                    "node '{}' is nondeterministic, a value of its own on every pull",
-                    nodes[node_idx].meta().name
-                ));
-            }
-            for source in &wiring[node_idx] {
-                let reason = match source {
-                    WireSource::Input(idx) => coordinate(*idx),
-                    WireSource::NodeOutput(up, _) => {
-                        per_cycle_reason(nodes, wiring, nondeterministic, coordinate, *up, seen)
-                    }
-                };
-                if reason.is_some() {
-                    return reason;
-                }
-            }
-            None
-        }
-        for (name, context) in obligations {
-            let reason = if let Some(idx) = input_defs.iter().position(|d| &d.name == name) {
-                coordinate(idx)
-            } else if let Some(&(node_idx, _)) = output_map.get(name) {
-                let mut seen = vec![false; nodes.len()];
-                per_cycle_reason(
-                    nodes,
-                    wiring,
-                    &classes.nondeterministic,
-                    &coordinate,
-                    node_idx,
-                    &mut seen,
-                )
-            } else {
-                None
-            };
-            if let Some(reason) = reason {
-                return Err(AssemblyError::Other(format!(
-                    "{context}, which is per-cycle: {reason}; a producer is a scope-init \
-                     value and cannot vary per cycle (for_traversal.md §3.1)"
-                )));
-            }
-        }
-        Ok(())
-    }
-
     fn resolve(self) -> Result<ResolvedDag, AssemblyError> {
         self.resolve_with_log(None)
     }
 
     fn resolve_with_log(
-        mut self,
+        self,
         mut log: Option<&mut crate::dsl::events::CompileEventLog>,
     ) -> Result<ResolvedDag, AssemblyError> {
-        let obligations = std::mem::take(&mut self.per_cycle_obligations);
         // An extern without a default is `None` until the host sets it,
         // and every consumer reads `None` through it; the log names each
         // one so a host knows what it must set (engine_parity.md, A12).
@@ -2138,15 +2037,6 @@ impl PolydatAssembler {
                 });
             }
         }
-
-        Self::check_not_per_cycle(
-            &final_nodes,
-            &final_wiring,
-            &self.input_defs,
-            &final_output_map,
-            &self.output_modifiers,
-            &obligations,
-        )?;
 
         Ok(ResolvedDag {
             nodes: final_nodes,

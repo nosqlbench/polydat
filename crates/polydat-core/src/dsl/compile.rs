@@ -2775,23 +2775,9 @@ fn compile_file_with<K: Built>(
     )
     .map_err(KernelError::Source)?;
     compiler.producers_seen = producers.clone();
-    let mut asm = compiler
+    let asm = compiler
         .assemble_parent(&parent_file, filter)
         .map_err(KernelError::Source)?;
-    // A producer is a scope-init value (for_traversal.md §3.1): every
-    // wire its sources reference must not vary per cycle, checked
-    // where the graph resolves, on every engine.
-    for p in &producers {
-        for name in p.comprehension.referenced_source_names() {
-            asm.require_not_per_cycle(
-                name.clone(),
-                format!(
-                    "producer '{}' at line {}, col {}: `for {}` references '{name}'",
-                    p.name, p.span.line, p.span.col, p.source_text
-                ),
-            );
-        }
-    }
     // The tiles typed while assembling belong to this program's log.
     if let Some(log) = log.as_deref_mut() {
         for e in compiler.tile_events.drain(..) {
