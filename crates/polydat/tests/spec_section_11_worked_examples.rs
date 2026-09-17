@@ -57,7 +57,7 @@ fn spec_11_1_single_cartesian_basic_dispense() {
     assert_eq!(tuples.len(), 6);
 }
 
-// ---- §11.2 Cartesian with filter and order (Extrema/5) ----
+// ---- §11.2 Cartesian with filter and order (extrema/1) ----
 
 #[test]
 fn spec_11_2_filter_then_extrema_truncated() {
@@ -133,25 +133,25 @@ fn spec_11_5_halton_over_union() {
 
 #[test]
 fn spec_11_6_form_a_order_then_filter() {
-    // (cart) order extrema/4 where {k} * {limit} > 50
+    // (cart) order extrema/1 where {k} * {limit} > 50
     let cart = Comprehension::cartesian(vec![clause("k", &[1, 2, 3]), clause("limit", &[1, 2, 3])]);
-    let ordered = Comprehension::order(cart, StrategyName::Extrema, Some(4));
+    let ordered = Comprehension::order(cart, StrategyName::Extrema, Some(1));
     let form_a = Comprehension::filter(ordered, "true"); // simplified: trivially true
     let tuples = dispense(&form_a);
     // SRD-18d §214: a 3×3 has 3 strata (corners 4, edges 4, center 1);
-    // `extrema/4` keeps all of them → 9. Filter "true" keeps all 9.
-    assert_eq!(tuples.len(), 9);
+    // `extrema/1` keeps the corner stratum → 4. Filter "true" keeps all 4.
+    assert_eq!(tuples.len(), 4);
 }
 
 #[test]
 fn spec_11_6_form_b_filter_then_order() {
-    // (cart where p) order extrema/4
+    // (cart where p) order extrema/1
     let cart = Comprehension::cartesian(vec![clause("k", &[1, 2, 3]), clause("limit", &[1, 2, 3])]);
     let filtered = Comprehension::filter(cart, "true");
-    let form_b = Comprehension::order(filtered, StrategyName::Extrema, Some(4));
+    let form_b = Comprehension::order(filtered, StrategyName::Extrema, Some(1));
     let tuples = dispense(&form_b);
-    // Same 9 as form_a (filter-then-order == order-then-filter here).
-    assert_eq!(tuples.len(), 9);
+    // Same 4 as form_a (filter-then-order == order-then-filter here).
+    assert_eq!(tuples.len(), 4);
 }
 
 // ---- §11.7 Bounded zip ----

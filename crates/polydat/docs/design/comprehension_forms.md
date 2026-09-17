@@ -461,7 +461,7 @@ the shape is *always* known by the time `apply` runs.
 | `Halton` | any non-`None` | K-D Halton over Lattice; 1-D Halton sequence over Lockstep / Modular / Concatenation | **Native** — K-D Halton over `[0,1)^K` mapped to the input's interval(s); the canonical use case |
 | `Sobol` | any non-`None` | K-D Sobol over Lattice; 1-D Sobol over single-axis index spaces | **Native** — same shape as Halton, Sobol generator |
 | `Lhs` | any non-`None` | K-D stratified per-axis permutation over Lattice; uniform random over single-axis index spaces (degenerate) | **Native** — K-D Latin Hypercube over `[0,1)^K` mapped to the input's interval(s) |
-| `Extrema` | any non-`None` | K-D lattice corners over Lattice with N≥2 axes; {first, last} over 1-D (degenerate) | K-D box corners over a Continuous Lattice (interval endpoints on each axis); 2K extrema for K-D |
+| `Extrema` | any non-`None` | The lattice index space stratified by interior count, corners first (stratum 0 the 2^N corners, 1 the edges, 2 the faces, …); `/k` keeps the first k complete strata, never part of one, so `extrema/1` is every corner. {first, last} over 1-D (degenerate) | K-D box corners over a Continuous Lattice (interval endpoints on each axis); 2K extrema for K-D |
 | `Shells` | any non-`None` discrete | Concentric shells around lattice center; concentric pairs over 1-D (degenerate) | Rejected — "shells" in continuous space is ill-defined without a discretization parameter |
 | `Diagonal` / `Antidiagonal` | any non-`None` discrete | Diagonal walk over Lattice with N≥2 axes; trivial over 1-D (degenerate) | Rejected — continuous diagonal would emit uncountably many points; no canonical "step" |
 
@@ -932,10 +932,10 @@ to produce correct output:
   push-down (§10) compiles the halton sequence to direct
   index selection over the cartesian lattice. Naïve unfused
   compilation has barrier of size `|c|`.
-- `order(c, extrema/k)` — barrier of size `O(k * d)` where d
-  is cartesian dimensionality, IF push-down compiles "extrema
-  enumeration" against the lattice index space; full input
-  size otherwise.
+- `order(c, extrema/k)` — barrier of size `|c|` today: `/k` selects
+  the first k strata of the lattice index space in closed form, but
+  the strategy still holds its materialized input (§15.1); a lazy
+  index lookup would reduce it to the selected strata.
 - `zip(Cycle)` shorter children — barrier of size = each
   shorter child's cardinality.
 
@@ -1311,7 +1311,7 @@ The barrier working-set sizes are:
   (the strategy needs to inspect everything).
 - `ORDER_MATERIALIZE` with push-down (§10): the strategy-
   specific minimum — for halton/n over a cartesian, O(n); for
-  extrema/k, O(k·d); for shuffle/n with cartesian input,
+  extrema/k, the selected strata; for shuffle/n with cartesian input,
   O(n) index draws.
 
 There are NO hidden buffering, copy, or fan-out terms. Every
@@ -1700,12 +1700,11 @@ push-down rules:
   draw one sample per bin, zip them; this is the classical
   Latin Hypercube design over a real K-D box. For Hybrid,
   combine the two per axis. Working set: O(n · N).
-- **Extrema** (k corners): for discrete `Lattice`, enumerate
-  the 2^N lattice corner positions, sort by the strategy's
-  distance metric (per §3.6's named-strategy semantics), emit
-  the top k. Working set: O(2^N · log(2^N)) = O(N · 2^N),
-  independent of input cardinality. For N>20 the optimizer
-  keeps a heap of size k instead of materializing all corners.
+- **Extrema** (k strata): for discrete `Lattice`, enumerate the
+  lattice index space stratified by interior count, corners first
+  (§3.6), and emit the first k complete strata in closed form.
+  Working set: the selected strata, independent of input
+  cardinality.
   For Continuous, the corners are the 2^N tuples formed from
   each axis's interval endpoints (with appropriate open/closed
   treatment); same selection logic.
@@ -2866,25 +2865,25 @@ AST: `cartesian(clause(k, 1..10), clause(profile, {profiles}))`
 ```text
 for k in 1..100, limit in 1..100
   where {k} * {limit} <= 1000
-  order extrema/5
+  order extrema/1
 ```
 
-AST: `order(filter(cartesian(clause(k, 1..100), clause(limit, 1..100)), "{k} * {limit} <= 1000"), Extrema, Some(5))`
+AST: `order(filter(cartesian(clause(k, 1..100), clause(limit, 1..100)), "{k} * {limit} <= 1000"), Extrema, Some(1))`
 
-- Cardinality: `BoundedAtMost(5)` (truncation cap + filter
-  survival).
+- Cardinality: `BoundedAtMost(4)` (the corner stratum, less filter
+  casualties).
 - Validity: V4 passes — Extrema requires a non-`None` Lattice
   with ≥2 axes; V5's look-through rule lets the filter sit
   between Extrema and its cartesian input without breaking the
   check. The strategy reasons about original lattice positions.
 - Footprint (naïve, pre-optimizer): O(1) per cursor for sources;
-  the filter holds no state; `ORDER_MATERIALIZE(Extrema, 5)`
+  the filter holds no state; `ORDER_MATERIALIZE(Extrema, 1)`
   inspects all surviving tuples to find extrema, so the barrier
   holds up to 10,000 candidates in the worst case.
 - Footprint (post-R2): Extrema over a 2-axis Lattice has a
-  closed-form push-down — enumerate the 2² = 4 lattice corners,
-  apply the strategy's distance metric, emit the top 5
-  (truncates to 4 since only 4 corners exist). Working set:
+  closed-form push-down — enumerate the 2² = 4 lattice corners
+  (stratum 0) and emit them: `/1` keeps the first stratum and
+  no part of the next. Working set:
   O(2^N · log 2^N) = O(N · 2^N) = O(2 · 4) = ~8 cells,
   independent of input size. The filter still runs per
   emitted-candidate tuple (V5 transparency), but the candidate
@@ -2892,7 +2891,7 @@ AST: `order(filter(cartesian(clause(k, 1..100), clause(limit, 1..100)), "{k} * {
   survivors.
 - IR (after R2): `PUSH_CLAUSE k` + `PUSH_CLAUSE limit` +
   `CARTESIAN(2)` + `FILTER("{k} * {limit} <= 1000")` +
-  `ORDER_MATERIALIZE(IndexedExtrema, 5)` + `DISPENSE`.
+  `ORDER_MATERIALIZE(IndexedExtrema, 1)` + `DISPENSE`.
 
 ### 11.3 Union of differently-modified sub-spaces
 
@@ -2993,22 +2992,22 @@ for [
 
 ```text
 // Form A — order, then filter
-fast_corner := for k in 1..10, limit in 1..10 order extrema/4
+fast_corner := for k in 1..10, limit in 1..10 order extrema/1
 filtered    := for fast_corner where {k} * {limit} > 50
 
 // Form B — filter, then order
 high_product   := for k in 1..10, limit in 1..10 where {k} * {limit} > 50
-corner_of_high := for high_product order extrema/4
+corner_of_high := for high_product order extrema/1
 ```
 
-AST A: `filter(order(cartesian(...), Extrema, Some(4)), "{k} * {limit} > 50")`
-AST B: `order(filter(cartesian(...), "{k} * {limit} > 50"), Extrema, Some(4))`
+AST A: `filter(order(cartesian(...), Extrema, Some(1)), "{k} * {limit} > 50")`
+AST B: `order(filter(cartesian(...), "{k} * {limit} > 50"), Extrema, Some(1))`
 
-- Form A: pick the 4 extrema (corners) of (k, limit), then drop
+- Form A: pick the corner stratum of (k, limit), its 4 corners, then drop
   those whose product ≤ 50. Could emit 0-4 tuples depending on
   which corners survive.
 - Form B: filter to high-product tuples first, then pick the
-  4 extrema of *those*. The "corners" are computed relative to
+  corner stratum of *those*. The "corners" are computed relative to
   the surviving set (which still uses original lattice
   positions per V5, but the survivors are a different set).
 - Both are valid. They emit different tuples. The user's
