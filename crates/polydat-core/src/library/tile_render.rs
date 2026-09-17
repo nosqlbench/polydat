@@ -79,30 +79,6 @@ impl HoleEncoding {
         )
     }
 
-    /// The encoding for a spec, interned for the process so the same
-    /// spec parses once.
-    pub fn interned(spec: &str) -> &'static HoleEncoding {
-        use std::sync::RwLock;
-        static ENCODINGS: RwLock<Option<HashMap<String, &'static HoleEncoding>>> =
-            RwLock::new(None);
-        if let Some(e) = ENCODINGS
-            .read()
-            .unwrap()
-            .as_ref()
-            .and_then(|m| m.get(spec).copied())
-        {
-            return e;
-        }
-        let mut guard = ENCODINGS.write().unwrap();
-        let map = guard.get_or_insert_with(HashMap::new);
-        if let Some(e) = map.get(spec).copied() {
-            return e;
-        }
-        let leaked: &'static HoleEncoding = Box::leak(Box::new(Self::from_spec(spec)));
-        map.insert(spec.to_string(), leaked);
-        leaked
-    }
-
     /// The encoding a spec names; a missing part takes its default.
     pub fn from_spec(spec: &str) -> Self {
         let mut parts = spec.splitn(5, '|');

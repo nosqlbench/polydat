@@ -146,31 +146,6 @@ impl ParsedFormat {
         }
     }
 
-    /// The parsed form of a format string, interned for the process
-    /// so the same text parses once. Immutable once made, like a
-    /// static string.
-    pub fn interned(fmt: &str) -> &'static ParsedFormat {
-        use std::sync::RwLock;
-        static FORMATS: RwLock<Option<std::collections::HashMap<String, &'static ParsedFormat>>> =
-            RwLock::new(None);
-        if let Some(p) = FORMATS
-            .read()
-            .unwrap()
-            .as_ref()
-            .and_then(|m| m.get(fmt).copied())
-        {
-            return p;
-        }
-        let mut guard = FORMATS.write().unwrap();
-        let map = guard.get_or_insert_with(std::collections::HashMap::new);
-        if let Some(p) = map.get(fmt).copied() {
-            return p;
-        }
-        let leaked: &'static ParsedFormat = Box::leak(Box::new(Self::from_format_str(fmt)));
-        map.insert(fmt.to_string(), leaked);
-        leaked
-    }
-
     /// Render the format over `argc` arguments fetched by index.
     /// Panics, as the node always has, when a placeholder names an
     /// argument that was not supplied.
