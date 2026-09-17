@@ -26,10 +26,7 @@
 //! The entry point is [`CompiledComprehension`], obtained via
 //! [`compile`]`(&ast)` or `CompiledComprehension::from_ast`.
 
-use std::sync::Arc;
-
 use super::ast::Comprehension;
-use super::ir::compile as compile_to_ir;
 
 pub mod compiled;
 pub mod coord_stream;
@@ -47,10 +44,9 @@ pub use polydat_kernel::{
 pub use scope_once::scope_once;
 pub use scoped_stream::ScopedKernelStream;
 
-/// Convenience: compile an AST into a [`CompiledComprehension`]
-/// ready to dispense. Equivalent to
-/// `CompiledComprehension::from_ast(ast)`.
+/// Compile an AST into a [`CompiledComprehension`] ready to
+/// dispense: the §10 optimizer runs first, then the AST → IR pass.
+/// Equivalent to `CompiledComprehension::from_ast(ast)`.
 pub fn compile(ast: &Comprehension) -> CompiledComprehension {
-    let program = Arc::new(compile_to_ir(ast));
-    CompiledComprehension::from_program(program)
+    CompiledComprehension::from_ast(ast)
 }

@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use crate::iteration::comprehension::ast::Comprehension;
 use crate::iteration::comprehension::ir::{Program, compile as compile_to_ir};
+use crate::iteration::comprehension::optimize::optimize;
 
 use super::coord_stream::CoordinateStream;
 use super::instance::{KernelScope, ScopedKernelInstance};
@@ -35,10 +36,13 @@ pub struct CompiledComprehension {
 }
 
 impl CompiledComprehension {
-    /// Compile an AST. Performs the AST → IR pass once.
+    /// Compile an AST: the §10 optimizer runs first, then the
+    /// AST → IR pass, once. Optimization is mandatory before IR
+    /// compilation (comprehension_forms.md §9.4, §10.6); the
+    /// §9.3 resource bounds hold for the program this returns.
     pub fn from_ast(ast: &Comprehension) -> Self {
         Self {
-            program: Arc::new(compile_to_ir(ast)),
+            program: Arc::new(compile_to_ir(&optimize(ast.clone()))),
         }
     }
 
@@ -120,6 +124,22 @@ mod tests {
         let ast = clause("k", &[1, 2, 3]);
         let compiled = CompiledComprehension::from_ast(&ast);
         assert!(!compiled.program().is_empty());
+    }
+
+    /// Optimization is mandatory before IR compilation
+    /// (comprehension_forms.md §9.4, §10.6): `from_ast` compiles the
+    /// optimized tree, so a program it returns is the program of the
+    /// optimized AST, and where a rule fires it is not the program of
+    /// the raw one.
+    #[test]
+    fn from_ast_compiles_the_optimized_tree() {
+        // A nested cartesian: R0b (A2) flattens it, so the raw and
+        // optimized trees compile to different programs.
+        let inner = Comprehension::cartesian(vec![clause("a", &[1, 2]), clause("b", &[3])]);
+        let ast = Comprehension::cartesian(vec![inner, clause("c", &[4])]);
+        let compiled = CompiledComprehension::from_ast(&ast);
+        assert_eq!(*compiled.program(), compile_to_ir(&optimize(ast.clone())));
+        assert_ne!(*compiled.program(), compile_to_ir(&ast));
     }
 
     #[test]
