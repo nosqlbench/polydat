@@ -45,8 +45,10 @@ pub use scope_once::scope_once;
 pub use scoped_stream::ScopedKernelStream;
 
 /// Compile an AST into a [`CompiledComprehension`] ready to
-/// dispense: the §10 optimizer runs first, then the AST → IR pass.
+/// dispense: validation, the §10 optimizer, then the AST → IR pass.
 /// Equivalent to `CompiledComprehension::from_ast(ast)`.
-pub fn compile(ast: &Comprehension) -> CompiledComprehension {
+pub fn compile(
+    ast: &Comprehension,
+) -> Result<CompiledComprehension, super::validate::ValidationError> {
     CompiledComprehension::from_ast(ast)
 }

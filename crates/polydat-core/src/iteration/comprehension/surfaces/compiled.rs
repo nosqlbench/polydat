@@ -16,6 +16,7 @@ use std::sync::Arc;
 use crate::iteration::comprehension::ast::Comprehension;
 use crate::iteration::comprehension::ir::{Program, compile as compile_to_ir};
 use crate::iteration::comprehension::optimize::optimize;
+use crate::iteration::comprehension::validate::{Mode, ValidationError, validate};
 
 use super::coord_stream::CoordinateStream;
 use super::instance::{KernelScope, ScopedKernelInstance};
@@ -36,14 +37,17 @@ pub struct CompiledComprehension {
 }
 
 impl CompiledComprehension {
-    /// Compile an AST: the §10 optimizer runs first, then the
-    /// AST → IR pass, once. Optimization is mandatory before IR
-    /// compilation (comprehension_forms.md §9.4, §10.6); the
-    /// §9.3 resource bounds hold for the program this returns.
-    pub fn from_ast(ast: &Comprehension) -> Self {
-        Self {
+    /// Compile an AST: validation (§5, V1–V9) first, then the §10
+    /// optimizer, then the AST → IR pass, once. Validation and
+    /// optimization are stages of this compile
+    /// (comprehension_forms.md §5, §9.4, §10.6): a tree that
+    /// violates a V-axiom is refused here, and the §9.3 resource
+    /// bounds hold for the program this returns.
+    pub fn from_ast(ast: &Comprehension) -> Result<Self, ValidationError> {
+        validate(ast, Mode::Permissive)?;
+        Ok(Self {
             program: Arc::new(compile_to_ir(&optimize(ast.clone()))),
-        }
+        })
     }
 
     /// Wrap an already-compiled program (tests use this for
@@ -122,7 +126,7 @@ mod tests {
     #[test]
     fn from_ast_compiles_once() {
         let ast = clause("k", &[1, 2, 3]);
-        let compiled = CompiledComprehension::from_ast(&ast);
+        let compiled = CompiledComprehension::from_ast(&ast).unwrap();
         assert!(!compiled.program().is_empty());
     }
 
@@ -137,15 +141,30 @@ mod tests {
         // optimized trees compile to different programs.
         let inner = Comprehension::cartesian(vec![clause("a", &[1, 2]), clause("b", &[3])]);
         let ast = Comprehension::cartesian(vec![inner, clause("c", &[4])]);
-        let compiled = CompiledComprehension::from_ast(&ast);
+        let compiled = CompiledComprehension::from_ast(&ast).unwrap();
         assert_eq!(*compiled.program(), compile_to_ir(&optimize(ast.clone())));
         assert_ne!(*compiled.program(), compile_to_ir(&ast));
+    }
+
+    /// Validation is a stage of the compile (comprehension_forms.md
+    /// §5): a tree that violates a V-axiom is refused by `from_ast`
+    /// with the axiom's error, not compiled.
+    #[test]
+    fn from_ast_refuses_a_tree_that_violates_a_v_axiom() {
+        // V1: a cartesian whose children bind the same name.
+        let ast = Comprehension::cartesian(vec![clause("k", &[1, 2]), clause("k", &[3, 4])]);
+        let err = CompiledComprehension::from_ast(&ast).unwrap_err();
+        assert!(
+            matches!(err, ValidationError::V1DuplicateName { ref name, .. } if name == "k"),
+            "{err}"
+        );
+        assert!(err.to_string().starts_with("V1:"), "{err}");
     }
 
     #[test]
     fn cloning_compiled_shares_arc() {
         let ast = clause("k", &[1, 2, 3]);
-        let a = CompiledComprehension::from_ast(&ast);
+        let a = CompiledComprehension::from_ast(&ast).unwrap();
         let b = a.clone();
         // Same Arc — strong_count goes up.
         let count = Arc::strong_count(&a.program);
@@ -156,7 +175,7 @@ mod tests {
     #[test]
     fn two_coordinate_streams_share_program() {
         let ast = clause("k", &[1, 2, 3]);
-        let compiled = CompiledComprehension::from_ast(&ast);
+        let compiled = CompiledComprehension::from_ast(&ast).unwrap();
         let _s1 = compiled.coordinate_stream();
         let _s2 = compiled.coordinate_stream();
         // Both streams hold an Arc; count is at least 3 (compiled +

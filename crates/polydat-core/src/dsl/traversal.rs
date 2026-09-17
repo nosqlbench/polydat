@@ -202,9 +202,15 @@ pub fn resolve_source(source: &ForSource, producers: &[Producer]) -> Result<Comp
                 )
             })
     };
-    match &source.kind {
-        ForSourceKind::Comprehension(c) => Ok(c.clone()),
-        ForSourceKind::Producer(name) => find(name),
+    let at = |e: &dyn std::fmt::Display| {
+        format!(
+            "`for {}` at line {}, col {}: {e}",
+            source.text, source.span.line, source.span.col
+        )
+    };
+    let comprehension = match &source.kind {
+        ForSourceKind::Comprehension(c) => c.clone(),
+        ForSourceKind::Producer(name) => find(name)?,
         ForSourceKind::Derived {
             base,
             filter,
@@ -215,17 +221,21 @@ pub fn resolve_source(source: &ForSource, producers: &[Producer]) -> Result<Comp
                 c = Comprehension::filter(c, pred.clone());
             }
             if let Some(spec) = order {
-                let (strategy, truncation) = parse_order(spec).map_err(|e| {
-                    format!(
-                        "`for {}` at line {}, col {}: {e}",
-                        source.text, source.span.line, source.span.col
-                    )
-                })?;
+                let (strategy, truncation) = parse_order(spec).map_err(|e| at(&e))?;
                 c = Comprehension::order(c, strategy, truncation);
             }
-            Ok(c)
+            c
         }
-    }
+    };
+    // Validation is a stage of the compile (comprehension_forms.md §5):
+    // a comprehension that violates a V-axiom is refused at the
+    // statement that names it, whether written inline or derived.
+    crate::iteration::comprehension::validate(
+        &comprehension,
+        crate::iteration::comprehension::Mode::Permissive,
+    )
+    .map_err(|e| at(&e))?;
+    Ok(comprehension)
 }
 
 /// Parse an `order` spec such as `halton/5` into the algebra's strategy

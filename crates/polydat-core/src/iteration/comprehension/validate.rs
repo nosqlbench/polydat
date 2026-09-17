@@ -12,8 +12,9 @@
 //! V4 (per-strategy input-shape contract) fires in two
 //! tiers per spec §10.7.8:
 //!
-//! 1. **Compile-time best-effort** — this module, when a caller
-//!    runs `validate` on the AST, against the AST's static
+//! 1. **Compile-time** — this module, run by the compile stage
+//!    (`CompiledComprehension::from_ast` and the `for` lowering)
+//!    on the AST, against the AST's static
 //!    metadata-derived [`IndexFn`]; catches shape violations
 //!    the static estimate can prove. For
 //!    [`crate::iteration::comprehension::eval_source::EvalClass::Static`]
@@ -143,9 +144,62 @@ pub enum ValidationError {
     },
 }
 
+impl std::fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::V1DuplicateName { combinator, name } => {
+                write!(
+                    f,
+                    "V1: `{combinator}` binds the name `{name}` more than once"
+                )
+            }
+            Self::V2ShapeMismatch { expected, actual } => write!(
+                f,
+                "V2: tuple shape ({}) does not match ({})",
+                actual.join(", "),
+                expected.join(", ")
+            ),
+            Self::V3UnresolvedNames {
+                predicate,
+                coords,
+                unresolved,
+            } => write!(
+                f,
+                "V3: predicate `{predicate}` names {} not bound by the tuple ({})",
+                unresolved.join(", "),
+                coords.join(", ")
+            ),
+            Self::V4InputShape { strategy, reason } => {
+                write!(
+                    f,
+                    "V4: strategy `{strategy:?}` cannot take this input: {reason}"
+                )
+            }
+            Self::V6UnboundedDiscrete {
+                operator,
+                cardinality,
+            } => write!(
+                f,
+                "V6: `{operator}` cannot materialize a {cardinality:?} stream"
+            ),
+            Self::V7ZipCardinality { mode, reason } => {
+                write!(f, "V7: zip in {mode:?} mode: {reason}")
+            }
+            Self::V8ContinuousRequirement { reason } => {
+                write!(f, "V8: continuous source: {reason}")
+            }
+            Self::V9UnionClassMismatch { reason } => {
+                write!(f, "V9: union children differ in class: {reason}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ValidationError {}
+
+#[derive(Debug, Clone, PartialEq)]
 /// Non-blocking warning for degenerate-but-defined compositions
 /// per spec §5.8.
-#[derive(Debug, Clone, PartialEq)]
 pub enum ValidationWarning {
     /// Lattice-geometric strategy (`Extrema` / `Shells` /
     /// `Diagonal` / `Antidiagonal`) over a 1-axis input.

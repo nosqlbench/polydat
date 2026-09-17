@@ -10,6 +10,7 @@ use polydat::iteration::comprehension::strategies::TupleValue;
 fn show(label: &str, s: &polydat::iteration::comprehension::StreamerValue) {
     let tuples: Vec<String> = s
         .coordinate_stream()
+        .unwrap()
         .map(|t| {
             let cells: Vec<String> = t
                 .bindings
@@ -54,8 +55,8 @@ fn main() {
     // Two streams from one wire never share a cursor.
     let value = kernel.pull("base");
     let base = value.as_streamer().unwrap();
-    let mut a = base.coordinate_stream();
-    let b = base.coordinate_stream();
+    let mut a = base.coordinate_stream().unwrap();
+    let b = base.coordinate_stream().unwrap();
     a.next();
     a.next();
     println!(

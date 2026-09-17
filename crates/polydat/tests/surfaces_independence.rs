@@ -40,7 +40,7 @@ fn clause(name: &str, vs: &[i64]) -> Comprehension {
 
 #[test]
 fn two_coordinate_streams_advance_independently() {
-    let compiled = compile(&clause("k", &[1, 2, 3, 4, 5]));
+    let compiled = compile(&clause("k", &[1, 2, 3, 4, 5])).unwrap();
 
     let mut a = compiled.coordinate_stream();
     let mut b = compiled.coordinate_stream();
@@ -62,7 +62,7 @@ fn two_coordinate_streams_advance_independently() {
 
 #[test]
 fn cross_surface_independence_coord_then_scoped() {
-    let compiled = compile(&clause("k", &[1, 2, 3]));
+    let compiled = compile(&clause("k", &[1, 2, 3])).unwrap();
     let parent = MockKernel("p".into());
 
     let mut coord = compiled.coordinate_stream();
@@ -79,7 +79,7 @@ fn cross_surface_independence_coord_then_scoped() {
 
 #[test]
 fn cross_surface_independence_scoped_then_coord() {
-    let compiled = compile(&clause("k", &[10, 20, 30]));
+    let compiled = compile(&clause("k", &[10, 20, 30])).unwrap();
     let parent = MockKernel("p".into());
 
     let mut scoped = compiled.scoped_kernel_stream(parent);
@@ -97,7 +97,7 @@ fn cross_surface_independence_scoped_then_coord() {
 
 #[test]
 fn scope_once_consistency_with_scoped_stream() {
-    let compiled = compile(&clause("k", &[7, 14, 21]));
+    let compiled = compile(&clause("k", &[7, 14, 21])).unwrap();
     let parent = MockKernel("p".into());
 
     let stream_instances: Vec<_> = compiled.scoped_kernel_stream(parent.clone()).collect();
@@ -116,7 +116,8 @@ fn ir_sharing_across_many_streamers() {
     let compiled = compile(&Comprehension::cartesian(vec![
         clause("a", &[1, 2, 3]),
         clause("b", &[10, 20]),
-    ]));
+    ]))
+    .unwrap();
 
     // Instantiate 100 coordinate streams; they all share IR
     // (no recompilation).
@@ -138,7 +139,8 @@ fn concurrent_pulls_no_data_races() {
     let compiled = compile(&Comprehension::cartesian(vec![
         clause("a", &[1, 2, 3]),
         clause("b", &[10, 20]),
-    ]));
+    ]))
+    .unwrap();
     let compiled = Arc::new(compiled);
 
     let mut handles = Vec::new();
@@ -174,7 +176,8 @@ fn many_streamers_all_produce_identical_sequences() {
         clause("a", &[1, 2]),
         clause("b", &[10, 20]),
         clause("c", &[100]),
-    ]));
+    ]))
+    .unwrap();
 
     let s1: Vec<Tuple> = compiled.coordinate_stream().collect();
     let s2: Vec<Tuple> = compiled.coordinate_stream().collect();
@@ -185,7 +188,7 @@ fn many_streamers_all_produce_identical_sequences() {
 
 #[test]
 fn scope_once_does_not_advance_any_cursor() {
-    let compiled = compile(&clause("k", &[1, 2, 3]));
+    let compiled = compile(&clause("k", &[1, 2, 3])).unwrap();
     let parent = MockKernel("p".into());
     let mut stream = compiled.coordinate_stream();
 

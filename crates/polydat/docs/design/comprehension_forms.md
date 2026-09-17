@@ -597,8 +597,9 @@ strategy-invocation time against the
 comprehensions whose sources are all statically evaluable
 (per §10.7.0's eval-class partitioning — `Literal` /
 `IntRange` / `ContinuousInterval` / registry-recognized
-generators per §10.7.7), the compile-time IR planner runs
-evaluation and fires V4 early as a usability nicety —
+generators per §10.7.7), the compile stage (`validate`, run by
+`CompiledComprehension::from_ast` and by the `for` lowering) fires
+V4 early as a usability nicety —
 malformed shapes error at parse time. For context-required
 sources, the early fire is skipped; runtime fire at strategy
 invocation is the load-bearing check. Either way, the axiom
@@ -2307,9 +2308,10 @@ metadata to work with?" is answered by inspecting the
 **§V4 enforcement timing.** V4 ("non-`Lex` strategies require
 the input's `IndexFn` to be non-`None`") fires at
 strategy-invocation time, against the `EvaluatedSource`. The
-compile-time IR planner may *additionally* fire V4 early as a
+compile stage (`validate`, run by `from_ast` and by the `for`
+lowering) *additionally* fires V4 early as a
 usability nicety — when an AST's sources are all statically
-evaluable, the planner runs evaluation and surfaces V4
+evaluable, the static metadata is exact and it surfaces V4
 failures at compile time. For ASTs with context-required
 sources, the early fire is skipped; runtime fire is the load-
 bearing one. Either way, V4 is the same axiom; only the
@@ -2339,7 +2341,7 @@ metadata algebra, run twice for context-required cases (once
 optimistically at compile time, once definitively at strategy
 invocation). The runtime second-fire produces the same
 metadata bundle the static path would have, only with values
-the planner didn't know yet.
+the compile stage did not know yet.
 
 ### 10.8 What the optimizer doesn't do
 
@@ -3191,7 +3193,7 @@ Three consumption patterns from the same `sweep`:
 // its CompiledComprehension. `parent` is a PolydatKernelScope over
 // the canonical kernel and the enclosing parent kernel (both
 // Arc<PolydatKernel>).
-let compiled: CompiledComprehension = sweep.compiled();
+let compiled: CompiledComprehension = sweep.compiled()?;
 let parent = PolydatKernelScope::new(canonical, parent_kernel);
 
 // First-order: a stream of coordinate tuples.

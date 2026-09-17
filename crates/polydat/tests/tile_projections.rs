@@ -101,9 +101,10 @@ fn continuous_sources_sample_with_an_order_count() {
     }
     let src = "input cycle: u64\ntile t : text := \"@for x in 0.0..1.0 order lhs/5 sep \\\" \\\" {${x | .2}}\"\n";
     assert_eq!(render(src, 0, "t").split(' ').count(), 5);
-    // A non-sampling strategy over a continuous source is a compile error.
+    // A non-sampling strategy over a continuous source is refused by
+    // V8 at the projection (validation is a stage of the compile).
     let e = err("input cycle: u64\ntile t : text := \"@for x in 0.0..1.0 order lex/4 {${x}}\"\n");
-    assert!(e.contains("sampling strategy"), "{e}");
+    assert!(e.contains("V8"), "{e}");
     assert!(e.contains("tile 't'"), "{e}");
     // An order strategy with truncation over a discrete range samples
     // exactly that many tuples.

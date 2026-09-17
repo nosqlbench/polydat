@@ -19,6 +19,7 @@ use crate::iteration::comprehension::ast::Comprehension;
 use crate::iteration::comprehension::cardinality::CardinalityClass;
 use crate::iteration::comprehension::metadata::Metadata;
 use crate::iteration::comprehension::surfaces::{CompiledComprehension, CoordinateStream, compile};
+use crate::iteration::comprehension::validate::ValidationError;
 
 /// A comprehension bound as a value.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -55,14 +56,17 @@ impl StreamerValue {
         self.metadata().cardinality
     }
 
-    /// Compile to the shared IR. Each call is independent.
-    pub fn compiled(&self) -> CompiledComprehension {
+    /// Compile to the shared IR: validation, optimization, then the
+    /// AST → IR pass. Each call is independent. A comprehension the
+    /// `for` lowering resolved was validated then and cannot fail
+    /// here; one built programmatically is validated here.
+    pub fn compiled(&self) -> Result<CompiledComprehension, ValidationError> {
         compile(&self.ast)
     }
 
     /// A fresh coordinate stream with its own dispense cursor.
-    pub fn coordinate_stream(&self) -> CoordinateStream {
-        self.compiled().coordinate_stream()
+    pub fn coordinate_stream(&self) -> Result<CoordinateStream, ValidationError> {
+        Ok(self.compiled()?.coordinate_stream())
     }
 
     /// Serialize for transport through a const node argument. The

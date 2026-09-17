@@ -78,7 +78,7 @@ mod tests {
 
     #[test]
     fn advance_returns_tuples_then_none() {
-        let compiled = compile(&clause("k", &[1, 2, 3]));
+        let compiled = compile(&clause("k", &[1, 2, 3])).unwrap();
         let mut stream = compiled.coordinate_stream();
         assert!(stream.advance().is_some());
         assert!(stream.advance().is_some());
@@ -89,7 +89,7 @@ mod tests {
 
     #[test]
     fn iterator_collect() {
-        let compiled = compile(&clause("k", &[10, 20, 30]));
+        let compiled = compile(&clause("k", &[10, 20, 30])).unwrap();
         let stream = compiled.coordinate_stream();
         let tuples: Vec<Tuple> = stream.collect();
         assert_eq!(tuples.len(), 3);
@@ -99,7 +99,7 @@ mod tests {
 
     #[test]
     fn iterator_take_truncates() {
-        let compiled = compile(&clause("k", &[1, 2, 3, 4, 5]));
+        let compiled = compile(&clause("k", &[1, 2, 3, 4, 5])).unwrap();
         let stream = compiled.coordinate_stream();
         let tuples: Vec<Tuple> = stream.take(2).collect();
         assert_eq!(tuples.len(), 2);

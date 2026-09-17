@@ -183,3 +183,17 @@ fn a_body_with_a_cursor_over_an_element_compiles() {
     assert_eq!(child.cursor_schemas().len(), 1);
     assert!(child.output_names().contains(&"row"));
 }
+
+/// Validation is a stage of the compile (comprehension_forms.md §5):
+/// a comprehension that violates a V-axiom is refused at the statement
+/// that names it, with the axiom's error. Here V4: `extrema` needs an
+/// index-addressable input, and a filter of a filter is not one.
+#[test]
+fn a_comprehension_that_violates_a_v_axiom_is_a_compile_error() {
+    let err = compile_polydat(
+        "input cycle: u64\nbase := for k in 1..10\nlow := for base where {k} < 8\ncorner := for low where {k} > 2 order extrema/1\n",
+    )
+    .unwrap_err();
+    assert!(err.contains("V4"), "{err}");
+    assert!(err.contains("line 4"), "{err}");
+}

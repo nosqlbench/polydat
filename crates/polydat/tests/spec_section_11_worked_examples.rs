@@ -198,7 +198,7 @@ fn spec_11_8_cycle_zip_with_shorter_child() {
 fn spec_11_9_derived_streamers_independent() {
     use polydat::iteration::comprehension::surfaces::compile as surfaces_compile;
     let base = Comprehension::cartesian(vec![clause("k", &[1, 2, 3]), clause("limit", &[10, 20])]);
-    let compiled = surfaces_compile(&base);
+    let compiled = surfaces_compile(&base).unwrap();
 
     let s1 = compiled.coordinate_stream();
     let s2 = compiled.coordinate_stream();
@@ -306,7 +306,7 @@ fn spec_11_13_three_surfaces_from_one_comprehension() {
     }
 
     let ast = Comprehension::cartesian(vec![clause("k", &[1, 2]), clause("profile", &[10, 20])]);
-    let compiled = surfaces_compile(&ast);
+    let compiled = surfaces_compile(&ast).unwrap();
 
     let coord_tuples: Vec<_> = compiled.coordinate_stream().collect();
     let kernel_instances: Vec<_> = compiled.scoped_kernel_stream(K("parent")).collect();

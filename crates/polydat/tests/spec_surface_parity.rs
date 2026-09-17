@@ -55,8 +55,8 @@ fn assert_dispense_parity(legacy_text: &str, spec_yaml: &str) {
     let algebra_b = parse_text(spec_yaml).expect("spec parse should succeed");
 
     // Dispense both, compare tuple-by-tuple.
-    let mut stream_a = compile(&algebra_a).coordinate_stream();
-    let mut stream_b = compile(&algebra_b).coordinate_stream();
+    let mut stream_a = compile(&algebra_a).unwrap().coordinate_stream();
+    let mut stream_b = compile(&algebra_b).unwrap().coordinate_stream();
     let tuples_a = dispense(&mut stream_a, 200);
     let tuples_b = dispense(&mut stream_b, 200);
     assert_eq!(

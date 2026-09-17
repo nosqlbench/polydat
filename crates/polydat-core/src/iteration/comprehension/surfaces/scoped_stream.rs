@@ -94,7 +94,7 @@ mod tests {
 
     #[test]
     fn advance_produces_scoped_instances() {
-        let compiled = compile(&clause("k", &[1, 2, 3]));
+        let compiled = compile(&clause("k", &[1, 2, 3])).unwrap();
         let parent = MockKernel("p".into());
         let mut stream = compiled.scoped_kernel_stream(parent);
         let mut count = 0;
@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn dispense_order_matches_coord_stream() {
-        let compiled = compile(&clause("k", &[10, 20, 30]));
+        let compiled = compile(&clause("k", &[10, 20, 30])).unwrap();
         let parent = MockKernel("p".into());
         let coord_values: Vec<TupleValue> = compiled
             .coordinate_stream()

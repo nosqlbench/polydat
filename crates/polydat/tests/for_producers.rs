@@ -51,8 +51,8 @@ fn streams_from_one_wire_advance_independently() {
     k.set_inputs(&[0]);
     let v = k.pull("sweep").clone();
     let s = v.as_streamer().unwrap();
-    let mut a = s.coordinate_stream();
-    let b = s.coordinate_stream();
+    let mut a = s.coordinate_stream().unwrap();
+    let b = s.coordinate_stream().unwrap();
     a.next();
     a.next();
     let b_all = tuples(b);
@@ -76,7 +76,7 @@ fn derived_where_filters_and_keeps_the_base_shape() {
         s.cardinality(),
         CardinalityClass::BoundedAtMost(9)
     ));
-    let got = tuples(s.coordinate_stream());
+    let got = tuples(s.coordinate_stream().unwrap());
     assert_eq!(
         got,
         vec![
@@ -97,7 +97,7 @@ fn derived_order_permutes_and_truncates() {
     );
     k.set_inputs(&[0]);
     let v = k.pull("last").clone();
-    let got = tuples(v.as_streamer().unwrap().coordinate_stream());
+    let got = tuples(v.as_streamer().unwrap().coordinate_stream().unwrap());
     assert_eq!(got, vec![vec![3, 30], vec![3, 20]]);
 }
 
@@ -112,21 +112,24 @@ fn derivations_chain_and_each_wire_is_distinct() {
             .clone()
             .as_streamer()
             .unwrap()
-            .coordinate_stream(),
+            .coordinate_stream()
+            .unwrap(),
     );
     let edges = tuples(
         k.pull("edges")
             .clone()
             .as_streamer()
             .unwrap()
-            .coordinate_stream(),
+            .coordinate_stream()
+            .unwrap(),
     );
     let tail = tuples(
         k.pull("tail")
             .clone()
             .as_streamer()
             .unwrap()
-            .coordinate_stream(),
+            .coordinate_stream()
+            .unwrap(),
     );
     assert_eq!(base.len(), 9);
     assert_eq!(edges.len(), 6);
