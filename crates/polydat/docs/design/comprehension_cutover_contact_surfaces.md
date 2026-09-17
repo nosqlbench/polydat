@@ -34,14 +34,10 @@ Companion specifications:
 Every successful input path ends in
 `ComprehensionSpec::into_algebra()`.
 
-`ast_legacy`, `parse`, and `spec::legacy_convert` (in
-`polydat-grammar`) are compatibility internals used to
+`ast_legacy`, `parse`, `eval`, and
+`spec::legacy_convert` are compatibility internals used to
 recognize established grammar. Their types must not cross the
 canonical public boundary or be retained in a workload model.
-`eval::evaluate_spec` (in `polydat-core`) is the runtime's
-clause-source evaluator. `eval::enumerate_tuples` enumerates the
-`ast_legacy` clause form directly; polydat's own paths call
-`runtime::evaluate_for_iteration`.
 
 Input-shape detection belongs at this surface. Downstream
 stages receive one canonical operator tree and must not branch
@@ -74,13 +70,6 @@ duplicate V1–V9, infer a competing cardinality model, or skip
 mandatory optimization while claiming the canonical compiled
 semantics.
 
-Validation and optimization are passes the caller runs.
-`surfaces::compile`, `CompiledComprehension::from_ast`, and
-`evaluate_for_iteration` do not run them on the caller's behalf:
-the surfaces go straight to `ir::compile`, and the
-runtime evaluator enforces V4 at strategy invocation
-(`Strategy::accepts_input`).
-
 Optimization is conservative: lack of proof leaves the tree
 unchanged. An optimizer finding is diagnostic data, not a new
 host-facing execution language.
@@ -92,8 +81,8 @@ Two execution families intentionally coexist:
 - The IR compiler/interpreter and `surfaces::*` implement
   algebra-native streams for supported static sources.
 - `runtime::evaluate_for_iteration` evaluates executor-facing
-  tuples against a `Lookup` scope (`PolydatKernel` or
-  `Layered`), so it is engine-neutral, including dependent
+  tuples against a `Lookup` scope (`PolydatKernel` or `Layered`),
+  including dependent
   Cartesian sources, interpolation, filtering, and ordering.
 
 The runtime evaluator is the authoritative choice when source

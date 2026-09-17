@@ -12,25 +12,18 @@ following remain true:
 
 1. Every public input form normalizes to the canonical
    `Comprehension` AST.
-2. Validation (`validate`, V1–V9) and the resource-bound pass
-   (`check_bounds`) are library passes a caller runs on the
-   canonical tree; the runtime path enforces V4 at strategy
-   invocation (`Strategy::accepts_input`) and does not run
-   `validate` or `check_bounds` itself. Neither has a host-side
-   substitute.
+2. Validation enforces V1–V9 without host-side substitutes.
 3. Metadata is total for every accepted AST node.
 4. Optimization preserves the exact dispense sequence and
    tuple values for every rule precondition.
-5. IR compilation preserves stack shape, and `check_bounds`
-   agrees with every opcode's declared stack effect when a
-   caller runs it before execution.
+5. IR compilation preserves stack shape and passes resource
+   bounds before execution.
 6. Static and runtime evaluators agree on their common
    supported domain.
 7. Dependent Cartesian products evaluate downstream sources
    against the selected prefix environment.
-8. PRNG-based order strategies (`Shuffle`, `Lhs`) repeat
-   exactly for equal inputs: the seed is a module constant plus
-   the input length, and there is no authored seed.
+8. Seeded order strategies repeat exactly for equal authored
+   inputs and seeds.
 9. Independent consumers do not share mutable dispense state.
 10. Scope-dependent execution uses the canonical kernel lookup
     and subcontext construction protocols.
@@ -56,8 +49,9 @@ number of tests:
 | Source semantics | `source_tests.rs`, `sampling_test.rs` |
 | Whole-crate behavior | the complete `polydat` test suite |
 
-Each named file is a module of the `suite` test binary
-(`tests/suite.rs`). Test names and counts may evolve. Removing or weakening coverage
+Each named file is a module of the `suite` test binary (`tests/suite.rs`).
+
+Test names and counts may evolve. Removing or weakening coverage
 for one of these contracts requires replacement coverage in the
 same change.
 
@@ -107,15 +101,14 @@ The runtime gate fails if:
 
 ## Validation command
 
-The authoritative local gate is the complete crate suite under
-nextest:
+The authoritative local gate is the complete crate suite under nextest
+(the workspace gate is `cargo nextest run --workspace --profile ci`; doctests
+are off and covered by `tests/rustdoc_examples.rs`):
 
 ```text
 cargo nextest run -p polydat
 ```
 
-The workspace gate is `cargo nextest run --workspace --profile
-ci`; doctests are off and covered by `tests/rustdoc_examples.rs`.
 Targeted suites may be run while developing, but they do not
 replace the complete gate at handoff.
 

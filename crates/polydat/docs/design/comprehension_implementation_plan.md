@@ -19,14 +19,11 @@ crate's public iteration surface). Its operator-tree AST is
 `polydat-grammar`, the runtime half in `polydat-core`; both are
 reachable at `polydat::iteration::comprehension::*`.
 
-The files `ast_legacy.rs`, `parse.rs`, and
+The files `ast_legacy.rs`, `parse.rs`, `eval.rs`, and
 `spec/legacy_convert.rs` are parse-pipeline compatibility
 internals. They may accept established source forms, but no
 runtime or host model may retain a legacy AST after conversion
-to the canonical `Comprehension` tree. `eval.rs` is the
-runtime's clause-source evaluator (`eval::evaluate_spec`);
-`eval::enumerate_tuples` enumerates the `ast_legacy` clause form
-directly; polydat's own paths call `runtime::evaluate_for_iteration`.
+to the canonical `Comprehension` tree.
 
 ## Compilation pipeline
 
@@ -54,13 +51,6 @@ canonical Comprehension AST
 Each stage either returns a well-formed value for the next
 stage or a typed error. Later stages do not repair an invalid
 earlier representation.
-
-The stages are separate passes over the canonical AST:
-`validate`, `optimize` (AST to AST, to a fixed point),
-`ir::compile` (the only AST-to-IR path), and `check_bounds`.
-`surfaces::compile` and `CompiledComprehension::from_ast` run
-only `ir::compile`; a caller that wants validation,
-optimization, or bounds runs those passes first.
 
 ## Representation ownership
 
@@ -129,9 +119,8 @@ another.
 
 ### Deterministic seeded strategies
 
-PRNG strategies (`Shuffle`, `Lhs`) seed from a module constant
-plus the input length; there is no authored seed, so equal
-inputs give equal sequences. Thread scheduling, address
+Seeded strategies derive their state from the authored seed
+and stable structural identity. Thread scheduling, address
 layout, and iteration among sibling consumers must not alter
 the sequence.
 
@@ -143,8 +132,8 @@ algebra and the predicate recognizer subset documented in
 algebra-native consumption surfaces.
 
 `runtime::evaluate_for_iteration` is the executor-facing path.
-It evaluates sources against a `Lookup` scope (`PolydatKernel`
-or `Layered`), preserves dependent-product environments, applies filters and strategies,
+It evaluates sources against a `Lookup` scope (`PolydatKernel` or `Layered`), preserves
+dependent-product environments, applies filters and strategies,
 and returns runtime tuples.
 
 `EvaluatedSource` distinguishes source values from source
@@ -155,11 +144,8 @@ index-sampling strategy.
 
 ## Optimization contract
 
-Optimization is a semantics-preserving pass the caller runs
-before compiling (see the compilation pipeline above);
-`surfaces::compile` and `CompiledComprehension::from_ast` do
-not run it on the caller's behalf. When run, it applies the
-implemented rules to a deterministic fixed point. A rule
+Optimization is mandatory and semantics-preserving. It runs
+the implemented rules to a deterministic fixed point. A rule
 may fire only when its structural, cardinality, order,
 dependency, predicate, and materialization preconditions are
 proven by current metadata.
