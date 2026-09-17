@@ -127,3 +127,81 @@ pub fn format_scope_coordinate_path(path: &[ScopeCoord]) -> String {
         .collect();
     strata.join(", ")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn coord(pairs: &[(&str, Value)]) -> ScopeCoord {
+        ScopeCoord::from(
+            pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), v.clone()))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    /// The exact rendering a consumer matches on: strata leaf-first,
+    /// each in parens, coordinates in declaration order, strata joined
+    /// by a comma and a space.
+    #[test]
+    fn a_path_renders_leaf_first_in_declaration_order() {
+        let path = [
+            coord(&[
+                ("k", Value::U64(10)),
+                ("limit", Value::U64(20)),
+                ("label", Value::Str("hot".into())),
+            ]),
+            coord(&[("table", Value::Str("users".into()))]),
+        ];
+        assert_eq!(
+            format_scope_coordinate_path(&path),
+            "(k=10, limit=20, label=hot), (table=users)"
+        );
+    }
+
+    /// A scope that owns no coordinate contributes nothing, so a chain
+    /// through a non-comprehension scope never renders an empty `()`.
+    #[test]
+    fn an_empty_stratum_is_omitted_anywhere_in_the_path() {
+        let outer = coord(&[("phase", Value::U64(1))]);
+        let inner = coord(&[("k", Value::U64(3))]);
+        let empty = ScopeCoord::new();
+        assert_eq!(
+            format_scope_coordinate_path(&[inner.clone(), empty.clone(), outer.clone()]),
+            "(k=3), (phase=1)"
+        );
+        assert_eq!(
+            format_scope_coordinate_path(&[empty.clone(), inner]),
+            "(k=3)"
+        );
+        assert_eq!(format_scope_coordinate_path(&[empty]), "");
+    }
+
+    /// An empty path is the empty string, so a caller wraps in parens
+    /// at its own discretion without a bare `()` to strip.
+    #[test]
+    fn an_empty_path_is_the_empty_string() {
+        assert_eq!(format_scope_coordinate_path(&[]), "");
+    }
+
+    /// Pre-map and runtime agree by construction: the same coordinates
+    /// render to the same string, which is what lets a lifecycle call
+    /// bind to a pre-mapped node without a second matching scheme.
+    #[test]
+    fn the_same_coordinates_render_to_the_same_string() {
+        let a = [coord(&[("k", Value::U64(7)), ("m", Value::F64(1.5))])];
+        let b = [coord(&[("k", Value::U64(7)), ("m", Value::F64(1.5))])];
+        assert_eq!(
+            format_scope_coordinate_path(&a),
+            format_scope_coordinate_path(&b)
+        );
+        // Order is declaration order, not name order: a different
+        // declaration order is a different position string.
+        let swapped = [coord(&[("m", Value::F64(1.5)), ("k", Value::U64(7))])];
+        assert_ne!(
+            format_scope_coordinate_path(&a),
+            format_scope_coordinate_path(&swapped)
+        );
+    }
+}
