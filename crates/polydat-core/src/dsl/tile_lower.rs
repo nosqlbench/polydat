@@ -61,7 +61,7 @@ impl Compiler {
         };
         let mut shape = SkeletonShape::default();
         shape.count(&spec.ops);
-        self.tile_events
+        self.pending_events
             .push(super::events::CompileEvent::TileCompiled {
                 tile: tile.name.clone(),
                 encoding: spec.encoding.clone(),
@@ -332,7 +332,7 @@ impl TileLowering {
                     )
                     .map_err(|e| format!("tile '{}': projection: {e}", self.tile_name))?;
                     compiler
-                        .tile_events
+                        .pending_events
                         .extend(super::traversal::warning_events(source, &warnings));
                     self.check_bounded(&comprehension, &source.text)?;
                     self.check_predicates(&comprehension, &source.text)?;
@@ -580,7 +580,7 @@ impl TileLowering {
             encoder.push_str(&format!(", format {f}"));
         }
         compiler
-            .tile_events
+            .pending_events
             .push(super::events::CompileEvent::TileHoleTyped {
                 tile: self.tile_name.clone(),
                 hole: text.to_string(),
@@ -808,7 +808,7 @@ impl TileLowering {
         )
         .map_err(|e| format!("tile '{}': nested projection: {e}", self.tile_name))?;
         compiler
-            .tile_events
+            .pending_events
             .extend(super::traversal::warning_events(source, &warnings));
         self.check_bounded(&comprehension, &source.text)?;
         self.check_predicates(&comprehension, &source.text)?;

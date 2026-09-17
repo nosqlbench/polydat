@@ -193,6 +193,7 @@ impl Compiler {
             None => return Ok(false),
         };
 
+        let nodes_before = asm.node_count();
         let module_inputs = module.inputs.clone();
         let module_input_types = module.input_types.clone();
         let module_outputs = module.outputs.clone();
@@ -369,7 +370,7 @@ impl Compiler {
                             func_name
                         )
                     })?;
-                    self.tile_events
+                    self.pending_events
                         .extend(super::traversal::warning_events(&rewritten, &warnings));
                     let name = format!("{prefix}{}", b.targets.join(","));
                     let value = crate::iteration::comprehension::StreamerValue::new(
@@ -462,6 +463,11 @@ impl Compiler {
             self.all_names.push(target.clone());
         }
 
+        self.pending_events
+            .push(super::events::CompileEvent::ModuleInlined {
+                name: func_name.to_string(),
+                nodes_added: asm.node_count().saturating_sub(nodes_before),
+            });
         Ok(true)
     }
 }

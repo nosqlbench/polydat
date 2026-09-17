@@ -5,9 +5,7 @@
 //!
 //! The compiler emits typed events for each step: binding
 //! resolution, module inlining, type adaptation, constant folding,
-//! fusion, and compilation level selection. `Parsed`,
-//! `OutputDeclared`, `ParamInjected`, and `Summary` are reserved;
-//! no compile path emits them.
+//! fusion, and compilation level selection: what `explain` retells.
 //!
 //! Events are tagged with severity levels:
 //! - **Info**: normal compilation steps (parsed, resolved, folded)
@@ -51,13 +49,6 @@ pub enum CompileEvent {
         /// Nodes the inlining added to the graph.
         nodes_added: usize,
     },
-    /// A legacy binding chain was translated to Polydat source.
-    LegacyTranslated {
-        /// The binding's name.
-        name: String,
-        /// The Polydat expression it became.
-        polydat_expr: String,
-    },
     /// Type adapter inserted between mismatched ports.
     TypeAdapterInserted {
         /// The producing node.
@@ -92,13 +83,6 @@ pub enum CompileEvent {
         node: String,
         /// The level's name.
         level: String,
-    },
-    /// Workload parameter injected as constant.
-    ParamInjected {
-        /// The parameter's name.
-        name: String,
-        /// The value injected.
-        value: String,
     },
     /// Config wire connected to a cycle-time source (performance warning).
     ConfigWireCycleWarning {
@@ -245,7 +229,6 @@ impl CompileEvent {
             CompileEvent::ModuleInlined { .. } => EventLevel::Info,
             CompileEvent::OutputDeclared { .. } => EventLevel::Info,
             CompileEvent::CompileLevelSelected { .. } => EventLevel::Info,
-            CompileEvent::ParamInjected { .. } => EventLevel::Info,
             CompileEvent::ConstantFolded { .. } => EventLevel::Info,
             CompileEvent::FusionApplied { .. } => EventLevel::Info,
             CompileEvent::Summary { .. } => EventLevel::Info,
@@ -259,7 +242,6 @@ impl CompileEvent {
             CompileEvent::TypeAdapterInserted { .. } => EventLevel::Advisory,
             CompileEvent::TypeWidening { .. } => EventLevel::Advisory,
             CompileEvent::ComprehensionWarning { .. } => EventLevel::Advisory,
-            CompileEvent::LegacyTranslated { .. } => EventLevel::Advisory,
             CompileEvent::PragmaAcknowledged { .. } => EventLevel::Advisory,
             CompileEvent::AssertionInserted { .. } => EventLevel::Advisory,
             CompileEvent::AssertionSkipped { .. } => EventLevel::Advisory,
@@ -334,8 +316,6 @@ impl CompileEventLog {
                 format!("resolved '{name}' → {node_type}"),
             CompileEvent::ModuleInlined { name, nodes_added } =>
                 format!("module '{name}' inlined ({nodes_added} nodes)"),
-            CompileEvent::LegacyTranslated { name, polydat_expr } =>
-                format!("legacy '{name}' → {polydat_expr}"),
             CompileEvent::TypeAdapterInserted { from_node, to_node, adapter } =>
                 format!("type adapter {adapter}: {from_node} → {to_node}"),
             CompileEvent::ConstantFolded { node, value } =>
@@ -346,8 +326,6 @@ impl CompileEventLog {
                 format!("output '{name}'"),
             CompileEvent::CompileLevelSelected { node, level } =>
                 format!("{node} → {level}"),
-            CompileEvent::ParamInjected { name, value } =>
-                format!("param '{name}' = {value}"),
             CompileEvent::ConfigWireCycleWarning { node, port } =>
                 format!("config wire '{port}' on '{node}' connected to cycle-time source"),
             CompileEvent::ComprehensionWarning { source, line, col, warning } =>

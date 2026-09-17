@@ -200,10 +200,12 @@ fn adapter_table_is_consistent() {
 fn classify_result<T>(result: &Result<T, String>, log: &CompileEventLog) -> Adapt {
     match result {
         Ok(_) => {
-            let has_adapter = log
-                .events()
-                .iter()
-                .any(|e| matches!(e, CompileEvent::TypeAdapterInserted { .. }));
+            let has_adapter = log.events().iter().any(|e| {
+                matches!(
+                    e,
+                    CompileEvent::TypeAdapterInserted { .. } | CompileEvent::TypeWidening { .. }
+                )
+            });
             if has_adapter {
                 Adapt::Inserted
             } else {
@@ -915,7 +917,7 @@ fn sanity_same_type_chain_has_no_adapters() {
 }
 
 #[test]
-fn sanity_u64_to_f64_widens_via_adapter() {
+fn sanity_u64_to_f64_is_reported_as_a_widening() {
     let source = "\
         input cycle: u64\n\
         a := clamp_f64(cycle, 0.0, 1.0)\n\
@@ -927,12 +929,19 @@ fn sanity_u64_to_f64_widens_via_adapter() {
         "u64→f64 widening should auto-adapt: {:?}",
         result.err()
     );
-    let has_adapter = log.events().iter().any(
-        |e| matches!(e, CompileEvent::TypeAdapterInserted { adapter, .. } if adapter == "U64→F64"),
-    );
+    let has_adapter = log.events().iter().any(|e| {
+        matches!(
+            e,
+            CompileEvent::TypeWidening {
+                from: "u64",
+                to: "f64",
+                ..
+            }
+        )
+    });
     assert!(
         has_adapter,
-        "expected a U64→F64 adapter event in log: {:?}",
+        "expected a u64 to f64 widening event in log: {:?}",
         log.events()
     );
 }

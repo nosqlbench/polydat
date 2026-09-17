@@ -782,23 +782,40 @@ println!("compile events on the default engine: {}", compiled_log.events().len()
 ```
 
 ```text
-compile events: 4
+compile events: 18
+  Info: Parsed { statements: 4 }
+  Info: BindingResolved { name: "h", node_type: "hash" }
+  Info: BindingResolved { name: "f", node_type: "f64_div" }
   Info: TileHoleTyped { tile: "t", hole: "h", wire_type: "u64", declared: None, expectation: "any JSON value (u64)", encoder: "json number", adapter: None }
   Info: TileHoleTyped { tile: "t", hole: "f | .2", wire_type: "f64", declared: None, expectation: "any JSON value (f64)", encoder: "json number, format .2", adapter: None }
   Info: TileCompiled { tile: "t", encoding: "json", statics: 3, static_bytes: 14, holes: 2, branches: 0, projections: 0, bodies: [] }
+  Info: OutputDeclared { name: "h" }
+  Info: OutputDeclared { name: "f__anon_0" }
+  Info: OutputDeclared { name: "f" }
+  Info: OutputDeclared { name: "t" }
+  Info: CompileLevelSelected { node: "const_f64", level: "native" }
+  Info: CompileLevelSelected { node: "h", level: "native" }
+  Info: CompileLevelSelected { node: "f__anon_0", level: "native" }
+  Info: CompileLevelSelected { node: "f", level: "native" }
+  Info: CompileLevelSelected { node: "t", level: "native" }
+  Info: CompileLevelSelected { node: "cycle", level: "native" }
   Info: ConstantFolded { node: "const_f64", value: "3.0" }
+  Info: Summary { nodes: 6, outputs: 5, constants_folded: 1 }
 nodes: 3, deterministic: true
 node names: ["const_f64", "__port_cycle", "jit_cone[hash+to_f64+f64_div+tile_render]"]
-compile events on the default engine: 4
+compile events on the default engine: 18
 ```
 
 The program in this section is a hash, a division, and a JSON tile with
 two holes. `CompileEvent` is an enum with one variant per kind of
 decision, each carrying its particulars, and `level` classifies it as
-info, advisory, or warning. The four events here are the two hole
+info, advisory, or warning. The events here retell the compile in order:
+the parse, each binding and the node it resolved to, the two hole
 typings, each naming the wire type it saw, what the hole's position
-expects, and the encoder it chose; the tile's compiled shape; and the
-one constant the compiler folded. Advisories, such as an implicit type
+expects, and the encoder it chose; the tile's compiled shape; the outputs
+the program exposes; the compiled form each node has, native here for
+every one; the one constant the compiler folded; and a summary of the
+resolved graph. Advisories, such as an implicit type
 widening, and warnings, such as an unknown pragma, arrive in the same
 list, so a host that wants a strict build can fail on any event whose
 level is a warning. Cone fusion is not an
@@ -808,10 +825,9 @@ an output, and one native cone that fused the hash, the conversion,
 the division, and the tile renderer, whose closure the cone calls in
 place over the state's own scratch (compiled_handles.md §6). The log
 is the
-same on every engine: the default engine records the same four events,
-the hole typings and the compiled tile from the assembly and the
-constant its own build folded, and every extern without a default is
-named on every engine. `is_deterministic`
+same on every engine: the default engine records the same events,
+from the parse to the summary, the folds its own build made among them,
+and every extern without a default is named on every engine. `is_deterministic`
 is false when any node's purity is nondeterministic, such as a
 wall-clock or a true random source, which is the check a host should
 make before relying on replay. Side-channel nodes such as `emit_row`

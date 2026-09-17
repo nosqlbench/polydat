@@ -147,17 +147,6 @@ pub enum EmbeddingError {
         /// The budget, in milliseconds.
         deadline_ms: u64,
     },
-
-    /// A node the expression references is absent from the
-    /// link-time node registry. Carries the node names that
-    /// could not be resolved. Not produced by any current
-    /// surface.
-    RegistryNotInitialised {
-        /// The node names that could not be resolved.
-        missing: Vec<String>,
-        /// The source text.
-        source: String,
-    },
 }
 
 impl std::fmt::Display for EmbeddingError {
@@ -243,11 +232,6 @@ impl std::fmt::Display for EmbeddingError {
                 f,
                 "evaluation of '{source}' exceeded deadline: \
                  {elapsed_ms}ms elapsed, {deadline_ms}ms budget"
-            ),
-            EmbeddingError::RegistryNotInitialised { missing, source } => write!(
-                f,
-                "runtime registry missing node(s) referenced by '{source}': {}",
-                missing.join(", ")
             ),
         }
     }
@@ -596,10 +580,15 @@ pub struct CompileOptions {
 pub fn compile_polydat_with_options(
     source: &str,
     options: &CompileOptions,
-    log: Option<&mut super::events::CompileEventLog>,
+    mut log: Option<&mut super::events::CompileEventLog>,
 ) -> Result<PolydatKernel, String> {
     let tokens = lexer::lex(source)?;
     let ast = parser::parse(tokens)?;
+    if let Some(log) = log.as_deref_mut() {
+        log.push(super::events::CompileEvent::Parsed {
+            statements: ast.statements.len(),
+        });
+    }
     compile_ast_with_options(&ast, source, options, log)
 }
 
@@ -1555,10 +1544,12 @@ pub(super) struct Compiler {
     pub(super) producers_seen: Vec<super::traversal::Producer>,
     /// Events raised while lowering, handed to the compile event log:
     /// one `TileHoleTyped` per hole (SRD 114 §4.4), so `explain tiles`
-    /// can show how each hole was typed and encoded, and one
-    /// `ComprehensionWarning` per degenerate composition (§5.8).
-    /// typed and encoded.
-    pub(super) tile_events: Vec<super::events::CompileEvent>,
+    /// can show how each hole was typed and encoded, one
+    /// `ComprehensionWarning` per degenerate composition (§5.8), and the
+    /// steps of this compile that report themselves (a binding resolved,
+    /// a module inlined, an output declared), merged into the log after
+    /// the parent assembles.
+    pub(super) pending_events: Vec<super::events::CompileEvent>,
     /// The compile ledger of the tree being compiled: the root's, handed
     /// to every body compiler and to the assembler of every program.
     pub(super) ledger: std::sync::Arc<crate::kernel::CompileLedger>,
@@ -1619,7 +1610,7 @@ impl Compiler {
             current_binding: None,
             tiles: Vec::new(),
             producers_seen: Vec::new(),
-            tile_events: Vec::new(),
+            pending_events: Vec::new(),
             ledger: crate::kernel::CompileLedger::new(),
         }
     }
@@ -2146,7 +2137,7 @@ impl Compiler {
                 self.validation_mode(),
                 &self.source_scope(),
             )?;
-            self.tile_events
+            self.pending_events
                 .extend(warning_events(&f.source, &warnings));
             let mut probe = |expr: &str| self.probe_element_type(expr);
             let elements = element_types(&comprehension, &mut probe).map_err(|e| {
@@ -2181,7 +2172,8 @@ impl Compiler {
                         f.source.text, f.span.line, f.span.col
                     )
                 })?;
-            self.tile_events.append(&mut child_compiler.tile_events);
+            self.pending_events
+                .append(&mut child_compiler.pending_events);
             let body = super::traversal::BodySource {
                 file: child,
                 source_text: child_compiler.source_text.clone(),
@@ -2383,6 +2375,18 @@ impl Compiler {
                         continue;
                     }
                     self.compile_binding(&mut asm, &b.targets, &b.value)?;
+                    // Every target that now names a node reports what it
+                    // resolved to: a call, an operator, or a literal alike.
+                    for target in &b.targets {
+                        if let Some(node_type) = asm.node_type_of(target) {
+                            self.pending_events.push(
+                                super::events::CompileEvent::BindingResolved {
+                                    name: target.clone(),
+                                    node_type,
+                                },
+                            );
+                        }
+                    }
                     if b.modifier != BindingModifier::NONE {
                         for target in &b.targets {
                             asm.set_output_modifier(target, b.modifier);
@@ -2561,6 +2565,12 @@ impl Compiler {
                 }
                 for name in &required_owned {
                     if self.all_names.contains(name) {
+                        self.pending_events
+                            .push(super::events::CompileEvent::OutputDeclared {
+                                name: name.clone(),
+                            });
+                    }
+                    if self.all_names.contains(name) {
                         asm.add_output(name, WireRef::node(name));
                     }
                 }
@@ -2593,6 +2603,8 @@ impl Compiler {
             }
             None => {
                 for name in &self.all_names {
+                    self.pending_events
+                        .push(super::events::CompileEvent::OutputDeclared { name: name.clone() });
                     asm.add_output(name, WireRef::node(name));
                 }
             }
@@ -2657,11 +2669,16 @@ pub fn compile_polydat_with_engine(
     source: &str,
     engine: crate::Engine,
     options: &CompileOptions,
-    log: Option<&mut super::events::CompileEventLog>,
+    mut log: Option<&mut super::events::CompileEventLog>,
 ) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
     use crate::KernelError;
     let tokens = super::lexer::lex(source).map_err(KernelError::Source)?;
     let ast = super::parser::parse(tokens).map_err(KernelError::Source)?;
+    if let Some(log) = log.as_deref_mut() {
+        log.push(super::events::CompileEvent::Parsed {
+            statements: ast.statements.len(),
+        });
+    }
     compile_ast_with_engine(&ast, source, options, log, engine)
 }
 
@@ -2771,7 +2788,7 @@ fn compile_file_with<K: Built>(
         file,
         compiler.validation_mode(),
         &compiler.source_scope(),
-        &mut compiler.tile_events,
+        &mut compiler.pending_events,
     )
     .map_err(KernelError::Source)?;
     compiler.producers_seen = producers.clone();
@@ -2780,7 +2797,7 @@ fn compile_file_with<K: Built>(
         .map_err(KernelError::Source)?;
     // The tiles typed while assembling belong to this program's log.
     if let Some(log) = log.as_deref_mut() {
-        for e in compiler.tile_events.drain(..) {
+        for e in compiler.pending_events.drain(..) {
             log.push(e);
         }
     }
@@ -2810,7 +2827,7 @@ fn compile_file_with<K: Built>(
         crate::kernel::KernelInternals::set_traversals(kernel, traversals, producers);
         // Tiles inside the bodies, typed in the child compilers.
         if let Some(log) = log {
-            for e in compiler.tile_events.drain(..) {
+            for e in compiler.pending_events.drain(..) {
                 log.push(e);
             }
         }
@@ -2990,10 +3007,6 @@ mod tests {
                 source: "expensive()".into(),
                 elapsed_ms: 5000,
                 deadline_ms: 1000,
-            },
-            EmbeddingError::RegistryNotInitialised {
-                missing: vec!["custom_node".into()],
-                source: "custom_node()".into(),
             },
         ];
         for v in variants {

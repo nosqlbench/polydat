@@ -692,6 +692,11 @@ impl PolydatAssembler {
         self.const_outputs.insert(name.to_string());
     }
 
+    /// How many nodes the graph holds so far.
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
     /// Designate a wire as a named output variate.
     pub fn add_output(&mut self, name: impl Into<String>, wire: WireRef) -> &mut Self {
         let name = name.into();
@@ -760,6 +765,14 @@ impl PolydatAssembler {
         self.outputs.keys().map(|s| s.as_str()).collect()
     }
 
+    /// The node type a named node has, when the name is a node.
+    pub fn node_type_of(&self, name: &str) -> Option<String> {
+        self.nodes
+            .iter()
+            .find(|pn| pn.name == name)
+            .map(|pn| pn.node.meta().name.clone())
+    }
+
     /// Look up the output port type of a named node.
     ///
     /// Returns the first output port's `PortType` if the node exists.
@@ -808,6 +821,7 @@ impl PolydatAssembler {
         let jit_mode = self.jit_mode.unwrap_or_default();
         let strict = self.strict;
         let mut resolved = self.resolve_with_log(log.as_deref_mut())?;
+        let (node_total, output_total) = (resolved.nodes.len(), resolved.output_order.len());
         crate::compile::cone::extract_jit_cones(&mut resolved, jit_mode);
         let _coord_names = resolved.input_names();
         let modifiers = resolved.output_modifiers.clone();
@@ -823,7 +837,7 @@ impl PolydatAssembler {
             modifiers,
             &resolved.source,
             &resolved.context,
-            log,
+            log.as_deref_mut(),
             strict,
             resolved.ledger.clone(),
         )
@@ -832,6 +846,7 @@ impl PolydatAssembler {
             kernel.set_cursor_schemas(cursors);
         }
         kernel.set_cone_mode(jit_mode);
+        Self::log_summary(log, node_total, output_total);
         Ok(kernel)
     }
 
@@ -1535,6 +1550,65 @@ impl PolydatAssembler {
     }
 
     /// Internal: validate, resolve wiring, insert adapters, topological sort.
+    /// Report the compiled form each node has
+    /// (`CompileEvent::CompileLevelSelected`), a property of the node
+    /// and its wire types, so the log is the same on every engine
+    /// (engine_parity.md): a native form, a compiled `u64` op, a slot
+    /// kit, a slot copy, or interpretation only. A node is named by
+    /// the output it produces when it produces one.
+    fn log_forms(resolved: &ResolvedDag, log: &mut crate::dsl::events::CompileEventLog) {
+        for (node_idx, node) in resolved.nodes.iter().enumerate() {
+            let wire_types = wire_types_of(resolved, node_idx);
+            let native = !matches!(
+                crate::compile::jit::classify_node_typed(node.as_ref(), &wire_types),
+                crate::compile::jit::JitOp::Fallback
+            );
+            let level = if native {
+                "native"
+            } else {
+                match node_step_op(node.as_ref(), &wire_types) {
+                    Some((crate::compile::closures::StepOp::Copy, _)) => "slot copy",
+                    Some((crate::compile::closures::StepOp::U64(_), _)) => "compiled u64 op",
+                    Some((crate::compile::closures::StepOp::Slot(_), _)) => "slot kit",
+                    None => "interpreted",
+                }
+            };
+            let name = resolved
+                .output_map
+                .iter()
+                .find(|(_, (ni, _))| *ni == node_idx)
+                .map(|(n, _)| n.clone())
+                .unwrap_or_else(|| node.meta().name.clone());
+            log.push(crate::dsl::events::CompileEvent::CompileLevelSelected {
+                node: name,
+                level: level.to_string(),
+            });
+        }
+    }
+
+    /// Close the log with the program's shape
+    /// (`CompileEvent::Summary`): the resolved node and output counts,
+    /// the same on every engine, and the constants the build folded,
+    /// counted from the log itself.
+    fn log_summary(
+        log: Option<&mut crate::dsl::events::CompileEventLog>,
+        nodes: usize,
+        outputs: usize,
+    ) {
+        if let Some(log) = log {
+            let constants_folded = log
+                .events()
+                .iter()
+                .filter(|e| matches!(e, crate::dsl::events::CompileEvent::ConstantFolded { .. }))
+                .count();
+            log.push(crate::dsl::events::CompileEvent::Summary {
+                nodes,
+                outputs,
+                constants_folded,
+            });
+        }
+    }
+
     fn resolve(self) -> Result<ResolvedDag, AssemblyError> {
         self.resolve_with_log(None)
     }
@@ -1693,10 +1767,19 @@ impl PolydatAssembler {
                             WireRef::Input(n) => n.clone(),
                             WireRef::Node(n, _) => n.clone(),
                         };
-                        log.push(crate::dsl::events::CompileEvent::TypeAdapterInserted {
-                            from_node: from_name,
-                            to_node: all_nodes[node_idx].name.clone(),
-                            adapter: format!("{source_type:?}→{expected_type:?}"),
+                        let to_name = all_nodes[node_idx].name.clone();
+                        log.push(if is_lossless_widening(source_type, expected_type) {
+                            crate::dsl::events::CompileEvent::TypeWidening {
+                                from: source_type.to_keyword(),
+                                to: expected_type.to_keyword(),
+                                context: format!("{from_name} → {to_name}"),
+                            }
+                        } else {
+                            crate::dsl::events::CompileEvent::TypeAdapterInserted {
+                                from_node: from_name,
+                                to_node: to_name,
+                                adapter: format!("{source_type:?}→{expected_type:?}"),
+                            }
                         });
                     }
 
@@ -2038,6 +2121,24 @@ impl PolydatAssembler {
             }
         }
 
+        if let Some(log) = log {
+            let resolved_view = ResolvedDag {
+                nodes: final_nodes,
+                wiring: final_wiring,
+                input_defs: self.input_defs,
+                coord_count: self.coord_count,
+                output_map: final_output_map,
+                output_order: self.output_order,
+                source: self.source,
+                context: self.context,
+                output_modifiers: self.output_modifiers,
+                const_outputs: self.const_outputs,
+                cursor_schemas: self.cursor_schemas,
+                ledger: self.ledger,
+            };
+            Self::log_forms(&resolved_view, log);
+            return Ok(resolved_view);
+        }
         Ok(ResolvedDag {
             nodes: final_nodes,
             wiring: final_wiring,
@@ -2140,6 +2241,24 @@ pub(crate) fn shared_outputs_of(resolved: &ResolvedDag) -> Vec<&str> {
 
 /// The port type of each wire input of a node, from its sources: the
 /// type a compiled lowering sees (SRD 115 §6).
+/// Whether the adapter from `from` to `to` is a lossless numeric
+/// widening, the class the adapter table lists first: reported as a
+/// `TypeWidening`, where every other adapter is a `TypeAdapterInserted`.
+fn is_lossless_widening(from: PortType, to: PortType) -> bool {
+    use PortType as P;
+    matches!(
+        (from, to),
+        (P::U64, P::F64)
+            | (P::U32, P::U64)
+            | (P::U32, P::I64)
+            | (P::U32, P::F64)
+            | (P::I32, P::I64)
+            | (P::I32, P::F64)
+            | (P::I64, P::F64)
+            | (P::F32, P::F64)
+    )
+}
+
 pub(crate) fn wire_types_of(resolved: &ResolvedDag, node_idx: usize) -> Vec<PortType> {
     resolved.wiring[node_idx]
         .iter()
@@ -2709,8 +2828,11 @@ impl PolydatAssembler {
                     Self::refuse_strict(&resolved)?;
                 }
                 let folded = log.is_some().then(|| Self::constant_sites(&resolved));
+                let (node_total, output_total) =
+                    (resolved.nodes.len(), resolved.output_order.len());
                 let kernel = Self::closures_from(resolved, prov).map_err(refused)?;
-                Self::log_folded(kernel.as_ref(), folded, log);
+                Self::log_folded(kernel.as_ref(), folded, log.as_deref_mut());
+                Self::log_summary(log, node_total, output_total);
                 Ok(kernel)
             }
             Engine::Native(prov) => {
@@ -2721,6 +2843,8 @@ impl PolydatAssembler {
                         Self::refuse_strict(&resolved)?;
                     }
                     let folded = log.is_some().then(|| Self::constant_sites(&resolved));
+                    let (node_total, output_total) =
+                        (resolved.nodes.len(), resolved.output_order.len());
                     let prov = Self::provenance_for(prov, &resolved);
                     let kernel = Self::hybrid_from(resolved).map_err(refused)?;
                     // Push on native is the push-pull kernel: push
@@ -2733,7 +2857,8 @@ impl PolydatAssembler {
                             Box::new(kernel)
                         }
                     };
-                    Self::log_folded(kernel.as_ref(), folded, log);
+                    Self::log_folded(kernel.as_ref(), folded, log.as_deref_mut());
+                    Self::log_summary(log, node_total, output_total);
                     Ok(kernel)
                 }
                 #[cfg(not(feature = "jit"))]

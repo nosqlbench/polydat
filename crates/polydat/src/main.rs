@@ -1525,11 +1525,7 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
                     .iter()
                     .filter(|e| matches!(e, CompileEvent::ModuleInlined { .. }))
                     .collect();
-                let translated: Vec<_> = events
-                    .iter()
-                    .filter(|e| matches!(e, CompileEvent::LegacyTranslated { .. }))
-                    .collect();
-                if inlined.is_empty() && translated.is_empty() {
+                if inlined.is_empty() {
                     println!("No modules were inlined. Every call resolved to a registered node.");
                 }
                 for e in inlined {
@@ -1537,11 +1533,6 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
                         println!(
                             "  module {name} was inlined, adding {nodes_added} nodes. The module boundary no longer exists in the graph."
                         );
-                    }
-                }
-                for e in translated {
-                    if let CompileEvent::LegacyTranslated { name, polydat_expr } = e {
-                        println!("  {name} was translated to {polydat_expr}");
                     }
                 }
             }

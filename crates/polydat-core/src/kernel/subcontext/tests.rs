@@ -173,49 +173,6 @@ fn finalize_rejects_import_with_no_matching_parent_name() {
     }
 }
 
-/// The compatibility-only variants render as finished diagnostics,
-/// not as promises of future work (design doc §2.2 / §7).
-#[test]
-fn compatibility_violations_render_without_pending_work_markers() {
-    let site = SourceContext::for_phase("compat").with_lines(3, 4);
-    let variants = [
-        ContractViolation::Phase2WriteThrough {
-            export: "X".into(),
-            site: site.clone(),
-            note: "tuple targets are not write-through shapes",
-        },
-        ContractViolation::Type {
-            import: "X".into(),
-            required: PortType::U64,
-            parent_export: PortType::F64,
-            site: site.clone(),
-        },
-        ContractViolation::Modifier {
-            import: "X".into(),
-            detail: "parent export is not shared".into(),
-            site,
-        },
-    ];
-    for v in variants {
-        let rendered = v.to_string();
-        assert!(
-            !rendered.contains("TODO") && !rendered.contains("Phase"),
-            "diagnostic must not promise future work: {rendered}"
-        );
-        assert!(
-            rendered.contains("`X`") && rendered.contains("phase:compat (3-4)"),
-            "diagnostic must name the binding and its site: {rendered}"
-        );
-    }
-    let wt = ContractViolation::Phase2WriteThrough {
-        export: "X".into(),
-        site: SourceContext::new("s"),
-        note: "why",
-    }
-    .to_string();
-    assert!(wt.ends_with("— why"), "note must be carried verbatim: {wt}");
-}
-
 #[test]
 fn spawn_records_named_child() {
     let parent = parent_kernel();

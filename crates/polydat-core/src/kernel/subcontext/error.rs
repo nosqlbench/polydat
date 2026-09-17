@@ -3,8 +3,6 @@
 
 //! Diagnostic types: [`SourceContext`] and [`ContractViolation`].
 
-use crate::ast::PortType;
-
 use super::name::ChildName;
 
 /// Diagnostic context attached to a [`super::ScopeModule`] —
@@ -77,13 +75,12 @@ impl SourceContext {
 /// unbound identifier in the body, which the compiler catches
 /// after `finalize`'s name-closure check on declared imports).
 ///
-/// The active set is the design doc's §7 error contract:
+/// The set is the design doc's §7 error contract:
 /// [`Self::UnboundImport`], [`Self::FinalShadow`],
 /// [`Self::DuplicateChild`], [`Self::Compile`], and
-/// [`Self::StrictNonePropagation`]. [`Self::Type`],
-/// [`Self::Modifier`], and [`Self::Phase2WriteThrough`] are
-/// retained as compatibility surface and are not emitted by the
-/// builder (design doc §2.2).
+/// [`Self::StrictNonePropagation`]. An import's type and modifier are
+/// checked by the compiler and the kernel's slot types, not here
+/// (design doc §2.2).
 #[derive(Debug, Clone)]
 pub enum ContractViolation {
     /// Rule 1 — Import resolution: an artifact import has no
@@ -91,27 +88,6 @@ pub enum ContractViolation {
     UnboundImport {
         /// The import's name.
         import: String,
-        /// Where the import is declared.
-        site: SourceContext,
-    },
-    /// Rule 1 — Type mismatch on import.
-    Type {
-        /// The import's name.
-        import: String,
-        /// The type the import requires.
-        required: PortType,
-        /// The type the parent exports.
-        parent_export: PortType,
-        /// Where the import is declared.
-        site: SourceContext,
-    },
-    /// Rule 1 — Modifier mismatch (e.g. shared import against a
-    /// non-shared parent export).
-    Modifier {
-        /// The import's name.
-        import: String,
-        /// What differs.
-        detail: String,
         /// Where the import is declared.
         site: SourceContext,
     },
@@ -126,21 +102,6 @@ pub enum ContractViolation {
     /// Rule 2 — Shared write-through rewrite was required but
     /// could not be performed.
     ///
-    /// Never emitted. The rewrite is implemented in
-    /// [`super::SubcontextBuilder::finalize`] (design doc §3.1),
-    /// which reports a rewrite that fails to produce its input
-    /// slot or synthetic output as [`Self::Compile`]; success is
-    /// visible as [`super::ScopeModule::write_throughs`]. The
-    /// variant is kept as compatibility surface for callers that
-    /// pattern-match on it (design doc §2.2).
-    Phase2WriteThrough {
-        /// The export the rewrite targeted.
-        export: String,
-        /// Where the export is declared.
-        site: SourceContext,
-        /// What the rewrite could not do.
-        note: &'static str,
-    },
     /// Named-child registry: a duplicate spawn under the same
     /// name (SRD-67 §"Named-child registry"). Reports both spawn
     /// sites.
@@ -186,33 +147,9 @@ impl std::fmt::Display for ContractViolation {
                 "unbound import `{import}` (parent does not export it) at {}",
                 site.display()
             ),
-            Self::Type {
-                import,
-                required,
-                parent_export,
-                site,
-            } => write!(
-                f,
-                "type mismatch on import `{import}`: required {required:?}, parent exports {parent_export:?} at {}",
-                site.display()
-            ),
-            Self::Modifier {
-                import,
-                detail,
-                site,
-            } => write!(
-                f,
-                "modifier mismatch on import `{import}`: {detail} at {}",
-                site.display()
-            ),
             Self::FinalShadow { export, site } => write!(
                 f,
                 "child export `{export}` shadows parent's `final` export at {}",
-                site.display()
-            ),
-            Self::Phase2WriteThrough { export, site, note } => write!(
-                f,
-                "write-through rewrite for shared export `{export}` could not be performed at {} — {note}",
                 site.display()
             ),
             Self::DuplicateChild {
