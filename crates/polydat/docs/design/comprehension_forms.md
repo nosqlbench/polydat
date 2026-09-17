@@ -3034,18 +3034,19 @@ AST: `zip([clause(x, 1..10), clause(y, 100..200..10)], Strict)`
 ### 11.8 Cycle zip with one unbounded child
 
 ```text
-for (cycle, color) in zip_cycle({cycle_stream}, [red, green, blue])
+for (tick, color) in zip_cycle({tick_stream}, [red, green, blue])
 ```
 
-AST: `zip([clause(cycle, {cycle_stream}), clause(color, [red, green, blue])], Cycle)`
+AST: `zip([clause(tick, {tick_stream}), clause(color, [red, green, blue])], Cycle)`
 
-- Cardinality: `Unbounded` (cycle_stream is unbounded;
+- Cardinality: `Unbounded` (tick_stream is unbounded;
   color repeats indefinitely).
 - Footprint: O(3) for the colors buffer (cycling requires re-
-  emit); O(1) for the unbounded `cycle` stream's per-tuple
+  emit); O(1) for the unbounded `tick` stream's per-tuple
   state.
 - Validity: V6 satisfied — no materializing order applied to
-  this; zip Cycle accepts one unbounded child.
+  this; zip Cycle accepts one unbounded child. Whether the
+  runtime evaluator streams that child is open (§15.1).
 
 ### 11.9 Derived streamers from one base
 
@@ -3375,3 +3376,50 @@ projection wire, and the cursor-declaration `over <element>` syntax
 are [Cursor Partitions](cursor_partitions.md); the algebra sees a
 plain list-source comprehension, and cursor narrowing happens at
 activation, resolved against the element.
+
+## 15. Open design questions
+
+### 15.1 Stream-first evaluation on the traversal path
+
+**The contract.** The implementation specification's first invariant is
+stream-first execution: a clause source is a stream producer, and
+materialization happens only at an operation whose metadata declares a
+barrier. §3.3 and §11.8 rest on it (`Cycle` streams its longest, possibly
+unbounded, child while buffering the others), as do §6.2's cost table and
+§10.2's R2 (a closed-form strategy selects tuples by index without
+materializing its input).
+
+**The state.** The IR interpreter behind the consumption surfaces
+(§9.5) is stream-first for cartesian, union, filter, and `Lex` order.
+The runtime evaluator that `for` traversals and tile projections use
+(`runtime::evaluate_for_iteration`) is not: every node evaluates to a
+vector, so every clause, filter, and zip is a barrier there. In both
+executors `Cycle` drains every child before emitting, and a strategy
+drains its whole input before `apply`, R2's index lookup included. No
+source the algebra can express today is infinite, so "unbounded" is, in
+this implementation, a count unknown at compile time.
+
+**What decides it.** The traversal surface is random access by contract
+(for_traversal.md §7: `len`, `seek`, `activation(index)`, fibers
+partitioned by index), so on that path the open is itself a barrier and
+a stream-first evaluator collects at the end. Stream-first evaluation
+pays off there only together with R2's lazy index lookup, which is what
+lets `order halton/n` over a large product materialize n tuples instead
+of the product. An infinite `Cycle` child can never reach a traversal;
+it is a property of the streaming surfaces alone.
+
+**Costs recorded** (2026-09-17): error timing moves from open to pull on
+the streaming surfaces, which need a fallible item; `on_empty` fires per
+prefix on first pull instead of once at open; `Cycle` must choose its
+streaming child by cardinality class and fall back to measuring when no
+child is unbounded; two stream-first executors must be kept tuple-for-
+tuple equivalent; boxed iterator composition can slow the small
+comprehensions that dominate today; the evaluator becomes harder to
+read.
+
+**Decision pending.** Either implement stream-first evaluation and R2's
+lazy lookup as one project, with the equivalence harness as the oracle
+and a measured cost at open, or narrow the invariant to the IR
+interpreter and restate §3.3, §6.2, §10.2, and §11.8 for an evaluator
+that materializes at every node. Until decided, the text above stands
+as written and the code behaves as described here.

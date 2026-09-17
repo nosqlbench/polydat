@@ -80,7 +80,9 @@ module, an equivalence precondition, and verification coverage.
 Clause sources are stream producers. A clause is not
 normalized to `Vec<Value>` as its semantic representation.
 Materialization occurs only at an IR operation whose metadata
-declares a barrier, such as a non-streaming order strategy.
+declares a barrier, such as a non-streaming order strategy. Whether
+the runtime evaluator honours this is open: comprehension_forms.md
+§15.1.
 
 ### Dependent Cartesian product
 
