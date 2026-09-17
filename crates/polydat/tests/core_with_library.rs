@@ -2012,3 +2012,30 @@ mod dsl_factories_tests {
         assert!(hashing.1.iter().any(|s| s.name == "hash"));
     }
 }
+
+/// The cursor advancer's item-at-a-time path: `advance` reads one item
+/// from each targeted cursor and `inject_into_state` lands its ordinal
+/// at the cursor's input index, so the program computes over it.
+#[test]
+fn the_cursor_advancer_injects_each_ordinal_into_the_state() {
+    use polydat::iteration::source::{Cursors, DataSourceFactory, RangeSourceFactory};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    let mut k = polydat::dsl::compile_polydat(
+        "input cycle: u64\ncursor rows = range(0, 100)\nout := u64_mul(rows.ordinal, 3)\n",
+    )
+    .unwrap();
+    let factories: HashMap<String, Arc<dyn DataSourceFactory>> = HashMap::from([(
+        "rows".to_string(),
+        Arc::new(RangeSourceFactory::new(7, 10)) as Arc<dyn DataSourceFactory>,
+    )]);
+    let mut cursors = Cursors::for_fields(k.program(), &["out"], &factories);
+    assert_eq!(cursors.target_count(), 1);
+    let mut seen = Vec::new();
+    while cursors.advance() {
+        cursors.inject_into_state(k.state());
+        seen.push(k.pull("out").as_u64());
+    }
+    assert_eq!(seen, vec![21, 24, 27]);
+    assert_eq!(cursors.consumed(), 3);
+}

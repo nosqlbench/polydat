@@ -381,7 +381,7 @@ pub trait DataSourceFactory: Send + Sync {
     ///
     /// Default impl: returns `false` to signal the factory
     /// doesn't support rewinding. Factories that DO support it
-    /// (RangeSourceFactory, ExtendingRangeSourceFactory)
+    /// ([`RangeSourceFactory`], [`ExtendingRangeSourceFactory`])
     /// override and reset their internal cursor / extent
     /// state. A host that needs to rewind should reject a factory
     /// that returns `false` with a clear diagnostic rather than
@@ -657,6 +657,19 @@ impl DataSourceFactory for ExtendingRangeSourceFactory {
     fn global_extent(&self) -> Option<u64> {
         // Live extent — readers / status displays see growth.
         Some(self.end.load(Ordering::Acquire).saturating_sub(self.start))
+    }
+
+    fn rewind_for_poll(&self) -> bool {
+        // A new round starts over: the cursor at the start and the end
+        // at the base chunk, which the policy grows again as it did
+        // the first time. A partition bound (`max_end`) still caps it.
+        self.cursor.store(self.start, Ordering::Release);
+        let mut end = self.start.saturating_add(self.base);
+        if let Some(cap) = self.max_end {
+            end = end.min(cap);
+        }
+        self.end.store(end, Ordering::Release);
+        true
     }
 
     fn replay_contract(&self) -> SourceReplayContract {
@@ -1674,5 +1687,58 @@ mod tests {
         let p = TimeElapsedPolicy::new(7, 1);
         std::thread::sleep(std::time::Duration::from_millis(20));
         assert_eq!(p.next_extension(&ctx_at(20, 0, 0)), None);
+    }
+}
+
+#[cfg(test)]
+mod rewind_tests {
+    use super::*;
+
+    fn drain(reader: &mut dyn DataSource) -> Vec<u64> {
+        let mut out = Vec::new();
+        while let Some(item) = reader.next() {
+            out.push(item.ordinal);
+        }
+        out
+    }
+
+    /// A factory that rewinds hands out the same ordinal range again:
+    /// what a host that re-runs a source between rounds relies on.
+    #[test]
+    fn a_range_factory_rewinds_to_the_same_ordinals() {
+        let factory = RangeSourceFactory::new(3, 6);
+        assert_eq!(drain(factory.create_reader().as_mut()), vec![3, 4, 5]);
+        assert!(factory.create_reader().next().is_none());
+        assert!(factory.rewind_for_poll());
+        assert_eq!(drain(factory.create_reader().as_mut()), vec![3, 4, 5]);
+    }
+
+    /// The extending factory rewinds too: the cursor to the start and
+    /// the extent to the base chunk, capped by a partition bound.
+    #[test]
+    fn an_extending_factory_rewinds_to_its_base_chunk() {
+        struct Never;
+        impl ExtensionPolicy for Never {
+            fn next_extension(&self, _ctx: &ExtensionContext) -> Option<u64> {
+                None
+            }
+        }
+        let factory = ExtendingRangeSourceFactory::new("rows", 10, 4, Arc::new(Never));
+        assert_eq!(
+            drain(factory.create_reader().as_mut()),
+            vec![10, 11, 12, 13]
+        );
+        assert_eq!(factory.global_consumed(), 4);
+        assert!(factory.rewind_for_poll());
+        assert_eq!(factory.global_consumed(), 0);
+        assert_eq!(factory.global_extent(), Some(4));
+        assert_eq!(
+            drain(factory.create_reader().as_mut()),
+            vec![10, 11, 12, 13]
+        );
+        let bounded = ExtendingRangeSourceFactory::new("rows", 0, 8, Arc::new(Never)).bounded(5);
+        assert_eq!(drain(bounded.create_reader().as_mut()), vec![0, 1, 2, 3, 4]);
+        assert!(bounded.rewind_for_poll());
+        assert_eq!(drain(bounded.create_reader().as_mut()), vec![0, 1, 2, 3, 4]);
     }
 }
