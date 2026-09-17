@@ -25,10 +25,10 @@
 //!   = the output is a *permutation* of the input (each element
 //!   exactly once), verified in `tests::apply_preserves_elements`.
 //!
-//! Accepts any non-`None` `IndexFn` including continuous —
-//! Shuffle over continuous works by sampling per the
-//! underlying measure (the IR layer dispatches the actual
-//! continuous draw).
+//! Accepts any non-`None` `IndexFn` including continuous: over a
+//! continuous or hybrid space it draws `n` codes, one 53-bit unit
+//! fraction per continuous axis, and the runtime's sampler carries
+//! each onto its axis's measure (spec §3.6, §10.2 R2).
 
 use super::{
     EvaluatedInput, MultiIndex, Strategy, Tuple, index_fn_dim, index_fn_size,
@@ -81,9 +81,14 @@ fn naive_shuffle_over_tuples(mut input: Vec<Tuple>, truncation: Option<u64>) -> 
 
 pub(crate) fn shuffle_multi_indices(idx: &IndexFn, truncation: Option<u64>) -> Vec<MultiIndex> {
     let total = index_fn_size(idx);
-    let n = match truncation {
-        Some(t) => t.min(total),
-        None => total,
+    let continuous = matches!(idx, IndexFn::Continuous { .. } | IndexFn::Hybrid { .. });
+    // A continuous space has no tuple count: the truncation is the
+    // number of draws.
+    let n = match (truncation, continuous) {
+        (Some(t), true) => t,
+        (Some(t), false) => t.min(total),
+        (None, true) => return Vec::new(),
+        (None, false) => total,
     };
     if n == 0 {
         return Vec::new();
@@ -91,13 +96,15 @@ pub(crate) fn shuffle_multi_indices(idx: &IndexFn, truncation: Option<u64>) -> V
 
     let dim = index_fn_dim(idx);
     let axis_sizes = axis_sizes_for(idx);
-    let mut rng = Prng::new(DEFAULT_SEED.wrapping_add(total));
+    // The seed follows the draw count over a continuous space, which
+    // has no tuple count of its own.
+    let mut rng = Prng::new(DEFAULT_SEED.wrapping_add(if continuous { n } else { total }));
 
     match idx {
         IndexFn::Continuous { intervals, .. } => {
             let _ = intervals;
             (0..n)
-                .map(|_| (0..dim).map(|_| rng.next_u64()).collect())
+                .map(|_| (0..dim).map(|_| rng.next_u64() >> 11).collect())
                 .collect()
         }
         IndexFn::Hybrid {
@@ -113,7 +120,7 @@ pub(crate) fn shuffle_multi_indices(idx: &IndexFn, truncation: Option<u64>) -> V
                         mi.push(rng.next_bounded(*size));
                     }
                     for _ in 0..continuous_axes.len() {
-                        mi.push(rng.next_u64());
+                        mi.push(rng.next_u64() >> 11);
                     }
                     mi
                 })
@@ -254,5 +261,32 @@ mod tests {
             axis_sizes: vec![3]
         })));
         assert!(!Shuffle.accepts_input(None));
+    }
+
+    /// Over a continuous or hybrid space the truncation is the number
+    /// of draws (spec §3.6: "n PRNG draws from the measure"), and a
+    /// continuous code is a 53-bit fraction of the unit interval.
+    #[test]
+    fn continuous_draws_are_counted_by_the_truncation() {
+        use crate::iteration::comprehension::cardinality::{Interval, ProductMeasure};
+        let idx = IndexFn::Continuous {
+            intervals: vec![Interval::closed(2.0, 4.0)],
+            measure: ProductMeasure::Uniform,
+        };
+        let out = shuffle_multi_indices(&idx, Some(16));
+        assert_eq!(out.len(), 16);
+        assert!(out.iter().all(|mi| mi[0] < (1u64 << 53)), "{out:?}");
+        assert!(shuffle_multi_indices(&idx, None).is_empty());
+        let idx = IndexFn::Hybrid {
+            discrete_axes: vec![3],
+            continuous_axes: vec![Interval::closed(0.0, 1.0)],
+            measure: ProductMeasure::Uniform,
+        };
+        let out = shuffle_multi_indices(&idx, Some(5));
+        assert_eq!(out.len(), 5);
+        assert!(
+            out.iter().all(|mi| mi[0] < 3 && mi[1] < (1u64 << 53)),
+            "{out:?}"
+        );
     }
 }

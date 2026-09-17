@@ -120,23 +120,29 @@ pub(crate) fn lhs_multi_indices(idx: &IndexFn, truncation: Option<u64>) -> Vec<M
 
     let mut out = Vec::with_capacity(n as usize);
     for i in 0..n {
-        let mi: MultiIndex = (0..dim)
-            .map(|axis| {
-                let stratum = per_axis_perms[axis][i as usize];
-                let size = axis_sizes[axis];
-                if size == u64::MAX {
-                    stratum
-                } else if size >= n {
-                    (stratum * size) / n
-                } else {
-                    stratum % size
-                }
-            })
-            .collect();
+        let mut mi: MultiIndex = Vec::with_capacity(dim);
+        for axis in 0..dim {
+            let stratum = per_axis_perms[axis][i as usize];
+            let size = axis_sizes[axis];
+            mi.push(if size == u64::MAX {
+                // A continuous axis: one draw inside the stratum's bin
+                // of the unit interval, as a 53-bit fraction.
+                let jitter = (rng.next_u64() >> 11) as f64 / UNIT_SCALE;
+                ((stratum as f64 + jitter) / n as f64 * UNIT_SCALE) as u64
+            } else if size >= n {
+                (stratum * size) / n
+            } else {
+                stratum % size
+            });
+        }
         out.push(mi);
     }
     out
 }
+
+/// The scale of a continuous code: a point of `[0, 1)` as a 53-bit
+/// fraction, the encoding the runtime's sampler reads.
+const UNIT_SCALE: f64 = (1u64 << 53) as f64;
 
 fn axis_sizes_for(idx: &IndexFn, dim: usize) -> Vec<u64> {
     match idx {
@@ -194,8 +200,10 @@ mod tests {
         // McKay/Beckman/Conover 1979: the defining marginal property
         // — for N samples over a continuous box, each axis's N strata
         // are exactly {0,1,…,N-1} (each bin used once). On a
-        // continuous box the stratum index passes through unscaled,
-        // so the per-axis value set must equal the full 0..N range.
+        // continuous box each code is a 53-bit fraction drawn inside
+        // its stratum's bin, so the bins the codes fall in must be
+        // the full 0..N range.
+
         use crate::iteration::comprehension::cardinality::{Interval, ProductMeasure};
         let n = 16u64;
         let idx = IndexFn::Continuous {
@@ -210,7 +218,8 @@ mod tests {
         assert_eq!(out.len(), n as usize);
         let expected: std::collections::BTreeSet<u64> = (0..n).collect();
         for axis in 0..3 {
-            let got: std::collections::BTreeSet<u64> = out.iter().map(|mi| mi[axis]).collect();
+            let got: std::collections::BTreeSet<u64> =
+                out.iter().map(|mi| mi[axis] * n / (1u64 << 53)).collect();
             assert_eq!(
                 got, expected,
                 "axis {axis}: LHS strata must be a permutation of 0..{n}"
@@ -226,5 +235,41 @@ mod tests {
         let a = lhs_multi_indices(&idx, Some(10));
         let b = lhs_multi_indices(&idx, Some(10));
         assert_eq!(a, b);
+    }
+
+    /// A continuous axis's codes are 53-bit fractions, one in each of
+    /// the n equal bins of the unit interval (the Latin hypercube over
+    /// a real box, spec §10.2 R2).
+    #[test]
+    fn continuous_axis_codes_are_stratified_unit_fractions() {
+        use crate::iteration::comprehension::cardinality::{Interval, ProductMeasure};
+        let idx = IndexFn::Continuous {
+            intervals: vec![Interval::closed(0.0, 1.0), Interval::closed(0.0, 1.0)],
+            measure: ProductMeasure::Uniform,
+        };
+        let out = lhs_multi_indices(&idx, Some(8));
+        assert_eq!(out.len(), 8);
+        for axis in 0..2 {
+            let mut bins: Vec<u64> = out
+                .iter()
+                .map(|mi| {
+                    assert!(mi[axis] < (1u64 << 53));
+                    mi[axis] * 8 / (1u64 << 53)
+                })
+                .collect();
+            bins.sort_unstable();
+            assert_eq!(bins, (0..8).collect::<Vec<_>>(), "axis {axis}: {out:?}");
+        }
+        // A hybrid: the discrete axis is a position, the continuous one a code.
+        let idx = IndexFn::Hybrid {
+            discrete_axes: vec![4],
+            continuous_axes: vec![Interval::closed(0.0, 1.0)],
+            measure: ProductMeasure::Uniform,
+        };
+        let out = lhs_multi_indices(&idx, Some(8));
+        assert!(
+            out.iter().all(|mi| mi[0] < 4 && mi[1] < (1u64 << 53)),
+            "{out:?}"
+        );
     }
 }

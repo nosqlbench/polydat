@@ -69,7 +69,9 @@ use std::sync::Arc;
 use crate::ast::Value;
 use crate::dsl::compile::eval_const_expr_for;
 use crate::iteration::comprehension::ast::Comprehension;
+use crate::iteration::comprehension::cardinality::{Interval, ProductMeasure};
 use crate::iteration::comprehension::eval_source::{EvalContext, SourceEval};
+use crate::iteration::comprehension::measure::AxisMeasure;
 use crate::iteration::comprehension::metadata::IndexFn;
 use crate::iteration::comprehension::source::Source;
 use crate::iteration::comprehension::strategies::{EvaluatedInput, Tuple, TupleValue};
@@ -478,16 +480,14 @@ where
                 strategy,
                 truncation,
             } => {
-                let inner = self.evaluate_node(child, prefix)?;
-                // A continuous source has no tuples of its own; an order
-                // strategy with a truncation samples that many points
-                // from its intervals (spec §10.7.8, continuous inputs).
-                if inner.tuples.is_empty()
-                    && let Some(intervals) = continuous_axes(child)
-                {
-                    let names = child.coordinate_names();
-                    return Self::sample_continuous(&names, &intervals, *strategy, *truncation);
+                // A continuous axis has no tuples of its own: an order
+                // over one samples the child's space, discrete axes by
+                // position and continuous axes through their measures
+                // (spec §10.2 R2).
+                if has_continuous_axis(child) {
+                    return self.sample_space(child, prefix, *strategy, *truncation);
                 }
+                let inner = self.evaluate_node(child, prefix)?;
                 self.apply_order(inner, *strategy, *truncation)
             }
         }
@@ -771,65 +771,200 @@ where
         })
     }
 
-    /// Sample `truncation` points from continuous intervals with a
-    /// space-filling strategy. The strategies encode a continuous
-    /// coordinate as a 53-bit fraction of the unit interval; each is
-    /// mapped onto its axis's interval and bound to the axis's name.
-    fn sample_continuous(
-        names: &[String],
-        intervals: &[crate::iteration::comprehension::cardinality::Interval],
+    /// Sample an order over a space with a continuous axis (spec
+    /// §10.2 R2). The child's clauses are the axes: a discrete
+    /// clause is evaluated to its values, a continuous clause keeps
+    /// its interval and measure. A sampling strategy (Halton, Sobol,
+    /// Lhs, Shuffle) draws `truncation` multi-indices over the
+    /// `Continuous` or `Hybrid` index function of those axes, and
+    /// each continuous coordinate is carried onto its interval by
+    /// its measure; `Extrema` takes the strata of the box, a
+    /// continuous axis contributing its two ends. Filters between
+    /// the order and its clauses apply to the drawn tuples, and a
+    /// sequence strategy keeps drawing until `truncation` tuples
+    /// pass, up to a bounded number of rounds.
+    fn sample_space(
+        &mut self,
+        child: &Comprehension,
+        prefix: &[(String, Value)],
         strategy: StrategyName,
         truncation: Option<u64>,
     ) -> Result<EvaluatedNode, RuntimeError> {
-        use crate::iteration::comprehension::strategies::{
-            halton::halton_multi_indices, lhs::lhs_multi_indices, shuffle::shuffle_multi_indices,
-            sobol::sobol_multi_indices,
-        };
-        let Some(n) = truncation else {
-            return Err(RuntimeError::OrderEval {
-                strategy,
-                message: "a continuous source has no finite tuple set; give the order a count, as in `order halton/16`".into(),
-            });
-        };
-        let index_fn = IndexFn::Continuous {
-            intervals: intervals.to_vec(),
-            measure: crate::iteration::comprehension::cardinality::ProductMeasure::Uniform,
-        };
-        let points = match strategy {
-            StrategyName::Halton => halton_multi_indices(&index_fn, Some(n)),
-            StrategyName::Sobol => sobol_multi_indices(&index_fn, Some(n)),
-            StrategyName::Lhs => lhs_multi_indices(&index_fn, Some(n)),
-            StrategyName::Shuffle => shuffle_multi_indices(&index_fn, Some(n)),
-            other => return Err(RuntimeError::OrderEval {
-                strategy: other,
-                message:
-                    "a continuous source needs a sampling strategy: halton, sobol, lhs, or shuffle"
-                        .into(),
-            }),
-        };
-        let scale = (1u64 << 53) as f64;
-        let tuples = points
-            .into_iter()
-            .map(|mi| {
-                mi.iter()
-                    .enumerate()
-                    .map(|(axis, u)| {
-                        let iv = &intervals[axis.min(intervals.len().saturating_sub(1))];
-                        let frac = (*u as f64) / scale;
-                        let x = iv.lo + frac * (iv.hi - iv.lo);
-                        let name = names
-                            .get(axis)
-                            .cloned()
-                            .unwrap_or_else(|| format!("axis{axis}"));
-                        (name, Value::F64(x))
-                    })
-                    .collect::<RuntimeTuple>()
+        let mut space = SampleSpace::default();
+        self.collect_sample_space(child, prefix, &mut space, &mut Vec::new())?;
+        let discrete_axes: Vec<u64> = space
+            .axes
+            .iter()
+            .filter_map(|a| match a {
+                SampleAxis::Discrete(tuples) => Some(tuples.len() as u64),
+                SampleAxis::Continuous { .. } => None,
             })
             .collect();
-        Ok(EvaluatedNode {
-            tuples,
-            index_fn: None,
-        })
+        if discrete_axes.contains(&0) {
+            return Ok(EvaluatedNode {
+                tuples: Vec::new(),
+                index_fn: None,
+            });
+        }
+        let (intervals, measures): (Vec<Interval>, Vec<ProductMeasure>) = space
+            .axes
+            .iter()
+            .filter_map(|a| match a {
+                SampleAxis::Continuous {
+                    interval, measure, ..
+                } => Some((
+                    interval.clone(),
+                    match measure {
+                        AxisMeasure::Uniform => ProductMeasure::Uniform,
+                        AxisMeasure::Named { name, .. } => ProductMeasure::Named(*name),
+                    },
+                )),
+                SampleAxis::Discrete(_) => None,
+            })
+            .unzip();
+        let sequence = !matches!(strategy, StrategyName::Extrema);
+        // A sampling strategy lays a hybrid out discrete axes first
+        // (`IndexFn::Hybrid`); Extrema's strata are lex in clause
+        // order, so it takes a lattice in that order, a continuous
+        // axis being its two ends.
+        let index_fn = if !sequence {
+            IndexFn::Lattice {
+                axis_sizes: space
+                    .axes
+                    .iter()
+                    .map(|a| match a {
+                        SampleAxis::Discrete(tuples) => tuples.len() as u64,
+                        SampleAxis::Continuous { .. } => 2,
+                    })
+                    .collect(),
+            }
+        } else if discrete_axes.is_empty() {
+            IndexFn::Continuous {
+                intervals,
+                measure: ProductMeasure::Product(measures),
+            }
+        } else {
+            IndexFn::Hybrid {
+                discrete_axes,
+                continuous_axes: intervals,
+                measure: ProductMeasure::Product(measures),
+            }
+        };
+
+        let mut want = truncation;
+        let mut rounds = 0;
+        loop {
+            let multi_indices = draw_sample(&index_fn, strategy, want)?;
+            let drawn = multi_indices.len() as u64;
+            let tuples = multi_indices
+                .iter()
+                .map(|mi| space.realize(mi, strategy))
+                .collect();
+            let mut node = EvaluatedNode {
+                tuples,
+                index_fn: None,
+            };
+            for predicate in &space.predicates {
+                node = self.apply_filter(node, predicate)?;
+            }
+            let (Some(n), Some(asked)) = (truncation, want) else {
+                return Ok(node);
+            };
+            let enough = node.tuples.len() as u64 >= n;
+            let exhausted = drawn < asked;
+            if !sequence {
+                return Ok(node);
+            }
+            if enough || exhausted || rounds >= SAMPLE_ROUNDS {
+                node.tuples.truncate(n as usize);
+                return Ok(node);
+            }
+
+            want = Some(asked.saturating_mul(2));
+            rounds += 1;
+        }
+    }
+
+    /// Walk `c` into `space`: clauses become axes in order, filters
+    /// contribute their predicates, and any other node (a zip, union,
+    /// or inner order) is evaluated and becomes one discrete axis of
+    /// its tuples. `bound` is the names bound so far; a discrete
+    /// clause may not reference one (a sampled cartesian is
+    /// independent, spec §6.2).
+    fn collect_sample_space(
+        &mut self,
+        c: &Comprehension,
+        prefix: &[(String, Value)],
+        space: &mut SampleSpace,
+        bound: &mut Vec<String>,
+    ) -> Result<(), RuntimeError> {
+        let measure_error = |name: &str, message: String| RuntimeError::SourceEval {
+            var: name.to_string(),
+            source: "<continuous>".to_string(),
+            message,
+        };
+        match c {
+            Comprehension::Clause {
+                name,
+                source: Source::ContinuousInterval { interval, measure },
+            } => {
+                let measure =
+                    AxisMeasure::from_product(measure, 0).map_err(|m| measure_error(name, m))?;
+                space.axes.push(SampleAxis::Continuous {
+                    name: name.clone(),
+                    interval: interval.clone(),
+                    measure,
+                });
+                bound.push(name.clone());
+            }
+            Comprehension::Clause {
+                name,
+                source:
+                    Source::Distribution {
+                        distribution,
+                        support,
+                        params,
+                    },
+            } => {
+                let measure = AxisMeasure::named(*distribution, params)
+                    .map_err(|m| measure_error(name, m))?;
+                space.axes.push(SampleAxis::Continuous {
+                    name: name.clone(),
+                    interval: support.clone(),
+                    measure,
+                });
+                bound.push(name.clone());
+            }
+            Comprehension::Clause { name, source } => {
+                let references = c.referenced_source_names();
+                if let Some(dep) = bound.iter().find(|b| references.contains(*b)) {
+                    return Err(RuntimeError::UnsupportedShape(format!(
+                        "clause '{name}' references '{dep}' beside a continuous axis; \
+                         a sampled cartesian is independent (comprehension_forms.md §6.2)"
+                    )));
+                }
+                let node = self.evaluate_clause(name, source, prefix)?;
+                space.axes.push(SampleAxis::Discrete(node.tuples));
+                bound.push(name.clone());
+            }
+            Comprehension::Cartesian { children } => {
+                for child in children {
+                    self.collect_sample_space(child, prefix, space, bound)?;
+                }
+            }
+            Comprehension::Filter { child, predicate } => {
+                self.collect_sample_space(child, prefix, space, bound)?;
+                space.predicates.push(predicate.clone());
+            }
+            Comprehension::Zip { .. }
+            | Comprehension::Union { .. }
+            | Comprehension::Order { .. } => {
+                let node = self.evaluate_node(c, prefix)?;
+                bound.extend(c.coordinate_names());
+                space.axes.push(SampleAxis::Discrete(node.tuples));
+            }
+        }
+        Ok(())
     }
 
     fn apply_order(
@@ -937,32 +1072,140 @@ where
     }
 }
 
-/// The intervals of a comprehension whose every clause is continuous,
-/// in coordinate order; `None` when any clause is discrete or the shape
-/// is not a plain product of clauses.
-pub(crate) fn continuous_axes(
-    c: &Comprehension,
-) -> Option<Vec<crate::iteration::comprehension::cardinality::Interval>> {
-    match c {
-        Comprehension::Clause {
-            source: Source::ContinuousInterval { interval, .. },
-            ..
-        } => Some(vec![interval.clone()]),
-        Comprehension::Clause {
-            source: Source::Distribution { support, .. },
-            ..
-        } => Some(vec![support.clone()]),
-        Comprehension::Clause { .. } => None,
-        Comprehension::Cartesian { children } => {
-            let mut out = Vec::new();
-            for ch in children {
-                out.extend(continuous_axes(ch)?);
+/// How many times a sampled order redraws, doubling the count each
+/// time, when its filters leave fewer tuples than asked.
+const SAMPLE_ROUNDS: u32 = 6;
+
+/// The scale of a continuous code: the strategies encode a point of
+/// `[0, 1)` as a 53-bit fraction.
+const UNIT_SCALE: f64 = (1u64 << 53) as f64;
+
+/// One axis of a sampled space (spec §10.2 R2): a discrete child
+/// evaluated to its tuples, or a continuous clause's interval and
+/// measure.
+enum SampleAxis {
+    Discrete(Vec<RuntimeTuple>),
+    Continuous {
+        name: String,
+        interval: Interval,
+        measure: AxisMeasure,
+    },
+}
+
+/// The space an order over a continuous axis samples: its axes in
+/// clause order, and the predicates of the filters between the
+/// order and its clauses.
+#[derive(Default)]
+struct SampleSpace {
+    axes: Vec<SampleAxis>,
+    predicates: Vec<String>,
+}
+
+impl SampleSpace {
+    /// The tuple at a multi-index, its coordinates in clause order.
+    /// Under a sampling strategy the multi-index lays the discrete
+    /// positions first and the continuous codes after them
+    /// (`IndexFn::Hybrid`), a code being a 53-bit fraction of the
+    /// unit interval; under `Extrema` it is in clause order over the
+    /// lattice, a continuous code being `0` or `1` for an end of the
+    /// interval.
+    fn realize(&self, mi: &[u64], strategy: StrategyName) -> RuntimeTuple {
+        let extrema = matches!(strategy, StrategyName::Extrema);
+        let discrete_count = self
+            .axes
+            .iter()
+            .filter(|a| matches!(a, SampleAxis::Discrete(_)))
+            .count();
+        let (mut d, mut c) = (0, if extrema { 0 } else { discrete_count });
+        let mut out = RuntimeTuple::new();
+        for axis in &self.axes {
+            match axis {
+                SampleAxis::Discrete(tuples) => {
+                    let pos = mi.get(d).copied().unwrap_or(0) as usize;
+                    d += 1;
+                    if extrema {
+                        c += 1;
+                    }
+                    if let Some(t) = tuples.get(pos) {
+                        out.extend(t.iter().cloned());
+                    }
+                }
+                SampleAxis::Continuous {
+                    name,
+                    interval,
+                    measure,
+                } => {
+                    let code = mi.get(c).copied().unwrap_or(0);
+                    c += 1;
+                    if extrema {
+                        d += 1;
+                    }
+                    let x = if extrema {
+                        measure.endpoint(interval, code == 1)
+                    } else {
+                        measure.map_unit(code as f64 / UNIT_SCALE, interval)
+                    };
+                    out.push((name.clone(), Value::F64(x)));
+                }
             }
-            Some(out)
         }
-        Comprehension::Filter { child, .. } => continuous_axes(child),
+        out
+    }
+}
+
+/// The multi-indices a strategy draws over a `Continuous` or
+/// `Hybrid` index function: a sampling strategy needs a count, and
+/// `Extrema` takes `count` strata (every stratum for `None`).
+fn draw_sample(
+    index_fn: &IndexFn,
+    strategy: StrategyName,
+    count: Option<u64>,
+) -> Result<Vec<Vec<u64>>, RuntimeError> {
+    use crate::iteration::comprehension::strategies::{
+        extrema::extrema_multi_indices, halton::halton_multi_indices, lhs::lhs_multi_indices,
+        shuffle::shuffle_multi_indices, sobol::sobol_multi_indices,
+    };
+    if matches!(strategy, StrategyName::Extrema) {
+        return Ok(extrema_multi_indices(index_fn, count));
+    }
+    let Some(n) = count else {
+        return Err(RuntimeError::OrderEval {
+            strategy,
+            message: "a continuous source has no finite tuple set; give the order a count, \
+                      as in `order halton/16`"
+                .into(),
+        });
+    };
+    Ok(match strategy {
+        StrategyName::Halton => halton_multi_indices(index_fn, Some(n)),
+        StrategyName::Sobol => sobol_multi_indices(index_fn, Some(n)),
+        StrategyName::Lhs => lhs_multi_indices(index_fn, Some(n)),
+        StrategyName::Shuffle => shuffle_multi_indices(index_fn, Some(n)),
+        other => {
+            return Err(RuntimeError::OrderEval {
+                strategy: other,
+                message: "a continuous source needs a sampling strategy: halton, sobol, lhs, \
+                          shuffle, or extrema"
+                    .into(),
+            });
+        }
+    })
+}
+
+/// `true` when an order over `c` samples: a continuous clause is
+/// reachable through cartesians and filters alone. Under a zip,
+/// union, or inner order the continuous axis is that node's to
+/// discharge.
+pub(crate) fn has_continuous_axis(c: &Comprehension) -> bool {
+    match c {
+        Comprehension::Clause { source, .. } => matches!(
+            source,
+            Source::ContinuousInterval { .. } | Source::Distribution { .. }
+        ),
+        Comprehension::Cartesian { children } => children.iter().any(has_continuous_axis),
+        Comprehension::Filter { child, .. } => has_continuous_axis(child),
         Comprehension::Zip { .. } | Comprehension::Union { .. } | Comprehension::Order { .. } => {
-            None
+            false
         }
     }
 }

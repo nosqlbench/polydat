@@ -87,7 +87,9 @@ pub enum Source {
         distribution: MeasureName,
         /// Its effective support.
         support: Interval,
-        /// Its parameters, in the distribution's order.
+        /// Its parameters, in the order of
+        /// [`MeasureName::parameter_names`]; empty for the standard
+        /// parameters ([`MeasureName::default_params`]).
         params: Vec<f64>,
     },
 }

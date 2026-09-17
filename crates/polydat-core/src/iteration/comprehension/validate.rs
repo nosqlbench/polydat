@@ -318,6 +318,18 @@ fn visit_clause(source: &Source, report: &mut ValidationReport) -> Result<(), Va
             ),
         });
     }
+    // V8, on the declared measure: a named distribution's parameters
+    // must be the measure's own (`MeasureName::parameter_names`), or
+    // absent for the standard ones.
+    if let Source::Distribution {
+        distribution,
+        params,
+        ..
+    } = source
+        && let Err(reason) = distribution.resolve_params(params)
+    {
+        return Err(ValidationError::V8ContinuousRequirement { reason });
+    }
     Ok(())
 }
 

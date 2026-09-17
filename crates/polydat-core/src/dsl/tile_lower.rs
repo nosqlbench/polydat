@@ -727,12 +727,15 @@ impl TileLowering {
         if let K::Order {
             child, strategy, ..
         } = c
-            && crate::iteration::comprehension::runtime::continuous_axes(child).is_some()
-            && !matches!(strategy, S::Halton | S::Sobol | S::Lhs | S::Shuffle)
+            && crate::iteration::comprehension::runtime::has_continuous_axis(child)
+            && !matches!(
+                strategy,
+                S::Halton | S::Sobol | S::Lhs | S::Shuffle | S::Extrema
+            )
         {
             return Err(format!(
                 "tile '{}': projection `for {text}` orders a continuous source with `{strategy:?}`; \
-                 a continuous source needs a sampling strategy: halton, sobol, lhs, or shuffle",
+                 a continuous source needs a sampling strategy: halton, sobol, lhs, shuffle, or extrema",
                 self.tile_name
             ));
         }

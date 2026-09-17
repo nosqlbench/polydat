@@ -62,6 +62,8 @@ mod for_invariance;
 mod for_producers;
 #[path = "for_runtime.rs"]
 mod for_runtime;
+#[path = "for_sampling.rs"]
+mod for_sampling;
 #[path = "for_syntax.rs"]
 mod for_syntax;
 #[path = "function_coverage.rs"]

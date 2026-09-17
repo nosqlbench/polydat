@@ -205,6 +205,63 @@ impl MeasureName {
     pub fn is_proper_probability_measure(self) -> bool {
         true
     }
+
+    /// The distribution's parameters, in the order a
+    /// `Source::Distribution`'s `params` lists them:
+    ///
+    /// | Measure | Parameters | Support |
+    /// |---|---|---|
+    /// | `Normal` | mean, stddev | (-∞, ∞) |
+    /// | `Exponential` | rate | [0, ∞) |
+    /// | `Pareto` | scale, shape | [scale, ∞) |
+    /// | `Beta` | alpha, beta | [0, 1] |
+    /// | `LogNormal` | mean, stddev (of the log) | (0, ∞) |
+    /// | `Gamma` | shape, scale | [0, ∞) |
+    /// | `Uniform01` | none | [0, 1] |
+    pub fn parameter_names(self) -> &'static [&'static str] {
+        match self {
+            MeasureName::Normal | MeasureName::LogNormal => &["mean", "stddev"],
+            MeasureName::Exponential => &["rate"],
+            MeasureName::Pareto => &["scale", "shape"],
+            MeasureName::Beta => &["alpha", "beta"],
+            MeasureName::Gamma => &["shape", "scale"],
+            MeasureName::Uniform01 => &[],
+        }
+    }
+
+    /// The standard parameters, used when a source names the
+    /// measure without parameters: `Normal(0, 1)`, `Exponential(1)`,
+    /// `Pareto(1, 1)`, `Beta(1, 1)`, `LogNormal(0, 1)`, `Gamma(1, 1)`.
+    pub fn default_params(self) -> &'static [f64] {
+        match self {
+            MeasureName::Normal | MeasureName::LogNormal => &[0.0, 1.0],
+            MeasureName::Exponential => &[1.0],
+            MeasureName::Pareto | MeasureName::Beta | MeasureName::Gamma => &[1.0, 1.0],
+            MeasureName::Uniform01 => &[],
+        }
+    }
+
+    /// The parameters as the sampler takes them: `params` when it
+    /// has the measure's count, the standard parameters when it is
+    /// empty, and an error naming the expected parameters otherwise.
+    pub fn resolve_params(self, params: &[f64]) -> Result<Vec<f64>, String> {
+        let names = self.parameter_names();
+        if params.is_empty() {
+            return Ok(self.default_params().to_vec());
+        }
+        if params.len() != names.len() {
+            return Err(format!(
+                "{self:?} takes {} parameter(s) ({}); found {}",
+                names.len(),
+                names.join(", "),
+                params.len()
+            ));
+        }
+        if let Some(bad) = params.iter().find(|p| !p.is_finite()) {
+            return Err(format!("{self:?}: parameter {bad} is not finite"));
+        }
+        Ok(params.to_vec())
+    }
 }
 
 #[cfg(test)]

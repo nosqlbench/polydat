@@ -13,8 +13,10 @@
 //!
 //! - Discrete `Lattice` with N≥2 axes is the native shape; 1-D
 //!   collapses to `{first, last}` (degenerate).
-//! - The continuous box is not implemented; the runtime rejects
-//!   Extrema over continuous sources.
+//! - A continuous box contributes two ends per axis, and a hybrid its
+//!   discrete axes beside them (spec §10.2 R2): the runtime's sampler
+//!   draws the strata through `extrema_multi_indices` and carries each
+//!   continuous code onto its interval's end.
 //!
 //! **Truncation is by complete strata, never mid-stratum.** Every
 //! corner of a hypercube has interior count 0, so all
@@ -70,11 +72,11 @@ impl Strategy for Extrema {
                 .filter_map(|flat| input.tuples.get(flat).cloned())
                 .collect()
         } else {
-            // Continuous / Hybrid: no pre-materialized tuples
-            // exist — the continuous-sampling executor path is
-            // a SRD-18c follow-up. Fall back to naive prefix
-            // ordering for safety; current runtime errors
-            // before reaching here.
+            // Continuous / Hybrid: no pre-materialized tuples exist,
+            // and the runtime samples them through
+            // `extrema_multi_indices` before `apply` is reached. A
+            // caller that still arrives here gets a naive prefix
+            // ordering of whatever tuples it has.
             naive_extrema_prefix(&input.tuples, truncation)
         }
     }

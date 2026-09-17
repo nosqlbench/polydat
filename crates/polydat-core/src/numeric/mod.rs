@@ -13,4 +13,5 @@ pub mod noise;
 pub mod pcg;
 pub mod register;
 pub mod round_numbers;
+pub mod special;
 pub mod vector;

@@ -1100,7 +1100,8 @@ string literal or an object key any type renders as escaped text; `csv`
 fields are quoted when needed; `text` is the display form. A `json` tile
 is checked at compile time as JSON with `0` in every hole. A projection's
 comprehension must have bounded cardinality; a continuous source projects
-only under a sampling order (`halton`, `sobol`, or `lhs`) with a count. Under `(strict)` or the compiler's strict mode, implicit adapters
+only under a sampling order (`halton`, `sobol`, `lhs`, `shuffle`, or
+`extrema`) with a count. Under `(strict)` or the compiler's strict mode, implicit adapters
 at holes are rejected as they are on wires. The rules in full are
 [Polytile](polytile.md) §4 and §5.
 

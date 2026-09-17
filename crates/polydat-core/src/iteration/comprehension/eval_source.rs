@@ -271,18 +271,18 @@ impl SourceEval for Source {
                     measure: measure.clone(),
                 },
             }),
-            Source::Distribution { support, .. } => Ok(EvaluatedSource {
+            Source::Distribution {
+                distribution,
+                support,
+                ..
+            } => Ok(EvaluatedSource {
                 values: Vec::new(),
                 cardinality: 0,
-                // Distribution carries its own measure; without
-                // wiring the full named-distribution measure
-                // forward we treat the support interval under a
-                // Uniform measure here. Sampling strategies
-                // route through the AST `Distribution` carrier
-                // directly when they need the named form.
+                // The parameters travel on the AST carrier; the
+                // runtime's sampler reads them there (spec §10.7.6).
                 index_fn: IndexFn::Continuous {
                     intervals: vec![support.clone()],
-                    measure: ProductMeasure::Uniform,
+                    measure: ProductMeasure::Named(*distribution),
                 },
             }),
         }
@@ -408,7 +408,13 @@ mod tests {
         assert_eq!(s.eval_class(), EvalClass::Distribution);
         let ev = s.evaluate(None).unwrap();
         assert_eq!(ev.cardinality, 0);
-        assert!(matches!(ev.index_fn, IndexFn::Continuous { .. }));
+        assert!(matches!(
+            ev.index_fn,
+            IndexFn::Continuous {
+                measure: ProductMeasure::Named(MeasureName::Normal),
+                ..
+            }
+        ));
     }
 
     #[test]
