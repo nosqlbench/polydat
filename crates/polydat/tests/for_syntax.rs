@@ -140,3 +140,13 @@ fn compiler_lowers_both_forms() {
     let k = polydat::dsl::compile_polydat("input cycle: u64\nsweep := for k in 1..4\n").unwrap();
     assert_eq!(k.program().producers().len(), 1);
 }
+
+/// A bracketed union runs across lines, and the positions of what
+/// follows it stay right.
+#[test]
+fn a_bracketed_union_keeps_line_numbers_after_it() {
+    let err = parse_err(
+        "both := for [\n    for k in 1..3,\n    for k in 10..12,\n]\nfor k 1..4 {\n    x := hash(k)\n}\n",
+    );
+    assert!(err.contains("line 5"), "{err}");
+}

@@ -68,7 +68,8 @@ pub enum TokenKind {
     Pragma,
     /// `for` followed by its raw comprehension text (SRD 113). The
     /// lexer captures everything after the keyword up to a `{` at
-    /// nesting depth zero or the end of the line, whichever comes
+    /// nesting depth zero or the end of a line at nesting depth zero
+    /// (a bracketed union runs across lines), whichever comes
     /// first, so the comprehension grammar stays owned by the
     /// comprehension parser rather than being re-tokenized here.
     For(String),
@@ -802,8 +803,17 @@ pub fn lex(source: &str) -> Result<Vec<Token>, String> {
                 }
                 "for" => {
                     let (text, consumed) = capture_for_text(&chars, pos);
+                    // A bracketed union runs across lines: the position keeps
+                    // counting them.
+                    for c in &chars[pos..pos + consumed] {
+                        if *c == '\n' {
+                            line += 1;
+                            col = 1;
+                        } else {
+                            col += 1;
+                        }
+                    }
                     pos += consumed;
-                    col += consumed;
                     tokens.push(Token {
                         kind: TokenKind::For(text),
                         span,
