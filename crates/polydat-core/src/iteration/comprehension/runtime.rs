@@ -479,16 +479,17 @@ where
                 child,
                 strategy,
                 truncation,
+                seed,
             } => {
                 // A continuous axis has no tuples of its own: an order
                 // over one samples the child's space, discrete axes by
                 // position and continuous axes through their measures
                 // (spec §10.2 R2).
                 if has_continuous_axis(child) {
-                    return self.sample_space(child, prefix, *strategy, *truncation);
+                    return self.sample_space(child, prefix, *strategy, *truncation, *seed);
                 }
                 let inner = self.evaluate_node(child, prefix)?;
-                self.apply_order(inner, *strategy, *truncation)
+                self.apply_order(inner, *strategy, *truncation, *seed)
             }
         }
     }
@@ -789,6 +790,7 @@ where
         prefix: &[(String, Value)],
         strategy: StrategyName,
         truncation: Option<u64>,
+        seed: Option<u64>,
     ) -> Result<EvaluatedNode, RuntimeError> {
         let mut space = SampleSpace::default();
         self.collect_sample_space(child, prefix, &mut space, &mut Vec::new())?;
@@ -854,7 +856,7 @@ where
         let mut want = truncation;
         let mut rounds = 0;
         loop {
-            let multi_indices = draw_sample(&index_fn, strategy, want)?;
+            let multi_indices = draw_sample(&index_fn, strategy, want, seed)?;
             let drawn = multi_indices.len() as u64;
             let tuples = multi_indices
                 .iter()
@@ -972,6 +974,7 @@ where
         input: EvaluatedNode,
         strategy: StrategyName,
         truncation: Option<u64>,
+        seed: Option<u64>,
     ) -> Result<EvaluatedNode, RuntimeError> {
         use crate::iteration::comprehension::strategies::{
             Strategy, antidiagonal::Antidiagonal, diagonal::Diagonal, extrema::Extrema,
@@ -1040,7 +1043,7 @@ where
             index_fn,
         };
 
-        let ordered = dispatch.apply(&evaluated_input, truncation);
+        let ordered = dispatch.apply_seeded(&evaluated_input, truncation, seed);
 
         // Map ordered algebra tuples back to runtime tuples via
         // PartialEq + consumed-index bitmap.
@@ -1155,11 +1158,13 @@ impl SampleSpace {
 
 /// The multi-indices a strategy draws over a `Continuous` or
 /// `Hybrid` index function: a sampling strategy needs a count, and
-/// `Extrema` takes `count` strata (every stratum for `None`).
+/// `Extrema` takes `count` strata (every stratum for `None`). `seed`
+/// is the authored seed of a seeded strategy.
 fn draw_sample(
     index_fn: &IndexFn,
     strategy: StrategyName,
     count: Option<u64>,
+    seed: Option<u64>,
 ) -> Result<Vec<Vec<u64>>, RuntimeError> {
     use crate::iteration::comprehension::strategies::{
         extrema::extrema_multi_indices, halton::halton_multi_indices, lhs::lhs_multi_indices,
@@ -1179,8 +1184,8 @@ fn draw_sample(
     Ok(match strategy {
         StrategyName::Halton => halton_multi_indices(index_fn, Some(n)),
         StrategyName::Sobol => sobol_multi_indices(index_fn, Some(n)),
-        StrategyName::Lhs => lhs_multi_indices(index_fn, Some(n)),
-        StrategyName::Shuffle => shuffle_multi_indices(index_fn, Some(n)),
+        StrategyName::Lhs => lhs_multi_indices(index_fn, Some(n), seed),
+        StrategyName::Shuffle => shuffle_multi_indices(index_fn, Some(n), seed),
         other => {
             return Err(RuntimeError::OrderEval {
                 strategy: other,

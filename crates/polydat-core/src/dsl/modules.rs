@@ -800,10 +800,12 @@ impl Compiler {
                 child,
                 strategy,
                 truncation,
+                seed,
             } => K::Order {
                 child: Box::new(self.rewrite_generators(child, prefix, module_inputs, arg_map)?),
                 strategy: *strategy,
                 truncation: *truncation,
+                seed: *seed,
             },
         })
     }

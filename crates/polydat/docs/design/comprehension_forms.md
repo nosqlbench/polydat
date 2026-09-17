@@ -410,7 +410,7 @@ etc.) are runtime errors.
 `Unbounded` if input was `Unbounded`. Actual count is a runtime
 fact dependent on predicate evaluation against actual values.
 
-### 3.6 `order(c, strategy, truncation?)` — permutation modifier
+### 3.6 `order(c, strategy, truncation?, seed?)` — permutation modifier
 
 ```text
 order(
@@ -420,7 +420,11 @@ order(
 ```
 
 Produces a permutation of the input stream. Optionally truncates
-to the first N tuples in the new order. Each named strategy is a
+to the first N tuples in the new order. `seed` is the authored seed a
+seeded strategy (`Shuffle`, `Lhs`) derives its state from, together
+with the input's structural identity (§9.6); absent, the strategy's
+fixed default applies. A seed on any other strategy is rejected at
+parse. Each named strategy is a
 stable, decidable permutation rule whose closed-form description
 is known to the optimizer (§10). User-supplied `Custom(fn)`
 orderings are deliberately excluded — they cannot be analyzed for
@@ -1224,7 +1228,7 @@ ORDER_STREAMING(Lex, truncation)
     the cartesian enumeration order, so the strategy adds
     nothing. Streaming.
 
-ORDER_MATERIALIZE(strategy, truncation)
+ORDER_MATERIALIZE(strategy, truncation, seed)
     MATERIALIZATION BARRIER. On first pull the operator builds
     a working set sufficient to satisfy the strategy: either
     (a) the strategy's full domain (input cardinality) if the

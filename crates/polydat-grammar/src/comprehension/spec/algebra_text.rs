@@ -56,8 +56,8 @@ pub fn parse_comprehension_algebra(text: &str) -> Result<Comprehension, String> 
     }
     if let Some(spec) = order_text {
         let order = parse_order_spec(&spec)?;
-        let (strategy, truncation) = convert_order(&order).map_err(|e| e.to_string())?;
-        comp = Comprehension::order(comp, strategy, truncation);
+        let (strategy, truncation, seed) = convert_order(&order).map_err(|e| e.to_string())?;
+        comp = Comprehension::order_seeded(comp, strategy, truncation, seed);
     }
     Ok(comp)
 }

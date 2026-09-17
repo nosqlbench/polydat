@@ -43,7 +43,8 @@ use crate::iteration::comprehension::strategy::StrategyName;
 /// Latin hypercube samples.
 pub struct Lhs;
 
-/// Seed base; the input length is added per call. Per-streamer
+/// Seed base when none is authored; the input length is added per
+/// call. Per-streamer
 /// seeding is not implemented.
 const SEED: u64 = 0x1A50_4577_3EED_BEEF;
 
@@ -61,19 +62,32 @@ impl Strategy for Lhs {
     }
 
     fn apply(&self, input: &EvaluatedInput, truncation: Option<u64>) -> Vec<Tuple> {
+        self.apply_seeded(input, truncation, None)
+    }
+
+    fn apply_seeded(
+        &self,
+        input: &EvaluatedInput,
+        truncation: Option<u64>,
+        seed: Option<u64>,
+    ) -> Vec<Tuple> {
         if index_fn_supports_lookup(&input.index_fn) {
-            let mis = lhs_multi_indices(&input.index_fn, truncation);
+            let mis = lhs_multi_indices(&input.index_fn, truncation, seed);
             mis.into_iter()
                 .filter_map(|mi| multi_index_to_flat(&input.index_fn, &mi))
                 .filter_map(|flat| input.tuples.get(flat).cloned())
                 .collect()
         } else {
-            naive_lhs_over_tuples(&input.tuples, truncation)
+            naive_lhs_over_tuples(&input.tuples, truncation, seed)
         }
     }
 }
 
-fn naive_lhs_over_tuples(input: &[Tuple], truncation: Option<u64>) -> Vec<Tuple> {
+fn naive_lhs_over_tuples(
+    input: &[Tuple],
+    truncation: Option<u64>,
+    seed: Option<u64>,
+) -> Vec<Tuple> {
     let total = input.len() as u64;
     if total == 0 {
         return Vec::new();
@@ -82,7 +96,7 @@ fn naive_lhs_over_tuples(input: &[Tuple], truncation: Option<u64>) -> Vec<Tuple>
         Some(t) => t.min(total),
         None => total,
     };
-    let mut rng = Prng::new(SEED.wrapping_add(total));
+    let mut rng = Prng::new(seed.unwrap_or(SEED).wrapping_add(total));
     let mut indices: Vec<u64> = (0..total).collect();
     rng.shuffle(&mut indices);
     indices
@@ -92,7 +106,13 @@ fn naive_lhs_over_tuples(input: &[Tuple], truncation: Option<u64>) -> Vec<Tuple>
         .collect()
 }
 
-pub(crate) fn lhs_multi_indices(idx: &IndexFn, truncation: Option<u64>) -> Vec<MultiIndex> {
+/// The multi-indices of a Latin hypercube over `idx`, `truncation`
+/// of them, from the authored `seed` or the default.
+pub(crate) fn lhs_multi_indices(
+    idx: &IndexFn,
+    truncation: Option<u64>,
+    seed: Option<u64>,
+) -> Vec<MultiIndex> {
     let dim = index_fn_dim(idx);
     if dim == 0 {
         return Vec::new();
@@ -110,7 +130,7 @@ pub(crate) fn lhs_multi_indices(idx: &IndexFn, truncation: Option<u64>) -> Vec<M
 
     let axis_sizes = axis_sizes_for(idx, dim);
 
-    let mut rng = Prng::new(SEED.wrapping_add(n));
+    let mut rng = Prng::new(seed.unwrap_or(SEED).wrapping_add(n));
     let mut per_axis_perms: Vec<Vec<u64>> = Vec::with_capacity(dim);
     for _ in 0..dim {
         let mut perm: Vec<u64> = (0..n).collect();
@@ -171,7 +191,7 @@ mod tests {
         let idx = IndexFn::Lattice {
             axis_sizes: vec![10, 10],
         };
-        let out = lhs_multi_indices(&idx, Some(5));
+        let out = lhs_multi_indices(&idx, Some(5), None);
         assert_eq!(out.len(), 5);
 
         let axis_0_values: std::collections::HashSet<u64> = out.iter().map(|mi| mi[0]).collect();
@@ -187,7 +207,7 @@ mod tests {
             intervals: vec![Interval::closed(0.0, 1.0), Interval::closed(0.0, 1.0)],
             measure: ProductMeasure::Uniform,
         };
-        let out = lhs_multi_indices(&idx, Some(10));
+        let out = lhs_multi_indices(&idx, Some(10), None);
         assert_eq!(out.len(), 10);
         let axis_0: std::collections::HashSet<u64> = out.iter().map(|mi| mi[0]).collect();
         let axis_1: std::collections::HashSet<u64> = out.iter().map(|mi| mi[1]).collect();
@@ -214,7 +234,7 @@ mod tests {
             ],
             measure: ProductMeasure::Uniform,
         };
-        let out = lhs_multi_indices(&idx, Some(n));
+        let out = lhs_multi_indices(&idx, Some(n), None);
         assert_eq!(out.len(), n as usize);
         let expected: std::collections::BTreeSet<u64> = (0..n).collect();
         for axis in 0..3 {
@@ -232,8 +252,8 @@ mod tests {
         let idx = IndexFn::Lattice {
             axis_sizes: vec![20, 20],
         };
-        let a = lhs_multi_indices(&idx, Some(10));
-        let b = lhs_multi_indices(&idx, Some(10));
+        let a = lhs_multi_indices(&idx, Some(10), None);
+        let b = lhs_multi_indices(&idx, Some(10), None);
         assert_eq!(a, b);
     }
 
@@ -247,7 +267,7 @@ mod tests {
             intervals: vec![Interval::closed(0.0, 1.0), Interval::closed(0.0, 1.0)],
             measure: ProductMeasure::Uniform,
         };
-        let out = lhs_multi_indices(&idx, Some(8));
+        let out = lhs_multi_indices(&idx, Some(8), None);
         assert_eq!(out.len(), 8);
         for axis in 0..2 {
             let mut bins: Vec<u64> = out
@@ -266,10 +286,26 @@ mod tests {
             continuous_axes: vec![Interval::closed(0.0, 1.0)],
             measure: ProductMeasure::Uniform,
         };
-        let out = lhs_multi_indices(&idx, Some(8));
+        let out = lhs_multi_indices(&idx, Some(8), None);
         assert!(
             out.iter().all(|mi| mi[0] < 4 && mi[1] < (1u64 << 53)),
             "{out:?}"
         );
+    }
+
+    /// An authored seed selects a different permutation from the
+    /// default and the same one on every call (comprehension_forms.md
+    /// §3.6: state from the authored seed and structural identity).
+    #[test]
+    fn an_authored_seed_is_deterministic_and_distinct() {
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![6, 6],
+        };
+        let default = lhs_multi_indices(&idx, Some(12), None);
+        let seeded = lhs_multi_indices(&idx, Some(12), Some(42));
+        let again = lhs_multi_indices(&idx, Some(12), Some(42));
+        assert_eq!(seeded, again);
+        assert_ne!(seeded, default);
+        assert_ne!(seeded, lhs_multi_indices(&idx, Some(12), Some(43)));
     }
 }

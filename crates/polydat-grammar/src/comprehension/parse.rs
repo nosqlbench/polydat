@@ -356,7 +356,10 @@ fn build_order_from_terse(name: &str, n: Option<usize>) -> Result<TraversalOrder
         }),
         "halton" => Ok(TraversalOrder::Halton { count: n }),
         "sobol" => Ok(TraversalOrder::Sobol { count: n }),
-        "shuffle" => Ok(TraversalOrder::Shuffle { count: n }),
+        "shuffle" => Ok(TraversalOrder::Shuffle {
+            count: n,
+            seed: None,
+        }),
         "lhs" => Ok(TraversalOrder::Lhs {
             count: n,
             seed: None,
@@ -386,6 +389,15 @@ fn build_order_from_keyword(name: &str, body: &str) -> Result<TraversalOrder, St
     let seed = args
         .iter()
         .find_map(|(k, v)| (k == "seed").then(|| v.parse::<u64>().ok()).flatten());
+    // A seed is read by the seeded strategies (comprehension_forms.md
+    // §3.6): naming one elsewhere is a mistake to report, not ignore.
+    let seeded =
+        matches!(name, "shuffle" | "lhs") || (name == "space_filling" && body.contains("lhs"));
+    if seed.is_some() && !seeded {
+        return Err(format!(
+            "order {name}: takes no seed; a seed applies to shuffle and lhs"
+        ));
+    }
 
     match name {
         "lex" => Ok(TraversalOrder::Lex { count }),
@@ -411,7 +423,7 @@ fn build_order_from_keyword(name: &str, body: &str) -> Result<TraversalOrder, St
         }
         "halton" => Ok(TraversalOrder::Halton { count }),
         "sobol" => Ok(TraversalOrder::Sobol { count }),
-        "shuffle" => Ok(TraversalOrder::Shuffle { count }),
+        "shuffle" => Ok(TraversalOrder::Shuffle { count, seed }),
         "lhs" => Ok(TraversalOrder::Lhs { count, seed }),
         "space_filling" => {
             // `space_filling(strategy, count=N, seed=N)` —
@@ -1303,5 +1315,30 @@ mod tests {
             }
             _ => panic!("expected Parallel source"),
         }
+    }
+
+    /// A seed is a knob of the seeded strategies alone
+    /// (comprehension_forms.md §3.6): `shuffle` and `lhs` carry it,
+    /// and naming one on any other strategy is an error, not silence.
+    #[test]
+    fn a_seed_belongs_to_shuffle_and_lhs() {
+        match parse_order_spec("shuffle(count=3, seed=42)").unwrap() {
+            TraversalOrder::Shuffle {
+                count: Some(3),
+                seed: Some(42),
+            } => {}
+            other => panic!("expected Shuffle count=3 seed=42, got {other:?}"),
+        }
+        match parse_order_spec("lhs(seed=7)").unwrap() {
+            TraversalOrder::Lhs {
+                count: None,
+                seed: Some(7),
+            } => {}
+            other => panic!("expected Lhs seed=7, got {other:?}"),
+        }
+        let err = parse_order_spec("halton(count=4, seed=1)").unwrap_err();
+        assert!(err.contains("takes no seed"), "{err}");
+        let err = parse_order_spec("space_filling(sobol, count=4, seed=1)").unwrap_err();
+        assert!(err.contains("takes no seed"), "{err}");
     }
 }

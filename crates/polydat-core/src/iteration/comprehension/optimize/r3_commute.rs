@@ -24,6 +24,7 @@ pub fn apply(ast: &Comprehension) -> Option<Comprehension> {
         child,
         strategy: StrategyName::Lex,
         truncation: None,
+        ..
     } = ast
     else {
         return None;
@@ -40,6 +41,7 @@ pub fn apply(ast: &Comprehension) -> Option<Comprehension> {
             child: filter_child.clone(),
             strategy: StrategyName::Lex,
             truncation: None,
+            seed: None,
         }),
         predicate: predicate.clone(),
     })

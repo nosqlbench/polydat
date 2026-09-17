@@ -435,11 +435,14 @@ pub enum TraversalOrder {
         /// The sampling seed; a fixed default when absent.
         seed: Option<u64>,
     },
-    /// User-supplied Polydat function name. Function takes the tuple
-    /// list and returns a permutation/subset.
+    /// A seeded permutation.
     Shuffle {
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// Tuples to keep, from the first; all when absent.
         count: Option<usize>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        /// The sampling seed; a fixed default when absent.
+        seed: Option<u64>,
     },
     Custom {
         /// The Polydat function that orders the tuples.
@@ -728,6 +731,15 @@ fn format_order(order: &TraversalOrder) -> String {
     fn count_suffix(n: Option<usize>) -> String {
         n.map(|n| format!("/{n}")).unwrap_or_default()
     }
+    /// A seeded strategy renders in the keyword form when it carries
+    /// a seed, the form the parser reads back.
+    fn seeded_text(name: &str, count: Option<usize>, seed: Option<u64>) -> String {
+        match (count, seed) {
+            (_, None) => format!("{name}{}", count_suffix(count)),
+            (Some(c), Some(s)) => format!("{name}(count={c}, seed={s})"),
+            (None, Some(s)) => format!("{name}(seed={s})"),
+        }
+    }
     match order {
         TraversalOrder::Lex { count } => format!("lex{}", count_suffix(*count)),
         TraversalOrder::ReverseLex { count } => format!("reverse_lex{}", count_suffix(*count)),
@@ -744,14 +756,8 @@ fn format_order(order: &TraversalOrder) -> String {
         }
         TraversalOrder::Halton { count } => format!("halton{}", count_suffix(*count)),
         TraversalOrder::Sobol { count } => format!("sobol{}", count_suffix(*count)),
-        TraversalOrder::Lhs { count, seed } => {
-            let mut s = format!("lhs{}", count_suffix(*count));
-            if let Some(k) = seed {
-                s.push_str(&format!(" seed={k}"));
-            }
-            s
-        }
-        TraversalOrder::Shuffle { count } => format!("shuffle{}", count_suffix(*count)),
+        TraversalOrder::Lhs { count, seed } => seeded_text("lhs", *count, *seed),
+        TraversalOrder::Shuffle { count, seed } => seeded_text("shuffle", *count, *seed),
         TraversalOrder::Custom { function } => format!("custom({function})"),
     }
 }
@@ -954,6 +960,44 @@ mod tests {
         assert_eq!(
             c.to_string(),
             "k in 10, limit in 10,20 | k in 100, limit in 100,200"
+        );
+    }
+
+    /// A seeded order renders in the keyword form, which the parser
+    /// reads back to the same order.
+    #[test]
+    fn a_seeded_order_renders_in_the_keyword_form() {
+        use crate::comprehension::parse::parse_order_spec;
+        for order in [
+            TraversalOrder::Shuffle {
+                count: Some(3),
+                seed: Some(42),
+            },
+            TraversalOrder::Lhs {
+                count: None,
+                seed: Some(7),
+            },
+            TraversalOrder::Shuffle {
+                count: Some(3),
+                seed: None,
+            },
+        ] {
+            let text = format_order(&order);
+            assert_eq!(parse_order_spec(&text).unwrap(), order, "{text}");
+        }
+        assert_eq!(
+            format_order(&TraversalOrder::Shuffle {
+                count: Some(3),
+                seed: Some(42),
+            }),
+            "shuffle(count=3, seed=42)"
+        );
+        assert_eq!(
+            format_order(&TraversalOrder::Lhs {
+                count: None,
+                seed: Some(7),
+            }),
+            "lhs(seed=7)"
         );
     }
 }

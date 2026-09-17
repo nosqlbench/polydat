@@ -876,7 +876,10 @@ inside one clause. Tuple clauses `(a, b) in (…)` zip in parallel;
 the strategy names the text grammar accepts are `lex`, `reverse_lex`,
 `diagonal`, `antidiagonal`, `extrema`, `shells`, `halton`, `sobol`, `lhs`,
 and `shuffle`, plus the meta-form `space_filling(<halton|sobol|lhs>, …)`, as a
-bare `name`, terse `name/N`, or keyword `name(arg=val, …)`. `custom(fn)`
+bare `name`, terse `name/N`, or keyword `name(arg=val, …)`. The keyword
+form carries `seed=<u64>` for `shuffle` and `lhs`, the authored seed those
+strategies derive their permutation from; any other strategy refuses a
+seed. `custom(fn)`
 parses but is rejected when the text is lowered to the algebra: the strategy
 set is closed.
 

@@ -126,8 +126,8 @@ pub fn legacy_to_algebra(legacy: &LegacyAst) -> Result<AlgebraAst, ConvertError>
     };
 
     let with_order = if let Some(order) = &legacy.order {
-        let (strategy, truncation) = convert_order(order)?;
-        AlgebraAst::order(with_filter, strategy, truncation)
+        let (strategy, truncation, seed) = convert_order(order)?;
+        AlgebraAst::order_seeded(with_filter, strategy, truncation, seed)
     } else {
         with_filter
     };
@@ -228,27 +228,31 @@ fn convert_zip_mode(legacy: LegacyZipMode) -> AlgebraZipMode {
 /// spec §3.6, custom orderings are no longer supported.
 pub(crate) fn convert_order(
     order: &LegacyOrder,
-) -> Result<(StrategyName, Option<u64>), ConvertError> {
-    let pair = match order {
-        LegacyOrder::Lex { count } => (StrategyName::Lex, count.map(|n| n as u64)),
-        LegacyOrder::ReverseLex { count } => (StrategyName::ReverseLex, count.map(|n| n as u64)),
-        LegacyOrder::Diagonal { count } => (StrategyName::Diagonal, count.map(|n| n as u64)),
-        LegacyOrder::Antidiagonal { count } => {
-            (StrategyName::Antidiagonal, count.map(|n| n as u64))
+) -> Result<(StrategyName, Option<u64>, Option<u64>), ConvertError> {
+    let triple = match order {
+        LegacyOrder::Lex { count } => (StrategyName::Lex, count.map(|n| n as u64), None),
+        LegacyOrder::ReverseLex { count } => {
+            (StrategyName::ReverseLex, count.map(|n| n as u64), None)
         }
-        LegacyOrder::Extrema { strata } => (StrategyName::Extrema, strata.map(|n| n as u64)),
-        LegacyOrder::Shells { depth, .. } => (StrategyName::Shells, depth.map(|n| n as u64)),
-        LegacyOrder::Halton { count } => (StrategyName::Halton, count.map(|n| n as u64)),
-        LegacyOrder::Sobol { count } => (StrategyName::Sobol, count.map(|n| n as u64)),
-        LegacyOrder::Lhs { count, .. } => (StrategyName::Lhs, count.map(|n| n as u64)),
-        LegacyOrder::Shuffle { count } => (StrategyName::Shuffle, count.map(|n| n as u64)),
+        LegacyOrder::Diagonal { count } => (StrategyName::Diagonal, count.map(|n| n as u64), None),
+        LegacyOrder::Antidiagonal { count } => {
+            (StrategyName::Antidiagonal, count.map(|n| n as u64), None)
+        }
+        LegacyOrder::Extrema { strata } => (StrategyName::Extrema, strata.map(|n| n as u64), None),
+        LegacyOrder::Shells { depth, .. } => (StrategyName::Shells, depth.map(|n| n as u64), None),
+        LegacyOrder::Halton { count } => (StrategyName::Halton, count.map(|n| n as u64), None),
+        LegacyOrder::Sobol { count } => (StrategyName::Sobol, count.map(|n| n as u64), None),
+        LegacyOrder::Lhs { count, seed } => (StrategyName::Lhs, count.map(|n| n as u64), *seed),
+        LegacyOrder::Shuffle { count, seed } => {
+            (StrategyName::Shuffle, count.map(|n| n as u64), *seed)
+        }
         LegacyOrder::Custom { function } => {
             return Err(ConvertError::CustomOrderingRemoved {
                 function: function.clone(),
             });
         }
     };
-    Ok(pair)
+    Ok(triple)
 }
 
 #[cfg(test)]
@@ -466,4 +470,43 @@ mod tests {
     // (algebra → legacy back-converter tests retired with the
     // bridge in 9c-4b phase 2. The forward direction
     // (`legacy_to_algebra`) tests above remain.)
+
+    /// The authored seed of a seeded order reaches the algebra; the
+    /// other strategies lower without one.
+    #[test]
+    fn a_seeded_order_keeps_its_seed_in_the_algebra() {
+        let legacy = LegacyAst {
+            mode: LegacyMode::Cartesian(vec![legacy_clause("k", "1..10")]),
+            filter: None,
+            order: Some(LegacyOrder::Shuffle {
+                count: Some(3),
+                seed: Some(42),
+            }),
+        };
+        let algebra = legacy_to_algebra(&legacy).unwrap();
+        assert!(
+            matches!(
+                algebra,
+                AlgebraAst::Order {
+                    strategy: StrategyName::Shuffle,
+                    truncation: Some(3),
+                    seed: Some(42),
+                    ..
+                }
+            ),
+            "{algebra:?}"
+        );
+        assert_eq!(
+            convert_order(&LegacyOrder::Lhs {
+                count: None,
+                seed: Some(7)
+            })
+            .unwrap(),
+            (StrategyName::Lhs, None, Some(7))
+        );
+        assert_eq!(
+            convert_order(&LegacyOrder::Halton { count: Some(4) }).unwrap(),
+            (StrategyName::Halton, Some(4), None)
+        );
+    }
 }

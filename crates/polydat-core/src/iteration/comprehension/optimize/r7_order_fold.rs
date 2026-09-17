@@ -24,6 +24,7 @@ pub fn apply(ast: &Comprehension) -> Option<Comprehension> {
         child: outer_child,
         strategy: outer_strat,
         truncation: outer_trunc,
+        seed: outer_seed,
     } = ast
     else {
         return None;
@@ -40,6 +41,7 @@ pub fn apply(ast: &Comprehension) -> Option<Comprehension> {
         child: inner_child.clone(),
         strategy: *outer_strat,
         truncation: *outer_trunc,
+        seed: *outer_seed,
     })
 }
 
@@ -69,6 +71,7 @@ mod tests {
                 child,
                 strategy: StrategyName::Halton,
                 truncation: Some(2),
+                ..
             } => {
                 assert_eq!(&*child, &inner);
             }
@@ -89,5 +92,19 @@ mod tests {
     fn r7_does_not_fire_for_single_order() {
         let ast = Comprehension::order(clause("k", &[1]), StrategyName::Lex, None);
         assert_eq!(apply(&ast), None);
+    }
+
+    /// The fold keeps the outer order's seed: it is the outer order
+    /// that survives.
+    #[test]
+    fn fold_keeps_the_outer_seed() {
+        let inner = clause("k", &[1, 2, 3]);
+        let o1 = Comprehension::order_seeded(inner.clone(), StrategyName::Shuffle, None, Some(1));
+        let o2 = Comprehension::order_seeded(o1, StrategyName::Shuffle, Some(2), Some(42));
+        let result = apply(&o2).unwrap();
+        assert_eq!(
+            result,
+            Comprehension::order_seeded(inner, StrategyName::Shuffle, Some(2), Some(42))
+        );
     }
 }

@@ -254,8 +254,8 @@ pub fn resolve_source_with(
                 c = Comprehension::filter(c, pred.clone());
             }
             if let Some(spec) = order {
-                let (strategy, truncation) = parse_order(spec).map_err(|e| at(&e))?;
-                c = Comprehension::order(c, strategy, truncation);
+                let (strategy, truncation, seed) = parse_order(spec).map_err(|e| at(&e))?;
+                c = Comprehension::order_seeded(c, strategy, truncation, seed);
             }
             c
         }
@@ -268,12 +268,19 @@ pub fn resolve_source_with(
     Ok((comprehension, report.warnings))
 }
 
-/// Parse an `order` spec such as `halton/5` into the algebra's strategy
-/// and truncation by running it through the comprehension parser on a
+/// Parse an `order` spec such as `halton/5` into the algebra's strategy,
+/// truncation, and seed by running it through the comprehension parser on a
 /// one-clause carrier.
 fn parse_order(
     spec: &str,
-) -> Result<(crate::iteration::comprehension::StrategyName, Option<u64>), String> {
+) -> Result<
+    (
+        crate::iteration::comprehension::StrategyName,
+        Option<u64>,
+        Option<u64>,
+    ),
+    String,
+> {
     let carrier = format!("__o in 0..1 order {spec}");
     let legacy = crate::iteration::comprehension::parse::parse_comprehension_text(&carrier)?;
     let algebra = crate::iteration::comprehension::spec::legacy_to_algebra(&legacy)
@@ -282,8 +289,9 @@ fn parse_order(
         Comprehension::Order {
             strategy,
             truncation,
+            seed,
             ..
-        } => Ok((strategy, truncation)),
+        } => Ok((strategy, truncation, seed)),
         other => Err(format!(
             "order spec `{spec}` did not produce an ordering (got {other:?})"
         )),

@@ -847,10 +847,12 @@ fn bind_generators(
             child,
             strategy,
             truncation,
+            seed,
         } => K::Order {
             child: Box::new(bind_generators(child, generators, inputs)),
             strategy: *strategy,
             truncation: *truncation,
+            seed: *seed,
         },
     }
 }

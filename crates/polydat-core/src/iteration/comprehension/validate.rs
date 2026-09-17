@@ -298,6 +298,7 @@ fn visit(c: &Comprehension, report: &mut ValidationReport) -> Result<(), Validat
             child,
             strategy,
             truncation,
+            ..
         } => visit_order(child, *strategy, *truncation, report),
     }
 }

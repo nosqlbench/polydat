@@ -80,7 +80,9 @@ pub enum Comprehension {
 
     /// Permutation modifier per spec §3.6. `strategy` must
     /// accept the child's IndexFn (V4); `truncation` limits the
-    /// dispensed count.
+    /// dispensed count; `seed` is the authored seed a seeded
+    /// strategy (`Shuffle`, `Lhs`) derives its state from, with a
+    /// fixed default when absent.
     Order {
         /// The stream ordered.
         child: Box<Comprehension>,
@@ -88,6 +90,9 @@ pub enum Comprehension {
         strategy: StrategyName,
         /// The dispensed count cap, if any.
         truncation: Option<u64>,
+        /// The authored seed, read by `Shuffle` and `Lhs`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seed: Option<u64>,
     },
 }
 
@@ -124,12 +129,25 @@ impl Comprehension {
         }
     }
 
-    /// Construct an order node wrapping `child`.
+    /// Construct an order node wrapping `child`, with no authored
+    /// seed.
     pub fn order(child: Comprehension, strategy: StrategyName, truncation: Option<u64>) -> Self {
+        Self::order_seeded(child, strategy, truncation, None)
+    }
+
+    /// Construct an order node wrapping `child` with an authored
+    /// `seed`, which `Shuffle` and `Lhs` derive their state from.
+    pub fn order_seeded(
+        child: Comprehension,
+        strategy: StrategyName,
+        truncation: Option<u64>,
+        seed: Option<u64>,
+    ) -> Self {
         Comprehension::Order {
             child: Box::new(child),
             strategy,
             truncation,
+            seed,
         }
     }
 
@@ -569,5 +587,34 @@ mod tests {
         let json = serde_json::to_string(&c).unwrap();
         let back: Comprehension = serde_json::from_str(&json).unwrap();
         assert_eq!(c, back);
+    }
+
+    /// An order's authored seed rides through serde, and an order
+    /// written without one reads back as unseeded.
+    #[test]
+    fn an_orders_seed_round_trips_and_defaults_to_none() {
+        let c = Comprehension::order_seeded(
+            Comprehension::clause(
+                "k",
+                Source::IntRange {
+                    lo: 1,
+                    hi: 4,
+                    step: 1,
+                },
+            ),
+            StrategyName::Shuffle,
+            Some(2),
+            Some(42),
+        );
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(json.contains("\"seed\":42"), "{json}");
+        let back: Comprehension = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, c);
+        let unseeded = json.replace(",\"seed\":42", "");
+        let back: Comprehension = serde_json::from_str(&unseeded).unwrap();
+        assert!(
+            matches!(back, Comprehension::Order { seed: None, .. }),
+            "{back:?}"
+        );
     }
 }

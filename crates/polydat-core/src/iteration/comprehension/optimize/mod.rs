@@ -278,11 +278,13 @@ fn replace_child_at(ast: &Comprehension, i: usize, replacement: Comprehension) -
         Comprehension::Order {
             strategy,
             truncation,
+            seed,
             ..
         } => Comprehension::Order {
             child: Box::new(replacement),
             strategy: *strategy,
             truncation: *truncation,
+            seed: *seed,
         },
     }
 }

@@ -56,8 +56,10 @@ for_stmt       ::= "for" for_source "{" statement* "}"
 for_source     ::= comprehension_text        (* inline comprehension *)
                 |  ident                     (* a bound producer *)
 
-comprehension_text ::= clause ("," clause)* ("where" predicate)? ("order" strategy ("/" int)?)?
-                |  "[" ("for" comprehension_text ","?)+ "]" ("where" predicate)? ("order" strategy ("/" int)?)?   (* union *)
+comprehension_text ::= clause ("," clause)* ("where" predicate)? ("order" order_spec)?
+                |  "[" ("for" comprehension_text ","?)+ "]" ("where" predicate)? ("order" order_spec)?   (* union *)
+order_spec     ::= strategy ("/" int)?                          (* bare or terse *)
+                |  strategy "(" (ident "=" value) ("," ident "=" value)* ")"   (* keyword; `seed=` for shuffle and lhs *)
 clause         ::= ident "in" source
                 |  "(" ident ("," ident)+ ")" "in" source
 ```

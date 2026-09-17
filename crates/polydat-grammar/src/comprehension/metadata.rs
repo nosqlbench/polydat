@@ -213,6 +213,7 @@ impl Comprehension {
                 child,
                 strategy,
                 truncation,
+                ..
             } => order_metadata(child, *strategy, *truncation),
         }
     }

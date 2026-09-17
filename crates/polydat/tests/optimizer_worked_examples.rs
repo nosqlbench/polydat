@@ -80,6 +80,7 @@ fn optimizer_eliminates_redundant_inner_order() {
             child,
             strategy: StrategyName::Halton,
             truncation: Some(3),
+            ..
         } => {
             assert!(matches!(&*child, Comprehension::Clause { .. }));
         }

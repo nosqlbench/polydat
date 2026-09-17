@@ -76,9 +76,10 @@ fn emit(ast: &Comprehension, ops: &mut Vec<Op>) {
             child,
             strategy,
             truncation,
+            seed,
         } => {
             emit(child, ops);
-            ops.push(order_op(child, *strategy, *truncation));
+            ops.push(order_op(child, *strategy, *truncation, *seed));
         }
     }
 }
@@ -86,7 +87,12 @@ fn emit(ast: &Comprehension, ops: &mut Vec<Op>) {
 /// Choose between `OrderStreaming` (R1: Lex) and
 /// `OrderMaterialize` (R2: non-Lex with indexed push-down
 /// when the input's metadata is index-addressable).
-fn order_op(child: &Comprehension, strategy: StrategyName, truncation: Option<u64>) -> Op {
+fn order_op(
+    child: &Comprehension,
+    strategy: StrategyName,
+    truncation: Option<u64>,
+    seed: Option<u64>,
+) -> Op {
     if matches!(strategy, StrategyName::Lex) {
         return Op::OrderStreaming {
             kind: OrderStreamingKind::Lex,
@@ -100,6 +106,7 @@ fn order_op(child: &Comprehension, strategy: StrategyName, truncation: Option<u6
     Op::OrderMaterialize {
         strategy,
         truncation,
+        seed,
         indexed,
         input_index_fn: metadata.index_addressable,
     }
@@ -215,5 +222,30 @@ mod tests {
         let ast = clause("k", &[1]);
         let prog = compile(&ast);
         assert!(matches!(prog.ops().last(), Some(Op::Dispense)));
+    }
+
+    /// An order's authored seed compiles into its materialize op.
+    #[test]
+    fn compile_carries_the_authored_seed() {
+        let ast = Comprehension::order_seeded(
+            clause("k", &[1, 2, 3, 4]),
+            StrategyName::Shuffle,
+            Some(2),
+            Some(42),
+        );
+        let prog = compile(&ast);
+        assert!(
+            prog.ops().iter().any(|op| matches!(
+                op,
+                Op::OrderMaterialize {
+                    strategy: StrategyName::Shuffle,
+                    truncation: Some(2),
+                    seed: Some(42),
+                    ..
+                }
+            )),
+            "{:?}",
+            prog.ops()
+        );
     }
 }

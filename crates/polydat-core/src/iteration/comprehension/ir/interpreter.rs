@@ -73,6 +73,7 @@ pub fn interpret(program: &Program) -> BoxedStream {
                 truncation,
                 indexed,
                 input_index_fn,
+                seed,
             } => {
                 let inner = stack.pop().expect("OrderMaterialize on empty stack");
                 stack.push(Box::new(OrderMaterializeStream::new(
@@ -81,6 +82,7 @@ pub fn interpret(program: &Program) -> BoxedStream {
                     *truncation,
                     *indexed,
                     input_index_fn.clone(),
+                    *seed,
                 )));
             }
             Op::Dispense => {
@@ -504,6 +506,7 @@ struct OrderMaterializeStream {
     #[allow(dead_code)] // R2 path now dispatches through Strategy::apply
     indexed: bool,
     input_index_fn: Option<crate::iteration::comprehension::metadata::IndexFn>,
+    seed: Option<u64>,
     materialized: Option<Vec<Tuple>>,
     pos: usize,
 }
@@ -515,6 +518,7 @@ impl OrderMaterializeStream {
         truncation: Option<u64>,
         indexed: bool,
         input_index_fn: Option<crate::iteration::comprehension::metadata::IndexFn>,
+        seed: Option<u64>,
     ) -> Self {
         Self {
             inner,
@@ -522,6 +526,7 @@ impl OrderMaterializeStream {
             truncation,
             indexed,
             input_index_fn,
+            seed,
             materialized: None,
             pos: 0,
         }
@@ -544,7 +549,7 @@ impl OrderMaterializeStream {
             index_fn,
         };
         let dispatched = crate::iteration::comprehension::strategies::for_name(self.strategy);
-        let out = dispatched.apply(&input, self.truncation);
+        let out = dispatched.apply_seeded(&input, self.truncation, self.seed);
         self.materialized = Some(out);
     }
 }

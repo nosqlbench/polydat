@@ -134,8 +134,10 @@ pub struct EvaluatedInput {
 /// Implementations are stateless — every call to [`apply`](Strategy::apply)
 /// produces the same output given the same inputs
 /// (deterministic). PRNG-based strategies (`Shuffle`, `Lhs`)
-/// derive their seed from a module constant plus the input
-/// length; no per-streamer seed is threaded.
+/// derive their state from the authored seed of
+/// [`apply_seeded`](Strategy::apply_seeded), or a module constant
+/// when none is authored, plus the input length; no per-streamer
+/// seed is threaded.
 pub trait Strategy {
     /// The strategy's name. Mirrors [`StrategyName`].
     fn name(&self) -> StrategyName;
@@ -165,6 +167,21 @@ pub trait Strategy {
     /// `accepts_input(Some(&input.index_fn))` before `apply`
     /// to fire V4 at strategy-invocation time per spec §10.7.8.
     fn apply(&self, input: &EvaluatedInput, truncation: Option<u64>) -> Vec<Tuple>;
+
+    /// [`apply`](Strategy::apply) under an authored seed
+    /// (comprehension_forms.md §3.6): a seeded strategy (`Shuffle`,
+    /// `Lhs`) derives its state from `seed` and the input's
+    /// structural identity, and from its fixed default when `seed`
+    /// is `None`. Every other strategy ignores the seed.
+    fn apply_seeded(
+        &self,
+        input: &EvaluatedInput,
+        truncation: Option<u64>,
+        seed: Option<u64>,
+    ) -> Vec<Tuple> {
+        let _ = seed;
+        self.apply(input, truncation)
+    }
 }
 
 /// Dispatch a [`StrategyName`] to its concrete [`Strategy`]

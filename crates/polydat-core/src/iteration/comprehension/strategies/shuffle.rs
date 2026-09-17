@@ -40,7 +40,8 @@ use crate::iteration::comprehension::strategy::StrategyName;
 /// A seeded permutation.
 pub struct Shuffle;
 
-/// Seed base; the input length is added per call. Per-streamer
+/// Seed base when none is authored; the input length is added per
+/// call. Per-streamer
 /// seeding is not implemented.
 const DEFAULT_SEED: u64 = 0xD1CE_5EED_C0FF_EE42;
 
@@ -58,20 +59,36 @@ impl Strategy for Shuffle {
     }
 
     fn apply(&self, input: &EvaluatedInput, truncation: Option<u64>) -> Vec<Tuple> {
+        self.apply_seeded(input, truncation, None)
+    }
+
+    fn apply_seeded(
+        &self,
+        input: &EvaluatedInput,
+        truncation: Option<u64>,
+        seed: Option<u64>,
+    ) -> Vec<Tuple> {
         if index_fn_supports_lookup(&input.index_fn) {
-            let mis = shuffle_multi_indices(&input.index_fn, truncation);
+            let mis = shuffle_multi_indices(&input.index_fn, truncation, seed);
             mis.into_iter()
                 .filter_map(|mi| multi_index_to_flat(&input.index_fn, &mi))
                 .filter_map(|flat| input.tuples.get(flat).cloned())
                 .collect()
         } else {
-            naive_shuffle_over_tuples(input.tuples.clone(), truncation)
+            naive_shuffle_over_tuples(input.tuples.clone(), truncation, seed)
         }
     }
 }
 
-fn naive_shuffle_over_tuples(mut input: Vec<Tuple>, truncation: Option<u64>) -> Vec<Tuple> {
-    let mut rng = Prng::new(DEFAULT_SEED.wrapping_add(input.len() as u64));
+fn naive_shuffle_over_tuples(
+    mut input: Vec<Tuple>,
+    truncation: Option<u64>,
+    seed: Option<u64>,
+) -> Vec<Tuple> {
+    let mut rng = Prng::new(
+        seed.unwrap_or(DEFAULT_SEED)
+            .wrapping_add(input.len() as u64),
+    );
     rng.shuffle(&mut input);
     match truncation {
         Some(n) => input.into_iter().take(n as usize).collect(),
@@ -79,7 +96,13 @@ fn naive_shuffle_over_tuples(mut input: Vec<Tuple>, truncation: Option<u64>) -> 
     }
 }
 
-pub(crate) fn shuffle_multi_indices(idx: &IndexFn, truncation: Option<u64>) -> Vec<MultiIndex> {
+/// The multi-indices of a shuffle over `idx`, `truncation` of them,
+/// from the authored `seed` or the default.
+pub(crate) fn shuffle_multi_indices(
+    idx: &IndexFn,
+    truncation: Option<u64>,
+    seed: Option<u64>,
+) -> Vec<MultiIndex> {
     let total = index_fn_size(idx);
     let continuous = matches!(idx, IndexFn::Continuous { .. } | IndexFn::Hybrid { .. });
     // A continuous space has no tuple count: the truncation is the
@@ -98,7 +121,8 @@ pub(crate) fn shuffle_multi_indices(idx: &IndexFn, truncation: Option<u64>) -> V
     let axis_sizes = axis_sizes_for(idx);
     // The seed follows the draw count over a continuous space, which
     // has no tuple count of its own.
-    let mut rng = Prng::new(DEFAULT_SEED.wrapping_add(if continuous { n } else { total }));
+    let base = seed.unwrap_or(DEFAULT_SEED);
+    let mut rng = Prng::new(base.wrapping_add(if continuous { n } else { total }));
 
     match idx {
         IndexFn::Continuous { intervals, .. } => {
@@ -218,7 +242,7 @@ mod tests {
         let idx = IndexFn::Lattice {
             axis_sizes: vec![3, 4],
         };
-        let out = shuffle_multi_indices(&idx, Some(10));
+        let out = shuffle_multi_indices(&idx, Some(10), None);
         assert_eq!(out.len(), 10);
         let mut seen = std::collections::HashSet::new();
         for mi in &out {
@@ -235,7 +259,7 @@ mod tests {
         let idx = IndexFn::Lattice {
             axis_sizes: vec![2, 2],
         };
-        let out = shuffle_multi_indices(&idx, None);
+        let out = shuffle_multi_indices(&idx, None, None);
         assert_eq!(out.len(), 4);
         let mut sorted = out.clone();
         sorted.sort();
@@ -273,20 +297,36 @@ mod tests {
             intervals: vec![Interval::closed(2.0, 4.0)],
             measure: ProductMeasure::Uniform,
         };
-        let out = shuffle_multi_indices(&idx, Some(16));
+        let out = shuffle_multi_indices(&idx, Some(16), None);
         assert_eq!(out.len(), 16);
         assert!(out.iter().all(|mi| mi[0] < (1u64 << 53)), "{out:?}");
-        assert!(shuffle_multi_indices(&idx, None).is_empty());
+        assert!(shuffle_multi_indices(&idx, None, None).is_empty());
         let idx = IndexFn::Hybrid {
             discrete_axes: vec![3],
             continuous_axes: vec![Interval::closed(0.0, 1.0)],
             measure: ProductMeasure::Uniform,
         };
-        let out = shuffle_multi_indices(&idx, Some(5));
+        let out = shuffle_multi_indices(&idx, Some(5), None);
         assert_eq!(out.len(), 5);
         assert!(
             out.iter().all(|mi| mi[0] < 3 && mi[1] < (1u64 << 53)),
             "{out:?}"
         );
+    }
+
+    /// An authored seed selects a different permutation from the
+    /// default and the same one on every call (comprehension_forms.md
+    /// §3.6: state from the authored seed and structural identity).
+    #[test]
+    fn an_authored_seed_is_deterministic_and_distinct() {
+        let idx = IndexFn::Lattice {
+            axis_sizes: vec![6, 6],
+        };
+        let default = shuffle_multi_indices(&idx, Some(12), None);
+        let seeded = shuffle_multi_indices(&idx, Some(12), Some(42));
+        let again = shuffle_multi_indices(&idx, Some(12), Some(42));
+        assert_eq!(seeded, again);
+        assert_ne!(seeded, default);
+        assert_ne!(seeded, shuffle_multi_indices(&idx, Some(12), Some(43)));
     }
 }

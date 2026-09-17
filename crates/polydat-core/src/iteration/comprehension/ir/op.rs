@@ -95,6 +95,9 @@ pub enum Op {
         strategy: StrategyName,
         /// The output cap, if any.
         truncation: Option<u64>,
+        /// The authored seed a seeded strategy (`Shuffle`, `Lhs`)
+        /// derives its state from; its fixed default when `None`.
+        seed: Option<u64>,
         /// `true` when R2 push-down applies: the interpreter
         /// should use the strategy's indexed form (draw
         /// multi-indices, look up via input IndexFn).
@@ -181,6 +184,7 @@ mod tests {
                 strategy: StrategyName::Halton,
                 truncation: Some(10),
                 indexed: true,
+                seed: None,
                 input_index_fn: None,
             }
             .is_barrier()
@@ -214,6 +218,7 @@ mod tests {
             strategy: StrategyName::Halton,
             truncation: Some(50),
             indexed: true,
+            seed: None,
             input_index_fn: Some(
                 crate::iteration::comprehension::metadata::IndexFn::Lattice {
                     axis_sizes: vec![10, 5],

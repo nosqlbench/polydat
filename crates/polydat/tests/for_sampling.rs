@@ -285,3 +285,57 @@ fn distribution_parameters_are_checked_at_compile() {
         "{err}"
     );
 }
+
+// ---- The authored seed (comprehension_forms.md §3.6) ----
+
+/// The first three of a shuffle, from the text.
+fn shuffled_prefix(order: &str) -> Vec<u64> {
+    let mut k = polydat::dsl::compile_polydat(&format!(
+        "input cycle: u64\nsome := for k in 1..100 order {order}\nfor some {{\n    v := u64_add(k, 0)\n}}\n"
+    ))
+    .unwrap_or_else(|e| panic!("{e}"));
+    k.set_inputs(&[0]);
+    let mut stream = k.traverse(0).unwrap();
+    let mut seen = Vec::new();
+    while let Some(mut a) = stream.advance().unwrap() {
+        seen.push(a.cycle(0).pull("v").as_u64());
+    }
+    seen
+}
+
+/// `shuffle(count=n, seed=s)` and `lhs(count=n, seed=s)` derive their
+/// permutation from the authored seed: the same seed gives the same
+/// traversal, a different seed a different one, and the default is
+/// its own.
+#[test]
+fn an_authored_seed_selects_the_permutation() {
+    let default = shuffled_prefix("shuffle/3");
+    let seeded = shuffled_prefix("shuffle(count=3, seed=42)");
+    assert_eq!(seeded.len(), 3);
+    assert_eq!(seeded, shuffled_prefix("shuffle(count=3, seed=42)"));
+    assert_ne!(seeded, default);
+    assert_ne!(seeded, shuffled_prefix("shuffle(count=3, seed=7)"));
+
+    let default = float_pairs(&body("x in 0.0..1.0, y in 0.0..1.0 order lhs/5", "x", "y"));
+    let seeded = float_pairs(&body(
+        "x in 0.0..1.0, y in 0.0..1.0 order lhs(count=5, seed=42)",
+        "x",
+        "y",
+    ));
+    assert_eq!(seeded.len(), 5);
+    assert_ne!(seeded, default);
+    assert_eq!(
+        seeded,
+        float_pairs(&body(
+            "x in 0.0..1.0, y in 0.0..1.0 order lhs(count=5, seed=42)",
+            "x",
+            "y",
+        ))
+    );
+    // A seed on a strategy that reads none is refused at the statement.
+    let err = polydat::dsl::compile_polydat(
+        "input cycle: u64\nsome := for k in 1..100 order halton(count=3, seed=42)\n",
+    )
+    .unwrap_err();
+    assert!(err.contains("takes no seed"), "{err}");
+}

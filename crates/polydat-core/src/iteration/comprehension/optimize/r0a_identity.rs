@@ -37,6 +37,7 @@ pub fn apply(ast: &Comprehension) -> Option<Comprehension> {
             child,
             strategy: StrategyName::Lex,
             truncation: None,
+            ..
         } => Some((**child).clone()),
         _ => None,
     }
