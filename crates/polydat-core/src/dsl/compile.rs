@@ -1954,6 +1954,16 @@ impl Compiler {
                 .map_err(|e| {
                     format!("cursor '{source_name}': failed to compile `over` expression: {e}")
                 })?;
+            // The wire is a spec string or a partition-typed external
+            // (for_traversal.md §5, §7): any other type is refused here,
+            // not at the first activation.
+            if let Some(ty) = asm.output_type(&raw_name)
+                && !matches!(ty, crate::ast::PortType::Str | crate::ast::PortType::Ext)
+            {
+                return Err(format!(
+                    "cursor '{source_name}': `over` names a {ty:?} wire; expected a spec string or a partition-typed value"
+                ));
+            }
             // A literal spec over a known extent resolves now
             // (engine_parity.md, step 3): the schema carries the
             // partitions for the host, and a clause that denotes

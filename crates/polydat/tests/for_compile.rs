@@ -222,3 +222,20 @@ fn a_degenerate_composition_warns_lax_and_fails_strict() {
     assert!(err.contains("strict mode"), "{err}");
     assert!(err.contains("line 2"), "{err}");
 }
+
+/// `over` naming a wire that is not a spec string or partition-typed
+/// is a compile error (for_traversal.md §7), not the first
+/// activation's.
+#[test]
+fn over_naming_a_non_partition_wire_is_a_compile_error() {
+    let err = compile_polydat(
+        "input cycle: u64\nfor k in 1..3 {\n    cursor rows = range(0, 100) over k\n    v := rows.ordinal\n}\n",
+    )
+    .unwrap_err();
+    assert!(err.contains("`over` names a U64 wire"), "{err}");
+    let err = compile_polydat(
+        "input cycle: u64\ncursor rows = range(0, 100) over 42\nv := rows.ordinal\n",
+    )
+    .unwrap_err();
+    assert!(err.contains("`over` names a U64 wire"), "{err}");
+}
