@@ -202,12 +202,14 @@ Changes to this subsystem must preserve:
 Polydat owns parsing normalization, the canonical algebra,
 optimization, IR, and runtime tuple evaluation. Host crates own
 their scope walker and the policy for turning each tuple into a
-child kernel. Child-kernel construction must go through
+child kernel. A child scope over a tuple is built by the traversal
+activation protocol ([for_traversal.md](for_traversal.md) §3.2); scope
+modules go through
 [subcontext_construction.md](subcontext_construction.md); the
 comprehension layer does not recreate a parallel scope-binding
 protocol.
 
 See [comprehension_cutover_contact_surfaces.md](comprehension_cutover_contact_surfaces.md)
 for the current host integration boundaries and
-[comprehension_migration_gate.md](comprehension_migration_gate.md)
+[comprehension_forms.md](comprehension_forms.md) §9.6, §9.8, and §14
 for the permanent regression obligations.

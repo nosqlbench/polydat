@@ -1504,7 +1504,7 @@ Separating the surfaces lets:
 
 ### 9.6 Core invariants
 
-Six invariants the implementation keeps, each a consequence of the
+Eleven invariants the implementation keeps, each a consequence of the
 sections above:
 
 - **Stream-first execution.** Clause sources are stream producers. A
@@ -1538,6 +1538,26 @@ sections above:
   state from the authored seed and stable structural identity. Thread
   scheduling, address layout, and iteration among sibling consumers
   do not alter the sequence (§3.6).
+- **One canonical tree.** Every public input form, the text, the
+  JSON and YAML spec forms, and the algebra built directly, normalizes
+  to the same `Comprehension` tree, and no later stage branches on
+  which form it came from (§8, §9.4). Two forms that would normalize
+  to different trees without an authored distinction are a defect in
+  the front end, not two dialects.
+- **Validation is owned here.** V1–V9 are enforced by the compile
+  stage of every entry point (§5); a host or a compatibility parser
+  never substitutes for them or bypasses them.
+- **Total metadata.** Every accepted node carries the full §10.7
+  bundle; a node the propagator cannot describe is rejected, not
+  passed through with a partial bundle.
+- **Bounds before execution.** IR compilation preserves each opcode's
+  declared stack effect, and the resource-bound pass (§9.3) runs
+  before a program is dispensed.
+- **One scope resolution.** A source or predicate resolves names
+  through the kernel lookup (`kernel::interp`) and nowhere else, and
+  a child scope over a tuple is built by the traversal activation
+  protocol ([The `for` Construct](for_traversal.md) §3.2).
+
 
 `EvaluatedSource` distinguishes source values from source
 indexability: `IndexFn` is a runtime query over the evaluated source,
@@ -1560,6 +1580,51 @@ chain:
   protocol that binds a tuple into a body.
 
 ---
+
+### 9.8 Verification surfaces
+
+The invariants of §9.6 are checked by the suite, organized by
+contract rather than by a frozen number of tests. Each named file is
+a module of the `suite` test binary (`crates/polydat/tests/suite.rs`):
+
+| Contract | Primary coverage |
+|---|---|
+| Spec, serde, and text parity (one canonical tree) | `spec_surface_parity.rs` |
+| Worked algebra examples (§11) | `spec_section_11_worked_examples.rs` |
+| Optimizer equivalence (§10.6) | `optimizer_worked_examples.rs`, the optimizer's unit and property tests |
+| Predicate soundness (§10.9) | `predicate_analyzer_soundness.rs` |
+| IR compilation and execution (§9.1) | `ir_end_to_end.rs` |
+| Resource bounds (§9.3) | `resource_bounds_verification.rs` |
+| Consumer independence (§9.5.2, §14.3) | `surfaces_independence.rs` |
+| Kernel and scope integration | `scope_composition.rs`, the runtime's unit tests |
+| Source semantics (§3.1, §10.7) | `source_tests.rs`, `sampling_test.rs`, `for_sampling.rs`, `for_flatten.rs` |
+| The `for` construct and producers | `for_compile.rs`, `for_producers.rs`, `for_runtime.rs`, `for_syntax.rs` |
+| Whole-crate behavior | the complete workspace suite |
+
+Removing or weakening the coverage of one contract requires
+replacement coverage in the same change.
+
+**The gate.** The authoritative local gate is the workspace gate CI
+runs: the complete suite under nextest, clippy with warnings denied,
+rustdoc with warnings denied, and the format check.
+
+```text
+cargo nextest run --workspace --all-features
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+cargo fmt --all -- --check
+```
+
+Targeted suites serve development; they do not replace the gate at
+handoff. Doctests are off and covered by `rustdoc_examples.rs`.
+
+**Change evidence.** A behavior-changing patch names the clause of
+this specification it changes, the canonical representation or stage
+it affects, the old and new dispense or error behavior, the tests
+that prove the new contract, and whether the parser's accepted forms
+or the serialized forms change. A performance-only change passes the
+same semantic gate: a benchmark never authorizes a different tuple
+stream.
 
 ## 10. Post-parse optimizer
 
@@ -3392,6 +3457,29 @@ projection wire, and the cursor-declaration `over <element>` syntax
 are [Cursor Partitions](cursor_partitions.md); the algebra sees a
 plain list-source comprehension, and cursor narrowing happens at
 activation, resolved against the element.
+
+### 14.8 The flat parse form is normalization machinery
+
+The flat form the text parser produces (`ast_legacy`) exists to be
+lowered to the canonical tree (`spec::legacy_to_algebra`) and for
+nothing else. It appears in no retained model: a producer, a
+traversal, a streamer, and a compiled program carry the canonical
+tree. No stage downstream of the lowering branches on the form a
+comprehension was written in, and the lowering never bypasses the
+canonical validation (§5).
+
+### 14.9 Traversal activation is not module construction
+
+A child scope over a tuple is a fresh kernel over the body's program
+with the tuple and the captured scope bound ([The `for`
+Construct](for_traversal.md) §3.2). It is not built through the scope
+module protocol ([Subcontext Construction](subcontext_construction.md)),
+which serves modules and stands beside traversal activation, not
+under it. The runtime evaluator (`runtime::evaluate_for_iteration`)
+is the one tuple order for a canonical tree: a host that evaluates
+the same tree gets the same order, and no static-interpreter shortcut
+stands in for it; a comprehension the scope-less surfaces cannot
+evaluate is refused by name (§9.5.2), never dispensed empty.
 
 ## 15. Open design questions
 

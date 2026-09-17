@@ -149,7 +149,7 @@ mechanism on every engine.
 | comprehension_forms.md | The comprehension algebra and its verification rule | **Rewrite** the preamble, §8 (Polydat's own surface, fix `Ext` and `for base where`), §9.5 (the surfaces that exist); absorb the plan's six invariants, the cutover's error-ownership table, the gate's oracle. Delete §15. |
 | comprehension_implementation_plan.md | none | **Delete** (open). |
 | comprehension_cutover_contact_surfaces.md | none | **Delete** (open) after §5 moves to the runtime doc and §8 to forms §14. |
-| comprehension_migration_gate.md | none | **Delete** (open) after its oracle moves to forms §10.6. |
+| comprehension_migration_gate.md | none | **Deleted** 2026-09-17: the oracle in forms §10.6, the invariants in §9.6, the verification surfaces in §9.8, the parser and activation boundaries in §14.8–§14.9. |
 
 Outside `docs/design`:
 
