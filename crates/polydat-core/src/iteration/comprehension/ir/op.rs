@@ -80,7 +80,9 @@ pub enum Op {
     /// interpreter realizes this by drawing strategy-specific
     /// multi-indices and looking each up against the input's
     /// `IndexFn` rather than materializing the full input.
-    /// Whether R2 fires is encoded in `indexed`.
+    /// Whether R2 fires is `input_index_fn`'s presence: the strategy
+    /// reads the index function from the evaluated input and routes
+    /// accordingly, so the op carries no second flag saying so.
     ///
     /// `input_index_fn` carries the upstream comprehension's
     /// addressing scheme (per spec §10.7.6 / §10.7.8) so the
@@ -98,12 +100,6 @@ pub enum Op {
         /// The authored seed a seeded strategy (`Shuffle`, `Lhs`)
         /// derives its state from; its fixed default when `None`.
         seed: Option<u64>,
-        /// `true` when R2 push-down applies: the interpreter
-        /// should use the strategy's indexed form (draw
-        /// multi-indices, look up via input IndexFn).
-        /// `false` for the naïve form (materialize input,
-        /// then apply).
-        indexed: bool,
         /// Upstream input's IndexFn at compile time (spec
         /// §10.7.6). The interpreter passes this into the
         /// [`crate::iteration::comprehension::strategies::EvaluatedInput`]
@@ -183,7 +179,6 @@ mod tests {
             Op::OrderMaterialize {
                 strategy: StrategyName::Halton,
                 truncation: Some(10),
-                indexed: true,
                 seed: None,
                 input_index_fn: None,
             }
@@ -217,7 +212,6 @@ mod tests {
         let op = Op::OrderMaterialize {
             strategy: StrategyName::Halton,
             truncation: Some(50),
-            indexed: true,
             seed: None,
             input_index_fn: Some(
                 crate::iteration::comprehension::metadata::IndexFn::Lattice {

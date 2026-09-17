@@ -71,7 +71,6 @@ pub fn interpret(program: &Program) -> BoxedStream {
             Op::OrderMaterialize {
                 strategy,
                 truncation,
-                indexed,
                 input_index_fn,
                 seed,
             } => {
@@ -80,7 +79,6 @@ pub fn interpret(program: &Program) -> BoxedStream {
                     inner,
                     *strategy,
                     *truncation,
-                    *indexed,
                     input_index_fn.clone(),
                     *seed,
                 )));
@@ -506,8 +504,6 @@ struct OrderMaterializeStream {
     inner: BoxedStream,
     strategy: StrategyName,
     truncation: Option<u64>,
-    #[allow(dead_code)] // R2 path now dispatches through Strategy::apply
-    indexed: bool,
     input_index_fn: Option<crate::iteration::comprehension::metadata::IndexFn>,
     seed: Option<u64>,
     materialized: Option<Vec<Tuple>>,
@@ -519,7 +515,6 @@ impl OrderMaterializeStream {
         inner: BoxedStream,
         strategy: StrategyName,
         truncation: Option<u64>,
-        indexed: bool,
         input_index_fn: Option<crate::iteration::comprehension::metadata::IndexFn>,
         seed: Option<u64>,
     ) -> Self {
@@ -527,7 +522,6 @@ impl OrderMaterializeStream {
             inner,
             strategy,
             truncation,
-            indexed,
             input_index_fn,
             seed,
             materialized: None,

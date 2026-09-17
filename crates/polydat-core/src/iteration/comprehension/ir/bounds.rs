@@ -94,7 +94,7 @@ fn barrier_for(op_index: usize, op: &Op) -> Bound {
         Op::OrderMaterialize {
             strategy,
             truncation,
-            indexed,
+            input_index_fn,
             ..
         } => {
             // R2 push-down: working set = truncation count.
@@ -103,8 +103,9 @@ fn barrier_for(op_index: usize, op: &Op) -> Bound {
             // lower-bound; actual is input cardinality).
             let ws = *truncation;
             let description = format!(
-                "ORDER_MATERIALIZE({}, indexed={indexed}, truncation={truncation:?})",
-                strategy.as_str()
+                "ORDER_MATERIALIZE({}, indexed={}, truncation={truncation:?})",
+                strategy.as_str(),
+                input_index_fn.is_some()
             );
             Bound {
                 op_index,
@@ -179,7 +180,6 @@ mod tests {
             Op::OrderMaterialize {
                 strategy: StrategyName::Halton,
                 truncation: Some(50),
-                indexed: true,
                 seed: None,
                 input_index_fn: None,
             },
@@ -216,14 +216,12 @@ mod tests {
             Op::OrderMaterialize {
                 strategy: StrategyName::Halton,
                 truncation: Some(10),
-                indexed: true,
                 seed: None,
                 input_index_fn: None,
             },
             Op::OrderMaterialize {
                 strategy: StrategyName::Shuffle,
                 truncation: Some(20),
-                indexed: true,
                 seed: None,
                 input_index_fn: None,
             },

@@ -99,15 +99,16 @@ fn order_op(
             truncation,
         };
     }
-    // R2: check whether the input is index-addressable. The
-    // metadata propagator (spec §10.7) is the authority.
+    // R2: the input's index function, when the metadata propagator
+    // (spec §10.7) claims one. Its presence is what makes the order
+    // indexed: the strategy reads it from the evaluated input and
+    // routes accordingly (§10.7.8).
     let metadata = child.metadata();
-    let indexed = metadata.index_addressable.is_some();
+
     Op::OrderMaterialize {
         strategy,
         truncation,
         seed,
-        indexed,
         input_index_fn: metadata.index_addressable,
     }
 }
@@ -175,7 +176,7 @@ mod tests {
             Op::OrderMaterialize {
                 strategy: StrategyName::Halton,
                 truncation: Some(3),
-                indexed: true,
+                input_index_fn: Some(_),
                 ..
             } => {}
             other => panic!("expected OrderMaterialize indexed, got {other:?}"),
@@ -185,7 +186,7 @@ mod tests {
     #[test]
     fn compile_order_halton_over_filter_is_naive() {
         // Filter destroys index addressability → R2 does NOT
-        // fire → indexed = false.
+        // fire → the op carries no index function.
         let cart = Comprehension::cartesian(vec![clause("a", &[1, 2, 3]), clause("b", &[10, 20])]);
         let filtered = Comprehension::filter(cart, "{a} > 0");
         let ast = Comprehension::order(filtered, StrategyName::Halton, Some(2));
@@ -197,7 +198,10 @@ mod tests {
             .unwrap();
         assert!(matches!(
             order_op,
-            Op::OrderMaterialize { indexed: false, .. }
+            Op::OrderMaterialize {
+                input_index_fn: None,
+                ..
+            }
         ));
     }
 
