@@ -58,11 +58,13 @@
 //! polydat-grammar input to the algebra layer funnels through
 //! [`legacy_convert::legacy_to_algebra`].
 
+pub mod algebra_text;
 pub mod legacy_convert;
 pub mod serde_form;
 pub mod source_parser;
 pub mod text;
 
+pub use algebra_text::parse_comprehension_algebra;
 pub use legacy_convert::{ConvertError, legacy_to_algebra};
 pub use serde_form::{ComprehensionSpec, ForSpec, SpecConvertError, parse_inline};
 pub use source_parser::{SourceParseError, parse_source};

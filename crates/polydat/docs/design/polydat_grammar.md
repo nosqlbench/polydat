@@ -834,6 +834,7 @@ for_source         ::= comprehension_text                (* inline comprehension
                     |  ident                             (* a bound producer *)
 
 comprehension_text ::= clause ("," clause)* ("where" predicate)? ("order" strategy ("/" int)?)?
+                    |  "[" ("for" comprehension_text ","?)+ "]" ("where" predicate)? ("order" strategy ("/" int)?)?   (* union *)
 clause             ::= ident "in" source
                     |  "(" ident ("," ident)+ ")" "in" source
 ```
@@ -842,7 +843,8 @@ clause             ::= ident "in" source
 ### 16.1 The captured text
 
 The lexer captures everything after `for` as **one token**: up to the end
-of the line or a `{` at bracket depth zero, whichever comes first, with
+of the line at bracket depth zero or a `{` at bracket depth zero, whichever
+comes first (a bracketed union runs across lines, one member per line), with
 string literals skipped whole. The captured text is handed to the
 comprehension parser unchanged, so the comprehension grammar has exactly
 one owner and `pp_file` prints the text back as written. Three
@@ -872,11 +874,10 @@ inside one clause. Tuple clauses `(a, b) in (…)` zip in parallel;
 `where <predicate>` filters tuples; the predicate names elements as
 `{name}`. `order <strategy>[/<n>]` permutes and optionally truncates;
 the strategy names the text grammar accepts are `lex`, `reverse_lex`,
-`diagonal`, `antidiagonal`, `extrema`, `shells`, `halton`, `sobol`, and
-`lhs`, plus the meta-form `space_filling(<halton|sobol|lhs>, …)`, as a
-bare `name`, terse `name/N`, or keyword `name(arg=val, …)`. The
-algebra's `Shuffle` strategy has no text spelling. `custom(fn)` parses
-but is rejected when the text is lowered to the algebra: the strategy
+`diagonal`, `antidiagonal`, `extrema`, `shells`, `halton`, `sobol`, `lhs`,
+and `shuffle`, plus the meta-form `space_filling(<halton|sobol|lhs>, …)`, as a
+bare `name`, terse `name/N`, or keyword `name(arg=val, …)`. `custom(fn)`
+parses but is rejected when the text is lowered to the algebra: the strategy
 set is closed.
 
 <a id="sec-for-elements"></a>

@@ -990,7 +990,14 @@ fn capture_for_text(chars: &[char], start: usize) -> (String, usize) {
     while pos < chars.len() {
         let c = chars[pos];
         match c {
-            '\n' => break,
+            '\n' if depth == 0 => break,
+            '\n' => {
+                // Inside brackets the capture runs on: a union's members
+                // sit one per line (comprehension_forms.md §8.2).
+                text.push(' ');
+                pos += 1;
+                continue;
+            }
             '{' if depth == 0 => {
                 // `{name}` inside a `where` predicate is a coordinate
                 // reference, not the start of the block. A block brace
@@ -1005,8 +1012,16 @@ fn capture_for_text(chars: &[char], start: usize) -> (String, usize) {
                     None => break,
                 }
             }
-            '#' => break,
-            '/' if pos + 1 < chars.len() && chars[pos + 1] == '/' => break,
+            '#' if depth == 0 => break,
+            '/' if depth == 0 && pos + 1 < chars.len() && chars[pos + 1] == '/' => break,
+            '#' => {
+                skip_comment(chars, &mut pos);
+                continue;
+            }
+            '/' if pos + 1 < chars.len() && chars[pos + 1] == '/' => {
+                skip_comment(chars, &mut pos);
+                continue;
+            }
             '"' | '\'' => {
                 let quote = c;
                 text.push(c);
@@ -1121,6 +1136,14 @@ fn suffix_len_consumed(suffix: Option<(u64, bool)>) -> usize {
             }
         }
         None => 0,
+    }
+}
+
+/// Advance `pos` past a line comment inside a bracketed `for` capture:
+/// to the newline, which the caller then folds into the capture.
+fn skip_comment(chars: &[char], pos: &mut usize) {
+    while *pos < chars.len() && chars[*pos] != '\n' {
+        *pos += 1;
     }
 }
 

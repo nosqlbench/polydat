@@ -57,6 +57,7 @@ for_source     ::= comprehension_text        (* inline comprehension *)
                 |  ident                     (* a bound producer *)
 
 comprehension_text ::= clause ("," clause)* ("where" predicate)? ("order" strategy ("/" int)?)?
+                |  "[" ("for" comprehension_text ","?)+ "]" ("where" predicate)? ("order" strategy ("/" int)?)?   (* union *)
 clause         ::= ident "in" source
                 |  "(" ident ("," ident)+ ")" "in" source
 ```
@@ -90,7 +91,8 @@ for phase in load,verify, p in partitions("*/4", 1000000) {
 the comprehension parser already reserved it.
 
 The lexer captures the comprehension text as one token: everything after
-`for` up to the end of the line or a `{` at bracket depth zero, whichever
+`for` up to the end of the line at bracket depth zero or a `{` at bracket
+depth zero, whichever
 comes first, with string literals skipped whole. A `{name}` coordinate
 reference inside a `where` predicate is part of the text, since a block
 brace is never immediately followed by an identifier and a closing brace.

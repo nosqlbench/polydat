@@ -437,6 +437,10 @@ pub enum TraversalOrder {
     },
     /// User-supplied Polydat function name. Function takes the tuple
     /// list and returns a permutation/subset.
+    Shuffle {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        count: Option<usize>,
+    },
     Custom {
         /// The Polydat function that orders the tuples.
         function: String,
@@ -667,9 +671,6 @@ impl Comprehension {
                 }
             }
         }
-        if let Err(e) = check_order_for_mode(&self.mode, &self.order) {
-            errors.push(e);
-        }
         if errors.is_empty() {
             Ok(())
         } else {
@@ -681,40 +682,6 @@ impl Comprehension {
 /// Order/mode compatibility check used by
 /// [`Comprehension::validate`]. SRD-18e §"Union mode +
 /// non-lex orderings" specifies the rule: every
-/// index-space strategy (`reverse_lex`, `diagonal`,
-/// `antidiagonal`, `extrema`, `shells`, `halton`, `sobol`,
-/// `lhs`) requires a single Cartesian lattice. `lex` (no
-/// geometric reasoning) and `custom` (the user's function
-/// decides) remain valid for Union mode.
-pub(crate) fn check_order_for_mode(
-    mode: &ComprehensionMode,
-    order: &Option<TraversalOrder>,
-) -> Result<(), String> {
-    let ComprehensionMode::Union(_) = mode else {
-        return Ok(());
-    };
-    let Some(order) = order else {
-        return Ok(());
-    };
-    let strategy_name = match order {
-        TraversalOrder::Lex { .. } => return Ok(()),
-        TraversalOrder::Custom { .. } => return Ok(()),
-        TraversalOrder::ReverseLex { .. } => "reverse_lex",
-        TraversalOrder::Diagonal { .. } => "diagonal",
-        TraversalOrder::Antidiagonal { .. } => "antidiagonal",
-        TraversalOrder::Extrema { .. } => "extrema",
-        TraversalOrder::Shells { .. } => "shells",
-        TraversalOrder::Halton { .. } => "halton",
-        TraversalOrder::Sobol { .. } => "sobol",
-        TraversalOrder::Lhs { .. } => "lhs",
-    };
-    Err(format!(
-        "ordering '{strategy_name}' has no defined behavior on Union mode \
-         (no single Cartesian lattice). Use Cartesian mode, or pick \
-         'lex' / 'custom' which are well-defined on Union."
-    ))
-}
-
 /// Canonical text rendering of a comprehension:
 /// `<clauses> [where <filter>] [order <spec>]`.
 ///
@@ -784,6 +751,7 @@ fn format_order(order: &TraversalOrder) -> String {
             }
             s
         }
+        TraversalOrder::Shuffle { count } => format!("shuffle{}", count_suffix(*count)),
         TraversalOrder::Custom { function } => format!("custom({function})"),
     }
 }

@@ -226,7 +226,9 @@ fn convert_zip_mode(legacy: LegacyZipMode) -> AlgebraZipMode {
 ///
 /// The legacy `Custom { function }` form is rejected — per
 /// spec §3.6, custom orderings are no longer supported.
-fn convert_order(order: &LegacyOrder) -> Result<(StrategyName, Option<u64>), ConvertError> {
+pub(crate) fn convert_order(
+    order: &LegacyOrder,
+) -> Result<(StrategyName, Option<u64>), ConvertError> {
     let pair = match order {
         LegacyOrder::Lex { count } => (StrategyName::Lex, count.map(|n| n as u64)),
         LegacyOrder::ReverseLex { count } => (StrategyName::ReverseLex, count.map(|n| n as u64)),
@@ -239,6 +241,7 @@ fn convert_order(order: &LegacyOrder) -> Result<(StrategyName, Option<u64>), Con
         LegacyOrder::Halton { count } => (StrategyName::Halton, count.map(|n| n as u64)),
         LegacyOrder::Sobol { count } => (StrategyName::Sobol, count.map(|n| n as u64)),
         LegacyOrder::Lhs { count, .. } => (StrategyName::Lhs, count.map(|n| n as u64)),
+        LegacyOrder::Shuffle { count } => (StrategyName::Shuffle, count.map(|n| n as u64)),
         LegacyOrder::Custom { function } => {
             return Err(ConvertError::CustomOrderingRemoved {
                 function: function.clone(),

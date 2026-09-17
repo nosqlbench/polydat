@@ -506,9 +506,7 @@ pub fn for_source_from_text(
             });
         }
     }
-    let legacy = crate::comprehension::parse::parse_comprehension_text(text)
-        .map_err(|e| format!("`for {text}` at line {}, col {}: {e}", span.line, span.col))?;
-    let algebra = crate::comprehension::spec::legacy_to_algebra(&legacy)
+    let algebra = crate::comprehension::spec::parse_comprehension_algebra(text)
         .map_err(|e| format!("`for {text}` at line {}, col {}: {e}", span.line, span.col))?;
     Ok(ForSource {
         text: text.to_string(),

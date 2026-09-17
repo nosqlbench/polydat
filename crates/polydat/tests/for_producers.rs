@@ -177,3 +177,47 @@ fn producer_wire_is_visible_to_ordinary_bindings() {
     k.set_inputs(&[0]);
     assert_eq!(k.pull("label").as_str(), "plan=for k in 1..4");
 }
+
+/// The bracketed union form (comprehension_forms.md §8.1, §8.2): each
+/// member is a full comprehension with its own modifiers, and the union
+/// takes modifiers of its own after the bracket.
+#[test]
+fn a_bracketed_union_carries_each_members_modifiers() {
+    let mut k = compile(
+        "input cycle: u64\nmixed := for [\n    for k in 1..4 where {k} > 1,\n    for k in 10..13 order lex/2,\n]\n",
+    );
+    k.set_inputs(&[0]);
+    let v = k.pull("mixed").clone();
+    let got = tuples(v.as_streamer().unwrap().coordinate_stream().unwrap());
+    assert_eq!(got, vec![vec![2], vec![3], vec![10], vec![11]]);
+}
+
+/// `shuffle/n` is a text spelling of the algebra's `Shuffle`, and an
+/// order over a union is the algebra's to accept (V4), not the text
+/// front end's to refuse.
+#[test]
+fn shuffle_and_an_ordered_union_are_text_forms() {
+    let mut k = compile(
+        "input cycle: u64\nsome := for k in 1..10 order shuffle/3\nboth := for k in 1..3, k in 10..12 order halton/2\n",
+    );
+    k.set_inputs(&[0]);
+    let some = tuples(
+        k.pull("some")
+            .clone()
+            .as_streamer()
+            .unwrap()
+            .coordinate_stream()
+            .unwrap(),
+    );
+    assert_eq!(some.len(), 3);
+    assert!(some.iter().all(|t| (1..10).contains(&t[0])));
+    let both = tuples(
+        k.pull("both")
+            .clone()
+            .as_streamer()
+            .unwrap()
+            .coordinate_stream()
+            .unwrap(),
+    );
+    assert_eq!(both.len(), 2);
+}

@@ -290,7 +290,10 @@ pub fn validate_order_for_mode(
     mode: &super::ast_legacy::ComprehensionMode,
     order: &Option<TraversalOrder>,
 ) -> Result<(), String> {
-    super::ast_legacy::check_order_for_mode(mode, order)
+    // An order over a union is decided by the algebra's V4 at compile
+    // (comprehension_forms.md §5), not by the text front end.
+    let _ = (mode, order);
+    Ok(())
 }
 
 /// Parse an order spec string into a [`TraversalOrder`].
@@ -353,6 +356,7 @@ fn build_order_from_terse(name: &str, n: Option<usize>) -> Result<TraversalOrder
         }),
         "halton" => Ok(TraversalOrder::Halton { count: n }),
         "sobol" => Ok(TraversalOrder::Sobol { count: n }),
+        "shuffle" => Ok(TraversalOrder::Shuffle { count: n }),
         "lhs" => Ok(TraversalOrder::Lhs {
             count: n,
             seed: None,
@@ -407,6 +411,7 @@ fn build_order_from_keyword(name: &str, body: &str) -> Result<TraversalOrder, St
         }
         "halton" => Ok(TraversalOrder::Halton { count }),
         "sobol" => Ok(TraversalOrder::Sobol { count }),
+        "shuffle" => Ok(TraversalOrder::Shuffle { count }),
         "lhs" => Ok(TraversalOrder::Lhs { count, seed }),
         "space_filling" => {
             // `space_filling(strategy, count=N, seed=N)` —
@@ -1016,34 +1021,23 @@ mod tests {
         assert_eq!(c.coordinate_names(), vec!["k"]);
     }
 
-    // ── SRD-18e Push 10: Union + non-lex ordering rejection ──
+    // ── An order over a union is the algebra's to accept (V4 at compile), ──
+    // ── not the text front end's to refuse.                                ──
 
     #[test]
-    fn union_plus_extrema_is_rejected() {
-        let err = parse_comprehension_text("k in 10, k in 100 order extrema/1").unwrap_err();
-        assert!(
-            err.contains("'extrema'") && err.contains("Union"),
-            "wrong message: {err}"
-        );
-        assert!(
-            err.contains("Cartesian") || err.contains("lex"),
-            "should hint at remedy: {err}"
-        );
+    fn an_ordered_union_parses_and_lowers() {
+        for text in [
+            "k in 10, k in 100 order extrema/1",
+            "k in 10, l in 100, k in 200, l in 400 order halton/64",
+            "k in 10, k in 100 order shells/2",
+        ] {
+            let c = parse_comprehension_text(text).unwrap_or_else(|e| panic!("{text}: {e}"));
+            assert!(c.is_union(), "{text}");
+            assert!(c.order.is_some(), "{text}");
+            crate::comprehension::spec::legacy_to_algebra(&c)
+                .unwrap_or_else(|e| panic!("{text}: {e}"));
+        }
     }
-
-    #[test]
-    fn union_plus_halton_is_rejected() {
-        let err = parse_comprehension_text("k in 10, l in 100, k in 200, l in 400 order halton/64")
-            .unwrap_err();
-        assert!(err.contains("'halton'") && err.contains("Union"), "{err}");
-    }
-
-    #[test]
-    fn union_plus_shells_is_rejected() {
-        let err = parse_comprehension_text("k in 10, k in 100 order shells/2").unwrap_err();
-        assert!(err.contains("'shells'") && err.contains("Union"), "{err}");
-    }
-
     #[test]
     fn union_plus_lex_is_accepted() {
         // lex is a stable enumeration order with no
@@ -1078,11 +1072,11 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_each_index_space_strategy_on_union() {
-        // Routes through Comprehension::validate (the canonical
-        // invariant entry point) — verifies every named
-        // index-space strategy is named in the error.
-        for (label, ord) in [
+    fn validate_accepts_each_index_space_strategy_on_union() {
+        // Routes through Comprehension::validate: the text front end
+        // no longer refuses an index-space strategy over a union; the
+        // algebra's V4 decides at compile.
+        for (_label, ord) in [
             ("reverse_lex", TraversalOrder::ReverseLex { count: None }),
             ("diagonal", TraversalOrder::Diagonal { count: None }),
             ("antidiagonal", TraversalOrder::Antidiagonal { count: None }),
@@ -1109,11 +1103,7 @@ mod tests {
                 vec![Clause::new("k", "20")],
             ])
             .with_order(ord);
-            let errs = comp.validate().unwrap_err();
-            assert!(
-                errs.iter().any(|e| e.contains(label)),
-                "{label}: error should name the strategy: {errs:?}"
-            );
+            assert!(comp.validate().is_ok());
         }
     }
 

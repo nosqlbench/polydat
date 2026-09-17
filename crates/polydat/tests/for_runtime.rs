@@ -214,3 +214,21 @@ fn comprehension_sources_see_the_parents_current_values() {
         vec![10, 10]
     );
 }
+
+/// A traversal over a bracketed union activates each member's tuples in
+/// order, the members' own `where` and `order` applied.
+#[test]
+fn a_traversal_over_a_bracketed_union_activates_every_member() {
+    let mut k = polydat::dsl::compile_polydat(
+        "input cycle: u64\nfor [\n    for k in 1..4 where {k} > 1,\n    for k in 10..13 order lex/2,\n] {\n    v := u64_mul(k, 2)\n}\n",
+    )
+    .unwrap();
+    k.set_inputs(&[0]);
+    let mut stream = k.traverse(0).unwrap();
+    assert_eq!(stream.len(), 4);
+    let mut seen = Vec::new();
+    while let Some(mut a) = stream.advance().unwrap() {
+        seen.push(a.cycle(0).pull("v").as_u64());
+    }
+    assert_eq!(seen, vec![4, 6, 20, 22]);
+}
