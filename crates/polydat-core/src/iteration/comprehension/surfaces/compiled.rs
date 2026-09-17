@@ -14,6 +14,7 @@
 use std::sync::Arc;
 
 use crate::iteration::comprehension::ast::Comprehension;
+use crate::iteration::comprehension::eval_source::{EvalClass, SourceEval};
 use crate::iteration::comprehension::flatten::flatten_static_sources;
 use crate::iteration::comprehension::ir::{Program, compile as compile_to_ir};
 use crate::iteration::comprehension::optimize::optimize;
@@ -65,6 +66,9 @@ impl CompiledComprehension {
         mode: Mode,
     ) -> Result<(Self, ValidationReport), ValidationError> {
         let ast = flatten_static_sources(ast, &NoScope::new());
+        if let Some((name, references)) = first_context_required(&ast) {
+            return Err(ValidationError::ContextRequired { name, references });
+        }
         let report = validate(&ast, mode)?;
         Ok((
             Self {
@@ -130,6 +134,28 @@ impl CompiledComprehension {
         coords: &crate::iteration::comprehension::strategies::Tuple,
     ) -> ScopedKernelInstance<K::Scoped> {
         scope_once_with(parent, coords)
+    }
+}
+
+/// The first clause of `ast` whose source needs a scope
+/// (comprehension_forms.md §10.7.0), with the names it references:
+/// the scope-less surfaces refuse such a comprehension by name.
+fn first_context_required(ast: &Comprehension) -> Option<(String, Vec<String>)> {
+    match ast {
+        Comprehension::Clause { name, source } => {
+            (source.eval_class() == EvalClass::ContextRequired).then(|| {
+                (
+                    name.clone(),
+                    source.referenced_names().into_iter().collect(),
+                )
+            })
+        }
+        Comprehension::Cartesian { children }
+        | Comprehension::Zip { children, .. }
+        | Comprehension::Union { children } => children.iter().find_map(first_context_required),
+        Comprehension::Filter { child, .. } | Comprehension::Order { child, .. } => {
+            first_context_required(child)
+        }
     }
 }
 
@@ -227,5 +253,33 @@ mod tests {
             count >= 3,
             "expected shared program across streamers, count = {count}"
         );
+    }
+
+    /// A context-required source has no coordinate stream
+    /// (comprehension_forms.md §9.5.2, §10.7.0): the scope-less
+    /// compile refuses it by name, with the names it needs, instead
+    /// of dispensing nothing.
+    #[test]
+    fn from_ast_refuses_a_context_required_source_by_name() {
+        let ast = Comprehension::cartesian(vec![
+            clause("k", &[1, 2]),
+            Comprehension::clause(
+                "j",
+                Source::Generator {
+                    expr: "pow2({n})".into(),
+                    cardinality_hint: None,
+                },
+            ),
+        ]);
+        let err = CompiledComprehension::from_ast(&ast).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ValidationError::ContextRequired { ref name, ref references }
+                    if name == "j" && references == &["n".to_string()]
+            ),
+            "{err}"
+        );
+        assert!(err.to_string().contains("traverse it with `for`"), "{err}");
     }
 }

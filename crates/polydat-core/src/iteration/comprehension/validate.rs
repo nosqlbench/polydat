@@ -146,6 +146,15 @@ pub enum ValidationError {
     /// Strict mode (spec §5.8): a degenerate composition the
     /// permissive mode only warns about.
     StrictWarning(ValidationWarning),
+    /// A source that needs a scope, on the scope-less surfaces
+    /// (comprehension_forms.md §9.5.2, §10.7.0): a coordinate stream
+    /// binds no names, the traversal does.
+    ContextRequired {
+        /// The clause.
+        name: String,
+        /// The names its source references.
+        references: Vec<String>,
+    },
 }
 
 impl std::fmt::Display for ValidationError {
@@ -193,6 +202,11 @@ impl std::fmt::Display for ValidationError {
                 write!(f, "V8: continuous source: {reason}")
             }
             Self::StrictWarning(w) => write!(f, "strict mode: {w}"),
+            Self::ContextRequired { name, references } => write!(
+                f,
+                "clause '{name}' needs a scope to bind {}; a coordinate stream has none: \n                 traverse it with `for`, which binds those names",
+                references.join(", ")
+            ),
             Self::V9UnionClassMismatch { reason } => {
                 write!(f, "V9: union children differ in class: {reason}")
             }

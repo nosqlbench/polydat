@@ -138,8 +138,11 @@ impl ClauseStream {
                 hi,
                 step: step.max(1),
             },
-            // Generator / WorkloadParamList: produce nothing at
-            // this layer (would need runtime evaluator wiring).
+            // Generator / WorkloadParamList: a context-free one is a
+            // literal by the time the IR is compiled, and a
+            // context-required one is refused by `from_ast`
+            // (`ValidationError::ContextRequired`); a hand-built
+            // program carrying one dispenses nothing.
             // ContinuousInterval / Distribution: must be sampled
             // via an enclosing order; bare clause is not pulled
             // in valid programs.

@@ -58,8 +58,10 @@ impl StreamerValue {
 
     /// Compile to the shared IR: validation, optimization, then the
     /// AST → IR pass. Each call is independent. A comprehension the
-    /// `for` lowering resolved was validated then and cannot fail
-    /// here; one built programmatically is validated here.
+    /// `for` lowering resolved was validated then and fails here only
+    /// when a source needs a scope, which this surface has none of
+    /// (comprehension_forms.md §9.5.2);
+    /// one built programmatically is validated here.
     pub fn compiled(&self) -> Result<CompiledComprehension, ValidationError> {
         compile(&self.ast)
     }

@@ -221,3 +221,29 @@ fn shuffle_and_an_ordered_union_are_text_forms() {
     );
     assert_eq!(both.len(), 2);
 }
+
+/// A producer over a context-required source traverses, where the
+/// scope binds its names, and has no coordinate stream: the
+/// scope-less surface refuses it by name (comprehension_forms.md
+/// §9.5.2, §10.7.0) instead of dispensing nothing.
+#[test]
+fn a_context_required_producer_traverses_but_has_no_coordinate_stream() {
+    let mut k = compile(
+        "input cycle: u64\nextern total: u64 = 100\nparts := for p in partitions(\"*/2\", {total})\nfor parts {\n    n := cardinality(p)\n}\n",
+    );
+    k.set_inputs(&[0]);
+    let mut stream = k.traverse(0).unwrap();
+    let mut seen = Vec::new();
+    while let Some(mut a) = stream.advance().unwrap() {
+        seen.push(a.cycle(0).pull("n").as_u64());
+    }
+    assert_eq!(seen, vec![50, 50]);
+    let streamer = k.pull("parts").clone();
+    let err = streamer
+        .as_streamer()
+        .unwrap()
+        .coordinate_stream()
+        .expect_err("a context-required source has no coordinate stream");
+    let text = err.to_string();
+    assert!(text.contains("'p'") && text.contains("total"), "{text}");
+}

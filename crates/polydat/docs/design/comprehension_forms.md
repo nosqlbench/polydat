@@ -1413,7 +1413,12 @@ means to bind a tuple into a child scope of that parent.
 `PolydatKernelScope` implements it over a canonical kernel and its
 parent. A `StreamerValue`, the value a producer wire carries,
 exposes `compiled()` and `coordinate_stream()` over the same
-factories ([The `for` Construct](for_traversal.md) §3.1).
+factories ([The `for` Construct](for_traversal.md) §3.1). These
+surfaces bind no names: a comprehension with a context-required
+source (§10.7.0) has no coordinate stream, and `compile` / `from_ast`
+refuse it naming the clause and the names it needs; the traversal
+surface below is where those names resolve. A `StreamerValue`
+carries the same comprehension either way.
 
 The `for` construct's traversal surface, `TraversalStream`
 ([The `for` Construct](for_traversal.md) §3.6), is a third form
