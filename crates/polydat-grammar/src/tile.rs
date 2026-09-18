@@ -168,7 +168,6 @@ impl TemplateParser<'_> {
         })?;
         let _ = start;
         Ok(TileHole {
-            text,
             expr,
             decl_type,
             format,
@@ -476,7 +475,7 @@ pub fn render_template(pieces: &[TilePiece], opts: &TileOptions) -> String {
             }
             TilePiece::Hole(h) => {
                 out.push_str(&opts.open);
-                out.push_str(&h.text);
+                out.push_str(&h.to_text());
                 out.push_str(&opts.close);
             }
             TilePiece::Projection {

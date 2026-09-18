@@ -133,21 +133,27 @@ pub struct TileDef {
     pub encoding: Option<String>,
     /// The delimiter and strictness options.
     pub options: TileOptions,
-    /// How the body was written: heredoc or string literal.
+    /// How the body was written: heredoc, block, or string literal.
+    /// Presentation, not content: it decides how the body is delimited
+    /// when the tile is printed.
     pub body_kind: TileBodyKind,
-    /// The body text exactly as captured.
-    pub body: String,
-    /// The body parsed into static runs, holes, projections, and branches.
+    /// The template: static runs, holes, projections, and branches.
+    /// This is the tile's body — the only representation of it. Text
+    /// admitted from source is parsed into pieces under the options in
+    /// force at that moment and is not kept beside them.
     pub pieces: Vec<TilePiece>,
     /// Where the definition appears.
     pub span: Span,
 }
 
 impl TileDef {
-    /// A tile from its header and its body text, the pieces parsed
-    /// from that text under the tile's own options: one construction,
-    /// so the body a tile projects is the body it renders
-    /// (polytile.md §3).
+    /// A tile whose body is admitted as **text**, parsed into pieces
+    /// under the tile's own options.
+    ///
+    /// The text is consumed by this call: what the tile holds
+    /// afterwards is the template it parsed to. Reading the body back
+    /// renders from those pieces ([`Self::body_text`]), so the body a
+    /// tile prints is always the body it renders (polytile.md §3).
     pub fn from_body(
         name: impl Into<String>,
         encoding: Option<String>,
@@ -156,17 +162,47 @@ impl TileDef {
         body: impl Into<String>,
         span: Span,
     ) -> Result<Self, String> {
-        let body = body.into();
-        let pieces = crate::tile::parse_template(&body, &options, span)?;
-        Ok(TileDef {
+        let pieces = crate::tile::parse_template(&body.into(), &options, span)?;
+        Ok(Self::from_pieces(
+            name, encoding, options, body_kind, pieces, span,
+        ))
+    }
+
+    /// A tile whose body is admitted as **pieces**, built directly.
+    ///
+    /// The counterpart of [`Self::from_body`], and the same tile: a
+    /// template composed programmatically and one parsed from text that
+    /// renders the same pieces are equal as tiles, because the pieces
+    /// are what a tile is. Pieces from either source compose by
+    /// concatenation, so a template may be assembled from parsed
+    /// fragments, hand-built pieces, or any mixture, in any order.
+    pub fn from_pieces(
+        name: impl Into<String>,
+        encoding: Option<String>,
+        options: TileOptions,
+        body_kind: TileBodyKind,
+        pieces: Vec<TilePiece>,
+        span: Span,
+    ) -> Self {
+        TileDef {
             name: name.into(),
             encoding,
             options,
             body_kind,
-            body,
             pieces,
             span,
-        })
+        }
+    }
+
+    /// The body as template text, rendered from the pieces under this
+    /// tile's own delimiters and sigil.
+    ///
+    /// Canonical rather than verbatim: a tile parsed from source does
+    /// not keep the author's spacing, the same way the projector does
+    /// not keep the spacing around a binary operator. Re-parsing this
+    /// text under the same options yields the same pieces.
+    pub fn body_text(&self) -> String {
+        crate::tile::render_template(&self.pieces, &self.options)
     }
 }
 
@@ -205,8 +241,6 @@ pub enum TilePiece {
 /// and raw flag.
 #[derive(Debug, Clone)]
 pub struct TileHole {
-    /// The text between the delimiters, as written.
-    pub text: String,
     /// The expression the hole evaluates.
     pub expr: Expr,
     /// The declared type after the colon, if any.
@@ -217,6 +251,35 @@ pub struct TileHole {
     pub raw: bool,
     /// Where the hole appears.
     pub span: Span,
+}
+
+impl TileHole {
+    /// The hole's body as template text, between the delimiters: the
+    /// expression, then the declared type, the format, and the raw
+    /// marker where each is present.
+    ///
+    /// This is the hole's only textual form. A hole parsed from source
+    /// does not keep what was written, because the parts are what the
+    /// renderer and the compiler read, and a second copy of the same
+    /// thing is a second thing to disagree. Spacing the author used
+    /// inside the delimiters is not reproduced, exactly as the
+    /// projector does not reproduce the spacing around a binary
+    /// operator.
+    pub fn to_text(&self) -> String {
+        let mut out = crate::pprint::pp_expr(&self.expr);
+        if let Some(ty) = &self.decl_type {
+            out.push_str(": ");
+            out.push_str(ty);
+        }
+        if let Some(fmt) = &self.format {
+            out.push_str(" | ");
+            out.push_str(fmt);
+        }
+        if self.raw {
+            out.push('!');
+        }
+        out
+    }
 }
 
 /// What a `for` iterates: inline comprehension text, or the name of a

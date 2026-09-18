@@ -50,7 +50,7 @@ pub fn tile_from_text(
         encoding: Some(encoding.to_string()),
         options: options.clone(),
         body_kind: TileBodyKind::Heredoc,
-        body: text.to_string(),
+
         pieces,
         span,
     })
@@ -85,7 +85,7 @@ pub fn tile_from_json_value(
         encoding: Some("json".to_string()),
         options: options.clone(),
         body_kind: TileBodyKind::Block,
-        body,
+
         pieces,
         span,
     })
@@ -182,7 +182,7 @@ impl Textualizer<'_> {
         {
             // A value hole: the node is the value, encoded by type.
             self.out.push_str(&self.opts.open);
-            self.out.push_str(&h.text);
+            self.out.push_str(&h.to_text());
             self.out.push_str(&self.opts.close);
             return Ok(());
         }
@@ -200,7 +200,7 @@ impl Textualizer<'_> {
                 }
                 TilePiece::Hole(h) => {
                     self.out.push_str(&self.opts.open);
-                    self.out.push_str(&h.text);
+                    self.out.push_str(&h.to_text());
                     self.out.push_str(&self.opts.close);
                 }
                 _ => unreachable!("directives rejected above"),

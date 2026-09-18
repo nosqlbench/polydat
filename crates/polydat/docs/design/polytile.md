@@ -97,6 +97,22 @@ string-aware, so the template is written in JSON's own syntax. A heredoc
 body is everything between `<<<` and `>>>` and suits any encoding. A
 string-literal body is an ordinary Polydat string and suits short tiles.
 
+**A tile is its template.** The captured text is read into pieces under
+the delimiters in force at that moment and is not kept beside them: a
+tile holds one representation of its body, not two, so there is nothing
+that can disagree with itself and no question of which half governs.
+Text is an *input form*, and so are a parsed fragment and a piece built
+by hand. Each is admitted by becoming pieces, pieces compose by
+concatenation, and a template assembled from any mixture in any order is
+the same tile as the template written whole (§5.7).
+
+Two consequences. The body a tile prints is rendered from its pieces,
+so it is canonical rather than verbatim: a hole comes back as its
+expression, declared type, format, and raw marker, with the expression
+printed as the projector prints one anywhere. And the delimiters a
+tile's text is read under belong to the reading, so a host that supplies
+its own supplies them to the parse rather than re-reading afterwards.
+
 ### 2.2 Template grammar
 
 Inside a body:
@@ -111,7 +127,7 @@ escape      ::= open open                               (* a literal open delimi
 
 `open` and `close` default to `${` and `}`; `sigil` defaults to `@`.
 Both are overridable per tile (§2.3) and per program by a host
-(`apply_tile_defaults`, §5.6).
+(`parse_with_tile_defaults`, §5.6).
 
 - A **hole** is a Polydat expression in the enclosing scope. `:type` is a
   declared type (§4). `|format` is a printf format spec applied before
@@ -181,7 +197,7 @@ make a tile portable into those places.
 1. **Delimiters are declarable.** `tile t (delims "<%" "%>")`
    uses `<%expr%>` for holes; `(sigil "#")` uses `#for` and `#if`. A
    host may also set defaults for every tile in a program it compiles
-   (`apply_tile_defaults`, §5.6). The
+   (`parse_with_tile_defaults`, §5.6). The
    canonical defaults are `${`, `}`, and `@`, chosen because they are
    inert in JSON, CQL, SQL, YAML double-quoted strings, and Markdown, and
    because `{name}` interpolation inside Polydat strings is untouched.
@@ -470,8 +486,39 @@ that only has strings, such as a YAML workload runner, lowers
 as a program transform and never touches a runtime decorator. The body
 is taken raw, never evaluated. Options `open`, `close`, `sigil`,
 `strict`, and `instring` are named arguments; a host gives every tile
-in a program its own delimiters with the `apply_tile_defaults` program
-transform before compiling.
+in a program its own delimiters by parsing under them
+(`parse_with_tile_defaults`), since what a body means depends on the
+delimiters it is read under.
+
+### 5.7 The three input forms
+
+A tile's body is admitted as text, as pieces, or as any mixture:
+
+```text
+TileDef::from_body(name, encoding, options, kind, text, span)   text
+TileDef::from_pieces(name, encoding, options, kind, pieces, span)  pieces
+parse_template(text, options, span) -> Vec<TilePiece>           a fragment
+TileDef::body_text(&self) -> String                             back to text
+```
+
+`from_body` parses and is equivalent to parsing a fragment and passing
+the pieces to `from_pieces`. A fragment's pieces are ordinary pieces, so
+they concatenate with hand-built ones and with other fragments'. This
+makes the forms interchangeable rather than parallel: there is one
+construction (pieces) and several ways to produce them.
+
+The laws that follow, and that the suite checks:
+
+- **Composition is concatenation**, so it is associative and has the
+  empty template as its identity. It is not commutative, because a
+  template is a sequence.
+- **`body_text` inverts admission up to canonical form.** Rendering a
+  template and re-reading it under the same options yields the same
+  pieces, and rendering again yields the same text: the second render is
+  a fixed point, so the round trip is idempotent from the first.
+- **The forms agree.** A template written whole and the same template
+  assembled from fragments and built pieces are one tile: equal text,
+  equal pieces, equal rendered bytes.
 
 ## 6. Compilation
 

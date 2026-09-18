@@ -23,7 +23,7 @@ use polydat::dsl::ast::PolydatFile;
 use polydat::dsl::ast::TileOptions;
 use polydat::dsl::ast::{Statement, WireModifier};
 use polydat::dsl::events::{CompileEvent, CompileEventLog};
-use polydat::dsl::transform::{apply_tile_defaults, assign_values, parse_assignment};
+use polydat::dsl::transform::{assign_values, parse_assignment};
 use polydat::dsl::{CompileOptions, compile_ast_with_engine};
 use polydat::iteration::cursor_partition::{Partition, cursor_over_partitions_on};
 use polydat::kernel::activation::Activation;
@@ -443,14 +443,14 @@ fn parse_source(source: &str) -> Result<PolydatFile, String> {
     polydat::dsl::parser::parse(tokens)
 }
 
-/// Parse a program and apply the host's tile defaults, if any, as the
-/// transform they are (SRD 114 §10).
+/// Parse a program, reading tiles that name no delimiters of their own
+/// under the host's, when `--tile-delims` supplied any.
 fn parse_program(source: &str, args: &CompileArgs) -> Result<PolydatFile, String> {
-    let mut ast = parse_source(source)?;
-    if let Some(defaults) = args.tile_defaults() {
-        apply_tile_defaults(&mut ast, &defaults)?;
+    let tokens = polydat::dsl::lexer::lex(source)?;
+    match args.tile_defaults() {
+        Some(defaults) => polydat::dsl::parser::parse_with_tile_defaults(tokens, &defaults),
+        None => polydat::dsl::parser::parse(tokens),
     }
-    Ok(ast)
 }
 
 /// The options every command compiles under.

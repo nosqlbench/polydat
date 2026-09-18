@@ -745,7 +745,7 @@ The pattern generalizes. To pin a default, rewrite the `extern` line
 (§3). To add a derived output, append a binding. To attach a template,
 add a tile statement (§10). To restrict what runs, pass required outputs
 and let the compiler prune. The `dsl::transform` module holds the
-rewrites the crate ships, such as `apply_tile_defaults`, and a host adds its own
+rewrites the crate ships, such as `assign_values`, and a host adds its own
 by operating on the source text or the parsed `PolydatFile` before
 compiling. What a host should not do is reach into a compiled program
 and change it: the compiler's provenance, purity, and fusion decisions

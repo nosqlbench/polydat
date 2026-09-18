@@ -11,7 +11,6 @@ use std::process::Command;
 use polydat::dsl::ast::TileOptions;
 use polydat::dsl::compile::{CompileOptions, compile_ast_with_options, compile_polydat_with_log};
 use polydat::dsl::events::{CompileEvent, CompileEventLog};
-use polydat::dsl::transform::apply_tile_defaults;
 
 /// The interpreter kernel of a parsed program under the default options.
 fn compile_ast(
@@ -26,9 +25,10 @@ fn tile_defaults_transform_rereads_untouched_tiles_only() {
         tile a : text := \"<%cycle%> #if cycle { on } #else { off } ${keep}\"\n\
         tile b : text (delims \"[[\" \"]]\") := \"[[cycle]] <%cycle%>\"\n";
     let tokens = polydat::dsl::lexer::lex(src).unwrap();
-    let mut ast = polydat::dsl::parser::parse(tokens).unwrap();
-    // Before the transform, `a` reads `${keep}` as a hole and fails.
-    assert!(compile_ast(&ast).is_err());
+    // Read under the stock delimiters, `a` takes `${keep}` for a hole
+    // and fails to compile.
+    let stock = polydat::dsl::parser::parse(tokens.clone()).unwrap();
+    assert!(compile_ast(&stock).is_err());
     let defaults = TileOptions {
         open: "<%".into(),
         close: "%>".into(),
@@ -36,7 +36,9 @@ fn tile_defaults_transform_rereads_untouched_tiles_only() {
         strict: false,
         in_string: false,
     };
-    apply_tile_defaults(&mut ast, &defaults).unwrap();
+    // Read under the host's, it is static text. The delimiters belong
+    // to the reading, so they are supplied to the parse.
+    let ast = polydat::dsl::parser::parse_with_tile_defaults(tokens, &defaults).unwrap();
     let mut k = compile_ast(&ast).unwrap();
     k.set_inputs(&[3]);
     assert_eq!(k.pull("a").as_str(), "3 on ${keep}");

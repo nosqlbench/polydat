@@ -269,8 +269,10 @@ impl TileLowering {
                         cond: false,
                     };
                     let source = match body.as_deref_mut() {
-                        Some(ctx) => self.body_hole(compiler, asm, &h.text, &h.expr, enc, ctx)?,
-                        None => self.wire_hole(compiler, asm, &h.text, &h.expr, enc)?,
+                        Some(ctx) => {
+                            self.body_hole(compiler, asm, &h.to_text(), &h.expr, enc, ctx)?
+                        }
+                        None => self.wire_hole(compiler, asm, &h.to_text(), &h.expr, enc)?,
                     };
                     ops.push(TileOp::Hole(source));
                 }

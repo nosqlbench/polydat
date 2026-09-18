@@ -1476,7 +1476,7 @@ What “the syntax the runtime gives back” changes, relative to your input:
 | `cursor q = range(0,1) over p` | `cursor q = range(0, 1) over p` | `over` retained |
 | `out := if n > 0 { 1 } else { 2 }` | `out := if((n > 0), 1, 2)` | block `if` desugared at parse |
 | `for k in 1..4 {` … | `for k in 1..4 {` … | the captured text is printed as written; the body indents four spaces |
-| `tile t := "n=${cycle}"` | `tile t := "n=${cycle}"` | the raw body is printed as captured |
+| `tile t := "n=${ cycle }"` | `tile t := "n=${cycle}"` | the body is rendered from the template, so a hole is canonical like any other expression |
 
 Everything in this table is exercised by the suite, which extracts
 every <code>```polydat</code> block above, asserts idempotent

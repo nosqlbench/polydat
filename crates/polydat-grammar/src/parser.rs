@@ -47,11 +47,18 @@ use crate::lexer::{Span, Token, TokenKind};
 struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    /// The delimiters and sigil a tile is read under when it names
+    /// none of its own: the host's, when one supplied them.
+    tile_defaults: TileOptions,
 }
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, pos: 0 }
+        Self {
+            tokens,
+            pos: 0,
+            tile_defaults: TileOptions::default(),
+        }
     }
 
     fn peek(&self) -> &TokenKind {
@@ -132,7 +139,23 @@ impl Parser {
 
 /// Parse a token stream into a PolydatFile AST.
 pub fn parse(tokens: Vec<Token>) -> Result<PolydatFile, String> {
+    parse_with_tile_defaults(tokens, &TileOptions::default())
+}
+
+/// [`parse`] reading every tile that names no delimiters or sigil of
+/// its own under `tile_defaults`.
+///
+/// A tile body is raw text until it is read, and what it means depends
+/// on the delimiters it is read under, so a host that supplies its own
+/// supplies them here rather than re-reading afterwards: the text is
+/// admitted once, under the reading that was intended. A tile that
+/// names any delimiter of its own keeps all of them.
+pub fn parse_with_tile_defaults(
+    tokens: Vec<Token>,
+    tile_defaults: &TileOptions,
+) -> Result<PolydatFile, String> {
     let mut parser = Parser::new(tokens);
+    parser.tile_defaults = tile_defaults.clone();
     let mut statements = Vec::new();
 
     while !parser.at_eof() {
@@ -267,7 +290,7 @@ fn parse_tile(p: &mut Parser) -> Result<Statement, String> {
     } else {
         None
     };
-    let mut options = TileOptions::default();
+    let mut options = p.tile_defaults.clone();
     if matches!(p.peek(), TokenKind::LParen) {
         p.advance();
         while !matches!(p.peek(), TokenKind::RParen | TokenKind::Eof) {
@@ -350,7 +373,6 @@ fn parse_tile(p: &mut Parser) -> Result<Statement, String> {
         encoding,
         options,
         body_kind,
-        body,
         pieces,
         span,
     }))
@@ -397,7 +419,7 @@ fn parse_polytile_binding(p: &mut Parser) -> Result<Statement, String> {
     };
     let body = expect_string(p, "the template body (a string or a `<<< >>>` heredoc)")
         .map_err(|m| at(&m))?;
-    let mut options = TileOptions::default();
+    let mut options = p.tile_defaults.clone();
     while matches!(p.peek(), TokenKind::Comma) {
         p.advance();
         if matches!(p.peek(), TokenKind::RParen) {

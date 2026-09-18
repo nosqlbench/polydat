@@ -89,14 +89,16 @@ fn pp_tile(t: &TileDef) -> String {
     match t.body_kind {
         TileBodyKind::Block => {
             out.push_str(" := ");
-            out.push_str(&t.body);
+            out.push_str(&t.body_text());
         }
         TileBodyKind::Heredoc => {
             out.push_str(" := <<<\n");
-            out.push_str(&t.body);
+            out.push_str(&t.body_text());
             out.push_str("\n>>>");
         }
-        TileBodyKind::Literal => out.push_str(&format!(" := \"{}\"", escape_string(&t.body))),
+        TileBodyKind::Literal => {
+            out.push_str(&format!(" := \"{}\"", escape_string(&t.body_text())))
+        }
     }
     out
 }

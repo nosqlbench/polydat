@@ -280,12 +280,24 @@ fn build_for() -> PolydatFile {
 ## 9. Tiles: every body form
 
 Mirrors [spec §17 "Tiles"](polydat_grammar.md#sec-tiles). A `TileDef`
-carries the header (name, optional encoding, options), the body text as
-captured with how it was written (`TileBodyKind`), and the body parsed
-into pieces. `TileDef::from_body` parses the pieces from the body under
-the tile's own options, one construction, so the body a tile projects
-is the body it renders. The printer reproduces the body from the
-captured text.
+carries the header (name, optional encoding, options), how the body was
+written (`TileBodyKind`), and the body itself as pieces. The pieces are
+the body: nothing keeps the text beside them, so the body a tile prints
+is the body it renders, by construction rather than by agreement.
+
+Two ways in, and they meet in the same place. `TileDef::from_body`
+reads text into pieces under the tile's own options;
+`TileDef::from_pieces` takes pieces already built. `parse_template`
+reads a *fragment* into pieces, which concatenate with hand-built ones,
+so a template can be assembled from text, from pieces, or from any
+mixture in any order ([Polytile](polytile.md) §5.7). `body_text()`
+renders back, canonically: a hole returns as its expression, type,
+format, and raw marker, with the expression printed as this document
+prints one anywhere.
+
+The example below uses `from_body` because it mirrors a spec example
+written as text. The paired test proves the two paths agree, which is
+what makes either one safe to use.
 
 ```text
 tile doc : json := {

@@ -220,3 +220,74 @@ fn directive_members_beside_static_members_carry_their_own_commas() {
         assert_eq!(doc, expect, "{name} at cycle {cycle}: {text}");
     }
 }
+
+/// A tile is its pieces, and pieces compose by concatenation whatever
+/// admitted them. Text, a parsed fragment, and hand-built pieces are
+/// three input forms for one thing, so a template assembled from any
+/// mixture in any order is the same tile as the template written whole.
+#[test]
+fn text_fragments_and_built_pieces_compose_into_one_tile() {
+    use polydat::dsl::ast::{TileBodyKind, TileDef, TilePiece};
+    use polydat::dsl::lexer::Span as S;
+    use polydat::dsl::tile::parse_template;
+
+    let sp = S { line: 1, col: 1 };
+    let opts = TileOptions::default();
+
+    // The same body, written whole.
+    let whole = TileDef::from_body(
+        "t",
+        Some("text".into()),
+        opts.clone(),
+        TileBodyKind::Literal,
+        "id=${tenant_id} t=${temp_c | .2}",
+        sp,
+    )
+    .expect("whole body parses");
+
+    // The same body, assembled: a parsed fragment, then a static run
+    // built by hand, then another parsed fragment.
+    let mut pieces = parse_template("id=${tenant_id}", &opts, sp).expect("fragment one");
+    pieces.push(TilePiece::Static(" t=".into()));
+    pieces.extend(parse_template("${temp_c | .2}", &opts, sp).expect("fragment two"));
+    let assembled = TileDef::from_pieces(
+        "t",
+        Some("text".into()),
+        opts.clone(),
+        TileBodyKind::Literal,
+        pieces,
+        sp,
+    );
+
+    // Same tile: same text, and the text re-reads to the same pieces.
+    assert_eq!(assembled.body_text(), whole.body_text());
+    assert_eq!(
+        parse_template(&assembled.body_text(), &opts, sp)
+            .unwrap()
+            .len(),
+        assembled.pieces.len()
+    );
+
+    // And the same rendered bytes, which is what a tile is for.
+    let render = |t: &TileDef| {
+        let mut k = compile_polydat_with_tiles(PROGRAM, vec![t.clone()]).expect("compiles");
+        k.set_inputs(&[3]);
+        k.pull("t").to_display_string()
+    };
+    assert_eq!(render(&assembled), render(&whole));
+
+    // Admitting the pieces in a different order builds a different
+    // template, as concatenation should: composition is associative,
+    // not commutative.
+    let mut swapped = parse_template("${temp_c | .2}", &opts, sp).unwrap();
+    swapped.extend(parse_template("id=${tenant_id}", &opts, sp).unwrap());
+    let other = TileDef::from_pieces(
+        "t",
+        Some("text".into()),
+        opts.clone(),
+        TileBodyKind::Literal,
+        swapped,
+        sp,
+    );
+    assert_ne!(other.body_text(), whole.body_text());
+}

@@ -37,7 +37,7 @@ fn shape(pieces: &[TilePiece]) -> String {
             TilePiece::Static(s) => format!("S({s:?})"),
             TilePiece::Hole(h) => format!(
                 "H({}{}{}{})",
-                h.text,
+                h.to_text(),
                 h.decl_type
                     .as_ref()
                     .map(|t| format!(" :{t}"))
@@ -81,13 +81,13 @@ fn json_block_body_with_holes_and_a_static_arm() {
     assert_eq!(t.name, "doc");
     assert_eq!(t.encoding.as_deref(), Some("json"));
     assert_eq!(t.body_kind, TileBodyKind::Block);
-    assert!(t.body.starts_with('{') && t.body.ends_with('}'));
-    let holes: Vec<&str> = t
+    assert!(t.body_text().starts_with('{') && t.body_text().ends_with('}'));
+    let holes: Vec<String> = t
         .pieces
         .iter()
         .filter_map(|p| {
             if let TilePiece::Hole(h) = p {
-                Some(h.text.as_str())
+                Some(h.to_text())
             } else {
                 None
             }
@@ -107,7 +107,7 @@ fn heredoc_body_trims_one_newline_each_side() {
     );
     assert_eq!(t.body_kind, TileBodyKind::Heredoc);
     assert_eq!(
-        t.body,
+        t.body_text(),
         "INSERT INTO ${keyspace}.${table} VALUES (${tenant_id}, '${doc!}')"
     );
     assert_eq!(
@@ -139,7 +139,11 @@ fn hole_modifiers_type_format_and_raw() {
         tile("tile t := \"${ts: u64} ${temp_c + s | .2} ${doc!} ${a | 05} ${b: str | >8 !}\"\n");
     assert_eq!(
         shape(&t.pieces),
-        "H(ts: u64 :u64) S(\" \") H(temp_c + s | .2 |.2) S(\" \") H(doc! !) S(\" \") H(a | 05 |05) S(\" \") H(b: str | >8 ! :str |>8 !)"
+        // Hole text is rendered from the hole's parts, so it is
+        // canonical: the binary operator is parenthesized as the
+        // projector parenthesizes one anywhere, and the raw marker
+        // follows the format with no space.
+        "H(ts: u64 :u64) S(\" \") H((temp_c + s) | .2 |.2) S(\" \") H(doc! !) S(\" \") H(a | 05 |05) S(\" \") H(b: str | >8! :str |>8 !)"
     );
     let TilePiece::Hole(h) = &t.pieces[2] else {
         panic!()
@@ -161,7 +165,7 @@ fn projections_with_default_and_explicit_separators_and_nesting() {
     );
     assert_eq!(
         shape(&t.pieces),
-        "S(\"{\\\"samples\\\": [ \") P(s in 0..4 [S(\"{ \\\"n\\\": \") H(s) S(\", \\\"t\\\": \") H(temp + s) S(\" }\")]) S(\" ], \\\"tags\\\": [ \") P(t in a,b sep \"; \" [S(\"\\\"\") H(t) S(\"\\\"\")]) S(\" ]}\")"
+        "S(\"{\\\"samples\\\": [ \") P(s in 0..4 [S(\"{ \\\"n\\\": \") H(s) S(\", \\\"t\\\": \") H((temp + s)) S(\" }\")]) S(\" ], \\\"tags\\\": [ \") P(t in a,b sep \"; \" [S(\"\\\"\") H(t) S(\"\\\"\")]) S(\" ]}\")"
     );
     let TilePiece::Projection { source, .. } = &t.pieces[1] else {
         panic!()
@@ -222,7 +226,7 @@ fn braces_inside_hole_expressions_and_strings_do_not_close_holes() {
     let t = tile("tile t := \"${if x > 1 { 1 } else { 2 }} ${str_concat(\\\"}\\\", y)}\"\n");
     assert_eq!(
         shape(&t.pieces),
-        "H(if x > 1 { 1 } else { 2 }) S(\" \") H(str_concat(\"}\", y))"
+        "H(if((x > 1), 1, 2)) S(\" \") H(str_concat(\"}\", y))"
     );
 }
 
