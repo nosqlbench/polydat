@@ -182,13 +182,28 @@ in one day. Compare rungs within one run, not runs across days or machines.
 
 ## The tile ladder
 
-A second ladder, `benches/tile_render.rs`, renders one JSON document, the
-reading of the toy test definition, through the same four levels in five
-cases: the reading's wires with no tile, a one-hole floor, the document
-without its projection, the document as written with a four-tuple
-projection, and a twenty-hole variant. Its design, its baseline, and the
-measurement after each step of the rendering work are recorded in
-[Native Tile Rendering](../design/tile_native_rendering.md) §6.
+A second ladder, `benches/tile_render.rs`, renders one JSON document
+through the same four levels. The document is the reading of the toy test
+definition (`examples/toy_test_definition.polydat`): a static arm, seven
+holes of four types with two formats, a nested object, one projection of
+four tuples with a formatted hole, and a declared boolean. Each case is
+one complete cycle that pulls the rendered tile, and the five are chosen
+so that subtracting one from another isolates a cost:
+
+| Case | What it isolates |
+| --- | --- |
+| `reading` | the reading's eight wires read directly, no tile: subtract it from any other case to get that case's render cost |
+| `one_hole` | one numeric hole in a two-byte skeleton: the floor for a render |
+| `flat` | the document without its projection: encode and copy cost per hole |
+| `projected` | the document as written: what the projection's tuples and body add |
+| `wide` | the flat document with twenty holes of three types: how cost scales with hole count |
+
+The pairing is the point. A tile's cost is the bytes it copies plus the
+holes it encodes plus, per projection, the tuples times the body
+([Polytile](../design/polytile.md) §7.3), and each of those three terms
+has a case that isolates it. A render cost that grows with the skeleton
+rather than the hole count, or a projection that costs more than its
+tuples, is a regression the shape of the ladder names.
 
 The current record, taken on 2026-09-14 in the same session as the engine
 ladder above, on the same machine and tree. Each entry is Criterion's point

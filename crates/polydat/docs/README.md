@@ -39,9 +39,8 @@ How the parts work and how to use them from a host program.
   closure tier, the hybrid kernel, and native code; features and
   trade-offs.
 - [Engine-ladder performance](guides/performance.md): one typed graph
-  measured on every engine, with the measurement contract; the tile
-  ladder in `benches/tile_render.rs` is recorded in
-  [Native Tile Rendering](design/tile_native_rendering.md) §6.
+  measured on every engine, with the measurement contract, and the tile
+  ladder (`benches/tile_render.rs`) beside it.
 
 ## Reference
 
@@ -57,5 +56,3 @@ of the guides most often needs are [Runtime Model](design/runtime_model.md),
 [Graph Compiler](design/graph_compiler.md), [Engines](design/engines.md),
 [The `for` Construct](design/for_traversal.md), [Polytile](design/polytile.md),
 and [Compiled By-Reference Slots](design/compiled_handles.md).
-[Native Tile Rendering](design/tile_native_rendering.md) is the record of
-making tile rendering native, measured step by step.

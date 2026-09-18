@@ -236,6 +236,22 @@ hands its own in: a hybrid kernel its scratch vector, a pure native
 kernel its own, and a cone node the entries its `scratch_layout`
 declares after its slot buffer.
 
+A helper reads its arguments as **borrowed views over the slots**
+(`marshal::arg_ref`, yielding a `ValueRef` by the wire's type) and
+never reconstitutes an owned `Value` on the way in. The rule matters
+more than it looks. A pair is two words naming bytes that S4 keeps
+alive for the call, so a view costs the two loads the native code
+already did; decoding to a `Value` instead costs an allocation and a
+copy per argument, and then the body usually copies again to do its
+work. That is the shape a helper falls into when it is assembled from
+the interpreter's pieces, and it is invisible in a differential,
+because the bytes come out the same — it shows up only as a per-call
+cost that scales with the argument count while the rest of the program
+pays native prices. So a helper's arguments arrive as views, and a
+helper's result is written into the step's own entry rather than
+returned as a value to be stored: no by-reference value is owned twice
+between the slots and the sink.
+
 The classifier lowers a pure node this way whenever it has no named
 native lowering and a kit exists (`JitOp::SlotCall`), whatever the
 colors of its ports, so the twelve `Ref2` types and every immediate

@@ -613,8 +613,14 @@ result goes, per [Compiled By-Reference Slots](compiled_handles.md):
   keeps, so a body's own native code runs inside the render. A body
   the default engine refuses renders interpreted.
 
-The measurements of the render path are in
-[Native Tile Rendering](tile_native_rendering.md) §6.
+Rendering changes what a tile costs on an engine, never what the engine
+accepts. A tile whose hole is a vector-typed wire, or whose projection
+body holds a node with no closure form, follows that node's ordinary
+rules on that engine: the node keeps the tier it would have kept
+anywhere else in the program, and the tile is not what decides it.
+
+The render path is measured by the tile ladder, in the
+[performance guide](../guides/performance.md).
 
 ### 7.3 Cost
 

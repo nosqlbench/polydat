@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! The tile ladder (docs/design/tile_native_rendering.md §4): one
+//! The tile ladder (docs/guides/performance.md, "The tile ladder"): one
 //! document rendered through P1, P2, P3, and pure native code, in five
 //! cases. `reading` is the toy test definition's reading with no tile,
 //! its eight wires read directly, so the render cost of every other
