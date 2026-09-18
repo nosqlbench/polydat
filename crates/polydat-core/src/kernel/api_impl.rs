@@ -135,6 +135,7 @@ impl Construction for PolydatKernel {
                         .unwrap_or_else(|| s.label.clone()),
                     cursor_limit: s.options.cursor_limit,
                     ledger: None,
+                    engine: crate::Engine::default(),
                 };
                 crate::dsl::compile::compile_polydat_with_options(&s.body, &options, None)
                     .map_err(crate::kernel::subcontext::ContractViolation::Compile)
@@ -159,6 +160,7 @@ impl Construction for PolydatKernel {
                         .unwrap_or_else(|| s.label.clone()),
                     cursor_limit: None,
                     ledger: None,
+                    engine: crate::Engine::default(),
                 };
                 crate::dsl::compile::compile_ast_with_options(&file, "", &options, None)
                     .map_err(crate::kernel::subcontext::ContractViolation::Compile)

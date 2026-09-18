@@ -2845,16 +2845,33 @@ impl PolydatAssembler {
                     let folded = log.is_some().then(|| Self::constant_sites(&resolved));
                     let (node_total, output_total) =
                         (resolved.nodes.len(), resolved.output_order.len());
+                    // Push without the cone guard has no native kernel
+                    // (engines.md §4), so a request for it cannot be
+                    // realized. Refuse it rather than build push-pull and
+                    // report a mode the caller did not ask for: a kernel's
+                    // reported configuration is the one it runs.
+                    if prov == Provenance::Push {
+                        return Err(refused(
+                            "native code has no push-only kernel: push-side invalidation \
+                             without the cone guard has no native form. Ask for `pushpull` \
+                             for both, `pull` for the guard alone, or `auto` to let the \
+                             selector choose; `push` alone is available on the closure tier."
+                                .into(),
+                        ));
+                    }
                     let prov = Self::provenance_for(prov, &resolved);
                     let kernel = Self::hybrid_from(resolved).map_err(refused)?;
-                    // Push on native is the push-pull kernel: push
-                    // bookkeeping without the cone guard has no kernel of
-                    // its own (engines.md §4).
                     let kernel: Box<dyn Kernel> = match prov {
                         Provenance::Raw => Box::new(kernel.into_raw()),
                         Provenance::Pull => Box::new(kernel.into_pull()),
-                        Provenance::Push | Provenance::PushPull | Provenance::Auto => {
-                            Box::new(kernel)
+                        // `provenance_for` resolves `Auto` to `Raw`,
+                        // `Pull`, or `PushPull`, and `Push` was refused
+                        // above, so this arm is `PushPull` in practice.
+                        // It refuses rather than panics if the selector
+                        // ever gains a mode with no native kernel.
+                        Provenance::PushPull | Provenance::Auto => Box::new(kernel),
+                        Provenance::Push => {
+                            return Err(refused("native code has no push-only kernel".into()));
                         }
                     };
                     Self::log_folded(kernel.as_ref(), folded, log.as_deref_mut());

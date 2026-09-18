@@ -11,7 +11,10 @@ use polydat::ast::Value;
 use polydat::dsl::compile::{compile_polydat_to_assembler, compile_polydat_with};
 use polydat::{Engine, JitMode, Kernel, KernelError, Provenance};
 
-/// Every engine and provenance mode a host can name.
+/// Every engine and provenance mode a host can name **and get**.
+/// `Native(Push)` is absent because native code has no push-only
+/// kernel and the factory refuses the pair rather than substituting
+/// push-pull; `a_config_that_cannot_be_realized_is_refused` covers it.
 fn engines() -> Vec<Engine> {
     let modes = [
         Provenance::Raw,
@@ -23,7 +26,9 @@ fn engines() -> Vec<Engine> {
     let mut all = vec![Engine::Interpreter(JitMode::Auto)];
     for m in modes {
         all.push(Engine::Closures(m));
-        all.push(Engine::Native(m));
+        if m != Provenance::Push {
+            all.push(Engine::Native(m));
+        }
     }
     all
 }
@@ -193,6 +198,95 @@ fn interpreter_only_double(
     widths: polydat::derive_support::Const<Vec<u64>>,
 ) -> polydat::derive_support::DynamicOutputs<u64> {
     polydat::derive_support::DynamicOutputs(widths.iter().map(|w| n * 2 + w).collect())
+}
+
+/// The engine is a preference on the compile options, and leaving it
+/// alone is the normative path: a caller that never mentions an engine
+/// gets the most compiled form the build has, and can still read back
+/// what it got. Naming one is for testing and demonstration.
+#[test]
+fn a_caller_that_names_no_engine_gets_the_most_compiled_form() {
+    use polydat::dsl::compile::{CompileOptions, compile_polydat_kernel_with_options};
+
+    let src = "input cycle: u64\ny := hash(cycle)\n";
+
+    // The default options name no engine.
+    let options = CompileOptions::default();
+    assert_eq!(options.engine, Engine::default());
+
+    let k = compile_polydat_kernel_with_options(src, &options, None)
+        .expect("the default options compile");
+
+    // What it runs is observable, and it is compiled, never the
+    // interpreter: native where the build has the `jit` feature, the
+    // closure tier where it does not.
+    let reported = k.engine();
+    if cfg!(feature = "jit") {
+        assert!(matches!(reported, Engine::Native(_)), "{reported}");
+    } else {
+        assert!(matches!(reported, Engine::Closures(_)), "{reported}");
+    }
+
+    // The same program with the preference set is the testing path, and
+    // it reports the engine that was asked for.
+    let named = compile_polydat_kernel_with_options(
+        src,
+        &CompileOptions {
+            engine: Engine::Interpreter(JitMode::Off),
+            ..CompileOptions::default()
+        },
+        None,
+    )
+    .expect("the interpreter is nameable");
+    assert_eq!(named.engine(), Engine::Interpreter(JitMode::Off));
+}
+
+/// A kernel reports the configuration it runs, so a configuration the
+/// factory cannot realize is refused rather than quietly replaced by a
+/// neighbouring one. Native code has no push-only kernel: push-side
+/// invalidation without the cone guard has no native form. Asking for
+/// it used to build the push-pull kernel, which then reported
+/// `Native(PushPull)` to a caller that asked for `Native(Push)`.
+#[test]
+fn a_config_that_cannot_be_realized_is_refused() {
+    let src = "input cycle: u64\ny := hash(cycle)\n";
+
+    match compile_polydat_with(src, Engine::Native(Provenance::Push)) {
+        Err(KernelError::Refused { engine, reason }) => {
+            assert_eq!(engine, Engine::Native(Provenance::Push));
+            assert!(reason.contains("push-only"), "{reason}");
+            // The refusal names what the caller can ask for instead.
+            assert!(
+                reason.contains("pushpull") && reason.contains("auto"),
+                "{reason}"
+            );
+        }
+        other => panic!("expected a refusal, got {:?}", other.map(|k| k.engine())),
+    }
+
+    // Push alone is realizable on the closure tier, so it is not refused
+    // there: the refusal is about this engine's forms, not the mode.
+    let k = compile_polydat_with(src, Engine::Closures(Provenance::Push))
+        .expect("closures has a push kernel");
+    assert_eq!(k.engine(), Engine::Closures(Provenance::Push));
+
+    // Every pair the factory accepts reports back what was asked for,
+    // except `Auto`, which is a request for the factory to choose and
+    // reports the choice.
+    for engine in engines() {
+        let k = compile_polydat_with(src, engine)
+            .unwrap_or_else(|e| panic!("{engine} should build: {e}"));
+        let reported = k.engine();
+        match engine {
+            Engine::Closures(Provenance::Auto) => {
+                assert!(matches!(reported, Engine::Closures(_)), "{reported}")
+            }
+            Engine::Native(Provenance::Auto) => {
+                assert!(matches!(reported, Engine::Native(_)), "{reported}")
+            }
+            named => assert_eq!(reported, named, "asked {named}, got {reported}"),
+        }
+    }
 }
 
 #[test]

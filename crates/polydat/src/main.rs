@@ -472,13 +472,18 @@ fn compile_options(args: &CompileArgs) -> CompileOptions {
         context: args.file.display().to_string(),
         cursor_limit: None,
         ledger: None,
+        // `--engine` and `--provenance` are the command line's spelling
+        // of the options' engine preference; without them `run_engine`
+        // resolves to `Engine::default()`, the most native form the
+        // build has.
+        engine: args.run_engine(),
     }
 }
 
 /// Compile the program once, on the run engine.
 fn compile_ast(ast: &PolydatFile, source: &str, args: &CompileArgs) -> Result<Compiled, String> {
     let options = compile_options(args);
-    let engine = args.run_engine();
+    let engine = options.engine;
     let mut events = CompileEventLog::new();
     take_audit();
     let start = Instant::now();

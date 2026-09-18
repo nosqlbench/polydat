@@ -589,6 +589,7 @@ impl<P> SubcontextBuilder<P> {
                 .unwrap_or_else(|| context.label.clone()),
             cursor_limit: compile_options.cursor_limit,
             ledger: Some(ledger.clone()),
+            engine: crate::Engine::default(),
         };
         let mut kernel = if compile_options.is_default() {
             compile_ast_with_options(

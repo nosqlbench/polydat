@@ -478,6 +478,7 @@ pub fn compile_polydat_with_libs(
         context: context.to_string(),
         cursor_limit: None,
         ledger: None,
+        engine: crate::Engine::default(),
     };
     compile_polydat_with_options(source, &options, None)
 }
@@ -522,6 +523,7 @@ pub fn compile_polydat_with_libs_and_limit(
         context: context.to_string(),
         cursor_limit,
         ledger: None,
+        engine: crate::Engine::default(),
     };
     compile_polydat_with_options(source, &options, None)
 }
@@ -545,13 +547,26 @@ pub fn compile_polydat_strict(
 /// The options every entry point compiles under. A host that names
 /// none gets the defaults: no source directory, no library paths,
 /// every binding an output, lax typing, the default context label,
-/// and no cursor limit.
+/// no cursor limit, and the most compiled engine this build has.
 ///
 /// `strict` refuses what lax compilation warns about, on every engine:
 /// an implicit type coercion, a config wire fed from a cycle-time
 /// source, a nondeterministic node no `volatile` output acknowledges, a
 /// binding nothing reads, an undeclared coordinate, and a positional
 /// module argument.
+///
+/// `engine` is a **preference**, and the only place a caller expresses
+/// one. Leaving it alone is the normative path: [`Engine::default`](crate::Engine::default) is
+/// the most native form the build offers (native code with the `jit`
+/// feature, the closure tier without), so a host that never mentions
+/// the field still gets compiled code, and gets faster code for free
+/// when a build gains a tier. Naming an engine is for testing,
+/// measurement, and demonstration — a differential test that wants the
+/// interpreter as the reference, a bench that walks the tiers. A
+/// preference the build cannot realize is refused
+/// ([`crate::KernelError::Refused`]) rather than silently replaced, and
+/// every kernel reports what it actually runs through
+/// [`crate::Kernel::engine`].
 #[derive(Debug, Default, Clone)]
 pub struct CompileOptions {
     /// The directory relative data-file paths resolve against.
@@ -570,6 +585,10 @@ pub struct CompileOptions {
     /// holds one charges the compile to it; `None` mints a fresh one,
     /// read back through the kernel's `ledger()`.
     pub ledger: Option<std::sync::Arc<crate::kernel::CompileLedger>>,
+    /// The engine to build on. Defaults to [`Engine::default`](crate::Engine::default), the
+    /// most native form this build has; see the type's documentation
+    /// for when to set it and what happens when it cannot be realized.
+    pub engine: crate::Engine,
 }
 
 /// Compile Polydat source into the interpreter's kernel under
@@ -1492,6 +1511,7 @@ pub fn compile_ast_with_libs(
         context: context.to_string(),
         cursor_limit: None,
         ledger: None,
+        engine: crate::Engine::default(),
     };
     compile_ast_with_options(file, "", &options, None)
 }
@@ -2648,14 +2668,19 @@ pub fn compile_polydat_kernel(source: &str) -> Result<Box<dyn crate::Kernel>, cr
 
 /// [`compile_polydat_kernel`] with the kernel path's options (source
 /// directory, library paths, required outputs, strict typing, the
-/// error context label, the cursor limit) and the compile event log:
-/// [`compile_polydat_with_engine`] on [`Engine::default`](crate::Engine::default).
+/// error context label, the cursor limit, and the engine preference)
+/// and the compile event log.
+///
+/// This is the entry point the engine preference is read from: it
+/// builds on `options.engine`, which defaults to the most native form
+/// the build has, so a host that never sets the field gets compiled
+/// code without naming one.
 pub fn compile_polydat_kernel_with_options(
     source: &str,
     options: &CompileOptions,
     log: Option<&mut super::events::CompileEventLog>,
 ) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
-    compile_polydat_with_engine(source, crate::Engine::default(), options, log)
+    compile_polydat_with_engine(source, options.engine, options, log)
 }
 
 /// [`compile_polydat_with`] with the kernel path's options (source
@@ -2664,6 +2689,11 @@ pub fn compile_polydat_kernel_with_options(
 /// On the interpreter this is the whole kernel path, traversals
 /// included; on a compiled engine the assembler entry point followed
 /// by [`PolydatAssembler::compile_engine_with_log`].
+///
+/// The `engine` argument is a per-call override of `options.engine`,
+/// for a caller that holds one options value and walks the tiers with
+/// it. A caller that has no such need expresses the preference once, in
+/// the options, and calls [`compile_polydat_kernel_with_options`].
 pub fn compile_polydat_with_engine(
     source: &str,
     engine: crate::Engine,

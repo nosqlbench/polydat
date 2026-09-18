@@ -23,8 +23,12 @@ fn engines() -> Vec<Engine> {
         Provenance::PushPull,
     ] {
         all.push(Engine::Closures(m));
+        // Native has no push-only kernel, so the factory refuses that
+        // pair rather than building push-pull under its name.
         #[cfg(feature = "jit")]
-        all.push(Engine::Native(m));
+        if m != Provenance::Push {
+            all.push(Engine::Native(m));
+        }
     }
     all
 }

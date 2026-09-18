@@ -26,6 +26,25 @@ provenance mode left to the selector. Compiled code is the default; the
 interpreter is a choice, and the semantic oracle every other engine is
 checked against.
 
+The engine is a **preference on the compile options**, and that is the
+one place a caller expresses one. Leaving `CompileOptions::engine`
+alone is the normative path: it defaults to `Engine::default()`, so a
+host that never mentions an engine gets the most compiled form this
+build has, and gets a faster one for free when a build gains a tier.
+Naming an engine is for testing, measurement, and demonstration — a
+differential test that wants the interpreter as its reference, a bench
+that walks the tiers. `compile_polydat_with_engine` keeps an engine
+argument as a per-call override for a caller holding one options value
+across several tiers.
+
+Two rules make the preference honest. A preference the build cannot
+realize is **refused** rather than silently replaced (§4), and every
+kernel reports what it actually runs through `Kernel::engine`, so the
+reported configuration is the one the kernel has rather than the one
+that was asked for. `Auto` is the exception that proves it: asking for
+`Auto` is asking the factory to choose, so the kernel reports the
+choice.
+
 Which engine an entry point builds when it takes no engine argument is
 decided by its **return type**, not by the absence of the argument. The
 four that return `Box<dyn Kernel>` — `compile_polydat_kernel`, its
@@ -225,10 +244,15 @@ A compiled engine is built in one provenance mode, named by
 | `Pull` | No | Yes |
 | `PushPull` | Yes | Yes |
 
-`Push` exists as a measurement and equivalence surface on the closure tier;
-on the native engine it builds the push-pull kernel, since push bookkeeping
-without the cone guard has no kernel of its own. Automatic selection returns
-only `Raw`, `Pull`, or `PushPull`.
+`Push` exists as a measurement and equivalence surface on the closure tier.
+Native code has no push-only kernel, since push bookkeeping without the cone
+guard has no native form, so `Native(Push)` is **refused** with a reason
+naming the realizable neighbours rather than built as push-pull. That refusal
+is an instance of the general rule: a kernel reports the configuration it
+runs, so a configuration the factory cannot realize is an error and never a
+silent substitution. A caller that does not care which mode it gets asks for
+`Auto`, which is a request for the factory to choose and reports the choice;
+automatic selection returns only `Raw`, `Pull`, or `PushPull`.
 
 ### 4.1 Push-side invalidation
 
