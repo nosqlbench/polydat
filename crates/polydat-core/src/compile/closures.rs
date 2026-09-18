@@ -514,14 +514,22 @@ impl KernelCore {
     /// Set an extern by name; returns its slot. The plan invalidates
     /// what depends on it, as a changed coordinate is invalidated, and
     /// the next evaluation begins a round.
-    fn set_extern(&mut self, name: &str, value: crate::ast::Value) -> Result<usize, String> {
+    fn set_extern(
+        &mut self,
+        name: &str,
+        value: crate::ast::Value,
+    ) -> Result<usize, crate::kernel::WriteError> {
         let (slot, unset) = self.externs.set(name, value, &mut self.buffer)?;
         self.extern_written(slot, unset);
         Ok(slot)
     }
 
     /// [`Self::set_extern`] by input index.
-    fn set_extern_at(&mut self, index: usize, value: crate::ast::Value) -> Result<usize, String> {
+    fn set_extern_at(
+        &mut self,
+        index: usize,
+        value: crate::ast::Value,
+    ) -> Result<usize, crate::kernel::WriteError> {
         let (slot, unset) = self.externs.set_at(index, value, &mut self.buffer)?;
         self.extern_written(slot, unset);
         Ok(slot)
@@ -821,7 +829,11 @@ macro_rules! kernel_accessors {
         /// the interpreter. The value must be of the declared port
         /// type. Every kind is written through at once, and every step
         /// downstream of the extern reruns.
-        pub fn set_input(&mut self, name: &str, value: crate::ast::Value) -> Result<(), String> {
+        pub fn set_input(
+            &mut self,
+            name: &str,
+            value: crate::ast::Value,
+        ) -> Result<(), crate::kernel::WriteError> {
             let slot = self.core.set_extern(name, value)?;
             self.mark_input_changed(slot);
             Ok(())
@@ -832,7 +844,7 @@ macro_rules! kernel_accessors {
             &mut self,
             index: usize,
             value: crate::ast::Value,
-        ) -> Result<(), String> {
+        ) -> Result<(), crate::kernel::WriteError> {
             let slot = self.core.set_extern_at(index, value)?;
             self.mark_input_changed(slot);
             Ok(())
@@ -866,7 +878,7 @@ macro_rules! kernel_accessors {
             &mut self,
             name: &str,
             partition: &crate::iteration::cursor_partition::Partition,
-        ) -> Result<(), String> {
+        ) -> Result<(), crate::kernel::WriteError> {
             for (slot, value) in self.core.externs.cursor_writes(name, partition)? {
                 self.set_input(&slot, value)?;
             }

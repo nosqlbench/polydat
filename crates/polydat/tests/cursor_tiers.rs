@@ -166,11 +166,20 @@ fn the_compiled_kernels_report_the_cursors_the_interpreter_does() {
     // An unknown cursor is refused by name on every engine.
     let p = p2.cursor_schemas()[0].partitions.as_ref().unwrap()[0];
     let mut p2 = p2;
-    let err = p2.set_cursor("zz", &p).unwrap_err();
-    assert!(err.contains("no cursor named 'zz'"), "{err}");
-    let mut p1 = p1;
-    let err = p1.set_cursor("zz", &p).unwrap_err();
-    assert!(err.contains("no cursor named 'zz'"), "{err}");
+    for (engine, err) in [
+        ("closures", p2.set_cursor("zz", &p).unwrap_err()),
+        ("interpreter", {
+            let mut p1 = p1;
+            p1.set_cursor("zz", &p).unwrap_err()
+        }),
+    ] {
+        match err {
+            polydat::kernel::WriteError::UnknownWire { key, .. } => {
+                assert!(key.contains("zz"), "{engine}: {key}")
+            }
+            other => panic!("{engine}: expected an unknown-wire error, got {other:?}"),
+        }
+    }
 }
 
 #[test]

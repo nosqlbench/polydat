@@ -718,7 +718,11 @@ fn a_program_with_many_inputs_runs_on_every_engine() {
 #[test]
 fn the_write_rule_is_the_same_on_every_engine() {
     let src = "input cycle: u64\nextern n: u64 = 1\nextern f: f64 = 1.0\nextern s: str = \"a\"\nout := to_f64(n) + f\n";
-    let mut messages: Vec<(Engine, String, String)> = Vec::new();
+    let mut messages: Vec<(
+        Engine,
+        polydat::kernel::WriteError,
+        polydat::kernel::WriteError,
+    )> = Vec::new();
     for engine in engines() {
         let mut k = match compile_polydat_with(src, engine) {
             Ok(k) => k,

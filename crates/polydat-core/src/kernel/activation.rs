@@ -268,7 +268,9 @@ fn bind_by_name_on(kernel: &mut dyn Kernel, values: &[(String, Value)]) -> Resul
     let declared: std::collections::HashSet<String> = kernel.input_names().into_iter().collect();
     for (name, value) in values {
         if declared.contains(name) {
-            kernel.set_input(name, value.clone())?;
+            kernel
+                .set_input(name, value.clone())
+                .map_err(|e| e.to_string())?;
         }
     }
     Ok(())
@@ -312,7 +314,9 @@ fn narrow_cursors_on(kernel: &mut dyn Kernel) -> Result<Option<CursorSlice>, Str
                     ));
                 }
             };
-            kernel.set_cursor(&schema.name, &partition)?;
+            kernel
+                .set_cursor(&schema.name, &partition)
+                .map_err(|e| e.to_string())?;
             CursorSlice {
                 cursor: schema.name.clone(),
                 start: partition.start_ord,

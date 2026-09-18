@@ -644,14 +644,22 @@ impl HybridCore {
     /// Set an extern by name; returns its slot. The plan invalidates
     /// what depends on it, as a changed coordinate is invalidated, and
     /// the next evaluation begins a round.
-    fn set_extern(&mut self, name: &str, value: crate::ast::Value) -> Result<usize, String> {
+    fn set_extern(
+        &mut self,
+        name: &str,
+        value: crate::ast::Value,
+    ) -> Result<usize, crate::kernel::WriteError> {
         let (slot, unset) = self.externs.set(name, value, &mut self.buffer)?;
         self.extern_written(slot, unset);
         Ok(slot)
     }
 
     /// [`Self::set_extern`] by input index.
-    fn set_extern_at(&mut self, index: usize, value: crate::ast::Value) -> Result<usize, String> {
+    fn set_extern_at(
+        &mut self,
+        index: usize,
+        value: crate::ast::Value,
+    ) -> Result<usize, crate::kernel::WriteError> {
         let (slot, unset) = self.externs.set_at(index, value, &mut self.buffer)?;
         self.extern_written(slot, unset);
         Ok(slot)
@@ -711,12 +719,20 @@ impl HybridKernelRaw {
     /// Set an extern by name, as `PolydatState::set_input` does on the
     /// interpreter. Every run evaluates everything, so it takes effect
     /// at the next run.
-    pub fn set_input(&mut self, name: &str, value: crate::ast::Value) -> Result<(), String> {
+    pub fn set_input(
+        &mut self,
+        name: &str,
+        value: crate::ast::Value,
+    ) -> Result<(), crate::kernel::WriteError> {
         self.core.set_extern(name, value).map(|_| ())
     }
 
     /// [`Self::set_input`] by input index.
-    pub fn set_input_at(&mut self, index: usize, value: crate::ast::Value) -> Result<(), String> {
+    pub fn set_input_at(
+        &mut self,
+        index: usize,
+        value: crate::ast::Value,
+    ) -> Result<(), crate::kernel::WriteError> {
         self.core.set_extern_at(index, value).map(|_| ())
     }
 
@@ -739,7 +755,7 @@ impl HybridKernelRaw {
         &mut self,
         name: &str,
         partition: &crate::iteration::cursor_partition::Partition,
-    ) -> Result<(), String> {
+    ) -> Result<(), crate::kernel::WriteError> {
         for (slot, value) in self.core.externs.cursor_writes(name, partition)? {
             self.set_input(&slot, value)?;
         }
@@ -870,14 +886,22 @@ impl HybridKernelPull {
     /// Set an extern by name, as `PolydatState::set_input` does on the
     /// interpreter. Every kind is written through at once, and the
     /// next run runs whatever the cone guard says.
-    pub fn set_input(&mut self, name: &str, value: crate::ast::Value) -> Result<(), String> {
+    pub fn set_input(
+        &mut self,
+        name: &str,
+        value: crate::ast::Value,
+    ) -> Result<(), crate::kernel::WriteError> {
         self.core.set_extern(name, value)?;
         self.force_run = true;
         Ok(())
     }
 
     /// [`Self::set_input`] by input index.
-    pub fn set_input_at(&mut self, index: usize, value: crate::ast::Value) -> Result<(), String> {
+    pub fn set_input_at(
+        &mut self,
+        index: usize,
+        value: crate::ast::Value,
+    ) -> Result<(), crate::kernel::WriteError> {
         self.core.set_extern_at(index, value)?;
         self.force_run = true;
         Ok(())
@@ -902,7 +926,7 @@ impl HybridKernelPull {
         &mut self,
         name: &str,
         partition: &crate::iteration::cursor_partition::Partition,
-    ) -> Result<(), String> {
+    ) -> Result<(), crate::kernel::WriteError> {
         for (slot, value) in self.core.externs.cursor_writes(name, partition)? {
             self.set_input(&slot, value)?;
         }
@@ -985,14 +1009,22 @@ impl HybridKernelPushPull {
     /// interpreter. Every kind is written through at once. Every step
     /// downstream of the extern reruns, and the next evaluation runs
     /// whatever the cone guard says.
-    pub fn set_input(&mut self, name: &str, value: crate::ast::Value) -> Result<(), String> {
+    pub fn set_input(
+        &mut self,
+        name: &str,
+        value: crate::ast::Value,
+    ) -> Result<(), crate::kernel::WriteError> {
         self.core.set_extern(name, value)?;
         self.force_run = true;
         Ok(())
     }
 
     /// [`Self::set_input`] by input index.
-    pub fn set_input_at(&mut self, index: usize, value: crate::ast::Value) -> Result<(), String> {
+    pub fn set_input_at(
+        &mut self,
+        index: usize,
+        value: crate::ast::Value,
+    ) -> Result<(), crate::kernel::WriteError> {
         self.core.set_extern_at(index, value)?;
         self.force_run = true;
         Ok(())
@@ -1017,7 +1049,7 @@ impl HybridKernelPushPull {
         &mut self,
         name: &str,
         partition: &crate::iteration::cursor_partition::Partition,
-    ) -> Result<(), String> {
+    ) -> Result<(), crate::kernel::WriteError> {
         for (slot, value) in self.core.externs.cursor_writes(name, partition)? {
             self.set_input(&slot, value)?;
         }

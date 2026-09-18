@@ -621,12 +621,12 @@ impl PolydatKernel {
 
     /// Set an extern by name on the owned state. The compiled kernels
     /// offer the same call, so a host drives every engine alike.
-    pub fn set_input(&mut self, name: &str, value: Value) -> Result<(), String> {
+    pub fn set_input(&mut self, name: &str, value: Value) -> Result<(), crate::kernel::WriteError> {
         let idx = self.program.find_input(name).ok_or_else(|| {
-            format!(
-                "no input named '{name}'; this program's inputs are {:?}",
-                self.program.input_names()
-            )
+            crate::kernel::WriteError::UnknownWire {
+                key: name.to_string(),
+                known: self.program.input_names(),
+            }
         })?;
         self.set_input_at(idx, value)
     }
@@ -634,23 +634,31 @@ impl PolydatKernel {
     /// [`Self::set_input`] by input index, as `find_input` numbers them.
     /// The one write rule of every engine: the value satisfies the
     /// declared type or is `None`, and a coordinate is not written here.
-    pub fn set_input_at(&mut self, idx: usize, value: Value) -> Result<(), String> {
+    pub fn set_input_at(
+        &mut self,
+        idx: usize,
+        value: Value,
+    ) -> Result<(), crate::kernel::WriteError> {
+        use crate::kernel::WriteError;
         let Some(name) = self.program.input_name_by_idx(idx) else {
-            return Err(format!(
-                "no input at index {idx}; this program's inputs are {:?}",
-                self.program.input_names()
-            ));
+            return Err(WriteError::UnknownWire {
+                key: format!("wire[{idx}]"),
+                known: self.program.input_names(),
+            });
         };
         if self.program.input_kind(idx) == Some(crate::kernel::InputKind::Coordinate) {
-            return Err(format!("'{name}' is a coordinate; set it with set_inputs"));
+            return Err(WriteError::CoordinateSlot {
+                slot: name.to_string(),
+            });
         }
         if let Some(declared) = self.program.input_port_type_by_idx(idx)
             && !value.satisfies_slot(declared)
         {
-            return Err(format!(
-                "input '{name}' is declared {declared} but was set to a {} value",
-                value.port_type()
-            ));
+            return Err(WriteError::TypeMismatch {
+                slot: name.to_string(),
+                expected: declared,
+                got: value.port_type(),
+            });
         }
         self.state.set_input(idx, value);
         Ok(())
@@ -666,21 +674,21 @@ impl PolydatKernel {
         &mut self,
         name: &str,
         partition: &crate::iteration::cursor_partition::Partition,
-    ) -> Result<(), String> {
+    ) -> Result<(), crate::kernel::WriteError> {
         if self
             .program
             .find_input(&format!("{name}__cursor"))
             .is_none()
         {
-            let known: Vec<&str> = self
-                .program
-                .cursor_schemas()
-                .iter()
-                .map(|s| s.name.as_str())
-                .collect();
-            return Err(format!(
-                "no cursor named '{name}' with an `over` clause; this program's cursors are {known:?}"
-            ));
+            return Err(crate::kernel::WriteError::UnknownWire {
+                key: format!("{name}__cursor"),
+                known: self
+                    .program
+                    .cursor_schemas()
+                    .iter()
+                    .map(|s| s.name.clone())
+                    .collect(),
+            });
         }
         crate::iteration::cursor_partition::narrow_cursor(
             &self.program,

@@ -922,7 +922,7 @@ impl CursorPlan {
             } else {
                 &parts[fiber.min(parts.len() - 1)]
             };
-            kernel.set_cursor(name, p)?;
+            kernel.set_cursor(name, p).map_err(|e| e.to_string())?;
         }
         Ok(())
     }

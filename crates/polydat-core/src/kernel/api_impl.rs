@@ -68,6 +68,7 @@ impl Dataflow for PolydatKernel {
             None => {
                 return Err(WriteError::UnknownWire {
                     key: format!("wire[{idx}]"),
+                    known: Vec::new(),
                 });
             }
         };
@@ -195,14 +196,14 @@ impl crate::kernel::Kernel for PolydatKernel {
     fn set_inputs(&mut self, coords: &[u64]) {
         PolydatKernel::set_inputs(self, coords);
     }
-    fn set_input(&mut self, name: &str, value: Value) -> Result<(), String> {
+    fn set_input(&mut self, name: &str, value: Value) -> Result<(), crate::kernel::WriteError> {
         PolydatKernel::set_input(self, name, value)
     }
     fn set_cursor(
         &mut self,
         name: &str,
         partition: &crate::iteration::cursor_partition::Partition,
-    ) -> Result<(), String> {
+    ) -> Result<(), crate::kernel::WriteError> {
         PolydatKernel::set_cursor(self, name, partition)
     }
     /// Every output is pulled, so what a side channel observes is what
@@ -243,7 +244,11 @@ impl crate::kernel::Kernel for PolydatKernel {
     fn input_index(&self, name: &str) -> Option<usize> {
         self.program().find_input(name)
     }
-    fn set_input_at(&mut self, index: usize, value: Value) -> Result<(), String> {
+    fn set_input_at(
+        &mut self,
+        index: usize,
+        value: Value,
+    ) -> Result<(), crate::kernel::WriteError> {
         PolydatKernel::set_input_at(self, index, value)
     }
     fn output_index(&self, name: &str) -> Option<usize> {

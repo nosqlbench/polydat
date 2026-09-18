@@ -81,6 +81,17 @@ with a handful of public conveniences and the rest as thin wrappers.
 The rule above is what that collapse has to preserve: whatever the
 surface narrows to, what it returns is the trait.
 
+**Every failure on the trait is structured.** No method on `Kernel`
+reports a failure as a `String`. A write that cannot be made returns
+`WriteError`, which says which of the three things went wrong and
+carries the facts rather than a sentence: the wire was not found (with
+the names that would have resolved), the value did not satisfy the
+slot's declared type (with both types), or the slot is a coordinate and
+advances through `set_inputs` instead. A caller can branch on the
+variant; a test can assert the variant rather than matching on message
+text, which is what makes "every engine refuses alike" checkable as
+equality of values.
+
 **A builder that cannot build says so.** Every construction path ends
 in `KernelError`, which distinguishes the three ways a build fails:
 the source did not parse or compile (`Source`), the graph did not

@@ -54,6 +54,12 @@ pub enum WriteError {
     UnknownWire {
         /// The name or index looked up.
         key: String,
+        /// The names that would have resolved, when the writer knows
+        /// them. Empty where it does not. A caller who mistyped a name
+        /// is best served by seeing the set it could have meant, so a
+        /// writer that has the list carries it rather than rendering a
+        /// sentence about it.
+        known: Vec<String>,
     },
 
     /// The value's port type did not match the slot's declared
@@ -68,13 +74,32 @@ pub enum WriteError {
         /// The value's type.
         got: PortType,
     },
+
+    /// The slot is a coordinate, which advances through
+    /// `set_inputs` rather than being written by name or index.
+    /// Writing one here would put the coordinate prefix out of
+    /// step with the values a pull is about to read.
+    CoordinateSlot {
+        /// The coordinate named.
+        slot: String,
+    },
 }
 
 impl std::fmt::Display for WriteError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            WriteError::UnknownWire { key } => {
-                write!(f, "unknown wire '{key}': no input slot by this name")
+            WriteError::UnknownWire { key, known } => {
+                write!(f, "unknown wire '{key}': no input slot by this name")?;
+                if !known.is_empty() {
+                    write!(f, "; this kernel's are {known:?}")?;
+                }
+                Ok(())
+            }
+            WriteError::CoordinateSlot { slot } => {
+                write!(
+                    f,
+                    "'{slot}' is a coordinate: advance it with set_inputs, not by name"
+                )
             }
             WriteError::TypeMismatch {
                 slot,
@@ -268,7 +293,10 @@ pub trait Dataflow: Metadata {
         let key_desc = key.describe();
         match key.resolve(self) {
             Some(idx) => self.set_wire_idx(idx, value),
-            None => Err(WriteError::UnknownWire { key: key_desc }),
+            None => Err(WriteError::UnknownWire {
+                key: key_desc,
+                known: Vec::new(),
+            }),
         }
     }
 
@@ -338,7 +366,7 @@ pub trait Kernel: Send + internals::KernelInternals {
     /// another type is refused at the write, never healed. A coordinate
     /// is set with [`Self::set_inputs`], not here. An unknown name is
     /// an error naming the known ones.
-    fn set_input(&mut self, name: &str, value: Value) -> Result<(), String>;
+    fn set_input(&mut self, name: &str, value: Value) -> Result<(), WriteError>;
 
     /// Narrow a cursor to one partition: its `Ext` slot and its six
     /// scalar projections are set.
@@ -346,7 +374,7 @@ pub trait Kernel: Send + internals::KernelInternals {
         &mut self,
         name: &str,
         partition: &crate::iteration::cursor_partition::Partition,
-    ) -> Result<(), String>;
+    ) -> Result<(), crate::kernel::WriteError>;
 
     /// Evaluate every output for the inputs set so far.
     fn eval(&mut self);
@@ -396,12 +424,15 @@ pub trait Kernel: Send + internals::KernelInternals {
     /// [`Self::set_input`] by index, for a host that binds the same
     /// inputs every cycle: the name is resolved once, with
     /// [`Self::input_index`], and no lookup runs per write.
-    fn set_input_at(&mut self, index: usize, value: Value) -> Result<(), String> {
-        let name = self
-            .input_names()
-            .get(index)
-            .cloned()
-            .ok_or_else(|| format!("no input at index {index}"))?;
+    fn set_input_at(&mut self, index: usize, value: Value) -> Result<(), WriteError> {
+        let name =
+            self.input_names()
+                .get(index)
+                .cloned()
+                .ok_or_else(|| WriteError::UnknownWire {
+                    key: format!("wire[{index}]"),
+                    known: self.input_names(),
+                })?;
         self.set_input(&name, value)
     }
 

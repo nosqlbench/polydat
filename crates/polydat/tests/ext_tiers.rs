@@ -447,14 +447,31 @@ fn an_extern_set_to_the_wrong_type_is_refused_by_name() {
         .unwrap()
         .try_compile_raw()
         .unwrap_or_else(|_| panic!("P2"));
+    // The write rule refuses by variant, not by message text: the
+    // structured error names the slot, what it wanted, and what it got.
     let err = p2
         .set_input("scale", Value::Str("ten".into()))
         .expect_err("a string is not a u64");
-    assert!(err.contains("scale") && err.contains("u64"), "{err}");
+    assert_eq!(
+        err,
+        polydat::kernel::WriteError::TypeMismatch {
+            slot: "scale".into(),
+            expected: polydat::ast::PortType::U64,
+            got: polydat::ast::PortType::Str,
+        },
+        "{err}"
+    );
     let err = p2
         .set_input("nope", Value::U64(1))
         .expect_err("no such extern");
-    assert!(err.contains("nope") && err.contains("scale"), "{err}");
+    match &err {
+        polydat::kernel::WriteError::UnknownWire { key, known } => {
+            assert_eq!(key, "nope");
+            // The error carries what the caller could have meant.
+            assert!(known.iter().any(|n| n == "scale"), "{known:?}");
+        }
+        other => panic!("expected an unknown-wire error, got {other:?}"),
+    }
     assert_eq!(p2.externs().len(), 4);
 }
 

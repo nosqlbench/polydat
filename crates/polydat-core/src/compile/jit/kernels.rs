@@ -235,12 +235,20 @@ impl JitCore {
     }
 
     /// Set an extern by name; returns its slot for dirty marking.
-    fn set_extern(&mut self, name: &str, value: crate::ast::Value) -> Result<usize, String> {
+    fn set_extern(
+        &mut self,
+        name: &str,
+        value: crate::ast::Value,
+    ) -> Result<usize, crate::kernel::WriteError> {
         Ok(self.externs.set(name, value, &mut self.buffer)?.0)
     }
 
     /// [`Self::set_extern`] by input index.
-    fn set_extern_at(&mut self, index: usize, value: crate::ast::Value) -> Result<usize, String> {
+    fn set_extern_at(
+        &mut self,
+        index: usize,
+        value: crate::ast::Value,
+    ) -> Result<usize, crate::kernel::WriteError> {
         Ok(self.externs.set_at(index, value, &mut self.buffer)?.0)
     }
 
@@ -362,7 +370,11 @@ macro_rules! jit_accessors {
         /// type. The value is written through into the buffer at once,
         /// whatever its color, and every step downstream of the extern
         /// reruns at the next evaluation.
-        pub fn set_input(&mut self, name: &str, value: crate::ast::Value) -> Result<(), String> {
+        pub fn set_input(
+            &mut self,
+            name: &str,
+            value: crate::ast::Value,
+        ) -> Result<(), crate::kernel::WriteError> {
             let slot = self.core.set_extern(name, value)?;
             self.mark_input_changed(slot);
             Ok(())
@@ -373,7 +385,7 @@ macro_rules! jit_accessors {
             &mut self,
             index: usize,
             value: crate::ast::Value,
-        ) -> Result<(), String> {
+        ) -> Result<(), crate::kernel::WriteError> {
             let slot = self.core.set_extern_at(index, value)?;
             self.mark_input_changed(slot);
             Ok(())
@@ -439,7 +451,7 @@ macro_rules! jit_accessors {
             &mut self,
             name: &str,
             partition: &crate::iteration::cursor_partition::Partition,
-        ) -> Result<(), String> {
+        ) -> Result<(), crate::kernel::WriteError> {
             for (slot, value) in self.core.externs.cursor_writes(name, partition)? {
                 self.set_input(&slot, value)?;
             }

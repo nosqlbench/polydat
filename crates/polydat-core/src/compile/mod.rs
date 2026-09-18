@@ -190,7 +190,11 @@ macro_rules! impl_kernel_trait {
                 self.core.drive.coords.extend_from_slice(coords);
                 self.core.drive.stale = true;
             }
-            fn set_input(&mut self, name: &str, value: crate::ast::Value) -> Result<(), String> {
+            fn set_input(
+                &mut self,
+                name: &str,
+                value: crate::ast::Value,
+            ) -> Result<(), crate::kernel::WriteError> {
                 self.core.drive.stale = true;
                 $ty::set_input(self, name, value)
             }
@@ -198,7 +202,7 @@ macro_rules! impl_kernel_trait {
                 &mut self,
                 name: &str,
                 partition: &crate::iteration::cursor_partition::Partition,
-            ) -> Result<(), String> {
+            ) -> Result<(), crate::kernel::WriteError> {
                 self.core.drive.stale = true;
                 $ty::set_cursor(self, name, partition)
             }
@@ -266,7 +270,7 @@ macro_rules! impl_kernel_trait {
                 &mut self,
                 index: usize,
                 value: crate::ast::Value,
-            ) -> Result<(), String> {
+            ) -> Result<(), crate::kernel::WriteError> {
                 self.core.drive.stale = true;
                 $ty::set_input_at(self, index, value)
             }

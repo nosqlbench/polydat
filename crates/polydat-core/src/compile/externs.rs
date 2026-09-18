@@ -37,6 +37,7 @@ use std::collections::HashMap;
 use crate::ast::SlotShape;
 use crate::ast::{PortType, Value};
 use crate::kernel::InputDef;
+use crate::kernel::WriteError;
 
 /// One extern input of a compiled kernel.
 #[derive(Clone)]
@@ -327,12 +328,12 @@ impl Externs {
         &self,
         name: &str,
         partition: &crate::iteration::cursor_partition::Partition,
-    ) -> Result<Vec<(String, Value)>, String> {
+    ) -> Result<Vec<(String, Value)>, WriteError> {
         if !self.cursors.iter().any(|c| c.name == name) {
-            let known: Vec<&str> = self.cursors.iter().map(|c| c.name.as_str()).collect();
-            return Err(format!(
-                "no cursor named '{name}'; this program's cursors are {known:?}"
-            ));
+            return Err(WriteError::UnknownWire {
+                key: name.to_string(),
+                known: self.cursors.iter().map(|c| c.name.clone()).collect(),
+            });
         }
         Ok(
             crate::iteration::cursor_partition::cursor_slot_writes(name, partition)
@@ -384,15 +385,17 @@ impl Externs {
         name: &str,
         value: Value,
         buffer: &mut [u64],
-    ) -> Result<(usize, bool), String> {
+    ) -> Result<(usize, bool), WriteError> {
         let Some(&i) = self.by_name.get(name) else {
             if self.input_names.iter().any(|n| n == name) {
-                return Err(format!("'{name}' is a coordinate; set it with set_inputs"));
+                return Err(WriteError::CoordinateSlot {
+                    slot: name.to_string(),
+                });
             }
-            let known: Vec<&str> = self.slots.iter().map(|s| s.name.as_str()).collect();
-            return Err(format!(
-                "no extern named '{name}'; this kernel's externs are {known:?}"
-            ));
+            return Err(WriteError::UnknownWire {
+                key: name.to_string(),
+                known: self.slots.iter().map(|s| s.name.clone()).collect(),
+            });
         };
         self.set_slot(i, value, buffer)
     }
@@ -404,17 +407,16 @@ impl Externs {
         index: usize,
         value: Value,
         buffer: &mut [u64],
-    ) -> Result<(usize, bool), String> {
+    ) -> Result<(usize, bool), WriteError> {
         match self.by_index.get(index) {
             Some(Some(i)) => self.set_slot(*i, value, buffer),
-            Some(None) => Err(format!(
-                "'{}' is a coordinate; set it with set_inputs",
-                self.input_names[index]
-            )),
-            None => Err(format!(
-                "no input at index {index}; this program's inputs are {:?}",
-                self.input_names
-            )),
+            Some(None) => Err(WriteError::CoordinateSlot {
+                slot: self.input_names[index].clone(),
+            }),
+            None => Err(WriteError::UnknownWire {
+                key: format!("wire[{index}]"),
+                known: self.input_names.clone(),
+            }),
         }
     }
 
@@ -426,15 +428,14 @@ impl Externs {
         i: usize,
         value: Value,
         buffer: &mut [u64],
-    ) -> Result<(usize, bool), String> {
+    ) -> Result<(usize, bool), WriteError> {
         let s = &mut self.slots[i];
         if !value.satisfies_slot(s.ty) {
-            return Err(format!(
-                "input '{}' is declared {} but was set to a {} value",
-                s.name,
-                s.ty,
-                value.port_type()
-            ));
+            return Err(WriteError::TypeMismatch {
+                slot: s.name.clone(),
+                expected: s.ty,
+                got: value.port_type(),
+            });
         }
         s.value = value;
         // A `shared` binding's slot writes through its cell, so every

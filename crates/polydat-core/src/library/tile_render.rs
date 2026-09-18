@@ -610,7 +610,7 @@ impl TileProgram {
                     };
                     let program = self.body_program_on(*child_idx, engine);
                     let mut first = true;
-                    let fail = |name: &str, e: String| -> ! {
+                    let fail = |name: &str, e: crate::kernel::WriteError| -> ! {
                         panic!(
                             "tile '{}': projection body input `{name}`: {e}",
                             self.spec.name
