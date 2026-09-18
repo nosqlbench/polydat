@@ -506,10 +506,10 @@ plans do not.
 Promotion is explicit; there is no automatic cost threshold in the normal
 compiler. The descriptor and runtime counters provide the facts needed by a
 caller or profiling layer to make that selection without changing semantics.
-The measured reason the packet clock is worth its complexity is that packet
+The packet clock is worth its complexity because packet
 reuse stays effective when the caller's burst size is smaller than the vector
 width: a ready packet drained one value at a time still amortizes its native
-call over its lanes. The measurements do not establish multi-consumer,
+call over its lanes. The design does not establish multi-consumer,
 shared-state, per-lane error, or automatic-selection semantics.
 
 ---

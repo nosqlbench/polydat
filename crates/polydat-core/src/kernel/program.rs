@@ -332,7 +332,8 @@ pub struct PolydatProgram {
     /// Producer bindings (`name := for ...`) declared at this level.
     producers: Vec<crate::dsl::traversal::Producer>,
     /// Names declared with the `const` keyword in the source. Subject
-    /// to the init-binding contract (SRD 11 §"Init Binding Contract"):
+    /// to the init-binding contract (evaluation_model.md, the init
+    /// contract):
     /// every name listed here must reach exactly one effectively-const
     /// value at scope-init time. Plan A (compile-time) and Plan B
     /// (scope-activation) checks both consult this set.
@@ -1486,7 +1487,7 @@ impl PolydatProgram {
 
         // Init-output set: every name whose producing node is
         // expected to fold to a constant at scope-init time
-        // (per SRD-11 §"Init Binding Contract"). A workload
+        // (the init contract, evaluation_model.md). A workload
         // edit that promotes a binding from `final` to `init`
         // (or vice versa) changes the eval-lifecycle of the
         // node graph — distinct programs.
@@ -1964,7 +1965,7 @@ impl PolydatProgram {
 
         // ─── Plan A: Init-Binding Contract (compile-time) ──────────
         //
-        // SRD 11 §"Init Binding Contract": every binding declared
+        // The init contract (evaluation_model.md): every binding declared
         // `init` must reach a single effectively-const value at
         // scope-init time. At compile time, that means: the
         // binding's owning node must classify as CompileConst or
@@ -1990,7 +1991,7 @@ impl PolydatProgram {
                         "init binding '{init_name}' violates the init contract: \
                          {offending} \
                          (init bindings must be effectively-const at scope-init time \
-                         per SRD 11 §\"Init Binding Contract\")"
+                         per the init contract, evaluation_model.md)"
                     ));
                 }
             }

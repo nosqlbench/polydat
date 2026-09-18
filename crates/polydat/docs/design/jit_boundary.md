@@ -34,8 +34,8 @@ when it calls a helper (`JitCode::fallible`, decided at finalization
 by whether the function holds a call instruction). Code with no call
 is arithmetic over the buffer and cannot fail, so the site runs it
 bare, without the jump buffer, the panic capture, or the unwind
-guard: on the engine ladder's graph those were 20 ns of a 50 ns
-evaluation, the generated code itself being 30 ns.
+guard, which is most of a small evaluation's cost when the generated
+code itself is a few arithmetic instructions.
 
 | Site | What runs natively | Where |
 |---|---|---|

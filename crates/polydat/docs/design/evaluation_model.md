@@ -300,7 +300,7 @@ Plan A fails the build with
 
 ```
 init binding '<name>' violates the init contract: <offending>
-(init bindings must be effectively-const at scope-init time per SRD 11 §"Init Binding Contract")
+(init bindings must be effectively-const at scope-init time per the init contract, evaluation_model.md))
 ```
 
 where the message's `init` names the `const` modifier (the

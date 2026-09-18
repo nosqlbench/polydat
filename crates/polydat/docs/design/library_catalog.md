@@ -172,7 +172,7 @@ lowerings and dedicated fail helpers; and
 every engine enriches the message with the node, its outputs, and its
 inputs through the one failure contract ([Engines](engines.md)).
 
-<a id="cursor-partitions-srd-71"></a>
+<a id="partition-values"></a>
 ### Partition values
 
 `Partition` and `PartitionList` ride wires as `Value::Ext` reflected
@@ -320,9 +320,9 @@ for a node the u64 kit carries; a node whose lowering reads its
 constants in another order supplies `jit_constants = <path>`.
 
 The tile hole encoder, `tile_encode`, is a library node carried by the
-slot kit; the compiler no longer emits it: the renderer encodes each
-hole where it stands in the skeleton ([Polytile](polytile.md) §7). It
-remains callable as a node.
+slot kit; the renderer encodes each hole where it stands in the
+skeleton ([Polytile](polytile.md) §7), and the compiler emits no
+encoder of its own. It remains callable as a node.
 
 ### Carve-outs from the canonical path
 

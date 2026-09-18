@@ -1,11 +1,5 @@
 # Compiled By-Reference Slots — `Str`, `Bytes`, `Json`, `Ext`, and `Handle` in Compiled Kernels
 
-**Status:** SRD 115, third revision. This revision replaces the handle
-design of the first two: there is no handle, no arena, no value table,
-and no cycle. A by-reference value in a compiled slot is a `Ref2` pair
-under the slot-state axioms of [JIT Boundary](jit_boundary.md), owned
-by the step that produced it, exactly as a typed vector is.
-
 **Purpose.** The compiled tiers (the closure tier P2, P3, and the pure
 native tier behind it) run over a flat buffer of `u64` slots. A string, byte
 string, JSON value, extension value, or handle value does not fit a
@@ -36,37 +30,29 @@ the slot colors), [JIT Boundary](jit_boundary.md) (axioms S1–S10),
 Every port has a static slot color. `Imm1` and `Imm2` slots hold
 immediate values, `Ref2` slots hold a `(ptr, len)` pair with a proven
 owner, and the classifier admits a node to a compiled tier only when
-its ports have a lowering. The five by-reference types had, in turn,
-no color of their own (they fell through to `Imm1`, so no node that
-touched one compiled), then a fourth color, `Hdl1`: a one-slot handle
-naming a value in a process-wide interner, a thread-local bump arena,
-or a per-kernel value table. The arena reset and the table's generation
-advanced at a "root cycle" that the kernel the host drives opened at
-every write, and so that a slot never held a handle into reclaimed
-storage, every step that wrote a handle ran on every cycle whether or
-not its inputs had changed.
-
-That design contradicted the runtime model in three places, and the
-contradictions are why it is gone:
+its ports have a lowering. The five by-reference types need a slot
+representation of their own, and three limits decide which one it can
+be.
 
 - **There is no cycle.** The runtime model has one rule, R1: a step is
   current until an input in its provenance changes, and invalidation is
-  per input, never all at once. A reset that reclaims every string at
-  every write is an all-or-none invalidation the model does not have,
-  and a step exempted from R1 to survive the reset is a hole in the
-  model's caching, not a refinement of it.
-- **No storage belongs to a thread.** L1 (composition_substrate.md)
-  puts every piece of state in the fiber's own `PolydatState`; the
-  program is shared and read-only. A thread-local arena is storage that
-  belongs to no state, which is why its lifetime had to be legislated
-  by an axiom instead of following from ownership.
-- **A handle is a second dereference.** S7 (jit_boundary.md) allows
-  exactly one static dereference per reference access and forbids index
-  tables and arena handles for that reason. A table handle is looked up
-  in a table, and an arena handle is decoded against a chunk list: both
-  are the second hop S7 exists to prevent.
+  per input, never all at once. A representation whose storage is
+  reclaimed at a periodic reset is an all-or-none invalidation the
+  model does not have, and a step exempted from R1 to survive that
+  reset is a hole in the model's caching, not a refinement of it.
+- **No storage belongs to a thread.** L1
+  ([Composition Substrate](composition_substrate.md)) puts every piece
+  of state in the fiber's own `PolydatState`; the program is shared and
+  read-only. Storage that belongs to no state has a lifetime that must
+  be legislated by an axiom instead of following from ownership.
+- **A reference is one dereference.** S7
+  ([JIT Boundary](jit_boundary.md)) allows exactly one static
+  dereference per reference access, and forbids index tables and arena
+  handles for that reason: a table handle is looked up in a table and
+  an arena handle is decoded against a chunk list, both the second hop
+  S7 exists to prevent.
 
-The typed vectors never had this problem. A `VecF32` output is a `Ref2`
+The typed vectors already meet all three. A `VecF32` output is a `Ref2`
 pair into a scratch buffer the kernel's state owns for exactly that
 (step, port), republished when the step runs and valid until it runs
 again (S3, S4). That is the model's own answer, and it is the whole of
@@ -218,7 +204,7 @@ scratch handed in:
 - **`Option<T>` reads as `Some` in the kit.** The kit sees slot bits
   and no mask; a `None` on the closure tier and P3 is the kernel's
   per-slot mask (a step whose node does not accept `None` emits `None`
-  without running, [Engine Parity](engine_parity.md) step 5), and pure
+  without running), and pure
   native code refuses to run with an unset extern.
 
 A node that supplies its own closure names it with
@@ -352,7 +338,8 @@ citations a SAFETY comment or a test needs are:
 - **No coercion for eligibility.** The classifier never re-types a
   port to admit a node; a `Ref2` port is admitted as `Ref2` or the node
   stays on the tier that carries it.
-- **The SRD-74 None rule is unchanged.** A `None` on a compiled kernel
+- **The None rule is unchanged** ([None Semantics](none_semantics.md)).
+  A `None` on a compiled kernel
   is the extern mask; a `Ref2` extern that is unset reads as an empty
   pair where nothing keeps the mask, and the consumers that tolerate
   `None` read it as `None` through `derive_support::ref_value`.

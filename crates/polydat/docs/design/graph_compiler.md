@@ -669,9 +669,4 @@ rule.
 
 ---
 
-[`ast`]: ../../../polydat-core/src/ast.rs
-[`kernel`]: ../../../polydat-core/src/kernel/mod.rs
 [`compile::assembly`]: ../../../polydat-core/src/compile/assembly.rs
-[`compile::fusion`]: ../../../polydat-core/src/compile/fusion.rs
-[`compile::hybrid`]: ../../../polydat-core/src/compile/hybrid.rs
-[`compile::select`]: ../../../polydat-core/src/compile/select.rs

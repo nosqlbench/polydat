@@ -1052,9 +1052,8 @@ The standard embedding entry points emit seven classes of
 `EmbeddingError`, reachable from parsing, compilation,
 lifecycle validation, evaluation, and typed result
 conversion. Each carries the context shown below; the shape
-is normative. (The enum also declares `ResultMissing`,
-`Timeout`, and `RegistryNotInitialised` as compatibility
-variants; no standard entry point constructs them — an
+is normative. (The enum also declares `ResultMissing` and
+`Timeout`; no standard entry point constructs either — an
 unknown function is `UnknownNode`, and no surface accepts a
 deadline.)
 
@@ -1151,35 +1150,8 @@ form the diagnostic chain: polydat owns the polydat-layer
 error variant; the host owns the host-layer location and
 naming.
 
----
 
-## 7. Why this works — substrate + compiler reused
-
-The expression engine is not a separate system. It is the
-substrate's slot contract holding at small scale and the
-graph compiler's passes firing on small input. Every
-guarantee in §4 is a substrate or compiler property already
-formalised in the companion docs; this section names which
-property each E-axiom rests on.
-
-| E-axiom | Underlying substrate / compiler property |
-|---|---|
-| E1 (Self-contained submission) | Compiler entry-point design — pure functions of declared inputs + the process-level node registry. |
-| E2 (Typed result) | Substrate T1 (every slot typed) → compiler emits typed output → value carries declared type. |
-| E3 (Deterministic evaluation) | Substrate T1+L2 (typed deterministic lifecycle) + compiler H3 (hoisting preserves value) + NF2 (fusion preserves determinism). |
-| E4 (Library inheritance) | Compiler reads the linked registry; a linked registration is process-level and uniform. |
-| E5 (Lifecycle transparency) | Substrate L2 (two-lifecycle classification) + compiler hoisting analysis (§3 in graph_compiler) → surfaces match each lifecycle window. |
-| E6 (Composability via interpolation) | Substrate S1+S2 (synthesis surface) + compiler Context Fusion → interpolation is text-level access to bound slot values. |
-| E7 (Typed error ontology) | One `EmbeddingError` enum returned by every standard surface. |
-
-Every property the host depends on for embedded evaluation
-is a property the substrate or compiler already provides for
-workloads. The "free expression engine" property is the
-substrate's claim that the contract holds at every scale.
-
----
-
-## 8. The composition pattern
+## 7. The composition pattern
 
 The canonical host pattern for kernel-bound evaluation:
 
@@ -1223,7 +1195,7 @@ the interpreter's kernel.
 
 ---
 
-## 9. Surface boundaries
+## 8. Surface boundaries
 
 - Evaluation APIs compile eagerly. Callers that need reuse
   compile a kernel and cache the resulting program.

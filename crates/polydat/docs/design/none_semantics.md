@@ -113,12 +113,11 @@ explicit error naming the bind point when it returns `None`. Calling
 `to_display_string`, which renders the literal text `"None"`, does not
 satisfy the op-template rendering contract.
 
-The render path is the wire-protocol boundary — bytes leaving via
-this path go to a remote system, so the silent-empty default
-that `to_display_string` used to provide had to be removed here.
-`to_display_string` stays unchanged for log / diagnostic contexts
-where empty is acceptable (it's renamed conceptually as the "lossy"
-form; render sites must use the strict variant).
+The render path is the wire-protocol boundary: bytes leaving by it go
+to a remote system, where an empty field is a real value the system
+stores and echoes back, so absence must not render as one.
+`to_display_string` is the lossy form, for a log or a diagnostic where
+empty is acceptable; a render site uses the strict one.
 
 Structural omission of an op-template segment is not a
 bind-point operation. The host must construct or select the

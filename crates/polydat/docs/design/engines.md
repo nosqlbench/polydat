@@ -30,10 +30,10 @@ Pure native code, one function for the whole program, is a fourth kernel
 behind P3: the differential tier that proves the native lowerings against
 the closures, and the carrier of the Tier-1 register kernel
 ([simd_isa_autopromotion.md](simd_isa_autopromotion.md)). It refuses a node
-without a lowering, is `#[doc(hidden)]`, and is reachable only through the
-`try_compile_pure_jit*` builders; it is not a host surface. The other
-`try_compile*` builders and `compile_hybrid` build one engine's kernel as its
-concrete type, for the differential suites and the ladder benchmarks.
+without a lowering and is `#[doc(hidden)]`: the differential suites and the
+ladder benchmarks reach it and one engine's concrete kernel through builders
+of their own, which are not a host surface. A host selects an engine with
+`Engine`.
 
 ## 2. The interpreter engine
 
