@@ -1,17 +1,18 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! The comprehension sub-language: its text form ([`parse`]), the
-//! flat form that text parses to ([`ast_legacy`]), the canonical
-//! algebra ([`ast`]) with its sources, strategies, cardinalities, and
-//! metadata, and the spec forms that convert between them ([`spec`]).
-//! Evaluation is the runtime's.
+//! The comprehension sub-language: the canonical algebra ([`ast`])
+//! with its sources, strategies, cardinalities, and metadata, and the
+//! forms that reach it ([`spec`]) from text, from a specification
+//! document, and from a source expression. The text parser and the
+//! flat form it produces on the way are internal to this crate
+//! (comprehension_forms.md §14.8). Evaluation is the runtime's.
 
 pub mod ast;
-pub mod ast_legacy;
+pub(crate) mod ast_legacy;
 pub mod cardinality;
 pub mod metadata;
-pub mod parse;
+pub(crate) mod parse;
 pub mod source;
 pub mod spec;
 pub mod strategy;

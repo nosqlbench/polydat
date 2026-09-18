@@ -3,9 +3,9 @@
 
 //! Legacy → algebra AST converter.
 //!
-//! Reuses the existing legacy parsers
-//! ([`crate::comprehension::parse`]) for structural shape
-//! recognition, then converts the legacy `Comprehension`
+//! Reuses the crate-internal text parser
+//! for structural shape
+//! recognition, then converts the
 //! flat-struct AST to the new algebra-layer operator-tree
 //! [`crate::comprehension::ast::Comprehension`].
 //!
@@ -90,7 +90,7 @@ impl std::fmt::Display for ConvertError {
 
 impl std::error::Error for ConvertError {}
 
-/// Convert a legacy [`LegacyAst`] to the algebra-layer
+/// Convert the flat parse form to the algebra-layer
 /// [`AlgebraAst`].
 ///
 /// Handles:

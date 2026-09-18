@@ -297,9 +297,7 @@ fn parse_order(
     String,
 > {
     let carrier = format!("__o in 0..1 order {spec}");
-    let legacy = crate::iteration::comprehension::parse::parse_comprehension_text(&carrier)?;
-    let algebra = crate::iteration::comprehension::spec::legacy_to_algebra(&legacy)
-        .map_err(|e| e.to_string())?;
+    let algebra = crate::iteration::comprehension::spec::parse_comprehension_algebra(&carrier)?;
     match algebra {
         Comprehension::Order {
             strategy,

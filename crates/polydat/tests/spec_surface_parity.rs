@@ -22,13 +22,11 @@
 //! - With `order` truncation
 //!
 //! Each case constructs the algebra AST via both paths
-//! (`parse_comprehension_text` + `legacy_to_algebra` vs.
+//! (`parse_comprehension_algebra` vs.
 //! `ComprehensionSpec::into_algebra`) and asserts the
 //! resulting compiled programs dispense identical tuples.
 
-use polydat::iteration::comprehension::spec::{
-    legacy_to_algebra, parse_comprehension_text, parse_text,
-};
+use polydat::iteration::comprehension::spec::{parse_comprehension_algebra, parse_text};
 use polydat::iteration::comprehension::surfaces::{CoordinateStream, compile};
 
 /// Dispense up to `cap` tuples from a coord stream and return
@@ -46,10 +44,8 @@ fn dispense(stream: &mut CoordinateStream, cap: usize) -> Vec<String> {
 
 /// Compile both ASTs and assert their dispense sequences match.
 fn assert_dispense_parity(legacy_text: &str, spec_yaml: &str) {
-    // Path A: legacy text → legacy AST → algebra AST.
-    let legacy_ast = parse_comprehension_text(legacy_text).expect("legacy parse should succeed");
-    let algebra_a =
-        legacy_to_algebra(&legacy_ast).expect("legacy → algebra conversion should succeed");
+    // Path A: the comprehension text.
+    let algebra_a = parse_comprehension_algebra(legacy_text).expect("text parse should succeed");
 
     // Path B: YAML text → ComprehensionSpec → algebra AST.
     let algebra_b = parse_text(spec_yaml).expect("spec parse should succeed");
@@ -61,7 +57,7 @@ fn assert_dispense_parity(legacy_text: &str, spec_yaml: &str) {
     let tuples_b = dispense(&mut stream_b, 200);
     assert_eq!(
         tuples_a, tuples_b,
-        "dispense sequence parity failed:\n  legacy: {legacy_text}\n  spec:   {spec_yaml}\n  legacy_ast: {legacy_ast:?}"
+        "dispense sequence parity failed:\n  text: {legacy_text}\n  spec: {spec_yaml}\n  tree: {algebra_a:?}"
     );
 }
 

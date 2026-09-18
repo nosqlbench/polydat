@@ -3459,15 +3459,18 @@ are [Cursor Partitions](cursor_partitions.md); the algebra sees a
 plain list-source comprehension, and cursor narrowing happens at
 activation, resolved against the element.
 
-### 14.8 The flat parse form is normalization machinery
+### 14.8 The flat parse form is internal
 
-The flat form the text parser produces (`ast_legacy`) exists to be
-lowered to the canonical tree (`spec::legacy_to_algebra`) and for
-nothing else. It appears in no retained model: a producer, a
-traversal, a streamer, and a compiled program carry the canonical
-tree. No stage downstream of the lowering branches on the form a
-comprehension was written in, and the lowering never bypasses the
-canonical validation (§5).
+The text parser produces a flat form on its way to the canonical tree,
+and that form and the parser are internal to `polydat_grammar`: no
+public signature names them. Text reaches the tree through
+`spec::parse_comprehension_algebra`, a specification document through
+`ComprehensionSpec::into_algebra` or `spec::parse_text`, and a source
+expression through `spec::parse_source`. A producer, a traversal, a
+streamer, and a compiled program carry the canonical tree, no stage
+downstream of the lowering branches on the form a comprehension was
+written in, and the lowering never bypasses the canonical validation
+(§5).
 
 ### 14.9 Traversal activation is not module construction
 

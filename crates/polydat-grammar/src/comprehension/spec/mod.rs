@@ -45,12 +45,12 @@
 //! ## Architecture
 //!
 //! The friendly surface delegates **structural parsing** to
-//! the existing legacy parsers in
-//! [`crate::comprehension::parse`] — `parse_clause_list`,
+//! the crate-internal text parser --
+//! `parse_clause_list`,
 //! `parse_comprehension_text`, `parse_order_spec`. Those
-//! parsers produce a legacy `Comprehension` AST with raw
+//! parsers produce the flat form with raw
 //! string sources. The [`legacy_convert`] module then walks
-//! the legacy AST and assembles the algebra-layer AST,
+//! that form and assembles the algebra-layer AST,
 //! using [`source_parser::parse_source`] for typed-source
 //! classification of each clause's RHS string.
 //!
@@ -65,10 +65,17 @@ pub mod source_parser;
 pub mod text;
 
 pub use algebra_text::parse_comprehension_algebra;
-pub use legacy_convert::{ConvertError, legacy_to_algebra};
+pub use legacy_convert::ConvertError;
 pub use serde_form::{ComprehensionSpec, ForSpec, SpecConvertError, parse_inline};
 pub use source_parser::{SourceParseError, parse_source};
 pub use text::{TextParseError, parse_text};
+
+// The flat parse form (`crate::comprehension::ast_legacy`) and the
+// text parser that produces it are crate-internal: they exist to be
+// lowered here (comprehension_forms.md §14.8). Text reaches the
+// canonical tree through [`parse_comprehension_algebra`], a spec
+// document through [`ComprehensionSpec::into_algebra`] or
+// [`parse_text`], and a source expression through [`parse_source`].
 
 // Leaf grammar utilities — re-exported here so consumers reach
 // them through one module. The implementations live in
@@ -91,6 +98,3 @@ pub use text::{TextParseError, parse_text};
 //   `ComprehensionSpec::into_legacy` / `into_algebra`.
 // - `split_at_order`, `split_at_where`, `split_respecting_parens` —
 //   parser helpers.
-pub use crate::comprehension::parse::{
-    parse_clause, parse_clause_list, parse_comprehension_text, parse_order_spec,
-};

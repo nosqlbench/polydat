@@ -97,9 +97,7 @@ impl StreamerValue {
 
     /// Parse canonical comprehension text into a streamer value.
     pub fn parse_text(text: &str) -> Result<Self, String> {
-        let legacy = crate::iteration::comprehension::parse::parse_comprehension_text(text)?;
-        let ast = crate::iteration::comprehension::spec::legacy_to_algebra(&legacy)
-            .map_err(|e| e.to_string())?;
+        let ast = crate::iteration::comprehension::spec::parse_comprehension_algebra(text)?;
         Ok(Self::new(text, ast))
     }
 }

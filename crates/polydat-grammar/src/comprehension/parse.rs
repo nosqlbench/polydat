@@ -1032,7 +1032,7 @@ mod tests {
             let c = parse_comprehension_text(text).unwrap_or_else(|e| panic!("{text}: {e}"));
             assert!(c.is_union(), "{text}");
             assert!(c.order.is_some(), "{text}");
-            crate::comprehension::spec::legacy_to_algebra(&c)
+            crate::comprehension::spec::legacy_convert::legacy_to_algebra(&c)
                 .unwrap_or_else(|e| panic!("{text}: {e}"));
         }
     }

@@ -51,7 +51,7 @@ pub struct ComprehensionSpec {
     #[serde(default, rename = "where", skip_serializing_if = "Option::is_none")]
     pub r#where: Option<String>,
     /// Optional traversal-order spec. See
-    /// [`crate::comprehension::parse::parse_order_spec`] for
+    /// the crate-internal `parse_order_spec` for
     /// the accepted syntax (`lex`, `halton/50`,
     /// `shells(origin=center, depth=3)`, etc.).
     #[serde(default, skip_serializing_if = "Option::is_none")]

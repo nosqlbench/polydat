@@ -30,12 +30,11 @@
 //! ([`Comprehension`], [`Source`], [`ZipMode`], etc.) for
 //! ergonomic consumer access.
 //!
-//! [`ast_legacy`] and [`parse`] retain the older flat-struct
-//! comprehension types as parse-pipeline implementation
-//! details: the YAML loader uses [`parse::parse_clause_list`]
-//! etc. to lex the textual form, then
-//! [`spec::ComprehensionSpec::into_algebra`] converts to the
-//! canonical algebra AST via [`spec::legacy_to_algebra`].
+//! The flat form the text parser produces and the parser itself are
+//! internal to `polydat_grammar` (comprehension_forms.md §14.8):
+//! text reaches the canonical tree through
+//! [`spec::parse_comprehension_algebra`], a spec document through
+//! [`spec::ComprehensionSpec::into_algebra`] or [`spec::parse_text`].
 //! [`eval`] is the runtime-evaluation helper module
 //! ([`eval::evaluate_spec`], [`eval::pre_evaluate_clause`]) that
 //! both the scope-walker and the runtime evaluator consume.
@@ -62,9 +61,7 @@
 // the canonical algebra with its sources, strategies, cardinalities,
 // and metadata, and the spec forms between them. These live in
 // `polydat_grammar`, reachable here at the paths they always had.
-pub use polydat_grammar::comprehension::{
-    ast, ast_legacy, cardinality, metadata, parse, source, spec, strategy,
-};
+pub use polydat_grammar::comprehension::{ast, cardinality, metadata, source, spec, strategy};
 
 // --- The runtime's reading of the algebra.
 pub mod eval_source;
@@ -79,13 +76,8 @@ pub mod strategies;
 pub mod surfaces;
 pub mod validate;
 
-// --- Parse-pipeline support modules. `ast_legacy` and `parse`
-// produce the older flat-struct form that the YAML parser
-// generates; `spec::ComprehensionSpec::into_algebra` converts
-// that into the canonical algebra AST above via
-// `spec::legacy_to_algebra`. `eval` is the runtime-evaluation
-// helper used by both the algebra runtime evaluator and the
-// scope-walker.
+// --- The runtime-evaluation helper both the algebra runtime
+// evaluator and the scope-walker consume.
 pub mod eval;
 pub mod streamer_value;
 pub use streamer_value::StreamerValue;
