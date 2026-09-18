@@ -1359,12 +1359,6 @@ impl PolydatKernel {
     ///   nested `for_each` clauses with outer-iter-var
     ///   interpolation (`vec_{profile}`) resolve at pre-map
     ///   time.
-    /// - **Cross-cutover migration paths.** The walker rewrite
-    ///   in PR 9c-1b (see
-    ///   `polydat/docs/design/comprehension_cutover_contact_surfaces.md`)
-    ///   uses this method to hydrate per-iteration kernels
-    ///   from the canonical scope kernel that
-    ///   `build_for_each_scope_kernel` produced.
     ///
     /// # Why one entry point
     ///

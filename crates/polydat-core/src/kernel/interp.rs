@@ -3,13 +3,11 @@
 
 //! `{name}`-style template interpolation against a Polydat Kernel.
 //!
-//! Surface #5 home (per `polydat/docs/design/comprehension_cutover_contact_surfaces.md`).
-//! Previously lived in `polydat::iteration::comprehension::eval`; relocated
-//! to the kernel module because the operation is general
-//! GK-kernel facility, not a comprehension concern. The
-//! comprehension runtime uses it; synthesisers use it; the
-//! executor uses it; but it doesn't depend on comprehension AST
-//! shape.
+//! Polydat's one name-resolution surface (expression_engine.md §3.2).
+//! It lives in the kernel module because the operation is a general
+//! kernel facility, not a comprehension concern: the comprehension
+//! runtime uses it, synthesisers use it, and the executor uses it,
+//! and none of them depends on the comprehension AST's shape.
 //!
 //! ## Functions
 //!

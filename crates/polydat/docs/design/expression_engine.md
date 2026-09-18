@@ -298,6 +298,15 @@ Cost: interpolation is O(name lookups + text length); the
 follow-on `eval_const_expr` is a compile + fold (~ms scale)
 the first time a given text is seen, and a cache hit after.
 
+**One name-resolution contract.** Kernel-aware interpolation is
+polydat's, through this surface, and nothing else resolves a
+placeholder: a comprehension source or predicate that refers to a
+scope binding reaches the same `Lookup`, and an unresolved name is
+the typed error above rather than an empty substitution. A host does
+not add a second interpolation dialect; a text it wants resolved goes
+through this surface, and nested placeholders follow the bounded
+fixed-point rules of §3.2.3.
+
 #### 3.2.3 Interpolation alone — text rendering without evaluation
 
 Interpolation is useful as a standalone operation when the

@@ -358,6 +358,14 @@ fresh. They differ in who composes the child and what crosses the boundary:
   tuple's elements and a snapshot of the cascaded wires by value and
   narrowing every cursor ([for_traversal.md](for_traversal.md)).
 
+Either way, what the child contains is not the iteration's to decide. A
+comprehension determines the order and the values of the tuples; a host's
+scope walker decides the imports, the exports, and the body fragments that
+become a child from one of them, and this protocol's `finalize` validates the
+contract between them. Compiling the module matter and binding the named
+child are polydat's; releasing a replaceable iteration child is the host's,
+through `release_child`.
+
 The difference today is that the subcontext path is interpreter-only and
 carries cells, while the traversal path runs on every engine and carries
 values. The intent is that both call one binder expressed over the `Kernel`

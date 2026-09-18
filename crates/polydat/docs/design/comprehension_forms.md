@@ -3525,6 +3525,15 @@ downstream of the lowering branches on the form a comprehension was
 written in, and the lowering never bypasses the canonical validation
 (§5).
 
+### 14.8.1 Authoring source text from host values is the host's
+
+Rendering a host's own values into authored comprehension text is the
+host's concern: it emits syntactically valid typed literals, the same
+ones §8 accepts. Formatting a value already inside a kernel is
+polydat's, through the ordinary value, interpolation, and adapter
+contracts. The canonical tree never takes a parser-compatibility type
+from either direction (§14.8).
+
 ### 14.9 Traversal activation is not module construction
 
 A child scope over a tuple is a fresh kernel over the body's program
