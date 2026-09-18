@@ -14,8 +14,7 @@ language.
 This document is the normative reference for the Polydat surface
 language, its lexical grammar, statement and expression productions,
 type-naming vocabulary, desugaring and projection behaviour, and
-rejection rules, and every example in it is checked by
-[`polydat/tests/doc_examples_test.rs`](../../tests/doc_examples_test.rs);
+rejection rules, and every example in it is checked by the suite;
 [`grammar.md`](grammar.md) is its formal appendix (type rules and the
 G-axioms in full), [`language_spec.md`](language_spec.md) its
 compilation companion, [`comprehension_forms.md`](comprehension_forms.md)
@@ -1218,9 +1217,9 @@ What “the syntax the runtime gives back” changes, relative to your input:
 | `for k in 1..4 {` … | `for k in 1..4 {` … | the captured text is printed as written; the body indents four spaces |
 | `tile t := "n=${cycle}"` | `tile t := "n=${cycle}"` | the raw body is printed as captured |
 
-Everything in this table is exercised by
-[`doc_examples_test.rs`](../../tests/doc_examples_test.rs), which extracts
-every <code>```polydat</code> block above, asserts idempotent round-trip,
-compiles the <code>compile</code>-tagged ones, and proves the
-**[↔ programmatic]** examples project identically to their hand-built
-ASTs in [`polydat_grammar_programmatic.md`](polydat_grammar_programmatic.md).
+Everything in this table is exercised by the suite, which extracts
+every <code>```polydat</code> block above, asserts idempotent
+round-trip, compiles the <code>compile</code>-tagged ones, and proves
+the **[↔ programmatic]** examples project identically to their
+hand-built ASTs in
+[`polydat_grammar_programmatic.md`](polydat_grammar_programmatic.md).

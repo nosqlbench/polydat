@@ -105,7 +105,7 @@ slot, so it has its **own `Value` variants** (`U128`, `I128`),
 each carrying a [`Bits128`] — two little-endian `u64` limbs
 (`[lo, hi]`). Storing two limbs instead of a raw Rust `u128` keeps
 `Value`'s alignment at 8 and its footprint inside the 40-byte
-buffer-slot envelope (the `value_size_probe` test guards this).
+buffer-slot envelope, which a size probe in the suite guards.
 
 - **No *named* native lowering** — 128-bit integer operations run
   as ordinary evals on the interpreter; on the closure tier the node
@@ -378,7 +378,7 @@ matrix-completion adapters (every remaining narrowing + the full
 vector-lane family) in `library/polyfill_complete.rs`. The matrix
 is **complete** — every meaningful pair has an adapter, with only
 the deliberate scalar↔vector exclusion left as `·` (§3.3). The
-`adapter_catalog_invariants` property test enforces both the
+catalog's own property test enforces both the
 widening invariant and total coverage.
 
 ```
@@ -432,7 +432,7 @@ type groups carry no row or column at all (omitted from the grid):
 
 **Class A — always-defined** (lossless or fully-
 defined for every valid runtime input). The
-`adapter_catalog_invariants` test encodes this set as a predicate
+catalog's test encodes this set as a predicate
 and proves `auto_adapter` covers all of it:
 
 - **Numeric widening** — the rule, now complete with no holes:
@@ -585,8 +585,8 @@ panic when the upstream might be human-typed."
 ### 3.3 Completeness
 
 The matrix is **complete**: every meaningful `(from, to)` pair has
-an adapter, and the `adapter_catalog_invariants` test enforces
-this (`every_meaningful_pair_has_an_adapter`) alongside the
+an adapter, which the catalog's own test enforces
+alongside the
 widening invariant and re-derives the grid above so it can never
 silently drift. Three properties hold:
 

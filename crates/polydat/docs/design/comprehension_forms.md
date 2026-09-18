@@ -1633,26 +1633,32 @@ chain:
 
 ### 9.8 Verification surfaces
 
-The invariants of §9.6 are checked by the suite, organized by
-contract rather than by a frozen number of tests. Each named file is
-a module of the `suite` test binary (`crates/polydat/tests/suite.rs`):
+The invariants of §9.6 are checked by contract, not by a frozen number
+of tests. Each contract below has coverage of its own in the suite, and
+removing or weakening one requires replacement coverage in the same
+change.
 
-| Contract | Primary coverage |
-|---|---|
-| Spec, serde, and text parity (one canonical tree) | `spec_surface_parity.rs` |
-| Worked algebra examples (§11) | `spec_section_11_worked_examples.rs` |
-| Optimizer equivalence (§10.6) | `optimizer_worked_examples.rs`, the optimizer's unit and property tests |
-| Predicate soundness (§10.9) | `predicate_analyzer_soundness.rs` |
-| IR compilation and execution (§9.1) | `ir_end_to_end.rs` |
-| Resource bounds (§9.3) | `resource_bounds_verification.rs` |
-| Consumer independence (§9.5.2, §14.3) | `surfaces_independence.rs` |
-| Kernel and scope integration | `scope_composition.rs`, the runtime's unit tests |
-| Source semantics (§3.1, §10.7) | `source_tests.rs`, `sampling_test.rs`, `for_sampling.rs`, `for_flatten.rs` |
-| The `for` construct and producers | `for_compile.rs`, `for_producers.rs`, `for_runtime.rs`, `for_syntax.rs` |
-| Whole-crate behavior | the complete workspace suite |
-
-Removing or weakening the coverage of one contract requires
-replacement coverage in the same change.
+- **One canonical tree.** Every input form reaches the same tree:
+  the text, the specification document, and a tree built directly are
+  compiled and dispensed against each other.
+- **The worked examples of §11**, each compiled and dispensed as the
+  section states.
+- **Optimizer equivalence** (§10.6): each rewrite against the
+  unoptimized tree as its oracle, by worked example and by property.
+- **Predicate soundness** (§10.9): the recognizer's classification
+  against evaluation, over generated predicates.
+- **IR compilation and execution** (§9.1), end to end from a tree to
+  a dispensed tuple sequence.
+- **Resource bounds** (§9.3): each barrier's declared working set
+  against what execution holds.
+- **Consumer independence** (§9.5.2, §14.3): siblings over one program
+  advancing without disturbing each other.
+- **Kernel and scope integration**: a comprehension evaluated in a
+  scope, and the runtime evaluator's own units.
+- **Source semantics** (§3.1, §10.7): each source's evaluation, its
+  cardinality, and its sampling.
+- **The `for` construct**: its syntax, its compile, its producers, and
+  its traversal.
 
 **The gate.** The authoritative local gate is the workspace gate CI
 runs: the complete suite under nextest, clippy with warnings denied,
@@ -1666,15 +1672,14 @@ cargo fmt --all -- --check
 ```
 
 Targeted suites serve development; they do not replace the gate at
-handoff. Doctests are off and covered by `rustdoc_examples.rs`.
+handoff. Doctests are off and covered by the rustdoc-example test.
 
 **Change evidence.** A behavior-changing patch names the clause of
 this specification it changes, the canonical representation or stage
-it affects, the old and new dispense or error behavior, the tests
-that prove the new contract, and whether the parser's accepted forms
-or the serialized forms change. A performance-only change passes the
-same semantic gate: a benchmark never authorizes a different tuple
-stream.
+it affects, the old and new dispense or error behavior, the tests that
+prove the new contract, and whether the parser's accepted forms or the
+serialized forms change. A performance-only change passes the same
+semantic gate: a benchmark never authorizes a different tuple stream.
 
 ## 10. Post-parse optimizer
 
@@ -2646,12 +2651,11 @@ with these properties:
    recognizer catalog to predicate text. It performs no fixed-point
    iteration, SMT solving, compilation, evaluation, or rewriting.
 
-Property 1 (soundness) is verified by
-`tests/predicate_analyzer_soundness.rs`. It uses deterministic
-random tuples to compare recognized equality, inequality, range,
-set-membership, and disjoint-axis conjunction claims with direct
-Rust evaluation. Cross-axis and unknown shapes verify conservative
-non-factorization.
+Property 1 (soundness) is verified over deterministic random
+tuples: each recognized equality, inequality, range,
+set-membership, and disjoint-axis conjunction claim is compared with
+direct evaluation, and cross-axis and unknown shapes are checked for
+conservative non-factorization.
 
 Property 2 (conservative incompleteness) is the design
 principle that keeps the analyzer simple and the metadata

@@ -328,8 +328,9 @@ encoder of its own. It remains callable as a node.
 
 Hand-written `impl PolydatNode for X` blocks exist only where the
 node cannot be expressed as a function of typed arguments, and the
-hand-written-impl invariant test's `CARVEOUT_FILES` allowlist is the
-list; any new hand-written impl under `polydat-nodes/src/**` or `polydat-core/src/library/**`
+hand-written-impl invariant test carries the allowlist that is the
+list; any new hand-written impl under `polydat-nodes/src/**` or
+`polydat-core/src/library/**`
 outside it fails that test. The families outside the attribute, and
 why:
 

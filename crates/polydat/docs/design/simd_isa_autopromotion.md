@@ -516,9 +516,9 @@ shared-state, per-lane error, or automatic-selection semantics.
 
 ## 10. Verification contract
 
-The behavior is covered by two complementary suites.
+The behavior is covered by two complementary bodies of tests.
 
-The tier-1 executor tests (`tests/core_with_library.rs`) verify:
+The executor's own tests verify:
 
 - selected scalar-cone discovery and typed register-plan compilation;
 - scope-stable scalar broadcasts;
@@ -528,7 +528,7 @@ The tier-1 executor tests (`tests/core_with_library.rs`) verify:
 - rejection of a second externally writable input; and
 - an explicit Cranelift `i32x4` register graph.
 
-`iteration::simd_ordinal` verifies:
+The ordinal clock's tests verify:
 
 - cursor-clock arithmetic for every common lane count;
 - every lease alignment against the scalar oracle;

@@ -5,10 +5,9 @@
 This guide shows, for a selection of the spec's examples, how to build
 the **same kernel** in Rust through the public AST types — without ever
 writing a source string. Each example here is cross-linked to its spec
-section. Every paired example (§2 to §9) is **machine-verified**: the test
-[`polydat/tests/doc_examples_test.rs`](../../tests/doc_examples_test.rs)
-asserts that the hand-built AST and the spec's grammar source **project
-to identical canonical syntax**:
+section. Every paired example (§2 to §9) is **machine-verified**: the
+suite asserts that the hand-built AST and the spec's grammar source
+**project to identical canonical syntax**:
 
 ```text
 pp_file(builder_ast) == pp_file(parse(grammar_src))
@@ -392,7 +391,7 @@ assert_eq!(k.get_wire("n"), Some(Value::U64(5)));        // None on unknown wire
 
 A grammar snippet's source and its hand-built AST compile to kernels that
 produce identical `pull` results — the behaviour-layer counterpart to the
-projection equality this guide is built around. The
-[verification test](../../tests/doc_examples_test.rs) checks the syntax
-equality directly; compiling both paths and comparing `pull` outputs is
-the natural extension when a behavioural guarantee is needed.
+projection equality this guide is built around. The suite checks the
+syntax equality directly; compiling both paths and comparing `pull`
+outputs is the natural extension when a behavioural guarantee is
+needed.

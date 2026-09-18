@@ -350,8 +350,8 @@ overflows near the top (`ceil_to_multiple`, `multiples_at_least`);
 `f64_mod` calls the body itself, since Rust's `%` on floats has no
 Cranelift equivalent; and `div_wire`, `mod_wire`, `div`, and `mod` fail
 on a zero divisor in the body's words, where `u64_div` and `u64_mod`,
-whose bodies check, yield zero. The corner suite
-(`tests/equivalence_corners.rs`) is the standing check.
+whose bodies check, yield zero. The corner suite is the standing
+check.
 
 ### The slot-call helper
 
@@ -552,23 +552,14 @@ builds, after every eval pass the engine asserts every
 scratch-backed Ref pair equals its owning entry's current
 `(as_ptr(), len())` — forgot-to-republish / wrong-slot /
 dangling failures name the slot deterministically. (b) The
-slice-transport tests run under Miri (no-jit configuration —
-Miri cannot execute JIT'd native code) to adjudicate the formal
-aliasing validity of the `from_raw_parts` pattern. Lane command
-(clean leak-checking, no suppression flags):
-
-```sh
-cargo +nightly miri test -p polydat --no-default-features \
-    --test suite slot_state_axioms::
-```
-
-Stacked Borrows accepts the pattern (the S5 oracle passes under Miri
-across the engines) and the leak check passes clean, so the leak
-check itself is a regression guard. One caveat, recorded rather than
-hidden: Miri warns on the integer-to-pointer casts (inherent to a
-u64-slot transport — provenance is necessarily reconstructed, so the
-check runs under permissive int-ptr semantics rather than strict
-provenance).
+slice transport is adjudicated under Miri, in a build without native
+code, since Miri cannot execute it: Stacked Borrows accepts the
+`from_raw_parts` pattern and the leak check passes clean, so the leak
+check is itself a regression guard. One caveat, recorded rather than
+hidden: Miri warns on the integer-to-pointer casts inherent to a
+u64-slot transport, where provenance is necessarily reconstructed, so
+the check runs under permissive integer-pointer semantics rather than
+strict provenance.
 
 **S10 — Unsafe is enumerable, annotated, and tripwired.** Every
 Ref-deref `unsafe` lives in macro-generated `compiled_slot`

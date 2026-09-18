@@ -316,9 +316,9 @@ citations a SAFETY comment or a test needs are:
   slot-call helper's frame view in `jit/codegen.rs`, and the pair view
   the node macro emits in its slot kit as the only
   `from_raw_parts` sites outside the vector substrate.*
-- **S8** — P1 is the oracle. *Tripwire: `tests/handle_tiers.rs`, the
-  random and corpus differentials over every tier, and
-  `tests/ext_tiers.rs` for host-defined values.*
+- **S8** — the interpreter is the oracle. *Tripwire: the random and
+  corpus differentials over every tier, and the same for host-defined
+  values.*
 - **S9(a)** — after every run, every scratch-backed `Ref2` slot equals
   its entry's current `(ptr, len)`, in debug builds. A pair into
   interned bytes or a borrowed boundary value is not scratch-backed and
@@ -346,16 +346,34 @@ citations a SAFETY comment or a test needs are:
 
 ## 9. Verification
 
-| Check | Where |
-|---|---|
-| Slot color, width, and scratch element of every by-reference type; raw readers refuse the pair on every compiled engine; pure native code carries a `Ref2` output through a slot call | `tests/slot_state_axioms.rs` |
-| Strings across tiers; a read is an owned copy that outlives the next write | `tests/handle_boundaries.rs` |
-| Value-port nodes, JSON, and tiles across tiers; a hybrid kernel's string output owned by its step | `tests/variadic_lowering.rs` |
-| Tier differential: random string, JSON, and tile programs across the interpreter, forced cones, P2, and hybrid; the corpus; repeated coordinates keep reference outputs current; JSON outputs replaced in place | `tests/handle_tiers.rs` (`FUZZ_SEED`, `FUZZ_ITERATIONS`) |
-| Extension values and externs of every kind across tiers | `tests/ext_tiers.rs` |
-| Every node at the corners of its inputs (the `u64` edges of a coordinate, the special values of an `f64` extern), every output compared bit for bit with the interpreter's on P2, P3, and pure native code, failures compared by message | `tests/equivalence_corners.rs` (ignored by default; `-- --ignored`) |
-| The vector and register classifier picks the named lowering for each node's wire shape; a program over both groups is one pure native function that agrees with the interpreter | `tests/handle_boundaries.rs` |
-| A kernel created from a shared program points its pairs into its own storage, read after the source state is dropped | `tests/slot_state_axioms.rs` |
-| A rendering state's body kernels created once and reused; a clone starts empty | `library::tile_render::tests` |
-| S9(a) validator | every P2, hybrid, pure native, and cone run in debug builds |
-| S10 source scan; no `thread_local!` holds a value, a pointer, or a state | `tests/slot_state_axioms.rs` |
+Each of these is checked by the suite, by contract:
+
+- The slot color, width, and scratch element of every by-reference
+  type; a raw reader refuses the pair on every compiled engine; pure
+  native code carries a `Ref2` output through a slot call.
+- Strings across the tiers: a read is an owned copy that outlives the
+  next write.
+- Value-port nodes, JSON, and tiles across the tiers, and a hybrid
+  kernel's string output owned by its step.
+- The tier differential: random string, JSON, and tile programs over
+  the interpreter, forced cones, the closure tier, and the hybrid
+  kernel, plus the corpus; repeated coordinates keep reference outputs
+  current; a JSON output is replaced in place.
+- Extension values and externs of every kind across the tiers.
+- Every node at the corners of its inputs, the `u64` edges of a
+  coordinate and the special values of an `f64` extern, with every
+  output compared bit for bit against the interpreter's on the closure
+  tier, the native kernel, and pure native code, and failures compared
+  by message.
+- The vector and register classifier picking the named lowering for
+  each node's wire shape, and a program over both groups compiled as
+  one pure native function that agrees with the interpreter.
+- A kernel created from a shared program pointing its pairs into its
+  own storage, read after the source state is dropped.
+- A rendering state's body kernels created once and reused, and a
+  clone of the set starting empty.
+- S9(a)'s validator, on every closure-tier, hybrid, pure-native, and
+  cone run in debug builds.
+- S10 by source scan: no `thread_local!` holds a value, a pointer, or
+  a state.
+
