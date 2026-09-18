@@ -143,6 +143,33 @@ pub struct TileDef {
     pub span: Span,
 }
 
+impl TileDef {
+    /// A tile from its header and its body text, the pieces parsed
+    /// from that text under the tile's own options: one construction,
+    /// so the body a tile projects is the body it renders
+    /// (polytile.md §3).
+    pub fn from_body(
+        name: impl Into<String>,
+        encoding: Option<String>,
+        options: TileOptions,
+        body_kind: TileBodyKind,
+        body: impl Into<String>,
+        span: Span,
+    ) -> Result<Self, String> {
+        let body = body.into();
+        let pieces = crate::tile::parse_template(&body, &options, span)?;
+        Ok(TileDef {
+            name: name.into(),
+            encoding,
+            options,
+            body_kind,
+            body,
+            pieces,
+            span,
+        })
+    }
+}
+
 /// One element of a parsed template.
 #[derive(Debug, Clone)]
 pub enum TilePiece {

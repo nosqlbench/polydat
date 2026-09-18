@@ -270,9 +270,11 @@ the statement's source instead of `ForSource::producer`.
 Mirrors [spec §17 “Tiles”](polydat_grammar.md#sec-tiles). A `TileDef`
 carries the header (name, optional encoding, options), the body text
 exactly as captured with how it was written (`TileBodyKind`), and the
-body parsed into pieces by `polydat::dsl::tile::parse_template` under
-the tile's options. The printer reproduces the body from the captured
-text, so the pieces need only agree with it.
+body parsed into pieces from that text under
+the tile's options, which `TileDef::from_body` does in one call. The
+printer reproduces the body from the captured
+text, so deriving the pieces from it is what keeps the projection and
+the render one tile.
 
 ```text
 input cycle: u64
@@ -281,24 +283,20 @@ tile t := "n=${cycle}"
 
 ```rust
 use polydat::dsl::ast::{TileBodyKind, TileDef, TileOptions};
-use polydat::dsl::tile::parse_template;
 
 fn build_tile() -> PolydatFile {
-    let options = TileOptions::default();
-    let body = "n=${cycle}".to_string();
-    let pieces = parse_template(&body, &options, sp()).expect("template");
-    file(vec![
-        input("cycle", "u64"),
-        Statement::Tile(TileDef {
-            name: "t".into(),
-            encoding: None,
-            options,
-            body_kind: TileBodyKind::Literal,
-            body,
-            pieces,
-            span: sp(),
-        }),
-    ])
+    // One construction: the pieces are parsed from the body under the
+    // tile's own options, so the two cannot disagree.
+    let tile = TileDef::from_body(
+        "t",
+        None,
+        TileOptions::default(),
+        TileBodyKind::Literal,
+        "n=${cycle}",
+        sp(),
+    )
+    .expect("template");
+    file(vec![input("cycle", "u64"), Statement::Tile(tile)])
 }
 ```
 

@@ -171,3 +171,49 @@ fn a_built_source_projects_the_comprehension_it_traverses() {
         "{err}"
     );
 }
+
+/// A tile built from its body text carries pieces parsed from that
+/// text, so the body it projects is the body it renders (polytile.md
+/// §3): the built tile behaves as the written one.
+#[test]
+fn a_built_tile_projects_the_body_it_renders() {
+    use polydat::dsl::ast::{
+        InputDecl, PolydatFile, Statement, TileBodyKind, TileDef, TileOptions,
+    };
+    use polydat::dsl::compile::{CompileOptions, compile_ast_with_options};
+    use polydat::dsl::lexer::Span;
+
+    let sp = Span { line: 0, col: 0 };
+    let tile = TileDef::from_body(
+        "t",
+        None,
+        TileOptions::default(),
+        TileBodyKind::Literal,
+        "n=${u64_add(cycle, 1)}",
+        sp,
+    )
+    .expect("the body parses");
+    let file = PolydatFile {
+        statements: vec![
+            Statement::InputDecl(InputDecl {
+                name: "cycle".into(),
+                ty: Some("u64".into()),
+                span: sp,
+            }),
+            Statement::Tile(tile),
+        ],
+    };
+    let projected = polydat::dsl::pprint::pp_file(&file);
+    assert!(
+        projected.contains("tile t := \"n=${u64_add(cycle, 1)}\""),
+        "{projected}"
+    );
+    let mut k = compile_ast_with_options(&file, "", &CompileOptions::default(), None).unwrap();
+    k.set_inputs(&[41]);
+    assert_eq!(k.pull("t").as_str(), "n=42");
+    // The same text written as source gives the same program.
+    let mut written =
+        compile_polydat("input cycle: u64\ntile t := \"n=${u64_add(cycle, 1)}\"\n").unwrap();
+    written.set_inputs(&[41]);
+    assert_eq!(written.pull("t").as_str(), "n=42");
+}
