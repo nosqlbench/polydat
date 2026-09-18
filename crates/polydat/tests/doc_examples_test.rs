@@ -30,13 +30,15 @@
 
 use polydat::ast::PortType;
 use polydat::dsl::ast::{
-    Arg, BinOpKind, Binding, BindingModifier, CallExpr, CursorDecl, Expr, ExternPort, InputDecl,
-    ModuleDef, PolydatFile, Statement, TypedParam,
+    Arg, BinOpKind, Binding, BindingModifier, CallExpr, CursorDecl, Expr, ExternPort, ForSource,
+    ForStmt, InputDecl, ModuleDef, PolydatFile, Statement, TileBodyKind, TileDef, TileOptions,
+    TypedParam,
 };
 use polydat::dsl::compile_polydat;
 use polydat::dsl::lexer::Span;
 use polydat::dsl::pprint::pp_file;
 use polydat::dsl::{lexer, parser};
+use polydat::iteration::comprehension::spec::parse_comprehension_algebra;
 
 const GRAMMAR_DOC: &str = include_str!("../docs/design/polydat_grammar.md");
 const PROG_DOC: &str = include_str!("../docs/design/polydat_grammar_programmatic.md");
@@ -403,6 +405,97 @@ fn build_module() -> PolydatFile {
     })])
 }
 
+fn comprehension(text: &str) -> ForSource {
+    let algebra = parse_comprehension_algebra(text).expect("comprehension text");
+    // The source takes its text from the tree, so the two halves cannot
+    // disagree; the `for` lowering refuses one where they do.
+    ForSource::comprehension(algebra, sp()).expect("the text writes this tree")
+}
+
+fn build_for() -> PolydatFile {
+    file(vec![
+        bind(
+            "sweep",
+            Expr::For(Box::new(comprehension(
+                "k in 1..4, limit in 10, 20, 30 order halton/5",
+            ))),
+        ),
+        Statement::For(ForStmt {
+            source: ForSource::producer("sweep", sp()),
+            body: vec![
+                bind("f", call("myfunc", vec![id("k")])),
+                bind("g", call("otherfunc", vec![id("limit"), id("k")])),
+            ],
+            span: sp(),
+        }),
+        Statement::For(ForStmt {
+            source: comprehension("phase in load, verify, p in partitions(\"*/4\", 1000000)"),
+            body: vec![
+                bind("row", call("mod_in", vec![id("cycle"), id("p")])),
+                Statement::For(ForStmt {
+                    source: comprehension("q in 1..2"),
+                    body: vec![bind("z", call("hash", vec![id("q")]))],
+                    span: sp(),
+                }),
+            ],
+            span: sp(),
+        }),
+    ])
+}
+
+fn tile(
+    name: &str,
+    encoding: &str,
+    options: TileOptions,
+    body_kind: TileBodyKind,
+    body: &str,
+) -> Statement {
+    Statement::Tile(
+        TileDef::from_body(name, Some(encoding.into()), options, body_kind, body, sp())
+            .expect("template"),
+    )
+}
+
+fn build_tile() -> PolydatFile {
+    let odd_options = TileOptions {
+        open: "<%".into(),
+        close: "%>".into(),
+        sigil: "#".into(),
+        strict: true,
+        in_string: false,
+    };
+    file(vec![
+        tile(
+            "doc",
+            "json",
+            TileOptions::default(),
+            TileBodyKind::Block,
+            "{\n    \"tenant\": ${tenant_id},\n    \"samples\": [ @for s in 0..4 { { \"n\": ${s} } } ]\n}",
+        ),
+        tile(
+            "load",
+            "text",
+            TileOptions::default(),
+            TileBodyKind::Heredoc,
+            "INSERT ${keyspace} '${doc!}'",
+        ),
+        tile(
+            "row",
+            "csv",
+            TileOptions::default(),
+            TileBodyKind::Literal,
+            "${a},${b}",
+        ),
+        tile(
+            "odd",
+            "text",
+            odd_options,
+            TileBodyKind::Literal,
+            "<%x%> #if c { y }",
+        ),
+    ])
+}
+
 fn paired_examples() -> Vec<Paired> {
     vec![
         Paired {
@@ -440,6 +533,18 @@ fn paired_examples() -> Vec<Paired> {
             grammar_src: "sine_wave(input: u64, period: u64) -> (value: f64) := {\n    pos := to_f64(input % period)\n    per := to_f64(period)\n    value := sin((pos / per) * 6.283185307179586)\n}\n",
             doc_snippet: "name: \"sine_wave\".into(),",
             build: build_module,
+        },
+        Paired {
+            anchor: "p-for",
+            grammar_src: "sweep := for k in 1..4, limit in 10, 20, 30 order halton/5\nfor sweep {\n    f := myfunc(k)\n    g := otherfunc(limit, k)\n}\nfor phase in load, verify, p in partitions(\"*/4\", 1000000) {\n    row := mod_in(cycle, p)\n    for q in 1..2 {\n        z := hash(q)\n    }\n}\n",
+            doc_snippet: "ForSource::comprehension(algebra, sp()).expect(\"the text writes this tree\")",
+            build: build_for,
+        },
+        Paired {
+            anchor: "p-tile",
+            grammar_src: "tile doc : json := {\n    \"tenant\": ${tenant_id},\n    \"samples\": [ @for s in 0..4 { { \"n\": ${s} } } ]\n}\ntile load : text := <<<\nINSERT ${keyspace} '${doc!}'\n>>>\ntile row : csv := \"${a},${b}\"\ntile odd : text (delims \"<%\" \"%>\", sigil \"#\", strict) := \"<%x%> #if c { y }\"\n",
+            doc_snippet: "TileDef::from_body(",
+            build: build_tile,
         },
     ]
 }

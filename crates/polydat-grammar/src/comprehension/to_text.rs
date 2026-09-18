@@ -33,17 +33,11 @@ impl Source {
                     format!("{lo}..{hi}..{step}")
                 }
             }
-            // A bracketed list, the one form that reads back whatever
-            // the values are: a bare list cannot carry a quoted string,
-            // and a bare single value is an identifier, which is a
-            // generator expression.
-            Source::Literal { values } => {
-                let items = values
-                    .iter()
-                    .map(literal_value_text)
-                    .collect::<Option<Vec<_>>>()?;
-                format!("[{}]", items.join(", "))
-            }
+            // The bare list the grammar's own examples write, when
+            // every value reads back from it; the bracketed, quoted
+            // form otherwise, which carries a string a bare list
+            // cannot.
+            Source::Literal { values } => literal_list_text(values)?,
             Source::Generator { expr, .. } => expr.clone(),
             Source::WorkloadParamList { name, .. } => format!("{{{name}}}"),
             Source::ContinuousInterval { interval, .. } => {
@@ -84,21 +78,82 @@ impl Source {
     }
 }
 
-/// One literal as a bracketed list writes it, or `None` when the text
-/// cannot: a JSON value has no literal spelling, and a string carrying
-/// a quote, a comma, or a bracket is not read back as one value.
-fn literal_value_text(v: &LiteralValue) -> Option<String> {
+/// A literal list as the text writes it: the bare comma list the
+/// grammar's own examples use when every value reads back from it, and
+/// the bracketed, quoted form otherwise. `None` when neither reads
+/// back: a JSON value, or a string carrying a quote, a comma, or a
+/// bracket.
+fn literal_list_text(values: &[LiteralValue]) -> Option<String> {
+    if values.is_empty() {
+        return None;
+    }
+    // A bare single string is an identifier, which reads back as a
+    // generator call, so one string takes the bracketed form; one
+    // number or boolean is a scalar of its own.
+    let bare_ok = values.iter().all(bare_value_is_unambiguous)
+        && (values.len() > 1 || !matches!(values[0], LiteralValue::String(_)));
+    if bare_ok {
+        let items = values
+            .iter()
+            .map(bare_value_text)
+            .collect::<Option<Vec<_>>>()?;
+        return Some(items.join(", "));
+    }
+    let items = values
+        .iter()
+        .map(quoted_value_text)
+        .collect::<Option<Vec<_>>>()?;
+    Some(format!("[{}]", items.join(", ")))
+}
+
+/// Whether a value reads back from a bare list: a number or a boolean
+/// always does, and a string does when it carries none of the
+/// characters the bare form refuses and does not read back as a number
+/// or a boolean instead.
+fn bare_value_is_unambiguous(v: &LiteralValue) -> bool {
+    match v {
+        LiteralValue::Int(_) | LiteralValue::Float(_) | LiteralValue::Bool(_) => true,
+        LiteralValue::String(s) => {
+            let trimmed = s.trim();
+            !trimmed.is_empty()
+                && trimmed == s
+                && !s.contains([
+                    '(', ')', '[', ']', '{', '}', '\'', '"', '+', '*', '/', '%', '=', '<', '>',
+                    '!', '&', '|', '~', '^', '?', ',', '\n',
+                ])
+                && s.parse::<i64>().is_err()
+                && s.parse::<f64>().is_err()
+                && !s.eq_ignore_ascii_case("true")
+                && !s.eq_ignore_ascii_case("false")
+        }
+        LiteralValue::Json(_) => false,
+    }
+}
+
+/// One value as a bare list writes it.
+fn bare_value_text(v: &LiteralValue) -> Option<String> {
     Some(match v {
         LiteralValue::Int(i) => i.to_string(),
         LiteralValue::Float(f) => format!("{f:?}"),
         LiteralValue::Bool(b) => b.to_string(),
+        LiteralValue::String(s) => s.clone(),
+        LiteralValue::Json(_) => return None,
+    })
+}
+
+/// One value as a bracketed list writes it, strings quoted. `None`
+/// when the text cannot: a JSON value has no literal spelling, and a
+/// string carrying a quote, a comma, or a bracket is not read back as
+/// one value.
+fn quoted_value_text(v: &LiteralValue) -> Option<String> {
+    Some(match v {
         LiteralValue::String(s) => {
             if s.contains(['"', '\'', ',', '[', ']', '{', '}', '(', ')', '\n']) {
                 return None;
             }
             format!("\"{s}\"")
         }
-        LiteralValue::Json(_) => return None,
+        other => bare_value_text(other)?,
     })
 }
 
@@ -299,12 +354,12 @@ mod tests {
         let texts = [
             "k in 1..4",
             "k in 1..10..2",
-            "k in [1, 2, 4]",
-            "k in [\"load\", \"verify\"]",
+            "k in 1, 2, 4",
+            "k in load, verify",
             "x in 0.0..1.0",
             "x in normal(0.0, 1.0)",
             "x in exponential(1.0) on 0.0..1.0",
-            "k in 1..4, limit in [10, 20]",
+            "k in 1..4, limit in 10, 20",
             "(a, b) in (1..4, 10..13)",
             "(a, b) in zip_truncate(1..4, 10..20)",
             "(a, b) in zip_cycle(1..4, 10..20)",

@@ -978,7 +978,7 @@ position (`x := for sweep`) is a parse error, since it modifies nothing.
 
 ```polydat compile
 input cycle: u64
-sweep := for k in 1..4, limit in 10,20,30 order halton/5
+sweep := for k in 1..4, limit in 10, 20, 30 order halton/5
 for sweep {
     f := hash(k)
     g := u64_add(limit, k)
@@ -991,12 +991,12 @@ traversal, and nesting, round-trips through `pp_file` byte for byte
 here):
 
 ```polydat
-sweep := for k in 1..4, limit in 10,20,30 order halton/5
+sweep := for k in 1..4, limit in 10, 20, 30 order halton/5
 for sweep {
     f := myfunc(k)
     g := otherfunc(limit, k)
 }
-for phase in load,verify, p in partitions("*/4", 1000000) {
+for phase in load, verify, p in partitions("*/4", 1000000) {
     row := mod_in(cycle, p)
     for q in 1..2 {
         z := hash(q)

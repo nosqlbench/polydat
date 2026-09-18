@@ -5,8 +5,7 @@
 This guide shows, for a selection of the spec's examples, how to build
 the **same kernel** in Rust through the public AST types — without ever
 writing a source string. Each example here is cross-linked to its spec
-section. The paired examples (§2 to §7) are **machine-verified** (§8
-and §9 are not yet paired in the test): the test
+section. Every paired example (§2 to §9) is **machine-verified**: the test
 [`polydat/tests/doc_examples_test.rs`](../../tests/doc_examples_test.rs)
 asserts that the hand-built AST and the spec's grammar source **project
 to identical canonical syntax**:
@@ -210,20 +209,29 @@ fn build_module() -> PolydatFile {
 ```
 
 <a id="p-for"></a>
-## 8. A `for` traversal over a bound producer
+## 8. A `for` traversal, a producer, and nesting
 
-Mirrors [spec §16 “The `for` construct”](polydat_grammar.md#sec-for).
+Mirrors [spec §16 "The `for` construct"](polydat_grammar.md#sec-for).
 The comprehension text after `for` is one token, so a `ForSource` holds
-the text as written beside its parsed form; the parsed form is the
-comprehension algebra, obtained from the same parser the lexer's token
-goes through. A producer binding is `Expr::For`; a traversal is
-`Statement::For` with the source and a body of ordinary statements.
+the text beside its parsed form, the comprehension algebra;
+`ForSource::comprehension` takes the text from the tree's canonical
+text ([Comprehension Forms](comprehension_forms.md#sec-canonical-text)),
+so the two cannot disagree, and the `for` lowering refuses a source
+where they do. A producer binding is `Expr::For`; a traversal is
+`Statement::For` with the source and a body of ordinary statements,
+which may hold traversals of their own.
 
 ```text
-sweep := for k in 1..4, limit in 10,20,30 order halton/5
+sweep := for k in 1..4, limit in 10, 20, 30 order halton/5
 for sweep {
-    f := hash(k)
-    g := u64_add(limit, k)
+    f := myfunc(k)
+    g := otherfunc(limit, k)
+}
+for phase in load, verify, p in partitions("*/4", 1000000) {
+    row := mod_in(cycle, p)
+    for q in 1..2 {
+        z := hash(q)
+    }
 }
 ```
 
@@ -240,70 +248,119 @@ fn comprehension(text: &str) -> ForSource {
 
 fn build_for() -> PolydatFile {
     file(vec![
-        bind("sweep", Expr::For(Box::new(comprehension("k in 1..4, limit in 10,20,30 order halton/5")))),
+        bind(
+            "sweep",
+            Expr::For(Box::new(comprehension(
+                "k in 1..4, limit in 10, 20, 30 order halton/5",
+            ))),
+        ),
         Statement::For(ForStmt {
             source: ForSource::producer("sweep", sp()),
             body: vec![
-                bind("f", call("hash", vec![id("k")])),
-                bind("g", call("u64_add", vec![id("limit"), id("k")])),
+                bind("f", call("myfunc", vec![id("k")])),
+                bind("g", call("otherfunc", vec![id("limit"), id("k")])),
+            ],
+            span: sp(),
+        }),
+        Statement::For(ForStmt {
+            source: comprehension("phase in load, verify, p in partitions(\"*/4\", 1000000)"),
+            body: vec![
+                bind("row", call("mod_in", vec![id("cycle"), id("p")])),
+                Statement::For(ForStmt {
+                    source: comprehension("q in 1..2"),
+                    body: vec![bind("z", call("hash", vec![id("q")]))],
+                    span: sp(),
+                }),
             ],
             span: sp(),
         }),
     ])
-}
 ```
 
-`pp_file` prints a `for` source from its `text` field, which
-`ForSource::comprehension` fills from the tree's canonical text
-([Comprehension Forms](comprehension_forms.md#sec-canonical-text)). The
-projection is therefore the canonical spelling of the same
-comprehension, which differs from the authored bytes where the author
-wrote a bare value list: this example projects as `sweep := for k in
-1..4, limit in [10, 20, 30] order halton/5`, and both texts parse to the
-same tree. The traversal follows with its body indented four spaces. A
-traversal over inline comprehension text uses `comprehension(...)` as
-the statement's source instead of `ForSource::producer`.
-
 <a id="p-tile"></a>
-## 9. A tile
+## 9. Tiles: every body form
 
-Mirrors [spec §17 “Tiles”](polydat_grammar.md#sec-tiles). A `TileDef`
-carries the header (name, optional encoding, options), the body text
-exactly as captured with how it was written (`TileBodyKind`), and the
-body parsed into pieces from that text under
-the tile's options, which `TileDef::from_body` does in one call. The
-printer reproduces the body from the captured
-text, so deriving the pieces from it is what keeps the projection and
-the render one tile.
+Mirrors [spec §17 "Tiles"](polydat_grammar.md#sec-tiles). A `TileDef`
+carries the header (name, optional encoding, options), the body text as
+captured with how it was written (`TileBodyKind`), and the body parsed
+into pieces. `TileDef::from_body` parses the pieces from the body under
+the tile's own options, one construction, so the body a tile projects
+is the body it renders. The printer reproduces the body from the
+captured text.
 
 ```text
-input cycle: u64
-tile t := "n=${cycle}"
+tile doc : json := {
+    "tenant": ${tenant_id},
+    "samples": [ @for s in 0..4 { { "n": ${s} } } ]
+}
+tile load : text := <<<
+INSERT ${keyspace} '${doc!}'
+>>>
+tile row : csv := "${a},${b}"
+tile odd : text (delims "<%" "%>", sigil "#", strict) := "<%x%> #if c { y }"
 ```
 
 ```rust
 use polydat::dsl::ast::{TileBodyKind, TileDef, TileOptions};
 
-fn build_tile() -> PolydatFile {
-    // One construction: the pieces are parsed from the body under the
-    // tile's own options, so the two cannot disagree.
-    let tile = TileDef::from_body(
-        "t",
-        None,
-        TileOptions::default(),
-        TileBodyKind::Literal,
-        "n=${cycle}",
-        sp(),
+fn tile(
+    name: &str,
+    encoding: &str,
+    options: TileOptions,
+    body_kind: TileBodyKind,
+    body: &str,
+) -> Statement {
+    Statement::Tile(
+        TileDef::from_body(name, Some(encoding.into()), options, body_kind, body, sp())
+            .expect("template"),
     )
-    .expect("template");
-    file(vec![input("cycle", "u64"), Statement::Tile(tile)])
+}
+
+fn build_tile() -> PolydatFile {
+    let odd_options = TileOptions {
+        open: "<%".into(),
+        close: "%>".into(),
+        sigil: "#".into(),
+        strict: true,
+        in_string: false,
+    };
+    file(vec![
+        tile(
+            "doc",
+            "json",
+            TileOptions::default(),
+            TileBodyKind::Block,
+            "{\n    \"tenant\": ${tenant_id},\n    \"samples\": [ @for s in 0..4 { { \"n\": ${s} } } ]\n}",
+        ),
+        tile(
+            "load",
+            "text",
+            TileOptions::default(),
+            TileBodyKind::Heredoc,
+            "INSERT ${keyspace} '${doc!}'",
+        ),
+        tile(
+            "row",
+            "csv",
+            TileOptions::default(),
+            TileBodyKind::Literal,
+            "${a},${b}",
+        ),
+        tile(
+            "odd",
+            "text",
+            odd_options,
+            TileBodyKind::Literal,
+            "<%x%> #if c { y }",
+        ),
+    ])
 }
 ```
 
-A `json` block body is the same construction with `encoding:
-Some("json".into())`, `TileBodyKind::Block`, and the balanced block as
-the body text; a heredoc is `TileBodyKind::Heredoc` with the text between
-`<<<` and `>>>`.
+A block body is the balanced braces as written, a heredoc is the text
+between `<<<` and `>>>`, and a literal is the text inside the quotes;
+the options carry the delimiters, the sigil, and strictness, and the
+pieces follow from the body under them.
 
 <a id="sec-driving"></a>
 ## 10. Driving a kernel (reference)
