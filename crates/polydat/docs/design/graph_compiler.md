@@ -112,6 +112,70 @@ what runs the resolved graph.
 | Engine build | `PolydatAssembler::compile_with(Engine)` | Interpreter: native cone extraction, then the fold (`fold_init_constants_impl`). Closure tier: the closure plan (`build_p2_layout`). Native: the hybrid kernel's segments. The strict refusals (`refuse_strict`) and the compile-constant fold happen on every engine, and `ConstantFolded` is logged on every engine. |
 | Context Fusion | `materialize_subscope` | Slot synthesis at scope-init (§4). |
 
+### 2.1 What the pipeline produces
+
+The product is a `PolydatProgram`: immutable once built, shared across
+kernels through an `Arc`. Conceptually it is the DAG as parallel
+vectors plus typed input and ordered-output metadata:
+
+```rust
+pub struct PolydatProgram {
+    nodes: Vec<Box<dyn PolydatNode>>,   // node instances, topological order
+    wiring: Vec<Vec<WireSource>>,       // per node, the source of each input port
+    input_defs: Vec<InputDef>,          // typed inputs and their lifecycle classes
+    coord_count: usize,                 // the leading coordinate-input prefix
+    output_map: HashMap<String, (usize, usize)>,  // name → (node, port)
+    output_list: Vec<(String, usize, usize)>,     // declaration order
+    …                                   // provenance, dependents, and cone metadata
+}
+
+pub enum WireSource {
+    Input(usize),               // a named input, by index
+    NodeOutput(usize, usize),   // the output of (node_index, port_index)
+}
+```
+
+Two shapes in that layout are load-bearing. A wire source is one of
+exactly two things, an input or another node's output, so data flow is
+forward-only along the wire chain with nothing to read backwards
+([runtime_model.md R3](runtime_model.md)); acyclicity itself is the
+topological pass's to establish, not the representation's. There is no
+third variant for a lifecycle class. Lifecycle rides on the input, as
+`InputDef::kind` (`Coordinate`, `IterationExtern`, or `ExternalWrite`),
+so a consumer's wiring says *where* the value comes from and the input
+definition says *how often it changes* — the two questions stay
+separable, and hoisting (§3) answers the second without rewriting any
+wiring. Inputs are ordered with the coordinates first, so `coord_count`
+splits the array and a host can write the coordinates positionally
+without naming them.
+
+Outputs are held twice on purpose: `output_map` answers "what is the
+value of `x`" in one lookup, and `output_list` preserves declaration
+order so positional access is stable across compiles of the same
+source.
+
+### 2.2 The compile log
+
+Every pass writes to one event log rather than to stderr, and the log
+is part of the compiled artifact, not a debugging side channel: the
+binary's `explain` reads it back, and so can any embedding host. Events
+carry a level:
+
+| Level | Tag | What it marks |
+|---|---|---|
+| Info | `polydat[info]` | A normal step: parsed, bound, folded, sorted. |
+| Advisory | `polydat[advisory]` | An implicit choice the compiler made for the author — an inserted adapter, a widened operand. Worth reviewing for module quality; not a defect. |
+| Warning | `polydat[warning]` | A likely performance or correctness problem, such as a value round-tripped through conversions back to its own type. |
+
+The advisory level is the one that earns its keep. Every implicit
+conversion in polydat is silent at runtime by design — the adapter is
+just another node — so without a record the author has no way to see
+that a `u64` operand became an `f64`, or that a value crossed to `Str`
+on the way into an interpolation. Making each one an event means the
+implicit behaviour stays convenient and stays inspectable, and strict
+mode can promote whole classes of it to refusals without a second
+mechanism.
+
 ---
 
 ## 3. Hoisting

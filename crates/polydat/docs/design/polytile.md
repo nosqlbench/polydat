@@ -8,7 +8,7 @@ Polydat.
 
 **Companion documents:**
 [The `for` Construct](for_traversal.md) (producers, traversal, activation),
-[Language Spec](language_spec.md) (string interpolation, expressions),
+[The Polydat Grammar](polydat_grammar.md) (string interpolation, expressions),
 [Type System](type_system.md) and [Type-System Alignment](type_system_alignment.md)
 (`Str`, `Bytes`, `Json`, adapters),
 [Engines](engines.md) and [JIT Boundary](jit_boundary.md) (P1, P2, P3),

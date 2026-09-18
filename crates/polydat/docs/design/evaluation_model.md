@@ -105,8 +105,8 @@ input branch is written, the unchanged branch stays cached.
 **Memoization granularity:** Every node's output buffer is cached.
 This uniform rule permits a later pull of any downstream cone to
 reuse every still-clean intermediate, including shared branches in
-a diamond. See [Language Spec §Incremental
-Invalidation](language_spec.md#incremental-invalidation).
+a diamond. The normative rule and its invariants are
+[The Runtime Model §3–§4](runtime_model.md) (R1 and R2).
 
 ---
 

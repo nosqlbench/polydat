@@ -14,8 +14,8 @@
 **Subtitle:** The Grammar Substrate.
 
 Formalises polydat's Polydat grammar as a substrate the other
-three design docs depend on. Where the Language Spec describes the
-language *prosaically*, this doc states the grammar's
+three design docs depend on. Where the normative grammar spec states the
+language form by form, this doc states the grammar's
 productions formally and identifies the distinctive
 properties that make the other docs' axioms possible. Names
 the G-axioms: structural commitments the grammar makes that
@@ -30,14 +30,14 @@ formal productions, the type inference rules, and the
 distinctive commitments (G-axioms) that make the
 [Composition Substrate], [Graph Compiler], [Runtime Model],
 and [Expression Engine] docs' axioms achievable at the
-language level. The [Language Spec](language_spec.md) owns
-the prosaic specification (the DSL syntax, the parser
-pipeline, the type system); this doc owns the *grammar-level
-invariants* that syntax preserves. Apparent contradictions
-between the Language Spec and this document resolve in favor
-of this document on grammar-structural matters; the Language
-Spec remains authoritative on specific syntax forms and on
-rejection rules.
+language level. [The Polydat Grammar](polydat_grammar.md) is
+the normative specification of the surface language — the
+syntax, the type keywords, the desugarings, the rejection
+rules — and this doc is its formal appendix, owning the
+*grammar-level invariants* that syntax preserves. Where the
+two appear to disagree, the normative spec governs what the
+language accepts and what it means; this document governs
+why the shape is the one it is.
 
 ## Companion documents
 
@@ -59,10 +59,10 @@ rejection rules.
   for embedding. E4 (library inheritance) works because
   the grammar guarantees G6 (single grammar for
   expressions and full programs).
-- [Language Spec](language_spec.md)
-  — prosaic specification. This doc complements the
-  Language Spec by formalising the grammar-level invariants
-  its syntax assumes.
+- [The Polydat Grammar](polydat_grammar.md)
+  — the normative surface spec. This doc complements it by
+  formalising the grammar-level invariants its syntax
+  assumes.
 - [Evaluation Model](evaluation_model.md)
   — two-lifecycle classification. G5 names this as a
   grammar-level commitment the Evaluation Model's lifecycle
@@ -121,8 +121,8 @@ the focal-point treatment names.
 
 ## 2. The grammar productions
 
-The grammar in formal (EBNF-ish) form. Where the Language Spec
-describes each form prosaically, this section lays the
+The grammar in formal (EBNF-ish) form. Where the normative spec
+states each form with a verified example, this section lays the
 productions out for cross-reference.
 
 ### 2.1 Top-level structure
@@ -242,8 +242,9 @@ array_literal  ::= "[" (expr ("," expr)*)? "]"
 cast, and `as` is an ordinary identifier elsewhere. The cast binds to
 the atom before it, as in Rust, so `a + b as u64` is `a + (b as u64)`;
 parenthesize to cast a whole sub-expression. `type` is any port-type
-keyword. The cast's meaning is in [Language Spec](language_spec.md)
-§"Type Inference Details".
+keyword. The cast's meaning — which adapter each pair of types
+resolves to, and which pairs are refused — is
+[polydat_grammar.md §10](polydat_grammar.md#sec-casts).
 
 Twelve expression constructors: eight non-sugar kinds
 (`Ident`, `IntLit`, `FloatLit`, `StringLit`, `ArrayLit`,
@@ -569,9 +570,11 @@ catalog (currently `if(cond, a, b)` and its block spelling
 `if cond { a } else { b }`, literal promotion in
 wire position, string-interpolation desugar to
 `printf(...)`, and the `polytile`/`polytile_json` rewrites
-into `tile` statements) is delegated to
-[language_spec.md §"Conditional Selection" + §"Literal
-Promotion" + §"String Interpolation"](language_spec.md).
+into `tile` statements) is specified in polydat_grammar.md:
+the conditional at [§7.1](polydat_grammar.md#sec-if-block),
+literal promotion at [§8](polydat_grammar.md#sec-calls), and
+interpolation at
+[§9](polydat_grammar.md#sec-interpolation).
 
 `if` is a soft keyword: the lexer emits it as an ordinary
 identifier, and only the token that follows decides the parse
@@ -606,7 +609,7 @@ Rust-like precedence ordering. Parse-tree shape is
 determined by this precedence table; the table is a
 grammar-structural commitment, not an implementation
 detail. The canonical table lives in
-[language_spec.md §"Infix Operators"](language_spec.md);
+[polydat_grammar.md §6.1](polydat_grammar.md#sec-precedence);
 the commitment that *some* stable precedence exists and
 that authors can rely on it for parse-tree shape is the
 grammar's axiom here.**
@@ -670,7 +673,7 @@ the substrate doesn't have to repeat.
 | [Graph Compiler](graph_compiler.md) | H/CF/NF axioms. G2+G5 underwrite H1+H2; G1 underwrites CF1; G4 underwrites NF1. |
 | [Runtime Model](runtime_model.md) | R/D axioms. G4 underwrites D1; G5 underwrites R1+D3; G3 underwrites L1's runtime realisation. |
 | [Expression Engine](expression_engine.md) | E-axioms. G3+G6 underwrite E1+E4; G4 underwrites E2; G6 underwrites the expression-as-kernel correspondence. |
-| [Language Spec](language_spec.md) | DSL syntax. This doc's productions (§2) formalise the syntax the Language Spec describes prosaically. |
+| [The Polydat Grammar](polydat_grammar.md) | DSL syntax. This doc's productions (§2) formalise the syntax the normative spec states and verifies by example. |
 | [Evaluation Model](evaluation_model.md) | Two-lifecycle classification. G2+G5 are the grammar-level commitments the Evaluation Model's lifecycle taxonomy rests on. |
 | [Scope Model](scope_model.md) | Scope-composition mechanism. G1+G3 are the grammar-level commitments for auto-extern discovery and parent-gated materialization. |
 | [Wire Materialization](wire_materialization.md) | Cross-scope read/write. G1's auto-extern discovery is what Wire Materialization's gradient classification operates over. |
@@ -688,7 +691,7 @@ the substrate doesn't have to repeat.
   call form; the semantics live elsewhere.
 - **Parse-error recovery.** The parser's error reporting
   + recovery strategies are implementation concerns. The
-  Language Spec describes them prosaically; not formalised
+  parser owns them; not formalised
   here.
 - **Source modules and includes.** The module-resolution
   pipeline (`polydat-core/src/dsl/modules.rs`) is

@@ -15,7 +15,76 @@ fusion of catalog nodes is in
 registration is in
 [expression_engine.md §5.5](expression_engine.md).
 
-### Wire Cost Classes
+## The node contract
+
+A node is a value implementing `PolydatNode` (`polydat-core/src/ast.rs`).
+Two methods are required and every other one has a default, which is the
+shape of the contract: a node states what it *is* and what it *computes*,
+then optionally declares properties that let the compiler and the faster
+engines do more with it. A node that declares nothing still runs
+correctly on every engine — it just runs through the interpreter's typed
+path.
+
+```rust
+pub trait PolydatNode: Send + Sync {
+    fn meta(&self) -> &NodeMeta;
+    fn eval(&self, inputs: &[Value], outputs: &mut [Value]);
+
+    fn scratch_layout(&self) -> Vec<ScratchElem> { … }
+    fn eval_in(&self, scratch: &mut [ScratchBuf], inputs: &[Value], outputs: &mut [Value]) { … }
+    fn commutativity(&self) -> Commutativity { … }
+    fn accepts_none_inputs(&self) -> bool { … }
+    fn compiled_u64(&self) -> Option<CompiledU64Op> { … }
+    fn compiled_slot(&self, wire_types: &[PortType]) -> Option<CompiledSlotKit> { … }
+    fn jit_constants(&self) -> Vec<u64> { … }
+    fn purity(&self) -> Purity { … }
+    fn simd_variant(&self) -> Option<SimdVariant> { … }
+    fn fusion_subgraph(&self) -> Option<FusionSubgraph<'_>> { … }
+}
+```
+
+`meta()` returns the `NodeMeta` that names the node for the DSL and
+diagnostics and declares its ports: `ins` as `Slot`s (wire or const) and
+`outs` as `Port`s, each typed. This is the slot contract every entry in
+the catalog satisfies, formalised in
+[composition_substrate.md §2](composition_substrate.md); it is what the
+assembler checks arity and types against, which is why `eval` may assume
+its slices are the right length and carry the right variants and need
+not re-check them.
+
+The declarations divide by what reads them:
+
+- **The runtime reads `purity()` and `accepts_none_inputs()`.** Purity
+  is the D2 declaration: `Pure` by default, `SideChannel` for a node
+  with an observable effect (logging, file writes), `Nondeterministic`
+  for one carrying state across evaluations. The clean-flag cache holds
+  for the first two and is refused for the third, so a node that lies
+  here is a node whose value depends on how often it was pulled.
+  `accepts_none_inputs()` opts a node out of the kernel's
+  None-in-None-out propagation, for the coalescing nodes whose whole
+  contract is telling present from absent
+  ([none_semantics.md](none_semantics.md)).
+- **The compiler reads `commutativity()` and `fusion_subgraph()`.**
+  Commutativity says which inputs are interchangeable, which lets a
+  rewrite reorder them. `fusion_subgraph()` is how a synthetic fusion
+  node stays honest about what it replaced: program-identity hashing
+  walks through the fusion node into the members, so the same source
+  hashes identically whichever engine mix compiled it.
+- **The faster engines read `compiled_u64()`, `compiled_slot()`,
+  `jit_constants()`, and `simd_variant()`.** Each is an offer, not a
+  promise: returning `None` costs the node nothing but the typed path.
+  The engines consult them in order — the u64 closure first, since a
+  pure-scalar node needs nothing else, then the slot kit for nodes with
+  typed-slice ports, then the JIT constants a node has baked in, then
+  the SIMD variant, which the planner still has to validate against
+  types, purity, and lowering before it promotes anything.
+- **The state reads `scratch_layout()` and `eval_in()`.** Scratch
+  storage belongs to the evaluating state, never to the node, because
+  one node value is shared by every state of the program. A node that
+  works over `Value`s alone declares no scratch, which is every node but
+  a native cone.
+
+## Wire cost classes
 
 Some node inputs are **configuration wires** — changing them
 invalidates expensive internal state (e.g., recomputing a

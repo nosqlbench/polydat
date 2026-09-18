@@ -241,6 +241,17 @@ freely with `{...}` placeholders; the kernel chain's slot
 contract is the source of substitution; the eval step is
 the typed result producer.
 
+Note what this is not: braces are not a Polydat expression
+form. In Polydat source, `{name}` has meaning only inside a
+string literal, as interpolation
+([polydat_grammar.md §9](polydat_grammar.md)). A host whose
+config fields carry brace-delimited expressions — a
+`dim: {vector_dim("glove-25-angular")}` in a workload file —
+is using its own surface, and it is the host that decides
+when to hand the inner text to `eval_const_expr`. Keeping
+the two apart is why a Polydat program can be read without
+knowing which host embedded it.
+
 #### 3.2.2 The surfaces
 
 Location: [`crate::kernel::interp::interpolate_via_kernel`].

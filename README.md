@@ -458,8 +458,10 @@ Reference:
 
 Design:
 
-- [Language Spec](crates/polydat/docs/design/language_spec.md) — syntax, type
-  inference, node contracts, wiring, and invalidation.
+- [The Polydat Grammar](crates/polydat/docs/design/polydat_grammar.md) — the
+  normative surface language: syntax, type inference, and casts.
+- [Library Catalog](crates/polydat/docs/design/library_catalog.md) — what a
+  node is, the authoring contract, and why the registry is open.
 - [Runtime Model](crates/polydat/docs/design/runtime_model.md) — ownership,
   caching, invalidation, layering, and determinism axioms.
 - [Graph Compiler](crates/polydat/docs/design/graph_compiler.md) — compiler

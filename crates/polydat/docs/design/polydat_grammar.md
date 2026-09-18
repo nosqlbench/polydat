@@ -16,8 +16,9 @@ language, its lexical grammar, statement and expression productions,
 type-naming vocabulary, desugaring and projection behaviour, and
 rejection rules, and every example in it is checked by the suite;
 [`grammar.md`](grammar.md) is its formal appendix (type rules and the
-G-axioms in full), [`language_spec.md`](language_spec.md) its
-compilation companion, [`comprehension_forms.md`](comprehension_forms.md)
+G-axioms in full), [`graph_compiler.md`](graph_compiler.md) the
+compilation companion (what the passes do to what this document
+parses), [`comprehension_forms.md`](comprehension_forms.md)
 the algebra behind the `for` construct (§[16](#sec-for)),
 [`polytile.md`](polytile.md) the semantics behind tiles
 (§[17](#sec-tiles)), and [`type_system.md`](type_system.md) the adapter
@@ -312,6 +313,23 @@ input cycle: u64
 input thread
 ```
 
+The declaration may be **omitted entirely**. A name a program
+references but never binds locally becomes a slot the host must supply,
+which the bind pass discovers by collecting free names
+([graph_compiler.md §2](graph_compiler.md)) — so `y := hash(cycle)` is
+a complete program with one coordinate input. Writing the `input` line
+declares the same thing explicitly, and is worth doing where the intent
+or the type matters to a reader. Either way the check is the same at
+the boundary: a host that fails to supply an inferred slot gets a
+reported mismatch, not a default.
+
+Nothing distinguishes `cycle` from any other name. It is the
+conventional spelling of the primary coordinate, and it appears
+throughout these examples because it is what hosts usually call the
+one they advance, but the compiler has no rule about it. A program may
+name its coordinates anything, take several, or take one and decompose
+it (§[3.1](#sec-destructuring)).
+
 <a id="sec-input-tuple"></a>
 ### 4.1 Tuple input form
 
@@ -444,7 +462,18 @@ as `2 ** (3 ** 2)` (right-associative).
 `+ - * / %` choose `u64_*` when **both** operands are `u64`, otherwise
 the `f64_*` form with the `u64` side widened by an inserted `to_f64`
 adapter. `**` is always `pow` (`f64`). Bitwise/shift operators
-(`& | ^ << >>`) are `u64`.
+(`& | ^ << >>`) and prefix `!` are `u64` unconditionally: they desugar
+to the `u64_*` node whatever the operand type, so an `f64` operand
+reaches a `u64` port and the wire fails to resolve — a compile error
+naming both types, never a silent reinterpretation of the float's bits.
+
+Widening is the only implicit numeric conversion, and it announces
+itself. The inserted `to_f64` is logged at advisory level (`widening
+u64 → f64 in operator *`), so an author reviewing a module can find
+every place the compiler chose the float variant rather than the
+integer one. The reverse direction is never implicit: narrowing an
+`f64` to a `u64` takes a named cast function, because the rounding is
+the author's choice to make (§[10](#sec-casts)).
 
 ```polydat compile
 input cycle: u64
@@ -582,6 +611,14 @@ Named-argument form (common for stdlib module calls):
 v := dist_normal(mean: 72.0, stddev: 5.0)
 weights := combinations(seed: 0, charset: "A-Z0-9", length: 8)
 ```
+
+An argument that is a bare literal is **promoted** to an anonymous
+constant node, which is why calls mix wires and literals freely:
+`pow(x, 2.0)` and `exp := 2.0` followed by `pow(x, exp)` compile to the
+same graph. The promoted node is compile-constant, so the fold removes
+it before any engine runs and the literal costs nothing per cycle.
+Promotion is one of the closed set of parse-time intrinsics
+(§[18](#sec-gaxioms), G6.i) — a library cannot add another.
 
 ---
 
