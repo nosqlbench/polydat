@@ -122,8 +122,9 @@ The other entry points differ in what they take:
 | `compile_polydat_kernel_with_options(src, &options, log)` | `CompileOptions`: the source directory, so relative `import` paths resolve; library directories (§8); required outputs; strict typing, where implicit adapters are errors; a context label for errors; a cursor limit; and the compile ledger to charge (`ledger`), by default a new one for the program tree, or the parent's when a host compiles a subscope. And the compile event log (§13). |
 | `compile_polydat_kernel_with_tiles(src, tiles)` | tile statements built from host data (§10) |
 | `compile_polydat_with(src, engine)` | the engine by name (§11); `compile_polydat_with_engine(src, engine, &options, log)` takes the options and the log as well |
-| `compile_polydat(src)`, `compile_polydat_with_options(src, &options, log)`, `compile_polydat_with_log(src, log)` | the interpreter kernel, `PolydatKernel`, as a concrete type: the oracle every engine is checked against (§11) and the program a diagnostic inspects (§13). The older `compile_polydat_with_*` forms with the options as separate parameters are deprecated wrappers of `compile_polydat_with_options`. |
-| `compile_ast_with_options(&ast, src, &options, log)` and `compile_ast_with_engine(&ast, src, &options, log, engine)` | the same compiles from a parsed, possibly transformed, program (§9) |
+| `compile_polydat(src)` | the interpreter through the trait: the reference implementation every other engine is checked against (§11). |
+| `compile_polydat_interpreter(src)`, `compile_polydat_interpreter_with_options(src, &options, log)`, `compile_polydat_interpreter_with_log(src, log)`, `compile_polydat_interpreter_with_tiles(src, tiles)` | the interpreter kernel, `PolydatKernel`, as a concrete type. Every one says `interpreter`, because the concrete type is for observing the interpreter's own internals in testing and diagnostics (§13), not for running a program. |
+| `compile_ast_interpreter_with_options(&ast, src, &options, log)` and `compile_ast_with_engine(&ast, src, &options, log, engine)` | the same compiles from a parsed, possibly transformed, program (§9) |
 | `compile_polydat_to_assembler(src)` | stops before engine selection and returns the assembler (§7, §11), the graph a host may extend by hand and build on any engine |
 | `compile_polydat_to_assembler_with(src, &options)` | the assembler built with the same `CompileOptions` |
 
@@ -761,13 +762,13 @@ kernel's determinism contract does not know it exists.
 The compile log records what the compiler did to a program: what it
 inlined, folded, fused, and why. The binary's `explain` command narrates
 it; a host gets the same events through the log parameter of
-`compile_polydat_kernel_with_options`, and `compile_polydat_with_log`
+`compile_polydat_kernel_with_options`, and `compile_polydat_interpreter_with_log`
 fills the same log while building the interpreter's program, whose
 metadata answers the questions a host usually has at run time.
 
 ```rust
 let mut log = CompileEventLog::new();
-let kernel = compile_polydat_with_log(src, &mut log)?;
+let kernel = compile_polydat_interpreter_with_log(src, &mut log)?;
 println!("compile events: {}", log.events().len());
 for event in log.events() {
     println!("  {:?}: {event:?}", event.level());

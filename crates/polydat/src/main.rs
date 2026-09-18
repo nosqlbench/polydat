@@ -82,7 +82,9 @@ struct CompileArgs {
     #[arg(long = "output", value_name = "NAME")]
     required: Vec<String>,
     /// Default hole delimiters for tiles that declare none of their own:
-    /// `--tile-delims '<%' '%>'`. Applied as a program transform.
+    /// `--tile-delims '<%' '%>'`. A tile body is raw text until it is
+    /// read, and these say how to read it, so they are given to the
+    /// parse rather than applied to the program afterwards.
     #[arg(long = "tile-delims", num_args = 2, value_names = ["OPEN", "CLOSE"])]
     tile_delims: Vec<String>,
     /// Default directive sigil for tiles that declare none of their own.

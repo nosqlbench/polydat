@@ -65,7 +65,7 @@ the module name in the diagnostic.
 The public construction surfaces select the available lookup roots:
 
 - `compile_polydat` uses registered nodes and the embedded standard library;
-- `compile_polydat_with_options` with `CompileOptions::source_dir`
+- `compile_polydat_interpreter_with_options` with `CompileOptions::source_dir`
   additionally supplies a source directory, and with
   `CompileOptions::lib_paths` (the binary's `--lib`) ordered library paths.
 

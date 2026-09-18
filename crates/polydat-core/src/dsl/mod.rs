@@ -43,14 +43,6 @@ pub use compile::{
     compile_polydat_kernel, compile_polydat_kernel_with_options, compile_polydat_kernel_with_tiles,
     compile_polydat_with, compile_polydat_with_engine, eval_const_expr,
 };
-// The deprecated forms stay reachable at their old paths; a caller sees
-// the deprecation at its own use.
-#[allow(deprecated)]
-pub use compile::{
-    compile_ast_with_options, compile_polydat_strict, compile_polydat_with_libs,
-    compile_polydat_with_libs_and_limit, compile_polydat_with_log, compile_polydat_with_options,
-    compile_polydat_with_outputs, compile_polydat_with_path,
-};
 
 /// Collect identifier references from an `Expr` tree into `out`.
 ///

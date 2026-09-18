@@ -47,7 +47,7 @@ fn port_type_keyword(pt: PortType) -> &'static str {
 }
 
 /// Optional compile-time configuration passed through to
-/// [`compile_polydat_with_libs`](crate::dsl::compile::compile_polydat_with_libs) when finalize compiles the body. When
+/// [`compile_ast_interpreter_with_options`](crate::dsl::compile::compile_ast_interpreter_with_options) when finalize compiles the body. When
 /// every field is at its default, finalize falls back to the
 /// minimal [`compile_ast_interpreter_with_options`] path used by the do-loop bridge — no
 /// behaviour change for the simplest synthesisers.
@@ -130,7 +130,7 @@ impl<P> SubcontextBuilder<P> {
     }
 
     /// SRD-67 Phase 3 bridge hook: route the legacy
-    /// [`compile_polydat_with_libs`](crate::dsl::compile::compile_polydat_with_libs) knobs (lib paths, strict mode,
+    /// [`compile_ast_interpreter_with_options`](crate::dsl::compile::compile_ast_interpreter_with_options) knobs (lib paths, strict mode,
     /// required-output filter, workload dir, context label)
     /// through the builder. Synthesisers that previously called
     /// `compile_polydat_with_libs` directly fold those calls into a

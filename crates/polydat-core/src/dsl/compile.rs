@@ -328,25 +328,6 @@ pub fn compile_polydat_interpreter(source: &str) -> Result<PolydatKernel, crate:
     compile_polydat_interpreter_with_options(source, &CompileOptions::default(), None)
 }
 
-/// Compile source together with tiles a host built from what it holds
-/// (SRD 114 §5.6): template text, JSON text, or a parsed JSON value,
-/// via [`crate::tile`]. The tiles are appended as `tile` statements, so
-/// they see every wire the source defines and are wires themselves.
-/// Renamed for what it returns: the interpreter's concrete kernel,
-/// which is for observing the interpreter's own internals rather than
-/// for running a program ([Engines](engines.md) §3.6). A host adding
-/// tiles to a program it means to run wants
-/// [`compile_polydat_kernel_with_tiles`], which returns a kernel
-/// through the trait on the engine the build offers.
-#[deprecated(note = "renamed: compile_polydat_interpreter_with_tiles, or \
-                     compile_polydat_kernel_with_tiles for a kernel through the trait")]
-pub fn compile_polydat_with_tiles(
-    source: &str,
-    tiles: Vec<super::ast::TileDef>,
-) -> Result<PolydatKernel, crate::KernelError> {
-    compile_polydat_interpreter_with_tiles(source, tiles)
-}
-
 /// [`compile_polydat_interpreter`] with tiles a host built from what it
 /// holds, appended as `tile` statements.
 pub fn compile_polydat_interpreter_with_tiles(
@@ -357,7 +338,7 @@ pub fn compile_polydat_interpreter_with_tiles(
     compile_ast_interpreter_with_options(&ast, source, &options, None)
 }
 
-/// [`compile_polydat_with_tiles`] on [`Engine::default`](crate::Engine::default):
+/// [`compile_polydat_interpreter_with_tiles`] on [`Engine::default`](crate::Engine::default):
 /// the same program with the same tiles appended, as a compiled kernel.
 pub fn compile_polydat_kernel_with_tiles(
     source: &str,
@@ -435,41 +416,6 @@ pub fn compile_polydat_tier1_simd_ordinal(
         .map_err(|error| error.to_string())
 }
 
-/// [`compile_polydat_interpreter_with_options`] with a source directory alone.
-#[deprecated(
-    note = "use compile_polydat_interpreter_with_options with CompileOptions { source_dir, .. }"
-)]
-pub fn compile_polydat_with_path(
-    source: &str,
-    source_dir: Option<&Path>,
-) -> Result<PolydatKernel, crate::KernelError> {
-    let options = CompileOptions {
-        source_dir: source_dir.map(Path::to_path_buf),
-        ..CompileOptions::default()
-    };
-    compile_polydat_interpreter_with_options(source, &options, None)
-}
-
-/// [`compile_polydat_interpreter_with_options`] with a source directory, the
-/// outputs to keep, and strictness as separate parameters.
-#[deprecated(
-    note = "use compile_polydat_interpreter_with_options with CompileOptions { required_outputs, .. }"
-)]
-pub fn compile_polydat_with_outputs(
-    source: &str,
-    source_dir: Option<&Path>,
-    required_outputs: &[String],
-    strict: bool,
-) -> Result<PolydatKernel, crate::KernelError> {
-    let options = CompileOptions {
-        source_dir: source_dir.map(Path::to_path_buf),
-        required_outputs: required_outputs.to_vec(),
-        strict,
-        ..CompileOptions::default()
-    };
-    compile_polydat_interpreter_with_options(source, &options, None)
-}
-
 /// `const name := expr` declares a side-effect-carrying compile-time
 /// computation: download a dataset, prebuffer a facet, register a
 /// resource, etc. The user's signal that they want it evaluated is
@@ -506,33 +452,6 @@ fn extend_required_with_const_bindings(
     out
 }
 
-/// [`compile_polydat_interpreter_with_options`] with the source directory, library
-/// directories, outputs to keep, strictness, and context label as
-/// separate parameters.
-#[deprecated(
-    note = "use compile_polydat_interpreter_with_options with CompileOptions { lib_paths, .. }"
-)]
-pub fn compile_polydat_with_libs(
-    source: &str,
-    source_dir: Option<&Path>,
-    polydat_lib_paths: Vec<PathBuf>,
-    required_outputs: &[String],
-    strict: bool,
-    context: &str,
-) -> Result<PolydatKernel, crate::KernelError> {
-    let options = CompileOptions {
-        source_dir: source_dir.map(Path::to_path_buf),
-        lib_paths: polydat_lib_paths,
-        required_outputs: required_outputs.to_vec(),
-        strict,
-        context: context.to_string(),
-        cursor_limit: None,
-        ledger: None,
-        engine: crate::Engine::default(),
-    };
-    compile_polydat_interpreter_with_options(source, &options, None)
-}
-
 /// RAII guard that sets the data-file base directory (see
 /// [`crate::library::datafile::set_data_base_dir`]) for the duration of
 /// a synchronous compile and restores the previous value on drop, so
@@ -551,49 +470,6 @@ impl Drop for DataBaseDirGuard {
     fn drop(&mut self) {
         crate::library::datafile::set_data_base_dir(self.0.take());
     }
-}
-
-/// [`compile_polydat_interpreter_with_options`] with every option as a separate
-/// parameter.
-#[deprecated(note = "use compile_polydat_interpreter_with_options")]
-pub fn compile_polydat_with_libs_and_limit(
-    source: &str,
-    source_dir: Option<&Path>,
-    polydat_lib_paths: Vec<PathBuf>,
-    required_outputs: &[String],
-    strict: bool,
-    context: &str,
-    cursor_limit: Option<u64>,
-) -> Result<PolydatKernel, crate::KernelError> {
-    let options = CompileOptions {
-        source_dir: source_dir.map(Path::to_path_buf),
-        lib_paths: polydat_lib_paths,
-        required_outputs: required_outputs.to_vec(),
-        strict,
-        context: context.to_string(),
-        cursor_limit,
-        ledger: None,
-        engine: crate::Engine::default(),
-    };
-    compile_polydat_interpreter_with_options(source, &options, None)
-}
-
-/// [`compile_polydat_interpreter_with_options`] with a source directory and
-/// strictness alone.
-#[deprecated(
-    note = "use compile_polydat_interpreter_with_options with CompileOptions { strict, .. }"
-)]
-pub fn compile_polydat_strict(
-    source: &str,
-    source_dir: Option<&Path>,
-    strict: bool,
-) -> Result<PolydatKernel, crate::KernelError> {
-    let options = CompileOptions {
-        source_dir: source_dir.map(Path::to_path_buf),
-        strict,
-        ..CompileOptions::default()
-    };
-    compile_polydat_interpreter_with_options(source, &options, None)
 }
 
 /// The options every entry point compiles under. A host that names
@@ -1516,68 +1392,6 @@ pub fn positional_str_lit(arg: Option<&crate::dsl::ast::Arg>) -> Option<String> 
         crate::dsl::ast::Arg::Positional(crate::dsl::ast::Expr::StringLit(s, _)) => Some(s.clone()),
         _ => None,
     }
-}
-
-/// [`compile_ast_interpreter_with_options`] under the default options.
-#[deprecated(note = "use compile_ast_interpreter_with_options")]
-pub fn compile_ast(file: &PolydatFile) -> Result<PolydatKernel, crate::KernelError> {
-    compile_ast_interpreter_with_options(file, "", &CompileOptions::default(), None)
-}
-
-/// [`compile_ast_interpreter_with_options`] with a source directory alone.
-#[deprecated(
-    note = "use compile_ast_interpreter_with_options with CompileOptions { source_dir, .. }"
-)]
-pub fn compile_ast_with_path(
-    file: &PolydatFile,
-    source_dir: Option<&Path>,
-) -> Result<PolydatKernel, crate::KernelError> {
-    let options = CompileOptions {
-        source_dir: source_dir.map(Path::to_path_buf),
-        ..CompileOptions::default()
-    };
-    compile_ast_interpreter_with_options(file, "", &options, None)
-}
-
-/// [`compile_ast_interpreter_with_options`] with a source directory and strictness
-/// alone.
-#[deprecated(note = "use compile_ast_interpreter_with_options with CompileOptions { strict, .. }")]
-pub fn compile_ast_strict(
-    file: &PolydatFile,
-    source_dir: Option<&Path>,
-    strict: bool,
-) -> Result<PolydatKernel, crate::KernelError> {
-    let options = CompileOptions {
-        source_dir: source_dir.map(Path::to_path_buf),
-        strict,
-        ..CompileOptions::default()
-    };
-    compile_ast_interpreter_with_options(file, "", &options, None)
-}
-
-/// [`compile_ast_interpreter_with_options`] with the source directory, library
-/// directories, outputs to keep, strictness, and context label as
-/// separate parameters.
-#[deprecated(note = "use compile_ast_interpreter_with_options")]
-pub fn compile_ast_with_libs(
-    file: &PolydatFile,
-    source_dir: Option<&Path>,
-    polydat_lib_paths: Vec<PathBuf>,
-    required_outputs: &[String],
-    strict: bool,
-    context: &str,
-) -> Result<PolydatKernel, crate::KernelError> {
-    let options = CompileOptions {
-        source_dir: source_dir.map(Path::to_path_buf),
-        lib_paths: polydat_lib_paths,
-        required_outputs: required_outputs.to_vec(),
-        strict,
-        context: context.to_string(),
-        cursor_limit: None,
-        ledger: None,
-        engine: crate::Engine::default(),
-    };
-    compile_ast_interpreter_with_options(file, "", &options, None)
 }
 
 pub(super) struct Compiler {
@@ -3003,38 +2817,6 @@ pub(super) fn compile_file_on_engine(
 // through the `Kernel` trait, and the concrete type is for observing the
 // interpreter's own internals in testing and diagnostics (engines.md
 // §3.6). The names now say that; these keep the old ones working.
-
-/// Renamed to [`compile_polydat_interpreter_with_options`].
-#[deprecated(note = "renamed: compile_polydat_interpreter_with_options, or \
-                     compile_polydat_kernel_with_options for a kernel through the trait")]
-pub fn compile_polydat_with_options(
-    source: &str,
-    options: &CompileOptions,
-    log: Option<&mut super::events::CompileEventLog>,
-) -> Result<PolydatKernel, crate::KernelError> {
-    compile_polydat_interpreter_with_options(source, options, log)
-}
-
-/// Renamed to [`compile_ast_interpreter_with_options`].
-#[deprecated(note = "renamed: compile_ast_interpreter_with_options, or \
-                     compile_ast_with_engine for a kernel through the trait")]
-pub fn compile_ast_with_options(
-    ast: &PolydatFile,
-    source: &str,
-    options: &CompileOptions,
-    log: Option<&mut super::events::CompileEventLog>,
-) -> Result<PolydatKernel, crate::KernelError> {
-    compile_ast_interpreter_with_options(ast, source, options, log)
-}
-
-/// Renamed to [`compile_polydat_interpreter_with_log`].
-#[deprecated(note = "renamed: compile_polydat_interpreter_with_log")]
-pub fn compile_polydat_with_log(
-    source: &str,
-    log: &mut super::events::CompileEventLog,
-) -> Result<PolydatKernel, crate::KernelError> {
-    compile_polydat_interpreter_with_log(source, log)
-}
 
 #[cfg(test)]
 mod tests {

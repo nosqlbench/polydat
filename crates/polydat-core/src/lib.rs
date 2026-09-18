@@ -177,8 +177,6 @@ pub use polydat_grammar::viz;
 /// [`tile::compile_polydat_kernel_with_tiles`].
 pub mod tile {
     pub use crate::dsl::ast::{TileBodyKind, TileDef, TileOptions, TilePiece};
-    #[allow(deprecated)]
-    pub use crate::dsl::compile::compile_polydat_with_tiles;
     pub use crate::dsl::compile::{
         compile_polydat_interpreter_with_tiles, compile_polydat_kernel_with_tiles,
     };
