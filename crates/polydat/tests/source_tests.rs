@@ -714,7 +714,7 @@ fn advancer_empty_when_no_sources_referenced() {
 
 #[test]
 fn limit_node_compiles_and_clamps_extent() {
-    use polydat::dsl::compile::{CompileOptions, compile_polydat_with_options};
+    use polydat::dsl::compile::{CompileOptions, compile_polydat_interpreter_with_options};
 
     let src = r#"
         cursor r = range(0, 1000)
@@ -727,7 +727,7 @@ fn limit_node_compiles_and_clamps_extent() {
         ledger: None,
         ..CompileOptions::default()
     };
-    let kernel = compile_polydat_with_options(src, &options, None).unwrap();
+    let kernel = compile_polydat_interpreter_with_options(src, &options, None).unwrap();
     let schemas = kernel.program().cursor_schemas();
     assert_eq!(schemas.len(), 1);
     // Extent should be clamped to 100 (min of 1000 and limit 100)
@@ -736,7 +736,7 @@ fn limit_node_compiles_and_clamps_extent() {
 
 #[test]
 fn limit_node_not_inserted_when_no_limit() {
-    use polydat::dsl::compile::{CompileOptions, compile_polydat_with_options};
+    use polydat::dsl::compile::{CompileOptions, compile_polydat_interpreter_with_options};
 
     let src = r#"
         cursor r = range(0, 500)
@@ -749,14 +749,14 @@ fn limit_node_not_inserted_when_no_limit() {
         ledger: None,
         ..CompileOptions::default()
     };
-    let kernel = compile_polydat_with_options(src, &options, None).unwrap();
+    let kernel = compile_polydat_interpreter_with_options(src, &options, None).unwrap();
     let schemas = kernel.program().cursor_schemas();
     assert_eq!(schemas[0].extent, Some(500)); // unclamped
 }
 
 #[test]
 fn limit_larger_than_extent_preserves_extent() {
-    use polydat::dsl::compile::{CompileOptions, compile_polydat_with_options};
+    use polydat::dsl::compile::{CompileOptions, compile_polydat_interpreter_with_options};
 
     let src = r#"
         cursor r = range(0, 50)
@@ -769,7 +769,7 @@ fn limit_larger_than_extent_preserves_extent() {
         ledger: None,
         ..CompileOptions::default()
     };
-    let kernel = compile_polydat_with_options(src, &options, None).unwrap();
+    let kernel = compile_polydat_interpreter_with_options(src, &options, None).unwrap();
     let schemas = kernel.program().cursor_schemas();
     // Limit 1000 > extent 50 → extent stays 50
     assert_eq!(schemas[0].extent, Some(50));

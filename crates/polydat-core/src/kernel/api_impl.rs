@@ -138,9 +138,10 @@ impl Construction for PolydatKernel {
                     ledger: None,
                     engine: crate::Engine::default(),
                 };
-                crate::dsl::compile::compile_polydat_with_options(&s.body, &options, None).map_err(
-                    |e| crate::kernel::subcontext::ContractViolation::Compile(e.to_string()),
+                crate::dsl::compile::compile_polydat_interpreter_with_options(
+                    &s.body, &options, None,
                 )
+                .map_err(|e| crate::kernel::subcontext::ContractViolation::Compile(e.to_string()))
             }
             PolydatMatterInner::Statements(s) => {
                 // Pre-parsed AST — go through the compile-from-AST
@@ -164,9 +165,10 @@ impl Construction for PolydatKernel {
                     ledger: None,
                     engine: crate::Engine::default(),
                 };
-                crate::dsl::compile::compile_ast_with_options(&file, "", &options, None).map_err(
-                    |e| crate::kernel::subcontext::ContractViolation::Compile(e.to_string()),
-                )
+                crate::dsl::compile::compile_ast_interpreter_with_options(&file, "", &options, None)
+                    .map_err(|e| {
+                        crate::kernel::subcontext::ContractViolation::Compile(e.to_string())
+                    })
             }
             PolydatMatterInner::Program(p) => {
                 let mut k = PolydatKernel::from_program(p.program);

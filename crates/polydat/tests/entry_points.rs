@@ -10,10 +10,10 @@
 use polydat::ast::Value;
 use polydat::compile::assembly::{PolydatAssembler, WireRef};
 use polydat::dsl::compile::{
-    CompileOptions, compile_polydat_interpreter, compile_polydat_kernel,
+    CompileOptions, compile_polydat_interpreter, compile_polydat_interpreter_with_log,
+    compile_polydat_interpreter_with_options, compile_polydat_kernel,
     compile_polydat_kernel_with_options, compile_polydat_to_assembler,
     compile_polydat_to_assembler_with, compile_polydat_with, compile_polydat_with_engine,
-    compile_polydat_with_log, compile_polydat_with_options,
 };
 use polydat::dsl::events::CompileEventLog;
 use polydat::{Engine, JitMode, Kernel, KernelError, Provenance};
@@ -55,12 +55,14 @@ fn every_entry_point_reaches_the_same_kernel() {
             compile_polydat_kernel_with_options(SRC, &options, Some(&mut log)).unwrap(),
         ),
         (
-            "compile_polydat_with_options",
-            Box::new(compile_polydat_with_options(SRC, &options, None).unwrap()),
+            "compile_polydat_interpreter_with_options",
+            Box::new(compile_polydat_interpreter_with_options(SRC, &options, None).unwrap()),
         ),
         (
-            "compile_polydat_with_log",
-            Box::new(compile_polydat_with_log(SRC, &mut CompileEventLog::new()).unwrap()),
+            "compile_polydat_interpreter_with_log",
+            Box::new(
+                compile_polydat_interpreter_with_log(SRC, &mut CompileEventLog::new()).unwrap(),
+            ),
         ),
         (
             "compile_polydat_to_assembler",
@@ -169,7 +171,7 @@ fn strict_refuses_implicit_coercions_on_every_engine() {
         strict: true,
         ..CompileOptions::default()
     };
-    assert!(compile_polydat_with_options(src, &strict, None).is_err());
+    assert!(compile_polydat_interpreter_with_options(src, &strict, None).is_err());
     for engine in engines() {
         let outcome = compile_polydat_with_engine(src, engine, &strict, None);
         assert!(
@@ -195,7 +197,8 @@ fn strict_refuses_implicit_coercions_on_every_engine() {
 fn the_logged_compile_accepts_a_traversal() {
     let src = "input cycle: u64\nfor k in 1..3 {\n  y := k * 10\n}\n";
     let mut log = CompileEventLog::new();
-    let k = compile_polydat_with_log(src, &mut log).expect("a for statement compiles with a log");
+    let k = compile_polydat_interpreter_with_log(src, &mut log)
+        .expect("a for statement compiles with a log");
     assert_eq!(k.traversals().len(), 1);
 }
 

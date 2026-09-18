@@ -14,7 +14,7 @@
 
 use polydat::dsl::ast::BindingModifier;
 use polydat::dsl::compile::{
-    CompileOptions, compile_polydat_interpreter, compile_polydat_with_options,
+    CompileOptions, compile_polydat_interpreter, compile_polydat_interpreter_with_options,
 };
 
 /// The interpreter kernel under strict typing.
@@ -23,7 +23,7 @@ fn compile_strict(src: &str) -> Result<polydat::kernel::PolydatKernel, polydat::
         strict: true,
         ..CompileOptions::default()
     };
-    compile_polydat_with_options(src, &options, None)
+    compile_polydat_interpreter_with_options(src, &options, None)
 }
 use polydat::kernel::Construction;
 use polydat::kernel::subcontext::PolydatMatter;

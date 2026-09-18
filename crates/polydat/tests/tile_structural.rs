@@ -8,8 +8,8 @@
 
 use polydat::dsl::compile_polydat_interpreter;
 use polydat::tile::{
-    Span, TileOptions, compile_polydat_with_tiles, tile_from_json_text, tile_from_json_value,
-    tile_from_text,
+    Span, TileOptions, compile_polydat_interpreter_with_tiles, tile_from_json_text,
+    tile_from_json_value, tile_from_text,
 };
 
 const PROGRAM: &str = "input cycle: u64\n\
@@ -89,7 +89,7 @@ fn host_builds_a_tile_from_a_parsed_json_value() {
     )
     .unwrap();
     assert_eq!(tile.encoding.as_deref(), Some("json"));
-    let mut k = compile_polydat_with_tiles(PROGRAM, vec![tile]).unwrap();
+    let mut k = compile_polydat_interpreter_with_tiles(PROGRAM, vec![tile]).unwrap();
     k.set_inputs(&[3]);
     let doc = canonical(k.pull("doc").as_str());
     assert_eq!(doc["device"], "dev-3");
@@ -115,7 +115,8 @@ fn host_builds_tiles_from_json_text_and_template_text() {
         Span { line: 0, col: 0 },
     )
     .unwrap();
-    let mut k = compile_polydat_with_tiles("input cycle: u64\n", vec![json, text]).unwrap();
+    let mut k =
+        compile_polydat_interpreter_with_tiles("input cycle: u64\n", vec![json, text]).unwrap();
     k.set_inputs(&[7]);
     assert_eq!(k.pull("doc").as_str(), "{\"n\": 7, \"s\": \"7\"}");
     assert_eq!(k.pull("line").as_str(), "n=7 doc={\"n\": 7, \"s\": \"7\"}");
@@ -273,7 +274,8 @@ fn text_fragments_and_built_pieces_compose_into_one_tile() {
 
     // And the same rendered bytes, which is what a tile is for.
     let render = |t: &TileDef| {
-        let mut k = compile_polydat_with_tiles(PROGRAM, vec![t.clone()]).expect("compiles");
+        let mut k =
+            compile_polydat_interpreter_with_tiles(PROGRAM, vec![t.clone()]).expect("compiles");
         k.set_inputs(&[3]);
         k.pull("t").to_display_string()
     };

@@ -20,7 +20,7 @@
 //! 2. **Random-DAG fuzz** ([`random_dags_compile_or_fail_cleanly`]).
 //!    A tiny deterministic RNG picks native registry entries and
 //!    wires their outputs together irrespective of type compatibility.
-//!    Each generated module is fed to `compile_polydat_with_log`; the
+//!    Each generated module is fed to `compile_polydat_interpreter_with_log`; the
 //!    compile must never panic, every error string must be non-empty
 //!    and free of panic-style wording, and every Ok result whose
 //!    event log mentions a `TypeAdapterInserted` must refer to a
@@ -28,7 +28,7 @@
 //!    RNG; FUZZ_ITERATIONS controls iteration count.
 
 use polydat::ast::{PortType, SlotType};
-use polydat::dsl::compile::{compile_polydat_interpreter, compile_polydat_with_log};
+use polydat::dsl::compile::{compile_polydat_interpreter, compile_polydat_interpreter_with_log};
 use polydat::dsl::events::{CompileEvent, CompileEventLog};
 use polydat::dsl::registry::{self, FuncSig};
 
@@ -164,7 +164,8 @@ fn adapter_table_is_consistent() {
             );
             let expected = expected_adapt(p.src, c.dst);
             let mut log = CompileEventLog::new();
-            let result = compile_polydat_with_log(&source, &mut log).map_err(|e| e.to_string());
+            let result =
+                compile_polydat_interpreter_with_log(&source, &mut log).map_err(|e| e.to_string());
             let observed = classify_result(&result, &log);
             if !adapt_agrees(expected, observed) {
                 mismatches.push(format!(
@@ -455,7 +456,7 @@ fn run_fuzz_pass(seed: u64, iterations: usize) -> Vec<String> {
 
         let mut log = CompileEventLog::new();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            compile_polydat_with_log(&source, &mut log)
+            compile_polydat_interpreter_with_log(&source, &mut log)
         }));
 
         // Invariant 1: compiler never panics on any input. A panic
@@ -782,7 +783,7 @@ fn strict_values_inserts_nonzero_assertion_on_mod_wire() {
         b := mod_wire(cycle, d)\n\
     ";
     let mut log = CompileEventLog::new();
-    let result = compile_polydat_with_log(strict_source, &mut log);
+    let result = compile_polydat_interpreter_with_log(strict_source, &mut log);
     assert!(result.is_ok(), "compile failed: {:?}", result.err());
     let assertion_inserts: Vec<&CompileEvent> = log
         .events()
@@ -801,7 +802,7 @@ fn strict_values_inserts_nonzero_assertion_on_mod_wire() {
         b := mod_wire(cycle, d)\n\
     ";
     let mut lax_log = CompileEventLog::new();
-    let lax_result = compile_polydat_with_log(lax_source, &mut lax_log);
+    let lax_result = compile_polydat_interpreter_with_log(lax_source, &mut lax_log);
     assert!(lax_result.is_ok(), "compile failed: {:?}", lax_result.err());
     let lax_inserts: Vec<&CompileEvent> = lax_log
         .events()
@@ -825,7 +826,7 @@ fn strict_values_skips_assertion_when_source_is_constant() {
         b := mod_wire(cycle, 7)\n\
     ";
     let mut log = CompileEventLog::new();
-    let result = compile_polydat_with_log(source, &mut log);
+    let result = compile_polydat_interpreter_with_log(source, &mut log);
     assert!(result.is_ok(), "compile failed: {:?}", result.err());
     let inserts: Vec<&CompileEvent> = log
         .events()
@@ -864,7 +865,7 @@ fn pragmas_round_trip_through_compile() {
         id := mod(hash(cycle), 1000)\n\
     ";
     let mut log = CompileEventLog::new();
-    let result = compile_polydat_with_log(source, &mut log);
+    let result = compile_polydat_interpreter_with_log(source, &mut log);
     assert!(result.is_ok(), "compile failed: {:?}", result.err());
     let acknowledged: Vec<&str> = log
         .events()
@@ -906,7 +907,7 @@ fn sanity_same_type_chain_has_no_adapters() {
         b := add(a, 2)\n\
     ";
     let mut log = CompileEventLog::new();
-    let result = compile_polydat_with_log(source, &mut log);
+    let result = compile_polydat_interpreter_with_log(source, &mut log);
     assert!(
         result.is_ok(),
         "simple chain should compile: {:?}",
@@ -926,7 +927,7 @@ fn sanity_u64_to_f64_is_reported_as_a_widening() {
         a := clamp_f64(cycle, 0.0, 1.0)\n\
     ";
     let mut log = CompileEventLog::new();
-    let result = compile_polydat_with_log(source, &mut log);
+    let result = compile_polydat_interpreter_with_log(source, &mut log);
     assert!(
         result.is_ok(),
         "u64→f64 widening should auto-adapt: {:?}",
@@ -985,7 +986,7 @@ fn strict_pragmas_reach_every_compile_path() {
     ";
     let plain = compile_polydat_interpreter(source).expect("plain compile");
     let mut log = CompileEventLog::new();
-    let logged = compile_polydat_with_log(source, &mut log).expect("logged compile");
+    let logged = compile_polydat_interpreter_with_log(source, &mut log).expect("logged compile");
     let lax_kernel = compile_polydat_interpreter(lax).expect("lax compile");
     let plain_nodes = plain.program().node_count();
     assert_eq!(

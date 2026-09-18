@@ -9,14 +9,16 @@
 use std::process::Command;
 
 use polydat::dsl::ast::TileOptions;
-use polydat::dsl::compile::{CompileOptions, compile_ast_with_options, compile_polydat_with_log};
+use polydat::dsl::compile::{
+    CompileOptions, compile_ast_interpreter_with_options, compile_polydat_interpreter_with_log,
+};
 use polydat::dsl::events::{CompileEvent, CompileEventLog};
 
 /// The interpreter kernel of a parsed program under the default options.
 fn compile_ast(
     ast: &polydat::dsl::ast::PolydatFile,
 ) -> Result<polydat::kernel::PolydatKernel, polydat::KernelError> {
-    compile_ast_with_options(ast, "", &CompileOptions::default(), None)
+    compile_ast_interpreter_with_options(ast, "", &CompileOptions::default(), None)
 }
 
 #[test]
@@ -137,7 +139,7 @@ fn the_compile_log_describes_each_tile_skeleton() {
     let mut log = CompileEventLog::default();
     let src = "input cycle: u64\n\
         tile doc : json := {\"meta\": {\"schema\": 3}, \"n\": ${cycle}, \"xs\": [@for i in 0..2 { ${i} }], \"f\": @if cycle { 1 } @else { 0 }}\n";
-    compile_polydat_with_log(src, &mut log).unwrap();
+    compile_polydat_interpreter_with_log(src, &mut log).unwrap();
     let shape = log
         .events()
         .iter()

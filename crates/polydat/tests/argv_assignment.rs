@@ -6,7 +6,7 @@
 //! bad values fail at compile time with the program's diagnostic.
 
 use polydat::dsl::transform::{assign_values, parse_assignment};
-use polydat::dsl::{CompileOptions, compile_ast_with_options};
+use polydat::dsl::{CompileOptions, compile_ast_interpreter_with_options};
 
 fn compile(
     src: &str,
@@ -19,7 +19,7 @@ fn compile(
         .map(|(n, v)| (n.to_string(), v.to_string()))
         .collect();
     assign_values(&mut ast, &pairs).map_err(polydat::KernelError::Source)?;
-    compile_ast_with_options(&ast, src, &CompileOptions::default(), None)
+    compile_ast_interpreter_with_options(&ast, src, &CompileOptions::default(), None)
 }
 
 const SRC: &str = "input cycle: u64\ninput seed: u64\nextern interval_ms: u64 = 1000\nextern label: String = \"x\"\nextern scale: f64 = 1.0\nextern on: bool = false\nts := cycle * interval_ms + seed\nout := \"{label}:{scale}:{on}\"";

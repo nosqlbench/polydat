@@ -8,8 +8,8 @@
 use polydat::ast::Value;
 use polydat::derive_support::Ext;
 use polydat::dsl::compile::{
-    CompileOptions, compile_polydat_kernel, compile_polydat_kernel_with_options,
-    compile_polydat_with, compile_polydat_with_log,
+    CompileOptions, compile_polydat_interpreter_with_log, compile_polydat_kernel,
+    compile_polydat_kernel_with_options, compile_polydat_with,
 };
 use polydat::dsl::events::CompileEventLog;
 use polydat::{Engine, JitMode, Kernel, Provenance};
@@ -476,7 +476,7 @@ fn section_diagnostics() {
     println!("== 12. Diagnostics ==");
     let src = "input cycle: u64\nh := hash(cycle)\nf := to_f64(h) / 3.0\ntile t : json := {\"h\": ${h}, \"f\": ${f | .2}}\n";
     let mut log = CompileEventLog::new();
-    let kernel = compile_polydat_with_log(src, &mut log).expect("compile");
+    let kernel = compile_polydat_interpreter_with_log(src, &mut log).expect("compile");
     println!("compile events: {}", log.events().len());
     for event in log.events() {
         println!("  {:?}: {event:?}", event.level());

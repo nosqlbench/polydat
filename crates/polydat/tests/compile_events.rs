@@ -8,7 +8,7 @@
 
 use std::process::Command;
 
-use polydat::dsl::compile::{compile_polydat_to_assembler, compile_polydat_with_log};
+use polydat::dsl::compile::{compile_polydat_interpreter_with_log, compile_polydat_to_assembler};
 use polydat::dsl::events::{CompileEvent, CompileEventLog};
 use polydat::{Engine, Provenance};
 
@@ -22,7 +22,7 @@ const SRC: &str = "input cycle: u64\n\
 #[test]
 fn the_log_retells_a_compile_from_parse_to_summary() {
     let mut log = CompileEventLog::new();
-    compile_polydat_with_log(SRC, &mut log).unwrap();
+    compile_polydat_interpreter_with_log(SRC, &mut log).unwrap();
     let events = log.events();
     assert!(
         matches!(events.first(), Some(CompileEvent::Parsed { statements: 4 })),

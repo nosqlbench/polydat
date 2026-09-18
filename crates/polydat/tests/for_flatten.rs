@@ -94,7 +94,7 @@ fn a_built_source_projects_the_comprehension_it_traverses() {
     use polydat::dsl::ast::{
         Binding, BindingModifier, Expr, ForSource, InputDecl, PolydatFile, Statement,
     };
-    use polydat::dsl::compile::{CompileOptions, compile_ast_with_options};
+    use polydat::dsl::compile::{CompileOptions, compile_ast_interpreter_with_options};
     use polydat::dsl::lexer::Span;
     use polydat::iteration::comprehension::ast::Comprehension;
     use polydat::iteration::comprehension::source::Source;
@@ -145,7 +145,8 @@ fn a_built_source_projects_the_comprehension_it_traverses() {
         "{projected}"
     );
     let mut k =
-        compile_ast_with_options(&file(built), "", &CompileOptions::default(), None).unwrap();
+        compile_ast_interpreter_with_options(&file(built), "", &CompileOptions::default(), None)
+            .unwrap();
     k.set_inputs(&[0]);
     let streamer = k.pull("sweep").clone();
     assert!(
@@ -184,7 +185,7 @@ fn a_built_tile_projects_the_body_it_renders() {
     use polydat::dsl::ast::{
         InputDecl, PolydatFile, Statement, TileBodyKind, TileDef, TileOptions,
     };
-    use polydat::dsl::compile::{CompileOptions, compile_ast_with_options};
+    use polydat::dsl::compile::{CompileOptions, compile_ast_interpreter_with_options};
     use polydat::dsl::lexer::Span;
 
     let sp = Span { line: 0, col: 0 };
@@ -212,7 +213,8 @@ fn a_built_tile_projects_the_body_it_renders() {
         projected.contains("tile t := \"n=${u64_add(cycle, 1)}\""),
         "{projected}"
     );
-    let mut k = compile_ast_with_options(&file, "", &CompileOptions::default(), None).unwrap();
+    let mut k =
+        compile_ast_interpreter_with_options(&file, "", &CompileOptions::default(), None).unwrap();
     k.set_inputs(&[41]);
     assert_eq!(k.pull("t").as_str(), "n=42");
     // The same text written as source gives the same program.

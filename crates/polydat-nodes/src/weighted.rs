@@ -790,7 +790,8 @@ mod tests {
             result := dynamic_weighted_select(hash(cycle), spec)
         "#;
         let mut log = CompileEventLog::new();
-        let _k = polydat::dsl::compile::compile_polydat_with_log(source, &mut log).unwrap();
+        let _k =
+            polydat::dsl::compile::compile_polydat_interpreter_with_log(source, &mut log).unwrap();
 
         let warnings: Vec<_> = log
             .events()
@@ -817,7 +818,8 @@ mod tests {
             result := dynamic_weighted_select(hash(cycle), spec)
         "#;
         let mut log = CompileEventLog::new();
-        let _k = polydat::dsl::compile::compile_polydat_with_log(source, &mut log).unwrap();
+        let _k =
+            polydat::dsl::compile::compile_polydat_interpreter_with_log(source, &mut log).unwrap();
 
         let warnings: Vec<_> = log
             .events()

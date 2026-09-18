@@ -133,7 +133,7 @@ fn module_string_parameters_spell_str_like_inputs_and_externs() {
 
 #[test]
 fn library_directory_files_are_parsed_once_and_reread_when_modified() {
-    use polydat::dsl::compile::{CompileOptions, compile_polydat_with_options};
+    use polydat::dsl::compile::{CompileOptions, compile_polydat_interpreter_with_options};
     let dir = std::env::temp_dir().join(format!("polydat-module-cache-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     // A file whose name is not the module's, so resolution scans the directory.
@@ -149,7 +149,7 @@ fn library_directory_files_are_parsed_once_and_reread_when_modified() {
         context: "cache test".into(),
         ..CompileOptions::default()
     };
-    let compile = || compile_polydat_with_options(program, &options, None);
+    let compile = || compile_polydat_interpreter_with_options(program, &options, None);
     let mut k = compile().unwrap();
     k.set_inputs(&[4]);
     assert_eq!(k.pull("r").as_u64(), 8);

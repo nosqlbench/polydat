@@ -232,17 +232,17 @@ fn producers_and_derivations_do_not_add_programs_per_tuple() {
 /// its own.
 #[test]
 fn a_host_ledger_collects_every_tree_compiled_under_it() {
-    use polydat::dsl::compile::{CompileOptions, compile_polydat_with_options};
+    use polydat::dsl::compile::{CompileOptions, compile_polydat_interpreter_with_options};
     use polydat::kernel::CompileLedger;
     let ledger = CompileLedger::new();
     let options = CompileOptions {
         ledger: Some(ledger.clone()),
         ..CompileOptions::default()
     };
-    let a = compile_polydat_with_options(THREE_LEVELS, &options, None).unwrap();
+    let a = compile_polydat_interpreter_with_options(THREE_LEVELS, &options, None).unwrap();
     let after_a = ledger.programs();
     assert!(after_a >= 4, "{after_a} programs after the first tree");
-    let b = compile_polydat_with_options(THREE_LEVELS, &options, None).unwrap();
+    let b = compile_polydat_interpreter_with_options(THREE_LEVELS, &options, None).unwrap();
     let after_b = ledger.programs();
     assert!(
         after_b >= after_a + 4,

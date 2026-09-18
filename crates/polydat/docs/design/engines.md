@@ -75,11 +75,22 @@ does the binary's `--engine auto`, which is what it runs without the
 flag. `compile_polydat_to_assembler` returns an assembler, which has no
 engine until something compiles it.
 
-That several entry points remain where a few would do is the sprawl the
-architecture review records as group B, which proposes one compiler
-with a handful of public conveniences and the rest as thin wrappers.
-The rule above is what that collapse has to preserve: whatever the
-surface narrows to, what it returns is the trait.
+The entry points say which of the two they are, in their names. Those
+returning a kernel through the trait are `compile_polydat_kernel` and
+its `_with_options` and `_with_tiles` forms, `compile_polydat_with` for
+naming an engine, `compile_polydat_with_engine` and
+`compile_ast_with_engine` for an engine beside options, and
+`compile_polydat` for the interpreter as the reference implementation.
+Those returning the interpreter's concrete kernel all carry
+`interpreter` in the name: `compile_polydat_interpreter` and its
+`_with_options`, `_with_log`, and `_with_tiles` forms. A reader can
+tell which surface a call is on without consulting a signature, and the
+ones that did not say so keep working under deprecated aliases.
+
+Two entry points are neither: `compile_polydat_to_assembler` returns an
+assembler, which has no engine until something compiles it, and
+`compile_polydat_checked` returns a diagnostic report beside its
+result.
 
 **Every failure on the trait is structured.** No method on `Kernel`
 reports a failure as a `String`. A write that cannot be made returns

@@ -216,12 +216,13 @@ fn a_comprehension_that_violates_a_v_axiom_is_a_compile_error() {
 /// and a strict compile refuses it with the warning as the error.
 #[test]
 fn a_degenerate_composition_warns_lax_and_fails_strict() {
-    use polydat::dsl::compile::{CompileOptions, compile_polydat_with_options};
+    use polydat::dsl::compile::{CompileOptions, compile_polydat_interpreter_with_options};
     use polydat::dsl::events::{CompileEvent, CompileEventLog};
     // `extrema` over a one-axis input collapses to its ends.
     let src = "input cycle: u64\nends := for k in 1..10 order extrema/1\n";
     let mut log = CompileEventLog::new();
-    compile_polydat_with_options(src, &CompileOptions::default(), Some(&mut log)).unwrap();
+    compile_polydat_interpreter_with_options(src, &CompileOptions::default(), Some(&mut log))
+        .unwrap();
     let warned = log.events().iter().any(|e| {
         matches!(e, CompileEvent::ComprehensionWarning { line, warning, .. }
             if *line == 2 && warning.contains("one-axis"))
@@ -231,7 +232,7 @@ fn a_degenerate_composition_warns_lax_and_fails_strict() {
         strict: true,
         ..CompileOptions::default()
     };
-    let err = compile_polydat_with_options(src, &strict, None).unwrap_err();
+    let err = compile_polydat_interpreter_with_options(src, &strict, None).unwrap_err();
     assert!(err.to_string().contains("strict mode"), "{err}");
     assert!(err.to_string().contains("line 2"), "{err}");
 }

@@ -511,7 +511,8 @@ fn the_default_engine_forms_take_options_tiles_and_activations() {
     let mut k = compile_polydat_kernel_with_options(SRC, &options, Some(&mut log)).unwrap();
     // The same pruning the interpreter path applies: `h`, `id`, and `n`
     // are gone, `key` and the declared surface remain.
-    let mut p1 = polydat::dsl::compile_polydat_with_options(SRC, &options, None).unwrap();
+    let mut p1 =
+        polydat::dsl::compile_polydat_interpreter_with_options(SRC, &options, None).unwrap();
     assert_eq!(k.output_names(), p1.output_names());
     assert!(
         !k.output_names()

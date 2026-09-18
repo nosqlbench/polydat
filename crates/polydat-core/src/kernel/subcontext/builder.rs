@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use crate::ast::PortType;
 use crate::dsl::ast::{Arg, CallExpr, Expr, ExternPort, PolydatFile, Statement};
-use crate::dsl::compile::{CompileOptions as DslOptions, compile_ast_with_options};
+use crate::dsl::compile::{CompileOptions as DslOptions, compile_ast_interpreter_with_options};
 use crate::dsl::lexer::{Span, lex};
 use crate::dsl::parser::parse;
 
@@ -49,7 +49,7 @@ fn port_type_keyword(pt: PortType) -> &'static str {
 /// Optional compile-time configuration passed through to
 /// [`compile_polydat_with_libs`](crate::dsl::compile::compile_polydat_with_libs) when finalize compiles the body. When
 /// every field is at its default, finalize falls back to the
-/// minimal [`compile_ast_with_options`] path used by the do-loop bridge — no
+/// minimal [`compile_ast_interpreter_with_options`] path used by the do-loop bridge — no
 /// behaviour change for the simplest synthesisers.
 ///
 /// SRD-67 Phase 3 bridge hook: the for_each / op-template
@@ -136,7 +136,7 @@ impl<P> SubcontextBuilder<P> {
     /// `compile_polydat_with_libs` directly fold those calls into a
     /// single `with_compile_options(...)` invocation; the do-loop
     /// bridge leaves this at its default and finalize uses
-    /// [`compile_ast_with_options`].
+    /// [`compile_ast_interpreter_with_options`].
     pub fn with_compile_options(&mut self, options: CompileOptions) -> &mut Self {
         self.compile_options = options;
         self
@@ -577,7 +577,7 @@ impl<P> SubcontextBuilder<P> {
         // is the byte-identical replacement.
         //
         // A rewritten AST (a Rule 2 write-through fired) or a
-        // `Statements` body compiles through `compile_ast_with_options`
+        // `Statements` body compiles through `compile_ast_interpreter_with_options`
         // with the full options, so the two combine freely.
         let dsl_options = DslOptions {
             source_dir: compile_options.workload_dir.clone(),
@@ -593,7 +593,7 @@ impl<P> SubcontextBuilder<P> {
             engine: crate::Engine::default(),
         };
         let mut kernel = if compile_options.is_default() {
-            compile_ast_with_options(
+            compile_ast_interpreter_with_options(
                 &PolydatFile {
                     statements: statements.clone(),
                 },
@@ -617,7 +617,7 @@ impl<P> SubcontextBuilder<P> {
             // libs-aware compile path directly. Avoids the prior
             // restriction that combined Rule 2 with non-default
             // compile options.
-            compile_ast_with_options(
+            compile_ast_interpreter_with_options(
                 &PolydatFile {
                     statements: statements.clone(),
                 },
@@ -646,7 +646,7 @@ impl<P> SubcontextBuilder<P> {
                     ),
                 }
             }
-            crate::dsl::compile::compile_polydat_with_options(&src, &dsl_options, None)
+            crate::dsl::compile::compile_polydat_interpreter_with_options(&src, &dsl_options, None)
                 .map_err(|e| ContractViolation::Compile(e.to_string()))?
         };
 

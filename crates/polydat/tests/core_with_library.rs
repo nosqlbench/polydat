@@ -29,7 +29,7 @@ mod dsl_compile_tests {
             strict,
             ..CompileOptions::default()
         };
-        compile_polydat_with_options(src, &options, None)
+        compile_polydat_interpreter_with_options(src, &options, None)
     }
 
     /// The interpreter kernel keeping `required` outputs, under `strict`.
@@ -43,7 +43,7 @@ mod dsl_compile_tests {
             strict,
             ..CompileOptions::default()
         };
-        compile_polydat_with_options(src, &options, None)
+        compile_polydat_interpreter_with_options(src, &options, None)
     }
 
     #[test]
@@ -1770,7 +1770,7 @@ mod kernel_engines_panic_enrichment_tests {
             context: "test_workload".into(),
             ..CompileOptions::default()
         };
-        let mut k = compile_polydat_with_options(
+        let mut k = compile_polydat_interpreter_with_options(
             "extern x: u64\n\
              doubled := mul(x, 2)\n",
             &options,

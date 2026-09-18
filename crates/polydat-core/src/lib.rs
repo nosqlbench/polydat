@@ -174,10 +174,14 @@ pub use polydat_grammar::viz;
 /// Polytile at the host boundary (SRD 114 §5.6): build a tile from
 /// template text, from structural JSON text, or from a parsed JSON
 /// value, then compile it with a program via
-/// [`tile::compile_polydat_with_tiles`].
+/// [`tile::compile_polydat_kernel_with_tiles`].
 pub mod tile {
     pub use crate::dsl::ast::{TileBodyKind, TileDef, TileOptions, TilePiece};
-    pub use crate::dsl::compile::{compile_polydat_kernel_with_tiles, compile_polydat_with_tiles};
+    #[allow(deprecated)]
+    pub use crate::dsl::compile::compile_polydat_with_tiles;
+    pub use crate::dsl::compile::{
+        compile_polydat_interpreter_with_tiles, compile_polydat_kernel_with_tiles,
+    };
     pub use crate::dsl::lexer::Span;
     pub use crate::dsl::tile::{parse_template, render_template};
     pub use crate::dsl::tile_structural::{

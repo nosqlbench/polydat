@@ -164,7 +164,7 @@ fn explain_events_report_wire_type_declaration_expectation_and_encoder() {
     let src = format!(
         "{WIRES}tile d : json := {{\"n\": ${{n}}, \"s\": \"x-${{s}}\", \"w\": ${{cycle: f64}}, \"b\": @if t {{ 1 }} @else {{ 0 }}}}\n"
     );
-    polydat::dsl::compile::compile_polydat_with_log(&src, &mut log).unwrap();
+    polydat::dsl::compile::compile_polydat_interpreter_with_log(&src, &mut log).unwrap();
     let holes: Vec<&CompileEvent> = log
         .events()
         .iter()
