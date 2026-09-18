@@ -13,12 +13,15 @@ what the documents should say instead.
 This file is the digest for decision. The full reports, with file and line citations for
 every claim, were scratch under `target/review/` and are not retained.
 
-Recorded 2026-09-11. Status as of 2026-09-16: the step-1 fixes (F-C1, F-N3, F-N11, F-E4,
+Recorded 2026-09-11. Status as of 2026-09-18: the step-1 fixes (F-C1, F-N3, F-N11, F-E4,
 F-E5, F-E13 stated, F-C12 documented, F-K2), F-K1, F-E3, F-E6, groups B (in part), C, I,
 and the `Lookup` half of group E have landed, and the runtime, node library, and language
-have since been split into their own crates; section 3's weeding pass landed except the
-deletions; groups A, D (in part), F, G, H, J, K, L, M remain open. Of section 5's
-decisions, 4 and 6 were taken by stating the behaviour as it is; the rest remain open.
+have since been split into their own crates; section 3's weeding map is closed, every
+document kept-and-weeded or deleted with its disposition in its row; groups A, D (in
+part), F, G, H, J, K (in part), L, M remain open. Of section 5's decisions, 4 and 6 were
+taken by stating the behaviour as it is, 7 and 8 are done, and 1, 2, 3 and 5 remain open.
+Of section 4's twelve rules, all twelve are now stated somewhere; rule 1 was restated on
+2026-09-18 because its first wording contradicted the two typed constructors.
 Section 1 lists the findings ranked; section 2 proposes
 an order of work; section 3 is the weeding map for every design document; section 4 lists
 the rules the documents must newly state; section 5 lists the decisions that are the
@@ -177,7 +180,11 @@ The engine work of the last month changed rules that no document states as a rul
 belongs in exactly one place; others cite it.
 
 1. `Engine::default()` is `Native(Auto)` with the `jit` feature and `Closures(Auto)`
-   without; every engine-less entry point and the binary build it (engines.md §1).
+   without; every entry point whose signature leaves the engine open builds it, as does
+   the binary without `--engine`, and the two constructors returning the concrete
+   `PolydatKernel` name the interpreter by their return type rather than falling back to
+   it (engines.md §1). *Stated 2026-09-18; the first wording said "every engine-less
+   entry point", which the typed constructors contradict.*
 2. One evaluation rule on every engine: a step is current until an input in its
    provenance changes; nondeterministic never current; compile-constant folded at build;
    no step exempt; provenance mode is an optimization that never changes a result
@@ -190,18 +197,19 @@ belongs in exactly one place; others cite it.
 4. The `Kernel` trait in those terms: the writes, `pull` runs one cone,
    `eval` runs every step, `invalidate_all` keeps inputs, `into_program` and the created
    kernel's starting state, `traverse` on every engine, the index-keyed calls,
-   `cursor_schemas` on every kernel (runtime_model.md, kernel API doc).
+   `cursor_schemas` on every kernel (runtime_model.md §6; the host-facing half is the
+   [embedding guide](../guides/embedding.md), there being no separate kernel API doc).
 5. The None rule, once: which nodes native code may see, how the planner and the batcher
-   apply it, the runtime panic as tripwire (engines.md §6).
+   apply it, the runtime panic as tripwire (engines.md §3.3).
 6. The failure contract: one message on every engine, `enrich_panic`, the tracker slot
-   (engines.md §6, jit_boundary.md).
+   (engines.md §3.4, jit_boundary.md).
 7. Compile events are engine-independent: `ConstantFolded`, `ExternWithoutDefault`, tile
-   events, assertion counts are identical on every engine (engines.md §7).
+   events, assertion counts are identical on every engine (engines.md §3.5).
 8. `EnginePlan`: what each engine reports and that eligibility is observed, not inferred
-   (engines.md §7, type_system_alignment.md §7).
+   (engines.md §3.5, type_system_alignment.md §7).
 9. Traversal activation on every engine: opening evaluates the comprehension in the body's
    scope through `Lookup`/`Layered`; `BodySource` carries settings; one program per engine
-   per position; the cascade rule for shared wires (for_traversal.md §5).
+   per position; the cascade rule for shared wires (for_traversal.md §4-§5).
 10. Tiles after SRD 117: hole values as the render node's inputs; bodies are kernels
     precompiled at construction on `Engine::default()` because a closure has no engine to
     ask; memoized tuples and their condition; integers and floats written directly,
@@ -209,9 +217,9 @@ belongs in exactly one place; others cite it.
     owned by the rendering state in the render step's scratch (polytile.md §7).
 11. The hybrid is P3: segments are runs of consecutive native-eligible nodes of one
     lifecycle; a constant node never joins a non-constant segment; the pure tier is the
-    differential oracle and Tier-1's carrier, not a host surface (engines.md §1-§2).
+    differential oracle and Tier-1's carrier, not a host surface (engines.md §1, §8).
 12. Cells on every engine: the publish contract (value, revision, intent bit), three
-    creation sites, the compiled consumer's poll (cross_fiber_invalidation.md §3, §5).
+    creation sites, the compiled consumer's poll (cross_fiber_invalidation.md §1, §3.1, §5.2).
 
 ## 5. Decisions before the work starts
 

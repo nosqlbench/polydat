@@ -26,6 +26,21 @@ provenance mode left to the selector. Compiled code is the default; the
 interpreter is a choice, and the semantic oracle every other engine is
 checked against.
 
+The default reaches every entry point that can express it. An entry
+point returning `Box<dyn Kernel>` without an engine argument builds
+`Engine::default()` — `compile_polydat_kernel` and its tile-carrying
+sibling — and the binary's `--engine auto`, which is what it runs
+without the flag, resolves through the same default. The two entry
+points that return the concrete `PolydatKernel` are the exception, and
+it is their return type that makes them one: `compile_polydat` and
+`PolydatAssembler::compile` name the interpreter because a caller
+asking for that type is asking for the oracle, not for whichever engine
+the build happens to offer. A caller who wants the same program on the
+default engine calls `compile_polydat_kernel` instead. So "engine-less
+means compiled" holds wherever the signature leaves the engine open,
+and the two typed constructors are not a silent interpreter fallback
+but a named request for it.
+
 Pure native code, one function for the whole program, is a fourth kernel
 behind P3: the differential tier that proves the native lowerings against
 the closures, and the carrier of the Tier-1 register kernel
