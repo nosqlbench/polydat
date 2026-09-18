@@ -82,7 +82,9 @@ fn row(src: &str) -> [(&'static str, String); 4] {
         Ok::<(), String>(())
     }));
     let p3 = outcome(std::panic::catch_unwind(|| {
-        let mut k = compile_polydat_to_assembler(src)?.try_compile_jit()?;
+        let mut k = compile_polydat_to_assembler(src)?
+            .try_compile_jit()
+            .map_err(|e| e.to_string())?;
         k.eval(&[3]);
         let outs: Vec<String> = k.output_names().iter().map(|s| s.to_string()).collect();
         for o in &outs {
@@ -91,7 +93,9 @@ fn row(src: &str) -> [(&'static str, String); 4] {
         Ok::<(), String>(())
     }));
     let pure = outcome(std::panic::catch_unwind(|| {
-        let mut k = compile_polydat_to_assembler(src)?.try_compile_pure_jit()?;
+        let mut k = compile_polydat_to_assembler(src)?
+            .try_compile_pure_jit()
+            .map_err(|e| e.to_string())?;
         k.eval(&[3]);
         let outs: Vec<String> = k.output_names().iter().map(|s| s.to_string()).collect();
         for o in &outs {

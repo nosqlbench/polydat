@@ -983,6 +983,16 @@ impl PolydatAssembler {
         }
     }
 
+    /// A node native code cannot run, as a refusal naming the native
+    /// engine and the reason the layout gave.
+    #[cfg(feature = "jit")]
+    fn refused_by_native(reason: String) -> KernelError {
+        KernelError::Refused {
+            engine: Engine::Native(Provenance::Auto),
+            reason,
+        }
+    }
+
     /// Shared: extract P2 compiled steps + slot layout from resolved DAG.
     /// Returns None if any node lacks a compiled form.
     fn build_p2_layout(resolved: &ResolvedDag) -> Result<P2Layout, String> {
@@ -1147,13 +1157,17 @@ impl PolydatAssembler {
     /// parity, step 7). Accepts every program the closure tier accepts;
     /// `compile_hybrid` builds the same kernel.
     #[cfg(feature = "jit")]
-    pub fn try_compile_jit(self) -> Result<crate::compile::hybrid::HybridKernelPushPull, String> {
+    pub fn try_compile_jit(
+        self,
+    ) -> Result<crate::compile::hybrid::HybridKernelPushPull, KernelError> {
         self.compile_hybrid()
     }
 
     /// P3, raw: every evaluation runs every step.
     #[cfg(feature = "jit")]
-    pub fn try_compile_jit_raw(self) -> Result<crate::compile::hybrid::HybridKernelRaw, String> {
+    pub fn try_compile_jit_raw(
+        self,
+    ) -> Result<crate::compile::hybrid::HybridKernelRaw, KernelError> {
         Ok(self.compile_hybrid()?.into_raw())
     }
 
@@ -1163,13 +1177,15 @@ impl PolydatAssembler {
     #[cfg(feature = "jit")]
     pub fn try_compile_jit_push(
         self,
-    ) -> Result<crate::compile::hybrid::HybridKernelPushPull, String> {
+    ) -> Result<crate::compile::hybrid::HybridKernelPushPull, KernelError> {
         self.compile_hybrid()
     }
 
     /// P3, pull: the cone guard alone.
     #[cfg(feature = "jit")]
-    pub fn try_compile_jit_pull(self) -> Result<crate::compile::hybrid::HybridKernelPull, String> {
+    pub fn try_compile_jit_pull(
+        self,
+    ) -> Result<crate::compile::hybrid::HybridKernelPull, KernelError> {
         Ok(self.compile_hybrid()?.into_pull())
     }
 
@@ -1178,9 +1194,11 @@ impl PolydatAssembler {
     /// lowering. Hosts use [`Self::try_compile_jit`].
     #[doc(hidden)]
     #[cfg(feature = "jit")]
-    pub fn try_compile_pure_jit(self) -> Result<crate::compile::jit::JitKernelPushPull, String> {
-        let resolved = self.resolve().map_err(|e| format!("{e}"))?;
-        Self::jit_push_pull_from(resolved)
+    pub fn try_compile_pure_jit(
+        self,
+    ) -> Result<crate::compile::jit::JitKernelPushPull, KernelError> {
+        let resolved = self.resolve().map_err(KernelError::Assembly)?;
+        Self::jit_push_pull_from(resolved).map_err(Self::refused_by_native)
     }
 
     #[cfg(feature = "jit")]
@@ -1235,9 +1253,11 @@ impl PolydatAssembler {
     /// Pure native code, raw; see [`Self::try_compile_pure_jit`].
     #[doc(hidden)]
     #[cfg(feature = "jit")]
-    pub fn try_compile_pure_jit_raw(self) -> Result<crate::compile::jit::JitKernelRaw, String> {
-        let resolved = self.resolve().map_err(|e| format!("{e}"))?;
-        Self::jit_raw_from(resolved)
+    pub fn try_compile_pure_jit_raw(
+        self,
+    ) -> Result<crate::compile::jit::JitKernelRaw, KernelError> {
+        let resolved = self.resolve().map_err(KernelError::Assembly)?;
+        Self::jit_raw_from(resolved).map_err(Self::refused_by_native)
     }
 
     /// Where each node lives, for the failure path (A7): its name, the
@@ -1334,9 +1354,11 @@ impl PolydatAssembler {
     /// Pure native code, push-only; see [`Self::try_compile_pure_jit`].
     #[doc(hidden)]
     #[cfg(feature = "jit")]
-    pub fn try_compile_pure_jit_push(self) -> Result<crate::compile::jit::JitKernelPush, String> {
-        let resolved = self.resolve().map_err(|e| format!("{e}"))?;
-        Self::jit_push_from(resolved)
+    pub fn try_compile_pure_jit_push(
+        self,
+    ) -> Result<crate::compile::jit::JitKernelPush, KernelError> {
+        let resolved = self.resolve().map_err(KernelError::Assembly)?;
+        Self::jit_push_from(resolved).map_err(Self::refused_by_native)
     }
 
     #[cfg(feature = "jit")]
@@ -1373,9 +1395,11 @@ impl PolydatAssembler {
     /// Pure native code, pull-only; see [`Self::try_compile_pure_jit`].
     #[doc(hidden)]
     #[cfg(feature = "jit")]
-    pub fn try_compile_pure_jit_pull(self) -> Result<crate::compile::jit::JitKernelPull, String> {
-        let resolved = self.resolve().map_err(|e| format!("{e}"))?;
-        Self::jit_pull_from(resolved)
+    pub fn try_compile_pure_jit_pull(
+        self,
+    ) -> Result<crate::compile::jit::JitKernelPull, KernelError> {
+        let resolved = self.resolve().map_err(KernelError::Assembly)?;
+        Self::jit_pull_from(resolved).map_err(Self::refused_by_native)
     }
 
     #[cfg(feature = "jit")]
@@ -1414,9 +1438,9 @@ impl PolydatAssembler {
     /// where a node has a lowering and its closure elsewhere; without
     /// the `jit` feature every node is a closure.
     #[doc(hidden)]
-    pub fn compile_hybrid(self) -> Result<crate::compile::hybrid::HybridKernel, String> {
-        let resolved = self.resolve().map_err(|e| format!("{e}"))?;
-        Self::hybrid_from(resolved)
+    pub fn compile_hybrid(self) -> Result<crate::compile::hybrid::HybridKernel, KernelError> {
+        let resolved = self.resolve().map_err(KernelError::Assembly)?;
+        Self::hybrid_from(resolved).map_err(Self::refused_by_native)
     }
 
     fn hybrid_from(resolved: ResolvedDag) -> Result<crate::compile::hybrid::HybridKernel, String> {
