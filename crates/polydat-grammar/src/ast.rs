@@ -227,6 +227,59 @@ pub enum ForSourceKind {
 }
 
 impl ForSource {
+    /// A traversal source over a comprehension, its text the tree's
+    /// canonical text
+    /// ([`Comprehension::to_text`](crate::comprehension::Comprehension::to_text)).
+    /// `None` when the
+    /// tree is outside the text grammar, so a source never carries a
+    /// text that reads back as a different comprehension.
+    pub fn comprehension(tree: crate::comprehension::Comprehension, span: Span) -> Option<Self> {
+        let text = tree.to_text()?;
+        Some(ForSource {
+            text,
+            kind: ForSourceKind::Comprehension(tree),
+            span,
+        })
+    }
+
+    /// A traversal source naming a producer bound in the same scope.
+    pub fn producer(name: impl Into<String>, span: Span) -> Self {
+        let name = name.into();
+        ForSource {
+            text: name.clone(),
+            kind: ForSourceKind::Producer(name),
+            span,
+        }
+    }
+
+    /// A traversal source deriving from a bound producer: the base
+    /// with an optional filter and order, written as the text writes
+    /// them.
+    pub fn derived(
+        base: impl Into<String>,
+        filter: Option<String>,
+        order: Option<String>,
+        span: Span,
+    ) -> Self {
+        let base = base.into();
+        let mut text = base.clone();
+        if let Some(predicate) = &filter {
+            text.push_str(&format!(" where {predicate}"));
+        }
+        if let Some(spec) = &order {
+            text.push_str(&format!(" order {spec}"));
+        }
+        ForSource {
+            text,
+            kind: ForSourceKind::Derived {
+                base,
+                filter,
+                order,
+            },
+            span,
+        }
+    }
+
     /// The element names the source dispenses, when known statically.
     /// A producer reference or derivation resolves its names at compile
     /// time.

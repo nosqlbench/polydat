@@ -1132,6 +1132,29 @@ remains valid as a parsing convenience — each string is parsed
 as a comprehension expression. The bracketed-comprehension form
 and the bracketed-string form are equivalent at the AST level.
 
+<a id="sec-canonical-text"></a>
+### 8.2.1 Canonical text
+
+A tree renders to canonical text and the text parses back to the same
+tree: `Comprehension::to_text` and `spec::parse_comprehension_algebra`
+are inverses over the shapes the text can write, and rendering is
+idempotent, so a comprehension built programmatically carries the text
+a written one carries.
+
+The rendering answers nothing rather than a spelling the parser would
+read back as something else. A tree has no text when its shape is
+outside the grammar of §8.1 — a filter under a cartesian, an order
+under a zip, a nested cartesian — and a source has none when a literal
+holds a value the text cannot write, a JSON value or a string carrying
+a quote, a comma, or a bracket.
+
+A traversal source carries both the text and the tree, and they are one
+source: the `for` lowering parses the text and refuses a source whose
+two halves describe different comprehensions, so a program never
+projects one comprehension and traverses another. A builder takes the
+text from the tree (`ForSource::comprehension`) rather than writing it
+twice.
+
 ### 8.3 Comprehensions as named values
 
 A comprehension binds to a wire whose port type is `Ext`, carrying a

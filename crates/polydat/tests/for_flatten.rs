@@ -84,3 +84,90 @@ fn a_generator_over_a_runtime_name_stays_unbounded_at_compile() {
     }
     assert_eq!(seen, vec![50, 50]);
 }
+
+/// A traversal source carries its text and its comprehension, and they
+/// are one source (comprehension_forms.md §8): the constructor derives
+/// the text from the tree, and a source whose two halves disagree is a
+/// compile error rather than a program that projects one comprehension
+/// and traverses another.
+#[test]
+fn a_built_source_projects_the_comprehension_it_traverses() {
+    use polydat::dsl::ast::{
+        Binding, BindingModifier, Expr, ForSource, ForSourceKind, InputDecl, PolydatFile, Statement,
+    };
+    use polydat::dsl::compile::{CompileOptions, compile_ast_with_options};
+    use polydat::dsl::lexer::Span;
+    use polydat::iteration::comprehension::ast::Comprehension;
+    use polydat::iteration::comprehension::source::Source;
+
+    let sp = Span { line: 0, col: 0 };
+    let tree = Comprehension::cartesian(vec![
+        Comprehension::clause(
+            "k",
+            Source::IntRange {
+                lo: 1,
+                hi: 4,
+                step: 1,
+            },
+        ),
+        Comprehension::clause(
+            "limit",
+            Source::IntRange {
+                lo: 10,
+                hi: 12,
+                step: 1,
+            },
+        ),
+    ]);
+    let built = ForSource::comprehension(tree.clone(), sp).expect("the text writes this tree");
+    assert_eq!(built.text, "k in 1..4, limit in 10..12");
+
+    let file = |source: ForSource| PolydatFile {
+        statements: vec![
+            Statement::InputDecl(InputDecl {
+                name: "cycle".into(),
+                ty: Some("u64".into()),
+                span: sp,
+            }),
+            Statement::Binding(Binding {
+                targets: vec!["sweep".into()],
+                value: Expr::For(Box::new(source)),
+                modifier: BindingModifier::NONE,
+                type_annotation: None,
+                span: sp,
+            }),
+        ],
+    };
+
+    // What the program projects is what it traverses.
+    let projected = polydat::dsl::pprint::pp_file(&file(built.clone()));
+    assert!(
+        projected.contains("sweep := for k in 1..4, limit in 10..12"),
+        "{projected}"
+    );
+    let mut k =
+        compile_ast_with_options(&file(built), "", &CompileOptions::default(), None).unwrap();
+    k.set_inputs(&[0]);
+    let streamer = k.pull("sweep").clone();
+    assert!(
+        matches!(
+            streamer.as_streamer().unwrap().cardinality(),
+            CardinalityClass::Bounded(6)
+        ),
+        "{:?}",
+        streamer.as_streamer().unwrap().cardinality()
+    );
+
+    // A hand-made source whose text disagrees is refused, naming both.
+    let mismatched = ForSource {
+        text: "k in 900..999".into(),
+        kind: ForSourceKind::Comprehension(tree),
+        span: sp,
+    };
+    let err = compile_ast_with_options(&file(mismatched), "", &CompileOptions::default(), None)
+        .unwrap_err();
+    assert!(
+        err.contains("text and its comprehension differ") && err.contains("900..999"),
+        "{err}"
+    );
+}

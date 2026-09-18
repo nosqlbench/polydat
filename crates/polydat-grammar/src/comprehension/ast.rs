@@ -218,64 +218,10 @@ impl Comprehension {
         acc: &mut Vec<(String, String)>,
         seen: &mut std::collections::HashSet<String>,
     ) {
-        use super::source::Source;
         match self {
             Comprehension::Clause { name, source } => {
                 if seen.insert(name.clone()) {
-                    let spec_text = match source {
-                        Source::IntRange { lo, hi, step } => {
-                            if *step == 1 {
-                                format!("{lo}..{hi}")
-                            } else {
-                                format!("{lo}..{hi}..{step}")
-                            }
-                        }
-                        Source::Literal { values } if values.len() == 1 => {
-                            literal_value_text(&values[0])
-                        }
-                        Source::Literal { values } => values
-                            .iter()
-                            .map(literal_value_text)
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                        Source::Generator { expr, .. } => expr.clone(),
-                        Source::WorkloadParamList { name, .. } => format!("{{{name}}}"),
-                        Source::ContinuousInterval { interval, .. } => {
-                            // `{:?}` (not `{}`) keeps the decimal point so the
-                            // endpoints re-parse as floats — `{}` on `1.0f64`
-                            // prints "1", round-tripping a continuous `[1.0,5.0)`
-                            // to "1..5", which `parse_source` would re-classify as
-                            // an INTEGER range (typing the iter-var `U64`).
-                            if interval.hi_open {
-                                format!("{:?}..{:?}", interval.lo, interval.hi)
-                            } else {
-                                format!("{:?}..={:?}", interval.lo, interval.hi)
-                            }
-                        }
-                        Source::Distribution {
-                            distribution,
-                            support,
-                            params,
-                        } => {
-                            // Round-trips through `parse_source`: the
-                            // parameters in the measure's own order, and the
-                            // interval only when it narrows the measure's own
-                            // support.
-                            let args = params
-                                .iter()
-                                .map(|p| format!("{p:?}"))
-                                .collect::<Vec<_>>()
-                                .join(", ");
-                            let call = format!("{}({args})", distribution.text());
-                            if *support == distribution.support(params) {
-                                call
-                            } else if support.hi_open {
-                                format!("{call} on {:?}..{:?}", support.lo, support.hi)
-                            } else {
-                                format!("{call} on {:?}..={:?}", support.lo, support.hi)
-                            }
-                        }
-                    };
+                    let spec_text = source.to_text().unwrap_or_else(|| "<source>".to_string());
                     acc.push((name.clone(), spec_text));
                 }
             }
@@ -369,36 +315,6 @@ impl Comprehension {
     /// per spec §9.3.
     pub fn depth(&self) -> usize {
         1 + self.children().map(|c| c.depth()).max().unwrap_or(0)
-    }
-}
-
-/// Render a [`super::source::LiteralValue`] in legacy
-/// source-text form for [`Comprehension::coordinate_specs`].
-///
-/// Numeric / bool variants render bare; identifier-like
-/// strings render bare; strings with special characters
-/// render quoted with backslash escapes.
-fn literal_value_text(v: &super::source::LiteralValue) -> String {
-    use super::source::LiteralValue;
-    match v {
-        LiteralValue::Int(n) => n.to_string(),
-        LiteralValue::Float(f) => {
-            if f.fract() == 0.0 && f.is_finite() {
-                format!("{f:.1}")
-            } else {
-                format!("{f}")
-            }
-        }
-        LiteralValue::Bool(b) => b.to_string(),
-        LiteralValue::Json(j) => j.to_string(),
-        LiteralValue::String(s) => {
-            let bare_ok = !s.is_empty() && s.chars().all(|c| c.is_alphanumeric() || c == '_');
-            if bare_ok {
-                s.clone()
-            } else {
-                format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-            }
-        }
     }
 }
 

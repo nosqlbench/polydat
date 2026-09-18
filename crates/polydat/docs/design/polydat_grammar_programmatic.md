@@ -228,19 +228,21 @@ for sweep {
 ```
 
 ```rust
-use polydat::dsl::ast::{ForSource, ForSourceKind, ForStmt};
+use polydat::dsl::ast::{ForSource, ForStmt};
 use polydat::iteration::comprehension::spec::parse_comprehension_algebra;
 
 fn comprehension(text: &str) -> ForSource {
     let algebra = parse_comprehension_algebra(text).expect("comprehension text");
-    ForSource { text: text.into(), kind: ForSourceKind::Comprehension(algebra), span: sp() }
+    // The source takes its text from the tree, so the two halves cannot
+    // disagree; the `for` lowering refuses one where they do.
+    ForSource::comprehension(algebra, sp()).expect("the text writes this tree")
 }
 
 fn build_for() -> PolydatFile {
     file(vec![
         bind("sweep", Expr::For(Box::new(comprehension("k in 1..4, limit in 10,20,30 order halton/5")))),
         Statement::For(ForStmt {
-            source: ForSource { text: "sweep".into(), kind: ForSourceKind::Producer("sweep".into()), span: sp() },
+            source: ForSource::producer("sweep", sp()),
             body: vec![
                 bind("f", call("hash", vec![id("k")])),
                 bind("g", call("u64_add", vec![id("limit"), id("k")])),
@@ -251,12 +253,16 @@ fn build_for() -> PolydatFile {
 }
 ```
 
-`pp_file` prints a `for` source from its `text` field, so the projection
-is `sweep := for k in 1..4, limit in 10,20,30 order halton/5` followed by
-the traversal with its body indented four spaces, which is the spec's
-source byte for byte. A traversal over inline comprehension text uses
-`comprehension(...)` as the statement's source instead of
-`ForSourceKind::Producer`.
+`pp_file` prints a `for` source from its `text` field, which
+`ForSource::comprehension` fills from the tree's canonical text
+([Comprehension Forms](comprehension_forms.md#sec-canonical-text)). The
+projection is therefore the canonical spelling of the same
+comprehension, which differs from the authored bytes where the author
+wrote a bare value list: this example projects as `sweep := for k in
+1..4, limit in [10, 20, 30] order halton/5`, and both texts parse to the
+same tree. The traversal follows with its body indented four spaces. A
+traversal over inline comprehension text uses `comprehension(...)` as
+the statement's source instead of `ForSource::producer`.
 
 <a id="p-tile"></a>
 ## 9. A tile

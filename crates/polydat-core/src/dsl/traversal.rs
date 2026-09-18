@@ -253,7 +253,25 @@ pub fn resolve_source_with(
         )
     };
     let comprehension = match &source.kind {
-        ForSourceKind::Comprehension(c) => c.clone(),
+        ForSourceKind::Comprehension(c) => {
+            // The text and the tree are one source (comprehension_forms.md
+            // §8): a source carries both, and they must agree, so a
+            // programmatic build cannot project one comprehension and
+            // traverse another.
+            let from_text =
+                crate::iteration::comprehension::spec::parse_comprehension_algebra(&source.text)
+                    .map_err(|e| at(&e))?;
+            if from_text != *c {
+                return Err(at(&format!(
+                    "the source's text and its comprehension differ; the text is `{}`, \
+                     the comprehension's own text is `{}`",
+                    source.text,
+                    c.to_text()
+                        .unwrap_or_else(|| "(outside the text grammar)".into())
+                )));
+            }
+            c.clone()
+        }
         ForSourceKind::Producer(name) => find(name)?,
         ForSourceKind::Derived {
             base,

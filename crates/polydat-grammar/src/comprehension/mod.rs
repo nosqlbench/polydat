@@ -16,6 +16,7 @@ pub(crate) mod parse;
 pub mod source;
 pub mod spec;
 pub mod strategy;
+pub mod to_text;
 
 pub use ast::Comprehension;
 pub use cardinality::{CardinalityClass, Hybrid, Interval, MeasureName, ProductMeasure};

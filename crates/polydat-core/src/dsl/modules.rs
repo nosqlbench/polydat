@@ -736,12 +736,20 @@ impl Compiler {
                 })
             }
             ForSourceKind::Comprehension(_) => {
-                let mut rewritten = super::parser::for_source_from_text(&text, source.span, true)?;
-                if let ForSourceKind::Comprehension(c) = &rewritten.kind {
-                    let c = self.rewrite_generators(c, prefix, module_inputs, arg_map)?;
-                    rewritten.kind = ForSourceKind::Comprehension(c);
-                }
-                Ok(rewritten)
+                let rewritten = super::parser::for_source_from_text(&text, source.span, true)?;
+                let ForSourceKind::Comprehension(c) = &rewritten.kind else {
+                    return Ok(rewritten);
+                };
+                // The rewrite renames the wires a source references, so
+                // the text is the rewritten tree's own, not the one the
+                // module body wrote (comprehension_forms.md §8).
+                let c = self.rewrite_generators(c, prefix, module_inputs, arg_map)?;
+                ForSource::comprehension(c, source.span).ok_or_else(|| {
+                    format!(
+                        "producer inside module '{prefix}': the rewritten comprehension \
+                         `{text}` is outside the text grammar"
+                    )
+                })
             }
         }
     }
