@@ -18,6 +18,7 @@ fn err(src: &str) -> String {
     compile_polydat(src)
         .err()
         .unwrap_or_else(|| panic!("expected a compile error\n{src}"))
+        .to_string()
 }
 
 #[test]

@@ -533,7 +533,7 @@ fn run_wellformed_pass(seed: u64, iterations: usize) -> Vec<String> {
                 }
             }
             Ok(Err(e)) => {
-                if cryptic(&e) || !e.contains("for ") {
+                if cryptic(&e.to_string()) || !e.to_string().contains("for ") {
                     failures.push(format!("[seed {seed:#x}] iteration {i}: compiler error is cryptic or does not name the for form: {e}\n  source:\n{source}\n  {}", repro(i)));
                 }
             }
@@ -548,7 +548,8 @@ fn run_wellformed_pass(seed: u64, iterations: usize) -> Vec<String> {
         // without panicking, and two hosts of the same source produce the
         // same trace (T1). Bounded so a wide comprehension stays cheap.
         let run = || -> Result<Vec<String>, String> {
-            let mut k = polydat::dsl::compile_polydat_interpreter(&source)?;
+            let mut k =
+                polydat::dsl::compile_polydat_interpreter(&source).map_err(|e| e.to_string())?;
             k.set_inputs(&[3]);
             let mut trace = Vec::new();
             run_traversals_bounded(&mut k, 0, &mut trace)?;
@@ -676,7 +677,7 @@ fn run_mutation_pass(seed: u64, iterations: usize) -> Vec<String> {
                     "printed form of a parsed mutant does not parse: {e}\n  printed:\n{printed}"
                 )
             })?;
-            polydat::dsl::compile_polydat_interpreter(&source)
+            polydat::dsl::compile_polydat_interpreter(&source).map_err(|e| e.to_string())
         });
         match outcome {
             Err(p) => failures.push(format!(
@@ -685,7 +686,7 @@ fn run_mutation_pass(seed: u64, iterations: usize) -> Vec<String> {
                 repro(i)
             )),
             Ok(Err(e)) => {
-                if cryptic(&e) || e.contains("printed form of a parsed mutant") {
+                if cryptic(&e) || e.to_string().contains("printed form of a parsed mutant") {
                     failures.push(format!(
                         "[seed {seed:#x}] iteration {i}: {e}\n  source:\n{source}\n  {}",
                         repro(i)

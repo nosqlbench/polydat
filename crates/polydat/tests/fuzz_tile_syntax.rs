@@ -469,7 +469,7 @@ fn run_wellformed_pass(seed: u64, iterations: usize) -> Vec<String> {
         // programs take the error path; the ones that compile must
         // render without panicking.
         match std::panic::catch_unwind(|| {
-            let mut k = polydat::dsl::compile_polydat(&source)?;
+            let mut k = polydat::dsl::compile_polydat(&source).map_err(|e| e.to_string())?;
             k.set_inputs(&[1]);
             Ok::<String, String>(k.pull("t").to_display_string())
         }) {
@@ -540,7 +540,7 @@ fn run_mutation_pass(seed: u64, iterations: usize) -> Vec<String> {
                     "printed form of a parsed mutant does not parse: {e}\n  printed:\n{printed}"
                 )
             })?;
-            polydat::dsl::compile_polydat(&source)
+            polydat::dsl::compile_polydat(&source).map_err(|e| e.to_string())
         });
         match outcome {
             Err(p) => failures.push(format!(
@@ -549,7 +549,7 @@ fn run_mutation_pass(seed: u64, iterations: usize) -> Vec<String> {
                 repro(i)
             )),
             Ok(Err(e)) => {
-                if cryptic(&e) || e.contains("printed form of a parsed mutant") {
+                if cryptic(&e) || e.to_string().contains("printed form of a parsed mutant") {
                     failures.push(format!(
                         "[seed {seed:#x}] iteration {i}: {e}\n  source:\n{source}\n  {}",
                         repro(i)

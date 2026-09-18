@@ -146,26 +146,29 @@ fn structural_errors_name_the_problem() {
         "input cycle: u64\ndoc := polytile_json(\"{\\\"a\\\": \\\"@for s in 0..4\\\"}\")\n",
     )
     .unwrap_err();
-    assert!(err.contains("outside a directive position"), "{err}");
+    assert!(
+        err.to_string().contains("outside a directive position"),
+        "{err}"
+    );
     let err = compile_polydat_interpreter(
         "input cycle: u64\ndoc := polytile_json(\"{\\\"a\\\": [\\\"@else\\\", 1]}\")\n",
     )
     .unwrap_err();
-    assert!(err.contains("without a leading"), "{err}");
+    assert!(err.to_string().contains("without a leading"), "{err}");
     let err = compile_polydat_interpreter("input cycle: u64\ndoc := polytile_json(\"not json\")\n")
         .unwrap_err();
-    assert!(err.contains("not JSON"), "{err}");
+    assert!(err.to_string().contains("not JSON"), "{err}");
     let err = compile_polydat_interpreter("input cycle: u64\ndoc := polytile(\"yaml\", \"x\")\n")
         .unwrap_err();
-    assert!(err.contains("unknown encoding 'yaml'"), "{err}");
+    assert!(err.to_string().contains("unknown encoding 'yaml'"), "{err}");
     let err = compile_polydat_interpreter("input cycle: u64\ndoc := polytile(\"json\", cycle)\n")
         .unwrap_err();
-    assert!(err.contains("template body"), "{err}");
+    assert!(err.to_string().contains("template body"), "{err}");
     let err = compile_polydat_interpreter(
         "input cycle: u64\ndoc := polytile(\"json\", \"${missing}\")\n",
     )
     .unwrap_err();
-    assert!(err.contains("missing"), "{err}");
+    assert!(err.to_string().contains("missing"), "{err}");
 }
 
 #[test]

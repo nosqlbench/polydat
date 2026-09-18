@@ -8,14 +8,17 @@
 use polydat::dsl::transform::{assign_values, parse_assignment};
 use polydat::dsl::{CompileOptions, compile_ast_with_options};
 
-fn compile(src: &str, assigns: &[(&str, &str)]) -> Result<polydat::kernel::PolydatKernel, String> {
-    let tokens = polydat::dsl::lexer::lex(src)?;
-    let mut ast = polydat::dsl::parser::parse(tokens)?;
+fn compile(
+    src: &str,
+    assigns: &[(&str, &str)],
+) -> Result<polydat::kernel::PolydatKernel, polydat::KernelError> {
+    let tokens = polydat::dsl::lexer::lex(src).map_err(polydat::KernelError::Source)?;
+    let mut ast = polydat::dsl::parser::parse(tokens).map_err(polydat::KernelError::Source)?;
     let pairs: Vec<(String, String)> = assigns
         .iter()
         .map(|(n, v)| (n.to_string(), v.to_string()))
         .collect();
-    assign_values(&mut ast, &pairs)?;
+    assign_values(&mut ast, &pairs).map_err(polydat::KernelError::Source)?;
     compile_ast_with_options(&ast, src, &CompileOptions::default(), None)
 }
 
@@ -50,13 +53,16 @@ fn assigned_input_becomes_a_fixed_extern() {
 #[test]
 fn non_numeric_text_for_a_numeric_extern_is_a_compile_error() {
     let err = compile(SRC, &[("interval_ms", "soon")]).unwrap_err();
-    assert!(err.contains("interval_ms"), "{err}");
+    assert!(err.to_string().contains("interval_ms"), "{err}");
 }
 
 #[test]
 fn unknown_name_is_rejected_with_declared_names() {
     let err = compile(SRC, &[("nope", "1")]).unwrap_err();
-    assert!(err.contains("nope") && err.contains("interval_ms"), "{err}");
+    assert!(
+        err.to_string().contains("nope") && err.to_string().contains("interval_ms"),
+        "{err}"
+    );
 }
 
 #[test]

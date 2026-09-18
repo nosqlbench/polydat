@@ -163,12 +163,12 @@ fn derived_form_over_an_unknown_base_is_an_error() {
     let err =
         compile_polydat_interpreter("input cycle: u64\nedges := for nowhere where {k} == 1\n")
             .unwrap_err();
-    assert!(err.contains("nowhere"), "{err}");
+    assert!(err.to_string().contains("nowhere"), "{err}");
     let err = compile_polydat_interpreter(
         "input cycle: u64\nbase := for k in 1..4\nbad := for base order zigzag\n",
     )
     .unwrap_err();
-    assert!(err.contains("zigzag"), "{err}");
+    assert!(err.to_string().contains("zigzag"), "{err}");
 }
 
 #[test]

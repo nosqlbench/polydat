@@ -70,7 +70,7 @@ fn a_generator_over_a_runtime_name_stays_unbounded_at_compile() {
         "input cycle: u64\ninput n: u64\nfor k in pow2({n}) order halton/2 {\n    v := u64_add(k, 0)\n}\n",
     )
     .unwrap_err();
-    assert!(err.contains("V4"), "{err}");
+    assert!(err.to_string().contains("V4"), "{err}");
     // Without an order the traversal evaluates it with the wire bound.
     let mut k = compile_polydat_interpreter(
         "input cycle: u64\nextern total: u64 = 100\nfor p in partitions(\"*/2\", {total}) {\n    v := cardinality(p)\n}\n",

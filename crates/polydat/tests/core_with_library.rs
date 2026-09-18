@@ -24,7 +24,7 @@ mod dsl_compile_tests {
     use std::sync::Arc;
 
     /// The interpreter kernel under `strict` alone.
-    fn strict(src: &str, strict: bool) -> Result<PolydatKernel, String> {
+    fn strict(src: &str, strict: bool) -> Result<PolydatKernel, polydat::KernelError> {
         let options = CompileOptions {
             strict,
             ..CompileOptions::default()
@@ -33,7 +33,11 @@ mod dsl_compile_tests {
     }
 
     /// The interpreter kernel keeping `required` outputs, under `strict`.
-    fn with_outputs(src: &str, required: &[String], strict: bool) -> Result<PolydatKernel, String> {
+    fn with_outputs(
+        src: &str,
+        required: &[String],
+        strict: bool,
+    ) -> Result<PolydatKernel, polydat::KernelError> {
         let options = CompileOptions {
             required_outputs: required.to_vec(),
             strict,
@@ -441,7 +445,7 @@ mod dsl_compile_tests {
         assert!(result.is_err(), "strict should reject implicit coercion");
         let err = result.unwrap_err();
         assert!(
-            err.contains("coercion") || err.contains("__adapt"),
+            err.to_string().contains("coercion") || err.to_string().contains("__adapt"),
             "error should mention coercion: {err}"
         );
     }
@@ -601,11 +605,12 @@ mod dsl_compile_tests {
         let err = compile_polydat_interpreter(src)
             .expect_err("Plan A must reject init binding wired to a coordinate input");
         assert!(
-            err.contains("init binding 'bad'") && err.contains("init contract"),
+            err.to_string().contains("init binding 'bad'")
+                && err.to_string().contains("init contract"),
             "diagnostic must name the binding and the contract; got: {err}"
         );
         assert!(
-            err.contains("cycle") || err.contains("coordinate"),
+            err.to_string().contains("cycle") || err.to_string().contains("coordinate"),
             "diagnostic should pinpoint the offending wire; got: {err}"
         );
     }
@@ -619,11 +624,12 @@ mod dsl_compile_tests {
         let err = compile_polydat_interpreter(src)
             .expect_err("Plan A must reject init binding wired to a external-write port");
         assert!(
-            err.contains("init binding 'derived'") && err.contains("init contract"),
+            err.to_string().contains("init binding 'derived'")
+                && err.to_string().contains("init contract"),
             "diagnostic must name the binding and the contract; got: {err}"
         );
         assert!(
-            err.contains("session_id") || err.contains("capture"),
+            err.to_string().contains("session_id") || err.to_string().contains("capture"),
             "diagnostic should pinpoint the offending wire; got: {err}"
         );
     }

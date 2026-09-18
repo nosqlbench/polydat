@@ -18,7 +18,7 @@ use polydat::dsl::compile::{
 };
 
 /// The interpreter kernel under strict typing.
-fn compile_strict(src: &str) -> Result<polydat::kernel::PolydatKernel, String> {
+fn compile_strict(src: &str) -> Result<polydat::kernel::PolydatKernel, polydat::KernelError> {
     let options = CompileOptions {
         strict: true,
         ..CompileOptions::default()
@@ -214,7 +214,7 @@ fn unknown_function_name() {
     assert!(result.is_err(), "unknown function should fail");
     let err = result.unwrap_err();
     assert!(
-        err.contains("nonexistent_function"),
+        err.to_string().contains("nonexistent_function"),
         "error should name the function: {err}"
     );
 }
@@ -303,8 +303,11 @@ fn shared_non_literal_rejected() {
         shared counter := hash(cycle)
     "#;
     let err = compile_polydat_interpreter(src).expect_err("non-literal shared const must error");
-    assert!(err.contains("shared binding 'counter'"), "error: {err}");
-    assert!(err.contains("literal"), "error: {err}");
+    assert!(
+        err.to_string().contains("shared binding 'counter'"),
+        "error: {err}"
+    );
+    assert!(err.to_string().contains("literal"), "error: {err}");
 }
 
 #[test]
@@ -319,7 +322,7 @@ fn const_on_cycle_expr_rejected() {
     "#;
     let err = compile_polydat_interpreter(src).expect_err("const wired to cycle must be rejected");
     assert!(
-        err.contains("init contract") || err.contains("const"),
+        err.to_string().contains("init contract") || err.to_string().contains("const"),
         "diagnostic should call out the const contract: {err}"
     );
 }
@@ -816,7 +819,8 @@ fn error_includes_line_info() {
     let err = result.unwrap_err();
     // Error should mention the bad function name
     assert!(
-        err.contains("completely_bogus_function") || err.contains("unknown"),
+        err.to_string().contains("completely_bogus_function")
+            || err.to_string().contains("unknown"),
         "error should be informative: {err}"
     );
 }
@@ -929,7 +933,7 @@ fn string_ordered_comparison_errors() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        err.contains("String") || err.contains("not supported"),
+        err.to_string().contains("String") || err.to_string().contains("not supported"),
         "expected clear String-ordered-comparison error, got: {err}",
     );
 }
@@ -958,7 +962,7 @@ fn type_mismatch_error_carries_binding_name() {
     // test verifies the friendlier path: a downstream type
     // mismatch carrying an anon node attributable to the binding.
     assert!(
-        err.contains("String") || err.contains("not supported"),
+        err.to_string().contains("String") || err.to_string().contains("not supported"),
         "got: {err}"
     );
 }
@@ -986,7 +990,7 @@ fn type_mismatch_error_names_user_binding_via_prefix() {
     // in, somewhere in the message — either as the destination
     // node or as the prefix of an anon node.
     assert!(
-        err.contains("overscan"),
+        err.to_string().contains("overscan"),
         "expected error to mention the LHS binding name 'overscan', got:\n{err}",
     );
 }

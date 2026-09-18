@@ -164,7 +164,7 @@ fn adapter_table_is_consistent() {
             );
             let expected = expected_adapt(p.src, c.dst);
             let mut log = CompileEventLog::new();
-            let result = compile_polydat_with_log(&source, &mut log);
+            let result = compile_polydat_with_log(&source, &mut log).map_err(|e| e.to_string());
             let observed = classify_result(&result, &log);
             if !adapt_agrees(expected, observed) {
                 mismatches.push(format!(
@@ -492,10 +492,13 @@ fn run_fuzz_pass(seed: u64, iterations: usize) -> Vec<String> {
                 // assembly-time validator (SRD 15 §"Const
                 // Constraint Metadata") rejected the literal
                 // before the node's constructor saw it.
-                if msg.is_empty()
-                    || msg.to_lowercase().contains("panic")
-                    || msg.to_lowercase().contains("index out of bounds")
-                    || msg.to_lowercase().contains("unreachable")
+                if msg.to_string().is_empty()
+                    || msg.to_string().to_lowercase().contains("panic")
+                    || msg
+                        .to_string()
+                        .to_lowercase()
+                        .contains("index out of bounds")
+                    || msg.to_string().to_lowercase().contains("unreachable")
                 {
                     failures.push(format!(
                         "[seed {seed:#x}] iteration {i} produced a cryptic error message.\n  \
@@ -958,7 +961,7 @@ fn sanity_f64_to_u64_rejects_without_cast() {
     ";
     let err = compile_polydat_interpreter(source).expect_err("narrowing f64→u64 must not compile");
     assert!(
-        err.contains("type mismatch"),
+        err.to_string().contains("type mismatch"),
         "expected a type-mismatch error for narrowing, got: {err}"
     );
 }

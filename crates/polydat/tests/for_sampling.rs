@@ -338,7 +338,7 @@ fn an_authored_seed_selects_the_permutation() {
         "input cycle: u64\nsome := for k in 1..100 order halton(count=3, seed=42)\n",
     )
     .unwrap_err();
-    assert!(err.contains("takes no seed"), "{err}");
+    assert!(err.to_string().contains("takes no seed"), "{err}");
 }
 
 /// A named measure is a source in the text, the spelling the spec's §3
@@ -384,5 +384,5 @@ fn a_named_measure_is_a_source_in_the_text() {
         "input cycle: u64\nfor x in normal(1) order halton/4 {\n    px := f64_add(x, 0.0)\n    py := f64_add(x, 0.0)\n}\n",
     )
     .unwrap_err();
-    assert!(err.contains("normal(1)"), "{err}");
+    assert!(err.to_string().contains("normal(1)"), "{err}");
 }

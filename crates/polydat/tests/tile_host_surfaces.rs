@@ -15,7 +15,7 @@ use polydat::dsl::events::{CompileEvent, CompileEventLog};
 /// The interpreter kernel of a parsed program under the default options.
 fn compile_ast(
     ast: &polydat::dsl::ast::PolydatFile,
-) -> Result<polydat::kernel::PolydatKernel, String> {
+) -> Result<polydat::kernel::PolydatKernel, polydat::KernelError> {
     compile_ast_with_options(ast, "", &CompileOptions::default(), None)
 }
 

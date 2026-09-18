@@ -315,7 +315,7 @@ fn a_failing_construction_is_a_compile_error_on_every_tier() {
     let err = compile_polydat_to_assembler(src)
         .err()
         .expect("construction fails at compile time");
-    assert!(err.contains("base must be non-zero"), "{err}");
+    assert!(err.to_string().contains("base must be non-zero"), "{err}");
 }
 
 // ── Externs on every engine ──

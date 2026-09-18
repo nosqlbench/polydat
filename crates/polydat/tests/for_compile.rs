@@ -45,7 +45,7 @@ fn int_among_floats_widens_and_mixed_types_are_an_error() {
     assert_eq!(elements(k.program(), 0)[0].1, PortType::F64);
     let err = compile_polydat_interpreter("input cycle: u64\nfor m in 1,load {\n    x := m\n}\n")
         .unwrap_err();
-    assert!(err.contains("mixes"), "{err}");
+    assert!(err.to_string().contains("mixes"), "{err}");
 }
 
 #[test]
@@ -120,7 +120,10 @@ fn traversal_over_a_producer_resolves_its_comprehension() {
     let err =
         compile_polydat_interpreter("input cycle: u64\nfor nowhere {\n    f := hash(cycle)\n}\n")
             .unwrap_err();
-    assert!(err.contains("no producer named 'nowhere'"), "{err}");
+    assert!(
+        err.to_string().contains("no producer named 'nowhere'"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -156,8 +159,11 @@ fn body_type_errors_are_reported_at_compile_time() {
         "input cycle: u64\nfor name in load,verify {\n    x := u64_add(name, 1)\n}\n",
     )
     .unwrap_err();
-    assert!(err.contains("for name in load, verify"), "{err}");
-    assert!(err.contains("body failed to compile"), "{err}");
+    assert!(
+        err.to_string().contains("for name in load, verify"),
+        "{err}"
+    );
+    assert!(err.to_string().contains("body failed to compile"), "{err}");
 }
 
 #[test]
@@ -166,7 +172,7 @@ fn unknown_outer_name_is_an_error_in_the_body() {
         "input cycle: u64\nfor k in 1..4 {\n    x := hash(missing)\n}\n",
     )
     .unwrap_err();
-    assert!(err.contains("missing"), "{err}");
+    assert!(err.to_string().contains("missing"), "{err}");
 }
 
 #[test]
@@ -175,7 +181,10 @@ fn body_may_not_declare_another_coordinate() {
         "input cycle: u64\nfor k in 1..4 {\n    input other: u64\n    x := hash(other)\n}\n",
     )
     .unwrap_err();
-    assert!(err.contains("cannot declare input 'other'"), "{err}");
+    assert!(
+        err.to_string().contains("cannot declare input 'other'"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -198,8 +207,8 @@ fn a_comprehension_that_violates_a_v_axiom_is_a_compile_error() {
         "input cycle: u64\nbase := for k in 1..10\nlow := for base where {k} < 8\ncorner := for low where {k} > 2 order extrema/1\n",
     )
     .unwrap_err();
-    assert!(err.contains("V4"), "{err}");
-    assert!(err.contains("line 4"), "{err}");
+    assert!(err.to_string().contains("V4"), "{err}");
+    assert!(err.to_string().contains("line 4"), "{err}");
 }
 
 /// A degenerate composition (comprehension_forms.md §5.8) compiles
@@ -223,8 +232,8 @@ fn a_degenerate_composition_warns_lax_and_fails_strict() {
         ..CompileOptions::default()
     };
     let err = compile_polydat_with_options(src, &strict, None).unwrap_err();
-    assert!(err.contains("strict mode"), "{err}");
-    assert!(err.contains("line 2"), "{err}");
+    assert!(err.to_string().contains("strict mode"), "{err}");
+    assert!(err.to_string().contains("line 2"), "{err}");
 }
 
 /// `over` naming a wire that is not a spec string or partition-typed
@@ -236,10 +245,10 @@ fn over_naming_a_non_partition_wire_is_a_compile_error() {
         "input cycle: u64\nfor k in 1..3 {\n    cursor rows = range(0, 100) over k\n    v := rows.ordinal\n}\n",
     )
     .unwrap_err();
-    assert!(err.contains("`over` names a U64 wire"), "{err}");
+    assert!(err.to_string().contains("`over` names a U64 wire"), "{err}");
     let err = compile_polydat_interpreter(
         "input cycle: u64\ncursor rows = range(0, 100) over 42\nv := rows.ordinal\n",
     )
     .unwrap_err();
-    assert!(err.contains("`over` names a U64 wire"), "{err}");
+    assert!(err.to_string().contains("`over` names a U64 wire"), "{err}");
 }

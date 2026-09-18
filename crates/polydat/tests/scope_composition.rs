@@ -839,11 +839,11 @@ fn extern_default_function_call_rejected() {
     )
     .expect_err("function call default must error");
     assert!(
-        err.contains("extern 'x' default"),
+        err.to_string().contains("extern 'x' default"),
         "error should name the extern: {err}"
     );
     assert!(
-        err.contains("literal"),
+        err.to_string().contains("literal"),
         "error should explain that literals are required: {err}"
     );
 }
@@ -859,7 +859,10 @@ fn extern_default_identifier_rejected() {
     "#,
     )
     .expect_err("identifier default must error");
-    assert!(err.contains("extern 'x' default"), "error: {err}");
+    assert!(
+        err.to_string().contains("extern 'x' default"),
+        "error: {err}"
+    );
 }
 
 #[test]
@@ -871,7 +874,10 @@ fn extern_default_type_mismatch_string_for_u64_rejected() {
     "#,
     )
     .expect_err("string default for u64 port must error");
-    assert!(err.contains("extern 'n' default"), "error: {err}");
+    assert!(
+        err.to_string().contains("extern 'n' default"),
+        "error: {err}"
+    );
 }
 
 #[test]
@@ -883,7 +889,10 @@ fn extern_default_type_mismatch_float_for_u64_rejected() {
     "#,
     )
     .expect_err("float default for u64 port must error");
-    assert!(err.contains("extern 'n' default"), "error: {err}");
+    assert!(
+        err.to_string().contains("extern 'n' default"),
+        "error: {err}"
+    );
 }
 
 #[test]
@@ -900,7 +909,10 @@ fn extern_default_negative_for_u64_rejected_with_clear_message() {
     "#,
     )
     .expect_err("negative literal default for u64 must error");
-    assert!(err.contains("extern 'n' default"), "error: {err}");
+    assert!(
+        err.to_string().contains("extern 'n' default"),
+        "error: {err}"
+    );
 }
 
 #[test]
@@ -1137,8 +1149,14 @@ fn shared_non_literal_init_rejected() {
     "#,
     )
     .expect_err("non-literal shared const must error");
-    assert!(err.contains("shared binding 'rolling'"), "error: {err}");
-    assert!(err.contains("literal initial value"), "error: {err}");
+    assert!(
+        err.to_string().contains("shared binding 'rolling'"),
+        "error: {err}"
+    );
+    assert!(
+        err.to_string().contains("literal initial value"),
+        "error: {err}"
+    );
 }
 
 // =========================================================================

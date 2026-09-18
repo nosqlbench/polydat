@@ -127,7 +127,7 @@ fn custom_delimiters_render_the_same() {
 fn unknown_wire_in_a_hole_is_a_compile_error_naming_the_tile() {
     let err = compile_polydat_interpreter("input cycle: u64\ntile t : text := \"${missing}\"\n")
         .unwrap_err();
-    assert!(err.contains("missing"), "{err}");
+    assert!(err.to_string().contains("missing"), "{err}");
 }
 
 #[test]

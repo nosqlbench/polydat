@@ -233,8 +233,8 @@ impl<P> SubcontextBuilder<P> {
         if trimmed.is_empty() {
             return Ok(self);
         }
-        let tokens = lex(source).map_err(ContractViolation::Compile)?;
-        let file = parse(tokens).map_err(ContractViolation::Compile)?;
+        let tokens = lex(source).map_err(|e| ContractViolation::Compile(e.to_string()))?;
+        let file = parse(tokens).map_err(|e| ContractViolation::Compile(e.to_string()))?;
 
         // Collect locally-declared names (LHS of `:=` and
         // `init <name> = ...` and `extern <name>` so the magic-
@@ -492,8 +492,9 @@ impl<P> SubcontextBuilder<P> {
         for fragment in &body {
             match fragment {
                 BodyFragment::PolydatSource(src) => {
-                    let tokens = lex(src).map_err(ContractViolation::Compile)?;
-                    let file = parse(tokens).map_err(ContractViolation::Compile)?;
+                    let tokens = lex(src).map_err(|e| ContractViolation::Compile(e.to_string()))?;
+                    let file =
+                        parse(tokens).map_err(|e| ContractViolation::Compile(e.to_string()))?;
                     statements.extend(file.statements);
                 }
                 BodyFragment::Statements(stmts) => statements.extend(stmts.iter().cloned()),
@@ -603,7 +604,7 @@ impl<P> SubcontextBuilder<P> {
                 },
                 None,
             )
-            .map_err(ContractViolation::Compile)?
+            .map_err(|e| ContractViolation::Compile(e.to_string()))?
         } else if !write_throughs.is_empty()
             || body
                 .iter()
@@ -624,7 +625,7 @@ impl<P> SubcontextBuilder<P> {
                 &dsl_options,
                 None,
             )
-            .map_err(ContractViolation::Compile)?
+            .map_err(|e| ContractViolation::Compile(e.to_string()))?
         } else {
             // No rewrite, no Statements fragments — reconstruct
             // the source string and use the source-aware
@@ -646,7 +647,7 @@ impl<P> SubcontextBuilder<P> {
                 }
             }
             crate::dsl::compile::compile_polydat_with_options(&src, &dsl_options, None)
-                .map_err(ContractViolation::Compile)?
+                .map_err(|e| ContractViolation::Compile(e.to_string()))?
         };
 
         // ----- Apply legacy-bridge inherited-output marking.

@@ -35,7 +35,10 @@ fn a_local_module_shadows_a_library_node_of_the_same_name() {
     assert_eq!(k.pull("r").as_u64(), 42);
     // Without the definition the library node is still the one called.
     let e = compile_polydat_interpreter("input cycle: u64\nr := pick(cycle)\n").unwrap_err();
-    assert!(e.contains("pick") || e.contains("inputs"), "{e}");
+    assert!(
+        e.to_string().contains("pick") || e.to_string().contains("inputs"),
+        "{e}"
+    );
 }
 
 #[test]
@@ -77,7 +80,7 @@ fn as_casts_through_the_adapter_catalog() {
     // Narrowing is still refused with the explicit alternatives.
     let e = compile_polydat_interpreter("input cycle: u64\nf := to_f64(cycle)\nn := f as u64\n")
         .unwrap_err();
-    assert!(e.contains("floor_to_u64"), "{e}");
+    assert!(e.to_string().contains("floor_to_u64"), "{e}");
 }
 
 #[test]
@@ -125,7 +128,7 @@ fn module_string_parameters_spell_str_like_inputs_and_externs() {
         "input cycle: u64\nf(name: str) -> (line: str) := {\n line := name\n}\na := f(7)\n",
     )
     .unwrap_err();
-    assert!(e.contains("expects str, got u64"), "{e}");
+    assert!(e.to_string().contains("expects str, got u64"), "{e}");
 }
 
 #[test]

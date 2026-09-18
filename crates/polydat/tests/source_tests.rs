@@ -112,7 +112,7 @@ fn vectordata_source_rejects_unknown_facet() {
 id := row.ordinal"#;
     let err = compile_polydat_interpreter(src).unwrap_err();
     assert!(
-        err.contains("facet must be") && err.contains("bogus"),
+        err.to_string().contains("facet must be") && err.to_string().contains("bogus"),
         "expected facet validation error, got: {err}",
     );
 }
@@ -124,7 +124,7 @@ fn vectordata_source_rejects_non_string_args() {
 id := row.ordinal"#;
     let err = compile_polydat_interpreter(src).unwrap_err();
     assert!(
-        err.contains("string literal"),
+        err.to_string().contains("string literal"),
         "expected string-literal error, got: {err}",
     );
 }
@@ -138,7 +138,7 @@ fn vectordata_source_requires_three_args() {
 id := row.ordinal"#;
     let err = compile_polydat_interpreter(src).unwrap_err();
     assert!(
-        err.contains("string literal") || err.contains("facet"),
+        err.to_string().contains("string literal") || err.to_string().contains("facet"),
         "expected validation error, got: {err}",
     );
 }
@@ -151,7 +151,7 @@ fn vectordata_base_rejects_non_string_args() {
 id := row.ordinal"#;
     let err = compile_polydat_interpreter(src).unwrap_err();
     assert!(
-        err.contains("string literal"),
+        err.to_string().contains("string literal"),
         "expected string-literal error, got: {err}",
     );
 }
@@ -163,7 +163,7 @@ fn vectordata_query_requires_two_args() {
 id := q.ordinal"#;
     let err = compile_polydat_interpreter(src).unwrap_err();
     assert!(
-        err.contains("string literal"),
+        err.to_string().contains("string literal"),
         "expected string-literal error, got: {err}",
     );
 }

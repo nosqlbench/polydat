@@ -60,7 +60,7 @@ fn outcome<T>(r: std::thread::Result<Result<T, String>>) -> (&'static str, Strin
 /// reads every output, as a host would.
 fn row(src: &str) -> [(&'static str, String); 4] {
     let p1 = outcome(std::panic::catch_unwind(|| {
-        let mut asm = compile_polydat_to_assembler(src)?;
+        let mut asm = compile_polydat_to_assembler(src).map_err(|e| e.to_string())?;
         asm.set_jit_mode(polydat::JitMode::Off);
         let mut k = asm.compile().map_err(|e| e.to_string())?;
         k.set_inputs(&[3]);
@@ -71,7 +71,8 @@ fn row(src: &str) -> [(&'static str, String); 4] {
         Ok::<(), String>(())
     }));
     let p2 = outcome(std::panic::catch_unwind(|| {
-        let mut k = compile_polydat_to_assembler(src)?
+        let mut k = compile_polydat_to_assembler(src)
+            .map_err(|e| e.to_string())?
             .try_compile_raw()
             .map_err(|_| "no closure form for some node".to_string())?;
         k.eval(&[3]);
@@ -82,7 +83,8 @@ fn row(src: &str) -> [(&'static str, String); 4] {
         Ok::<(), String>(())
     }));
     let p3 = outcome(std::panic::catch_unwind(|| {
-        let mut k = compile_polydat_to_assembler(src)?
+        let mut k = compile_polydat_to_assembler(src)
+            .map_err(|e| e.to_string())?
             .try_compile_jit()
             .map_err(|e| e.to_string())?;
         k.eval(&[3]);
@@ -93,7 +95,8 @@ fn row(src: &str) -> [(&'static str, String); 4] {
         Ok::<(), String>(())
     }));
     let pure = outcome(std::panic::catch_unwind(|| {
-        let mut k = compile_polydat_to_assembler(src)?
+        let mut k = compile_polydat_to_assembler(src)
+            .map_err(|e| e.to_string())?
             .try_compile_pure_jit()
             .map_err(|e| e.to_string())?;
         k.eval(&[3]);

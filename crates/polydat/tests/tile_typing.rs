@@ -27,6 +27,7 @@ fn err(src: &str) -> String {
     compile_polydat(src)
         .err()
         .unwrap_or_else(|| panic!("expected a compile error\n{src}"))
+        .to_string()
 }
 
 // §4.3 row: json, value position. The wire's type picks the JSON form.

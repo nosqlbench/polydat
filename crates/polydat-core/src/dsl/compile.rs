@@ -309,7 +309,7 @@ pub fn stdlib_sources() -> &'static [(&'static str, &'static str)] {
 /// its `PolydatProgram`, its `Lookup` view, its subcontext builder —
 /// calls [`compile_polydat_interpreter`] for the concrete type. That is
 /// the one reason to hold a `PolydatKernel` rather than a `dyn Kernel`.
-pub fn compile_polydat(source: &str) -> Result<Box<dyn crate::Kernel>, String> {
+pub fn compile_polydat(source: &str) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
     compile_polydat_interpreter(source).map(|k| Box::new(k) as Box<dyn crate::Kernel>)
 }
 
@@ -324,7 +324,7 @@ pub fn compile_polydat(source: &str) -> Result<Box<dyn crate::Kernel>, String> {
 /// reach for. Driving a kernel — coordinates, externs, cursors,
 /// evaluation, reads, traversals — is the trait's, on every engine
 /// including this one.
-pub fn compile_polydat_interpreter(source: &str) -> Result<PolydatKernel, String> {
+pub fn compile_polydat_interpreter(source: &str) -> Result<PolydatKernel, crate::KernelError> {
     compile_polydat_with_options(source, &CompileOptions::default(), None)
 }
 
@@ -335,8 +335,8 @@ pub fn compile_polydat_interpreter(source: &str) -> Result<PolydatKernel, String
 pub fn compile_polydat_with_tiles(
     source: &str,
     tiles: Vec<super::ast::TileDef>,
-) -> Result<PolydatKernel, String> {
-    let (ast, options) = ast_with_tiles(source, tiles)?;
+) -> Result<PolydatKernel, crate::KernelError> {
+    let (ast, options) = ast_with_tiles(source, tiles).map_err(crate::KernelError::Source)?;
     compile_ast_with_options(&ast, source, &options, None)
 }
 
@@ -376,7 +376,7 @@ fn ast_with_tiles(
 /// [`PolydatAssembler::compile`] for the interpreter's concrete kernel.
 /// An assembler carries no traversal, so a program with a `for`
 /// statement is refused here; the kernel entry points compile it.
-pub fn compile_polydat_to_assembler(source: &str) -> Result<PolydatAssembler, String> {
+pub fn compile_polydat_to_assembler(source: &str) -> Result<PolydatAssembler, crate::KernelError> {
     compile_polydat_to_assembler_with(source, &CompileOptions::default())
 }
 
@@ -389,12 +389,14 @@ pub fn compile_polydat_to_assembler(source: &str) -> Result<PolydatAssembler, St
 pub fn compile_polydat_to_assembler_with(
     source: &str,
     options: &CompileOptions,
-) -> Result<PolydatAssembler, String> {
-    let tokens = super::lexer::lex(source)?;
-    let ast = super::parser::parse(tokens)?;
+) -> Result<PolydatAssembler, crate::KernelError> {
+    let tokens = super::lexer::lex(source).map_err(crate::KernelError::Source)?;
+    let ast = super::parser::parse(tokens).map_err(crate::KernelError::Source)?;
     let mut prepared = Prepared::new(source, &ast, options, None);
     let (compiler, filter) = prepared.parts();
-    compiler.assemble_parent(&ast, filter)
+    compiler
+        .assemble_parent(&ast, filter)
+        .map_err(crate::KernelError::Source)
 }
 
 /// Compile one selected scalar output into the conservative perfect-ordinal
@@ -410,7 +412,8 @@ pub fn compile_polydat_tier1_simd_ordinal(
     driving_input: &str,
     output: &str,
 ) -> Result<crate::compile::simd_tier1::Tier1SimdExecutor, String> {
-    compile_polydat_to_assembler(source)?
+    compile_polydat_to_assembler(source)
+        .map_err(|e| e.to_string())?
         .try_compile_tier1_simd_ordinal(driving_input, output)
         .map_err(|error| error.to_string())
 }
@@ -420,7 +423,7 @@ pub fn compile_polydat_tier1_simd_ordinal(
 pub fn compile_polydat_with_path(
     source: &str,
     source_dir: Option<&Path>,
-) -> Result<PolydatKernel, String> {
+) -> Result<PolydatKernel, crate::KernelError> {
     let options = CompileOptions {
         source_dir: source_dir.map(Path::to_path_buf),
         ..CompileOptions::default()
@@ -438,7 +441,7 @@ pub fn compile_polydat_with_outputs(
     source_dir: Option<&Path>,
     required_outputs: &[String],
     strict: bool,
-) -> Result<PolydatKernel, String> {
+) -> Result<PolydatKernel, crate::KernelError> {
     let options = CompileOptions {
         source_dir: source_dir.map(Path::to_path_buf),
         required_outputs: required_outputs.to_vec(),
@@ -495,7 +498,7 @@ pub fn compile_polydat_with_libs(
     required_outputs: &[String],
     strict: bool,
     context: &str,
-) -> Result<PolydatKernel, String> {
+) -> Result<PolydatKernel, crate::KernelError> {
     let options = CompileOptions {
         source_dir: source_dir.map(Path::to_path_buf),
         lib_paths: polydat_lib_paths,
@@ -540,7 +543,7 @@ pub fn compile_polydat_with_libs_and_limit(
     strict: bool,
     context: &str,
     cursor_limit: Option<u64>,
-) -> Result<PolydatKernel, String> {
+) -> Result<PolydatKernel, crate::KernelError> {
     let options = CompileOptions {
         source_dir: source_dir.map(Path::to_path_buf),
         lib_paths: polydat_lib_paths,
@@ -561,7 +564,7 @@ pub fn compile_polydat_strict(
     source: &str,
     source_dir: Option<&Path>,
     strict: bool,
-) -> Result<PolydatKernel, String> {
+) -> Result<PolydatKernel, crate::KernelError> {
     let options = CompileOptions {
         source_dir: source_dir.map(Path::to_path_buf),
         strict,
@@ -626,9 +629,9 @@ pub fn compile_polydat_with_options(
     source: &str,
     options: &CompileOptions,
     mut log: Option<&mut super::events::CompileEventLog>,
-) -> Result<PolydatKernel, String> {
-    let tokens = lexer::lex(source)?;
-    let ast = parser::parse(tokens)?;
+) -> Result<PolydatKernel, crate::KernelError> {
+    let tokens = lexer::lex(source).map_err(crate::KernelError::Source)?;
+    let ast = parser::parse(tokens).map_err(crate::KernelError::Source)?;
     if let Some(log) = log.as_deref_mut() {
         log.push(super::events::CompileEvent::Parsed {
             statements: ast.statements.len(),
@@ -645,7 +648,7 @@ pub fn compile_ast_with_options(
     source: &str,
     options: &CompileOptions,
     mut log: Option<&mut super::events::CompileEventLog>,
-) -> Result<PolydatKernel, String> {
+) -> Result<PolydatKernel, crate::KernelError> {
     let mut prepared = Prepared::new(source, ast, options, log.as_deref_mut());
     let (compiler, filter) = prepared.parts();
     // This path returns the interpreter's concrete kernel, so the
@@ -660,9 +663,7 @@ pub fn compile_ast_with_options(
         crate::Engine::Interpreter(mode) => mode,
         _ => crate::JitMode::Auto,
     };
-    compiler
-        .compile_interpreter(ast, filter, log, cones)
-        .map_err(|e| e.to_string())
+    compiler.compile_interpreter(ast, filter, log, cones)
 }
 
 /// [`compile_polydat_with_options`] under the default options, with the
@@ -671,7 +672,7 @@ pub fn compile_ast_with_options(
 pub fn compile_polydat_with_log(
     source: &str,
     log: &mut super::events::CompileEventLog,
-) -> Result<PolydatKernel, String> {
+) -> Result<PolydatKernel, crate::KernelError> {
     compile_polydat_with_options(source, &CompileOptions::default(), Some(log))
 }
 
@@ -836,7 +837,7 @@ fn eval_const_expr_uncached(
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
         move || -> Result<crate::ast::Value, EmbeddingError> {
             let kernel = compile_polydat_with_options(&wrapped, &options, None)
-                .map_err(|msg| classify_compile_error(&source_owned, msg))?;
+                .map_err(|e| classify_compile_error(&source_owned, e.to_string()))?;
             kernel
                 .get_constant("out")
                 .cloned()
@@ -1496,7 +1497,7 @@ pub fn positional_str_lit(arg: Option<&crate::dsl::ast::Arg>) -> Option<String> 
 
 /// [`compile_ast_with_options`] under the default options.
 #[deprecated(note = "use compile_ast_with_options")]
-pub fn compile_ast(file: &PolydatFile) -> Result<PolydatKernel, String> {
+pub fn compile_ast(file: &PolydatFile) -> Result<PolydatKernel, crate::KernelError> {
     compile_ast_with_options(file, "", &CompileOptions::default(), None)
 }
 
@@ -1505,7 +1506,7 @@ pub fn compile_ast(file: &PolydatFile) -> Result<PolydatKernel, String> {
 pub fn compile_ast_with_path(
     file: &PolydatFile,
     source_dir: Option<&Path>,
-) -> Result<PolydatKernel, String> {
+) -> Result<PolydatKernel, crate::KernelError> {
     let options = CompileOptions {
         source_dir: source_dir.map(Path::to_path_buf),
         ..CompileOptions::default()
@@ -1520,7 +1521,7 @@ pub fn compile_ast_strict(
     file: &PolydatFile,
     source_dir: Option<&Path>,
     strict: bool,
-) -> Result<PolydatKernel, String> {
+) -> Result<PolydatKernel, crate::KernelError> {
     let options = CompileOptions {
         source_dir: source_dir.map(Path::to_path_buf),
         strict,
@@ -1540,7 +1541,7 @@ pub fn compile_ast_with_libs(
     required_outputs: &[String],
     strict: bool,
     context: &str,
-) -> Result<PolydatKernel, String> {
+) -> Result<PolydatKernel, crate::KernelError> {
     let options = CompileOptions {
         source_dir: source_dir.map(Path::to_path_buf),
         lib_paths: polydat_lib_paths,
@@ -2975,7 +2976,7 @@ mod tests {
     use super::*;
 
     /// The interpreter kernel under `strict` alone.
-    fn strict(src: &str, strict: bool) -> Result<PolydatKernel, String> {
+    fn strict(src: &str, strict: bool) -> Result<PolydatKernel, crate::KernelError> {
         let options = CompileOptions {
             strict,
             ..CompileOptions::default()
@@ -3175,8 +3176,14 @@ mod tests {
         "#;
         let err =
             compile_polydat_interpreter(src).expect_err("non-literal shared const must error");
-        assert!(err.contains("shared binding 'rolling'"), "error: {err}");
-        assert!(err.contains("literal initial value"), "error: {err}");
+        assert!(
+            err.to_string().contains("shared binding 'rolling'"),
+            "error: {err}"
+        );
+        assert!(
+            err.to_string().contains("literal initial value"),
+            "error: {err}"
+        );
     }
 
     #[test]
@@ -3329,11 +3336,11 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            err.contains("strict mode"),
+            err.to_string().contains("strict mode"),
             "expected strict error, got: {err}"
         );
         assert!(
-            err.contains("inputs"),
+            err.to_string().contains("inputs"),
             "expected inputs mention, got: {err}"
         );
     }
@@ -3394,7 +3401,7 @@ mod tests {
         match result {
             Ok(_) => {} // ideal: kernel built
             Err(e) => assert!(
-                !e.contains("violates the init contract"),
+                !e.to_string().contains("violates the init contract"),
                 "Plan A must accept iteration-extern wires in init bindings; got: {e}"
             ),
         }
@@ -3408,7 +3415,8 @@ mod tests {
         let err = compile_polydat_interpreter(src)
             .expect_err("Plan A must reject init binding wired to a non-deterministic source");
         assert!(
-            err.contains("init binding 'bad'") && err.contains("init contract"),
+            err.to_string().contains("init binding 'bad'")
+                && err.to_string().contains("init contract"),
             "diagnostic must name the binding and the contract; got: {err}"
         );
     }
