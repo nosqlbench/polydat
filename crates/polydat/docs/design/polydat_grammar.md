@@ -866,7 +866,15 @@ consequences:
 inclusive, `a..b step c`), generator calls such as
 `partitions("*/4", n)` and `subdivide(p, n)`, string comprehensions, and
 `{name}` references to wires of the enclosing scope, which are resolved
-when the traversal is opened. A depth-0 comma starts a new clause only
+when the traversal is opened. A continuous source is a float range
+(`0.0..1.0`, uniform over the interval) or a named measure,
+`normal(0, 1)`, drawing from the measure's own support, and
+`exponential(1) on 0.0..1.0` for the measure restricted to an interval;
+the measures are the closed set `normal`, `exponential`, `pareto`,
+`beta`, `log_normal`, `gamma`, and `uniform01`, each taking its own
+parameters in order or none for the standard ones. A continuous source
+projects only under a sampling order, per the order rules below.
+A depth-0 comma starts a new clause only
 when followed by `<ident> in`, so value-list and argument commas stay
 inside one clause. Tuple clauses `(a, b) in (…)` zip in parallel;
 `zip_truncate(…)` and `zip_cycle(…)` choose the zip mode.

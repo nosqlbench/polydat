@@ -252,7 +252,29 @@ impl Comprehension {
                                 format!("{:?}..={:?}", interval.lo, interval.hi)
                             }
                         }
-                        Source::Distribution { .. } => "<distribution>".to_string(),
+                        Source::Distribution {
+                            distribution,
+                            support,
+                            params,
+                        } => {
+                            // Round-trips through `parse_source`: the
+                            // parameters in the measure's own order, and the
+                            // interval only when it narrows the measure's own
+                            // support.
+                            let args = params
+                                .iter()
+                                .map(|p| format!("{p:?}"))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            let call = format!("{}({args})", distribution.text());
+                            if *support == distribution.support(params) {
+                                call
+                            } else if support.hi_open {
+                                format!("{call} on {:?}..{:?}", support.lo, support.hi)
+                            } else {
+                                format!("{call} on {:?}..={:?}", support.lo, support.hi)
+                            }
+                        }
                     };
                     acc.push((name.clone(), spec_text));
                 }

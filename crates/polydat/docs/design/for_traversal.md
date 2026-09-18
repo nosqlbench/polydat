@@ -67,7 +67,10 @@ clause         ::= ident "in" source
 `comprehension_text` is the canonical text form accepted by the
 comprehension parser. `source` is the comprehension's source surface:
 literal lists, `lo..hi` ranges, generator calls such as
-`partitions("*/4", n)` and `subdivide(p, n)`, and string comprehensions.
+`partitions("*/4", n)` and `subdivide(p, n)`, string comprehensions, and
+continuous sources: a float range or a named measure such as
+`normal(0, 1)`, optionally restricted with `on <interval>`
+([Polydat Grammar](polydat_grammar.md) §16.2).
 `predicate` and `strategy` are the algebra's. The grammar adds no new
 source forms.
 

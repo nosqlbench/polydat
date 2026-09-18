@@ -113,9 +113,11 @@ Produces a **stream** of single-name tuples
   parameter references, set operators, etc. Continuous sources
   cover bounded real intervals
   (`0.0..1.0`, `-π..π`) and unbounded ones (`0.0..` for the
-  non-negative reals), plus continuous-distribution objects
-  (uniform, normal, exponential — sampled as their respective
-  measures). Discrete sources that are inherently finite expose
+  non-negative reals), plus named measures: `normal(0, 1)` in the text,
+  `Source::Distribution` in the algebra, each sampled as its own
+  measure and optionally restricted to an interval
+  (`exponential(1) on 0.0..1.0`).
+  Discrete sources that are inherently finite expose
   their cardinality up front; computed-on-demand discrete
   sources expose `Unbounded` or an `at-most` hint; continuous
   sources expose their measure class (see §6.1).

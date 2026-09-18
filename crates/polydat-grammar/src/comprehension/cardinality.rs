@@ -262,6 +262,69 @@ impl MeasureName {
         }
         Ok(params.to_vec())
     }
+
+    /// The measure's name in comprehension source text, the spelling
+    /// a clause writes: `normal(0, 1)`, `log_normal(0, 0.5)`.
+    pub fn text(self) -> &'static str {
+        match self {
+            MeasureName::Normal => "normal",
+            MeasureName::Exponential => "exponential",
+            MeasureName::Pareto => "pareto",
+            MeasureName::Beta => "beta",
+            MeasureName::LogNormal => "log_normal",
+            MeasureName::Gamma => "gamma",
+            MeasureName::Uniform01 => "uniform01",
+        }
+    }
+
+    /// The measure a source-text name denotes, or `None` when the
+    /// name is not one of the closed set (§10.7.5): the caller reads
+    /// the text as something else, a generator call for one.
+    pub fn from_text(name: &str) -> Option<Self> {
+        [
+            MeasureName::Normal,
+            MeasureName::Exponential,
+            MeasureName::Pareto,
+            MeasureName::Beta,
+            MeasureName::LogNormal,
+            MeasureName::Gamma,
+            MeasureName::Uniform01,
+        ]
+        .into_iter()
+        .find(|m| m.text() == name)
+    }
+
+    /// The measure's own support under `params`, the interval a
+    /// source that names no narrower one draws from. A Pareto's
+    /// support starts at its scale; every other measure's is fixed.
+    pub fn support(self, params: &[f64]) -> Interval {
+        let p = self
+            .resolve_params(params)
+            .unwrap_or_else(|_| self.default_params().to_vec());
+        let inf = f64::INFINITY;
+        match self {
+            MeasureName::Normal => Interval::open(-inf, inf),
+            MeasureName::Exponential | MeasureName::Gamma => Interval {
+                lo: 0.0,
+                hi: inf,
+                lo_open: false,
+                hi_open: true,
+            },
+            MeasureName::Pareto => Interval {
+                lo: p[0],
+                hi: inf,
+                lo_open: false,
+                hi_open: true,
+            },
+            MeasureName::LogNormal => Interval {
+                lo: 0.0,
+                hi: inf,
+                lo_open: true,
+                hi_open: true,
+            },
+            MeasureName::Beta | MeasureName::Uniform01 => Interval::closed(0.0, 1.0),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -339,3 +339,49 @@ fn an_authored_seed_selects_the_permutation() {
     .unwrap_err();
     assert!(err.contains("takes no seed"), "{err}");
 }
+
+/// A named measure is a source in the text, the spelling the spec's §3
+/// names among the continuous sources: the clause draws from the
+/// measure, and `on <interval>` restricts it.
+#[test]
+fn a_named_measure_is_a_source_in_the_text() {
+    let mut k = polydat::dsl::compile_polydat(
+        "input cycle: u64\nfor x in normal(10, 2) order halton/64 {\n    px := f64_add(x, 0.0)\n    py := f64_add(x, 0.0)\n}\n",
+    )
+    .unwrap();
+    k.set_inputs(&[0]);
+    let mut stream = k.traverse(0).unwrap();
+    let mut xs = Vec::new();
+    while let Some(mut a) = stream.advance().unwrap() {
+        xs.push(a.cycle(0).pull("px").as_f64());
+    }
+    assert_eq!(xs.len(), 64);
+    let mean = xs.iter().sum::<f64>() / 64.0;
+    assert!((mean - 10.0).abs() < 0.5, "mean {mean}");
+    // The first base-2 Halton point is 1/2, so the first draw is the
+    // median, to the quantile's own accuracy.
+    assert!((xs[0] - 10.0).abs() < 1e-3, "{}", xs[0]);
+
+    // Restricted to an interval: every draw inside it, and the
+    // measure's shape kept, so most of them sit below the midpoint.
+    let seen = float_pairs(&body(
+        "x in exponential(1) on 0.0..1.0 order halton/64",
+        "x",
+        "x",
+    ));
+    assert_eq!(seen.len(), 64);
+    assert!(
+        seen.iter().all(|(x, _)| (0.0..=1.0).contains(x)),
+        "{seen:?}"
+    );
+    let low = seen.iter().filter(|(x, _)| *x < 0.5).count();
+    assert!((36..=44).contains(&low), "{low} of 64 below the midpoint");
+
+    // A call that names no measure is the generator it always was, so
+    // the error is the strategy's, not a misread source.
+    let err = polydat::dsl::compile_polydat(
+        "input cycle: u64\nfor x in normal(1) order halton/4 {\n    px := f64_add(x, 0.0)\n    py := f64_add(x, 0.0)\n}\n",
+    )
+    .unwrap_err();
+    assert!(err.contains("normal(1)"), "{err}");
+}

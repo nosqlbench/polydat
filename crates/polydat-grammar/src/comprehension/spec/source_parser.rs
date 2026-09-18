@@ -25,12 +25,14 @@
 //! | `{name}` | `WorkloadParamList { name: "name", len_hint: None }` |
 //! | `fib(8)` (or any `ident(...)`) | `Generator { expr, cardinality_hint: None }` |
 //! | `0.0..1.0` | `ContinuousInterval { interval, measure: Uniform }` |
+//! | `normal(0, 1)` | `Distribution { Normal, support: the measure's own, params }` |
+//! | `exponential(1) on 0.0..1.0` | `Distribution { Exponential, support: the interval, params }` |
 //!
 //! Any other text is a `Generator` expression the runtime
 //! evaluates; `SourceParseError::Unrecognized` is not produced by
 //! this path.
 
-use crate::comprehension::cardinality::{Interval, ProductMeasure};
+use crate::comprehension::cardinality::{Interval, MeasureName, ProductMeasure};
 use crate::comprehension::source::{LiteralValue, Source};
 
 /// Parse a source-expression string into a typed [`Source`].
@@ -99,6 +101,14 @@ pub fn parse_source(text: &str) -> Result<Source, SourceParseError> {
         });
     }
 
+    // A named continuous measure (§3, §10.7.5): `normal(0, 1)`, and
+    // `normal(0, 1) on 0.0..1.0` for the measure restricted to an
+    // interval. Before the range and call branches, which would read
+    // the interval alone or take the call for a generator.
+    if let Some(result) = parse_distribution(trimmed) {
+        return result;
+    }
+
     // Range: contains `..` and starts with a number-ish.
     if let Some(idx) = find_top_level(trimmed, "..") {
         return parse_range(trimmed, idx);
@@ -144,6 +154,103 @@ pub fn parse_source(text: &str) -> Result<Source, SourceParseError> {
         expr: trimmed.to_string(),
         cardinality_hint: None,
     })
+}
+
+/// A named continuous measure written as a source: `normal(0, 1)`
+/// draws from the measure's own support, and `normal(0, 1) on
+/// 0.0..1.0` restricts it to the interval. `None` when the text
+/// names no measure, so the caller reads it as something else.
+///
+/// The arguments are the measure's parameters in the order
+/// [`MeasureName::parameter_names`] gives; none means the standard
+/// ones. A name from the closed set with arguments that are not its
+/// own is an error, not a fall-through: `normal(1)` is a mistake to
+/// report, never a generator call.
+fn parse_distribution(text: &str) -> Option<Result<Source, SourceParseError>> {
+    let (call, support_text) = match split_on_keyword(text, " on ") {
+        Some((call, rest)) => (call, Some(rest)),
+        None => (text, None),
+    };
+    let (name, args) = split_call(call)?;
+    let measure = MeasureName::from_text(name)?;
+    Some(build_distribution(text, measure, args, support_text))
+}
+
+/// The measure source `text` denotes, or the error its arguments or
+/// its interval earn.
+fn build_distribution(
+    text: &str,
+    measure: MeasureName,
+    args: &str,
+    support_text: Option<&str>,
+) -> Result<Source, SourceParseError> {
+    let invalid = || SourceParseError::InvalidRange(text.to_string());
+    let mut params = Vec::new();
+    for arg in args.split(',') {
+        let arg = arg.trim();
+        if arg.is_empty() {
+            if params.is_empty() && args.trim().is_empty() {
+                break;
+            }
+            return Err(invalid());
+        }
+        params.push(arg.parse::<f64>().map_err(|_| invalid())?);
+    }
+    let params = measure.resolve_params(&params).map_err(|_| invalid())?;
+    let support = match support_text {
+        None => measure.support(&params),
+        Some(interval_text) => match parse_range_text(interval_text)? {
+            Source::ContinuousInterval { interval, .. } => interval,
+            _ => return Err(invalid()),
+        },
+    };
+    Ok(Source::Distribution {
+        distribution: measure,
+        support,
+        params,
+    })
+}
+
+/// `name(args)` split into its head and its argument text, or `None`
+/// when the text is not one call and nothing else.
+fn split_call(text: &str) -> Option<(&str, &str)> {
+    let text = text.trim();
+    let open = text.find('(')?;
+    let inner = text.strip_suffix(')')?;
+    let name = text[..open].trim();
+    if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    Some((name, &inner[open + 1..]))
+}
+
+/// Split `text` at `keyword` outside any bracket or quote, the way a
+/// measure's interval is written after its call.
+fn split_on_keyword<'a>(text: &'a str, keyword: &str) -> Option<(&'a str, &'a str)> {
+    let bytes = text.as_bytes();
+    let mut depth = 0i32;
+    let mut quote: Option<u8> = None;
+    for i in 0..bytes.len() {
+        let c = bytes[i];
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                }
+            }
+            None => match c {
+                b'"' | b'\'' => quote = Some(c),
+                b'(' | b'[' | b'{' => depth += 1,
+                b')' | b']' | b'}' => depth -= 1,
+                _ => {
+                    if depth == 0 && text[i..].starts_with(keyword) {
+                        return Some((&text[..i], &text[i + keyword.len()..]));
+                    }
+                }
+            },
+        }
+    }
+    None
 }
 
 /// Conservative bare-comma-list detector. The legacy form
@@ -271,6 +378,14 @@ fn parse_literal_value(s: &str) -> LiteralValue {
 
 /// Parse a range expression starting at `dotdot_idx` (the
 /// position of `..`).
+fn parse_range_text(text: &str) -> Result<Source, SourceParseError> {
+    let text = text.trim();
+    match find_top_level(text, "..") {
+        Some(idx) => parse_range(text, idx),
+        None => Err(SourceParseError::InvalidRange(text.to_string())),
+    }
+}
+
 fn parse_range(text: &str, dotdot_idx: usize) -> Result<Source, SourceParseError> {
     let lo_str = text[..dotdot_idx].trim();
     let after = &text[dotdot_idx + 2..];
@@ -620,6 +735,78 @@ mod tests {
         match s {
             Source::Literal { values } => assert!(values.is_empty()),
             other => panic!("expected empty Literal, got {other:?}"),
+        }
+    }
+
+    /// A named measure is a source of its own: the call alone draws
+    /// from the measure's support, and `on <interval>` restricts it.
+    #[test]
+    fn a_named_measure_parses_as_a_distribution() {
+        match parse_source("normal(0, 1)").unwrap() {
+            Source::Distribution {
+                distribution: MeasureName::Normal,
+                support,
+                params,
+            } => {
+                assert_eq!(params, vec![0.0, 1.0]);
+                assert!(support.lo.is_infinite() && support.hi.is_infinite());
+            }
+            other => panic!("expected a normal distribution, got {other:?}"),
+        }
+        match parse_source("exponential(2) on 0.0..1.0").unwrap() {
+            Source::Distribution {
+                distribution: MeasureName::Exponential,
+                support,
+                params,
+            } => {
+                assert_eq!(params, vec![2.0]);
+                assert_eq!(support, Interval::half_open(0.0, 1.0));
+            }
+            other => panic!("expected a restricted exponential, got {other:?}"),
+        }
+        // No arguments takes the measure's standard parameters, and a
+        // Pareto's support starts at its scale.
+        match parse_source("pareto(3, 2)").unwrap() {
+            Source::Distribution {
+                support, params, ..
+            } => {
+                assert_eq!(params, vec![3.0, 2.0]);
+                assert_eq!(support.lo, 3.0);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(
+            parse_source("uniform01()").unwrap(),
+            Source::Distribution {
+                distribution: MeasureName::Uniform01,
+                ..
+            }
+        ));
+    }
+
+    /// Only the closed set of measures is a distribution; any other
+    /// call is the generator it always was.
+    #[test]
+    fn a_call_that_names_no_measure_is_still_a_generator() {
+        for text in ["fib(8)", "partitions(\"*/4\", 100)", "range(0, 10)"] {
+            assert!(
+                matches!(parse_source(text).unwrap(), Source::Generator { .. }),
+                "{text}"
+            );
+        }
+        // An interval alone keeps its uniform measure.
+        assert!(matches!(
+            parse_source("0.0..1.0").unwrap(),
+            Source::ContinuousInterval { .. }
+        ));
+    }
+
+    /// A measure's arguments are its own: a wrong count is the error
+    /// the measure's parameter table names, not a generator call.
+    #[test]
+    fn a_measure_with_the_wrong_arguments_is_an_error() {
+        for text in ["normal(1)", "normal(0, 1, 2)", "beta(a, b)", "gamma(1,)"] {
+            assert!(parse_source(text).is_err(), "{text}");
         }
     }
 }
