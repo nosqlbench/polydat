@@ -81,6 +81,20 @@ with a handful of public conveniences and the rest as thin wrappers.
 The rule above is what that collapse has to preserve: whatever the
 surface narrows to, what it returns is the trait.
 
+**A builder that cannot build says so.** Every construction path ends
+in `KernelError`, which distinguishes the three ways a build fails:
+the source did not parse or compile (`Source`), the graph did not
+assemble (`Assembly`), or it assembled and this engine cannot run some
+node in it (`Refused`, naming the node and the engine). No path answers
+a failure with a kernel. The closure tier's builders used to hand back
+an empty `PolydatKernel` — no nodes, no inputs, no outputs — when
+assembly failed, which is the same mistake as reporting a
+configuration that was not realized: the caller receives something
+shaped like a working program that computes nothing, and the real
+error is gone. The interpreter kernel that once rode in the error slot
+was never read by any caller; every one of them treated a failure as a
+failure.
+
 Pure native code, one function for the whole program, is a fourth kernel
 behind P3: the differential tier that proves the native lowerings against
 the closures, and the carrier of the Tier-1 register kernel

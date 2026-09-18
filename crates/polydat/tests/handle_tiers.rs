@@ -959,14 +959,8 @@ fn check_with(src: &str, outputs: &[&str], cycles: u64, externs: &[(String, Valu
     let mut p2 = compile_polydat_to_assembler(src)
         .unwrap()
         .try_compile_raw()
-        .unwrap_or_else(|k| {
-            let p = k.program();
-            let names: Vec<String> = (0..p.node_count())
-                .map(|i| p.node_meta(i).name.clone())
-                .collect();
-            panic!(
-                "every node here has a P2 form, but the kernel fell back; nodes: {names:?}\n{src}"
-            )
+        .unwrap_or_else(|e| {
+            panic!("every node here has a P2 form, but the closure tier refused it: {e}\n{src}")
         });
     let p2_built = built();
     let mut p2pp = compile_polydat_to_assembler(src)

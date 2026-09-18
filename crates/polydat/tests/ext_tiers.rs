@@ -259,13 +259,7 @@ fn fallible_and_tuple_nodes_agree_between_interpreter_closures_and_hybrid() {
     let mut p2 = compile_polydat_to_assembler(SHAPES)
         .unwrap()
         .try_compile_raw()
-        .unwrap_or_else(|k| {
-            let p = k.program();
-            let names: Vec<String> = (0..p.node_count())
-                .map(|i| p.node_meta(i).name.clone())
-                .collect();
-            panic!("the closure tier refused a fallible or tuple node; nodes: {names:?}")
-        });
+        .unwrap_or_else(|e| panic!("the closure tier refused a fallible or tuple node: {e}"));
     let mut hybrid = compile_polydat_to_assembler(SHAPES)
         .unwrap()
         .compile_hybrid()

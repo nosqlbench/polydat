@@ -200,6 +200,42 @@ fn interpreter_only_double(
     polydat::derive_support::DynamicOutputs(widths.iter().map(|w| n * 2 + w).collect())
 }
 
+/// The closure tier's builders report why they could not build, rather
+/// than handing back a kernel. The `try_compile_*` family used to
+/// answer an assembly failure with an empty `PolydatKernel` — no nodes,
+/// no inputs, no outputs — which every caller then treated as a
+/// fallback that had merely declined to compile. A kernel that computes
+/// nothing is worse than an error, so both failures are now a
+/// `KernelError` that says which one happened.
+#[test]
+fn the_closure_builders_report_failure_instead_of_an_empty_kernel() {
+    // Assembles, but a node has no closure form: refused, naming it.
+    let no_closure = "input cycle: u64\n(a, b) := interpreter_only_double(cycle, 1, 2)\n";
+    match compile_polydat_to_assembler(no_closure)
+        .unwrap()
+        .try_compile_raw()
+    {
+        Err(KernelError::Refused { engine, reason }) => {
+            assert!(matches!(engine, Engine::Closures(_)), "{engine}");
+            assert!(reason.contains("interpreter_only_double"), "{reason}");
+            assert!(reason.contains("no compiled form"), "{reason}");
+        }
+        other => panic!("expected a refusal, got {:?}", other.map(|_| ())),
+    }
+
+    // The same refusal reaches every member of the family.
+    let asm = || compile_polydat_to_assembler(no_closure).unwrap();
+    assert!(asm().try_compile().is_err());
+    assert!(asm().try_compile_push().is_err());
+    assert!(asm().try_compile_pull().is_err());
+
+    // A program every node can compile still builds.
+    let fine = compile_polydat_to_assembler("input cycle: u64\ny := hash(cycle)\n")
+        .unwrap()
+        .try_compile_raw();
+    assert!(fine.is_ok(), "{:?}", fine.map(|_| ()));
+}
+
 /// The engine is a preference on the compile options, and leaving it
 /// alone is the normative path: a caller that never mentions an engine
 /// gets the most compiled form the build has, and can still read back

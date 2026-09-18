@@ -266,45 +266,6 @@ impl std::fmt::Debug for PolydatKernel {
 }
 
 impl PolydatKernel {
-    /// Create from pre-validated components (all inputs are coordinates).
-    pub(crate) fn new(
-        nodes: Vec<Box<dyn PolydatNode>>,
-        wiring: Vec<Vec<WireSource>>,
-        input_names: Vec<String>,
-        output_map: HashMap<String, (usize, usize)>,
-        source: &str,
-        context: &str,
-        ledger: Arc<crate::kernel::CompileLedger>,
-    ) -> Self {
-        let coord_count = input_names.len();
-        let input_defs: Vec<InputDef> = input_names
-            .into_iter()
-            .map(|name| InputDef {
-                name,
-                default: Value::U64(0),
-                port_type: crate::ast::PortType::U64,
-                kind: crate::kernel::InputKind::Coordinate,
-            })
-            .collect();
-        let order: Vec<String> = output_map.keys().cloned().collect();
-        Self::new_with_inputs(
-            nodes,
-            wiring,
-            input_defs,
-            coord_count,
-            output_map,
-            order,
-            std::collections::HashSet::new(),
-            HashMap::new(),
-            source,
-            context,
-            None,
-            false,
-            ledger,
-        )
-        .unwrap()
-    }
-
     /// Create with explicit input definitions. `strict` selects
     /// strict-mode const folding (config-wire violations become
     /// errors).

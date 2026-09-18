@@ -878,32 +878,19 @@ impl PolydatAssembler {
         }
     }
 
-    /// Validate, resolve, and attempt Phase 2 compilation.
+    /// Validate, resolve, and compile the closure tier's push-pull
+    /// kernel.
     ///
-    /// Returns `Ok(CompiledKernelPushPull)` if every node has a compiled
-    /// form (a copy, a `compiled_u64` op, or a slot kit). Falls back to
-    /// `Err(Box<PolydatKernel>)` (a working
-    /// Phase 1 kernel; boxed so the happy-path `Result` stays small) if any
-    /// node cannot be compiled.
-    pub fn try_compile(self) -> Result<CompiledKernelPushPull, Box<PolydatKernel>> {
-        let resolved = self.resolve().expect("assembly validation failed");
-        let coord_names = resolved.input_names();
+    /// Two ways to fail, and the error says which: the graph did not
+    /// assemble (`KernelError::Assembly`), or it assembled and a node
+    /// has no closure form (`KernelError::Refused`, naming the node).
+    /// Neither hands back a kernel — an unusable kernel is worse than
+    /// an error, and the empty one this used to return on an assembly
+    /// failure computed nothing while looking like a program.
+    pub fn try_compile(self) -> Result<CompiledKernelPushPull, KernelError> {
+        let resolved = self.resolve().map_err(KernelError::Assembly)?;
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
-            match Self::build_p2_layout(&resolved) {
-                Ok(r) => r,
-                // Fall back to Phase 1
-                Err(_) => {
-                    return Err(Box::new(PolydatKernel::new(
-                        resolved.nodes,
-                        resolved.wiring,
-                        coord_names,
-                        resolved.output_map,
-                        &resolved.source,
-                        &resolved.context,
-                        resolved.ledger.clone(),
-                    )));
-                }
-            };
+            Self::build_p2_layout(&resolved).map_err(Self::refused_by_closures)?;
         let dependents = slot_layout(&resolved).expand_dependents(
             &resolved,
             &PolydatProgram::compute_dependents(
@@ -922,38 +909,13 @@ impl PolydatAssembler {
         ))
     }
 
-    /// Phase 2 compilation without provenance caching.
-    pub fn try_compile_raw(self) -> Result<CompiledKernelRaw, Box<PolydatKernel>> {
-        let resolved = match self.resolve() {
-            Ok(r) => r,
-            Err(_) => {
-                return Err(Box::new(PolydatKernel::new(
-                    vec![],
-                    vec![],
-                    vec![],
-                    HashMap::new(),
-                    "",
-                    "(fallback)",
-                    crate::kernel::CompileLedger::new(),
-                )));
-            }
-        };
-        let coord_names = resolved.input_names();
+    /// The closure tier's kernel without provenance caching: every
+    /// evaluation runs every step. Fails the two ways [`Self::try_compile`]
+    /// does.
+    pub fn try_compile_raw(self) -> Result<CompiledKernelRaw, KernelError> {
+        let resolved = self.resolve().map_err(KernelError::Assembly)?;
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
-            match Self::build_p2_layout(&resolved) {
-                Ok(r) => r,
-                Err(_) => {
-                    return Err(Box::new(PolydatKernel::new(
-                        resolved.nodes,
-                        resolved.wiring,
-                        coord_names,
-                        resolved.output_map,
-                        &resolved.source,
-                        &resolved.context,
-                        resolved.ledger.clone(),
-                    )));
-                }
-            };
+            Self::build_p2_layout(&resolved).map_err(Self::refused_by_closures)?;
         Ok(CompiledKernelRaw::new(
             coord_count,
             total_slots,
@@ -964,38 +926,12 @@ impl PolydatAssembler {
         ))
     }
 
-    /// Phase 2 compilation with push-side provenance only (no cone guard).
-    pub fn try_compile_push(self) -> Result<CompiledKernelPush, Box<PolydatKernel>> {
-        let resolved = match self.resolve() {
-            Ok(r) => r,
-            Err(_) => {
-                return Err(Box::new(PolydatKernel::new(
-                    vec![],
-                    vec![],
-                    vec![],
-                    HashMap::new(),
-                    "",
-                    "(fallback)",
-                    crate::kernel::CompileLedger::new(),
-                )));
-            }
-        };
-        let coord_names = resolved.input_names();
+    /// The closure tier's kernel with push-side invalidation and no cone
+    /// guard. Fails the two ways [`Self::try_compile`] does.
+    pub fn try_compile_push(self) -> Result<CompiledKernelPush, KernelError> {
+        let resolved = self.resolve().map_err(KernelError::Assembly)?;
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
-            match Self::build_p2_layout(&resolved) {
-                Ok(r) => r,
-                Err(_) => {
-                    return Err(Box::new(PolydatKernel::new(
-                        resolved.nodes,
-                        resolved.wiring,
-                        coord_names,
-                        resolved.output_map,
-                        &resolved.source,
-                        &resolved.context,
-                        resolved.ledger.clone(),
-                    )));
-                }
-            };
+            Self::build_p2_layout(&resolved).map_err(Self::refused_by_closures)?;
         let dependents = slot_layout(&resolved).expand_dependents(
             &resolved,
             &PolydatProgram::compute_dependents(
@@ -1014,38 +950,12 @@ impl PolydatAssembler {
         ))
     }
 
-    /// Phase 2 compilation with pull-side cone guard only (no per-node skip).
-    pub fn try_compile_pull(self) -> Result<CompiledKernelPull, Box<PolydatKernel>> {
-        let resolved = match self.resolve() {
-            Ok(r) => r,
-            Err(_) => {
-                return Err(Box::new(PolydatKernel::new(
-                    vec![],
-                    vec![],
-                    vec![],
-                    HashMap::new(),
-                    "",
-                    "(fallback)",
-                    crate::kernel::CompileLedger::new(),
-                )));
-            }
-        };
-        let coord_names = resolved.input_names();
+    /// The closure tier's kernel with the pull-side cone guard and no
+    /// per-step skip. Fails the two ways [`Self::try_compile`] does.
+    pub fn try_compile_pull(self) -> Result<CompiledKernelPull, KernelError> {
+        let resolved = self.resolve().map_err(KernelError::Assembly)?;
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
-            match Self::build_p2_layout(&resolved) {
-                Ok(r) => r,
-                Err(_) => {
-                    return Err(Box::new(PolydatKernel::new(
-                        resolved.nodes,
-                        resolved.wiring,
-                        coord_names,
-                        resolved.output_map,
-                        &resolved.source,
-                        &resolved.context,
-                        resolved.ledger.clone(),
-                    )));
-                }
-            };
+            Self::build_p2_layout(&resolved).map_err(Self::refused_by_closures)?;
         let dependents = slot_layout(&resolved).expand_dependents(
             &resolved,
             &PolydatProgram::compute_dependents(
@@ -1062,6 +972,15 @@ impl PolydatAssembler {
             ref_slots,
             extras,
         ))
+    }
+
+    /// A node with no closure form, as a refusal naming the closure
+    /// tier and the reason the layout gave.
+    fn refused_by_closures(reason: String) -> KernelError {
+        KernelError::Refused {
+            engine: Engine::Closures(Provenance::Auto),
+            reason,
+        }
     }
 
     /// Shared: extract P2 compiled steps + slot layout from resolved DAG.

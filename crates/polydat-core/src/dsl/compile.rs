@@ -648,8 +648,20 @@ pub fn compile_ast_with_options(
 ) -> Result<PolydatKernel, String> {
     let mut prepared = Prepared::new(source, ast, options, log.as_deref_mut());
     let (compiler, filter) = prepared.parts();
+    // This path returns the interpreter's concrete kernel, so the
+    // options' engine preference can only say how much of the graph is
+    // fused into native cones. A preference naming the interpreter is
+    // honoured with its mode; any other preference is a caller asking a
+    // concrete-typed entry point for an engine it cannot return, and it
+    // gets the interpreter under the default cone mode. A caller that
+    // means the preference calls `compile_polydat_kernel_with_options`,
+    // which can return whichever engine the options name.
+    let cones = match options.engine {
+        crate::Engine::Interpreter(mode) => mode,
+        _ => crate::JitMode::Auto,
+    };
     compiler
-        .compile_interpreter(ast, filter, log, crate::JitMode::Auto)
+        .compile_interpreter(ast, filter, log, cones)
         .map_err(|e| e.to_string())
 }
 
