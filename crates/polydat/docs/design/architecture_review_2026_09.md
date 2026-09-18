@@ -147,7 +147,7 @@ mechanism on every engine.
 | for_traversal.md | The `for` construct: readings, semantics, compiled form, activation, axioms | **Weed.** Keep §1-§3, §5.1-5.4, §6, §7, §9. Rewrite §4 and §5.2 to present tense on every engine. Fold three §11 rationale bullets into §3/§5. Delete status, §8, §10's option list, §11. |
 | polytile.md | Tile grammar, structure, typing, semantics, skeleton, runtime, axioms | **Weed.** Keep §1-§9, §11. Fold §13's rules into §3.2, §5.4, §7.3. Delete status, revision log, §10, §12, §13. State the SRD 117 outcome (hole values, precompiled bodies on `Engine::default()` and why, memoized tuples, index-keyed binding, byte-identical writers, interning lifetime). |
 | comprehension_forms.md | The comprehension algebra and its verification rule | **Rewrite** the preamble, §8 (Polydat's own surface, fix `Ext` and `for base where`), §9.5 (the surfaces that exist); absorb the plan's six invariants, the cutover's error-ownership table, the gate's oracle. Delete §15. |
-| comprehension_implementation_plan.md | none | **Delete** (open). |
+| comprehension_implementation_plan.md | none | **Deleted** 2026-09-17: its stages diagram is forms §9.0, its invariants §9.6, its verification §9.8, its error contract §9.7, its ownership of the flat form §14.8. |
 | comprehension_cutover_contact_surfaces.md | none | **Delete** (open) after §5 moves to the runtime doc and §8 to forms §14. |
 | comprehension_migration_gate.md | none | **Deleted** 2026-09-17: the oracle in forms §10.6, the invariants in §9.6, the verification surfaces in §9.8, the parser and activation boundaries in §14.8–§14.9. |
 

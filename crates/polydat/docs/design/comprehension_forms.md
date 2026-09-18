@@ -1199,6 +1199,32 @@ either a stream-fusion compiler or a stack-machine interpreter.
 This section is the **executable contract** behind the
 "resource-bounded execution" requirement.
 
+### 9.0 The stages
+
+```text
+source text / serde form / a tree built directly
+        │ parse (§8) or construct
+        ▼
+canonical Comprehension AST
+        │
+        ├── flatten context-free sources (§10.7.0)
+        ├── validate (V1–V9, §5)
+        ├── derive metadata (§10.7)
+        └── optimize to a fixed point (§10)
+              │
+              ▼
+        immutable IR Program (§9.1)
+              │
+              ├── resource-bound check (§9.3)
+              ├── the consumption surfaces (§9.5)
+              └── the runtime evaluator, for a traversal
+```
+
+Each stage returns a well-formed value for the next or a typed error
+(§9.7). A later stage never repairs an earlier one's invalid
+representation, and the whole sequence is what `from_ast` and the
+`for` lowering run.
+
 ### 9.1 Operator IR
 
 Every well-formed comprehension AST compiles to a finite

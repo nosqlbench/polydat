@@ -8,7 +8,6 @@ or cutover procedure.
 Companion specifications:
 
 - [Comprehension Forms](comprehension_forms.md)
-- [Comprehension Implementation](comprehension_implementation_plan.md)
 - [Subcontext Construction](subcontext_construction.md)
 - [Expression Engine](expression_engine.md)
 
