@@ -54,7 +54,7 @@ stale text). Size: XS under an hour, S a half day to a day, M two to three days,
 | F-N8 | library | S | `dynamic_weighted_select` re-parses its spec every evaluation; `random_string` re-parses its charset per call; every `Const<Vec<C>>` node clones its list per cycle. |
 | F-N6 | library | S | Const-argument constraints cannot be declared through the macro; the substitutes are panics caught at construction and the legacy `validate_node`. |
 | F-C12 | compiler | XS | Plan B (a scope-init const that yields None is a hard error) is documented and not enforced; the materializer warns and continues. Doc or code, one of them changes. |
-| F-L8 | dsl | XS | An array literal in argument position is dropped during lowering instead of refused. `out := printf("{}", [1, 2])` compiles, supplies zero wire inputs, and panics at eval ("format references input #0 but only 0 wire input(s) supplied"); bound first (`w := [1, 2]`) it works and yields `Str("1, 2")`. A list literal is a binding-position form (polydat_grammar.md §18.1), so the argument position should be a compile error naming the form. Found 2026-09-18 while merging the type rules. |
+| F-L11 | dsl | XS | An array literal in argument position is dropped during lowering instead of refused. `out := printf("{}", [1, 2])` compiles, supplies zero wire inputs, and panics at eval ("format references input #0 but only 0 wire input(s) supplied"); bound first (`w := [1, 2]`) it works and yields `Str("1, 2")`. A list literal is a binding-position form (polydat_grammar.md §18.1), so the argument position should be a compile error naming the form. Found 2026-09-18 while merging the type rules. |
 
 ### 1.2 Architectural
 
@@ -233,5 +233,8 @@ belongs in exactly one place; others cite it.
    `polydat_grammar.md` now carries the type rules and G-axioms (§18) and the
    productions (§21), so the appendix material is under the same example test as the
    rest of the spec rather than in a second document that nothing checked.
-8. **The comprehension plan, cutover and gate documents**: delete after their invariants
-   move into `comprehension_forms.md`. (section 3)
+8. ~~**The comprehension plan, cutover and gate documents**: delete after their invariants
+   move into `comprehension_forms.md`. (section 3)~~ **Done 2026-09-17**, and with the
+   language spec, the grammar appendix, and the tile plan deleted on 2026-09-18 the
+   weeding map of section 3 is closed: every row is either kept-and-weeded or deleted
+   with its disposition recorded.
