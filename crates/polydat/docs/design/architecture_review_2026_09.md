@@ -180,11 +180,12 @@ The engine work of the last month changed rules that no document states as a rul
 belongs in exactly one place; others cite it.
 
 1. `Engine::default()` is `Native(Auto)` with the `jit` feature and `Closures(Auto)`
-   without; every entry point whose signature leaves the engine open builds it, as does
-   the binary without `--engine`, and the two constructors returning the concrete
-   `PolydatKernel` name the interpreter by their return type rather than falling back to
-   it (engines.md §1). *Stated 2026-09-18; the first wording said "every engine-less
-   entry point", which the typed constructors contradict.*
+   without; the four entry points returning `Box<dyn Kernel>` with no engine argument
+   build it, as does the binary without `--engine`, while the fourteen returning the
+   concrete `PolydatKernel` are the interpreter by their return type (engines.md §1).
+   *Stated 2026-09-18. The first wording, "every engine-less entry point and the binary
+   build it", is false: fourteen engine-less entry points build the interpreter. The
+   return type decides, not the absent argument.*
 2. One evaluation rule on every engine: a step is current until an input in its
    provenance changes; nondeterministic never current; compile-constant folded at build;
    no step exempt; provenance mode is an optimization that never changes a result

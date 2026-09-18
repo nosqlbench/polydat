@@ -26,20 +26,31 @@ provenance mode left to the selector. Compiled code is the default; the
 interpreter is a choice, and the semantic oracle every other engine is
 checked against.
 
-The default reaches every entry point that can express it. An entry
-point returning `Box<dyn Kernel>` without an engine argument builds
-`Engine::default()` — `compile_polydat_kernel` and its tile-carrying
-sibling — and the binary's `--engine auto`, which is what it runs
-without the flag, resolves through the same default. The two entry
-points that return the concrete `PolydatKernel` are the exception, and
-it is their return type that makes them one: `compile_polydat` and
-`PolydatAssembler::compile` name the interpreter because a caller
-asking for that type is asking for the oracle, not for whichever engine
-the build happens to offer. A caller who wants the same program on the
-default engine calls `compile_polydat_kernel` instead. So "engine-less
-means compiled" holds wherever the signature leaves the engine open,
-and the two typed constructors are not a silent interpreter fallback
-but a named request for it.
+Which engine an entry point builds when it takes no engine argument is
+decided by its **return type**, not by the absence of the argument. The
+four that return `Box<dyn Kernel>` — `compile_polydat_kernel`, its
+`_with_options` and `_with_tiles` siblings, and
+`compile_polydat_checked` — build `Engine::default()`, and so does the
+binary's `--engine auto`, which is what it runs without the flag. The
+fourteen that return the concrete `PolydatKernel` build the
+interpreter, because that type *is* the interpreter's kernel. Naming it
+is how a caller says it wants the reference implementation — the one
+whose results every other engine is checked against — rather than
+whichever engine happens to be fastest in this build. That is what a
+differential test needs, and what a diagnostic that reports on a
+program needs. `PolydatAssembler::compile` is the interpreter for the
+same reason, and `compile_polydat_to_assembler` returns an assembler,
+which has no engine until something compiles it.
+
+So "compiled by default" is a claim about the boxed-kernel surface, and
+it holds there without exception. It is not a claim that every function
+lacking an `engine` parameter produces compiled code; fourteen of them
+do not, and each says so in its signature. A caller who wants one of
+those programs on the default engine goes through the boxed surface
+instead. That fourteen typed constructors exist at all is a separate
+problem, and a known one — the entry-point sprawl is the architecture
+review's group B, which proposes one compiler with four public
+conveniences and the rest as thin wrappers.
 
 Pure native code, one function for the whole program, is a fourth kernel
 behind P3: the differential tier that proves the native lowerings against
