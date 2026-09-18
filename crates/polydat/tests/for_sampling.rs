@@ -18,7 +18,8 @@ use polydat::iteration::comprehension::validate::{Mode, ValidationError, validat
 
 /// Collect the `(px, py)` pairs a traversal body computes, as floats.
 fn float_pairs(src: &str) -> Vec<(f64, f64)> {
-    let mut k = polydat::dsl::compile_polydat(src).unwrap_or_else(|e| panic!("{e}\n{src}"));
+    let mut k =
+        polydat::dsl::compile_polydat_interpreter(src).unwrap_or_else(|e| panic!("{e}\n{src}"));
     k.set_inputs(&[0]);
     let mut stream = k.traverse(0).unwrap();
     let mut seen = Vec::new();
@@ -162,7 +163,7 @@ fn a_filter_over_a_continuous_source_applies_to_the_draws() {
 // ---- Named measures: the AST form, no text spelling ----
 
 fn scope() -> polydat::kernel::PolydatKernel {
-    polydat::dsl::compile_polydat("input cycle: u64\n").unwrap()
+    polydat::dsl::compile_polydat_interpreter("input cycle: u64\n").unwrap()
 }
 
 fn xs(ast: &Comprehension) -> Vec<f64> {
@@ -290,7 +291,7 @@ fn distribution_parameters_are_checked_at_compile() {
 
 /// The first three of a shuffle, from the text.
 fn shuffled_prefix(order: &str) -> Vec<u64> {
-    let mut k = polydat::dsl::compile_polydat(&format!(
+    let mut k = polydat::dsl::compile_polydat_interpreter(&format!(
         "input cycle: u64\nsome := for k in 1..100 order {order}\nfor some {{\n    v := u64_add(k, 0)\n}}\n"
     ))
     .unwrap_or_else(|e| panic!("{e}"));
@@ -333,7 +334,7 @@ fn an_authored_seed_selects_the_permutation() {
         ))
     );
     // A seed on a strategy that reads none is refused at the statement.
-    let err = polydat::dsl::compile_polydat(
+    let err = polydat::dsl::compile_polydat_interpreter(
         "input cycle: u64\nsome := for k in 1..100 order halton(count=3, seed=42)\n",
     )
     .unwrap_err();
@@ -345,7 +346,7 @@ fn an_authored_seed_selects_the_permutation() {
 /// measure, and `on <interval>` restricts it.
 #[test]
 fn a_named_measure_is_a_source_in_the_text() {
-    let mut k = polydat::dsl::compile_polydat(
+    let mut k = polydat::dsl::compile_polydat_interpreter(
         "input cycle: u64\nfor x in normal(10, 2) order halton/64 {\n    px := f64_add(x, 0.0)\n    py := f64_add(x, 0.0)\n}\n",
     )
     .unwrap();
@@ -379,7 +380,7 @@ fn a_named_measure_is_a_source_in_the_text() {
 
     // A call that names no measure is the generator it always was, so
     // the error is the strategy's, not a misread source.
-    let err = polydat::dsl::compile_polydat(
+    let err = polydat::dsl::compile_polydat_interpreter(
         "input cycle: u64\nfor x in normal(1) order halton/4 {\n    px := f64_add(x, 0.0)\n    py := f64_add(x, 0.0)\n}\n",
     )
     .unwrap_err();

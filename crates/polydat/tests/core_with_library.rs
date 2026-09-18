@@ -64,7 +64,7 @@ mod dsl_compile_tests {
 
     #[test]
     fn typed_strict_kernel_bound() {
-        let kernel = compile_polydat("const k := 10\n").unwrap();
+        let kernel = compile_polydat_interpreter("const k := 10\n").unwrap();
         // Lossless: u64 → f64.
         let v: f64 = eval_kernel_bound_typed_strict("{k} * 2", &kernel).unwrap();
         assert_eq!(v, 20.0);
@@ -75,7 +75,7 @@ mod dsl_compile_tests {
 
     #[test]
     fn typed_surface_kernel_bound() {
-        let kernel = compile_polydat("const k := 10\n").unwrap();
+        let kernel = compile_polydat_interpreter("const k := 10\n").unwrap();
         let v: bool = eval_kernel_bound_typed("{k} > 5", &kernel).unwrap();
         assert!(v);
         let v: u64 = eval_kernel_bound_typed("{k} * 2", &kernel).unwrap();
@@ -89,7 +89,7 @@ mod dsl_compile_tests {
             hashed := hash(cycle)
             user_id := mod(hashed, 1000000)
         "#;
-        let mut kernel = compile_polydat(src).unwrap();
+        let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[42]);
         let uid = kernel.pull("user_id").as_u64();
         assert!(uid < 1_000_000, "user_id={uid}");
@@ -101,7 +101,7 @@ mod dsl_compile_tests {
             input cycle: u64
             result := mod(hash(cycle), 100)
         "#;
-        let mut kernel = compile_polydat(src).unwrap();
+        let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[42]);
         assert!(kernel.pull("result").as_u64() < 100);
     }
@@ -112,7 +112,7 @@ mod dsl_compile_tests {
             input cycle: u64
             h := hash(cycle)
         "#;
-        let mut kernel = compile_polydat(src).unwrap();
+        let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[42]);
         let v1 = kernel.pull("h").as_u64();
         kernel.set_inputs(&[42]);
@@ -127,7 +127,7 @@ mod dsl_compile_tests {
             shared counter := 0
             normal := mod(hash(cycle), 100)
         "#;
-        let kernel = compile_polydat(src).unwrap();
+        let kernel = compile_polydat_interpreter(src).unwrap();
         assert_eq!(
             kernel.program().output_modifier("counter"),
             polydat::dsl::ast::BindingModifier::SHARED
@@ -146,7 +146,7 @@ mod dsl_compile_tests {
             shared budget := 100
             normal := hash(cycle)
         "#;
-        let kernel = compile_polydat(src).unwrap();
+        let kernel = compile_polydat_interpreter(src).unwrap();
         let mut shared = kernel.program().shared_outputs();
         shared.sort();
         assert_eq!(shared, vec!["budget", "counter"]);
@@ -161,7 +161,7 @@ mod dsl_compile_tests {
             const dataset := "example"
             normal := hash(cycle)
         "#;
-        let kernel = compile_polydat(src).unwrap();
+        let kernel = compile_polydat_interpreter(src).unwrap();
         let mut finals = kernel.program().const_outputs();
         finals.sort();
         assert_eq!(finals, vec!["dataset", "dim"]);
@@ -175,7 +175,7 @@ mod dsl_compile_tests {
             h := hash(cycle)
             v := mod(h, 100)
         "#;
-        let kernel = compile_polydat(src).unwrap();
+        let kernel = compile_polydat_interpreter(src).unwrap();
         assert_eq!(
             kernel.program().output_modifier("h"),
             polydat::dsl::ast::BindingModifier::NONE
@@ -194,7 +194,7 @@ mod dsl_compile_tests {
             tenant_h := hash(tenant)
             tenant_code := mod(tenant_h, 10000)
         "#;
-        let mut kernel = compile_polydat(src).unwrap();
+        let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[4_201_337]);
         let tc = kernel.pull("tenant_code").as_u64();
         assert!(tc < 10000, "tenant_code={tc}");
@@ -208,7 +208,7 @@ mod dsl_compile_tests {
             // Another comment
             h := hash(cycle)
         "#;
-        let mut kernel = compile_polydat(src).unwrap();
+        let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[1]);
         assert!(kernel.pull("h").as_u64() != 0);
     }
@@ -230,7 +230,7 @@ mod dsl_compile_tests {
     fn inferred_coordinates() {
         // Without explicit coordinates, 'cycle' is inferred as a coordinate input
         let src = "h := hash(cycle)";
-        let mut kernel = compile_polydat(src).unwrap();
+        let mut kernel = compile_polydat_interpreter(src).unwrap();
         assert_eq!(kernel.input_names(), &["cycle"]);
         kernel.set_inputs(&[42]);
         let h = kernel.pull("h").as_u64();
@@ -241,7 +241,7 @@ mod dsl_compile_tests {
     fn inferred_multi_coordinates() {
         // Multiple unbound names become multiple coordinate inputs (sorted)
         let src = "h := hash(interleave(row, col))";
-        let mut kernel = compile_polydat(src).unwrap();
+        let mut kernel = compile_polydat_interpreter(src).unwrap();
         assert_eq!(kernel.input_names(), &["col", "row"]); // alphabetically sorted
         kernel.set_inputs(&[10, 20]);
         let h = kernel.pull("h").as_u64();
@@ -338,7 +338,7 @@ mod dsl_compile_tests {
             a := hash(cycle)
             b := mod(a, 100)
         "#;
-        let kernel_all = compile_polydat(src).unwrap();
+        let kernel_all = compile_polydat_interpreter(src).unwrap();
         let kernel_empty = with_outputs(src, &[], false).unwrap();
 
         assert_eq!(
@@ -480,7 +480,7 @@ mod dsl_compile_tests {
             input cycle: u64
             out := cycle & 0xFF
         "#;
-        let mut kernel = compile_polydat(src).unwrap();
+        let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[0x1234]);
         assert_eq!(kernel.pull("out").as_u64(), 0x34);
     }
@@ -491,7 +491,7 @@ mod dsl_compile_tests {
             input cycle: u64
             out := cycle << 8
         "#;
-        let mut kernel = compile_polydat(src).unwrap();
+        let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[1]);
         assert_eq!(kernel.pull("out").as_u64(), 256);
     }
@@ -502,7 +502,7 @@ mod dsl_compile_tests {
             input cycle: u64
             out := !cycle
         "#;
-        let mut kernel = compile_polydat(src).unwrap();
+        let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[0]);
         assert_eq!(kernel.pull("out").as_u64(), u64::MAX);
     }
@@ -513,7 +513,7 @@ mod dsl_compile_tests {
             input cycle: u64
             out := cycle ^ 0xFF
         "#;
-        let mut kernel = compile_polydat(src).unwrap();
+        let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[0xF0]);
         assert_eq!(kernel.pull("out").as_u64(), 0x0F);
     }
@@ -524,7 +524,7 @@ mod dsl_compile_tests {
             input cycle: u64
             out := cycle | 0x0F
         "#;
-        let mut kernel = compile_polydat(src).unwrap();
+        let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[0xF0]);
         assert_eq!(kernel.pull("out").as_u64(), 0xFF);
     }
@@ -535,7 +535,7 @@ mod dsl_compile_tests {
             input cycle: u64
             out := cycle >> 4
         "#;
-        let mut kernel = compile_polydat(src).unwrap();
+        let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[0xFF]);
         assert_eq!(kernel.pull("out").as_u64(), 0x0F);
     }
@@ -546,7 +546,7 @@ mod dsl_compile_tests {
             input cycle: u64
             out := to_f64(cycle) ** 2.0
         "#;
-        let mut kernel = compile_polydat(src).unwrap();
+        let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[3]);
         // pow(3.0, 2.0) = 9.0
         let result = kernel.pull("out").as_f64();
@@ -598,7 +598,7 @@ mod dsl_compile_tests {
         // hard structural violation. Plan A must reject.
         let src = "input cycle: u64\n\
                    const bad := hash(cycle)\n";
-        let err = compile_polydat(src)
+        let err = compile_polydat_interpreter(src)
             .expect_err("Plan A must reject init binding wired to a coordinate input");
         assert!(
             err.contains("init binding 'bad'") && err.contains("init contract"),
@@ -616,7 +616,7 @@ mod dsl_compile_tests {
         // init bindings must not depend on one.
         let src = "extern session_id: u64 = 0\n\
                    const derived := mod(session_id, 100)\n";
-        let err = compile_polydat(src)
+        let err = compile_polydat_interpreter(src)
             .expect_err("Plan A must reject init binding wired to a external-write port");
         assert!(
             err.contains("init binding 'derived'") && err.contains("init contract"),
@@ -635,8 +635,8 @@ mod dsl_compile_tests {
         // butter case and must keep working.
         let src = "input cycle: u64\n\
                    user_id := mod(hash(cycle), 1000)\n";
-        let _kernel =
-            compile_polydat(src).expect("non-init bindings wired to cycle must still compile");
+        let _kernel = compile_polydat_interpreter(src)
+            .expect("non-init bindings wired to cycle must still compile");
     }
 
     #[test]
@@ -646,7 +646,7 @@ mod dsl_compile_tests {
             input cycle: u64
             greeting := "hello, " + "world"
         "#;
-        let mut kernel = compile_polydat(src).unwrap();
+        let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[0]);
         assert_eq!(kernel.pull("greeting").as_str(), "hello, world");
     }
@@ -663,7 +663,7 @@ mod dsl_compile_tests {
             z := " end"
             out := x + y + z
         "#;
-        let mut kernel = compile_polydat(src).unwrap();
+        let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[0]);
         assert_eq!(kernel.pull("out").as_str(), "id=42 end");
     }
@@ -677,7 +677,7 @@ mod dsl_compile_tests {
             n := 7
             out := "n=" + n
         "#;
-        let mut kernel = compile_polydat(src).unwrap();
+        let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[0]);
         assert_eq!(kernel.pull("out").as_str(), "n=7");
     }
@@ -690,7 +690,7 @@ mod dsl_compile_tests {
             extern other: u64
             const y := other + 1
         "#;
-        let kernel = compile_polydat(src).expect("compile");
+        let kernel = compile_polydat_interpreter(src).expect("compile");
         assert_eq!(
             kernel.program().input_port_type("y"),
             Some(polydat::ast::PortType::U64),
@@ -705,7 +705,7 @@ mod dsl_compile_tests {
     #[test]
     fn logical_and_or_eval_precedence_and_truthiness() {
         let eval = |src: &str| -> u64 {
-            compile_polydat(src)
+            compile_polydat_interpreter(src)
                 .unwrap_or_else(|e| panic!("compile `{src}`: {e}"))
                 .pull("out")
                 .as_u64()
@@ -753,13 +753,13 @@ mod dsl_compile_tests {
     #[test]
     fn as_cast_type_fusion_and_precedence() {
         let f64_of = |src: &str| {
-            compile_polydat(src)
+            compile_polydat_interpreter(src)
                 .unwrap_or_else(|e| panic!("compile `{src}`: {e}"))
                 .pull("out")
                 .as_f64()
         };
         let u64_of = |src: &str| {
-            compile_polydat(src)
+            compile_polydat_interpreter(src)
                 .unwrap_or_else(|e| panic!("compile `{src}`: {e}"))
                 .pull("out")
                 .as_u64()
@@ -769,7 +769,7 @@ mod dsl_compile_tests {
         // Narrowing f64 → u64 is NOT allowed under `as` (ambiguous
         // rounding); the author chooses an explicit conversion.
         assert!(
-            compile_polydat("out := 7.9 as u64").is_err(),
+            compile_polydat_interpreter("out := 7.9 as u64").is_err(),
             "narrowing f64 → u64 under `as` is rejected"
         );
         assert_eq!(u64_of("out := f64_to_u64(7.9)"), 7, "explicit truncate");
@@ -782,7 +782,7 @@ mod dsl_compile_tests {
         assert_eq!(f64_of("out := (5 / 2) as f64"), 2.0);
         // No valid fusion → compile error.
         assert!(
-            compile_polydat("out := \"x\" as f64").is_err(),
+            compile_polydat_interpreter("out := \"x\" as f64").is_err(),
             "str → f64 has no defined fusion → error"
         );
     }
@@ -870,7 +870,7 @@ mod compile_cone_tests {
     fn a_plain_compile_fuses_by_default() {
         // A host that names no mode gets `Auto`: the chain fuses as it does
         // under an explicit `Auto`, and the kernel reports that engine.
-        let k = polydat::dsl::compile::compile_polydat(U64_CHAIN).expect("compile");
+        let k = polydat::dsl::compile::compile_polydat_interpreter(U64_CHAIN).expect("compile");
         assert_eq!(
             polydat::Kernel::engine(&k),
             polydat::Engine::Interpreter(JitMode::Auto)
@@ -1351,7 +1351,7 @@ mod kernel_program_r1v_contagion_tests {
         let src = "input cycle: u64\n\
                    now := current_epoch_millis()\n\
                    b := add(now, 1)\n";
-        let mut k = compile_polydat(src).expect("compile");
+        let mut k = compile_polydat_interpreter(src).expect("compile");
         let v0 = pull_u64_at(&mut k, 0, "b");
         // Spin briefly to ensure system clock advances. A few ms
         // is enough; if clock granularity is coarser the test
@@ -1383,7 +1383,7 @@ mod kernel_program_r1v_contagion_tests {
                    now := current_epoch_millis()\n\
                    b := add(now, 1)\n\
                    c := add(b, 1)\n";
-        let mut k = compile_polydat(src).expect("compile");
+        let mut k = compile_polydat_interpreter(src).expect("compile");
         let v0 = pull_u64_at(&mut k, 0, "c");
         std::thread::sleep(std::time::Duration::from_millis(4));
         let v1 = pull_u64_at(&mut k, 1, "c");
@@ -1402,7 +1402,7 @@ mod kernel_program_r1v_contagion_tests {
         let src = "input cycle: u64\n\
                    c := counter()\n\
                    wrapped := add(c, 1000)\n";
-        let mut k = compile_polydat(src).expect("compile");
+        let mut k = compile_polydat_interpreter(src).expect("compile");
         let v0 = pull_u64_at(&mut k, 0, "wrapped");
         let v1 = pull_u64_at(&mut k, 1, "wrapped");
         let v2 = pull_u64_at(&mut k, 2, "wrapped");
@@ -1428,7 +1428,7 @@ mod kernel_program_r1v_contagion_tests {
         let src = "input cycle: u64\n\
                    pure_chain := add(cycle, 1)\n\
                    pure_outer := mul(pure_chain, 2)\n";
-        let mut k = compile_polydat(src).expect("compile");
+        let mut k = compile_polydat_interpreter(src).expect("compile");
         // For the same coordinate, multiple pulls must return
         // the same value AND not re-evaluate the eval function.
         // The latter property is hard to assert without
@@ -1484,7 +1484,7 @@ mod kernel_program_ast_metadata_tests {
 foo := hash(cycle)
 bar := mod(foo, 100)
 ";
-        let k = compile_polydat(src).expect("compile");
+        let k = compile_polydat_interpreter(src).expect("compile");
         let chain = k
             .program()
             .local_inclusion_chain("bar", &std::collections::HashSet::new());
@@ -1512,7 +1512,7 @@ bar := mod(foo, 100)
 const seed := 12345
 mixed := hash(seed)
 ";
-        let k = compile_polydat(src).expect("compile");
+        let k = compile_polydat_interpreter(src).expect("compile");
         let chain = k
             .program()
             .local_inclusion_chain("mixed", &std::collections::HashSet::new());
@@ -1532,7 +1532,7 @@ mixed := hash(seed)
 foo := hash(cycle)
 bar := mod(foo, 100)
 ";
-        let k = compile_polydat(src).expect("compile");
+        let k = compile_polydat_interpreter(src).expect("compile");
         let mut excluded = std::collections::HashSet::new();
         excluded.insert("foo".to_string());
         let chain = k.program().local_inclusion_chain("bar", &excluded);
@@ -1562,8 +1562,10 @@ mod kernel_program_canonical_hash_tests {
         // slot that canonical_hash should cover — even when it's
         // an argument to a function call rather than a top-level
         // `const X := <literal>` binding.
-        let a = compile_polydat("input cycle: u64\nshard := mod(hash(cycle), 8)\n").expect("a");
-        let b = compile_polydat("input cycle: u64\nshard := mod(hash(cycle), 16)\n").expect("b");
+        let a = compile_polydat_interpreter("input cycle: u64\nshard := mod(hash(cycle), 8)\n")
+            .expect("a");
+        let b = compile_polydat_interpreter("input cycle: u64\nshard := mod(hash(cycle), 16)\n")
+            .expect("b");
         assert_ne!(
             a.program().canonical_hash(),
             b.program().canonical_hash(),
@@ -1588,8 +1590,8 @@ mod kernel_tests {
     fn fold_init_constants_basic() {
         // base=42, seed=hash(base) should both be folded
         // user_id=hash(cycle) should NOT be folded (depends on coordinate)
-        use polydat::dsl::compile::compile_polydat;
-        let mut k = compile_polydat(
+        use polydat::dsl::compile::compile_polydat_interpreter;
+        let mut k = compile_polydat_interpreter(
             "input cycle: u64\nbase := 42\nseed := hash(base)\nuser_id := hash(cycle)",
         )
         .unwrap();
@@ -1619,8 +1621,8 @@ mod kernel_tests {
 
     #[test]
     fn fold_does_not_touch_cycle_dependent() {
-        use polydat::dsl::compile::compile_polydat;
-        let mut k = compile_polydat("input cycle: u64\nout := hash(cycle)").unwrap();
+        use polydat::dsl::compile::compile_polydat_interpreter;
+        let mut k = compile_polydat_interpreter("input cycle: u64\nout := hash(cycle)").unwrap();
         k.set_inputs(&[42]);
         let v1 = k.pull("out").as_u64();
         k.set_inputs(&[43]);
@@ -1630,10 +1632,10 @@ mod kernel_tests {
 
     #[test]
     fn implicit_u64_to_f64_adapter_does_not_crash() {
-        use polydat::dsl::compile::compile_polydat;
+        use polydat::dsl::compile::compile_polydat_interpreter;
         // sin() expects f64, cycle is u64. The compiler should auto-insert
         // a __u64_to_f64 adapter. This must not panic.
-        let mut k = compile_polydat("input cycle: u64\nout := sin(cycle)").unwrap();
+        let mut k = compile_polydat_interpreter("input cycle: u64\nout := sin(cycle)").unwrap();
         k.set_inputs(&[1]);
         let v = k.pull("out");
         // sin(1.0) ≈ 0.8414709848078965
@@ -1730,8 +1732,8 @@ mod library_context_tests {
         // canonical form. Confirm the expression compiles.
         let src = "extern phase_start: u64 = 0\n\
                    volatile te := current_epoch_millis() - phase_start\n";
-        let k =
-            polydat::dsl::compile_polydat(src).expect("clock-minus-injected-origin must compile");
+        let k = polydat::dsl::compile_polydat_interpreter(src)
+            .expect("clock-minus-injected-origin must compile");
         assert!(
             k.program().output_names().contains(&"te"),
             "expected output 'te' in {:?}",
@@ -1891,7 +1893,7 @@ mod iteration_cursor_partition_over_tests {
     #[test]
     fn narrow_cursor_writes_declared_slots() {
         let src = "input cycle: u64\ncursor q = range(0, 100) over \"*/4\"\nn := cardinality(q.cursor)\ns := q.cursor.start_ordinal";
-        let mut k = polydat::dsl::compile_polydat(src).unwrap();
+        let mut k = polydat::dsl::compile_polydat_interpreter(src).unwrap();
         let program = k.program().clone();
         let parts =
             cursor_over_partitions(&program, k.state(), &program.cursor_schemas()[0]).unwrap();
@@ -1924,8 +1926,8 @@ mod dsl_stub_tests {
         // sub-context of a parent kernel and evaluates it many times
         // against injected inputs, as truthiness.
         use polydat::ast::Value;
-        let parent =
-            polydat::dsl::compile_polydat("input cycle: u64\nx := 5").expect("parent kernel");
+        let parent = polydat::dsl::compile_polydat_interpreter("input cycle: u64\nx := 5")
+            .expect("parent kernel");
         let mut matter = GraphMatter::new();
         matter.extern_wire::<u64>("threshold").bind(
             ExprStub::parse("__pred", "threshold > 50")
@@ -2021,7 +2023,7 @@ fn the_cursor_advancer_injects_each_ordinal_into_the_state() {
     use polydat::iteration::source::{Cursors, DataSourceFactory, RangeSourceFactory};
     use std::collections::HashMap;
     use std::sync::Arc;
-    let mut k = polydat::dsl::compile_polydat(
+    let mut k = polydat::dsl::compile_polydat_interpreter(
         "input cycle: u64\ncursor rows = range(0, 100)\nout := u64_mul(rows.ordinal, 3)\n",
     )
     .unwrap();

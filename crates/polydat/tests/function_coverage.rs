@@ -6,7 +6,7 @@
 //! compiler pipeline: source -> assembler -> kernel -> eval.
 
 use polydat::ast::Value;
-use polydat::dsl::compile::{compile_polydat, compile_polydat_to_assembler};
+use polydat::dsl::compile::{compile_polydat_interpreter, compile_polydat_to_assembler};
 use polydat::kernel::PolydatKernel;
 
 use super::common;
@@ -31,7 +31,7 @@ struct DiffKernel {
 }
 impl DiffKernel {
     fn compile(src: &str) -> Self {
-        let base = compile_polydat(src)
+        let base = compile_polydat_interpreter(src)
             .unwrap_or_else(|e| panic!("failed to compile: {e}\nsource:\n{src}"));
         let forced = {
             let mut asm = compile_polydat_to_assembler(src)
@@ -198,7 +198,7 @@ fn clamp_above() {
 #[test]
 fn mixed_radix_decomposition() {
     let src = "input cycle: u64\n(a, b) := mixed_radix(cycle, 10, 0)";
-    let mut k = compile_polydat(src).unwrap();
+    let mut k = compile_polydat_interpreter(src).unwrap();
     k.set_inputs(&[42]);
     let a = k.pull("a").as_u64();
     let b = k.pull("b").as_u64();
@@ -247,7 +247,7 @@ fn max_variadic() {
 #[test]
 fn interleave_known() {
     let src = "input (a: u64, b: u64)\nout := interleave(a, b)";
-    let mut k = compile_polydat(src).unwrap();
+    let mut k = compile_polydat_interpreter(src).unwrap();
     // interleave(1, 0) should give 1 (bit0 of a=1 -> bit0)
     k.set_inputs(&[1, 0]);
     let v = k.pull("out").as_u64();
@@ -734,7 +734,7 @@ fn date_components_decomposes() {
     let src = "input cycle: u64\n\
                e := epoch_offset(cycle, 1704067200000)\n\
                (y, mo, d, h, mi, s, ms) := date_components(e)";
-    let mut k = compile_polydat(src).unwrap();
+    let mut k = compile_polydat_interpreter(src).unwrap();
     k.set_inputs(&[0]);
     let y = k.pull("y").as_u64();
     let mo = k.pull("mo").as_u64();
@@ -946,7 +946,7 @@ fn json_merge_combines() {
                out := json_merge(a, b)";
     // json_merge with non-object JSON may panic or produce a defined result.
     // Just verify it compiles.
-    let result = compile_polydat(src);
+    let result = compile_polydat_interpreter(src);
     assert!(
         result.is_ok(),
         "json_merge should compile: {:?}",
@@ -2003,7 +2003,7 @@ fn fp_lerp_midpoint() {
 #[test]
 fn sine_wave_module() {
     let src = "input cycle: u64\nout := sine_wave(input: cycle, period: 20)";
-    let mut k = compile_polydat(src).unwrap();
+    let mut k = compile_polydat_interpreter(src).unwrap();
     // At cycle 0, sin(0) = 0
     k.set_inputs(&[0]);
     let v0 = k.pull("out").as_f64();
@@ -2020,7 +2020,7 @@ fn sine_wave_module() {
 #[test]
 fn square_wave_module() {
     let src = "input cycle: u64\nout := square_wave(input: cycle, period: 100)";
-    let mut k = compile_polydat(src).unwrap();
+    let mut k = compile_polydat_interpreter(src).unwrap();
     // First quarter: positive
     k.set_inputs(&[10]);
     let v = k.pull("out").as_f64();
@@ -2034,7 +2034,7 @@ fn square_wave_module() {
 #[test]
 fn sine_unit_module() {
     let src = "input cycle: u64\nout := sine_unit(input: cycle, period: 20)";
-    let mut k = compile_polydat(src).unwrap();
+    let mut k = compile_polydat_interpreter(src).unwrap();
     // sine_unit maps to [0, 1]
     for c in 0..20u64 {
         k.set_inputs(&[c]);
@@ -2116,10 +2116,10 @@ fn every_function_is_registered_once() {
 
 #[test]
 fn every_registered_function_compiles() {
-    use polydat::dsl::compile::compile_polydat;
+    use polydat::dsl::compile::compile_polydat_interpreter;
     let mut failures: Vec<String> = Vec::new();
     for (name, src) in common::coverage_cases::programs() {
-        match std::panic::catch_unwind(|| compile_polydat(&src)) {
+        match std::panic::catch_unwind(|| compile_polydat_interpreter(&src)) {
             Ok(Ok(_)) => {}
             Ok(Err(e)) => failures.push(format!("  {name}: {e}")),
             Err(_) => failures.push(format!("  {name}: panicked")),

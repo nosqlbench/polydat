@@ -6,10 +6,11 @@
 //! projections repeat over comprehensions with element and outer wires,
 //! and splices inline earlier tiles.
 
-use polydat::dsl::compile_polydat;
+use polydat::dsl::compile_polydat_interpreter;
 
 fn render(src: &str, cycle: u64, name: &str) -> String {
-    let mut k = compile_polydat(src).unwrap_or_else(|e| panic!("compile failed: {e}\n{src}"));
+    let mut k =
+        compile_polydat_interpreter(src).unwrap_or_else(|e| panic!("compile failed: {e}\n{src}"));
     k.set_inputs(&[cycle]);
     k.pull(name).as_str().to_string()
 }
@@ -96,7 +97,7 @@ fn splicing_inlines_an_earlier_tile() {
 #[test]
 fn a_tile_is_an_ordinary_wire() {
     let src = "input cycle: u64\ntile doc : json := {\"n\": ${cycle}}\nstmt := \"INSERT doc '{doc}'\"\nup := str_upper(doc)\n";
-    let mut k = compile_polydat(src).unwrap();
+    let mut k = compile_polydat_interpreter(src).unwrap();
     k.set_inputs(&[3]);
     assert_eq!(k.pull("stmt").as_str(), "INSERT doc '{\"n\": 3}'");
     assert_eq!(k.pull("up").as_str(), "{\"N\": 3}");
@@ -106,7 +107,7 @@ fn a_tile_is_an_ordinary_wire() {
 #[test]
 fn a_tile_without_holes_is_a_constant() {
     let src = "input cycle: u64\ntile fixed : json := {\"schema\": 3}\n";
-    let k = compile_polydat(src).unwrap();
+    let k = compile_polydat_interpreter(src).unwrap();
     assert!(k.program().const_outputs().contains(&"fixed"));
 }
 
@@ -124,7 +125,8 @@ fn custom_delimiters_render_the_same() {
 
 #[test]
 fn unknown_wire_in_a_hole_is_a_compile_error_naming_the_tile() {
-    let err = compile_polydat("input cycle: u64\ntile t : text := \"${missing}\"\n").unwrap_err();
+    let err = compile_polydat_interpreter("input cycle: u64\ntile t : text := \"${missing}\"\n")
+        .unwrap_err();
     assert!(err.contains("missing"), "{err}");
 }
 

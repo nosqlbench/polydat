@@ -227,7 +227,7 @@ mod tests {
     }
 
     fn compile_and_eval(src: &str) {
-        let k = polydat::dsl::compile::compile_polydat(src).unwrap();
+        let k = polydat::dsl::compile::compile_polydat_interpreter(src).unwrap();
         let p = k.into_program();
         let mut state = p.create_state();
         // Evaluate at a few different inputs

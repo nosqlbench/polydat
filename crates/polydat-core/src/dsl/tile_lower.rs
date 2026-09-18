@@ -409,7 +409,7 @@ impl TileLowering {
                     // Compile the body once here so a bad reference is a
                     // compile error of the enclosing program, not a
                     // failure inside `tile_render` construction.
-                    super::compile_polydat(&src)
+                    super::compile_polydat_interpreter(&src)
                         .map_err(|e| format!("tile '{}': projection body: {e}", self.tile_name))?;
                     self.children.push(ChildSpec {
                         source: src,

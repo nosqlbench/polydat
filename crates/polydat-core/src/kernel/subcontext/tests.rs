@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use crate::ast::PortType;
-use crate::dsl::compile::compile_polydat;
+use crate::dsl::compile::compile_polydat_interpreter;
 
 use super::builder::SubcontextBuilder;
 use super::error::{ContractViolation, SourceContext};
@@ -23,7 +23,7 @@ use crate::ast::Value;
 /// import against. `dataset` is a final-folded string; `cycle`
 /// is the standard coordinate input.
 fn parent_kernel() -> Arc<ScopeKernel<RootMarker>> {
-    let kernel = compile_polydat(
+    let kernel = compile_polydat_interpreter(
         "input cycle: u64\n\
          const dataset := \"sift1m\"\n\
          seed := hash(cycle)\n",
@@ -333,7 +333,7 @@ fn parent_with_shared_u64(name: &str, init: u64) -> Arc<ScopeKernel<RootMarker>>
         "input cycle: u64\n\
          shared {name} := {init}\n",
     );
-    let kernel = compile_polydat(&src).expect("parent kernel compile");
+    let kernel = compile_polydat_interpreter(&src).expect("parent kernel compile");
     wrap_root_kernel(kernel, "test-root-shared")
 }
 
@@ -594,8 +594,9 @@ fn workload_emulation_shared_cell_through_op_template_chain() {
     // 1. Workload-root carrying the shared cell. Mirror of the
     //    `shared has_sai_column_indexes := false` declaration
     //    in the workload bindings block.
-    let workload_canonical = compile_polydat("input cycle: u64\nshared has_match := false\n")
-        .expect("workload-root compile");
+    let workload_canonical =
+        compile_polydat_interpreter("input cycle: u64\nshared has_match := false\n")
+            .expect("workload-root compile");
 
     // 2. Detect-phase op-template program built via Source
     //    matter. The result-binding's LHS `has_match` collides
@@ -740,7 +741,7 @@ fn shared_bool_literal_init_does_not_leak_false_as_named_input() {
         "shared has_sai_column_indexes := false\n\
          shared has_indexes := true\n",
     ] {
-        let kernel = compile_polydat(src).expect("compile");
+        let kernel = compile_polydat_interpreter(src).expect("compile");
         let inputs = kernel.program().input_names();
         assert!(
             !inputs.iter().any(|n| n == "false" || n == "true"),
@@ -768,11 +769,11 @@ fn log_info_preserves_bool_type_through_result_binding_cell() {
     // the Bool flows through unchanged and lands in the cell.
     use super::CompileOptions;
 
-    let root =
-        compile_polydat("input cycle: u64\nshared has_match := false\n").expect("root compile");
+    let root = compile_polydat_interpreter("input cycle: u64\nshared has_match := false\n")
+        .expect("root compile");
 
     // Phase scope (silent intermediate — body never names has_match).
-    let phase_program = compile_polydat("input cycle: u64\nlocal := cycle\n")
+    let phase_program = compile_polydat_interpreter("input cycle: u64\nlocal := cycle\n")
         .expect("phase compile")
         .program()
         .clone();
@@ -857,13 +858,14 @@ fn build_kernel_under_parent_full_sees_live_parents_cells() {
     use super::CompileOptions;
 
     // Workload root with a `shared` cell.
-    let root = compile_polydat("input cycle: u64\nshared has_sai_column_indexes := false\n")
-        .expect("root compile");
+    let root =
+        compile_polydat_interpreter("input cycle: u64\nshared has_sai_column_indexes := false\n")
+            .expect("root compile");
 
     // Phase scope built under root via the typed subscope path
     // — the canonical activity-layer path. Phase body never
     // names the shared wire; the cell rides as transit.
-    let phase_program = compile_polydat("input cycle: u64\nlocal := cycle\n")
+    let phase_program = compile_polydat_interpreter("input cycle: u64\nlocal := cycle\n")
         .expect("phase compile")
         .program()
         .clone();
@@ -938,17 +940,17 @@ fn shared_cell_cascade_survives_for_iteration_through_silent_intermediates() {
     use std::sync::Arc;
 
     let root_kernel =
-        compile_polydat("input cycle: u64\nshared flag := 0\n").expect("root compile");
+        compile_polydat_interpreter("input cycle: u64\nshared flag := 0\n").expect("root compile");
 
     // Scenario: synthesised via for_iteration (the comprehension
     // code path).
-    let scenario_canon =
-        compile_polydat("input cycle: u64\nlocal := cycle\n").expect("scenario compile");
+    let scenario_canon = compile_polydat_interpreter("input cycle: u64\nlocal := cycle\n")
+        .expect("scenario compile");
     let scenario =
         PolydatKernel::for_iteration(&Arc::new(scenario_canon), &Arc::new(root_kernel), &[]);
 
     // for_each scope: iter-var only.
-    let foreach_program = compile_polydat("input cycle: u64\nextern profile: String\n")
+    let foreach_program = compile_polydat_interpreter("input cycle: u64\nextern profile: String\n")
         .expect("for_each compile")
         .program()
         .clone();
@@ -960,7 +962,7 @@ fn shared_cell_cascade_survives_for_iteration_through_silent_intermediates() {
     foreach.state().set_input(pidx, Value::Str("p0".into()));
 
     // Phase op: writes through the shared cell.
-    let leaf_program = compile_polydat(
+    let leaf_program = compile_polydat_interpreter(
         "input cycle: u64\n\
          extern flag: u64\n\
          __write_flag := 7\n",
@@ -986,10 +988,11 @@ fn shared_cell_cascade_survives_for_iteration_through_silent_intermediates() {
     // chain should observe the write too. This proves the
     // cell handle (not just the local snapshot) carried the
     // value.
-    let reader_program = compile_polydat("input cycle: u64\nextern flag: u64\nseen := flag\n")
-        .expect("reader compile")
-        .program()
-        .clone();
+    let reader_program =
+        compile_polydat_interpreter("input cycle: u64\nextern flag: u64\nseen := flag\n")
+            .expect("reader compile")
+            .program()
+            .clone();
     let mut reader = foreach.materialize_subscope(reader_program, &[]);
     let seen = reader.pull("seen").clone();
     assert_eq!(
@@ -1016,13 +1019,13 @@ fn shared_cell_cascade_survives_legacy_bind_program_under_parent_chain() {
     // input slots + transit cells), so the activity layer's
     // existing call sites pick the fix up automatically.
     // Workload root: `shared X := <literal>`.
-    let root_kernel =
-        compile_polydat("input cycle: u64\nshared counter := 0\n").expect("root compile");
+    let root_kernel = compile_polydat_interpreter("input cycle: u64\nshared counter := 0\n")
+        .expect("root compile");
 
     // Scenario kernel: body never names `counter`. Built via
     // the typed subscope path — exactly how the activity layer
     // builds phase / scenario / for_each kernels.
-    let mid_program = compile_polydat("input cycle: u64\nlocal := cycle\n")
+    let mid_program = compile_polydat_interpreter("input cycle: u64\nlocal := cycle\n")
         .expect("mid compile")
         .program()
         .clone();
@@ -1032,7 +1035,7 @@ fn shared_cell_cascade_survives_legacy_bind_program_under_parent_chain() {
     // Rule-2-equivalent shape (`extern counter: u64` + write
     // through). The cell cascade must reach this kernel for
     // the write to land.
-    let leaf_program = compile_polydat(
+    let leaf_program = compile_polydat_interpreter(
         "input cycle: u64\n\
          extern counter: u64\n\
          __write_counter := 42\n",
@@ -1143,7 +1146,7 @@ fn bind_program_under_parent_rebinds_compiled_program() {
     // template instancing loop. Verify it produces a kernel
     // whose `lookup` resolves a parent constant — the same
     // behaviour the legacy two-call dance produced.
-    let parent_kernel = compile_polydat(
+    let parent_kernel = compile_polydat_interpreter(
         "input cycle: u64\n\
          const n := 7\n",
     )
@@ -1151,7 +1154,7 @@ fn bind_program_under_parent_rebinds_compiled_program() {
 
     // Compile the child program standalone. The rebind helper
     // does NOT compile — it takes a pre-compiled `Arc<PolydatProgram>`.
-    let child_kernel = compile_polydat(
+    let child_kernel = compile_polydat_interpreter(
         "input cycle: u64\n\
          extern n: u64\n\
          passthrough := mul(n, 1)\n",
@@ -1175,7 +1178,7 @@ fn build_kernel_under_parent_threads_compile_options() {
     // kernels via the builder. Verify the bridge accepts a
     // non-default options struct and produces a working kernel.
     let parent_kernel =
-        compile_polydat("input cycle: u64\nconst n := 5\n").expect("parent compile");
+        compile_polydat_interpreter("input cycle: u64\nconst n := 5\n").expect("parent compile");
 
     let opts = super::builder::CompileOptions {
         workload_dir: None,
@@ -1205,7 +1208,7 @@ fn parent_final_export_collision_still_errors() {
     // `const X := ...` on the parent + same-named child binding
     // is an immutable-export violation. Rule 2 routes shared
     // collisions but final collisions remain hard errors.
-    let kernel = compile_polydat(
+    let kernel = compile_polydat_interpreter(
         "input cycle: u64\n\
          const fixed := 42\n",
     )
@@ -1311,7 +1314,7 @@ fn add_result_bindings_rule2_writethrough_to_parent_shared() {
         input cycle: u64\n\
         shared count_seen := 0\n\
     ";
-    let parent_kernel = compile_polydat(parent_src).expect("parent compile");
+    let parent_kernel = compile_polydat_interpreter(parent_src).expect("parent compile");
     let parent = wrap_root_kernel(parent_kernel, "rb-rule2-root");
 
     let mut b = parent.clone().subcontext_builder();
@@ -1397,8 +1400,8 @@ fn add_result_bindings_empty_source_is_noop() {
 fn l2f_silent_fall_through_when_strict_off() {
     use crate::ast::Value;
     use crate::kernel::subcontext::PolydatMatter;
-    let outer =
-        compile_polydat("input cycle: u64\nconst X := \"outer-value\"\n").expect("outer compile");
+    let outer = compile_polydat_interpreter("input cycle: u64\nconst X := \"outer-value\"\n")
+        .expect("outer compile");
 
     let opts = super::CompileOptions {
         workload_dir: None,
@@ -1446,8 +1449,8 @@ fn l2f_silent_fall_through_when_strict_off() {
 #[test]
 fn l2f_strict_rejects_silent_fall_through() {
     use crate::kernel::subcontext::PolydatMatter;
-    let outer =
-        compile_polydat("input cycle: u64\nconst X := \"outer-value\"\n").expect("outer compile");
+    let outer = compile_polydat_interpreter("input cycle: u64\nconst X := \"outer-value\"\n")
+        .expect("outer compile");
 
     let opts = super::CompileOptions {
         workload_dir: None,

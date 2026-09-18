@@ -294,11 +294,37 @@ pub fn stdlib_sources() -> &'static [(&'static str, &'static str)] {
     STDLIB_MODULES
 }
 
-/// Compile a `.polydat` source string into the interpreter's kernel,
-/// under the default options: [`compile_polydat_with_options`] with
-/// [`CompileOptions::default`]. The interpreter is the semantic oracle;
-/// [`compile_polydat_kernel`] is the same program on the default engine.
-pub fn compile_polydat(source: &str) -> Result<PolydatKernel, String> {
+/// Compile a `.polydat` source string on the interpreter, under the
+/// default options.
+///
+/// The kernel comes back as `dyn Kernel`, which is the surface every
+/// use of a kernel goes through. The engine is named here rather than
+/// taken from the options because this entry point exists to be the
+/// semantic oracle: it is what a differential test compares a compiled
+/// engine against. A caller with no such need calls
+/// [`compile_polydat_kernel`], which takes the engine from the options
+/// and so defaults to the most compiled form the build has.
+///
+/// A test or diagnostic that needs the interpreter's *own* internals —
+/// its `PolydatProgram`, its `Lookup` view, its subcontext builder —
+/// calls [`compile_polydat_interpreter`] for the concrete type. That is
+/// the one reason to hold a `PolydatKernel` rather than a `dyn Kernel`.
+pub fn compile_polydat(source: &str) -> Result<Box<dyn crate::Kernel>, String> {
+    compile_polydat_interpreter(source).map(|k| Box::new(k) as Box<dyn crate::Kernel>)
+}
+
+/// [`compile_polydat`] returning the interpreter's concrete kernel.
+///
+/// This is the carve-out from the rule that kernels are used through
+/// the [`Kernel`](crate::Kernel) trait, and it is narrow on purpose:
+/// the concrete type carries the interpreter's implementation detail
+/// (`program()`, `lookup()`, `state()`, `build_subscope()`, the
+/// constant and wire readers), which a test asserting on that detail
+/// and a diagnostic reporting it both need and nothing else should
+/// reach for. Driving a kernel — coordinates, externs, cursors,
+/// evaluation, reads, traversals — is the trait's, on every engine
+/// including this one.
+pub fn compile_polydat_interpreter(source: &str) -> Result<PolydatKernel, String> {
     compile_polydat_with_options(source, &CompileOptions::default(), None)
 }
 
@@ -2946,8 +2972,9 @@ mod tests {
         // list's literal text rather than failing the compile — which
         // is what lets list-valued workload params (`limit_values:
         // [25]`) load.
-        let result =
-            compile_polydat("input cycle: u64\nconst eh_values := [1, 2, 3]\nout := cycle");
+        let result = compile_polydat_interpreter(
+            "input cycle: u64\nconst eh_values := [1, 2, 3]\nout := cycle",
+        );
         assert!(
             result.is_ok(),
             "array-literal binding should compile (binds as a string const), got: {:?}",
@@ -3127,7 +3154,8 @@ mod tests {
             input cycle: u64
             shared rolling := hash(cycle)
         "#;
-        let err = compile_polydat(src).expect_err("non-literal shared const must error");
+        let err =
+            compile_polydat_interpreter(src).expect_err("non-literal shared const must error");
         assert!(err.contains("shared binding 'rolling'"), "error: {err}");
         assert!(err.contains("literal initial value"), "error: {err}");
     }
@@ -3138,7 +3166,7 @@ mod tests {
             input cycle: u64
             const dim := 128
         "#;
-        let kernel = compile_polydat(src).unwrap();
+        let kernel = compile_polydat_interpreter(src).unwrap();
         assert_eq!(
             kernel.program().output_modifier("dim"),
             crate::dsl::ast::BindingModifier::CONST
@@ -3151,7 +3179,7 @@ mod tests {
             input cycle: u64
             shared budget := 100
         "#;
-        let kernel = compile_polydat(src).unwrap();
+        let kernel = compile_polydat_interpreter(src).unwrap();
         assert_eq!(
             kernel.program().output_modifier("budget"),
             crate::dsl::ast::BindingModifier::SHARED
@@ -3167,7 +3195,7 @@ mod tests {
             input cycle: u64
             const max_dim := 256
         "#;
-        let kernel = compile_polydat(src).unwrap();
+        let kernel = compile_polydat_interpreter(src).unwrap();
         assert_eq!(
             kernel.program().output_modifier("max_dim"),
             crate::dsl::ast::BindingModifier::CONST
@@ -3181,7 +3209,7 @@ mod tests {
             input cycle: u64
             label := "hello world"
         "#;
-        let mut kernel = compile_polydat(src).unwrap();
+        let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[0]);
         assert_eq!(kernel.pull("label").as_str(), "hello world");
     }
@@ -3192,7 +3220,7 @@ mod tests {
             input cycle: u64
             base := 1710000000000
         "#;
-        let mut kernel = compile_polydat(src).unwrap();
+        let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[0]);
         assert_eq!(kernel.pull("base").as_u64(), 1_710_000_000_000);
     }
@@ -3319,7 +3347,7 @@ mod tests {
         // time; the compiled program's output_map points at a
         // ConstU64 leaf.
         let src = "const dim := 128\n";
-        let kernel = compile_polydat(src).expect("init compile-const");
+        let kernel = compile_polydat_interpreter(src).expect("init compile-const");
         let prog = kernel.program();
         assert!(prog.const_outputs().contains(&"dim"));
         let &(node_idx, _) = prog.output_map_lookup("dim").expect("dim in output map");
@@ -3339,7 +3367,7 @@ mod tests {
         // evaluates it; the compile step just must not reject.
         let src = "extern profile: String\n\
                    const label := format_str(\"label_%s\", profile)\n";
-        let result = compile_polydat(src);
+        let result = compile_polydat_interpreter(src);
         // We don't care if format_str exists in the stdlib — what
         // we're testing is that the contract check itself doesn't
         // fail (any error must be about an unknown function, not
@@ -3358,7 +3386,7 @@ mod tests {
         // `counter()` is non-deterministic; init bindings must not
         // depend on it.
         let src = "const bad := counter()\n";
-        let err = compile_polydat(src)
+        let err = compile_polydat_interpreter(src)
             .expect_err("Plan A must reject init binding wired to a non-deterministic source");
         assert!(
             err.contains("init binding 'bad'") && err.contains("init contract"),
@@ -3374,7 +3402,7 @@ mod tests {
         let src = "const a := 1\n\
                    const b := 2\n\
                    c := 3\n";
-        let kernel = compile_polydat(src).unwrap();
+        let kernel = compile_polydat_interpreter(src).unwrap();
         let init_set = kernel.program().const_outputs();
         assert!(init_set.contains(&"a"), "const 'a' should be tracked");
         assert!(init_set.contains(&"b"), "const 'b' should be tracked");
@@ -3403,7 +3431,7 @@ mod tests {
             extern some_outer_var: str
             const x := "{some_outer_var}"
         "#;
-        let kernel = compile_polydat(src).expect("compile");
+        let kernel = compile_polydat_interpreter(src).expect("compile");
         assert_eq!(
             kernel.program().input_port_type("x"),
             Some(crate::ast::PortType::Str),
@@ -3419,7 +3447,7 @@ mod tests {
             extern other: str
             const y := other
         "#;
-        let kernel = compile_polydat(src).expect("compile");
+        let kernel = compile_polydat_interpreter(src).expect("compile");
         assert_eq!(
             kernel.program().input_port_type("y"),
             Some(crate::ast::PortType::Str),
@@ -3441,7 +3469,7 @@ mod tests {
             extern source_uri: str
             const prebuffered := dataset_prebuffer(source_uri)
         "#;
-        let kernel = compile_polydat(src).expect("compile");
+        let kernel = compile_polydat_interpreter(src).expect("compile");
         assert_eq!(
             kernel.program().input_port_type("prebuffered"),
             Some(crate::ast::PortType::Handle),

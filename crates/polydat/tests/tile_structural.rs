@@ -6,7 +6,7 @@
 //! tile in as template text, JSON text, a parsed JSON value, or a
 //! `polytile` binding in source.
 
-use polydat::dsl::compile_polydat;
+use polydat::dsl::compile_polydat_interpreter;
 use polydat::tile::{
     Span, TileOptions, compile_polydat_with_tiles, tile_from_json_text, tile_from_json_value,
     tile_from_text,
@@ -21,7 +21,8 @@ const PROGRAM: &str = "input cycle: u64\n\
     tags := for t in a,b\n";
 
 fn render(src: &str, cycle: u64, name: &str) -> String {
-    let mut k = compile_polydat(src).unwrap_or_else(|e| panic!("compile failed: {e}\n{src}"));
+    let mut k =
+        compile_polydat_interpreter(src).unwrap_or_else(|e| panic!("compile failed: {e}\n{src}"));
     k.set_inputs(&[cycle]);
     k.pull(name).as_str().to_string()
 }
@@ -62,7 +63,7 @@ fn structural_and_textual_forms_render_the_same_document() {
         assert_eq!(canonical(&a), canonical(&b), "cycle {cycle}\n{a}\n{b}");
     }
     let doc = canonical(&render(&src_struct, 3, "doc"));
-    let mut k = compile_polydat(&src_struct).unwrap();
+    let mut k = compile_polydat_interpreter(&src_struct).unwrap();
     k.set_inputs(&[3]);
     assert_eq!(doc["tenant"], k.pull("tenant_id").as_u64());
     assert_eq!(doc["device"], "dev-3");
@@ -141,25 +142,29 @@ fn heredoc_string_literals_work_as_ordinary_strings_too() {
 
 #[test]
 fn structural_errors_name_the_problem() {
-    let err = compile_polydat(
+    let err = compile_polydat_interpreter(
         "input cycle: u64\ndoc := polytile_json(\"{\\\"a\\\": \\\"@for s in 0..4\\\"}\")\n",
     )
     .unwrap_err();
     assert!(err.contains("outside a directive position"), "{err}");
-    let err = compile_polydat(
+    let err = compile_polydat_interpreter(
         "input cycle: u64\ndoc := polytile_json(\"{\\\"a\\\": [\\\"@else\\\", 1]}\")\n",
     )
     .unwrap_err();
     assert!(err.contains("without a leading"), "{err}");
-    let err =
-        compile_polydat("input cycle: u64\ndoc := polytile_json(\"not json\")\n").unwrap_err();
-    assert!(err.contains("not JSON"), "{err}");
-    let err = compile_polydat("input cycle: u64\ndoc := polytile(\"yaml\", \"x\")\n").unwrap_err();
-    assert!(err.contains("unknown encoding 'yaml'"), "{err}");
-    let err = compile_polydat("input cycle: u64\ndoc := polytile(\"json\", cycle)\n").unwrap_err();
-    assert!(err.contains("template body"), "{err}");
-    let err = compile_polydat("input cycle: u64\ndoc := polytile(\"json\", \"${missing}\")\n")
+    let err = compile_polydat_interpreter("input cycle: u64\ndoc := polytile_json(\"not json\")\n")
         .unwrap_err();
+    assert!(err.contains("not JSON"), "{err}");
+    let err = compile_polydat_interpreter("input cycle: u64\ndoc := polytile(\"yaml\", \"x\")\n")
+        .unwrap_err();
+    assert!(err.contains("unknown encoding 'yaml'"), "{err}");
+    let err = compile_polydat_interpreter("input cycle: u64\ndoc := polytile(\"json\", cycle)\n")
+        .unwrap_err();
+    assert!(err.contains("template body"), "{err}");
+    let err = compile_polydat_interpreter(
+        "input cycle: u64\ndoc := polytile(\"json\", \"${missing}\")\n",
+    )
+    .unwrap_err();
     assert!(err.contains("missing"), "{err}");
 }
 

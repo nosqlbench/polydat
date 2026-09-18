@@ -133,11 +133,13 @@ fn bad_comprehension_text_reports_position() {
 fn compiler_lowers_both_forms() {
     // Step 2: a traversal body compiles to a child program and a
     // producer binding becomes program metadata.
-    let k =
-        polydat::dsl::compile_polydat("input cycle: u64\nfor k in 1..4 {\n    x := hash(k)\n}\n")
-            .unwrap();
+    let k = polydat::dsl::compile_polydat_interpreter(
+        "input cycle: u64\nfor k in 1..4 {\n    x := hash(k)\n}\n",
+    )
+    .unwrap();
     assert_eq!(k.program().traversals().len(), 1);
-    let k = polydat::dsl::compile_polydat("input cycle: u64\nsweep := for k in 1..4\n").unwrap();
+    let k = polydat::dsl::compile_polydat_interpreter("input cycle: u64\nsweep := for k in 1..4\n")
+        .unwrap();
     assert_eq!(k.program().producers().len(), 1);
 }
 

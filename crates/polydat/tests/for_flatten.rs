@@ -8,11 +8,11 @@
 //! over it validates; a call that references a name is left to the
 //! traversal.
 
-use polydat::dsl::compile_polydat;
+use polydat::dsl::compile_polydat_interpreter;
 use polydat::iteration::comprehension::cardinality::CardinalityClass;
 
 fn traversed(src: &str) -> Vec<u64> {
-    let mut k = compile_polydat(src).unwrap_or_else(|e| panic!("{e}\n{src}"));
+    let mut k = compile_polydat_interpreter(src).unwrap_or_else(|e| panic!("{e}\n{src}"));
     k.set_inputs(&[0]);
     let mut stream = k.traverse(0).unwrap();
     let mut seen = Vec::new();
@@ -44,7 +44,7 @@ fn an_order_over_a_context_free_generator_validates_and_samples() {
 /// and its stream is the generator's values.
 #[test]
 fn a_producer_over_a_context_free_generator_is_bounded_by_its_values() {
-    let mut k = compile_polydat("input cycle: u64\nfibs := for k in fib(8)\n").unwrap();
+    let mut k = compile_polydat_interpreter("input cycle: u64\nfibs := for k in fib(8)\n").unwrap();
     k.set_inputs(&[0]);
     let streamer = k.pull("fibs").clone();
     let streamer = streamer.as_streamer().unwrap();
@@ -66,13 +66,13 @@ fn a_producer_over_a_context_free_generator_is_bounded_by_its_values() {
 /// refuse: unbounded and without a closed-form index function (V4).
 #[test]
 fn a_generator_over_a_runtime_name_stays_unbounded_at_compile() {
-    let err = compile_polydat(
+    let err = compile_polydat_interpreter(
         "input cycle: u64\ninput n: u64\nfor k in pow2({n}) order halton/2 {\n    v := u64_add(k, 0)\n}\n",
     )
     .unwrap_err();
     assert!(err.contains("V4"), "{err}");
     // Without an order the traversal evaluates it with the wire bound.
-    let mut k = compile_polydat(
+    let mut k = compile_polydat_interpreter(
         "input cycle: u64\nextern total: u64 = 100\nfor p in partitions(\"*/2\", {total}) {\n    v := cardinality(p)\n}\n",
     )
     .unwrap();
@@ -213,7 +213,8 @@ fn a_built_tile_projects_the_body_it_renders() {
     assert_eq!(k.pull("t").as_str(), "n=42");
     // The same text written as source gives the same program.
     let mut written =
-        compile_polydat("input cycle: u64\ntile t := \"n=${u64_add(cycle, 1)}\"\n").unwrap();
+        compile_polydat_interpreter("input cycle: u64\ntile t := \"n=${u64_add(cycle, 1)}\"\n")
+            .unwrap();
     written.set_inputs(&[41]);
     assert_eq!(written.pull("t").as_str(), "n=42");
 }

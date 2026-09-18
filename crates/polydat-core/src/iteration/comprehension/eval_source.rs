@@ -455,7 +455,7 @@ mod tests {
 
     #[test]
     fn generator_with_context_evaluates_to_lattice() {
-        let canonical = Arc::new(crate::dsl::compile_polydat("\n").unwrap());
+        let canonical = Arc::new(crate::dsl::compile_polydat_interpreter("\n").unwrap());
         let s = Source::Generator {
             expr: "1, 2, 3, 4, 5".into(),
             cardinality_hint: Some(5),

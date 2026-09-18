@@ -7,14 +7,14 @@
 //! concurrency level. Detects race conditions in mmap readers,
 //! caching, or dataset resolution.
 
-use polydat::dsl::compile::compile_polydat;
+use polydat::dsl::compile::compile_polydat_interpreter;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Read a specific vector index single-threaded and return its string.
 fn read_vector_single(source: &str, index: u64) -> String {
     let src = format!("input cycle: u64\nvec := vector_at(cycle, \"{source}\")");
-    let mut kernel = compile_polydat(&src).unwrap();
+    let mut kernel = compile_polydat_interpreter(&src).unwrap();
     kernel.set_inputs(&[index]);
     kernel.pull("vec").to_display_string()
 }
@@ -51,7 +51,7 @@ fn concurrent_reads_match_sequential() {
         let source = source.to_string();
         handles.push(std::thread::spawn(move || {
             let src = format!("input cycle: u64\nvec := vector_at(cycle, \"{source}\")");
-            let mut kernel = compile_polydat(&src).unwrap();
+            let mut kernel = compile_polydat_interpreter(&src).unwrap();
 
             let mut mismatches = Vec::new();
             for _iter in 0..iterations {
@@ -95,7 +95,7 @@ fn concurrent_reads_match_sequential() {
 fn shared_kernel_concurrent_eval() {
     let source = "example:label_01";
     let src = format!("input cycle: u64\nvec := vector_at(cycle, \"{source}\")");
-    let kernel = compile_polydat(&src).unwrap();
+    let kernel = compile_polydat_interpreter(&src).unwrap();
     let program = kernel.into_program();
 
     let thread_count = 32;
@@ -136,7 +136,7 @@ fn shared_kernel_concurrent_eval() {
 /// Helper: compile kernel on a blocking thread to avoid nested runtime.
 fn compile_shared_program(source: &str) -> Arc<polydat::kernel::PolydatProgram> {
     let src = format!("input cycle: u64\nvec := vector_at(cycle, \"{source}\")");
-    let kernel = compile_polydat(&src).unwrap();
+    let kernel = compile_polydat_interpreter(&src).unwrap();
     kernel.into_program()
 }
 
@@ -255,7 +255,7 @@ fn high_contention_reads() {
             let total_reads = &total_reads;
             s.spawn(move || {
                 let src = format!("input cycle: u64\nvec := vector_at(cycle, \"{source}\")");
-                let mut kernel = compile_polydat(&src).unwrap();
+                let mut kernel = compile_polydat_interpreter(&src).unwrap();
                 for i in 0..reads_per_thread {
                     let idx = (i * 7 + 13) as u64 % 83775; // spread across dataset
                     kernel.set_inputs(&[idx]);

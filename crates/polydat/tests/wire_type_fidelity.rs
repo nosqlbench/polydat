@@ -19,7 +19,7 @@
 //! VecF32, flattened op scope, no shadow).
 
 use polydat::ast::PortType;
-use polydat::dsl::compile::compile_polydat;
+use polydat::dsl::compile::compile_polydat_interpreter;
 use polydat::kernel::Metadata;
 
 /// The sweep-phase shape: a VecF32-producing dataset accessor bound to
@@ -32,7 +32,7 @@ input prebuffered: handle
 input q: u64
 query_vector := query_vector_at(prebuffered, q)
 "#;
-    let kernel = compile_polydat(src).expect("compile");
+    let kernel = compile_polydat_interpreter(src).expect("compile");
     assert_eq!(
         kernel.output_port_type("query_vector"),
         Some(PortType::VecF32),
@@ -54,7 +54,7 @@ query_vector := query_vector_at(prebuffered, q)
 normed := vec_norm(query_vector)
 rendered := printf("ann of {}", query_vector)
 "#;
-    let kernel = compile_polydat(src).expect("compile");
+    let kernel = compile_polydat_interpreter(src).expect("compile");
     assert_eq!(
         kernel.output_port_type("query_vector"),
         Some(PortType::VecF32),

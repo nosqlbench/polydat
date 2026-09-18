@@ -1951,18 +1951,22 @@ mod tests {
     #[test]
     fn kernel_resolves_via_get_constant() {
         let kernel =
-            crate::dsl::compile::compile_polydat("const dataset := \"example\"\n").unwrap();
+            crate::dsl::compile::compile_polydat_interpreter("const dataset := \"example\"\n")
+                .unwrap();
         let out = interpolate_via_kernel("path/{dataset}/data", &kernel).unwrap();
         assert_eq!(out, "path/example/data");
     }
 
     #[test]
     fn kernel_resolves_via_get_input() {
-        let parent = crate::dsl::compile::compile_polydat("const k_values := \"1, 10\"\n").unwrap();
-        let child_program = crate::dsl::compile::compile_polydat("extern k_values: String\n")
-            .unwrap()
-            .program()
-            .clone();
+        let parent =
+            crate::dsl::compile::compile_polydat_interpreter("const k_values := \"1, 10\"\n")
+                .unwrap();
+        let child_program =
+            crate::dsl::compile::compile_polydat_interpreter("extern k_values: String\n")
+                .unwrap()
+                .program()
+                .clone();
         let child = parent.materialize_subscope(child_program, &[]);
         let out = interpolate_via_kernel("values={k_values}", &child).unwrap();
         assert_eq!(out, "values=1, 10");
@@ -1970,7 +1974,7 @@ mod tests {
 
     #[test]
     fn kernel_unresolved_name_errors() {
-        let kernel = crate::dsl::compile::compile_polydat("const x := 1\n").unwrap();
+        let kernel = crate::dsl::compile::compile_polydat_interpreter("const x := 1\n").unwrap();
         let err = interpolate_via_kernel("hello {nope}", &kernel)
             .unwrap_err()
             .to_string();
@@ -1980,7 +1984,7 @@ mod tests {
 
     #[test]
     fn kernel_nested_template_iterates_to_fixed_point() {
-        let kernel = crate::dsl::compile::compile_polydat(
+        let kernel = crate::dsl::compile::compile_polydat_interpreter(
             "const k := \"1\"\nconst k_1_limits := \"1, 2, 4, 8\"\n",
         )
         .unwrap();
@@ -2015,7 +2019,7 @@ mod tests {
         // constants. The real cursor compiler emits these via
         // `__cursor_extent_<name>_{start,end}` outputs; for this
         // test we synthesize them directly.
-        let kernel = crate::dsl::compile::compile_polydat(
+        let kernel = crate::dsl::compile::compile_polydat_interpreter(
             "const __cursor_extent_row_start := 0\n\
              const __cursor_extent_row_end := 5\n",
         )
@@ -2035,7 +2039,7 @@ mod tests {
 
     #[test]
     fn all_cursor_non_zero_start() {
-        let kernel = crate::dsl::compile::compile_polydat(
+        let kernel = crate::dsl::compile::compile_polydat_interpreter(
             "const __cursor_extent_data_start := 100\n\
              const __cursor_extent_data_end := 103\n",
         )
@@ -2049,7 +2053,8 @@ mod tests {
 
     #[test]
     fn all_cursor_missing_extent_errors() {
-        let kernel = crate::dsl::compile::compile_polydat("const unrelated := 1\n").unwrap();
+        let kernel =
+            crate::dsl::compile::compile_polydat_interpreter("const unrelated := 1\n").unwrap();
         let err = evaluate_spec("all(no_such_cursor)", &kernel)
             .unwrap_err()
             .to_string();
@@ -2069,7 +2074,7 @@ mod tests {
         // a clean clause-level error (the legacy silent
         // literal-list fallback masked this kind of typo six
         // layers downstream).
-        let kernel = crate::dsl::compile::compile_polydat(
+        let kernel = crate::dsl::compile::compile_polydat_interpreter(
             "const __cursor_extent_row_start := 0\n\
              const __cursor_extent_row_end := 5\n",
         )
@@ -2110,7 +2115,8 @@ mod tests {
         // The user-visible result was a CQL parser error from a
         // malformed `DROP INDEX`. After this fix every layer
         // propagates an actionable diagnostic.
-        let kernel = crate::dsl::compile::compile_polydat("const unrelated := 1\n").unwrap();
+        let kernel =
+            crate::dsl::compile::compile_polydat_interpreter("const unrelated := 1\n").unwrap();
         let result = evaluate_spec(
             "matching_profiles('nonexistent_dataset_xyz_qqq', 'label_')",
             &kernel,
@@ -2138,7 +2144,8 @@ mod tests {
         // must propagate the failure rather than splitting on
         // commas. This guards the broader contract that
         // protected the dataset-resolution case above.
-        let kernel = crate::dsl::compile::compile_polydat("const unrelated := 1\n").unwrap();
+        let kernel =
+            crate::dsl::compile::compile_polydat_interpreter("const unrelated := 1\n").unwrap();
         let err = evaluate_spec("nonexistent_func('a', 'b', 'c')", &kernel)
             .unwrap_err()
             .to_string();
@@ -2156,7 +2163,8 @@ mod tests {
         // (which it should — `1, 10, 100` isn't a single GK
         // expression). This is the legitimate use case that the
         // fallback exists for.
-        let kernel = crate::dsl::compile::compile_polydat("const unrelated := 1\n").unwrap();
+        let kernel =
+            crate::dsl::compile::compile_polydat_interpreter("const unrelated := 1\n").unwrap();
         let values = evaluate_spec("1, 10, 100", &kernel).unwrap();
         assert_eq!(values, vec![Value::U64(1), Value::U64(10), Value::U64(100)]);
 
@@ -2177,7 +2185,9 @@ mod tests {
         // the compiler-side change that emits
         // __cursor_extent_<name>_{start,end} as final bindings
         // even in the literal-args case.
-        let kernel = crate::dsl::compile::compile_polydat("cursor row = range(0, 50)\n").unwrap();
+        let kernel =
+            crate::dsl::compile::compile_polydat_interpreter("cursor row = range(0, 50)\n")
+                .unwrap();
         let start = kernel.lookup("__cursor_extent_row_start");
         let end = kernel.lookup("__cursor_extent_row_end");
         assert_eq!(
@@ -2190,7 +2200,8 @@ mod tests {
 
     #[test]
     fn all_cursor_with_real_cursor_decl_works() {
-        let kernel = crate::dsl::compile::compile_polydat("cursor row = range(0, 5)\n").unwrap();
+        let kernel =
+            crate::dsl::compile::compile_polydat_interpreter("cursor row = range(0, 5)\n").unwrap();
         let values = evaluate_spec("all(row)", &kernel).unwrap();
         assert_eq!(
             values,
@@ -2206,7 +2217,7 @@ mod tests {
 
     #[test]
     fn all_cursor_ignores_whitespace() {
-        let kernel = crate::dsl::compile::compile_polydat(
+        let kernel = crate::dsl::compile::compile_polydat_interpreter(
             "const __cursor_extent_row_start := 0\n\
              const __cursor_extent_row_end := 3\n",
         )
@@ -2218,7 +2229,8 @@ mod tests {
     #[test]
     fn evaluate_spec_resolves_against_kernel() {
         let kernel =
-            crate::dsl::compile::compile_polydat("const k_values := \"1, 10, 100\"\n").unwrap();
+            crate::dsl::compile::compile_polydat_interpreter("const k_values := \"1, 10, 100\"\n")
+                .unwrap();
         let v = evaluate_spec("{k_values}", &kernel).unwrap();
         assert_eq!(v, vec![Value::U64(1), Value::U64(10), Value::U64(100)]);
     }
@@ -2229,7 +2241,8 @@ mod tests {
         // wire/param reference — resolves identically to the
         // braced `{name}` interpolation form.
         let kernel =
-            crate::dsl::compile::compile_polydat("const k_values := \"1, 10, 100\"\n").unwrap();
+            crate::dsl::compile::compile_polydat_interpreter("const k_values := \"1, 10, 100\"\n")
+                .unwrap();
         let bare = evaluate_spec("k_values", &kernel).unwrap();
         let braced = evaluate_spec("{k_values}", &kernel).unwrap();
         assert_eq!(bare, braced);
@@ -2241,7 +2254,7 @@ mod tests {
         // SRD-18f §6: a bare identifier source that doesn't
         // resolve is a hard error (not silently bound as its own
         // name-string), and the message points at the fix.
-        let kernel = crate::dsl::compile::compile_polydat("\n").unwrap();
+        let kernel = crate::dsl::compile::compile_polydat_interpreter("\n").unwrap();
         let err = evaluate_spec("nonexistent", &kernel)
             .unwrap_err()
             .to_string();
@@ -2253,7 +2266,8 @@ mod tests {
     fn bracket_list_spread_and_no_peel() {
         // `[xs…]` destructures (peels one level); `[xs]` binds the
         // whole value once.
-        let kernel = crate::dsl::compile::compile_polydat("const xs := \"1, 2, 3\"\n").unwrap();
+        let kernel =
+            crate::dsl::compile::compile_polydat_interpreter("const xs := \"1, 2, 3\"\n").unwrap();
         // spread → peel the string's tokens
         let spread = evaluate_spec("[xs…]", &kernel).unwrap();
         assert_eq!(spread, vec![Value::U64(1), Value::U64(2), Value::U64(3)]);
@@ -2264,7 +2278,8 @@ mod tests {
 
     #[test]
     fn bracket_list_mixes_refs_literals_and_spread() {
-        let kernel = crate::dsl::compile::compile_polydat("const mid := \"7, 8\"\n").unwrap();
+        let kernel =
+            crate::dsl::compile::compile_polydat_interpreter("const mid := \"7, 8\"\n").unwrap();
         let v = evaluate_spec("[1, mid…, \"x\"]", &kernel).unwrap();
         assert_eq!(
             v,
@@ -2355,7 +2370,7 @@ mod tests {
     // ── SRD-18c Layer 2 / SRD-18e Push 3: range operator ──
 
     fn empty_kernel() -> PolydatKernel {
-        crate::dsl::compile::compile_polydat("\n").unwrap()
+        crate::dsl::compile::compile_polydat_interpreter("\n").unwrap()
     }
 
     #[test]
@@ -2510,7 +2525,8 @@ mod tests {
     #[test]
     fn range_with_kernel_referenced_bounds() {
         let kernel =
-            crate::dsl::compile::compile_polydat("const lo := 5\nconst hi := 12\n").unwrap();
+            crate::dsl::compile::compile_polydat_interpreter("const lo := 5\nconst hi := 12\n")
+                .unwrap();
         let v = evaluate_spec("{lo}..{hi}", &kernel).unwrap();
         assert_eq!(
             v,

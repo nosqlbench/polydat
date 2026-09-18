@@ -524,7 +524,7 @@ fn run_wellformed_pass(seed: u64, iterations: usize) -> Vec<String> {
         // Invariant 4: the compiler never panics. It either lowers every
         // for form (one child program per traversal, one producer entry
         // per binding) or returns a sentence naming the offending form.
-        match std::panic::catch_unwind(|| polydat::dsl::compile_polydat(&source)) {
+        match std::panic::catch_unwind(|| polydat::dsl::compile_polydat_interpreter(&source)) {
             Ok(Ok(k)) => {
                 let mut lowered = 0;
                 count_lowered(k.program(), &mut lowered);
@@ -548,7 +548,7 @@ fn run_wellformed_pass(seed: u64, iterations: usize) -> Vec<String> {
         // without panicking, and two hosts of the same source produce the
         // same trace (T1). Bounded so a wide comprehension stays cheap.
         let run = || -> Result<Vec<String>, String> {
-            let mut k = polydat::dsl::compile_polydat(&source)?;
+            let mut k = polydat::dsl::compile_polydat_interpreter(&source)?;
             k.set_inputs(&[3]);
             let mut trace = Vec::new();
             run_traversals_bounded(&mut k, 0, &mut trace)?;
@@ -676,7 +676,7 @@ fn run_mutation_pass(seed: u64, iterations: usize) -> Vec<String> {
                     "printed form of a parsed mutant does not parse: {e}\n  printed:\n{printed}"
                 )
             })?;
-            polydat::dsl::compile_polydat(&source)
+            polydat::dsl::compile_polydat_interpreter(&source)
         });
         match outcome {
             Err(p) => failures.push(format!(

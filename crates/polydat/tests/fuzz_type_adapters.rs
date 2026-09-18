@@ -28,7 +28,7 @@
 //!    RNG; FUZZ_ITERATIONS controls iteration count.
 
 use polydat::ast::{PortType, SlotType};
-use polydat::dsl::compile::{compile_polydat, compile_polydat_with_log};
+use polydat::dsl::compile::{compile_polydat_interpreter, compile_polydat_with_log};
 use polydat::dsl::events::{CompileEvent, CompileEventLog};
 use polydat::dsl::registry::{self, FuncSig};
 
@@ -956,7 +956,7 @@ fn sanity_f64_to_u64_rejects_without_cast() {
         x := to_f64(cycle)\n\
         y := add(x, 1)\n\
     ";
-    let err = compile_polydat(source).expect_err("narrowing f64→u64 must not compile");
+    let err = compile_polydat_interpreter(source).expect_err("narrowing f64→u64 must not compile");
     assert!(
         err.contains("type mismatch"),
         "expected a type-mismatch error for narrowing, got: {err}"
@@ -980,10 +980,10 @@ fn strict_pragmas_reach_every_compile_path() {
         d := mod(hash(cycle), 100)\n\
         b := mod_wire(cycle, d)\n\
     ";
-    let plain = compile_polydat(source).expect("plain compile");
+    let plain = compile_polydat_interpreter(source).expect("plain compile");
     let mut log = CompileEventLog::new();
     let logged = compile_polydat_with_log(source, &mut log).expect("logged compile");
-    let lax_kernel = compile_polydat(lax).expect("lax compile");
+    let lax_kernel = compile_polydat_interpreter(lax).expect("lax compile");
     let plain_nodes = plain.program().node_count();
     assert_eq!(
         plain_nodes,
@@ -1048,7 +1048,7 @@ fn strict_value_assertion_fails_alike_on_every_engine() {
             .collect::<Vec<_>>()
             .join("\n")
     }
-    let mut interpreter = compile_polydat(source).expect("interpreter compile");
+    let mut interpreter = compile_polydat_interpreter(source).expect("interpreter compile");
     let mut default = polydat::dsl::compile::compile_polydat_kernel_with_options(
         source,
         &polydat::dsl::compile::CompileOptions::default(),

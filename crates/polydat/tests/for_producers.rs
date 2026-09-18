@@ -6,12 +6,12 @@
 //! one wire are independent; cardinality metadata is exposed.
 
 use polydat::ast::PortType;
-use polydat::dsl::compile_polydat;
+use polydat::dsl::compile_polydat_interpreter;
 use polydat::iteration::comprehension::cardinality::CardinalityClass;
 use polydat::iteration::comprehension::strategies::TupleValue;
 
 fn compile(src: &str) -> polydat::kernel::PolydatKernel {
-    compile_polydat(src).unwrap_or_else(|e| panic!("compile failed: {e}\n{src}"))
+    compile_polydat_interpreter(src).unwrap_or_else(|e| panic!("compile failed: {e}\n{src}"))
 }
 
 fn tuples(stream: polydat::iteration::comprehension::surfaces::CoordinateStream) -> Vec<Vec<i64>> {
@@ -161,11 +161,13 @@ fn traversal_over_a_derived_producer_resolves_elements() {
 #[test]
 fn derived_form_over_an_unknown_base_is_an_error() {
     let err =
-        compile_polydat("input cycle: u64\nedges := for nowhere where {k} == 1\n").unwrap_err();
-    assert!(err.contains("nowhere"), "{err}");
-    let err =
-        compile_polydat("input cycle: u64\nbase := for k in 1..4\nbad := for base order zigzag\n")
+        compile_polydat_interpreter("input cycle: u64\nedges := for nowhere where {k} == 1\n")
             .unwrap_err();
+    assert!(err.contains("nowhere"), "{err}");
+    let err = compile_polydat_interpreter(
+        "input cycle: u64\nbase := for k in 1..4\nbad := for base order zigzag\n",
+    )
+    .unwrap_err();
     assert!(err.contains("zigzag"), "{err}");
 }
 

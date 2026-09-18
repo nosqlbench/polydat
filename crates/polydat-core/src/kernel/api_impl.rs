@@ -329,12 +329,12 @@ impl crate::kernel::KernelProgram for crate::kernel::PolydatProgram {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dsl::compile::compile_polydat;
+    use crate::dsl::compile::compile_polydat_interpreter;
 
     /// Indexed wire access works.
     #[test]
     fn dataflow_indexed_set_get() {
-        let mut k = compile_polydat("input cycle: u64\nconst x := 7\n").unwrap();
+        let mut k = compile_polydat_interpreter("input cycle: u64\nconst x := 7\n").unwrap();
         // cycle is index 0
         k.set_wire(0_usize, Value::U64(42)).expect("typed write");
         assert_eq!(k.get_wire(0_usize), Some(Value::U64(42)));
@@ -343,7 +343,7 @@ mod tests {
     /// Named wire access resolves through metadata.
     #[test]
     fn dataflow_named_set_get() {
-        let mut k = compile_polydat("input cycle: u64\nextern n: u64\n").unwrap();
+        let mut k = compile_polydat_interpreter("input cycle: u64\nextern n: u64\n").unwrap();
         k.set_wire("n", Value::U64(5)).expect("typed write");
         match k.get_wire("n") {
             Some(Value::U64(5)) => {}
@@ -354,7 +354,7 @@ mod tests {
     /// String key works alongside &str.
     #[test]
     fn dataflow_string_key() {
-        let mut k = compile_polydat("input cycle: u64\nextern n: u64\n").unwrap();
+        let mut k = compile_polydat_interpreter("input cycle: u64\nextern n: u64\n").unwrap();
         let name = String::from("n");
         k.set_wire(&name, Value::U64(99)).expect("typed write");
         assert_eq!(k.get_wire(name.clone()), Some(Value::U64(99)));
@@ -363,7 +363,7 @@ mod tests {
     /// Unknown name returns Err(UnknownWire) / None — no panic.
     #[test]
     fn dataflow_unknown_name_safe() {
-        let mut k = compile_polydat("input cycle: u64\n").unwrap();
+        let mut k = compile_polydat_interpreter("input cycle: u64\n").unwrap();
         let err = k.set_wire("nonexistent", Value::U64(1)).unwrap_err();
         assert!(matches!(
             err,
@@ -382,7 +382,7 @@ mod tests {
     /// pair for testing the diagnostic.
     #[test]
     fn dataflow_type_mismatch_rejected() {
-        let mut k = compile_polydat("input cycle: u64\nextern n: u64\n").unwrap();
+        let mut k = compile_polydat_interpreter("input cycle: u64\nextern n: u64\n").unwrap();
         let err = k
             .set_wire(
                 "n",
@@ -426,7 +426,7 @@ mod tests {
     /// through the boundary auto-adapter rather than rejecting.
     #[test]
     fn dataflow_healable_mismatch_adapts() {
-        let mut k = compile_polydat("input cycle: u64\nextern x: f64\n").unwrap();
+        let mut k = compile_polydat_interpreter("input cycle: u64\nextern x: f64\n").unwrap();
         // u64 → f64 has an auto-adapter (lossless widening); the
         // typed-write API should accept this transparently.
         k.set_wire("x", Value::U64(42))
@@ -442,15 +442,17 @@ mod tests {
     /// type (per none_semantics.md).
     #[test]
     fn dataflow_none_passes_through_any_slot() {
-        let mut k = compile_polydat("input cycle: u64\nextern n: u64\n").unwrap();
+        let mut k = compile_polydat_interpreter("input cycle: u64\nextern n: u64\n").unwrap();
         k.set_wire("n", Value::None).expect("None always permitted");
     }
 
     /// Metadata trait surfaces names + types.
     #[test]
     fn metadata_listings() {
-        let k = compile_polydat("input (cycle: u64, thread: u64)\nextern n: u64\nconst x := 7\n")
-            .unwrap();
+        let k = compile_polydat_interpreter(
+            "input (cycle: u64, thread: u64)\nextern n: u64\nconst x := 7\n",
+        )
+        .unwrap();
         let inputs: Vec<String> = k.input_names();
         assert!(inputs.iter().any(|s| s == "cycle"));
         assert!(inputs.iter().any(|s| s == "n"));
@@ -507,7 +509,7 @@ mod tests {
     /// the input slot — `n` is an extern input.
     #[test]
     fn construction_root_from_program() {
-        let template = compile_polydat("input cycle: u64\nextern n: u64\n").unwrap();
+        let template = compile_polydat_interpreter("input cycle: u64\nextern n: u64\n").unwrap();
         let program = template.program().clone();
         let matter = crate::kernel::subcontext::PolydatMatter::builder()
             .program(program)
@@ -522,7 +524,7 @@ mod tests {
     /// Builder rejects ambiguous matter (multiple input forms).
     #[test]
     fn builder_rejects_multiple_forms() {
-        let template = compile_polydat("input cycle: u64\n").unwrap();
+        let template = compile_polydat_interpreter("input cycle: u64\n").unwrap();
         match crate::kernel::subcontext::PolydatMatter::builder()
             .source("input cycle: u64\n")
             .program(template.program().clone())

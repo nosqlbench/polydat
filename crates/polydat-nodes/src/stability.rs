@@ -151,7 +151,7 @@ mod tests {
     /// `is_stable` destructure without an adapter.
     #[test]
     fn declared_f64_input_flows_without_a_spurious_adapter() {
-        let mut k = polydat::dsl::compile::compile_polydat(
+        let mut k = polydat::dsl::compile::compile_polydat_interpreter(
             "input source: f64\n(stable_value, stable) := is_stable(source, 0.05, 4, 8)",
         )
         .expect("compile");

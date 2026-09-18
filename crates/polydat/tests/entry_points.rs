@@ -10,9 +10,10 @@
 use polydat::ast::Value;
 use polydat::compile::assembly::{PolydatAssembler, WireRef};
 use polydat::dsl::compile::{
-    CompileOptions, compile_polydat, compile_polydat_kernel, compile_polydat_kernel_with_options,
-    compile_polydat_to_assembler, compile_polydat_to_assembler_with, compile_polydat_with,
-    compile_polydat_with_engine, compile_polydat_with_log, compile_polydat_with_options,
+    CompileOptions, compile_polydat_interpreter, compile_polydat_kernel,
+    compile_polydat_kernel_with_options, compile_polydat_to_assembler,
+    compile_polydat_to_assembler_with, compile_polydat_with, compile_polydat_with_engine,
+    compile_polydat_with_log, compile_polydat_with_options,
 };
 use polydat::dsl::events::CompileEventLog;
 use polydat::{Engine, JitMode, Kernel, KernelError, Provenance};
@@ -40,7 +41,7 @@ fn values(k: &mut dyn Kernel, cycle: u64) -> Vec<Value> {
 
 #[test]
 fn every_entry_point_reaches_the_same_kernel() {
-    let mut oracle = compile_polydat(SRC).unwrap();
+    let mut oracle = compile_polydat_interpreter(SRC).unwrap();
     let want: Vec<Value> = values(&mut oracle, 5);
     let options = CompileOptions::default();
     let mut log = CompileEventLog::new();
@@ -136,7 +137,8 @@ fn a_hand_built_assembler_compiles_on_every_engine() {
         (k.pull("h"), k.pull("k"))
     }
     let mut from_source =
-        compile_polydat("input cycle: u64\nh := hash(cycle)\nk := mod(h, 7)\n").unwrap();
+        compile_polydat_interpreter("input cycle: u64\nh := hash(cycle)\nk := mod(h, 7)\n")
+            .unwrap();
     let want = hk(&mut from_source);
     let mut p1 = build().compile().unwrap();
     assert_eq!(hk(&mut p1), want);
@@ -203,7 +205,7 @@ fn the_logged_compile_accepts_a_traversal() {
 #[test]
 fn deferred_cursor_extents_resolve_on_every_engine() {
     let src = "input cycle: u64\nn := 10 + 5\ncursor q = range(0, n)\nv := hash(q.ordinal)\n";
-    let want = compile_polydat(src).unwrap().cursor_schemas()[0].extent;
+    let want = compile_polydat_interpreter(src).unwrap().cursor_schemas()[0].extent;
     assert_eq!(want, Some(15));
     for engine in engines() {
         let k = match compile_polydat_with(src, engine) {

@@ -17,7 +17,7 @@
 //! - Edge cases and error handling
 
 use polydat::ast::Value;
-use polydat::dsl::compile::compile_polydat;
+use polydat::dsl::compile::compile_polydat_interpreter;
 use polydat::iteration::source::{DataSourceFactory, RangeSourceFactory, SourceItem};
 use std::sync::Arc;
 use std::thread;
@@ -110,7 +110,7 @@ fn vectordata_source_rejects_unknown_facet() {
     // error before compilation hits any vectordata I/O.
     let src = r#"cursor row = vectordata_source("example", "label_00", "bogus")
 id := row.ordinal"#;
-    let err = compile_polydat(src).unwrap_err();
+    let err = compile_polydat_interpreter(src).unwrap_err();
     assert!(
         err.contains("facet must be") && err.contains("bogus"),
         "expected facet validation error, got: {err}",
@@ -122,7 +122,7 @@ id := row.ordinal"#;
 fn vectordata_source_rejects_non_string_args() {
     let src = r#"cursor row = vectordata_source(42, "label_00", "base")
 id := row.ordinal"#;
-    let err = compile_polydat(src).unwrap_err();
+    let err = compile_polydat_interpreter(src).unwrap_err();
     assert!(
         err.contains("string literal"),
         "expected string-literal error, got: {err}",
@@ -136,7 +136,7 @@ fn vectordata_source_requires_three_args() {
     // string-literal error rather than panic on out-of-bounds args.
     let src = r#"cursor row = vectordata_source("example", "label_00")
 id := row.ordinal"#;
-    let err = compile_polydat(src).unwrap_err();
+    let err = compile_polydat_interpreter(src).unwrap_err();
     assert!(
         err.contains("string literal") || err.contains("facet"),
         "expected validation error, got: {err}",
@@ -149,7 +149,7 @@ fn vectordata_base_rejects_non_string_args() {
     // Facet-baked shortcut: only dataset + profile required.
     let src = r#"cursor row = vectordata_base("example", 7)
 id := row.ordinal"#;
-    let err = compile_polydat(src).unwrap_err();
+    let err = compile_polydat_interpreter(src).unwrap_err();
     assert!(
         err.contains("string literal"),
         "expected string-literal error, got: {err}",
@@ -161,7 +161,7 @@ id := row.ordinal"#;
 fn vectordata_query_requires_two_args() {
     let src = r#"cursor q = vectordata_query("example")
 id := q.ordinal"#;
-    let err = compile_polydat(src).unwrap_err();
+    let err = compile_polydat_interpreter(src).unwrap_err();
     assert!(
         err.contains("string literal"),
         "expected string-literal error, got: {err}",
@@ -476,7 +476,7 @@ fn cursor_compiles_and_produces_schema() {
         input cycle: u64
         id := hash(r.ordinal)
     "#;
-    let kernel = compile_polydat(src).unwrap();
+    let kernel = compile_polydat_interpreter(src).unwrap();
     let schemas = kernel.program().cursor_schemas();
     assert_eq!(schemas.len(), 1);
     assert_eq!(schemas[0].name, "r");
@@ -493,7 +493,7 @@ fn cursor_extent_folds_const_function_call() {
         input cycle: u64
         id := hash(r.ordinal)
     "#;
-    let kernel = compile_polydat(src).unwrap();
+    let kernel = compile_polydat_interpreter(src).unwrap();
     let schemas = kernel.program().cursor_schemas();
     assert_eq!(schemas.len(), 1);
     assert_eq!(
@@ -511,7 +511,7 @@ fn cursor_extent_folds_arithmetic_expression() {
         input cycle: u64
         id := hash(r.ordinal)
     "#;
-    let kernel = compile_polydat(src).unwrap();
+    let kernel = compile_polydat_interpreter(src).unwrap();
     let schemas = kernel.program().cursor_schemas();
     assert_eq!(
         schemas[0].extent,
@@ -527,7 +527,7 @@ fn cursor_projection_wires_into_downstream_nodes() {
         input cycle: u64
         doubled := r.ordinal + r.ordinal
     "#;
-    let mut kernel = compile_polydat(src).unwrap();
+    let mut kernel = compile_polydat_interpreter(src).unwrap();
     // Set the source projection input (r__ordinal) to 21
     if let Some(idx) = kernel.program().find_input("r__ordinal") {
         kernel.state().set_input(idx, Value::U64(21));
@@ -545,7 +545,7 @@ fn multiple_cursors_produce_independent_schemas() {
         input cycle: u64
         sum := a.ordinal + b.ordinal
     "#;
-    let kernel = compile_polydat(src).unwrap();
+    let kernel = compile_polydat_interpreter(src).unwrap();
     let schemas = kernel.program().cursor_schemas();
     assert_eq!(schemas.len(), 2);
     assert_eq!(schemas[0].name, "a");
@@ -561,7 +561,7 @@ fn cursor_with_non_literal_extent() {
         input cycle: u64
         cursor r = range(0, cycle)
     "#;
-    let kernel = compile_polydat(src).unwrap();
+    let kernel = compile_polydat_interpreter(src).unwrap();
     let schemas = kernel.program().cursor_schemas();
     assert_eq!(schemas[0].extent, None);
 }
@@ -573,7 +573,7 @@ fn cursor_projection_feeds_function_call() {
         input cycle: u64
         id := hash(r.ordinal)
     "#;
-    let mut kernel = compile_polydat(src).unwrap();
+    let mut kernel = compile_polydat_interpreter(src).unwrap();
     if let Some(idx) = kernel.program().find_input("r__ordinal") {
         kernel.state().set_input(idx, Value::U64(42));
     }
@@ -598,7 +598,7 @@ fn advancer_targets_correct_cursors() {
         id := hash(base.ordinal)
         unused := hash(cycle)
     "#;
-    let kernel = compile_polydat(src).unwrap();
+    let kernel = compile_polydat_interpreter(src).unwrap();
     let program = kernel.program();
 
     let mut factories: HashMap<String, Arc<dyn polydat::iteration::source::DataSourceFactory>> =
@@ -622,7 +622,7 @@ fn advancer_does_not_target_unused_sources() {
         input cycle: u64
         id := hash(base.ordinal)
     "#;
-    let kernel = compile_polydat(src).unwrap();
+    let kernel = compile_polydat_interpreter(src).unwrap();
     let program = kernel.program();
 
     let mut factories: HashMap<String, Arc<dyn polydat::iteration::source::DataSourceFactory>> =
@@ -646,7 +646,7 @@ fn advancer_advance_and_exhaust() {
         input cycle: u64
         id := hash(r.ordinal)
     "#;
-    let kernel = compile_polydat(src).unwrap();
+    let kernel = compile_polydat_interpreter(src).unwrap();
     let program = kernel.program();
 
     let mut factories: HashMap<String, Arc<dyn polydat::iteration::source::DataSourceFactory>> =
@@ -673,7 +673,7 @@ fn advancer_last_items_reflect_position() {
         input cycle: u64
         id := hash(r.ordinal)
     "#;
-    let kernel = compile_polydat(src).unwrap();
+    let kernel = compile_polydat_interpreter(src).unwrap();
     let program = kernel.program();
 
     let mut factories: HashMap<String, Arc<dyn polydat::iteration::source::DataSourceFactory>> =
@@ -699,7 +699,7 @@ fn advancer_empty_when_no_sources_referenced() {
         input cycle: u64
         id := hash(cycle)
     "#;
-    let kernel = compile_polydat(src).unwrap();
+    let kernel = compile_polydat_interpreter(src).unwrap();
     let program = kernel.program();
 
     let factories: HashMap<String, Arc<dyn polydat::iteration::source::DataSourceFactory>> =

@@ -7,11 +7,11 @@
 //! wires cascaded from the parent.
 
 use polydat::ast::PortType;
-use polydat::dsl::compile_polydat;
+use polydat::dsl::compile_polydat_interpreter;
 use polydat::kernel::{InputKind, PolydatProgram};
 
 fn compile(src: &str) -> polydat::kernel::PolydatKernel {
-    compile_polydat(src).unwrap_or_else(|e| panic!("compile failed: {e}\n{src}"))
+    compile_polydat_interpreter(src).unwrap_or_else(|e| panic!("compile failed: {e}\n{src}"))
 }
 
 fn elements(p: &PolydatProgram, idx: usize) -> Vec<(String, PortType)> {
@@ -43,7 +43,8 @@ fn element_types_follow_the_source_table() {
 fn int_among_floats_widens_and_mixed_types_are_an_error() {
     let k = compile("input cycle: u64\nfor m in 1,2.5,3 {\n    x := m\n}\n");
     assert_eq!(elements(k.program(), 0)[0].1, PortType::F64);
-    let err = compile_polydat("input cycle: u64\nfor m in 1,load {\n    x := m\n}\n").unwrap_err();
+    let err = compile_polydat_interpreter("input cycle: u64\nfor m in 1,load {\n    x := m\n}\n")
+        .unwrap_err();
     assert!(err.contains("mixes"), "{err}");
 }
 
@@ -117,7 +118,8 @@ fn traversal_over_a_producer_resolves_its_comprehension() {
         ]
     );
     let err =
-        compile_polydat("input cycle: u64\nfor nowhere {\n    f := hash(cycle)\n}\n").unwrap_err();
+        compile_polydat_interpreter("input cycle: u64\nfor nowhere {\n    f := hash(cycle)\n}\n")
+            .unwrap_err();
     assert!(err.contains("no producer named 'nowhere'"), "{err}");
 }
 
@@ -150,7 +152,7 @@ fn nested_bodies_compile_to_nested_programs_once_each() {
 
 #[test]
 fn body_type_errors_are_reported_at_compile_time() {
-    let err = compile_polydat(
+    let err = compile_polydat_interpreter(
         "input cycle: u64\nfor name in load,verify {\n    x := u64_add(name, 1)\n}\n",
     )
     .unwrap_err();
@@ -160,14 +162,16 @@ fn body_type_errors_are_reported_at_compile_time() {
 
 #[test]
 fn unknown_outer_name_is_an_error_in_the_body() {
-    let err = compile_polydat("input cycle: u64\nfor k in 1..4 {\n    x := hash(missing)\n}\n")
-        .unwrap_err();
+    let err = compile_polydat_interpreter(
+        "input cycle: u64\nfor k in 1..4 {\n    x := hash(missing)\n}\n",
+    )
+    .unwrap_err();
     assert!(err.contains("missing"), "{err}");
 }
 
 #[test]
 fn body_may_not_declare_another_coordinate() {
-    let err = compile_polydat(
+    let err = compile_polydat_interpreter(
         "input cycle: u64\nfor k in 1..4 {\n    input other: u64\n    x := hash(other)\n}\n",
     )
     .unwrap_err();
@@ -190,7 +194,7 @@ fn a_body_with_a_cursor_over_an_element_compiles() {
 /// index-addressable input, and a filter of a filter is not one.
 #[test]
 fn a_comprehension_that_violates_a_v_axiom_is_a_compile_error() {
-    let err = compile_polydat(
+    let err = compile_polydat_interpreter(
         "input cycle: u64\nbase := for k in 1..10\nlow := for base where {k} < 8\ncorner := for low where {k} > 2 order extrema/1\n",
     )
     .unwrap_err();
@@ -228,12 +232,12 @@ fn a_degenerate_composition_warns_lax_and_fails_strict() {
 /// activation's.
 #[test]
 fn over_naming_a_non_partition_wire_is_a_compile_error() {
-    let err = compile_polydat(
+    let err = compile_polydat_interpreter(
         "input cycle: u64\nfor k in 1..3 {\n    cursor rows = range(0, 100) over k\n    v := rows.ordinal\n}\n",
     )
     .unwrap_err();
     assert!(err.contains("`over` names a U64 wire"), "{err}");
-    let err = compile_polydat(
+    let err = compile_polydat_interpreter(
         "input cycle: u64\ncursor rows = range(0, 100) over 42\nv := rows.ordinal\n",
     )
     .unwrap_err();

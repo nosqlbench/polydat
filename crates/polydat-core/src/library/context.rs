@@ -501,7 +501,7 @@ mod tests {
             std::env::set_var(&var, "x-value");
         }
         let src = format!("v := env_or(\"{var}\", \"fallback\")\n",);
-        let kernel = crate::dsl::compile_polydat(&src).expect("compile env_or");
+        let kernel = crate::dsl::compile_polydat_interpreter(&src).expect("compile env_or");
         unsafe {
             std::env::remove_var(&var);
         }
@@ -520,8 +520,8 @@ mod tests {
         // — no new syntax needed for the resumable-test-fixture
         // workload's path composition.
         let src = "path := \"{tmp_dir()}/data\"\n";
-        let kernel =
-            crate::dsl::compile_polydat(src).expect("compile tmp_dir() interpolated in a string");
+        let kernel = crate::dsl::compile_polydat_interpreter(src)
+            .expect("compile tmp_dir() interpolated in a string");
         let names = kernel.program().output_names();
         assert!(
             names.contains(&"path"),

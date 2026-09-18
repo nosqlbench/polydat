@@ -39,9 +39,9 @@ mod modules;
 
 pub use compile::{
     CompileOptions, compile_ast_with_engine, compile_ast_with_options, compile_polydat,
-    compile_polydat_checked, compile_polydat_kernel, compile_polydat_kernel_with_options,
-    compile_polydat_kernel_with_tiles, compile_polydat_with, compile_polydat_with_engine,
-    compile_polydat_with_options, eval_const_expr,
+    compile_polydat_checked, compile_polydat_interpreter, compile_polydat_kernel,
+    compile_polydat_kernel_with_options, compile_polydat_kernel_with_tiles, compile_polydat_with,
+    compile_polydat_with_engine, compile_polydat_with_options, eval_const_expr,
 };
 // The deprecated forms stay reachable at their old paths; a caller sees
 // the deprecation at its own use.

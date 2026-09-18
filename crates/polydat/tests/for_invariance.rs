@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use polydat::dsl::compile_polydat;
+use polydat::dsl::compile_polydat_interpreter;
 use polydat::kernel::{PolydatKernel, program_count};
 
 const THREE_LEVELS: &str = "input cycle: u64\n\
@@ -28,7 +28,7 @@ for p in partitions(\"*/4\", 100000) {\n\
 
 #[test]
 fn compiling_three_levels_builds_exactly_four_programs() {
-    let k = compile_polydat(THREE_LEVELS).unwrap();
+    let k = compile_polydat_interpreter(THREE_LEVELS).unwrap();
     // Element-type probes and the body compiles themselves build
     // intermediate programs, all recorded in the tree's ledger, but
     // the compiled result holds exactly one per lexical position.
@@ -71,7 +71,7 @@ fn walk_three_levels(
 
 #[test]
 fn activating_thousands_of_tuples_builds_no_programs() {
-    let mut k = compile_polydat(THREE_LEVELS).unwrap();
+    let mut k = compile_polydat_interpreter(THREE_LEVELS).unwrap();
     k.set_inputs(&[0]);
     let ledger = k.program().ledger().clone();
     let leaf_program = k.program().traversals()[0].program.traversals()[0]
@@ -107,7 +107,7 @@ fn activating_thousands_of_tuples_builds_no_programs() {
 
 #[test]
 fn opening_a_generator_sourced_traversal_compiles_its_source_once() {
-    let mut k = compile_polydat(THREE_LEVELS).unwrap();
+    let mut k = compile_polydat_interpreter(THREE_LEVELS).unwrap();
     k.set_inputs(&[0]);
     let ledger = k.program().ledger().clone();
     let before = ledger.programs();
@@ -129,7 +129,7 @@ fn opening_a_generator_sourced_traversal_compiles_its_source_once() {
 
 #[test]
 fn a_second_host_shares_the_same_programs_and_builds_none() {
-    let k = compile_polydat(THREE_LEVELS).unwrap();
+    let k = compile_polydat_interpreter(THREE_LEVELS).unwrap();
     let program = k.into_program();
     let ledger = program.ledger().clone();
     let before = ledger.programs();
@@ -156,7 +156,7 @@ fn a_second_host_shares_the_same_programs_and_builds_none() {
 fn activation_cost_is_flat_across_the_tuple_index() {
     use std::time::Instant;
     let src = "input cycle: u64\nfor k in 0..4000 {\n    v := hash(k)\n}\n";
-    let mut k = compile_polydat(src).unwrap();
+    let mut k = compile_polydat_interpreter(src).unwrap();
     k.set_inputs(&[0]);
     let stream = k.traverse(0).unwrap();
     assert_eq!(stream.len(), 4000);
@@ -199,7 +199,7 @@ fn activation_cost_is_flat_across_the_tuple_index() {
 
 #[test]
 fn producers_and_derivations_do_not_add_programs_per_tuple() {
-    let k = compile_polydat(
+    let k = compile_polydat_interpreter(
         "input cycle: u64\nbase := for k in 1..200, limit in 1..50\nedges := for base where {k} == 1 || {k} == 199\nfor edges {\n    f := u64_add(k, limit)\n}\n",
     )
     .unwrap();
@@ -249,7 +249,7 @@ fn a_host_ledger_collects_every_tree_compiled_under_it() {
         "{after_b} programs after the second tree"
     );
     assert!(Arc::ptr_eq(a.program().ledger(), b.program().ledger()));
-    let alone = compile_polydat(THREE_LEVELS).unwrap();
+    let alone = compile_polydat_interpreter(THREE_LEVELS).unwrap();
     assert!(!Arc::ptr_eq(alone.program().ledger(), &ledger));
     assert_eq!(ledger.programs(), after_b);
     assert!(alone.program().ledger().programs() >= 4);

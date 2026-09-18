@@ -1261,7 +1261,7 @@ mod tests {
     use crate::iteration::comprehension::source::LiteralValue;
 
     fn empty_kernel() -> Arc<PolydatKernel> {
-        Arc::new(crate::dsl::compile_polydat("\n").unwrap())
+        Arc::new(crate::dsl::compile_polydat_interpreter("\n").unwrap())
     }
 
     /// Canonical kernel with `extern k: u64` so the runtime
@@ -1269,7 +1269,7 @@ mod tests {
     /// materialize_subscope — the shape the traversal lowering
     /// produces.
     fn canonical_with_k() -> Arc<PolydatKernel> {
-        Arc::new(crate::dsl::compile_polydat("extern k: u64\n").unwrap())
+        Arc::new(crate::dsl::compile_polydat_interpreter("extern k: u64\n").unwrap())
     }
 
     #[test]

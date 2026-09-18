@@ -35,5 +35,5 @@ fn non_convex_components_stay_on_the_interpreter() {
     // The result may be Ok or a clean Err (the fuzz feeds garbage
     // types on purpose); the invariant under test is NO PANIC in
     // cone extraction/splicing under the default (auto) mode.
-    let _ = crate::dsl::compile::compile_polydat(src);
+    let _ = crate::dsl::compile::compile_polydat_interpreter(src);
 }

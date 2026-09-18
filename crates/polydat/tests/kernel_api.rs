@@ -528,7 +528,7 @@ fn the_default_engine_forms_take_options_tiles_and_activations() {
 #[test]
 fn every_engine_reports_its_plan() {
     let p1 = compile_polydat_with(SRC, Engine::Interpreter(JitMode::Auto)).unwrap();
-    let nodes = polydat::dsl::compile_polydat(SRC)
+    let nodes = polydat::dsl::compile_polydat_interpreter(SRC)
         .unwrap()
         .program()
         .node_count();

@@ -10,11 +10,11 @@
 use std::sync::Arc;
 
 use polydat::ast::Value;
-use polydat::dsl::compile_polydat;
+use polydat::dsl::compile_polydat_interpreter;
 use polydat::kernel::PolydatKernel;
 
 fn compile(src: &str) -> PolydatKernel {
-    compile_polydat(src).unwrap_or_else(|e| panic!("compile failed: {e}\n{src}"))
+    compile_polydat_interpreter(src).unwrap_or_else(|e| panic!("compile failed: {e}\n{src}"))
 }
 
 /// Every (activation index, cycle, output) value of a traversal, in order.
@@ -219,7 +219,7 @@ fn comprehension_sources_see_the_parents_current_values() {
 /// order, the members' own `where` and `order` applied.
 #[test]
 fn a_traversal_over_a_bracketed_union_activates_every_member() {
-    let mut k = polydat::dsl::compile_polydat(
+    let mut k = polydat::dsl::compile_polydat_interpreter(
         "input cycle: u64\nfor [\n    for k in 1..4 where {k} > 1,\n    for k in 10..13 order lex/2,\n] {\n    v := u64_mul(k, 2)\n}\n",
     )
     .unwrap();

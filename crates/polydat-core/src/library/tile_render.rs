@@ -386,7 +386,7 @@ impl TileProgram {
             .children
             .iter()
             .map(|c| {
-                crate::dsl::compile_polydat(&c.source)
+                crate::dsl::compile_polydat_interpreter(&c.source)
                     .unwrap_or_else(|e| {
                         panic!(
                             "tile '{}': projection body failed to compile: {e}\n{}",
@@ -1379,7 +1379,7 @@ mod tests {
     fn body_kernels_are_created_once_per_state_and_reused() {
         let src =
             "input cycle: u64\ntile t : text := \"@for k in 0..3 sep \\\",\\\" {${k + cycle}}\"\n";
-        let mut k = crate::dsl::compile_polydat(src).unwrap();
+        let mut k = crate::dsl::compile_polydat_interpreter(src).unwrap();
         let program = k.program();
         let node = (0..program.node_count())
             .find(|&i| program.node_meta(i).name == "tile_render")

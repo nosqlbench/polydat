@@ -14,13 +14,13 @@ use std::sync::Arc;
 
 use polydat::ast::Value;
 use polydat::dsl::compile::{CompileOptions, compile_polydat_with_engine};
-use polydat::dsl::compile_polydat;
+use polydat::dsl::compile_polydat_interpreter;
 use polydat::kernel::PolydatKernel;
 use polydat::kernel::activation::TraversalStream;
 use polydat::{Engine, JitMode, Kernel, Provenance};
 
 fn compile(src: &str) -> PolydatKernel {
-    compile_polydat(src).unwrap_or_else(|e| panic!("compile failed: {e}\n{src}"))
+    compile_polydat_interpreter(src).unwrap_or_else(|e| panic!("compile failed: {e}\n{src}"))
 }
 
 fn engines() -> Vec<Engine> {

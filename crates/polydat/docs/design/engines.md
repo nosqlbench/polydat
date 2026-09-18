@@ -13,7 +13,7 @@ the runtime's one evaluation rule and the ownership of every output in
 
 | Engine | Representation | Construction |
 | --- | --- | --- |
-| Interpreter (P1) | `PolydatKernel` over `Box<dyn PolydatNode>` and typed `Value` buffers, with native cones per its `JitMode` | `Engine::Interpreter(mode)`; `compile_polydat` and `PolydatAssembler::compile` for the concrete type |
+| Interpreter (P1) | `PolydatKernel` over `Box<dyn PolydatNode>` and typed `Value` buffers, with native cones per its `JitMode` | `Engine::Interpreter(mode)`, or `compile_polydat`; `compile_polydat_interpreter` and `PolydatAssembler::compile` for the concrete type |
 | Closure tier (P2) | Every node's generated closure over one flat `u64` slot buffer | `Engine::Closures(provenance)` |
 | Native (P3) | Cranelift native code for every node with a lowering and the node's closure elsewhere, over the same slot buffer, one native function per run of consecutive eligible nodes | `Engine::Native(provenance)`; refused by a build without the `jit` feature |
 
@@ -45,31 +45,41 @@ that was asked for. `Auto` is the exception that proves it: asking for
 `Auto` is asking the factory to choose, so the kernel reports the
 choice.
 
-Which engine an entry point builds when it takes no engine argument is
-decided by its **return type**, not by the absence of the argument. The
-four that return `Box<dyn Kernel>` — `compile_polydat_kernel`, its
-`_with_options` and `_with_tiles` siblings, and
-`compile_polydat_checked` — build `Engine::default()`, and so does the
-binary's `--engine auto`, which is what it runs without the flag. The
-fourteen that return the concrete `PolydatKernel` build the
-interpreter, because that type *is* the interpreter's kernel. Naming it
-is how a caller says it wants the reference implementation — the one
-whose results every other engine is checked against — rather than
-whichever engine happens to be fastest in this build. That is what a
-differential test needs, and what a diagnostic that reports on a
-program needs. `PolydatAssembler::compile` is the interpreter for the
-same reason, and `compile_polydat_to_assembler` returns an assembler,
-which has no engine until something compiles it.
+### The trait is the surface
 
-So "compiled by default" is a claim about the boxed-kernel surface, and
-it holds there without exception. It is not a claim that every function
-lacking an `engine` parameter produces compiled code; fourteen of them
-do not, and each says so in its signature. A caller who wants one of
-those programs on the default engine goes through the boxed surface
-instead. That fourteen typed constructors exist at all is a separate
-problem, and a known one — the entry-point sprawl is the architecture
-review's group B, which proposes one compiler with four public
-conveniences and the rest as thin wrappers.
+**A kernel is used through the `Kernel` trait.** Every entry point that
+builds one hands back a `Box<dyn Kernel>`, and every way of driving one
+— coordinates, externs, cursors, evaluation, typed reads, traversals,
+cells — is a trait method meaning the same thing on every engine. A
+host writes against the trait and never needs to name an engine.
+
+Two things sit outside that rule, and only two:
+
+- **Configuring a kernel**, which happens before one exists, through
+  `CompileOptions`.
+- **Observing an engine's own implementation detail, in testing and
+  diagnostics.** The interpreter's concrete `PolydatKernel` carries its
+  program, its `Lookup` view, its subcontext builder, and its constant
+  and wire readers. A differential test asserting on the graph that was
+  built, and a diagnostic reporting on it, both need that; nothing else
+  should reach for it. `compile_polydat_interpreter` is the one entry
+  point returning it, named for the carve-out rather than offered as a
+  convenience.
+
+`compile_polydat` is the trait-typed interpreter build: the semantic
+oracle a differential test compares a compiled engine against. It names
+its engine rather than reading the options because being the oracle is
+its whole purpose. Every other entry point takes the engine from the
+options, and so defaults to the most compiled form the build has, as
+does the binary's `--engine auto`, which is what it runs without the
+flag. `compile_polydat_to_assembler` returns an assembler, which has no
+engine until something compiles it.
+
+That several entry points remain where a few would do is the sprawl the
+architecture review records as group B, which proposes one compiler
+with a handful of public conveniences and the rest as thin wrappers.
+The rule above is what that collapse has to preserve: whatever the
+surface narrows to, what it returns is the trait.
 
 Pure native code, one function for the whole program, is a fourth kernel
 behind P3: the differential tier that proves the native lowerings against

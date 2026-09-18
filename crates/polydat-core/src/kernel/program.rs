@@ -2312,20 +2312,20 @@ fn canonical_const_value(v: &crate::ast::ConstValue, h: &mut sha2::Sha256) {
 
 #[cfg(test)]
 mod canonical_hash_tests {
-    use crate::dsl::compile_polydat;
+    use crate::dsl::compile_polydat_interpreter;
 
     #[test]
     fn identical_source_produces_identical_hash() {
         let src = "const dataset := \"sift1m\"\nconst count := 100\n";
-        let k1 = compile_polydat(src).expect("compile1");
-        let k2 = compile_polydat(src).expect("compile2");
+        let k1 = compile_polydat_interpreter(src).expect("compile1");
+        let k2 = compile_polydat_interpreter(src).expect("compile2");
         assert_eq!(k1.program().canonical_hash(), k2.program().canonical_hash());
     }
 
     #[test]
     fn different_const_value_changes_hash() {
-        let a = compile_polydat("const x := 100\n").expect("compile a");
-        let b = compile_polydat("const x := 101\n").expect("compile b");
+        let a = compile_polydat_interpreter("const x := 100\n").expect("compile a");
+        let b = compile_polydat_interpreter("const x := 101\n").expect("compile b");
         assert_ne!(
             a.program().canonical_hash(),
             b.program().canonical_hash(),
@@ -2335,8 +2335,8 @@ mod canonical_hash_tests {
 
     #[test]
     fn different_string_value_changes_hash() {
-        let a = compile_polydat("const s := \"sift1m\"\n").expect("compile a");
-        let b = compile_polydat("const s := \"sift10m\"\n").expect("compile b");
+        let a = compile_polydat_interpreter("const s := \"sift1m\"\n").expect("compile a");
+        let b = compile_polydat_interpreter("const s := \"sift10m\"\n").expect("compile b");
         assert_ne!(
             a.program().canonical_hash(),
             b.program().canonical_hash(),
@@ -2349,8 +2349,8 @@ mod canonical_hash_tests {
         // Same RHS, different output name → different program
         // identity. The output map contributes to canonical
         // identity.
-        let a = compile_polydat("const foo := 42\n").expect("compile a");
-        let b = compile_polydat("const bar := 42\n").expect("compile b");
+        let a = compile_polydat_interpreter("const foo := 42\n").expect("compile a");
+        let b = compile_polydat_interpreter("const bar := 42\n").expect("compile b");
         assert_ne!(
             a.program().canonical_hash(),
             b.program().canonical_hash(),
@@ -2360,9 +2360,11 @@ mod canonical_hash_tests {
 
     #[test]
     fn comment_only_change_does_not_change_hash() {
-        let a = compile_polydat("const x := 42\n").expect("compile a");
-        let b = compile_polydat("# explanatory comment\nconst x := 42\n# trailing comment\n")
-            .expect("compile b");
+        let a = compile_polydat_interpreter("const x := 42\n").expect("compile a");
+        let b = compile_polydat_interpreter(
+            "# explanatory comment\nconst x := 42\n# trailing comment\n",
+        )
+        .expect("compile b");
         assert_eq!(
             a.program().canonical_hash(),
             b.program().canonical_hash(),
@@ -2373,8 +2375,8 @@ mod canonical_hash_tests {
 
     #[test]
     fn whitespace_change_does_not_change_hash() {
-        let a = compile_polydat("const x := 42\n").expect("compile a");
-        let b = compile_polydat("const  x  :=  42\n\n\n").expect("compile b");
+        let a = compile_polydat_interpreter("const x := 42\n").expect("compile a");
+        let b = compile_polydat_interpreter("const  x  :=  42\n\n\n").expect("compile b");
         assert_eq!(
             a.program().canonical_hash(),
             b.program().canonical_hash(),
@@ -2384,8 +2386,8 @@ mod canonical_hash_tests {
 
     #[test]
     fn additional_binding_changes_hash() {
-        let a = compile_polydat("const x := 1\n").expect("compile a");
-        let b = compile_polydat("const x := 1\nconst y := 2\n").expect("compile b");
+        let a = compile_polydat_interpreter("const x := 1\n").expect("compile a");
+        let b = compile_polydat_interpreter("const x := 1\nconst y := 2\n").expect("compile b");
         assert_ne!(
             a.program().canonical_hash(),
             b.program().canonical_hash(),
@@ -2404,7 +2406,7 @@ mod canonical_hash_tests {
         // distinguishable. Prevents a caller from accidentally
         // comparing an instance_hash against a canonical_hash
         // and getting a coincidental match.
-        let p = compile_polydat("const x := 1\n").expect("compile");
+        let p = compile_polydat_interpreter("const x := 1\n").expect("compile");
         let prog = p.program();
         assert_ne!(prog.instance_hash(&[]), prog.canonical_hash());
     }
@@ -2414,9 +2416,9 @@ mod canonical_hash_tests {
         // Parent A vs B differ only in a const-slot literal —
         // canonical_hash distinguishes them, so instance_hash
         // computed against the same child must distinguish too.
-        let parent_a = compile_polydat("const ds := \"v1\"\n").expect("a");
-        let parent_b = compile_polydat("const ds := \"v2\"\n").expect("b");
-        let child = compile_polydat("const y := 42\n").expect("child");
+        let parent_a = compile_polydat_interpreter("const ds := \"v1\"\n").expect("a");
+        let parent_b = compile_polydat_interpreter("const ds := \"v2\"\n").expect("b");
+        let child = compile_polydat_interpreter("const y := 42\n").expect("child");
         let cp = child.program();
         let h_a = cp.instance_hash(&[parent_a.program().as_ref()]);
         let h_b = cp.instance_hash(&[parent_b.program().as_ref()]);
@@ -2433,9 +2435,9 @@ mod canonical_hash_tests {
         // must map to different identities. The hash mixes
         // ancestor[i].canonical_hash() in chain order, so swapping
         // ancestors yields a different result.
-        let g = compile_polydat("const g := 1\n").expect("g");
-        let p = compile_polydat("const p := 2\n").expect("p");
-        let c = compile_polydat("const c := 3\n").expect("c");
+        let g = compile_polydat_interpreter("const g := 1\n").expect("g");
+        let p = compile_polydat_interpreter("const p := 2\n").expect("p");
+        let c = compile_polydat_interpreter("const c := 3\n").expect("c");
         let cp = c.program();
         let chain1 = cp.instance_hash(&[p.program().as_ref(), g.program().as_ref()]);
         let chain2 = cp.instance_hash(&[g.program().as_ref(), p.program().as_ref()]);
@@ -2447,9 +2449,9 @@ mod canonical_hash_tests {
         // Two independent compiles of the same source feeding
         // the same child must produce the same instance_hash.
         let parent_src = "const ds := \"sift1m\"\n";
-        let p1 = compile_polydat(parent_src).expect("p1");
-        let p2 = compile_polydat(parent_src).expect("p2");
-        let child = compile_polydat("const y := 42\n").expect("child");
+        let p1 = compile_polydat_interpreter(parent_src).expect("p1");
+        let p2 = compile_polydat_interpreter(parent_src).expect("p2");
+        let child = compile_polydat_interpreter("const y := 42\n").expect("child");
         let cp = child.program();
         let h1 = cp.instance_hash(&[p1.program().as_ref()]);
         let h2 = cp.instance_hash(&[p2.program().as_ref()]);
@@ -2461,22 +2463,22 @@ mod canonical_hash_tests {
     #[test]
     fn is_equivalent_to_identical_programs() {
         let src = "const x := 100\n";
-        let a = compile_polydat(src).expect("a");
-        let b = compile_polydat(src).expect("b");
+        let a = compile_polydat_interpreter(src).expect("a");
+        let b = compile_polydat_interpreter(src).expect("b");
         assert!(a.program().is_equivalent_to(b.program()));
         assert!(b.program().is_equivalent_to(a.program())); // symmetric
     }
 
     #[test]
     fn is_equivalent_to_differs_when_const_differs() {
-        let a = compile_polydat("const x := 100\n").expect("a");
-        let b = compile_polydat("const x := 101\n").expect("b");
+        let a = compile_polydat_interpreter("const x := 100\n").expect("a");
+        let b = compile_polydat_interpreter("const x := 101\n").expect("b");
         assert!(!a.program().is_equivalent_to(b.program()));
     }
 
     #[test]
     fn is_subset_of_self_is_true() {
-        let p = compile_polydat("const x := 1\n").expect("p");
+        let p = compile_polydat_interpreter("const x := 1\n").expect("p");
         // A program is trivially a subset of itself (the
         // equivalence shortcut at the top of is_subset_of).
         assert!(p.program().is_subset_of(p.program()));
@@ -2486,8 +2488,8 @@ mod canonical_hash_tests {
     fn is_subset_of_distinct_definitions_is_false() {
         // Inner declares a NEW output the parent doesn't —
         // structurally not a subset.
-        let parent = compile_polydat("const x := 1\n").expect("parent");
-        let inner = compile_polydat("const y := 2\n").expect("inner");
+        let parent = compile_polydat_interpreter("const x := 1\n").expect("parent");
+        let inner = compile_polydat_interpreter("const y := 2\n").expect("inner");
         assert!(!inner.program().is_subset_of(parent.program()));
     }
 }
@@ -2495,12 +2497,12 @@ mod canonical_hash_tests {
 #[cfg(test)]
 mod ast_metadata_tests {
     use crate::dsl::ast::Statement;
-    use crate::dsl::compile_polydat;
+    use crate::dsl::compile_polydat_interpreter;
 
     #[test]
     fn retained_ast_is_present_after_compile() {
         let src = "const dataset := \"sift1m\"\ncount := 100\n";
-        let k = compile_polydat(src).expect("compile");
+        let k = compile_polydat_interpreter(src).expect("compile");
         assert!(
             k.program().ast().is_some(),
             "AST should be retained on program"
@@ -2510,7 +2512,7 @@ mod ast_metadata_tests {
     #[test]
     fn binding_ast_for_finds_init_binding() {
         let src = "const dataset := \"sift1m\"\nratio := 2.5\n";
-        let k = compile_polydat(src).expect("compile");
+        let k = compile_polydat_interpreter(src).expect("compile");
         let stmt = k
             .program()
             .binding_ast_for("dataset")
@@ -2524,7 +2526,7 @@ mod ast_metadata_tests {
     #[test]
     fn binding_ast_for_finds_cycle_binding() {
         let src = "count := 42\n";
-        let k = compile_polydat(src).expect("compile");
+        let k = compile_polydat_interpreter(src).expect("compile");
         let stmt = k
             .program()
             .binding_ast_for("count")
@@ -2542,13 +2544,13 @@ mod ast_metadata_tests {
 
     #[test]
     fn binding_ast_for_unknown_name_returns_none() {
-        let k = compile_polydat("const x := 1\n").expect("compile");
+        let k = compile_polydat_interpreter("const x := 1\n").expect("compile");
         assert!(k.program().binding_ast_for("does_not_exist").is_none());
     }
 
     #[test]
     fn local_inclusion_chain_unknown_name_is_empty() {
-        let k = compile_polydat("const x := 1\n").expect("compile");
+        let k = compile_polydat_interpreter("const x := 1\n").expect("compile");
         let chain = k
             .program()
             .local_inclusion_chain("missing", &std::collections::HashSet::new());
@@ -2566,7 +2568,7 @@ mod ast_metadata_tests {
 #[cfg(test)]
 mod r1v_contagion_tests {
     use crate::ast::Value;
-    use crate::dsl::compile_polydat;
+    use crate::dsl::compile_polydat_interpreter;
 
     #[test]
     fn within_cycle_volatile_reads_are_consistent() {
@@ -2576,7 +2578,7 @@ mod r1v_contagion_tests {
         // per-pull freshness.
         let src = "input cycle: u64\n\
                    c := counter()\n";
-        let mut k = compile_polydat(src).expect("compile");
+        let mut k = compile_polydat_interpreter(src).expect("compile");
         k.set_inputs(&[0]);
         let a = match k.pull("c") {
             Value::U64(v) => *v,
