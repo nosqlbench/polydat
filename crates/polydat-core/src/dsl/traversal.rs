@@ -165,7 +165,7 @@ pub fn strip_for_forms(
                     resolve_source_with(source, &producers, mode, scope)?;
                 events.extend(warning_events(source, &warnings));
                 let name = b.targets.join(",");
-                let value = StreamerValue::new(source.text.clone(), comprehension.clone());
+                let value = StreamerValue::new(source.to_text(), comprehension.clone());
                 parent.push(Statement::Binding(Binding {
                     targets: b.targets.clone(),
                     value: Expr::Call(CallExpr {
@@ -180,7 +180,7 @@ pub fn strip_for_forms(
                 producers.push(Producer {
                     name,
                     span: b.span,
-                    source_text: source.text.clone(),
+                    source_text: source.to_text(),
                     comprehension,
                 });
             }
@@ -212,7 +212,7 @@ pub(super) fn warning_events(
     warnings
         .iter()
         .map(|w| super::events::CompileEvent::ComprehensionWarning {
-            source: source.text.clone(),
+            source: source.to_text(),
             line: source.span.line,
             col: source.span.col,
             warning: w.to_string(),
@@ -239,7 +239,7 @@ pub fn resolve_source_with(
                 let known: Vec<&str> = producers.iter().map(|p| p.name.as_str()).collect();
                 format!(
                     "`for {}` at line {}, col {}: no producer named '{name}' is bound in this scope{}",
-                    source.text,
+                    source.to_text(),
                     source.span.line,
                     source.span.col,
                     if known.is_empty() { String::new() } else { format!("; producers here: {}", known.join(", ")) }
@@ -249,25 +249,30 @@ pub fn resolve_source_with(
     let at = |e: &dyn std::fmt::Display| {
         format!(
             "`for {}` at line {}, col {}: {e}",
-            source.text, source.span.line, source.span.col
+            source.to_text(),
+            source.span.line,
+            source.span.col
         )
     };
     let comprehension = match &source.kind {
         ForSourceKind::Comprehension(c) => {
-            // The text and the tree are one source (comprehension_forms.md
-            // §8): a source carries both, and they must agree, so a
-            // programmatic build cannot project one comprehension and
-            // traverse another.
+            // A source has one comprehension and renders its text from
+            // it, so there is no longer a text that could disagree.
+            // What remains worth checking is the pair that makes the
+            // rendering trustworthy: writing this tree and reading it
+            // back must give this tree. A failure here is a gap between
+            // the comprehension's renderer and its parser, not anything
+            // the program did, and says so.
+            let written = source.to_text();
             let from_text =
-                crate::iteration::comprehension::spec::parse_comprehension_algebra(&source.text)
+                crate::iteration::comprehension::spec::parse_comprehension_algebra(&written)
                     .map_err(|e| at(&e))?;
             if from_text != *c {
                 return Err(at(&format!(
-                    "the source's text and its comprehension differ; the text is `{}`, \
-                     the comprehension's own text is `{}`",
-                    source.text,
-                    c.to_text()
-                        .unwrap_or_else(|| "(outside the text grammar)".into())
+                    "this comprehension does not survive being written and read back: it writes \
+                     as `{written}`, which reads as a different comprehension. That is an \
+                     inconsistency between the comprehension renderer and parser, not an error \
+                     in this program"
                 )));
             }
             c.clone()
@@ -538,7 +543,10 @@ pub fn child_file(
         {
             return Err(format!(
                 "`for {}` at line {}, col {}: a traversal body cannot declare input '{}'; only `cycle` is a coordinate inside a body, and the comprehension supplies the rest",
-                f.source.text, f.span.line, f.span.col, d.name
+                f.source.to_text(),
+                f.span.line,
+                f.span.col,
+                d.name
             ));
         }
     }

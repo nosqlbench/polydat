@@ -491,11 +491,7 @@ pub fn for_source_from_text(
             .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
     if is_ident {
         if allow_producer {
-            return Ok(ForSource {
-                text: text.to_string(),
-                kind: ForSourceKind::Producer(text.to_string()),
-                span,
-            });
+            return Ok(ForSource::producer(text, span));
         }
         return Err(format!(
             "`for {text}` at line {}, col {}: a producer expression needs comprehension text such as `k in 1..10`, \
@@ -517,23 +513,23 @@ pub fn for_source_from_text(
                 .next()
                 .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
         if base_is_ident && (filter.is_some() || order.is_some()) {
-            return Ok(ForSource {
-                text: text.to_string(),
-                kind: ForSourceKind::Derived {
-                    base: base.to_string(),
-                    filter,
-                    order,
-                },
-                span,
-            });
+            return Ok(ForSource::derived(base, filter, order, span));
         }
     }
     let algebra = crate::comprehension::spec::parse_comprehension_algebra(text)
         .map_err(|e| format!("`for {text}` at line {}, col {}: {e}", span.line, span.col))?;
-    Ok(ForSource {
-        text: text.to_string(),
-        kind: ForSourceKind::Comprehension(algebra),
-        span,
+    // Built through the constructor, which refuses a tree the text
+    // cannot write back. Text this parser accepts should always be
+    // writable, so a refusal here is a round-trip gap between the two
+    // halves of the comprehension grammar rather than an author error,
+    // and says so.
+    ForSource::comprehension(algebra, span).ok_or_else(|| {
+        format!(
+            "`for {text}` at line {}, col {}: parsed, but the comprehension it denotes has no text \
+             form, so it could not be written back; this is a gap between the comprehension \
+             parser and its renderer, not an error in the program",
+            span.line, span.col
+        )
     })
 }
 

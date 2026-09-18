@@ -116,7 +116,7 @@ fn pp_for_stmt(f: &ForStmt, indent: usize) -> String {
     }
     format!(
         "for {} {{\n{}{}}}",
-        f.source.text,
+        f.source.to_text(),
         body,
         "    ".repeat(indent)
     )
@@ -142,7 +142,7 @@ pub fn pp_expr(expr: &Expr) -> String {
         Expr::UnaryBitNot(e, _) => format!("(!{})", pp_expr(e)),
         Expr::FieldAccess { source, field, .. } => format!("{source}.{field}"),
         Expr::Cast(e, ty, _) => format!("({} as {})", pp_expr(e), ty.to_keyword()),
-        Expr::For(source) => format!("for {}", source.text),
+        Expr::For(source) => format!("for {}", source.to_text()),
     }
 }
 

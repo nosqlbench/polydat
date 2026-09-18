@@ -427,7 +427,7 @@ println!("after two pulls on a: a has {} left, b has {}", a.count(), b.count());
 where `show` prints the cardinality class and dispenses the stream:
 
 ```text
-plan: for k in 1..4, limit in 10,20,30
+plan: for k in 1..4, limit in 10, 20, 30
 base     Bounded(9)   9 tuples  (1,10) (1,20) (1,30) (2,10) (2,20) (2,30) (3,10) (3,20) (3,30)
 corners  BoundedAtMost(9)   6 tuples  (1,10) (1,20) (1,30) (3,10) (3,20) (3,30)
 sampled  Bounded(4)   4 tuples  (2,20) (1,30) (3,10) (1,20)
@@ -479,7 +479,7 @@ println!("programs built after the first activation: {}", ledger.programs() - bu
 
 ```text
 body program: 16 nodes, compiled once
-8 activations from `p in partitions("*/4", {total}), scale in 1,100`
+8 activations from `p in partitions("*/4", {total}), scale in 1, 100`
 
 act  p          scale  cycles  first row  first v
   0  [  0, 250)      1     250          0  7191089600892374487

@@ -2201,7 +2201,9 @@ impl Compiler {
             let elements = element_types(&comprehension, &mut probe).map_err(|e| {
                 format!(
                     "`for {}` at line {}, col {}: {e}",
-                    f.source.text, f.span.line, f.span.col
+                    f.source.to_text(),
+                    f.span.line,
+                    f.span.col
                 )
             })?;
             let (child, cascade) = child_file(f, &comprehension, &elements, type_of)?;
@@ -2218,7 +2220,10 @@ impl Compiler {
             child_compiler.source_text = super::pprint::pp_file(&child);
             child_compiler.context_label = format!(
                 "{} :: for {} (line {}, col {})",
-                self.context_label, f.source.text, f.span.line, f.span.col
+                self.context_label,
+                f.source.to_text(),
+                f.span.line,
+                f.span.col
             );
             child_compiler.cursor_limit = self.cursor_limit;
             child_compiler.pragmas = self.pragmas.clone();
@@ -2227,7 +2232,9 @@ impl Compiler {
                 .map_err(|e| {
                     format!(
                         "`for {}` at line {}, col {}: body failed to compile: {e}",
-                        f.source.text, f.span.line, f.span.col
+                        f.source.to_text(),
+                        f.span.line,
+                        f.span.col
                     )
                 })?;
             self.pending_events
@@ -2247,7 +2254,7 @@ impl Compiler {
             };
             out.push(Traversal {
                 span: f.span,
-                source_text: f.source.text.clone(),
+                source_text: f.source.to_text(),
                 comprehension,
                 elements,
                 cascade,
@@ -2575,7 +2582,7 @@ impl Compiler {
                 Statement::For(f) => {
                     return Err(format!(
                         "`for {}` at line {}, col {}: {}",
-                        f.source.text,
+                        f.source.to_text(),
                         f.span.line,
                         f.span.col,
                         "a `for` traversal compiles through `compile_polydat` and runs through `PolydatKernel::traverse`; the assembler entry point builds one program and cannot carry a traversal (docs/design/for_traversal.md §5)"

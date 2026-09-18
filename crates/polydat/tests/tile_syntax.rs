@@ -52,7 +52,7 @@ fn shape(pieces: &[TilePiece]) -> String {
                 source, sep, body, ..
             } => format!(
                 "P({}{} [{}])",
-                source.text,
+                source.to_text(),
                 sep.as_ref()
                     .map(|s| format!(" sep {s:?}"))
                     .unwrap_or_default(),
@@ -165,7 +165,7 @@ fn projections_with_default_and_explicit_separators_and_nesting() {
     );
     assert_eq!(
         shape(&t.pieces),
-        "S(\"{\\\"samples\\\": [ \") P(s in 0..4 [S(\"{ \\\"n\\\": \") H(s) S(\", \\\"t\\\": \") H((temp + s)) S(\" }\")]) S(\" ], \\\"tags\\\": [ \") P(t in a,b sep \"; \" [S(\"\\\"\") H(t) S(\"\\\"\")]) S(\" ]}\")"
+        "S(\"{\\\"samples\\\": [ \") P(s in 0..4 [S(\"{ \\\"n\\\": \") H(s) S(\", \\\"t\\\": \") H((temp + s)) S(\" }\")]) S(\" ], \\\"tags\\\": [ \") P(t in a, b sep \"; \" [S(\"\\\"\") H(t) S(\"\\\"\")]) S(\" ]}\")"
     );
     let TilePiece::Projection { source, .. } = &t.pieces[1] else {
         panic!()
@@ -188,7 +188,7 @@ fn projection_over_a_bound_producer_and_a_where_predicate() {
     let TilePiece::Projection { source, .. } = &t.pieces[2] else {
         panic!()
     };
-    assert!(source.text.contains("where {k} > 3"));
+    assert!(source.to_text().contains("where {k} > 3"));
 }
 
 #[test]

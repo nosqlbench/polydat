@@ -1148,12 +1148,27 @@ under a zip, a nested cartesian — and a source has none when a literal
 holds a value the text cannot write, a JSON value or a string carrying
 a quote, a comma, or a bracket.
 
-A traversal source carries both the text and the tree, and they are one
-source: the `for` lowering parses the text and refuses a source whose
-two halves describe different comprehensions, so a program never
-projects one comprehension and traverses another. A builder takes the
-text from the tree (`ForSource::comprehension`) rather than writing it
-twice.
+A traversal source **is** its comprehension. It holds the tree and
+renders its text from it (`ForSource::to_text`) rather than carrying
+both, so there are not two halves that could describe different
+comprehensions and a program cannot project one while traversing
+another. What a source keeps besides the tree is its position, which is
+provenance; a copy of the text an author wrote is not provenance, it is
+a second answer to a question that has one.
+
+Construction carries the guarantee. `ForSource::comprehension` refuses a
+tree that does not survive the round trip — one with no text at all, and
+one whose text reads back as a different comprehension — so a shape the
+two halves of the grammar disagree about has no source and can never
+reach a program. A refusal there is a gap between the renderer and the
+parser rather than an error in the program, and the diagnostics say so.
+
+One consequence is visible to authors: a source prints canonically
+rather than as written, so `limit in 10,20,30` comes back as
+`limit in 10, 20, 30`. That is the projector's ordinary contract,
+idempotence rather than fidelity ([The Polydat
+Grammar](polydat_grammar.md) §0.1), now applying to sources as it
+already did to expressions.
 
 ### 8.3 Comprehensions as named values
 

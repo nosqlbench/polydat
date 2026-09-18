@@ -336,16 +336,17 @@ impl TileLowering {
                     compiler
                         .pending_events
                         .extend(super::traversal::warning_events(source, &warnings));
-                    self.check_bounded(&comprehension, &source.text)?;
-                    self.check_predicates(&comprehension, &source.text)?;
+                    self.check_bounded(&comprehension, &source.to_text())?;
+                    self.check_predicates(&comprehension, &source.to_text())?;
                     let stream =
-                        StreamerValue::new(source.text.clone(), comprehension.clone()).to_json();
+                        StreamerValue::new(source.to_text(), comprehension.clone()).to_json();
                     let mut probe = |expr: &str| self.generator_type(compiler, asm, expr, None);
                     let elements = super::traversal::element_types(&comprehension, &mut probe)
                         .map_err(|e| {
                             format!(
                                 "tile '{}': projection `for {}`: {e}",
-                                self.tile_name, source.text
+                                self.tile_name,
+                                source.to_text()
                             )
                         })?;
                     // Generator-call sources are expressions over the
@@ -358,13 +359,15 @@ impl TileLowering {
                             return Err(format!(
                                 "tile '{}': projection `for {}`: generator `{expr_text}` uses a `{{name}}` placeholder; \
                                  in a tile the generator is an expression over the scope's wires, so name the wire directly",
-                                self.tile_name, source.text
+                                self.tile_name,
+                                source.to_text()
                             ));
                         }
                         let expr = super::tile::parse_hole_expr(&expr_text).map_err(|e| {
                             format!(
                                 "tile '{}': projection `for {}`: generator `{expr_text}`: {e}",
-                                self.tile_name, source.text
+                                self.tile_name,
+                                source.to_text()
                             )
                         })?;
                         let wire = self.next_name("g");
@@ -373,7 +376,8 @@ impl TileLowering {
                             .map_err(|e| {
                                 format!(
                                     "tile '{}': projection `for {}`: generator `{expr_text}`: {e}",
-                                    self.tile_name, source.text
+                                    self.tile_name,
+                                    source.to_text()
                                 )
                             })?;
                         let idx = self.push_input(wire);
@@ -812,14 +816,15 @@ impl TileLowering {
         compiler
             .pending_events
             .extend(super::traversal::warning_events(source, &warnings));
-        self.check_bounded(&comprehension, &source.text)?;
-        self.check_predicates(&comprehension, &source.text)?;
+        self.check_bounded(&comprehension, &source.to_text())?;
+        self.check_predicates(&comprehension, &source.to_text())?;
         let mut probe = |expr: &str| self.generator_type(compiler, asm, expr, Some(&*ctx));
         let nested_elements =
             super::traversal::element_types(&comprehension, &mut probe).map_err(|e| {
                 format!(
                     "tile '{}': nested projection `for {}`: {e}",
-                    self.tile_name, source.text
+                    self.tile_name,
+                    source.to_text()
                 )
             })?;
         // Generator expressions of the nested source read the scope's
@@ -861,7 +866,7 @@ impl TileLowering {
             ctx.bindings
                 .push(format!("{name} := for {}", p.source_text));
         }
-        for r in placeholder_names(&source.text) {
+        for r in placeholder_names(&source.to_text()) {
             self.cascade_ref(asm, r, ctx);
         }
         // Every outer wire the nested body reads must reach the body
@@ -1037,7 +1042,7 @@ fn collect_piece_refs(
                 }
             }
             TilePiece::Projection { source, body, .. } => {
-                out.extend(placeholder_names(&source.text));
+                out.extend(placeholder_names(&source.to_text()));
                 if let ForSourceKind::Producer(n) | ForSourceKind::Derived { base: n, .. } =
                     &source.kind
                 {

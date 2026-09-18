@@ -483,7 +483,7 @@ pub fn render_template(pieces: &[TilePiece], opts: &TileOptions) -> String {
             } => {
                 out.push_str(&opts.sigil);
                 out.push_str("for ");
-                out.push_str(&source.text);
+                out.push_str(&source.to_text());
                 if let Some(s) = sep {
                     out.push_str(&format!(" sep \"{s}\""));
                 }

@@ -39,10 +39,10 @@ fn producer_binding_is_a_const_streamer_wire() {
     k.set_inputs(&[0]);
     let v = k.pull("sweep").clone();
     let s = v.as_streamer().expect("streamer value");
-    assert_eq!(s.text, "k in 1..4, limit in 10,20,30");
+    assert_eq!(s.text, "k in 1..4, limit in 10, 20, 30");
     assert_eq!(s.element_names(), vec!["k", "limit"]);
     assert_eq!(s.cardinality(), CardinalityClass::Bounded(9));
-    assert_eq!(v.to_display_string(), "for k in 1..4, limit in 10,20,30");
+    assert_eq!(v.to_display_string(), "for k in 1..4, limit in 10, 20, 30");
 }
 
 #[test]

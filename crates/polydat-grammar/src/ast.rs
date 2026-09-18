@@ -285,13 +285,17 @@ impl TileHole {
 /// What a `for` iterates: inline comprehension text, or the name of a
 /// bound producer wire.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ForSource {
-    /// The raw text after `for`, preserved for diagnostics and for
-    /// pretty-printing round trips.
-    pub text: String,
-    /// What the text denotes once parsed.
+    /// What the source denotes. This is the source: its text is
+    /// rendered from here ([`ForSource::to_text`]), never stored
+    /// beside it, so a source cannot read as one thing and traverse
+    /// another.
     pub kind: ForSourceKind,
-    /// Where the source appears.
+    /// Where the source appears, for diagnostics. Position is
+    /// provenance and belongs on the node; a copy of the text the
+    /// author wrote is not provenance, it is a second answer to a
+    /// question that has one.
     pub span: Span,
 }
 
@@ -324,9 +328,18 @@ impl ForSource {
     /// tree is outside the text grammar, so a source never carries a
     /// text that reads back as a different comprehension.
     pub fn comprehension(tree: crate::comprehension::Comprehension, span: Span) -> Option<Self> {
+        // The guarantee `to_text` rests on, and it is the round trip,
+        // not merely the existence of a text: this tree must write as
+        // text that reads back as this tree. A tree that writes
+        // something meaning anything else — or nothing the parser
+        // accepts — has no source, so the shape can never reach a
+        // program and be projected as one comprehension while
+        // traversing another.
         let text = tree.to_text()?;
+        if crate::comprehension::spec::parse_comprehension_algebra(&text).ok()? != tree {
+            return None;
+        }
         Some(ForSource {
-            text,
             kind: ForSourceKind::Comprehension(tree),
             span,
         })
@@ -334,10 +347,8 @@ impl ForSource {
 
     /// A traversal source naming a producer bound in the same scope.
     pub fn producer(name: impl Into<String>, span: Span) -> Self {
-        let name = name.into();
         ForSource {
-            text: name.clone(),
-            kind: ForSourceKind::Producer(name),
+            kind: ForSourceKind::Producer(name.into()),
             span,
         }
     }
@@ -351,22 +362,52 @@ impl ForSource {
         order: Option<String>,
         span: Span,
     ) -> Self {
-        let base = base.into();
-        let mut text = base.clone();
-        if let Some(predicate) = &filter {
-            text.push_str(&format!(" where {predicate}"));
-        }
-        if let Some(spec) = &order {
-            text.push_str(&format!(" order {spec}"));
-        }
         ForSource {
-            text,
             kind: ForSourceKind::Derived {
-                base,
+                base: base.into(),
                 filter,
                 order,
             },
             span,
+        }
+    }
+
+    /// The source as the text after `for` writes it, rendered from
+    /// what it denotes.
+    ///
+    /// A comprehension renders through
+    /// [`Comprehension::to_text`](crate::comprehension::Comprehension::to_text),
+    /// a producer is its name, and a derivation is its base with the
+    /// `where` and `order` it carries. Re-reading the result yields
+    /// the same source, so nothing downstream can traverse one thing
+    /// and report another.
+    ///
+    /// Total for every source that exists: [`Self::comprehension`]
+    /// refuses a tree the text cannot write, so the fallback below is
+    /// unreachable through the constructors. It renders a form no
+    /// parser accepts rather than a plausible one, so a source that
+    /// somehow evaded them fails loudly at the next read instead of
+    /// quietly meaning something else.
+    pub fn to_text(&self) -> String {
+        match &self.kind {
+            ForSourceKind::Producer(name) => name.clone(),
+            ForSourceKind::Comprehension(tree) => tree
+                .to_text()
+                .unwrap_or_else(|| "«comprehension with no text form»".to_string()),
+            ForSourceKind::Derived {
+                base,
+                filter,
+                order,
+            } => {
+                let mut text = base.clone();
+                if let Some(predicate) = filter {
+                    text.push_str(&format!(" where {predicate}"));
+                }
+                if let Some(spec) = order {
+                    text.push_str(&format!(" order {spec}"));
+                }
+                text
+            }
         }
     }
 

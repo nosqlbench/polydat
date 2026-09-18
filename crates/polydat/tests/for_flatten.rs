@@ -85,15 +85,14 @@ fn a_generator_over_a_runtime_name_stays_unbounded_at_compile() {
     assert_eq!(seen, vec![50, 50]);
 }
 
-/// A traversal source carries its text and its comprehension, and they
-/// are one source (comprehension_forms.md §8): the constructor derives
-/// the text from the tree, and a source whose two halves disagree is a
-/// compile error rather than a program that projects one comprehension
-/// and traverses another.
+/// A traversal source is its comprehension: the text is rendered from
+/// the tree rather than stored beside it (comprehension_forms.md §8), so
+/// what a program projects is what it traverses by construction, and a
+/// source whose halves disagree is not a thing that can be built.
 #[test]
 fn a_built_source_projects_the_comprehension_it_traverses() {
     use polydat::dsl::ast::{
-        Binding, BindingModifier, Expr, ForSource, ForSourceKind, InputDecl, PolydatFile, Statement,
+        Binding, BindingModifier, Expr, ForSource, InputDecl, PolydatFile, Statement,
     };
     use polydat::dsl::compile::{CompileOptions, compile_ast_with_options};
     use polydat::dsl::lexer::Span;
@@ -120,7 +119,7 @@ fn a_built_source_projects_the_comprehension_it_traverses() {
         ),
     ]);
     let built = ForSource::comprehension(tree.clone(), sp).expect("the text writes this tree");
-    assert_eq!(built.text, "k in 1..4, limit in 10..12");
+    assert_eq!(built.to_text(), "k in 1..4, limit in 10..12");
 
     let file = |source: ForSource| PolydatFile {
         statements: vec![
@@ -158,18 +157,23 @@ fn a_built_source_projects_the_comprehension_it_traverses() {
         streamer.as_streamer().unwrap().cardinality()
     );
 
-    // A hand-made source whose text disagrees is refused, naming both.
-    let mismatched = ForSource {
-        text: "k in 900..999".into(),
-        kind: ForSourceKind::Comprehension(tree),
-        span: sp,
-    };
-    let err = compile_ast_with_options(&file(mismatched), "", &CompileOptions::default(), None)
-        .unwrap_err();
-    assert!(
-        err.contains("text and its comprehension differ") && err.contains("900..999"),
-        "{err}"
+    // A source's text is rendered from its comprehension, so a text
+    // that disagrees with the tree is not a thing that can be built:
+    // there is no text to set. The forged source this test used to
+    // construct no longer compiles, and the property it was checking
+    // holds by construction instead.
+    let built = ForSource::comprehension(tree.clone(), sp).expect("writable tree");
+    assert_eq!(
+        built.to_text(),
+        tree.to_text().expect("writable tree"),
+        "a source's text is its comprehension's text"
     );
+    // And the pair that makes that trustworthy: written and read back,
+    // the comprehension is the same comprehension.
+    let reread =
+        polydat::iteration::comprehension::spec::parse_comprehension_algebra(&built.to_text())
+            .expect("its own text parses");
+    assert_eq!(reread, tree, "writing and reading back is the identity");
 }
 
 /// A tile built from its body text carries pieces parsed from that

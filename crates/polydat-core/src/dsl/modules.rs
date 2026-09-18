@@ -374,7 +374,7 @@ impl Compiler {
                         .extend(super::traversal::warning_events(&rewritten, &warnings));
                     let name = format!("{prefix}{}", b.targets.join(","));
                     let value = crate::iteration::comprehension::StreamerValue::new(
-                        rewritten.text.clone(),
+                        rewritten.to_text(),
                         comprehension.clone(),
                     );
                     let call = Expr::Call(CallExpr {
@@ -388,7 +388,7 @@ impl Compiler {
                     self.producers_seen.push(super::traversal::Producer {
                         name,
                         span: b.span,
-                        source_text: rewritten.text.clone(),
+                        source_text: rewritten.to_text(),
                         comprehension,
                     });
                 }
@@ -405,7 +405,7 @@ impl Compiler {
                 Statement::For(f) => {
                     return Err(format!(
                         "`for {}` inside module '{}': {}",
-                        f.source.text,
+                        f.source.to_text(),
                         func_name,
                         "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
                     ));
@@ -673,7 +673,7 @@ impl Compiler {
                 _ => Vec::new(),
             })
             .collect();
-        let mut text = source.text.clone();
+        let mut text = source.to_text();
         for name in placeholder_names(&text) {
             let replacement = if module_inputs.contains(&name) {
                 match arg_map.get(&name) {
@@ -683,7 +683,7 @@ impl Compiler {
                     Some(_) => {
                         return Err(format!(
                             "`for {}` reads module input `{name}` through a placeholder, so the caller must pass a wire for it",
-                            source.text
+                            source.to_text()
                         ));
                     }
                     None => None,
@@ -707,34 +707,20 @@ impl Compiler {
             }
         };
         match &source.kind {
-            ForSourceKind::Producer(n) => {
-                let p = renamed(n);
-                Ok(ForSource {
-                    text: p.clone(),
-                    kind: ForSourceKind::Producer(p),
-                    span: source.span,
-                })
-            }
+            // Renaming the base is the whole rewrite: the text follows
+            // from it, where this used to patch the old text by prefix
+            // surgery and could leave the two disagreeing.
+            ForSourceKind::Producer(n) => Ok(ForSource::producer(renamed(n), source.span)),
             ForSourceKind::Derived {
                 base,
                 filter,
                 order,
-            } => {
-                let b = renamed(base);
-                let text = match text.strip_prefix(base.as_str()) {
-                    Some(rest) => format!("{b}{rest}"),
-                    None => text,
-                };
-                Ok(ForSource {
-                    text,
-                    kind: ForSourceKind::Derived {
-                        base: b,
-                        filter: filter.clone(),
-                        order: order.clone(),
-                    },
-                    span: source.span,
-                })
-            }
+            } => Ok(ForSource::derived(
+                renamed(base),
+                filter.clone(),
+                order.clone(),
+                source.span,
+            )),
             ForSourceKind::Comprehension(_) => {
                 let rewritten = super::parser::for_source_from_text(&text, source.span, true)?;
                 let ForSourceKind::Comprehension(c) = &rewritten.kind else {

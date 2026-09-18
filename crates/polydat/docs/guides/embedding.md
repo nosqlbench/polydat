@@ -508,7 +508,7 @@ for index in 0..stream.len() {
 ```
 
 ```text
-6 activations of `shard in 0..3, phase in load,verify`
+6 activations of `shard in 0..3, phase in load, verify`
   activation 0: load shard 0 row 65
   activation 1: verify shard 0 row 65
   activation 2: load shard 1 row 165

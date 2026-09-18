@@ -30,7 +30,10 @@ fn producer_binding_parses_to_a_comprehension() {
     let Expr::For(source) = &b.value else {
         panic!("expected for expression, got {:?}", b.value)
     };
-    assert_eq!(source.text, "k in 1..4, limit in 10,20,30 order halton/5");
+    assert_eq!(
+        source.to_text(),
+        "k in 1..4, limit in 10, 20, 30 order halton/5"
+    );
     assert!(matches!(source.kind, ForSourceKind::Comprehension(_)));
     assert_eq!(source.element_names(), vec!["k", "limit"]);
 }
@@ -43,8 +46,8 @@ fn traversal_over_inline_comprehension_with_body() {
         panic!("expected for statement")
     };
     assert_eq!(
-        fs.source.text,
-        "phase in load,verify, p in partitions(\"*/4\", 1000000)"
+        fs.source.to_text(),
+        "phase in load, verify, p in partitions(\"*/4\", 1000000)"
     );
     assert_eq!(fs.source.element_names(), vec!["phase", "p"]);
     assert_eq!(fs.body.len(), 2);
@@ -80,10 +83,13 @@ fn nested_traversals_and_every_statement_kind_in_a_body() {
 fn pretty_printer_round_trips_both_forms() {
     let src = "sweep := for k in 1..4, limit in 10,20,30 order halton/5\nfor sweep {\n    f := myfunc(k)\n    g := otherfunc(limit, k)\n}\nfor phase in load,verify, p in partitions(\"*/4\", 1000000) {\n    row := mod_in(cycle, p)\n    for q in 1..2 {\n        z := hash(q)\n    }\n}\n";
     let printed = pp_file(&parse(src));
-    assert_eq!(printed, src);
-    // And the printed form parses back to the same shape.
+    // The projector's guarantee is idempotence, not fidelity: a source
+    // is rendered from its comprehension, so a literal list comes back
+    // canonically spaced whatever the author wrote.
+    assert!(printed.contains("limit in 10, 20, 30"), "{printed}");
+    assert!(printed.contains("phase in load, verify"), "{printed}");
     let again = pp_file(&parse(&printed));
-    assert_eq!(again, printed);
+    assert_eq!(again, printed, "the second print is a fixed point");
 }
 
 #[test]
@@ -94,8 +100,8 @@ fn where_and_order_survive_in_the_captured_text() {
     let Statement::For(fs) = &f.statements[0] else {
         panic!()
     };
-    assert!(fs.source.text.ends_with("order extrema/1"));
-    assert!(fs.source.text.contains("where {k} >= 2"));
+    assert!(fs.source.to_text().ends_with("order extrema/1"));
+    assert!(fs.source.to_text().contains("where {k} >= 2"));
 }
 
 #[test]
@@ -107,7 +113,7 @@ fn comments_after_the_comprehension_are_not_captured() {
     let Expr::For(source) = &b.value else {
         panic!()
     };
-    assert_eq!(source.text, "k in 1..4");
+    assert_eq!(source.to_text(), "k in 1..4");
     assert_eq!(f.statements.len(), 2);
 }
 

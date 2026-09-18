@@ -156,7 +156,7 @@ fn body_type_errors_are_reported_at_compile_time() {
         "input cycle: u64\nfor name in load,verify {\n    x := u64_add(name, 1)\n}\n",
     )
     .unwrap_err();
-    assert!(err.contains("for name in load,verify"), "{err}");
+    assert!(err.contains("for name in load, verify"), "{err}");
     assert!(err.contains("body failed to compile"), "{err}");
 }
 

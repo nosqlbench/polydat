@@ -1479,7 +1479,7 @@ fn explain(args: ExplainArgs) -> Result<(), String> {
                         Statement::Pragma { name, .. } => println!("  pragma    {name}"),
                         Statement::For(f) => println!(
                             "  for       {} {{ {} statements }}",
-                            f.source.text,
+                            f.source.to_text(),
                             f.body.len()
                         ),
                         Statement::Tile(t) => println!(

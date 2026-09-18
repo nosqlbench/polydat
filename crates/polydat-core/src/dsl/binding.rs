@@ -522,7 +522,7 @@ impl Compiler {
                         Expr::For(source) => {
                             return Err(format!(
                                 "`for {}` at line {}, col {}: {}",
-                                source.text,
+                                source.to_text(),
                                 source.span.line,
                                 source.span.col,
                                 "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
@@ -1063,7 +1063,7 @@ impl Compiler {
             Expr::For(source) => {
                 return Err(format!(
                     "`for {}` at line {}, col {}: {}",
-                    source.text,
+                    source.to_text(),
                     source.span.line,
                     source.span.col,
                     "the `for` construct is parsed but not compiled yet (SRD 113 step 2); see docs/design/for_traversal.md"
