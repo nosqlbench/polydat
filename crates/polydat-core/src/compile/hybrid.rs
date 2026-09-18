@@ -125,7 +125,7 @@ type ResolvedOutput = (usize, crate::ast::PortType, Option<std::sync::Arc<[usize
 
 /// Common fields shared by all hybrid kernel variants. A clone is a new
 /// state of the same program: the steps and the nodes are shared,
-/// everything else is the clone's own (engine_parity.md, step 4), and
+/// everything else is the clone's own (engines.md §3.5), and
 /// every pair in its buffer points into its own storage (axiom S3),
 /// never into the state it was cloned from.
 struct HybridCore {
@@ -1250,7 +1250,7 @@ pub(crate) fn build_hybrid(
     // A node downstream of an extern with no value runs as a closure:
     // a `None` propagates through closures as it does on the
     // interpreter (SRD-74), and native code cannot carry one
-    // (engine_parity.md, A12).
+    // (engines.md §3.3).
     let mut classifications = classifications;
     let unset = externs.unset_slots();
     if !unset.is_empty() {
@@ -1746,7 +1746,7 @@ fn ref_copy_or_slot(
     node.compiled_slot(wire_types)
 }
 
-// ── The engine-independent surface (engine_parity.md, step 4) ──────
+// ── The engine-independent surface (engines.md §3.5) ──────
 
 #[cfg(feature = "jit")]
 impl HybridKernelRaw {
@@ -1857,7 +1857,7 @@ fn run_hybrid_step(
         if let HybridStep::Jit(_) = step {
             panic!(
                 "a `None` reached native code in a hybrid kernel: an extern was cleared \
-                 after the build (docs/design/engine_parity.md, A12)"
+                 after the build (docs/design/engines.md §3.3)"
             );
         }
         if !step.accepts_none() {

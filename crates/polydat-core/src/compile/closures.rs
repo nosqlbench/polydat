@@ -99,7 +99,7 @@ type ResolvedOutput = (usize, crate::ast::PortType, Option<std::sync::Arc<[usize
 
 /// Common fields shared by all kernel variants. A clone is a new state
 /// of the same program: the steps are shared, everything else is the
-/// clone's own (engine_parity.md, step 4), and every pair in its buffer
+/// clone's own (engines.md §3.5), and every pair in its buffer
 /// points into its own storage (axiom S3), never into the state it was
 /// cloned from.
 struct KernelCore {
@@ -1224,7 +1224,7 @@ impl CompiledKernelPushPull {
     kernel_accessors!();
 }
 
-// ── The engine-independent surface (engine_parity.md, step 4) ──────
+// ── The engine-independent surface (engines.md §3.5) ──────
 
 use crate::compile::select::{Engine, Provenance};
 

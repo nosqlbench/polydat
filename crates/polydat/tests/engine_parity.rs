@@ -1,7 +1,8 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! The node-by-engine matrix of docs/design/engine_parity.md, pinned.
+//! The node-by-engine matrix of engine equivalence (docs/design/engines.md
+//! §7), pinned.
 //!
 //! Every registered public node is compiled and run through one cycle
 //! on each engine from the same program the coverage test uses, and the
@@ -146,7 +147,7 @@ fn the_node_by_engine_matrix_is_as_recorded() {
         let gone: Vec<&&str> = old.difference(&new).collect();
         let added: Vec<&&str> = new.difference(&old).collect();
         panic!(
-            "the node-by-engine matrix changed.\n\nrecorded but no longer so:\n{}\n\nnow, not recorded:\n{}\n\nrefusals and failures now:\n{}\n\nIf the change is intended, regenerate with ENGINE_PARITY=overwrite and record the step in docs/design/engine_parity.md.",
+            "the node-by-engine matrix changed.\n\nrecorded but no longer so:\n{}\n\nnow, not recorded:\n{}\n\nrefusals and failures now:\n{}\n\nIf the change is intended, regenerate with ENGINE_PARITY=overwrite; a new refusal needs its reason in docs/design/engines.md §8.",
             gone.iter()
                 .map(|l| format!("  {l}"))
                 .collect::<Vec<_>>()

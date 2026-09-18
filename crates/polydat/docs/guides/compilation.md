@@ -5,7 +5,7 @@ accepts every program and computes the same values (the one exception: an
 extern of a 128-bit integer or register word type runs on the interpreter
 only), and every level is driven through one trait, `Kernel`:
 set inputs, pull outputs, and read names and types the same way whatever
-the engine ([engine parity](../design/engine_parity.md)). Picking a level
+the engine ([Engines](../design/engines.md) §3.5). Picking a level
 is a performance and build-size trade rather than a behaviour switch.
 
 | Level   | Mechanism                 | Measured, per cycle of an eleven-node graph | Feature |

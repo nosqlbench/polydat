@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! One kernel API for every engine (engine_parity.md, step 4). A host
+//! One kernel API for every engine (engines.md §3.5). A host
 //! names an engine, gets a `Box<dyn Kernel>` or one error type, and
 //! drives every engine through the same calls: coordinates, externs,
 //! cursors, evaluation, typed reads, and sharing across threads. Every

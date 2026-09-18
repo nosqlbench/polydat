@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Cursors on every engine (engine_parity.md, step 3). A cursor's
+//! Cursors on every engine (engines.md §3.5). A cursor's
 //! `over` clause resolves to partitions at build when the clause and
 //! the extent are constant; a clause that denotes one partition seeds
 //! the cursor so the program runs on every engine with no host call,
@@ -177,7 +177,7 @@ fn the_compiled_kernels_report_the_cursors_the_interpreter_does() {
 fn a_clause_denoting_several_partitions_is_unset_until_narrowed() {
     // The cursor is `None` until the host narrows it, and every
     // consumer reads `None` through it, on the interpreter and on the
-    // closure tier alike (engine_parity.md, A3 and A12). Native code
+    // closure tier alike (engines.md §3.3, §3.5). Native code
     // cannot carry `None` and refuses to run.
     let src = program("*/4");
     let mut p1 = compile_polydat_to_assembler(&src)

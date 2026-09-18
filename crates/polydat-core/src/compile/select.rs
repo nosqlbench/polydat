@@ -158,7 +158,7 @@ pub fn select_prov_mode(analysis: &GraphAnalysis) -> ProvMode {
     ProvMode::Pull
 }
 
-// ── The engine a host chooses (engine_parity.md, step 4) ──────────
+// ── The engine a host chooses (engines.md §3.5) ──────────
 
 /// How much of a kernel's work is skipped when inputs repeat: the
 /// provenance mode a compiled engine is built with. Every mode computes
@@ -181,7 +181,7 @@ pub enum Provenance {
 /// The engine a program runs on. Every engine accepts every program the
 /// interpreter accepts, or refuses it with a reason
 /// ([`KernelError::Refused`]); the choice changes how fast the program
-/// runs and nothing else (docs/design/engine_parity.md).
+/// runs and nothing else (docs/design/engines.md §7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Engine {
     /// The interpreter, with as much of its graph fused into native

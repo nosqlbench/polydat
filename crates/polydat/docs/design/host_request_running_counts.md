@@ -51,7 +51,7 @@ one", cardinality is "how many matching records did I see in all".
   of any input, so it is nondeterministic by construction, it cannot
   be replayed from its coordinates, and it cannot agree across
   engines or fibers ([Evaluation Model](evaluation_model.md),
-  [Engine Parity](engine_parity.md), [Cross-Fiber
+  [Engines](engines.md) §7, [Cross-Fiber
   Invalidation](cross_fiber_invalidation.md)).
 - Shared cells are typed and first-writer-wins
   ([Scope Model](scope_model.md) §6.1; the `set_or_get` node). They

@@ -350,7 +350,7 @@ pub(crate) use impl_kernel_trait;
 /// needs. The evaluation loops consume only this; provenance derives it
 /// today, and a host that knows its write and read patterns may supply
 /// a narrower plan later without touching the loops
-/// (docs/design/engine_parity.md, step 5).
+/// (docs/design/engines.md §3.1).
 pub(crate) struct Invalidation {
     /// Per input slot (coordinates and externs alike), the steps that
     /// depend on it, transitively.
@@ -404,7 +404,7 @@ impl Invalidation {
 }
 
 /// Where each compiled step came from, for the failure path only
-/// (engine_parity.md, A7). A step's panic is caught at the step
+/// (engines.md §3.4). A step's panic is caught at the step
 /// boundary and re-raised enriched exactly as the interpreter enriches
 /// a node's: the node's name, the outputs it feeds, the program's
 /// diagnostic context, and its input values decoded from the buffer

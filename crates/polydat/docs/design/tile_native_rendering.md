@@ -14,7 +14,7 @@ was not where the time was.
 **Depends on:** [Polytile](polytile.md) (SRD 114) for the skeleton and
 its semantics, [Compiled By-Reference Slots](compiled_handles.md)
 (SRD 115) for the reference-pair slots a rendered document rides in, and
-[Engine Parity](engine_parity.md) (SRD 116) for the `Kernel` trait every
+[Engines](engines.md) §3.5 for the `Kernel` trait every
 engine shares, which the projection bodies use.
 
 *Since SRD 115's third revision the render node is one closure on

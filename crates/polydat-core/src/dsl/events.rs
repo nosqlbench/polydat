@@ -119,7 +119,7 @@ pub enum CompileEvent {
         message: String,
     },
     /// An extern with no default: `None` until the host sets it, and
-    /// every consumer reads `None` through it (engine_parity.md, A12).
+    /// every consumer reads `None` through it (engines.md §3.3).
     ExternWithoutDefault {
         /// The extern's name.
         name: String,

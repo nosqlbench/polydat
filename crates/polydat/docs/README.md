@@ -59,6 +59,3 @@ of the guides most often needs are [Runtime Model](design/runtime_model.md),
 and [Compiled By-Reference Slots](design/compiled_handles.md).
 [Native Tile Rendering](design/tile_native_rendering.md) is the record of
 making tile rendering native, measured step by step.
-[Engine Parity](design/engine_parity.md) is the review of every way the
-compilation levels differed in anything other than performance, and the
-plan that removed each difference; every step has landed.

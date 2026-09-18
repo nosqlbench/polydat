@@ -962,7 +962,7 @@ pub fn read_poly(ty: PortType, slots: &[u64]) -> Value {
 /// resolved output type, and a value of another type would be read by
 /// every consumer as something it is not, where the interpreter would
 /// have carried it. A `None` has no slot form on a compiled engine
-/// (engine_parity.md, A12).
+/// (engines.md §3.3).
 #[inline]
 pub fn write_poly(
     ty: PortType,
@@ -974,7 +974,7 @@ pub fn write_poly(
     if v.port_type() != ty {
         panic!(
             "a node produced a {:?} on an output the graph typed {:?}; a compiled engine \
-             cannot carry a value of another type than the slot's (engine_parity.md, A7)",
+             cannot carry a value of another type than the slot's (engines.md §3.4)",
             v.port_type(),
             ty
         );

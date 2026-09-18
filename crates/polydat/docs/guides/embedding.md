@@ -323,7 +323,7 @@ slots and strings, JSON, and host values as the reference pairs of
 [Compiled By-Reference Slots](../design/compiled_handles.md) (§5
 there describes the closure kits). Pure native code runs a node only
 when it has a native lowering; a host never needs one for correctness,
-only for speed, and [Engine Parity](../design/engine_parity.md) records
+only for speed, and [Engines](../design/engines.md) §8 records
 what each engine accepts.
 
 ## 6. Host-defined value types
@@ -686,7 +686,7 @@ and its `_with_options` and `_with_tiles` forms, `compile_kernel()` on
 the assembler, and the `polydat` binary build on it, and the binary opens
 every level of a traversal nest on it. [Compilation levels](compilation.md)
 describes each engine, [Engines](../design/engines.md) the selection
-rules, and [Engine Parity](../design/engine_parity.md) what each engine
+rules, and [Engines](../design/engines.md) §8 what each engine
 accepts.
 
 ## 12. Program transforms

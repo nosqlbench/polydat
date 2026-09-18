@@ -948,7 +948,7 @@ fn check(src: &str, outputs: &[&str], cycles: u64) -> bool {
 fn check_with(src: &str, outputs: &[&str], cycles: u64, externs: &[(String, Value)]) -> bool {
     // A constant side channel fires when its step is flattened: at
     // construction on a compiled kernel, at the first pull on the
-    // interpreter (engine_parity.md, A6). Each engine's construction
+    // interpreter (engines.md §3.1). Each engine's construction
     // rows count toward its first cycle.
     let _ = polydat::library::emit::take_rows();
     let built = || polydat::library::emit::take_rows().len();

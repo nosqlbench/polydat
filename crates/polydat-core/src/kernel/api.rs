@@ -310,7 +310,7 @@ pub trait Construction: Sized {
     fn subscope(&self, matter: super::subcontext::PolydatMatter<'_>) -> Result<Self, Self::Error>;
 }
 
-// ── One kernel API for every engine (engine_parity.md, step 4) ──────
+// ── One kernel API for every engine (engines.md §3.5) ──────
 
 /// A kernel on any engine: the interpreter, the closure tier, the
 /// hybrid kernel, or pure native code. Every engine accepts every

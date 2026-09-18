@@ -1231,7 +1231,7 @@ pub fn classify_node_typed(node: &dyn PolydatNode, wire_types: &[crate::ast::Por
         "reg_dot_f32" if wire_types == [PT::RegF32x4, PT::RegF32x4] => JitOp::RegDotF32,
         // The compiler's input passthrough and `default_or(value,
         // fallback)` (`value` unless it is `None`, which a compiled slot
-        // never carries; engine_parity.md, A12): a slot copy of an
+        // never carries; engines.md §3.3): a slot copy of an
         // immediate, a copy into the step's own scratch of a reference
         // value (axiom S3: a pair is never forwarded).
         n if n.starts_with("__port_") || n == "default_or" => match meta.outs.first() {

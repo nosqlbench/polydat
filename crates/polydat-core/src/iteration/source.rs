@@ -186,7 +186,7 @@ pub struct SourceSchema {
     pub partition_output: Option<String>,
     /// The partitions the `over` clause denotes, resolved by the
     /// compiler when the clause is a literal spec and the extent is
-    /// known at build (engine_parity.md, step 3). A host reads them
+    /// known at build (engines.md §3.5). A host reads them
     /// without evaluating anything; `cursor_over_partitions` returns
     /// them without a pull. `None` when the clause or the extent is
     /// only known at run time, or the cursor has no `over` clause.

@@ -316,7 +316,7 @@ pub(crate) fn panic_payload_text(payload: &(dyn std::any::Any + Send)) -> String
 }
 
 /// Build the rich diagnostic message for a node-level eval panic, on
-/// every engine (engine_parity.md, A7): the original payload, the
+/// every engine (engines.md §3.4): the original payload, the
 /// panic location the capture guard recorded, the node's function
 /// name, every output it feeds, the program's diagnostic context
 /// (typically the source path / scope label), and the input values,

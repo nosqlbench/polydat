@@ -1956,7 +1956,7 @@ impl Compiler {
                 ));
             }
             // A literal spec over a known extent resolves now
-            // (engine_parity.md, step 3): the schema carries the
+            // (engines.md §3.5): the schema carries the
             // partitions for the host, and a clause that denotes
             // exactly one partition seeds the cursor's slots, so the
             // program runs on every engine with no host call. A clause
@@ -2520,7 +2520,7 @@ impl Compiler {
                         f.source.text,
                         f.span.line,
                         f.span.col,
-                        "a `for` traversal compiles through `compile_polydat` and runs through `PolydatKernel::traverse`; the assembler entry point builds one program and cannot carry a traversal (docs/design/engine_parity.md, A5)"
+                        "a `for` traversal compiles through `compile_polydat` and runs through `PolydatKernel::traverse`; the assembler entry point builds one program and cannot carry a traversal (docs/design/for_traversal.md §5)"
                     ));
                 }
                 Statement::Tile(t) => {
@@ -2616,14 +2616,13 @@ impl Compiler {
         asm.set_strict_wires(self.pragmas.strict_types(), self.pragmas.strict_values());
         asm.set_strict(self.strict);
         // The cursors, with their partitions resolved at build, reach
-        // every kernel built from this assembler (engine_parity.md,
-        // step 3).
+        // every kernel built from this assembler (engines.md §3.5).
         asm.set_cursor_schemas(self.cursor_schemas.clone());
         Ok(asm)
     }
 }
 
-// ── The one entry point (engine_parity.md, step 4) ──────────────────
+// ── The one entry point (engines.md §3.5) ──────────────────
 
 /// Compile `source` for `engine`: the interpreter, the closure tier,
 /// the hybrid kernel, or pure native code. Every engine accepts every

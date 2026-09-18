@@ -554,7 +554,7 @@ pub struct PolydatAssembler {
     /// records in: a fresh one unless the compiler hands down the
     /// tree's.
     pub(crate) ledger: std::sync::Arc<crate::kernel::CompileLedger>,
-    /// The cursors the program declares (engine_parity.md, step 3), set
+    /// The cursors the program declares (engines.md §3.5), set
     /// by the DSL compiler so every kernel built from this assembler
     /// knows them.
     cursor_schemas: Vec<crate::iteration::source::SourceSchema>,
@@ -1076,7 +1076,7 @@ impl PolydatAssembler {
                 node_step_op(node.as_ref(), &wire_types_of(resolved, node_idx)).ok_or_else(
                     || {
                         format!(
-                            "node '{}' has no compiled form (docs/design/engine_parity.md)",
+                            "node '{}' has no compiled form (docs/design/engines.md §8)",
                             node.meta().name
                         )
                     },
@@ -1255,7 +1255,7 @@ impl PolydatAssembler {
     }
 
     /// Pure native code, push+pull: the differential tier behind P3
-    /// (engine_parity.md, step 7), which refuses a node without a native
+    /// (engines.md §8), which refuses a node without a native
     /// lowering. Hosts use [`Self::try_compile_jit`].
     #[doc(hidden)]
     #[cfg(feature = "jit")]
@@ -1553,7 +1553,7 @@ impl PolydatAssembler {
     /// Report the compiled form each node has
     /// (`CompileEvent::CompileLevelSelected`), a property of the node
     /// and its wire types, so the log is the same on every engine
-    /// (engine_parity.md): a native form, a compiled `u64` op, a slot
+    /// (engines.md §7): a native form, a compiled `u64` op, a slot
     /// kit, a slot copy, or interpretation only. A node is named by
     /// the output it produces when it produces one.
     fn log_forms(resolved: &ResolvedDag, log: &mut crate::dsl::events::CompileEventLog) {
@@ -1619,7 +1619,7 @@ impl PolydatAssembler {
     ) -> Result<ResolvedDag, AssemblyError> {
         // An extern without a default is `None` until the host sets it,
         // and every consumer reads `None` through it; the log names each
-        // one so a host knows what it must set (engine_parity.md, A12).
+        // one so a host knows what it must set (engines.md §3.3).
         // A cursor's slots are `None` until narrowed by design and are
         // not externs a host sets by value.
         if let Some(log) = log.as_deref_mut() {
@@ -2784,7 +2784,7 @@ pub fn boundary_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatN
     }
 }
 
-// ── The one constructor (engine_parity.md, step 4) ─────────────────
+// ── The one constructor (engines.md §3.5) ─────────────────
 
 use crate::compile::select::{Engine, KernelError, Provenance};
 use crate::kernel::Kernel;

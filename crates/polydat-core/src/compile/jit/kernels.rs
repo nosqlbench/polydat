@@ -76,7 +76,7 @@ pub type JitParts = (super::codegen::NativeFn, JitCode);
 
 /// Shared fields for all JIT kernel variants. A clone is a new state
 /// of the same program: the code and the nodes are shared, everything
-/// else is the clone's own (engine_parity.md, step 4), and every extern
+/// else is the clone's own (engines.md §3.5), and every extern
 /// pair in its buffer points into its own storage (axiom S3), never
 /// into the state it was cloned from.
 pub(super) struct JitCore {
@@ -254,7 +254,7 @@ impl JitCore {
 
     /// Run one native evaluation: take what cells other holders
     /// published, refuse an unset extern (native code cannot carry a
-    /// `None`; engine_parity.md, A12), run inside the longjmp catch.
+    /// `None`; engines.md §3.3), run inside the longjmp catch.
     #[inline]
     pub(super) fn run(&mut self, native: impl FnOnce()) {
         if self.externs.cells_dirty() {
@@ -264,7 +264,7 @@ impl JitCore {
             panic!(
                 "extern '{name}' ({ty}) has no value: it has no default, so set it with \
                  set_input before the first run (native code cannot carry `None`; \
-                 docs/design/engine_parity.md, A12)"
+                 docs/design/engines.md §3.3)"
             );
         }
         // Code that calls no helper cannot fail: it runs bare. Otherwise
@@ -745,7 +745,7 @@ impl JitKernelPushPull {
     jit_accessors!();
 }
 
-// ── The engine-independent surface (engine_parity.md, step 4) ──────
+// ── The engine-independent surface (engines.md §3.5) ──────
 
 use crate::compile::select::{Engine, Provenance};
 

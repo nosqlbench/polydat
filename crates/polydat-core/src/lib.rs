@@ -205,7 +205,7 @@ pub use derive_support::Const;
 /// what `Engine::Interpreter` carries.
 pub use compile::cone::JitMode;
 /// The engine a host chooses and the one error of every constructor
-/// that takes it (docs/design/engine_parity.md, step 4).
+/// that takes it (docs/design/engines.md §3.5).
 pub use compile::select::{Engine, EnginePlan, KernelError, Provenance};
 /// One kernel API for every engine.
 pub use kernel::{Kernel, KernelProgram};

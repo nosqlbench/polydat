@@ -73,7 +73,7 @@ pub(crate) struct Externs {
     /// Every named output in declaration order, as the interpreter
     /// program lists them.
     output_names: Vec<String>,
-    /// The cursors the program declares (engine_parity.md, step 3):
+    /// The cursors the program declares (engines.md §3.5):
     /// each is an `Ext` extern plus six scalar ones, and its schema
     /// carries the partitions the compiler resolved at build.
     cursors: Vec<crate::iteration::source::SourceSchema>,

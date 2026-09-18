@@ -78,7 +78,7 @@ fn the_log_retells_a_compile_from_parse_to_summary() {
 }
 
 /// A compiled tier's log reports the same forms as the interpreter's:
-/// the form is the node's, not the engine's (engine_parity.md).
+/// the form is the node's, not the engine's (engines.md §7).
 #[test]
 fn the_compiled_tiers_report_each_nodes_form() {
     let asm = compile_polydat_to_assembler(SRC).unwrap();
