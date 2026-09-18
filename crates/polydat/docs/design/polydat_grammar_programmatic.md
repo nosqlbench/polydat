@@ -229,11 +229,10 @@ for sweep {
 
 ```rust
 use polydat::dsl::ast::{ForSource, ForSourceKind, ForStmt};
-use polydat::iteration::comprehension::spec::{legacy_to_algebra, parse_comprehension_text};
+use polydat::iteration::comprehension::spec::parse_comprehension_algebra;
 
 fn comprehension(text: &str) -> ForSource {
-    let legacy = parse_comprehension_text(text).expect("comprehension text");
-    let algebra = legacy_to_algebra(&legacy).expect("algebra");
+    let algebra = parse_comprehension_algebra(text).expect("comprehension text");
     ForSource { text: text.into(), kind: ForSourceKind::Comprehension(algebra), span: sp() }
 }
 
