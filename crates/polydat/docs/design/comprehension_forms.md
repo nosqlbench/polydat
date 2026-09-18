@@ -3538,7 +3538,7 @@ evaluate is refused by name (§9.5.2), never dispensed empty.
 
 ### 15.1 Stream-first evaluation on the traversal path
 
-**The contract.** The implementation specification's first invariant is
+**The contract.** The first of §9.6's invariants is
 stream-first execution: a clause source is a stream producer, and
 materialization happens only at an operation whose metadata declares a
 barrier. §3.3 and §11.8 rest on it (`Cycle` streams its longest, possibly
