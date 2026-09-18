@@ -13,7 +13,7 @@ static slot contract (S/T/L axioms) this mechanism realises;
 the [Graph Compiler](graph_compiler.md) states the construction
 passes (H/CF/NF axioms) that produce a program; the
 [Expression Engine](expression_engine.md) cites D1/D2/D3 as its
-bounded determinism; the [Polydat Grammar](grammar.md) supplies
+bounded determinism; the [Polydat Grammar](polydat_grammar.md) supplies
 the language-level commitments (G4 port-typed expressions
 underwrites D1; G5 structural lifecycle classification
 underwrites R1 and D3). Cross-fiber concerns are the host's:

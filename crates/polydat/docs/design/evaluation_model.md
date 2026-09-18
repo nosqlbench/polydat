@@ -8,7 +8,7 @@ non-deterministic node exclusion, input spaces, and
 externally-written inputs. The axioms it gives mechanism to are
 R1–R4 of [runtime_model.md](runtime_model.md), L2/S4/T1 of
 [composition_substrate.md](composition_substrate.md), and G2/G5
-of [grammar.md](grammar.md); the engines that run the model are
+of [polydat_grammar.md §18](polydat_grammar.md#sec-gaxioms); the engines that run the model are
 [engines.md](engines.md).
 
 The Polydat evaluation model separates the immutable program

@@ -54,6 +54,7 @@ stale text). Size: XS under an hour, S a half day to a day, M two to three days,
 | F-N8 | library | S | `dynamic_weighted_select` re-parses its spec every evaluation; `random_string` re-parses its charset per call; every `Const<Vec<C>>` node clones its list per cycle. |
 | F-N6 | library | S | Const-argument constraints cannot be declared through the macro; the substitutes are panics caught at construction and the legacy `validate_node`. |
 | F-C12 | compiler | XS | Plan B (a scope-init const that yields None is a hard error) is documented and not enforced; the materializer warns and continues. Doc or code, one of them changes. |
+| F-L8 | dsl | XS | An array literal in argument position is dropped during lowering instead of refused. `out := printf("{}", [1, 2])` compiles, supplies zero wire inputs, and panics at eval ("format references input #0 but only 0 wire input(s) supplied"); bound first (`w := [1, 2]`) it works and yields `Str("1, 2")`. A list literal is a binding-position form (polydat_grammar.md §18.1), so the argument position should be a compile error naming the form. Found 2026-09-18 while merging the type rules. |
 
 ### 1.2 Architectural
 
@@ -141,7 +142,7 @@ mechanism on every engine.
 | library_catalog.md | Design rationale for the node library (authoring contract, cost classes, open registry) | **Rewrite.** Keep cost classes, host-registered nodes, the `pick` and `exactly_one_value` rationales, registration's first paragraphs. Replace registration bullets with the shape table. Delete every signature table, Polydat Modules, Node Fusion, the vectordata history, host SRD references. |
 | module_system.md | Discovery, resolution, inlining | **Keep.** Add what a body inherits, program-local modules inside bodies (after F-L3), tiles in module bodies. |
 | polydat_grammar.md | The normative, test-checked language spec | **Rewrite** to absorb grammar.md §3-§5, `for` (both readings), tiles, the `if` block, `shared x: T`, the `as` catalog; fix the keyword count, the `as` rule, the shuffle claim. |
-| grammar.md | none | **Delete** after its G-axioms with rationale and its type rules merge into polydat_grammar.md. |
+| grammar.md | none | **Deleted** 2026-09-18. Its three unique contributions merged into polydat_grammar.md: the type rules and the six G-axioms with what breaks without each are §18, the composition diagram §18.4, the EBNF productions §21. Two claims died as stale rather than moving: `true`/`false` are identifiers, not a `Bool` literal tier, and `Cast` counts as a non-sugar constructor (nine + three, not eight + four). One died as false: `T-ArrayLit` did not yield `Vec<T>` — a list literal binds to a constant string of its rendered elements, which §18.1 now states with the reason. |
 | language_spec.md | none | **Deleted** 2026-09-18. Most of it had already been superseded: the conditional, the `as` rule, precedence, comparisons, and the type keywords were all in polydat_grammar.md, the carriers and the adapter grid in type_system.md, the pipeline in graph_compiler.md, and the invalidation rule in runtime_model.md §3–§4. What it alone held moved: the dispatch table's two live facts (bitwise on an `f64` operand, the widening advisory) to polydat_grammar.md §6.2, literal promotion to §8, implicit inputs and the `cycle` demystification to §4; the `PolydatNode` surface to library_catalog.md; the compiled-program layout and the compile log's three levels to graph_compiler.md §2.1–§2.2; the "braces are not a Polydat expression form" boundary to expression_engine.md §3.2.1. One claim died with it as false: `///` does not attach a doc comment to the next binding, the lexer strips it like any line comment. |
 | polydat_grammar_programmatic.md | Proof that the builder path projects to the parsed path | **Keep** (landed; every example paired 2026-09-17). Drop the `pp_cursor` remark. |
 | for_traversal.md | The `for` construct: readings, semantics, compiled form, activation, axioms | **Weed.** Keep §1-§3, §5.1-5.4, §6, §7, §9. Rewrite §4 and §5.2 to present tense on every engine. Fold three §11 rationale bullets into §3/§5. Delete status, §8, §10's option list, §11. |
@@ -227,7 +228,10 @@ belongs in exactly one place; others cite it.
    as a fourth rung of the matrix. (F-E10)
 6. **Plan B**: enforce (materialization returns an error under strict) or document the
    warn-and-continue behaviour. (F-C12)
-7. **Grammar documents**: merge four into `polydat_grammar.md` as proposed, or keep
-   `grammar.md` as a formal appendix under test. (F-L1)
+7. ~~**Grammar documents**: merge four into `polydat_grammar.md` as proposed, or keep
+   `grammar.md` as a formal appendix under test. (F-L1)~~ **Decided 2026-09-18: merge.**
+   `polydat_grammar.md` now carries the type rules and G-axioms (§18) and the
+   productions (§21), so the appendix material is under the same example test as the
+   rest of the spec rather than in a second document that nothing checked.
 8. **The comprehension plan, cutover and gate documents**: delete after their invariants
    move into `comprehension_forms.md`. (section 3)

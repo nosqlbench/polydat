@@ -94,7 +94,7 @@ kernel.set_inputs(&[12_345]);
 // device=45, reading=123, q_temp=0.019101, q_humid=0.155169
 ```
 
-The grammar fits on one page (see [`polydat-grammar/src/`](../../../polydat-grammar/src/) or [the grammar](../design/grammar.md)) but the
+The grammar fits on one page (see [`polydat-grammar/src/`](../../../polydat-grammar/src/) or [the grammar](../design/polydat_grammar.md)) but the
 graphs you can build are arbitrarily wide and deep. The compiler
 tracks each wire's port type (u64, f64, str, bool, bytes, json,
 vectors…) and rejects mismatches at compile time, before the kernel

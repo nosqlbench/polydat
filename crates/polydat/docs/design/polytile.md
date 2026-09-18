@@ -60,7 +60,7 @@ Three limits shape the design, the same three that shape the kernel:
 
 ### 2.1 Statement grammar
 
-Extends [Grammar](grammar.md) §2.
+Extends [polydat_grammar.md §21](polydat_grammar.md#sec-productions).
 
 ```ebnf
 statement   ::= ...existing...

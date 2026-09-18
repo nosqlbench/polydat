@@ -708,7 +708,7 @@ state), not as a separate concurrency proof.
 
 ## 10. What this document does NOT specify
 
-- **The grammar productions.** [grammar.md](grammar.md) owns
+- **The grammar productions.** [polydat_grammar.md §21](polydat_grammar.md#sec-productions) owns
   the formal productions; this doc
   relies on the grammar exposing typed input ports.
 - **The compilation pipeline mechanics.**

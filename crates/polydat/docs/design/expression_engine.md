@@ -23,7 +23,7 @@ engine for free.
   (data flow, caching, invalidation) and D-axioms
   (determinism guarantees). E3's bounded-determinism claim
   is the realisation of D1/D2/D3 at expression scale.
-- [The Polydat Grammar](grammar.md) — G-axioms. G3
+- [The Polydat Grammar](polydat_grammar.md) — G-axioms. G3
   (scope-chain transparency) + G6 (single grammar for
   expressions and full programs) compose into E1
   (self-contained submission) + E4 (library inheritance) +

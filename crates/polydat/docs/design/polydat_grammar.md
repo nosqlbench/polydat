@@ -14,10 +14,12 @@ language.
 This document is the normative reference for the Polydat surface
 language, its lexical grammar, statement and expression productions,
 type-naming vocabulary, desugaring and projection behaviour, and
-rejection rules, and every example in it is checked by the suite;
-[`grammar.md`](grammar.md) is its formal appendix (type rules and the
-G-axioms in full), [`graph_compiler.md`](graph_compiler.md) the
-compilation companion (what the passes do to what this document
+rejection rules, and every example in it is checked by the suite. It
+carries its own foundations: the type rules and the six G-axioms the
+substrate, compiler, runtime, and embedding designs rest on are
+§[18](#sec-gaxioms), and the productions are §[21](#sec-productions).
+The companions are [`graph_compiler.md`](graph_compiler.md) for
+compilation (what the passes do to what this document
 parses), [`comprehension_forms.md`](comprehension_forms.md)
 the algebra behind the `for` construct (§[16](#sec-for)),
 [`polytile.md`](polytile.md) the semantics behind tiles
@@ -1162,43 +1164,265 @@ no meaning outside a tile body.
 ---
 
 <a id="sec-gaxioms"></a>
-## 18. Foundations: the six G-axioms
+## 18. Foundations: the type rules and the six G-axioms
 
-The grammar is small but does an unusual amount of load-bearing work.
-These six structural commitments (stated in full, with what breaks
-without each, in [`grammar.md`](grammar.md) §4) are the basis the
-substrate, compiler, runtime, and embedding docs rest on. They are
-**not** optimizations — without them those layers' contracts would not
-hold.
+The grammar is small — twelve expression constructors and eight
+statement kinds — but does an unusual amount of load-bearing work. The
+substrate, compiler, runtime, and embedding designs each make claims
+that reduce to "the grammar makes this possible." This section says
+what the grammar actually commits to: first the type rules, then the
+six structural commitments (the **G-axioms**) those other designs rest
+on. The axioms are **not** optimizations. Without them the contracts
+above them would not hold, and each is stated below with what breaks in
+its absence.
 
-- **G1 — Auto-extern as syntactic discovery.** An identifier reference is
-  classified local-or-outer with the *same* syntax; an unresolved local
-  reference is searched up the scope chain and synthesised as an extern
-  slot. (Type rules `T-LocalIdent`, then `T-OuterIdent`.)
-- **G2 — Lifecycle declared at the surface.** `const`/`shared`/`volatile`
-  declare lifecycle; the compiler verifies, it does not infer
-  (§[5](#sec-modifiers)).
-- **G3 — Scope-chain transparency.** An outer-scope reference uses the
-  same syntax as a local one — no `outer` keyword or qualifier.
-- **G4 — Port-typed expressions.** Every well-formed expression has a
-  compile-time-derivable `PortType`; the type rules are total
-  (§[15](#sec-types)).
-- **G5 — Two-lifecycle structural classification.** Every wire is
-  classifiable Effectively-const or Dynamic from the wire chain alone,
-  independent of runtime state.
-- **G6 — One grammar for expressions and programs.** An expression is a
-  program of one anonymous output; a program is a sequence of named
-  bindings. Sub-axiom **G6.i**: compiler intrinsics (`if(…)` and its
-  block form, literal promotion, interpolation→`printf`, and the
-  `polytile`/`polytile_json` rewrites into `tile` statements) are a
-  **closed** parse-time set, not extensible by library code. Sub-axiom
-  **G6.p**: infix precedence is a stable, grammar-structural commitment
-  (§[6.1](#sec-precedence)).
+<a id="sec-type-rules"></a>
+### 18.1 Type rules
 
-This section summarizes the G-axioms. The full type-inference rules
-(`T-IntLit`, `T-Call-OverloadResolve`, `T-BinOp-Add`, `T-FieldAccess`, …)
-and the G-axiom composition diagram are in the
-[`grammar.md`](grammar.md) formal appendix.
+The type system is `PortType` (§[15](#sec-types)). Every well-formed
+expression has an output type derivable from its structure.
+
+```text
+T-IntLit:     n ∈ integer literal          ⊢  n  :  U64
+T-FloatLit:   n ∈ float literal            ⊢  n  :  F64
+T-StringLit:  s ∈ string literal           ⊢  s  :  Str
+T-ArrayLit:   e_1 … e_n literals           ⊢  [e_1, …, e_n]  :  Str
+                                              (the rendered element text)
+```
+
+Polydat does not distinguish signed from unsigned at the literal tier;
+an integer literal is `U64`, and signed values arrive through explicit
+conversion nodes. There is no boolean literal rule: `true` and `false`
+are ordinary identifiers and comparisons yield a `u64` `0`/`1`
+(§[2.6](#sec-bool)).
+
+`T-ArrayLit` is the one that surprises. A list literal binds to a
+constant string holding its rendered elements, not to a vector: there
+is no const-vector node, and list literals exist to be sweep axes and
+comprehension-source text, which are consumed as `{name}` interpolation
+or as source syntax. A wire that genuinely wants the elements as
+numbers parses them (`str_to_vec_i32`, `str_to_vec_f32`). A list
+literal is a **binding-position** form; it has no meaning as a call
+argument.
+
+```text
+T-LocalIdent:  ident declared in this scope by `input`, `extern`,
+               `cursor`, or a binding, with declared type T
+               ⊢  ident  :  T
+
+T-OuterIdent:  ident not declared in this scope but declared in some
+               outer scope with type T (found by auto-extern at
+               compile time)
+               ⊢  ident  :  T
+
+T-Unknown:     ident declared nowhere reachable
+               ⊢  compile error
+```
+
+`T-OuterIdent` is the formal form of G1: an identifier the local scope
+cannot resolve is searched up the chain, and if found an extern slot is
+synthesised in the current scope's program.
+
+```text
+T-Call:        func declared (p_1: T_1, …, p_k: T_k) -> (out: U)
+               args : (T_1, …, T_k)
+               ⊢  func(args)  :  U
+
+T-Call-OverloadResolve:
+               func has signatures S_1 … S_m, exactly one S_i matching
+               the argument types
+               ⊢  func(args)  :  U_i
+
+T-BinOp:       a : U64, b : U64   ⊢  a + b  ≡  u64_add(a, b)  :  U64
+               a : F64, b : F64   ⊢  a + b  ≡  f64_add(a, b)  :  F64
+               a : U64, b : F64   ⊢  a + b  ≡  f64_add(to_f64(a), b) : F64
+
+T-FieldAccess: source declared with type S, S projecting "field" : T
+               ⊢  source.field  :  T
+```
+
+Overload resolution is why the operator rules work: `add` exists as
+both `u64_add` and `f64_add`, and the desugar picks by operand type
+(§[6.2](#sec-arithmetic)). A cross-type operator triggers adapter
+insertion from the catalog. A source's field projections come from the
+source binding's declared type, which is why the grammar does not
+enumerate them (§[11.2](#sec-cursors)).
+
+The rules cover every expression constructor: there is no untyped
+expression form, which is what makes G4 true rather than aspirational.
+
+<a id="sec-soundness"></a>
+### 18.2 What the rules buy
+
+- **Type soundness.** A compiled expression has one inferred output
+  `PortType`, and every runtime value written to that output satisfies
+  it. Node metadata fixes the local port types; the assembler connects
+  equal types, inserts a catalog adapter, or rejects the graph, and
+  typed runtime writes perform the matching boundary check. So long as
+  each node honours its declared metadata, a well-typed expression
+  evaluates only to a value satisfying its inferred type — or to
+  `Value::None`, the absence sentinel
+  ([none_semantics.md](none_semantics.md)).
+- **Cross-statement inference.** Statements compile in dependency
+  order. A binding's right-hand side is inferred from literals,
+  references, and node signatures, and its port type enters the
+  environment the downstream statements are inferred against. An
+  explicit declaration constrains that result. Unresolved references,
+  incompatible constraints, and dependency cycles are compile errors.
+- **Interpolation has a type.** Interpolation is parser desugaring, not
+  an AST form. Every interpolated string lowers to `printf(...)` and
+  has type `Str`, including a lone placeholder: `"{name}"` is a `Str`,
+  while `name` without quotes is a typed passthrough
+  (§[9](#sec-interpolation)).
+- **`ext` stays opaque.** `PortType::Ext` is opaque to the grammar. No
+  structural inference or implicit conversion reaches inside an
+  extension value; a reflected value answers for its own type identity,
+  display, JSON projection, and field access. Extension-producing nodes
+  still carry ordinary metadata, so lifecycle and purity classification
+  operate on the node and its wires rather than on what the extension
+  holds.
+
+<a id="sec-axiom-statements"></a>
+### 18.3 The six axioms
+
+**G1 — Auto-extern as syntactic discovery.** *Every identifier
+reference is classified local or outer-scope by the grammar, without
+being syntactically distinguished by which one it is. The resolution
+rule (`T-LocalIdent` then `T-OuterIdent`) is total and deterministic,
+and an identifier not found locally is searched up the chain and
+synthesised as an extern slot in the current scope's program.*
+
+This is what lets the compiler discover a synthesis surface by walking
+a body rather than reading declarations, and it is why the same rule
+serves `{name}` interpolation: a host's `{k}` reaches the binding a
+bare `k` would. Without it, every cross-scope dependency would be
+declared by hand — twice the surface, and a maintenance trap the first
+time a body changes.
+
+**G2 — Lifecycle declared at the surface.** *The binding modifiers
+declare lifecycle. The compiler verifies the declaration against the
+wire chain; it does not infer lifecycle from the expression's contents
+(§[5](#sec-modifiers)).*
+
+The author's declaration is the anchor the const-binding contract
+checks against and the hoisting pass partitions on. Without it,
+lifecycle would be inferred per call site, the analysis would have to
+be richer, and the wire-chain check would have nothing declarative to
+check.
+
+**G3 — Scope-chain transparency.** *An identifier referencing an
+outer-scope binding is written exactly like a local one. There is no
+`outer` keyword, no parent qualifier, no ceremony: the author writes
+`k` whichever scope owns `k`.*
+
+The layer structure stays invisible to the author, which is precisely
+what makes an expression embeddable as written — a host can hand over
+an expression that consumes its context without adapting the syntax.
+Without it, the substrate's layering would leak into every expression
+that crossed a scope.
+
+**G4 — Port-typed expressions.** *Every well-formed expression has a
+derivable output `PortType`. The rules of §18.1 are total: every
+constructor has a rule, the rules compose, and no expression form
+lacks an output type.*
+
+Typed wires at both ends are what let a mismatch be caught or healed at
+construction rather than at runtime, and what makes a returned value's
+type structural rather than discovered. Without it, type checking would
+move to runtime and the typed-result guarantee would become a runtime
+concern.
+
+**G5 — Two-lifecycle structural classification.** *Every wire is
+classifiable Effectively-const or Dynamic by analysing the wire chain
+alone — the join of its upstream cone's lifecycles, plus the declared
+modifiers of G2. The classification does not depend on runtime state or
+evaluation history.*
+
+This is what allows the compiler to emit a partitioned program at all:
+one buffer evaluated once at scope-init, another per cycle. Without it,
+lifecycle would be discovered during evaluation, the partition could
+not be compiled, and the cost-determinism guarantee would lose its
+structural basis.
+
+**G6 — One grammar for expressions and programs.** *A single
+expression and a full multi-binding program are the same grammar: an
+expression is a program of one anonymous output, and a program is a
+sequence of named bindings. There is no expression grammar separate
+from a program grammar.*
+
+This is why the same compiler compiles a four-character expression and
+a two-hundred-line kernel with no expression mode, and why every node a
+program can call an embedded expression can call too. Without it a host
+would choose between two grammars and the compiler would maintain two
+pipelines.
+
+**G6.i — Intrinsics are a closed parse-time set.** *A small fixed set
+of forms that look like calls or values are intrinsics: the parser
+recognises them and emits desugared graph shapes. The set is closed and
+each member rewrites into registered library nodes or constant
+emission, so nothing reaches the compiler that an author could not have
+written by hand.*
+
+The catalog is the conditional in both spellings
+(§[7.1](#sec-if-block)), literal promotion (§[8](#sec-calls)),
+interpolation to `printf` (§[9](#sec-interpolation)), and the
+`polytile` rewrites into `tile` statements (§[17](#sec-tiles)). Closure
+is the point: an embedded expression using `"x={y}"` compiles to the
+graph the author could have written, so the embedding contract sees
+nothing magic, and the compiler's main loop sees only registered nodes
+after parse. Without it, parse-time desugars would have to live in
+library code behind some "declare yourself intrinsic" mechanism, or the
+grammar would grow constructs the compiler treats opaquely.
+
+**G6.p — Precedence is a grammar-structural commitment.** *Infix
+operators follow a stable Rust-like precedence, and parse-tree shape is
+determined by it. The table (§[6.1](#sec-precedence)) is part of the
+grammar's contract, not an implementation detail.*
+
+An author can write `a + b * c < d & e` and predict the parse; a tool
+that walks or rewrites the AST can rely on the shape; the type rules
+operate on a determinate tree. Without it, either everything needs
+parentheses or the parse is implementation-defined and tooling needs
+implementation-specific knowledge.
+
+<a id="sec-axioms-compose"></a>
+### 18.4 How they compose
+
+```text
+            Grammar
+            G1 G2 G3 G4 G5 G6
+              │
+              ▼
+        slot contract       ← G1+G4 → S1+T1
+              │
+              ▼
+        compiler passes     ← G2+G5 → H1+CF1
+              │
+              ▼
+        runtime model       ← G4+G5 → R1+D1
+              │
+              ▼
+        embedding           ← G3+G6 → E1+E4
+```
+
+Each layer above the grammar names an axiom of its own and rests it on
+a grammar-level commitment. Without G1, the substrate's synthesis
+surface would be a runtime discovery. Without G2, the two-lifecycle
+classification would be a runtime classification. Without G3, embedding
+would need syntactic adaptation. The substrate is small because the
+grammar's commitments already do work it would otherwise repeat —
+which is the reason to treat these six as load-bearing rather than as
+conveniences.
+
+| Document | What it rests on the grammar for |
+|---|---|
+| [Composition Substrate](composition_substrate.md) | G1+G4 underwrite S1+T1; G3+G4 underwrite L1+L2; G5 underwrites L2's structural classification. |
+| [Graph Compiler](graph_compiler.md) | G2+G5 underwrite H1+H2; G1 underwrites CF1; G4 underwrites NF1. |
+| [Runtime Model](runtime_model.md) | G4 underwrites D1; G5 underwrites R1+D3; G3 underwrites L1's runtime realisation. |
+| [Expression Engine](expression_engine.md) | G3+G6 underwrite E1+E4; G4 underwrites E2; G6 underwrites the expression-as-kernel correspondence. |
+| [Evaluation Model](evaluation_model.md) | G2+G5 are the commitments the lifecycle taxonomy rests on. |
+| [Scope Model](scope_model.md) | G1+G3 are the commitments for auto-extern discovery and parent-gated materialization. |
+| [Wire Materialization](wire_materialization.md) | G1's auto-extern discovery is what the gradient classification operates over. |
 
 ---
 
@@ -1260,3 +1484,99 @@ round-trip, compiles the <code>compile</code>-tagged ones, and proves
 the **[↔ programmatic]** examples project identically to their
 hand-built ASTs in
 [`polydat_grammar_programmatic.md`](polydat_grammar_programmatic.md).
+
+---
+
+<a id="sec-productions"></a>
+## 21. Appendix: the grammar in productions
+
+The sections above state each form with a verified example. This
+appendix lays the same grammar out as productions, for cross-reference
+and for anyone writing a tool against it. The notation is EBNF-ish;
+`ident` is `[A-Za-z_][A-Za-z0-9_]*` and `type` is any keyword of
+§[15](#sec-types).
+
+```ebnf
+polydat_file   ::= statement*
+
+statement      ::= input_decl
+                |  binding
+                |  module_def
+                |  extern_port
+                |  cursor_decl
+                |  pragma
+                |  for_stmt                   (* §16 *)
+                |  tile_def                   (* §17 *)
+
+input_decl     ::= "input" ident (":" type)?
+                |  "input" "(" (ident (":" type)?)+ ")"
+
+extern_port    ::= "extern" ident ":" type ("=" expr)?
+
+binding        ::= modifier* ident ":=" expr
+                |  modifier* "(" ident ("," ident)* ")" ":=" expr
+modifier       ::= "const" | "shared" | "volatile"
+
+module_def     ::= ident "(" typed_param_list ")"
+                   "->" "(" typed_param_list ")"
+                   ":=" "{" statement* "}"
+typed_param    ::= ident ":" type
+
+pragma         ::= "pragma" ident
+```
+
+Statement order is not constrained syntactically; the compiler's
+dependency analysis orders the resulting graph. An `input` declares a
+coordinate slot advanced by the leading `set_inputs` prefix, an
+`extern` a typed non-coordinate slot; the tuple binding form is
+destructuring sugar over a tuple-producing expression
+(§[3.1](#sec-destructuring)).
+
+```ebnf
+expr           ::= ident
+                |  int_literal
+                |  float_literal
+                |  string_literal
+                |  array_literal
+                |  call_expr
+                |  field_access
+                |  cast_expr
+                |  for_expr                   (* §16 *)
+                |  bin_op_expr                (* sugar *)
+                |  unary_expr                 (* sugar *)
+
+call_expr      ::= ident "(" arg_list? ")"
+arg_list       ::= arg ("," arg)*
+arg            ::= expr                       (* positional *)
+                |  ident ":" expr             (* named *)
+
+cast_expr      ::= expr "as" type             (* postfix; binds to the atom *)
+field_access   ::= ident "." ident
+
+bin_op_expr    ::= expr bin_op expr
+bin_op         ::= "+" | "-" | "*" | "/" | "%" | "**"
+                |  "&" | "|" | "^" | "<<" | ">>"
+                |  "==" | "!=" | "<" | ">" | "<=" | ">="
+                |  "&&" | "||"
+
+unary_expr     ::= "-" expr                   (* arithmetic negate *)
+                |  "!" expr                   (* bitwise NOT *)
+
+string_literal ::= ("\"" | "'") ( char | "{" expr "}" | "{{" | "}}" )* (matching quote)
+array_literal  ::= "[" (expr ("," expr)*)? "]"
+```
+
+Twelve expression constructors, matching the AST: nine that survive
+parse as themselves (`Ident`, `IntLit`, `FloatLit`, `StringLit`,
+`ArrayLit`, `Call`, `FieldAccess`, `Cast`, `For`) and three sugar forms
+(`BinOp`, `UnaryNeg`, `UnaryBitNot`) that desugar to calls. The block
+form of `if` is not a constructor: the parser rewrites it to the
+`if(…)` call before anything else sees it
+(§[18.3](#sec-axiom-statements), G6.i).
+
+Three things this appendix deliberately does not cover. Tokenisation,
+whitespace, and escape rules are the lexer's, sketched in
+§[1](#sec-lexical) and definitive only in the code. What a named node
+computes is the [library catalog](library_catalog.md)'s; the grammar
+names the call form and stops. Parse-error recovery is the parser's
+strategy, not a grammar commitment.

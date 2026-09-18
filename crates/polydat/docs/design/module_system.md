@@ -2,7 +2,7 @@
 
 This specification defines file-backed module discovery, typed module
 interfaces, call resolution, and graph inlining. Module definitions use the
-grammar in [grammar.md](grammar.md); their compiled composition semantics use
+grammar in [polydat_grammar.md §13](polydat_grammar.md#sec-modules); their compiled composition semantics use
 the inline mode in [scope_model.md](scope_model.md).
 
 ## 1. Module definition
@@ -103,7 +103,7 @@ When the compilation entry point's `strict` flag is true:
 
 The strict compilation flag is distinct from `pragma strict_types` and
 `pragma strict_values`. Those pragmas control wire assertions and compose
-through the pragma rules in [grammar.md](grammar.md).
+through the pragma rules in [polydat_grammar.md §14](polydat_grammar.md#sec-pragmas).
 
 ## 5. Inlining
 

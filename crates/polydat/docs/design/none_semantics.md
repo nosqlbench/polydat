@@ -8,7 +8,7 @@ axiom-level statements — T1 (typed return) in
 None is the canonical "absent" sentinel of the `Value` enum;
 D1 in [runtime_model.md](runtime_model.md), whose typed return
 None never silently becomes a string; and G1 (auto-extern) in
-[grammar.md](grammar.md), through the conditional-shadow
+[polydat_grammar.md §18](polydat_grammar.md#sec-gaxioms), through the conditional-shadow
 `const` compilation rule below.
 
 This document is normative for the implemented language and

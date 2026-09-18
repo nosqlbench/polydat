@@ -9,7 +9,7 @@ policy, side effects, and any surface sugar over the canonical text form.
 [Cursor Partitions](cursor_partitions.md) (partition values and `over`),
 [Scope Model](scope_model.md) (activation, materialization, coordinates),
 [Runtime Model](runtime_model.md) (the D-axioms),
-[Grammar](grammar.md) (productions this document extends),
+[The Polydat Grammar](polydat_grammar.md) (productions this document extends),
 [Engines](engines.md) (the engines an activation runs on).
 
 ## 1. The claim
@@ -37,7 +37,7 @@ compose across them.
 
 ## 2. Grammar
 
-Extends [Grammar](grammar.md) §2.
+Extends [polydat_grammar.md §21](polydat_grammar.md#sec-productions).
 
 ```ebnf
 statement      ::= ...existing...
