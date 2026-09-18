@@ -745,12 +745,32 @@ is the unit the host already owns (§4).
 The pattern generalizes. To pin a default, rewrite the `extern` line
 (§3). To add a derived output, append a binding. To attach a template,
 add a tile statement (§10). To restrict what runs, pass required outputs
-and let the compiler prune. The `dsl::transform` module holds the
-rewrites the crate ships, such as `assign_values`, and a host adds its own
-by operating on the source text or the parsed `PolydatFile` before
-compiling. What a host should not do is reach into a compiled program
-and change it: the compiler's provenance, purity, and fusion decisions
-were made against the program it saw.
+and let the compiler prune. A transform operates on the **parsed program**, never on the text it
+was parsed from. The text is what produced the tree and has no
+authority over it afterwards, so re-reading it is not a rewrite of the
+program but a second, unrelated parse — which is why a tile keeps no
+copy of its body (§10).
+
+`dsl::transform` holds the rewrites the crate ships and the walkers a
+host writes its own over:
+
+| | |
+|---|---|
+| `assign_values(&mut file, &pairs)` | pin an `extern` default, or turn an `input` into one |
+| `each_statement(&mut statements, f)` | every statement, descending into module and `for` bodies |
+| `each_tile(&mut statements, f)` | every tile the subtree declares |
+| `tile_named(&mut statements, "doc")` | one tile, for a transform qualified to it |
+| `each_piece(&mut pieces, f)` | every piece of a template, descending into projection bodies and branch arms |
+
+Each takes the slice to walk rather than the whole file, so the caller
+chooses the subtree: the program's statements, one module's body, or
+one tile's pieces. A rewrite projects forward — a tile's text is
+rendered from the pieces a transform touched, so what the program
+prints after a rewrite is what it renders.
+
+What a host should not do is reach into a compiled program and change
+it: the compiler's provenance, purity, and fusion decisions were made
+against the program it saw.
 
 Side effects belong on the host side of the emit buffer. A node marked
 `SideChannel` may write to a thread-local the host drains, as `emit_row`

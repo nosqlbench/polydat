@@ -10,7 +10,7 @@
 //! engine selection then apply to the host's additions exactly as they
 //! apply to the author's.
 
-use super::ast::{Expr, ExternPort, PolydatFile, Statement};
+use super::ast::{Expr, ExternPort, PolydatFile, Statement, TileDef, TilePiece};
 
 /// Assign `name=value` text to externs and inputs by rewriting their
 /// declarations.
@@ -32,7 +32,11 @@ pub fn assign_values(
 ) -> Result<(), String> {
     for (name, raw) in assignments {
         let mut found = false;
-        for stmt in file.statements.iter_mut() {
+        // Written over the statement walker, so the transform is the
+        // rewrite and the walk is not its business. It assigns at this
+        // scope only: a name inside a module or a `for` body belongs to
+        // that scope, and the walker would reach it.
+        each_statement::<std::convert::Infallible>(&mut file.statements, &mut |stmt| {
             match stmt {
                 Statement::ExternPort(port) if &port.name == name => {
                     port.default = Some(Expr::StringLit(raw.clone(), port.span));
@@ -51,7 +55,9 @@ pub fn assign_values(
                 }
                 _ => {}
             }
-        }
+            Ok(())
+        })
+        .expect("the closure never fails");
         if !found {
             let declared: Vec<&str> = file
                 .statements
@@ -85,4 +91,100 @@ pub fn parse_assignment(text: &str) -> Result<(String, String), String> {
         return Err(format!("'{name}' is not a valid wire name in '{text}'"));
     }
     Ok((name.to_string(), value.trim().to_string()))
+}
+
+// ── Addressing a subtree ────────────────────────────────────────────
+//
+// A transform reads and rewrites the parsed program, never its source
+// text: the text is what produced the tree and has no authority over
+// it afterwards. These walk the two nesting axes so a transform can be
+// written once and applied to a whole program or to one part of it.
+//
+// Statements nest through module bodies and `for` bodies; a template's
+// pieces nest through projection bodies and branch arms. Each walker
+// takes the slice to walk rather than the file, so the caller chooses
+// the subtree: pass `&mut file.statements` for the program, a module's
+// `body` for that module, or one tile's `pieces` for that tile.
+
+/// Apply `f` to every statement in `statements`, then to every
+/// statement nested in a module body or a `for` body, depth first.
+///
+/// `f` sees a statement before its own nested bodies are walked, so a
+/// transform may rewrite a statement and have the walk continue into
+/// what it wrote.
+pub fn each_statement<E>(
+    statements: &mut [Statement],
+    f: &mut impl FnMut(&mut Statement) -> Result<(), E>,
+) -> Result<(), E> {
+    for stmt in statements.iter_mut() {
+        f(stmt)?;
+        match stmt {
+            Statement::ModuleDef(m) => each_statement(&mut m.body, f)?,
+            Statement::For(s) => each_statement(&mut s.body, f)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Apply `f` to every tile the subtree declares, module and `for`
+/// bodies included.
+pub fn each_tile<E>(
+    statements: &mut [Statement],
+    f: &mut impl FnMut(&mut TileDef) -> Result<(), E>,
+) -> Result<(), E> {
+    each_statement(statements, &mut |stmt| match stmt {
+        Statement::Tile(t) => f(t),
+        _ => Ok(()),
+    })
+}
+
+/// The tile bound to `name` in the subtree, for a transform qualified
+/// to one definition.
+pub fn tile_named<'a>(statements: &'a mut [Statement], name: &str) -> Option<&'a mut TileDef> {
+    for stmt in statements.iter_mut() {
+        match stmt {
+            Statement::Tile(t) if t.name == name => return Some(t),
+            Statement::ModuleDef(m) => {
+                if let Some(t) = tile_named(&mut m.body, name) {
+                    return Some(t);
+                }
+            }
+            Statement::For(s) => {
+                if let Some(t) = tile_named(&mut s.body, name) {
+                    return Some(t);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Apply `f` to every piece of a template, then to every piece nested
+/// in a projection body or a branch arm, depth first.
+///
+/// Rewriting a piece rewrites the tile: a tile's text is rendered from
+/// its pieces, so what the program projects after a transform is what
+/// it renders, with no second copy to keep in step.
+pub fn each_piece<E>(
+    pieces: &mut [TilePiece],
+    f: &mut impl FnMut(&mut TilePiece) -> Result<(), E>,
+) -> Result<(), E> {
+    for piece in pieces.iter_mut() {
+        f(piece)?;
+        match piece {
+            TilePiece::Projection { body, .. } => each_piece(body, f)?,
+            TilePiece::Branch {
+                then, otherwise, ..
+            } => {
+                each_piece(then, f)?;
+                if let Some(arm) = otherwise {
+                    each_piece(arm, f)?;
+                }
+            }
+            TilePiece::Static(_) | TilePiece::Hole(_) => {}
+        }
+    }
+    Ok(())
 }

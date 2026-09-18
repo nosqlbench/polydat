@@ -296,3 +296,80 @@ fn text_fragments_and_built_pieces_compose_into_one_tile() {
     );
     assert_ne!(other.body_text(), whole.body_text());
 }
+
+/// A transform reads and rewrites the parsed program. It addresses a
+/// subtree — here one tile by name, and one module's body — and what
+/// it writes projects forward, because a tile's text is rendered from
+/// the pieces the transform touched rather than from a copy of the
+/// source it was parsed from.
+#[test]
+fn a_transform_rewrites_one_tile_and_the_change_projects_forward() {
+    use polydat::dsl::ast::{Expr, TilePiece};
+    use polydat::dsl::transform::{each_piece, each_tile, tile_named};
+    let src = "input cycle: u64\n\
+        renamed := cycle + 700\n\
+        tile a : text := \"a=${cycle}\"\n\
+        tile b : text := \"b=${cycle}\"\n\
+        wrap(n: u64) -> (out: str) := {\n\
+            tile inner : text := \"i=${n} @for k in 0..2 { ${k} }\"\n\
+            out := inner\n\
+        }\n";
+    let mut file = polydat::dsl::parser::parse(polydat::dsl::lexer::lex(src).unwrap()).unwrap();
+
+    // Qualified to one definition: rename the hole's wire in `a` only.
+    let a = tile_named(&mut file.statements, "a").expect("tile a");
+    each_piece::<std::convert::Infallible>(&mut a.pieces, &mut |p| {
+        if let TilePiece::Hole(h) = p {
+            h.expr = Expr::Ident("renamed".into(), h.span);
+        }
+        Ok(())
+    })
+    .unwrap();
+
+    let printed = polydat::dsl::pprint::pp_file(&file);
+    // Forward projection: the rewrite is in the text, with no second
+    // copy to fall out of step.
+    assert!(
+        printed.contains("tile a : text := \"a=${renamed}\""),
+        "{printed}"
+    );
+    // And only there.
+    assert!(
+        printed.contains("tile b : text := \"b=${cycle}\""),
+        "{printed}"
+    );
+
+    // Across the whole program, module bodies included: count the
+    // tiles the walker reaches, and the pieces nested in a projection.
+    let mut tiles = Vec::new();
+    let mut nested_holes = 0usize;
+    each_tile::<std::convert::Infallible>(&mut file.statements, &mut |t| {
+        tiles.push(t.name.clone());
+        each_piece::<std::convert::Infallible>(&mut t.pieces, &mut |p| {
+            if matches!(p, TilePiece::Hole(_)) {
+                nested_holes += 1;
+            }
+            Ok(())
+        })
+        .unwrap();
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(tiles, vec!["a", "b", "inner"], "module bodies are reached");
+    // `inner` has a hole outside its projection and one inside it.
+    assert_eq!(nested_holes, 4, "projection bodies are reached");
+
+    // The rewritten program compiles and renders what the transform
+    // wrote, not what the source said.
+    let mut k = polydat::dsl::compile_ast_with_engine(
+        &file,
+        src,
+        &polydat::dsl::CompileOptions::default(),
+        None,
+        polydat::Engine::default(),
+    )
+    .expect("the rewritten program compiles");
+    k.set_inputs(&[7]);
+    assert_eq!(k.pull("a").to_display_string(), "a=707", "{printed}");
+    assert_eq!(k.pull("b").to_display_string(), "b=7", "{printed}");
+}
