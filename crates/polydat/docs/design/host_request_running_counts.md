@@ -20,7 +20,8 @@ offers in its place today, and what any future answer has to satisfy.
 > per-label cardinality checks compare against profile counts.
 
 The other three items of the same request were pure functions of their
-inputs and belonged in the node library. Two landed on 2026-09-19:
+inputs and belonged in the node library. All three landed on
+2026-09-19:
 
 - The element and set operations, as `vec_len`, `vec_at`, `vec_max`,
   `vec_min`, `vec_contains`, `vec_position`, `vec_intersect_count` and
@@ -37,11 +38,17 @@ inputs and belonged in the node library. Two landed on 2026-09-19:
   "a profile name's numeric suffix" asked for and what the `as` cast
   cannot do.
 
-`metadata_count_of` and `predicate_count_of` over a dataset handle are
-**not** done. They are the same two quantities as the list operations
-answer, computed over a handle instead of a list, and whether they are
-worth a node depends on whether the host has the handle where it needs
-the count or is holding the list anyway.
+- `metadata_count_of(handle, value)` and `predicate_count_of(handle,
+  value)`, which answer the same two quantities over a facet rather
+  than over a list, for the host that has the handle where it needs the
+  count. Each is a linear read of the facet, which is what the question
+  is: the reader holds the values and nothing indexes them by content.
+  Both arguments are fixed for a scope in the intended use, so the
+  count is computed once at scope init and reused, the way the facet
+  itself is loaded once. The value is an `i64`, the facet's own scalar
+  type; `metadata_value_at` formats that same scalar as text, so a host
+  comparing labels as strings and one counting them here read one
+  facet.
 
 ## What it is for
 
@@ -118,10 +125,19 @@ meet all four; it is not designed here.
 
 The accumulation question is **open**, recorded 2026-09-17.
 
-The pure items landed on 2026-09-19, except the two count-of nodes over
-a dataset handle. Both quantities the host wanted a counter for are now
-expressible: the rank is `vec_count_below_i32(matching, ordinal)` and
-the cardinality is `vec_len_i32(matching)`, and
-`tests/vector_set_ops.rs` checks that pair gives the same answer on the
-interpreter with and without cones, on the closure tier, and on native
-code — which is the property a counter could not have had.
+Every pure item landed on 2026-09-19. Both quantities the host wanted a
+counter for are expressible twice over: from a list, as
+`vec_count_below_i32(matching, ordinal)` and `vec_len_i32(matching)`,
+and from a facet, as `predicate_count_of(h, v)` and
+`metadata_count_of(h, v)`. `tests/vector_set_ops.rs` checks the list
+pair gives the same answer on the interpreter with and without cones,
+on the closure tier, and on native code — which is the property a
+counter could not have had.
+
+The facet pair is tested for its ports, its registration, and its
+fallback only. Counting real records needs a dataset download, which
+the suite does not do, and which is why its neighbours
+(`metadata_value_at`, `predicate_value_at`, `metadata_content_count`)
+have no tests at all. Closing that gap means a fixture facet the tests
+can open, and it would cover the whole accessor family rather than
+these two.

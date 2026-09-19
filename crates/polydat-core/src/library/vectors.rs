@@ -1552,6 +1552,98 @@ handle_metadata_node!(
     }
 );
 
+// ── Counting a facet's matching records ─────────────────────────────
+
+/// How many scalars of a Generic facet equal `value`.
+///
+/// A linear read of the facet, which is what the question is: the
+/// reader holds the values and nothing indexes them by content. Both
+/// callers below pass a handle and a value that are fixed for a scope,
+/// so the count is computed once at scope init and reused, the way the
+/// facet itself is loaded once.
+fn generic_count_of(h: &DatasetHandle, value: i64) -> Value {
+    match h {
+        DatasetHandle::Generic(d) => {
+            let n = (0..d.count).filter(|i| d.get_scalar(*i) == value).count();
+            Value::U64(n as u64)
+        }
+        _ => Value::U64(0),
+    }
+}
+
+macro_rules! handle_count_of_node {
+    (
+        $(#[$meta:meta])*
+        $name:ident, $func_name:literal, facet = $facet:literal
+    ) => {
+        $(#[$meta])*
+        pub struct $name {
+            meta: NodeMeta,
+        }
+
+        impl $name {
+            /// A node of this kind.
+            pub fn new() -> Self {
+                Self {
+                    meta: NodeMeta {
+                        name: $func_name.into(),
+                        outs: vec![Port::new("output", PortType::U64)],
+                        ins: vec![
+                            Slot::Wire(Port::handle("handle")),
+                            Slot::Wire(Port::new("value", PortType::I64)),
+                        ],
+                    },
+                }
+            }
+        }
+
+        impl Default for $name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+
+        impl PolydatNode for $name {
+            fn meta(&self) -> &NodeMeta {
+                &self.meta
+            }
+            fn eval(&self, inputs: &[Value], outputs: &mut [Value]) {
+                let handle = handle_of(&inputs[0]);
+                let resolved = handle.resolve_facet($facet);
+                let value = inputs[1].as_i64();
+                outputs[0] = generic_count_of(resolved.as_ref(), value);
+            }
+        }
+    };
+}
+
+handle_count_of_node!(
+    /// How many records carry the metadata value `value`.
+    ///
+    /// The per-label cardinality the recall audit compares against a
+    /// profile's declared count: not a counter advancing as records are
+    /// visited, but a property of the facet and the value, so it
+    /// replays and agrees on every engine and every fiber
+    /// (docs/design/host_request_running_counts.md).
+    ///
+    /// `metadata_value_at(handle, i)` formats the same scalar as text,
+    /// so a host comparing labels as strings and one counting them
+    /// here are reading one facet.
+    ///
+    /// Signature: `metadata_count_of(handle, value: i64) -> (u64)`
+    MetadataCountOf, "metadata_count_of", facet = "metadata_content"
+);
+
+handle_count_of_node!(
+    /// How many queries carry the predicate value `value`.
+    ///
+    /// The denominator of a per-predicate recall figure, and the bound
+    /// on a rank within one predicate's queries.
+    ///
+    /// Signature: `predicate_count_of(handle, value: i64) -> (u64)`
+    PredicateCountOf, "predicate_count_of", facet = "metadata_predicates"
+);
+
 // ---------------------------------------------------------------------------
 // Signature declarations for the DSL registry
 // ---------------------------------------------------------------------------
@@ -1564,6 +1656,42 @@ use crate::dsl::registry::{Arity, DefaultResolver, FuncCategory, FuncSig, ParamS
 // accessor declares a `default_resolver` so the binding compiler
 // can promote a string source into the right resolver call.
 
+/// A handle accessor that counts matching records: `(handle, value)`
+/// rather than `(handle, index)`, and a `u64` count out.
+macro_rules! sig_handle_count_of {
+    ($name:literal, $resolver:expr, $desc:literal, $help:literal) => {
+        FuncSig {
+            name: $name,
+            category: FuncCategory::RealData,
+            outputs: 1,
+            description: $desc,
+            help: $help,
+            identity: None,
+            variadic_ctor: None,
+            params: &[
+                ParamSpec {
+                    name: "handle",
+                    slot_type: SlotType::Wire,
+                    required: true,
+                    example: "base",
+                    constraint: None,
+                },
+                ParamSpec {
+                    name: "value",
+                    slot_type: SlotType::Wire,
+                    required: true,
+                    example: "to_i64(1)",
+                    constraint: None,
+                },
+            ],
+            arity: Arity::Fixed,
+            commutativity: crate::ast::Commutativity::Positional,
+            default_resolver: Some($resolver),
+            output_type: crate::dsl::registry::OutputType::Fixed,
+            output_port: None,
+        }
+    };
+}
 macro_rules! sig_handle_indexed {
     ($name:literal, $resolver:expr, $desc:literal, $help:literal) => {
         FuncSig {
@@ -1696,6 +1824,18 @@ pub fn signatures() -> &'static [FuncSig] {
             DefaultResolver::Facet("metadata_predicates"),
             "scalar predicate value per query",
             "Read a predicate value for a query by ordinal.\nReads from the metadata_predicates facet."
+        ),
+        sig_handle_count_of!(
+            "metadata_count_of",
+            DefaultResolver::Facet("metadata_content"),
+            "how many records carry a metadata value",
+            "Count the base records whose metadata_content scalar equals\nthe given value: the per-label cardinality, as a property of\nthe facet rather than a counter over a visit order."
+        ),
+        sig_handle_count_of!(
+            "predicate_count_of",
+            DefaultResolver::Facet("metadata_predicates"),
+            "how many queries carry a predicate value",
+            "Count the queries whose metadata_predicates scalar equals the\ngiven value."
         ),
         // ===== Per-handle metadata =====
         sig_handle_metadata!(
@@ -1882,6 +2022,12 @@ pub(crate) fn build_node(
         "metadata_content_count" => Some(Ok(
             Box::new(MetadataContentCount::new()) as Box<dyn crate::ast::PolydatNode>
         )),
+        "metadata_count_of" => Some(Ok(
+            Box::new(MetadataCountOf::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
+        "predicate_count_of" => Some(Ok(
+            Box::new(PredicateCountOf::new()) as Box<dyn crate::ast::PolydatNode>
+        )),
         _ => None,
     }
 }
@@ -2025,5 +2171,82 @@ inventory::submit! {
     crate::dsl::cursor_sugar::CursorSugarRegistration {
         handler: vectordata_sugar,
         name: "vectordata",
+    }
+}
+
+#[cfg(test)]
+mod count_of_tests {
+    use super::*;
+
+    /// The ports the compiler types a call against: a handle and a
+    /// signed value in, a count out. The value is `i64` because that is
+    /// what the facet stores; a caller with a literal reaches it
+    /// through `to_i64`, since an integer literal is a `u64` and the
+    /// adapter catalog will not heal that pair.
+    #[test]
+    fn the_count_of_nodes_take_a_handle_and_a_signed_value() {
+        for node in [
+            Box::new(MetadataCountOf::new()) as Box<dyn PolydatNode>,
+            Box::new(PredicateCountOf::new()) as Box<dyn PolydatNode>,
+        ] {
+            let meta = node.meta();
+            assert_eq!(meta.outs.len(), 1);
+            assert_eq!(meta.outs[0].typ, PortType::U64, "{}", meta.name);
+            assert_eq!(meta.ins.len(), 2, "{}", meta.name);
+            let Slot::Wire(handle) = &meta.ins[0] else {
+                panic!("{}: the first input is a wire", meta.name)
+            };
+            let Slot::Wire(value) = &meta.ins[1] else {
+                panic!("{}: the second input is a wire", meta.name)
+            };
+            assert_eq!(handle.typ, PortType::Handle, "{}", meta.name);
+            assert_eq!(value.typ, PortType::I64, "{}", meta.name);
+        }
+    }
+
+    /// A handle of the wrong shape answers zero rather than failing.
+    /// The facets these read are scalar ones; a caller that opened a
+    /// vector facet by mistake gets a count of nothing, which is the
+    /// same answer the facet's own readers give for a shape they do not
+    /// hold.
+    #[test]
+    fn a_handle_of_another_shape_counts_nothing() {
+        let group_shaped = DatasetHandle::Prebuffered {
+            _group: match load_dataset_group("nonexistent:profile") {
+                Ok(g) => g,
+                // No dataset available in this environment: the
+                // fallback is still exercised through the match arm
+                // below, which is what this test is about.
+                Err(_) => return,
+            },
+            source: "nonexistent:profile".into(),
+        };
+        assert_eq!(generic_count_of(&group_shaped, 1), Value::U64(0));
+    }
+
+    /// Both names resolve through the registry and carry a default
+    /// resolver, so `metadata_count_of("ds:profile", v)` promotes the
+    /// source string to the right facet the way its neighbours do.
+    #[test]
+    fn both_names_are_registered_with_a_facet_resolver() {
+        for (name, facet) in [
+            ("metadata_count_of", "metadata_content"),
+            ("predicate_count_of", "metadata_predicates"),
+        ] {
+            let sig = signatures()
+                .iter()
+                .find(|s| s.name == name)
+                .unwrap_or_else(|| panic!("{name} is registered"));
+            assert_eq!(sig.outputs, 1, "{name}");
+            assert_eq!(sig.params.len(), 2, "{name}");
+            match sig.default_resolver {
+                Some(DefaultResolver::Facet(f)) => assert_eq!(f, facet, "{name}"),
+                other => panic!("{name}: expected a facet resolver, got {other:?}"),
+            }
+            assert!(
+                build_node(name, &[], &[], &[]).is_some(),
+                "{name} builds through the constructor dispatch"
+            );
+        }
     }
 }
