@@ -258,21 +258,8 @@ impl Clone for HybridCore {
 }
 
 impl HybridCore {
-    /// Point every pair in the buffer into this state's own storage: a
-    /// step's scratch entry for its `Ref2` outputs, the stored value
-    /// for an extern's (axiom S3). What a clone needs, whose buffer
-    /// was copied from a state whose storage it does not share.
-    fn republish_refs(&mut self) {
-        for &(slot, idx) in &self.ref_scratch {
-            let (p, l) = self.scratch[idx].ptr_len();
-            self.buffer[slot] = p;
-            self.buffer[slot + 1] = l;
-        }
-        self.externs.seed(&mut self.buffer, None);
-    }
-}
+    crate::compile::shared_core_methods!();
 
-impl HybridCore {
     /// Axiom S9(a) — deterministic Ref validation (see
     /// `jit_boundary.md` §"Slot-state axioms"). Gated to
     /// `debug_assertions` to match its call sites, which compile
@@ -301,18 +288,6 @@ impl HybridCore {
         }
     }
 
-    /// Axiom S2 guard for raw u64 readers.
-    #[inline]
-    fn guard_ref_slot(&self, slot: usize) {
-        if self.ref_slots.get(slot).copied().unwrap_or(false) {
-            panic!(
-                "S2 pointer containment: slot {slot} is Ref2-colored; raw u64 readers \
-                 would leak an interior address. Use the typed borrow-checked accessor \
-                 (read_vec_*), the boundary decode, or copy out."
-            );
-        }
-    }
-
     /// Axiom S2 typed accessor core (borrow ties to &self).
     fn ref_entry(&self, slot: usize) -> &crate::ast::ScratchBuf {
         match self.ref_scratch.iter().find(|(s, _)| *s == slot) {
@@ -327,25 +302,6 @@ impl HybridCore {
 }
 
 impl HybridCore {
-    /// Begin an evaluation round after a write: take what cells other
-    /// holders published, forget what ran in the last round, and
-    /// invalidate the volatile steps, as the interpreter does at every
-    /// write. Nothing else changes: every output stands until an input
-    /// in its provenance is written (runtime_model.md, R1).
-    #[inline]
-    fn begin_epoch(&mut self) {
-        if self.externs.cells_dirty() {
-            self.externs.refresh_cells(&mut self.buffer);
-        }
-        self.dirty_refreshed();
-        self.epoch += 1;
-        self.all_ran = false;
-        for &i in self.volatile_steps.iter() {
-            self.clean[i] = false;
-        }
-        self.drive.stale = false;
-    }
-
     /// Whether this kernel skips current steps, and with it which steps
     /// an input change marks: every dependent, or only the side
     /// channels when a pure step's currency is never consulted.
@@ -366,67 +322,6 @@ impl HybridCore {
             })
             .collect::<Vec<_>>()
             .into();
-    }
-
-    /// Every dependent of a slot a cell refresh changed runs again,
-    /// between writes too, as the interpreter re-evaluates a node
-    /// whose cell moved on its next read: the plan's dependents, whatever
-    /// the mode, are neither run nor current.
-    #[inline]
-    fn dirty_refreshed(&mut self) {
-        if !self.externs.has_changed() {
-            return;
-        }
-        let changed = self.externs.take_changed();
-        for &slot in &changed {
-            if let Some(deps) = self.plan.input_dependents.get(slot) {
-                for &i in deps {
-                    self.ran[i] = 0;
-                    self.clean[i] = false;
-                }
-                self.all_ran = false;
-            }
-        }
-        self.externs.return_changed(changed);
-    }
-
-    /// Take the current value of every cell another holder published
-    /// to, and mark its dependents, so a pull between writes sees the
-    /// register as the interpreter's revision check does.
-    #[inline]
-    fn refresh_cells(&mut self) {
-        if self.externs.cells_dirty() {
-            self.externs.refresh_cells(&mut self.buffer);
-            self.dirty_refreshed();
-        }
-    }
-
-    /// Bind a `shared` binding to `cell` (engine parity, step 9): this
-    /// kernel reads and writes that register from now on.
-    fn attach_cell(&mut self, name: &str, cell: crate::kernel::SharedCell) -> Result<(), String> {
-        let slot = self.externs.attach_cell(name, cell)?;
-        self.dirty_input(slot);
-        self.drive.stale = true;
-        Ok(())
-    }
-
-    /// An input slot changed, through whichever call: every step the
-    /// plan lists for it is no longer current.
-    #[inline]
-    fn dirty_input(&mut self, slot: usize) {
-        if let Some(deps) = self.dirty.get(slot) {
-            for &i in deps {
-                self.clean[i] = false;
-            }
-        }
-    }
-
-    /// Run the steps of `order` that have not run in this round and are
-    /// not current, as the closure kernels do: one rule for every step,
-    /// whatever reaches it; a volatile step is never current.
-    #[inline]
-    fn run_steps(&mut self, order: &[usize]) {
-        self.run_guarded(|core| core.run_order(order));
     }
 
     /// Run `body` with the capture guard armed, so a step's panic is
@@ -505,105 +400,6 @@ impl HybridCore {
         self.all_ran = true;
     }
 
-    /// Evaluate every output: begin a round if a write is pending, then run
-    /// every step that has not run.
-    #[inline]
-    fn eval_all(&mut self) {
-        let fresh = self.drive.stale;
-        if fresh {
-            self.begin_epoch();
-        } else {
-            self.refresh_cells();
-        }
-        if fresh && !self.use_clean && !self.any_none {
-            self.run_guarded(|core| core.run_fresh());
-        } else {
-            let all = std::sync::Arc::clone(&self.all);
-            self.run_steps(&all);
-        }
-    }
-
-    /// The named output for the current inputs, running only its cone.
-    fn pull_named(&mut self, name: &str) -> crate::ast::Value {
-        if self.drive.stale {
-            self.begin_epoch();
-        } else {
-            self.refresh_cells();
-        }
-        let plan = std::sync::Arc::clone(&self.plan);
-        if let Some(order) = plan.cones.get(name) {
-            self.run_steps(order);
-        }
-        self.value_of(name)
-    }
-
-    /// [`Self::pull_named`] by output index: the name is resolved to
-    /// its slot, type, and cone once, so a pull costs no string lookup
-    /// (SRD 117 step 3).
-    fn pull_at(&mut self, index: usize) -> crate::ast::Value {
-        if self.resolved_outputs.len() <= index {
-            self.resolved_outputs.resize(index + 1, None);
-        }
-        if self.resolved_outputs[index].is_none() {
-            let name = self
-                .externs
-                .output_names()
-                .get(index)
-                .cloned()
-                .unwrap_or_else(|| {
-                    panic!(
-                        "no output at index {index}; this kernel declares {}",
-                        self.externs.output_names().len()
-                    )
-                });
-            let slot = self.output_map[&name];
-            let ty = self
-                .output_types
-                .get(&name)
-                .copied()
-                .unwrap_or(crate::ast::PortType::U64);
-            let cone = self
-                .plan
-                .cones
-                .get(&name)
-                .map(|c| std::sync::Arc::from(c.as_slice()));
-            self.resolved_outputs[index] = Some((slot, ty, cone));
-        }
-        if self.drive.stale {
-            self.begin_epoch();
-        } else {
-            self.refresh_cells();
-        }
-        let (slot, ty, cone) = self.resolved_outputs[index]
-            .clone()
-            .expect("resolved above");
-        if let Some(order) = cone {
-            self.run_steps(&order);
-        }
-        self.slot_value(slot, ty)
-    }
-
-    /// The named output as a typed `Value`, `None` where the slot holds
-    /// one; a vector from scratch; a handle copied out.
-    fn value_of(&self, name: &str) -> crate::ast::Value {
-        let slot = self.output_map[name];
-        let ty = self
-            .output_types
-            .get(name)
-            .copied()
-            .unwrap_or(crate::ast::PortType::U64);
-        self.slot_value(slot, ty)
-    }
-
-    /// The value at `slot` decoded as `ty`: `None` where the mask says
-    /// so, a Ref pair copied out through the pair.
-    fn slot_value(&self, slot: usize, ty: crate::ast::PortType) -> crate::ast::Value {
-        if self.none.get(slot).copied().unwrap_or(false) {
-            return crate::ast::Value::None;
-        }
-        crate::compile::marshal::decode_output(&self.buffer, slot, ty)
-    }
-
     /// The native segments and the closure steps.
     fn plan(&self) -> crate::EnginePlan {
         let (native_segments, closure_steps) = self.engine_counts();
@@ -612,13 +408,6 @@ impl HybridCore {
             closure_steps,
             interpreted_nodes: 0,
         }
-    }
-
-    /// Nothing is current: every step runs at the next evaluation.
-    fn invalidate_all(&mut self) {
-        self.clean.fill(false);
-        self.all_ran = false;
-        self.drive.stale = true;
     }
 }
 
@@ -644,47 +433,6 @@ impl HybridCore {
             .filter(|s| matches!(s, HybridStep::Closure(_)))
             .count();
         (self.steps.len() - closures, closures)
-    }
-
-    /// Set an extern by name; returns its slot for dirty marking.
-    /// Set an extern by name; returns its slot. The plan invalidates
-    /// what depends on it, as a changed coordinate is invalidated, and
-    /// the next evaluation begins a round.
-    fn set_extern(
-        &mut self,
-        name: &str,
-        value: crate::ast::Value,
-    ) -> Result<usize, crate::kernel::WriteError> {
-        let (slot, unset) = self.externs.set(name, value, &mut self.buffer)?;
-        self.extern_written(slot, unset);
-        Ok(slot)
-    }
-
-    /// [`Self::set_extern`] by input index.
-    fn set_extern_at(
-        &mut self,
-        index: usize,
-        value: crate::ast::Value,
-    ) -> Result<usize, crate::kernel::WriteError> {
-        let (slot, unset) = self.externs.set_at(index, value, &mut self.buffer)?;
-        self.extern_written(slot, unset);
-        Ok(slot)
-    }
-
-    /// An extern was written: its dependents are no longer current, the
-    /// `None` mask records whether it is unset (SRD-74 on a compiled
-    /// kernel), and the next evaluation begins a round. When the last
-    /// unset extern is set, no slot can hold a `None` any more, so the
-    /// mask is cleared and the steps run without it.
-    fn extern_written(&mut self, slot: usize, unset: bool) {
-        self.none[slot] = unset;
-        let was = self.any_none;
-        self.any_none = self.externs.any_unset();
-        if was && !self.any_none {
-            self.none.fill(false);
-        }
-        self.dirty_input(slot);
-        self.drive.stale = true;
     }
 }
 

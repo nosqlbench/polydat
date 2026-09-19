@@ -349,6 +349,226 @@ macro_rules! impl_kernel_trait {
 }
 pub(crate) use impl_kernel_trait;
 
+/// The bookkeeping every compiled engine keeps, whatever its steps
+/// are: the evaluation round and what ran in it, the clean flags and
+/// what a write dirties, the extern writes and the cell refresh, the
+/// reference pairs a step publishes, and reading an output back.
+///
+/// Both compiled cores carry the same fields for these and, until this
+/// macro, the same seventeen method bodies byte for byte. None of them
+/// touches the step list, which is the one thing the two tiers
+/// genuinely differ about: a step on the closure tier is always a
+/// closure, and on the native tier it is a closure or a run of native
+/// code. That difference lives in the run loops, which stay per tier.
+macro_rules! shared_core_methods {
+    () => {
+        fn attach_cell(
+            &mut self,
+            name: &str,
+            cell: crate::kernel::SharedCell,
+        ) -> Result<(), String> {
+            let slot = self.externs.attach_cell(name, cell)?;
+            self.dirty_input(slot);
+            self.drive.stale = true;
+            Ok(())
+        }
+
+        fn begin_epoch(&mut self) {
+            if self.externs.cells_dirty() {
+                self.externs.refresh_cells(&mut self.buffer);
+            }
+            self.dirty_refreshed();
+            self.epoch += 1;
+            self.all_ran = false;
+            for &i in self.volatile_steps.iter() {
+                self.clean[i] = false;
+            }
+            self.drive.stale = false;
+        }
+
+        fn dirty_input(&mut self, slot: usize) {
+            if let Some(deps) = self.dirty.get(slot) {
+                for &i in deps {
+                    self.clean[i] = false;
+                }
+            }
+        }
+
+        fn dirty_refreshed(&mut self) {
+            if !self.externs.has_changed() {
+                return;
+            }
+            let changed = self.externs.take_changed();
+            for &slot in &changed {
+                if let Some(deps) = self.plan.input_dependents.get(slot) {
+                    for &i in deps {
+                        self.ran[i] = 0;
+                        self.clean[i] = false;
+                    }
+                    self.all_ran = false;
+                }
+            }
+            self.externs.return_changed(changed);
+        }
+
+        fn eval_all(&mut self) {
+            let fresh = self.drive.stale;
+            if fresh {
+                self.begin_epoch();
+            } else {
+                self.refresh_cells();
+            }
+            if fresh && !self.use_clean && !self.any_none {
+                self.run_guarded(|core| core.run_fresh());
+            } else {
+                let all = std::sync::Arc::clone(&self.all);
+                self.run_steps(&all);
+            }
+        }
+
+        fn extern_written(&mut self, slot: usize, unset: bool) {
+            self.none[slot] = unset;
+            let was = self.any_none;
+            self.any_none = self.externs.any_unset();
+            if was && !self.any_none {
+                self.none.fill(false);
+            }
+            self.dirty_input(slot);
+            self.drive.stale = true;
+        }
+
+        fn guard_ref_slot(&self, slot: usize) {
+            if self.ref_slots.get(slot).copied().unwrap_or(false) {
+                panic!(
+                    "S2 pointer containment: slot {slot} is Ref2-colored; raw u64 readers \
+                     would leak an interior address. Use the typed borrow-checked accessor \
+                     (read_vec_*), the boundary decode, or copy out."
+                );
+            }
+        }
+
+        fn invalidate_all(&mut self) {
+            self.clean.fill(false);
+            self.all_ran = false;
+            self.drive.stale = true;
+        }
+
+        fn pull_at(&mut self, index: usize) -> crate::ast::Value {
+            if self.resolved_outputs.len() <= index {
+                self.resolved_outputs.resize(index + 1, None);
+            }
+            if self.resolved_outputs[index].is_none() {
+                let name = self
+                    .externs
+                    .output_names()
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "no output at index {index}; this kernel declares {}",
+                            self.externs.output_names().len()
+                        )
+                    });
+                let slot = self.output_map[&name];
+                let ty = self
+                    .output_types
+                    .get(&name)
+                    .copied()
+                    .unwrap_or(crate::ast::PortType::U64);
+                let cone = self
+                    .plan
+                    .cones
+                    .get(&name)
+                    .map(|c| std::sync::Arc::from(c.as_slice()));
+                self.resolved_outputs[index] = Some((slot, ty, cone));
+            }
+            if self.drive.stale {
+                self.begin_epoch();
+            } else {
+                self.refresh_cells();
+            }
+            let (slot, ty, cone) = self.resolved_outputs[index]
+                .clone()
+                .expect("resolved above");
+            if let Some(order) = cone {
+                self.run_steps(&order);
+            }
+            self.slot_value(slot, ty)
+        }
+
+        fn pull_named(&mut self, name: &str) -> crate::ast::Value {
+            if self.drive.stale {
+                self.begin_epoch();
+            } else {
+                self.refresh_cells();
+            }
+            let plan = std::sync::Arc::clone(&self.plan);
+            if let Some(order) = plan.cones.get(name) {
+                self.run_steps(order);
+            }
+            self.value_of(name)
+        }
+
+        fn refresh_cells(&mut self) {
+            if self.externs.cells_dirty() {
+                self.externs.refresh_cells(&mut self.buffer);
+                self.dirty_refreshed();
+            }
+        }
+
+        fn republish_refs(&mut self) {
+            for &(slot, idx) in &self.ref_scratch {
+                let (p, l) = self.scratch[idx].ptr_len();
+                self.buffer[slot] = p;
+                self.buffer[slot + 1] = l;
+            }
+            self.externs.seed(&mut self.buffer, None);
+        }
+
+        fn run_steps(&mut self, order: &[usize]) {
+            self.run_guarded(|core| core.run_order(order));
+        }
+
+        fn set_extern(
+            &mut self,
+            name: &str,
+            value: crate::ast::Value,
+        ) -> Result<usize, crate::kernel::WriteError> {
+            let (slot, unset) = self.externs.set(name, value, &mut self.buffer)?;
+            self.extern_written(slot, unset);
+            Ok(slot)
+        }
+
+        fn set_extern_at(
+            &mut self,
+            index: usize,
+            value: crate::ast::Value,
+        ) -> Result<usize, crate::kernel::WriteError> {
+            let (slot, unset) = self.externs.set_at(index, value, &mut self.buffer)?;
+            self.extern_written(slot, unset);
+            Ok(slot)
+        }
+
+        fn slot_value(&self, slot: usize, ty: crate::ast::PortType) -> crate::ast::Value {
+            if self.none.get(slot).copied().unwrap_or(false) {
+                return crate::ast::Value::None;
+            }
+            crate::compile::marshal::decode_output(&self.buffer, slot, ty)
+        }
+
+        fn value_of(&self, name: &str) -> crate::ast::Value {
+            let slot = self.output_map[name];
+            let ty = self
+                .output_types
+                .get(name)
+                .copied()
+                .unwrap_or(crate::ast::PortType::U64);
+            self.slot_value(slot, ty)
+        }
+    };
+}
+pub(crate) use shared_core_methods;
+
 /// The dirty-register plan of a compiled kernel: which steps each input
 /// slot invalidates when it changes, and which steps each named output
 /// needs. The evaluation loops consume only this; provenance derives it
