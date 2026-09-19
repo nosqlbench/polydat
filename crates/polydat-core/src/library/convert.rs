@@ -437,6 +437,26 @@ fn to_f64(input: u64) -> f64 {
     input as f64
 }
 
+/// `to_i64(n)` — the signed reading of a `u64`.
+///
+/// The named conversion for a pair the adapter catalog refuses to
+/// insert on its own: `u64` is not strictly narrower than `i64`, so a
+/// value above `i64::MAX` has no signed reading and the catalog will
+/// not heal the wire silently ([Type System](type_system.md) §3). That
+/// makes this the only way a program reaches an `i64` port, since an
+/// integer literal is a `u64` and there is no negative literal either
+/// — `-5` is unary negation, which is `f64`.
+///
+/// Above `i64::MAX` it fails by name rather than wrapping, the same
+/// rule the boundary adapter follows.
+#[crate::polydat_node(category = Conversions)]
+fn to_i64(input: u64) -> i64 {
+    if input > i64::MAX as u64 {
+        panic!("to_i64: value {input} exceeds i64::MAX ({})", i64::MAX);
+    }
+    input as i64
+}
+
 /// Try to build a conversion node from a function name and const args.
 ///
 /// Returns `None` if the name is not handled by this module.

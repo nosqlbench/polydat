@@ -46,6 +46,7 @@ pub mod stability;
 pub mod streamer;
 pub mod string;
 pub mod vector_math;
+pub mod vector_set;
 pub mod weighted;
 
 #[cfg(test)]

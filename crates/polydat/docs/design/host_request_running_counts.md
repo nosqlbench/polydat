@@ -19,13 +19,29 @@ offers in its place today, and what any future answer has to satisfy.
 > ground-truth row, and "count of records matching", which the
 > per-label cardinality checks compare against profile counts.
 
-The other three items of the same request, for the record: element
-and set operations over `vec_i32` and `vec_i64` (`vec_len`, `vec_at`,
-`vec_max`, `vec_min`, `vec_contains`, `vec_position`,
-`vec_intersect_count`, `vec_set_eq`); `metadata_count_of(handle,
-value)` and `predicate_count_of(handle, value)` over a dataset handle;
-and a `str_to_u64` that parses a profile name's numeric suffix. Those
-are pure functions of their inputs and belong in the node library.
+The other three items of the same request were pure functions of their
+inputs and belonged in the node library. Two landed on 2026-09-19:
+
+- The element and set operations, as `vec_len`, `vec_at`, `vec_max`,
+  `vec_min`, `vec_contains`, `vec_position`, `vec_intersect_count` and
+  `vec_set_eq`, each in an `_i32` and an `_i64` form, plus
+  `vec_count_below`, which is the rank a sorted list gives through
+  `vec_position` but without requiring the list to be sorted or the
+  value to be in it. Getting a list onto a wire needed
+  `str_to_vec_i32` and `str_to_vec_i64`, which a code comment already
+  told authors to use and which did not exist; reaching a signed port
+  needed `to_i64`, since an integer literal is a `u64` and the adapter
+  catalog will not heal that pair silently.
+- The name reading, as `str_to_u64` for a whole string and
+  `str_digit_suffix` for the run of digits ending one, which is what
+  "a profile name's numeric suffix" asked for and what the `as` cast
+  cannot do.
+
+`metadata_count_of` and `predicate_count_of` over a dataset handle are
+**not** done. They are the same two quantities as the list operations
+answer, computed over a handle instead of a list, and whether they are
+worth a node depends on whether the host has the handle where it needs
+the count or is holding the list anyway.
 
 ## What it is for
 
@@ -100,5 +116,12 @@ meet all four; it is not designed here.
 
 ## Status
 
-Open. Recorded 2026-09-17. The three pure items of the request are the
-node library's to add and are not blocked on this question.
+The accumulation question is **open**, recorded 2026-09-17.
+
+The pure items landed on 2026-09-19, except the two count-of nodes over
+a dataset handle. Both quantities the host wanted a counter for are now
+expressible: the rank is `vec_count_below_i32(matching, ordinal)` and
+the cardinality is `vec_len_i32(matching)`, and
+`tests/vector_set_ops.rs` checks that pair gives the same answer on the
+interpreter with and without cones, on the closure tier, and on native
+code — which is the property a counter could not have had.

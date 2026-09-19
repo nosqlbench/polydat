@@ -449,6 +449,45 @@ fn str_lower(input: String) -> String {
 fn str_upper(input: String) -> String {
     input.to_uppercase()
 }
+/// `str_to_u64(s)` — the unsigned integer a string names, or `0` when
+/// it names none.
+///
+/// The whole string must be digits: `"4242"` is `4242`, and `"4242x"`
+/// is `0` rather than a partial read, because a partial read of a
+/// malformed value is worse than a plain miss. The `as` cast
+/// (`s as u64`) is the same parse in expression position and is a hard
+/// error on a malformed value; this node exists for the case where a
+/// caller wants the miss, and composes with `str_digit_suffix`.
+#[polydat::polydat_node(category = Conversions)]
+fn str_to_u64(s: &str) -> u64 {
+    s.trim().parse::<u64>().unwrap_or(0)
+}
+
+/// `str_digit_suffix(s)` — the run of digits ending the string, as a
+/// number, or `0` when it does not end in one.
+///
+/// `"label-17"` is `17`, `"profile_8"` is `8`, `"sift1m"` is `1`
+/// because `m` is not a digit and the run ends before it. Names that
+/// carry an index in their tail are common enough as a host convention
+/// to be worth a node; reading the tail with string arithmetic in a
+/// program would be several nodes and one off-by-one.
+///
+/// A run too long for a `u64` answers `0`, on the same principle as
+/// `str_to_u64`: a wrong number is worse than no number.
+#[polydat::polydat_node(category = Conversions)]
+fn str_digit_suffix(s: &str) -> u64 {
+    let s = s.trim_end();
+    let start = s
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| c.is_ascii_digit())
+        .last()
+        .map(|(i, _)| i);
+    match start {
+        Some(i) => s[i..].parse::<u64>().unwrap_or(0),
+        None => 0,
+    }
+}
 
 #[cfg(test)]
 mod tests {

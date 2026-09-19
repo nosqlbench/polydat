@@ -134,6 +134,8 @@ mod tile_typing;
 mod ui;
 #[path = "variadic_lowering.rs"]
 mod variadic_lowering;
+#[path = "vector_set_ops.rs"]
+mod vector_set_ops;
 #[path = "vectordata_concurrency.rs"]
 mod vectordata_concurrency;
 #[path = "vectordata_integration.rs"]
