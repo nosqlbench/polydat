@@ -60,12 +60,22 @@ fn the_log_retells_a_compile_from_parse_to_summary() {
             "{out}: {events:?}"
         );
     }
+    // The level a node reaches depends on what the build offers: with
+    // the `jit` feature `f` lowers natively, without it the same node
+    // reaches its compiled u64 op. The log reports what happened, so
+    // the expectation follows the build rather than the other way
+    // round.
+    let f_level = if cfg!(feature = "jit") {
+        "native"
+    } else {
+        "compiled u64 op"
+    };
     assert!(
         events.iter().any(|e| matches!(
             e,
-            CompileEvent::CompileLevelSelected { node, level } if node == "f" && level == "native"
+            CompileEvent::CompileLevelSelected { node, level } if node == "f" && level == f_level
         )),
-        "{events:?}"
+        "expected `f` at level {f_level}: {events:?}"
     );
     assert!(
         matches!(

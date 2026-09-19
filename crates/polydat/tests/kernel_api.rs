@@ -290,12 +290,19 @@ fn a_config_that_cannot_be_realized_is_refused() {
     match compile_polydat_with(src, Engine::Native(Provenance::Push)) {
         Err(KernelError::Refused { engine, reason }) => {
             assert_eq!(engine, Engine::Native(Provenance::Push));
-            assert!(reason.contains("push-only"), "{reason}");
-            // The refusal names what the caller can ask for instead.
-            assert!(
-                reason.contains("pushpull") && reason.contains("auto"),
-                "{reason}"
-            );
+            if cfg!(feature = "jit") {
+                assert!(reason.contains("push-only"), "{reason}");
+                // The refusal names what the caller can ask for instead.
+                assert!(
+                    reason.contains("pushpull") && reason.contains("auto"),
+                    "{reason}"
+                );
+            } else {
+                // A build with no native code refuses the engine before
+                // it reaches the mode, which is the earlier and more
+                // useful of the two reasons.
+                assert!(reason.contains("jit"), "{reason}");
+            }
         }
         other => panic!("expected a refusal, got {:?}", other.map(|k| k.engine())),
     }
@@ -310,6 +317,12 @@ fn a_config_that_cannot_be_realized_is_refused() {
     // except `Auto`, which is a request for the factory to choose and
     // reports the choice.
     for engine in engines() {
+        // A build without the `jit` feature has no native engine to
+        // report anything about; the refusal is checked above.
+        if cfg!(not(feature = "jit")) && matches!(engine, Engine::Native(_)) {
+            assert!(compile_polydat_with(src, engine).is_err(), "{engine}");
+            continue;
+        }
         let k = compile_polydat_with(src, engine)
             .unwrap_or_else(|e| panic!("{engine} should build: {e}"));
         let reported = k.engine();

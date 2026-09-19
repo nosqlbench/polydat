@@ -989,7 +989,6 @@ impl PolydatAssembler {
 
     /// A node native code cannot run, as a refusal naming the native
     /// engine and the reason the layout gave.
-    #[cfg(feature = "jit")]
     fn refused_by_native(reason: String) -> KernelError {
         KernelError::Refused {
             engine: Engine::Native(Provenance::Auto),
@@ -1397,10 +1396,16 @@ impl PolydatAssembler {
     fn log_forms(resolved: &ResolvedDag, log: &mut crate::dsl::events::CompileEventLog) {
         for (node_idx, node) in resolved.nodes.iter().enumerate() {
             let wire_types = wire_types_of(resolved, node_idx);
+            // Without the `jit` feature there is no native form to
+            // report: every node reaches its closure, its slot copy, or
+            // interpretation, which the arms below name.
+            #[cfg(feature = "jit")]
             let native = !matches!(
                 crate::compile::jit::classify_node_typed(node.as_ref(), &wire_types),
                 crate::compile::jit::JitOp::Fallback
             );
+            #[cfg(not(feature = "jit"))]
+            let native = false;
             let level = if native {
                 "native"
             } else {
