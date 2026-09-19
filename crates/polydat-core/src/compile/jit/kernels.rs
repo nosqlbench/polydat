@@ -80,6 +80,11 @@ pub type JitParts = (super::codegen::NativeFn, JitCode);
 /// pair in its buffer points into its own storage (axiom S3), never
 /// into the state it was cloned from.
 pub(super) struct JitCore {
+    /// The engine this kernel runs, as it reports it: the tier and
+    /// the provenance mode it was built with. State rather than a
+    /// property of the type, so one kernel type can serve a tier
+    /// that runs native code and one that runs none.
+    engine: crate::compile::select::Engine,
     pub(super) buffer: Vec<u64>,
     pub(super) coord_count: usize,
     pub(super) output_map: HashMap<String, usize>,
@@ -123,6 +128,7 @@ pub(super) struct JitCore {
 impl Clone for JitCore {
     fn clone(&self) -> Self {
         let mut core = JitCore {
+            engine: self.engine,
             buffer: self.buffer.clone(),
             coord_count: self.coord_count,
             output_map: self.output_map.clone(),
@@ -181,6 +187,9 @@ impl JitCore {
         volatile_steps: Vec<usize>,
     ) -> Self {
         Self {
+            engine: crate::compile::select::Engine::Native(
+                crate::compile::select::Provenance::PushPull,
+            ),
             buffer: vec![0u64; total_slots + 1],
             coord_count,
             output_map,
@@ -617,7 +626,5 @@ impl JitKernelPushPull {
 
 // ── The engine-independent surface (engines.md §3.5) ──────
 
-use crate::compile::select::{Engine, Provenance};
-
-crate::compile::impl_kernel_trait!(JitKernelRaw, Engine::Native(Provenance::Raw));
-crate::compile::impl_kernel_trait!(JitKernelPushPull, Engine::Native(Provenance::PushPull));
+crate::compile::impl_kernel_trait!(JitKernelRaw);
+crate::compile::impl_kernel_trait!(JitKernelPushPull);

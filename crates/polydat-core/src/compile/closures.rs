@@ -103,6 +103,11 @@ type ResolvedOutput = (usize, crate::ast::PortType, Option<std::sync::Arc<[usize
 /// points into its own storage (axiom S3), never into the state it was
 /// cloned from.
 struct KernelCore {
+    /// The engine this kernel runs, as it reports it: the tier and
+    /// the provenance mode it was built with. State rather than a
+    /// property of the type, so one kernel type can serve a tier
+    /// that runs native code and one that runs none.
+    engine: crate::compile::select::Engine,
     buffer: Vec<u64>,
     coord_count: usize,
     steps: std::sync::Arc<[CompiledStep]>,
@@ -183,6 +188,7 @@ struct KernelCore {
 impl Clone for KernelCore {
     fn clone(&self) -> Self {
         let mut core = KernelCore {
+            engine: self.engine,
             buffer: self.buffer.clone(),
             coord_count: self.coord_count,
             steps: self.steps.clone(),
@@ -611,6 +617,7 @@ impl KernelCore {
 
 /// Build kernel core from raw step data. `use_clean` is whether the
 /// kernel's provenance mode skips current steps.
+#[allow(clippy::too_many_arguments)]
 fn build_core(
     coord_count: usize,
     total_slots: usize,
@@ -619,6 +626,7 @@ fn build_core(
     ref_slots: Vec<bool>,
     extras: P2Extras,
     use_clean: bool,
+    engine: crate::compile::select::Engine,
 ) -> KernelCore {
     let P2Extras {
         output_types,
@@ -706,6 +714,7 @@ fn build_core(
         .map(|(i, _)| i)
         .collect();
     let mut core = KernelCore {
+        engine,
         buffer,
         coord_count,
         steps: compiled_steps.into(),
@@ -917,6 +926,7 @@ impl CompiledKernelRaw {
                 ref_slots,
                 extras,
                 false,
+                Engine::Closures(Provenance::Raw),
             ),
         }
     }
@@ -995,6 +1005,7 @@ impl CompiledKernelPush {
                 ref_slots,
                 extras,
                 true,
+                Engine::Closures(Provenance::Push),
             ),
         }
     }
@@ -1073,6 +1084,7 @@ impl CompiledKernelPull {
             ref_slots,
             extras,
             false,
+            Engine::Closures(Provenance::Pull),
         );
         let slot_provenance =
             compute_slot_provenance(coord_count, total_slots, input_dependents, &core.steps);
@@ -1173,6 +1185,7 @@ impl CompiledKernelPushPull {
             ref_slots,
             extras,
             true,
+            Engine::Closures(Provenance::PushPull),
         );
         let slot_provenance =
             compute_slot_provenance(coord_count, total_slots, &input_dependents, &core.steps);
@@ -1240,13 +1253,10 @@ impl CompiledKernelPushPull {
 
 use crate::compile::select::{Engine, Provenance};
 
-crate::compile::impl_kernel_trait!(CompiledKernelRaw, Engine::Closures(Provenance::Raw));
-crate::compile::impl_kernel_trait!(CompiledKernelPush, Engine::Closures(Provenance::Push));
-crate::compile::impl_kernel_trait!(CompiledKernelPull, Engine::Closures(Provenance::Pull));
-crate::compile::impl_kernel_trait!(
-    CompiledKernelPushPull,
-    Engine::Closures(Provenance::PushPull)
-);
+crate::compile::impl_kernel_trait!(CompiledKernelRaw);
+crate::compile::impl_kernel_trait!(CompiledKernelPush);
+crate::compile::impl_kernel_trait!(CompiledKernelPull);
+crate::compile::impl_kernel_trait!(CompiledKernelPushPull);
 
 /// One step: SRD-74 Rule 1, then gather, run the closure, scatter. A
 /// node that does not accept `None` emits `None` on every output when

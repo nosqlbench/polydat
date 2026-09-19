@@ -180,10 +180,10 @@ pub(crate) struct Drive {
 /// `traversals`, and `plan`/`invalidate_all`/`attach_cell`/
 /// `slot_value`.
 macro_rules! impl_kernel_trait {
-    ($ty:ident, $engine:expr) => {
+    ($ty:ident) => {
         impl crate::kernel::Kernel for $ty {
             fn engine(&self) -> crate::compile::select::Engine {
-                $engine
+                self.core.engine
             }
             fn set_inputs(&mut self, coords: &[u64]) {
                 self.core.drive.coords.clear();

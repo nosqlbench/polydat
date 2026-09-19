@@ -129,6 +129,11 @@ type ResolvedOutput = (usize, crate::ast::PortType, Option<std::sync::Arc<[usize
 /// every pair in its buffer points into its own storage (axiom S3),
 /// never into the state it was cloned from.
 struct HybridCore {
+    /// The engine this kernel runs, as it reports it: the tier and
+    /// the provenance mode it was built with. State rather than a
+    /// property of the type, so one kernel type can serve a tier
+    /// that runs native code and one that runs none.
+    engine: crate::compile::select::Engine,
     buffer: Vec<u64>,
     coord_count: usize,
     steps: std::sync::Arc<Vec<HybridStep>>,
@@ -213,6 +218,7 @@ struct HybridCore {
 impl Clone for HybridCore {
     fn clone(&self) -> Self {
         let mut core = HybridCore {
+            engine: self.engine,
             buffer: self.buffer.clone(),
             coord_count: self.coord_count,
             steps: self.steps.clone(),
@@ -1711,6 +1717,7 @@ fn build_pushpull_from_steps(
     let volatile_steps: Vec<usize> = (0..step_count).filter(|&i| volatile[i]).collect();
     let mut kernel = HybridKernelPushPull {
         core: HybridCore {
+            engine: Engine::Native(Provenance::PushPull),
             buffer,
             coord_count,
             steps: std::sync::Arc::new(steps),
@@ -1808,6 +1815,7 @@ impl HybridKernelPushPull {
     pub(crate) fn into_raw(self) -> HybridKernelRaw {
         let mut core = self.core;
         core.set_use_clean(false);
+        core.engine = Engine::Native(Provenance::Raw);
         HybridKernelRaw { core }
     }
 
@@ -1816,6 +1824,7 @@ impl HybridKernelPushPull {
     pub(crate) fn into_pull(self) -> HybridKernelPull {
         let mut core = self.core;
         core.set_use_clean(false);
+        core.engine = Engine::Native(Provenance::Pull);
         let changed_mask = crate::kernel::ProvMask::all_below(core.coord_count);
         HybridKernelPull {
             core,
@@ -1829,9 +1838,9 @@ impl HybridKernelPushPull {
 use crate::compile::select::{Engine, Provenance};
 
 #[cfg(feature = "jit")]
-crate::compile::impl_kernel_trait!(HybridKernelRaw, Engine::Native(Provenance::Raw));
-crate::compile::impl_kernel_trait!(HybridKernelPull, Engine::Native(Provenance::Pull));
-crate::compile::impl_kernel_trait!(HybridKernelPushPull, Engine::Native(Provenance::PushPull));
+crate::compile::impl_kernel_trait!(HybridKernelRaw);
+crate::compile::impl_kernel_trait!(HybridKernelPull);
+crate::compile::impl_kernel_trait!(HybridKernelPushPull);
 
 /// The pending coordinates through the `Kernel` trait, for the hybrid
 /// kernels: `pull_value`/`pull_value_at` apply them and run the
