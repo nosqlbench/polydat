@@ -32,15 +32,10 @@ pub enum ConstArg {
     Float(f64),
     /// A string literal.
     Str(String),
-    /// A list of float literals.
-    FloatArray(#[allow(dead_code)] Vec<f64>),
     /// SRD-80b Phase C — workload-list const carrier for the
     /// `Const<Vec<C>>` shape. Each inner [`ConstArg`] is one
     /// element; `<Vec<C> as ConstSource>::extract` walks the
-    /// list and calls `C::extract` per element. Distinct from
-    /// `FloatArray` because the latter is the array-literal
-    /// lowering for the `ConstVecF64` slot type while `List`
-    /// is the typed-element variadic-const slot.
+    /// list and calls `C::extract` per element.
     List(Vec<ConstArg>),
 }
 impl ConstArg {
@@ -68,15 +63,6 @@ impl ConstArg {
         match self {
             ConstArg::Str(s) => s,
             _ => "",
-        }
-    }
-
-    /// Return the value as a float slice, or `&[]` if incompatible.
-    #[allow(dead_code)]
-    pub fn as_float_array(&self) -> &[f64] {
-        match self {
-            ConstArg::FloatArray(v) => v,
-            _ => &[],
         }
     }
 }

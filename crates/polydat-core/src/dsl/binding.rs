@@ -471,16 +471,27 @@ impl Compiler {
                             )?;
                             wire_refs.push(WireRef::node(anon));
                         }
-                        Expr::ArrayLit(elems, _) => {
-                            let floats: Vec<f64> = elems
-                                .iter()
-                                .map(|e| match e {
-                                    Expr::FloatLit(v, _) => *v,
-                                    Expr::IntLit(v, _) => *v as f64,
-                                    _ => 0.0,
-                                })
-                                .collect();
-                            const_args.push(ConstArg::FloatArray(floats));
+                        Expr::ArrayLit(_, span) => {
+                            // A list literal is a binding-position form
+                            // and has no meaning as a call argument
+                            // (polydat_grammar.md §18.1 T-ArrayLit): it
+                            // binds to a constant string holding its
+                            // rendered elements, because there is no
+                            // const-vector node to bind it to. Refusing
+                            // it here is what keeps the surprise at
+                            // compile time. Lowering it silently as a
+                            // const argument supplied no wire input and
+                            // no node read the constant, so a call that
+                            // wanted the list as an input reached the
+                            // runtime one argument short.
+                            return Err(format!(
+                                "line {}, col {}: a list literal is a binding-position form \
+                                 and has no meaning as an argument to `{}`. Bind it first \
+                                 (`w := [...]`, which yields the rendered text) and pass `w`, \
+                                 parsing it with `str_to_vec_i32` or `str_to_vec_f32` where \
+                                 the elements are wanted as numbers.",
+                                span.line, span.col, call.func,
+                            ));
                         }
                         Expr::UnaryNeg(inner, _) => {
                             // Special case: `-literal` as a constant or wire argument.

@@ -1203,7 +1203,8 @@ comprehension-source text, which are consumed as `{name}` interpolation
 or as source syntax. A wire that genuinely wants the elements as
 numbers parses them (`str_to_vec_i32`, `str_to_vec_f32`). A list
 literal is a **binding-position** form; it has no meaning as a call
-argument.
+argument, and one written there is a compile error naming the form and
+telling the author to bind it first.
 
 ```text
 T-LocalIdent:  ident declared in this scope by `input`, `extern`,

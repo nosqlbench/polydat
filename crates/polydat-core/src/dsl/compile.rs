@@ -2858,6 +2858,27 @@ mod tests {
     }
 
     #[test]
+    fn array_literal_in_argument_position_is_refused() {
+        // The other half of the same rule: a list literal is a
+        // binding-position form and has no meaning as a call argument
+        // (polydat_grammar.md §18.1 T-ArrayLit). It used to lower to a
+        // const argument nothing read, so the call reached the runtime
+        // with one wire input missing and panicked there instead.
+        let err = compile_polydat_interpreter("input cycle: u64\nout := printf(\"{}\", [1, 2])")
+            .expect_err("a list literal in argument position is a compile error");
+        let text = err.to_string();
+        assert!(
+            text.contains("binding-position form") && text.contains("printf"),
+            "the error should name the form and the call: {text}",
+        );
+        // Bound first, the same list works, which is what the message
+        // tells the author to do.
+        let ok =
+            compile_polydat_interpreter("input cycle: u64\nw := [1, 2]\nout := printf(\"{}\", w)");
+        assert!(ok.is_ok(), "{:?}", ok.err());
+    }
+
+    #[test]
     fn embedding_error_display_includes_source_text() {
         let e = EmbeddingError::LifecycleMismatch {
             source: "hash(cycle)".to_string(),
