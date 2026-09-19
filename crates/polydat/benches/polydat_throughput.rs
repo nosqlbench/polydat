@@ -169,7 +169,7 @@ fn bench_p2_wide_sum(c: &mut Criterion) {
 
 #[cfg(feature = "jit")]
 fn bench_p3_single_identity(c: &mut Criterion) {
-    let mut kernel = asm_single_identity().try_compile_jit().unwrap();
+    let mut kernel = asm_single_identity().compile_hybrid().unwrap();
     let out_slot = kernel.resolve_output("out").unwrap();
     c.bench_function("p3/single_identity", |b| {
         let mut cycle = 0u64;
@@ -185,7 +185,7 @@ fn bench_p3_single_identity(c: &mut Criterion) {
 fn bench_p3_identity_chain(c: &mut Criterion) {
     let mut group = c.benchmark_group("p3/identity_chain");
     for depth in [1, 2, 4, 8, 16] {
-        let mut kernel = asm_identity_chain(depth).try_compile_jit().unwrap();
+        let mut kernel = asm_identity_chain(depth).compile_hybrid().unwrap();
         let out_slot = kernel.resolve_output("out").unwrap();
         group.bench_with_input(BenchmarkId::from_parameter(depth), &depth, |b, _| {
             let mut cycle = 0u64;

@@ -4,8 +4,8 @@
 //! JIT kernel types: structs and impls for all four kernel variants.
 //!
 //! `JitCore` holds the shared buffer, slot map, and module handle.
-//! The four kernel structs (`JitKernelRaw`, `JitKernelPush`,
-//! `JitKernelPull`, `JitKernelPushPull`) wrap a `JitCore` and a
+//! The two kernel structs (`JitKernelRaw` and `JitKernelPushPull`)
+//! wrap a `JitCore` and a
 //! compiled function pointer, providing `eval` and accessor methods.
 
 use std::collections::HashMap;
@@ -518,148 +518,6 @@ impl JitKernelRaw {
     jit_accessors!();
 }
 
-// ── JitKernelPush ──────────────────────────────────────────
-
-/// Push-only JIT kernel: per-node dirty tracking, no cone guard.
-#[derive(Clone)]
-#[doc(hidden)]
-pub struct JitKernelPush {
-    pub(super) core: JitCore,
-    pub(super) code_fn_prov: super::codegen::NativeProvFn,
-    pub(super) node_clean: Vec<u8>,
-    pub(super) input_dependents: Vec<Vec<usize>>,
-}
-
-impl JitKernelPush {
-    #[inline]
-    fn set_inputs(&mut self, coords: &[u64]) {
-        for (i, &c) in coords.iter().enumerate().take(self.core.coord_count) {
-            if self.core.buffer[i] != c {
-                self.core.buffer[i] = c;
-                self.mark_input_changed(i);
-            }
-        }
-        // A write makes every never-current step run again (R1.v).
-        for &step_idx in &self.core.volatile_steps {
-            self.node_clean[step_idx] = 0;
-        }
-    }
-
-    /// Every step downstream of the slot reruns, and every
-    /// never-current step with it (R1.v).
-    fn mark_input_changed(&mut self, slot: usize) {
-        if slot < self.input_dependents.len() {
-            for &step_idx in &self.input_dependents[slot] {
-                self.node_clean[step_idx] = 0;
-            }
-        }
-        for &step_idx in &self.core.volatile_steps {
-            self.node_clean[step_idx] = 0;
-        }
-    }
-
-    /// Evaluate the kernel with the given coordinate values.
-    #[inline]
-    pub fn eval(&mut self, coords: &[u64]) {
-        self.set_inputs(coords);
-        let code_fn = self.code_fn_prov;
-        let buf_const = self.core.buffer.as_ptr();
-        let buf_mut = self.core.buffer.as_mut_ptr();
-        let sc = self.core.scratch.as_mut_ptr();
-        let clean_mut = self.node_clean.as_mut_ptr();
-        self.core.run(move || unsafe {
-            (code_fn)(buf_const, buf_mut, sc, clean_mut);
-        });
-    }
-
-    /// Evaluate and return the value at the given buffer slot index.
-    #[inline]
-    pub fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
-        self.eval(coords);
-        self.core.buffer[slot]
-    }
-
-    jit_accessors!();
-}
-
-// ── JitKernelPull ──────────────────────────────────────────
-
-/// Pull-only JIT kernel: cone guard, but all nodes run when cone is dirty.
-/// Uses the raw (non-provenance) JIT function — no per-node clean checks.
-#[derive(Clone)]
-#[doc(hidden)]
-pub struct JitKernelPull {
-    pub(super) core: JitCore,
-    pub(super) code_fn: super::codegen::NativeFn,
-    pub(super) slot_provenance: Vec<ProvMask>,
-    pub(super) changed_mask: ProvMask,
-    /// Set by `set_input`: an extern changed, so the next evaluation
-    /// runs whatever the cone guard says.
-    pub(super) force_run: bool,
-}
-
-impl JitKernelPull {
-    #[inline]
-    fn set_inputs(&mut self, coords: &[u64]) {
-        self.changed_mask.clear();
-        for (i, &c) in coords.iter().enumerate().take(self.core.coord_count) {
-            if self.core.buffer[i] != c {
-                self.core.buffer[i] = c;
-                self.changed_mask.set(i);
-            }
-        }
-        // A never-current step runs again after every write (R1.v),
-        // and one native function is the program.
-        if self.core.has_volatile() {
-            self.force_run = true;
-        }
-    }
-
-    /// The next evaluation runs regardless of the cone guard, since
-    /// `set_inputs` rebuilds the changed set from the coordinates alone.
-    fn mark_input_changed(&mut self, _slot: usize) {
-        self.force_run = true;
-    }
-
-    /// Evaluate the kernel with the given coordinate values.
-    #[inline]
-    pub fn eval(&mut self, coords: &[u64]) {
-        self.set_inputs(coords);
-        self.force_run = false;
-        let code_fn = self.code_fn;
-        let buf_const = self.core.buffer.as_ptr();
-        let buf_mut = self.core.buffer.as_mut_ptr();
-        let sc = self.core.scratch.as_mut_ptr();
-        self.core.run(move || unsafe {
-            (code_fn)(buf_const, buf_mut, sc);
-        });
-    }
-
-    /// Evaluate and return the value at the given buffer slot index,
-    /// skipping evaluation if the slot's provenance cone is unaffected.
-    #[inline]
-    pub fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
-        self.set_inputs(coords);
-        if !self.force_run
-            && slot < self.slot_provenance.len()
-            && !self.slot_provenance[slot].intersects(&self.changed_mask)
-        {
-            return self.core.buffer[slot];
-        }
-        self.force_run = false;
-        let code_fn = self.code_fn;
-        let buf_const = self.core.buffer.as_ptr();
-        let buf_mut = self.core.buffer.as_mut_ptr();
-        let sc = self.core.scratch.as_mut_ptr();
-        self.core.run(move || unsafe {
-            (code_fn)(buf_const, buf_mut, sc);
-        });
-        self.core.buffer[slot]
-    }
-
-    jit_accessors!();
-}
-
 // ── JitKernelPushPull ──────────────────────────────────────
 
 /// Full optimization: push-side dirty tracking + pull-side cone guard.
@@ -762,6 +620,4 @@ impl JitKernelPushPull {
 use crate::compile::select::{Engine, Provenance};
 
 crate::compile::impl_kernel_trait!(JitKernelRaw, Engine::Native(Provenance::Raw));
-crate::compile::impl_kernel_trait!(JitKernelPush, Engine::Native(Provenance::Push));
-crate::compile::impl_kernel_trait!(JitKernelPull, Engine::Native(Provenance::Pull));
 crate::compile::impl_kernel_trait!(JitKernelPushPull, Engine::Native(Provenance::PushPull));

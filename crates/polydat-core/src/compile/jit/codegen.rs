@@ -22,7 +22,7 @@ use cranelift_module::{Linkage, Module};
 use crate::ast::PolydatNode;
 use crate::ast::SlotShape;
 
-use super::kernels::{JitCore, JitKernelPull, JitKernelPush, JitKernelPushPull, JitKernelRaw};
+use super::kernels::{JitCore, JitKernelPushPull, JitKernelRaw};
 
 // ── Extern "C" runtime helpers ─────────────────────────────
 
@@ -2274,77 +2274,6 @@ pub(crate) fn compile_jit_entry(
 ) -> Result<JitSegmentCode, String> {
     let (raw_fn, _, code) = compile_jit_impl(steps, false, tracker)?;
     Ok((raw_fn, code))
-}
-
-/// Compile a set of JIT steps into a push (per-node dirty tracking) native kernel.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn compile_jit_push(
-    coord_count: usize,
-    total_slots: usize,
-    steps: Vec<(JitOp, Vec<usize>, Vec<usize>)>,
-    output_map: HashMap<String, usize>,
-    nodes: Vec<Box<dyn PolydatNode>>,
-    input_dependents: Vec<Vec<usize>>,
-    externs: crate::compile::externs::Externs,
-    scratch: super::kernels::ScratchPlan,
-    volatile: Vec<usize>,
-) -> Result<JitKernelPush, String> {
-    let step_count = steps.len();
-    let (_, prov_fn, code) = compile_jit_impl(&steps, true, Some(total_slots))?;
-    let mut core = JitCore::new(
-        total_slots,
-        coord_count,
-        output_map,
-        code,
-        nodes,
-        scratch,
-        volatile,
-    );
-    core.set_externs(externs);
-    Ok(JitKernelPush {
-        core,
-        code_fn_prov: prov_fn,
-        node_clean: vec![0u8; step_count],
-        input_dependents,
-    })
-}
-
-/// Compile a set of JIT steps into a pull (cone guard) native kernel.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn compile_jit_pull(
-    coord_count: usize,
-    total_slots: usize,
-    steps: Vec<(JitOp, Vec<usize>, Vec<usize>)>,
-    output_map: HashMap<String, usize>,
-    nodes: Vec<Box<dyn PolydatNode>>,
-    input_dependents: &[Vec<usize>],
-    externs: crate::compile::externs::Externs,
-    scratch: super::kernels::ScratchPlan,
-    volatile: Vec<usize>,
-) -> Result<JitKernelPull, String> {
-    let buffer_len = total_slots;
-    // Pull uses the RAW jit function (no per-node clean checks)
-    let (raw_fn, _, code) = compile_jit_impl(&steps, false, Some(total_slots))?;
-    let step_outs: Vec<&[usize]> = steps.iter().map(|(_, _, o)| o.as_slice()).collect();
-    let slot_provenance =
-        crate::compile::slot_provenance(coord_count, buffer_len, &step_outs, input_dependents);
-    let mut core = JitCore::new(
-        total_slots,
-        coord_count,
-        output_map,
-        code,
-        nodes,
-        scratch,
-        volatile,
-    );
-    core.set_externs(externs);
-    Ok(JitKernelPull {
-        core,
-        code_fn: raw_fn,
-        slot_provenance,
-        changed_mask: crate::kernel::ProvMask::all_below(coord_count),
-        force_run: false,
-    })
 }
 
 /// Compile a set of JIT steps into a push+pull (full optimization) native kernel.

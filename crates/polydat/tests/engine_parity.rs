@@ -85,7 +85,7 @@ fn row(src: &str) -> [(&'static str, String); 4] {
     let p3 = outcome(std::panic::catch_unwind(|| {
         let mut k = compile_polydat_to_assembler(src)
             .map_err(|e| e.to_string())?
-            .try_compile_jit()
+            .compile_hybrid()
             .map_err(|e| e.to_string())?;
         k.eval(&[3]);
         let outs: Vec<String> = k.output_names().iter().map(|s| s.to_string()).collect();
@@ -204,7 +204,7 @@ fn the_engines_agree_on_every_node() {
             .ok();
         let mut p3 = compile_polydat_to_assembler(&src)
             .unwrap()
-            .try_compile_jit()
+            .compile_hybrid()
             .ok();
         let mut pure = compile_polydat_to_assembler(&src)
             .unwrap()

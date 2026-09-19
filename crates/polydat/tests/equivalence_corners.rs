@@ -272,7 +272,7 @@ fn engines(src: &str) -> Option<Engines> {
     if let Ok(k) = compile_polydat_to_assembler(src).unwrap().try_compile_raw() {
         engines.push(Box::new(Closures(k)));
     }
-    if let Ok(k) = compile_polydat_to_assembler(src).unwrap().try_compile_jit() {
+    if let Ok(k) = compile_polydat_to_assembler(src).unwrap().compile_hybrid() {
         engines.push(Box::new(Hybrid(k)));
     }
     if let Ok(k) = compile_polydat_to_assembler(src)

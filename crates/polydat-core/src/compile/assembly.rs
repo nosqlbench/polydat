@@ -887,6 +887,7 @@ impl PolydatAssembler {
     /// Neither hands back a kernel — an unusable kernel is worse than
     /// an error, and the empty one this used to return on an assembly
     /// failure computed nothing while looking like a program.
+    #[doc(hidden)]
     pub fn try_compile(self) -> Result<CompiledKernelPushPull, KernelError> {
         let resolved = self.resolve().map_err(KernelError::Assembly)?;
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
@@ -912,6 +913,7 @@ impl PolydatAssembler {
     /// The closure tier's kernel without provenance caching: every
     /// evaluation runs every step. Fails the two ways [`Self::try_compile`]
     /// does.
+    #[doc(hidden)]
     pub fn try_compile_raw(self) -> Result<CompiledKernelRaw, KernelError> {
         let resolved = self.resolve().map_err(KernelError::Assembly)?;
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
@@ -928,6 +930,7 @@ impl PolydatAssembler {
 
     /// The closure tier's kernel with push-side invalidation and no cone
     /// guard. Fails the two ways [`Self::try_compile`] does.
+    #[doc(hidden)]
     pub fn try_compile_push(self) -> Result<CompiledKernelPush, KernelError> {
         let resolved = self.resolve().map_err(KernelError::Assembly)?;
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
@@ -952,6 +955,7 @@ impl PolydatAssembler {
 
     /// The closure tier's kernel with the pull-side cone guard and no
     /// per-step skip. Fails the two ways [`Self::try_compile`] does.
+    #[doc(hidden)]
     pub fn try_compile_pull(self) -> Result<CompiledKernelPull, KernelError> {
         let resolved = self.resolve().map_err(KernelError::Assembly)?;
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
@@ -1152,46 +1156,18 @@ impl PolydatAssembler {
         (guard, types)
     }
 
-    /// P3, push+pull: native code for every node that has a lowering and
-    /// the node's closure elsewhere, over one slot buffer (engine
-    /// parity, step 7). Accepts every program the closure tier accepts;
-    /// `compile_hybrid` builds the same kernel.
-    #[cfg(feature = "jit")]
-    pub fn try_compile_jit(
-        self,
-    ) -> Result<crate::compile::hybrid::HybridKernelPushPull, KernelError> {
-        self.compile_hybrid()
-    }
-
     /// P3, raw: every evaluation runs every step.
     #[cfg(feature = "jit")]
+    #[doc(hidden)]
     pub fn try_compile_jit_raw(
         self,
     ) -> Result<crate::compile::hybrid::HybridKernelRaw, KernelError> {
         Ok(self.compile_hybrid()?.into_raw())
     }
 
-    /// P3, push: per-step skipping. The P3 kernel's push form is its
-    /// push+pull form, since its cone guard costs nothing a push-only
-    /// host would notice.
-    #[cfg(feature = "jit")]
-    pub fn try_compile_jit_push(
-        self,
-    ) -> Result<crate::compile::hybrid::HybridKernelPushPull, KernelError> {
-        self.compile_hybrid()
-    }
-
-    /// P3, pull: the cone guard alone.
-    #[cfg(feature = "jit")]
-    pub fn try_compile_jit_pull(
-        self,
-    ) -> Result<crate::compile::hybrid::HybridKernelPull, KernelError> {
-        Ok(self.compile_hybrid()?.into_pull())
-    }
-
     /// Pure native code, push+pull: the differential tier behind P3
     /// (engines.md §8), which refuses a node without a native
-    /// lowering. Hosts use [`Self::try_compile_jit`].
+    /// lowering. Hosts use [`Self::compile_hybrid`].
     #[doc(hidden)]
     #[cfg(feature = "jit")]
     pub fn try_compile_pure_jit(
@@ -1337,6 +1313,7 @@ impl PolydatAssembler {
     /// retains the selected scalar DAG as a fallback and synthesizes a second,
     /// register-typed DAG for one named output and driving cursor input.
     #[cfg(feature = "jit")]
+    #[doc(hidden)]
     pub fn try_compile_tier1_simd_ordinal(
         self,
         driving_input: &str,
@@ -1349,88 +1326,6 @@ impl PolydatAssembler {
             crate::compile::simd_tier1::Tier1SimdError::VectorGraphBuild(error.to_string())
         })?;
         crate::compile::simd_tier1::compile_tier1_ordinal(resolved, driving_input, output)
-    }
-
-    /// Pure native code, push-only; see [`Self::try_compile_pure_jit`].
-    #[doc(hidden)]
-    #[cfg(feature = "jit")]
-    pub fn try_compile_pure_jit_push(
-        self,
-    ) -> Result<crate::compile::jit::JitKernelPush, KernelError> {
-        let resolved = self.resolve().map_err(KernelError::Assembly)?;
-        Self::jit_push_from(resolved).map_err(Self::refused_by_native)
-    }
-
-    #[cfg(feature = "jit")]
-    fn jit_push_from(resolved: ResolvedDag) -> Result<crate::compile::jit::JitKernelPush, String> {
-        let _coord_names = resolved.input_names();
-        let (coord_count, total_slots, jit_steps, output_map, scratch, volatile) =
-            Self::build_jit_layout(&resolved)?;
-        let deps = slot_layout(&resolved).expand_dependents(
-            &resolved,
-            &PolydatProgram::compute_dependents(
-                &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
-                resolved.input_defs.len(),
-            ),
-        );
-        let (guard, types) = Self::jit_slot_info(&resolved);
-        let externs = Self::externs_of(&resolved)?;
-        let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
-        let mut k = crate::compile::jit::compile_jit_push(
-            coord_count,
-            total_slots,
-            jit_steps,
-            output_map,
-            resolved.nodes,
-            deps,
-            externs,
-            scratch,
-            volatile,
-        )?;
-        k.set_slot_info(guard, types);
-        k.set_attribution(attribution);
-        Ok(k)
-    }
-
-    /// Pure native code, pull-only; see [`Self::try_compile_pure_jit`].
-    #[doc(hidden)]
-    #[cfg(feature = "jit")]
-    pub fn try_compile_pure_jit_pull(
-        self,
-    ) -> Result<crate::compile::jit::JitKernelPull, KernelError> {
-        let resolved = self.resolve().map_err(KernelError::Assembly)?;
-        Self::jit_pull_from(resolved).map_err(Self::refused_by_native)
-    }
-
-    #[cfg(feature = "jit")]
-    fn jit_pull_from(resolved: ResolvedDag) -> Result<crate::compile::jit::JitKernelPull, String> {
-        let _coord_names = resolved.input_names();
-        let (coord_count, total_slots, jit_steps, output_map, scratch, volatile) =
-            Self::build_jit_layout(&resolved)?;
-        let deps = slot_layout(&resolved).expand_dependents(
-            &resolved,
-            &PolydatProgram::compute_dependents(
-                &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
-                resolved.input_defs.len(),
-            ),
-        );
-        let (guard, types) = Self::jit_slot_info(&resolved);
-        let externs = Self::externs_of(&resolved)?;
-        let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
-        let mut k = crate::compile::jit::compile_jit_pull(
-            coord_count,
-            total_slots,
-            jit_steps,
-            output_map,
-            resolved.nodes,
-            &deps,
-            externs,
-            scratch,
-            volatile,
-        )?;
-        k.set_slot_info(guard, types);
-        k.set_attribution(attribution);
-        Ok(k)
     }
 
     /// The P3 kernel as its concrete type, for the differential suites
@@ -2738,7 +2633,7 @@ impl PolydatAssembler {
     /// the engine names. Every engine accepts every program the
     /// interpreter accepts, or refuses it with a reason naming the node
     /// or construct ([`KernelError::Refused`]). The older constructors
-    /// (`compile`, `try_compile*`, `compile_hybrid`, `try_compile_jit*`)
+    /// (`compile`, `try_compile*`, `compile_hybrid`)
     /// remain as aliases of this one for their engine.
     pub fn compile_with(self, engine: Engine) -> Result<Box<dyn Kernel>, KernelError> {
         self.compile_engine_with_log(engine, None)
