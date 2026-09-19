@@ -17,7 +17,8 @@ Recorded 2026-09-11. Status as of 2026-09-18: the step-1 fixes (F-C1, F-N3, F-N1
 F-E5, F-E13 stated, F-C12 documented, F-K2), F-K1, F-E3, F-E6, groups B, C, I,
 and the `Lookup` half of group E have landed, and the runtime, node library, and language
 have since been split into their own crates; section 3's weeding map is closed, every
-document kept-and-weeded or deleted with its disposition in its row; groups A, D (in
+document kept-and-weeded or deleted with its disposition in its row; Group B is closed as of 2026-09-18, and the nmbrs node-library request was
+answered on 2026-09-19 (host_request_running_counts.md); groups A, D (in
 part), F, G, H, J, K (in part), L, M remain open. Of section 5's decisions, 4 and 6 were
 taken by stating the behaviour as it is, 7 and 8 are done, and 1, 2, 3 and 5 remain open.
 Of section 4's twelve rules, all twelve are now stated somewhere; rule 1 was restated on
