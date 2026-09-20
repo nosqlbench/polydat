@@ -1175,6 +1175,62 @@ impl PolydatAssembler {
         Self::jit_raw_from(resolved)
     }
 
+    // ── The typed tier constructors (feature `bench-tiers`) ──────
+    //
+    // The same kernels [`Self::compile_slots`] builds, returned as
+    // their own types instead of `Box<dyn SlotKernel>`.
+    //
+    // There is one contract — [`Kernel`](crate::kernel::Kernel) and the
+    // [`SlotKernel`](crate::compile::SlotKernel) that extends it — and
+    // these do not add a second. They change only how a caller *holds*
+    // it: a boxed kernel dispatches, a named one monomorphizes, and
+    // both are bound by the same trait with the same semantics.
+    //
+    // The normative path is `compile_slots`, which picks an engine from
+    // a runtime value and therefore cannot return a statically known
+    // type. Only a caller that knows its tier at compile time can use
+    // these, and only one kind of caller does: a benchmark measuring a
+    // tier, which otherwise measures the dispatch instead of the
+    // kernel. On the engine ladder that difference is about a fifth of
+    // the native tier's per-cycle cost, which is large enough to hide
+    // the regressions the ladder exists to catch.
+    //
+    // Off by default, so an ordinary build and anything a consumer
+    // links has exactly one door to a kernel.
+
+    /// The closure tier with no provenance, as its own type.
+    #[cfg(feature = "bench-tiers")]
+    pub fn compile_closures_raw(
+        self,
+    ) -> Result<crate::compile::closures::CompiledKernelRaw, KernelError> {
+        let resolved = self.resolve_with_log(None)?;
+        let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
+            Self::build_p2_layout(&resolved).map_err(Self::refused_by_closures)?;
+        crate::compile::closures::CompiledKernelRaw::new(
+            coord_count,
+            total_slots,
+            steps,
+            output_map,
+            ref_slots,
+            extras,
+        )
+    }
+
+    /// The native tier with no provenance, as its own type.
+    #[cfg(all(feature = "bench-tiers", feature = "jit"))]
+    pub fn compile_native_raw(
+        self,
+    ) -> Result<crate::compile::hybrid::HybridKernelRaw, KernelError> {
+        let resolved = self.resolve_with_log(None)?;
+        Ok(Self::hybrid_from(resolved)?.into_raw())
+    }
+
+    /// Pure native code with no provenance, as its own type.
+    #[cfg(all(feature = "bench-tiers", feature = "jit"))]
+    pub fn compile_pure_native_raw(self) -> Result<crate::compile::jit::JitKernelRaw, KernelError> {
+        self.try_compile_pure_jit_raw()
+    }
+
     /// Where each node lives, for the failure path (A7): its name, the
     /// outputs it feeds, and `(first slot, port type)` per input port,
     /// so a compiled kernel can report a step's failure as the

@@ -67,3 +67,9 @@ half = "2"
 default = ["jit"]
 vectordata = ["dep:vectordata", "dep:tokio"]
 jit = ["dep:cranelift-jit", "dep:cranelift-module", "dep:cranelift-codegen", "dep:cranelift-frontend", "dep:cranelift-native"]
+# The typed tier constructors, for measurement. `compile_slots` picks an
+# engine from a runtime value and so must box; a benchmark knows its tier
+# at compile time and needs the monomorphized call to measure the kernel
+# rather than the dispatch. Off by default: an ordinary build, and
+# anything a consumer links, has one door to a kernel.
+bench-tiers = []

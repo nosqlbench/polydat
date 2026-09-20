@@ -53,6 +53,8 @@ default = ["jit", "cli"]
 cli = ["dep:clap"]
 vectordata = ["polydat-core/vectordata"]
 jit = ["polydat-core/jit", "polydat-nodes/jit"]
+# Passthrough for the typed tier constructors; see polydat-core.
+bench-tiers = ["polydat-core/bench-tiers"]
 
 # docs.rs builds with every feature so the native tier and the
 # optional integrations are documented.
@@ -126,6 +128,7 @@ required-features = ["jit"]
 [[bench]]
 name = "engine_ladder"
 harness = false
+required-features = ["bench-tiers"]
 
 [[bench]]
 name = "tile_render"

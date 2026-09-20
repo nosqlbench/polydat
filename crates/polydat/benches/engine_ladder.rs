@@ -49,58 +49,81 @@ fn bench_engine_ladder(c: &mut Criterion) {
         });
     });
 
-    let mut p2 =
-        match assembler().compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw)) {
-            Ok(kernel) => kernel,
-            Err(_) => panic!("every engine-ladder node must support P2"),
+    // Each compiled tier is measured twice, from one kernel type and
+    // one contract, held two ways.
+    //
+    // `<tier>` names the kernel by its own type, so the call is
+    // monomorphized: what a host pays to run the program. `<tier>_dyn`
+    // holds the same kernel as `Box<dyn SlotKernel>`, the way
+    // `compile_slots` and every engine-by-name entry point hand one
+    // back: what a host pays to run the program *and* to have chosen
+    // the engine at run time. The gap between the two is the price of
+    // that choice, and it is a number worth watching rather than
+    // rediscovering — measured once at about a fifth of the native
+    // tier's per-cycle cost.
+    //
+    // The monomorphized column is why this bench needs `bench-tiers`:
+    // naming a kernel type is the one thing the normative surface
+    // deliberately does not let a caller do.
+    macro_rules! tier {
+        ($name:literal, $typed:expr, $boxed:expr) => {
+            let mut typed = $typed;
+            let slots = OUTPUTS.map(|n| typed.resolve_output(n).expect("output must resolve"));
+            group.bench_function($name, |b| {
+                let mut cycle = 1u64;
+                b.iter(|| {
+                    typed.eval(&[cycle, TENANT_SEED, OPERATION_SEED]);
+                    for &slot in &slots {
+                        black_box(typed.get_slot(slot));
+                    }
+                    cycle = cycle.wrapping_add(1);
+                });
+            });
+            let mut boxed = $boxed;
+            let slots = OUTPUTS.map(|n| boxed.resolve_output(n).expect("output must resolve"));
+            group.bench_function(concat!($name, "_dyn"), |b| {
+                let mut cycle = 1u64;
+                b.iter(|| {
+                    boxed.eval_at(&[cycle, TENANT_SEED, OPERATION_SEED]);
+                    for &slot in &slots {
+                        black_box(boxed.get_slot(slot));
+                    }
+                    cycle = cycle.wrapping_add(1);
+                });
+            });
         };
-    let p2_outputs = OUTPUTS.map(|name| p2.resolve_output(name).expect("P2 output must resolve"));
-    group.bench_function("p2_closures", |b| {
-        let mut cycle = 1u64;
-        b.iter(|| {
-            p2.eval_at(&[cycle, TENANT_SEED, OPERATION_SEED]);
-            for &output in &p2_outputs {
-                black_box(p2.get_slot(output));
-            }
-            cycle = cycle.wrapping_add(1);
-        });
-    });
+    }
+
+    tier!(
+        "p2_closures",
+        assembler()
+            .compile_closures_raw()
+            .expect("every engine-ladder node must support P2"),
+        assembler()
+            .compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw))
+            .expect("every engine-ladder node must support P2")
+    );
 
     #[cfg(feature = "jit")]
     {
-        let mut p3 = assembler()
-            .compile_slots(polydat::Engine::Native(polydat::Provenance::Raw))
-            .expect("every engine-ladder node must support P3");
-        let p3_outputs =
-            OUTPUTS.map(|name| p3.resolve_output(name).expect("P3 output must resolve"));
-        group.bench_function("p3_native", |b| {
-            let mut cycle = 1u64;
-            b.iter(|| {
-                p3.eval_at(&[cycle, TENANT_SEED, OPERATION_SEED]);
-                for &output in &p3_outputs {
-                    black_box(p3.get_slot(output));
-                }
-                cycle = cycle.wrapping_add(1);
-            });
-        });
-
-        let mut pure = assembler()
-            .compile_slots(polydat::Engine::PureNative(polydat::Provenance::Raw))
-            .expect("every engine-ladder node lowers to native code");
-        let pure_outputs = OUTPUTS.map(|name| {
-            pure.resolve_output(name)
-                .expect("pure native output must resolve")
-        });
-        group.bench_function("pure_native", |b| {
-            let mut cycle = 1u64;
-            b.iter(|| {
-                pure.eval_at(&[cycle, TENANT_SEED, OPERATION_SEED]);
-                for &output in &pure_outputs {
-                    black_box(pure.get_slot(output));
-                }
-                cycle = cycle.wrapping_add(1);
-            });
-        });
+        tier!(
+            "p3_native",
+            assembler()
+                .compile_native_raw()
+                .expect("every engine-ladder node must support P3"),
+            assembler()
+                .compile_slots(polydat::Engine::Native(polydat::Provenance::Raw))
+                .expect("every engine-ladder node must support P3")
+        );
+        tier!(
+            "pure_native",
+            assembler()
+                .compile_pure_native_raw()
+                .expect("every engine-ladder node lowers to native code"),
+            assembler()
+                .compile_slots(polydat::Engine::PureNative(polydat::Provenance::Raw))
+                .expect("every engine-ladder node lowers to native code")
+        );
     }
 
     group.finish();
