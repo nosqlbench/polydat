@@ -391,6 +391,72 @@ mod tests {
         );
     }
 
+    /// The same graph under `strict`, on every engine a build can name.
+    ///
+    /// A config wire fed by a cycle-time source warns by default and is
+    /// refused under strict, and both of the assembler's strict checks
+    /// run through one function that every engine's build calls
+    /// (`refuse_strict` → `strict_violation`). The adapter half is
+    /// pinned across engines in `entry_points`; this pins the config
+    /// half, which needs a node with a config-typed wire port and so
+    /// lives beside the one that has it (F-H3).
+    #[test]
+    fn strict_refuses_a_cycle_fed_config_wire_on_every_engine() {
+        use crate::compile::assembly::{PolydatAssembler, WireRef};
+        use crate::compile::select::{Engine, Provenance};
+        use crate::library::identity::Identity;
+
+        let build = || {
+            let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
+            asm.add_node(
+                "hashed",
+                Box::new(Identity::new(crate::ast::PortType::U64)),
+                vec![WireRef::input("cycle")],
+            );
+            asm.add_node(
+                "test_node",
+                Box::new(ConfigWireTestNode::new()),
+                vec![WireRef::node("hashed"), WireRef::input("cycle")],
+            );
+            asm.add_output("result", WireRef::node("test_node"));
+            asm.set_strict(true);
+            asm
+        };
+
+        let mut engines = vec![
+            Engine::Interpreter(crate::JitMode::Auto),
+            Engine::Closures(Provenance::Auto),
+        ];
+        if cfg!(feature = "jit") {
+            engines.push(Engine::Native(Provenance::Auto));
+            engines.push(Engine::PureNative(Provenance::Auto));
+        }
+        for engine in engines {
+            let outcome = build().compile_with(engine);
+            let err = match outcome {
+                Err(e) => e.to_string(),
+                Ok(_) => panic!("{engine}: strict must refuse a cycle-fed config wire"),
+            };
+            assert!(
+                err.contains("config"),
+                "{engine}: the refusal should name the config wire: {err}"
+            );
+        }
+        // Without strict the same graph builds, warning rather than
+        // refusing: strict is what turns the advice into an error. On
+        // the interpreter, because this node is a test fixture with no
+        // compiled form and the compiled tiers refuse it for that
+        // unrelated reason — which is also why the refusals above are
+        // checked for the word `config` rather than merely being
+        // errors.
+        let mut asm = build();
+        asm.set_strict(false);
+        assert!(
+            asm.compile_with(Engine::Interpreter(crate::JitMode::Auto))
+                .is_ok()
+        );
+    }
+
     #[test]
     fn wire_cost_warning_when_config_is_coordinate_direct() {
         // DAG: cycle → config_test.config_param  (BAD: coordinate direct to config)

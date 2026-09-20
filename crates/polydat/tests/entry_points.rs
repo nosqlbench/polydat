@@ -363,6 +363,64 @@ fn the_two_native_tiers_agree_in_value_and_differ_in_name() {
     assert_eq!(values(hybrid.as_mut(), 9), values(pure.as_mut(), 9));
 }
 
+/// The diagnostic entry point diagnoses the program it would compile.
+///
+/// `compile_polydat_checked` used to build a different program from the
+/// one the kernel entry points build — it skipped the pragmas and the
+/// source text — so a host could be told a program was fine and then
+/// have it refused, or the reverse (F-H4). It goes through
+/// `compile_ast_with_engine` on the default engine now, so it accepts
+/// exactly what `compile_polydat_kernel` accepts, across the shapes
+/// that used to differ.
+///
+/// `compile_polydat_to_assembler` is the one entry point that may
+/// disagree, and only about `for`: an assembler holds no traversal, so
+/// it refuses a program with one and says so. That is a property of
+/// what an assembler is, not a second opinion about the program.
+#[test]
+fn the_diagnostic_entry_point_agrees_with_the_compile_it_diagnoses() {
+    use polydat::dsl::compile::compile_polydat_checked;
+
+    for (label, src) in [
+        ("plain", "input cycle: u64\nh := hash(cycle)\n"),
+        (
+            "traversal",
+            "input cycle: u64\nfor k in 1..3 {\n  y := k * 10\n}\n",
+        ),
+        (
+            "pragma",
+            "pragma strict_types\ninput cycle: u64\nh := hash(cycle)\n",
+        ),
+        ("tile", "input cycle: u64\ntile t := \"c=${cycle}\"\n"),
+        (
+            "module",
+            "input cycle: u64\nd(a: u64) -> (o: u64) := {\n  o := a + 1\n}\nx := d(cycle)\n",
+        ),
+        ("broken", "input cycle: u64\nh := no_such_function(cycle)\n"),
+    ] {
+        let compiles = compile_polydat_kernel(src).is_ok();
+        let (checked, report) = compile_polydat_checked(src);
+        assert_eq!(
+            checked.is_ok(),
+            compiles,
+            "{label}: the diagnostic entry disagrees with the compile it diagnoses"
+        );
+        assert_eq!(
+            report.errors().is_empty(),
+            compiles,
+            "{label}: the report should carry an error exactly when the compile fails"
+        );
+    }
+
+    // The assembler's one documented disagreement, and only that one.
+    assert!(compile_polydat_to_assembler("input cycle: u64\nh := hash(cycle)\n").is_ok());
+    assert!(
+        compile_polydat_to_assembler("input cycle: u64\nfor k in 1..3 {\n  y := k * 10\n}\n")
+            .is_err(),
+        "an assembler holds no traversal, so it refuses a program with one"
+    );
+}
+
 /// The logged interpreter compile is the plain one with a log: a program
 /// with a traversal compiles through it, as it does everywhere else.
 #[test]

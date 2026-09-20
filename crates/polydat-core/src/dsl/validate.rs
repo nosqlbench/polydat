@@ -29,6 +29,19 @@ pub(crate) fn validate_ast(file: &PolydatFile, report: &mut DiagnosticReport) {
     let mut definition_order: Vec<(String, crate::dsl::lexer::Span)> = Vec::new();
 
     // First pass: collect explicit coordinates and all defined names
+    // The modules this program defines. A call to one is not a call to
+    // a library node, and the compiler gives a program's own module the
+    // call before the registry sees it, so the diagnostic pass has to
+    // know them or it reports an unknown function for a module that is
+    // right there in the file (F-H4).
+    let modules: std::collections::HashSet<String> = file
+        .statements
+        .iter()
+        .filter_map(|s| match s {
+            Statement::ModuleDef(m) => Some(m.name.clone()),
+            _ => None,
+        })
+        .collect();
     for stmt in &file.statements {
         match stmt {
             Statement::InputDecl(d) => {
@@ -67,7 +80,7 @@ pub(crate) fn validate_ast(file: &PolydatFile, report: &mut DiagnosticReport) {
             | Statement::Tile(_) => continue,
             Statement::Binding(b) => &b.value,
         };
-        validate_expr(expr, &mut referenced, report);
+        validate_expr(expr, &modules, &mut referenced, report);
     }
 
     // Coordinate inference or validation
@@ -150,6 +163,7 @@ pub(crate) fn validate_ast(file: &PolydatFile, report: &mut DiagnosticReport) {
 /// collect all wire references into `referenced`.
 pub(crate) fn validate_expr(
     expr: &Expr,
+    modules: &HashSet<String>,
     referenced: &mut HashSet<String>,
     report: &mut DiagnosticReport,
 ) {
@@ -158,8 +172,10 @@ pub(crate) fn validate_expr(
             referenced.insert(name.clone());
         }
         Expr::Call(call) => {
-            // Validate function name
-            if registry::lookup(&call.func).is_none() {
+            // A module the program defines takes the call before the
+            // registry does, as it does in the compiler, so a call to
+            // one is not an unknown function.
+            if !modules.contains(&call.func) && registry::lookup(&call.func).is_none() {
                 let msg = format!("unknown function: '{}'", call.func);
                 let hint = if let Some(suggestion) = registry::suggest_function(&call.func) {
                     format!("did you mean '{suggestion}'?")
@@ -175,19 +191,19 @@ pub(crate) fn validate_expr(
                     Arg::Positional(e) => e,
                     Arg::Named(_, e) => e,
                 };
-                validate_expr(inner, referenced, report);
+                validate_expr(inner, modules, referenced, report);
             }
         }
         Expr::BinOp(lhs, _, rhs) => {
-            validate_expr(lhs, referenced, report);
-            validate_expr(rhs, referenced, report);
+            validate_expr(lhs, modules, referenced, report);
+            validate_expr(rhs, modules, referenced, report);
         }
         Expr::UnaryNeg(inner, _) | Expr::UnaryBitNot(inner, _) => {
-            validate_expr(inner, referenced, report);
+            validate_expr(inner, modules, referenced, report);
         }
         Expr::ArrayLit(elems, _) => {
             for e in elems {
-                validate_expr(e, referenced, report);
+                validate_expr(e, modules, referenced, report);
             }
         }
         Expr::StringLit(s, _) => {
