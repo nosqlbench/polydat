@@ -500,6 +500,7 @@ macro_rules! shared_core_methods {
             Ok(())
         }
 
+        #[inline]
         fn begin_epoch(&mut self) {
             if self.externs.cells_dirty() {
                 self.externs.refresh_cells(&mut self.buffer);
@@ -513,6 +514,7 @@ macro_rules! shared_core_methods {
             self.drive.stale = false;
         }
 
+        #[inline]
         fn dirty_input(&mut self, slot: usize) {
             if let Some(deps) = self.dirty.get(slot) {
                 for &i in deps {
@@ -521,6 +523,7 @@ macro_rules! shared_core_methods {
             }
         }
 
+        #[inline]
         fn dirty_refreshed(&mut self) {
             if !self.externs.has_changed() {
                 return;
@@ -538,6 +541,7 @@ macro_rules! shared_core_methods {
             self.externs.return_changed(changed);
         }
 
+        #[inline]
         fn eval_all(&mut self) {
             let fresh = self.drive.stale;
             if fresh {
@@ -564,6 +568,7 @@ macro_rules! shared_core_methods {
             self.drive.stale = true;
         }
 
+        #[inline]
         fn guard_ref_slot(&self, slot: usize) {
             if self.ref_slots.get(slot).copied().unwrap_or(false) {
                 panic!(
@@ -636,6 +641,7 @@ macro_rules! shared_core_methods {
             self.value_of(name)
         }
 
+        #[inline]
         fn refresh_cells(&mut self) {
             if self.externs.cells_dirty() {
                 self.externs.refresh_cells(&mut self.buffer);
@@ -652,6 +658,7 @@ macro_rules! shared_core_methods {
             self.externs.seed(&mut self.buffer, None);
         }
 
+        #[inline]
         fn run_steps(&mut self, order: &[usize]) {
             self.run_guarded(|core| core.run_order(order));
         }
