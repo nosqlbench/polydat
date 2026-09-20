@@ -54,11 +54,17 @@ pub enum WriteError {
     UnknownWire {
         /// The name or index looked up.
         key: String,
-        /// The names that would have resolved, when the writer knows
-        /// them. Empty where it does not. A caller who mistyped a name
-        /// is best served by seeing the set it could have meant, so a
-        /// writer that has the list carries it rather than rendering a
-        /// sentence about it.
+        /// The kernel's input slots, as
+        /// [`Kernel::input_names`] reports them and in the same order,
+        /// coordinates included. Empty only where the writer does not
+        /// have the list.
+        ///
+        /// Coordinates are in it although writing one by name is
+        /// [`Self::CoordinateSlot`] rather than a success: a caller who
+        /// mistyped a coordinate meant a name this kernel has, and is
+        /// not helped by a list that leaves it out. The exact match is
+        /// what the other variant is for. Every engine answers alike,
+        /// and a host can check the list against `input_names`.
         known: Vec<String>,
     },
 

@@ -182,6 +182,83 @@ fn a_program_is_shared_across_threads_on_every_engine() {
     }
 }
 
+/// One write rule, on every engine and by either road.
+///
+/// A write into a declared slot either matches the slot's type or is
+/// refused; nothing is healed, widened, or narrowed on the way in. The
+/// three ways it can be refused are the three `WriteError` variants,
+/// and every engine answers the same variant with the same facts for
+/// the same write — which is what makes "every engine refuses alike"
+/// checkable as equality rather than as message text.
+#[test]
+fn every_engine_writes_by_one_rule() {
+    use polydat::ast::PortType;
+    use polydat::kernel::WriteError;
+
+    const SRC: &str = "input cycle: u64\nextern n: u64 = 7\nextern f: f64 = 1.5\n\
+                       extern s: str = \"x\"\nout := n + cycle\n";
+
+    for engine in engines() {
+        let Ok(mut k) = compile_polydat_with(SRC, engine) else {
+            continue;
+        };
+        let inputs = k.input_names();
+
+        // A name the kernel does not have: the key back, and the slots
+        // it does have, which is exactly what `input_names` reports.
+        match k.set_input("nope", Value::U64(1)) {
+            Err(WriteError::UnknownWire { key, known }) => {
+                assert_eq!(key, "nope", "{engine}");
+                assert_eq!(known, inputs, "{engine}: `known` is the kernel's inputs");
+            }
+            other => panic!("{engine}: expected UnknownWire, got {other:?}"),
+        }
+        // The indexed road answers the same, including the same list.
+        match k.set_input_at(inputs.len() + 5, Value::U64(1)) {
+            Err(WriteError::UnknownWire { known, .. }) => {
+                assert_eq!(known, inputs, "{engine}: both roads list alike")
+            }
+            other => panic!("{engine}: expected UnknownWire, got {other:?}"),
+        }
+
+        // A type the slot does not take. No adapter runs here: a `u64`
+        // does not widen into an `f64` slot and an `f64` does not
+        // narrow into a `u64` one, though both are healed between
+        // wires inside the graph. The boundary is stricter than the
+        // graph on purpose — a host's write is not a wire.
+        for (name, value, expected, got) in [
+            ("n", Value::Str("bad".into()), PortType::U64, PortType::Str),
+            ("f", Value::U64(3), PortType::F64, PortType::U64),
+            ("n", Value::F64(3.5), PortType::U64, PortType::F64),
+            ("s", Value::U64(9), PortType::Str, PortType::U64),
+        ] {
+            match k.set_input(name, value.clone()) {
+                Err(WriteError::TypeMismatch {
+                    slot,
+                    expected: e,
+                    got: g,
+                }) => {
+                    assert_eq!((slot.as_str(), e, g), (name, expected, got), "{engine}");
+                }
+                other => panic!("{engine}: {name} <- {value:?} expected TypeMismatch, {other:?}"),
+            }
+        }
+
+        // A coordinate is a slot, so it is not unknown; it advances
+        // through `set_inputs` and says so.
+        match k.set_input("cycle", Value::U64(2)) {
+            Err(WriteError::CoordinateSlot { slot }) => assert_eq!(slot, "cycle", "{engine}"),
+            other => panic!("{engine}: expected CoordinateSlot, got {other:?}"),
+        }
+
+        // And the write that does match is simply made.
+        k.set_input("n", Value::U64(99))
+            .unwrap_or_else(|e| panic!("{engine}: {e:?}"));
+        k.set_inputs(&[1]);
+        assert_eq!(k.pull("out").as_u64(), 100, "{engine}");
+    }
+}
+
 /// What a kernel was set to does not travel into its program.
 ///
 /// `into_program` yields the compiled program, not the kernel's state.

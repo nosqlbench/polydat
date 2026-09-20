@@ -246,8 +246,11 @@ pub use compile::cone::JitMode;
 /// The engine a host chooses and the one error of every constructor
 /// that takes it (docs/design/engines.md §3.5).
 pub use compile::select::{Engine, EnginePlan, KernelError, Provenance};
-/// One kernel API for every engine.
-pub use kernel::{Kernel, KernelProgram};
+/// One kernel API for every engine, and the one error a write to a
+/// declared slot can fail with. `WriteError` sits beside `KernelError`
+/// at the root because they are the pair a host handles: one for
+/// building a kernel, one for writing to it.
+pub use kernel::{Kernel, KernelProgram, WriteError};
 
 // SRD-82 §"Panic reporting: one full render" — host runtimes with
 // their own panic reporting declare it so the eval-panic hook

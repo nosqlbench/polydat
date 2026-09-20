@@ -392,9 +392,15 @@ impl Externs {
                     slot: name.to_string(),
                 });
             }
+            // Every input slot this kernel has, coordinates included,
+            // as `Kernel::input_names` reports them and as the indexed
+            // write beside this one already listed. A caller who
+            // mistyped a coordinate meant a name that exists, and is
+            // not helped by a list that omits it; the exact match is
+            // the `CoordinateSlot` above.
             return Err(WriteError::UnknownWire {
                 key: name.to_string(),
-                known: self.slots.iter().map(|s| s.name.clone()).collect(),
+                known: self.input_names.clone(),
             });
         };
         self.set_slot(i, value, buffer)
