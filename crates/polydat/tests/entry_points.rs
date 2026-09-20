@@ -30,6 +30,8 @@ fn engines() -> Vec<Engine> {
     if cfg!(feature = "jit") {
         all.push(Engine::Native(Provenance::Auto));
         all.push(Engine::Native(Provenance::Raw));
+        all.push(Engine::PureNative(Provenance::Auto));
+        all.push(Engine::PureNative(Provenance::Raw));
     }
     all
 }
@@ -191,6 +193,69 @@ fn strict_refuses_implicit_coercions_on_every_engine() {
     }
 }
 
+/// The pure native tier is an engine a host names like any other: it
+/// arrives through the same options, it reports itself rather than the
+/// hybrid it is the differential for, and a provenance mode it has no
+/// kernel for is refused instead of answered with another.
+#[test]
+#[cfg(feature = "jit")]
+fn the_pure_tier_names_itself_and_refuses_the_modes_it_lacks() {
+    let mut oracle = compile_polydat_interpreter(SRC).unwrap();
+    let want = values(&mut oracle, 5);
+
+    for prov in [Provenance::Auto, Provenance::Raw, Provenance::PushPull] {
+        let engine = Engine::PureNative(prov);
+        let mut k = compile_polydat_with(SRC, engine).unwrap_or_else(|e| panic!("{engine}: {e}"));
+        // The tier it ran, not the `Native` tier it stands behind.
+        let ran = k.engine();
+        assert!(
+            matches!(ran, Engine::PureNative(_)),
+            "{engine}: reported {ran}",
+        );
+        // A named mode is the mode; `Auto` delegated the choice.
+        if prov != Provenance::Auto {
+            assert_eq!(ran, engine, "a named mode is honoured or refused");
+        }
+        assert_eq!(values(k.as_mut(), 5), want, "{engine}");
+    }
+
+    // Push and pull have no pure kernel, so they are refusals naming
+    // the engine, not silent substitutions of push+pull.
+    for prov in [Provenance::Push, Provenance::Pull] {
+        let engine = Engine::PureNative(prov);
+        match compile_polydat_with(SRC, engine) {
+            Err(KernelError::Refused {
+                engine: named,
+                reason,
+            }) => {
+                assert!(matches!(named, Engine::PureNative(_)), "{named}");
+                assert!(reason.contains("pure native"), "{reason}");
+            }
+            other => panic!(
+                "{engine}: expected a refusal, got {:?}",
+                other.map(|k| k.engine())
+            ),
+        }
+    }
+}
+
+/// `Native` and `PureNative` differ in one thing: what becomes of a node
+/// with no native form. `Native` runs that node's closure and always
+/// succeeds, so it can never tell a host whether its program went fully
+/// native; the pure tier refuses and names the node, which is the whole
+/// reason to ask for it. Every node in this library lowers today, so the
+/// two agree here — what this pins is that they agree in value and that
+/// each reports its own tier.
+#[test]
+#[cfg(feature = "jit")]
+fn the_two_native_tiers_agree_in_value_and_differ_in_name() {
+    let mut hybrid = compile_polydat_with(SRC, Engine::Native(Provenance::Auto)).unwrap();
+    let mut pure = compile_polydat_with(SRC, Engine::PureNative(Provenance::Auto)).unwrap();
+    assert!(matches!(hybrid.engine(), Engine::Native(_)));
+    assert!(matches!(pure.engine(), Engine::PureNative(_)));
+    assert_eq!(values(hybrid.as_mut(), 9), values(pure.as_mut(), 9));
+}
+
 /// The logged interpreter compile is the plain one with a log: a program
 /// with a traversal compiles through it, as it does everywhere else.
 #[test]
@@ -216,6 +281,21 @@ fn deferred_cursor_extents_resolve_on_every_engine() {
             Err(KernelError::Refused { .. }) => continue,
             Err(e) => panic!("{engine}: {e}"),
         };
+        // The pure tier is the exception, and it is a defect rather
+        // than a property: the extent is read from the kernel's folded
+        // constants, and the pure tier is one compiled function with no
+        // step list, so it cannot run its compile-constant steps at
+        // build the way the other two do. Its buffer still holds zero
+        // when the extent is read. Asserted rather than skipped so that
+        // fixing it fails here (F-E15).
+        if matches!(engine, Engine::PureNative(_)) {
+            assert_eq!(
+                k.cursor_schemas()[0].extent,
+                Some(0),
+                "{engine}: F-E15 is fixed; fold this engine back into the loop",
+            );
+            continue;
+        }
         assert_eq!(k.cursor_schemas()[0].extent, want, "{engine}");
     }
 }

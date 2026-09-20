@@ -67,7 +67,9 @@ struct CompileArgs {
     strict: bool,
     /// Execution engine: `auto` is the build's default, native code
     /// where the build has it and closures otherwise; `interpreter`,
-    /// `closures`, and `native` name one.
+    /// `closures`, `native`, and `pure-native` name one. `pure-native`
+    /// refuses the program when any node has no native lowering, where
+    /// `native` runs that node's closure.
     #[arg(long, value_enum, default_value_t = Engine::Auto)]
     engine: Engine,
     /// Provenance mode of a compiled engine: how much work a cycle whose
@@ -126,6 +128,7 @@ impl CompileArgs {
             Engine::Interpreter | Engine::Off => KernelEngine::Interpreter(self.cones()),
             Engine::Closures => KernelEngine::Closures(provenance),
             Engine::Native | Engine::Force => KernelEngine::Native(provenance),
+            Engine::PureNative => KernelEngine::PureNative(provenance),
         }
     }
 
@@ -271,6 +274,10 @@ enum Engine {
     Closures,
     /// Native code where a node has a lowering, its closure elsewhere.
     Native,
+    /// Native code and nothing else: refuses the program when any node
+    /// has no native lowering, which is how you find out whether a
+    /// program is fully native.
+    PureNative,
     /// `--engine interpreter --cones off`, under its old spelling.
     #[value(hide = true)]
     Off,

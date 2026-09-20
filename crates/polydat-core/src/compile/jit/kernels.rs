@@ -84,7 +84,7 @@ pub(super) struct JitCore {
     /// the provenance mode it was built with. State rather than a
     /// property of the type, so one kernel type can serve a tier
     /// that runs native code and one that runs none.
-    engine: crate::compile::select::Engine,
+    pub(super) engine: crate::compile::select::Engine,
     pub(super) buffer: Vec<u64>,
     pub(super) coord_count: usize,
     pub(super) output_map: HashMap<String, usize>,
@@ -187,7 +187,11 @@ impl JitCore {
         volatile_steps: Vec<usize>,
     ) -> Self {
         Self {
-            engine: crate::compile::select::Engine::Native(
+            // The pure tier, not `Native`: this core belongs to a
+            // kernel that refused every node without a native lowering
+            // rather than running its closure, and `engine()` reports
+            // what ran. The raw builder overwrites the mode.
+            engine: crate::compile::select::Engine::PureNative(
                 crate::compile::select::Provenance::PushPull,
             ),
             buffer: vec![0u64; total_slots + 1],

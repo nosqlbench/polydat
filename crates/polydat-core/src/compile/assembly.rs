@@ -996,6 +996,18 @@ impl PolydatAssembler {
         }
     }
 
+    /// The same, naming the pure tier: on `Native` a node without a
+    /// native lowering runs its closure, so only the pure tier turns
+    /// that into a refusal, and the error should say which engine
+    /// refused.
+    #[cfg_attr(not(feature = "jit"), allow(dead_code))]
+    fn refused_by_pure_native(reason: String) -> KernelError {
+        KernelError::Refused {
+            engine: Engine::PureNative(Provenance::Auto),
+            reason,
+        }
+    }
+
     /// Shared: extract P2 compiled steps + slot layout from resolved DAG.
     /// Returns None if any node lacks a compiled form.
     fn build_p2_layout(resolved: &ResolvedDag) -> Result<P2Layout, String> {
@@ -2716,6 +2728,59 @@ impl PolydatAssembler {
                         Provenance::Push => {
                             return Err(refused("native code has no push-only kernel".into()));
                         }
+                    };
+                    Self::log_folded(kernel.as_ref(), folded, log.as_deref_mut());
+                    Self::log_summary(log, node_total, output_total);
+                    Ok(kernel)
+                }
+                #[cfg(not(feature = "jit"))]
+                {
+                    let _ = (prov, log);
+                    Err(refused(
+                        "this build has no native code (the `jit` feature is off)".into(),
+                    ))
+                }
+            }
+            Engine::PureNative(prov) => {
+                #[cfg(feature = "jit")]
+                {
+                    let resolved = self.resolve_with_log(log.as_deref_mut())?;
+                    if strict {
+                        Self::refuse_strict(&resolved)?;
+                    }
+                    let folded = log.is_some().then(|| Self::constant_sites(&resolved));
+                    let (node_total, output_total) =
+                        (resolved.nodes.len(), resolved.output_order.len());
+                    // Only raw and push+pull have a pure kernel. A named
+                    // mode with none is refused rather than silently
+                    // answered with another, because a kernel reports
+                    // the configuration it runs; `Auto` delegated the
+                    // choice, so the selector's pull resolves to
+                    // push+pull, whose guard subsumes it.
+                    let prov = match prov {
+                        Provenance::Auto => match Self::provenance_for(prov, &resolved) {
+                            Provenance::Raw => Provenance::Raw,
+                            _ => Provenance::PushPull,
+                        },
+                        named @ (Provenance::Raw | Provenance::PushPull) => named,
+                        other => {
+                            return Err(refused(format!(
+                                "pure native code has no {} kernel: the tier keeps only the \
+                                 two forms the differential needs. Ask for `raw` or \
+                                 `pushpull`, or `auto` to let the selector choose; every \
+                                 mode is available on `native`.",
+                                format!("{other:?}").to_lowercase(),
+                            )));
+                        }
+                    };
+                    let kernel: Box<dyn Kernel> = match prov {
+                        Provenance::Raw => Box::new(
+                            Self::jit_raw_from(resolved).map_err(Self::refused_by_pure_native)?,
+                        ),
+                        _ => Box::new(
+                            Self::jit_push_pull_from(resolved)
+                                .map_err(Self::refused_by_pure_native)?,
+                        ),
                     };
                     Self::log_folded(kernel.as_ref(), folded, log.as_deref_mut());
                     Self::log_summary(log, node_total, output_total);

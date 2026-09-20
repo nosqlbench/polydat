@@ -2254,6 +2254,8 @@ pub(crate) fn compile_jit_raw_with(
         volatile,
     );
     core.set_externs(externs);
+    core.engine =
+        crate::compile::select::Engine::PureNative(crate::compile::select::Provenance::Raw);
     Ok(JitKernelRaw {
         core,
         code_fn: raw_fn,

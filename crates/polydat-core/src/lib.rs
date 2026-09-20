@@ -52,7 +52,7 @@
 //!
 //! ## Engines
 //!
-//! One program compiles to any of three engines and gives the same
+//! One program compiles to any of four engines and gives the same
 //! values on each; the host names one with [`Engine`], and
 //! [`Engine::default`] is the fastest the build has.
 //!
@@ -64,6 +64,10 @@
 //! - [`Engine::Native`]: Cranelift machine code where a node has a
 //!   lowering and the node's closure elsewhere. Needs the `jit`
 //!   feature.
+//! - [`Engine::PureNative`]: Cranelift machine code and nothing else,
+//!   refusing the program where `Native` would fall back to a closure.
+//!   A host asks for it to learn whether its program is fully native.
+//!   Needs the `jit` feature.
 //!
 //! [`Provenance`] chooses how much re-evaluation a changed input
 //! triggers; it is an optimization and never changes a result. Every

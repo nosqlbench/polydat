@@ -194,6 +194,18 @@ pub enum Engine {
     /// Native code where a node has a lowering, its closure elsewhere:
     /// the P3 tier. Refused by a build without the `jit` feature.
     Native(Provenance),
+    /// Native code and nothing else: the differential tier behind
+    /// [`Engine::Native`] (engines.md §8). It differs from `Native` in
+    /// what it does with a node that has no native lowering, which is
+    /// to refuse the program rather than run that node's closure. A
+    /// host asks for it to be told whether its program is fully native,
+    /// which `Native` can never answer because it always succeeds.
+    /// Refused by a build without the `jit` feature.
+    ///
+    /// Only [`Provenance::Raw`] and [`Provenance::PushPull`] have a
+    /// pure kernel; the other named modes are refused, and
+    /// [`Provenance::Auto`] resolves to one of the two.
+    PureNative(Provenance),
 }
 
 impl Default for Engine {
@@ -225,6 +237,7 @@ impl std::fmt::Display for Engine {
             }
             Engine::Closures(p) => write!(f, "closures ({p:?})"),
             Engine::Native(p) => write!(f, "native ({p:?})"),
+            Engine::PureNative(p) => write!(f, "pure native ({p:?})"),
         }
     }
 }

@@ -16,6 +16,21 @@ the runtime's one evaluation rule and the ownership of every output in
 | Interpreter (P1) | `PolydatKernel` over `Box<dyn PolydatNode>` and typed `Value` buffers, with native cones per its `JitMode` | `Engine::Interpreter(mode)`, or `compile_polydat`; `compile_polydat_interpreter` and `PolydatAssembler::compile` for the concrete type |
 | Closure tier (P2) | Every node's generated closure over one flat `u64` slot buffer | `Engine::Closures(provenance)` |
 | Native (P3) | Cranelift native code for every node with a lowering and the node's closure elsewhere, over the same slot buffer, one native function per run of consecutive eligible nodes | `Engine::Native(provenance)`; refused by a build without the `jit` feature |
+| Pure native | Cranelift native code and nothing else: no closure fallback, so a node without a lowering refuses the program | `Engine::PureNative(provenance)`, with `Raw` or `PushPull` only; refused by a build without the `jit` feature |
+
+Pure native is the differential tier behind P3 (§8), and it is an
+engine a host may name rather than an internal one. It differs from
+`Native` only in what it does with a node that has neither a native
+form nor a kit: `Native` runs that node's closure and always succeeds,
+while pure native refuses and names the node. So it is the only way to
+ask whether a program is fully native, which `Native` can never answer
+because it cannot fail for that reason. Every node in this library
+lowers today, so the two tiers accept the same programs; the question
+the pure tier answers is about a host's own registered nodes, which is
+where a node with no native form realistically appears. It keeps the
+two provenance forms the differential needs, `Raw` and `PushPull`; a
+named mode with no pure kernel is refused, and `Auto` resolves to one
+of the two.
 
 A host names an engine with `compile_polydat_with(src, engine)`,
 `compile_polydat_with_engine(src, engine, &options, log)`, or
