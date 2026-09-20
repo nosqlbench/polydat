@@ -45,7 +45,12 @@ fn traces(src: &str, coords: &[u64], outputs: &[&str], engine: Engine) -> (Trace
         let mut p1 = stream.activation(index).unwrap();
         p1.for_each_cycle(|i, kernel| {
             for name in outputs {
-                want.push((index as u64, i, name.to_string(), kernel.pull(name).clone()));
+                want.push((
+                    index as u64,
+                    i,
+                    name.to_string(),
+                    kernel.pull_ref(name).clone(),
+                ));
             }
         });
         let mut act = stream

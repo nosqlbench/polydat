@@ -3103,7 +3103,7 @@ mod tests {
         "#;
         let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[0]);
-        assert_eq!(kernel.pull("label").as_str(), "hello world");
+        assert_eq!(kernel.pull_ref("label").as_str(), "hello world");
     }
 
     #[test]
@@ -3114,7 +3114,7 @@ mod tests {
         "#;
         let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[0]);
-        assert_eq!(kernel.pull("base").as_u64(), 1_710_000_000_000);
+        assert_eq!(kernel.pull_ref("base").as_u64(), 1_710_000_000_000);
     }
 
     // --- Diagnostic tests ---

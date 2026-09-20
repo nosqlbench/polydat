@@ -160,8 +160,8 @@ mod tests {
         }
         // A wrong U64→F64 adapter would panic pulling these (f64 read
         // as u64). The destructure types resolve: value=f64, signal=u64.
-        assert_eq!(k.pull("stable").as_u64(), 0, "n=1 < min_samples");
-        assert!((k.pull("stable_value").as_f64() - 5.0).abs() < 1e-9);
+        assert_eq!(k.pull_ref("stable").as_u64(), 0, "n=1 < min_samples");
+        assert!((k.pull_ref("stable_value").as_f64() - 5.0).abs() < 1e-9);
     }
 
     /// Feed a noisy ramp that ages out of an 8-deep window, then a

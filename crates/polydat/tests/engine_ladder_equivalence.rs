@@ -54,7 +54,7 @@ fn engine_ladder_has_identical_results_at_each_level() {
 
     for inputs in cases {
         p1.set_inputs(&inputs);
-        let p1_values = p1_outputs.map(|output| p1.pull_by_index(output).as_u64());
+        let p1_values = p1_outputs.map(|output| p1.pull_ref_at(output).as_u64());
 
         p2.eval_at(&inputs);
         let p2_values = p2_outputs.map(|output| p2.get_slot(output));

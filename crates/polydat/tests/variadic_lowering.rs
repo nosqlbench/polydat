@@ -71,8 +71,8 @@ fn agree(
         p1.set_inputs(&[c]);
         p3.set_inputs(&[c]);
         for out in outputs {
-            let a = p1.pull(out).clone();
-            let b = p3.pull(out).clone();
+            let a = p1.pull_ref(out).clone();
+            let b = p3.pull_ref(out).clone();
             assert_eq!(
                 a.port_type(),
                 b.port_type(),
@@ -135,7 +135,7 @@ fn json_constructors_lower_and_agree() {
     );
     let mut p3 = agree(&src, &["obj", "t"], 6, &["json_object", "json_with"], &[]);
     p3.set_inputs(&[3]);
-    let obj = p3.pull("obj").clone();
+    let obj = p3.pull_ref("obj").clone();
     assert!(matches!(obj, Value::Json(_)));
     assert!(obj.to_display_string().contains("\"name\""));
 }
@@ -166,13 +166,13 @@ fn value_port_nodes_agree_on_the_hybrid_kernel() {
         p1.set_inputs(&[c]);
         assert_eq!(
             k.get_value("j").to_display_string(),
-            p1.pull("j").to_display_string()
+            p1.pull_ref("j").to_display_string()
         );
         assert_eq!(
             k.get_value("t").to_display_string(),
-            p1.pull("t").to_display_string()
+            p1.pull_ref("t").to_display_string()
         );
-        assert_eq!(k.get_value("s").as_str(), p1.pull("s").as_str());
+        assert_eq!(k.get_value("s").as_str(), p1.pull_ref("s").as_str());
     }
 }
 
@@ -222,7 +222,7 @@ fn a_projection_body_with_cones_renders_inside_a_render() {
     let src = "input cycle: u64\nh := hash(cycle)\ns := __u64_to_string(h)\ntile t : json := {\"h\": ${h}, \"xs\": [@for k in 1..4 sep \",\" { {\"k\": ${k}, \"hk\": ${hash(k)}, \"s\": ${__u64_to_string(hash(k))}, \"outer\": ${s}} }]}\n";
     let mut p3 = agree(src, &["t"], 5, &["tile_render"], &[]);
     p3.set_inputs(&[2]);
-    let text = p3.pull("t").to_display_string();
+    let text = p3.pull_ref("t").to_display_string();
     assert!(text.contains("\"hk\":"), "{text}");
 }
 
@@ -240,7 +240,7 @@ fn a_projection_tile_renders_on_the_hybrid_kernel() {
     for c in 0..6u64 {
         k.eval_at(&[c]);
         p1.set_inputs(&[c]);
-        assert_eq!(k.get_value("t").as_str(), p1.pull("t").as_str());
+        assert_eq!(k.get_value("t").as_str(), p1.pull_ref("t").as_str());
     }
 }
 
@@ -258,7 +258,7 @@ fn a_pure_native_kernel_carries_a_reference_output() {
     for c in [3u64, 4, 4, 5] {
         pure.eval_at(&[c]);
         p1.set_inputs(&[c]);
-        assert_eq!(pure.get_value("s").as_str(), p1.pull("s").as_str());
+        assert_eq!(pure.get_value("s").as_str(), p1.pull_ref("s").as_str());
     }
 }
 
@@ -277,7 +277,7 @@ fn a_hybrid_kernels_string_output_is_owned_by_its_step() {
     let want: Vec<u64> = (1..500u64)
         .map(|c| {
             p1.set_inputs(&[c]);
-            p1.pull("n").as_u64()
+            p1.pull_ref("n").as_u64()
         })
         .collect();
     let mut kept = None;

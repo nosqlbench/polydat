@@ -160,7 +160,7 @@ fn deeply_nested_function_calls() {
     "#;
     let mut kernel = compile_polydat_interpreter(src).unwrap();
     kernel.set_inputs(&[42]);
-    let _ = kernel.pull("deep").as_u64();
+    let _ = kernel.pull_ref("deep").as_u64();
 }
 
 #[test]
@@ -171,7 +171,7 @@ fn deeply_nested_arithmetic() {
     "#;
     let mut kernel = compile_polydat_interpreter(src).unwrap();
     kernel.set_inputs(&[10]);
-    let result = kernel.pull("v").as_u64();
+    let result = kernel.pull_ref("v").as_u64();
     // (((10+1)*2)+3)*4)+5 = ((11*2)+3)*4+5 = (22+3)*4+5 = 25*4+5 = 105
     assert_eq!(result, 105);
 }
@@ -184,7 +184,7 @@ fn hex_literals() {
     "#;
     let mut kernel = compile_polydat_interpreter(src).unwrap();
     kernel.set_inputs(&[1]);
-    assert!(kernel.pull("v").as_u64() < 255);
+    assert!(kernel.pull_ref("v").as_u64() < 255);
 }
 
 #[test]
@@ -195,7 +195,7 @@ fn negative_float_literal() {
     "#;
     let mut kernel = compile_polydat_interpreter(src).unwrap();
     kernel.set_inputs(&[0]);
-    let val = kernel.pull("v").as_f64();
+    let val = kernel.pull_ref("v").as_f64();
     assert!((val - (-3.14)).abs() < 0.001);
 }
 
@@ -445,12 +445,12 @@ fn extern_usable_as_wire_argument() {
     let idx = kernel.program().find_input("offset").unwrap();
     kernel.state().set_input(idx, polydat::ast::Value::U64(100));
     kernel.set_inputs(&[42]);
-    let v1 = kernel.pull("result").as_u64();
+    let v1 = kernel.pull_ref("result").as_u64();
 
     // Different extern value should produce different hash
     kernel.state().set_input(idx, polydat::ast::Value::U64(200));
     kernel.set_inputs(&[42]);
-    let v2 = kernel.pull("result").as_u64();
+    let v2 = kernel.pull_ref("result").as_u64();
     assert_ne!(v1, v2, "different extern values should hash differently");
 }
 
@@ -465,7 +465,7 @@ fn extern_in_arithmetic_expression() {
     let idx = kernel.program().find_input("scale").unwrap();
     kernel.state().set_input(idx, polydat::ast::Value::U64(10));
     kernel.set_inputs(&[5]);
-    let v = kernel.pull("result").as_u64();
+    let v = kernel.pull_ref("result").as_u64();
     assert_eq!(v, 50);
 }
 
@@ -481,7 +481,7 @@ fn extern_input_usable_as_output() {
     kernel.state().set_input(idx, polydat::ast::Value::U64(128));
     kernel.set_inputs(&[0]);
     // The passthrough output should reflect the input value
-    let val = kernel.pull("dim").as_u64();
+    let val = kernel.pull_ref("dim").as_u64();
     assert_eq!(val, 128);
 }
 
@@ -544,7 +544,7 @@ fn materialize_wiring_from_outer_copies_constants() {
 
     // The passthrough output also reflects the bound value
     inner.set_inputs(&[0]);
-    let pulled = inner.pull("dim").as_u64();
+    let pulled = inner.pull_ref("dim").as_u64();
     assert_eq!(pulled, 128);
 }
 
@@ -593,13 +593,13 @@ fn deterministic_across_1000_cycles() {
     let mut first_pass = Vec::new();
     for i in 0..1000 {
         kernel.set_inputs(&[i]);
-        first_pass.push(kernel.pull("v").as_u64());
+        first_pass.push(kernel.pull_ref("v").as_u64());
     }
 
     // Verify second pass matches
     for i in 0..1000 {
         kernel.set_inputs(&[i]);
-        let v = kernel.pull("v").as_u64();
+        let v = kernel.pull_ref("v").as_u64();
         assert_eq!(
             v, first_pass[i as usize],
             "non-deterministic at cycle {i}: {v} != {}",
@@ -620,14 +620,14 @@ fn deterministic_with_multiple_outputs() {
 
     for i in 0..100 {
         kernel.set_inputs(&[i]);
-        let a1 = kernel.pull("a").as_u64();
-        let b1 = kernel.pull("b").as_u64();
-        let c1 = kernel.pull("c").as_u64();
+        let a1 = kernel.pull_ref("a").as_u64();
+        let b1 = kernel.pull_ref("b").as_u64();
+        let c1 = kernel.pull_ref("c").as_u64();
 
         kernel.set_inputs(&[i]);
-        let a2 = kernel.pull("a").as_u64();
-        let b2 = kernel.pull("b").as_u64();
-        let c2 = kernel.pull("c").as_u64();
+        let a2 = kernel.pull_ref("a").as_u64();
+        let b2 = kernel.pull_ref("b").as_u64();
+        let c2 = kernel.pull_ref("c").as_u64();
 
         assert_eq!(a1, a2, "non-deterministic 'a' at cycle {i}");
         assert_eq!(b1, b2, "non-deterministic 'b' at cycle {i}");
@@ -647,7 +647,7 @@ fn max_u64_input() {
     "#;
     let mut kernel = compile_polydat_interpreter(src).unwrap();
     kernel.set_inputs(&[u64::MAX]);
-    let _ = kernel.pull("h").as_u64();
+    let _ = kernel.pull_ref("h").as_u64();
     // Should not panic
 }
 
@@ -660,7 +660,7 @@ fn zero_input() {
     "#;
     let mut kernel = compile_polydat_interpreter(src).unwrap();
     kernel.set_inputs(&[0]);
-    assert!(kernel.pull("v").as_u64() < 100);
+    assert!(kernel.pull_ref("v").as_u64() < 100);
 }
 
 #[test]
@@ -671,7 +671,7 @@ fn mod_by_one() {
     "#;
     let mut kernel = compile_polydat_interpreter(src).unwrap();
     kernel.set_inputs(&[42]);
-    assert_eq!(kernel.pull("v").as_u64(), 0);
+    assert_eq!(kernel.pull_ref("v").as_u64(), 0);
 }
 
 #[test]
@@ -725,7 +725,7 @@ fn fuzz_random_hash_chains() {
         let mut kernel = compile_polydat_interpreter(&src)
             .unwrap_or_else(|e| panic!("seed {seed}: compile failed: {e}\nsource:\n{src}"));
         kernel.set_inputs(&[seed]);
-        let v = kernel.pull("result").as_u64();
+        let v = kernel.pull_ref("result").as_u64();
         assert!(v < 1000, "seed {seed}: expected < 1000, got {v}");
     }
 }
@@ -746,7 +746,7 @@ fn fuzz_arithmetic_expressions() {
             let mut kernel = result.unwrap();
             // Don't test with values that might overflow — just verify it doesn't panic
             kernel.set_inputs(&[10]);
-            let _ = kernel.pull("result");
+            let _ = kernel.pull_ref("result");
         }
     }
 }
@@ -765,7 +765,7 @@ fn fuzz_many_bindings() {
         let mut kernel = compile_polydat_interpreter(&src)
             .unwrap_or_else(|e| panic!("n={n}: compile failed: {e}\nsource:\n{src}"));
         kernel.set_inputs(&[42]);
-        let _ = kernel.pull(&prev);
+        let _ = kernel.pull_ref(&prev);
     }
 }
 
@@ -782,7 +782,7 @@ fn fuzz_multi_output_destructuring() {
             .unwrap_or_else(|e| panic!("n={n}: compile failed: {e}\nsource:\n{src}"));
         kernel.set_inputs(&[12345]);
         for name in &names {
-            let _ = kernel.pull(name);
+            let _ = kernel.pull_ref(name);
         }
     }
 }
@@ -797,7 +797,7 @@ fn fuzz_wide_graph() {
     let mut kernel = compile_polydat_interpreter(&src).unwrap();
     kernel.set_inputs(&[42]);
     for i in 0..100 {
-        let v = kernel.pull(&format!("out_{i}")).as_u64();
+        let v = kernel.pull_ref(&format!("out_{i}")).as_u64();
         assert!(v < 1000, "out_{i} = {v}");
     }
 }
@@ -869,8 +869,8 @@ fn string_eq_compiles_and_evaluates() {
     "#;
     let mut kernel = compile_polydat_interpreter(src).unwrap();
     kernel.set_inputs(&[0]);
-    assert_eq!(kernel.pull("eq").as_u64(), 1);
-    assert_eq!(kernel.pull("ne").as_u64(), 0);
+    assert_eq!(kernel.pull_ref("eq").as_u64(), 1);
+    assert_eq!(kernel.pull_ref("ne").as_u64(), 0);
 }
 
 /// `!=` between two String wires desugars to `str_ne`.
@@ -884,8 +884,8 @@ fn string_ne_compiles_and_evaluates() {
     "#;
     let mut kernel = compile_polydat_interpreter(src).unwrap();
     kernel.set_inputs(&[0]);
-    assert_eq!(kernel.pull("ne").as_u64(), 1);
-    assert_eq!(kernel.pull("eq").as_u64(), 0);
+    assert_eq!(kernel.pull_ref("ne").as_u64(), 1);
+    assert_eq!(kernel.pull_ref("eq").as_u64(), 0);
 }
 
 /// `if(cond, str_a, str_b)` with String branches desugars to
@@ -899,7 +899,7 @@ fn if_with_string_branches_picks_str() {
     "#;
     let mut kernel = compile_polydat_interpreter(src).unwrap();
     kernel.set_inputs(&[0]);
-    assert_eq!(kernel.pull("out").as_str(), "fast");
+    assert_eq!(kernel.pull_ref("out").as_str(), "fast");
 }
 
 /// The motivating workload pattern from full_cql_vector.yaml's
@@ -916,7 +916,7 @@ fn if_string_cond_picks_f64_branch() {
     "#;
     let mut kernel = compile_polydat_interpreter(src).unwrap();
     kernel.set_inputs(&[0]);
-    assert!((kernel.pull("overscan").as_f64() - 1.5).abs() < 1e-9);
+    assert!((kernel.pull_ref("overscan").as_f64() - 1.5).abs() < 1e-9);
 }
 
 /// Ordered comparisons (<, >, <=, >=) on Strings are not supported;
@@ -1020,8 +1020,8 @@ fn if_block_matches_call_form_u64() {
     let mut kc = compile_polydat_interpreter(call).unwrap();
     kb.set_inputs(&[0]);
     kc.set_inputs(&[0]);
-    assert_eq!(kb.pull("out").as_u64(), 100);
-    assert_eq!(kb.pull("out").as_u64(), kc.pull("out").as_u64());
+    assert_eq!(kb.pull_ref("out").as_u64(), 100);
+    assert_eq!(kb.pull_ref("out").as_u64(), kc.pull_ref("out").as_u64());
 }
 
 /// The false path is taken when the condition is 0.
@@ -1034,7 +1034,7 @@ fn if_block_takes_else_branch() {
     "#;
     let mut kernel = compile_polydat_interpreter(src).unwrap();
     kernel.set_inputs(&[0]);
-    assert_eq!(kernel.pull("out").as_u64(), 7);
+    assert_eq!(kernel.pull_ref("out").as_u64(), 7);
 }
 
 /// Mixed u64/f64 branches widen through select_f64, exactly as the call form does.
@@ -1048,7 +1048,7 @@ fn if_block_widens_mixed_branches_to_f64() {
     let mut kernel = compile_polydat_interpreter(src).unwrap();
     kernel.set_inputs(&[0]);
     assert!(
-        (kernel.pull("out").as_f64() - 1.0).abs() < 1e-9,
+        (kernel.pull_ref("out").as_f64() - 1.0).abs() < 1e-9,
         "u64 branch should widen to f64 when the other branch is f64"
     );
 }
@@ -1063,7 +1063,7 @@ fn if_block_picks_str() {
     "#;
     let mut kernel = compile_polydat_interpreter(src).unwrap();
     kernel.set_inputs(&[0]);
-    assert_eq!(kernel.pull("out").as_str(), "fast");
+    assert_eq!(kernel.pull_ref("out").as_str(), "fast");
 }
 
 /// `else if` chains select the correct arm.
@@ -1076,7 +1076,7 @@ fn if_block_else_if_chain_selects_middle_arm() {
     "#;
     let mut kernel = compile_polydat_interpreter(src).unwrap();
     kernel.set_inputs(&[0]);
-    assert_eq!(kernel.pull("out").as_u64(), 2);
+    assert_eq!(kernel.pull_ref("out").as_u64(), 2);
 }
 
 /// The motivating case: guard a divisor without a conditional guarantee. Both
@@ -1095,6 +1095,6 @@ fn if_block_does_not_short_circuit_the_untaken_branch() {
     kernel.set_inputs(&[0]);
     // segments == 0 -> else arm; the then-arm's `mean` was still computed, and
     // max(segments,1) is what kept it well-defined.
-    assert_eq!(kernel.pull("out").as_u64(), 0);
-    assert_eq!(kernel.pull("mean").as_u64(), 1000);
+    assert_eq!(kernel.pull_ref("out").as_u64(), 0);
+    assert_eq!(kernel.pull_ref("mean").as_u64(), 1000);
 }

@@ -47,7 +47,7 @@ fn from_the_assembler_api() {
 
     let mut kernel = asm.compile().unwrap();
     kernel.set_inputs(&[42]);
-    assert!(kernel.pull("user_id").as_u64() < 1_000_000);
+    assert!(kernel.pull_ref("user_id").as_u64() < 1_000_000);
 }
 
 /// `dsl::compile::eval_const_expr`, "Examples".

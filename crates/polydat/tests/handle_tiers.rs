@@ -1005,10 +1005,10 @@ fn check_with(src: &str, outputs: &[&str], cycles: u64, externs: &[(String, Valu
     for c in 0..cycles {
         let first = |n: usize| if c == 0 { n } else { 0 };
         p1.set_inputs(&[c]);
-        let want: Vec<Value> = outputs.iter().map(|o| p1.pull(o).clone()).collect();
+        let want: Vec<Value> = outputs.iter().map(|o| p1.pull_ref(o).clone()).collect();
         let want_rows = built() + first(p1_built);
         cones.set_inputs(&[c]);
-        let got_cones: Vec<Value> = outputs.iter().map(|o| cones.pull(o).clone()).collect();
+        let got_cones: Vec<Value> = outputs.iter().map(|o| cones.pull_ref(o).clone()).collect();
         let cones_rows = built() + first(cones_built);
         p2.set_inputs(&[c]);
         let got_p2: Vec<Value> = outputs.iter().map(|o| p2.pull(o)).collect();
@@ -1047,7 +1047,7 @@ fn check_with(src: &str, outputs: &[&str], cycles: u64, externs: &[(String, Valu
     // produced (axioms S3, S5).
     for &c in &[0u64, 1, 1, 2, 2, 2, 0, 3, 3, 1] {
         p1.set_inputs(&[c]);
-        let want: Vec<Value> = outputs.iter().map(|o| p1.pull(o).clone()).collect();
+        let want: Vec<Value> = outputs.iter().map(|o| p1.pull_ref(o).clone()).collect();
         p2pp.eval_at(&[c]);
         let got: Vec<Value> = outputs.iter().map(|o| p2pp.get_value(o)).collect();
         for (i, out) in outputs.iter().enumerate() {
@@ -1164,7 +1164,7 @@ fn provenance_kernels_keep_reference_outputs_current_on_repeated_coordinates() {
         p1.set_inputs(&[c]);
         let want: Vec<Value> = ["s", "j", "t", "n"]
             .iter()
-            .map(|o| p1.pull(o).clone())
+            .map(|o| p1.pull_ref(o).clone())
             .collect();
         p2.eval_at(&[c]);
         let got: Vec<Value> = ["s", "j", "t", "n"]

@@ -605,7 +605,7 @@ fn run_traversals_bounded(
                 for name in &outputs {
                     trace.push(format!(
                         "{t}/{a}/{c} {name}={}",
-                        kernel.pull(name).to_display_string()
+                        kernel.pull_ref(name).to_display_string()
                     ));
                 }
             }

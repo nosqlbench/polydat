@@ -66,7 +66,7 @@ fn row(src: &str) -> [(&'static str, String); 4] {
         k.set_inputs(&[3]);
         let outs: Vec<String> = k.output_names().iter().map(|s| s.to_string()).collect();
         for o in &outs {
-            let _ = k.pull(o);
+            let _ = k.pull_ref(o);
         }
         Ok::<(), String>(())
     }));
@@ -218,7 +218,7 @@ fn the_engines_agree_on_every_node() {
             let want = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 p1.set_inputs(&[c]);
                 outs.iter()
-                    .map(|o| p1.pull(o).clone())
+                    .map(|o| p1.pull_ref(o).clone())
                     .collect::<Vec<Value>>()
             }))
             .map_err(payload_text);

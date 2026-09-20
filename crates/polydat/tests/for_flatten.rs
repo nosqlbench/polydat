@@ -17,7 +17,7 @@ fn traversed(src: &str) -> Vec<u64> {
     let mut stream = k.traverse(0).unwrap();
     let mut seen = Vec::new();
     while let Some(mut a) = stream.advance().unwrap() {
-        seen.push(a.cycle(0).pull("v").as_u64());
+        seen.push(a.cycle(0).pull_ref("v").as_u64());
     }
     seen
 }
@@ -46,7 +46,7 @@ fn an_order_over_a_context_free_generator_validates_and_samples() {
 fn a_producer_over_a_context_free_generator_is_bounded_by_its_values() {
     let mut k = compile_polydat_interpreter("input cycle: u64\nfibs := for k in fib(8)\n").unwrap();
     k.set_inputs(&[0]);
-    let streamer = k.pull("fibs").clone();
+    let streamer = k.pull_ref("fibs").clone();
     let streamer = streamer.as_streamer().unwrap();
     assert!(
         matches!(streamer.cardinality(), CardinalityClass::Bounded(8)),
@@ -80,7 +80,7 @@ fn a_generator_over_a_runtime_name_stays_unbounded_at_compile() {
     let mut stream = k.traverse(0).unwrap();
     let mut seen = Vec::new();
     while let Some(mut a) = stream.advance().unwrap() {
-        seen.push(a.cycle(0).pull("v").as_u64());
+        seen.push(a.cycle(0).pull_ref("v").as_u64());
     }
     assert_eq!(seen, vec![50, 50]);
 }
@@ -148,7 +148,7 @@ fn a_built_source_projects_the_comprehension_it_traverses() {
         compile_ast_interpreter_with_options(&file(built), "", &CompileOptions::default(), None)
             .unwrap();
     k.set_inputs(&[0]);
-    let streamer = k.pull("sweep").clone();
+    let streamer = k.pull_ref("sweep").clone();
     assert!(
         matches!(
             streamer.as_streamer().unwrap().cardinality(),
@@ -216,11 +216,11 @@ fn a_built_tile_projects_the_body_it_renders() {
     let mut k =
         compile_ast_interpreter_with_options(&file, "", &CompileOptions::default(), None).unwrap();
     k.set_inputs(&[41]);
-    assert_eq!(k.pull("t").as_str(), "n=42");
+    assert_eq!(k.pull_ref("t").as_str(), "n=42");
     // The same text written as source gives the same program.
     let mut written =
         compile_polydat_interpreter("input cycle: u64\ntile t := \"n=${u64_add(cycle, 1)}\"\n")
             .unwrap();
     written.set_inputs(&[41]);
-    assert_eq!(written.pull("t").as_str(), "n=42");
+    assert_eq!(written.pull_ref("t").as_str(), "n=42");
 }

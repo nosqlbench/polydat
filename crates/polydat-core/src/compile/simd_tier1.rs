@@ -622,7 +622,7 @@ impl Tier1SimdExecutor {
         self.scalar
             .state()
             .set_input(self.driving_input_index, Value::U64(ordinal));
-        self.scalar.pull(&self.descriptor.output).clone()
+        self.scalar.pull_ref(&self.descriptor.output).clone()
     }
 }
 

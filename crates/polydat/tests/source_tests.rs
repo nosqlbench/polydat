@@ -533,7 +533,7 @@ fn cursor_projection_wires_into_downstream_nodes() {
         kernel.state().set_input(idx, Value::U64(21));
     }
     kernel.set_inputs(&[0]); // cycle = 0
-    let doubled = kernel.pull("doubled").as_u64();
+    let doubled = kernel.pull_ref("doubled").as_u64();
     assert_eq!(doubled, 42); // 21 + 21
 }
 
@@ -578,7 +578,7 @@ fn cursor_projection_feeds_function_call() {
         kernel.state().set_input(idx, Value::U64(42));
     }
     kernel.set_inputs(&[0]);
-    let id = kernel.pull("id").as_u64();
+    let id = kernel.pull_ref("id").as_u64();
     // hash(42) should produce a deterministic non-zero value
     assert!(id != 0);
 }

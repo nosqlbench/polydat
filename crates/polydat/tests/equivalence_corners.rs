@@ -199,7 +199,7 @@ impl Engine for Interpreter {
             if let Some(v) = extern_value {
                 k.set_input("x", v.clone()).unwrap();
             }
-            outs.iter().map(|o| canonical(k.pull(o))).collect()
+            outs.iter().map(|o| canonical(k.pull_ref(o))).collect()
         })
     }
 }

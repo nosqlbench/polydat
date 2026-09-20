@@ -43,9 +43,9 @@ fn tile_defaults_transform_rereads_untouched_tiles_only() {
     let ast = polydat::dsl::parser::parse_with_tile_defaults(tokens, &defaults).unwrap();
     let mut k = compile_ast(&ast).unwrap();
     k.set_inputs(&[3]);
-    assert_eq!(k.pull("a").as_str(), "3 on ${keep}");
+    assert_eq!(k.pull_ref("a").as_str(), "3 on ${keep}");
     // `b` declared its own delimiters and keeps them.
-    assert_eq!(k.pull("b").as_str(), "3 <%cycle%>");
+    assert_eq!(k.pull_ref("b").as_str(), "3 <%cycle%>");
 }
 
 // These run through the binary on a temp file, so they also cover the

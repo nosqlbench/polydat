@@ -18,8 +18,8 @@ fn a_module_defined_in_the_same_source_resolves_without_a_source_directory() {
         t := pair_sum(s, s)\n";
     let mut k = compile_polydat_interpreter(src).unwrap();
     k.set_inputs(&[5]);
-    assert_eq!(k.pull("s").as_u64(), 15);
-    assert_eq!(k.pull("t").as_u64(), 30);
+    assert_eq!(k.pull_ref("s").as_u64(), 15);
+    assert_eq!(k.pull_ref("t").as_u64(), 30);
 }
 
 #[test]
@@ -32,7 +32,7 @@ fn a_local_module_shadows_a_library_node_of_the_same_name() {
         r := pick(cycle)\n";
     let mut k = compile_polydat_interpreter(src).unwrap();
     k.set_inputs(&[21]);
-    assert_eq!(k.pull("r").as_u64(), 42);
+    assert_eq!(k.pull_ref("r").as_u64(), 42);
     // Without the definition the library node is still the one called.
     let e = compile_polydat_interpreter("input cycle: u64\nr := pick(cycle)\n").unwrap_err();
     assert!(
@@ -50,7 +50,7 @@ fn a_local_module_with_a_tile_resolves_too() {
         d := card(cycle + 1)\n";
     let mut k = compile_polydat_interpreter(src).unwrap();
     k.set_inputs(&[4]);
-    assert_eq!(k.pull("d").as_str(), "{\"n\": 5, \"twice\": 10}");
+    assert_eq!(k.pull_ref("d").as_str(), "{\"n\": 5, \"twice\": 10}");
 }
 
 #[test]
@@ -60,7 +60,8 @@ fn variadic_value_nodes_receive_typed_values() {
         arr := json_array(cycle, f, \"s\")\n";
     let mut k = compile_polydat_interpreter(src).unwrap();
     k.set_inputs(&[7]);
-    let arr: serde_json::Value = serde_json::from_str(&k.pull("arr").to_display_string()).unwrap();
+    let arr: serde_json::Value =
+        serde_json::from_str(&k.pull_ref("arr").to_display_string()).unwrap();
     assert_eq!(arr, serde_json::json!([7, 3.5, "s"]));
 }
 
@@ -74,9 +75,9 @@ fn as_casts_through_the_adapter_catalog() {
         t := b as bool\n";
     let mut k = compile_polydat_interpreter(src).unwrap();
     k.set_inputs(&[3]);
-    assert_eq!(k.pull("j").to_display_string(), "3");
-    assert_eq!(k.pull("s").as_str(), "3");
-    assert!(k.pull("t").as_bool());
+    assert_eq!(k.pull_ref("j").to_display_string(), "3");
+    assert_eq!(k.pull_ref("s").as_str(), "3");
+    assert!(k.pull_ref("t").as_bool());
     // Narrowing is still refused with the explicit alternatives.
     let e = compile_polydat_interpreter("input cycle: u64\nf := to_f64(cycle)\nn := f as u64\n")
         .unwrap_err();
@@ -93,12 +94,12 @@ fn a_producer_bound_inside_a_module_projects_in_its_tiles() {
         g := grid(cycle + 10)\n";
     let mut k = compile_polydat_interpreter(src).unwrap();
     k.set_inputs(&[0]);
-    assert_eq!(k.pull("g").as_str(), "0,1,10,11 | 0,1");
+    assert_eq!(k.pull_ref("g").as_str(), "0,1,10,11 | 0,1");
     // Two calls bind two producers under their own prefixes.
     let src = format!("{src}h := grid(cycle + 100)\n");
     let mut k = compile_polydat_interpreter(&src).unwrap();
     k.set_inputs(&[0]);
-    assert_eq!(k.pull("h").as_str(), "0,1,100,101 | 0,1");
+    assert_eq!(k.pull_ref("h").as_str(), "0,1,100,101 | 0,1");
 }
 
 #[test]
@@ -112,7 +113,7 @@ fn module_string_parameters_spell_str_like_inputs_and_externs() {
         a := greet(\"world\", cycle)\n";
     let mut k = compile_polydat_interpreter(src).unwrap();
     k.set_inputs(&[3]);
-    assert_eq!(k.pull("a").as_str(), "hello world #3");
+    assert_eq!(k.pull_ref("a").as_str(), "hello world #3");
     // The library's older spelling `String` names the same type.
     let src = "input cycle: u64\n\
         greet(name: String) -> (line: String) := {\n\
@@ -121,7 +122,7 @@ fn module_string_parameters_spell_str_like_inputs_and_externs() {
         a := greet(\"there\")\n";
     let mut k = compile_polydat_interpreter(src).unwrap();
     k.set_inputs(&[0]);
-    assert_eq!(k.pull("a").as_str(), "hi there");
+    assert_eq!(k.pull_ref("a").as_str(), "hi there");
     // A literal of the wrong kind is still refused, in the keyword the
     // author will recognise.
     let e = compile_polydat_interpreter(
@@ -152,11 +153,11 @@ fn library_directory_files_are_parsed_once_and_reread_when_modified() {
     let compile = || compile_polydat_interpreter_with_options(program, &options, None);
     let mut k = compile().unwrap();
     k.set_inputs(&[4]);
-    assert_eq!(k.pull("r").as_u64(), 8);
+    assert_eq!(k.pull_ref("r").as_u64(), 8);
     // A second compiler in the same process reuses the parse and agrees.
     let mut k = compile().unwrap();
     k.set_inputs(&[5]);
-    assert_eq!(k.pull("r").as_u64(), 10);
+    assert_eq!(k.pull_ref("r").as_u64(), 10);
     // An edit with a later modification time is seen on the next compile.
     std::fs::write(
         &path,
@@ -172,5 +173,5 @@ fn library_directory_files_are_parsed_once_and_reread_when_modified() {
         .unwrap();
     let mut k = compile().unwrap();
     k.set_inputs(&[4]);
-    assert_eq!(k.pull("r").as_u64(), 12);
+    assert_eq!(k.pull_ref("r").as_u64(), 12);
 }

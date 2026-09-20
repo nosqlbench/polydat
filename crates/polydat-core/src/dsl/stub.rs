@@ -200,7 +200,7 @@ impl ScopedExpr {
 
     /// Evaluate (pull) the bound expression's output.
     pub fn eval(&mut self) -> Value {
-        self.kernel.pull(&self.output).clone()
+        self.kernel.pull_ref(&self.output).clone()
     }
 
     /// Evaluate as a boolean — the default truthiness sense. Polydat

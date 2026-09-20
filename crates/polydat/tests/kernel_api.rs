@@ -657,7 +657,7 @@ fn the_default_engine_forms_take_options_tiles_and_activations() {
     assert!(!log.events().is_empty());
     k.set_inputs(&[3]);
     p1.set_inputs(&[3]);
-    assert_eq!(k.pull("key"), *p1.pull("key"));
+    assert_eq!(k.pull("key"), *p1.pull_ref("key"));
     assert_eq!(k.engine(), compile_polydat_kernel(SRC).unwrap().engine());
 
     // Tiles from host data.
@@ -706,7 +706,7 @@ fn the_default_engine_forms_take_options_tiles_and_activations() {
             k.engine()
         );
         let mut want = stream.activation(index).unwrap();
-        assert_eq!(act.cycle(0).pull("x"), *want.cycle(0).pull("x"));
+        assert_eq!(act.cycle(0).pull("x"), *want.cycle(0).pull_ref("x"));
     }
 }
 

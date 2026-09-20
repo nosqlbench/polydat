@@ -147,7 +147,7 @@ fn bench_case(c: &mut Criterion, case: &str, src: &str, outputs: &[&str]) {
         b.iter(|| {
             p1.set_inputs(&[cycle]);
             for &output in &p1_outputs {
-                black_box(weight(p1.pull_by_index(output)));
+                black_box(weight(p1.pull_ref_at(output)));
             }
             cycle = cycle.wrapping_add(1);
         });

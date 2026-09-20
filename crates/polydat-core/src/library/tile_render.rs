@@ -1390,11 +1390,11 @@ mod tests {
         };
         assert_eq!(bodies_of(&mut k).0, 0, "nothing before the first render");
         k.set_inputs(&[10]);
-        assert_eq!(k.pull("t").as_str(), "10,11,12");
+        assert_eq!(k.pull_ref("t").as_str(), "10,11,12");
         assert_eq!(bodies_of(&mut k).0, 1, "one kernel for the body");
         for c in 0..5u64 {
             k.set_inputs(&[c]);
-            let _ = k.pull("t");
+            let _ = k.pull_ref("t");
         }
         let (created, clone) = bodies_of(&mut k);
         assert_eq!(created, 1, "reused across renders");

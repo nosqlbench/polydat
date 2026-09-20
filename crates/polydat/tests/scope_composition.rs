@@ -123,9 +123,9 @@ fn materialize_wiring_from_outer_does_not_affect_coordinates() {
 
     // Coordinate input should still work normally
     inner.set_inputs(&[42]);
-    let v1 = inner.pull("h").as_u64();
+    let v1 = inner.pull_ref("h").as_u64();
     inner.set_inputs(&[43]);
-    let v2 = inner.pull("h").as_u64();
+    let v2 = inner.pull_ref("h").as_u64();
     assert_ne!(v1, v2, "different cycles should produce different hashes");
 }
 
@@ -364,11 +364,11 @@ fn extern_wired_into_hash() {
 
     kernel.state().set_input(idx, Value::U64(42));
     kernel.set_inputs(&[0]);
-    let v1 = kernel.pull("result").as_u64();
+    let v1 = kernel.pull_ref("result").as_u64();
 
     kernel.state().set_input(idx, Value::U64(99));
     kernel.set_inputs(&[0]);
-    let v2 = kernel.pull("result").as_u64();
+    let v2 = kernel.pull_ref("result").as_u64();
 
     assert_ne!(v1, v2, "different seeds should produce different hashes");
 }
@@ -385,7 +385,7 @@ fn extern_in_binary_expression() {
 
     kernel.state().set_input(idx, Value::U64(7));
     kernel.set_inputs(&[6]);
-    assert_eq!(kernel.pull("result").as_u64(), 42);
+    assert_eq!(kernel.pull_ref("result").as_u64(), 42);
 }
 
 #[test]
@@ -401,7 +401,7 @@ fn extern_in_function_chain() {
 
     kernel.state().set_input(idx, Value::U64(42));
     kernel.set_inputs(&[0]);
-    let v = kernel.pull("result").as_u64();
+    let v = kernel.pull_ref("result").as_u64();
     assert!(v < 100);
 }
 
@@ -417,11 +417,11 @@ fn extern_and_coordinate_mixed() {
 
     kernel.state().set_input(idx, Value::U64(1000));
     kernel.set_inputs(&[42]);
-    let v1 = kernel.pull("result").as_u64();
+    let v1 = kernel.pull_ref("result").as_u64();
 
     kernel.state().set_input(idx, Value::U64(2000));
     kernel.set_inputs(&[42]);
-    let v2 = kernel.pull("result").as_u64();
+    let v2 = kernel.pull_ref("result").as_u64();
 
     assert_eq!(v2 - v1, 1000, "offset difference should be reflected");
 }
@@ -465,11 +465,11 @@ fn full_scope_pipeline_outer_to_inner() {
 
     // Verify both externs were bound correctly
     inner.set_inputs(&[0]);
-    let dim_val = inner.pull("dim").as_u64();
+    let dim_val = inner.pull_ref("dim").as_u64();
     assert_eq!(dim_val, 128);
 
     inner.set_inputs(&[42]);
-    let id = inner.pull("id").as_u64();
+    let id = inner.pull_ref("id").as_u64();
     // id = hash(42) + 10000, should be > 10000
     assert!(id >= 10000, "id should include base_count offset, got {id}");
 }
@@ -649,7 +649,7 @@ fn sequential_inner_scopes_are_independent() {
         )
         .unwrap();
     inner1.set_inputs(&[0]);
-    let v1 = inner1.pull("h").as_u64();
+    let v1 = inner1.pull_ref("h").as_u64();
 
     // Second inner scope — should produce identical result
     let inner2_program = compile_polydat_interpreter(
@@ -671,7 +671,7 @@ fn sequential_inner_scopes_are_independent() {
         )
         .unwrap();
     inner2.set_inputs(&[0]);
-    let v2 = inner2.pull("h").as_u64();
+    let v2 = inner2.pull_ref("h").as_u64();
 
     assert_eq!(
         v1, v2,
@@ -1450,7 +1450,11 @@ fn cross_kernel_cell_write_invalidates_full_memoized_chain() {
         .unwrap();
 
     // Establish the memoized pre-write evaluation on the reader.
-    assert_eq!(reader.pull("ready"), &Value::U64(0), "pre-write predicate");
+    assert_eq!(
+        reader.pull_ref("ready"),
+        &Value::U64(0),
+        "pre-write predicate"
+    );
 
     // Cross-kernel write through the writer's cell-bound slot.
     use polydat::kernel::Dataflow;
@@ -1461,13 +1465,13 @@ fn cross_kernel_cell_write_invalidates_full_memoized_chain() {
     // The very next pull must observe it — through the whole
     // comparison/AND chain, not just at the root.
     assert_eq!(
-        reader.pull("ready"),
+        reader.pull_ref("ready"),
         &Value::U64(1),
         "first post-write pull reads the fresh cell through the full chain"
     );
     // And stay fresh (the dirty signal must not be half-consumed).
     assert_eq!(
-        reader.pull("ready"),
+        reader.pull_ref("ready"),
         &Value::U64(1),
         "second post-write pull"
     );
@@ -1476,5 +1480,9 @@ fn cross_kernel_cell_write_invalidates_full_memoized_chain() {
     writer
         .set_wire("s", Value::U64(0))
         .expect("cell-bound write");
-    assert_eq!(reader.pull("ready"), &Value::U64(0), "revert propagates");
+    assert_eq!(
+        reader.pull_ref("ready"),
+        &Value::U64(0),
+        "revert propagates"
+    );
 }

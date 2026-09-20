@@ -53,8 +53,8 @@ fn agree(src: &str, outputs: &[&str], cycles: u64, fused: &[&str]) {
         p1.set_inputs(&[c]);
         p3.set_inputs(&[c]);
         for out in outputs {
-            let a = p1.pull(out).clone();
-            let b = p3.pull(out).clone();
+            let a = p1.pull_ref(out).clone();
+            let b = p3.pull_ref(out).clone();
             assert_eq!(a.port_type(), b.port_type(), "{out} at cycle {c}: type");
             assert_eq!(
                 a.to_display_string(),
@@ -107,7 +107,7 @@ fn a_string_literal_feeds_a_cone_as_a_boundary_handle() {
     agree(src, &["line"], 6, &["str_concat"]);
     let mut p3 = kernel(src, JitMode::Force);
     p3.set_inputs(&[2]);
-    assert!(p3.pull("line").as_str().starts_with("row-"));
+    assert!(p3.pull_ref("line").as_str().starts_with("row-"));
 }
 
 #[test]
@@ -118,7 +118,7 @@ fn a_string_round_trips_through_parse_and_widening() {
     p3.set_inputs(&[3]);
     let mut p1 = kernel(src, JitMode::Off);
     p1.set_inputs(&[3]);
-    assert_eq!(p3.pull("n").as_u64(), p1.pull("n").as_u64());
+    assert_eq!(p3.pull_ref("n").as_u64(), p1.pull_ref("n").as_u64());
 }
 
 /// The string producers with a named native lowering write straight
@@ -339,7 +339,7 @@ fn the_vector_and_register_groups_have_named_lowerings() {
         pure.set_inputs(&[c]);
         p1.set_inputs(&[c]);
         for name in ["unit", "cos", "rd", "rev", "i16", "i64", "lid"] {
-            let want = p1.pull(name).clone();
+            let want = p1.pull_ref(name).clone();
             let got = pure.pull(name).clone();
             assert_eq!(got, want, "{name} at cycle {c}");
         }
@@ -354,15 +354,15 @@ fn a_string_read_is_an_owned_copy_that_outlives_the_next_write() {
     let src = "input cycle: u64\nw := \"w{cycle}\"\nu := str_upper(w)\n";
     let mut p3 = kernel(src, JitMode::Force);
     p3.set_inputs(&[7]);
-    let first = p3.pull("u").clone();
+    let first = p3.pull_ref("u").clone();
     assert_eq!(first.as_str(), "W7");
     assert_eq!(
-        p3.pull("u").as_str(),
+        p3.pull_ref("u").as_str(),
         "W7",
         "a second read is the same value"
     );
     p3.set_inputs(&[8]);
-    assert_eq!(p3.pull("u").as_str(), "W8");
+    assert_eq!(p3.pull_ref("u").as_str(), "W8");
     assert_eq!(first.as_str(), "W7", "the earlier read is the reader's own");
 }
 
@@ -382,7 +382,7 @@ fn a_non_decimal_format_u64_stays_on_p1_and_agrees() {
     agree(src, &["d", "x"], 4, &["format_u64"]);
     let mut p3 = kernel(src, JitMode::Force);
     p3.set_inputs(&[1]);
-    assert!(p3.pull("x").as_str().starts_with("0x"));
+    assert!(p3.pull_ref("x").as_str().starts_with("0x"));
 }
 
 /// An unparseable string is a diagnostic at every tier, and *when* it
@@ -395,7 +395,7 @@ fn a_failed_parse_is_a_diagnostic_at_every_tier() {
     for mode in [JitMode::Off, JitMode::Force] {
         let mut k = kernel(src, mode);
         k.set_inputs(&[0]);
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| k.pull("n").as_u64()));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| k.pull_ref("n").as_u64()));
         assert!(r.is_err(), "{mode:?} accepted an unparseable string");
     }
 }

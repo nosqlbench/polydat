@@ -69,7 +69,7 @@ fn agree(src: &str, narrow: Option<&Partition>) {
     }
     for c in [0u64, 1, 7, 250, 999, 1000, 4096] {
         p1.set_inputs(&[c]);
-        let want: Vec<Value> = OUTPUTS.iter().map(|o| p1.pull(o).clone()).collect();
+        let want: Vec<Value> = OUTPUTS.iter().map(|o| p1.pull_ref(o).clone()).collect();
         p2.eval_at(&[c]);
         let got_p2: Vec<Value> = OUTPUTS.iter().map(|o| p2.get_value(o)).collect();
         p2pp.eval_at(&[c]);
@@ -112,8 +112,11 @@ fn a_single_partition_clause_needs_no_host_call_on_any_engine() {
             .compile()
             .unwrap();
         p1.set_inputs(&[0]);
-        assert_eq!(p1.pull("n").as_u64(), parts[0].end_ord - parts[0].start_ord);
-        assert_eq!(p1.pull("ps").as_u64(), parts[0].start_ord);
+        assert_eq!(
+            p1.pull_ref("n").as_u64(),
+            parts[0].end_ord - parts[0].start_ord
+        );
+        assert_eq!(p1.pull_ref("ps").as_u64(), parts[0].start_ord);
     }
 }
 
@@ -194,7 +197,7 @@ fn a_clause_denoting_several_partitions_is_unset_until_narrowed() {
         .compile()
         .unwrap();
     p1.set_inputs(&[0]);
-    assert_eq!(*p1.pull("n"), Value::None);
+    assert_eq!(*p1.pull_ref("n"), Value::None);
     let mut p2 = compile_polydat_to_assembler(&src)
         .unwrap()
         .compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw))
@@ -204,7 +207,11 @@ fn a_clause_denoting_several_partitions_is_unset_until_narrowed() {
     for o in OUTPUTS {
         // The partition consumers read `None`; the scalar projections
         // read their declared defaults, on both engines.
-        assert_eq!(p2.get_value(o), *p1.pull(o), "`{o}` on the closure tier");
+        assert_eq!(
+            p2.get_value(o),
+            *p1.pull_ref(o),
+            "`{o}` on the closure tier"
+        );
     }
     // Narrowed, the same kernel computes; the outputs stop being `None`.
     let parts = compile_polydat_to_assembler(&src).unwrap().cursor_schemas()[0]

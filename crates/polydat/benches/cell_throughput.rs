@@ -89,8 +89,8 @@ fn build_n_input_kernel(n_inputs: usize) -> PolydatKernel {
 /// `node_clean` is true. Bench loops can then measure
 /// the steady-state hot path.
 fn warm_up(kernel: &mut PolydatKernel) {
-    black_box(kernel.pull("out")); // first pull: full eval; sets node_clean
-    black_box(kernel.pull("out")); // second pull: lazy-builds the cone, returns clean
+    black_box(kernel.pull_ref("out")); // first pull: full eval; sets node_clean
+    black_box(kernel.pull_ref("out")); // second pull: lazy-builds the cone, returns clean
 }
 
 // =================================================================
@@ -203,7 +203,7 @@ fn bench_pull_clean_one_scope(c: &mut Criterion) {
         warm_up(&mut kernel);
         group.bench_with_input(BenchmarkId::from_parameter(n_cells), &n_cells, |b, _| {
             b.iter(|| {
-                black_box(kernel.pull("out"));
+                black_box(kernel.pull_ref("out"));
             });
         });
     }
@@ -235,7 +235,7 @@ fn bench_pull_dirty_one_cell(c: &mut Criterion) {
             b.iter(|| {
                 cells[0].publish(Value::U64(v));
                 v = v.wrapping_add(1);
-                black_box(kernel.pull("out"));
+                black_box(kernel.pull_ref("out"));
             });
         });
     }
@@ -264,7 +264,7 @@ fn bench_pull_clean_multi_scope(c: &mut Criterion) {
         warm_up(&mut kernel);
         group.bench_with_input(BenchmarkId::from_parameter(n_scopes), &n_scopes, |b, _| {
             b.iter(|| {
-                black_box(kernel.pull("out"));
+                black_box(kernel.pull_ref("out"));
             });
         });
     }
@@ -301,7 +301,7 @@ fn bench_pull_clean_wide_spill(c: &mut Criterion) {
         warm_up(&mut kernel);
         group.bench_with_input(BenchmarkId::from_parameter(n_cells), &n_cells, |b, _| {
             b.iter(|| {
-                black_box(kernel.pull("out"));
+                black_box(kernel.pull_ref("out"));
             });
         });
     }

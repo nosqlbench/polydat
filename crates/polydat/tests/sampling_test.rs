@@ -49,7 +49,7 @@ fn normal_pipeline_mean_and_stddev() {
     let mut values = Vec::new();
     for cycle in 0..10_000u64 {
         k.set_inputs(&[cycle]);
-        values.push(k.pull("temperature").as_f64());
+        values.push(k.pull_ref("temperature").as_f64());
     }
     let mean = values.iter().sum::<f64>() / values.len() as f64;
     let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64;
@@ -63,9 +63,9 @@ fn normal_pipeline_mean_and_stddev() {
 fn normal_pipeline_deterministic() {
     let mut k = build_normal_pipeline();
     k.set_inputs(&[42]);
-    let v1 = k.pull("temperature").as_f64();
+    let v1 = k.pull_ref("temperature").as_f64();
     k.set_inputs(&[42]);
-    let v2 = k.pull("temperature").as_f64();
+    let v2 = k.pull_ref("temperature").as_f64();
     assert_eq!(v1, v2);
 }
 
@@ -112,8 +112,8 @@ fn correlated_samples_move_together() {
     let mut total = 0;
     for cycle in 0..5000u64 {
         k.set_inputs(&[cycle]);
-        let temp = k.pull("temp").as_f64();
-        let wait = k.pull("wait").as_f64();
+        let temp = k.pull_ref("temp").as_f64();
+        let wait = k.pull_ref("wait").as_f64();
         if temp > 72.0 {
             total += 1;
             if wait > 2.0 {
@@ -200,8 +200,8 @@ fn independent_samples_not_correlated() {
     let mut total = 0;
     for cycle in 0..5000u64 {
         k.set_inputs(&[cycle]);
-        let temp = k.pull("temp").as_f64();
-        let wait = k.pull("wait").as_f64();
+        let temp = k.pull_ref("temp").as_f64();
+        let wait = k.pull_ref("wait").as_f64();
         if temp > 72.0 {
             total += 1;
             if wait > 1.39 {
@@ -226,9 +226,9 @@ fn independent_samples_each_has_correct_stats() {
     let mut sizes = Vec::new();
     for cycle in 0..10_000u64 {
         k.set_inputs(&[cycle]);
-        temps.push(k.pull("temp").as_f64());
-        waits.push(k.pull("wait").as_f64());
-        sizes.push(k.pull("size").as_f64());
+        temps.push(k.pull_ref("temp").as_f64());
+        waits.push(k.pull_ref("wait").as_f64());
+        sizes.push(k.pull_ref("size").as_f64());
     }
 
     let temp_mean = temps.iter().sum::<f64>() / temps.len() as f64;
@@ -309,7 +309,7 @@ fn weighted_entity_region_distribution() {
     let n = 10_000u64;
     for cycle in 0..n {
         k.set_inputs(&[cycle]);
-        let region = k.pull("region").as_u64() as usize;
+        let region = k.pull_ref("region").as_u64() as usize;
         assert!(region < 4);
         counts[region] += 1;
     }
@@ -328,7 +328,7 @@ fn weighted_entity_device_type_uniform() {
     let n = 10_000u64;
     for cycle in 0..n {
         k.set_inputs(&[cycle]);
-        let dtype = k.pull("device_type").as_u64() as usize;
+        let dtype = k.pull_ref("device_type").as_u64() as usize;
         assert!(dtype < 4);
         counts[dtype] += 1;
     }
@@ -479,7 +479,7 @@ fn sensor_workload_temperature_stats() {
     let mut temps = Vec::new();
     for cycle in 0..10_000u64 {
         k.set_inputs(&[cycle]);
-        temps.push(k.pull("temperature").as_f64());
+        temps.push(k.pull_ref("temperature").as_f64());
     }
     let mean = temps.iter().sum::<f64>() / temps.len() as f64;
     let variance = temps.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / temps.len() as f64;
@@ -496,7 +496,7 @@ fn sensor_workload_humidity_clamped() {
     let mut k = build_sensor_workload();
     for cycle in 0..10_000u64 {
         k.set_inputs(&[cycle]);
-        let h = k.pull("humidity").as_f64();
+        let h = k.pull_ref("humidity").as_f64();
         assert!((0.0..=100.0).contains(&h), "humidity={h} out of [0,100]");
     }
 }
@@ -506,7 +506,7 @@ fn sensor_workload_battery_clamped() {
     let mut k = build_sensor_workload();
     for cycle in 0..10_000u64 {
         k.set_inputs(&[cycle]);
-        let b = k.pull("battery").as_f64();
+        let b = k.pull_ref("battery").as_f64();
         assert!((0.0..=100.0).contains(&b), "battery={b} out of [0,100]");
     }
 }
@@ -517,9 +517,9 @@ fn sensor_workload_same_site_stable_identity() {
     // Cycles 0 and 50000 have the same site (0), different sensor/reading.
     // site_code should be the same.
     k.set_inputs(&[0]);
-    let sc1 = k.pull("site_code").as_u64();
+    let sc1 = k.pull_ref("site_code").as_u64();
     k.set_inputs(&[50000]);
-    let sc2 = k.pull("site_code").as_u64();
+    let sc2 = k.pull_ref("site_code").as_u64();
     assert_eq!(sc1, sc2, "same site should have same site_code");
 }
 
@@ -529,9 +529,9 @@ fn sensor_workload_different_sites_different_sensors() {
     // Cycle 0: site=0, sensor=0. Cycle 1: site=1, sensor=0.
     // Same sensor index but different site → different sensor_code.
     k.set_inputs(&[0]);
-    let s1 = k.pull("sensor_code").as_u64();
+    let s1 = k.pull_ref("sensor_code").as_u64();
     k.set_inputs(&[1]);
-    let s2 = k.pull("sensor_code").as_u64();
+    let s2 = k.pull_ref("sensor_code").as_u64();
     assert_ne!(
         s1, s2,
         "different sites should produce different sensor_codes"
@@ -547,8 +547,8 @@ fn sensor_workload_independent_fields() {
     let mut high_temp_total = 0;
     for cycle in 0..10_000u64 {
         k.set_inputs(&[cycle]);
-        let temp = k.pull("temperature").as_f64();
-        let humid = k.pull("humidity").as_f64();
+        let temp = k.pull_ref("temperature").as_f64();
+        let humid = k.pull_ref("humidity").as_f64();
         if temp > 22.0 {
             high_temp_total += 1;
             if humid > 55.0 {
@@ -568,7 +568,7 @@ fn sensor_workload_timestamps_track_readings() {
     let mut k = build_sensor_workload();
     // reading = cycle / (100 * 500) = cycle / 50000
     k.set_inputs(&[0]);
-    assert_eq!(k.pull("timestamp").as_u64(), 1_710_000_000_000);
+    assert_eq!(k.pull_ref("timestamp").as_u64(), 1_710_000_000_000);
     k.set_inputs(&[50000]);
-    assert_eq!(k.pull("timestamp").as_u64(), 1_710_000_000_001);
+    assert_eq!(k.pull_ref("timestamp").as_u64(), 1_710_000_000_001);
 }

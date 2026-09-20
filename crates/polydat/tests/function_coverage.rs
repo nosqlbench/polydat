@@ -55,10 +55,10 @@ impl DiffKernel {
     }
 
     fn pull(&mut self, name: &str) -> Value {
-        let v = self.base.pull(name).clone();
+        let v = self.base.pull_ref(name).clone();
         if let Some(forced) = &mut self.forced {
             forced.set_inputs(&self.coords);
-            let fv = forced.pull(name).clone();
+            let fv = forced.pull_ref(name).clone();
             assert!(
                 value_bits_eq(&v, &fv),
                 "SRD-105 differential: jit=force diverged from the \
@@ -200,8 +200,8 @@ fn mixed_radix_decomposition() {
     let src = "input cycle: u64\n(a, b) := mixed_radix(cycle, 10, 0)";
     let mut k = compile_polydat_interpreter(src).unwrap();
     k.set_inputs(&[42]);
-    let a = k.pull("a").as_u64();
-    let b = k.pull("b").as_u64();
+    let a = k.pull_ref("a").as_u64();
+    let b = k.pull_ref("b").as_u64();
     // 42 = 2 * 10 + remainder 4 reversed? mixed_radix: digit0 = 42 % 10 = 2, digit1 = 42 / 10 = 4
     assert_eq!(a, 2);
     assert_eq!(b, 4);
@@ -250,11 +250,11 @@ fn interleave_known() {
     let mut k = compile_polydat_interpreter(src).unwrap();
     // interleave(1, 0) should give 1 (bit0 of a=1 -> bit0)
     k.set_inputs(&[1, 0]);
-    let v = k.pull("out").as_u64();
+    let v = k.pull_ref("out").as_u64();
     assert_eq!(v & 1, 1, "bit 0 should be from a");
     // interleave(0, 1) should give 2 (bit0 of b=1 -> bit1)
     k.set_inputs(&[0, 1]);
-    let v = k.pull("out").as_u64();
+    let v = k.pull_ref("out").as_u64();
     assert_eq!(v & 2, 2, "bit 1 should be from b");
 }
 
@@ -736,13 +736,13 @@ fn date_components_decomposes() {
                (y, mo, d, h, mi, s, ms) := date_components(e)";
     let mut k = compile_polydat_interpreter(src).unwrap();
     k.set_inputs(&[0]);
-    let y = k.pull("y").as_u64();
-    let mo = k.pull("mo").as_u64();
-    let d = k.pull("d").as_u64();
-    let h = k.pull("h").as_u64();
-    let mi = k.pull("mi").as_u64();
-    let s = k.pull("s").as_u64();
-    let ms = k.pull("ms").as_u64();
+    let y = k.pull_ref("y").as_u64();
+    let mo = k.pull_ref("mo").as_u64();
+    let d = k.pull_ref("d").as_u64();
+    let h = k.pull_ref("h").as_u64();
+    let mi = k.pull_ref("mi").as_u64();
+    let s = k.pull_ref("s").as_u64();
+    let ms = k.pull_ref("ms").as_u64();
     assert_eq!(y, 2024);
     assert_eq!(mo, 1);
     assert_eq!(d, 1);
@@ -2006,11 +2006,11 @@ fn sine_wave_module() {
     let mut k = compile_polydat_interpreter(src).unwrap();
     // At cycle 0, sin(0) = 0
     k.set_inputs(&[0]);
-    let v0 = k.pull("out").as_f64();
+    let v0 = k.pull_ref("out").as_f64();
     assert!((v0).abs() < 0.01, "sine_wave(0, 20) should be ~0, got {v0}");
     // At cycle 5 (quarter period), sin(π/2) = 1
     k.set_inputs(&[5]);
-    let v5 = k.pull("out").as_f64();
+    let v5 = k.pull_ref("out").as_f64();
     assert!(
         (v5 - 1.0).abs() < 0.1,
         "sine_wave(5, 20) should be ~1, got {v5}"
@@ -2023,11 +2023,11 @@ fn square_wave_module() {
     let mut k = compile_polydat_interpreter(src).unwrap();
     // First quarter: positive
     k.set_inputs(&[10]);
-    let v = k.pull("out").as_f64();
+    let v = k.pull_ref("out").as_f64();
     assert!(v > 0.0, "square_wave early should be positive, got {v}");
     // Third quarter: negative
     k.set_inputs(&[60]);
-    let v = k.pull("out").as_f64();
+    let v = k.pull_ref("out").as_f64();
     assert!(v < 0.0, "square_wave late should be negative, got {v}");
 }
 
@@ -2038,7 +2038,7 @@ fn sine_unit_module() {
     // sine_unit maps to [0, 1]
     for c in 0..20u64 {
         k.set_inputs(&[c]);
-        let v = k.pull("out").as_f64();
+        let v = k.pull_ref("out").as_f64();
         assert!(
             (-0.01..=1.01).contains(&v),
             "sine_unit({c}) = {v}, expected [0,1]"

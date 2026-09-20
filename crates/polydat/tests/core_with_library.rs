@@ -95,7 +95,7 @@ mod dsl_compile_tests {
         "#;
         let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[42]);
-        let uid = kernel.pull("user_id").as_u64();
+        let uid = kernel.pull_ref("user_id").as_u64();
         assert!(uid < 1_000_000, "user_id={uid}");
     }
 
@@ -107,7 +107,7 @@ mod dsl_compile_tests {
         "#;
         let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[42]);
-        assert!(kernel.pull("result").as_u64() < 100);
+        assert!(kernel.pull_ref("result").as_u64() < 100);
     }
 
     #[test]
@@ -118,9 +118,9 @@ mod dsl_compile_tests {
         "#;
         let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[42]);
-        let v1 = kernel.pull("h").as_u64();
+        let v1 = kernel.pull_ref("h").as_u64();
         kernel.set_inputs(&[42]);
-        let v2 = kernel.pull("h").as_u64();
+        let v2 = kernel.pull_ref("h").as_u64();
         assert_eq!(v1, v2);
     }
 
@@ -200,7 +200,7 @@ mod dsl_compile_tests {
         "#;
         let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[4_201_337]);
-        let tc = kernel.pull("tenant_code").as_u64();
+        let tc = kernel.pull_ref("tenant_code").as_u64();
         assert!(tc < 10000, "tenant_code={tc}");
     }
 
@@ -214,7 +214,7 @@ mod dsl_compile_tests {
         "#;
         let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[1]);
-        assert!(kernel.pull("h").as_u64() != 0);
+        assert!(kernel.pull_ref("h").as_u64() != 0);
     }
 
     #[test]
@@ -237,7 +237,7 @@ mod dsl_compile_tests {
         let mut kernel = compile_polydat_interpreter(src).unwrap();
         assert_eq!(kernel.input_names(), &["cycle"]);
         kernel.set_inputs(&[42]);
-        let h = kernel.pull("h").as_u64();
+        let h = kernel.pull_ref("h").as_u64();
         assert_ne!(h, 42); // hashed, not identity
     }
 
@@ -248,7 +248,7 @@ mod dsl_compile_tests {
         let mut kernel = compile_polydat_interpreter(src).unwrap();
         assert_eq!(kernel.input_names(), &["col", "row"]); // alphabetically sorted
         kernel.set_inputs(&[10, 20]);
-        let h = kernel.pull("h").as_u64();
+        let h = kernel.pull_ref("h").as_u64();
         assert_ne!(h, 0);
     }
 
@@ -273,7 +273,7 @@ mod dsl_compile_tests {
         "#;
         let mut kernel = strict(src, true).unwrap();
         kernel.set_inputs(&[42]);
-        let h = kernel.pull("h").as_u64();
+        let h = kernel.pull_ref("h").as_u64();
         assert_ne!(h, 42); // hashed, not identity
     }
 
@@ -283,7 +283,7 @@ mod dsl_compile_tests {
         let src = "h := hash(cycle)";
         let mut kernel = strict(src, false).unwrap();
         kernel.set_inputs(&[42]);
-        assert_ne!(kernel.pull("h").as_u64(), 42);
+        assert_ne!(kernel.pull_ref("h").as_u64(), 42);
     }
 
     #[test]
@@ -300,7 +300,7 @@ mod dsl_compile_tests {
         kernel.set_inputs(&[42]);
 
         // "b" should be available and correct
-        let b = kernel.pull("b").as_u64();
+        let b = kernel.pull_ref("b").as_u64();
         assert!(b < 100, "b={b}");
 
         // "a" and "c" should NOT be in the output map
@@ -324,7 +324,7 @@ mod dsl_compile_tests {
         let mut kernel = with_outputs(src, &required, false).unwrap();
         kernel.set_inputs(&[42]);
 
-        let result = kernel.pull("result").as_u64();
+        let result = kernel.pull_ref("result").as_u64();
         assert!(result < 1000, "result={result}");
 
         let outputs = kernel.output_names();
@@ -382,7 +382,7 @@ mod dsl_compile_tests {
             outputs.contains(&"side_effect"),
             "init binding must survive DCE even when unconsumed; got outputs {outputs:?}"
         );
-        assert_eq!(kernel.pull("side_effect").as_u64(), 42);
+        assert_eq!(kernel.pull_ref("side_effect").as_u64(), 42);
     }
 
     #[test]
@@ -398,8 +398,8 @@ mod dsl_compile_tests {
         let mut kernel = with_outputs(src, &required, false).unwrap();
         kernel.set_inputs(&[5]);
 
-        assert!(kernel.pull("y").as_u64() < 50);
-        assert_eq!(kernel.pull("z").as_u64(), 15);
+        assert!(kernel.pull_ref("y").as_u64() < 50);
+        assert_eq!(kernel.pull_ref("z").as_u64(), 15);
 
         let outputs = kernel.output_names();
         assert!(outputs.contains(&"y"));
@@ -486,7 +486,7 @@ mod dsl_compile_tests {
         "#;
         let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[0x1234]);
-        assert_eq!(kernel.pull("out").as_u64(), 0x34);
+        assert_eq!(kernel.pull_ref("out").as_u64(), 0x34);
     }
 
     #[test]
@@ -497,7 +497,7 @@ mod dsl_compile_tests {
         "#;
         let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[1]);
-        assert_eq!(kernel.pull("out").as_u64(), 256);
+        assert_eq!(kernel.pull_ref("out").as_u64(), 256);
     }
 
     #[test]
@@ -508,7 +508,7 @@ mod dsl_compile_tests {
         "#;
         let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[0]);
-        assert_eq!(kernel.pull("out").as_u64(), u64::MAX);
+        assert_eq!(kernel.pull_ref("out").as_u64(), u64::MAX);
     }
 
     #[test]
@@ -519,7 +519,7 @@ mod dsl_compile_tests {
         "#;
         let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[0xF0]);
-        assert_eq!(kernel.pull("out").as_u64(), 0x0F);
+        assert_eq!(kernel.pull_ref("out").as_u64(), 0x0F);
     }
 
     #[test]
@@ -530,7 +530,7 @@ mod dsl_compile_tests {
         "#;
         let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[0xF0]);
-        assert_eq!(kernel.pull("out").as_u64(), 0xFF);
+        assert_eq!(kernel.pull_ref("out").as_u64(), 0xFF);
     }
 
     #[test]
@@ -541,7 +541,7 @@ mod dsl_compile_tests {
         "#;
         let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[0xFF]);
-        assert_eq!(kernel.pull("out").as_u64(), 0x0F);
+        assert_eq!(kernel.pull_ref("out").as_u64(), 0x0F);
     }
 
     #[test]
@@ -553,7 +553,7 @@ mod dsl_compile_tests {
         let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[3]);
         // pow(3.0, 2.0) = 9.0
-        let result = kernel.pull("out").as_f64();
+        let result = kernel.pull_ref("out").as_f64();
         assert!((result - 9.0).abs() < 0.001);
     }
 
@@ -654,7 +654,7 @@ mod dsl_compile_tests {
         "#;
         let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[0]);
-        assert_eq!(kernel.pull("greeting").as_str(), "hello, world");
+        assert_eq!(kernel.pull_ref("greeting").as_str(), "hello, world");
     }
 
     #[test]
@@ -671,7 +671,7 @@ mod dsl_compile_tests {
         "#;
         let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[0]);
-        assert_eq!(kernel.pull("out").as_str(), "id=42 end");
+        assert_eq!(kernel.pull_ref("out").as_str(), "id=42 end");
     }
 
     #[test]
@@ -685,7 +685,7 @@ mod dsl_compile_tests {
         "#;
         let mut kernel = compile_polydat_interpreter(src).unwrap();
         kernel.set_inputs(&[0]);
-        assert_eq!(kernel.pull("out").as_str(), "n=7");
+        assert_eq!(kernel.pull_ref("out").as_str(), "n=7");
     }
 
     #[test]
@@ -713,7 +713,7 @@ mod dsl_compile_tests {
         let eval = |src: &str| -> u64 {
             compile_polydat_interpreter(src)
                 .unwrap_or_else(|e| panic!("compile `{src}`: {e}"))
-                .pull("out")
+                .pull_ref("out")
                 .as_u64()
         };
         // Basic && / ||.
@@ -761,13 +761,13 @@ mod dsl_compile_tests {
         let f64_of = |src: &str| {
             compile_polydat_interpreter(src)
                 .unwrap_or_else(|e| panic!("compile `{src}`: {e}"))
-                .pull("out")
+                .pull_ref("out")
                 .as_f64()
         };
         let u64_of = |src: &str| {
             compile_polydat_interpreter(src)
                 .unwrap_or_else(|e| panic!("compile `{src}`: {e}"))
-                .pull("out")
+                .pull_ref("out")
                 .as_u64()
         };
         // u64 → f64 widening fusion (allowed under `as`).
@@ -829,7 +829,7 @@ mod compile_cone_tests {
         xs.iter()
             .map(|&x| {
                 k.state().set_input(idx, Value::U64(x));
-                k.pull(output).clone()
+                k.pull_ref(output).clone()
             })
             .collect()
     }
@@ -848,7 +848,7 @@ mod compile_cone_tests {
         let idx = k.program().find_input("x").expect("input x");
         k.state().set_input(idx, Value::U64(x));
         let err = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            k.pull("checked");
+            k.pull_ref("checked");
         }))
         .expect_err("violation must panic");
         err.downcast_ref::<String>()
@@ -1343,7 +1343,7 @@ mod kernel_program_r1v_contagion_tests {
     /// returning the resulting u64.
     fn pull_u64_at(k: &mut polydat::kernel::PolydatKernel, cycle: u64, out: &str) -> u64 {
         k.set_inputs(&[cycle]);
-        match k.pull(out) {
+        match k.pull_ref(out) {
             Value::U64(v) => *v,
             other => panic!("expected U64, got {other:?}"),
         }
@@ -1441,18 +1441,18 @@ mod kernel_program_r1v_contagion_tests {
         // instrumentation, so check the former; the implicit
         // claim is that nondeterministic_nodes is precise.
         k.set_inputs(&[42]);
-        let r1 = match k.pull("pure_outer") {
+        let r1 = match k.pull_ref("pure_outer") {
             Value::U64(v) => *v,
             _ => panic!(),
         };
-        let r2 = match k.pull("pure_outer") {
+        let r2 = match k.pull_ref("pure_outer") {
             Value::U64(v) => *v,
             _ => panic!(),
         };
         assert_eq!(r1, r2);
         // Pure path: same coord → same output.
         k.set_inputs(&[42]);
-        let r3 = match k.pull("pure_outer") {
+        let r3 = match k.pull_ref("pure_outer") {
             Value::U64(v) => *v,
             _ => panic!(),
         };
@@ -1462,7 +1462,7 @@ mod kernel_program_r1v_contagion_tests {
         );
         // Different coord → different output.
         k.set_inputs(&[43]);
-        let r4 = match k.pull("pure_outer") {
+        let r4 = match k.pull_ref("pure_outer") {
             Value::U64(v) => *v,
             _ => panic!(),
         };
@@ -1604,9 +1604,9 @@ mod kernel_tests {
 
         // seed should be constant across cycles
         k.set_inputs(&[0]);
-        let seed_0 = k.pull("seed").clone();
+        let seed_0 = k.pull_ref("seed").clone();
         k.set_inputs(&[1]);
-        let seed_1 = k.pull("seed").clone();
+        let seed_1 = k.pull_ref("seed").clone();
         assert_eq!(
             seed_0.as_u64(),
             seed_1.as_u64(),
@@ -1615,9 +1615,9 @@ mod kernel_tests {
 
         // user_id should vary
         k.set_inputs(&[0]);
-        let uid_0 = k.pull("user_id").clone();
+        let uid_0 = k.pull_ref("user_id").clone();
         k.set_inputs(&[1]);
-        let uid_1 = k.pull("user_id").clone();
+        let uid_1 = k.pull_ref("user_id").clone();
         assert_ne!(
             uid_0.as_u64(),
             uid_1.as_u64(),
@@ -1630,9 +1630,9 @@ mod kernel_tests {
         use polydat::dsl::compile::compile_polydat_interpreter;
         let mut k = compile_polydat_interpreter("input cycle: u64\nout := hash(cycle)").unwrap();
         k.set_inputs(&[42]);
-        let v1 = k.pull("out").as_u64();
+        let v1 = k.pull_ref("out").as_u64();
         k.set_inputs(&[43]);
-        let v2 = k.pull("out").as_u64();
+        let v2 = k.pull_ref("out").as_u64();
         assert_ne!(v1, v2, "cycle-dependent node should not be folded");
     }
 
@@ -1643,7 +1643,7 @@ mod kernel_tests {
         // a __u64_to_f64 adapter. This must not panic.
         let mut k = compile_polydat_interpreter("input cycle: u64\nout := sin(cycle)").unwrap();
         k.set_inputs(&[1]);
-        let v = k.pull("out");
+        let v = k.pull_ref("out");
         // sin(1.0) ≈ 0.8414709848078965
         let f = v.as_f64();
         assert!(
@@ -1781,7 +1781,7 @@ mod kernel_engines_panic_enrichment_tests {
         k.state()
             .set_input(idx, polydat::ast::Value::Str("oops".into()));
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            k.pull("doubled");
+            k.pull_ref("doubled");
         }));
         let err = result.expect_err("pull should panic on type mismatch");
         let msg = err
@@ -1906,8 +1906,8 @@ mod iteration_cursor_partition_over_tests {
         assert_eq!(parts.len(), 4);
         narrow_cursor(&program, k.state(), "q", &parts[2]);
         k.set_inputs(&[0]);
-        assert_eq!(k.pull("n").as_u64(), 25);
-        assert_eq!(k.pull("s").as_u64(), 50);
+        assert_eq!(k.pull_ref("n").as_u64(), 25);
+        assert_eq!(k.pull_ref("s").as_u64(), 50);
     }
 }
 
@@ -2042,7 +2042,7 @@ fn the_cursor_advancer_injects_each_ordinal_into_the_state() {
     let mut seen = Vec::new();
     while cursors.advance() {
         cursors.inject_into_state(k.state());
-        seen.push(k.pull("out").as_u64());
+        seen.push(k.pull_ref("out").as_u64());
     }
     assert_eq!(seen, vec![21, 24, 27]);
     assert_eq!(cursors.consumed(), 3);

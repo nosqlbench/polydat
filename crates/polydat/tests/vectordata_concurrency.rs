@@ -16,7 +16,7 @@ fn read_vector_single(source: &str, index: u64) -> String {
     let src = format!("input cycle: u64\nvec := vector_at(cycle, \"{source}\")");
     let mut kernel = compile_polydat_interpreter(&src).unwrap();
     kernel.set_inputs(&[index]);
-    kernel.pull("vec").to_display_string()
+    kernel.pull_ref("vec").to_display_string()
 }
 
 /// Read vectors from multiple threads and check consistency.
@@ -57,7 +57,7 @@ fn concurrent_reads_match_sequential() {
             for _iter in 0..iterations {
                 for &(idx, ref expected) in &baseline {
                     kernel.set_inputs(&[idx]);
-                    let actual = kernel.pull("vec").to_display_string();
+                    let actual = kernel.pull_ref("vec").to_display_string();
                     if actual != *expected {
                         mismatches.push((thread_id, idx, actual.len(), expected.len()));
                     }
@@ -259,7 +259,7 @@ fn high_contention_reads() {
                 for i in 0..reads_per_thread {
                     let idx = (i * 7 + 13) as u64 % 83775; // spread across dataset
                     kernel.set_inputs(&[idx]);
-                    let val = kernel.pull("vec").to_display_string();
+                    let val = kernel.pull_ref("vec").to_display_string();
                     total_reads.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
                     if val == "[]" || val.starts_with("[]") {

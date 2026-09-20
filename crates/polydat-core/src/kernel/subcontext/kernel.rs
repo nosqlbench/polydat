@@ -355,7 +355,7 @@ impl<M> ScopeKernel<M> {
             let Some(idx) = inner.program().find_input(&wt.export_name) else {
                 continue;
             };
-            let value = inner.pull(&wt.source_output).clone();
+            let value = inner.pull_ref(&wt.source_output).clone();
             let slot_type = inner
                 .program()
                 .input_port_type_by_idx(idx)

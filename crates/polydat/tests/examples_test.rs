@@ -41,7 +41,7 @@ fn hello_world_bounded() {
     let mut k = build_hello_world();
     for cycle in 0..1000 {
         k.set_inputs(&[cycle]);
-        let uid = k.pull("user_id").as_u64();
+        let uid = k.pull_ref("user_id").as_u64();
         assert!(uid < 1_000_000, "cycle {cycle}: user_id={uid}");
     }
 }
@@ -50,9 +50,9 @@ fn hello_world_bounded() {
 fn hello_world_deterministic() {
     let mut k = build_hello_world();
     k.set_inputs(&[42]);
-    let first = k.pull("user_id").as_u64();
+    let first = k.pull_ref("user_id").as_u64();
     k.set_inputs(&[42]);
-    assert_eq!(k.pull("user_id").as_u64(), first);
+    assert_eq!(k.pull_ref("user_id").as_u64(), first);
 }
 
 #[test]
@@ -62,7 +62,7 @@ fn hello_world_dispersed() {
     let mut vals = Vec::new();
     for cycle in 0..100 {
         k.set_inputs(&[cycle]);
-        vals.push(k.pull("user_id").as_u64());
+        vals.push(k.pull_ref("user_id").as_u64());
     }
     // Check that the values are not monotonically increasing
     let monotonic = vals.windows(2).all(|w| w[1] > w[0]);
@@ -153,14 +153,14 @@ fn cartesian_decomposition_covers_space() {
     // cycles 0..49 should cover regions 0..49 with store=0, tx=0
     for cycle in 0u64..50 {
         k.set_inputs(&[cycle]);
-        assert_eq!(k.pull("region").as_u64(), cycle);
-        assert_eq!(k.pull("store").as_u64(), 0);
-        assert_eq!(k.pull("tx").as_u64(), 0);
+        assert_eq!(k.pull_ref("region").as_u64(), cycle);
+        assert_eq!(k.pull_ref("store").as_u64(), 0);
+        assert_eq!(k.pull_ref("tx").as_u64(), 0);
     }
     // cycle 50 wraps to region=0, store=1
     k.set_inputs(&[50]);
-    assert_eq!(k.pull("region").as_u64(), 0);
-    assert_eq!(k.pull("store").as_u64(), 1);
+    assert_eq!(k.pull_ref("region").as_u64(), 0);
+    assert_eq!(k.pull_ref("store").as_u64(), 1);
 }
 
 #[test]
@@ -168,11 +168,11 @@ fn cartesian_tx_increments() {
     let mut k = build_cartesian_space();
     // 50 regions × 200 stores = 10,000 cycles per tx increment
     k.set_inputs(&[0]);
-    assert_eq!(k.pull("tx").as_u64(), 0);
+    assert_eq!(k.pull_ref("tx").as_u64(), 0);
     k.set_inputs(&[10_000]);
-    assert_eq!(k.pull("tx").as_u64(), 1);
+    assert_eq!(k.pull_ref("tx").as_u64(), 1);
     k.set_inputs(&[20_000]);
-    assert_eq!(k.pull("tx").as_u64(), 2);
+    assert_eq!(k.pull_ref("tx").as_u64(), 2);
 }
 
 #[test]
@@ -180,9 +180,9 @@ fn cartesian_codes_bounded() {
     let mut k = build_cartesian_space();
     for cycle in 0..500 {
         k.set_inputs(&[cycle]);
-        assert!(k.pull("region_code").as_u64() < 10000);
-        assert!(k.pull("store_code").as_u64() < 100000);
-        assert!(k.pull("tx_id").as_u64() < 1_000_000_000);
+        assert!(k.pull_ref("region_code").as_u64() < 10000);
+        assert!(k.pull_ref("store_code").as_u64() < 100000);
+        assert!(k.pull_ref("tx_id").as_u64() < 1_000_000_000);
     }
 }
 
@@ -262,8 +262,8 @@ fn shared_bucket_shard_consistent() {
     let mut k = build_shared_computation();
     for cycle in 0..500 {
         k.set_inputs(&[cycle]);
-        let bucket = k.pull("user_bucket").as_u64();
-        let shard = k.pull("user_shard").as_u64();
+        let bucket = k.pull_ref("user_bucket").as_u64();
+        let shard = k.pull_ref("user_shard").as_u64();
         assert_eq!(
             shard,
             bucket % 16,
@@ -278,11 +278,11 @@ fn shared_fields_bounded() {
     let mut k = build_shared_computation();
     for cycle in 0..500 {
         k.set_inputs(&[cycle]);
-        assert!(k.pull("user_id").as_u64() < 10_000_000);
-        assert!(k.pull("user_bucket").as_u64() < 64);
-        assert!(k.pull("user_shard").as_u64() < 16);
-        assert!(k.pull("name_idx").as_u64() < 50000);
-        assert!(k.pull("account_age_days").as_u64() < 3650);
+        assert!(k.pull_ref("user_id").as_u64() < 10_000_000);
+        assert!(k.pull_ref("user_bucket").as_u64() < 64);
+        assert!(k.pull_ref("user_shard").as_u64() < 16);
+        assert!(k.pull_ref("name_idx").as_u64() < 50000);
+        assert!(k.pull_ref("account_age_days").as_u64() < 3650);
     }
 }
 
@@ -294,9 +294,9 @@ fn shared_chained_hashes_differ() {
     let mut all_same = true;
     for cycle in 0..100 {
         k.set_inputs(&[cycle]);
-        let uid = k.pull("user_id").as_u64();
-        let nidx = k.pull("name_idx").as_u64();
-        let age = k.pull("account_age_days").as_u64();
+        let uid = k.pull_ref("user_id").as_u64();
+        let nidx = k.pull_ref("name_idx").as_u64();
+        let age = k.pull_ref("account_age_days").as_u64();
         if uid != nidx || uid != age {
             all_same = false;
             break;
@@ -374,11 +374,11 @@ fn multi_coord_same_thread_stable_partition() {
     // The partition depends only on thread, not cycle.
     let mut k = build_multi_coordinate();
     k.set_inputs(&[0, 7]);
-    let p1 = k.pull("partition").as_u64();
+    let p1 = k.pull_ref("partition").as_u64();
     k.set_inputs(&[100, 7]);
-    let p2 = k.pull("partition").as_u64();
+    let p2 = k.pull_ref("partition").as_u64();
     k.set_inputs(&[99999, 7]);
-    let p3 = k.pull("partition").as_u64();
+    let p3 = k.pull_ref("partition").as_u64();
     assert_eq!(p1, p2);
     assert_eq!(p2, p3);
 }
@@ -387,9 +387,9 @@ fn multi_coord_same_thread_stable_partition() {
 fn multi_coord_different_threads_different_partitions() {
     let mut k = build_multi_coordinate();
     k.set_inputs(&[0, 0]);
-    let p0 = k.pull("partition").as_u64();
+    let p0 = k.pull_ref("partition").as_u64();
     k.set_inputs(&[0, 1]);
-    let p1 = k.pull("partition").as_u64();
+    let p1 = k.pull_ref("partition").as_u64();
     // Not strictly guaranteed to differ, but for two small inputs
     // through a good hash + mod 256, collision is very unlikely.
     assert_ne!(
@@ -402,9 +402,9 @@ fn multi_coord_different_threads_different_partitions() {
 fn multi_coord_same_cycle_different_thread_different_row() {
     let mut k = build_multi_coordinate();
     k.set_inputs(&[100, 0]);
-    let r0 = k.pull("row_key").as_u64();
+    let r0 = k.pull_ref("row_key").as_u64();
     k.set_inputs(&[100, 1]);
-    let r1 = k.pull("row_key").as_u64();
+    let r1 = k.pull_ref("row_key").as_u64();
     assert_ne!(
         r0, r1,
         "interleave should make (cycle,thread) order-dependent"
@@ -417,9 +417,9 @@ fn multi_coord_bounded() {
     for cycle in 0..100 {
         for thread in 0..8 {
             k.set_inputs(&[cycle, thread]);
-            assert!(k.pull("partition").as_u64() < 256);
-            assert!(k.pull("row_key").as_u64() < 1_000_000);
-            assert!(k.pull("value").as_u64() < 1000);
+            assert!(k.pull_ref("partition").as_u64() < 256);
+            assert!(k.pull_ref("row_key").as_u64() < 1_000_000);
+            assert!(k.pull_ref("value").as_u64() < 1000);
         }
     }
 }
@@ -520,7 +520,7 @@ fn provenance_direct_hash_bounded() {
     let mut k = build_hashing_provenance();
     for cycle in 0..500 {
         k.set_inputs(&[cycle]);
-        assert!(k.pull("tenant_id").as_u64() < 10000);
+        assert!(k.pull_ref("tenant_id").as_u64() < 10000);
     }
 }
 
@@ -532,9 +532,9 @@ fn provenance_combined_hash_order_matters() {
     // cycle that gives tenant=2, device=0: cycle=2 → tenant=2, device=0
     // These have different tenants, so device_id should differ even with same device=0
     k.set_inputs(&[1]);
-    let d1 = k.pull("device_id").as_u64();
+    let d1 = k.pull_ref("device_id").as_u64();
     k.set_inputs(&[2]);
-    let d2 = k.pull("device_id").as_u64();
+    let d2 = k.pull_ref("device_id").as_u64();
     assert_ne!(d1, d2);
 }
 
@@ -546,9 +546,9 @@ fn provenance_chained_hashes_produce_different_fields() {
     let mut any_differ = false;
     for cycle in 0..100 {
         k.set_inputs(&[cycle]);
-        let a = k.pull("field_a").as_u64();
-        let b = k.pull("field_b").as_u64();
-        let c = k.pull("field_c").as_u64();
+        let a = k.pull_ref("field_a").as_u64();
+        let b = k.pull_ref("field_b").as_u64();
+        let c = k.pull_ref("field_c").as_u64();
         assert!(a < 1000);
         assert!(b < 1000);
         assert!(c < 1000);
@@ -566,16 +566,16 @@ fn provenance_same_tenant_same_fields() {
     let mut k = build_hashing_provenance();
 
     k.set_inputs(&[5]); // tenant=5
-    let tid1 = k.pull("tenant_id").as_u64();
-    let a1 = k.pull("field_a").as_u64();
-    let b1 = k.pull("field_b").as_u64();
-    let c1 = k.pull("field_c").as_u64();
+    let tid1 = k.pull_ref("tenant_id").as_u64();
+    let a1 = k.pull_ref("field_a").as_u64();
+    let b1 = k.pull_ref("field_b").as_u64();
+    let c1 = k.pull_ref("field_c").as_u64();
 
     k.set_inputs(&[105]); // also tenant=5 (105 % 100 = 5)
-    let tid2 = k.pull("tenant_id").as_u64();
-    let a2 = k.pull("field_a").as_u64();
-    let b2 = k.pull("field_b").as_u64();
-    let c2 = k.pull("field_c").as_u64();
+    let tid2 = k.pull_ref("tenant_id").as_u64();
+    let a2 = k.pull_ref("field_a").as_u64();
+    let b2 = k.pull_ref("field_b").as_u64();
+    let c2 = k.pull_ref("field_c").as_u64();
 
     assert_eq!(tid1, tid2, "same tenant → same tenant_id");
     assert_eq!(a1, a2, "same tenant → same field_a");
@@ -673,8 +673,11 @@ fn timeseries_timestamp_tracks_reading() {
     for reading in 0u64..10 {
         let cycle = reading * 100_000; // reading = cycle / (100 * 1000)
         k.set_inputs(&[cycle]);
-        assert_eq!(k.pull("reading").as_u64(), reading);
-        assert_eq!(k.pull("timestamp").as_u64(), 1_710_000_000_000 + reading);
+        assert_eq!(k.pull_ref("reading").as_u64(), reading);
+        assert_eq!(
+            k.pull_ref("timestamp").as_u64(),
+            1_710_000_000_000 + reading
+        );
     }
 }
 
@@ -686,10 +689,10 @@ fn timeseries_same_tenant_across_devices() {
     let mut k = build_timeseries();
 
     k.set_inputs(&[5]); // tenant=5, device=0
-    let tc_d0 = k.pull("tenant_code").as_u64();
+    let tc_d0 = k.pull_ref("tenant_code").as_u64();
 
     k.set_inputs(&[105]); // tenant=5, device=1
-    let tc_d1 = k.pull("tenant_code").as_u64();
+    let tc_d1 = k.pull_ref("tenant_code").as_u64();
 
     assert_eq!(
         tc_d0, tc_d1,
@@ -704,10 +707,10 @@ fn timeseries_different_tenant_same_device() {
     let mut k = build_timeseries();
 
     k.set_inputs(&[5]); // tenant=5, device=0
-    let ds1 = k.pull("device_seq").as_u64();
+    let ds1 = k.pull_ref("device_seq").as_u64();
 
     k.set_inputs(&[6]); // tenant=6, device=0
-    let ds2 = k.pull("device_seq").as_u64();
+    let ds2 = k.pull_ref("device_seq").as_u64();
 
     assert_ne!(
         ds1, ds2,
@@ -723,16 +726,16 @@ fn timeseries_time_bucket_groups_readings() {
     //   time_bucket = reading / 1000
 
     k.set_inputs(&[0]); // reading=0, bucket=0
-    assert_eq!(k.pull("reading").as_u64(), 0);
-    assert_eq!(k.pull("time_bucket").as_u64(), 0);
+    assert_eq!(k.pull_ref("reading").as_u64(), 0);
+    assert_eq!(k.pull_ref("time_bucket").as_u64(), 0);
 
     // reading=999 → cycle = 999 * 100_000 = 99_900_000
     k.set_inputs(&[99_900_000]);
-    assert_eq!(k.pull("reading").as_u64(), 999);
-    assert_eq!(k.pull("time_bucket").as_u64(), 0); // 999 / 1000 = 0
+    assert_eq!(k.pull_ref("reading").as_u64(), 999);
+    assert_eq!(k.pull_ref("time_bucket").as_u64(), 0); // 999 / 1000 = 0
 
     // reading=1000 → cycle = 1000 * 100_000 = 100_000_000
     k.set_inputs(&[100_000_000]);
-    assert_eq!(k.pull("reading").as_u64(), 1000);
-    assert_eq!(k.pull("time_bucket").as_u64(), 1); // 1000 / 1000 = 1
+    assert_eq!(k.pull_ref("reading").as_u64(), 1000);
+    assert_eq!(k.pull_ref("time_bucket").as_u64(), 1); // 1000 / 1000 = 1
 }

@@ -427,7 +427,7 @@ fn parent_shared_export_collision_propagates_through_siblings() {
     // `seen` resolves to the cell value.
     let seen = {
         let mut inner = reader.lock_inner();
-        inner.pull("seen").clone()
+        inner.pull_ref("seen").clone()
     };
     assert_eq!(
         seen,
@@ -709,7 +709,7 @@ fn workload_emulation_shared_cell_through_op_template_chain() {
     //    cell-bound input). Must observe the detect fiber's
     //    write — proves the cell handle is shared end-to-end
     //    through the canonical/fiber-instance fork.
-    let seen = consumer_fiber.pull("seen").clone();
+    let seen = consumer_fiber.pull_ref("seen").clone();
     match seen {
         Value::U64(1) | Value::Bool(true) => {} // expected
         other => panic!(
@@ -994,7 +994,7 @@ fn shared_cell_cascade_survives_for_iteration_through_silent_intermediates() {
             .program()
             .clone();
     let mut reader = foreach.materialize_subscope(reader_program, &[]);
-    let seen = reader.pull("seen").clone();
+    let seen = reader.pull_ref("seen").clone();
     assert_eq!(
         seen,
         Value::U64(7),
@@ -1165,7 +1165,7 @@ fn bind_program_under_parent_rebinds_compiled_program() {
     let mut bound = parent_kernel.materialize_subscope(program, &[]);
     // After bind, the child's `n` extern reads through the
     // parent's folded constant. `pull` evaluates the output node.
-    let v = bound.pull("passthrough").clone();
+    let v = bound.pull_ref("passthrough").clone();
     assert_eq!(v.as_u64(), 7);
 }
 
@@ -1199,7 +1199,7 @@ fn build_kernel_under_parent_threads_compile_options() {
         .build_subscope(matter)
         .expect("bridge with options");
 
-    let v = kernel.pull("doubled").clone();
+    let v = kernel.pull_ref("doubled").clone();
     assert_eq!(v.as_u64(), 10);
 }
 

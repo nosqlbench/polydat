@@ -21,16 +21,16 @@ fn simple_hash_mod_chain() {
     let mut kernel = asm.compile().unwrap();
 
     kernel.set_inputs(&[42]);
-    let v = kernel.pull("result").as_u64();
+    let v = kernel.pull_ref("result").as_u64();
     assert!(v < 1000, "expected < 1000, got {v}");
 
     // Deterministic: same coordinate → same result
     kernel.set_inputs(&[42]);
-    assert_eq!(kernel.pull("result").as_u64(), v);
+    assert_eq!(kernel.pull_ref("result").as_u64(), v);
 
     // Different coordinate → (likely) different result
     kernel.set_inputs(&[43]);
-    let v2 = kernel.pull("result").as_u64();
+    let v2 = kernel.pull_ref("result").as_u64();
     assert!(v2 < 1000);
     // Not strictly guaranteed to differ, but astronomically unlikely
     // for two adjacent inputs to hash-mod to the same value
@@ -56,9 +56,9 @@ fn mixed_radix_decomposition() {
 
     // 4_201_337 → tenant=37, device=13, reading=42
     kernel.set_inputs(&[4_201_337]);
-    assert_eq!(kernel.pull("tenant").as_u64(), 37);
-    assert_eq!(kernel.pull("device").as_u64(), 13);
-    assert_eq!(kernel.pull("reading").as_u64(), 42);
+    assert_eq!(kernel.pull_ref("tenant").as_u64(), 37);
+    assert_eq!(kernel.pull_ref("device").as_u64(), 13);
+    assert_eq!(kernel.pull_ref("reading").as_u64(), 42);
 }
 
 /// Shared intermediate: tenant_h used by two downstream nodes
@@ -97,8 +97,8 @@ fn shared_intermediate() {
     let mut kernel = asm.compile().unwrap();
 
     kernel.set_inputs(&[42]);
-    let code = kernel.pull("code").as_u64();
-    let bucket = kernel.pull("bucket").as_u64();
+    let code = kernel.pull_ref("code").as_u64();
+    let bucket = kernel.pull_ref("bucket").as_u64();
 
     assert!(code < 10000);
     assert!(bucket < 10);
@@ -140,7 +140,7 @@ fn auto_edge_adapter_u64_to_string() {
     let mut kernel = asm.compile().unwrap();
 
     kernel.set_inputs(&[542]);
-    let result = kernel.pull("result");
+    let result = kernel.pull_ref("result");
     assert_eq!(result.as_str(), "42"); // 542 % 100 = 42
 }
 
@@ -170,12 +170,12 @@ fn two_input_interleave() {
     let mut kernel = asm.compile().unwrap();
 
     kernel.set_inputs(&[5, 10]);
-    let v1 = kernel.pull("result").as_u64();
+    let v1 = kernel.pull_ref("result").as_u64();
     assert!(v1 < 1000);
 
     // Different coordinates → different result
     kernel.set_inputs(&[10, 5]);
-    let v2 = kernel.pull("result").as_u64();
+    let v2 = kernel.pull_ref("result").as_u64();
     assert!(v2 < 1000);
     assert_ne!(
         v1, v2,
@@ -196,8 +196,8 @@ fn memoization_within_context() {
     let mut kernel = asm.compile().unwrap();
 
     kernel.set_inputs(&[99]);
-    let v1 = kernel.pull("result").as_u64();
-    let v2 = kernel.pull("result").as_u64();
+    let v1 = kernel.pull_ref("result").as_u64();
+    let v2 = kernel.pull_ref("result").as_u64();
     assert_eq!(v1, v2, "same context, same output");
 }
 
@@ -212,10 +212,10 @@ fn context_change_invalidates() {
     let mut kernel = asm.compile().unwrap();
 
     kernel.set_inputs(&[1]);
-    let v1 = kernel.pull("result").as_u64();
+    let v1 = kernel.pull_ref("result").as_u64();
 
     kernel.set_inputs(&[2]);
-    let v2 = kernel.pull("result").as_u64();
+    let v2 = kernel.pull_ref("result").as_u64();
 
     assert_ne!(
         v1, v2,
@@ -341,11 +341,11 @@ fn timeseries_workload_sketch() {
     // cycle 4_201_337 → tenant=37, device=13, reading=42
     kernel.set_inputs(&[4_201_337]);
 
-    let tenant_code = kernel.pull("tenant_code").as_u64();
-    let device_seq = kernel.pull("device_seq").as_u64();
-    let time_bucket = kernel.pull("time_bucket").as_u64();
-    let timestamp = kernel.pull("timestamp").as_u64();
-    let reading_h = kernel.pull("reading_h").as_u64();
+    let tenant_code = kernel.pull_ref("tenant_code").as_u64();
+    let device_seq = kernel.pull_ref("device_seq").as_u64();
+    let time_bucket = kernel.pull_ref("time_bucket").as_u64();
+    let timestamp = kernel.pull_ref("timestamp").as_u64();
+    let reading_h = kernel.pull_ref("reading_h").as_u64();
 
     assert!(tenant_code < 10000, "tenant_code={tenant_code}");
     assert!(device_seq < 100000, "device_seq={device_seq}");
@@ -355,14 +355,14 @@ fn timeseries_workload_sketch() {
 
     // Deterministic: same cycle → same outputs
     kernel.set_inputs(&[4_201_337]);
-    assert_eq!(kernel.pull("tenant_code").as_u64(), tenant_code);
-    assert_eq!(kernel.pull("device_seq").as_u64(), device_seq);
-    assert_eq!(kernel.pull("reading_h").as_u64(), reading_h);
+    assert_eq!(kernel.pull_ref("tenant_code").as_u64(), tenant_code);
+    assert_eq!(kernel.pull_ref("device_seq").as_u64(), device_seq);
+    assert_eq!(kernel.pull_ref("reading_h").as_u64(), reading_h);
 
     // Different cycle → different outputs
     kernel.set_inputs(&[4_201_338]);
-    let tc2 = kernel.pull("tenant_code").as_u64();
-    let ds2 = kernel.pull("device_seq").as_u64();
+    let tc2 = kernel.pull_ref("tenant_code").as_u64();
+    let ds2 = kernel.pull_ref("device_seq").as_u64();
     // tenant changes (38 vs 37), so outputs should differ
     assert_ne!(tenant_code, tc2);
     // device stays the same (13), but tenant changed so interleave differs

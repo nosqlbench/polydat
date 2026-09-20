@@ -89,17 +89,17 @@ fn constant_folding_compiles_and_folds() {
 
     // user_id should vary per cycle (not folded)
     kernel.set_inputs(&[0]);
-    let a = kernel.pull("user_id").as_u64();
+    let a = kernel.pull_ref("user_id").as_u64();
     kernel.set_inputs(&[1]);
-    let b = kernel.pull("user_id").as_u64();
+    let b = kernel.pull_ref("user_id").as_u64();
     assert_ne!(a, b, "user_id should vary per cycle");
     assert!(a < 1_000_000 && b < 1_000_000);
 
     // seed should be constant across cycles
     kernel.set_inputs(&[0]);
-    let s0 = kernel.pull("seed").as_u64();
+    let s0 = kernel.pull_ref("seed").as_u64();
     kernel.set_inputs(&[999]);
-    let s1 = kernel.pull("seed").as_u64();
+    let s1 = kernel.pull_ref("seed").as_u64();
     assert_eq!(s0, s1, "seed should be folded to a constant");
 }
 
@@ -115,8 +115,8 @@ fn type_adapters_compiles() {
     // sin and cos should produce values in [-1, 1]
     for cycle in 0..100 {
         kernel.set_inputs(&[cycle]);
-        let s = kernel.pull("s").as_f64();
-        let c = kernel.pull("c").as_f64();
+        let s = kernel.pull_ref("s").as_f64();
+        let c = kernel.pull_ref("c").as_f64();
         assert!((-1.0..=1.0).contains(&s), "sin out of range: {s}");
         assert!((-1.0..=1.0).contains(&c), "cos out of range: {c}");
     }
@@ -134,18 +134,18 @@ fn multi_output_compiles() {
     let (mut kernel, log) = compile_with_events(&source);
 
     kernel.set_inputs(&[0]);
-    assert_eq!(kernel.pull("region").as_u64(), 0);
-    assert_eq!(kernel.pull("store").as_u64(), 0);
+    assert_eq!(kernel.pull_ref("region").as_u64(), 0);
+    assert_eq!(kernel.pull_ref("store").as_u64(), 0);
 
     kernel.set_inputs(&[51]);
-    assert_eq!(kernel.pull("region").as_u64(), 1); // 51 % 50 = 1
-    assert_eq!(kernel.pull("store").as_u64(), 1); // 51 / 50 = 1
+    assert_eq!(kernel.pull_ref("region").as_u64(), 1); // 51 % 50 = 1
+    assert_eq!(kernel.pull_ref("store").as_u64(), 1); // 51 / 50 = 1
 
     // region_id and store_id should be bounded
     for cycle in 0..200 {
         kernel.set_inputs(&[cycle]);
-        assert!(kernel.pull("region_id").as_u64() < 10000);
-        assert!(kernel.pull("store_id").as_u64() < 100000);
+        assert!(kernel.pull_ref("region_id").as_u64() < 10000);
+        assert!(kernel.pull_ref("store_id").as_u64() < 100000);
     }
 
     eprintln!("{}", log.format());
@@ -162,9 +162,9 @@ fn string_generation_compiles() {
 
     for cycle in 0..10 {
         kernel.set_inputs(&[cycle]);
-        let code = kernel.pull("code").to_display_string();
-        let decimal = kernel.pull("decimal").to_display_string();
-        let hex = kernel.pull("hex").to_display_string();
+        let code = kernel.pull_ref("code").to_display_string();
+        let decimal = kernel.pull_ref("decimal").to_display_string();
+        let hex = kernel.pull_ref("hex").to_display_string();
         assert!(
             !code.is_empty(),
             "combinations should produce output: {code}"
@@ -189,8 +189,8 @@ fn distributions_compiles() {
     let valid_outcomes = [100u64, 200, 300];
     for cycle in 0..1000 {
         kernel.set_inputs(&[cycle]);
-        normal_sum += kernel.pull("normal").as_f64();
-        let outcome = kernel.pull("outcome").as_u64();
+        normal_sum += kernel.pull_ref("normal").as_f64();
+        let outcome = kernel.pull_ref("outcome").as_u64();
         assert!(
             valid_outcomes.contains(&outcome),
             "unexpected outcome: {outcome}"
@@ -217,15 +217,15 @@ fn weighted_selection_compiles() {
     let mut heads = 0u64;
     for cycle in 0..1000 {
         kernel.set_inputs(&[cycle]);
-        if kernel.pull("coin").as_u64() == 1 {
+        if kernel.pull_ref("coin").as_u64() == 1 {
             heads += 1;
         }
-        let color = kernel.pull("color").to_display_string();
+        let color = kernel.pull_ref("color").to_display_string();
         assert!(
             ["red", "blue", "green"].contains(&color.as_str()),
             "unexpected color: {color}"
         );
-        let tier = kernel.pull("tier").as_u64();
+        let tier = kernel.pull_ref("tier").as_u64();
         assert!((1..=3).contains(&tier), "unexpected tier: {tier}");
     }
     // Fair coin should be roughly 50%
@@ -244,19 +244,19 @@ fn datetime_context_compiles() {
     let (mut kernel, log) = compile_with_events(&source);
 
     kernel.set_inputs(&[0]);
-    let ts = kernel.pull("ts").to_display_string();
+    let ts = kernel.pull_ref("ts").to_display_string();
     assert!(
         ts.contains("2024"),
         "timestamp should contain year 2024: {ts}"
     );
 
-    let wall = kernel.pull("wall").as_u64();
+    let wall = kernel.pull_ref("wall").as_u64();
     assert!(
         wall > 1_700_000_000_000,
         "wall clock should be recent: {wall}"
     );
 
-    let tid = kernel.pull("tid").as_u64();
+    let tid = kernel.pull_ref("tid").as_u64();
     assert!(tid > 0, "thread_id should be positive: {tid}");
 
     eprintln!("{}", log.format());
@@ -273,12 +273,12 @@ fn math_trig_compiles() {
 
     for cycle in 0..100 {
         kernel.set_inputs(&[cycle]);
-        let sine = kernel.pull("sine").as_f64();
-        let cosine = kernel.pull("cosine").as_f64();
-        let root = kernel.pull("root").as_f64();
-        let exp = kernel.pull("exponential").as_f64();
-        let scaled = kernel.pull("scaled").as_f64();
-        let clamped = kernel.pull("clamped").as_f64();
+        let sine = kernel.pull_ref("sine").as_f64();
+        let cosine = kernel.pull_ref("cosine").as_f64();
+        let root = kernel.pull_ref("root").as_f64();
+        let exp = kernel.pull_ref("exponential").as_f64();
+        let scaled = kernel.pull_ref("scaled").as_f64();
+        let clamped = kernel.pull_ref("clamped").as_f64();
 
         assert!((-1.0..=1.0).contains(&sine), "sin: {sine}");
         assert!((-1.0..=1.0).contains(&cosine), "cos: {cosine}");
@@ -304,13 +304,13 @@ fn json_encoding_compiles() {
     let (mut kernel, log) = compile_with_events(&source);
 
     kernel.set_inputs(&[42]);
-    let js = kernel.pull("js").to_display_string();
+    let js = kernel.pull_ref("js").to_display_string();
     assert!(!js.is_empty(), "json_to_str should produce output");
 
-    let encoded = kernel.pull("encoded").to_display_string();
+    let encoded = kernel.pull_ref("encoded").to_display_string();
     assert!(!encoded.is_empty(), "url_encode should produce output");
 
-    let b64 = kernel.pull("b64").to_display_string();
+    let b64 = kernel.pull_ref("b64").to_display_string();
     assert!(!b64.is_empty(), "to_base64 should produce output");
 
     eprintln!("{}", log.format());
@@ -327,11 +327,11 @@ fn noise_pcg_compiles() {
 
     for cycle in 0..100 {
         kernel.set_inputs(&[cycle]);
-        let noise = kernel.pull("noise").as_f64();
+        let noise = kernel.pull_ref("noise").as_f64();
         assert!((-1.0..=1.0).contains(&noise), "perlin_1d: {noise}");
 
-        let _shuffled = kernel.pull("shuffled").as_u64();
-        let _walked = kernel.pull("walked").as_u64();
+        let _shuffled = kernel.pull_ref("shuffled").as_u64();
+        let _walked = kernel.pull_ref("walked").as_u64();
     }
 
     eprintln!("{}", log.format());
@@ -348,10 +348,10 @@ fn real_data_compiles() {
 
     for cycle in 0..10 {
         kernel.set_inputs(&[cycle]);
-        let fname = kernel.pull("fname").to_display_string();
-        let fullname = kernel.pull("fullname").to_display_string();
-        let state = kernel.pull("state").to_display_string();
-        let country = kernel.pull("country").to_display_string();
+        let fname = kernel.pull_ref("fname").to_display_string();
+        let fullname = kernel.pull_ref("fullname").to_display_string();
+        let state = kernel.pull_ref("state").to_display_string();
+        let country = kernel.pull_ref("country").to_display_string();
 
         assert!(!fname.is_empty(), "first_names should produce output");
         assert!(!fullname.is_empty(), "full_names should produce output");
@@ -377,7 +377,7 @@ fn empirical_dist_compiles() {
 
     for cycle in 0..1000 {
         kernel.set_inputs(&[cycle]);
-        let v = kernel.pull("latency").as_f64();
+        let v = kernel.pull_ref("latency").as_f64();
         assert!(
             (0.5..=100.0).contains(&v),
             "empirical should be in [0.5, 100.0]: {v} at cycle={cycle}"

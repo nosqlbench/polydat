@@ -707,16 +707,26 @@ impl PolydatKernel {
             .map(|idx| self.state.get_input(idx))
     }
 
-    /// Convenience: pull from the owned state.
-    pub fn pull(&mut self, output_name: &str) -> &Value {
+    /// Evaluate `output_name`'s cone and borrow the result, which is
+    /// the one thing this reader has over
+    /// [`Kernel::pull`](crate::Kernel::pull): no clone. The value lives
+    /// in the kernel's own buffer, so the borrow ties to `&mut self`
+    /// and ends at the next write.
+    ///
+    /// Named `pull_ref` and not `pull` deliberately. An inherent `pull`
+    /// here would shadow the trait's, which returns an owned `Value`,
+    /// and the same expression would mean different things depending on
+    /// whether the caller held a `PolydatKernel` or a `Box<dyn Kernel>`
+    /// — silently, since both sides answer `as_u64` and the rest.
+    pub fn pull_ref(&mut self, output_name: &str) -> &Value {
         self.state.pull(&self.program, output_name)
     }
 
-    /// Pull a program output by its output-list **index**, skipping the
-    /// name→index resolution `pull` does. Pair with
-    /// [`PolydatProgram::output_index`] resolved ONCE (at bind time) so a
+    /// [`Self::pull_ref`] by the output's index rather than its name,
+    /// skipping the name resolution. Pair with
+    /// [`PolydatProgram::output_index`] resolved once at bind time so a
     /// per-cycle reader pays no name hash on the hot path.
-    pub fn pull_by_index(&mut self, output_idx: usize) -> &Value {
+    pub fn pull_ref_at(&mut self, output_idx: usize) -> &Value {
         self.state.pull_by_index(&self.program, output_idx)
     }
 

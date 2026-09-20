@@ -82,10 +82,10 @@ fn extension_nodes_agree_between_interpreter_closures_and_hybrid() {
         .expect("hybrid");
     for cycle in 0..64u64 {
         p1.set_inputs(&[cycle]);
-        let n = p1.pull("n").as_u64();
-        let label = p1.pull("label").as_str().to_string();
-        let doc = p1.pull("doc").to_display_string();
-        let Value::Ext(t) = p1.pull("t").clone() else {
+        let n = p1.pull_ref("n").as_u64();
+        let label = p1.pull_ref("label").as_str().to_string();
+        let doc = p1.pull_ref("doc").to_display_string();
+        let Value::Ext(t) = p1.pull_ref("t").clone() else {
             panic!("t is an Ext wire")
         };
         let t = t.as_any().downcast_ref::<Span>().expect("a Span").clone();
@@ -179,7 +179,7 @@ fn extension_nodes_run_as_slot_calls_in_native_code() {
             for name in ["n", "label", "doc"] {
                 assert_eq!(
                     pure.get_value(name).to_display_string(),
-                    p1.pull(name).to_display_string(),
+                    p1.pull_ref(name).to_display_string(),
                     "cycle {cycle}: pure native `{name}`"
                 );
             }
@@ -277,7 +277,7 @@ fn fallible_and_tuple_nodes_agree_between_interpreter_closures_and_hybrid() {
         let want: Vec<(polydat::ast::PortType, String)> = outputs
             .iter()
             .map(|o| {
-                let v = p1.pull(o);
+                let v = p1.pull_ref(o);
                 (v.port_type(), v.to_display_string())
             })
             .collect();

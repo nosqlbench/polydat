@@ -214,11 +214,11 @@ impl crate::kernel::Kernel for PolydatKernel {
     /// it observes on a compiled kernel's run.
     fn eval(&mut self) {
         for name in Metadata::output_names(self) {
-            let _ = PolydatKernel::pull(self, &name);
+            let _ = PolydatKernel::pull_ref(self, &name);
         }
     }
     fn pull(&mut self, name: &str) -> Value {
-        PolydatKernel::pull(self, name).clone()
+        PolydatKernel::pull_ref(self, name).clone()
     }
     fn input_names(&self) -> Vec<String> {
         Metadata::input_names(self)
@@ -259,7 +259,7 @@ impl crate::kernel::Kernel for PolydatKernel {
         self.program().output_index(name)
     }
     fn pull_at(&mut self, index: usize) -> Value {
-        PolydatKernel::pull_by_index(self, index).clone()
+        PolydatKernel::pull_ref_at(self, index).clone()
     }
     fn traversals(&self) -> &[crate::dsl::traversal::Traversal] {
         self.program().traversals()

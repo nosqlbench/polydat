@@ -12,7 +12,7 @@ fn render(src: &str, cycle: u64, name: &str) -> String {
     let mut k =
         compile_polydat_interpreter(src).unwrap_or_else(|e| panic!("compile failed: {e}\n{src}"));
     k.set_inputs(&[cycle]);
-    k.pull(name).as_str().to_string()
+    k.pull_ref(name).as_str().to_string()
 }
 
 #[test]
@@ -99,8 +99,8 @@ fn a_tile_is_an_ordinary_wire() {
     let src = "input cycle: u64\ntile doc : json := {\"n\": ${cycle}}\nstmt := \"INSERT doc '{doc}'\"\nup := str_upper(doc)\n";
     let mut k = compile_polydat_interpreter(src).unwrap();
     k.set_inputs(&[3]);
-    assert_eq!(k.pull("stmt").as_str(), "INSERT doc '{\"n\": 3}'");
-    assert_eq!(k.pull("up").as_str(), "{\"N\": 3}");
+    assert_eq!(k.pull_ref("stmt").as_str(), "INSERT doc '{\"n\": 3}'");
+    assert_eq!(k.pull_ref("up").as_str(), "{\"N\": 3}");
     assert!(k.program().output_names().contains(&"doc"));
 }
 

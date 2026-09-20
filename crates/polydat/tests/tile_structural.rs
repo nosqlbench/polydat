@@ -40,7 +40,7 @@ fn render(src: &str, cycle: u64, name: &str) -> String {
     let mut k =
         compile_polydat_interpreter(src).unwrap_or_else(|e| panic!("compile failed: {e}\n{src}"));
     k.set_inputs(&[cycle]);
-    k.pull(name).as_str().to_string()
+    k.pull_ref(name).as_str().to_string()
 }
 
 const STRUCTURAL: &str = r#"{
@@ -81,7 +81,7 @@ fn structural_and_textual_forms_render_the_same_document() {
     let doc = canonical(&render(&src_struct, 3, "doc"));
     let mut k = compile_polydat_interpreter(&src_struct).unwrap();
     k.set_inputs(&[3]);
-    assert_eq!(doc["tenant"], k.pull("tenant_id").as_u64());
+    assert_eq!(doc["tenant"], k.pull_ref("tenant_id").as_u64());
     assert_eq!(doc["device"], "dev-3");
     assert_eq!(doc["label"], "row-3");
     assert_eq!(doc["as_text"], doc["tenant"].to_string());
@@ -107,7 +107,7 @@ fn host_builds_a_tile_from_a_parsed_json_value() {
     assert_eq!(tile.encoding.as_deref(), Some("json"));
     let mut k = with_tiles(PROGRAM, vec![tile]).unwrap();
     k.set_inputs(&[3]);
-    let doc = canonical(k.pull("doc").as_str());
+    let doc = canonical(k.pull_ref("doc").as_str());
     assert_eq!(doc["device"], "dev-3");
     assert_eq!(doc["samples"][0]["n"], 0);
     // The tile is a wire like any other.
@@ -133,8 +133,11 @@ fn host_builds_tiles_from_json_text_and_template_text() {
     .unwrap();
     let mut k = with_tiles("input cycle: u64\n", vec![json, text]).unwrap();
     k.set_inputs(&[7]);
-    assert_eq!(k.pull("doc").as_str(), "{\"n\": 7, \"s\": \"7\"}");
-    assert_eq!(k.pull("line").as_str(), "n=7 doc={\"n\": 7, \"s\": \"7\"}");
+    assert_eq!(k.pull_ref("doc").as_str(), "{\"n\": 7, \"s\": \"7\"}");
+    assert_eq!(
+        k.pull_ref("line").as_str(),
+        "n=7 doc={\"n\": 7, \"s\": \"7\"}"
+    );
 }
 
 #[test]
@@ -291,7 +294,7 @@ fn text_fragments_and_built_pieces_compose_into_one_tile() {
     let render = |t: &TileDef| {
         let mut k = with_tiles(PROGRAM, vec![t.clone()]).expect("compiles");
         k.set_inputs(&[3]);
-        k.pull("t").to_display_string()
+        k.pull_ref("t").to_display_string()
     };
     assert_eq!(render(&assembled), render(&whole));
 

@@ -43,7 +43,7 @@ fn bench_engine_ladder(c: &mut Criterion) {
         b.iter(|| {
             p1.set_inputs(&[cycle, TENANT_SEED, OPERATION_SEED]);
             for &output in &p1_outputs {
-                black_box(p1.pull_by_index(output).as_u64());
+                black_box(p1.pull_ref_at(output).as_u64());
             }
             cycle = cycle.wrapping_add(1);
         });

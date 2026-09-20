@@ -2593,15 +2593,15 @@ mod r1v_contagion_tests {
                    c := counter()\n";
         let mut k = compile_polydat_interpreter(src).expect("compile");
         k.set_inputs(&[0]);
-        let a = match k.pull("c") {
+        let a = match k.pull_ref("c") {
             Value::U64(v) => *v,
             _ => panic!(),
         };
-        let b = match k.pull("c") {
+        let b = match k.pull_ref("c") {
             Value::U64(v) => *v,
             _ => panic!(),
         };
-        let c = match k.pull("c") {
+        let c = match k.pull_ref("c") {
             Value::U64(v) => *v,
             _ => panic!(),
         };

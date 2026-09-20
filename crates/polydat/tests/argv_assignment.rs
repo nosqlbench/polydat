@@ -37,8 +37,8 @@ fn string_text_fuses_to_declared_extern_types() {
     )
     .unwrap();
     k.set_inputs(&[3, 4]);
-    assert_eq!(k.pull("ts").as_u64(), 3 * 60000 + 4);
-    assert_eq!(k.pull("out").as_str(), "run-1:2.5:true");
+    assert_eq!(k.pull_ref("ts").as_u64(), 3 * 60000 + 4);
+    assert_eq!(k.pull_ref("out").as_str(), "run-1:2.5:true");
 }
 
 #[test]
@@ -47,7 +47,7 @@ fn assigned_input_becomes_a_fixed_extern() {
     // `seed` is no longer a coordinate: only `cycle` is.
     assert_eq!(k.program().coord_count(), 1);
     k.set_inputs(&[2]);
-    assert_eq!(k.pull("ts").as_u64(), 2 * 1000 + 7);
+    assert_eq!(k.pull_ref("ts").as_u64(), 2 * 1000 + 7);
 }
 
 #[test]

@@ -25,7 +25,7 @@ mod fusion {
         // Verify output correctness after fusion.
         for cycle in 0..1000u64 {
             kernel.set_inputs(&[cycle]);
-            let result = kernel.pull("out").as_u64();
+            let result = kernel.pull_ref("out").as_u64();
             // Must match hash_range semantics: hash(cycle) % 100
             let expected = polydat::numeric::hash::splitmix64_u64(cycle) % 100;
             assert_eq!(result, expected, "cycle {cycle}");
@@ -48,8 +48,16 @@ mod fusion {
         for cycle in 0..100u64 {
             kernel.set_inputs(&[cycle]);
             let h = polydat::numeric::hash::splitmix64_u64(cycle);
-            assert_eq!(kernel.pull("out1").as_u64(), h % 100, "out1 cycle {cycle}");
-            assert_eq!(kernel.pull("out2").as_u64(), h % 50, "out2 cycle {cycle}");
+            assert_eq!(
+                kernel.pull_ref("out1").as_u64(),
+                h % 100,
+                "out1 cycle {cycle}"
+            );
+            assert_eq!(
+                kernel.pull_ref("out2").as_u64(),
+                h % 50,
+                "out2 cycle {cycle}"
+            );
         }
     }
 
@@ -189,7 +197,7 @@ mod fusion {
 
         // Verify it works.
         kernel.set_inputs(&[10, 20, 30]);
-        assert_eq!(kernel.pull("out").as_u64(), 60);
+        assert_eq!(kernel.pull_ref("out").as_u64(), 60);
     }
 
     #[test]

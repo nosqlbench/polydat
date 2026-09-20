@@ -70,7 +70,7 @@ fn bench_p1_single_identity(c: &mut Criterion) {
         let mut cycle = 0u64;
         b.iter(|| {
             kernel.set_inputs(&[cycle]);
-            black_box(kernel.pull("out"));
+            black_box(kernel.pull_ref("out"));
             cycle = cycle.wrapping_add(1);
         });
     });
@@ -84,7 +84,7 @@ fn bench_p1_identity_chain(c: &mut Criterion) {
             let mut cycle = 0u64;
             b.iter(|| {
                 kernel.set_inputs(&[cycle]);
-                black_box(kernel.pull("out"));
+                black_box(kernel.pull_ref("out"));
                 cycle = cycle.wrapping_add(1);
             });
         });
@@ -102,7 +102,7 @@ fn bench_p1_wide_sum(c: &mut Criterion) {
             b.iter(|| {
                 let c: Vec<u64> = coords.iter().map(|x| x.wrapping_add(base)).collect();
                 kernel.set_inputs(&c);
-                black_box(kernel.pull("out"));
+                black_box(kernel.pull_ref("out"));
                 base = base.wrapping_add(1);
             });
         });
@@ -371,7 +371,7 @@ fn bench_cone_hash_mod_chain(c: &mut Criterion) {
                 let mut cycle = 0u64;
                 b.iter(|| {
                     kernel.set_inputs(&[cycle]);
-                    black_box(kernel.pull("out"));
+                    black_box(kernel.pull_ref("out"));
                     cycle = cycle.wrapping_add(1);
                 });
             });
@@ -391,8 +391,8 @@ fn bench_cone_workload_bindings(c: &mut Criterion) {
             let mut cycle = 0u64;
             b.iter(|| {
                 kernel.set_inputs(&[cycle]);
-                black_box(kernel.pull("out"));
-                black_box(kernel.pull("scaled"));
+                black_box(kernel.pull_ref("out"));
+                black_box(kernel.pull_ref("scaled"));
                 cycle = cycle.wrapping_add(1);
             });
         });
@@ -413,7 +413,7 @@ fn bench_cone_vector_pipeline(c: &mut Criterion) {
                 let mut cycle = 0u64;
                 b.iter(|| {
                     kernel.set_inputs(&[cycle]);
-                    black_box(kernel.pull("out"));
+                    black_box(kernel.pull_ref("out"));
                     cycle = cycle.wrapping_add(1);
                 });
             });

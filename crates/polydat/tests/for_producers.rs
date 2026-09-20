@@ -37,7 +37,7 @@ fn producer_binding_is_a_const_streamer_wire() {
     assert!(p.const_outputs().contains(&"sweep"));
     assert_eq!(p.output_port_type("sweep"), Some(PortType::Ext));
     k.set_inputs(&[0]);
-    let v = k.pull("sweep").clone();
+    let v = k.pull_ref("sweep").clone();
     let s = v.as_streamer().expect("streamer value");
     assert_eq!(s.text, "k in 1..4, limit in 10, 20, 30");
     assert_eq!(s.element_names(), vec!["k", "limit"]);
@@ -49,7 +49,7 @@ fn producer_binding_is_a_const_streamer_wire() {
 fn streams_from_one_wire_advance_independently() {
     let mut k = compile("input cycle: u64\nsweep := for k in 1..4, limit in 10,20,30\n");
     k.set_inputs(&[0]);
-    let v = k.pull("sweep").clone();
+    let v = k.pull_ref("sweep").clone();
     let s = v.as_streamer().unwrap();
     let mut a = s.coordinate_stream().unwrap();
     let b = s.coordinate_stream().unwrap();
@@ -69,7 +69,7 @@ fn derived_where_filters_and_keeps_the_base_shape() {
         "input cycle: u64\nbase := for k in 1..4, limit in 10,20,30\nedges := for base where {k} == 1 || {k} == 3\n",
     );
     k.set_inputs(&[0]);
-    let v = k.pull("edges").clone();
+    let v = k.pull_ref("edges").clone();
     let s = v.as_streamer().unwrap();
     assert_eq!(s.element_names(), vec!["k", "limit"]);
     assert!(matches!(
@@ -96,7 +96,7 @@ fn derived_order_permutes_and_truncates() {
         "input cycle: u64\nbase := for k in 1..4, limit in 10,20,30\nlast := for base order reverse_lex/2\n",
     );
     k.set_inputs(&[0]);
-    let v = k.pull("last").clone();
+    let v = k.pull_ref("last").clone();
     let got = tuples(v.as_streamer().unwrap().coordinate_stream().unwrap());
     assert_eq!(got, vec![vec![3, 30], vec![3, 20]]);
 }
@@ -108,7 +108,7 @@ fn derivations_chain_and_each_wire_is_distinct() {
     );
     k.set_inputs(&[0]);
     let base = tuples(
-        k.pull("base")
+        k.pull_ref("base")
             .clone()
             .as_streamer()
             .unwrap()
@@ -116,7 +116,7 @@ fn derivations_chain_and_each_wire_is_distinct() {
             .unwrap(),
     );
     let edges = tuples(
-        k.pull("edges")
+        k.pull_ref("edges")
             .clone()
             .as_streamer()
             .unwrap()
@@ -124,7 +124,7 @@ fn derivations_chain_and_each_wire_is_distinct() {
             .unwrap(),
     );
     let tail = tuples(
-        k.pull("tail")
+        k.pull_ref("tail")
             .clone()
             .as_streamer()
             .unwrap()
@@ -177,7 +177,7 @@ fn producer_wire_is_visible_to_ordinary_bindings() {
     // display form.
     let mut k = compile("input cycle: u64\nsweep := for k in 1..4\nlabel := \"plan={sweep}\"\n");
     k.set_inputs(&[0]);
-    assert_eq!(k.pull("label").as_str(), "plan=for k in 1..4");
+    assert_eq!(k.pull_ref("label").as_str(), "plan=for k in 1..4");
 }
 
 /// The bracketed union form (comprehension_forms.md §8.1, §8.2): each
@@ -189,7 +189,7 @@ fn a_bracketed_union_carries_each_members_modifiers() {
         "input cycle: u64\nmixed := for [\n    for k in 1..4 where {k} > 1,\n    for k in 10..13 order lex/2,\n]\n",
     );
     k.set_inputs(&[0]);
-    let v = k.pull("mixed").clone();
+    let v = k.pull_ref("mixed").clone();
     let got = tuples(v.as_streamer().unwrap().coordinate_stream().unwrap());
     assert_eq!(got, vec![vec![2], vec![3], vec![10], vec![11]]);
 }
@@ -204,7 +204,7 @@ fn shuffle_and_an_ordered_union_are_text_forms() {
     );
     k.set_inputs(&[0]);
     let some = tuples(
-        k.pull("some")
+        k.pull_ref("some")
             .clone()
             .as_streamer()
             .unwrap()
@@ -214,7 +214,7 @@ fn shuffle_and_an_ordered_union_are_text_forms() {
     assert_eq!(some.len(), 3);
     assert!(some.iter().all(|t| (1..10).contains(&t[0])));
     let both = tuples(
-        k.pull("both")
+        k.pull_ref("both")
             .clone()
             .as_streamer()
             .unwrap()
@@ -237,10 +237,10 @@ fn a_context_required_producer_traverses_but_has_no_coordinate_stream() {
     let mut stream = k.traverse(0).unwrap();
     let mut seen = Vec::new();
     while let Some(mut a) = stream.advance().unwrap() {
-        seen.push(a.cycle(0).pull("n").as_u64());
+        seen.push(a.cycle(0).pull_ref("n").as_u64());
     }
     assert_eq!(seen, vec![50, 50]);
-    let streamer = k.pull("parts").clone();
+    let streamer = k.pull_ref("parts").clone();
     let err = streamer
         .as_streamer()
         .unwrap()
@@ -263,7 +263,7 @@ fn a_traversal_captures_its_sources_references_when_it_opens() {
         let mut stream = k.traverse(0).unwrap();
         let mut seen = Vec::new();
         while let Some(mut a) = stream.advance().unwrap() {
-            seen.push(a.cycle(0).pull("n").as_u64());
+            seen.push(a.cycle(0).pull_ref("n").as_u64());
         }
         seen
     };
@@ -278,7 +278,7 @@ fn a_traversal_captures_its_sources_references_when_it_opens() {
     k.set_inputs(&[100]);
     let mut seen = Vec::new();
     while let Some(mut a) = stream.advance().unwrap() {
-        seen.push(a.cycle(0).pull("n").as_u64());
+        seen.push(a.cycle(0).pull_ref("n").as_u64());
     }
     assert_eq!(seen, vec![4, 4]);
 }

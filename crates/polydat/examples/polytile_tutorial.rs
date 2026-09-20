@@ -274,9 +274,9 @@ fn tiers() {
     let mut p3 = compile_polydat_kernel(src).expect("P3");
     for cycle in [0u64, 1] {
         p1.set_inputs(&[cycle]);
-        let a = p1.pull("doc").to_display_string();
+        let a = p1.pull_ref("doc").to_display_string();
         cones.set_inputs(&[cycle]);
-        let b = cones.pull("doc").to_display_string();
+        let b = cones.pull_ref("doc").to_display_string();
         p2.set_inputs(&[cycle]);
         let c = p2.pull("doc").to_display_string();
         p3.set_inputs(&[cycle]);
