@@ -887,106 +887,6 @@ impl PolydatAssembler {
         }
     }
 
-    /// Validate, resolve, and compile the closure tier's push-pull
-    /// kernel.
-    ///
-    /// Two ways to fail, and the error says which: the graph did not
-    /// assemble (`KernelError::Assembly`), or it assembled and a node
-    /// has no closure form (`KernelError::Refused`, naming the node).
-    /// Neither hands back a kernel — an unusable kernel is worse than
-    /// an error, and the empty one this used to return on an assembly
-    /// failure computed nothing while looking like a program.
-    #[doc(hidden)]
-    pub fn try_compile(self) -> Result<CompiledKernelPushPull, KernelError> {
-        let resolved = self.resolve().map_err(KernelError::Assembly)?;
-        let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
-            Self::build_p2_layout(&resolved).map_err(Self::refused_by_closures)?;
-        let dependents = slot_layout(&resolved).expand_dependents(
-            &resolved,
-            &PolydatProgram::compute_dependents(
-                &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
-                resolved.input_defs.len(),
-            ),
-        );
-        CompiledKernelPushPull::new(
-            coord_count,
-            total_slots,
-            steps,
-            output_map,
-            dependents,
-            ref_slots,
-            extras,
-        )
-    }
-
-    /// The closure tier's kernel without provenance caching: every
-    /// evaluation runs every step. Fails the two ways [`Self::try_compile`]
-    /// does.
-    #[doc(hidden)]
-    pub fn try_compile_raw(self) -> Result<CompiledKernelRaw, KernelError> {
-        let resolved = self.resolve().map_err(KernelError::Assembly)?;
-        let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
-            Self::build_p2_layout(&resolved).map_err(Self::refused_by_closures)?;
-        CompiledKernelRaw::new(
-            coord_count,
-            total_slots,
-            steps,
-            output_map,
-            ref_slots,
-            extras,
-        )
-    }
-
-    /// The closure tier's kernel with push-side invalidation and no cone
-    /// guard. Fails the two ways [`Self::try_compile`] does.
-    #[doc(hidden)]
-    pub fn try_compile_push(self) -> Result<CompiledKernelPush, KernelError> {
-        let resolved = self.resolve().map_err(KernelError::Assembly)?;
-        let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
-            Self::build_p2_layout(&resolved).map_err(Self::refused_by_closures)?;
-        let dependents = slot_layout(&resolved).expand_dependents(
-            &resolved,
-            &PolydatProgram::compute_dependents(
-                &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
-                resolved.input_defs.len(),
-            ),
-        );
-        CompiledKernelPush::new(
-            coord_count,
-            total_slots,
-            steps,
-            output_map,
-            dependents,
-            ref_slots,
-            extras,
-        )
-    }
-
-    /// The closure tier's kernel with the pull-side cone guard and no
-    /// per-step skip. Fails the two ways [`Self::try_compile`] does.
-    #[doc(hidden)]
-    pub fn try_compile_pull(self) -> Result<CompiledKernelPull, KernelError> {
-        let resolved = self.resolve().map_err(KernelError::Assembly)?;
-        let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
-            Self::build_p2_layout(&resolved).map_err(Self::refused_by_closures)?;
-        let dependents = slot_layout(&resolved).expand_dependents(
-            &resolved,
-            &PolydatProgram::compute_dependents(
-                &PolydatProgram::compute_provenance(&resolved.nodes, &resolved.wiring),
-                resolved.input_defs.len(),
-            ),
-        );
-        CompiledKernelPull::new(
-            coord_count,
-            total_slots,
-            steps,
-            output_map,
-            &dependents,
-            ref_slots,
-            extras,
-        )
-    }
-
     /// A node with no closure form, as a refusal naming the closure
     /// tier and the reason the layout gave.
     fn refused_by_closures(reason: String) -> KernelError {
@@ -1176,27 +1076,6 @@ impl PolydatAssembler {
         (guard, types)
     }
 
-    /// P3, raw: every evaluation runs every step.
-    #[cfg(feature = "jit")]
-    #[doc(hidden)]
-    pub fn try_compile_jit_raw(
-        self,
-    ) -> Result<crate::compile::hybrid::HybridKernelRaw, KernelError> {
-        Ok(self.compile_hybrid()?.into_raw())
-    }
-
-    /// Pure native code, push+pull: the differential tier behind P3
-    /// (engines.md §8), which refuses a node without a native
-    /// lowering. Hosts use [`Self::compile_hybrid`].
-    #[doc(hidden)]
-    #[cfg(feature = "jit")]
-    pub fn try_compile_pure_jit(
-        self,
-    ) -> Result<crate::compile::jit::JitKernelPushPull, KernelError> {
-        let resolved = self.resolve().map_err(KernelError::Assembly)?;
-        Self::jit_push_pull_from(resolved)
-    }
-
     #[cfg(feature = "jit")]
     fn jit_push_pull_from(
         resolved: ResolvedDag,
@@ -1289,7 +1168,7 @@ impl PolydatAssembler {
     /// Pure native code, raw; see [`Self::try_compile_pure_jit`].
     #[doc(hidden)]
     #[cfg(feature = "jit")]
-    pub fn try_compile_pure_jit_raw(
+    pub(crate) fn try_compile_pure_jit_raw(
         self,
     ) -> Result<crate::compile::jit::JitKernelRaw, KernelError> {
         let resolved = self.resolve().map_err(KernelError::Assembly)?;
@@ -1393,16 +1272,6 @@ impl PolydatAssembler {
             crate::compile::simd_tier1::Tier1SimdError::VectorGraphBuild(error.to_string())
         })?;
         crate::compile::simd_tier1::compile_tier1_ordinal(resolved, driving_input, output)
-    }
-
-    /// The P3 kernel as its concrete type, for the differential suites
-    /// and the ladder; a host uses [`Self::compile_with`]. Native code
-    /// where a node has a lowering and its closure elsewhere; without
-    /// the `jit` feature every node is a closure.
-    #[doc(hidden)]
-    pub fn compile_hybrid(self) -> Result<crate::compile::hybrid::HybridKernel, KernelError> {
-        let resolved = self.resolve().map_err(KernelError::Assembly)?;
-        Self::hybrid_from(resolved)
     }
 
     fn hybrid_from(
@@ -1522,6 +1391,9 @@ impl PolydatAssembler {
         }
     }
 
+    /// Resolve with no log. Only the pure-native paths take it, and
+    /// those need code generation, so it is gated as they are.
+    #[cfg(feature = "jit")]
     fn resolve(self) -> Result<ResolvedDag, AssemblyError> {
         self.resolve_with_log(None)
     }
@@ -2801,8 +2673,15 @@ impl PolydatAssembler {
                 Self::log_summary(log, node_total, output_total);
                 Ok(kernel)
             }
+            // Available in every build. Without the `jit` feature this
+            // engine's kernel has no native segment in it and every
+            // step is a closure, which `plan()` reports as it reports
+            // any other mix; the engine is the kernel architecture, and
+            // how much of it got native code is the plan. Refusing here
+            // would take a working tier away from an architecture that
+            // has no code generator, which is the one place it is most
+            // worth keeping every engine that can be built.
             Engine::Native(prov) => {
-                #[cfg(feature = "jit")]
                 {
                     let resolved = self.resolve_with_log(log.as_deref_mut())?;
                     if strict {
@@ -2843,13 +2722,6 @@ impl PolydatAssembler {
                     Self::log_folded(kernel.as_ref(), folded, log.as_deref_mut());
                     Self::log_summary(log, node_total, output_total);
                     Ok(kernel)
-                }
-                #[cfg(not(feature = "jit"))]
-                {
-                    let _ = (prov, log);
-                    Err(refused(
-                        "this build has no native code (the `jit` feature is off)".into(),
-                    ))
                 }
             }
             Engine::PureNative(prov) => {

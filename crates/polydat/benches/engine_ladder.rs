@@ -49,15 +49,16 @@ fn bench_engine_ladder(c: &mut Criterion) {
         });
     });
 
-    let mut p2 = match assembler().try_compile_raw() {
-        Ok(kernel) => kernel,
-        Err(_) => panic!("every engine-ladder node must support P2"),
-    };
+    let mut p2 =
+        match assembler().compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw)) {
+            Ok(kernel) => kernel,
+            Err(_) => panic!("every engine-ladder node must support P2"),
+        };
     let p2_outputs = OUTPUTS.map(|name| p2.resolve_output(name).expect("P2 output must resolve"));
     group.bench_function("p2_closures", |b| {
         let mut cycle = 1u64;
         b.iter(|| {
-            p2.eval(&[cycle, TENANT_SEED, OPERATION_SEED]);
+            p2.eval_at(&[cycle, TENANT_SEED, OPERATION_SEED]);
             for &output in &p2_outputs {
                 black_box(p2.get_slot(output));
             }
@@ -68,14 +69,14 @@ fn bench_engine_ladder(c: &mut Criterion) {
     #[cfg(feature = "jit")]
     {
         let mut p3 = assembler()
-            .try_compile_jit_raw()
+            .compile_slots(polydat::Engine::Native(polydat::Provenance::Raw))
             .expect("every engine-ladder node must support P3");
         let p3_outputs =
             OUTPUTS.map(|name| p3.resolve_output(name).expect("P3 output must resolve"));
         group.bench_function("p3_native", |b| {
             let mut cycle = 1u64;
             b.iter(|| {
-                p3.eval(&[cycle, TENANT_SEED, OPERATION_SEED]);
+                p3.eval_at(&[cycle, TENANT_SEED, OPERATION_SEED]);
                 for &output in &p3_outputs {
                     black_box(p3.get_slot(output));
                 }
@@ -84,7 +85,7 @@ fn bench_engine_ladder(c: &mut Criterion) {
         });
 
         let mut pure = assembler()
-            .try_compile_pure_jit_raw()
+            .compile_slots(polydat::Engine::PureNative(polydat::Provenance::Raw))
             .expect("every engine-ladder node lowers to native code");
         let pure_outputs = OUTPUTS.map(|name| {
             pure.resolve_output(name)
@@ -93,7 +94,7 @@ fn bench_engine_ladder(c: &mut Criterion) {
         group.bench_function("pure_native", |b| {
             let mut cycle = 1u64;
             b.iter(|| {
-                pure.eval(&[cycle, TENANT_SEED, OPERATION_SEED]);
+                pure.eval_at(&[cycle, TENANT_SEED, OPERATION_SEED]);
                 for &output in &pure_outputs {
                     black_box(pure.get_slot(output));
                 }

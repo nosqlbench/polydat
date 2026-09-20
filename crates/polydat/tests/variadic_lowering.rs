@@ -158,11 +158,11 @@ fn value_port_nodes_agree_on_the_hybrid_kernel() {
     let src = "input cycle: u64\nh := hash(cycle)\nj := to_json(h)\nt := json_text(j)\ns := printf(\"{}/{:x}\", h, h)\n";
     let mut k = compile_polydat_to_assembler(src)
         .unwrap()
-        .compile_hybrid()
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
         .expect("hybrid");
     let mut p1 = kernel(src, JitMode::Off);
     for c in 0..20u64 {
-        k.eval(&[c]);
+        k.eval_at(&[c]);
         p1.set_inputs(&[c]);
         assert_eq!(
             k.get_value("j").to_display_string(),
@@ -234,11 +234,11 @@ fn a_projection_tile_renders_on_the_hybrid_kernel() {
     let src = "input cycle: u64\nh := hash(cycle)\ntile t : text := \"${h}: @for k in 1..3 sep \\\"-\\\" {${hash(k)}}\"\n";
     let mut k = compile_polydat_to_assembler(src)
         .unwrap()
-        .compile_hybrid()
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
         .expect("hybrid");
     let mut p1 = kernel(src, JitMode::Off);
     for c in 0..6u64 {
-        k.eval(&[c]);
+        k.eval_at(&[c]);
         p1.set_inputs(&[c]);
         assert_eq!(k.get_value("t").as_str(), p1.pull("t").as_str());
     }
@@ -252,11 +252,11 @@ fn a_pure_native_kernel_carries_a_reference_output() {
     let src = "input cycle: u64\nh := hash(cycle)\ns := __u64_to_string(h)\n";
     let mut pure = compile_polydat_to_assembler(src)
         .unwrap()
-        .try_compile_pure_jit()
+        .compile_slots(polydat::Engine::PureNative(polydat::Provenance::PushPull))
         .expect("a string output runs as a slot call in native code");
     let mut p1 = kernel(src, JitMode::Off);
     for c in [3u64, 4, 4, 5] {
-        pure.eval(&[c]);
+        pure.eval_at(&[c]);
         p1.set_inputs(&[c]);
         assert_eq!(pure.get_value("s").as_str(), p1.pull("s").as_str());
     }
@@ -270,7 +270,7 @@ fn a_hybrid_kernels_string_output_is_owned_by_its_step() {
     let src = "input cycle: u64\nh := hash(cycle)\ns := __u64_to_string(h)\nn := __str_to_u64(s)\n";
     let mut hy = compile_polydat_to_assembler(src)
         .unwrap()
-        .compile_hybrid()
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
         .expect("hybrid");
     let n = hy.resolve_output("n").unwrap();
     let mut p1 = kernel(src, JitMode::Off);
@@ -282,7 +282,7 @@ fn a_hybrid_kernels_string_output_is_owned_by_its_step() {
         .collect();
     let mut kept = None;
     for c in 1..500u64 {
-        hy.eval(&[c]);
+        hy.eval_at(&[c]);
         assert_eq!(hy.get_slot(n), want[(c - 1) as usize]);
         let s = hy.get_value("s");
         assert_eq!(s.as_str(), want[(c - 1) as usize].to_string());

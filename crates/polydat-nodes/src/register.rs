@@ -414,7 +414,11 @@ mod tests {
         "#;
         let p1 = polydat::dsl::compile_polydat(src).unwrap();
         let asm = polydat::dsl::compile::compile_polydat_to_assembler(src).unwrap();
-        let mut p2 = asm.try_compile_raw().expect("reg nodes are P2-eligible");
+        let mut p2 = asm
+            .compile_slots(polydat_core::Engine::Closures(
+                polydat_core::Provenance::Raw,
+            ))
+            .expect("reg nodes are P2-eligible");
 
         let mut k1 = p1;
         for cycle in [0u64, 5, 0xFFFF, 0x1_0005] {
@@ -445,7 +449,11 @@ mod tests {
             vec![WireRef::node("wide")],
         );
         asm.add_output("back", WireRef::node("back"));
-        let mut p2 = asm.try_compile_raw().expect("u128 nodes are P2-eligible");
+        let mut p2 = asm
+            .compile_slots(polydat_core::Engine::Closures(
+                polydat_core::Provenance::Raw,
+            ))
+            .expect("u128 nodes are P2-eligible");
         for v in [0u64, 1, u64::MAX] {
             let slot = p2.resolve_output("back").unwrap();
             assert_eq!(p2.eval_for_slot(&[v], slot), v, "u128 round trip of {v}");
@@ -490,10 +498,12 @@ mod tests {
                     let want = p1.pull("out").as_reg_bits();
 
                     let asm = polydat::dsl::compile::compile_polydat_to_assembler(&src).unwrap();
-                    match asm.try_compile_pure_jit_raw() {
+                    match asm.compile_slots(polydat_core::Engine::PureNative(
+                        polydat_core::Provenance::Raw,
+                    )) {
                         Ok(mut p3) => {
                             let slot = p3.resolve_output("out").unwrap();
-                            p3.eval(&[cycle]);
+                            p3.eval_at(&[cycle]);
                             let got = Bits128([p3.get_slot(slot), p3.get_slot(slot + 1)]);
                             assert_eq!(got, want, "P3 reg_{op}_{fam} mismatch at cycle={cycle}");
                         }
@@ -503,9 +513,13 @@ mod tests {
                             eprintln!("reg_{op}_{fam}: pure-P3 declined ({e}); checking hybrid");
                             let asm =
                                 polydat::dsl::compile::compile_polydat_to_assembler(&src).unwrap();
-                            let mut hy = asm.compile_hybrid().unwrap();
+                            let mut hy = asm
+                                .compile_slots(polydat_core::Engine::Native(
+                                    polydat_core::Provenance::PushPull,
+                                ))
+                                .unwrap();
                             let slot = hy.resolve_output("out").unwrap();
-                            hy.eval(&[cycle]);
+                            hy.eval_at(&[cycle]);
                             let got = Bits128([hy.get_slot(slot), hy.get_slot(slot + 1)]);
                             assert_eq!(
                                 got, want,

@@ -115,12 +115,14 @@ fn bench_p1_wide_sum(c: &mut Criterion) {
 // =================================================================
 
 fn bench_p2_single_identity(c: &mut Criterion) {
-    let mut kernel = asm_single_identity().try_compile().unwrap();
+    let mut kernel = asm_single_identity()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::PushPull))
+        .unwrap();
     let out_slot = kernel.resolve_output("out").unwrap();
     c.bench_function("p2/single_identity", |b| {
         let mut cycle = 0u64;
         b.iter(|| {
-            kernel.eval(&[cycle]);
+            kernel.eval_at(&[cycle]);
             black_box(kernel.get_slot(out_slot));
             cycle = cycle.wrapping_add(1);
         });
@@ -130,12 +132,14 @@ fn bench_p2_single_identity(c: &mut Criterion) {
 fn bench_p2_identity_chain(c: &mut Criterion) {
     let mut group = c.benchmark_group("p2/identity_chain");
     for depth in [1, 2, 4, 8, 16] {
-        let mut kernel = asm_identity_chain(depth).try_compile().unwrap();
+        let mut kernel = asm_identity_chain(depth)
+            .compile_slots(polydat::Engine::Closures(polydat::Provenance::PushPull))
+            .unwrap();
         let out_slot = kernel.resolve_output("out").unwrap();
         group.bench_with_input(BenchmarkId::from_parameter(depth), &depth, |b, _| {
             let mut cycle = 0u64;
             b.iter(|| {
-                kernel.eval(&[cycle]);
+                kernel.eval_at(&[cycle]);
                 black_box(kernel.get_slot(out_slot));
                 cycle = cycle.wrapping_add(1);
             });
@@ -147,14 +151,16 @@ fn bench_p2_identity_chain(c: &mut Criterion) {
 fn bench_p2_wide_sum(c: &mut Criterion) {
     let mut group = c.benchmark_group("p2/wide_sum");
     for width in [1, 2, 4, 6, 8, 10] {
-        let mut kernel = asm_wide_sum(width).try_compile().unwrap();
+        let mut kernel = asm_wide_sum(width)
+            .compile_slots(polydat::Engine::Closures(polydat::Provenance::PushPull))
+            .unwrap();
         let out_slot = kernel.resolve_output("out").unwrap();
         let coords: Vec<u64> = (0..width as u64).collect();
         group.bench_with_input(BenchmarkId::from_parameter(width), &width, |b, _| {
             let mut base = 0u64;
             b.iter(|| {
                 let c: Vec<u64> = coords.iter().map(|x| x.wrapping_add(base)).collect();
-                kernel.eval(&c);
+                kernel.eval_at(&c);
                 black_box(kernel.get_slot(out_slot));
                 base = base.wrapping_add(1);
             });
@@ -169,12 +175,14 @@ fn bench_p2_wide_sum(c: &mut Criterion) {
 
 #[cfg(feature = "jit")]
 fn bench_p3_single_identity(c: &mut Criterion) {
-    let mut kernel = asm_single_identity().compile_hybrid().unwrap();
+    let mut kernel = asm_single_identity()
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
+        .unwrap();
     let out_slot = kernel.resolve_output("out").unwrap();
     c.bench_function("p3/single_identity", |b| {
         let mut cycle = 0u64;
         b.iter(|| {
-            kernel.eval(&[cycle]);
+            kernel.eval_at(&[cycle]);
             black_box(kernel.get_slot(out_slot));
             cycle = cycle.wrapping_add(1);
         });
@@ -185,12 +193,14 @@ fn bench_p3_single_identity(c: &mut Criterion) {
 fn bench_p3_identity_chain(c: &mut Criterion) {
     let mut group = c.benchmark_group("p3/identity_chain");
     for depth in [1, 2, 4, 8, 16] {
-        let mut kernel = asm_identity_chain(depth).compile_hybrid().unwrap();
+        let mut kernel = asm_identity_chain(depth)
+            .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
+            .unwrap();
         let out_slot = kernel.resolve_output("out").unwrap();
         group.bench_with_input(BenchmarkId::from_parameter(depth), &depth, |b, _| {
             let mut cycle = 0u64;
             b.iter(|| {
-                kernel.eval(&[cycle]);
+                kernel.eval_at(&[cycle]);
                 black_box(kernel.get_slot(out_slot));
                 cycle = cycle.wrapping_add(1);
             });
@@ -206,12 +216,14 @@ fn bench_p3_identity_chain(c: &mut Criterion) {
 // =================================================================
 
 fn bench_hybrid_single_identity(c: &mut Criterion) {
-    let mut kernel = asm_single_identity().compile_hybrid().unwrap();
+    let mut kernel = asm_single_identity()
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
+        .unwrap();
     let out_slot = kernel.resolve_output("out").unwrap();
     c.bench_function("hybrid/single_identity", |b| {
         let mut cycle = 0u64;
         b.iter(|| {
-            kernel.eval(&[cycle]);
+            kernel.eval_at(&[cycle]);
             black_box(kernel.get_slot(out_slot));
             cycle = cycle.wrapping_add(1);
         });
@@ -221,12 +233,14 @@ fn bench_hybrid_single_identity(c: &mut Criterion) {
 fn bench_hybrid_identity_chain(c: &mut Criterion) {
     let mut group = c.benchmark_group("hybrid/identity_chain");
     for depth in [1, 2, 4, 8, 16] {
-        let mut kernel = asm_identity_chain(depth).compile_hybrid().unwrap();
+        let mut kernel = asm_identity_chain(depth)
+            .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
+            .unwrap();
         let out_slot = kernel.resolve_output("out").unwrap();
         group.bench_with_input(BenchmarkId::from_parameter(depth), &depth, |b, _| {
             let mut cycle = 0u64;
             b.iter(|| {
-                kernel.eval(&[cycle]);
+                kernel.eval_at(&[cycle]);
                 black_box(kernel.get_slot(out_slot));
                 cycle = cycle.wrapping_add(1);
             });

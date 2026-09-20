@@ -60,21 +60,31 @@ fn input_seq(n: usize) -> Vec<u64> {
 fn s5_skip_engines_match_raw_oracle() {
     let mk = || compile_polydat_to_assembler(MIXED_SRC).unwrap();
 
-    let mut raw = mk().try_compile_raw().expect("raw P2");
-    let mut push = mk().try_compile_push().expect("push P2");
-    let mut pull = mk().try_compile_pull().expect("pull P2");
-    let mut pushpull = mk().try_compile().expect("pushpull P2");
-    let mut hybrid = mk().compile_hybrid().expect("hybrid");
+    let mut raw = mk()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw))
+        .expect("raw P2");
+    let mut push = mk()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::Push))
+        .expect("push P2");
+    let mut pull = mk()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::Pull))
+        .expect("pull P2");
+    let mut pushpull = mk()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::PushPull))
+        .expect("pushpull P2");
+    let mut hybrid = mk()
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
+        .expect("hybrid");
 
     let out = raw.resolve_output("out").unwrap();
     let vsum = raw.resolve_output("vsum").unwrap();
 
     for (i, &cycle) in input_seq(120).iter().enumerate() {
-        raw.eval(&[cycle]);
-        push.eval(&[cycle]);
-        pull.eval(&[cycle]);
-        pushpull.eval(&[cycle]);
-        hybrid.eval(&[cycle]);
+        raw.eval_at(&[cycle]);
+        push.eval_at(&[cycle]);
+        pull.eval_at(&[cycle]);
+        pushpull.eval_at(&[cycle]);
+        hybrid.eval_at(&[cycle]);
 
         let want_out = raw.get_slot(out);
         let want_vsum: Vec<f32> = raw.read_vec_f32(vsum).to_vec();
@@ -106,9 +116,9 @@ fn s5_skip_engines_match_raw_oracle() {
 fn s2_raw_readers_refuse_ref_slots() {
     let mut p2 = compile_polydat_to_assembler(MIXED_SRC)
         .unwrap()
-        .try_compile_raw()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw))
         .expect("P2");
-    p2.eval(&[42]);
+    p2.eval_at(&[42]);
     let vsum = p2.resolve_output("vsum").unwrap();
 
     // Typed accessor works and sees real data.
@@ -137,9 +147,9 @@ fn s2_raw_readers_refuse_ref_slots() {
 fn s2_typed_accessor_rejects_wrong_lane_type() {
     let mut p2 = compile_polydat_to_assembler(MIXED_SRC)
         .unwrap()
-        .try_compile_raw()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw))
         .expect("P2");
-    p2.eval(&[42]);
+    p2.eval_at(&[42]);
     let vsum = p2.resolve_output("vsum").unwrap();
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let _ = p2.read_vec_i32(vsum);
@@ -400,9 +410,9 @@ fn native_kernels_guard_reference_slots_and_copy_them_out() {
         "input cycle: u64\nh := hash(cycle)\nj := __u64_to_json(h)\ns := __u64_to_string(h)\n";
     let mut k = compile_polydat_to_assembler(src)
         .unwrap()
-        .compile_hybrid()
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
         .expect("hybrid");
-    k.eval(&[3]);
+    k.eval_at(&[3]);
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| k.get("s")));
     assert!(r.is_err(), "a raw read of a reference slot must be refused");
     // The typed reader decodes by port type and copies out.
@@ -411,9 +421,9 @@ fn native_kernels_guard_reference_slots_and_copy_them_out() {
     assert_eq!(k.get_value("j").to_display_string(), h.to_string());
     let mut pure = compile_polydat_to_assembler(src)
         .unwrap()
-        .try_compile_pure_jit()
+        .compile_slots(polydat::Engine::PureNative(polydat::Provenance::PushPull))
         .expect("pure native code carries reference pairs through slot calls");
-    pure.eval(&[3]);
+    pure.eval_at(&[3]);
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pure.get("s")));
     assert!(
         r.is_err(),
@@ -470,9 +480,9 @@ fn created_kernels_own_their_pairs(mut source: Box<dyn polydat::Kernel>) {
 fn a_created_closure_kernel_owns_its_reference_pairs() {
     let kernel = compile_polydat_to_assembler(OWNED_PAIRS_SRC)
         .unwrap()
-        .try_compile()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::PushPull))
         .unwrap_or_else(|_| panic!("the closure tier refused the program"));
-    created_kernels_own_their_pairs(Box::new(kernel));
+    created_kernels_own_their_pairs(kernel);
 }
 
 #[cfg(feature = "jit")]
@@ -480,7 +490,7 @@ fn a_created_closure_kernel_owns_its_reference_pairs() {
 fn a_created_hybrid_kernel_owns_its_reference_pairs() {
     let kernel = compile_polydat_to_assembler(OWNED_PAIRS_SRC)
         .unwrap()
-        .compile_hybrid()
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
         .expect("hybrid");
-    created_kernels_own_their_pairs(Box::new(kernel));
+    created_kernels_own_their_pairs(kernel);
 }

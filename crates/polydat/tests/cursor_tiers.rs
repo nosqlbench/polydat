@@ -51,15 +51,15 @@ fn agree(src: &str, narrow: Option<&Partition>) {
         .unwrap();
     let mut p2 = compile_polydat_to_assembler(src)
         .unwrap()
-        .try_compile_raw()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw))
         .unwrap_or_else(|_| panic!("the partition family has a closure form\n{src}"));
     let mut p2pp = compile_polydat_to_assembler(src)
         .unwrap()
-        .try_compile()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::PushPull))
         .unwrap_or_else(|_| panic!("P2 push-pull\n{src}"));
     let mut hybrid = compile_polydat_to_assembler(src)
         .unwrap()
-        .compile_hybrid()
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
         .unwrap_or_else(|e| panic!("hybrid: {e}\n{src}"));
     if let Some(p) = narrow {
         p1.set_cursor("q", p).unwrap();
@@ -70,11 +70,11 @@ fn agree(src: &str, narrow: Option<&Partition>) {
     for c in [0u64, 1, 7, 250, 999, 1000, 4096] {
         p1.set_inputs(&[c]);
         let want: Vec<Value> = OUTPUTS.iter().map(|o| p1.pull(o).clone()).collect();
-        p2.eval(&[c]);
+        p2.eval_at(&[c]);
         let got_p2: Vec<Value> = OUTPUTS.iter().map(|o| p2.get_value(o)).collect();
-        p2pp.eval(&[c]);
+        p2pp.eval_at(&[c]);
         let got_p2pp: Vec<Value> = OUTPUTS.iter().map(|o| p2pp.get_value(o)).collect();
-        hybrid.eval(&[c]);
+        hybrid.eval_at(&[c]);
         let got_hybrid: Vec<Value> = OUTPUTS.iter().map(|o| hybrid.get_value(o)).collect();
         for (i, out) in OUTPUTS.iter().enumerate() {
             for (tier, got) in [
@@ -145,12 +145,12 @@ fn the_compiled_kernels_report_the_cursors_the_interpreter_does() {
         .unwrap();
     let p2 = compile_polydat_to_assembler(&src)
         .unwrap()
-        .try_compile_raw()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw))
         .ok()
         .unwrap();
     let hybrid = compile_polydat_to_assembler(&src)
         .unwrap()
-        .compile_hybrid()
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
         .unwrap();
     let names = |s: &[polydat::iteration::source::SourceSchema]| -> Vec<(String, usize)> {
         s.iter()
@@ -197,10 +197,10 @@ fn a_clause_denoting_several_partitions_is_unset_until_narrowed() {
     assert_eq!(*p1.pull("n"), Value::None);
     let mut p2 = compile_polydat_to_assembler(&src)
         .unwrap()
-        .try_compile_raw()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw))
         .ok()
         .unwrap();
-    p2.eval(&[0]);
+    p2.eval_at(&[0]);
     for o in OUTPUTS {
         // The partition consumers read `None`; the scalar projections
         // read their declared defaults, on both engines.
@@ -212,7 +212,7 @@ fn a_clause_denoting_several_partitions_is_unset_until_narrowed() {
         .clone()
         .unwrap();
     p2.set_cursor("q", &parts[1]).unwrap();
-    p2.eval(&[0]);
+    p2.eval_at(&[0]);
     assert_eq!(
         p2.get_value("n").as_u64(),
         parts[1].end_ord - parts[1].start_ord

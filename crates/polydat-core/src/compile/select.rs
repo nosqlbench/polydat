@@ -192,7 +192,9 @@ pub enum Engine {
     /// one slot buffer.
     Closures(Provenance),
     /// Native code where a node has a lowering, its closure elsewhere:
-    /// the P3 tier. Refused by a build without the `jit` feature.
+    /// the P3 tier. Built in every configuration: a build without the
+    /// `jit` feature runs the same kernel with every step a closure and
+    /// no native segment in it, which `plan()` reports.
     Native(Provenance),
     /// Native code and nothing else: the differential tier behind
     /// [`Engine::Native`] (engines.md §8). It differs from `Native` in

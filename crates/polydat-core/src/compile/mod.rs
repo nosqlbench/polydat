@@ -223,14 +223,31 @@ pub trait SlotKernel: crate::kernel::Kernel {
     /// what a tier benchmark wants: `pull_at` gives the same value
     /// through a `Value` it has to construct.
     fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64;
-}
 
-// The `read_vec_*` borrows into a `Ref2` output's scratch are
-// deliberately not here. They read `core.ref_entry(slot)`, which the
-// closure tier and the hybrid have and the pure tier does not, so a
-// trait carrying them would be implementable by seven of the nine
-// compiled kernels rather than all nine. They stay inherent until the
-// pure tier grows the same entry, and then they join this trait.
+    /// Set the coordinates and run every step, the whole program in
+    /// one call. [`Kernel::eval`](crate::kernel::Kernel::eval) is the
+    /// same evaluation over coordinates already written with
+    /// `set_inputs`; this is the form that takes them, which is what a
+    /// loop over a coordinate range wants.
+    fn eval_at(&mut self, coords: &[u64]);
+
+    /// Borrow a `vec_f32` output's current contents. The borrow ties to
+    /// `&self`, so holding one across the next evaluation is a compile
+    /// error rather than a stale read (axiom S2).
+    fn read_vec_f32(&self, slot: usize) -> &[f32];
+    /// Borrow a `vec_f64` output's current contents.
+    fn read_vec_f64(&self, slot: usize) -> &[f64];
+    /// Borrow a `vec_f16` output's current contents.
+    fn read_vec_f16(&self, slot: usize) -> &[half::f16];
+    /// Borrow a `vec_i8` output's current contents.
+    fn read_vec_i8(&self, slot: usize) -> &[i8];
+    /// Borrow a `vec_i16` output's current contents.
+    fn read_vec_i16(&self, slot: usize) -> &[i16];
+    /// Borrow a `vec_i32` output's current contents.
+    fn read_vec_i32(&self, slot: usize) -> &[i32];
+    /// Borrow a `vec_i64` output's current contents.
+    fn read_vec_i64(&self, slot: usize) -> &[i64];
+}
 
 /// [`SlotKernel`] for a compiled kernel, forwarding to the inherent
 /// methods the type already has. The trait is the surface; the
@@ -252,6 +269,30 @@ macro_rules! impl_slot_kernel {
             }
             fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
                 $ty::eval_for_slot(self, coords, slot)
+            }
+            fn eval_at(&mut self, coords: &[u64]) {
+                $ty::eval(self, coords)
+            }
+            fn read_vec_f32(&self, slot: usize) -> &[f32] {
+                $ty::read_vec_f32(self, slot)
+            }
+            fn read_vec_f64(&self, slot: usize) -> &[f64] {
+                $ty::read_vec_f64(self, slot)
+            }
+            fn read_vec_f16(&self, slot: usize) -> &[half::f16] {
+                $ty::read_vec_f16(self, slot)
+            }
+            fn read_vec_i8(&self, slot: usize) -> &[i8] {
+                $ty::read_vec_i8(self, slot)
+            }
+            fn read_vec_i16(&self, slot: usize) -> &[i16] {
+                $ty::read_vec_i16(self, slot)
+            }
+            fn read_vec_i32(&self, slot: usize) -> &[i32] {
+                $ty::read_vec_i32(self, slot)
+            }
+            fn read_vec_i64(&self, slot: usize) -> &[i64] {
+                $ty::read_vec_i64(self, slot)
             }
         }
     };

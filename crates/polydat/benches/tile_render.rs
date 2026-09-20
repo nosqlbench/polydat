@@ -153,14 +153,15 @@ fn bench_case(c: &mut Criterion, case: &str, src: &str, outputs: &[&str]) {
         });
     });
 
-    let mut p2 = match assembler(src).try_compile_raw() {
-        Ok(kernel) => kernel,
-        Err(_) => panic!("every tile-ladder node must support P2"),
-    };
+    let mut p2 =
+        match assembler(src).compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw)) {
+            Ok(kernel) => kernel,
+            Err(_) => panic!("every tile-ladder node must support P2"),
+        };
     group.bench_function("p2_closures", |b| {
         let mut cycle = 1u64;
         b.iter(|| {
-            p2.eval(&[cycle]);
+            p2.eval_at(&[cycle]);
             for name in outputs {
                 black_box(weight(&p2.get_value(name)));
             }
@@ -171,12 +172,12 @@ fn bench_case(c: &mut Criterion, case: &str, src: &str, outputs: &[&str]) {
     #[cfg(feature = "jit")]
     {
         let mut p3 = assembler(src)
-            .try_compile_jit_raw()
+            .compile_slots(polydat::Engine::Native(polydat::Provenance::Raw))
             .expect("every tile-ladder node must support P3");
         group.bench_function("p3_native", |b| {
             let mut cycle = 1u64;
             b.iter(|| {
-                p3.eval(&[cycle]);
+                p3.eval_at(&[cycle]);
                 for name in outputs {
                     black_box(weight(&p3.get_value(name)));
                 }
@@ -186,11 +187,13 @@ fn bench_case(c: &mut Criterion, case: &str, src: &str, outputs: &[&str]) {
 
         // Pure native code runs a program only when every node lowers;
         // a case a node keeps off it is recorded as absent.
-        if let Ok(mut pure) = assembler(src).try_compile_pure_jit_raw() {
+        if let Ok(mut pure) =
+            assembler(src).compile_slots(polydat::Engine::PureNative(polydat::Provenance::Raw))
+        {
             group.bench_function("pure_native", |b| {
                 let mut cycle = 1u64;
                 b.iter(|| {
-                    pure.eval(&[cycle]);
+                    pure.eval_at(&[cycle]);
                     for name in outputs {
                         black_box(weight(&pure.get_value(name)));
                     }

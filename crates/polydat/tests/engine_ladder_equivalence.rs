@@ -19,7 +19,7 @@ fn engine_ladder_has_identical_results_at_each_level() {
 
     let mut p2 = match compile_polydat_to_assembler(GRAPH)
         .expect("assemble P2 graph")
-        .try_compile_raw()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw))
     {
         Ok(kernel) => kernel,
         Err(_) => panic!("engine-ladder graph must be entirely P2-compatible"),
@@ -29,14 +29,14 @@ fn engine_ladder_has_identical_results_at_each_level() {
     #[cfg(feature = "jit")]
     let mut p3 = compile_polydat_to_assembler(GRAPH)
         .expect("assemble P3 graph")
-        .try_compile_jit_raw()
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::Raw))
         .expect("engine-ladder graph must be entirely P3-compatible");
     #[cfg(feature = "jit")]
     let p3_outputs = OUTPUTS.map(|name| p3.resolve_output(name).expect("resolve P3 output"));
     #[cfg(feature = "jit")]
     let mut pure = compile_polydat_to_assembler(GRAPH)
         .expect("assemble pure native graph")
-        .try_compile_pure_jit_raw()
+        .compile_slots(polydat::Engine::PureNative(polydat::Provenance::Raw))
         .expect("engine-ladder graph must lower entirely to native code");
     #[cfg(feature = "jit")]
     let pure_outputs = OUTPUTS.map(|name| {
@@ -56,16 +56,16 @@ fn engine_ladder_has_identical_results_at_each_level() {
         p1.set_inputs(&inputs);
         let p1_values = p1_outputs.map(|output| p1.pull_by_index(output).as_u64());
 
-        p2.eval(&inputs);
+        p2.eval_at(&inputs);
         let p2_values = p2_outputs.map(|output| p2.get_slot(output));
         assert_eq!(p2_values, p1_values, "P2 differs for inputs {inputs:?}");
 
         #[cfg(feature = "jit")]
         {
-            p3.eval(&inputs);
+            p3.eval_at(&inputs);
             let p3_values = p3_outputs.map(|output| p3.get_slot(output));
             assert_eq!(p3_values, p1_values, "P3 differs for inputs {inputs:?}");
-            pure.eval(&inputs);
+            pure.eval_at(&inputs);
             let pure_values = pure_outputs.map(|output| pure.get_slot(output));
             assert_eq!(
                 pure_values, p1_values,

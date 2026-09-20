@@ -305,7 +305,6 @@ impl HybridCore {
     /// Whether this kernel skips current steps, and with it which steps
     /// an input change marks: every dependent, or only the side
     /// channels when a pure step's currency is never consulted.
-    #[cfg(feature = "jit")]
     fn set_use_clean(&mut self, on: bool) {
         self.use_clean = on;
         let side = std::sync::Arc::clone(&self.side);
@@ -475,7 +474,6 @@ impl HybridKernelRaw {
         eval_all_hybrid_steps(&mut self.core);
     }
 
-    #[cfg(feature = "jit")]
     fn pull_output(&mut self, name: &str) -> crate::ast::Value {
         self.core.pull_named(name)
     }
@@ -1560,7 +1558,6 @@ fn ref_copy_or_slot(
 
 // ── The engine-independent surface (engines.md §3.5) ──────
 
-#[cfg(feature = "jit")]
 impl HybridKernelRaw {
     /// Nothing to mark: every run evaluates everything.
     fn mark_all_dirty(&mut self) {}
@@ -1584,7 +1581,6 @@ impl HybridKernelPushPull {
 
     /// The same program with no provenance: every run evaluates
     /// everything.
-    #[cfg(feature = "jit")]
     pub(crate) fn into_raw(self) -> HybridKernelRaw {
         let mut core = self.core;
         core.set_use_clean(false);
@@ -1592,8 +1588,6 @@ impl HybridKernelPushPull {
         HybridKernelRaw { core }
     }
 
-    /// The same program with the cone guard only.
-    #[cfg(feature = "jit")]
     pub(crate) fn into_pull(self) -> HybridKernelPull {
         let mut core = self.core;
         core.set_use_clean(false);
@@ -1610,14 +1604,9 @@ impl HybridKernelPushPull {
 
 use crate::compile::select::{Engine, Provenance};
 
-#[cfg(feature = "jit")]
 crate::compile::impl_kernel_trait!(HybridKernelRaw);
 crate::compile::impl_kernel_trait!(HybridKernelPull);
 crate::compile::impl_kernel_trait!(HybridKernelPushPull);
-// `SlotKernel` extends `Kernel`, so each impl is gated exactly as the
-// `Kernel` impl above it is: without the `jit` feature this build has
-// no raw hybrid kernel at all.
-#[cfg(feature = "jit")]
 crate::compile::impl_slot_kernel!(HybridKernelRaw);
 crate::compile::impl_slot_kernel!(HybridKernelPull);
 crate::compile::impl_slot_kernel!(HybridKernelPushPull);
@@ -1652,7 +1641,6 @@ macro_rules! hybrid_drive {
         }
     };
 }
-#[cfg(feature = "jit")]
 hybrid_drive!(HybridKernelRaw, set_coords);
 hybrid_drive!(HybridKernelPull, set_inputs);
 hybrid_drive!(HybridKernelPushPull, set_inputs);

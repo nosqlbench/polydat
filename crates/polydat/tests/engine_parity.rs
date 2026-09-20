@@ -73,9 +73,9 @@ fn row(src: &str) -> [(&'static str, String); 4] {
     let p2 = outcome(std::panic::catch_unwind(|| {
         let mut k = compile_polydat_to_assembler(src)
             .map_err(|e| e.to_string())?
-            .try_compile_raw()
+            .compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw))
             .map_err(|_| "no closure form for some node".to_string())?;
-        k.eval(&[3]);
+        k.eval_at(&[3]);
         let outs: Vec<String> = k.output_names().iter().map(|s| s.to_string()).collect();
         for o in &outs {
             let _ = k.get_value(o);
@@ -85,9 +85,9 @@ fn row(src: &str) -> [(&'static str, String); 4] {
     let p3 = outcome(std::panic::catch_unwind(|| {
         let mut k = compile_polydat_to_assembler(src)
             .map_err(|e| e.to_string())?
-            .compile_hybrid()
+            .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
             .map_err(|e| e.to_string())?;
-        k.eval(&[3]);
+        k.eval_at(&[3]);
         let outs: Vec<String> = k.output_names().iter().map(|s| s.to_string()).collect();
         for o in &outs {
             let _ = k.get_value(o);
@@ -97,9 +97,9 @@ fn row(src: &str) -> [(&'static str, String); 4] {
     let pure = outcome(std::panic::catch_unwind(|| {
         let mut k = compile_polydat_to_assembler(src)
             .map_err(|e| e.to_string())?
-            .try_compile_pure_jit()
+            .compile_slots(polydat::Engine::PureNative(polydat::Provenance::PushPull))
             .map_err(|e| e.to_string())?;
-        k.eval(&[3]);
+        k.eval_at(&[3]);
         let outs: Vec<String> = k.output_names().iter().map(|s| s.to_string()).collect();
         for o in &outs {
             let _ = k.get_value(o);
@@ -200,15 +200,15 @@ fn the_engines_agree_on_every_node() {
         let outs: Vec<String> = p1.output_names().iter().map(|s| s.to_string()).collect();
         let mut p2 = compile_polydat_to_assembler(&src)
             .unwrap()
-            .try_compile_raw()
+            .compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw))
             .ok();
         let mut p3 = compile_polydat_to_assembler(&src)
             .unwrap()
-            .compile_hybrid()
+            .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
             .ok();
         let mut pure = compile_polydat_to_assembler(&src)
             .unwrap()
-            .try_compile_pure_jit()
+            .compile_slots(polydat::Engine::PureNative(polydat::Provenance::PushPull))
             .ok();
         for &c in &cycles {
             // An assertion node fails on some cycles by design; the
@@ -225,21 +225,21 @@ fn the_engines_agree_on_every_node() {
             let mut got: Vec<(&str, Result<Vec<Value>, String>)> = Vec::new();
             if let Some(k) = p2.as_mut() {
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    k.eval(&[c]);
+                    k.eval_at(&[c]);
                     outs.iter().map(|o| k.get_value(o)).collect::<Vec<_>>()
                 }));
                 got.push(("P2", r.map_err(payload_text)));
             }
             if let Some(k) = p3.as_mut() {
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    k.eval(&[c]);
+                    k.eval_at(&[c]);
                     outs.iter().map(|o| k.get_value(o)).collect::<Vec<_>>()
                 }));
                 got.push(("P3", r.map_err(payload_text)));
             }
             if let Some(k) = pure.as_mut() {
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    k.eval(&[c]);
+                    k.eval_at(&[c]);
                     outs.iter().map(|o| k.get_value(o)).collect::<Vec<_>>()
                 }));
                 got.push(("pure", r.map_err(payload_text)));
@@ -317,12 +317,12 @@ fn nondeterministic_and_side_channel_nodes_run_alike_on_pure_native_code() {
         ),
         (
             "pure native",
-            Box::new(
-                compile_polydat_to_assembler(src)
-                    .unwrap()
-                    .try_compile_pure_jit()
-                    .expect("pure native code runs a counter and a side channel"),
-            ),
+            // Already a box, and `SlotKernel` extends `Kernel`, so it
+            // upcasts here rather than needing a second one.
+            compile_polydat_to_assembler(src)
+                .unwrap()
+                .compile_slots(polydat::Engine::PureNative(polydat::Provenance::PushPull))
+                .expect("pure native code runs a counter and a side channel"),
         ),
     ];
     let _ = polydat::library::emit::take_rows();

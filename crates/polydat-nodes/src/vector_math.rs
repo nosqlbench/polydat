@@ -276,7 +276,9 @@ mod tests {
 
         let asm = polydat::dsl::compile::compile_polydat_to_assembler(src).unwrap();
         let mut p2 = asm
-            .try_compile_raw()
+            .compile_slots(polydat_core::Engine::Closures(
+                polydat_core::Provenance::Raw,
+            ))
             .expect("slice-bearing nodes are P2-eligible via compiled_slot");
 
         for cycle in [0u64, 7, 0xFEED] {
@@ -290,12 +292,16 @@ mod tests {
         #[cfg(feature = "jit")]
         {
             let asm = polydat::dsl::compile::compile_polydat_to_assembler(src).unwrap();
-            let mut hy = asm.compile_hybrid().unwrap();
+            let mut hy = asm
+                .compile_slots(polydat_core::Engine::Native(
+                    polydat_core::Provenance::PushPull,
+                ))
+                .unwrap();
             for cycle in [0u64, 7, 0xFEED] {
                 p1.set_inputs(&[cycle]);
                 let want = p1.pull("out").as_f64();
                 let slot = hy.resolve_output("out").unwrap();
-                hy.eval(&[cycle]);
+                hy.eval_at(&[cycle]);
                 let got = f64::from_bits(hy.get_slot(slot));
                 assert_eq!(got, want, "hybrid vec flow mismatch at cycle={cycle}");
             }
@@ -314,7 +320,11 @@ mod tests {
         "#;
         let mut p1 = polydat::dsl::compile_polydat(src).unwrap();
         let asm = polydat::dsl::compile::compile_polydat_to_assembler(src).unwrap();
-        let mut p2 = asm.try_compile_raw().expect("P2-eligible");
+        let mut p2 = asm
+            .compile_slots(polydat_core::Engine::Closures(
+                polydat_core::Provenance::Raw,
+            ))
+            .expect("P2-eligible");
         let slot = p2.resolve_output("out").unwrap();
         // Interleave cycles so stale-scratch bugs would surface as
         // cross-cycle contamination.

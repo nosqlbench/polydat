@@ -24,10 +24,10 @@
 
 #![cfg(feature = "jit")]
 
+use polydat::JitMode;
 use polydat::ast::{PortType, Value};
 use polydat::dsl::compile::compile_polydat_to_assembler;
 use polydat::kernel::PolydatKernel;
-use polydat::{JitMode, Kernel};
 
 // Two shapes the library has no instance of with a handle element: a
 // fallible construction whose cached value is a string, and a tuple
@@ -958,24 +958,24 @@ fn check_with(src: &str, outputs: &[&str], cycles: u64, externs: &[(String, Valu
     let cones_built = built();
     let mut p2 = compile_polydat_to_assembler(src)
         .unwrap()
-        .try_compile_raw()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw))
         .unwrap_or_else(|e| {
             panic!("every node here has a P2 form, but the closure tier refused it: {e}\n{src}")
         });
     let p2_built = built();
     let mut p2pp = compile_polydat_to_assembler(src)
         .unwrap()
-        .try_compile()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::PushPull))
         .unwrap_or_else(|_| panic!("P2 push-pull\n{src}"));
     let _ = built();
     let mut p3 = compile_polydat_to_assembler(src)
         .unwrap()
-        .try_compile_pure_jit()
+        .compile_slots(polydat::Engine::PureNative(polydat::Provenance::PushPull))
         .ok();
     let p3_built = built();
     let mut hybrid = compile_polydat_to_assembler(src)
         .unwrap()
-        .compile_hybrid()
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
         .unwrap_or_else(|e| panic!("hybrid: {e}\n{src}"));
     let hybrid_built = built();
     for (name, value) in externs {
@@ -1010,19 +1010,16 @@ fn check_with(src: &str, outputs: &[&str], cycles: u64, externs: &[(String, Valu
         cones.set_inputs(&[c]);
         let got_cones: Vec<Value> = outputs.iter().map(|o| cones.pull(o).clone()).collect();
         let cones_rows = built() + first(cones_built);
-        Kernel::set_inputs(&mut p2, &[c]);
-        let got_p2: Vec<Value> = outputs.iter().map(|o| Kernel::pull(&mut p2, o)).collect();
+        p2.set_inputs(&[c]);
+        let got_p2: Vec<Value> = outputs.iter().map(|o| p2.pull(o)).collect();
         let p2_rows = built() + first(p2_built);
         let got_p3: Option<Vec<Value>> = p3.as_mut().map(|k| {
-            Kernel::set_inputs(k, &[c]);
-            outputs.iter().map(|o| Kernel::pull(k, o)).collect()
+            k.set_inputs(&[c]);
+            outputs.iter().map(|o| k.pull(o)).collect()
         });
         let p3_rows = built() + first(p3_built);
-        Kernel::set_inputs(&mut hybrid, &[c]);
-        let got_hybrid: Vec<Value> = outputs
-            .iter()
-            .map(|o| Kernel::pull(&mut hybrid, o))
-            .collect();
+        hybrid.set_inputs(&[c]);
+        let got_hybrid: Vec<Value> = outputs.iter().map(|o| hybrid.pull(o)).collect();
         let hybrid_rows = built() + first(hybrid_built);
         for (i, out) in outputs.iter().enumerate() {
             same(&want[i], &got_cones[i], "cones", out, c, src);
@@ -1051,7 +1048,7 @@ fn check_with(src: &str, outputs: &[&str], cycles: u64, externs: &[(String, Valu
     for &c in &[0u64, 1, 1, 2, 2, 2, 0, 3, 3, 1] {
         p1.set_inputs(&[c]);
         let want: Vec<Value> = outputs.iter().map(|o| p1.pull(o).clone()).collect();
-        p2pp.eval(&[c]);
+        p2pp.eval_at(&[c]);
         let got: Vec<Value> = outputs.iter().map(|o| p2pp.get_value(o)).collect();
         for (i, out) in outputs.iter().enumerate() {
             same(&want[i], &got[i], "P2 push-pull", out, c, src);
@@ -1156,11 +1153,11 @@ fn provenance_kernels_keep_reference_outputs_current_on_repeated_coordinates() {
     let mut p1 = kernel(src, JitMode::Off);
     let mut p2 = compile_polydat_to_assembler(src)
         .unwrap()
-        .try_compile()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::PushPull))
         .unwrap_or_else(|_| panic!("P2 push-pull"));
     let mut hybrid = compile_polydat_to_assembler(src)
         .unwrap()
-        .compile_hybrid()
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
         .expect("hybrid");
     let coords = [3u64, 3, 3, 4, 4, 3, 3, 5, 5, 5];
     for &c in &coords {
@@ -1169,7 +1166,7 @@ fn provenance_kernels_keep_reference_outputs_current_on_repeated_coordinates() {
             .iter()
             .map(|o| p1.pull(o).clone())
             .collect();
-        p2.eval(&[c]);
+        p2.eval_at(&[c]);
         let got: Vec<Value> = ["s", "j", "t", "n"]
             .iter()
             .map(|o| p2.get_value(o))
@@ -1181,7 +1178,7 @@ fn provenance_kernels_keep_reference_outputs_current_on_repeated_coordinates() {
                 .collect::<Vec<_>>(),
             "P2 at {c}"
         );
-        hybrid.eval(&[c]);
+        hybrid.eval_at(&[c]);
         let got: Vec<Value> = ["s", "j", "t", "n"]
             .iter()
             .map(|o| hybrid.get_value(o))
@@ -1204,10 +1201,10 @@ fn a_p2_kernel_replaces_reference_outputs_in_place() {
     let src = "input cycle: u64\nh := hash(cycle)\nj := __u64_to_json(h)\nk := to_json(h)\nt := json_to_str(k)\n";
     let mut p2 = compile_polydat_to_assembler(src)
         .unwrap()
-        .try_compile_raw()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw))
         .unwrap_or_else(|_| panic!("P2"));
     for c in 0..50u64 {
-        p2.eval(&[c]);
+        p2.eval_at(&[c]);
         assert_eq!(
             p2.get_value("t").as_str(),
             p2.get_value("j").to_display_string()

@@ -332,15 +332,15 @@ fn the_vector_and_register_groups_have_named_lowerings() {
     );
     let mut pure = compile_polydat_to_assembler(src)
         .unwrap()
-        .try_compile_pure_jit()
+        .compile_slots(polydat::Engine::PureNative(polydat::Provenance::PushPull))
         .expect("every node of the two groups lowers");
     let mut p1 = kernel(src, JitMode::Off);
     for c in 0..8 {
-        polydat::Kernel::set_inputs(&mut pure, &[c]);
+        pure.set_inputs(&[c]);
         p1.set_inputs(&[c]);
         for name in ["unit", "cos", "rd", "rev", "i16", "i64", "lid"] {
             let want = p1.pull(name).clone();
-            let got = polydat::Kernel::pull(&mut pure, name).clone();
+            let got = pure.pull(name).clone();
             assert_eq!(got, want, "{name} at cycle {c}");
         }
     }

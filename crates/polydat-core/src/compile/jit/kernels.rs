@@ -159,6 +159,22 @@ impl Clone for JitCore {
 }
 
 impl JitCore {
+    /// Axiom S2 typed accessor core (borrow ties to `&self`), as the
+    /// closure tier and the hybrid have it. The pure tier owns the
+    /// same scratch and the same `(slot → entry)` map, so the typed
+    /// borrows read the same way here; `guard_slots` is this core's
+    /// name for the per-slot `Ref2` mask.
+    fn ref_entry(&self, slot: usize) -> &crate::ast::ScratchBuf {
+        match self.ref_scratch.iter().find(|(s, _)| *s == slot) {
+            Some(&(_, idx)) => &self.scratch[idx],
+            None if self.guard_slots.get(slot).copied().unwrap_or(false) => panic!(
+                "slot {slot} is a Ref pair owned by the CALLER (a kernel \
+                 input) — read it on the caller side"
+            ),
+            None => panic!("slot {slot} is not a Ref2-colored slot"),
+        }
+    }
+
     /// The value at `slot` decoded as `ty`, a pair copied out.
     pub(super) fn slot_value(&self, slot: usize, ty: crate::ast::PortType) -> crate::ast::Value {
         crate::compile::marshal::decode_output(&self.buffer, slot, ty)
@@ -379,6 +395,8 @@ impl JitCore {
 
 macro_rules! jit_accessors {
     () => {
+        crate::compile::ref_readers!();
+
         /// Returns the number of coordinate inputs this kernel accepts.
         pub fn coord_count(&self) -> usize {
             self.core.coord_count

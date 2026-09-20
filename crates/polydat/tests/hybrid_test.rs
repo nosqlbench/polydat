@@ -24,8 +24,10 @@ fn hybrid_simple_identity() {
     );
     asm.add_output("out", WireRef::node("id"));
 
-    let mut kernel = asm.compile_hybrid().unwrap();
-    kernel.eval(&[42]);
+    let mut kernel = asm
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
+        .unwrap();
+    kernel.eval_at(&[42]);
     assert_eq!(kernel.get("out"), 42);
 }
 
@@ -36,8 +38,10 @@ fn hybrid_hash_mod_chain() {
     asm.add_node("m", Box::new(Mod::new(1000)), vec![WireRef::node("h")]);
     asm.add_output("out", WireRef::node("m"));
 
-    let mut kernel = asm.compile_hybrid().unwrap();
-    kernel.eval(&[42]);
+    let mut kernel = asm
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
+        .unwrap();
+    kernel.eval_at(&[42]);
     let v = kernel.get("out");
     assert!(v < 1000, "got {v}");
 }
@@ -68,9 +72,11 @@ fn hybrid_mixed_jit_and_closure() {
     asm.add_output("tenant", WireRef::node_port("decompose", 0));
     asm.add_output("code", WireRef::node("code"));
 
-    let mut kernel = asm.compile_hybrid().unwrap();
+    let mut kernel = asm
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
+        .unwrap();
 
-    kernel.eval(&[4242]);
+    kernel.eval_at(&[4242]);
     let tenant = kernel.get("tenant");
     let code = kernel.get("code");
     assert_eq!(tenant, 42); // 4242 % 100
@@ -84,11 +90,13 @@ fn hybrid_deterministic() {
     asm.add_node("m", Box::new(Mod::new(1000000)), vec![WireRef::node("h")]);
     asm.add_output("out", WireRef::node("m"));
 
-    let mut kernel = asm.compile_hybrid().unwrap();
+    let mut kernel = asm
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
+        .unwrap();
 
-    kernel.eval(&[42]);
+    kernel.eval_at(&[42]);
     let v1 = kernel.get("out");
-    kernel.eval(&[42]);
+    kernel.eval_at(&[42]);
     let v2 = kernel.get("out");
     assert_eq!(v1, v2);
 }
@@ -127,9 +135,11 @@ fn hybrid_multi_output() {
     asm.add_output("c0", WireRef::node("code0"));
     asm.add_output("c1", WireRef::node("code1"));
 
-    let mut kernel = asm.compile_hybrid().unwrap();
+    let mut kernel = asm
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
+        .unwrap();
 
-    kernel.eval(&[4_201_337]);
+    kernel.eval_at(&[4_201_337]);
     assert!(kernel.get("c0") < 10000);
     assert!(kernel.get("c1") < 100000);
 }
@@ -147,12 +157,14 @@ fn hybrid_interleave_plus_hash() {
     asm.add_node("result", Box::new(Mod::new(1000)), vec![WireRef::node("h")]);
     asm.add_output("out", WireRef::node("result"));
 
-    let mut kernel = asm.compile_hybrid().unwrap();
-    kernel.eval(&[5, 10]);
+    let mut kernel = asm
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
+        .unwrap();
+    kernel.eval_at(&[5, 10]);
     let v1 = kernel.get("out");
     assert!(v1 < 1000);
 
-    kernel.eval(&[10, 5]);
+    kernel.eval_at(&[10, 5]);
     let v2 = kernel.get("out");
     assert!(v2 < 1000);
     assert_ne!(v1, v2, "interleave should make (5,10) != (10,5)");
@@ -169,8 +181,10 @@ fn hybrid_long_chain() {
     asm.add_node("m", Box::new(Mod::new(100)), vec![WireRef::node("h")]);
     asm.add_output("out", WireRef::node("m"));
 
-    let mut kernel = asm.compile_hybrid().unwrap();
-    kernel.eval(&[0]);
+    let mut kernel = asm
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
+        .unwrap();
+    kernel.eval_at(&[0]);
     // 0 + 1 + 2 + 3 = 6, hash(6) % 100
     let v = kernel.get("out");
     assert!(v < 100);

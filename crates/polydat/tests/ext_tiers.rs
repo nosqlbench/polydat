@@ -74,11 +74,11 @@ fn extension_nodes_agree_between_interpreter_closures_and_hybrid() {
     let mut p1 = p1.compile().expect("P1");
     let mut p2 = compile_polydat_to_assembler(SRC)
         .unwrap()
-        .try_compile_raw()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw))
         .unwrap_or_else(|_| panic!("the closure tier refused a program with extension nodes"));
     let mut hybrid = compile_polydat_to_assembler(SRC)
         .unwrap()
-        .compile_hybrid()
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
         .expect("hybrid");
     for cycle in 0..64u64 {
         p1.set_inputs(&[cycle]);
@@ -90,7 +90,7 @@ fn extension_nodes_agree_between_interpreter_closures_and_hybrid() {
         };
         let t = t.as_any().downcast_ref::<Span>().expect("a Span").clone();
 
-        p2.eval(&[cycle]);
+        p2.eval_at(&[cycle]);
         assert_eq!(p2.get("n"), n, "cycle {cycle}: P2 n");
         assert_eq!(
             p2.get_value("label").as_str(),
@@ -111,7 +111,7 @@ fn extension_nodes_agree_between_interpreter_closures_and_hybrid() {
             "cycle {cycle}: P2 t"
         );
 
-        hybrid.eval(&[cycle]);
+        hybrid.eval_at(&[cycle]);
         assert_eq!(hybrid.get("n"), n, "cycle {cycle}: hybrid n");
         assert_eq!(
             hybrid.get_value("label").as_str(),
@@ -141,11 +141,21 @@ fn extension_nodes_agree_between_interpreter_closures_and_hybrid() {
 /// producing step's scratch.
 #[test]
 fn extension_nodes_run_as_slot_calls_in_native_code() {
+    // The engine builds in every configuration; what differs is how
+    // much of it native code got, which is the plan and not the engine.
     let hybrid = compile_polydat_to_assembler(SRC)
         .unwrap()
-        .compile_hybrid()
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
         .expect("hybrid");
-    let (native, closures) = hybrid.engine_counts();
+    // The per-node engine choice, through the trait every engine
+    // answers rather than a tier-specific accessor.
+    let plan = hybrid.plan();
+    let (native, closures) = (plan.native_segments, plan.closure_steps);
+    #[cfg(not(feature = "jit"))]
+    {
+        assert_eq!(native, 0, "nothing is native without the jit feature");
+        assert!(closures >= 3, "the nodes are closure steps, got {closures}");
+    }
     #[cfg(feature = "jit")]
     {
         assert_eq!(
@@ -161,11 +171,11 @@ fn extension_nodes_run_as_slot_calls_in_native_code() {
         let mut p1 = p1.compile().expect("P1");
         let mut pure = compile_polydat_to_assembler(SRC)
             .unwrap()
-            .try_compile_pure_jit()
+            .compile_slots(polydat::Engine::PureNative(polydat::Provenance::PushPull))
             .expect("pure native code calls the extension nodes' kits");
         for cycle in [0u64, 1, 1, 9] {
             p1.set_inputs(&[cycle]);
-            pure.eval(&[cycle]);
+            pure.eval_at(&[cycle]);
             for name in ["n", "label", "doc"] {
                 assert_eq!(
                     pure.get_value(name).to_display_string(),
@@ -174,11 +184,6 @@ fn extension_nodes_run_as_slot_calls_in_native_code() {
                 );
             }
         }
-    }
-    #[cfg(not(feature = "jit"))]
-    {
-        assert_eq!(native, 0, "nothing is native without the jit feature");
-        assert!(closures >= 3, "the nodes are closure steps, got {closures}");
     }
 }
 
@@ -258,11 +263,11 @@ fn fallible_and_tuple_nodes_agree_between_interpreter_closures_and_hybrid() {
     let mut p1 = p1.compile().expect("P1");
     let mut p2 = compile_polydat_to_assembler(SHAPES)
         .unwrap()
-        .try_compile_raw()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw))
         .unwrap_or_else(|e| panic!("the closure tier refused a fallible or tuple node: {e}"));
     let mut hybrid = compile_polydat_to_assembler(SHAPES)
         .unwrap()
-        .compile_hybrid()
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
         .expect("hybrid");
     let outputs = [
         "seed", "label", "fs", "fd", "len", "text", "moved", "doc", "tail", "line",
@@ -276,7 +281,7 @@ fn fallible_and_tuple_nodes_agree_between_interpreter_closures_and_hybrid() {
                 (v.port_type(), v.to_display_string())
             })
             .collect();
-        p2.eval(&[cycle]);
+        p2.eval_at(&[cycle]);
         for (i, o) in outputs.iter().enumerate() {
             let v = p2.get_value(o);
             assert_eq!(
@@ -285,7 +290,7 @@ fn fallible_and_tuple_nodes_agree_between_interpreter_closures_and_hybrid() {
                 "cycle {cycle}: P2 `{o}`"
             );
         }
-        hybrid.eval(&[cycle]);
+        hybrid.eval_at(&[cycle]);
         for (i, o) in outputs.iter().enumerate() {
             let v = hybrid.get_value(o);
             assert_eq!(
@@ -295,7 +300,10 @@ fn fallible_and_tuple_nodes_agree_between_interpreter_closures_and_hybrid() {
             );
         }
     }
-    let (native, closures) = hybrid.engine_counts();
+    // The per-node engine choice, through the trait every engine
+    // answers rather than a tier-specific accessor.
+    let plan = hybrid.plan();
+    let (native, closures) = (plan.native_segments, plan.closure_steps);
     #[cfg(feature = "jit")]
     assert!(
         native >= 1 && closures == 0,
@@ -377,15 +385,15 @@ fn externs_agree_between_interpreter_closures_hybrid_and_native() {
     let mut p1 = polydat::dsl::compile::compile_polydat(EXTERNS).expect("interpreter");
     let mut p2 = compile_polydat_to_assembler(EXTERNS)
         .unwrap()
-        .try_compile_raw()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw))
         .unwrap_or_else(|_| panic!("the closure tier refused externs"));
     let mut p2pp = compile_polydat_to_assembler(EXTERNS)
         .unwrap()
-        .try_compile()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::PushPull))
         .unwrap_or_else(|_| panic!("the push-pull closure tier refused externs"));
     let mut hybrid = compile_polydat_to_assembler(EXTERNS)
         .unwrap()
-        .compile_hybrid()
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
         .expect("hybrid");
     // `doc` and `region` have no default, so the host sets every extern
     // before the first run and again between rounds; the compiled
@@ -410,7 +418,7 @@ fn externs_agree_between_interpreter_closures_hybrid_and_native() {
                     (v.port_type(), v.to_display_string())
                 })
                 .collect();
-            p2.eval(&[cycle]);
+            p2.eval_at(&[cycle]);
             for (i, o) in read.iter().enumerate() {
                 let v = p2.get_value(o);
                 assert_eq!(
@@ -419,7 +427,7 @@ fn externs_agree_between_interpreter_closures_hybrid_and_native() {
                     "round {round} cycle {cycle}: P2 `{o}`"
                 );
             }
-            p2pp.eval(&[cycle]);
+            p2pp.eval_at(&[cycle]);
             for (i, o) in read.iter().enumerate() {
                 let v = p2pp.get_value(o);
                 assert_eq!(
@@ -428,7 +436,7 @@ fn externs_agree_between_interpreter_closures_hybrid_and_native() {
                     "round {round} cycle {cycle}: P2 push-pull `{o}`"
                 );
             }
-            hybrid.eval(&[cycle]);
+            hybrid.eval_at(&[cycle]);
             for (i, o) in read.iter().enumerate() {
                 let v = hybrid.get_value(o);
                 assert_eq!(
@@ -445,7 +453,7 @@ fn externs_agree_between_interpreter_closures_hybrid_and_native() {
 fn an_extern_set_to_the_wrong_type_is_refused_by_name() {
     let mut p2 = compile_polydat_to_assembler(EXTERNS)
         .unwrap()
-        .try_compile_raw()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw))
         .unwrap_or_else(|_| panic!("P2"));
     // The write rule refuses by variant, not by message text: the
     // structured error names the slot, what it wanted, and what it got.
@@ -494,7 +502,7 @@ fn externs_agree_between_interpreter_and_pure_native_code() {
     let mut p1 = polydat::dsl::compile::compile_polydat(SRC).expect("interpreter");
     let mut p3 = compile_polydat_to_assembler(SRC)
         .unwrap()
-        .try_compile_pure_jit()
+        .compile_slots(polydat::Engine::PureNative(polydat::Provenance::PushPull))
         .expect("pure native code with carrier externs");
     let all = ["id", "n", "f"];
     for round in 0..3u64 {
@@ -515,7 +523,7 @@ fn externs_agree_between_interpreter_and_pure_native_code() {
                     (v.port_type(), v.to_display_string())
                 })
                 .collect();
-            p3.eval(&[cycle]);
+            p3.eval_at(&[cycle]);
             for (i, o) in all.iter().enumerate() {
                 let v = p3.get_value(o);
                 assert_eq!(
@@ -530,7 +538,7 @@ fn externs_agree_between_interpreter_and_pure_native_code() {
     let mut p1 = polydat::dsl::compile::compile_polydat(EXTERNS).expect("interpreter");
     let mut p3 = compile_polydat_to_assembler(EXTERNS)
         .unwrap()
-        .try_compile_pure_jit()
+        .compile_slots(polydat::Engine::PureNative(polydat::Provenance::PushPull))
         .expect("pure native code with string, JSON, and extension externs");
     let read = ["id", "tag", "text", "code", "line"];
     for round in 0..3u64 {
@@ -548,7 +556,7 @@ fn externs_agree_between_interpreter_and_pure_native_code() {
                     (v.port_type(), v.to_display_string())
                 })
                 .collect();
-            p3.eval(&[cycle]);
+            p3.eval_at(&[cycle]);
             for (i, o) in read.iter().enumerate() {
                 let v = p3.get_value(o);
                 assert_eq!(

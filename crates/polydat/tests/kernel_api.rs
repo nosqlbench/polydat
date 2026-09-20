@@ -100,19 +100,12 @@ fn every_engine_is_driven_alike_and_agrees_with_the_interpreter() {
     assert!(want[0][2].to_display_string().starts_with("eu-west/"));
     for engine in engines() {
         // Every engine runs it: the partition family has no native
-        // lowering, and P3 runs those nodes as closures (step 7). A build
-        // without native code refuses P3 by name.
+        // lowering, and the native tier runs those nodes as closures.
         let kernel = compile_polydat_with(SRC, engine);
-        if cfg!(not(feature = "jit")) && matches!(engine, Engine::Native(_)) {
-            match kernel {
-                Err(KernelError::Refused { engine: e, reason }) => {
-                    assert_eq!(e, engine);
-                    assert!(!reason.is_empty(), "{engine}");
-                }
-                other => panic!("{engine}: expected a refusal, got {:?}", other.map(|_| ())),
-            }
-            continue;
-        }
+        // `Engine::Native` builds in every configuration: without the
+        // `jit` feature its kernel simply has no native segment in it.
+        // An architecture with no code generator keeps every engine it
+        // can actually build.
         let mut k = kernel.unwrap_or_else(|e| panic!("{engine}: {e}"));
         assert!(matches!(
             (k.engine(), engine),
@@ -213,7 +206,7 @@ fn the_closure_builders_report_failure_instead_of_an_empty_kernel() {
     let no_closure = "input cycle: u64\n(a, b) := interpreter_only_double(cycle, 1, 2)\n";
     match compile_polydat_to_assembler(no_closure)
         .unwrap()
-        .try_compile_raw()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw))
     {
         Err(KernelError::Refused { engine, reason }) => {
             assert!(matches!(engine, Engine::Closures(_)), "{engine}");
@@ -225,14 +218,26 @@ fn the_closure_builders_report_failure_instead_of_an_empty_kernel() {
 
     // The same refusal reaches every member of the family.
     let asm = || compile_polydat_to_assembler(no_closure).unwrap();
-    assert!(asm().try_compile().is_err());
-    assert!(asm().try_compile_push().is_err());
-    assert!(asm().try_compile_pull().is_err());
+    assert!(
+        asm()
+            .compile_slots(polydat::Engine::Closures(polydat::Provenance::PushPull))
+            .is_err()
+    );
+    assert!(
+        asm()
+            .compile_slots(polydat::Engine::Closures(polydat::Provenance::Push))
+            .is_err()
+    );
+    assert!(
+        asm()
+            .compile_slots(polydat::Engine::Closures(polydat::Provenance::Pull))
+            .is_err()
+    );
 
     // A program every node can compile still builds.
     let fine = compile_polydat_to_assembler("input cycle: u64\ny := hash(cycle)\n")
         .unwrap()
-        .try_compile_raw();
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw));
     assert!(fine.is_ok(), "{:?}", fine.map(|_| ()));
 }
 
@@ -290,19 +295,16 @@ fn a_config_that_cannot_be_realized_is_refused() {
     match compile_polydat_with(src, Engine::Native(Provenance::Push)) {
         Err(KernelError::Refused { engine, reason }) => {
             assert_eq!(engine, Engine::Native(Provenance::Push));
-            if cfg!(feature = "jit") {
-                assert!(reason.contains("push-only"), "{reason}");
-                // The refusal names what the caller can ask for instead.
-                assert!(
-                    reason.contains("pushpull") && reason.contains("auto"),
-                    "{reason}"
-                );
-            } else {
-                // A build with no native code refuses the engine before
-                // it reaches the mode, which is the earlier and more
-                // useful of the two reasons.
-                assert!(reason.contains("jit"), "{reason}");
-            }
+            // The same reason in every configuration: what cannot be
+            // realized is the mode, not the build. The native tier
+            // builds everywhere; push without the cone guard has no
+            // form on it either way.
+            assert!(reason.contains("push-only"), "{reason}");
+            // The refusal names what the caller can ask for instead.
+            assert!(
+                reason.contains("pushpull") && reason.contains("auto"),
+                "{reason}"
+            );
         }
         other => panic!("expected a refusal, got {:?}", other.map(|k| k.engine())),
     }
@@ -319,10 +321,6 @@ fn a_config_that_cannot_be_realized_is_refused() {
     for engine in engines() {
         // A build without the `jit` feature has no native engine to
         // report anything about; the refusal is checked above.
-        if cfg!(not(feature = "jit")) && matches!(engine, Engine::Native(_)) {
-            assert!(compile_polydat_with(src, engine).is_err(), "{engine}");
-            continue;
-        }
         let k = compile_polydat_with(src, engine)
             .unwrap_or_else(|e| panic!("{engine} should build: {e}"));
         let reported = k.engine();
@@ -383,14 +381,16 @@ fn the_older_constructors_build_the_same_kernels() {
     let mut via_trait = asm()
         .compile_with(Engine::Closures(Provenance::PushPull))
         .unwrap();
-    let mut direct = asm().try_compile().unwrap_or_else(|_| panic!("closures"));
+    let mut direct = asm()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::PushPull))
+        .unwrap_or_else(|_| panic!("closures"));
     direct.set_input("scale", Value::U64(1000)).unwrap();
     direct
         .set_input("region", Value::Str("eu-west".into()))
         .unwrap();
     direct.set_cursor("q", &partition(2)).unwrap();
     let want = drive(via_trait.as_mut(), &[7]);
-    direct.eval(&[7]);
+    direct.eval_at(&[7]);
     for (i, o) in OUTPUTS.iter().enumerate() {
         assert_eq!(
             want[0][i].to_display_string(),
@@ -428,9 +428,6 @@ fn the_compile_log_is_the_same_on_every_engine() {
         Engine::Closures(Provenance::Auto),
         Engine::Native(Provenance::Auto),
     ] {
-        if cfg!(not(feature = "jit")) && matches!(engine, Engine::Native(_)) {
-            continue;
-        }
         assert_eq!(events(engine), want, "{engine}");
     }
 }
@@ -608,12 +605,25 @@ fn every_engine_reports_its_plan() {
     );
     if let Ok(p3) = compile_polydat_with(SRC, Engine::Native(Provenance::Auto)) {
         let plan = p3.plan();
-        assert!(plan.native_segments > 0, "{plan}");
+        // The plan reports what this build could lower, which is the
+        // one thing that differs between the two configurations: the
+        // engine is the same kernel either way, and without the `jit`
+        // feature every step in it is a closure.
+        if cfg!(feature = "jit") {
+            assert!(plan.native_segments > 0, "{plan}");
+        } else {
+            assert_eq!(plan.native_segments, 0, "{plan}");
+            assert!(plan.closure_steps > 0, "{plan}");
+        }
         assert_eq!(plan.interpreted_nodes, 0);
-        assert!(
-            plan.to_string()
-                .starts_with(&format!("{} native segment(s)", plan.native_segments))
-        );
+        // `Display` lists the non-zero counts, native first, so a plan
+        // with no native segment leads with its closure steps.
+        let leads_with = if plan.native_segments > 0 {
+            format!("{} native segment(s)", plan.native_segments)
+        } else {
+            format!("{} closure step(s)", plan.closure_steps)
+        };
+        assert!(plan.to_string().starts_with(&leads_with), "{plan}");
     }
     assert_eq!(polydat::EnginePlan::default().to_string(), "nothing");
 }

@@ -1852,13 +1852,13 @@ out := reg_add_i32(n0, addend_v)
 ";
         let asm = polydat::dsl::compile::compile_polydat_to_assembler(src).unwrap();
         let mut jit = asm
-            .try_compile_pure_jit_raw()
+            .compile_slots(polydat::Engine::PureNative(polydat::Provenance::Raw))
             .expect("i32x4 graph must lower");
         let output_slot = jit.resolve_output("out").unwrap();
 
         let vector = move |lanes: [i32; 4]| {
             let input = Bits128::from_lanes_i32(lanes);
-            jit.eval(&[input.0[0], input.0[1], 3, 17]);
+            jit.eval_at(&[input.0[0], input.0[1], 3, 17]);
             Bits128([jit.get_slot(output_slot), jit.get_slot(output_slot + 1)]).lanes_i32()
         };
         let scalar = |x: i32| x.wrapping_mul(3).wrapping_add(17);

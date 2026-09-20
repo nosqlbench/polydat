@@ -11,7 +11,6 @@
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 
 use polydat::ast::Bits128;
-use polydat::compile::jit::JitKernelRaw;
 use polydat::iteration::simd_ordinal::{AffineI32Source, OrdinalI32x4Stream, PacketFragmentPolicy};
 
 const FACTOR: u64 = 3;
@@ -69,10 +68,10 @@ fn vector_graph_source(depth: usize) -> String {
     source
 }
 
-fn compile_raw(source: &str) -> JitKernelRaw {
+fn compile_raw(source: &str) -> Box<dyn polydat::SlotKernel> {
     polydat::dsl::compile::compile_polydat_to_assembler(source)
         .expect("assemble benchmark graph")
-        .try_compile_pure_jit_raw()
+        .compile_slots(polydat::Engine::PureNative(polydat::Provenance::Raw))
         .expect("benchmark graph must lower completely to P3")
 }
 
@@ -99,7 +98,7 @@ fn bench_scalar_p3(
     group.bench_with_input(BenchmarkId::new("scalar_p3", burst), &burst, |b, _| {
         b.iter(|| {
             for value in &mut output {
-                kernel.eval(&[ordinal, FACTOR, ADDEND]);
+                kernel.eval_at(&[ordinal, FACTOR, ADDEND]);
                 *value = kernel.get_slot(output_slot) as u32 as i32;
                 ordinal = ordinal.wrapping_add(1);
             }
@@ -117,7 +116,7 @@ fn bench_offset_simd_p3(
     let output_slot = kernel.resolve_output("out").unwrap();
     let vector = move |lanes: [i32; 4]| {
         let input = Bits128::from_lanes_i32(lanes);
-        kernel.eval(&[input.0[0], input.0[1], FACTOR, ADDEND]);
+        kernel.eval_at(&[input.0[0], input.0[1], FACTOR, ADDEND]);
         Bits128([
             kernel.get_slot(output_slot),
             kernel.get_slot(output_slot + 1),

@@ -178,9 +178,11 @@ trait Engine {
 }
 
 struct Interpreter(polydat::kernel::PolydatKernel);
-struct Closures(polydat::compile::closures::CompiledKernelRaw);
-struct Hybrid(polydat::compile::hybrid::HybridKernelPushPull);
-struct Pure(polydat::compile::jit::JitKernelPushPull);
+
+/// Every compiled tier, driven identically. Before `SlotKernel` this
+/// was three newtypes over three kernel types with three byte-identical
+/// `run` bodies; the tier is now the label it always was.
+struct Compiled(&'static str, Box<dyn polydat::SlotKernel>);
 
 fn caught<T>(f: impl FnOnce() -> T) -> Result<T, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(payload_text)
@@ -202,49 +204,17 @@ impl Engine for Interpreter {
     }
 }
 
-impl Engine for Closures {
+impl Engine for Compiled {
     fn name(&self) -> &'static str {
-        "P2"
+        self.0
     }
     fn run(&mut self, coords: &[u64], extern_value: Option<&Value>, outs: &[String]) -> Outcome {
-        let k = &mut self.0;
+        let k = &mut self.1;
         caught(|| {
             if let Some(v) = extern_value {
                 k.set_input("x", v.clone()).unwrap();
             }
-            k.eval(coords);
-            outs.iter().map(|o| canonical(&k.get_value(o))).collect()
-        })
-    }
-}
-
-impl Engine for Hybrid {
-    fn name(&self) -> &'static str {
-        "P3"
-    }
-    fn run(&mut self, coords: &[u64], extern_value: Option<&Value>, outs: &[String]) -> Outcome {
-        let k = &mut self.0;
-        caught(|| {
-            if let Some(v) = extern_value {
-                k.set_input("x", v.clone()).unwrap();
-            }
-            k.eval(coords);
-            outs.iter().map(|o| canonical(&k.get_value(o))).collect()
-        })
-    }
-}
-
-impl Engine for Pure {
-    fn name(&self) -> &'static str {
-        "pure"
-    }
-    fn run(&mut self, coords: &[u64], extern_value: Option<&Value>, outs: &[String]) -> Outcome {
-        let k = &mut self.0;
-        caught(|| {
-            if let Some(v) = extern_value {
-                k.set_input("x", v.clone()).unwrap();
-            }
-            k.eval(coords);
+            k.eval_at(coords);
             outs.iter().map(|o| canonical(&k.get_value(o))).collect()
         })
     }
@@ -269,17 +239,23 @@ fn engines(src: &str) -> Option<Engines> {
     }
     let outs: Vec<String> = p1.output_names().iter().map(|s| s.to_string()).collect();
     let mut engines: Vec<Box<dyn Engine>> = vec![Box::new(Interpreter(p1))];
-    if let Ok(k) = compile_polydat_to_assembler(src).unwrap().try_compile_raw() {
-        engines.push(Box::new(Closures(k)));
-    }
-    if let Ok(k) = compile_polydat_to_assembler(src).unwrap().compile_hybrid() {
-        engines.push(Box::new(Hybrid(k)));
+    if let Ok(k) = compile_polydat_to_assembler(src)
+        .unwrap()
+        .compile_slots(polydat::Engine::Closures(polydat::Provenance::Raw))
+    {
+        engines.push(Box::new(Compiled("P2", k)));
     }
     if let Ok(k) = compile_polydat_to_assembler(src)
         .unwrap()
-        .try_compile_pure_jit()
+        .compile_slots(polydat::Engine::Native(polydat::Provenance::PushPull))
     {
-        engines.push(Box::new(Pure(k)));
+        engines.push(Box::new(Compiled("P3", k)));
+    }
+    if let Ok(k) = compile_polydat_to_assembler(src)
+        .unwrap()
+        .compile_slots(polydat::Engine::PureNative(polydat::Provenance::PushPull))
+    {
+        engines.push(Box::new(Compiled("pure", k)));
     }
     Some((engines, outs))
 }
