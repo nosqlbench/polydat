@@ -493,6 +493,22 @@ pub trait Kernel: Send + internals::KernelInternals {
     /// The program this kernel runs, shareable across threads: each
     /// thread creates its own kernel from it with
     /// [`KernelProgram::create_kernel`].
+    ///
+    /// **What this kernel was set to does not travel with it.** A
+    /// kernel created from the program starts at the program: every
+    /// extern at its declared default and every `shared` binding with
+    /// a cell of its own, whatever this kernel had been written to
+    /// before it became one. That holds on every engine.
+    ///
+    /// The reason is that an extern is per-kernel state, in the same
+    /// family as the coordinates: both are writes into declared slots
+    /// of a running kernel, and neither is part of the compiled
+    /// program. A host that wants a value fixed *for the program*
+    /// fixes it before compiling, with
+    /// [`transform::assign_values`](crate::dsl::transform::assign_values)
+    /// or an `extern` default in the source; a host that wants every
+    /// thread to see one register attaches a cell with
+    /// [`Self::attach_shared_cell`].
     fn into_program(self: Box<Self>) -> std::sync::Arc<dyn KernelProgram>;
 
     /// The compile ledger of the program tree this kernel belongs to:

@@ -330,7 +330,13 @@ The `Kernel` trait means the same thing on every engine:
   declares them.
 - `into_program` yields a program shared across threads, and a kernel
   `create_kernel` makes from it starts from the program: every extern at its
-  declared default, every `shared` binding with a cell of its own.
+  declared default, every `shared` binding with a cell of its own — whatever
+  the kernel that became the program had been written to. An extern is
+  per-kernel state, in the same family as the coordinates, since both are
+  writes into declared slots of a running kernel and neither is part of the
+  compiled program. A host that wants a value fixed *for the program* fixes
+  it before compiling, with `transform::assign_values` or an `extern`
+  default; a host that wants every thread on one register attaches a cell.
 - `cursor_schemas` reports every cursor with the partitions and extent the
   compiler resolved, an extent computed from constants included.
 - `plan` reports what the engine decided for the program, as an

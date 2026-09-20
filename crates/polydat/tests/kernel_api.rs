@@ -182,6 +182,54 @@ fn a_program_is_shared_across_threads_on_every_engine() {
     }
 }
 
+/// What a kernel was set to does not travel into its program.
+///
+/// `into_program` yields the compiled program, not the kernel's state.
+/// An extern is per-kernel state, in the same family as the
+/// coordinates — both are writes into declared slots of a running
+/// kernel — so a kernel created from the program starts at the
+/// program's own defaults whatever the kernel that became it had been
+/// written to. Every engine, the same answer; a host that wants a
+/// value fixed for the program fixes it before compiling.
+#[test]
+fn a_kernel_s_own_writes_do_not_travel_into_its_program() {
+    const SRC: &str =
+        "input cycle: u64\nextern region: str = \"us-east\"\nkey := \"{region}/{cycle}\"\n";
+    for engine in engines() {
+        let Ok(mut kernel) = compile_polydat_with(SRC, engine) else {
+            continue;
+        };
+        // The write takes on the kernel the host holds.
+        kernel
+            .set_input("region", Value::Str("eu-west".into()))
+            .unwrap_or_else(|e| panic!("{engine}: {e:?}"));
+        kernel.set_inputs(&[1]);
+        assert_eq!(
+            kernel.pull("key").as_str(),
+            "eu-west/1",
+            "{engine}: the host's write must take on its own kernel"
+        );
+
+        // It does not take on a kernel made from the program.
+        let program = kernel.into_program();
+        let mut fresh = program.create_kernel();
+        fresh.set_inputs(&[1]);
+        assert_eq!(
+            fresh.pull("key").as_str(),
+            "us-east/1",
+            "{engine}: a created kernel starts at the program's default"
+        );
+
+        // And the fresh kernel is writable in its turn: resetting to
+        // the program is a starting point, not a lock.
+        fresh
+            .set_input("region", Value::Str("ap-south".into()))
+            .unwrap_or_else(|e| panic!("{engine}: {e:?}"));
+        fresh.set_inputs(&[1]);
+        assert_eq!(fresh.pull("key").as_str(), "ap-south/1", "{engine}");
+    }
+}
+
 /// A node with no compiled form: its output count is decided at
 /// construction (`DynamicOutputs`), a shape outside every kit, so
 /// every compiled engine refuses a program that uses it.
