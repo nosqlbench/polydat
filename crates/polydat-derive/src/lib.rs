@@ -2538,8 +2538,20 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                 ArgKind::ConstVec(_) => {
                     // SRD-80b Phase C — `Const<Vec<C>>` body view:
                     // clone the cached Vec and wrap in `Const`.
-                    // (Per-cycle clone matches the Wire-trait
-                    // convention; JIT-ineligible by design.)
+                    //
+                    // The clone is an allocation per evaluation for a
+                    // list built once at construction, and it is here
+                    // because the shape's declared type is owned: the
+                    // macro calls the author's function, whose
+                    // signature says `Const<Vec<C>>`, so a borrow
+                    // cannot be passed without every node that uses
+                    // the shape being rewritten. Closing it properly
+                    // means a borrowed list shape beside the borrowed
+                    // string one that already exists — `Const<&[C]>`
+                    // as `Const<&str>` — which is an authoring-surface
+                    // change rather than a fix (F-N8). These nodes are
+                    // JIT-ineligible by design and run as interpreter
+                    // or closure steps, which bounds what it costs.
                     quote! {
                         let #n = polydat::derive_support::Const(self.#n.clone());
                     }
