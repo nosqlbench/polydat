@@ -182,6 +182,55 @@ fn a_program_is_shared_across_threads_on_every_engine() {
     }
 }
 
+/// An extern cleared after the build reads `None`, not a panic.
+///
+/// The `None` rule has one predicate now, shared by the interpreter's
+/// cone planner and the hybrid's segment batcher: fused code answers a
+/// `None` on a boundary input with `None` on all of its outputs, and a
+/// node that would have consumed the `None` and kept going may join
+/// only when every input comes from inside, where none can arrive. The
+/// hybrid used to panic here instead, because its batcher decided from
+/// a build-time snapshot of which externs were unset and a host can
+/// clear one afterwards (F-E7).
+///
+/// The pure tier is the exception and says so: it is native code with
+/// no closure to propagate a `None` through, so it refuses at the pull
+/// with a message naming both ways an extern ends up without a value.
+#[test]
+fn an_extern_cleared_after_the_build_reads_none() {
+    const SRC: &str =
+        "input cycle: u64\nextern tag: str = \"t\"\nlabel := str_concat(tag, \"-x\")\n";
+    for engine in engines() {
+        let Ok(mut k) = compile_polydat_with(SRC, engine) else {
+            continue;
+        };
+        // Clearing is an ordinary write, accepted on every engine.
+        k.set_input("tag", Value::None)
+            .unwrap_or_else(|e| panic!("{engine}: clearing an extern is a write: {e:?}"));
+        k.set_inputs(&[1]);
+
+        let pulled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| k.pull("label")));
+        if matches!(engine, Engine::PureNative(_)) {
+            let payload = pulled.expect_err("the pure tier cannot carry a None and refuses");
+            let text = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+                .unwrap_or_default();
+            assert!(
+                text.contains("cannot carry") && text.contains("cleared"),
+                "{engine}: the refusal should name why and what to run instead: {text}"
+            );
+            continue;
+        }
+        assert_eq!(
+            pulled.unwrap_or_else(|_| panic!("{engine}: a cleared extern is a None, not a panic")),
+            Value::None,
+            "{engine}"
+        );
+    }
+}
+
 /// One write rule, on every engine and by either road.
 ///
 /// A write into a declared slot either matches the slot's type or is

@@ -354,11 +354,11 @@ mod jit_impl {
             if !node_eligible(nd, &crate::compile::assembly::wire_types_of(dag, i)) {
                 continue;
             }
-            if nd.accepts_none_inputs()
-                && !dag.wiring[i]
-                    .iter()
-                    .all(|src| matches!(src, WireSource::NodeOutput(j, _) if eligible[*j]))
-            {
+            if !crate::compile::none_rule_admits(
+                nd.accepts_none_inputs(),
+                &dag.wiring[i],
+                &eligible,
+            ) {
                 continue;
             }
             eligible[i] = true;

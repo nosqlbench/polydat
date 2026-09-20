@@ -299,9 +299,13 @@ impl JitCore {
         }
         if let Some((name, ty)) = self.externs.first_unset() {
             panic!(
-                "extern '{name}' ({ty}) has no value: it has no default, so set it with \
-                 set_input before the first run (native code cannot carry `None`; \
-                 docs/design/engines.md §3.3)"
+                "extern '{name}' ({ty}) has no value on the pure native tier, which \
+                 cannot carry a `None`: every step is native code and there is no \
+                 closure to propagate one through. Either it was declared without a \
+                 default and never set, or a host cleared it after the build. Set it \
+                 with set_input before pulling, or run this program on `native`, which \
+                 answers a cleared extern with `None` as the interpreter does \
+                 (docs/design/engines.md §3.3)"
             );
         }
         // Code that calls no helper cannot fail: it runs bare. Otherwise

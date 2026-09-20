@@ -126,6 +126,36 @@ macro_rules! ref_readers {
 }
 pub(crate) use ref_readers;
 
+/// SRD-74's fusion rule: whether a node may join the run of fused
+/// code being formed, as far as `None` is concerned. The one predicate
+/// both fusers apply — the interpreter's cone planner and the hybrid's
+/// segment batcher — so that what one admits the other admits.
+///
+/// Fused code answers a `None` on a boundary input by making every one
+/// of its outputs `None`, because native code cannot carry one. That is
+/// SRD-74 Rule 1 and it is the right answer for a node that propagates
+/// a `None`. It is the wrong answer for a node that *consumes* one and
+/// keeps going — `to_json` writes `null`, a `printf` with an `Option`
+/// argument writes its own text — so such a node may join only when
+/// every one of its inputs comes from inside, where a `None` cannot
+/// arrive: either no boundary input is `None` and the run proceeds
+/// normally, or one is and the whole run answers `None` without any
+/// member running at all.
+///
+/// `eligible` is indexed by node and filled in topological order, so a
+/// node's producers are decided before it is.
+#[cfg(feature = "jit")]
+pub(crate) fn none_rule_admits(
+    accepts_none: bool,
+    wiring: &[crate::kernel::WireSource],
+    eligible: &[bool],
+) -> bool {
+    !accepts_none
+        || wiring
+            .iter()
+            .all(|src| matches!(src, crate::kernel::WireSource::NodeOutput(j, _) if eligible[*j]))
+}
+
 /// The provenance of every buffer slot: which input slots reach it,
 /// as an exact multi-word mask, for the pull-side cone guard of every
 /// compiled kernel. `input_dependents` is indexed by input slot (a

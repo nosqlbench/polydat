@@ -1052,11 +1052,36 @@ pub(crate) fn build_hybrid(
             (jit_op, input_slots, output_slots)
         })
         .collect();
-    // A node downstream of an extern with no value runs as a closure:
-    // a `None` propagates through closures as it does on the
-    // interpreter (SRD-74), and native code cannot carry one
-    // (engines.md §3.3).
+    // A node that would have produced a value from a `None` runs as a
+    // closure, always. A segment's answer to a `None` on one of its
+    // boundary inputs is `None` on all of its outputs — SRD-74 Rule 1,
+    // the only answer native code can give, since it cannot carry one.
+    // That answer is right for every node that propagates a `None` and
+    // wrong for a node that consumes one (`to_json` keeps going, a
+    // `printf` with an `Option` arg writes its own text), so such a
+    // node must not be inside a segment for the rule to hold. The cone
+    // planner makes the same exclusion for the same reason.
     let mut classifications = classifications;
+    let mut eligible = vec![false; nodes.len()];
+    for (node_idx, node) in nodes.iter().enumerate() {
+        if matches!(classifications[node_idx].0, JitOp::Fallback) {
+            continue;
+        }
+        if !crate::compile::none_rule_admits(
+            node.accepts_none_inputs(),
+            &wiring[node_idx],
+            &eligible,
+        ) {
+            classifications[node_idx].0 = JitOp::Fallback;
+            continue;
+        }
+        eligible[node_idx] = true;
+    }
+    // A node downstream of an extern with no value runs as a closure
+    // too. This is the narrower case — the extern is already unset at
+    // build — and it stays because it also keeps the `None` out of
+    // segments downstream, where the boundary guard would otherwise be
+    // the only thing catching it.
     let unset = externs.unset_slots();
     if !unset.is_empty() {
         let mut tainted = vec![false; nodes.len()];
@@ -1647,10 +1672,18 @@ hybrid_drive!(HybridKernelPushPull, set_inputs);
 
 /// One step: SRD-74 Rule 1, then the segment or the closure. A step
 /// that does not accept `None` emits `None` on every output when any
-/// input is `None`, without running; native code never accepts it, and
-/// a node downstream of an unset extern is a closure, so a `None`
-/// reaches a segment only when a host cleared an extern after the
-/// build. With `none_free` the mask is known clear and is not read.
+/// input is `None`, without running.
+///
+/// A segment is such a step and always was — native code cannot carry
+/// a `None` — so a `None` on one of its boundary inputs makes all of
+/// its outputs `None`, which is the same answer the closure tier and
+/// the interpreter give. It reaches a segment only when a host cleared
+/// an extern after the build; an extern unset at build already keeps
+/// the nodes downstream of it out of segments, and a node that would
+/// have *consumed* the `None` rather than propagated it is kept out
+/// unconditionally, so this answer is never the wrong one.
+///
+/// With `none_free` the mask is known clear and is not read.
 #[inline(always)]
 fn run_hybrid_step(
     step: &HybridStep,
@@ -1661,20 +1694,11 @@ fn run_hybrid_step(
     scatter: &mut [u64],
     scratch: &mut [crate::ast::ScratchBuf],
 ) {
-    if !none_free && step.input_slots().iter().any(|&s| none[s]) {
-        #[cfg(feature = "jit")]
-        if let HybridStep::Jit(_) = step {
-            panic!(
-                "a `None` reached native code in a hybrid kernel: an extern was cleared \
-                 after the build (docs/design/engines.md §3.3)"
-            );
+    if !none_free && !step.accepts_none() && step.input_slots().iter().any(|&s| none[s]) {
+        for &s in step.output_slots() {
+            none[s] = true;
         }
-        if !step.accepts_none() {
-            for &s in step.output_slots() {
-                none[s] = true;
-            }
-            return;
-        }
+        return;
     }
     match step {
         #[cfg(feature = "jit")]
