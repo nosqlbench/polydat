@@ -462,18 +462,25 @@ pretty-printer prints it as the `tile` statement it became.
 
 A host that has already parsed its configuration skips source text
 entirely. `polydat::tile` builds a `TileDef` from a template string, a
-JSON string, or a `serde_json::Value`, and
-`compile_polydat_kernel_with_tiles` compiles it with a program:
+JSON string, or a `serde_json::Value`, and `add_tiles` puts it into a
+parsed program. There is no entry point that does both: adding tiles is
+a program transform, so it composes with any other rewrite the host
+wants instead of owning a road to a kernel of its own.
 
 ```rust
-use polydat::tile::{compile_polydat_kernel_with_tiles, tile_from_json_value, Span, TileOptions};
+use polydat::dsl::{CompileOptions, compile_ast_with_engine, parse_polydat};
+use polydat::tile::{add_tiles, tile_from_json_value, Span, TileOptions};
 
 let template = serde_json::json!({
     "id": "${cycle}",
     "points": [ "@for s in 0..3", { "n": "${s}", "v": "${cycle + s}" } ]
 });
 let tile = tile_from_json_value("doc", &template, &TileOptions::default(), Span { line: 0, col: 0 })?;
-let mut kernel = compile_polydat_kernel_with_tiles("input cycle: u64\n", vec![tile])?;
+let source = "input cycle: u64\n";
+let mut program = parse_polydat(source)?;
+add_tiles(&mut program, vec![tile])?;
+let mut kernel = compile_ast_with_engine(
+    &program, source, &CompileOptions::default(), None, polydat::Engine::default())?;
 kernel.set_inputs(&[4]);
 println!("{}", kernel.pull("doc").as_str());
 ```

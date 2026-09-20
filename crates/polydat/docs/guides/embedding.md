@@ -120,10 +120,10 @@ The other entry points differ in what they take:
 | Function | Adds |
 | --- | --- |
 | `compile_polydat_kernel_with_options(src, &options, log)` | `CompileOptions`: the source directory, so relative `import` paths resolve; library directories (§8); required outputs; strict typing, where implicit adapters are errors; a context label for errors; a cursor limit; and the compile ledger to charge (`ledger`), by default a new one for the program tree, or the parent's when a host compiles a subscope. And the compile event log (§13). |
-| `compile_polydat_kernel_with_tiles(src, tiles)` | tile statements built from host data (§10) |
+| `parse_polydat(src)` | stops after the parse and returns the program tree, the form a transform rewrites (§9); `parse_polydat_with_tile_defaults(src, &defaults)` sets the delimiters a tile body is read with |
 | `compile_polydat_with(src, engine)` | the engine by name (§11); `compile_polydat_with_engine(src, engine, &options, log)` takes the options and the log as well |
 | `compile_polydat(src)` | the interpreter through the trait: the reference implementation every other engine is checked against (§11). |
-| `compile_polydat_interpreter(src)`, `compile_polydat_interpreter_with_options(src, &options, log)`, `compile_polydat_interpreter_with_log(src, log)`, `compile_polydat_interpreter_with_tiles(src, tiles)` | the interpreter kernel, `PolydatKernel`, as a concrete type. Every one says `interpreter`, because the concrete type is for observing the interpreter's own internals in testing and diagnostics (§13), not for running a program. |
+| `compile_polydat_interpreter(src)`, `compile_polydat_interpreter_with_options(src, &options, log)`, `compile_polydat_interpreter_with_log(src, log)` | the interpreter kernel, `PolydatKernel`, as a concrete type. Every one says `interpreter`, because the concrete type is for observing the interpreter's own internals in testing and diagnostics (§13), not for running a program. |
 | `compile_ast_interpreter_with_options(&ast, src, &options, log)` and `compile_ast_with_engine(&ast, src, &options, log, engine)` | the same compiles from a parsed, possibly transformed, program (§9) |
 | `compile_polydat_to_assembler(src)` | stops before engine selection and returns the assembler (§7, §11), the graph a host may extend by hand and build on any engine |
 | `compile_polydat_to_assembler_with(src, &options)` | the assembler built with the same `CompileOptions` |
@@ -544,7 +544,8 @@ templates in their own configuration format without teaching the host
 anything about rendering.
 
 ```rust
-use polydat::tile::{compile_polydat_kernel_with_tiles, tile_from_json_value, Span, TileOptions};
+use polydat::dsl::{CompileOptions, compile_ast_with_engine, parse_polydat};
+use polydat::tile::{add_tiles, tile_from_json_value, Span, TileOptions};
 
 let template = serde_json::json!({
     "id": "${cycle}",
@@ -552,7 +553,11 @@ let template = serde_json::json!({
     "points": [ "@for s in 0..2", { "n": "${s}", "v": "${cycle + s}" } ]
 });
 let tile = tile_from_json_value("doc", &template, &TileOptions::default(), Span { line: 0, col: 0 })?;
-let mut kernel = compile_polydat_kernel_with_tiles("input cycle: u64\n", vec![tile])?;
+let source = "input cycle: u64\n";
+let mut program = parse_polydat(source)?;
+add_tiles(&mut program, vec![tile])?;
+let mut kernel = compile_ast_with_engine(
+    &program, source, &CompileOptions::default(), None, polydat::Engine::default())?;
 kernel.set_inputs(&[4]);
 println!("doc: {}", kernel.pull("doc").as_str());
 ```

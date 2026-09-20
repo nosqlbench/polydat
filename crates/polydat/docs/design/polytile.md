@@ -293,8 +293,8 @@ is that the structural form is validated by construction rather than by
 parsing the template with placeholders.
 
 A host may hand Polydat a `serde_json::Value` directly through
-`tile_from_json_value` (§5.6) and compile it with
-`compile_polydat_with_tiles`, or embed the document in a Polydat file as a
+`tile_from_json_value` (§5.6) and add it to a parsed program with
+`add_tiles`, or embed the document in a Polydat file as a
 `json` tile body, which is the textual form of the same thing. The two
 forms are interconvertible: a structural template pretty-prints as a
 valid textual `json` tile, and a textual `json` tile parses to the same
@@ -471,7 +471,7 @@ Beyond the statement form, hosts build tiles from what they hold:
 tile_from_text(name, encoding, text, options, span)   textual body, bare
 tile_from_json_text(name, json, options, span)        structural body as text
 tile_from_json_value(name, value, options, span)      structural body, already parsed
-compile_polydat_with_tiles(source, tiles)             compile them with a program
+add_tiles(&mut program, tiles)                        add them to a parsed program
 
 name := polytile(encoding, body, options...)    in source; body is a string or heredoc
 name := polytile_json(body, options...)         in source; structural JSON

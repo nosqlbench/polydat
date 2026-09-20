@@ -388,9 +388,7 @@ fn section_traversal() {
 /// JSON value becomes a tile statement.
 fn section_tiles() {
     println!("== 9. Tiles from host data ==");
-    use polydat::tile::{
-        Span, TileOptions, compile_polydat_kernel_with_tiles, tile_from_json_value,
-    };
+    use polydat::tile::{Span, TileOptions, add_tiles, tile_from_json_value};
     let template = serde_json::json!({
         "id": "${cycle}",
         "label": "row-${cycle}",
@@ -403,8 +401,20 @@ fn section_tiles() {
         Span { line: 0, col: 0 },
     )
     .expect("tile");
-    let mut kernel =
-        compile_polydat_kernel_with_tiles("input cycle: u64\n", vec![tile]).expect("compile");
+    // Parse, transform, compile: the tile joins the program as a
+    // `tile` statement, and any other rewrite the host wants applies
+    // to the same tree before the one compile.
+    let source = "input cycle: u64\n";
+    let mut program = polydat::dsl::parse_polydat(source).expect("parse");
+    add_tiles(&mut program, vec![tile]).expect("add tiles");
+    let mut kernel = polydat::dsl::compile_ast_with_engine(
+        &program,
+        source,
+        &polydat::dsl::CompileOptions::default(),
+        None,
+        polydat::Engine::default(),
+    )
+    .expect("compile");
     kernel.set_inputs(&[4]);
     println!("doc: {}", kernel.pull("doc").as_str());
     println!();

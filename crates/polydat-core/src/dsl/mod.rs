@@ -40,8 +40,8 @@ mod modules;
 pub use compile::{
     CompileOptions, compile_ast_interpreter_with_options, compile_ast_with_engine, compile_polydat,
     compile_polydat_checked, compile_polydat_interpreter, compile_polydat_interpreter_with_options,
-    compile_polydat_kernel, compile_polydat_kernel_with_options, compile_polydat_kernel_with_tiles,
-    compile_polydat_with, compile_polydat_with_engine, eval_const_expr,
+    compile_polydat_kernel, compile_polydat_kernel_with_options, compile_polydat_with,
+    compile_polydat_with_engine, eval_const_expr, parse_polydat, parse_polydat_with_tile_defaults,
 };
 
 /// Collect identifier references from an `Expr` tree into `out`.

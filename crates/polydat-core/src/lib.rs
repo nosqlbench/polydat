@@ -177,19 +177,49 @@ pub use polydat_grammar::viz;
 
 /// Polytile at the host boundary (SRD 114 §5.6): build a tile from
 /// template text, from structural JSON text, or from a parsed JSON
-/// value, then compile it with a program via
-/// [`tile::compile_polydat_kernel_with_tiles`].
+/// value, then add it to a program with [`tile::add_tiles`].
+///
+/// A host tile reaches a kernel the way every other host intention
+/// does, as a transform over the parsed program:
+///
+/// ```no_run
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// use polydat_core::dsl::{CompileOptions, compile_ast_with_engine, parse_polydat};
+/// use polydat_core::tile::{Span, TileOptions, add_tiles, tile_from_text};
+///
+/// let tile = tile_from_text("greeting", "hi ${who}", &TileOptions::default(), Span::default())?;
+/// let source = "input cycle: u64\nwho := \"world\"\n";
+/// let mut program = parse_polydat(source)?;
+/// add_tiles(&mut program, vec![tile])?;
+/// let kernel = compile_ast_with_engine(
+///     &program,
+///     source,
+///     &CompileOptions::default(),
+///     None,
+///     polydat_core::Engine::default(),
+/// )?;
+/// # let _ = kernel;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// There is no `compile_with_tiles`, deliberately. Adding tiles is one
+/// rewrite among the ones a host may want, and a dedicated entry point
+/// would be the only one that could not be combined with another. From
+/// `add_tiles` on, the tile is a `tile` statement like any the author
+/// wrote, and the program's own typing and engine selection apply to
+/// it unchanged.
 pub mod tile {
     pub use crate::dsl::ast::{TileBodyKind, TileDef, TileOptions, TilePiece};
-    pub use crate::dsl::compile::{
-        compile_polydat_interpreter_with_tiles, compile_polydat_kernel_with_tiles,
-    };
     pub use crate::dsl::lexer::Span;
     pub use crate::dsl::tile::{parse_template, render_template};
     pub use crate::dsl::tile_structural::{
         ENCODINGS, template_text_from_value, tile_from_json_text, tile_from_json_value,
         tile_from_text,
     };
+    /// Add host-built tiles to a parsed program; see
+    /// [`transform::add_tiles`](crate::dsl::transform::add_tiles).
+    pub use crate::dsl::transform::add_tiles;
 }
 
 // SRD-104 — dependency-inverted resource-accessor bridge. A

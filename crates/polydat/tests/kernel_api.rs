@@ -508,11 +508,11 @@ fn outputs_are_listed_in_declaration_order_on_every_engine() {
 #[test]
 fn the_default_engine_forms_take_options_tiles_and_activations() {
     use polydat::dsl::compile::{
-        CompileOptions, compile_polydat_kernel, compile_polydat_kernel_with_options,
-        compile_polydat_kernel_with_tiles,
+        CompileOptions, compile_ast_with_engine, compile_polydat_kernel,
+        compile_polydat_kernel_with_options, parse_polydat,
     };
     use polydat::dsl::events::CompileEventLog;
-    use polydat::tile::{Span, TileOptions, tile_from_text};
+    use polydat::tile::{Span, TileOptions, add_tiles, tile_from_text};
 
     // Options: the outputs to keep and the compile log.
     let mut log = CompileEventLog::new();
@@ -547,7 +547,20 @@ fn the_default_engine_forms_take_options_tiles_and_activations() {
         Span { line: 0, col: 0 },
     )
     .unwrap();
-    let mut k = compile_polydat_kernel_with_tiles("input cycle: u64\n", vec![tile]).unwrap();
+    // Parse, transform, compile: a host tile is a rewrite of the
+    // program, so it composes with any other rewrite instead of taking
+    // an entry point of its own.
+    let tile_src = "input cycle: u64\n";
+    let mut program = parse_polydat(tile_src).unwrap();
+    add_tiles(&mut program, vec![tile]).unwrap();
+    let mut k = compile_ast_with_engine(
+        &program,
+        tile_src,
+        &CompileOptions::default(),
+        None,
+        polydat::Engine::default(),
+    )
+    .unwrap();
     k.set_inputs(&[4]);
     assert_eq!(k.pull("doc").as_str(), r#"{"n": 4, "twice": 8}"#);
 

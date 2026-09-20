@@ -93,6 +93,44 @@ pub fn parse_assignment(text: &str) -> Result<(String, String), String> {
     Ok((name.to_string(), value.trim().to_string()))
 }
 
+/// Add `tiles` a host built from what it holds to the program, as
+/// `tile` statements at its top level.
+///
+/// A tile a host supplies is the same thing as a tile the author
+/// wrote: it is one `tile` statement either way, and from here on the
+/// program's own typing, lifecycle classification and engine selection
+/// apply to it exactly as they apply to the author's. That is why this
+/// is a transform and not a compile entry point — a host that also
+/// wants [`assign_values`], or a rewrite of its own, applies them to
+/// the same tree in whatever order it means, and compiles once.
+///
+/// A tile whose name the program already declares is an error naming
+/// it, rather than a second declaration for the compiler to resolve.
+/// The check reaches module and `for` bodies, so a host cannot shadow
+/// a nested tile without knowing it.
+pub fn add_tiles(file: &mut PolydatFile, tiles: Vec<TileDef>) -> Result<(), String> {
+    let mut declared: Vec<String> = Vec::new();
+    each_tile::<std::convert::Infallible>(&mut file.statements, &mut |tile| {
+        declared.push(tile.name.clone());
+        Ok(())
+    })
+    .expect("the closure never fails");
+    for tile in &tiles {
+        if declared.contains(&tile.name) {
+            return Err(format!(
+                "the program already declares a tile named '{}'; a host tile cannot \
+                 replace one the program declares. Rename the host tile, or rewrite \
+                 the declared one in place with `tile_named`.",
+                tile.name,
+            ));
+        }
+        declared.push(tile.name.clone());
+    }
+    file.statements
+        .extend(tiles.into_iter().map(Statement::Tile));
+    Ok(())
+}
+
 // ── Addressing a subtree ────────────────────────────────────────────
 //
 // A transform reads and rewrites the parsed program, never its source

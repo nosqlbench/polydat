@@ -6,11 +6,27 @@
 //! tile in as template text, JSON text, a parsed JSON value, or a
 //! `polytile` binding in source.
 
-use polydat::dsl::compile_polydat_interpreter;
-use polydat::tile::{
-    Span, TileOptions, compile_polydat_interpreter_with_tiles, tile_from_json_text,
-    tile_from_json_value, tile_from_text,
+use polydat::dsl::compile::{
+    CompileOptions, compile_ast_interpreter_with_options, compile_polydat_interpreter,
+    parse_polydat,
 };
+use polydat::kernel::PolydatKernel;
+use polydat::tile::{
+    Span, TileDef, TileOptions, add_tiles, tile_from_json_text, tile_from_json_value,
+    tile_from_text,
+};
+
+/// Parse, add the host's tiles, compile: the three steps a host takes
+/// to bring a tile it built to a kernel, as one helper because this
+/// file takes them many times. There is no entry point that does all
+/// three, deliberately — adding tiles is a program transform, so it
+/// composes with any other rewrite rather than owning a road of its
+/// own (engines.md §1).
+fn with_tiles(source: &str, tiles: Vec<TileDef>) -> Result<PolydatKernel, polydat::KernelError> {
+    let mut program = parse_polydat(source)?;
+    add_tiles(&mut program, tiles).map_err(polydat::KernelError::Source)?;
+    compile_ast_interpreter_with_options(&program, source, &CompileOptions::default(), None)
+}
 
 const PROGRAM: &str = "input cycle: u64\n\
     tenant_id := mod(hash(cycle), 1000)\n\
@@ -89,7 +105,7 @@ fn host_builds_a_tile_from_a_parsed_json_value() {
     )
     .unwrap();
     assert_eq!(tile.encoding.as_deref(), Some("json"));
-    let mut k = compile_polydat_interpreter_with_tiles(PROGRAM, vec![tile]).unwrap();
+    let mut k = with_tiles(PROGRAM, vec![tile]).unwrap();
     k.set_inputs(&[3]);
     let doc = canonical(k.pull("doc").as_str());
     assert_eq!(doc["device"], "dev-3");
@@ -115,8 +131,7 @@ fn host_builds_tiles_from_json_text_and_template_text() {
         Span { line: 0, col: 0 },
     )
     .unwrap();
-    let mut k =
-        compile_polydat_interpreter_with_tiles("input cycle: u64\n", vec![json, text]).unwrap();
+    let mut k = with_tiles("input cycle: u64\n", vec![json, text]).unwrap();
     k.set_inputs(&[7]);
     assert_eq!(k.pull("doc").as_str(), "{\"n\": 7, \"s\": \"7\"}");
     assert_eq!(k.pull("line").as_str(), "n=7 doc={\"n\": 7, \"s\": \"7\"}");
@@ -274,8 +289,7 @@ fn text_fragments_and_built_pieces_compose_into_one_tile() {
 
     // And the same rendered bytes, which is what a tile is for.
     let render = |t: &TileDef| {
-        let mut k =
-            compile_polydat_interpreter_with_tiles(PROGRAM, vec![t.clone()]).expect("compiles");
+        let mut k = with_tiles(PROGRAM, vec![t.clone()]).expect("compiles");
         k.set_inputs(&[3]);
         k.pull("t").to_display_string()
     };

@@ -301,9 +301,7 @@ fn tiers() {
 /// A host that already holds the template as a parsed JSON value hands
 /// it in without going through source text at all.
 fn host_boundary() {
-    use polydat::tile::{
-        Span, TileOptions, compile_polydat_kernel_with_tiles, tile_from_json_value,
-    };
+    use polydat::tile::{Span, TileOptions, add_tiles, tile_from_json_value};
 
     let template = serde_json::json!({
         "id": "${cycle}",
@@ -316,8 +314,19 @@ fn host_boundary() {
         Span { line: 0, col: 0 },
     )
     .expect("structural template");
-    let mut kernel =
-        compile_polydat_kernel_with_tiles("input cycle: u64\n", vec![tile]).expect("compile");
+    // Parse, transform, compile. The host's tile is a `tile` statement
+    // from `add_tiles` on, so nothing downstream treats it specially.
+    let source = "input cycle: u64\n";
+    let mut program = polydat::dsl::parse_polydat(source).expect("parse");
+    add_tiles(&mut program, vec![tile]).expect("add tiles");
+    let mut kernel = polydat::dsl::compile_ast_with_engine(
+        &program,
+        source,
+        &polydat::dsl::CompileOptions::default(),
+        None,
+        polydat::Engine::default(),
+    )
+    .expect("compile");
     kernel.set_inputs(&[4]);
     println!("== 10. A tile from a parsed JSON value ==");
     println!("cycle 4 doc: {}", kernel.pull("doc").as_str());

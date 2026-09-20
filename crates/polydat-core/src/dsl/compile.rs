@@ -328,41 +328,40 @@ pub fn compile_polydat_interpreter(source: &str) -> Result<PolydatKernel, crate:
     compile_polydat_interpreter_with_options(source, &CompileOptions::default(), None)
 }
 
-/// [`compile_polydat_interpreter`] with tiles a host built from what it
-/// holds, appended as `tile` statements.
-pub fn compile_polydat_interpreter_with_tiles(
-    source: &str,
-    tiles: Vec<super::ast::TileDef>,
-) -> Result<PolydatKernel, crate::KernelError> {
-    let (ast, options) = ast_with_tiles(source, tiles).map_err(crate::KernelError::Source)?;
-    compile_ast_interpreter_with_options(&ast, source, &options, None)
+/// Parse Polydat source into the program tree, the form every
+/// transform reads and rewrites.
+///
+/// This is the first of the three steps a host takes when it shapes a
+/// program before running it: parse, transform, compile. A host with
+/// nothing to change calls a `compile_polydat*` entry point instead
+/// and never sees a tree; a host that injects a value
+/// ([`transform::assign_values`](super::transform::assign_values)),
+/// adds tiles it built from what it holds
+/// ([`transform::add_tiles`](super::transform::add_tiles)), or rewrites
+/// a definition in place applies as many of those as it means to the
+/// one tree and compiles it once with
+/// [`compile_ast_with_engine`] or
+/// [`compile_ast_interpreter_with_options`].
+///
+/// [`parse_polydat_with_tile_defaults`] is the same parse for a host
+/// that sets the hole delimiters a tile body is read with.
+pub fn parse_polydat(source: &str) -> Result<PolydatFile, crate::KernelError> {
+    let tokens = super::lexer::lex(source).map_err(crate::KernelError::Source)?;
+    super::parser::parse(tokens).map_err(crate::KernelError::Source)
 }
 
-/// [`compile_polydat_interpreter_with_tiles`] on [`Engine::default`](crate::Engine::default):
-/// the same program with the same tiles appended, as a compiled kernel.
-pub fn compile_polydat_kernel_with_tiles(
+/// [`parse_polydat`] with the hole delimiters and directive sigil a
+/// tile body that declares none of its own is read with.
+///
+/// These belong to the parse and not to a later rewrite: a tile body
+/// is raw text until it is read, so what counts as a hole has to be
+/// settled before there are pieces for a transform to address.
+pub fn parse_polydat_with_tile_defaults(
     source: &str,
-    tiles: Vec<super::ast::TileDef>,
-) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
-    let (ast, options) = ast_with_tiles(source, tiles).map_err(crate::KernelError::Source)?;
-    compile_ast_with_engine(&ast, source, &options, None, crate::Engine::default())
-}
-
-/// The parsed source with `tiles` appended as `tile` statements, and
-/// the options every tile entry point compiles under.
-fn ast_with_tiles(
-    source: &str,
-    tiles: Vec<super::ast::TileDef>,
-) -> Result<(PolydatFile, CompileOptions), String> {
-    let tokens = super::lexer::lex(source)?;
-    let mut ast = super::parser::parse(tokens)?;
-    ast.statements
-        .extend(tiles.into_iter().map(Statement::Tile));
-    let options = CompileOptions {
-        context: "polydat source with host tiles".to_string(),
-        ..CompileOptions::default()
-    };
-    Ok((ast, options))
+    defaults: &super::ast::TileOptions,
+) -> Result<PolydatFile, crate::KernelError> {
+    let tokens = super::lexer::lex(source).map_err(crate::KernelError::Source)?;
+    super::parser::parse_with_tile_defaults(tokens, defaults).map_err(crate::KernelError::Source)
 }
 
 /// Compile Polydat source to an assembler (not yet compiled to a kernel).

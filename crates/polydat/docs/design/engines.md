@@ -92,20 +92,25 @@ engine until something compiles it.
 
 The entry points say which of the two they are, in their names. Those
 returning a kernel through the trait are `compile_polydat_kernel` and
-its `_with_options` and `_with_tiles` forms, `compile_polydat_with` for
-naming an engine, `compile_polydat_with_engine` and
-`compile_ast_with_engine` for an engine beside options, and
-`compile_polydat` for the interpreter as the reference implementation.
-Those returning the interpreter's concrete kernel all carry
-`interpreter` in the name: `compile_polydat_interpreter` and its
-`_with_options`, `_with_log`, and `_with_tiles` forms. A reader can
-tell which surface a call is on without consulting a signature, and the
-ones that did not say so keep working under deprecated aliases.
+its `_with_options` form, `compile_polydat_with` for naming an engine,
+`compile_polydat_with_engine` and `compile_ast_with_engine` for an
+engine beside options, and `compile_polydat` for the interpreter as the
+reference implementation. Those returning the interpreter's concrete
+kernel all carry `interpreter` in the name: `compile_polydat_interpreter`
+and its `_with_options` and `_with_log` forms. A reader can tell which
+surface a call is on without consulting a signature.
 
-Two entry points are neither: `compile_polydat_to_assembler` returns an
-assembler, which has no engine until something compiles it, and
+Three entry points are neither. `compile_polydat_to_assembler` returns
+an assembler, which has no engine until something compiles it;
 `compile_polydat_checked` returns a diagnostic report beside its
-result.
+result; and `parse_polydat` returns the program tree, which is the form
+a transform rewrites. A host that shapes a program before running it
+takes three steps rather than one — parse, transform, compile — and
+that is deliberate: a transform composes with every other transform,
+where an entry point per host feature composes with nothing. Adding
+tiles a host built from its own configuration is `add_tiles`, fixing an
+extern is `assign_values`, and a host that wants both applies both to
+one tree and compiles once.
 
 **Every failure on the trait is structured.** No method on `Kernel`
 reports a failure as a `String`. A write that cannot be made returns
@@ -119,10 +124,12 @@ text, which is what makes "every engine refuses alike" checkable as
 equality of values.
 
 **A builder that cannot build says so.** Every construction path ends
-in `KernelError`, which distinguishes the three ways a build fails:
-the source did not parse or compile (`Source`), the graph did not
-assemble (`Assembly`), or it assembled and this engine cannot run some
-node in it (`Refused`, naming the node and the engine). No path answers
+in `KernelError`, which distinguishes the four ways a build fails: the
+source did not parse or compile (`Source`), the graph did not assemble
+(`Assembly`), it assembled and this engine cannot run some node in it
+(`Refused`, naming the node and the engine), or a value the program
+computes at build could not be computed (`ConstantFold`, §3.1, which
+every engine reports alike because no engine can compute it). No path answers
 a failure with a kernel. The closure tier's builders used to hand back
 an empty `PolydatKernel` — no nodes, no inputs, no outputs — when
 assembly failed, which is the same mistake as reporting a
