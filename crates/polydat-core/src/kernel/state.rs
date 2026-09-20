@@ -1181,17 +1181,20 @@ impl PolydatKernel {
                 } else {
                     "<non-string panic payload>".to_string()
                 };
-                // Single-line, diag-routed warning. Operators
-                // see this in stderr / session.log immediately;
-                // they don't have to wait until the const's
-                // downstream consumer re-pulls and the panic
-                // re-fires with full context.
-                eprintln!(
-                    "warning: scope-init const pull failed for '{name}': {msg} \
+                // Single-line warning through the audit sink, so a
+                // host that installed a log function receives it as it
+                // receives every other warning; `eprintln!` here went
+                // only to stderr, which is the one place a host routing
+                // its logs is not reading. Operators see it at
+                // activation rather than waiting for the const's
+                // consumer to re-pull and the panic to re-fire with
+                // full context (evaluation_model.md, Plan B).
+                crate::library::support::audit::warn(&format!(
+                    "scope-init const pull failed for '{name}': {msg} \
                      (buffer left at Value::None; downstream lookup will \
                      fall through to wired-in input or surface the error \
                      when the binding is consumed)"
-                );
+                ));
             }
         }
 

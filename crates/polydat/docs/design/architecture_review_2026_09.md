@@ -29,9 +29,8 @@ the `jit` feature. The engine ladder was run against a same-hour baseline and
 found one real regression, seven `#[inline]` attributes dropped when the shared
 core macro landed; it is fixed and every tier is back at or under baseline.
 Group D closed with it: one write rule checked on every engine, and the interpreter's borrowing readers renamed to `pull_ref`/`pull_ref_at` so they no longer shadow the trait. The functional table's rows were re-checked against the code rather than trusted, and the nine that had landed without being marked are now marked. Groups A (second half), F, G, H, J, K (in part), M remain open. Of section 5's decisions, 4 and 6 were
-taken by stating the behaviour as it is, 7 and 8 are done, and 1, 2, 3 and 5 remain open.
-Of section 4's twelve rules, all twelve are now stated somewhere; rule 1 was restated on
-2026-09-18 because its first wording contradicted the two typed constructors.
+Of section 5's decisions, 1, 4, 5, 6, 7 and 8 are taken; 2 (`tile_encode`) and 3 (the
+engine projection bodies use) remain open, both inside group F.
 Section 1 lists the findings ranked; section 2 proposes
 an order of work; section 3 is the weeding map for every design document; section 4 lists
 the rules the documents must newly state; section 5 lists the decisions that are the
@@ -66,7 +65,7 @@ stale text). Size: XS under an hour, S a half day to a day, M two to three days,
 | F-H7 | host | M | Every binary command compiles the program twice (interpreter for names and manifest, run engine for the run); `run --emit` four times. **Reduced, not closed, as of 2026-09-20:** `describe` reuses the run engine`s program when that engine is the interpreter, so `run --emit` compiles twice rather than four times. The probe compile remains.  |
 | F-N8 | library | S | `dynamic_weighted_select` re-parses its spec every evaluation; `random_string` re-parses its charset per call; every `Const<Vec<C>>` node clones its list per cycle. |
 | F-N6 | library | S | Const-argument constraints cannot be declared through the macro; the substitutes are panics caught at construction and the legacy `validate_node`. |
-| F-C12 | compiler | XS | Plan B (a scope-init const that yields None is a hard error) is documented and not enforced; the materializer warns and continues. Doc or code, one of them changes. |
+| F-C12 | compiler | XS | Plan B (a scope-init const that yields None is a hard error) is documented and not enforced; the materializer warns and continues. Doc or code, one of them changes. **Closed 2026-09-20: the doc, and it already had.** `evaluation_model.md` §"Scope-Activation Pull (Plan B)" states the warn-and-continue behaviour and gives the reason — a `const` may depend on resolution that is not ready until the workload runs (`dataset_prebuffer` and its kind), so a warning at activation plus the failure in context at first use is the diagnostic pair an operator can act on. No design document claims the hard error; only this row did. The code matches: catch, warn naming the binding and the panic text, leave the buffer at `Value::None`, activate. One real defect turned up while checking: the warning went to `eprintln!` rather than the audit sink, so a host that installed a log function never received the one diagnostic the design leans on. It goes through `audit::warn` now. |
 | F-L11 | dsl | XS | An array literal in argument position is dropped during lowering instead of refused. `out := printf("{}", [1, 2])` compiles, supplies zero wire inputs, and panics at eval ("format references input #0 but only 0 wire input(s) supplied"); bound first (`w := [1, 2]`) it works and yields `Str("1, 2")`. A list literal is a binding-position form (polydat_grammar.md §18.1), so the argument position should be a compile error naming the form. Found 2026-09-18 while merging the type rules. **Fixed 2026-09-19.** |
 | F-E15 | engines | S | The pure native tier runs no compile-constant fold at build, where the closure tier and the hybrid each run their constant steps once (`run_steps(&constants)`) so that what is knowable at build is known at build. The pure tier is one compiled function with no step list, so it has no subset to run. A deferred cursor extent is read from the kernel's folded constants, so `cursor_schemas()[0].extent` is `Some(0)` on this engine where every other engine reports `Some(15)`. Against the fail-fast flattening rule. Found 2026-09-19, when `Engine::PureNative` made the tier reachable and the shared engine list drove it for the first time. **Fixed the same day**: the constant steps are compiled a second time into an entry of their own and run once over the kernel's buffer, which is the hybrid's semantics reached the only way a tier with no step list can reach them. `every_engine_folds_its_constants_at_build` pins the failure half. |
 | F-E16 | engines | S | A compile-constant step that cannot be computed was reported four different ways. The interpreter caught the panic, warned "skipping fold", and continued, so the same failure arrived on the first pull instead; the three compiled engines panicked out of the builder rather than returning an error; and once they returned one, it read as `KernelError::Refused`, which says one engine declined a program the others accept. Found 2026-09-19 while fixing F-E15. **Fixed the same day**: it is `KernelError::ConstantFold` on every engine, an error and never a panic, carrying the node's own enriched message. A step no input reaches will do at every pull what it does at build, so there is nothing a later evaluation could supply; deferring only moved the failure. `entry_points::every_engine_folds_its_constants_at_build` and `handle_boundaries::a_failed_parse_over_a_literal_is_a_build_error` pin it, and the latter's dynamic twin pins that the *timing* follows the step's lifecycle and not the engine. |
@@ -234,10 +233,17 @@ belongs in exactly one place; others cite it.
 12. Cells on every engine: the publish contract (value, revision, intent bit), three
     creation sites, the compiled consumer's poll (cross_fiber_invalidation.md §1, §3.1, §5.2).
 
+
 ## 5. Decisions before the work starts
 
-1. **Shared wires cascaded into a `for` body**: attach the parent's cell (the lowering must
+1. ~~**Shared wires cascaded into a `for` body**: attach the parent's cell (the lowering must
    declare the cascaded wire shared) or state that the cascade is a snapshot at open. The
+   design promises the cell; the code snapshots. (F-K5a)~~ **Decided 2026-09-20: the
+   snapshot, which both design documents already state.** The premise was wrong — neither
+   `for_traversal.md` nor `scope_model.md` §4 promises the cell. A traversal materialises
+   its tuples when it opens, so the body must capture the scope it opened against or the
+   two would disagree about what that scope was. Pinned on every engine by
+   `for_engines::a_body_reading_an_outer_shared_wire_sees_the_value_at_open`.
    design promises the cell; the code snapshots. (F-K5a)
 2. **`tile_encode`**: keep as a host-callable library node with its lowering, or delete
    with `JitOp::TileEncode`. Nothing in the DSL emits it. (F-L5)
@@ -245,10 +251,17 @@ belongs in exactly one place; others cite it.
    reason) or on the enclosing kernel's engine as `for` bodies are. (F-L2 consequence 3)
 4. **The wide-extern refusal**: close it (two-slot extern seeding) or state it as the one
    exception. (F-E13)
-5. **The pure native tier**: reduce to a raw kernel without the `Kernel` impl, or keep it
-   as a fourth rung of the matrix. (F-E10)
-6. **Plan B**: enforce (materialization returns an error under strict) or document the
-   warn-and-continue behaviour. (F-C12)
+5. ~~**The pure native tier**: reduce to a raw kernel without the `Kernel` impl, or keep it
+   as a fourth rung of the matrix. (F-E10)~~ **Decided 2026-09-20: keep it, and name it.**
+   `Engine::PureNative(provenance)` makes the tier a host can ask for, which is the only
+   way to ask whether a program is fully native — `Native` cannot answer, because it
+   falls back to a closure and so cannot fail for that reason.
+6. ~~**Plan B**: enforce (materialization returns an error under strict) or document the
+   warn-and-continue behaviour. (F-C12)~~ **Decided 2026-09-20: document, and it already
+   was.** `evaluation_model.md` carries the rule and the reason for it; no document ever
+   claimed the hard error. Enforcing would refuse a scope whose `const` depends on
+   resolution that is not ready until the workload runs, which is the case the
+   warn-and-continue exists for.
 7. ~~**Grammar documents**: merge four into `polydat_grammar.md` as proposed, or keep
    `grammar.md` as a formal appendix under test. (F-L1)~~ **Decided 2026-09-18: merge.**
    `polydat_grammar.md` now carries the type rules and G-axioms (§18) and the
