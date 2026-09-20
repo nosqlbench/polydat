@@ -222,7 +222,7 @@ pub use polydat::numeric::n_of_m::n_of_m_eval;
 /// JIT level: no u64 kit (`Const<Vec<_>>`); lowered through its slot
 /// kit, called from native code on P3.
 #[polydat::polydat_node(category = Probability)]
-fn one_of(input: u64, values: Const<Vec<String>>) -> String {
+fn one_of(input: u64, values: Const<&[String]>) -> String {
     assert!(!values.is_empty(), "one_of: values must be non-empty");
     let h = crate::hash::splitmix64_u64(input);
     let idx = (h % values.len() as u64) as usize;

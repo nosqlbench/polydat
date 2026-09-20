@@ -257,7 +257,7 @@ fn reg_dot_f32(a: [f32; 4], b: [f32; 4]) -> f64 {
 /// under any view. Native code bakes the mask into one `shuffle`
 /// instruction, so the node exposes it as its constants.
 #[polydat::polydat_node(category = Arithmetic, jit_constants = reg_shuffle_bytes_jit_constants)]
-fn reg_shuffle_bytes(x: Bits128, mask: polydat::derive_support::Const<Vec<u64>>) -> Bits128 {
+fn reg_shuffle_bytes(x: Bits128, mask: polydat::derive_support::Const<&[u64]>) -> Bits128 {
     let m = &*mask;
     if m.len() != 16 {
         panic!(

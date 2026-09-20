@@ -268,7 +268,7 @@ fn build_alias_table(weights: &[f64]) -> AliasTableU64 {
 #[polydat::polydat_node(category = Probability)]
 fn alias_sample(
     input: u64,
-    weights: Const<Vec<f64>>,
+    weights: Const<&[f64]>,
     #[poly_const(build_alias_table, from = weights)] table: &AliasTableU64,
 ) -> u64 {
     let _ = weights;

@@ -539,6 +539,15 @@ struct ClassifiedArg {
     wire_constraint: Option<Ident>,
 }
 
+/// How a `Const` list argument asked for its elements: borrowed from
+/// the node's own field, or cloned out of it for each evaluation.
+#[derive(Clone, Copy, PartialEq)]
+enum ListForm {
+    /// `Const<&[C]>` — a borrow, free per evaluation.
+    Borrowed,
+    /// `Const<Vec<C>>` — an owned clone, the older spelling.
+    Owned,
+}
 #[derive(Clone)]
 enum ArgKind {
     Wire,
@@ -549,8 +558,14 @@ enum ArgKind {
     /// inner element's slot type, sets `Arity::VariadicConsts`,
     /// and at build time collects every matching ConstArg from
     /// the tail of `consts[..]` into a `Vec<inner>` field.
-    /// Eval hands the body a `Const(self.field.clone())`.
-    ConstVec(ConstShape),
+    ///
+    /// The flag is how the body asked for the list. `Const<&[C]>`
+    /// borrows the field, which costs nothing per evaluation and is
+    /// what the borrowed string shape `Const<&str>` already does;
+    /// `Const<Vec<C>>` clones it, which is an allocation per
+    /// evaluation of a list that never changes after construction.
+    /// Both are accepted and the owned one is the older spelling.
+    ConstVec(ConstShape, ListForm),
     /// `&T` argument with `#[poly_const(<fn_path>, from = <arg>)]`.
     /// Generates a struct field of type `T`, computed once in
     /// `new()` by calling `<fn_path>(<source>)` where `<source>`
@@ -984,7 +999,7 @@ fn classify_type(ty: &Type) -> Option<ConstShape> {
 /// from [`classify_type`]: the macro recognises the variadic-
 /// const shape before the scalar `Const<T>` shape, so a
 /// signature using `Const<Vec<u64>>` doesn't get misclassified.
-fn classify_const_vec(ty: &Type) -> Option<ConstShape> {
+fn classify_const_vec(ty: &Type) -> Option<(ConstShape, ListForm)> {
     // Outer must be Const<...>.
     let syn::Type::Path(p) = ty else {
         return None;
@@ -1003,7 +1018,12 @@ fn classify_const_vec(ty: &Type) -> Option<ConstShape> {
             None
         }
     })?;
-    // Inner must be Vec<X>.
+    // Inner is `&[X]`, the borrowed list, or `Vec<X>`, the owned one.
+    if let syn::Type::Reference(r) = inner
+        && let syn::Type::Slice(slice) = r.elem.as_ref()
+    {
+        return const_shape_of(&slice.elem).map(|s| (s, ListForm::Borrowed));
+    }
     let syn::Type::Path(vp) = inner else {
         return None;
     };
@@ -1021,8 +1041,14 @@ fn classify_const_vec(ty: &Type) -> Option<ConstShape> {
             None
         }
     })?;
-    let s = type_to_string(velem);
-    match s.as_str() {
+    const_shape_of(velem).map(|s| (s, ListForm::Owned))
+}
+
+/// The element shape of a const list, from the element type as
+/// written. Shared by the borrowed and owned spellings so the two
+/// accept exactly the same element types.
+fn const_shape_of(elem: &Type) -> Option<ConstShape> {
+    match type_to_string(elem).as_str() {
         "u64" => Some(ConstShape::U64),
         "f64" => Some(ConstShape::F64),
         "bool" => Some(ConstShape::Bool),
@@ -1705,7 +1731,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                         setup_fn,
                         source_args,
                     }))
-                } else if let Some(inner) = classify_const_vec(&declared_ty) {
+                } else if let Some(list) = classify_const_vec(&declared_ty) {
                     // SRD-80b Phase C — `Const<Vec<C>>` variadic
                     // workload-list. `poly_default` doesn't apply
                     // (the empty list IS the default); other
@@ -1727,7 +1753,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                              from a scalar `Const<C>` source instead.",
                         ));
                     }
-                    ArgKind::ConstVec(inner)
+                    ArgKind::ConstVec(list.0, list.1)
                 } else {
                     match classify_type(&declared_ty) {
                         Some(shape) => ArgKind::Const(shape),
@@ -1764,7 +1790,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
             .iter()
             .enumerate()
             .filter_map(|(i, a)| {
-                if matches!(a.kind, ArgKind::ConstVec(_)) {
+                if matches!(a.kind, ArgKind::ConstVec(..)) {
                     Some(i)
                 } else {
                     None
@@ -1934,7 +1960,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                 // (Handled in the new() body via a separate pass —
                 // see `variadic_slot_extends` below.)
             }
-            ArgKind::ConstVec(inner) => {
+            ArgKind::ConstVec(inner, _) => {
                 // SRD-80b — `Const<Vec<C>>` emits a `Slot::Const`
                 // entry when the inner element has a matching
                 // `ConstValue::Vec*` variant (u64, f64). This
@@ -1998,7 +2024,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
             // any count from `variadic_min` (default 0) upward.
             // `ConstVec` follows the same pattern (empty is valid).
             let required = match &a.kind {
-                ArgKind::Variadic(_) | ArgKind::ConstVec(_) => false,
+                ArgKind::Variadic(_) | ArgKind::ConstVec(..) => false,
                 _ => a.default_value.is_none(),
             };
             let slot_type = match &a.kind {
@@ -2006,7 +2032,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                     quote!(polydat::ast::SlotType::Wire)
                 }
                 ArgKind::Const(shape) => shape.slot_type_tokens(),
-                ArgKind::ConstVec(inner) => inner.slot_type_tokens(),
+                ArgKind::ConstVec(inner, _) => inner.slot_type_tokens(),
                 ArgKind::Setup(_) => return None,
             };
             Some(quote! {
@@ -2064,7 +2090,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                          when per-eval inputs are needed.",
                     ));
                 }
-                ArgKind::Setup(_) | ArgKind::Const(_) | ArgKind::ConstVec(_) => {}
+                ArgKind::Setup(_) | ArgKind::Const(_) | ArgKind::ConstVec(..) => {}
             }
         }
     }
@@ -2083,7 +2109,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
         let const_vec_args: Vec<&syn::Ident> = args
             .iter()
             .filter_map(|a| match &a.kind {
-                ArgKind::ConstVec(_) => Some(&a.name),
+                ArgKind::ConstVec(..) => Some(&a.name),
                 _ => None,
             })
             .collect();
@@ -2243,7 +2269,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                 let doc = format!("The `{n}` argument, as given at construction.");
                 Some(quote!(#[doc = #doc] pub #n: #ft))
             }
-            ArgKind::ConstVec(inner) => {
+            ArgKind::ConstVec(inner, _) => {
                 let n = &a.name;
                 let ft = inner.field_type_tokens();
                 let doc = format!("The `{n}` arguments, as given at construction.");
@@ -2273,7 +2299,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                 let ft = shape.field_type_tokens();
                 Some(quote!(#n: #ft))
             }
-            ArgKind::ConstVec(inner) => {
+            ArgKind::ConstVec(inner, _) => {
                 let n = &a.name;
                 let ft = inner.field_type_tokens();
                 Some(quote!(#n: Vec<#ft>))
@@ -2349,7 +2375,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                 Some((a.name.to_string(), ConstSourceShape::ScalarStr))
             }
             ArgKind::Const(_) => Some((a.name.to_string(), ConstSourceShape::ScalarValue)),
-            ArgKind::ConstVec(_) => Some((a.name.to_string(), ConstSourceShape::VecValues)),
+            ArgKind::ConstVec(..) => Some((a.name.to_string(), ConstSourceShape::VecValues)),
             _ => None,
         })
         .collect();
@@ -2362,7 +2388,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
         .filter_map(|a| match &a.kind {
             ArgKind::Wire
             | ArgKind::Const(_)
-            | ArgKind::ConstVec(_)
+            | ArgKind::ConstVec(..)
             | ArgKind::PolyWire
             | ArgKind::Variadic(_) => None,
             ArgKind::Setup(spec) => {
@@ -2421,7 +2447,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
         .iter()
         .filter_map(|a| match &a.kind {
             ArgKind::Wire | ArgKind::PolyWire | ArgKind::Variadic(_) => None,
-            ArgKind::Const(_) | ArgKind::ConstVec(_) | ArgKind::Setup(_) => {
+            ArgKind::Const(_) | ArgKind::ConstVec(..) | ArgKind::Setup(_) => {
                 let n = &a.name;
                 Some(quote!(#n))
             }
@@ -2535,27 +2561,16 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                         let #n: &[_] = #owned.as_slice();
                     }
                 }
-                ArgKind::ConstVec(_) => {
-                    // SRD-80b Phase C — `Const<Vec<C>>` body view:
-                    // clone the cached Vec and wrap in `Const`.
-                    //
-                    // The clone is an allocation per evaluation for a
-                    // list built once at construction, and it is here
-                    // because the shape's declared type is owned: the
-                    // macro calls the author's function, whose
-                    // signature says `Const<Vec<C>>`, so a borrow
-                    // cannot be passed without every node that uses
-                    // the shape being rewritten. Closing it properly
-                    // means a borrowed list shape beside the borrowed
-                    // string one that already exists — `Const<&[C]>`
-                    // as `Const<&str>` — which is an authoring-surface
-                    // change rather than a fix (F-N8). These nodes are
-                    // JIT-ineligible by design and run as interpreter
-                    // or closure steps, which bounds what it costs.
-                    quote! {
-                        let #n = polydat::derive_support::Const(self.#n.clone());
-                    }
-                }
+                // SRD-80b Phase C — a const list's body view. The
+                // elements live in the node's own field either way; the
+                // declared type says whether the body wanted a borrow
+                // of them or a copy.
+                ArgKind::ConstVec(_, ListForm::Borrowed) => quote! {
+                    let #n = polydat::derive_support::Const(&self.#n[..]);
+                },
+                ArgKind::ConstVec(_, ListForm::Owned) => quote! {
+                    let #n = polydat::derive_support::Const(self.#n.clone());
+                },
             }
         })
         .collect();
@@ -2606,7 +2621,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                     };
                 })
             }
-            ArgKind::ConstVec(inner) => {
+            ArgKind::ConstVec(inner, _) => {
                 let n = &a.name;
                 let i = const_idx_for_extract;
                 // ConstVec consumes everything from index `i`
@@ -2633,7 +2648,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
         .iter()
         .filter_map(|a| match &a.kind {
             ArgKind::Wire | ArgKind::Setup(_) | ArgKind::Variadic(_) => None,
-            ArgKind::Const(_) | ArgKind::ConstVec(_) => {
+            ArgKind::Const(_) | ArgKind::ConstVec(..) => {
                 let n = &a.name;
                 Some(quote!(#n))
             }
@@ -2701,7 +2716,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                     });
                     wire_idx += 1;
                 }
-                ArgKind::Const(_) | ArgKind::ConstVec(_) | ArgKind::Setup(_) => {}
+                ArgKind::Const(_) | ArgKind::ConstVec(..) | ArgKind::Setup(_) => {}
             }
         }
         out
@@ -2808,7 +2823,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                 }
                 // ConstVec is JIT-ineligible (the JIT u64 buffer
                 // has no slot shape for a variable-length list).
-                ArgKind::Setup(_) | ArgKind::PolyWire | ArgKind::ConstVec(_) => None,
+                ArgKind::Setup(_) | ArgKind::PolyWire | ArgKind::ConstVec(..) => None,
                 // SRD-80 PR B.9: variadic JIT — only `&[u64]`
                 // rides the Phase 2 closure cleanly (the buffer
                 // IS the slice). For f64/bool/Str variadics
@@ -2881,7 +2896,9 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
         Poly,
         Variadic(VariadicElement),
         Const(ConstShape),
-        ConstVec,
+        /// A const list. The form says whether the body asked to
+        /// borrow the kit's own copy or to take one of its own.
+        ConstVec(ListForm),
         Setup,
         /// A session-static setup (`from = ()`), captured from the
         /// node by clone: the closure sees what the node captured at
@@ -3052,7 +3069,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                 ArgKind::PolyWire => SlotArg::Poly,
                 ArgKind::Variadic(elem) => SlotArg::Variadic(*elem),
                 ArgKind::Const(shape) => SlotArg::Const(*shape),
-                ArgKind::ConstVec(_) => SlotArg::ConstVec,
+                ArgKind::ConstVec(_, form) => SlotArg::ConstVec(*form),
                 ArgKind::Setup(spec) => {
                     if spec.source_args.is_empty() {
                         SlotArg::SetupStatic
@@ -3235,7 +3252,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
         for (a, shape) in args.iter().zip(shapes.iter()) {
             let n = &a.name;
             match shape {
-                SlotArg::Const(_) | SlotArg::ConstVec | SlotArg::SetupStatic => {
+                SlotArg::Const(_) | SlotArg::ConstVec(_) | SlotArg::SetupStatic => {
                     captures.push(quote!(let #n = self.#n.clone();))
                 }
                 _ => {}
@@ -3452,7 +3469,12 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                         let wrap = shape.wrap_as_const(quote!(#n));
                         quote!(let #n = #wrap;)
                     }
-                    SlotArg::ConstVec => quote!(let #n = polydat::derive_support::Const(#n.clone());),
+                    SlotArg::ConstVec(ListForm::Borrowed) => {
+                        quote!(let #n = polydat::derive_support::Const(&#n[..]);)
+                    }
+                    SlotArg::ConstVec(ListForm::Owned) => {
+                        quote!(let #n = polydat::derive_support::Const(#n.clone());)
+                    }
                     SlotArg::Setup | SlotArg::SetupStatic => quote!(let #n = &#n;),
                 }
             })
@@ -3529,7 +3551,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
             // A `Const<T>` is spelled by its bare name in the source
             // signature; the shared body must not depend on the
             // module having imported it.
-            if let (ArgKind::Const(_) | ArgKind::ConstVec(_), syn::Type::Path(p)) = (&a.kind, t)
+            if let (ArgKind::Const(_) | ArgKind::ConstVec(..), syn::Type::Path(p)) = (&a.kind, t)
                 && let Some(last) = p.path.segments.last()
                 && last.ident == "Const"
             {
@@ -3774,7 +3796,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                     let n = &a.name;
                     Some(quote!(let #n = self.#n.clone();))
                 }
-                ArgKind::Setup(_) | ArgKind::PolyWire | ArgKind::ConstVec(_) => {
+                ArgKind::Setup(_) | ArgKind::PolyWire | ArgKind::ConstVec(..) => {
                     unreachable!("setup/polywire/constvec excludes JIT eligibility")
                 }
             })
@@ -3807,7 +3829,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                         // this branch is only reached for u64 elems.)
                         quote!(let #n: &[u64] = inputs;)
                     }
-                    ArgKind::Setup(_) | ArgKind::PolyWire | ArgKind::ConstVec(_) => unreachable!(),
+                    ArgKind::Setup(_) | ArgKind::PolyWire | ArgKind::ConstVec(..) => unreachable!(),
                 }
             })
             .collect();
@@ -4027,7 +4049,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
     // SRD-80b Phase C — `Const<Vec<C>>` implies
     // `Arity::VariadicConsts`. Mutually exclusive with the
     // wire-variadic case (the macro rejects mixing them earlier).
-    let has_const_vec = args.iter().any(|a| matches!(a.kind, ArgKind::ConstVec(_)));
+    let has_const_vec = args.iter().any(|a| matches!(a.kind, ArgKind::ConstVec(..)));
     let arity_field: TokenStream2 = if has_variadic {
         // SRD-80b split-halves: `variadic_min` is interpreted
         // as PAIRS count; the FuncSig advertises 2× as total

@@ -298,7 +298,8 @@ the kit plans):
 | `&str`, `&[u8]`, `&serde_json::Value`, `&[f32]` and the other typed slices | Borrow shapes: the body borrows the value for the call. |
 | `Arc<[u8]>` / `Vec<u8>`, `Arc<serde_json::Value>`, `SliceArc<T>` / `Vec<T>`, `Handle` | Owned wrapper wires for bytes, JSON, vectors, and opaque handles. |
 | `Const<T>` (`u64`, `f64`, `bool`, `&str`) | A workload-supplied literal, fixed at construction. |
-| `Const<Vec<C>>` | A trailing list of literals (`Arity::VariadicConsts`), collected from the tail of the const arguments. |
+| `Const<&[C]>` | A trailing list of literals (`Arity::VariadicConsts`), collected from the tail of the const arguments. The list is built once at construction and the body borrows it, as `Const<&str>` borrows a string literal. Prefer this form. |
+| `Const<Vec<C>>` | The same list, handed to the body as an owned clone. Accepted, and the older spelling; it allocates once per evaluation for a list that never changes after construction, so write `Const<&[C]>` unless the body genuinely needs to own the elements. |
 | `#[poly_const(path, from = arg)] name: &T` | Setup state computed once at construction by `path(arg)` from a const; `from = ()` names a session-static value that is not a function of the consts. |
 | `Value` | A polymorphic wire whose port type is resolved at construction; with a `Value` return the output type is `SameAsInput`. |
 | `&[T]` (one argument), two `&[T]` arguments | A variadic wire list (`Arity::VariadicWires`), or split halves; element types `u64`, `bool`, `&str`, `String`, `Value`. |

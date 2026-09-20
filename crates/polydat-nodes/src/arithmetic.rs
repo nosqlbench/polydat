@@ -264,7 +264,7 @@ fn mixed_radix_jit_constants(node: &MixedRadix) -> Vec<u64> {
 )]
 fn mixed_radix(
     input: u64,
-    radixes: polydat::derive_support::Const<Vec<u64>>,
+    radixes: polydat::derive_support::Const<&[u64]>,
 ) -> polydat::derive_support::DynamicOutputs<u64> {
     let mut remainder = input;
     let mut result = Vec::with_capacity(radixes.len());

@@ -565,7 +565,7 @@ impl<T: ReflectedValue + Clone + 'static> Wire for Ext<T> {
 
 /// Marker wrapper for node return types whose output port
 /// COUNT is determined at construction time from a
-/// `Const<Vec<C>>` arg's length, not at codegen time.
+/// const-list arg's length, not at codegen time.
 /// SRD-80b shape extension covering nodes like `mixed_radix`
 /// that emit one output per radix where `radix` count is a
 /// workload-supplied list.
@@ -576,16 +576,17 @@ impl<T: ReflectedValue + Clone + 'static> Wire for Ext<T> {
 /// #[polydat_node(category = Arithmetic)]
 /// fn mixed_radix(
 ///     value: u64,
-///     radixes: Const<Vec<u64>>,
+///     radixes: Const<&[u64]>,
 /// ) -> DynamicOutputs<u64> {
 ///     // body returns DynamicOutputs(Vec<u64>) with len == radixes.len()
 /// }
 /// ```
 ///
 /// The macro emits one output port per element (named `d0`,
-/// `d1`, ...) at construction time using the `Const<Vec<C>>`
+/// `d1`, ...) at construction time using the const-list
 /// arg's length. `FuncSig.outputs` is `0` signalling dynamic.
-/// Requires exactly one `Const<Vec<C>>` arg per function; the
+/// Requires exactly one const-list arg per function — `Const<&[C]>`
+/// or its owned spelling `Const<Vec<C>>` — and the
 /// macro errors at compile time otherwise.
 pub struct DynamicOutputs<T>(pub Vec<T>);
 

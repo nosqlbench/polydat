@@ -108,7 +108,7 @@ fn in_range(
 /// `Const<Vec<u64>>` node publishes no `jit_constants`, so the
 /// `JitOp::IsOneOfCheck` arm never fires.
 #[polydat::polydat_node(category = Arithmetic)]
-fn is_one_of(input: u64, allowed: polydat::derive_support::Const<Vec<u64>>) -> u64 {
+fn is_one_of(input: u64, allowed: polydat::derive_support::Const<&[u64]>) -> u64 {
     if !allowed.contains(&input) {
         panic!(
             "is_one_of: value {input} not in allowed set {:?}",

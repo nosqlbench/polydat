@@ -37,7 +37,7 @@ fn const_bool(#[poly_default(false)] value: crate::derive_support::Const<bool>) 
 /// Select from a fixed list of u64 values by index. The input
 /// is taken modulo the list length.
 #[crate::polydat_node(category = Math)]
-fn fixed_values_u64(input: u64, values: crate::derive_support::Const<Vec<u64>>) -> u64 {
+fn fixed_values_u64(input: u64, values: crate::derive_support::Const<&[u64]>) -> u64 {
     assert!(
         !values.is_empty(),
         "fixed_values_u64: value list must not be empty"
@@ -48,7 +48,7 @@ fn fixed_values_u64(input: u64, values: crate::derive_support::Const<Vec<u64>>) 
 
 /// Select from a fixed list of f64 values by index.
 #[crate::polydat_node(category = Math)]
-fn fixed_values_f64(input: u64, values: crate::derive_support::Const<Vec<f64>>) -> f64 {
+fn fixed_values_f64(input: u64, values: crate::derive_support::Const<&[f64]>) -> f64 {
     assert!(
         !values.is_empty(),
         "fixed_values_f64: value list must not be empty"
@@ -59,7 +59,7 @@ fn fixed_values_f64(input: u64, values: crate::derive_support::Const<Vec<f64>>) 
 
 /// Select from a fixed list of strings by index.
 #[crate::polydat_node(category = Math)]
-fn fixed_values_str(input: u64, values: crate::derive_support::Const<Vec<String>>) -> String {
+fn fixed_values_str(input: u64, values: crate::derive_support::Const<&[String]>) -> String {
     assert!(
         !values.is_empty(),
         "fixed_values_str: value list must not be empty"
