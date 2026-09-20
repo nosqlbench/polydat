@@ -299,3 +299,59 @@ fn a_kernel_created_from_a_compiled_program_opens_its_traversals() {
         assert_eq!(ga, want, "{engine}");
     }
 }
+
+/// The cascade is a snapshot, and a `shared` wire is no exception.
+///
+/// A body that reads an outer `shared` wire receives the value the cell
+/// held when the traversal opened, not the cell itself: the body lowers
+/// every cascaded wire as a plain extern
+/// ([scope_model.md](../docs/design/scope_model.md) §4,
+/// [for_traversal.md](../docs/design/for_traversal.md)). So a write to
+/// the cell while a traversal is open reaches no activation of it, and
+/// re-opening picks the new value up. Every engine, the same answer —
+/// F-K5a recorded this as untested, which it was.
+///
+/// Capture rather than freeze: nothing about the parent's wire is made
+/// read-only, and the parent goes on reading and writing its cell.
+#[test]
+fn a_body_reading_an_outer_shared_wire_sees_the_value_at_open() {
+    const SRC: &str = "input cycle: u64\n\
+        shared scale := 10\n\
+        for k in 1..3 {\n\
+          y := k * scale\n\
+        }\n";
+
+    let mut all = vec![Engine::Interpreter(JitMode::Auto)];
+    all.extend(engines());
+    for engine in all {
+        let mut k = compile_polydat_with_engine(SRC, engine, &CompileOptions::default(), None)
+            .unwrap_or_else(|e| panic!("{engine}: {e}"));
+        k.set_inputs(&[0]);
+        let cell = k.shared_cells()[0].cell.clone();
+
+        let y_at = |stream: &TraversalStream, i: usize| -> u64 {
+            let mut a = stream.activation(i).unwrap();
+            a.kernel.pull_ref("y").as_u64()
+        };
+
+        let stream = k.traverse(0).unwrap();
+        assert_eq!(y_at(&stream, 0), 10, "{engine}: k=1 at the opening value");
+
+        // Moving the cell mid-traversal reaches no activation of the
+        // stream already open, whether one already read or not.
+        cell.publish(Value::U64(100));
+        assert_eq!(y_at(&stream, 1), 20, "{engine}: k=2 still at the snapshot");
+        assert_eq!(y_at(&stream, 0), 10, "{engine}: k=1 re-read, unchanged");
+        drop(stream);
+
+        // Re-opening captures the cell as it now stands.
+        let stream = k.traverse(0).unwrap();
+        assert_eq!(y_at(&stream, 0), 100, "{engine}: k=1 after re-opening");
+        assert_eq!(y_at(&stream, 1), 200, "{engine}: k=2 after re-opening");
+        drop(stream);
+
+        // And the parent's own read of the wire is the cell, live.
+        k.set_inputs(&[0]);
+        assert_eq!(k.pull("scale"), Value::U64(100), "{engine}: the parent");
+    }
+}
