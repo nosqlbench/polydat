@@ -385,13 +385,35 @@ fn a_non_decimal_format_u64_stays_on_p1_and_agrees() {
     assert!(p3.pull("x").as_str().starts_with("0x"));
 }
 
+/// An unparseable string is a diagnostic at every tier, and *when* it
+/// arrives follows the string's lifecycle rather than the tier. A
+/// string built from a coordinate is not knowable until the coordinate
+/// is, so the parse fails on the pull that needs it.
 #[test]
 fn a_failed_parse_is_a_diagnostic_at_every_tier() {
-    let src = "input cycle: u64\ns := \"nope\"\nn := __str_to_u64(s)\n";
+    let src = "input cycle: u64\ns := printf(\"nope{}\", cycle)\nn := __str_to_u64(s)\n";
     for mode in [JitMode::Off, JitMode::Force] {
         let mut k = kernel(src, mode);
         k.set_inputs(&[0]);
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| k.pull("n").as_u64()));
         assert!(r.is_err(), "{mode:?} accepted an unparseable string");
+    }
+}
+
+/// The same parse over a literal is knowable at build, so it is a build
+/// error and never a kernel: the compile-constant fold runs it once
+/// while the kernel is being built, on every engine (engines.md §3.1).
+#[test]
+fn a_failed_parse_over_a_literal_is_a_build_error() {
+    let src = "input cycle: u64\ns := \"nope\"\nn := __str_to_u64(s)\n";
+    for mode in [JitMode::Off, JitMode::Force] {
+        let mut asm = compile_polydat_to_assembler(src).unwrap();
+        asm.set_jit_mode(mode);
+        let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| asm.compile()))
+            .unwrap_or_else(|_| panic!("{mode:?}: a build failure is an error, never a panic"));
+        assert!(
+            built.is_err(),
+            "{mode:?}: an unparseable literal must not build",
+        );
     }
 }

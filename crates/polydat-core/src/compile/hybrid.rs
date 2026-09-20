@@ -324,6 +324,16 @@ impl HybridCore {
             .into();
     }
 
+    /// The program node the step now running belongs to, for the
+    /// failure path (A7). A step here can be a run of native code over
+    /// several nodes, so the tracker slot names the member. Read by
+    /// `run_guarded` and by the build-time `fold_steps`, so the two
+    /// always name the same node.
+    #[inline]
+    fn failing_node(&self) -> usize {
+        self.steps[self.cur_step].failing_node(&self.buffer, self.tracker)
+    }
+
     /// Run `body` with the capture guard armed, so a step's panic is
     /// recorded quietly and re-raised enriched, as the interpreter
     /// re-raises a node's (A7).
@@ -334,7 +344,7 @@ impl HybridCore {
         drop(capture);
         if let Err(payload) = outcome {
             let sites = std::sync::Arc::clone(&self.sites);
-            let node = self.steps[self.cur_step].failing_node(&self.buffer, self.tracker);
+            let node = self.failing_node();
             sites.reraise(payload, node, &self.buffer, Some(&self.none));
         }
         #[cfg(debug_assertions)]
@@ -972,6 +982,17 @@ fn flatten_output_slots(
 /// a JIT segment. If not, it becomes a closure step. Adjacent JIT-able
 /// nodes are batched into a single JIT segment for efficiency.
 ///
+/// A node this engine cannot lay out, as a refusal naming the engine.
+/// Distinct from the fold failure a built kernel can still report,
+/// which is the program's and not this engine's
+/// ([`KernelError::ConstantFold`](crate::KernelError::ConstantFold)).
+fn refused(reason: String) -> crate::KernelError {
+    crate::KernelError::Refused {
+        engine: crate::compile::select::Engine::Native(crate::compile::select::Provenance::Auto),
+        reason,
+    }
+}
+
 /// Returns a `HybridKernelPushPull` (the production default).
 #[cfg(feature = "jit")]
 #[allow(clippy::too_many_arguments)]
@@ -990,7 +1011,7 @@ pub(crate) fn build_hybrid(
     constant: Vec<bool>,
     volatile: Vec<bool>,
     attribution: std::sync::Arc<crate::compile::Attribution>,
-) -> Result<HybridKernelPushPull, String> {
+) -> Result<HybridKernelPushPull, crate::KernelError> {
     let mut steps: Vec<HybridStep> = Vec::new();
     let mut scratch: Vec<crate::ast::ScratchBuf> = Vec::new();
     let mut ref_scratch: Vec<(usize, usize)> = Vec::new();
@@ -1101,10 +1122,10 @@ pub(crate) fn build_hybrid(
                 ));
                 ClosureOp::Slot(kit.op)
             } else {
-                return Err(format!(
+                return Err(refused(format!(
                     "node '{}' has no compiled form and can't be JIT-compiled",
                     node.meta().name
-                ));
+                )));
             };
             node_step[i] = steps.len();
             steps.push(HybridStep::Closure(ClosureStep {
@@ -1185,7 +1206,8 @@ pub(crate) fn build_hybrid(
                 .iter()
                 .flat_map(|(_, _, o)| o.iter().copied())
                 .collect();
-            let (code_fn, code) = jit::compile_jit_entry(&batch, Some(total_slots))?;
+            let (code_fn, code) =
+                jit::compile_jit_entry(&batch, Some(total_slots)).map_err(refused)?;
             let segment = steps.len();
             for &k in &members {
                 node_step[k] = segment;
@@ -1275,7 +1297,7 @@ pub(crate) fn build_hybrid(
     constant: Vec<bool>,
     volatile: Vec<bool>,
     attribution: std::sync::Arc<crate::compile::Attribution>,
-) -> Result<HybridKernelPushPull, String> {
+) -> Result<HybridKernelPushPull, crate::KernelError> {
     let mut steps: Vec<HybridStep> = Vec::new();
     let mut scratch: Vec<crate::ast::ScratchBuf> = Vec::new();
     let mut ref_scratch: Vec<(usize, usize)> = Vec::new();
@@ -1322,7 +1344,10 @@ pub(crate) fn build_hybrid(
             ));
             ClosureOp::Slot(kit.op)
         } else {
-            return Err(format!("node '{}' has no compiled form", node.meta().name));
+            return Err(refused(format!(
+                "node '{}' has no compiled form",
+                node.meta().name
+            )));
         };
         steps.push(HybridStep::Closure(ClosureStep {
             op,
@@ -1385,7 +1410,7 @@ fn build_pushpull_from_steps(
     volatile: Vec<bool>,
     attribution: std::sync::Arc<crate::compile::Attribution>,
     node_step: Vec<usize>,
-) -> Result<HybridKernelPushPull, String> {
+) -> Result<HybridKernelPushPull, crate::KernelError> {
     let step_count = steps.len();
     debug_assert_eq!(node_step.len(), nodes.len());
     debug_assert!(node_step.iter().all(|&s| s < step_count));
@@ -1511,7 +1536,7 @@ fn build_pushpull_from_steps(
     // then on, so what is knowable at build is known at build and fails
     // at build.
     kernel.core.begin_epoch();
-    kernel.core.run_steps(&constants);
+    kernel.core.fold_steps(&constants)?;
     kernel.core.drive.stale = true;
     Ok(kernel)
 }

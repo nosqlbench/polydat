@@ -242,25 +242,42 @@ fn the_pure_tier_names_itself_and_refuses_the_modes_it_lacks() {
 /// What is knowable at build is known at build, and fails at build. A
 /// step no input reaches runs once while the kernel is being built, so
 /// a constant that cannot be computed reports it then rather than on
-/// the first pull. Every compiled engine does this, the pure tier
-/// included: it compiles one function over every step and keeps no step
-/// list, so its constants are compiled a second time into an entry of
-/// their own and run over the same buffer (F-E15).
+/// the first pull.
+///
+/// Every engine does this and reports it the same way: the same
+/// `KernelError` variant, and a message carrying the node's own
+/// failure. It is `ConstantFold` and not `Refused` because no engine is
+/// declining a program the others accept — the value cannot be
+/// computed anywhere. The pure tier keeps no step list, so its
+/// constants are compiled a second time into an entry of their own and
+/// run over the same buffer to reach the same rule (F-E15).
 #[test]
-#[cfg(feature = "jit")]
-fn every_compiled_engine_folds_its_constants_at_build() {
-    let src = "input cycle: u64\nn := div(10, 0)\nv := n + cycle\n";
-    for engine in [
-        Engine::Closures(Provenance::Raw),
-        Engine::Native(Provenance::Raw),
-        Engine::PureNative(Provenance::Raw),
-    ] {
+fn every_engine_folds_its_constants_at_build() {
+    let src = "input cycle: u64\nn := mod_wire(10, 0)\nv := n + cycle\n";
+    for engine in engines() {
         let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             compile_polydat_with(src, engine).map(|k| k.engine())
-        }));
+        }))
+        .unwrap_or_else(|_| panic!("{engine}: a build failure is an error, never a panic"));
+        match built {
+            Err(KernelError::ConstantFold { reason }) => assert!(
+                reason.contains("zero") && reason.contains("mod_wire"),
+                "{engine}: the message carries the node's own failure: {reason}",
+            ),
+            other => panic!(
+                "{engine}: a constant that cannot be computed is a ConstantFold error at \
+                 build, got {other:?}",
+            ),
+        }
+    }
+    // The same node with the divisor on a wire is not a constant, so
+    // nothing runs it at build and every engine accepts the program.
+    // The rule is about what is knowable at build, not about the node.
+    let dynamic = "input cycle: u64\nn := mod_wire(10, cycle)\n";
+    for engine in engines() {
         assert!(
-            built.is_err(),
-            "{engine}: a constant that cannot be computed must fail at build, got {built:?}",
+            compile_polydat_with(dynamic, engine).is_ok(),
+            "{engine}: a dynamic divisor is not a compile-time constant",
         );
     }
 }

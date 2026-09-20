@@ -293,7 +293,7 @@ impl PolydatKernel {
         log: Option<&mut crate::dsl::events::CompileEventLog>,
         strict: bool,
         ledger: Arc<crate::kernel::CompileLedger>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, crate::compile::assembly::AssemblyError> {
         let mut program = PolydatProgram::with_inputs(
             nodes,
             wiring,

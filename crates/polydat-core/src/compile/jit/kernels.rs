@@ -335,13 +335,14 @@ impl JitCore {
         folded: &[(super::codegen::JitOp, Vec<usize>, Vec<usize>)],
         origin: &[usize],
         total_slots: usize,
-    ) -> Result<(), String> {
+    ) -> Result<(), crate::KernelError> {
         if folded.is_empty() {
             return Ok(());
         }
         // Graph order is topological and a constant depends on
         // constants alone, so the filtered order is a valid order.
-        let (code_fn, code) = super::codegen::compile_jit_entry(folded, Some(total_slots))?;
+        let (code_fn, code) = super::codegen::compile_jit_entry(folded, Some(total_slots))
+            .map_err(|reason| crate::KernelError::ConstantFold { reason })?;
         let buf_ptr_const = self.buffer.as_ptr();
         let buf_ptr_mut = self.buffer.as_mut_ptr();
         let sc = self.scratch.as_mut_ptr();
@@ -364,7 +365,9 @@ impl JitCore {
                 let step = self.buffer[self.tracker] as usize;
                 let step = origin.get(step).copied().unwrap_or(step);
                 let sites = std::sync::Arc::clone(&self.sites);
-                sites.reraise(payload, step, &self.buffer, None);
+                return Err(crate::KernelError::ConstantFold {
+                    reason: sites.describe(payload, step, &self.buffer, None),
+                });
             }
         }
         // `code` owns the executable memory the call ran in, so it is
@@ -448,7 +451,7 @@ macro_rules! jit_accessors {
             folded: &[(super::codegen::JitOp, Vec<usize>, Vec<usize>)],
             origin: &[usize],
             total_slots: usize,
-        ) -> Result<(), String> {
+        ) -> Result<(), crate::KernelError> {
             self.core.fold_constants(folded, origin, total_slots)
         }
 

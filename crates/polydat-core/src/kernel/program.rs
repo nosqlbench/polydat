@@ -1757,7 +1757,9 @@ impl PolydatProgram {
 
     /// Fold every init-lifecycle constant now, as the compiler does at the
     /// end of a build, and return how many were folded.
-    pub fn fold_init_constants(&mut self) -> Result<usize, String> {
+    pub fn fold_init_constants(
+        &mut self,
+    ) -> Result<usize, crate::compile::assembly::AssemblyError> {
         self.fold_init_constants_impl(None, false)
     }
 
@@ -1766,7 +1768,7 @@ impl PolydatProgram {
     pub fn fold_init_constants_with_log(
         &mut self,
         log: Option<&mut crate::dsl::events::CompileEventLog>,
-    ) -> Result<usize, String> {
+    ) -> Result<usize, crate::compile::assembly::AssemblyError> {
         self.fold_init_constants_impl(log, false)
     }
 
@@ -1910,7 +1912,7 @@ impl PolydatProgram {
         &mut self,
         log: Option<&mut crate::dsl::events::CompileEventLog>,
         strict: bool,
-    ) -> Result<usize, String> {
+    ) -> Result<usize, crate::compile::assembly::AssemblyError> {
         self.fold_init_constants_impl(log, strict)
     }
 
@@ -1925,7 +1927,7 @@ impl PolydatProgram {
         &mut self,
         mut log: Option<&mut crate::dsl::events::CompileEventLog>,
         strict: bool,
-    ) -> Result<usize, String> {
+    ) -> Result<usize, crate::compile::assembly::AssemblyError> {
         use crate::ast::Value;
         use crate::library::fixed::ConstF64;
         use crate::library::identity::{ConstExt, ConstHandle, ConstStr, ConstU64};
@@ -1987,12 +1989,12 @@ impl PolydatProgram {
                         &self.input_defs,
                         *node_idx,
                     );
-                    return Err(format!(
+                    return Err(crate::compile::assembly::AssemblyError::Other(format!(
                         "init binding '{init_name}' violates the init contract: \
                          {offending} \
                          (init bindings must be effectively-const at scope-init time \
                          per the init contract, evaluation_model.md)"
-                    ));
+                    )));
                 }
             }
         }
@@ -2009,7 +2011,7 @@ impl PolydatProgram {
                 &self.output_modifiers,
             )
         {
-            return Err(violation);
+            return Err(crate::compile::assembly::AssemblyError::Other(violation));
         }
 
         // Wire cost check: a config wire fed by a cycle-time source
@@ -2150,15 +2152,26 @@ impl PolydatProgram {
                     is_init[i] = false;
                     continue;
                 }
+                // A compile-constant step is one no input reaches, so
+                // what it does here it will do on every pull: there is
+                // nothing a later evaluation could supply that would
+                // make it succeed. Skipping the fold only moved the
+                // same failure to the first pull, and left this engine
+                // disagreeing with the three compiled ones, which fail
+                // at build. What is knowable at build is known at
+                // build, and fails at build.
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     state.eval_node_public(self, i);
                 }));
-                if result.is_err() {
-                    let node_name = &self.nodes[i].meta().name;
-                    crate::library::support::audit::warn(&format!(
-                        "constant folding: node '{node_name}' panicked during init-time eval — skipping fold"
+                if let Err(payload) = result {
+                    // The eval path already enriched the payload with
+                    // the node, the outputs it feeds and the inputs it
+                    // was called with, the way any evaluation failure
+                    // is enriched. Taking its text keeps one copy of
+                    // that attribution rather than wrapping a second.
+                    return Err(crate::compile::assembly::AssemblyError::ConstantFold(
+                        crate::kernel::engines::panic_payload_text(payload.as_ref()),
                     ));
-                    is_init[i] = false;
                 }
             }
         }

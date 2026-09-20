@@ -225,6 +225,14 @@ impl Clone for KernelCore {
 
 impl KernelCore {
     crate::compile::shared_core_methods!();
+    /// The program node the step now running belongs to, for the
+    /// failure path (A7). On this tier a step is one node, so the
+    /// step index is the node index. Read by `run_guarded` and by the
+    /// build-time `fold_steps`, so the two always name the same node.
+    #[inline]
+    fn failing_node(&self) -> usize {
+        self.cur_step
+    }
 
     /// Run `body` with the capture guard armed, so a step's panic is
     /// recorded quietly and re-raised enriched, as the interpreter
@@ -236,7 +244,8 @@ impl KernelCore {
         drop(capture);
         if let Err(payload) = outcome {
             let sites = std::sync::Arc::clone(&self.sites);
-            sites.reraise(payload, self.cur_step, &self.buffer, Some(&self.none));
+            let node = self.failing_node();
+            sites.reraise(payload, node, &self.buffer, Some(&self.none));
         }
         #[cfg(debug_assertions)]
         self.validate_refs();
@@ -375,7 +384,7 @@ fn build_core(
     extras: P2Extras,
     use_clean: bool,
     engine: crate::compile::select::Engine,
-) -> KernelCore {
+) -> Result<KernelCore, crate::KernelError> {
     let P2Extras {
         output_types,
         externs,
@@ -500,9 +509,9 @@ fn build_core(
     // then on, so what is knowable at build is known at build and fails
     // at build.
     core.begin_epoch();
-    core.run_steps(&constants);
+    core.fold_steps(&constants)?;
     core.drive.stale = true;
-    core
+    Ok(core)
 }
 
 /// The provenance of every slot, from the steps' output slots
@@ -664,8 +673,8 @@ impl CompiledKernelRaw {
         output_map: HashMap<String, usize>,
         ref_slots: Vec<bool>,
         extras: P2Extras,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, crate::KernelError> {
+        Ok(Self {
             core: build_core(
                 coord_count,
                 total_slots,
@@ -675,8 +684,8 @@ impl CompiledKernelRaw {
                 extras,
                 false,
                 Engine::Closures(Provenance::Raw),
-            ),
-        }
+            )?,
+        })
     }
 
     /// The plan invalidates what depends on the input; this mode runs
@@ -741,10 +750,10 @@ impl CompiledKernelPush {
         input_dependents: Vec<Vec<usize>>,
         ref_slots: Vec<bool>,
         extras: P2Extras,
-    ) -> Self {
+    ) -> Result<Self, crate::KernelError> {
         // The plan in `extras` carries the dependents.
         let _ = input_dependents;
-        Self {
+        Ok(Self {
             core: build_core(
                 coord_count,
                 total_slots,
@@ -754,8 +763,8 @@ impl CompiledKernelPush {
                 extras,
                 true,
                 Engine::Closures(Provenance::Push),
-            ),
-        }
+            )?,
+        })
     }
 
     #[inline]
@@ -823,7 +832,7 @@ impl CompiledKernelPull {
         input_dependents: &[Vec<usize>],
         ref_slots: Vec<bool>,
         extras: P2Extras,
-    ) -> Self {
+    ) -> Result<Self, crate::KernelError> {
         let core = build_core(
             coord_count,
             total_slots,
@@ -833,15 +842,15 @@ impl CompiledKernelPull {
             extras,
             false,
             Engine::Closures(Provenance::Pull),
-        );
+        )?;
         let slot_provenance =
             compute_slot_provenance(coord_count, total_slots, input_dependents, &core.steps);
-        Self {
+        Ok(Self {
             core,
             slot_provenance,
             changed_mask: crate::kernel::ProvMask::all_below(coord_count), // all dirty initially
             force_run: false,
-        }
+        })
     }
 
     /// Track which inputs changed (for the cone guard), and invalidate
@@ -924,7 +933,7 @@ impl CompiledKernelPushPull {
         input_dependents: Vec<Vec<usize>>,
         ref_slots: Vec<bool>,
         extras: P2Extras,
-    ) -> Self {
+    ) -> Result<Self, crate::KernelError> {
         let core = build_core(
             coord_count,
             total_slots,
@@ -934,15 +943,15 @@ impl CompiledKernelPushPull {
             extras,
             true,
             Engine::Closures(Provenance::PushPull),
-        );
+        )?;
         let slot_provenance =
             compute_slot_provenance(coord_count, total_slots, &input_dependents, &core.steps);
-        Self {
+        Ok(Self {
             core,
             slot_provenance,
             changed_mask: crate::kernel::ProvMask::all_below(coord_count),
             force_run: false,
-        }
+        })
     }
 
     #[inline]

@@ -90,6 +90,12 @@ pub enum AssemblyError {
         /// Inputs it was given.
         got: usize,
     },
+    /// A compile-constant step could not be computed; see
+    /// [`KernelError::ConstantFold`], which this becomes at the kernel
+    /// boundary. Carried here so the interpreter's build path, which
+    /// speaks `AssemblyError`, reports the same kind as the compiled
+    /// engines do rather than folding it into `Other`.
+    ConstantFold(String),
     /// Catch-all for errors from downstream phases (e.g., strict mode).
     Other(String),
 }
@@ -184,6 +190,10 @@ impl std::fmt::Display for AssemblyError {
                     write!(f, "  Disconnect extra wires from this node.")
                 }
             }
+            AssemblyError::ConstantFold(msg) => write!(
+                f,
+                "a value this program computes at build could not be computed: {msg}"
+            ),
             AssemblyError::Other(msg) => write!(f, "{msg}"),
         }
     }
@@ -840,8 +850,7 @@ impl PolydatAssembler {
             log.as_deref_mut(),
             strict,
             resolved.ledger.clone(),
-        )
-        .map_err(AssemblyError::Other)?;
+        )?;
         if !cursors.is_empty() {
             kernel.set_cursor_schemas(cursors);
         }
@@ -899,7 +908,7 @@ impl PolydatAssembler {
                 resolved.input_defs.len(),
             ),
         );
-        Ok(CompiledKernelPushPull::new(
+        CompiledKernelPushPull::new(
             coord_count,
             total_slots,
             steps,
@@ -907,7 +916,7 @@ impl PolydatAssembler {
             dependents,
             ref_slots,
             extras,
-        ))
+        )
     }
 
     /// The closure tier's kernel without provenance caching: every
@@ -918,14 +927,14 @@ impl PolydatAssembler {
         let resolved = self.resolve().map_err(KernelError::Assembly)?;
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
             Self::build_p2_layout(&resolved).map_err(Self::refused_by_closures)?;
-        Ok(CompiledKernelRaw::new(
+        CompiledKernelRaw::new(
             coord_count,
             total_slots,
             steps,
             output_map,
             ref_slots,
             extras,
-        ))
+        )
     }
 
     /// The closure tier's kernel with push-side invalidation and no cone
@@ -942,7 +951,7 @@ impl PolydatAssembler {
                 resolved.input_defs.len(),
             ),
         );
-        Ok(CompiledKernelPush::new(
+        CompiledKernelPush::new(
             coord_count,
             total_slots,
             steps,
@@ -950,7 +959,7 @@ impl PolydatAssembler {
             dependents,
             ref_slots,
             extras,
-        ))
+        )
     }
 
     /// The closure tier's kernel with the pull-side cone guard and no
@@ -967,7 +976,7 @@ impl PolydatAssembler {
                 resolved.input_defs.len(),
             ),
         );
-        Ok(CompiledKernelPull::new(
+        CompiledKernelPull::new(
             coord_count,
             total_slots,
             steps,
@@ -975,7 +984,7 @@ impl PolydatAssembler {
             &dependents,
             ref_slots,
             extras,
-        ))
+        )
     }
 
     /// A node with no closure form, as a refusal naming the closure
@@ -1185,16 +1194,16 @@ impl PolydatAssembler {
         self,
     ) -> Result<crate::compile::jit::JitKernelPushPull, KernelError> {
         let resolved = self.resolve().map_err(KernelError::Assembly)?;
-        Self::jit_push_pull_from(resolved).map_err(Self::refused_by_native)
+        Self::jit_push_pull_from(resolved)
     }
 
     #[cfg(feature = "jit")]
     fn jit_push_pull_from(
         resolved: ResolvedDag,
-    ) -> Result<crate::compile::jit::JitKernelPushPull, String> {
+    ) -> Result<crate::compile::jit::JitKernelPushPull, KernelError> {
         let _coord_names = resolved.input_names();
         let (coord_count, total_slots, jit_steps, output_map, scratch, volatile) =
-            Self::build_jit_layout(&resolved)?;
+            Self::build_jit_layout(&resolved).map_err(Self::refused_by_pure_native)?;
         let (guard, types) = Self::jit_slot_info(&resolved);
         let deps = slot_layout(&resolved).expand_dependents(
             &resolved,
@@ -1203,7 +1212,7 @@ impl PolydatAssembler {
                 resolved.input_defs.len(),
             ),
         );
-        let externs = Self::externs_of(&resolved)?;
+        let externs = Self::externs_of(&resolved).map_err(Self::refused_by_pure_native)?;
         let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
         let (folded, origin) = Self::constant_steps(&resolved, &jit_steps);
         let mut k = crate::compile::jit::compile_jit_push_pull(
@@ -1216,7 +1225,8 @@ impl PolydatAssembler {
             externs,
             scratch,
             volatile,
-        )?;
+        )
+        .map_err(Self::refused_by_pure_native)?;
         k.set_slot_info(guard, types);
         k.set_attribution(attribution);
         // After the attribution, so a constant that fails at build names
@@ -1283,7 +1293,7 @@ impl PolydatAssembler {
         self,
     ) -> Result<crate::compile::jit::JitKernelRaw, KernelError> {
         let resolved = self.resolve().map_err(KernelError::Assembly)?;
-        Self::jit_raw_from(resolved).map_err(Self::refused_by_native)
+        Self::jit_raw_from(resolved)
     }
 
     /// Where each node lives, for the failure path (A7): its name, the
@@ -1335,12 +1345,14 @@ impl PolydatAssembler {
     }
 
     #[cfg(feature = "jit")]
-    fn jit_raw_from(resolved: ResolvedDag) -> Result<crate::compile::jit::JitKernelRaw, String> {
+    fn jit_raw_from(
+        resolved: ResolvedDag,
+    ) -> Result<crate::compile::jit::JitKernelRaw, KernelError> {
         let _coord_names = resolved.input_names();
         let (coord_count, total_slots, jit_steps, output_map, scratch, volatile) =
-            Self::build_jit_layout(&resolved)?;
+            Self::build_jit_layout(&resolved).map_err(Self::refused_by_pure_native)?;
         let (guard, types) = Self::jit_slot_info(&resolved);
-        let externs = Self::externs_of(&resolved)?;
+        let externs = Self::externs_of(&resolved).map_err(Self::refused_by_pure_native)?;
         let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
         let (folded, origin) = Self::constant_steps(&resolved, &jit_steps);
         let mut k = crate::compile::jit::compile_jit_raw_with(
@@ -1352,7 +1364,8 @@ impl PolydatAssembler {
             externs,
             scratch,
             volatile,
-        )?;
+        )
+        .map_err(Self::refused_by_pure_native)?;
         k.set_slot_info(guard, types);
         k.set_attribution(attribution);
         // After the attribution, so a constant that fails at build names
@@ -1389,10 +1402,12 @@ impl PolydatAssembler {
     #[doc(hidden)]
     pub fn compile_hybrid(self) -> Result<crate::compile::hybrid::HybridKernel, KernelError> {
         let resolved = self.resolve().map_err(KernelError::Assembly)?;
-        Self::hybrid_from(resolved).map_err(Self::refused_by_native)
+        Self::hybrid_from(resolved)
     }
 
-    fn hybrid_from(resolved: ResolvedDag) -> Result<crate::compile::hybrid::HybridKernel, String> {
+    fn hybrid_from(
+        resolved: ResolvedDag,
+    ) -> Result<crate::compile::hybrid::HybridKernel, KernelError> {
         let _coord_names = resolved.input_names();
         let layout = slot_layout(&resolved);
 
@@ -1405,7 +1420,7 @@ impl PolydatAssembler {
 
         let ref_slots = layout.ref_slot_mask(&resolved);
         let input_types: Vec<PortType> = resolved.input_defs.iter().map(|d| d.port_type).collect();
-        let externs = Self::externs_of(&resolved)?;
+        let externs = Self::externs_of(&resolved).map_err(Self::refused_by_native)?;
         let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
         // The runtime model's lifecycle classification, the one rule the
         // interpreter's fold applies.
@@ -2713,6 +2728,14 @@ impl PolydatAssembler {
         mut log: Option<&mut crate::dsl::events::CompileEventLog>,
     ) -> Result<Box<dyn Kernel>, KernelError> {
         let refused = |reason: String| KernelError::Refused { engine, reason };
+        // A builder names its tier but not the provenance mode it was
+        // asked for, which the caller is entitled to see back. Only a
+        // refusal is restamped: a fold failure belongs to the program
+        // and names no engine at all.
+        let asked = |e: KernelError| match e {
+            KernelError::Refused { reason, .. } => KernelError::Refused { engine, reason },
+            other => other,
+        };
         let strict = self.strict;
         match engine {
             Engine::Interpreter(cones) => {
@@ -2728,7 +2751,7 @@ impl PolydatAssembler {
                 let folded = log.is_some().then(|| Self::constant_sites(&resolved));
                 let (node_total, output_total) =
                     (resolved.nodes.len(), resolved.output_order.len());
-                let kernel = Self::closures_from(resolved, prov).map_err(refused)?;
+                let kernel = Self::closures_from(resolved, prov).map_err(asked)?;
                 Self::log_folded(kernel.as_ref(), folded, log.as_deref_mut());
                 Self::log_summary(log, node_total, output_total);
                 Ok(kernel)
@@ -2758,7 +2781,7 @@ impl PolydatAssembler {
                         ));
                     }
                     let prov = Self::provenance_for(prov, &resolved);
-                    let kernel = Self::hybrid_from(resolved).map_err(refused)?;
+                    let kernel = Self::hybrid_from(resolved).map_err(asked)?;
                     let kernel: Box<dyn Kernel> = match prov {
                         Provenance::Raw => Box::new(kernel.into_raw()),
                         Provenance::Pull => Box::new(kernel.into_pull()),
@@ -2817,13 +2840,8 @@ impl PolydatAssembler {
                         }
                     };
                     let kernel: Box<dyn Kernel> = match prov {
-                        Provenance::Raw => Box::new(
-                            Self::jit_raw_from(resolved).map_err(Self::refused_by_pure_native)?,
-                        ),
-                        _ => Box::new(
-                            Self::jit_push_pull_from(resolved)
-                                .map_err(Self::refused_by_pure_native)?,
-                        ),
+                        Provenance::Raw => Box::new(Self::jit_raw_from(resolved).map_err(asked)?),
+                        _ => Box::new(Self::jit_push_pull_from(resolved).map_err(asked)?),
                     };
                     Self::log_folded(kernel.as_ref(), folded, log.as_deref_mut());
                     Self::log_summary(log, node_total, output_total);
@@ -2913,10 +2931,13 @@ impl PolydatAssembler {
 
     /// The closure-tier kernel of a resolved graph in one provenance
     /// mode, or why the closure tier refuses the graph.
-    fn closures_from(resolved: ResolvedDag, prov: Provenance) -> Result<Box<dyn Kernel>, String> {
+    fn closures_from(
+        resolved: ResolvedDag,
+        prov: Provenance,
+    ) -> Result<Box<dyn Kernel>, KernelError> {
         let prov = Self::provenance_for(prov, &resolved);
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
-            Self::build_p2_layout(&resolved)?;
+            Self::build_p2_layout(&resolved).map_err(Self::refused_by_closures)?;
         let dependents = || {
             slot_layout(&resolved).expand_dependents(
                 &resolved,
@@ -2934,7 +2955,7 @@ impl PolydatAssembler {
                 output_map,
                 ref_slots,
                 extras,
-            )),
+            )?),
             Provenance::Push => Box::new(CompiledKernelPush::new(
                 coord_count,
                 total_slots,
@@ -2943,7 +2964,7 @@ impl PolydatAssembler {
                 dependents(),
                 ref_slots,
                 extras,
-            )),
+            )?),
             Provenance::Pull => Box::new(CompiledKernelPull::new(
                 coord_count,
                 total_slots,
@@ -2952,7 +2973,7 @@ impl PolydatAssembler {
                 &dependents(),
                 ref_slots,
                 extras,
-            )),
+            )?),
             Provenance::PushPull | Provenance::Auto => Box::new(CompiledKernelPushPull::new(
                 coord_count,
                 total_slots,
@@ -2961,7 +2982,7 @@ impl PolydatAssembler {
                 dependents(),
                 ref_slots,
                 extras,
-            )),
+            )?),
         })
     }
 }

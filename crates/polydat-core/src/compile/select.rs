@@ -296,6 +296,18 @@ pub enum KernelError {
         /// The node or construct it cannot run.
         reason: String,
     },
+    /// A compile-constant step could not be computed. A step no input
+    /// reaches runs once at build, so what it does there it will do on
+    /// every pull; there is nothing a later evaluation could supply
+    /// that would make it succeed. Distinct from [`Self::Refused`],
+    /// which is one engine declining a program the others accept:
+    /// every engine reports this one, and reports it at build.
+    ConstantFold {
+        /// The failure as the node reported it, enriched with the
+        /// node's name, the outputs it feeds, and the program's
+        /// diagnostic context, as an evaluation failure would be.
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for KernelError {
@@ -306,6 +318,12 @@ impl std::fmt::Display for KernelError {
             KernelError::Refused { engine, reason } => {
                 write!(f, "the {engine} engine refuses this program: {reason}")
             }
+            KernelError::ConstantFold { reason } => {
+                write!(
+                    f,
+                    "a value this program computes at build could not be computed: {reason}"
+                )
+            }
         }
     }
 }
@@ -314,6 +332,15 @@ impl std::error::Error for KernelError {}
 
 impl From<crate::compile::assembly::AssemblyError> for KernelError {
     fn from(e: crate::compile::assembly::AssemblyError) -> Self {
-        KernelError::Assembly(e)
+        // The interpreter's build path speaks `AssemblyError`, so a
+        // fold failure travels as one; it is the same failure the
+        // compiled engines report directly, and reads as the same kind
+        // here.
+        match e {
+            crate::compile::assembly::AssemblyError::ConstantFold(reason) => {
+                KernelError::ConstantFold { reason }
+            }
+            other => KernelError::Assembly(other),
+        }
     }
 }

@@ -1986,8 +1986,7 @@ impl Compiler {
     ) -> Result<PolydatKernel, crate::KernelError> {
         let (mut kernel, parent) = compile_file_with(self, file, filter, log, |mut asm, log| {
             asm.set_jit_mode(cones);
-            asm.compile_with_log(log)
-                .map_err(crate::KernelError::Assembly)
+            asm.compile_with_log(log).map_err(crate::KernelError::from)
         })?;
         kernel.set_ast(std::sync::Arc::new(parent));
         Ok(kernel)

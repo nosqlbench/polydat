@@ -529,6 +529,27 @@ macro_rules! shared_core_methods {
             self.run_guarded(|core| core.run_order(order));
         }
 
+        /// `run_steps` for the build-time constant fold: the same steps
+        /// under the same guard, but a failure comes back as the
+        /// message [`Attribution::reraise`] would have raised. A step
+        /// that fails here fails before any kernel exists, so it is an
+        /// error the builder returns rather than a panic out of a
+        /// constructor.
+        fn fold_steps(&mut self, order: &[usize]) -> Result<(), crate::KernelError> {
+            let capture = crate::kernel::engines::EvalPanicCaptureGuard::arm();
+            let outcome =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run_order(order)));
+            drop(capture);
+            if let Err(payload) = outcome {
+                let sites = std::sync::Arc::clone(&self.sites);
+                let node = self.failing_node();
+                return Err(crate::KernelError::ConstantFold {
+                    reason: sites.describe(payload, node, &self.buffer, Some(&self.none)),
+                });
+            }
+            Ok(())
+        }
+
         fn set_extern(
             &mut self,
             name: &str,
@@ -689,6 +710,20 @@ impl Attribution {
         buffer: &[u64],
         none: Option<&[bool]>,
     ) -> ! {
+        crate::kernel::engines::reraise_enriched(self.describe(payload, step, buffer, none))
+    }
+
+    /// The same message [`Self::reraise`] raises, returned instead. The
+    /// build-time constant fold uses it: a step that fails there fails
+    /// before any kernel exists, so it is an error the builder returns
+    /// and not a panic out of a constructor.
+    pub(crate) fn describe(
+        &self,
+        payload: Box<dyn std::any::Any + Send>,
+        step: usize,
+        buffer: &[u64],
+        none: Option<&[bool]>,
+    ) -> String {
         let site = self.sites.get(step);
         let name = site
             .map(|s| s.name.clone())
@@ -697,8 +732,6 @@ impl Attribution {
             .map(|s| s.outputs.iter().map(String::as_str).collect())
             .unwrap_or_default();
         let inputs = self.inputs_of(step, buffer, none);
-        let enriched =
-            crate::kernel::engines::enrich_panic(payload, &name, &outputs, &self.context, &inputs);
-        crate::kernel::engines::reraise_enriched(enriched)
+        crate::kernel::engines::enrich_panic(payload, &name, &outputs, &self.context, &inputs)
     }
 }

@@ -190,6 +190,17 @@ change what is recomputed, never a result. No step is exempt, and nothing
 but a write to an input invalidates anything: there is no evaluation round
 or thread boundary with a meaning of its own (runtime_model.md, R4).
 
+A compile-constant step that cannot be computed is a **build error on
+every engine**, reported as `KernelError::ConstantFold` and carrying the
+node's own failure message. It is not a `Refused`, because no engine is
+declining a program the others accept: a step no input reaches will do
+at every pull exactly what it does at build, so there is nothing a later
+evaluation could supply that would make it succeed, and deferring it
+would only move the same failure later. When the failure arrives follows
+the step's lifecycle and never the engine: `__str_to_u64("nope")` is a
+build error, while `__str_to_u64(printf("nope{}", cycle))` builds and
+fails on the pull that needs it.
+
 ![The one evaluation rule: each step stays current until an input in its provenance changes; a pull runs one cone and eval every step; the interpreter and the compiled kernels realize the same rule](../diagrams/evaluation_rule.svg)
 
 The figure follows one write in which the host changed only `scale`: the
