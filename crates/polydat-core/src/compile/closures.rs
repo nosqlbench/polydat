@@ -1014,6 +1014,10 @@ crate::compile::impl_kernel_trait!(CompiledKernelRaw);
 crate::compile::impl_kernel_trait!(CompiledKernelPush);
 crate::compile::impl_kernel_trait!(CompiledKernelPull);
 crate::compile::impl_kernel_trait!(CompiledKernelPushPull);
+crate::compile::impl_slot_kernel!(CompiledKernelRaw);
+crate::compile::impl_slot_kernel!(CompiledKernelPush);
+crate::compile::impl_slot_kernel!(CompiledKernelPull);
+crate::compile::impl_slot_kernel!(CompiledKernelPushPull);
 
 /// One step: SRD-74 Rule 1, then gather, run the closure, scatter. A
 /// node that does not accept `None` emits `None` on every output when

@@ -1614,6 +1614,13 @@ use crate::compile::select::{Engine, Provenance};
 crate::compile::impl_kernel_trait!(HybridKernelRaw);
 crate::compile::impl_kernel_trait!(HybridKernelPull);
 crate::compile::impl_kernel_trait!(HybridKernelPushPull);
+// `SlotKernel` extends `Kernel`, so each impl is gated exactly as the
+// `Kernel` impl above it is: without the `jit` feature this build has
+// no raw hybrid kernel at all.
+#[cfg(feature = "jit")]
+crate::compile::impl_slot_kernel!(HybridKernelRaw);
+crate::compile::impl_slot_kernel!(HybridKernelPull);
+crate::compile::impl_slot_kernel!(HybridKernelPushPull);
 
 /// The pending coordinates through the `Kernel` trait, for the hybrid
 /// kernels: `pull_value`/`pull_value_at` apply them and run the

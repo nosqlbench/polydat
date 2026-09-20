@@ -2725,8 +2725,51 @@ impl PolydatAssembler {
     pub fn compile_engine_with_log(
         self,
         engine: Engine,
-        mut log: Option<&mut crate::dsl::events::CompileEventLog>,
+        log: Option<&mut crate::dsl::events::CompileEventLog>,
     ) -> Result<Box<dyn Kernel>, KernelError> {
+        match engine {
+            // The one engine with no slot surface, and so the one this
+            // function builds itself.
+            Engine::Interpreter(cones) => {
+                let mut asm = self;
+                asm.jit_mode = Some(cones);
+                Ok(Box::new(asm.compile_with_log(log)?))
+            }
+            // Every compiled engine is built once, by
+            // `compile_slots_with_log`, and upcast for the caller who
+            // asked for the ordinary surface. One builder, two views.
+            _ => Ok(self.compile_slots_with_log(engine, log)?),
+        }
+    }
+
+    /// Build on `engine` and keep the slot surface: the same kernel
+    /// [`Self::compile_with`] builds, typed as
+    /// [`SlotKernel`](crate::compile::SlotKernel) so a caller can read
+    /// a buffer slot and evaluate one without boxing a `Value`.
+    ///
+    /// For testing, measurement and diagnostics, where the layout is
+    /// the subject. Normative use is `compile_with`, which returns the
+    /// same kernel as `Box<dyn Kernel>`; a `Box<dyn SlotKernel>`
+    /// upcasts to one wherever the ordinary surface will do, so a
+    /// caller that wants both needs only this call.
+    ///
+    /// `Engine::Interpreter` is refused, and cannot be anything else:
+    /// the interpreter holds typed `Value` buffers and has no slot to
+    /// name. Ask for a compiled engine, or use `compile_with` and the
+    /// `Kernel` trait, which every engine answers.
+    pub fn compile_slots(
+        self,
+        engine: Engine,
+    ) -> Result<Box<dyn crate::compile::SlotKernel>, KernelError> {
+        self.compile_slots_with_log(engine, None)
+    }
+
+    /// [`Self::compile_slots`] with the compile event log.
+    pub fn compile_slots_with_log(
+        self,
+        engine: Engine,
+        mut log: Option<&mut crate::dsl::events::CompileEventLog>,
+    ) -> Result<Box<dyn crate::compile::SlotKernel>, KernelError> {
         let refused = |reason: String| KernelError::Refused { engine, reason };
         // A builder names its tier but not the provenance mode it was
         // asked for, which the caller is entitled to see back. Only a
@@ -2738,11 +2781,13 @@ impl PolydatAssembler {
         };
         let strict = self.strict;
         match engine {
-            Engine::Interpreter(cones) => {
-                let mut asm = self;
-                asm.jit_mode = Some(cones);
-                Ok(Box::new(asm.compile_with_log(log)?))
-            }
+            Engine::Interpreter(_) => Err(refused(
+                "the interpreter has no slot buffer: its buffers are typed `Value`s, so \
+                 there is no slot to name. Ask for `closures`, `native` or `pure-native` \
+                 for the slot surface, or compile with `compile_with` and drive the \
+                 kernel through the `Kernel` trait, which every engine answers."
+                    .into(),
+            )),
             Engine::Closures(prov) => {
                 let resolved = self.resolve_with_log(log.as_deref_mut())?;
                 if strict {
@@ -2782,7 +2827,7 @@ impl PolydatAssembler {
                     }
                     let prov = Self::provenance_for(prov, &resolved);
                     let kernel = Self::hybrid_from(resolved).map_err(asked)?;
-                    let kernel: Box<dyn Kernel> = match prov {
+                    let kernel: Box<dyn crate::compile::SlotKernel> = match prov {
                         Provenance::Raw => Box::new(kernel.into_raw()),
                         Provenance::Pull => Box::new(kernel.into_pull()),
                         // `provenance_for` resolves `Auto` to `Raw`,
@@ -2839,7 +2884,7 @@ impl PolydatAssembler {
                             )));
                         }
                     };
-                    let kernel: Box<dyn Kernel> = match prov {
+                    let kernel: Box<dyn crate::compile::SlotKernel> = match prov {
                         Provenance::Raw => Box::new(Self::jit_raw_from(resolved).map_err(asked)?),
                         _ => Box::new(Self::jit_push_pull_from(resolved).map_err(asked)?),
                     };
@@ -2934,7 +2979,7 @@ impl PolydatAssembler {
     fn closures_from(
         resolved: ResolvedDag,
         prov: Provenance,
-    ) -> Result<Box<dyn Kernel>, KernelError> {
+    ) -> Result<Box<dyn crate::compile::SlotKernel>, KernelError> {
         let prov = Self::provenance_for(prov, &resolved);
         let (coord_count, total_slots, steps, output_map, ref_slots, extras) =
             Self::build_p2_layout(&resolved).map_err(Self::refused_by_closures)?;

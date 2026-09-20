@@ -709,3 +709,5 @@ impl JitKernelPushPull {
 
 crate::compile::impl_kernel_trait!(JitKernelRaw);
 crate::compile::impl_kernel_trait!(JitKernelPushPull);
+crate::compile::impl_slot_kernel!(JitKernelRaw);
+crate::compile::impl_slot_kernel!(JitKernelPushPull);

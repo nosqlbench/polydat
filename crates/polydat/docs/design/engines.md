@@ -78,8 +78,30 @@ Two things sit outside that rule, and only two:
   and wire readers. A differential test asserting on the graph that was
   built, and a diagnostic reporting on it, both need that; nothing else
   should reach for it. `compile_polydat_interpreter` is the one entry
-  point returning it, named for the carve-out rather than offered as a
+  point returning it, named for what it is rather than offered as a
   convenience.
+
+The second of those is a **subtrait, not a hidden corner of the first**.
+Every compiled engine lays its program out over one flat `u64` slot
+buffer (§6), and `SlotKernel: Kernel` is where that layout is admitted:
+a slot index instead of an output name, a raw `u64` instead of a
+`Value`, an evaluation that returns one word. `PolydatAssembler::
+compile_slots(engine)` hands back a `Box<dyn SlotKernel>`, so a
+benchmark measuring a tier or a test asserting on what was laid out
+reaches the extended surface without naming a kernel type, and the same
+box upcasts to `Box<dyn Kernel>` wherever the ordinary surface will do.
+One kernel, one build, two views.
+
+Being a subtrait is what makes it opt-in rather than merely
+undocumented: a caller who does not write `use SlotKernel` does not
+have these methods on their kernel at all. `#[doc(hidden)]` would have
+hidden the rustdoc entry and left the method on the type, where
+autocomplete still offers it and nothing marks the intent at the call
+site. The import is that mark. The interpreter does not implement the
+trait and cannot — its buffers are typed `Value`s and it has no slot to
+name — so `compile_slots(Engine::Interpreter(_))` is refused with that
+reason, which is the shape of the trait telling the truth about which
+engines share what.
 
 `compile_polydat` is the trait-typed interpreter build: the semantic
 oracle a differential test compares a compiled engine against. It names

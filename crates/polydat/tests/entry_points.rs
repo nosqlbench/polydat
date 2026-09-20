@@ -193,6 +193,70 @@ fn strict_refuses_implicit_coercions_on_every_engine() {
     }
 }
 
+/// The extended API is a subtrait, not a hidden corner of the core one.
+///
+/// `compile_slots` hands back a `Box<dyn SlotKernel>`, so a caller
+/// reaches the slot surface — a buffer slot, a raw `u64`, an evaluation
+/// that returns one — without naming a kernel type, and the same box
+/// upcasts to `Box<dyn Kernel>` wherever the ordinary surface will do.
+/// The interpreter is refused rather than half-answered: it holds typed
+/// `Value` buffers and has no slot to name.
+#[test]
+fn the_slot_surface_is_a_subtrait_reachable_without_a_kernel_type() {
+    use polydat::SlotKernel;
+
+    let mut oracle = compile_polydat_interpreter(SRC).unwrap();
+    let want = values(&mut oracle, 5);
+
+    for engine in engines() {
+        if matches!(engine, Engine::Interpreter(_)) {
+            // Honestly refused, with a reason that says why and what to
+            // ask for instead.
+            match compile_polydat_to_assembler(SRC)
+                .unwrap()
+                .compile_slots(engine)
+            {
+                Err(KernelError::Refused { reason, .. }) => {
+                    assert!(reason.contains("slot"), "{reason}")
+                }
+                Err(e) => panic!("expected a refusal naming the slot buffer, got {e}"),
+                Ok(_) => panic!("the interpreter has no slot buffer to hand back"),
+            }
+            continue;
+        }
+        let mut k = match compile_polydat_to_assembler(SRC)
+            .unwrap()
+            .compile_slots(engine)
+        {
+            Ok(k) => k,
+            Err(KernelError::Refused { .. }) => continue,
+            Err(e) => panic!("{engine}: {e}"),
+        };
+        // The extended surface: a slot, then an evaluation that returns
+        // the raw word rather than a `Value`.
+        let slot = SlotKernel::resolve_output(k.as_ref(), "k").expect("a named output");
+        let raw = k.eval_for_slot(&[5], slot);
+        assert_eq!(raw, SlotKernel::get(k.as_ref(), "k"));
+
+        // And the core surface, on the same box, because the extended
+        // trait extends it. No second build, no downcast.
+        assert_eq!(k.engine(), engine_of(engine, k.engine()));
+        assert_eq!(values(k.as_mut(), 5), want, "{engine}");
+        assert_eq!(k.pull("k").as_u64(), raw, "{engine}");
+    }
+}
+
+/// `Auto` delegates the provenance choice, so the reported engine is
+/// the tier that was asked for with whatever mode the selector took.
+fn engine_of(asked: Engine, reported: Engine) -> Engine {
+    match (asked, reported) {
+        (Engine::Closures(Provenance::Auto), r @ Engine::Closures(_)) => r,
+        (Engine::Native(Provenance::Auto), r @ Engine::Native(_)) => r,
+        (Engine::PureNative(Provenance::Auto), r @ Engine::PureNative(_)) => r,
+        _ => asked,
+    }
+}
+
 /// The pure native tier is an engine a host names like any other: it
 /// arrives through the same options, it reports itself rather than the
 /// hybrid it is the differential for, and a provenance mode it has no

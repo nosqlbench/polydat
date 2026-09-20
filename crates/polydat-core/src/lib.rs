@@ -237,6 +237,9 @@ pub mod derive_support;
 // for ergonomic use in `#[polydat_node]` function signatures.
 pub use derive_support::Const;
 
+/// The slot surface of a compiled kernel: the extended API, opt-in at
+/// the import, over and above the `Kernel` trait every engine answers.
+pub use compile::SlotKernel;
 /// How much of the interpreter's graph is fused into native cones:
 /// what `Engine::Interpreter` carries.
 pub use compile::cone::JitMode;

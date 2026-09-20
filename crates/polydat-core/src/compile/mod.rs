@@ -172,6 +172,92 @@ pub(crate) struct Drive {
     pub(crate) stale: bool,
 }
 
+/// The slot surface of a compiled kernel: the extended API, over and
+/// above the [`Kernel`](crate::kernel::Kernel) trait every engine
+/// answers.
+///
+/// Every compiled engine lays its program out over one flat `u64` slot
+/// buffer (engines.md §6). That layout is an implementation detail, and
+/// this trait is where it is admitted: a slot index instead of an
+/// output name, a raw `u64` instead of a `Value`, a borrow into the
+/// scratch a by-reference output writes. The interpreter does not
+/// implement it and cannot — its buffers are typed `Value`s and it has
+/// no slot to name — which is the point: the shape of this trait *is*
+/// the thing the compiled tiers share and the interpreter does not.
+///
+/// **This is not the surface for running a program.** Driving a kernel
+/// is `Kernel`, on every engine, and a host that never names an engine
+/// never sees this trait. Reach for it when the implementation detail
+/// is the subject: a differential test asserting on what was laid out,
+/// a benchmark measuring a tier without the `Value` construction and
+/// the name lookup a `pull` pays, a diagnostic reporting on a slot.
+///
+/// It is a subtrait rather than a wider `Kernel`, so it is opt-in at
+/// the import: a caller who does not write `use SlotKernel` does not
+/// have these methods on their kernel at all. And it is reachable
+/// without naming a kernel type, through
+/// [`PolydatAssembler::compile_slots`](crate::compile::assembly::PolydatAssembler::compile_slots),
+/// which hands back a `Box<dyn SlotKernel>` that upcasts to
+/// `Box<dyn Kernel>` wherever the ordinary surface will do.
+pub trait SlotKernel: crate::kernel::Kernel {
+    /// The buffer slot a named output writes, resolved once so a
+    /// caller reading the same output every cycle pays no lookup.
+    fn resolve_output(&self, name: &str) -> Option<usize>;
+
+    /// The raw `u64` in `slot`, as it stands: no evaluation, no
+    /// decoding. Panics on a `Ref2` slot (axiom S2), which has no
+    /// scalar to read — use the `read_vec_*` borrows.
+    fn get_slot(&self, slot: usize) -> u64;
+
+    /// [`Self::get_slot`] by output name.
+    fn get(&self, name: &str) -> u64;
+
+    /// A named output decoded by its port type, a `Ref2` output copied
+    /// out through its pair so the caller never holds a pointer. Reads
+    /// what is there; [`Kernel::pull`](crate::kernel::Kernel::pull)
+    /// evaluates first.
+    fn get_value(&self, name: &str) -> crate::ast::Value;
+
+    /// Set the coordinates, evaluate what `slot` needs, and return its
+    /// raw `u64`. The whole read in one call and one `u64`, which is
+    /// what a tier benchmark wants: `pull_at` gives the same value
+    /// through a `Value` it has to construct.
+    fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64;
+}
+
+// The `read_vec_*` borrows into a `Ref2` output's scratch are
+// deliberately not here. They read `core.ref_entry(slot)`, which the
+// closure tier and the hybrid have and the pure tier does not, so a
+// trait carrying them would be implementable by seven of the nine
+// compiled kernels rather than all nine. They stay inherent until the
+// pure tier grows the same entry, and then they join this trait.
+
+/// [`SlotKernel`] for a compiled kernel, forwarding to the inherent
+/// methods the type already has. The trait is the surface; the
+/// inherent copies are what it forwards to and what this crate calls.
+macro_rules! impl_slot_kernel {
+    ($ty:ident) => {
+        impl crate::compile::SlotKernel for $ty {
+            fn resolve_output(&self, name: &str) -> Option<usize> {
+                $ty::resolve_output(self, name)
+            }
+            fn get_slot(&self, slot: usize) -> u64 {
+                $ty::get_slot(self, slot)
+            }
+            fn get(&self, name: &str) -> u64 {
+                $ty::get(self, name)
+            }
+            fn get_value(&self, name: &str) -> crate::ast::Value {
+                $ty::get_value(self, name)
+            }
+            fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
+                $ty::eval_for_slot(self, coords, slot)
+            }
+        }
+    };
+}
+pub(crate) use impl_slot_kernel;
+
 /// The [`Kernel`](crate::kernel::Kernel) impl every compiled kernel
 /// shares: the type's inherent `eval_pending`, `pull_value`,
 /// `pull_value_at`, `set_input`, `set_input_at`, `set_cursor`,
