@@ -95,12 +95,15 @@ struct CompileArgs {
 }
 
 impl CompileArgs {
-    /// How much of the interpreter's program is fused into cones.
+    /// How much of the interpreter's program is fused into cones: what
+    /// `--cones` says, and nothing else. The engine and the cone mode
+    /// are separate choices, which is the whole point of splitting
+    /// them out of the one flag that used to carry both.
     fn cones(&self) -> JitMode {
-        match (self.engine, self.cones) {
-            (Engine::Off, _) | (_, Cones::Off) => JitMode::Off,
-            (Engine::Force, _) | (_, Cones::Force) => JitMode::Force,
-            (_, Cones::Auto) => JitMode::Auto,
+        match self.cones {
+            Cones::Off => JitMode::Off,
+            Cones::Force => JitMode::Force,
+            Cones::Auto => JitMode::Auto,
         }
     }
 
@@ -125,9 +128,9 @@ impl CompileArgs {
                 KernelEngine::Closures(_) => KernelEngine::Closures(provenance),
                 other => other,
             },
-            Engine::Interpreter | Engine::Off => KernelEngine::Interpreter(self.cones()),
+            Engine::Interpreter => KernelEngine::Interpreter(self.cones()),
             Engine::Closures => KernelEngine::Closures(provenance),
-            Engine::Native | Engine::Force => KernelEngine::Native(provenance),
+            Engine::Native => KernelEngine::Native(provenance),
             Engine::PureNative => KernelEngine::PureNative(provenance),
         }
     }
@@ -278,12 +281,6 @@ enum Engine {
     /// has no native lowering, which is how you find out whether a
     /// program is fully native.
     PureNative,
-    /// `--engine interpreter --cones off`, under its old spelling.
-    #[value(hide = true)]
-    Off,
-    /// `--engine native --cones force`, under its old spelling.
-    #[value(hide = true)]
-    Force,
 }
 
 /// How much of a compiled engine's work is skipped when inputs repeat.

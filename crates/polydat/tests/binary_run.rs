@@ -128,15 +128,16 @@ fn every_engine_emits_the_same_rows() {
         assert!(ok, "{engine}: {stderr}");
         rows(&stdout)
     };
-    let want = run("off");
+    // The interpreter is the reference every other engine is checked
+    // against, so it is the baseline here as it is everywhere else.
+    let want = run("interpreter");
     assert_eq!(want.len(), 4, "{want:?}");
     assert!(want[0].contains("n=50 "), "{want:?}");
     assert_eq!(run("auto"), want);
-    assert_eq!(run("interpreter"), want);
     assert_eq!(run("closures"), want);
     if cfg!(feature = "jit") {
-        assert_eq!(run("force"), want);
         assert_eq!(run("native"), want);
+        assert_eq!(run("pure-native"), want);
     }
     // The interpreter with its cones off, and a compiled engine in a
     // named provenance mode, by their own flags.
@@ -155,6 +156,28 @@ fn every_engine_emits_the_same_rows() {
         "interpreter",
         "--cones",
         "off",
+        "-q",
+    ]);
+    assert!(ok, "{stderr}");
+    assert_eq!(rows(&stdout), want);
+    // And with every eligible node fused. The cone mode is `--cones`
+    // alone now; the engine flag no longer carries it, so this is the
+    // only spelling that reaches it.
+    let (ok, stdout, stderr) = run_binary(&[
+        "run",
+        path.to_str().unwrap(),
+        "--cycles",
+        "4",
+        "--partition",
+        "1",
+        "--emit",
+        "map",
+        "--outputs",
+        "cycle,f,s,n,t",
+        "--engine",
+        "interpreter",
+        "--cones",
+        "force",
         "-q",
     ]);
     assert!(ok, "{stderr}");
