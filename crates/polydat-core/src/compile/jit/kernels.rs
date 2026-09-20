@@ -311,6 +311,67 @@ impl JitCore {
         #[cfg(debug_assertions)]
         self.validate_refs();
     }
+
+    /// The compile-constant fold of the runtime model on this tier: a
+    /// step no input reaches runs at build, once, and is current from
+    /// then on, so what is knowable at build is known at build and
+    /// fails at build.
+    ///
+    /// The other two compiled tiers keep a step list and run the
+    /// constant steps out of it. This tier has one compiled function
+    /// and no list, so the constant steps are compiled a second time
+    /// into an entry of their own, run once over this core's buffer and
+    /// scratch, and dropped with the code that held them. The steps
+    /// carry absolute slot indices, so the entry writes the same slots
+    /// the whole-program function would have.
+    ///
+    /// Externs are not consulted: a compile-constant step is one no
+    /// input reaches, extern inputs included, so a program whose
+    /// externs are still unset folds its constants anyway. That is the
+    /// difference from [`Self::run`], which refuses an unset extern
+    /// because a real evaluation reads them.
+    pub(super) fn fold_constants(
+        &mut self,
+        folded: &[(super::codegen::JitOp, Vec<usize>, Vec<usize>)],
+        origin: &[usize],
+        total_slots: usize,
+    ) -> Result<(), String> {
+        if folded.is_empty() {
+            return Ok(());
+        }
+        // Graph order is topological and a constant depends on
+        // constants alone, so the filtered order is a valid order.
+        let (code_fn, code) = super::codegen::compile_jit_entry(folded, Some(total_slots))?;
+        let buf_ptr_const = self.buffer.as_ptr();
+        let buf_ptr_mut = self.buffer.as_mut_ptr();
+        let sc = self.scratch.as_mut_ptr();
+        let native = move || unsafe {
+            (code_fn)(buf_ptr_const, buf_ptr_mut, sc);
+        };
+        if !code.fallible() {
+            native();
+        } else {
+            self.buffer[self.tracker] = u64::MAX;
+            let capture = crate::kernel::engines::EvalPanicCaptureGuard::arm();
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                super::codegen::invoke_with_catch(native)
+            }));
+            drop(capture);
+            if let Err(payload) = outcome {
+                // The entry counts its own steps, so the tracker holds
+                // an index into `folded`; the attribution is keyed by
+                // the program's step, which `origin` gives back.
+                let step = self.buffer[self.tracker] as usize;
+                let step = origin.get(step).copied().unwrap_or(step);
+                let sites = std::sync::Arc::clone(&self.sites);
+                sites.reraise(payload, step, &self.buffer, None);
+            }
+        }
+        // `code` owns the executable memory the call ran in, so it is
+        // kept alive to here and dropped after, not before.
+        drop(code);
+        Ok(())
+    }
 }
 
 macro_rules! jit_accessors {
@@ -376,6 +437,19 @@ macro_rules! jit_accessors {
             sites: std::sync::Arc<crate::compile::Attribution>,
         ) {
             self.core.sites = sites;
+        }
+
+        /// Run this program's compile-constant steps once, at build; see
+        /// [`JitCore::fold_constants`]. Called by the assembler after
+        /// the attribution is in place, so a constant that fails names
+        /// its node.
+        pub(crate) fn fold_constants(
+            &mut self,
+            folded: &[(super::codegen::JitOp, Vec<usize>, Vec<usize>)],
+            origin: &[usize],
+            total_slots: usize,
+        ) -> Result<(), String> {
+            self.core.fold_constants(folded, origin, total_slots)
         }
 
         /// Set an extern by name, as `PolydatState::set_input` does on

@@ -239,6 +239,32 @@ fn the_pure_tier_names_itself_and_refuses_the_modes_it_lacks() {
     }
 }
 
+/// What is knowable at build is known at build, and fails at build. A
+/// step no input reaches runs once while the kernel is being built, so
+/// a constant that cannot be computed reports it then rather than on
+/// the first pull. Every compiled engine does this, the pure tier
+/// included: it compiles one function over every step and keeps no step
+/// list, so its constants are compiled a second time into an entry of
+/// their own and run over the same buffer (F-E15).
+#[test]
+#[cfg(feature = "jit")]
+fn every_compiled_engine_folds_its_constants_at_build() {
+    let src = "input cycle: u64\nn := div(10, 0)\nv := n + cycle\n";
+    for engine in [
+        Engine::Closures(Provenance::Raw),
+        Engine::Native(Provenance::Raw),
+        Engine::PureNative(Provenance::Raw),
+    ] {
+        let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            compile_polydat_with(src, engine).map(|k| k.engine())
+        }));
+        assert!(
+            built.is_err(),
+            "{engine}: a constant that cannot be computed must fail at build, got {built:?}",
+        );
+    }
+}
+
 /// `Native` and `PureNative` differ in one thing: what becomes of a node
 /// with no native form. `Native` runs that node's closure and always
 /// succeeds, so it can never tell a host whether its program went fully
@@ -281,21 +307,6 @@ fn deferred_cursor_extents_resolve_on_every_engine() {
             Err(KernelError::Refused { .. }) => continue,
             Err(e) => panic!("{engine}: {e}"),
         };
-        // The pure tier is the exception, and it is a defect rather
-        // than a property: the extent is read from the kernel's folded
-        // constants, and the pure tier is one compiled function with no
-        // step list, so it cannot run its compile-constant steps at
-        // build the way the other two do. Its buffer still holds zero
-        // when the extent is read. Asserted rather than skipped so that
-        // fixing it fails here (F-E15).
-        if matches!(engine, Engine::PureNative(_)) {
-            assert_eq!(
-                k.cursor_schemas()[0].extent,
-                Some(0),
-                "{engine}: F-E15 is fixed; fold this engine back into the loop",
-            );
-            continue;
-        }
         assert_eq!(k.cursor_schemas()[0].extent, want, "{engine}");
     }
 }

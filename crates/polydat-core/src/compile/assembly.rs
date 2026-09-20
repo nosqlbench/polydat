@@ -1205,6 +1205,7 @@ impl PolydatAssembler {
         );
         let externs = Self::externs_of(&resolved)?;
         let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
+        let (folded, origin) = Self::constant_steps(&resolved, &jit_steps);
         let mut k = crate::compile::jit::compile_jit_push_pull(
             coord_count,
             total_slots,
@@ -1218,7 +1219,45 @@ impl PolydatAssembler {
         )?;
         k.set_slot_info(guard, types);
         k.set_attribution(attribution);
+        // After the attribution, so a constant that fails at build names
+        // its node as it would at evaluation.
+        k.fold_constants(&folded, &origin, total_slots)?;
         Ok(k)
+    }
+
+    /// This graph's compile-constant steps, and the program step each
+    /// one came from. The closure tier and the hybrid run their
+    /// constant steps out of the step list they keep; the pure tier
+    /// compiles one function over every step and keeps no list, so its
+    /// constants are compiled a second time into an entry of their own
+    /// and run once over the kernel's buffer. Same classification as
+    /// the other two engines use, from the runtime model's lifecycle.
+    #[cfg(feature = "jit")]
+    #[allow(clippy::type_complexity)]
+    fn constant_steps(
+        resolved: &ResolvedDag,
+        jit_steps: &[(crate::compile::jit::JitOp, Vec<usize>, Vec<usize>)],
+    ) -> (
+        Vec<(crate::compile::jit::JitOp, Vec<usize>, Vec<usize>)>,
+        Vec<usize>,
+    ) {
+        let classes = PolydatProgram::classify_lifecycle(
+            &resolved.nodes,
+            &resolved.wiring,
+            &resolved.input_defs,
+            &resolved.output_map,
+            &resolved.output_modifiers,
+        );
+        // One step per node, pushed in node order by `build_jit_layout`,
+        // so a step's index is its node's.
+        jit_steps
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| {
+                classes.lifecycle.get(*i) == Some(&crate::kernel::EvalLifecycle::CompileConst)
+            })
+            .map(|(i, s)| (s.clone(), i))
+            .unzip()
     }
 
     /// The extern inputs of a resolved graph, at the slots the layout
@@ -1303,6 +1342,7 @@ impl PolydatAssembler {
         let (guard, types) = Self::jit_slot_info(&resolved);
         let externs = Self::externs_of(&resolved)?;
         let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
+        let (folded, origin) = Self::constant_steps(&resolved, &jit_steps);
         let mut k = crate::compile::jit::compile_jit_raw_with(
             coord_count,
             total_slots,
@@ -1315,6 +1355,9 @@ impl PolydatAssembler {
         )?;
         k.set_slot_info(guard, types);
         k.set_attribution(attribution);
+        // After the attribution, so a constant that fails at build names
+        // its node as it would at evaluation.
+        k.fold_constants(&folded, &origin, total_slots)?;
         Ok(k)
     }
 

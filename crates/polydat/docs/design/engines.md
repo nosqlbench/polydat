@@ -177,7 +177,11 @@ in the document named, and the others cite it.
 Every engine evaluates under the runtime model's rule (runtime_model.md,
 R1): a step is current until an input in its provenance changes; a
 nondeterministic step is never current; a compile-constant step is folded
-once at build, on every engine, and the fold is logged the same way; a side
+once at build, on every engine, and the fold is logged the same way — the
+interpreter, the closure tier and the hybrid run their constant steps out
+of the step list they keep, and the pure tier, which compiles one function
+over every step and keeps no list, compiles its constants a second time
+into an entry of their own and runs that once over the same buffer; a side
 channel runs when it is not current and is observed when it runs. `pull`
 runs the requested output's cone and nothing else, on every engine; `eval`
 runs every step. An unset extern is `None` and propagates as the None rule
