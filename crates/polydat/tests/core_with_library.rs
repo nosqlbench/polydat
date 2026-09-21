@@ -2052,3 +2052,53 @@ fn the_cursor_advancer_injects_each_ordinal_into_the_state() {
     assert_eq!(seen, vec![21, 24, 27]);
     assert_eq!(cursors.consumed(), 3);
 }
+
+/// The typed embedding errors carry what the compiler knew, rather
+/// than a shape rebuilt from the message text (F-C7). Each case below
+/// used to lose a field: the type mismatch reported `(unknown)` nodes
+/// and `U64 → U64` though the assembler had the real four; the
+/// unknown function never suggested a near name though the registry
+/// computes one; the lifecycle mismatch named no input though the
+/// kernel's inputs are exactly what it is about.
+#[cfg(test)]
+mod typed_embedding_errors {
+    use polydat::dsl::compile::{EmbeddingError, eval_const_expr};
+
+    #[test]
+    fn a_wiring_mismatch_names_both_nodes_and_both_types() {
+        let err = eval_const_expr("hash(json_object())").unwrap_err();
+        let EmbeddingError::TypeMismatch {
+            from_type, to_type, ..
+        } = &err
+        else {
+            panic!("expected TypeMismatch, got {err:?}");
+        };
+        assert_eq!(*from_type, polydat::ast::PortType::Json);
+        assert_eq!(*to_type, polydat::ast::PortType::U64);
+        let text = err.to_string();
+        assert!(!text.contains("(unknown)"), "{text}");
+    }
+
+    #[test]
+    fn an_unknown_function_carries_the_registry_s_suggestion() {
+        let err = eval_const_expr("mdo(1, 2)").unwrap_err();
+        let EmbeddingError::UnknownNode {
+            name, suggestion, ..
+        } = &err
+        else {
+            panic!("expected UnknownNode, got {err:?}");
+        };
+        assert_eq!(name, "mdo");
+        let sug = suggestion.as_deref().expect("a name one edit away exists");
+        assert!(err.to_string().contains(sug), "{err}");
+    }
+
+    #[test]
+    fn a_lifecycle_mismatch_names_what_it_waits_on() {
+        let err = eval_const_expr("mod(cycle, 10)").unwrap_err();
+        let EmbeddingError::LifecycleMismatch { dynamic_inputs, .. } = &err else {
+            panic!("expected LifecycleMismatch, got {err:?}");
+        };
+        assert_eq!(dynamic_inputs, &["cycle".to_string()]);
+    }
+}

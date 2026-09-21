@@ -111,18 +111,6 @@ pub enum EmbeddingError {
         source: String,
     },
 
-    /// Compilation succeeded but the requested output name
-    /// could not be resolved in the resulting kernel.
-    /// Indicates an internal compiler issue or a mismatch
-    /// between the wrapper template and the compiler's output
-    /// naming.
-    ResultMissing {
-        /// The output the caller asked for.
-        output_name: String,
-        /// The source text.
-        source: String,
-    },
-
     /// A `Value::None` propagated to the expression's output
     /// where a concrete value was required. Produced by a
     /// `HostType::from_value` conversion that meets `Value::None`,
@@ -133,19 +121,6 @@ pub enum EmbeddingError {
         accessor: &'static str,
         /// The source text.
         source: String,
-    },
-
-    /// Evaluation exceeded a host-specified time budget.
-    /// Currently produced only by deadline-accepting
-    /// surfaces (reserved for the bulk-evaluation surface
-    /// γ-9 and adapter-specific embedding paths).
-    Timeout {
-        /// The source text.
-        source: String,
-        /// Milliseconds spent.
-        elapsed_ms: u64,
-        /// The budget, in milliseconds.
-        deadline_ms: u64,
     },
 }
 
@@ -210,28 +185,11 @@ impl std::fmt::Display for EmbeddingError {
                 f,
                 "node-eval panic in '{source}' (node '{node_name}'): {message}"
             ),
-            EmbeddingError::ResultMissing {
-                output_name,
-                source,
-            } => write!(
-                f,
-                "compilation completed for '{source}' but output '{output_name}' \
-                 is not reachable — internal compiler issue"
-            ),
             EmbeddingError::NonePropagated { accessor, source } => write!(
                 f,
                 "Value::None propagated to '{source}'; \
                  host called strict accessor `{accessor}`. \
                  Use a non-strict accessor (`try_as_*`) or surface the None to the user."
-            ),
-            EmbeddingError::Timeout {
-                source,
-                elapsed_ms,
-                deadline_ms,
-            } => write!(
-                f,
-                "evaluation of '{source}' exceeded deadline: \
-                 {elapsed_ms}ms elapsed, {deadline_ms}ms budget"
             ),
         }
     }
@@ -735,14 +693,18 @@ fn eval_const_expr_uncached(
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
         move || -> Result<crate::ast::Value, EmbeddingError> {
             let kernel = compile_polydat_interpreter_with_options(&wrapped, &options, None)
-                .map_err(|e| classify_compile_error(&source_owned, e.to_string()))?;
-            kernel
-                .get_constant("out")
-                .cloned()
-                .ok_or_else(|| EmbeddingError::LifecycleMismatch {
+                .map_err(|e| classify_compile_error(&source_owned, e))?;
+            kernel.get_constant("out").cloned().ok_or_else(|| {
+                // The expression compiled but did not fold, which
+                // means it reads something that is not known until
+                // the workload runs. The kernel's inputs are those
+                // things, and naming them is the whole point of the
+                // variant.
+                EmbeddingError::LifecycleMismatch {
                     source: source_owned.clone(),
-                    dynamic_inputs: Vec::new(),
-                })
+                    dynamic_inputs: kernel.input_names(),
+                }
+            })
         },
     ));
     match result {
@@ -755,42 +717,51 @@ fn eval_const_expr_uncached(
     }
 }
 
-/// Classify a raw compile-error string into a typed
-/// `EmbeddingError` variant. Best-effort string pattern
-/// matching against the compiler's error message shapes;
-/// when nothing matches, falls through to `Parse` (the most
-/// common case for stringly-typed compile errors).
-fn classify_compile_error(source: &str, msg: String) -> EmbeddingError {
-    // "not a const expression: '...' depends on runtime inputs"
-    if msg.starts_with("not a const expression") {
-        return EmbeddingError::LifecycleMismatch {
+/// Classify a compile failure into a typed [`EmbeddingError`].
+///
+/// The assembler's own errors are structured, so the fields are
+/// carried across rather than reconstructed: a wiring type mismatch
+/// keeps the two node names and the two types the assembler already
+/// knows. The DSL front end reports in strings, so the one shape a
+/// host acts on — an unregistered function — is read out of the
+/// message, and its suggestion comes from the registry rather than
+/// being dropped. Anything else keeps the compiler's own message.
+fn classify_compile_error(source: &str, err: crate::KernelError) -> EmbeddingError {
+    use crate::KernelError;
+    use crate::compile::assembly::AssemblyError;
+    if let KernelError::Assembly(AssemblyError::TypeMismatch {
+        from_node,
+        from_type,
+        to_node,
+        to_type,
+        ..
+    }) = err
+    {
+        return EmbeddingError::TypeMismatch {
+            from_node,
+            from_type,
+            to_node,
+            to_type,
             source: source.to_string(),
-            dynamic_inputs: Vec::new(),
         };
     }
-    // "unknown function: 'foo'" patterns
-    if let Some(stripped) = msg.strip_prefix("unknown function: '")
-        && let Some(end) = stripped.find('\'')
+    let msg = err.to_string();
+    // The factory and the diagnostic pass both write "unknown
+    // function: '<name>'", the factory with the compiler's context
+    // ahead of it, so the marker is searched for rather than
+    // stripped from the front.
+    const UNKNOWN: &str = "unknown function: '";
+    if let Some(at) = msg.find(UNKNOWN)
+        && let Some(end) = msg[at + UNKNOWN.len()..].find('\'')
     {
-        let name = stripped[..end].to_string();
+        let name = msg[at + UNKNOWN.len()..][..end].to_string();
+        let suggestion = crate::dsl::registry::suggest_function(&name).map(str::to_string);
         return EmbeddingError::UnknownNode {
             name,
             source: source.to_string(),
-            suggestion: None,
+            suggestion,
         };
     }
-    // "type mismatch" patterns from the assembler
-    if msg.contains("type mismatch") {
-        return EmbeddingError::TypeMismatch {
-            from_node: "(unknown)".to_string(),
-            from_type: crate::ast::PortType::U64,
-            to_node: "(unknown)".to_string(),
-            to_type: crate::ast::PortType::U64,
-            source: source.to_string(),
-        };
-    }
-    // Fall-through: treat as parse error since most
-    // compiler-side failures originate at parse time.
     EmbeddingError::Parse {
         source: source.to_string(),
         message: msg,
@@ -2770,18 +2741,9 @@ mod tests {
                 message: "div by zero".into(),
                 source: "div(a, b)".into(),
             },
-            EmbeddingError::ResultMissing {
-                output_name: "out".into(),
-                source: "x := 1".into(),
-            },
             EmbeddingError::NonePropagated {
                 accessor: "as_bool",
                 source: "{missing}".into(),
-            },
-            EmbeddingError::Timeout {
-                source: "expensive()".into(),
-                elapsed_ms: 5000,
-                deadline_ms: 1000,
             },
         ];
         for v in variants {

@@ -1087,10 +1087,16 @@ The standard embedding entry points emit seven classes of
 `EmbeddingError`, reachable from parsing, compilation,
 lifecycle validation, evaluation, and typed result
 conversion. Each carries the context shown below; the shape
-is normative. (The enum also declares `ResultMissing` and
-`Timeout`; no standard entry point constructs either — an
-unknown function is `UnknownNode`, and no surface accepts a
-deadline.)
+is normative, and every variant is one a host can actually
+receive — the enum used to declare a `ResultMissing` and a
+`Timeout` that no entry point constructed.
+
+Each variant's fields are the compiler's own. A wiring type
+mismatch carries the two node names and the two port types
+the assembler resolved; an unknown function carries the
+registry's nearest name; a lifecycle mismatch carries the
+kernel's inputs, which are what the expression is waiting
+on. None of them is rebuilt by reading an error message.
 
 ```rust
 pub enum EmbeddingError {
@@ -1123,8 +1129,8 @@ pub enum EmbeddingError {
     },
 
     /// A node mentioned in the expression is not registered.
-    /// `suggestion` is reserved for a close known name; the
-    /// current surfaces set it to `None`.
+    /// `suggestion` is the nearest registered name within
+    /// three edits, when there is one.
     UnknownNode {
         name: String,
         source: String,
@@ -1169,7 +1175,7 @@ pub enum EmbeddingError {
 | `Parse` | Lexer/parser rejects the input; or interpolation does not stabilise. | Surface the parse position to the user; the input is malformed expression text. |
 | `UnresolvedPlaceholder` | `{name}` has no binding in the lookup (an unset extern reads as none). | Check the kernel's inputs and outputs; suggest declaring the name as a workload param or fixing the spelling. |
 | `LifecycleMismatch` | `eval_const_expr` was called on text reaching a dynamic input. | Either: (a) use the two-step interpolate-then-eval pattern to resolve dynamic names, or (b) accept the expression must be evaluated per-cycle via a compiled kernel + cycle dispatch. |
-| `UnknownNode` | A node call uses a name not in the registry. | Tell the user to check the available node catalog (`suggestion` is currently always `None`). Host crates that register custom nodes must link the registration. |
+| `UnknownNode` | A node call uses a name not in the registry. | Surface `suggestion` when it is set, and point the user at the node catalog otherwise. Host crates that register custom nodes must link the registration. |
 | `TypeMismatch` | Wire types incompatible and no auto-adapter exists; or the typed surface's target has no adapter. | Surface the from/to node and types; suggest an explicit conversion (`x as str`, `format_u64(x)`, `to_f64(x)`) or a different node. |
 | `NodeEvalPanic` | A node panicked during the fold. | Surface the panic message; this is typically a node-internal contract violation (invalid argument range, etc.). Forwarded to the user with provenance. |
 | `NonePropagated` | A typed surface's result was `Value::None`. | Use the raw-`Value` surface and handle the None, or surface it to the user with context about which input was missing. See [none_semantics.md](none_semantics.md). |
