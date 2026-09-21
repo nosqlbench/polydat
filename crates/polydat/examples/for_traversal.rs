@@ -38,13 +38,13 @@ fn main() {
     );
     // The body compiles for the engine on the first activation; every
     // activation after it shares that program.
-    drop(stream.activate(0).expect("first activation"));
+    drop(stream.activation(0).expect("first activation"));
     let ledger = kernel.ledger().clone();
     let built_before = ledger.programs();
     println!();
     println!("act  p          scale  cycles  first row  first v");
     for index in 0..stream.len() {
-        let mut act = stream.activate(index).expect("activation");
+        let mut act = stream.activation(index).expect("activation");
         let slice = act.cursor.clone().expect("cursor slice");
         let scale = act.coord("scale").unwrap().as_u64();
         let cycles = act.cycle_count();

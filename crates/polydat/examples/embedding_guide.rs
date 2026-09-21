@@ -377,7 +377,7 @@ fn section_traversal() {
         stream.traversal().source_text
     );
     for index in 0..stream.len() {
-        let mut act = stream.activate(index).expect("activation");
+        let mut act = stream.activation(index).expect("activation");
         let k = act.cycle(1);
         println!("  activation {index}: {}", k.pull("stmt").as_str());
     }

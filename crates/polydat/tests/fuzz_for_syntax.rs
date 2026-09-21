@@ -579,7 +579,7 @@ fn run_wellformed_pass(seed: u64, iterations: usize) -> Vec<String> {
 /// traversals), running at most a few activations and cycles of each,
 /// and append every pulled output's display form to `trace`.
 fn run_traversals_bounded(
-    k: &mut polydat::kernel::PolydatKernel,
+    k: &mut dyn polydat::Kernel,
     depth: usize,
     trace: &mut Vec<String>,
 ) -> Result<(), String> {
@@ -588,7 +588,7 @@ fn run_traversals_bounded(
     if depth > 4 {
         return Ok(());
     }
-    let n = k.program().traversals().len();
+    let n = k.traversals().len();
     for t in 0..n {
         let stream = k.traverse(t)?;
         let outputs: Vec<String> = stream
@@ -605,12 +605,12 @@ fn run_traversals_bounded(
                 for name in &outputs {
                     trace.push(format!(
                         "{t}/{a}/{c} {name}={}",
-                        kernel.pull_ref(name).to_display_string()
+                        kernel.pull(name).to_display_string()
                     ));
                 }
             }
             act.cycle(0);
-            run_traversals_bounded(&mut act.kernel, depth + 1, trace)?;
+            run_traversals_bounded(act.kernel.as_mut(), depth + 1, trace)?;
         }
     }
     Ok(())

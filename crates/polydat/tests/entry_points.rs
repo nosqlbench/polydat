@@ -478,7 +478,7 @@ for k in 1..4 {
             for i in 0..s.len() {
                 let mut act = s.activation(i).unwrap();
                 act.kernel.set_inputs(&[0]);
-                seen.push(act.kernel.pull_ref("d").as_u64());
+                seen.push(act.kernel.pull("d").as_u64());
             }
         }
         assert_eq!(seen, vec![2, 4, 6], "{engine}");

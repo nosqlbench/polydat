@@ -23,7 +23,7 @@ fn float_pairs(src: &str) -> Vec<(f64, f64)> {
     let mut seen = Vec::new();
     while let Some(mut a) = stream.advance().unwrap() {
         let c = a.cycle(0);
-        seen.push((c.pull_ref("px").as_f64(), c.pull_ref("py").as_f64()));
+        seen.push((c.pull("px").as_f64(), c.pull("py").as_f64()));
     }
     seen
 }
@@ -297,7 +297,7 @@ fn shuffled_prefix(order: &str) -> Vec<u64> {
     let mut stream = k.traverse(0).unwrap();
     let mut seen = Vec::new();
     while let Some(mut a) = stream.advance().unwrap() {
-        seen.push(a.cycle(0).pull_ref("v").as_u64());
+        seen.push(a.cycle(0).pull("v").as_u64());
     }
     seen
 }
@@ -352,7 +352,7 @@ fn a_named_measure_is_a_source_in_the_text() {
     let mut stream = k.traverse(0).unwrap();
     let mut xs = Vec::new();
     while let Some(mut a) = stream.advance().unwrap() {
-        xs.push(a.cycle(0).pull_ref("px").as_f64());
+        xs.push(a.cycle(0).pull("px").as_f64());
     }
     assert_eq!(xs.len(), 64);
     let mean = xs.iter().sum::<f64>() / 64.0;

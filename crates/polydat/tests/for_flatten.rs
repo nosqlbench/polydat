@@ -17,7 +17,7 @@ fn traversed(src: &str) -> Vec<u64> {
     let mut stream = k.traverse(0).unwrap();
     let mut seen = Vec::new();
     while let Some(mut a) = stream.advance().unwrap() {
-        seen.push(a.cycle(0).pull_ref("v").as_u64());
+        seen.push(a.cycle(0).pull("v").as_u64());
     }
     seen
 }
@@ -80,7 +80,7 @@ fn a_generator_over_a_runtime_name_stays_unbounded_at_compile() {
     let mut stream = k.traverse(0).unwrap();
     let mut seen = Vec::new();
     while let Some(mut a) = stream.advance().unwrap() {
-        seen.push(a.cycle(0).pull_ref("v").as_u64());
+        seen.push(a.cycle(0).pull("v").as_u64());
     }
     assert_eq!(seen, vec![50, 50]);
 }

@@ -237,7 +237,7 @@ fn a_context_required_producer_traverses_but_has_no_coordinate_stream() {
     let mut stream = k.traverse(0).unwrap();
     let mut seen = Vec::new();
     while let Some(mut a) = stream.advance().unwrap() {
-        seen.push(a.cycle(0).pull_ref("n").as_u64());
+        seen.push(a.cycle(0).pull("n").as_u64());
     }
     assert_eq!(seen, vec![50, 50]);
     let streamer = k.pull_ref("parts").clone();
@@ -263,7 +263,7 @@ fn a_traversal_captures_its_sources_references_when_it_opens() {
         let mut stream = k.traverse(0).unwrap();
         let mut seen = Vec::new();
         while let Some(mut a) = stream.advance().unwrap() {
-            seen.push(a.cycle(0).pull_ref("n").as_u64());
+            seen.push(a.cycle(0).pull("n").as_u64());
         }
         seen
     };
@@ -278,7 +278,7 @@ fn a_traversal_captures_its_sources_references_when_it_opens() {
     k.set_inputs(&[100]);
     let mut seen = Vec::new();
     while let Some(mut a) = stream.advance().unwrap() {
-        seen.push(a.cycle(0).pull_ref("n").as_u64());
+        seen.push(a.cycle(0).pull("n").as_u64());
     }
     assert_eq!(seen, vec![4, 4]);
 }

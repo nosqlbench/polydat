@@ -59,9 +59,16 @@ fn walk_three_levels(
             a2.cycle(0);
             let mut inner = a2.kernel.traverse(0).unwrap();
             assert_eq!(inner.len(), 50);
+            // Every activation of this stream is a kernel over the one
+            // leaf program the parent compiled; the stream names it,
+            // since a kernel of any engine may be its program's only
+            // representation.
+            assert!(std::sync::Arc::ptr_eq(
+                &inner.body_program().unwrap().as_interpreter().unwrap(),
+                leaf_program
+            ));
             while let Some(mut a3) = inner.advance().unwrap() {
-                assert!(Arc::ptr_eq(a3.kernel.program(), leaf_program));
-                checksum = checksum.wrapping_add(a3.cycle(0).pull_ref("leaf").as_u64());
+                checksum = checksum.wrapping_add(a3.cycle(0).pull("leaf").as_u64());
                 leaves += 1;
             }
         }
@@ -141,7 +148,13 @@ fn a_second_host_shares_the_same_programs_and_builds_none() {
     let sb = b.traverse(0).unwrap();
     let act_a = sa.activation(3).unwrap();
     let act_b = sb.activation(3).unwrap();
-    assert!(Arc::ptr_eq(act_a.kernel.program(), act_b.kernel.program()));
+    assert_eq!(act_a.coords, act_b.coords);
+    // Two hosts over one program open traversals over one body
+    // program: the second host's stream compiles nothing.
+    assert!(Arc::ptr_eq(
+        &sa.body_program().unwrap(),
+        &sb.body_program().unwrap()
+    ));
     // Two hosts over one program share its ledger, and neither built.
     assert!(Arc::ptr_eq(a.program().ledger(), b.program().ledger()));
     assert_eq!(ledger.programs(), before);
@@ -166,7 +179,7 @@ fn activation_cost_is_flat_across_the_tuple_index() {
         let mut sink = 0u64;
         for i in range.clone() {
             let mut act = stream.activation(i).unwrap();
-            sink = sink.wrapping_add(act.cycle(0).pull_ref("v").as_u64());
+            sink = sink.wrapping_add(act.cycle(0).pull("v").as_u64());
         }
         assert_ne!(sink, 0);
         start.elapsed().as_nanos() as f64 / range.len() as f64
@@ -216,7 +229,7 @@ fn producers_and_derivations_do_not_add_programs_per_tuple() {
         assert_eq!(stream.len(), 98);
         for i in 0..stream.len() {
             let mut act = stream.activation(i).unwrap();
-            act.cycle(0).pull_ref("f");
+            act.cycle(0).pull("f");
         }
     }
     assert_eq!(

@@ -29,7 +29,7 @@ fn trace(
         let index = act.index;
         act.for_each_cycle(|i, kernel| {
             for name in outputs {
-                out.push((index, i, name.to_string(), kernel.pull_ref(name).clone()));
+                out.push((index, i, name.to_string(), kernel.pull(name).clone()));
             }
         });
     }
@@ -46,8 +46,13 @@ fn one_activation_per_tuple_over_one_shared_program() {
     assert_eq!(stream.len(), 9);
     let a = stream.activation(0).unwrap();
     let b = stream.activation(8).unwrap();
-    // T2: activation allocates state only; both share the body's program.
-    assert!(Arc::ptr_eq(a.kernel.program(), b.kernel.program()));
+    // T2: activation allocates state only. The body's program is
+    // compiled once for the stream's engine and every activation is a
+    // kernel over that one program, which is why the second
+    // activation costs what the first did minus the compile.
+    let first = stream.body_program().unwrap();
+    let again = stream.body_program().unwrap();
+    assert!(Arc::ptr_eq(&first, &again));
     assert_eq!(a.coord("k"), Some(&Value::U64(1)));
     assert_eq!(b.coord("limit"), Some(&Value::U64(30)));
     assert_eq!(a.cycle_count(), 1);
@@ -108,10 +113,10 @@ fn cursor_over_an_element_narrows_and_iterates_its_slice() {
     // Local cycle 0 maps to absolute ordinal 250, both through mod_in
     // and through the cursor's ordinal projection.
     let kernel = act.cycle(0);
-    assert_eq!(kernel.pull_ref("row").as_u64(), 250);
-    assert_eq!(kernel.pull_ref("ord").as_u64(), 250);
+    assert_eq!(kernel.pull("row").as_u64(), 250);
+    assert_eq!(kernel.pull("ord").as_u64(), 250);
     let kernel = act.cycle(249);
-    assert_eq!(kernel.pull_ref("row").as_u64(), 499);
+    assert_eq!(kernel.pull("row").as_u64(), 499);
     assert!(stream.advance().unwrap().is_some());
     assert!(stream.advance().unwrap().is_some());
     assert!(stream.advance().unwrap().is_none());
@@ -140,7 +145,7 @@ fn nested_traversals_activate_from_the_parent_activation() {
         outer.cycle(0);
         let mut inner_stream = outer.kernel.traverse(0).unwrap();
         while let Some(mut inner) = inner_stream.advance().unwrap() {
-            seen.push(inner.cycle(0).pull_ref("v").as_u64());
+            seen.push(inner.cycle(0).pull("v").as_u64());
         }
     }
     assert_eq!(seen, vec![101, 102, 201, 202]);
@@ -165,7 +170,7 @@ fn fibers_partition_a_traversal_by_index_without_coordination() {
                         let mut act = stream.activation(i).unwrap();
                         let index = act.index;
                         act.for_each_cycle(|c, kernel| {
-                            out.push((index, c, "g".to_string(), kernel.pull_ref("g").clone()))
+                            out.push((index, c, "g".to_string(), kernel.pull("g").clone()))
                         });
                     }
                     out
@@ -228,7 +233,7 @@ fn a_traversal_over_a_bracketed_union_activates_every_member() {
     assert_eq!(stream.len(), 4);
     let mut seen = Vec::new();
     while let Some(mut a) = stream.advance().unwrap() {
-        seen.push(a.cycle(0).pull_ref("v").as_u64());
+        seen.push(a.cycle(0).pull("v").as_u64());
     }
     assert_eq!(seen, vec![4, 6, 20, 22]);
 }

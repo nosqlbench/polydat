@@ -743,7 +743,7 @@ fn the_default_engine_forms_take_options_tiles_and_activations() {
     k.set_inputs(&[10]);
     let stream = k.traverse(0).unwrap();
     for index in 0..stream.len() {
-        let mut act = stream.activate(index).unwrap();
+        let mut act = stream.activation(index).unwrap();
         // The same tier as the root; the selector picks each body's provenance.
         assert!(
             matches!(
@@ -755,7 +755,7 @@ fn the_default_engine_forms_take_options_tiles_and_activations() {
             k.engine()
         );
         let mut want = stream.activation(index).unwrap();
-        assert_eq!(act.cycle(0).pull("x"), *want.cycle(0).pull_ref("x"));
+        assert_eq!(act.cycle(0).pull("x"), want.cycle(0).pull("x"));
     }
 }
 

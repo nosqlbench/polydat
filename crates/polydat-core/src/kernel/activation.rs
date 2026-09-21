@@ -53,9 +53,14 @@ impl CursorSlice {
 
 /// One child scope of a traversal: the tuple it was activated for, a
 /// fresh kernel over the body's program, and its cursor slice if the
-/// body declares a cursor. The kernel is the interpreter's by default;
-/// [`TraversalStream::activation_on`] builds one on any engine behind
-/// the [`Kernel`] trait (engine parity, step 8).
+/// body declares a cursor.
+///
+/// The kernel is on the stream's engine — the engine of the kernel
+/// that opened the traversal — and is driven through the [`Kernel`]
+/// trait. [`TraversalStream::activation_on`] names another engine for
+/// a caller that wants one. The default used to be the interpreter's
+/// whatever the parent ran on, so a traversal opened on a native
+/// kernel activated interpreted unless the caller asked otherwise.
 pub struct Activation<K = PolydatKernel> {
     /// Position of this activation's tuple in the traversal's dispense
     /// order.
@@ -160,6 +165,10 @@ pub struct TraversalStream {
     tuples: Vec<RuntimeTuple>,
     cascade: Vec<(String, Value)>,
     next: usize,
+    /// The engine of the kernel that opened this traversal. Its
+    /// activations run there: a body belongs to the kernel that opened
+    /// it, and runs where that kernel runs.
+    engine: crate::Engine,
 }
 
 impl TraversalStream {
@@ -189,8 +198,23 @@ impl TraversalStream {
         self.next
     }
 
+    /// The engine this stream's activations run on: the engine of the
+    /// kernel that opened the traversal.
+    pub fn engine(&self) -> crate::Engine {
+        self.engine
+    }
+
+    /// The body's program on this stream's engine — the one every
+    /// activation is a kernel over, compiled once and shared, which is
+    /// what makes activation cost no compile.
+    pub fn body_program(&self) -> Result<std::sync::Arc<dyn crate::kernel::KernelProgram>, String> {
+        self.traversal
+            .program_on(self.engine)
+            .map_err(|e| e.to_string())
+    }
+
     /// The next activation, or `None` when exhausted.
-    pub fn advance(&mut self) -> Result<Option<Activation>, String> {
+    pub fn advance(&mut self) -> Result<Option<Activation<Box<dyn Kernel>>>, String> {
         if self.next >= self.tuples.len() {
             return Ok(None);
         }
@@ -202,31 +226,14 @@ impl TraversalStream {
     /// Build the activation at `index` without moving the dispense
     /// position. Fibers partition a traversal by calling this over
     /// disjoint index ranges.
-    pub fn activation(&self, index: usize) -> Result<Activation, String> {
-        let tuple = self.tuples.get(index).ok_or_else(|| {
-            format!(
-                "activation index {index} is out of range; traversal has {} tuples",
-                self.tuples.len()
-            )
-        })?;
-        let program = self.traversal.program.clone();
-        let mut kernel = PolydatKernel::from_program(program);
-        bind_by_name(&mut kernel, tuple);
-        bind_by_name(&mut kernel, &self.cascade);
-        let cursor = narrow_cursors(&mut kernel)?;
-        Ok(Activation {
-            index: index as u64,
-            coords: tuple.clone(),
-            kernel,
-            cursor,
-        })
-    }
-
-    /// [`Self::activation_on`] on [`Engine::default`](crate::Engine::default):
-    /// the activation at `index` as a compiled kernel, with the JIT where
-    /// the build has it.
-    pub fn activate(&self, index: usize) -> Result<Activation<Box<dyn Kernel>>, String> {
-        self.activation_on(index, crate::Engine::default())
+    ///
+    /// The kernel is on the stream's engine — the one the kernel that
+    /// opened the traversal runs on. This used to be the interpreter's
+    /// whatever the parent was, so a traversal opened on a native
+    /// kernel activated interpreted unless the caller asked for an
+    /// engine by name.
+    pub fn activation(&self, index: usize) -> Result<Activation<Box<dyn Kernel>>, String> {
+        self.activation_on(index, self.engine)
     }
 
     /// [`Self::activation`] on `engine` (engine parity, step 8): a fresh
@@ -283,14 +290,10 @@ fn bind_by_name(kernel: &mut PolydatKernel, values: &[(String, Value)]) {
     }
 }
 
-/// Resolve every `over` clause in the body and narrow its cursor. Returns
-/// the narrowest slice, or the full extent of the first cursor when none
-/// has an `over` clause. One routine for every engine, through the
-/// trait.
-fn narrow_cursors(kernel: &mut PolydatKernel) -> Result<Option<CursorSlice>, String> {
-    narrow_cursors_on(kernel)
-}
-
+/// Resolve every `over` clause in the body and narrow its cursor.
+/// Returns the narrowest slice, or the full extent of the first cursor
+/// when none has an `over` clause. One routine for every engine,
+/// through the trait.
 fn narrow_cursors_on(kernel: &mut dyn Kernel) -> Result<Option<CursorSlice>, String> {
     let schemas: Vec<crate::iteration::source::SourceSchema> = kernel.cursor_schemas().to_vec();
     let mut narrowest: Option<CursorSlice> = None;
@@ -425,5 +428,6 @@ pub fn open_traversal(
         tuples,
         cascade,
         next: 0,
+        engine: parent.engine(),
     })
 }

@@ -45,12 +45,7 @@ fn traces(src: &str, coords: &[u64], outputs: &[&str], engine: Engine) -> (Trace
         let mut p1 = stream.activation(index).unwrap();
         p1.for_each_cycle(|i, kernel| {
             for name in outputs {
-                want.push((
-                    index as u64,
-                    i,
-                    name.to_string(),
-                    kernel.pull_ref(name).clone(),
-                ));
+                want.push((index as u64, i, name.to_string(), kernel.pull(name).clone()));
             }
         });
         let mut act = stream
@@ -331,7 +326,7 @@ fn a_body_reading_an_outer_shared_wire_sees_the_value_at_open() {
 
         let y_at = |stream: &TraversalStream, i: usize| -> u64 {
             let mut a = stream.activation(i).unwrap();
-            a.kernel.pull_ref("y").as_u64()
+            a.kernel.pull("y").as_u64()
         };
 
         let stream = k.traverse(0).unwrap();
