@@ -597,9 +597,13 @@ after binding its generator clauses from the render node's inputs.
 **Bodies.** Every projection body renders in a kernel of its own over
 the body's program, kept by the rendering state in the render step's
 own scratch ([Compiled By-Reference Slots](compiled_handles.md) §3), so
-no body kernel belongs to a thread or is shared between states. The
-body's program for `Engine::default()` is compiled when the
-`TileProgram` is constructed, so the first render pays no compile. The
+no body kernel belongs to a thread or is shared between states. A body
+is a `BodySource`, the carrier a `for` body uses, and the compiler
+hands the whole set to the render node inside the `Arc<TileProgram>`
+rather than as source text; each body's program per engine is built
+the first time a render on that engine asks for it
+(`BodySource::program_on`). The interpreter's is built when the
+`TileProgram` is constructed, since the tuples are memoized there. The
 comprehension and the static runs are parsed and interned once, at that
 construction. The body's inputs (the tuple elements and the cascade) and
 its holes are resolved to indices on the first tuple and kept, so a
@@ -616,11 +620,14 @@ tile's bytes impose (a shortest-representation writer that does not
 promise that identity is not acceptable). Other formats keep the general
 formatting path.
 
-**Lifetime.** `TileProgram::interned` holds one program per skeleton
-payload for the life of the process, so the same payload is parsed and
-its bodies compiled once, and every render node over it shares the one
-program. The program is built with no lock held, since a body with a
-tile of its own interns through the same table.
+**Lifetime.** The compiler builds one `TileProgram` per tile in the
+source and hands the render node the `Arc`, so every kernel compiled
+from that program shares the one tile program and its one set of
+bodies. There is no process-wide table keyed by the skeleton's bytes:
+that table existed because the node received its body as text and had
+to recognise "the same tile" by comparing payloads, which meant two
+identical tiles in different programs shared one entry and a program's
+own compile settings could not reach its bodies.
 
 ### 7.2 Tiers
 
@@ -630,8 +637,9 @@ result goes, per [Compiled By-Reference Slots](compiled_handles.md):
 - **P1.** `tile_render` walks the skeleton as an ordinary node on
   `Value`s, encoding each hole from a view of its value. The document
   is built in a `String` and surfaced as a `Str`, since a P1 value owns
-  its bytes. A projection's body runs interpreted, in a kernel the
-  rendering state keeps in the node's own scratch.
+  its bytes. A projection's body runs on the interpreter too — the
+  engine of the kernel rendering — in a kernel the rendering state
+  keeps in the node's own scratch.
 - **P2, and beside native segments in a hybrid kernel.** The render
   node runs its own closure over the slots
   (`compiled_slot = tile_render_compiled`): each hole is read as a
@@ -650,15 +658,17 @@ result goes, per [Compiled By-Reference Slots](compiled_handles.md):
   writes into the same entry of the state's scratch it would as a
   closure step, so the hole values never leave native code before
   they are encoded.
-- **Projections on the compiled engines.** Every compiled kernel renders
-  its bodies on `Engine::default()`, not on its own engine: the render
-  node's closure serves the closure tier and a hybrid kernel's closure
-  steps alike and has no engine to ask, and the default is the fastest
-  engine the build has. The body's program for that engine is compiled
-  when the tile program is constructed, so the first render pays no
-  compile; the bodies render in the body kernels the rendering state
-  keeps, so a body's own native code runs inside the render. A body
-  the default engine refuses renders interpreted.
+- **Projections on the compiled engines.** A body renders on the engine
+  the renderer is given, and its program for that engine is built the
+  first time a render asks for it. The interpreter hands down its own
+  engine. A compiled kernel still hands down `Engine::default()` rather
+  than its own: the render node's closure serves the closure tier and a
+  hybrid kernel's closure steps alike, and `compiled_slot` is not told
+  which engine it is building a kit for, so the closure has no engine
+  to capture. The difference is which tier a body runs on, never what
+  it produces. The bodies render in the body kernels the rendering
+  state keeps, so a body's own native code runs inside the render, and
+  a body an engine refuses renders interpreted and says so once.
 
 Rendering changes what a tile costs on an engine, never what the engine
 accepts. A tile whose hole is a vector-typed wire, or whose projection

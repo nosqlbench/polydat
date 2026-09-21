@@ -287,7 +287,14 @@ belongs in exactly one place; others cite it.
    like any other, and `program_on(engine)` is the only thing a renderer has to call. The
    H5 reason the default rested on is gone with the cycle concept it named, and a body
    that ran on `Engine::default()` regardless of its parent was the tile side of the same
-   defect F-K11 was on the `for` side.
+   defect F-K11 was on the `for` side. *Taken, and carried out on the interpreter path:
+   `render_into` takes the engine and `body_program_on` builds on it. The compiled render
+   still passes `Engine::default()`, because `PolydatNode::compiled_slot(&self,
+   wire_types)` is not told which engine it is building a kit for — the one place a
+   closure could learn it. That parameter belongs with group G, which is where a node's
+   lowering and its closure become one declaration; until then a projection body under a
+   closure-tier kernel may render on the native tier, which is a tier difference and not
+   a result difference.*
 4. ~~**The wide-extern refusal**: close it (two-slot extern seeding) or state it as the
    one exception. (F-E13)~~ **Decided 2026-09-20: state it.** `engines.md` §8 names it
    with its reason under "the two refusals" — a compiled engine writes an extern as one
