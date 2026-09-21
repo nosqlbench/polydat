@@ -260,11 +260,6 @@ impl Clone for HybridCore {
 impl HybridCore {
     crate::compile::shared_core_methods!();
 
-    /// Axiom S9(a) — deterministic Ref validation (see
-    /// `jit_boundary.md` §"Slot-state axioms"). Gated to
-    /// `debug_assertions` to match its call sites, which compile
-    /// out in release.
-    #[cfg(debug_assertions)]
     /// Axiom S2 typed accessor core (borrow ties to &self).
     fn ref_entry(&self, slot: usize) -> &crate::ast::ScratchBuf {
         match self.ref_scratch.iter().find(|(s, _)| *s == slot) {

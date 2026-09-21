@@ -158,6 +158,16 @@ jobs:
       - name: Clippy (warnings are errors)
         run: cargo clippy --workspace --all-features --all-targets -- -D warnings
 
+      # Everything above runs in the dev profile, where
+      # `debug_assertions` is on. A `#[cfg(debug_assertions)]` on an
+      # item a release build still calls compiles here and fails for
+      # anyone running `cargo install polydat` or `cargo bench`, which
+      # is how the ref-validator's attribute came to sit on the typed
+      # accessor beside it and go unnoticed. `--all-targets` covers the
+      # benches, where the ladder lives.
+      - name: Check release (warnings are errors)
+        run: cargo check --release --workspace --all-features --all-targets
+
       # The node attribute's compile-fail suite is ignored by default
       # because every case is a separate compile; CI always runs it.
       # The integration tests are one binary, `suite`, with each file

@@ -326,13 +326,6 @@ impl KernelCore {
         }
     }
 
-    /// Axiom S9(a) — deterministic Ref validation: every
-    /// scratch-backed Ref pair in the buffer must equal its
-    /// owning entry's current `(as_ptr(), len())`. Run after
-    /// every eval in debug/test builds; a violation names the
-    /// slot instead of dangling. Gated to `debug_assertions` to
-    /// match its call sites, which compile out in release.
-    #[cfg(debug_assertions)]
     /// Axiom S2 typed accessor core: resolve a Ref pair's first
     /// slot to its kernel-owned scratch entry. The returned
     /// borrow ties to `&self`, so holding it across the next

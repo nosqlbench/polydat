@@ -529,6 +529,10 @@ macro_rules! shared_core_methods {
         /// slot only when a step owned it, the other whenever the
         /// slot was `None`. Nothing is published either way, so the
         /// looser test is the right one and is now the only one.
+        ///
+        /// Gated to `debug_assertions` to match its call sites, which
+        /// compile out in release.
+        #[cfg(debug_assertions)]
         fn validate_refs(&self) {
             for &(slot, idx) in &self.ref_scratch {
                 let unpublished = self.none[slot]
