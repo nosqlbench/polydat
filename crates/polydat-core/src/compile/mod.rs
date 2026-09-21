@@ -126,6 +126,117 @@ macro_rules! ref_readers {
 }
 pub(crate) use ref_readers;
 
+/// The accessors every compiled kernel type carries, whichever tier it
+/// belongs to: reading an output by name or by slot, the externs and
+/// the cursors it declares, and applying the coordinates a `Kernel`
+/// caller left pending before a pull or an eval. Every one of them
+/// delegates to `self.core`, so none decides anything about evaluation
+/// — which is why seven types can share one copy.
+///
+/// `$set_coords` is the coordinate writer the type uses: the provenance
+/// modes that track a changed-input mask apply coordinates through
+/// `set_inputs`, the rest through `set_coords`. It is the only thing
+/// that varies, and the closure tier and the hybrid had a macro each to
+/// vary it.
+macro_rules! kernel_accessors {
+    ($set_coords:ident) => {
+        /// The coordinate inputs.
+        pub fn coord_count(&self) -> usize {
+            self.core.coord_count
+        }
+
+        /// The slot of a named output.
+        pub fn resolve_output(&self, name: &str) -> Option<usize> {
+            self.core.output_map.get(name).copied()
+        }
+
+        /// Read an output by pre-resolved slot index. Panics on
+        /// Ref2-colored slots (axiom S2) — use `read_vec_*`.
+        #[inline]
+        pub fn get_slot(&self, slot: usize) -> u64 {
+            self.core.guard_ref_slot(slot);
+            self.core.buffer[slot]
+        }
+
+        /// Read a named output variate after `eval()`. Panics on
+        /// Ref2-colored outputs (axiom S2) — use `read_vec_*`.
+        #[inline]
+        pub fn get(&self, name: &str) -> u64 {
+            let slot = self.core.output_map[name];
+            self.core.guard_ref_slot(slot);
+            self.core.buffer[slot]
+        }
+
+        /// The named output as a typed `Value`, decoded by its port
+        /// type: a `Ref2` output is copied out through its pair
+        /// (compiled_handles.md §4), so the caller never holds a
+        /// pointer; a slot that holds `None` reads as `None`.
+        pub fn get_value(&self, name: &str) -> crate::ast::Value {
+            self.core.value_of(name)
+        }
+
+        /// A named output, its cone run if a write is pending.
+        pub fn pull_output(&mut self, name: &str) -> crate::ast::Value {
+            self.core.pull_named(name)
+        }
+
+        /// The named output through the `Kernel` trait: the pending
+        /// coordinates are applied, a round begins if a write is pending, and
+        /// only the output's cone runs.
+        fn pull_value(&mut self, name: &str) -> crate::ast::Value {
+            let coords = std::mem::take(&mut self.core.drive.coords);
+            self.$set_coords(&coords);
+            self.core.drive.coords = coords;
+            self.pull_output(name)
+        }
+
+        /// [`Self::pull_value`] by output index.
+        fn pull_value_at(&mut self, index: usize) -> crate::ast::Value {
+            let coords = std::mem::take(&mut self.core.drive.coords);
+            self.$set_coords(&coords);
+            self.core.drive.coords = coords;
+            self.core.pull_at(index)
+        }
+
+        /// `eval` through the `Kernel` trait: the pending coordinates,
+        /// then every step.
+        fn eval_pending(&mut self) {
+            let coords = std::mem::take(&mut self.core.drive.coords);
+            self.eval(&coords);
+            self.core.drive.coords = coords;
+        }
+
+        /// The kernel's externs by name and declared type.
+        pub fn externs(&self) -> Vec<(&str, crate::ast::PortType)> {
+            self.core.externs.names()
+        }
+
+        /// The cursors the program declares, with the partitions the
+        /// compiler resolved where its `over` clause and extent were
+        /// constant, as `PolydatProgram::cursor_schemas` reports them.
+        pub fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema] {
+            self.core.externs.cursor_schemas()
+        }
+
+        /// Narrow a cursor to one partition, as `narrow_cursor` does on
+        /// the interpreter: its `Ext` slot and six scalar projections
+        /// are set as externs.
+        pub fn set_cursor(
+            &mut self,
+            name: &str,
+            partition: &crate::iteration::cursor_partition::Partition,
+        ) -> Result<(), crate::kernel::WriteError> {
+            for (slot, value) in self.core.externs.cursor_writes(name, partition)? {
+                self.set_input(&slot, value)?;
+            }
+            Ok(())
+        }
+
+        crate::compile::ref_readers!();
+    };
+}
+pub(crate) use kernel_accessors;
+
 /// SRD-74's fusion rule: whether a node may join the run of fused
 /// code being formed, as far as `None` is concerned. The one predicate
 /// both fusers apply — the interpreter's cone planner and the hybrid's
@@ -530,6 +641,44 @@ macro_rules! shared_core_methods {
         /// slot was `None`. Nothing is published either way, so the
         /// looser test is the right one and is now the only one.
         ///
+        /// Axiom S2 typed accessor core: resolve a Ref pair's first
+        /// slot to its kernel-owned scratch entry. The returned
+        /// borrow ties to `&self`, so holding it across the next
+        /// `eval(&mut self)` is a compile error — stale reads are
+        /// statically impossible.
+        fn ref_entry(&self, slot: usize) -> &crate::ast::ScratchBuf {
+            match self.ref_scratch.iter().find(|(s, _)| *s == slot) {
+                Some(&(_, idx)) => &self.scratch[idx],
+                None if self.ref_slots.get(slot).copied().unwrap_or(false) => panic!(
+                    "slot {slot} is a Ref pair owned by the CALLER (a kernel \
+                     input) — read it on the caller side"
+                ),
+                None => panic!("slot {slot} is not a Ref2-colored slot"),
+            }
+        }
+
+        /// Run `body` with the failure path armed: a panic inside a
+        /// step is recorded quietly and re-raised enriched, as the
+        /// interpreter re-raises a node's (A7), and every reference
+        /// pair is checked afterwards in a debug build.
+        ///
+        /// `#[inline]` is load-bearing: this wraps every `eval`, and
+        /// without it the native rung of the ladder pays a call and
+        /// about seven percent.
+        #[inline]
+        fn run_guarded(&mut self, body: impl FnOnce(&mut Self)) {
+            let capture = crate::kernel::engines::EvalPanicCaptureGuard::arm();
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(self)));
+            drop(capture);
+            if let Err(payload) = outcome {
+                let sites = std::sync::Arc::clone(&self.sites);
+                let node = self.failing_node();
+                sites.reraise(payload, node, &self.buffer, Some(&self.none));
+            }
+            #[cfg(debug_assertions)]
+            self.validate_refs();
+        }
+
         /// Gated to `debug_assertions` to match its call sites, which
         /// compile out in release.
         #[cfg(debug_assertions)]

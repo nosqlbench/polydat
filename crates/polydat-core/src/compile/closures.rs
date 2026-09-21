@@ -234,23 +234,6 @@ impl KernelCore {
         self.cur_step
     }
 
-    /// Run `body` with the capture guard armed, so a step's panic is
-    /// recorded quietly and re-raised enriched, as the interpreter
-    /// re-raises a node's (A7).
-    #[inline]
-    fn run_guarded(&mut self, body: impl FnOnce(&mut Self)) {
-        let capture = crate::kernel::engines::EvalPanicCaptureGuard::arm();
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(self)));
-        drop(capture);
-        if let Err(payload) = outcome {
-            let sites = std::sync::Arc::clone(&self.sites);
-            let node = self.failing_node();
-            sites.reraise(payload, node, &self.buffer, Some(&self.none));
-        }
-        #[cfg(debug_assertions)]
-        self.validate_refs();
-    }
-
     /// The steps of `order` that have not run in the round, in order.
     #[inline]
     fn run_order(&mut self, order: &[usize]) {
@@ -323,22 +306,6 @@ impl KernelCore {
         crate::EnginePlan {
             closure_steps: self.steps.len(),
             ..Default::default()
-        }
-    }
-
-    /// Axiom S2 typed accessor core: resolve a Ref pair's first
-    /// slot to its kernel-owned scratch entry. The returned
-    /// borrow ties to `&self`, so holding it across the next
-    /// `eval(&mut self)` is a compile error — stale reads are
-    /// statically impossible.
-    fn ref_entry(&self, slot: usize) -> &ScratchBuf {
-        match self.ref_scratch.iter().find(|(s, _)| *s == slot) {
-            Some(&(_, idx)) => &self.scratch[idx],
-            None if self.ref_slots.get(slot).copied().unwrap_or(false) => panic!(
-                "slot {slot} is a Ref pair owned by the CALLER (a kernel \
-                 input) — read it on the caller side"
-            ),
-            None => panic!("slot {slot} is not a Ref2-colored slot"),
         }
     }
 }
@@ -497,71 +464,16 @@ fn compute_slot_provenance(
     crate::compile::slot_provenance(coord_count, total_slots, &outs, input_dependents)
 }
 
-// ── Shared accessor methods ────────────────────────────────────
+// ── The writes, which the two tiers spell differently ──────────
 
-macro_rules! kernel_accessors {
+/// Setting an extern and dirtying what it reaches. The hybrid writes
+/// these itself: its `mark_input_changed` walks a plan it rebuilds when
+/// `use_clean` changes, and its `mark_all_dirty` is empty on the mode
+/// that runs every step anyway. Everything a compiled kernel reads
+/// rather than writes is [`crate::compile::kernel_accessors`], shared
+/// with the hybrid.
+macro_rules! closure_writes {
     () => {
-        /// The coordinate inputs.
-        pub fn coord_count(&self) -> usize {
-            self.core.coord_count
-        }
-
-        /// The slot of a named output.
-        pub fn resolve_output(&self, name: &str) -> Option<usize> {
-            self.core.output_map.get(name).copied()
-        }
-
-        /// Read an output by pre-resolved slot index. Panics on
-        /// Ref2-colored slots (axiom S2) — use `read_vec_*`.
-        #[inline]
-        pub fn get_slot(&self, slot: usize) -> u64 {
-            self.core.guard_ref_slot(slot);
-            self.core.buffer[slot]
-        }
-
-        /// Read a named output variate after `eval()`. Panics on
-        /// Ref2-colored outputs (axiom S2) — use `read_vec_*`.
-        #[inline]
-        pub fn get(&self, name: &str) -> u64 {
-            let slot = self.core.output_map[name];
-            self.core.guard_ref_slot(slot);
-            self.core.buffer[slot]
-        }
-
-        /// The named output as a typed `Value`, decoded by its port
-        /// type: a `Ref2` output is copied out through its pair
-        /// (compiled_handles.md §4), so the caller never holds a
-        /// pointer; a slot that holds `None` reads as `None`.
-        pub fn get_value(&self, name: &str) -> crate::ast::Value {
-            self.core.value_of(name)
-        }
-
-        /// The named output through the `Kernel` trait: the pending
-        /// coordinates are applied, a round begins if a write is pending, and
-        /// only the output's cone runs.
-        fn pull_value(&mut self, name: &str) -> crate::ast::Value {
-            let coords = std::mem::take(&mut self.core.drive.coords);
-            self.set_coords(&coords);
-            self.core.drive.coords = coords;
-            self.pull_output(name)
-        }
-
-        /// [`Self::pull_value`] by output index.
-        fn pull_value_at(&mut self, index: usize) -> crate::ast::Value {
-            let coords = std::mem::take(&mut self.core.drive.coords);
-            self.set_coords(&coords);
-            self.core.drive.coords = coords;
-            self.core.pull_at(index)
-        }
-
-        /// `eval` through the `Kernel` trait: the pending coordinates,
-        /// then every step.
-        fn eval_pending(&mut self) {
-            let coords = std::mem::take(&mut self.core.drive.coords);
-            self.eval(&coords);
-            self.core.drive.coords = coords;
-        }
-
         /// Set an extern by name, as `PolydatState::set_input` does on
         /// the interpreter. The value must be of the declared port
         /// type. Every kind is written through at once, and every step
@@ -587,11 +499,6 @@ macro_rules! kernel_accessors {
             Ok(())
         }
 
-        /// The kernel's externs by name and declared type.
-        pub fn externs(&self) -> Vec<(&str, crate::ast::PortType)> {
-            self.core.externs.names()
-        }
-
         /// Every step downstream of a coordinate reruns at the next
         /// evaluation: the state a kernel created from a shared program
         /// starts in.
@@ -600,29 +507,6 @@ macro_rules! kernel_accessors {
                 self.mark_input_changed(i);
             }
         }
-
-        /// The cursors the program declares, with the partitions the
-        /// compiler resolved where its `over` clause and extent were
-        /// constant, as `PolydatProgram::cursor_schemas` reports them.
-        pub fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema] {
-            self.core.externs.cursor_schemas()
-        }
-
-        /// Narrow a cursor to one partition, as `narrow_cursor` does on
-        /// the interpreter: its `Ext` slot and six scalar projections
-        /// are set as externs.
-        pub fn set_cursor(
-            &mut self,
-            name: &str,
-            partition: &crate::iteration::cursor_partition::Partition,
-        ) -> Result<(), crate::kernel::WriteError> {
-            for (slot, value) in self.core.externs.cursor_writes(name, partition)? {
-                self.set_input(&slot, value)?;
-            }
-            Ok(())
-        }
-
-        crate::compile::ref_readers!();
     };
 }
 
@@ -685,10 +569,6 @@ impl CompiledKernelRaw {
         self.core.eval_all();
     }
 
-    fn pull_output(&mut self, name: &str) -> crate::ast::Value {
-        self.core.pull_named(name)
-    }
-
     /// Eval + return a specific slot. No cone guard — always evaluates.
     #[inline]
     pub fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
@@ -697,7 +577,8 @@ impl CompiledKernelRaw {
         self.core.buffer[slot]
     }
 
-    kernel_accessors!();
+    crate::compile::kernel_accessors!(set_coords);
+    closure_writes!();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -761,10 +642,6 @@ impl CompiledKernelPush {
         self.core.eval_all();
     }
 
-    fn pull_output(&mut self, name: &str) -> crate::ast::Value {
-        self.core.pull_named(name)
-    }
-
     /// Eval + return a specific slot. No cone guard — always enters eval loop.
     #[inline]
     pub fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
@@ -773,7 +650,8 @@ impl CompiledKernelPush {
         self.core.buffer[slot]
     }
 
-    kernel_accessors!();
+    crate::compile::kernel_accessors!(set_coords);
+    closure_writes!();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -854,10 +732,6 @@ impl CompiledKernelPull {
         self.core.eval_all();
     }
 
-    fn pull_output(&mut self, name: &str) -> crate::ast::Value {
-        self.core.pull_named(name)
-    }
-
     /// Cone guard: if the output's cone is clean, skip eval entirely.
     /// Otherwise run ALL steps (no per-node skip).
     #[inline]
@@ -876,7 +750,8 @@ impl CompiledKernelPull {
         self.core.buffer[slot]
     }
 
-    kernel_accessors!();
+    crate::compile::kernel_accessors!(set_coords);
+    closure_writes!();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -953,10 +828,6 @@ impl CompiledKernelPushPull {
         self.core.eval_all();
     }
 
-    fn pull_output(&mut self, name: &str) -> crate::ast::Value {
-        self.core.pull_named(name)
-    }
-
     /// Cone guard + push-side skip: the full optimization.
     #[inline]
     pub fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
@@ -974,7 +845,8 @@ impl CompiledKernelPushPull {
         self.core.buffer[slot]
     }
 
-    kernel_accessors!();
+    crate::compile::kernel_accessors!(set_coords);
+    closure_writes!();
 }
 
 // ── The engine-independent surface (engines.md §3.5) ──────

@@ -259,18 +259,6 @@ impl Clone for HybridCore {
 
 impl HybridCore {
     crate::compile::shared_core_methods!();
-
-    /// Axiom S2 typed accessor core (borrow ties to &self).
-    fn ref_entry(&self, slot: usize) -> &crate::ast::ScratchBuf {
-        match self.ref_scratch.iter().find(|(s, _)| *s == slot) {
-            Some(&(_, idx)) => &self.scratch[idx],
-            None if self.ref_slots.get(slot).copied().unwrap_or(false) => panic!(
-                "slot {slot} is a Ref pair owned by the CALLER (a kernel \
-                 input) — read it on the caller side"
-            ),
-            None => panic!("slot {slot} is not a Ref2-colored slot"),
-        }
-    }
 }
 
 impl HybridCore {
@@ -303,23 +291,6 @@ impl HybridCore {
     #[inline]
     fn failing_node(&self) -> usize {
         self.steps[self.cur_step].failing_node(&self.buffer, self.tracker)
-    }
-
-    /// Run `body` with the capture guard armed, so a step's panic is
-    /// recorded quietly and re-raised enriched, as the interpreter
-    /// re-raises a node's (A7).
-    #[inline]
-    fn run_guarded(&mut self, body: impl FnOnce(&mut Self)) {
-        let capture = crate::kernel::engines::EvalPanicCaptureGuard::arm();
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(self)));
-        drop(capture);
-        if let Err(payload) = outcome {
-            let sites = std::sync::Arc::clone(&self.sites);
-            let node = self.failing_node();
-            sites.reraise(payload, node, &self.buffer, Some(&self.none));
-        }
-        #[cfg(debug_assertions)]
-        self.validate_refs();
     }
 
     /// The steps of `order` that have not run in the round, in order.
@@ -427,6 +398,7 @@ pub struct HybridKernelRaw {
 }
 
 impl HybridKernelRaw {
+    crate::compile::kernel_accessors!(set_coords);
     /// The coordinates, written; a changed one invalidates
     /// its dependents through the plan, as in every mode.
     #[inline]
@@ -444,10 +416,6 @@ impl HybridKernelRaw {
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_coords(coords);
         eval_all_hybrid_steps(&mut self.core);
-    }
-
-    fn pull_output(&mut self, name: &str) -> crate::ast::Value {
-        self.core.pull_named(name)
     }
 
     /// Set an extern by name, as `PolydatState::set_input` does on the
@@ -470,32 +438,6 @@ impl HybridKernelRaw {
         self.core.set_extern_at(index, value).map(|_| ())
     }
 
-    /// The kernel's externs by name and declared type.
-    pub fn externs(&self) -> Vec<(&str, crate::ast::PortType)> {
-        self.core.externs.names()
-    }
-
-    /// The cursors the program declares, with the partitions the
-    /// compiler resolved where its `over` clause and extent were
-    /// constant, as `PolydatProgram::cursor_schemas` reports them.
-    pub fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema] {
-        self.core.externs.cursor_schemas()
-    }
-
-    /// Narrow a cursor to one partition, as `narrow_cursor` does on
-    /// the interpreter: its `Ext` slot and six scalar projections are
-    /// set as externs.
-    pub fn set_cursor(
-        &mut self,
-        name: &str,
-        partition: &crate::iteration::cursor_partition::Partition,
-    ) -> Result<(), crate::kernel::WriteError> {
-        for (slot, value) in self.core.externs.cursor_writes(name, partition)? {
-            self.set_input(&slot, value)?;
-        }
-        Ok(())
-    }
-
     /// Eval all steps and return the value at `slot`.
     #[inline]
     pub fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
@@ -504,46 +446,10 @@ impl HybridKernelRaw {
         self.core.buffer[slot]
     }
 
-    /// Read a named output after `eval()`. Panics on Ref2 slots
-    /// (axiom S2) — use `read_vec_*`.
-    #[inline]
-    pub fn get(&self, name: &str) -> u64 {
-        let slot = self.core.output_map[name];
-        self.core.guard_ref_slot(slot);
-        self.core.buffer[slot]
-    }
-
-    /// Read by slot index. Panics on Ref2 slots (axiom S2) —
-    /// use `read_vec_*`.
-    #[inline]
-    pub fn get_slot(&self, slot: usize) -> u64 {
-        self.core.guard_ref_slot(slot);
-        self.core.buffer[slot]
-    }
-
-    crate::compile::ref_readers!();
-
-    /// The named output as a typed `Value`, decoded by its port type:
-    /// a `Ref2` output is copied out through its pair
-    /// (compiled_handles.md §4), so the caller never holds a pointer.
-    pub fn get_value(&self, name: &str) -> crate::ast::Value {
-        self.core.value_of(name)
-    }
-
-    /// Number of coordinate inputs.
-    pub fn coord_count(&self) -> usize {
-        self.core.coord_count
-    }
-
     /// The number of native segments and of closure steps in this
     /// kernel, in that order: what the per-node engine choice decided.
     pub fn engine_counts(&self) -> (usize, usize) {
         self.core.engine_counts()
-    }
-
-    /// Resolve an output name to its buffer slot.
-    pub fn resolve_output(&self, name: &str) -> Option<usize> {
-        self.core.output_map.get(name).copied()
     }
 
     /// Store owned nodes to keep JIT-baked pointers valid.
@@ -574,6 +480,7 @@ pub struct HybridKernelPull {
 }
 
 impl HybridKernelPull {
+    crate::compile::kernel_accessors!(set_inputs);
     /// Track which inputs changed (for the cone guard), and invalidate
     /// their dependents through the plan, as in every mode.
     #[inline]
@@ -594,10 +501,6 @@ impl HybridKernelPull {
         self.set_inputs(coords);
         self.force_run = false;
         eval_all_hybrid_steps(&mut self.core);
-    }
-
-    fn pull_output(&mut self, name: &str) -> crate::ast::Value {
-        self.core.pull_named(name)
     }
 
     /// Cone guard: if the output's cone is clean, skip eval entirely.
@@ -641,72 +544,10 @@ impl HybridKernelPull {
         Ok(())
     }
 
-    /// The kernel's externs by name and declared type.
-    pub fn externs(&self) -> Vec<(&str, crate::ast::PortType)> {
-        self.core.externs.names()
-    }
-
-    /// The cursors the program declares, with the partitions the
-    /// compiler resolved where its `over` clause and extent were
-    /// constant, as `PolydatProgram::cursor_schemas` reports them.
-    pub fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema] {
-        self.core.externs.cursor_schemas()
-    }
-
-    /// Narrow a cursor to one partition, as `narrow_cursor` does on
-    /// the interpreter: its `Ext` slot and six scalar projections are
-    /// set as externs.
-    pub fn set_cursor(
-        &mut self,
-        name: &str,
-        partition: &crate::iteration::cursor_partition::Partition,
-    ) -> Result<(), crate::kernel::WriteError> {
-        for (slot, value) in self.core.externs.cursor_writes(name, partition)? {
-            self.set_input(&slot, value)?;
-        }
-        Ok(())
-    }
-
-    /// Read a named output after `eval()`. Panics on Ref2 slots
-    /// (axiom S2) — use `read_vec_*`.
-    #[inline]
-    pub fn get(&self, name: &str) -> u64 {
-        let slot = self.core.output_map[name];
-        self.core.guard_ref_slot(slot);
-        self.core.buffer[slot]
-    }
-
-    /// Read by slot index. Panics on Ref2 slots (axiom S2) —
-    /// use `read_vec_*`.
-    #[inline]
-    pub fn get_slot(&self, slot: usize) -> u64 {
-        self.core.guard_ref_slot(slot);
-        self.core.buffer[slot]
-    }
-
-    crate::compile::ref_readers!();
-
-    /// The named output as a typed `Value`, decoded by its port type:
-    /// a `Ref2` output is copied out through its pair
-    /// (compiled_handles.md §4), so the caller never holds a pointer.
-    pub fn get_value(&self, name: &str) -> crate::ast::Value {
-        self.core.value_of(name)
-    }
-
-    /// Number of coordinate inputs.
-    pub fn coord_count(&self) -> usize {
-        self.core.coord_count
-    }
-
     /// The number of native segments and of closure steps in this
     /// kernel, in that order: what the per-node engine choice decided.
     pub fn engine_counts(&self) -> (usize, usize) {
         self.core.engine_counts()
-    }
-
-    /// Resolve an output name to its buffer slot.
-    pub fn resolve_output(&self, name: &str) -> Option<usize> {
-        self.core.output_map.get(name).copied()
     }
 
     /// Store owned nodes to keep JIT-baked pointers valid.
@@ -739,6 +580,7 @@ pub struct HybridKernelPushPull {
 }
 
 impl HybridKernelPushPull {
+    crate::compile::kernel_accessors!(set_inputs);
     /// Set an extern by name, as `PolydatState::set_input` does on the
     /// interpreter. Every kind is written through at once. Every step
     /// downstream of the extern reruns, and the next evaluation runs
@@ -764,32 +606,6 @@ impl HybridKernelPushPull {
         Ok(())
     }
 
-    /// The kernel's externs by name and declared type.
-    pub fn externs(&self) -> Vec<(&str, crate::ast::PortType)> {
-        self.core.externs.names()
-    }
-
-    /// The cursors the program declares, with the partitions the
-    /// compiler resolved where its `over` clause and extent were
-    /// constant, as `PolydatProgram::cursor_schemas` reports them.
-    pub fn cursor_schemas(&self) -> &[crate::iteration::source::SourceSchema] {
-        self.core.externs.cursor_schemas()
-    }
-
-    /// Narrow a cursor to one partition, as `narrow_cursor` does on
-    /// the interpreter: its `Ext` slot and six scalar projections are
-    /// set as externs.
-    pub fn set_cursor(
-        &mut self,
-        name: &str,
-        partition: &crate::iteration::cursor_partition::Partition,
-    ) -> Result<(), crate::kernel::WriteError> {
-        for (slot, value) in self.core.externs.cursor_writes(name, partition)? {
-            self.set_input(&slot, value)?;
-        }
-        Ok(())
-    }
-
     /// Track which inputs changed and dirty affected steps.
     #[inline]
     fn set_inputs(&mut self, coords: &[u64]) {
@@ -812,10 +628,6 @@ impl HybridKernelPushPull {
         self.core.eval_all();
     }
 
-    fn pull_output(&mut self, name: &str) -> crate::ast::Value {
-        self.core.pull_named(name)
-    }
-
     /// Cone guard + push-side skip: the full optimization.
     #[inline]
     pub fn eval_for_slot(&mut self, coords: &[u64], slot: usize) -> u64 {
@@ -833,46 +645,10 @@ impl HybridKernelPushPull {
         self.core.buffer[slot]
     }
 
-    /// Read a named output after `eval()`. Panics on Ref2 slots
-    /// (axiom S2) — use `read_vec_*`.
-    #[inline]
-    pub fn get(&self, name: &str) -> u64 {
-        let slot = self.core.output_map[name];
-        self.core.guard_ref_slot(slot);
-        self.core.buffer[slot]
-    }
-
-    /// Read by slot index. Panics on Ref2 slots (axiom S2) —
-    /// use `read_vec_*`.
-    #[inline]
-    pub fn get_slot(&self, slot: usize) -> u64 {
-        self.core.guard_ref_slot(slot);
-        self.core.buffer[slot]
-    }
-
-    crate::compile::ref_readers!();
-
-    /// The named output as a typed `Value`, decoded by its port type:
-    /// a `Ref2` output is copied out through its pair
-    /// (compiled_handles.md §4), so the caller never holds a pointer.
-    pub fn get_value(&self, name: &str) -> crate::ast::Value {
-        self.core.value_of(name)
-    }
-
-    /// Number of coordinate inputs.
-    pub fn coord_count(&self) -> usize {
-        self.core.coord_count
-    }
-
     /// The number of native segments and of closure steps in this
     /// kernel, in that order: what the per-node engine choice decided.
     pub fn engine_counts(&self) -> (usize, usize) {
         self.core.engine_counts()
-    }
-
-    /// Resolve an output name to its buffer slot.
-    pub fn resolve_output(&self, name: &str) -> Option<usize> {
-        self.core.output_map.get(name).copied()
     }
 
     /// Store owned nodes to keep JIT-baked pointers valid.
@@ -1607,40 +1383,6 @@ crate::compile::impl_kernel_trait!(HybridKernelPushPull);
 crate::compile::impl_slot_kernel!(HybridKernelRaw);
 crate::compile::impl_slot_kernel!(HybridKernelPull);
 crate::compile::impl_slot_kernel!(HybridKernelPushPull);
-
-/// The pending coordinates through the `Kernel` trait, for the hybrid
-/// kernels: `pull_value`/`pull_value_at` apply them and run the
-/// output's cone; `eval_pending` applies them and runs every step.
-macro_rules! hybrid_drive {
-    ($ty:ident, $set_coords:ident) => {
-        impl $ty {
-            /// The named output through the `Kernel` trait: the pending
-            /// coordinates are applied, a round begins if a write is pending,
-            /// and only the output's cone runs.
-            fn pull_value(&mut self, name: &str) -> crate::ast::Value {
-                let coords = std::mem::take(&mut self.core.drive.coords);
-                self.$set_coords(&coords);
-                self.core.drive.coords = coords;
-                self.pull_output(name)
-            }
-            /// [`Self::pull_value`] by output index.
-            fn pull_value_at(&mut self, index: usize) -> crate::ast::Value {
-                let coords = std::mem::take(&mut self.core.drive.coords);
-                self.$set_coords(&coords);
-                self.core.drive.coords = coords;
-                self.core.pull_at(index)
-            }
-            fn eval_pending(&mut self) {
-                let coords = std::mem::take(&mut self.core.drive.coords);
-                self.eval(&coords);
-                self.core.drive.coords = coords;
-            }
-        }
-    };
-}
-hybrid_drive!(HybridKernelRaw, set_coords);
-hybrid_drive!(HybridKernelPull, set_inputs);
-hybrid_drive!(HybridKernelPushPull, set_inputs);
 
 /// One step: SRD-74 Rule 1, then the segment or the closure. A step
 /// that does not accept `None` emits `None` on every output when any
