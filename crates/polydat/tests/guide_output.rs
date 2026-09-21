@@ -34,19 +34,79 @@ fn manifest_dir() -> PathBuf {
 
 /// Run the crate's binary or one of its examples. The binary's progress
 /// lines go to stderr and precede its output on a terminal, so a
+/// The crate's binary and examples, built once and located by path.
+///
+/// Running a producer through `cargo run` costs a cargo invocation
+/// each time — about 1.2 seconds warm — and, worse, takes the build
+/// directory lock, so several producers cannot run at once: they queue
+/// on the lock instead. Building once and then executing the artifacts
+/// directly removes both, which is what lets `check` run a document's
+/// producers concurrently.
+fn executables() -> &'static HashMap<String, PathBuf> {
+    static BUILT: std::sync::OnceLock<HashMap<String, PathBuf>> = std::sync::OnceLock::new();
+    BUILT.get_or_init(|| {
+        let manifest = manifest_dir().join("Cargo.toml");
+        let out = Command::new(env!("CARGO"))
+            .args([
+                "build",
+                "--quiet",
+                "--all-features",
+                "--examples",
+                "--bins",
+                "--message-format",
+                "json",
+                "--manifest-path",
+            ])
+            .arg(&manifest)
+            .output()
+            .unwrap_or_else(|e| panic!("cargo build: {e}"));
+        assert!(
+            out.status.success(),
+            "cargo build failed:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let mut found = HashMap::new();
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if msg["reason"] != "compiler-artifact" {
+                continue;
+            }
+            let Some(path) = msg["executable"].as_str() else {
+                continue;
+            };
+            let Some(name) = msg["target"]["name"].as_str() else {
+                continue;
+            };
+            let kinds = msg["target"]["kind"].as_array().cloned().unwrap_or_default();
+            let kind = kinds.first().and_then(|k| k.as_str()).unwrap_or("");
+            if kind == "example" || kind == "bin" {
+                found.insert(format!("{kind}:{name}"), PathBuf::from(path));
+            }
+        }
+        assert!(
+            found.contains_key("bin:polydat"),
+            "cargo build reported no polydat binary; it reported: {:?}",
+            found.keys().collect::<Vec<_>>()
+        );
+        found
+    })
+}
+
+/// Run the crate's binary or one of its examples. The binary's progress
+/// lines go to stderr and precede its output on a terminal, so a
 /// binary run is quoted as stderr followed by stdout.
-fn run(args: &[&str], cwd: &Path, with_stderr: bool) -> String {
-    let manifest = manifest_dir().join("Cargo.toml");
-    let out = Command::new(env!("CARGO"))
-        .args(["run", "--quiet", "--all-features", "--manifest-path"])
-        .arg(&manifest)
+fn run(exe: &Path, args: &[&str], cwd: &Path, with_stderr: bool) -> String {
+    let out = Command::new(exe)
         .args(args)
         .current_dir(cwd)
         .output()
-        .unwrap_or_else(|e| panic!("cargo run {args:?}: {e}"));
+        .unwrap_or_else(|e| panic!("{} {args:?}: {e}", exe.display()));
     assert!(
         out.status.success(),
-        "cargo run {args:?} failed:\n{}",
+        "{} {args:?} failed:\n{}",
+        exe.display(),
         String::from_utf8_lossy(&out.stderr)
     );
     let mut text = String::new();
@@ -67,11 +127,16 @@ enum Producer {
 impl Producer {
     fn output(&self) -> String {
         match self {
-            Producer::Example(name) => run(&["--example", name], &manifest_dir(), false),
+            Producer::Example(name) => {
+                let exe = executables()
+                    .get(&format!("example:{name}"))
+                    .unwrap_or_else(|| panic!("no example named {name}"));
+                run(exe, &[], &manifest_dir(), false)
+            }
             Producer::Binary(args) => {
-                let mut argv = vec!["--"];
-                argv.extend(args.iter().map(String::as_str));
-                run(&argv, &manifest_dir().join("examples"), true)
+                let exe = &executables()["bin:polydat"];
+                let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+                run(exe, &argv, &manifest_dir().join("examples"), true)
             }
         }
     }
@@ -191,7 +256,34 @@ fn check(doc: &str, default: Option<&str>) {
         .replace("\r\n", "\n");
     let blocks = text_blocks(&text, default);
     assert!(!blocks.is_empty(), "{doc} has no text blocks");
-    let mut outputs: HashMap<Producer, String> = HashMap::new();
+
+    // Each producer is an independent process, so they run at once.
+    // `illustrations.md` quotes fifteen of them, and running them in
+    // turn was the slowest thing in the suite by a wide margin.
+    let distinct: Vec<Producer> = {
+        let mut seen: Vec<Producer> = Vec::new();
+        for block in &blocks {
+            if let Some(p) = &block.producer
+                && !seen.contains(p)
+            {
+                seen.push(p.clone());
+            }
+        }
+        seen
+    };
+    // One build before the threads, so they do not race to do it.
+    let _ = executables();
+    let outputs: HashMap<Producer, String> = std::thread::scope(|scope| {
+        let handles: Vec<_> = distinct
+            .iter()
+            .map(|p| scope.spawn(move || (p.clone(), p.output())))
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().expect("a producer ran"))
+            .collect()
+    });
+
     let mut failures = Vec::new();
     for block in &blocks {
         let Some(producer) = &block.producer else {
@@ -201,9 +293,7 @@ fn check(doc: &str, default: Option<&str>) {
             ));
             continue;
         };
-        let output = outputs
-            .entry(producer.clone())
-            .or_insert_with(|| producer.output());
+        let output = &outputs[producer];
         let missing = missing_lines(&block.lines, output);
         if !missing.is_empty() {
             failures.push(format!(

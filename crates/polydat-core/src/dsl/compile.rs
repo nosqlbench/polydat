@@ -1946,6 +1946,35 @@ impl Compiler {
     /// same child file and compiler settings the parent used for the
     /// interpreter's program, through the assembler, its own `for`
     /// statements and producers included.
+    /// A body of this program's, from its lowered source: the
+    /// settings this compiler carries, so the body compiles the way
+    /// the program around it does — its source directory and library
+    /// paths, its strict flag, its pragmas, the modules it has
+    /// resolved, and the tree's compile ledger.
+    ///
+    /// A `for` body gets these because `compile_traversals` builds its
+    /// `BodySource` here; a tile's projection body used to travel as
+    /// text and get none of them.
+    pub(super) fn body_source_for(
+        &self,
+        source: &str,
+        context_label: &str,
+    ) -> Result<super::traversal::BodySource, String> {
+        let file = super::lexer::lex(source).and_then(super::parser::parse)?;
+        Ok(super::traversal::BodySource::from_parts(
+            file,
+            source.to_string(),
+            self.source_dir.clone(),
+            self.polydat_lib_paths.clone(),
+            self.strict,
+            format!("{} :: {context_label}", self.context_label),
+            self.cursor_limit,
+            self.pragmas.clone(),
+            self.module_cache.clone(),
+            self.ledger.clone(),
+        ))
+    }
+
     pub(super) fn compile_body_on(
         body: &super::traversal::BodySource,
         engine: crate::Engine,

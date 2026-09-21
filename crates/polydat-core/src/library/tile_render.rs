@@ -384,51 +384,31 @@ fn memoize(
 }
 
 impl TileProgram {
-    /// Parse a skeleton and compile its projection bodies. Panics with
-    /// the compiler's diagnostic on a malformed payload, which only the
-    /// compiler produces.
-    pub fn from_json(json: &str) -> Self {
-        let spec: TileSpec = serde_json::from_str(json)
-            .unwrap_or_else(|e| panic!("tile_render: malformed skeleton payload: {e}"));
-        let bodies: Vec<Arc<crate::dsl::traversal::BodySource>> = spec
-            .children
-            .iter()
-            .enumerate()
-            .map(|(i, c)| {
-                Arc::new(
-                    crate::dsl::traversal::BodySource::from_source(
-                        &c.source,
-                        &format!("tile '{}' :: projection body {i}", spec.name),
-                    )
-                    .unwrap_or_else(|e| {
-                        panic!(
-                            "tile '{}': projection body failed to compile: {e}\n{}",
-                            spec.name, c.source
-                        )
-                    }),
-                )
-            })
-            .collect();
+    /// A program from a skeleton and the bodies its projections run.
+    ///
+    /// The compiler's path: it lowered the bodies, so it hands them
+    /// over as they are. Each body carries the settings the parent
+    /// compiled under, and its program per engine is built when a
+    /// render on that engine first asks for it.
+    pub fn from_parts(
+        spec: TileSpec,
+        bodies: Vec<Arc<crate::dsl::traversal::BodySource>>,
+    ) -> Result<Self, String> {
         // Construction needs the interpreter's program: the canonical
         // kernel the comprehension evaluator installs tuples into is
         // built over it, and memoisation runs there. Every other
         // engine's is built on the first render that asks for it.
-        let children: Vec<Arc<PolydatProgram>> = bodies
-            .iter()
-            .map(|b| {
-                let program = b
-                    .program_on(crate::Engine::Interpreter(crate::JitMode::Auto))
-                    .unwrap_or_else(|e| {
-                        panic!(
-                            "tile '{}': projection body failed to compile: {e}",
-                            spec.name
-                        )
-                    });
+        let mut children: Vec<Arc<PolydatProgram>> = Vec::with_capacity(bodies.len());
+        for (i, body) in bodies.iter().enumerate() {
+            let program = body
+                .program_on(crate::Engine::Interpreter(crate::JitMode::Auto))
+                .map_err(|e| format!("projection body {i} failed to compile: {e}"))?;
+            children.push(
                 program
                     .as_interpreter()
-                    .expect("a body compiled for the interpreter is an interpreter program")
-            })
-            .collect();
+                    .ok_or_else(|| format!("projection body {i} is not an interpreter program"))?,
+            );
+        }
         let canonicals: Vec<Arc<PolydatKernel>> = children
             .iter()
             .map(|p| Arc::new(PolydatKernel::from_program(p.clone())))
@@ -437,14 +417,48 @@ impl TileProgram {
         number_child_holes(&mut ops);
         let mut memo = vec![None; children.len()];
         memoize(&ops, &canonicals, &mut memo);
-        TileProgram {
+        Ok(TileProgram {
             spec,
             ops,
             bodies,
             children,
             canonicals,
             memo,
-        }
+        })
+    }
+
+    /// A program from a serialized skeleton, whose projection bodies
+    /// are rebuilt from the source text it carries under the default
+    /// settings.
+    ///
+    /// The route for a skeleton that reaches the runtime as text — a
+    /// host that stored one, a test that wrote one. The compiler's own
+    /// path is [`Self::from_parts`], which hands the bodies over
+    /// rather than describing them.
+    pub fn from_json(json: &str) -> Self {
+        let spec: TileSpec = serde_json::from_str(json)
+            .unwrap_or_else(|e| panic!("tile_render: malformed skeleton payload: {e}"));
+        let name = spec.name.clone();
+        let bodies: Vec<Arc<crate::dsl::traversal::BodySource>> = spec
+            .children
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                Arc::new(
+                    crate::dsl::traversal::BodySource::from_source(
+                        &c.source,
+                        &format!("tile '{name}' :: projection body {i}"),
+                    )
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "tile '{name}': projection body failed to parse: {e}\n{}",
+                            c.source
+                        )
+                    }),
+                )
+            })
+            .collect();
+        Self::from_parts(spec, bodies).unwrap_or_else(|e| panic!("tile '{name}': {e}"))
     }
 
     /// The body program of projection `child` for a render on
@@ -467,39 +481,6 @@ impl TileProgram {
             ));
             self.children[child].clone()
         })
-    }
-
-    /// The program for a skeleton payload, interned for the process
-    /// (SRD 115 §6): the compiled lowering of `tile_render` bakes its
-    /// address, so it must outlive every kernel compiled from it, and
-    /// the same payload is parsed and its bodies compiled once.
-    pub fn interned(spec: &str) -> &'static TileProgram {
-        use std::sync::RwLock;
-        static PROGRAMS: RwLock<Option<HashMap<String, usize>>> = RwLock::new(None);
-        let found = PROGRAMS
-            .read()
-            .unwrap()
-            .as_ref()
-            .and_then(|m| m.get(spec).copied());
-        if let Some(p) = found {
-            // SAFETY: the address was leaked below and is never freed.
-            return unsafe { &*(p as *const TileProgram) };
-        }
-        // Built with no lock held: constructing a program compiles its
-        // projection bodies, and a body's own tile interns its program
-        // through this same table (SRD 117 step 2). Two threads may
-        // build the same program at once; the first to insert wins and
-        // the other's build is dropped.
-        let built = Box::new(Self::from_json(spec));
-        let mut guard = PROGRAMS.write().unwrap();
-        let map = guard.get_or_insert_with(HashMap::new);
-        if let Some(&p) = map.get(spec) {
-            // SAFETY: as above.
-            return unsafe { &*(p as *const TileProgram) };
-        }
-        let leaked: &'static TileProgram = Box::leak(built);
-        map.insert(spec.to_string(), leaked as *const TileProgram as usize);
-        leaked
     }
 
     /// True when any op re-runs a projection body.
@@ -1304,7 +1285,12 @@ fn tile_encode(
 /// wider than one slot, or of a kind without a view, is read as a value
 /// through the typed decoder.
 fn tile_render_compiled(node: &TileRender, wire_types: &[PortType]) -> crate::ast::CompiledSlotKit {
-    let program: &'static TileProgram = TileProgram::interned(&node.spec);
+    // Native code bakes this address, so it must outlive every kernel
+    // compiled from the program: one reference count of the node's own
+    // `Arc` is given up here and never taken back. This used to be a
+    // process-wide table keyed by the whole JSON payload, which made
+    // "the same tile" mean "the same bytes of JSON".
+    let program: &'static TileProgram = unsafe { &*std::sync::Arc::into_raw(node.program.clone()) };
     // Per wire: its first slot and its type; a one-slot carrier or a
     // `Ref2` kind is viewed in place, a two-slot immediate is decoded.
     let mut reads: Vec<(usize, PortType)> = Vec::with_capacity(wire_types.len());
@@ -1375,19 +1361,23 @@ impl std::fmt::Write for BytesSink<'_> {
     }
 }
 
-/// Render a compiled tile skeleton over its encoded hole texts. Authors
-/// do not call this directly; the compiler emits it for `tile` statements.
+/// Render a compiled tile skeleton over its encoded hole texts.
+///
+/// The compiler emits this for a `tile` statement and hands it the
+/// skeleton it built, projection bodies and all. The skeleton used to
+/// travel as JSON in a string constant, which this node parsed back
+/// and compiled at construction: a malformed payload was a panic here
+/// rather than a compile error, the body's source lived in three
+/// places, and what the compiler knew about the body that JSON cannot
+/// carry — its source directory, library paths, strict flag, pragmas,
+/// and the modules the program had resolved — was lost on the way.
 #[crate::polydat_node(
     category = Formatting,
     variadic_min = 0,
     compiled_slot = tile_render_compiled,
     state = render_state
 )]
-fn tile_render(
-    spec: Const<&str>,
-    #[poly_const(TileProgram::from_json, from = spec)] program: &TileProgram,
-    values: &[Value],
-) -> String {
+fn tile_render(program: Const<Arc<TileProgram>>, values: &[Value]) -> String {
     // A render without a state's scratch (a node evaluated on its
     // own): body kernels of the call's own.
     program.render(values, &mut BodyKernels::default())

@@ -24,7 +24,7 @@ use crate::dsl::registry;
 ///
 /// `pub` visibility is required so that `NodeRegistration::build` function
 /// pointers (which are `pub` fields) can name this type.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum ConstArg {
     /// An integer literal.
     Int(u64),
@@ -37,8 +37,47 @@ pub enum ConstArg {
     /// element; `<Vec<C> as ConstSource>::extract` walks the
     /// list and calls `C::extract` per element.
     List(Vec<ConstArg>),
+    /// A value the compiler built and hands the node as it is.
+    ///
+    /// The other variants are what a literal in the source parses to.
+    /// This one is for what the compiler makes: a tile's skeleton with
+    /// its projection bodies already lowered, for instance. It used to
+    /// travel as a `Str` holding JSON, which the node parsed back —
+    /// so a malformed payload was a panic at node construction rather
+    /// than a compile error, the body's source lived in three places,
+    /// and everything the compiler knew that JSON cannot carry was
+    /// lost on the way.
+    ///
+    /// The receiving node names the concrete type, which
+    /// [`ConstArg::as_opaque`] downcasts to.
+    Opaque(std::sync::Arc<dyn std::any::Any + Send + Sync>),
 }
+
+impl std::fmt::Debug for ConstArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConstArg::Int(v) => f.debug_tuple("Int").field(v).finish(),
+            ConstArg::Float(v) => f.debug_tuple("Float").field(v).finish(),
+            ConstArg::Str(s) => f.debug_tuple("Str").field(s).finish(),
+            ConstArg::List(l) => f.debug_tuple("List").field(l).finish(),
+            // A compiler-built value has no text form, and the point
+            // of carrying it opaquely is that this layer does not know
+            // what it is.
+            ConstArg::Opaque(_) => f.write_str("Opaque(..)"),
+        }
+    }
+}
+
 impl ConstArg {
+    /// The value as `T`, when this is an opaque const the compiler
+    /// built and `T` is the type it built.
+    pub fn as_opaque<T: std::any::Any + Send + Sync>(&self) -> Option<std::sync::Arc<T>> {
+        match self {
+            ConstArg::Opaque(v) => v.clone().downcast::<T>().ok(),
+            _ => None,
+        }
+    }
+
     /// Return the value as a `u64`, or 0 if incompatible.
     pub fn as_u64(&self) -> u64 {
         match self {

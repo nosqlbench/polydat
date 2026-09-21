@@ -300,7 +300,7 @@ Pure native code, the differential tier behind P3, runs every one of them as wel
 |---|---|
 | `printf` | Printf-style N→1 formatting node. Variadic: accepts 0..N wire inputs. |
 | `tile_encode` | Encode one value under a hole's spec (`encoding\|position\|type\|format\|flags`). |
-| `tile_render` | Render a compiled tile skeleton over its encoded hole texts. Authors do not call this directly; the compiler emits it for `tile` statements. |
+| `tile_render` | Render a compiled tile skeleton over its encoded hole texts. |
 
 ### Hashing (10)
 

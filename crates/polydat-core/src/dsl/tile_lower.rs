@@ -24,7 +24,7 @@ use crate::library::tile_render::{
     ChildSpec, HoleEncoding, HolePosition, HoleSource, TileOp, TileSpec,
 };
 
-use super::ast::{Arg, CallExpr, Expr, ForSource, ForSourceKind, TileDef, TileOptions, TilePiece};
+use super::ast::{Expr, ForSource, ForSourceKind, TileDef, TileOptions, TilePiece};
 use super::compile::Compiler;
 use super::refs::collect_expr_refs;
 use super::tile::render_template;
@@ -45,6 +45,7 @@ impl Compiler {
             options: tile.options.clone(),
             inputs: Vec::new(),
             children: Vec::new(),
+            bodies: Vec::new(),
             hole_counter: 0,
             in_string: tile.options.in_string,
             strict: self.strict || tile.options.strict,
@@ -74,16 +75,51 @@ impl Compiler {
                 projections: shape.projections,
                 bodies: spec.children.iter().map(|c| c.source.clone()).collect(),
             });
-        let mut args = vec![Arg::Positional(Expr::StringLit(spec.to_json(), tile.span))];
-        for name in &lowering.inputs {
-            args.push(Arg::Positional(Expr::Ident(name.clone(), tile.span)));
-        }
-        let call = Expr::Call(CallExpr {
-            func: "tile_render".into(),
-            args,
-            span: tile.span,
-        });
-        self.compile_binding(asm, std::slice::from_ref(&tile.name), &call)?;
+        // The skeleton goes to the node as the value it is. It used to
+        // be serialized to JSON, written into the program as a string
+        // literal, and parsed back at node construction — which lost
+        // everything about a projection body that JSON cannot carry,
+        // the source directory, library paths, strict flag, pragmas
+        // and resolved modules among them, and made a malformed
+        // payload a panic at construction rather than a compile error.
+        let bodies = lowering.bodies.clone();
+        let program = std::sync::Arc::new(
+            crate::library::tile_render::TileProgram::from_parts(spec, bodies)
+                .map_err(|e| format!("tile '{}': {e}", tile.name))?,
+        );
+        let wires: Vec<crate::compile::assembly::WireRef> = lowering
+            .inputs
+            .iter()
+            .map(|name| {
+                if self.input_names.contains(name) {
+                    crate::compile::assembly::WireRef::input(name)
+                } else {
+                    crate::compile::assembly::WireRef::node(name)
+                }
+            })
+            .collect();
+        let wire_types: Vec<crate::ast::PortType> = lowering
+            .inputs
+            .iter()
+            .map(|n| {
+                asm.output_type(n)
+                    .or_else(|| asm.input_type(n))
+                    .unwrap_or(crate::ast::PortType::Str)
+            })
+            .collect();
+        let node = super::factory::build_node(
+            "tile_render",
+            &wires,
+            &wire_types,
+            &[super::factory::ConstArg::Opaque(program)],
+        )
+        .map_err(|e| format!("tile '{}': {e}", tile.name))?;
+        asm.add_node(&tile.name, node, wires);
+        // The tile's name joins the binding targets, which the output
+        // pass declares in the order they were bound. Registering the
+        // output here instead would put the tile ahead of every
+        // binding that pass has not reached yet.
+        self.all_names.push(tile.name.clone());
         if lowering.inputs.is_empty() {
             // No holes: the tile is a constant, and says so.
             asm.mark_const_output(&tile.name);
@@ -208,6 +244,10 @@ struct TileLowering {
     /// Wire names passed to `tile_render`, in input order.
     inputs: Vec<String>,
     children: Vec<ChildSpec>,
+    /// Each projection body as the carrier a `for` body uses, built
+    /// here under the parent's settings and handed to the node with
+    /// the skeleton rather than re-derived from text at the far end.
+    bodies: Vec<std::sync::Arc<super::traversal::BodySource>>,
     hole_counter: usize,
     /// Whether the static text so far leaves a `json` skeleton inside a
     /// string literal.
@@ -414,11 +454,26 @@ impl TileLowering {
                         src.push_str(b);
                         src.push('\n');
                     }
-                    // Compile the body once here so a bad reference is a
-                    // compile error of the enclosing program, not a
-                    // failure inside `tile_render` construction.
-                    super::compile_polydat_interpreter(&src)
+                    // The body as the carrier a `for` body uses, under
+                    // the settings the parent compiles with: its
+                    // source directory and library paths, its strict
+                    // flag, its pragmas, and the modules it has
+                    // resolved, which a body written as text inside a
+                    // JSON payload could not be given. It is compiled
+                    // once here, so a bad reference is a compile error
+                    // of the enclosing program rather than a failure
+                    // inside `tile_render`'s construction, and the
+                    // program that compile produced is the one the
+                    // renderer uses.
+                    let body = compiler
+                        .body_source_for(
+                            &src,
+                            &format!("tile '{}' :: projection body", self.tile_name),
+                        )
                         .map_err(|e| format!("tile '{}': projection body: {e}", self.tile_name))?;
+                    body.program_on(crate::Engine::Interpreter(crate::JitMode::Auto))
+                        .map_err(|e| format!("tile '{}': projection body: {e}", self.tile_name))?;
+                    self.bodies.push(std::sync::Arc::new(body));
                     self.children.push(ChildSpec {
                         source: src,
                         cascade: ctx.cascade,

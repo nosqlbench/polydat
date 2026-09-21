@@ -83,3 +83,25 @@ fn a_projection_renders_the_same_on_every_engine() {
         assert_eq!(rows, first, "{engine:?} renders a projection differently");
     }
 }
+
+/// A tile's projection body compiles under the settings the program
+/// around it compiles under (F-L4).
+///
+/// The body used to reach the render node as source text inside a
+/// JSON payload, and was compiled there with defaults: no source
+/// directory, no library paths, no strict flag, no pragmas, and an
+/// empty module table. So a module the program itself defines — which
+/// the compiler had already resolved — was an unknown function inside
+/// the body, while every other scope of the same program could call
+/// it. The compiler hands the node the body it lowered now, settings
+/// and all.
+#[test]
+fn a_projection_body_sees_the_program_s_modules() {
+    let src = "input cycle: u64\n\
+               dbl(a: u64) -> (o: u64) := { o := u64_mul(a, 2) }\n\
+               tile rows : csv := <<<@for k in 1..4 sep \",\" {${dbl(k)}}>>>\n";
+    let mut k = polydat::dsl::compile::compile_polydat_interpreter(src)
+        .expect("a module the program defines resolves inside the body");
+    k.set_inputs(&[1]);
+    assert_eq!(polydat::Kernel::pull(&mut k, "rows").as_str(), "2,4,6");
+}

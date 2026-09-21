@@ -113,6 +113,35 @@ impl BodySource {
         Ok(program)
     }
 
+    /// A body from the parts the compiler that lowered it holds.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn from_parts(
+        file: PolydatFile,
+        source_text: String,
+        source_dir: Option<std::path::PathBuf>,
+        lib_paths: Vec<std::path::PathBuf>,
+        strict: bool,
+        context_label: String,
+        cursor_limit: Option<u64>,
+        pragmas: super::pragmas::PragmaSet,
+        modules: HashMap<String, super::modules::ResolvedModule>,
+        ledger: Arc<crate::kernel::CompileLedger>,
+    ) -> Self {
+        BodySource {
+            file,
+            source_text,
+            source_dir,
+            lib_paths,
+            strict,
+            context_label,
+            cursor_limit,
+            pragmas,
+            modules,
+            programs: Mutex::new(HashMap::new()),
+            ledger,
+        }
+    }
+
     /// A body from its source text, under the default settings.
     ///
     /// The route for a body that reaches the runtime as text rather

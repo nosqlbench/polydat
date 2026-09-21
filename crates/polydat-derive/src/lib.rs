@@ -677,6 +677,11 @@ enum ConstShape {
     F64,
     Bool,
     Str,
+    /// `Const<Arc<T>>` — a value the compiler built, carried as
+    /// [`ConstArg::Opaque`] and downcast to `T` at construction. The
+    /// concrete `T` comes from the argument's declared type, so this
+    /// variant carries none and the enum stays `Copy`.
+    Opaque,
 }
 
 impl ConstShape {
@@ -687,6 +692,10 @@ impl ConstShape {
             ConstShape::F64 => quote!(polydat::ast::SlotType::ConstF64),
             ConstShape::Bool => quote!(polydat::ast::SlotType::ConstU64),
             ConstShape::Str => quote!(polydat::ast::SlotType::ConstStr),
+            // An opaque const has no literal form, so it is not a
+            // const slot on the node's meta; the assembler and the
+            // JIT walkers see the wires and nothing else.
+            ConstShape::Opaque => quote!(polydat::ast::SlotType::ConstStr),
         }
     }
 
@@ -694,23 +703,38 @@ impl ConstShape {
     /// captured const value. `Const<&str>` → `String` (owned
     /// backing store). Other shapes are Copy and stored
     /// directly.
-    fn field_type_tokens(self) -> TokenStream2 {
+    fn field_type_tokens(self, opaque: Option<&Type>) -> TokenStream2 {
         match self {
             ConstShape::U64 => quote!(u64),
             ConstShape::F64 => quote!(f64),
             ConstShape::Bool => quote!(bool),
             ConstShape::Str => quote!(String),
+            ConstShape::Opaque => {
+                let t = opaque.expect("an opaque const names its type");
+                quote!(std::sync::Arc<#t>)
+            }
         }
     }
 
     /// Token stream that extracts a value from a `ConstArg`.
     /// `c` is the `ConstArg` binding in scope at the call site.
-    fn extract_from_const_arg(self, c: TokenStream2) -> TokenStream2 {
+    fn extract_from_const_arg(self, c: TokenStream2, opaque: Option<&Type>) -> TokenStream2 {
         match self {
             ConstShape::U64 => quote!(#c.as_u64()),
             ConstShape::F64 => quote!(#c.as_f64()),
             ConstShape::Bool => quote!(#c.as_u64() != 0),
             ConstShape::Str => quote!(#c.as_str().to_string()),
+            ConstShape::Opaque => {
+                let t = opaque.expect("an opaque const names its type");
+                quote!(match #c.as_opaque::<#t>() {
+                    Some(v) => v,
+                    None => return Some(Err(format!(
+                        "{}: expected a compiler-built {} for this argument",
+                        name,
+                        std::any::type_name::<#t>()
+                    ))),
+                })
+            }
         }
     }
 
@@ -724,6 +748,7 @@ impl ConstShape {
             ConstShape::F64 => quote!(polydat::derive_support::Const(#field_ref)),
             ConstShape::Bool => quote!(polydat::derive_support::Const(#field_ref)),
             ConstShape::Str => quote!(polydat::derive_support::Const(#field_ref.as_str())),
+            ConstShape::Opaque => quote!(polydat::derive_support::Const(#field_ref.clone())),
         }
     }
 }
@@ -914,7 +939,9 @@ fn const_shape_to_jit_type(s: ConstShape) -> Option<JitType> {
         ConstShape::Bool => Some(JitType::Bool),
         // A string constant never rides the buffer: the kits capture
         // it by clone, and native lowerings read it from the node.
-        ConstShape::Str => None,
+        // Nor does a compiler-built value, which is an `Arc` the node
+        // holds rather than bits.
+        ConstShape::Str | ConstShape::Opaque => None,
     }
 }
 
@@ -1012,8 +1039,44 @@ fn classify_type(ty: &Type) -> Option<ConstShape> {
         "f64" => Some(ConstShape::F64),
         "bool" => Some(ConstShape::Bool),
         "& str" | "&str" => Some(ConstShape::Str),
+        // `Const<Arc<T>>` — a value the compiler built and hands the
+        // node as it is, rather than a literal the source wrote. The
+        // concrete `T` is read from the declared type where it is
+        // needed; the shape itself carries no type so it stays `Copy`
+        // with the rest.
+        _ if s.starts_with("Arc <") || s.starts_with("std :: sync :: Arc <") => {
+            Some(ConstShape::Opaque)
+        }
         _ => None,
     }
+}
+
+/// The `T` of a `Const<Arc<T>>` argument's declared type.
+fn opaque_inner_type(ty: &Type) -> Option<Type> {
+    let Type::Path(p) = ty else { return None };
+    let last = p.path.segments.last()?;
+    if last.ident != "Const" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return None;
+    };
+    let inner = args.args.iter().find_map(|a| match a {
+        syn::GenericArgument::Type(t) => Some(t),
+        _ => None,
+    })?;
+    let Type::Path(arc) = inner else { return None };
+    let arc_last = arc.path.segments.last()?;
+    if arc_last.ident != "Arc" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(arc_args) = &arc_last.arguments else {
+        return None;
+    };
+    arc_args.args.iter().find_map(|a| match a {
+        syn::GenericArgument::Type(t) => Some(t.clone()),
+        _ => None,
+    })
 }
 
 /// SRD-80b Phase C — detect `Const<Vec<T>>` in arg position.
@@ -1960,6 +2023,15 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                         quote!(polydat::ast::ConstValue::U64(if #field_name { 1 } else { 0 }))
                     }
                     ConstShape::Str => quote!(polydat::ast::ConstValue::Str(#field_name.clone())),
+                    // A compiler-built value has no literal form. Its
+                    // slot names the argument and says what it is, so
+                    // the meta reads honestly and no walker mistakes
+                    // it for a constant it can fold.
+                    ConstShape::Opaque => {
+                        quote!(polydat::ast::ConstValue::Str(
+                            "<compiler-built>".to_string()
+                        ))
+                    }
                 };
                 slot_exprs.push(quote! {
                     polydat::ast::Slot::Const {
@@ -2326,13 +2398,13 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
             ArgKind::Wire | ArgKind::PolyWire | ArgKind::Variadic(_) => None,
             ArgKind::Const(shape) => {
                 let n = &a.name;
-                let ft = shape.field_type_tokens();
+                let ft = shape.field_type_tokens(opaque_inner_type(&a.declared_ty).as_ref());
                 let doc = format!("The `{n}` argument, as given at construction.");
                 Some(quote!(#[doc = #doc] pub #n: #ft))
             }
             ArgKind::ConstVec(inner, _) => {
                 let n = &a.name;
-                let ft = inner.field_type_tokens();
+                let ft = inner.field_type_tokens(None);
                 let doc = format!("The `{n}` arguments, as given at construction.");
                 Some(quote!(#[doc = #doc] pub #n: Vec<#ft>))
             }
@@ -2357,12 +2429,12 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
             ArgKind::Wire => None,
             ArgKind::Const(shape) => {
                 let n = &a.name;
-                let ft = shape.field_type_tokens();
+                let ft = shape.field_type_tokens(opaque_inner_type(&a.declared_ty).as_ref());
                 Some(quote!(#n: #ft))
             }
             ArgKind::ConstVec(inner, _) => {
                 let n = &a.name;
-                let ft = inner.field_type_tokens();
+                let ft = inner.field_type_tokens(None);
                 Some(quote!(#n: Vec<#ft>))
             }
             ArgKind::Setup(_) => None,
@@ -2666,7 +2738,8 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                 let i = const_idx_for_extract;
                 const_idx_for_extract += 1;
                 let i_lit = syn::Index::from(i);
-                let extract_present = shape.extract_from_const_arg(quote!(c));
+                let extract_present = shape
+                    .extract_from_const_arg(quote!(c), opaque_inner_type(&a.declared_ty).as_ref());
                 let fallback = match &a.default_value {
                     Some(default_expr) => {
                         // Default is an expression evaluating to
@@ -2703,7 +2776,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                 // the last arg, so no subsequent Const reads need
                 // a higher base index.
                 let i_lit = syn::LitInt::new(&i.to_string(), proc_macro2::Span::call_site());
-                let extract_one = inner.extract_from_const_arg(quote!(c));
+                let extract_one = inner.extract_from_const_arg(quote!(c), None);
                 Some(quote! {
                     let #n: Vec<_> = consts[#i_lit..].iter()
                         .map(|c| #extract_one)
