@@ -3,8 +3,8 @@
 
 //! Hash function nodes.
 //!
-//! Every node here is JIT-eligible: each arg and return maps to a
-//! `JitType`, so the macro emits `compiled_u64()` and
+//! Every node here is JIT-eligible: each arg and return is a scalar
+//! that rides one slot, so the macro emits `compiled_u64()` and
 //! `jit_constants()` (carrying the captured `Const<...>` field
 //! values) alongside `eval()`.
 

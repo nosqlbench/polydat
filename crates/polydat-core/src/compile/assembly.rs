@@ -1567,8 +1567,8 @@ impl PolydatAssembler {
                     if strict {
                         return Err(AssemblyError::Other(format!(
                             "strict mode: implicit type coercion {source_type} → {expected_type} \
-                             into '{}'. Use an explicit conversion function (e.g., u64_to_f64, \
-                             f64_to_u64).",
+                             into '{}'. Use an explicit conversion function (e.g., to_f64, \
+                             to_i64, f64_to_u64).",
                             all_nodes[node_idx].name
                         )));
                     }

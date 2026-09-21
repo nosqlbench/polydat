@@ -13,13 +13,16 @@
 //!   syntactically and emits direct `match`-on-`Value`
 //!   extraction at the eval call site — no trait dispatch, no
 //!   `unsafe` lifetime transmute.
-//! - [`ConstSource`] — `Sized + 'static` typed-extraction from
-//!   [`ConstArg`] for owned `Const<T>` positions.
 //!
 //! Combinator [`Wire`] impls cover [`Option<T>`] (`None`-aware
 //! pass-through) and [`Ext<T>`] (downcast through
-//! [`ReflectedValue`]); `ConstSource for Vec<C: ConstSource>`
-//! handles workload-list constants.
+//! [`ReflectedValue`]).
+//!
+//! A `Const<T>` position is not a `Wire`: the macro classifies it
+//! syntactically into a `ConstShape` and emits the extraction from
+//! the `ConstArg` inline, so there is no trait for it to dispatch
+//! through. A `ConstSource` trait once carried that, and stayed here
+//! after the macro stopped emitting calls to it.
 //!
 //! ## Why the trait surface lives here
 //!
@@ -27,14 +30,12 @@
 //! traits that are visible at the call site, only emit token
 //! streams referencing traits defined elsewhere. The macro
 //! emits `<T as polydat::derive_support::Wire>::extract(...)`
-//! and `<T as polydat::derive_support::ConstSource>::extract(...)`
 //! paths; this module is what those paths resolve to.
 
 use std::sync::Arc;
 
 use crate::ast::SlotShape;
-use crate::ast::{JitType, PortType, ReflectedValue, SliceArc, SlotType, Value};
-use crate::dsl::factory::ConstArg;
+use crate::ast::{PortType, ReflectedValue, SliceArc, Value};
 
 // =====================================================================
 // Wire — Rust-type ↔ Value bridge (owned types only)
@@ -44,9 +45,11 @@ use crate::dsl::factory::ConstArg;
 ///
 /// Every owned Rust type the macro accepts in a wire position
 /// implements this trait. `PORT` is the static [`PortType`] the
-/// DSL type-checker uses to route a wire to this slot; `JIT`
-/// tags the type as ridable on the Phase-2 `u64` buffer (or
-/// `None` if it stays on the Phase-1 typed-eval path).
+/// DSL type-checker uses to route a wire to this slot; which slots
+/// a value rides and how wide they are follows from that port type
+/// through [`SlotShape`], the one place that mapping lives. A second
+/// `JIT: Option<JitType>` const here said the same thing about the
+/// compiled buffer and nothing ever read it.
 ///
 /// Borrow shapes (`&str`, `&[u8]`, `&[T]`,
 /// `&serde_json::Value`) and polymorphic `Value`-typed wires
@@ -62,11 +65,6 @@ use crate::dsl::factory::ConstArg;
 pub trait Wire: Sized + 'static {
     /// Static port type for the DSL type-checker.
     const PORT: PortType;
-
-    /// JIT carrier classification. `Some(_)` means the type
-    /// rides the Phase-2 `u64` buffer; `None` means typed-eval
-    /// only.
-    const JIT: Option<JitType>;
 
     /// SRD-53 §"Source-string call-site sugar" — auto-resolver
     /// for `Str`-typed upstream wires feeding this slot. `None`
@@ -93,7 +91,6 @@ pub trait Wire: Sized + 'static {
 
 impl Wire for u64 {
     const PORT: PortType = PortType::U64;
-    const JIT: Option<JitType> = Some(JitType::U64);
     fn extract(v: &Value) -> Self {
         v.as_u64()
     }
@@ -104,7 +101,6 @@ impl Wire for u64 {
 
 impl Wire for u32 {
     const PORT: PortType = PortType::U32;
-    const JIT: Option<JitType> = Some(JitType::U64);
     fn extract(v: &Value) -> Self {
         v.as_u64() as u32
     }
@@ -115,7 +111,6 @@ impl Wire for u32 {
 
 impl Wire for i32 {
     const PORT: PortType = PortType::I32;
-    const JIT: Option<JitType> = Some(JitType::I64);
     // Lenient extract: honest `Value::I64` (sign-extended I32
     // storage convention) plus the legacy bit-stuffed `Value::U64`
     // form during the alignment migration — same precedent as
@@ -130,7 +125,6 @@ impl Wire for i32 {
 
 impl Wire for i64 {
     const PORT: PortType = PortType::I64;
-    const JIT: Option<JitType> = Some(JitType::I64);
     // Lenient extract: see `Wire<i32>` note above.
     fn extract(v: &Value) -> Self {
         v.as_i64()
@@ -142,7 +136,6 @@ impl Wire for i64 {
 
 impl Wire for u8 {
     const PORT: PortType = PortType::U8;
-    const JIT: Option<JitType> = Some(JitType::U64);
     fn extract(v: &Value) -> Self {
         v.as_u64() as u8
     }
@@ -153,7 +146,6 @@ impl Wire for u8 {
 
 impl Wire for u16 {
     const PORT: PortType = PortType::U16;
-    const JIT: Option<JitType> = Some(JitType::U64);
     fn extract(v: &Value) -> Self {
         v.as_u64() as u16
     }
@@ -164,7 +156,6 @@ impl Wire for u16 {
 
 impl Wire for i8 {
     const PORT: PortType = PortType::I8;
-    const JIT: Option<JitType> = Some(JitType::I64);
     // Lenient extract through as_i64 (honest I64 or legacy
     // stuffed U64), narrowed by truncation — sign survives
     // because the storage convention is sign-extension.
@@ -178,7 +169,6 @@ impl Wire for i8 {
 
 impl Wire for i16 {
     const PORT: PortType = PortType::I16;
-    const JIT: Option<JitType> = Some(JitType::I64);
     fn extract(v: &Value) -> Self {
         v.as_i64() as i16
     }
@@ -193,11 +183,10 @@ impl Wire for u128 {
     // one-u64 JIT slot, so it crosses the compiled tiers as a limb
     // pair (`Imm2`) and a node over it runs its closure on the
     // closure tier and a slot call of its kit on the native engines
-    // (type_system_alignment.md §2). `JIT: None` is about the
+    // (type_system_alignment.md §2). The two-slot ride is about the
     // register, not about which engines carry the type — every one
     // of them does, which `the_128_bit_carriers_agree_on_every_engine`
     // pins.
-    const JIT: Option<JitType> = None;
     fn extract(v: &Value) -> Self {
         v.as_u128()
     }
@@ -208,7 +197,6 @@ impl Wire for u128 {
 
 impl Wire for i128 {
     const PORT: PortType = PortType::I128;
-    const JIT: Option<JitType> = None;
     fn extract(v: &Value) -> Self {
         v.as_i128()
     }
@@ -222,12 +210,10 @@ impl Wire for i128 {
 // The raw view extracts/injects the word itself; the lane-typed
 // `[T; N]` views extract through the free-bitcast rule (any
 // register view satisfies any register slot) and inject tagged
-// with their own lane typing. JIT is None until the layer-1
-// two-slot ride lands.
+// with their own lane typing.
 
 impl Wire for crate::ast::Bits128 {
     const PORT: PortType = PortType::Reg128;
-    const JIT: Option<JitType> = None;
     fn extract(v: &Value) -> Self {
         v.as_reg_bits()
     }
@@ -240,7 +226,6 @@ macro_rules! impl_wire_reg {
     ($arr:ty, $port:ident, $view:ident, $to:ident, $from:ident) => {
         impl Wire for $arr {
             const PORT: PortType = PortType::$port;
-            const JIT: Option<JitType> = None;
             fn extract(v: &Value) -> Self {
                 v.as_reg_bits().$to()
             }
@@ -264,7 +249,6 @@ impl_wire_reg!([f64; 2], RegF64x2, F64x2, lanes_f64, from_lanes_f64);
 
 impl Wire for f64 {
     const PORT: PortType = PortType::F64;
-    const JIT: Option<JitType> = Some(JitType::F64);
     fn extract(v: &Value) -> Self {
         v.as_f64()
     }
@@ -275,7 +259,6 @@ impl Wire for f64 {
 
 impl Wire for f32 {
     const PORT: PortType = PortType::F32;
-    const JIT: Option<JitType> = Some(JitType::U64);
     fn extract(v: &Value) -> Self {
         f32::from_bits(v.as_u64() as u32)
     }
@@ -286,7 +269,6 @@ impl Wire for f32 {
 
 impl Wire for half::f16 {
     const PORT: PortType = PortType::F16;
-    const JIT: Option<JitType> = Some(JitType::U64);
     // Same bit-stuffing convention as f32: the binary16 pattern
     // rides the low 16 bits of the u64 carrier.
     fn extract(v: &Value) -> Self {
@@ -299,7 +281,6 @@ impl Wire for half::f16 {
 
 impl Wire for bool {
     const PORT: PortType = PortType::Bool;
-    const JIT: Option<JitType> = Some(JitType::Bool);
     fn extract(v: &Value) -> Self {
         match v {
             Value::Bool(b) => *b,
@@ -317,7 +298,6 @@ impl Wire for bool {
 
 impl Wire for String {
     const PORT: PortType = PortType::Str;
-    const JIT: Option<JitType> = None;
     fn extract(v: &Value) -> Self {
         // SRD-80b: panic on shape mismatch — the type-checker is
         // responsible for routing well-typed values to each slot,
@@ -343,7 +323,6 @@ impl Wire for String {
 /// to avoid the per-cycle `to_string()` allocation.
 impl Wire for std::sync::Arc<str> {
     const PORT: PortType = PortType::Str;
-    const JIT: Option<JitType> = None;
     fn extract(v: &Value) -> Self {
         match v {
             Value::Str(s) => s.clone(),
@@ -363,7 +342,6 @@ impl Wire for std::sync::Arc<str> {
 /// needs to handle multiple inner types via runtime dispatch.
 impl Wire for std::sync::Arc<dyn std::any::Any + Send + Sync> {
     const PORT: PortType = PortType::Handle;
-    const JIT: Option<JitType> = None;
     fn extract(v: &Value) -> Self {
         match v {
             Value::Handle(arc) => arc.clone(),
@@ -381,7 +359,6 @@ impl Wire for std::sync::Arc<dyn std::any::Any + Send + Sync> {
 /// to dispatch on the runtime ReflectedValue::type_name.
 impl Wire for Box<dyn ReflectedValue> {
     const PORT: PortType = PortType::Ext;
-    const JIT: Option<JitType> = None;
     fn extract(v: &Value) -> Self {
         match v {
             Value::Ext(b) => b.clone_reflected(),
@@ -397,7 +374,6 @@ impl Wire for Box<dyn ReflectedValue> {
 
 impl Wire for Arc<[u8]> {
     const PORT: PortType = PortType::Bytes;
-    const JIT: Option<JitType> = None;
     fn extract(v: &Value) -> Self {
         match v {
             Value::Bytes(b) => b.clone(),
@@ -411,7 +387,6 @@ impl Wire for Arc<[u8]> {
 
 impl Wire for Vec<u8> {
     const PORT: PortType = PortType::Bytes;
-    const JIT: Option<JitType> = None;
     fn extract(v: &Value) -> Self {
         match v {
             Value::Bytes(b) => b.to_vec(),
@@ -427,7 +402,6 @@ impl Wire for Vec<u8> {
 
 impl Wire for Arc<serde_json::Value> {
     const PORT: PortType = PortType::Json;
-    const JIT: Option<JitType> = None;
     fn extract(v: &Value) -> Self {
         match v {
             Value::Json(j) => j.clone(),
@@ -445,7 +419,6 @@ macro_rules! impl_wire_vec {
     ($elem:ty, $variant:ident, $port:ident) => {
         impl Wire for SliceArc<$elem> {
             const PORT: PortType = PortType::$port;
-            const JIT: Option<JitType> = None;
             fn extract(v: &Value) -> Self {
                 match v {
                     Value::$variant(arc) => arc.clone(),
@@ -468,7 +441,6 @@ macro_rules! impl_wire_vec {
 
         impl Wire for Vec<$elem> {
             const PORT: PortType = PortType::$port;
-            const JIT: Option<JitType> = None;
             fn extract(v: &Value) -> Self {
                 match v {
                     Value::$variant(arc) => arc.as_slice().to_vec(),
@@ -505,7 +477,6 @@ impl_wire_vec!(i8, VecI8, VecI8);
 /// `accepts_none_inputs() -> true` when any arg is `Option<_>`.
 impl<T: Wire> Wire for Option<T> {
     const PORT: PortType = T::PORT;
-    const JIT: Option<JitType> = None;
     fn extract(v: &Value) -> Self {
         match v {
             Value::None => None,
@@ -543,7 +514,6 @@ impl<T> std::ops::DerefMut for Ext<T> {
 
 impl<T: ReflectedValue + Clone + 'static> Wire for Ext<T> {
     const PORT: PortType = PortType::Ext;
-    const JIT: Option<JitType> = None;
     fn extract(v: &Value) -> Self {
         match v {
             Value::Ext(boxed) => {
@@ -625,7 +595,6 @@ impl<T> std::ops::Deref for Config<T> {
 
 impl<T: Wire> Wire for Config<T> {
     const PORT: PortType = T::PORT;
-    const JIT: Option<JitType> = T::JIT;
     const RESOLVER: Option<crate::dsl::registry::DefaultResolver> = T::RESOLVER;
     const WIRE_COST: crate::ast::WireCost = crate::ast::WireCost::Config;
     fn extract(v: &Value) -> Self {
@@ -707,7 +676,6 @@ impl ResolverKind for GroupResolver {
 
 impl<R: ResolverKind, T: 'static + Send + Sync> Wire for Resolved<R, T> {
     const PORT: PortType = PortType::Handle;
-    const JIT: Option<JitType> = None;
     const RESOLVER: Option<crate::dsl::registry::DefaultResolver> =
         Some(<R as ResolverKind>::RESOLVER);
     fn extract(v: &Value) -> Self {
@@ -740,82 +708,6 @@ impl<R: ResolverKind, T: 'static + Send + Sync> Wire for Resolved<R, T> {
     }
     fn inject(self) -> Value {
         Value::Handle(self.inner)
-    }
-}
-
-// =====================================================================
-// ConstSource — ConstArg → typed extraction (owned types only)
-// =====================================================================
-
-/// `ConstArg` → typed-Rust-value bridge for owned types in
-/// `Const<T>` position.
-///
-/// Borrow shapes (`Const<&str>`) are handled by the macro at
-/// codegen — it stores `String` via `ConstSource for String`
-/// and emits `Const(self.field.as_str())` at the eval call site
-/// to satisfy the operator-side `Const<&str>` signature.
-pub trait ConstSource: Sized + 'static {
-    /// The slot type the constant occupies.
-    const SLOT: SlotType;
-    /// The value from a build-time constant argument.
-    fn extract(arg: &ConstArg) -> Self;
-}
-
-impl ConstSource for u64 {
-    const SLOT: SlotType = SlotType::ConstU64;
-    fn extract(arg: &ConstArg) -> Self {
-        match arg {
-            ConstArg::Int(v) => *v,
-            other => panic!("ConstSource<u64>::extract: expected Int, got {other:?}"),
-        }
-    }
-}
-
-impl ConstSource for f64 {
-    const SLOT: SlotType = SlotType::ConstF64;
-    fn extract(arg: &ConstArg) -> Self {
-        match arg {
-            ConstArg::Float(v) => *v,
-            ConstArg::Int(v) => *v as f64,
-            other => panic!("ConstSource<f64>::extract: expected Float or Int, got {other:?}"),
-        }
-    }
-}
-
-impl ConstSource for bool {
-    const SLOT: SlotType = SlotType::ConstU64;
-    fn extract(arg: &ConstArg) -> Self {
-        match arg {
-            ConstArg::Int(v) => *v != 0,
-            other => panic!("ConstSource<bool>::extract: expected Int, got {other:?}"),
-        }
-    }
-}
-
-impl ConstSource for String {
-    const SLOT: SlotType = SlotType::ConstStr;
-    fn extract(arg: &ConstArg) -> Self {
-        match arg {
-            ConstArg::Str(s) => s.clone(),
-            other => panic!("ConstSource<String>::extract: expected Str, got {other:?}"),
-        }
-    }
-}
-
-/// SRD-80b Phase C — workload-list const combinator. Used by the
-/// macro when it sees `Const<Vec<C>>` in an operator's signature
-/// (e.g. `Const<Vec<u64>>`, `Const<Vec<String>>`). The macro
-/// emits one `Slot::Const { name, slot_type: ConstVec, .. }`
-/// for the position and packages the trailing `consts[..]`
-/// slice into a `ConstArg::List` at build time; this impl
-/// walks the list, dispatching `C::extract` per element.
-impl<C: ConstSource> ConstSource for Vec<C> {
-    const SLOT: SlotType = SlotType::ConstVec;
-    fn extract(arg: &ConstArg) -> Self {
-        match arg {
-            ConstArg::List(items) => items.iter().map(C::extract).collect(),
-            other => panic!("ConstSource<Vec<_>>::extract: expected List, got {other:?}"),
-        }
     }
 }
 

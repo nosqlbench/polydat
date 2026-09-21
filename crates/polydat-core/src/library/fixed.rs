@@ -27,8 +27,8 @@ fn const_bool(#[poly_default(false)] value: crate::derive_support::Const<bool>) 
 //
 // These ride the `Const<Vec<C>>` workload-list combinator. The macro
 // recognises the trailing `Const<Vec<C>>` arg and packages `consts[1..]`
-// into a `Vec<C>` field at build time via
-// `<C as ConstSource>::extract` per element. Empty lists are
+// into a `Vec<C>` field at build time, emitting the extraction for
+// the element type it read out of the signature. Empty lists are
 // rejected in the body (the body panics) rather than at the
 // macro level — the FuncSig's `Arity::VariadicConsts { min_consts: 0 }`
 // would otherwise have to be `min_consts: 1`, which is per-node

@@ -1378,9 +1378,10 @@ pub enum SlotType {
     ConstVecF64,
     /// SRD-80b Phase C — typed-element variadic-const slot for
     /// `Const<Vec<C>>` operator-side shape. Element type
-    /// discrimination rides through the `<C as ConstSource>::extract`
-    /// trait dispatch at the build-closure call site; the slot tag
-    /// only signals "this is a list" to the DSL type-checker.
+    /// discrimination is emitted inline by the macro at the
+    /// build-closure call site, from the element type it read out of
+    /// the signature; the slot tag only signals "this is a list" to
+    /// the DSL type-checker.
     ConstVec,
 }
 
@@ -1394,50 +1395,6 @@ impl SlotType {
     pub fn is_wire(self) -> bool {
         matches!(self, SlotType::Wire)
     }
-}
-
-/// JIT-compatible primitive carriers.
-///
-/// The carriers that ride compiled slot buffers: the 64-bit scalars
-/// (`u64` as-is, `i64` and `f64` as their bits, `bool` as 0/1), the
-/// narrow integers and floats zero/sign-extended or as bits, and the
-/// 128-bit words in two slots. The 64-bit core is the CL ∩ JSON
-/// scalar set from `polydat/docs/design/type_system_alignment.md` §4.
-///
-/// Referenced by `polydat::derive_support::Wire::JIT` to tag each
-/// Wire-typed Rust value with its JIT carrier (or `None`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum JitType {
-    /// An unsigned 64-bit carrier.
-    U64,
-    /// A signed 64-bit carrier.
-    I64,
-    /// An `f64` carrier, as its bits.
-    F64,
-    /// A boolean carrier, 0 or 1.
-    Bool,
-    /// A `u8` carrier, zero-extended.
-    U8,
-    /// A `u16` carrier, zero-extended.
-    U16,
-    /// A `u32` carrier, zero-extended.
-    U32,
-    /// An `i8` carrier, sign-extended.
-    I8,
-    /// An `i16` carrier, sign-extended.
-    I16,
-    /// An `i32` carrier, sign-extended.
-    I32,
-    /// An `f32` carrier, as its bits.
-    F32,
-    /// An `f16` carrier, as its bits.
-    F16,
-    /// A `u128`, in two slots.
-    U128,
-    /// An `i128`, in two slots.
-    I128,
-    /// A 128-bit register word, in two slots.
-    Reg128,
 }
 
 /// A concrete constant value stored in node metadata.

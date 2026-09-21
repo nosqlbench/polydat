@@ -1298,14 +1298,6 @@ pub enum JitOp {
     Hash,
     /// `output[0] = splitmix64(input[0]) (fully inlined 64-bit ALU bit mixer)`
     SplitMix64,
-    /// `output[0] = popcount(input[0])`
-    Popcnt,
-    /// `output[0] = leading_zeros(input[0])`
-    Clz,
-    /// `output[0] = trailing_zeros(input[0])`
-    Ctz,
-    /// `output[0] = byte_swap(input[0])`
-    Bswap,
     /// `output[0] = shuffle(input[0])`  (extern call: feedback, size, min)
     ShuffleConst(u64, u64, u64),
 
@@ -1641,7 +1633,7 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
         "identity" => JitOp::Identity,
         "hash" | "splitmix64" | "scatter" => JitOp::SplitMix64,
         "fair_coin" => JitOp::FairCoin,
-        "unfair_coin" | "bernoulli" => {
+        "unfair_coin" => {
             if let Some(&p) = consts.first() {
                 JitOp::UnfairCoinConst(p)
             } else {
@@ -1655,10 +1647,6 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
                 JitOp::Fallback
             }
         }
-        "popcnt" | "count_ones" | "popcount" => JitOp::Popcnt,
-        "clz" | "leading_zeros" => JitOp::Clz,
-        "ctz" | "trailing_zeros" => JitOp::Ctz,
-        "bswap" | "swap_bytes" => JitOp::Bswap,
         "xxhash3" | "xxh3" => JitOp::Hash,
         "hash_range" => {
             if let Some(&c) = consts.first() {
@@ -2035,35 +2023,22 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
         }
 
         // ── Type Conversion Lattice (SRD 110) ────────────────────
-        "u64_to_f64" | "__u64_to_f64" | "u32_to_f64" | "__u32_to_f64" | "bool_to_f64"
-        | "__bool_to_f64" | "bool_to_f32" | "__bool_to_f32" | "__f32_to_f64" | "f32_to_f64"
-        | "__u64_to_f32" | "u64_to_f32" | "__u32_to_f32" | "u32_to_f32" | "__u16_to_f32"
-        | "u16_to_f32" | "__u8_to_f32" | "u8_to_f32" | "__u16_to_f64" | "u16_to_f64"
-        | "__u8_to_f64" | "u8_to_f64" | "__u128_to_f64" | "__u128_to_f32" | "__u128_to_f16" => {
-            JitOp::ToF64
-        }
+        "__u64_to_f64" | "__u32_to_f64" | "__bool_to_f64" | "__bool_to_f32" | "__f32_to_f64"
+        | "__u64_to_f32" | "__u32_to_f32" | "__u16_to_f32" | "__u8_to_f32" | "__u16_to_f64"
+        | "__u8_to_f64" | "__u128_to_f64" | "__u128_to_f32" | "__u128_to_f16" => JitOp::ToF64,
 
-        "i64_to_f64" | "__i64_to_f64" | "i32_to_f64" | "__i32_to_f64" | "__i64_to_f32"
-        | "i64_to_f32" | "__i32_to_f32" | "i32_to_f32" | "__i16_to_f32" | "i16_to_f32"
-        | "__i8_to_f32" | "i8_to_f32" | "__i16_to_f64" | "i16_to_f64" | "__i8_to_f64"
-        | "i8_to_f64" | "__i128_to_f64" | "__i128_to_f32" | "__i128_to_f16" => JitOp::I64ToF64,
+        "__i64_to_f64" | "__i32_to_f64" | "__i64_to_f32" | "__i32_to_f32" | "__i16_to_f32"
+        | "__i8_to_f32" | "__i16_to_f64" | "__i8_to_f64" | "__i128_to_f64" | "__i128_to_f32"
+        | "__i128_to_f16" => JitOp::I64ToF64,
 
-        "__f64_to_u64"
-        | "__f64_to_u64_checked"
-        | "f64_to_u32"
+        "__f64_to_u64_checked"
         | "__f64_to_u32"
-        | "f32_to_u64"
         | "__f32_to_u64"
-        | "f32_to_u32"
         | "__f32_to_u32"
         | "__f64_to_u16"
-        | "f64_to_u16"
         | "__f64_to_u8"
-        | "f64_to_u8"
         | "__f32_to_u16"
-        | "f32_to_u16"
         | "__f32_to_u8"
-        | "f32_to_u8"
         | "__f16_to_u64"
         | "__f16_to_u32"
         | "__f16_to_u16"
@@ -2076,63 +2051,54 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
         // conversion, which is what `round_to_u64` does too.
         "round_u64" => JitOp::RoundToU64,
 
-        "f64_to_i64" | "__f64_to_i64" | "f64_to_i32" | "__f64_to_i32" | "f32_to_i64"
-        | "__f32_to_i64" | "f32_to_i32" | "__f32_to_i32" | "__f64_to_i16" | "f64_to_i16"
-        | "__f64_to_i8" | "f64_to_i8" | "__f32_to_i16" | "f32_to_i16" | "__f32_to_i8"
-        | "f32_to_i8" | "__f16_to_i64" | "__f16_to_i32" | "__f16_to_i16" | "__f16_to_i8"
-        | "__f64_to_i128" | "__f32_to_i128" | "__f16_to_i128" => JitOp::F64ToI64,
-
-        "f64_to_f32" | "__f64_to_f32" | "__f16_to_f32" | "__f16_to_f64" | "__f32_to_f16"
-        | "__f64_to_f16" => JitOp::Identity,
-
-        "u32_to_u64" | "__u32_to_u64" | "u64_to_u32" | "__u64_to_u32" | "u32_to_i32"
-        | "__u32_to_i32" | "i32_to_u32" | "__i32_to_u32" | "u64_to_i64" | "__u64_to_i64"
-        | "i64_to_u64" | "__i64_to_u64" | "bool_to_u64" | "__bool_to_u64" | "bool_to_i64"
-        | "__bool_to_i64" | "bool_to_u32" | "__bool_to_u32" | "bool_to_i32" | "__bool_to_i32"
-        | "__u64_to_u16" | "__u64_to_u8" | "__u64_to_i16" | "__u64_to_i8" | "__i64_to_u32"
-        | "__i64_to_u16" | "__i64_to_u8" | "__i64_to_i16" | "__i64_to_i8" | "__u32_to_u16"
-        | "__u32_to_u8" | "__u32_to_i16" | "__u32_to_i8" | "__i32_to_u16" | "__i32_to_u8"
-        | "__i32_to_i16" | "__i32_to_i8" | "__u16_to_u8" | "__u16_to_i8" | "__i16_to_u8"
-        | "__i16_to_i8" | "__u128_to_u64" | "__u128_to_i64" | "__i128_to_u64" | "__i128_to_i64"
-        | "__u128_to_u32" | "__u128_to_u16" | "__u128_to_u8" | "__u128_to_i32"
-        | "__u128_to_i16" | "__u128_to_i8" | "__i128_to_u32" | "__i128_to_u16" | "__i128_to_u8"
-        | "__i128_to_i32" | "__i128_to_i16" | "__i128_to_i8" | "__u64_to_u128"
-        | "__u64_to_i128" | "__i64_to_u128" | "__i64_to_i128" | "__u128_to_i128"
-        | "__i128_to_u128" | "__bool_to_u16" | "__bool_to_u8" | "__bool_to_i16"
-        | "__bool_to_i8" | "__bool_to_u128" | "__bool_to_i128" | "__u8_to_f16" | "__u16_to_f16"
-        | "__i8_to_f16" | "__i16_to_f16" | "__u64_to_f16" | "__i64_to_f16" | "__u32_to_f16"
-        | "__i32_to_f16" | "__bool_to_f16" => JitOp::Identity,
-
-        "i32_to_i64" | "__i32_to_i64" | "i32_to_u64" | "__i32_to_u64" | "__u32_to_i64"
-        | "u32_to_i64" | "__u32_to_u128" | "__u32_to_i128" | "__i32_to_u128" | "__i32_to_i128" => {
-            JitOp::SignExtendI32
+        "__f64_to_i64" | "__f64_to_i32" | "__f32_to_i64" | "__f32_to_i32" | "__f64_to_i16"
+        | "__f64_to_i8" | "__f32_to_i16" | "__f32_to_i8" | "__f16_to_i64" | "__f16_to_i32"
+        | "__f16_to_i16" | "__f16_to_i8" | "__f64_to_i128" | "__f32_to_i128" | "__f16_to_i128" => {
+            JitOp::F64ToI64
         }
 
-        "__i16_to_i32" | "i16_to_i32" | "__i16_to_i64" | "i16_to_i64" | "__i16_to_u32"
-        | "i16_to_u32" | "__i16_to_u64" | "i16_to_u64" | "__i16_to_u128" | "__i16_to_i128" => {
-            JitOp::SignExtendI16
+        "__f64_to_f32" | "__f16_to_f32" | "__f16_to_f64" | "__f32_to_f16" | "__f64_to_f16" => {
+            JitOp::Identity
         }
 
-        "__i8_to_i16" | "i8_to_i16" | "__i8_to_i32" | "i8_to_i32" | "__i8_to_i64" | "i8_to_i64"
-        | "__i8_to_u16" | "i8_to_u16" | "__i8_to_u32" | "i8_to_u32" | "__i8_to_u64"
-        | "i8_to_u64" | "__i8_to_u128" | "__i8_to_i128" => JitOp::SignExtendI8,
+        "__u32_to_u64" | "__u64_to_u32" | "__u32_to_i32" | "__i32_to_u32" | "__u64_to_i64"
+        | "__i64_to_u64" | "__bool_to_u64" | "__bool_to_i64" | "__bool_to_u32"
+        | "__bool_to_i32" | "__u64_to_u16" | "__u64_to_u8" | "__u64_to_i16" | "__u64_to_i8"
+        | "__i64_to_u32" | "__i64_to_u16" | "__i64_to_u8" | "__i64_to_i16" | "__i64_to_i8"
+        | "__u32_to_u16" | "__u32_to_u8" | "__u32_to_i16" | "__u32_to_i8" | "__i32_to_u16"
+        | "__i32_to_u8" | "__i32_to_i16" | "__i32_to_i8" | "__u16_to_u8" | "__u16_to_i8"
+        | "__i16_to_u8" | "__i16_to_i8" | "__u128_to_u64" | "__u128_to_i64" | "__i128_to_u64"
+        | "__i128_to_i64" | "__u128_to_u32" | "__u128_to_u16" | "__u128_to_u8"
+        | "__u128_to_i32" | "__u128_to_i16" | "__u128_to_i8" | "__i128_to_u32"
+        | "__i128_to_u16" | "__i128_to_u8" | "__i128_to_i32" | "__i128_to_i16" | "__i128_to_i8"
+        | "__u64_to_u128" | "__u64_to_i128" | "__i64_to_u128" | "__i64_to_i128"
+        | "__u128_to_i128" | "__i128_to_u128" | "__bool_to_u16" | "__bool_to_u8"
+        | "__bool_to_i16" | "__bool_to_i8" | "__bool_to_u128" | "__bool_to_i128"
+        | "__u8_to_f16" | "__u16_to_f16" | "__i8_to_f16" | "__i16_to_f16" | "__u64_to_f16"
+        | "__i64_to_f16" | "__u32_to_f16" | "__i32_to_f16" | "__bool_to_f16" => JitOp::Identity,
 
-        "__u16_to_u32" | "u16_to_u32" | "__u16_to_u64" | "u16_to_u64" | "__u16_to_i32"
-        | "u16_to_i32" | "__u16_to_i64" | "u16_to_i64" | "__u16_to_u128" | "__u16_to_i128"
-        | "__u16_to_i16" | "u16_to_i16" | "__i16_to_u16" | "i16_to_u16" => JitOp::ZeroExtendU16,
+        "__i32_to_i64" | "__i32_to_u64" | "__u32_to_i64" | "__u32_to_u128" | "__u32_to_i128"
+        | "__i32_to_u128" | "__i32_to_i128" => JitOp::SignExtendI32,
 
-        "__u8_to_u16" | "u8_to_u16" | "__u8_to_u32" | "u8_to_u32" | "__u8_to_u64" | "u8_to_u64"
-        | "__u8_to_i16" | "u8_to_i16" | "__u8_to_i32" | "u8_to_i32" | "__u8_to_i64"
-        | "u8_to_i64" | "__u8_to_u128" | "__u8_to_i128" | "__u8_to_i8" | "u8_to_i8"
-        | "__i8_to_u8" | "i8_to_u8" => JitOp::ZeroExtendU8,
+        "__i16_to_i32" | "__i16_to_i64" | "__i16_to_u32" | "__i16_to_u64" | "__i16_to_u128"
+        | "__i16_to_i128" => JitOp::SignExtendI16,
 
-        "u64_to_i32" | "__u64_to_i32" | "i64_to_i32" | "__i64_to_i32" => JitOp::ZeroExtendU32,
+        "__i8_to_i16" | "__i8_to_i32" | "__i8_to_i64" | "__i8_to_u16" | "__i8_to_u32"
+        | "__i8_to_u64" | "__i8_to_u128" | "__i8_to_i128" => JitOp::SignExtendI8,
 
-        "u64_to_bool" | "__u64_to_bool" | "i64_to_bool" | "__i64_to_bool" | "u32_to_bool"
-        | "__u32_to_bool" | "i32_to_bool" | "__i32_to_bool" | "f64_to_bool" | "__f64_to_bool"
-        | "f32_to_bool" | "__f32_to_bool" | "__f16_to_bool" | "f16_to_bool" | "__u8_to_bool"
-        | "__u16_to_bool" | "__i8_to_bool" | "__i16_to_bool" | "__u128_to_bool"
-        | "__i128_to_bool" => JitOp::ToBool,
+        "__u16_to_u32" | "__u16_to_u64" | "__u16_to_i32" | "__u16_to_i64" | "__u16_to_u128"
+        | "__u16_to_i128" | "__u16_to_i16" | "__i16_to_u16" => JitOp::ZeroExtendU16,
+
+        "__u8_to_u16" | "__u8_to_u32" | "__u8_to_u64" | "__u8_to_i16" | "__u8_to_i32"
+        | "__u8_to_i64" | "__u8_to_u128" | "__u8_to_i128" | "__u8_to_i8" | "__i8_to_u8" => {
+            JitOp::ZeroExtendU8
+        }
+
+        "__u64_to_i32" | "__i64_to_i32" => JitOp::ZeroExtendU32,
+
+        "__u64_to_bool" | "__i64_to_bool" | "__u32_to_bool" | "__i32_to_bool" | "__f64_to_bool"
+        | "__f32_to_bool" | "__f16_to_bool" | "__u8_to_bool" | "__u16_to_bool" | "__i8_to_bool"
+        | "__i16_to_bool" | "__u128_to_bool" | "__i128_to_bool" => JitOp::ToBool,
 
         "weighted_pick" => {
             if consts.len() >= 5 {
@@ -3155,26 +3121,6 @@ fn compile_jit_impl(
                     let zero_bits = builder.ins().iconst(types::I64, 0.0_f64.to_bits() as i64);
                     let one_bits = builder.ins().iconst(types::I64, 1.0_f64.to_bits() as i64);
                     let result = builder.ins().select(cmp, one_bits, zero_bits);
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::Popcnt => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let result = builder.ins().popcnt(val);
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::Clz => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let result = builder.ins().clz(val);
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::Ctz => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let result = builder.ins().ctz(val);
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::Bswap => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let result = builder.ins().bswap(val);
                     store_slot(&mut builder, buffer_ptr, output_slots[0], result);
                 }
                 JitOp::ShuffleConst(feedback, size, min) => {

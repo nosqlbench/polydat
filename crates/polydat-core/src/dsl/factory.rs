@@ -34,8 +34,9 @@ pub enum ConstArg {
     Str(String),
     /// SRD-80b Phase C — workload-list const carrier for the
     /// `Const<Vec<C>>` shape. Each inner [`ConstArg`] is one
-    /// element; `<Vec<C> as ConstSource>::extract` walks the
-    /// list and calls `C::extract` per element.
+    /// element; the macro emits the walk over the list and the
+    /// per-element extraction for the element type it read out of
+    /// the signature.
     List(Vec<ConstArg>),
     /// A value the compiler built and hands the node as it is.
     ///
