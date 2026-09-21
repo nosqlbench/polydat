@@ -49,6 +49,16 @@ What remains:
   what is left touches the closure, hybrid and JIT builders, so it waits for the ladder
   with group A.
 
+**Both ladders were run on 2026-09-21** against a same-hour worktree baseline at the
+commit this day's work started from, and everything that landed is clean: every rung of
+the engine ladder within noise, and on the tile ladder no cell worse across two
+independent pairings, with `projected/pure_native` about four percent better both times.
+Both ladders stay monotonic, P1 through the pure tier. The first pairing flagged three
+cells, all of which the re-run dissolved — the same-code noise floor between two runs of
+one binary is ±2.2 percent here, which is larger than criterion's own p-value admits, so
+a flagged cell means re-run rather than investigate. Running it also turned up that
+`cargo build --release` had been failing outright; see the commit that fixes it.
+
 Everything left waits on the same thing: a quiet machine for the ladder. **Group F closed
 2026-09-20/21.** Of section 5's decisions, all eight are taken; 3 (the engine projection
 bodies use) fell out of group F: a projection body runs on the engine of the kernel that

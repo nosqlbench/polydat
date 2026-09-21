@@ -236,10 +236,13 @@ Run the semantic gate first:
 cargo nextest run -p polydat --test suite engine_ladder_equivalence::
 ```
 
-Then run only the focused performance target:
+Then run only the focused performance target. The engine ladder measures each
+compiled tier from its own kernel type as well as through `dyn`, and naming a
+kernel type is the one thing the normative surface does not let a caller do, so
+the target is behind `bench-tiers` and cargo refuses it without the feature:
 
 ```sh
-cargo bench -p polydat --bench engine_ladder
+cargo bench -p polydat --features bench-tiers --bench engine_ladder
 ```
 
 The tile ladder runs the same way:
@@ -252,8 +255,30 @@ The P3 and pure cases require the default `jit` feature. A no-default-features
 run still builds and measures P1 and P2:
 
 ```sh
-cargo bench -p polydat --no-default-features --bench engine_ladder
+cargo bench -p polydat --no-default-features --features bench-tiers --bench engine_ladder
 ```
+
+## Reading a comparison
+
+Checking for a regression means a baseline built from the same source in the
+same hour, in a worktree outside the repository, since a worktree under it
+shares this one's target directory:
+
+```sh
+cargo bench -p polydat --features bench-tiers --bench engine_ladder -- --save-baseline before
+cargo bench -p polydat --features bench-tiers --bench engine_ladder -- --load-baseline after --baseline before
+```
+
+Criterion's `Performance has regressed` is a statement about the samples it
+took, not about the code. Two runs of one unmodified binary differ here by up
+to 2.2 percent with p below 0.05, because the processes differ in code layout
+and in what else the machine was doing, and criterion's statistics see inside
+a run rather than across runs. So a flagged cell means run the pair again
+rather than start reading diffs: a real change survives an independent
+pairing, and on 2026-09-21 three of the four cells the first pairing flagged
+did not. A run whose confidence intervals are several times wider than its
+neighbours' was disturbed, and is worth discarding before it is compared
+against.
 
 The benchmark source is
 [`benches/engine_ladder.rs`](../../benches/engine_ladder.rs), and its cross-engine
