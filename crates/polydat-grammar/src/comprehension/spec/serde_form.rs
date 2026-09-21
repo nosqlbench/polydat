@@ -19,18 +19,18 @@
 //! - `order: "halton/50"` — traversal order spec
 //!
 //! Conversion delegates to the existing legacy parsers + the
-//! [`super::legacy_convert`] bridge. This module owns only the
+//! [`super::from_clauses`] bridge. This module owns only the
 //! serde surface and the shape-routing logic.
 
 use serde::{Deserialize, Serialize};
 
 use crate::comprehension::ast::Comprehension as AlgebraAst;
-use crate::comprehension::ast_legacy::{Clause as LegacyClause, Comprehension as LegacyAst};
+use crate::comprehension::clause_ast::{Clause as LegacyClause, Comprehension as ClauseAst};
 use crate::comprehension::parse::{
     comprehension_from_subspaces, parse_clause_list, parse_order_spec,
 };
 
-use super::legacy_convert::{ConvertError, legacy_to_algebra};
+use super::from_clauses::{ConvertError, clauses_to_algebra};
 
 /// The friendly, serde-deserializable comprehension surface.
 ///
@@ -159,18 +159,18 @@ impl ComprehensionSpec {
     /// Convert this spec into the algebra-layer
     /// [`AlgebraAst`].  Routes the `for` shape through the
     /// legacy parser, builds a legacy AST (applying `where` /
-    /// `order` modifiers), and runs the [`legacy_to_algebra`]
+    /// `order` modifiers), and runs the [`clauses_to_algebra`]
     /// bridge.
     pub fn into_algebra(self) -> Result<AlgebraAst, SpecConvertError> {
         let legacy = self.into_legacy()?;
-        let algebra = legacy_to_algebra(&legacy)?;
+        let algebra = clauses_to_algebra(&legacy)?;
         Ok(algebra)
     }
 
     /// Build the intermediate legacy AST.  Exposed for tests
     /// and for any consumer that still needs the legacy shape
     /// (e.g., during incremental cutover).
-    pub fn into_legacy(self) -> Result<LegacyAst, SpecConvertError> {
+    pub fn into_legacy(self) -> Result<ClauseAst, SpecConvertError> {
         let subspaces = self.r#for.into_subspaces()?;
         let mut legacy = comprehension_from_subspaces(subspaces);
         if let Some(predicate) = self.r#where {

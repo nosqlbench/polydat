@@ -444,10 +444,6 @@ pub enum TraversalOrder {
         /// The sampling seed; a fixed default when absent.
         seed: Option<u64>,
     },
-    Custom {
-        /// The Polydat function that orders the tuples.
-        function: String,
-    },
 }
 
 /// Origin for shell stratification.
@@ -758,7 +754,6 @@ fn format_order(order: &TraversalOrder) -> String {
         TraversalOrder::Sobol { count } => format!("sobol{}", count_suffix(*count)),
         TraversalOrder::Lhs { count, seed } => seeded_text("lhs", *count, *seed),
         TraversalOrder::Shuffle { count, seed } => seeded_text("shuffle", *count, *seed),
-        TraversalOrder::Custom { function } => format!("custom({function})"),
     }
 }
 

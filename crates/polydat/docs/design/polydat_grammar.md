@@ -925,9 +925,9 @@ and `shuffle`, plus the meta-form `space_filling(<halton|sobol|lhs>, …)`, as a
 bare `name`, terse `name/N`, or keyword `name(arg=val, …)`. The keyword
 form carries `seed=<u64>` for `shuffle` and `lhs`, the authored seed those
 strategies derive their permutation from; any other strategy refuses a
-seed. `custom(fn)`
-parses but is rejected when the text is lowered to the algebra: the strategy
-set is closed.
+seed. The set is closed: a name outside it is a parse error that lists
+the set and says so, and there is no form that names a function of the
+author's own.
 
 <a id="sec-for-elements"></a>
 ### 16.3 Element types
@@ -1018,6 +1018,21 @@ position (`x := for sweep`) is a parse error, since it modifies nothing.
 input cycle: u64
 sweep := for k in 1..4, limit in 10, 20, 30 order halton/5
 for sweep {
+    f := hash(k)
+    g := u64_add(limit, k)
+}
+```
+
+A derivation names the producer it starts from and adds a `where`, an
+`order`, or both. The result is another producer, so a derivation can
+be traversed, or derived from again:
+
+```polydat compile
+input cycle: u64
+sweep := for k in 1..9, limit in 10, 20, 30
+large := for sweep where {k} > 3
+ordered := for large order lex
+for ordered {
     f := hash(k)
     g := u64_add(limit, k)
 }

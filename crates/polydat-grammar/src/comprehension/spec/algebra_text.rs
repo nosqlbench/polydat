@@ -3,7 +3,7 @@
 
 //! The comprehension text as the algebra reads it (comprehension_forms.md
 //! §8.1, §8.2): a flat clause list with its trailing `where` and `order`
-//! goes through the clause parser and [`legacy_to_algebra`]; a bracketed
+//! goes through the clause parser and [`clauses_to_algebra`]; a bracketed
 //! union, `[ for <member>, for <member>, … ]`, lowers each member by the
 //! same rule, so any position that takes a comprehension takes every
 //! form, and the union's own trailing `where` and `order` apply to the
@@ -14,7 +14,7 @@ use crate::comprehension::parse::{
     parse_comprehension_text, parse_order_spec, split_at_order, split_at_where,
 };
 
-use super::legacy_convert::{convert_order, legacy_to_algebra};
+use super::from_clauses::{clauses_to_algebra, convert_order};
 
 /// Parse comprehension text to the algebra. A text beginning with `[`
 /// is a union of the `for`-introduced members inside the brackets,
@@ -23,8 +23,8 @@ use super::legacy_convert::{convert_order, legacy_to_algebra};
 pub fn parse_comprehension_algebra(text: &str) -> Result<Comprehension, String> {
     let trimmed = text.trim();
     let Some(inside_and_tail) = trimmed.strip_prefix('[') else {
-        let legacy = parse_comprehension_text(trimmed)?;
-        return legacy_to_algebra(&legacy).map_err(|e| e.to_string());
+        let clauses = parse_comprehension_text(trimmed)?;
+        return clauses_to_algebra(&clauses).map_err(|e| e.to_string());
     };
     let close = matching_close(inside_and_tail)
         .ok_or_else(|| "union: missing the `]` that closes `[`".to_string())?;

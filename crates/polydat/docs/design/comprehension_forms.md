@@ -3437,7 +3437,7 @@ Under this specification:
   `polydat_core::iteration::comprehension` at the same names.
 - The text front end (`polydat_grammar::comprehension::parse::parse_comprehension_text`,
   reached from the `for` token) produces a flat
-  clause/predicate/order form that `spec::legacy_to_algebra`
+  clause/predicate/order form that `spec::clauses_to_algebra`
   converts into that tree before validation or retention; the flat
   form is the parser's intermediate, never a retained
   representation. `spec::parse_text` and `spec::ComprehensionSpec`
@@ -3456,9 +3456,11 @@ Under this specification:
   `source_values`, and `streamer_value` are likewise
   `polydat_core::iteration::comprehension` modules.
 - Strategy selection uses the closed `StrategyName` enum. There
-  is no user-callback ordering escape hatch: the text front end
-  still recognizes `custom(fn)`, and the conversion to the tree
-  rejects it.
+  is no user-callback ordering escape hatch, and the text front
+  end says so: a strategy name outside the set is a parse error
+  naming the set. `custom(fn)` used to parse and be rejected one
+  layer down, which is the same answer given later and somewhere
+  a reader of the grammar would not look.
 
 ---
 

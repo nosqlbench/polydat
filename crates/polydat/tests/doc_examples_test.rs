@@ -31,8 +31,8 @@
 use polydat::ast::PortType;
 use polydat::dsl::ast::{
     Arg, BinOpKind, Binding, BindingModifier, CallExpr, CursorDecl, Expr, ExternPort, ForSource,
-    ForStmt, InputDecl, ModuleDef, PolydatFile, Statement, TileBodyKind, TileDef, TileOptions,
-    TypedParam,
+    ForSourceKind, ForStmt, InputDecl, ModuleDef, PolydatFile, Statement, TileBodyKind, TileDef,
+    TileOptions, TilePiece, TypedParam,
 };
 use polydat::dsl::compile_polydat;
 use polydat::dsl::lexer::Span;
@@ -547,4 +547,238 @@ fn paired_examples() -> Vec<Paired> {
             build: build_tile,
         },
     ]
+}
+
+// ── Grammar coverage: every surface form has a worked example ──────
+
+/// The name of a statement's form, as the grammar spells it.
+///
+/// Exhaustive on purpose: a new `Statement` variant is a compile
+/// error here, and then a missing example is a test failure below
+/// (F-L7). Coverage used to be whatever someone had pasted into the
+/// document, and the document was missing `for`, `tile`, the `if`
+/// block, and `shared x: T` — four of the newest forms in the
+/// language.
+fn statement_form(s: &Statement) -> &'static str {
+    match s {
+        Statement::InputDecl(_) => "input",
+        Statement::Binding(b) => match () {
+            _ if b.modifier.is_const() => "const binding",
+            _ if b.modifier.has(polydat::dsl::ast::WireModifier::Shared) => "shared binding",
+            _ if b.modifier.is_volatile() => "volatile binding",
+            _ => "binding",
+        },
+        Statement::ModuleDef(_) => "module",
+        Statement::ExternPort(_) => "extern",
+        Statement::Cursor(_) => "cursor",
+        Statement::Pragma { .. } => "pragma",
+        Statement::For(_) => "for",
+        Statement::Tile(_) => "tile",
+    }
+}
+
+/// The name of an expression's form.
+fn expr_form(e: &Expr) -> &'static str {
+    match e {
+        Expr::Ident(..) => "identifier",
+        Expr::IntLit(..) => "integer literal",
+        Expr::FloatLit(..) => "float literal",
+        Expr::StringLit(..) => "string literal",
+        Expr::ArrayLit(..) => "list literal",
+        Expr::Call(_) => "call",
+        Expr::BinOp(..) => "binary operator",
+        Expr::UnaryNeg(..) => "unary minus",
+        Expr::UnaryBitNot(..) => "unary bitwise not",
+        Expr::FieldAccess { .. } => "field access",
+        Expr::Cast(..) => "cast",
+        Expr::For(_) => "for expression",
+    }
+}
+
+/// The name of a `for` source's form.
+fn for_source_form(s: &ForSourceKind) -> &'static str {
+    match s {
+        ForSourceKind::Producer(_) => "for over a producer",
+        ForSourceKind::Comprehension(_) => "for over a comprehension",
+        ForSourceKind::Derived { .. } => "for over a derived producer",
+    }
+}
+
+/// The name of a tile template piece's form.
+fn tile_piece_form(p: &TilePiece) -> &'static str {
+    match p {
+        TilePiece::Static(_) => "tile static text",
+        TilePiece::Hole(_) => "tile hole",
+        TilePiece::Projection { .. } => "tile projection",
+        TilePiece::Branch { .. } => "tile branch",
+    }
+}
+
+/// The name of a tile body's delimiting form.
+fn tile_body_form(k: &TileBodyKind) -> &'static str {
+    match k {
+        TileBodyKind::Block => "tile block body",
+        TileBodyKind::Heredoc => "tile heredoc body",
+        TileBodyKind::Literal => "tile literal body",
+    }
+}
+
+/// Every form the four surface enums can take. The test asserts the
+/// document's examples cover all of them.
+fn every_form() -> Vec<&'static str> {
+    vec![
+        "input",
+        "binding",
+        "const binding",
+        "shared binding",
+        "volatile binding",
+        "module",
+        "extern",
+        "cursor",
+        "pragma",
+        "for",
+        "tile",
+        "identifier",
+        "integer literal",
+        "float literal",
+        "string literal",
+        "list literal",
+        "call",
+        "binary operator",
+        "unary minus",
+        "unary bitwise not",
+        "field access",
+        "cast",
+        "for expression",
+        "for over a producer",
+        "for over a comprehension",
+        "for over a derived producer",
+        "tile static text",
+        "tile hole",
+        "tile projection",
+        "tile branch",
+        "tile block body",
+        "tile heredoc body",
+        "tile literal body",
+    ]
+}
+
+fn walk_expr(e: &Expr, seen: &mut std::collections::BTreeSet<&'static str>) {
+    seen.insert(expr_form(e));
+    match e {
+        Expr::Call(c) => {
+            for a in &c.args {
+                let inner = match a {
+                    Arg::Positional(x) => x,
+                    Arg::Named(_, x) => x,
+                };
+                walk_expr(inner, seen);
+            }
+        }
+        Expr::BinOp(l, _, r) => {
+            walk_expr(l, seen);
+            walk_expr(r, seen);
+        }
+        Expr::UnaryNeg(i, _) | Expr::UnaryBitNot(i, _) | Expr::Cast(i, _, _) => walk_expr(i, seen),
+        Expr::ArrayLit(items, _) => {
+            for i in items {
+                walk_expr(i, seen);
+            }
+        }
+        Expr::For(src) => walk_for_source(src, seen),
+        Expr::Ident(..)
+        | Expr::IntLit(..)
+        | Expr::FloatLit(..)
+        | Expr::StringLit(..)
+        | Expr::FieldAccess { .. } => {}
+    }
+}
+
+fn walk_for_source(s: &ForSource, seen: &mut std::collections::BTreeSet<&'static str>) {
+    seen.insert(for_source_form(&s.kind));
+}
+
+fn walk_tile_piece(p: &TilePiece, seen: &mut std::collections::BTreeSet<&'static str>) {
+    seen.insert(tile_piece_form(p));
+    match p {
+        TilePiece::Projection { source, body, .. } => {
+            walk_for_source(source, seen);
+            for b in body {
+                walk_tile_piece(b, seen);
+            }
+        }
+        TilePiece::Branch {
+            cond,
+            then,
+            otherwise,
+            ..
+        } => {
+            walk_expr(cond, seen);
+            for b in then.iter().chain(otherwise.iter().flatten()) {
+                walk_tile_piece(b, seen);
+            }
+        }
+        TilePiece::Static(_) | TilePiece::Hole(_) => {}
+    }
+}
+
+fn walk_statement(s: &Statement, seen: &mut std::collections::BTreeSet<&'static str>) {
+    seen.insert(statement_form(s));
+    match s {
+        Statement::Binding(b) => walk_expr(&b.value, seen),
+        Statement::ModuleDef(m) => {
+            for inner in &m.body {
+                walk_statement(inner, seen);
+            }
+        }
+        Statement::For(f) => {
+            walk_for_source(&f.source, seen);
+            for inner in &f.body {
+                walk_statement(inner, seen);
+            }
+        }
+        Statement::Tile(t) => {
+            seen.insert(tile_body_form(&t.body_kind));
+            for p in &t.pieces {
+                walk_tile_piece(p, seen);
+            }
+        }
+        Statement::InputDecl(_)
+        | Statement::ExternPort(_)
+        | Statement::Cursor(_)
+        | Statement::Pragma { .. } => {}
+    }
+}
+
+/// Every surface form the grammar can express appears in a worked
+/// example in the specification.
+///
+/// The document's coverage used to be whatever examples someone had
+/// pasted in, and nothing noticed a form that had none: `for`, `tile`,
+/// the tile `if` block, and `shared x: T` were all absent. The form
+/// lists above are exhaustive matches, so a new AST variant fails to
+/// compile here until it is named, and then fails this test until the
+/// specification shows it.
+#[test]
+fn every_surface_form_has_an_example_in_the_spec() {
+    let mut seen: std::collections::BTreeSet<&'static str> = Default::default();
+    for block in extract_blocks(GRAMMAR_DOC, "polydat") {
+        let Ok(file) = parse(&block.body) else {
+            // The round-trip test above reports an unparseable block;
+            // this one is about coverage.
+            continue;
+        };
+        for s in &file.statements {
+            walk_statement(s, &mut seen);
+        }
+    }
+    let missing: Vec<&str> = every_form()
+        .into_iter()
+        .filter(|f| !seen.contains(f))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "polydat_grammar.md has no worked example of: {}",
+        missing.join(", ")
+    );
 }

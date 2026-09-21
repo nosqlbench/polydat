@@ -29,7 +29,7 @@
 
 use std::collections::HashMap;
 
-use super::ast_legacy::{Clause, Comprehension, ShellOrigin, TraversalOrder, ZipMode};
+use super::clause_ast::{Clause, Comprehension, ShellOrigin, TraversalOrder, ZipMode};
 
 /// Parse a single clause.
 ///
@@ -350,15 +350,22 @@ fn build_order_from_terse(name: &str, n: Option<usize>) -> Result<TraversalOrder
             count: n,
             seed: None,
         }),
-        "custom" => Err(
-            "order spec 'custom': use 'custom(<function>)' to name the Polydat function"
-                .to_string(),
-        ),
-        other => Err(format!(
-            "order spec: unknown strategy '{other}' — \
-             expected one of lex/reverse_lex/diagonal/antidiagonal/extrema/shells/halton/sobol/lhs/custom"
-        )),
+        other => Err(unknown_strategy(other)),
     }
+}
+
+/// The one message for a strategy name outside the closed set. The
+/// bare form and the keyword form both report through it, so a reader
+/// is told the same thing whichever they wrote — and is told that the
+/// set is closed, which `custom(<fn>)` used to leave them to discover
+/// later, from the lowering pass.
+fn unknown_strategy(name: &str) -> String {
+    format!(
+        "order spec: unknown strategy '{name}' — expected one of \
+         lex/reverse_lex/diagonal/antidiagonal/extrema/shells/halton/sobol/lhs/shuffle, \
+         or space_filling(halton|sobol|lhs, …). The set is closed: no form names \
+         a function of your own."
+    )
 }
 
 fn build_order_from_keyword(name: &str, body: &str) -> Result<TraversalOrder, String> {
@@ -430,15 +437,7 @@ fn build_order_from_keyword(name: &str, body: &str) -> Result<TraversalOrder, St
                 )),
             }
         }
-        "custom" => {
-            let function = args
-                .iter()
-                .find(|(k, _)| k.is_empty())
-                .map(|(_, v)| v.clone())
-                .ok_or_else(|| "custom: missing function name".to_string())?;
-            Ok(TraversalOrder::Custom { function })
-        }
-        other => Err(format!("order spec: unknown strategy '{other}'")),
+        other => Err(unknown_strategy(other)),
     }
 }
 
@@ -1032,7 +1031,7 @@ mod tests {
             let c = parse_comprehension_text(text).unwrap_or_else(|e| panic!("{text}: {e}"));
             assert!(c.is_union(), "{text}");
             assert!(c.order.is_some(), "{text}");
-            crate::comprehension::spec::legacy_convert::legacy_to_algebra(&c)
+            crate::comprehension::spec::from_clauses::clauses_to_algebra(&c)
                 .unwrap_or_else(|e| panic!("{text}: {e}"));
         }
     }
@@ -1048,13 +1047,16 @@ mod tests {
         ));
     }
 
+    /// The strategy set is closed, so a name outside it is a parse
+    /// error that lists the set. `custom(<fn>)` used to parse and
+    /// then be refused when the text was lowered to the algebra —
+    /// two answers to one question, the later one in a place a
+    /// reader of the grammar would not look.
     #[test]
-    fn union_plus_custom_is_accepted() {
-        // custom is the escape hatch — the user's function
-        // decides what ordering means for their Union shape.
-        let comp = parse_comprehension_text("k in 10, k in 100 order custom(my_fn)").unwrap();
-        assert!(comp.is_union());
-        assert!(matches!(comp.order, Some(TraversalOrder::Custom { .. })));
+    fn an_out_of_tree_ordering_is_a_parse_error() {
+        let err = parse_comprehension_text("k in 10, k in 100 order custom(my_fn)").unwrap_err();
+        assert!(err.contains("unknown strategy 'custom'"), "{err}");
+        assert!(err.contains("lex"), "{err}");
     }
 
     #[test]
@@ -1113,7 +1115,7 @@ mod tests {
         assert!(c.is_parallel());
         assert_eq!(c.vars, vec!["x".to_string(), "y".to_string()]);
         match &c.source {
-            super::super::ast_legacy::ClauseSource::Parallel { exprs, .. } => {
+            super::super::clause_ast::ClauseSource::Parallel { exprs, .. } => {
                 assert_eq!(
                     exprs,
                     &vec!["1..10".to_string(), "100..1000..100".to_string()]
@@ -1141,7 +1143,7 @@ mod tests {
         let c = parse_clause("(x, y) in (fib(8), pow2(8))").unwrap();
         assert!(c.is_parallel());
         match &c.source {
-            super::super::ast_legacy::ClauseSource::Parallel { exprs, .. } => {
+            super::super::clause_ast::ClauseSource::Parallel { exprs, .. } => {
                 assert_eq!(exprs, &vec!["fib(8)".to_string(), "pow2(8)".to_string()]);
             }
             _ => panic!("expected Parallel source"),
@@ -1214,7 +1216,7 @@ mod tests {
 
     #[test]
     fn round_trip_parallel_strict() {
-        use super::super::ast_legacy::ZipMode;
+        use super::super::clause_ast::ZipMode;
         roundtrip_clause(Clause::parallel(["x", "y"], ["fib(8)", "pow2(8)"]));
         roundtrip_clause(Clause::parallel_with_mode(
             ZipMode::Strict,
@@ -1225,7 +1227,7 @@ mod tests {
 
     #[test]
     fn round_trip_parallel_truncate_and_cycle() {
-        use super::super::ast_legacy::ZipMode;
+        use super::super::clause_ast::ZipMode;
         roundtrip_clause(Clause::parallel_with_mode(
             ZipMode::Truncate,
             ["x", "y"],
@@ -1268,7 +1270,7 @@ mod tests {
 
     #[test]
     fn parse_clause_parallel_zip_truncate_mode() {
-        use super::super::ast_legacy::{ClauseSource, ZipMode};
+        use super::super::clause_ast::{ClauseSource, ZipMode};
         let c = parse_clause("(x, y) in zip_truncate(1..10, fib(8))").unwrap();
         match &c.source {
             ClauseSource::Parallel { mode, exprs } => {
@@ -1281,7 +1283,7 @@ mod tests {
 
     #[test]
     fn parse_clause_parallel_zip_cycle_mode() {
-        use super::super::ast_legacy::{ClauseSource, ZipMode};
+        use super::super::clause_ast::{ClauseSource, ZipMode};
         let c = parse_clause("(x, y) in zip_cycle(1..10, 100..1000..100)").unwrap();
         match &c.source {
             ClauseSource::Parallel { mode, .. } => {
@@ -1293,7 +1295,7 @@ mod tests {
 
     #[test]
     fn parse_clause_parallel_default_mode_is_strict() {
-        use super::super::ast_legacy::{ClauseSource, ZipMode};
+        use super::super::clause_ast::{ClauseSource, ZipMode};
         let c = parse_clause("(x, y) in (1..10, 100..1000..100)").unwrap();
         match &c.source {
             ClauseSource::Parallel { mode, .. } => {

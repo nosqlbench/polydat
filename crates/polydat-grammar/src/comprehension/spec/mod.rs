@@ -49,28 +49,51 @@
 //! `parse_clause_list`,
 //! `parse_comprehension_text`, `parse_order_spec`. Those
 //! parsers produce the flat form with raw
-//! string sources. The [`legacy_convert`] module then walks
+//! string sources. The [`from_clauses`] module then walks
 //! that form and assembles the algebra-layer AST,
 //! using [`source_parser::parse_source`] for typed-source
 //! classification of each clause's RHS string.
 //!
 //! This is the **single bridge**: every conversion of a
 //! polydat-grammar input to the algebra layer funnels through
-//! [`legacy_convert::legacy_to_algebra`].
+//! [`from_clauses::clauses_to_algebra`].
 
 pub mod algebra_text;
-pub mod legacy_convert;
+pub mod from_clauses;
 pub mod serde_form;
 pub mod source_parser;
 pub mod text;
 
 pub use algebra_text::parse_comprehension_algebra;
-pub use legacy_convert::ConvertError;
+pub use from_clauses::ConvertError;
 pub use serde_form::{ComprehensionSpec, ForSpec, SpecConvertError, parse_inline};
 pub use source_parser::{SourceParseError, parse_source};
 pub use text::{TextParseError, parse_text};
 
-// The flat parse form (`crate::comprehension::ast_legacy`) and the
+/// An `order` specification on its own — `halton/5`, `lex`,
+/// `shuffle(seed=7)` — as the algebra's strategy, truncation, and
+/// seed.
+///
+/// A caller that has an order and nothing else used to reach this by
+/// writing `__o in 0..1 order <spec>` and running the whole
+/// comprehension parser over the result, then matching the algebra
+/// tree it got back for the one node it wanted. The parser has had an
+/// order-spec entry point all along; this exposes it.
+pub fn parse_order(
+    spec: &str,
+) -> Result<
+    (
+        crate::comprehension::strategy::StrategyName,
+        Option<u64>,
+        Option<u64>,
+    ),
+    String,
+> {
+    let form = crate::comprehension::parse::parse_order_spec(spec)?;
+    from_clauses::convert_order(&form).map_err(|e| e.to_string())
+}
+
+// The flat parse form (`crate::comprehension::clause_ast`) and the
 // text parser that produces it are crate-internal: they exist to be
 // lowered here (comprehension_forms.md §14.8). Text reaches the
 // canonical tree through [`parse_comprehension_algebra`], a spec

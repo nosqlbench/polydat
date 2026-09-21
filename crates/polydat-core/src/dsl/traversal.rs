@@ -306,9 +306,8 @@ pub fn resolve_source_with(
     Ok((comprehension, report.warnings))
 }
 
-/// Parse an `order` spec such as `halton/5` into the algebra's strategy,
-/// truncation, and seed by running it through the comprehension parser on a
-/// one-clause carrier.
+/// Parse an `order` spec such as `halton/5` into the algebra's
+/// strategy, truncation, and seed.
 fn parse_order(
     spec: &str,
 ) -> Result<
@@ -319,19 +318,7 @@ fn parse_order(
     ),
     String,
 > {
-    let carrier = format!("__o in 0..1 order {spec}");
-    let algebra = crate::iteration::comprehension::spec::parse_comprehension_algebra(&carrier)?;
-    match algebra {
-        Comprehension::Order {
-            strategy,
-            truncation,
-            seed,
-            ..
-        } => Ok((strategy, truncation, seed)),
-        other => Err(format!(
-            "order spec `{spec}` did not produce an ordering (got {other:?})"
-        )),
-    }
+    crate::iteration::comprehension::spec::parse_order(spec)
 }
 
 /// Type each element name of a comprehension from its source, per SRD

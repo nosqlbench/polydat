@@ -9,8 +9,8 @@
 //! (comprehension_forms.md §14.8). Evaluation is the runtime's.
 
 pub mod ast;
-pub(crate) mod ast_legacy;
 pub mod cardinality;
+pub(crate) mod clause_ast;
 pub mod metadata;
 pub(crate) mod parse;
 pub mod source;

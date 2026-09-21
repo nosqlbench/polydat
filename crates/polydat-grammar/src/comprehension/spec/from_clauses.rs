@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Legacy → algebra AST converter.
+//! The clause form → algebra AST converter.
 //!
 //! Reuses the crate-internal text parser
 //! for structural shape
@@ -10,29 +10,29 @@
 //! [`crate::comprehension::ast::Comprehension`].
 //!
 //! Source-string typing is handled by
-//! [`super::source_parser::parse_source`] — the legacy AST
+//! [`super::source_parser::parse_source`] — the clauses AST
 //! carries source expressions as raw strings; the algebra
 //! layer requires typed [`crate::comprehension::source::Source`]
 //! values at AST construction time so the validator and
 //! metadata propagator can do their work statically.
 //!
 //! This converter is the "single bridge" the audit calls for:
-//! every legacy AST funnels through here on the way to the
+//! every clauses AST funnels through here on the way to the
 //! algebra layer. nb-workload's parser remains responsible for
-//! turning YAML / text into legacy ASTs; polydat owns the
+//! turning YAML / text into clauses ASTs; polydat owns the
 //! conversion onward.
 
 use crate::comprehension::ast::Comprehension as AlgebraAst;
-use crate::comprehension::ast_legacy::{
-    Clause as LegacyClause, ClauseSource as LegacyClauseSource, Comprehension as LegacyAst,
-    ComprehensionMode as LegacyMode, Subspace as LegacySubspace, TraversalOrder as LegacyOrder,
-    ZipMode as LegacyZipMode,
+use crate::comprehension::clause_ast::{
+    Clause as ClauseForm, ClauseSource as ClauseSourceForm, Comprehension as ClauseAst,
+    ComprehensionMode as ModeForm, Subspace as SubspaceForm, TraversalOrder as OrderForm,
+    ZipMode as ZipModeForm,
 };
 use crate::comprehension::strategy::{StrategyName, ZipMode as AlgebraZipMode};
 
 use super::source_parser::{SourceParseError, parse_source};
 
-/// Errors produced when converting a legacy AST to algebra.
+/// Errors produced when converting a clauses AST to algebra.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConvertError {
     /// A clause's source string didn't parse to a typed `Source`.
@@ -56,12 +56,6 @@ pub enum ConvertError {
         /// Expressions given.
         exprs: usize,
     },
-    /// Custom traversal order encountered — removed from the
-    /// algebra per spec §3.6.
-    CustomOrderingRemoved {
-        /// The function the order named.
-        function: String,
-    },
 }
 
 impl std::fmt::Display for ConvertError {
@@ -80,10 +74,6 @@ impl std::fmt::Display for ConvertError {
             ConvertError::ParallelArityMismatch { vars, exprs } => {
                 write!(f, "parallel clause vars={vars} != exprs={exprs}")
             }
-            ConvertError::CustomOrderingRemoved { function } => write!(
-                f,
-                "custom ordering {function:?} is no longer supported (spec §3.6)"
-            ),
         }
     }
 }
@@ -96,36 +86,31 @@ impl std::error::Error for ConvertError {}
 /// Handles:
 /// - `mode` → cartesian / union
 /// - `filter` → wrapping `Filter` node
-/// - `order` → wrapping `Order` node (with `Custom` removed
-///   per spec §3.6)
+/// - `order` → wrapping `Order` node
 /// - `Clause::Single` source → typed `Source` via
 ///   [`parse_source`]
 /// - `Clause::Parallel` source → algebra `Zip` of single-var
 ///   clauses (the algebra layer represents parallel iteration
-///   as zip; the legacy parallel-clause shape is an inline
+///   as zip; the clauses parallel-clause shape is an inline
 ///   form of the same thing)
-// The algebra → legacy bridge (`algebra_to_legacy_iter_inputs`,
-// `algebra_union_subspaces`, `LegacyIterInputs` + their
-// private helpers) was retired in 9c-4b phase 2 — the
-// executor consumes the algebra runtime evaluator directly,
-// and test fixtures walk the algebra AST natively via
-// `Comprehension::coordinate_specs` etc. What remains here
-// is the forward direction (`legacy_to_algebra`) used by
-// `ComprehensionSpec::into_algebra` to convert parser output
-// to algebra shape.
-pub fn legacy_to_algebra(legacy: &LegacyAst) -> Result<AlgebraAst, ConvertError> {
-    let body = match &legacy.mode {
-        LegacyMode::Cartesian(clauses) => convert_cartesian(clauses)?,
-        LegacyMode::Union(subspaces) => convert_union(subspaces)?,
+// The bridge runs one way. The algebra is what everything
+// downstream reads: the evaluator consumes it directly and the
+// fixtures walk it natively. This is the forward direction,
+// `clauses_to_algebra`, which `ComprehensionSpec::into_algebra`
+// calls to turn parser output into algebra shape.
+pub fn clauses_to_algebra(clauses: &ClauseAst) -> Result<AlgebraAst, ConvertError> {
+    let body = match &clauses.mode {
+        ModeForm::Cartesian(clauses) => convert_cartesian(clauses)?,
+        ModeForm::Union(subspaces) => convert_union(subspaces)?,
     };
 
-    let with_filter = if let Some(pred) = &legacy.filter {
+    let with_filter = if let Some(pred) = &clauses.filter {
         AlgebraAst::filter(body, pred.clone())
     } else {
         body
     };
 
-    let with_order = if let Some(order) = &legacy.order {
+    let with_order = if let Some(order) = &clauses.order {
         let (strategy, truncation, seed) = convert_order(order)?;
         AlgebraAst::order_seeded(with_filter, strategy, truncation, seed)
     } else {
@@ -135,7 +120,7 @@ pub fn legacy_to_algebra(legacy: &LegacyAst) -> Result<AlgebraAst, ConvertError>
     Ok(with_order)
 }
 
-fn convert_cartesian(clauses: &[LegacyClause]) -> Result<AlgebraAst, ConvertError> {
+fn convert_cartesian(clauses: &[ClauseForm]) -> Result<AlgebraAst, ConvertError> {
     if clauses.is_empty() {
         return Err(ConvertError::EmptyComprehension);
     }
@@ -153,7 +138,7 @@ fn convert_cartesian(clauses: &[LegacyClause]) -> Result<AlgebraAst, ConvertErro
     }
 }
 
-fn convert_union(subspaces: &[LegacySubspace]) -> Result<AlgebraAst, ConvertError> {
+fn convert_union(subspaces: &[SubspaceForm]) -> Result<AlgebraAst, ConvertError> {
     if subspaces.is_empty() {
         return Err(ConvertError::EmptyComprehension);
     }
@@ -174,9 +159,9 @@ fn convert_union(subspaces: &[LegacySubspace]) -> Result<AlgebraAst, ConvertErro
     }
 }
 
-fn convert_clause(clause: &LegacyClause) -> Result<AlgebraAst, ConvertError> {
+fn convert_clause(clause: &ClauseForm) -> Result<AlgebraAst, ConvertError> {
     match &clause.source {
-        LegacyClauseSource::Single(source_str) => {
+        ClauseSourceForm::Single(source_str) => {
             let var = clause
                 .single_var()
                 .unwrap_or_else(|| clause.first_var())
@@ -188,14 +173,14 @@ fn convert_clause(clause: &LegacyClause) -> Result<AlgebraAst, ConvertError> {
             })?;
             Ok(AlgebraAst::clause(var, source))
         }
-        LegacyClauseSource::Parallel { mode, exprs } => {
+        ClauseSourceForm::Parallel { mode, exprs } => {
             if clause.vars.len() != exprs.len() {
                 return Err(ConvertError::ParallelArityMismatch {
                     vars: clause.vars.len(),
                     exprs: exprs.len(),
                 });
             }
-            // Parallel iteration in legacy = zip in algebra.
+            // Parallel iteration in the clause form is zip in the algebra.
             // Build a single-var clause per (var, expr) pair,
             // wrap in a Zip with the converted mode.
             let mut children = Vec::with_capacity(clause.vars.len());
@@ -213,43 +198,38 @@ fn convert_clause(clause: &LegacyClause) -> Result<AlgebraAst, ConvertError> {
     }
 }
 
-fn convert_zip_mode(legacy: LegacyZipMode) -> AlgebraZipMode {
-    match legacy {
-        LegacyZipMode::Strict => AlgebraZipMode::Strict,
-        LegacyZipMode::Truncate => AlgebraZipMode::Truncate,
-        LegacyZipMode::Cycle => AlgebraZipMode::Cycle,
+fn convert_zip_mode(clauses: ZipModeForm) -> AlgebraZipMode {
+    match clauses {
+        ZipModeForm::Strict => AlgebraZipMode::Strict,
+        ZipModeForm::Truncate => AlgebraZipMode::Truncate,
+        ZipModeForm::Cycle => AlgebraZipMode::Cycle,
     }
 }
 
-/// Convert a legacy [`LegacyOrder`] into the algebra's
+/// Convert a clauses [`OrderForm`] into the algebra's
 /// `(StrategyName, Option<u64>)` pair.
 ///
-/// The legacy `Custom { function }` form is rejected — per
+/// The clauses `Custom { function }` form is rejected — per
 /// spec §3.6, custom orderings are no longer supported.
 pub(crate) fn convert_order(
-    order: &LegacyOrder,
+    order: &OrderForm,
 ) -> Result<(StrategyName, Option<u64>, Option<u64>), ConvertError> {
     let triple = match order {
-        LegacyOrder::Lex { count } => (StrategyName::Lex, count.map(|n| n as u64), None),
-        LegacyOrder::ReverseLex { count } => {
+        OrderForm::Lex { count } => (StrategyName::Lex, count.map(|n| n as u64), None),
+        OrderForm::ReverseLex { count } => {
             (StrategyName::ReverseLex, count.map(|n| n as u64), None)
         }
-        LegacyOrder::Diagonal { count } => (StrategyName::Diagonal, count.map(|n| n as u64), None),
-        LegacyOrder::Antidiagonal { count } => {
+        OrderForm::Diagonal { count } => (StrategyName::Diagonal, count.map(|n| n as u64), None),
+        OrderForm::Antidiagonal { count } => {
             (StrategyName::Antidiagonal, count.map(|n| n as u64), None)
         }
-        LegacyOrder::Extrema { strata } => (StrategyName::Extrema, strata.map(|n| n as u64), None),
-        LegacyOrder::Shells { depth, .. } => (StrategyName::Shells, depth.map(|n| n as u64), None),
-        LegacyOrder::Halton { count } => (StrategyName::Halton, count.map(|n| n as u64), None),
-        LegacyOrder::Sobol { count } => (StrategyName::Sobol, count.map(|n| n as u64), None),
-        LegacyOrder::Lhs { count, seed } => (StrategyName::Lhs, count.map(|n| n as u64), *seed),
-        LegacyOrder::Shuffle { count, seed } => {
+        OrderForm::Extrema { strata } => (StrategyName::Extrema, strata.map(|n| n as u64), None),
+        OrderForm::Shells { depth, .. } => (StrategyName::Shells, depth.map(|n| n as u64), None),
+        OrderForm::Halton { count } => (StrategyName::Halton, count.map(|n| n as u64), None),
+        OrderForm::Sobol { count } => (StrategyName::Sobol, count.map(|n| n as u64), None),
+        OrderForm::Lhs { count, seed } => (StrategyName::Lhs, count.map(|n| n as u64), *seed),
+        OrderForm::Shuffle { count, seed } => {
             (StrategyName::Shuffle, count.map(|n| n as u64), *seed)
-        }
-        LegacyOrder::Custom { function } => {
-            return Err(ConvertError::CustomOrderingRemoved {
-                function: function.clone(),
-            });
         }
     };
     Ok(triple)
@@ -260,18 +240,18 @@ mod tests {
     use super::*;
     use crate::comprehension::source::{LiteralValue, Source};
 
-    fn legacy_clause(var: &str, source: &str) -> LegacyClause {
-        LegacyClause::new(var, source)
+    fn clause(var: &str, source: &str) -> ClauseForm {
+        ClauseForm::new(var, source)
     }
 
     #[test]
     fn cartesian_single_clause_collapses_to_clause() {
-        let legacy = LegacyAst {
-            mode: LegacyMode::Cartesian(vec![legacy_clause("k", "1..10")]),
+        let clauses = ClauseAst {
+            mode: ModeForm::Cartesian(vec![clause("k", "1..10")]),
             filter: None,
             order: None,
         };
-        let algebra = legacy_to_algebra(&legacy).unwrap();
+        let algebra = clauses_to_algebra(&clauses).unwrap();
         match algebra {
             AlgebraAst::Clause { name, source } => {
                 assert_eq!(name, "k");
@@ -290,15 +270,15 @@ mod tests {
 
     #[test]
     fn multi_clause_cartesian_becomes_algebra_cartesian() {
-        let legacy = LegacyAst {
-            mode: LegacyMode::Cartesian(vec![
-                legacy_clause("k", "1..10"),
-                legacy_clause("limit", "[10, 100, 1000]"),
+        let clauses = ClauseAst {
+            mode: ModeForm::Cartesian(vec![
+                clause("k", "1..10"),
+                clause("limit", "[10, 100, 1000]"),
             ]),
             filter: None,
             order: None,
         };
-        let algebra = legacy_to_algebra(&legacy).unwrap();
+        let algebra = clauses_to_algebra(&clauses).unwrap();
         match algebra {
             AlgebraAst::Cartesian { children } => {
                 assert_eq!(children.len(), 2);
@@ -338,23 +318,23 @@ mod tests {
 
     #[test]
     fn filter_wraps_body() {
-        let legacy = LegacyAst {
-            mode: LegacyMode::Cartesian(vec![legacy_clause("k", "1..10")]),
+        let clauses = ClauseAst {
+            mode: ModeForm::Cartesian(vec![clause("k", "1..10")]),
             filter: Some("{k} > 5".to_string()),
             order: None,
         };
-        let algebra = legacy_to_algebra(&legacy).unwrap();
+        let algebra = clauses_to_algebra(&clauses).unwrap();
         assert!(matches!(algebra, AlgebraAst::Filter { .. }));
     }
 
     #[test]
     fn order_lex_with_count_round_trips() {
-        let legacy = LegacyAst {
-            mode: LegacyMode::Cartesian(vec![legacy_clause("k", "1..10")]),
+        let clauses = ClauseAst {
+            mode: ModeForm::Cartesian(vec![clause("k", "1..10")]),
             filter: None,
-            order: Some(LegacyOrder::Lex { count: Some(5) }),
+            order: Some(OrderForm::Lex { count: Some(5) }),
         };
-        let algebra = legacy_to_algebra(&legacy).unwrap();
+        let algebra = clauses_to_algebra(&clauses).unwrap();
         match algebra {
             AlgebraAst::Order {
                 strategy: StrategyName::Lex,
@@ -367,15 +347,12 @@ mod tests {
 
     #[test]
     fn order_halton_with_count() {
-        let legacy = LegacyAst {
-            mode: LegacyMode::Cartesian(vec![
-                legacy_clause("k", "1..10"),
-                legacy_clause("limit", "1..100"),
-            ]),
+        let clauses = ClauseAst {
+            mode: ModeForm::Cartesian(vec![clause("k", "1..10"), clause("limit", "1..100")]),
             filter: None,
-            order: Some(LegacyOrder::Halton { count: Some(20) }),
+            order: Some(OrderForm::Halton { count: Some(20) }),
         };
-        let algebra = legacy_to_algebra(&legacy).unwrap();
+        let algebra = clauses_to_algebra(&clauses).unwrap();
         match algebra {
             AlgebraAst::Order {
                 strategy: StrategyName::Halton,
@@ -387,35 +364,16 @@ mod tests {
     }
 
     #[test]
-    fn custom_ordering_rejected() {
-        let legacy = LegacyAst {
-            mode: LegacyMode::Cartesian(vec![legacy_clause("k", "1..10")]),
-            filter: None,
-            order: Some(LegacyOrder::Custom {
-                function: "my_fn".to_string(),
-            }),
-        };
-        let err = legacy_to_algebra(&legacy).unwrap_err();
-        assert!(matches!(err, ConvertError::CustomOrderingRemoved { .. }));
-    }
-
-    #[test]
     fn union_of_subspaces() {
-        let legacy = LegacyAst {
-            mode: LegacyMode::Union(vec![
-                LegacySubspace::new(vec![
-                    legacy_clause("k", "10"),
-                    legacy_clause("limit", "[1, 2, 3]"),
-                ]),
-                LegacySubspace::new(vec![
-                    legacy_clause("k", "100"),
-                    legacy_clause("limit", "[10, 20, 30]"),
-                ]),
+        let clauses = ClauseAst {
+            mode: ModeForm::Union(vec![
+                SubspaceForm::new(vec![clause("k", "10"), clause("limit", "[1, 2, 3]")]),
+                SubspaceForm::new(vec![clause("k", "100"), clause("limit", "[10, 20, 30]")]),
             ]),
             filter: None,
             order: None,
         };
-        let algebra = legacy_to_algebra(&legacy).unwrap();
+        let algebra = clauses_to_algebra(&clauses).unwrap();
         match algebra {
             AlgebraAst::Union { children } => assert_eq!(children.len(), 2),
             other => panic!("expected Union, got {other:?}"),
@@ -424,13 +382,13 @@ mod tests {
 
     #[test]
     fn parallel_clause_becomes_zip() {
-        let parallel = LegacyClause::parallel(["x", "y"], ["1..3", "10..30"]);
-        let legacy = LegacyAst {
-            mode: LegacyMode::Cartesian(vec![parallel]),
+        let parallel = ClauseForm::parallel(["x", "y"], ["1..3", "10..30"]);
+        let clauses = ClauseAst {
+            mode: ModeForm::Cartesian(vec![parallel]),
             filter: None,
             order: None,
         };
-        let algebra = legacy_to_algebra(&legacy).unwrap();
+        let algebra = clauses_to_algebra(&clauses).unwrap();
         // After the singleton-cartesian elide, the Zip
         // surfaces at the top level.
         match algebra {
@@ -450,12 +408,12 @@ mod tests {
         // Generator expression (runtime evaluates). So
         // "totally nonsense" round-trips through algebra as
         // a Source::Generator. No conversion error.
-        let legacy = LegacyAst {
-            mode: LegacyMode::Cartesian(vec![legacy_clause("k", "totally nonsense")]),
+        let clauses = ClauseAst {
+            mode: ModeForm::Cartesian(vec![clause("k", "totally nonsense")]),
             filter: None,
             order: None,
         };
-        let algebra = legacy_to_algebra(&legacy).unwrap();
+        let algebra = clauses_to_algebra(&clauses).unwrap();
         match algebra {
             AlgebraAst::Clause { source, .. } => match source {
                 crate::comprehension::source::Source::Generator { expr, .. } => {
@@ -467,23 +425,23 @@ mod tests {
         }
     }
 
-    // (algebra → legacy back-converter tests retired with the
+    // (algebra → clauses back-converter tests retired with the
     // bridge in 9c-4b phase 2. The forward direction
-    // (`legacy_to_algebra`) tests above remain.)
+    // (`clauses_to_algebra`) tests above remain.)
 
     /// The authored seed of a seeded order reaches the algebra; the
     /// other strategies lower without one.
     #[test]
     fn a_seeded_order_keeps_its_seed_in_the_algebra() {
-        let legacy = LegacyAst {
-            mode: LegacyMode::Cartesian(vec![legacy_clause("k", "1..10")]),
+        let clauses = ClauseAst {
+            mode: ModeForm::Cartesian(vec![clause("k", "1..10")]),
             filter: None,
-            order: Some(LegacyOrder::Shuffle {
+            order: Some(OrderForm::Shuffle {
                 count: Some(3),
                 seed: Some(42),
             }),
         };
-        let algebra = legacy_to_algebra(&legacy).unwrap();
+        let algebra = clauses_to_algebra(&clauses).unwrap();
         assert!(
             matches!(
                 algebra,
@@ -497,7 +455,7 @@ mod tests {
             "{algebra:?}"
         );
         assert_eq!(
-            convert_order(&LegacyOrder::Lhs {
+            convert_order(&OrderForm::Lhs {
                 count: None,
                 seed: Some(7)
             })
@@ -505,7 +463,7 @@ mod tests {
             (StrategyName::Lhs, None, Some(7))
         );
         assert_eq!(
-            convert_order(&LegacyOrder::Halton { count: Some(4) }).unwrap(),
+            convert_order(&OrderForm::Halton { count: Some(4) }).unwrap(),
             (StrategyName::Halton, Some(4), None)
         );
     }
