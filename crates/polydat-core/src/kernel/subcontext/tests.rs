@@ -1480,3 +1480,58 @@ fn l2f_strict_rejects_silent_fall_through() {
         other => panic!("expected StrictNonePropagation, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// The parent view: what a builder reads of the scope it builds under.
+// ---------------------------------------------------------------------------
+
+/// A builder takes a `ParentView`, not a kernel, so a caller holding
+/// a plain `PolydatKernel` builds a subcontext without standing one
+/// up. The view carries the parent's live cells, which is the part
+/// the transient kernel existed to supply: writing through the
+/// child's export reaches the cell the parent itself reads.
+#[test]
+fn a_parent_view_carries_the_parents_live_cells() {
+    let parent = compile_polydat_interpreter("input cycle: u64\nshared X := 0\n")
+        .expect("parent kernel compile");
+    let view = super::builder::ParentView::of(&parent);
+    assert!(view.program().output_names().contains(&"X"));
+    let cell = view
+        .shared_cells()
+        .iter()
+        .find(|c| c.name == "X")
+        .expect("the parent's shared cell is in the view");
+
+    let mut b: SubcontextBuilder<RootMarker> = SubcontextBuilder::new(view.clone());
+    b.context(SourceContext::for_phase("view-rule2"));
+    b.export(ExportSpec::shared("X", PortType::U64));
+    b.body(BodyFragment::PolydatSource(
+        "input cycle: u64\nX := 42\n".to_string(),
+    ));
+    let module = b.finalize().expect("Rule 2 resolves against the view");
+    assert_eq!(module.write_throughs().len(), 1);
+
+    // The cell in the view is the parent's own, not a copy of it.
+    cell.cell.publish(Value::U64(9));
+    assert_eq!(parent.lookup("X"), Some(Value::U64(9)));
+}
+
+/// Rule 1 still closes over the real parent's names: a view of a
+/// kernel that exports neither `absent` nor an input by that name
+/// rejects the import.
+#[test]
+fn a_parent_view_rejects_an_import_the_parent_cannot_answer() {
+    let parent = compile_polydat_interpreter("input cycle: u64\nseed := hash(cycle)\n")
+        .expect("parent kernel compile");
+    let mut b: SubcontextBuilder<RootMarker> =
+        SubcontextBuilder::new(super::builder::ParentView::of(&parent));
+    b.context(SourceContext::for_phase("view-rule1"));
+    b.import(ImportSpec::shared("absent", PortType::U64));
+    b.body(BodyFragment::PolydatSource(
+        "input cycle: u64\nextern absent: u64\nv := absent\n".to_string(),
+    ));
+    match b.finalize().expect_err("unbound import") {
+        ContractViolation::UnboundImport { import, .. } => assert_eq!(import, "absent"),
+        other => panic!("expected UnboundImport, got {other:?}"),
+    }
+}

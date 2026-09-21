@@ -11,8 +11,9 @@
 //!
 //! The kernel exposes:
 //! - [`Self::subcontext_builder`] — yields a typed
-//!   [`super::SubcontextBuilder`] from an `Arc<Self>`. The single
-//!   public entry point for child construction.
+//!   [`super::SubcontextBuilder`] over this kernel's
+//!   [`super::ParentView`]. The single public entry point for child
+//!   construction on the typed path.
 //! - [`Self::spawn`] — the single chokepoint where every
 //!   cross-binding is resolved; takes a closed
 //!   [`super::ScopeModule`] artifact, applies SRD-67's
@@ -29,7 +30,7 @@ use std::sync::{Arc, Mutex};
 use crate::ast::{PortType, Value};
 use crate::kernel::{PolydatKernel, SharedCell};
 
-use super::builder::SubcontextBuilder;
+use super::builder::{ParentView, SubcontextBuilder};
 use super::error::{ContractViolation, SourceContext};
 use super::module::{ScopeModule, WriteThroughBinding};
 use super::name::ChildName;
@@ -148,10 +149,9 @@ impl<M> ScopeKernel<M> {
             .collect()
     }
 
-    /// Internal constructor — only callers within the crate (the
-    /// builder / spawn path; tests via `Self::wrap_for_test`)
-    /// produce a `ScopeKernel` directly. Public callers go
-    /// through the protocol.
+    /// Internal constructor — only the spawn path and
+    /// [`wrap_root_kernel`] produce a `ScopeKernel` directly. Public
+    /// callers go through the protocol.
     pub(crate) fn new_internal(
         name: ChildName,
         kernel: PolydatKernel,
@@ -231,11 +231,15 @@ impl<M> ScopeKernel<M> {
     }
 
     /// Begin construction of a child sub-context. Per SRD-67
-    /// §"Step 1 — Parent yields a builder": the builder borrows
-    /// an `Arc` of the parent, accumulates module matter, and
-    /// produces a closed [`ScopeModule`] artifact at finalize.
-    pub fn subcontext_builder(self: Arc<Self>) -> SubcontextBuilder<M> {
-        SubcontextBuilder::new(self)
+    /// §"Step 1 — Parent yields a builder": the builder takes the
+    /// parent's [`ParentView`] — its program and its in-scope cells,
+    /// which is everything finalize reads of a parent — accumulates
+    /// module matter, and produces a closed [`ScopeModule`] artifact
+    /// at finalize. It holds no reference to the parent kernel, so a
+    /// caller that only has a [`PolydatKernel`] needs no `ScopeKernel`
+    /// to stand up a child.
+    pub fn subcontext_builder(&self) -> SubcontextBuilder<M> {
+        SubcontextBuilder::new(ParentView::of(&self.lock_inner()))
     }
 
     /// Spawn a child kernel from a closed [`ScopeModule`]
@@ -376,13 +380,16 @@ impl<M> ScopeKernel<M> {
 }
 
 /// Construct a workload-root [`ScopeKernel<RootMarker>`] from a
-/// pre-compiled [`PolydatKernel`]. Phase 1 bridge for callers that
-/// already have a kernel and want to use it as the parent of a
-/// typed sub-context.
+/// pre-compiled [`PolydatKernel`]: the door into the typed scope
+/// path, where a host spawns children it keeps and releases by name
+/// rather than dropping a kernel on the floor.
 ///
-/// Used by `PolydatKernel::build_subscope` to stand up the transient
-/// typed parent.
-pub(crate) fn wrap_root_kernel(
+/// `PolydatKernel::build_subscope` no longer calls this. It used to,
+/// to stand up a transient typed parent for the builder to validate
+/// against, which is what kept the only constructor of a root scope
+/// crate-private; the builder takes a [`ParentView`] now, so this is
+/// the host's constructor and nothing else's.
+pub fn wrap_root_kernel(
     kernel: PolydatKernel,
     label: impl Into<String>,
 ) -> Arc<ScopeKernel<RootMarker>> {
@@ -598,8 +605,8 @@ impl PolydatKernel {
             PolydatMatterInner::Source(s) => {
                 let strict = s.options.strict;
                 let label = s.label.clone();
-                let transient = self.transient_typed_parent(&s.label);
-                let mut builder = transient.clone().subcontext_builder();
+                let mut builder: SubcontextBuilder<RootMarker> =
+                    SubcontextBuilder::new(ParentView::of(self));
                 builder
                     .context(SourceContext::new(s.label.clone()))
                     .mark_inherited_outputs(s.inherited_outputs)
@@ -610,15 +617,14 @@ impl PolydatKernel {
                 }
                 let module = builder.finalize()?;
                 let child = self.materialize_subscope(module.program.clone(), &[]);
-                drop(transient);
                 enforce_l2f_strict(&child, strict, &label)?;
                 Ok(child)
             }
             PolydatMatterInner::Statements(s) => {
                 let strict = s.options.strict;
                 let label = s.label.clone();
-                let transient = self.transient_typed_parent(&s.label);
-                let mut builder = transient.clone().subcontext_builder();
+                let mut builder: SubcontextBuilder<RootMarker> =
+                    SubcontextBuilder::new(ParentView::of(self));
                 builder
                     .context(SourceContext::new(s.label.clone()))
                     .mark_inherited_outputs(s.inherited_outputs)
@@ -629,18 +635,10 @@ impl PolydatKernel {
                 }
                 let module = builder.finalize()?;
                 let child = self.materialize_subscope(module.program.clone(), &[]);
-                drop(transient);
                 enforce_l2f_strict(&child, strict, &label)?;
                 Ok(child)
             }
         }
-    }
-
-    /// Snapshot a typed `ScopeKernel<RootMarker>` over `self`'s
-    /// live cell view, used as the transient parent the
-    /// SubcontextBuilder validates against.
-    fn transient_typed_parent(&self, label: &str) -> Arc<ScopeKernel<RootMarker>> {
-        wrap_root_kernel(self.snapshot_with_cells(), format!("{label}__transient"))
     }
 }
 

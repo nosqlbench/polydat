@@ -4,9 +4,9 @@
 //! [`SubcontextBuilder<P>`] — accumulator for module matter.
 //!
 //! Per SRD-67 §"Step 2 — Builder accumulates module matter": the
-//! builder owns an `Arc<ScopeKernel<P>>` for the parent, records
-//! imports / exports / body fragments / pull consumers, and at
-//! `finalize` validates the import contract against the parent's
+//! builder holds a [`ParentView`] of the scope it builds under,
+//! records imports / exports / body fragments / pull consumers, and
+//! at `finalize` validates the import contract against the parent's
 //! exports + compiles the body via the existing `compile_polydat` /
 //! `compile_ast` pipeline. The result is a closed
 //! [`ScopeModule<Child<P>>`] artifact.
@@ -20,9 +20,10 @@ use crate::dsl::ast::{Arg, CallExpr, Expr, ExternPort, PolydatFile, Statement};
 use crate::dsl::compile::{CompileOptions as DslOptions, compile_ast_interpreter_with_options};
 use crate::dsl::lexer::{Span, lex};
 use crate::dsl::parser::parse;
+use crate::kernel::PolydatKernel;
 
 use super::error::{ContractViolation, SourceContext};
-use super::kernel::{Child, ScopeKernel};
+use super::kernel::{Child, SharedCellInScope};
 use super::module::{BodyFragment, ScopeContract, ScopeModule, WriteThroughBinding};
 use super::pull::{PullConsumer, RegisteredPullConsumer};
 use super::spec::{ExportSpec, ImportSpec};
@@ -92,11 +93,58 @@ impl CompileOptions {
     }
 }
 
-/// Module-matter accumulator. Construction is gated by
-/// [`ScopeKernel::subcontext_builder`] — the parent is the only
-/// way in.
+/// Everything a builder reads of the scope it builds under: the
+/// parent's compiled program, which answers every declared name,
+/// every output modifier, and names the ledger the child's compile
+/// is charged to; and the shared cells in scope at the parent, each
+/// a live handle rather than a copy.
+///
+/// That is the whole parent surface `finalize` touches. It used to
+/// be an `Arc<ScopeKernel<P>>`, so a caller holding a plain
+/// [`PolydatKernel`] had to clone one into existence to ask five
+/// questions — a full state over the parent's program, a buffer and
+/// a clean flag per node, allocated and dropped.
+#[derive(Clone)]
+pub struct ParentView {
+    program: Arc<crate::kernel::PolydatProgram>,
+    shared_cells: Vec<SharedCellInScope>,
+}
+
+impl ParentView {
+    /// The view a kernel presents to a subcontext built under it.
+    pub fn of(parent: &PolydatKernel) -> Self {
+        Self {
+            program: parent.program().clone(),
+            shared_cells: parent
+                .shared_cells_in_scope()
+                .into_iter()
+                .map(|e| SharedCellInScope {
+                    name: e.name,
+                    port_type: e.port_type,
+                    cell: e.cell,
+                })
+                .collect(),
+        }
+    }
+
+    /// The parent's compiled program.
+    pub fn program(&self) -> &Arc<crate::kernel::PolydatProgram> {
+        &self.program
+    }
+
+    /// The shared cells visible at the parent, its own and every
+    /// ancestor's that reached it.
+    pub fn shared_cells(&self) -> &[SharedCellInScope] {
+        &self.shared_cells
+    }
+}
+
+/// Module-matter accumulator. Construction is gated by a parent —
+/// [`ScopeKernel::subcontext_builder`](super::ScopeKernel::subcontext_builder)
+/// on the typed path, `PolydatKernel::build_subscope` on the untyped
+/// one — and both hand it the same [`ParentView`].
 pub struct SubcontextBuilder<P> {
-    parent: Arc<ScopeKernel<P>>,
+    parent: ParentView,
     imports: Vec<ImportSpec>,
     exports: Vec<ExportSpec>,
     body: Vec<BodyFragment>,
@@ -113,12 +161,14 @@ pub struct SubcontextBuilder<P> {
     /// for callers that don't need libs / strict / required-output
     /// filtering.
     compile_options: CompileOptions,
+    _parent_marker: PhantomData<fn() -> P>,
 }
 
 impl<P> SubcontextBuilder<P> {
-    pub(crate) fn new(parent: Arc<ScopeKernel<P>>) -> Self {
+    pub(crate) fn new(parent: ParentView) -> Self {
         Self {
             parent,
+            _parent_marker: PhantomData,
             imports: Vec::new(),
             exports: Vec::new(),
             body: Vec::new(),
@@ -157,9 +207,9 @@ impl<P> SubcontextBuilder<P> {
         self
     }
 
-    /// Borrow the parent kernel — used by tests / advanced
-    /// callers that need to inspect parent state during build.
-    pub fn parent(&self) -> &Arc<ScopeKernel<P>> {
+    /// The parent surface this builder validates against — used by
+    /// tests and by callers that need to inspect it during build.
+    pub fn parent(&self) -> &ParentView {
         &self.parent
     }
 
@@ -343,7 +393,7 @@ impl<P> SubcontextBuilder<P> {
         // compiler hit a type mismatch wiring the f64 RHS
         // through it.
         {
-            let in_scope_cells = self.parent.shared_cells_in_scope();
+            let in_scope_cells = self.parent.shared_cells();
             let parent_shared_by_name: std::collections::HashMap<&str, PortType> = in_scope_cells
                 .iter()
                 .map(|c| (c.name.as_str(), c.port_type))
@@ -394,6 +444,7 @@ impl<P> SubcontextBuilder<P> {
             context,
             inherited_outputs,
             compile_options,
+            _parent_marker,
         } = self;
 
         let mut diagnostics: Vec<String> = Vec::new();
@@ -405,15 +456,14 @@ impl<P> SubcontextBuilder<P> {
         // here; the compiler's slot type checks and
         // `check_write_through_type` protect the actual child
         // inputs and cell writes. -----
-        let parent_inner = parent.lock_inner();
-        let parent_outputs: std::collections::HashSet<String> = parent_inner
-            .program()
+        let parent_program = parent.program();
+        let parent_outputs: std::collections::HashSet<String> = parent_program
             .output_names()
             .iter()
             .map(|s| (*s).to_string())
             .collect();
         let parent_inputs: std::collections::HashSet<String> =
-            parent_inner.program().input_names().into_iter().collect();
+            parent_program.input_names().into_iter().collect();
 
         for imp in &imports {
             if !parent_outputs.contains(&imp.name) && !parent_inputs.contains(&imp.name) {
@@ -446,22 +496,18 @@ impl<P> SubcontextBuilder<P> {
         //
         // * No parent export and no in-scope cell → child-only
         //   export, registered locally (no rewrite).
-        drop(parent_inner);
-        let in_scope_cells = parent.shared_cells_in_scope();
-        let in_scope_cells_by_name: std::collections::HashMap<
-            &str,
-            &super::kernel::SharedCellInScope,
-        > = in_scope_cells
-            .iter()
-            .map(|c| (c.name.as_str(), c))
-            .collect();
-        let parent_inner = parent.lock_inner();
+        let in_scope_cells = parent.shared_cells();
+        let in_scope_cells_by_name: std::collections::HashMap<&str, &SharedCellInScope> =
+            in_scope_cells
+                .iter()
+                .map(|c| (c.name.as_str(), c))
+                .collect();
         // A subscope is a program of the parent's tree: its compile is
         // charged to the parent's ledger.
-        let ledger = parent_inner.program().ledger().clone();
+        let ledger = parent_program.ledger().clone();
         let mut write_through_specs: Vec<(String, PortType)> = Vec::new();
         for exp in &exports {
-            let parent_modifier = parent_inner.program().output_modifier(&exp.name);
+            let parent_modifier = parent_program.output_modifier(&exp.name);
             if parent_modifier.is_const() && parent_outputs.contains(&exp.name) {
                 return Err(ContractViolation::FinalShadow {
                     export: exp.name.clone(),
@@ -477,7 +523,6 @@ impl<P> SubcontextBuilder<P> {
                 write_through_specs.push((exp.name.clone(), in_scope.port_type));
             }
         }
-        drop(parent_inner);
 
         // ----- Lower every body fragment into a single
         // Vec<Statement>. The Rule 2 rewrite operates on the AST

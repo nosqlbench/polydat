@@ -85,11 +85,11 @@ mod spec;
 #[cfg(test)]
 mod tests;
 
-pub use builder::{CompileOptions, SubcontextBuilder};
+pub use builder::{CompileOptions, ParentView, SubcontextBuilder};
 pub use error::{ContractViolation, SourceContext};
 pub(crate) use kernel::PolydatMatterInner;
 pub use kernel::{Child, PolydatMatter, PolydatMatterBuilder, RootMarker};
-pub use kernel::{ScopeKernel, SharedCellInScope};
+pub use kernel::{ScopeKernel, SharedCellInScope, wrap_root_kernel};
 pub use module::{BodyFragment, ScopeContract, ScopeModule};
 pub use name::ChildName;
 pub use pull::{NamedPullConsumer, PullConsumer, RegisteredPullConsumer};
