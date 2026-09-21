@@ -88,6 +88,8 @@ mod hybrid_test;
 mod ir_end_to_end;
 #[path = "local_modules.rs"]
 mod local_modules;
+#[path = "nodes_reference.rs"]
+mod nodes_reference;
 #[path = "optimizer_worked_examples.rs"]
 mod optimizer_worked_examples;
 #[path = "polydat_examples_test.rs"]
