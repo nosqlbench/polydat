@@ -194,7 +194,7 @@ Pure native code, the differential tier behind P3, runs every one of them as wel
 | `elapsed_millis` | Elapsed milliseconds since session start. |
 | `env` | Environment variable read, frozen at construction. |
 | `env_or` | Environment variable read with default, frozen at construction. |
-| `limit` | cursor limit — clamps extent for smoke testing |
+| `limit` | Cursor limit: passes the input value through unchanged. |
 | `session_start_millis` | Session start time in epoch milliseconds, frozen at construction. |
 | `thread_id` | Current OS thread numeric identifier. |
 | `tmp_dir` | System temp directory, frozen at construction. |

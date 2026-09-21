@@ -1639,7 +1639,7 @@ impl Compiler {
             let ordinal_wire = format!("{source_name}__ordinal");
             asm.add_node(
                 &limit_node_name,
-                Box::new(crate::library::context::CursorLimit::new(limit_val)),
+                Box::new(crate::library::context::Limit::new(limit_val)),
                 vec![WireRef::node(&ordinal_wire)],
             );
             // Shadow the ordinal output with the limited version

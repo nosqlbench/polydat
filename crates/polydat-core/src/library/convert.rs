@@ -406,31 +406,6 @@ fn zero_pad_u64(
     format!("{:0>width$}", input, width = *width as usize)
 }
 
-// ---------------------------------------------------------------------------
-// Signature declarations for the DSL registry
-// ---------------------------------------------------------------------------
-
-use crate::dsl::registry::{FuncCategory, FuncSig};
-
-/// Signatures for type conversion nodes.
-pub fn signatures() -> &'static [FuncSig] {
-    #[allow(unused_imports)]
-    use FuncCategory as C;
-    &[
-        // `unit_interval` / `clamp_f64` migrated to `#[polydat_node]`
-        // per SRD-80b Phase E (library/sampling/icd.rs). The macro
-        // emits both FuncSig (via inventory) and the matching
-        // builder, so this signatures() list no longer carries them
-        // and the corresponding `build_node` arms are gone.
-        // `to_f64` / `f64_to_u64` / `round_to_u64` / `floor_to_u64` /
-        // `ceil_to_u64` / `discretize` / `format_u64` migrated to
-        // `#[polydat_node]` per SRD-80 PR B.14.
-        // `format_f64` / `zero_pad_u64` migrated to `#[polydat_node]`
-        // per SRD-80 PR B.5 — FuncSigs registered via macro-emitted
-        // NodeRegistration.
-    ]
-}
-
 /// Convert u64 integer value to f64. SRD-80 PR B.14 migration.
 #[crate::polydat_node(category = Conversions)]
 fn to_f64(input: u64) -> f64 {
@@ -456,40 +431,6 @@ fn to_i64(input: u64) -> i64 {
     }
     input as i64
 }
-
-/// Try to build a conversion node from a function name and const args.
-///
-/// Returns `None` if the name is not handled by this module.
-pub(crate) fn build_node(
-    _name: &str,
-    _wires: &[crate::compile::assembly::WireRef],
-    _wire_types: &[crate::ast::PortType],
-    _consts: &[crate::dsl::factory::ConstArg],
-) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
-    // `unit_interval` / `clamp_f64` route via macro-emitted
-    // NodeRegistration per SRD-80b Phase E (sampling/icd.rs).
-    // `to_f64` / `f64_to_u64` / `round_to_u64` / `floor_to_u64` /
-    // `ceil_to_u64` / `discretize` / `format_u64` route via
-    // proc-macro NodeRegistration per SRD-80 PR B.14.
-    // `format_f64` / `zero_pad_u64` route through proc-macro-emitted
-    // NodeRegistration per SRD-80 PR B.5.
-    None
-}
-
-/// Assembly-time constant validation. See SRD 15 §"Const Constraint Metadata".
-///
-/// `format_u64.radix` (`AllowedU64{2,8,10,16}`) and
-/// `discretize.range` / `.buckets` (`NonZeroU64`) ride on
-/// `ParamSpec.constraint`; Pass 1 enforces them and there's
-/// nothing relational left for this validator to do.
-pub(crate) fn validate_node(
-    _name: &str,
-    _consts: &[crate::dsl::factory::ConstArg],
-) -> Result<(), String> {
-    Ok(())
-}
-
-crate::register_nodes!(signatures, build_node, validate_node);
 #[cfg(test)]
 mod tests {
     use super::*;

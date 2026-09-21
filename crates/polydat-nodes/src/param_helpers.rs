@@ -171,51 +171,6 @@ fn matches(
     input.to_string()
 }
 
-// =========================================================================
-// Registration
-// =========================================================================
-
-use polydat::dsl::registry::FuncSig;
-
-/// The hand-registered signatures of this module.
-pub fn signatures() -> &'static [FuncSig] {
-    &[
-        // `required` / `this_or` migrated to `#[polydat_node]` via the
-        // `Option<T>` combinator (SRD-80b Phase C).
-        // `is_positive` / `in_range` / `matches` already on the macro.
-        // `is_one_of` migrated to `#[polydat_node]` via the
-        // `Const<Vec<C>>` combinator (SRD-80b Phase C).
-    ]
-}
-
-pub(crate) fn build_node(
-    name: &str,
-    _wires: &[polydat::compile::assembly::WireRef],
-    _wire_types: &[polydat::ast::PortType],
-    consts: &[polydat::dsl::factory::ConstArg],
-) -> Option<Result<Box<dyn polydat::ast::PolydatNode>, String>> {
-    let _ = name;
-    let _ = consts;
-    // All param-helper nodes route via proc-macro-emitted NodeRegistration.
-    None
-}
-
-/// Assembly-time constant validation for parameter-helper nodes.
-/// See SRD 15 §"Const Constraint Metadata".
-///
-/// Empty: `in_range` and `is_one_of` each declare their own validator
-/// through `#[polydat_node(validate = ...)]`, so the rule travels with
-/// the node it belongs to rather than living in a table keyed by name
-/// that a new node has to remember to join.
-pub(crate) fn validate_node(
-    _name: &str,
-    _consts: &[polydat::dsl::factory::ConstArg],
-) -> Result<(), String> {
-    Ok(())
-}
-
-polydat::register_nodes!(signatures, build_node, validate_node);
-
 #[cfg(test)]
 mod tests {
     use super::*;

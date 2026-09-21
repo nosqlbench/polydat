@@ -261,6 +261,7 @@ fn mixed_radix_jit_constants(node: &MixedRadix) -> Vec<u64> {
     category = Arithmetic,
     compiled_u64 = mixed_radix_jit,
     jit_constants = mixed_radix_jit_constants,
+    validate = mixed_radix_validate,
 )]
 fn mixed_radix(
     input: u64,
@@ -278,6 +279,27 @@ fn mixed_radix(
         }
     }
     polydat::derive_support::DynamicOutputs(result)
+}
+
+/// `mixed_radix`'s rule over its radix list: every radix but the last
+/// must be non-zero, since a zero there would divide by zero, while a
+/// zero in the last position is the "everything left" sentinel the
+/// body reads. The rule is positional across one list argument, which
+/// no per-parameter constraint can state.
+fn mixed_radix_validate(
+    _name: &str,
+    consts: &[polydat::dsl::factory::ConstArg],
+) -> Result<(), String> {
+    for (i, c) in consts
+        .iter()
+        .enumerate()
+        .take(consts.len().saturating_sub(1))
+    {
+        if c.as_u64() == 0 {
+            return Err(format!("radix {i} must be non-zero"));
+        }
+    }
+    Ok(())
 }
 
 /// Sum N u64 inputs (wrapping). Variadic: accepts 0..N wire inputs.
@@ -340,68 +362,6 @@ fn interleave(a: u64, b: u64) -> u64 {
     }
     result
 }
-
-// ---------------------------------------------------------------------------
-// Signature declarations for the DSL registry
-// ---------------------------------------------------------------------------
-
-use polydat::dsl::registry::FuncSig;
-
-/// Signatures for arithmetic and variadic nodes.
-///
-/// SRD-80b Phase E: every arithmetic node routes through the
-/// proc-macro NodeRegistration — `mixed_radix` included, via the
-/// `Const<Vec<C>>` + `DynamicOutputs<T>` shape. The hand-written
-/// `FuncSig`/`build_node` pair that predated that migration was
-/// removed: it duplicated the macro's registration under the same
-/// name, leaving `lookup("mixed_radix")`'s answer to inventory
-/// link order. Only `validate_node` stays hand-written (its
-/// positional rule can't ride on a per-param constraint).
-pub fn signatures() -> &'static [FuncSig] {
-    &[]
-}
-
-/// No hand-built arithmetic nodes remain — construction goes
-/// through the proc-macro registration (see [`signatures`]).
-pub(crate) fn build_node(
-    name: &str,
-    _wires: &[polydat::compile::assembly::WireRef],
-    _wire_types: &[polydat::ast::PortType],
-    consts: &[polydat::dsl::factory::ConstArg],
-) -> Option<Result<Box<dyn polydat::ast::PolydatNode>, String>> {
-    let _ = (name, consts);
-    None
-}
-
-/// Assembly-time constant validation. See SRD 15 §"Const Constraint Metadata".
-///
-/// The variadic positional rule for `mixed_radix` — non-terminal
-/// radixes must each be non-zero, but the last one is allowed to
-/// be `0` as the "everything left" sentinel — can't ride on a
-/// per-param `ParamSpec.constraint`, so it stays here as a
-/// hand-written validator.
-pub(crate) fn validate_node(
-    name: &str,
-    consts: &[polydat::dsl::factory::ConstArg],
-) -> Result<(), String> {
-    match name {
-        "mixed_radix" => {
-            for (i, c) in consts
-                .iter()
-                .enumerate()
-                .take(consts.len().saturating_sub(1))
-            {
-                if c.as_u64() == 0 {
-                    return Err(format!("radix {i} must be non-zero"));
-                }
-            }
-            Ok(())
-        }
-        _ => Ok(()),
-    }
-}
-
-polydat::register_nodes!(signatures, build_node, validate_node);
 
 #[cfg(test)]
 mod tests {
@@ -738,5 +698,30 @@ mod tests {
                 node.meta().name,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod node_validator_tests {
+    use polydat::dsl::compile::compile_polydat_kernel;
+
+    /// `mixed_radix`'s positional rule is declared on the node, so
+    /// the factory refuses a zero in a non-terminal radix when the
+    /// program is built — on every engine, and before a cycle can
+    /// divide by it. A zero in the last position is the sentinel the
+    /// body reads and stays legal.
+    #[test]
+    fn a_zero_radix_is_refused_except_in_the_last_position() {
+        let err = compile_polydat_kernel("input cycle: u64\n(a, b) := mixed_radix(cycle, 0, 10)\n")
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| panic!("a zero leading radix must not build"));
+        assert!(err.contains("radix 0 must be non-zero"), "{err}");
+
+        assert!(
+            compile_polydat_kernel("input cycle: u64\n(a, b) := mixed_radix(cycle, 10, 0)\n")
+                .is_ok(),
+            "a trailing zero is the remainder sentinel"
+        );
     }
 }

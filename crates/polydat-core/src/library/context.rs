@@ -25,8 +25,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::ast::{NodeMeta, PolydatNode, Port, Slot, SlotType, Value};
-
 /// Current wall-clock time in epoch milliseconds.
 ///
 /// Signature: `() -> (u64)`. Non-deterministic — clock read per eval.
@@ -190,133 +188,25 @@ fn counter(
     count.fetch_add(1, Ordering::Relaxed)
 }
 
-// ---------------------------------------------------------------------------
-// Cursor limit — not a #[polydat_node]: it's a passthrough whose
-// `max_items` value is read via the const-slot meta by the cursor
-// machinery, and is constructed directly by the cursor compiler
-// (`polydat::dsl::compile`) rather than via the DSL function
-// registry. Keeping the hand-written shape preserves the explicit
-// constructor used at that one call site.
-// ---------------------------------------------------------------------------
-
-/// Cursor limit node: passes through the input value unchanged.
+/// Cursor limit: passes the input value through unchanged.
 ///
-/// Inserted by the compiler when the `limit` activity parameter is present.
-/// The node is a visible, documented passthrough in the Polydat graph that
-/// clamps the cursor's extent. The `max_items` value is used by the
-/// `Cursors` system to determine when to stop advancing.
+/// The compiler inserts this node when a cursor carries a `limit`,
+/// shadowing the cursor's ordinal wire with it. The clamp itself is
+/// the cursor system's, which reads `max_items` from this node's
+/// const slot; the node exists so that the clamp is visible in the
+/// graph rather than applied invisibly beside it.
 ///
 /// Signature: `limit(input: u64, max_items: u64) -> u64`
-pub struct CursorLimit {
-    meta: NodeMeta,
-    /// Maximum number of items the cursor should yield.
-    pub max_items: u64,
+#[crate::polydat_node(category = Context)]
+fn limit(input: u64, max_items: Const<u64>) -> u64 {
+    let _ = max_items;
+    input
 }
-
-impl CursorLimit {
-    /// A limit node yielding at most `max_items`.
-    pub fn new(max_items: u64) -> Self {
-        Self {
-            meta: NodeMeta {
-                name: "limit".into(),
-                outs: vec![Port::u64("output")],
-                ins: vec![Slot::Wire(Port::u64("input"))],
-            },
-            max_items,
-        }
-    }
-}
-
-impl PolydatNode for CursorLimit {
-    fn meta(&self) -> &NodeMeta {
-        &self.meta
-    }
-    fn eval(&self, inputs: &[Value], outputs: &mut [Value]) {
-        // Pure passthrough — the limit is enforced by the cursor system,
-        // not by the node evaluation. The node exists to be visible in
-        // the graph and to carry the max_items metadata.
-        outputs[0] = inputs[0].clone();
-    }
-    /// The same passthrough on the closure tier: the limit is the
-    /// cursor system's, so the compiled step copies its slot.
-    fn compiled_u64(&self) -> Option<crate::ast::CompiledU64Op> {
-        Some(Box::new(|inputs: &[u64], outputs: &mut [u64]| {
-            outputs[0] = inputs[0];
-        }))
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Signature declarations for the cursor-limit node only. Every
-// other context node registers itself via the `#[polydat_node]`
-// macro's inventory submission.
-// ---------------------------------------------------------------------------
-
-use crate::dsl::registry::{Arity, FuncCategory, FuncSig, ParamSpec};
-
-/// Signature for the cursor-limit passthrough.
-pub fn signatures() -> &'static [FuncSig] {
-    use FuncCategory as C;
-    &[FuncSig {
-        name: "limit",
-        category: C::Context,
-        outputs: 1,
-        description: "cursor limit — clamps extent for smoke testing",
-        help: "Passes through the input value unchanged. Inserted by the compiler\n\
-                   when the `limit` activity parameter is present. The max_items value\n\
-                   is used by the cursor system to stop advancing early.\n\
-                   Parameters:\n  input — cursor wire (u64)\n  max_items — maximum items to yield\n\
-                   Example: row = limit(row, 100)  // stop after 100 items",
-        identity: None,
-        variadic_ctor: None,
-        params: &[
-            ParamSpec {
-                name: "input",
-                slot_type: SlotType::Wire,
-                required: true,
-                example: "row",
-                constraint: None,
-            },
-            ParamSpec {
-                name: "max_items",
-                slot_type: SlotType::ConstU64,
-                required: true,
-                example: "100",
-                constraint: None,
-            },
-        ],
-        arity: Arity::Fixed,
-        commutativity: crate::ast::Commutativity::Positional,
-        default_resolver: None,
-        output_type: crate::dsl::registry::OutputType::Fixed,
-        // Hand registration: no static return-port declaration;
-        // type inference falls back to the name heuristic.
-        output_port: None,
-    }]
-}
-
-/// Build the cursor-limit node by name. Other context nodes
-/// register via the `#[polydat_node]` macro's inventory hook.
-pub(crate) fn build_node(
-    name: &str,
-    _wires: &[crate::compile::assembly::WireRef],
-    _wire_types: &[crate::ast::PortType],
-    consts: &[crate::dsl::factory::ConstArg],
-) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
-    match name {
-        "limit" => {
-            let max_items = consts.first().map(|c| c.as_u64()).unwrap_or(u64::MAX);
-            Some(Ok(Box::new(CursorLimit::new(max_items))))
-        }
-        _ => None,
-    }
-}
-
-crate::register_nodes!(signatures, build_node);
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::{PolydatNode, Value};
 
     #[test]
     fn current_epoch_millis_reasonable() {

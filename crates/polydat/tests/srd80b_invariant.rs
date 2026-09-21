@@ -34,9 +34,6 @@ const CARVEOUT_FILES: &[&str] = &[
     // by `assert_type_node` / `assert_value_node`, runtime
     // PortType / ConstConstraint dispatched).
     "../polydat-core/src/library/assertions.rs",
-    // Cursor-compiler synthesised: CursorLimit (built by the
-    // cursor materialiser; not workload-callable).
-    "../polydat-core/src/library/context.rs",
     // Rust-internal composition primitive: LutSample backs the
     // `dist_*` family; no DSL surface (the `dist_*` functions
     // are the workload-callable wrappers).
