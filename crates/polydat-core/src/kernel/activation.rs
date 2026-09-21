@@ -282,14 +282,6 @@ fn bind_by_name_on(kernel: &mut dyn Kernel, values: &[(String, Value)]) -> Resul
     Ok(())
 }
 
-fn bind_by_name(kernel: &mut PolydatKernel, values: &[(String, Value)]) {
-    for (name, value) in values {
-        if let Some(idx) = kernel.program().find_input(name) {
-            kernel.state().set_input(idx, value.clone());
-        }
-    }
-}
-
 /// Resolve every `over` clause in the body and narrow its cursor.
 /// Returns the narrowest slice, or the full extent of the first cursor
 /// when none has an `over` clause. One routine for every engine,
@@ -392,8 +384,18 @@ pub fn open_traversal(
         };
         cascade.push((name.clone(), value));
     }
-    let mut canonical = PolydatKernel::from_program(traversal.program.clone());
-    bind_by_name(&mut canonical, &cascade);
+    // What the comprehension's sources resolve against: the cascaded
+    // wires, over the body program's ledger, which is what a source
+    // that has to compile is charged to. Opening a traversal used to
+    // allocate a whole interpreter state over the body's program for
+    // this — every buffer, every clean flag — and then read two things
+    // from it, the cascade it had just bound into it and the body's
+    // own constants, which no source of the enclosing scope names.
+    let base = crate::kernel::interp::NoScope::charged_to(traversal.program.ledger().clone());
+    let cascaded = Layered {
+        prefix: &cascade,
+        inner: &base,
+    };
     // The sources' own references are captured from the parent here,
     // whatever their provenance (a coordinate input as much as an
     // extern) and even where the body declares the same name, as every
@@ -415,7 +417,7 @@ pub fn open_traversal(
     }
     let scope = Layered {
         prefix: &captured,
-        inner: &canonical,
+        inner: &cascaded,
     };
     let tuples = evaluate_for_iteration(&traversal.comprehension, &scope).map_err(|e| {
         format!(
