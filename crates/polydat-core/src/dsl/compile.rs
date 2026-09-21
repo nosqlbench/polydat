@@ -1159,135 +1159,6 @@ fn evaluate_default_expr(
     }
 }
 
-/// Infer the surface-level `PortType` of an auto-extern binding's
-/// RHS for the `const NAME := <expr>` shape. Returns `None` when
-/// the type can't be determined cheaply from the AST alone —
-/// the caller falls back to `PortType::Ext` in that case
-/// (preserving today's behavior at the type-system edge).
-///
-/// ## Why this exists
-///
-/// Auto-extern slots — the `const NAME := <expr>` form where
-/// `<expr>` references at least one name — are the
-/// conditional-shadow fallback path that two-tier lookup uses
-/// when the const-fold yields None at scope-init.
-///
-/// Before this inference: every auto-extern landed at the slot
-/// boundary as `PortType::Ext`. When an outer scope provided
-/// a concrete primitive (a U64 iter-var, a Str literal), the
-/// boundary adapter had to bridge `U64 → Ext` / `Str → Ext` /
-/// etc — and the type-adapter catalog had no entries for those
-/// directions, so the runtime warned and passed the value
-/// through unchanged.
-///
-/// `PortType::Ext` is meant for adapter-contributed reflected
-/// types (CQL UUIDs, timestamps) — `Box<dyn ReflectedValue>`
-/// — not as a "generic unknown" placeholder. Conflating the
-/// **scope** axis (`InputKind::IterationExtern` — "this is
-/// populated by the outer chain") with the **type** axis
-/// (`PortType` — "what is this value's concrete shape") is the
-/// design bug this function targets.
-///
-/// ## Rules
-///
-/// - String literal RHS (including `"{interp}"` templates) →
-///   `Str`. The DSL parser produces `Expr::StringLit` for both
-///   plain strings and interpolation patterns; the produced
-///   value is Str in either case.
-/// - Integer literal → `U64`.
-/// - Float literal → `F64`.
-/// - `true`/`false` → `Bool`.
-/// - Bare identifier referencing an already-declared input →
-///   the referenced input's `PortType`. Threading reference
-///   types lets `const X := other_extern` propagate types
-///   along the cascade rather than collapsing to Ext.
-/// - Binary op → the operand types (preferring LHS when both
-///   resolve and match; both `Add`/`Sub`/`Mul`/`Div`/`Mod`
-///   preserve operand type). `Pow` always returns F64.
-/// - Unary negation and bitwise not → operand type.
-/// - Cast → its target type.
-/// - `for` producer → `Ext`.
-/// - Calls to `printf`/`concat`/`format`/`str` → `Str`; to
-///   `dataset_prebuffer`/`const_handle` → `Handle`.
-/// - Other function calls, array literals, field access →
-///   `None` (Ext fallback). These produce types the assembler
-///   knows only after node attachment; inferring here would
-///   need a full second pass.
-///
-/// ## Tradeoffs not covered
-///
-/// String-literal RHS without interpolation is already foldable
-/// to a concrete value at compile time — the auto-extern slot
-/// only exists because the binding's RHS has refs. So the
-/// "Str → ?" path is real and covered.
-///
-/// For Ident → declared-input, we look up the input that's
-/// ALREADY in the assembler. Forward references (an Ident that
-/// will be declared later in the same pass) return `None`.
-/// Production sites declare in dependency order, so this
-/// covers ~all real-world cases; the Ext fallback is correct
-/// when it doesn't.
-fn infer_auto_extern_type(
-    expr: &crate::dsl::ast::Expr,
-    asm: &crate::compile::assembly::PolydatAssembler,
-) -> Option<crate::ast::PortType> {
-    use crate::ast::PortType;
-    use crate::dsl::ast::{BinOpKind, Expr};
-    match expr {
-        Expr::StringLit(_, _) => Some(PortType::Str),
-        Expr::IntLit(_, _) => Some(PortType::U64),
-        Expr::FloatLit(_, _) => Some(PortType::F64),
-        Expr::Ident(name, _) => {
-            if name == "true" || name == "false" {
-                Some(PortType::Bool)
-            } else {
-                asm.input_type(name)
-            }
-        }
-        Expr::BinOp(lhs, op, rhs) => {
-            let lhs_t = infer_auto_extern_type(lhs, asm);
-            let rhs_t = infer_auto_extern_type(rhs, asm);
-            match op {
-                BinOpKind::Pow => Some(PortType::F64),
-                _ => lhs_t.or(rhs_t),
-            }
-        }
-        Expr::UnaryNeg(inner, _) | Expr::UnaryBitNot(inner, _) => {
-            infer_auto_extern_type(inner, asm)
-        }
-        // SRD-84 Part 1b — a cast's type is its target.
-        Expr::Cast(_, ty, _) => Some(*ty),
-        // A producer is an Ext-carried comprehension until the Streamer
-        // port type lands (SRD 113 step 3).
-        Expr::For(_) => Some(PortType::Ext),
-        Expr::Call(call) => {
-            // Each call we recognize here is one fewer
-            // boundary-adapter `… → Ext` warning at runtime.
-            // Consult `registry::lookup(f).and_then(|s| s.output_port)`
-            // first; the function name → output `PortType` table
-            // below remains only for hand registrations without
-            // one.
-            //
-            // Categories:
-            //
-            // - String-producing builtins. The DSL parser also
-            //   desugars `"hello {x}"` to `printf("hello {}", x)`,
-            //   so `printf` covers every interpolation-literal
-            //   workload sugar (e.g. `set: { foo: "{outer}" }`).
-            // - Handle-producing builtins. `dataset_prebuffer`
-            //   returns an opaque `Value::Handle` so downstream
-            //   binds can declare a `Handle`-typed input slot
-            //   without per-source plumbing.
-            match call.func.as_str() {
-                "printf" | "concat" | "format" | "str" => Some(crate::ast::PortType::Str),
-                "dataset_prebuffer" | "const_handle" => Some(crate::ast::PortType::Handle),
-                _ => None,
-            }
-        }
-        Expr::ArrayLit(_, _) | Expr::FieldAccess { .. } => None,
-    }
-}
-
 /// Try to fold a `shared X := <expr>` initializer to a typed
 /// `(Value, PortType)`. Returns `Some` for literal forms (the
 /// shareable-cell case); returns `None` for non-literal
@@ -2311,55 +2182,22 @@ impl Compiler {
                         for target in &b.targets {
                             asm.mark_const_output(target);
                             if rhs_has_refs && !asm.input_names().contains(&target.as_str()) {
-                                // Infer the slot's `PortType` from the
-                                // RHS surface shape so the auto-extern
-                                // lands at the boundary with its
-                                // actual type (Str for string-template
-                                // / interpolation forms, U64 / F64 /
-                                // Bool for literals + literal-bearing
-                                // arithmetic) rather than the legacy
-                                // `Ext` catchall — the conflation the
-                                // type-axis-vs-scope-axis design fix
-                                // removes. `Ext` survives as the
-                                // fallback for shapes we can't cheaply
-                                // resolve (function calls, array
-                                // literals, field access), so the
-                                // boundary adapter's catalog miss is
-                                // narrower and the typed paths bypass
-                                // the warning entirely.
-                                // Two-step type discovery for the
-                                // auto-extern slot:
-                                //
-                                // 1. The binding's RHS was just
-                                //    compiled (`compile_binding`
-                                //    above) — its output is now a
-                                //    node in the assembler. Query
-                                //    that node's declared output
-                                //    `PortType` directly. This
-                                //    covers every shape the
-                                //    inferrer's surface-AST pass
-                                //    can't see through: `select_str`,
-                                //    `str_concat`, `format_u64`,
-                                //    `query_count`, arbitrary nested
-                                //    function calls — all already
-                                //    have nodes in the assembler with
-                                //    fully-resolved `NodeMeta` ports.
-                                // 2. If the assembler doesn't have an
-                                //    answer (rare — should only
-                                //    happen for shapes where
-                                //    `compile_binding` didn't
-                                //    register a node under the
-                                //    target name), fall back to the
-                                //    surface-AST inferrer.
-                                // 3. If both fail, `PortType::Ext`
-                                //    remains as the last-resort
-                                //    fallback — every catalog miss
-                                //    at runtime points back to a
-                                //    real registry gap.
-                                let inferred = asm
-                                    .output_type(target.as_str())
-                                    .or_else(|| infer_auto_extern_type(&b.value, &asm))
-                                    .unwrap_or(crate::ast::PortType::Ext);
+                                // The binding's right-hand side was
+                                // compiled just above, so its node is
+                                // in the assembler and carries the
+                                // resolved output `PortType` the
+                                // auto-extern slot should take. That
+                                // covers every shape, including the
+                                // ones a pass over the surface AST
+                                // cannot see through — `select_str`,
+                                // `format_u64`, a nested call.
+                                let Some(inferred) = asm.output_type(target.as_str()) else {
+                                    return Err(format!(
+                                        "internal error: the const binding `{target}` was \
+                                         just compiled, so the assembler should carry its \
+                                         output type"
+                                    ));
+                                };
                                 asm.add_input(
                                     target.as_str(),
                                     crate::ast::Value::None,

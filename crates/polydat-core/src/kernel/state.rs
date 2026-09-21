@@ -104,18 +104,17 @@ pub(crate) fn adapt_boundary_value(
             //   the consumer's declared port type doesn't
             //   match the actual cross-scope contract.
             let hint = if slot_type == crate::ast::PortType::Ext {
-                "  - The slot's type defaulted to `Ext` (extension type) — the auto-extern \
-                 inferrer couldn't resolve the binding's RHS to a concrete `PortType`. \
-                 Options:\n\
+                "  - The slot's type is `Ext` (extension type), so the value the outer \
+                 scope supplies has no adapter into it. Options:\n\
                  \x20   * Add an explicit `extern {slot_name}: <type>` declaration in the \
                  receiving scope so the slot's type is pinned at the source.\n\
                  \x20   * If the binding is set from YAML sugar (e.g. `set: {{ {slot_name}: \"{{ outer }}\" }}`), \
                  the desugared `const {slot_name} := \"{{ outer }}\"` evaluates to a Str — \
                  use the bare form `set: {{ {slot_name}: outer }}` to pass the original \
                  type through, or quote-encode if the consumer expects a string.\n\
-                 \x20   * File a registry gap if the binding's RHS function isn't recognized \
-                 by `infer_auto_extern_type` — the function's output `PortType` should be \
-                 surfaced via the DSL registry."
+                 \x20   * The slot takes its type from the compiled output of the binding \
+                 that feeds it, so a node registered without an output `PortType` lands \
+                 here — declare one on the node."
             } else {
                 "  - The slot's declared type and the cross-scope provider's type don't match. \
                  Options:\n\
