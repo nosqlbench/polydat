@@ -433,7 +433,14 @@ type groups carry no row or column at all (omitted from the grid):
 **Class A — always-defined** (lossless or fully-
 defined for every valid runtime input). The
 catalog's test encodes this set as a predicate
-and proves `auto_adapter` covers all of it:
+and proves `auto_adapter` covers all of it.
+
+Always-defined is weaker than lossless, and the two are not
+interchangeable: `u64 → f64` and `u64 → bool` are both class A and
+neither keeps the value. Whether a conversion keeps the value is
+computed from the two types' numeric domains and is what the
+`_strict` embedding surfaces gate on — see
+[expression_engine.md](expression_engine.md) §5.4.2.
 
 - **Numeric widening** — the rule, now complete with no holes:
   unsigned → any **strictly-wider** integer of either signedness

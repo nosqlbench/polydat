@@ -843,9 +843,24 @@ Across all three sites, the rules are uniform:
   the catalog.
 - **Lossy conversions are refusable.** The `_strict` typed
   surfaces refuse a conversion `is_lossless_adapter`
-  classifies as lossy (truncation, narrowing, boolean
-  projection) and apply only the lossless ones (numeric
-  widening, to-string rendering).
+  classifies as lossy and apply only the lossless ones. That
+  classification is computed from the two types' numeric
+  domains (`PortType::numeric_domain`), not declared per
+  catalog entry: a conversion keeps the value when every
+  number the source type can carry is a number the target
+  type can carry. Integers fit by their magnitude bits — an
+  unsigned domain needs a signed one strictly wider, and a
+  signed domain never fits an unsigned one. An integer fits
+  a float when its magnitude bits fit the significand, so
+  `U32 → F64` is lossless and `U64 → F64` and `I64 → F64`
+  are not, since 64 magnitude bits do not fit 53 and values
+  above `2^53` round. Rendering to `Str` keeps the value for
+  every type with a numeric domain. Everything outside that
+  world — `Bytes`, `Json`, the vectors, `Ext` — is not
+  claimed lossless, whatever the catalog can do with it.
+  The answer is a property of the types, so it is the same
+  for every input; a host that wants a number widened writes
+  it at the wider type.
 - **Adapter insertion is observable.** The compile event
   log records every adapter the assembler inserts
   (`TypeAdapterInserted`), on every engine; the typed

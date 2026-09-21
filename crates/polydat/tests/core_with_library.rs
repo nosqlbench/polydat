@@ -69,11 +69,16 @@ mod dsl_compile_tests {
     #[test]
     fn typed_strict_kernel_bound() {
         let kernel = compile_polydat_interpreter("const k := 10\n").unwrap();
-        // Lossless: u64 → f64.
-        let v: f64 = eval_kernel_bound_typed_strict("{k} * 2", &kernel).unwrap();
-        assert_eq!(v, 20.0);
+        // Lossless: u64 → String, the display round-trip.
+        let v: String = eval_kernel_bound_typed_strict("{k} * 2", &kernel).unwrap();
+        assert_eq!(v, "20");
         // Lossy: u64 → bool — strict rejects.
         let result: Result<bool, _> = eval_kernel_bound_typed_strict("{k} > 5", &kernel);
+        assert!(matches!(result, Err(EmbeddingError::TypeMismatch { .. })));
+        // Lossy too: u64's 64 magnitude bits do not fit f64's 53-bit
+        // significand, so strict refuses the widening rather than
+        // deciding per value.
+        let result: Result<f64, _> = eval_kernel_bound_typed_strict("{k} * 2", &kernel);
         assert!(matches!(result, Err(EmbeddingError::TypeMismatch { .. })));
     }
 

@@ -33,4 +33,4 @@ pub mod tile_structural;
 pub mod viz;
 
 mod port_type;
-pub use port_type::PortType;
+pub use port_type::{NumericDomain, PortType};

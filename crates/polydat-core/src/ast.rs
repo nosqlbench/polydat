@@ -1078,7 +1078,7 @@ impl Value {
     }
 }
 
-pub use polydat_grammar::PortType;
+pub use polydat_grammar::{NumericDomain, PortType};
 
 /// What a port type means to a compiled buffer: its slot color, the
 /// width that follows from it, and the scratch element a by-reference

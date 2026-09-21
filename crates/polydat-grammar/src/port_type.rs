@@ -181,7 +181,128 @@ impl fmt::Display for PortType {
     }
 }
 
+/// The set of numbers a scalar port type can carry, described by the
+/// properties that decide whether one of them holds every value of
+/// another: how many bits the representation has, and how it spends
+/// them.
+///
+/// `Bool` is the one-bit unsigned domain, which is what the type
+/// system already says of it — it widens to `U64` as 1 and 0.
+/// Non-scalar types (`Str`, `Bytes`, `Json`, the vectors, the
+/// register views, `Ext`, `Handle`) have no domain.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NumericDomain {
+    /// Non-negative integers in `0 ..= 2^bits - 1`.
+    Unsigned {
+        /// Width of the representation.
+        bits: u32,
+    },
+    /// Two's-complement integers, one of whose bits is the sign.
+    Signed {
+        /// Width of the representation, sign bit included.
+        bits: u32,
+    },
+    /// An IEEE 754 binary float.
+    Float {
+        /// Significand bits, the implicit leading one included: the
+        /// largest integer represented exactly is `2^mantissa`.
+        mantissa: u32,
+        /// Exponent bits, which fix the magnitude range.
+        exponent: u32,
+    },
+}
+
+impl NumericDomain {
+    /// Whether every value of this domain is a value of `other` —
+    /// that is, whether a conversion into `other` is lossless.
+    ///
+    /// Integers fit by counting the bits each spends on magnitude: an
+    /// unsigned domain needs a signed one strictly wider, a signed
+    /// domain never fits an unsigned one. An integer fits a float
+    /// when its magnitude bits fit the float's significand, which is
+    /// why `U64 → F64` does not: 64 magnitude bits do not fit 53, and
+    /// the values above `2^53` round. A float fits a wider float when
+    /// both its significand and its exponent do.
+    pub fn fits_in(self, other: Self) -> bool {
+        use NumericDomain::{Float, Signed, Unsigned};
+        match (self, other) {
+            (Unsigned { bits: a }, Unsigned { bits: b }) => a <= b,
+            (Unsigned { bits: a }, Signed { bits: b }) => a < b,
+            (Signed { bits: a }, Signed { bits: b }) => a <= b,
+            (Signed { .. }, Unsigned { .. }) => false,
+            (Unsigned { bits }, Float { mantissa, .. }) => bits <= mantissa,
+            (Signed { bits }, Float { mantissa, .. }) => bits - 1 <= mantissa,
+            (Float { .. }, Unsigned { .. } | Signed { .. }) => false,
+            (
+                Float {
+                    mantissa: m1,
+                    exponent: e1,
+                },
+                Float {
+                    mantissa: m2,
+                    exponent: e2,
+                },
+            ) => m1 <= m2 && e1 <= e2,
+        }
+    }
+}
+
 impl PortType {
+    /// The numbers this type can carry, for the types that carry
+    /// numbers. `None` for every other type.
+    ///
+    /// This is what decides whether a conversion between two types
+    /// keeps the value, so that the answer is read off the types
+    /// themselves rather than kept in a list of pairs beside them.
+    pub fn numeric_domain(self) -> Option<NumericDomain> {
+        use NumericDomain::{Float, Signed, Unsigned};
+        Some(match self {
+            Self::Bool => Unsigned { bits: 1 },
+            Self::U8 => Unsigned { bits: 8 },
+            Self::U16 => Unsigned { bits: 16 },
+            Self::U32 => Unsigned { bits: 32 },
+            Self::U64 => Unsigned { bits: 64 },
+            Self::U128 => Unsigned { bits: 128 },
+            Self::I8 => Signed { bits: 8 },
+            Self::I16 => Signed { bits: 16 },
+            Self::I32 => Signed { bits: 32 },
+            Self::I64 => Signed { bits: 64 },
+            Self::I128 => Signed { bits: 128 },
+            Self::F16 => Float {
+                mantissa: 11,
+                exponent: 5,
+            },
+            Self::F32 => Float {
+                mantissa: 24,
+                exponent: 8,
+            },
+            Self::F64 => Float {
+                mantissa: 53,
+                exponent: 11,
+            },
+            Self::Str
+            | Self::Bytes
+            | Self::Json
+            | Self::Ext
+            | Self::Handle
+            | Self::Reg128
+            | Self::RegI8x16
+            | Self::RegI16x8
+            | Self::RegI32x4
+            | Self::RegI64x2
+            | Self::RegF16x8
+            | Self::RegF32x4
+            | Self::RegF64x2
+            | Self::VecF32
+            | Self::VecI32
+            | Self::VecF64
+            | Self::VecI64
+            | Self::VecF16
+            | Self::VecI16
+            | Self::VecI8 => return None,
+        })
+    }
+
     /// The canonical lowercase keyword for this `PortType`.
     ///
     /// This is the single source of truth for the str↔PortType

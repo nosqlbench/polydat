@@ -1030,43 +1030,38 @@ pub fn eval_kernel_bound_typed_strict<T: HostType>(
     eval_const_expr_typed_strict::<T>(&interpolated)
 }
 
-/// Classify a catalog adapter as lossless or lossy per
-/// `expression_engine.md` §5.4.3. Lossless conversions
-/// preserve value identity (widening numeric types,
-/// to-string display roundtrips); lossy conversions
-/// change information content (truncation, boolean
-/// projection).
+/// Whether a conversion from one port type to another keeps the
+/// value: whether every number `from` can carry is a number `to`
+/// can carry.
 ///
-/// Strict-mode embedding surfaces use this to gate which
-/// catalog adapters they'll invoke.
+/// The answer is read off the two types' own numeric domains
+/// ([`crate::ast::PortType::numeric_domain`]) rather than looked up in a table of
+/// pairs. A table has to be kept in step with the adapter catalog by
+/// hand, and was not: it named eleven pairs where the catalog has
+/// well over a hundred, so `U8 → U64` was refused as lossy, and it
+/// called `U64 → F64` and `I64 → F64` lossless where both round above
+/// `2^53`.
+///
+/// Rendering to `Str` keeps the value for the types that have a
+/// numeric domain, since each of those renders with a round-trip
+/// `Display`. Every other conversion — into `Bytes`, `Json`, a
+/// vector, `Ext` — is out of the scalar world and is not claimed
+/// lossless here, whatever the catalog can do with it.
+///
+/// Strict-mode embedding surfaces use this to gate which catalog
+/// adapters they will invoke.
 pub fn is_lossless_adapter(from: crate::ast::PortType, to: crate::ast::PortType) -> bool {
     use crate::ast::PortType;
-    match (from, to) {
-        // Numeric widening — lossless.
-        (PortType::U32, PortType::U64) => true,
-        (PortType::U32, PortType::F64) => true,
-        (PortType::I32, PortType::I64) => true,
-        (PortType::I32, PortType::F64) => true,
-        (PortType::I64, PortType::F64) => true,
-        (PortType::F32, PortType::F64) => true,
-        // To-string conversions — lossless (string is a
-        // representation of the value).
-        (_, PortType::Str) => true,
-        // Bool → U64 is lossless (true→1, false→0; round-trip
-        // exact).
-        (PortType::Bool, PortType::U64) => true,
-        // U64 → Bool is lossy (nonzero → true throws away
-        // the magnitude).
-        (PortType::U64, PortType::Bool) => false,
-        // F64 → U64 is lossy (truncation).
-        (PortType::F64, PortType::U64) => false,
-        // U64 → F64 widening is lossless (u64 fits in f64
-        // mantissa for values < 2^53; values above lose
-        // precision but f64 is the canonical wider type).
-        (PortType::U64, PortType::F64) => true,
-        // Default: unknown → assume lossy (conservative).
-        _ => false,
+    if from == to {
+        return true;
     }
+    let Some(f) = from.numeric_domain() else {
+        return false;
+    };
+    if to == PortType::Str {
+        return true;
+    }
+    to.numeric_domain().is_some_and(|t| f.fits_in(t))
 }
 
 // ───── End typed embedding surface ─────
@@ -2857,14 +2852,57 @@ mod tests {
 
     #[test]
     fn typed_strict_accepts_lossless_conversion() {
-        // U64 → F64 widening is lossless (for values that
-        // fit in f64 mantissa, i.e. < 2^53).
-        let v: f64 = eval_const_expr_typed_strict("42").unwrap();
-        assert_eq!(v, 42.0);
-
         // U64 → String via display — lossless.
         let v: String = eval_const_expr_typed_strict("42").unwrap();
         assert_eq!(v, "42");
+
+        // Same type, no adapter.
+        let v: f64 = eval_const_expr_typed_strict("42.0").unwrap();
+        assert_eq!(v, 42.0);
+    }
+
+    /// Strict mode answers about the types, not about the one value
+    /// in hand: `U64 → F64` is refused because `u64` has 64 magnitude
+    /// bits and `f64`'s significand holds 53, so values above `2^53`
+    /// round. A host that wants the number as an `f64` writes it as
+    /// one. The type-level answer is the same for every input, which
+    /// a value-level one would not be.
+    #[test]
+    fn typed_strict_refuses_a_widening_that_rounds() {
+        let r: Result<f64, _> = eval_const_expr_typed_strict("42");
+        assert!(
+            matches!(r, Err(EmbeddingError::TypeMismatch { .. })),
+            "{r:?}"
+        );
+        assert!(!is_lossless_adapter(
+            crate::ast::PortType::U64,
+            crate::ast::PortType::F64
+        ));
+        assert!(!is_lossless_adapter(
+            crate::ast::PortType::I64,
+            crate::ast::PortType::F64
+        ));
+        // The narrow integers do fit, which the old eleven-pair
+        // table did not say.
+        for from in [
+            crate::ast::PortType::U8,
+            crate::ast::PortType::U16,
+            crate::ast::PortType::U32,
+        ] {
+            assert!(
+                is_lossless_adapter(from, crate::ast::PortType::U64),
+                "{from:?} → U64"
+            );
+            assert!(
+                is_lossless_adapter(from, crate::ast::PortType::F64),
+                "{from:?} → F64"
+            );
+        }
+        // Signed never fits unsigned, however wide.
+        assert!(!is_lossless_adapter(
+            crate::ast::PortType::I8,
+            crate::ast::PortType::U128
+        ));
     }
 
     #[test]
