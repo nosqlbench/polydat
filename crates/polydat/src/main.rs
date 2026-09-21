@@ -23,7 +23,7 @@ use polydat::dsl::ast::PolydatFile;
 use polydat::dsl::ast::TileOptions;
 use polydat::dsl::ast::{Statement, WireModifier};
 use polydat::dsl::events::{CompileEvent, CompileEventLog};
-use polydat::dsl::transform::{assign_values, parse_assignment};
+use polydat::dsl::transform::{assign_values, declared_wires, parse_assignment};
 use polydat::dsl::{CompileOptions, compile_ast_with_engine};
 use polydat::iteration::cursor_partition::{Partition, cursor_over_partitions_on};
 use polydat::kernel::activation::Activation;
@@ -564,44 +564,41 @@ fn run(args: RunArgs) -> Result<(), String> {
     let mut ast = parse_program(&source, &args.compile)?;
     assign_values(&mut ast, &assignments)?;
 
-    // Probe compile: discovers the declared outputs the emit transform
-    // names, read from a kernel of the run engine's program.
-    let probe = compile_ast(&ast, &source, &args.compile)?;
-    let shape = probe.root.clone().create_kernel();
+    // What the program declares, read from its source. The emit
+    // transform needs the names before the program is compiled, so a
+    // probe compile used to run first and the run's reported compile
+    // time was the sum of two. `declared_wires` reads the same names
+    // from the AST, and the suite checks it against what the compiler
+    // resolves.
+    let declared = declared_wires(&ast);
+    let traversal_mode = !declared.traversal_bodies.is_empty();
     let selected: Vec<String> = match &args.outputs {
         Some(list) => list
             .split(',')
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect(),
-        None => {
-            let inputs = shape.input_names();
-            shape
-                .output_names()
-                .into_iter()
-                .filter(|n| !n.starts_with("__") && !inputs.iter().any(|i| i == n))
-                .collect()
-        }
+        None => declared.root.names.clone(),
     };
     // Selected outputs must exist where they will be pulled: in every
     // traversal body when the program traverses, else at the root.
-    if shape.traversals().is_empty() {
+    if !traversal_mode {
         for name in &selected {
-            if shape.output_index(name).is_none() {
+            if !declared.root.binds(name) && !declared.inputs.iter().any(|i| i == name) {
                 return Err(format!(
                     "no output named '{name}'; declared outputs: {}",
-                    shape.output_names().join(", ")
+                    declared.root.names.join(", ")
                 ));
             }
         }
     } else if args.outputs.is_some() {
-        for t in shape.traversals() {
+        for (i, body) in declared.traversal_bodies.iter().enumerate() {
             for name in &selected {
-                if t.program.output_index(name).is_none() {
+                if !body.binds(name) {
                     return Err(format!(
-                        "no output named '{name}' in the body of `for {}`; its outputs: {}",
-                        t.source_text,
-                        body_wire_names(&t.program).join(", ")
+                        "no output named '{name}' in the body of traversal {}; its outputs: {}",
+                        i + 1,
+                        body.names.join(", ")
                     ));
                 }
             }
@@ -613,7 +610,6 @@ fn run(args: RunArgs) -> Result<(), String> {
     // A program with top-level traversals runs in traversal mode: the
     // emit transform goes inside each for body, where it sees the
     // body's scope, and the run activates the traversals.
-    let traversal_mode = !shape.traversals().is_empty();
 
     // `--emit tile:<name>` selects the tile and the text format: the
     // tile's rendered text is the row. The tile lives where the emit
@@ -621,22 +617,19 @@ fn run(args: RunArgs) -> Result<(), String> {
     let (emit_format, selected) = match &args.emit {
         Some(EmitSpec::Tile(name)) => {
             let present = if traversal_mode {
-                shape
-                    .traversals()
-                    .iter()
-                    .all(|t| t.program.output_index(name).is_some())
+                declared.traversal_bodies.iter().all(|b| b.binds(name))
             } else {
-                shape.output_index(name).is_some()
+                declared.root.binds(name)
             };
             if !present {
                 let known: Vec<String> = if traversal_mode {
-                    shape
-                        .traversals()
+                    declared
+                        .traversal_bodies
                         .iter()
-                        .flat_map(|t| body_wire_names(&t.program))
+                        .flat_map(|b| b.names.clone())
                         .collect()
                 } else {
-                    shape.output_names()
+                    declared.root.names.clone()
                 };
                 return Err(format!(
                     "no tile or output named '{name}'; declared outputs: {}",
@@ -666,7 +659,9 @@ fn run(args: RunArgs) -> Result<(), String> {
         Ok(emit_ast.statements.remove(0))
     };
 
-    let compiled = if emit_format.is_some() {
+    // One compile, of the program that runs. The emit transform is
+    // applied to the AST first when there is one.
+    if emit_format.is_some() {
         if traversal_mode {
             for stmt in ast.statements.iter_mut() {
                 if let Statement::For(f) = stmt {
@@ -683,11 +678,9 @@ fn run(args: RunArgs) -> Result<(), String> {
         } else {
             ast.statements.push(emit_binding(&selected)?);
         }
-        compile_ast(&ast, &source, &args.compile)?
-    } else {
-        probe
-    };
-    let mut compiled = compiled;
+    }
+    let mut compiled = compile_ast(&ast, &source, &args.compile)?;
+    let shape = compiled.root.clone().create_kernel();
 
     if args.events {
         print!("{}", compiled.events.format());

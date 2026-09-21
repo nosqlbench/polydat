@@ -34,6 +34,8 @@ mod compile_events;
 mod core_with_library;
 #[path = "cursor_tiers.rs"]
 mod cursor_tiers;
+#[path = "declared_wires.rs"]
+mod declared_wires;
 #[path = "doc_examples_test.rs"]
 mod doc_examples_test;
 #[path = "end_to_end.rs"]

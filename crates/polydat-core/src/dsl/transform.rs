@@ -226,3 +226,154 @@ pub fn each_piece<E>(
     }
     Ok(())
 }
+
+/// What a scope of a parsed program binds, by name.
+///
+/// A host that rewrites a program before compiling it often needs to
+/// know what the program will call things — which wires a scope has,
+/// so an added binding can name them. The compiled program knows
+/// exactly; a host that only has the source would otherwise work it
+/// out again, and a second implementation of "what does this scope
+/// bind" is a second answer to a question with one.
+///
+/// `declared_wires` is that answer, read from the AST. It is checked
+/// against the compiler's own in the suite.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScopeWires {
+    /// Names bound in this scope, in declaration order: bindings,
+    /// tiles, and — inside a traversal body — the element names the
+    /// traversal's source binds.
+    pub names: Vec<String>,
+}
+
+impl ScopeWires {
+    fn push(&mut self, name: &str) {
+        if !name.starts_with("__") && !self.names.iter().any(|n| n == name) {
+            self.names.push(name.to_string());
+        }
+    }
+
+    /// Whether this scope binds `name`.
+    pub fn binds(&self, name: &str) -> bool {
+        self.names.iter().any(|n| n == name)
+    }
+}
+
+/// Every scope of a parsed program, by name.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeclaredWires {
+    /// The root scope's bindings and tiles.
+    pub root: ScopeWires,
+    /// The names the root declares as inputs or extern ports. Each is
+    /// a slot and a passthrough output under the same name, so it can
+    /// be read like a binding; it is listed separately because a host
+    /// selecting "the program's outputs" usually means the bindings.
+    pub inputs: Vec<String>,
+    /// One entry per top-level `for` statement, in source order.
+    pub traversal_bodies: Vec<ScopeWires>,
+}
+
+/// Read [`DeclaredWires`] from a parsed program.
+///
+/// A traversal body's element names come from its source: a
+/// comprehension binds its own, a bare producer name or a derivation
+/// of one binds the producer's, which is resolved against the
+/// bindings of the enclosing scope.
+pub fn declared_wires(file: &PolydatFile) -> DeclaredWires {
+    let mut out = DeclaredWires::default();
+    for stmt in &file.statements {
+        match stmt {
+            Statement::Binding(b) => {
+                for t in &b.targets {
+                    out.root.push(t);
+                }
+            }
+            Statement::Tile(t) => out.root.push(&t.name),
+            Statement::InputDecl(i) => out.inputs.push(i.name.clone()),
+            Statement::ExternPort(p) => out.inputs.push(p.name.clone()),
+            _ => {}
+        }
+    }
+    // Bodies in a second pass, because a body sees the scope that
+    // encloses it: an outer wire the body names cascades in as an
+    // input of the child program and is readable there under the same
+    // name. Its own names come first, so a listing reads body-first.
+    for stmt in &file.statements {
+        if let Statement::For(f) = stmt {
+            let mut body = ScopeWires::default();
+            for name in source_element_names(&f.source, file) {
+                body.push(&name);
+            }
+            collect_scope(&f.body, file, &mut body);
+            for name in out.root.names.iter().chain(out.inputs.iter()) {
+                body.push(name);
+            }
+            out.traversal_bodies.push(body);
+        }
+    }
+    out
+}
+
+/// The bindings and tiles of a statement list, appended to `into`.
+fn collect_scope(body: &[Statement], file: &PolydatFile, into: &mut ScopeWires) {
+    for stmt in body {
+        match stmt {
+            Statement::Binding(b) => {
+                for t in &b.targets {
+                    into.push(t);
+                }
+            }
+            Statement::Tile(t) => into.push(&t.name),
+            Statement::For(f) => {
+                // A nested traversal is its own scope; its element
+                // names and bindings do not reach this one.
+                let _ = (f, file);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The element names a `for` source binds.
+fn source_element_names(source: &crate::dsl::ast::ForSource, file: &PolydatFile) -> Vec<String> {
+    use crate::dsl::ast::ForSourceKind;
+    match &source.kind {
+        ForSourceKind::Comprehension(c) => {
+            c.coordinate_specs().into_iter().map(|(v, _)| v).collect()
+        }
+        ForSourceKind::Producer(name) => producer_element_names(name, file),
+        ForSourceKind::Derived { base, .. } => producer_element_names(base, file),
+    }
+}
+
+/// The element names of the producer bound to `name` at the root:
+/// `name := for <comprehension>`, or a derivation of another producer,
+/// which is followed to its base.
+fn producer_element_names(name: &str, file: &PolydatFile) -> Vec<String> {
+    let mut seen = 0usize;
+    let mut target = name.to_string();
+    // A derivation chain is finite; the bound is the statement count,
+    // so a cycle a malformed program could write ends the walk rather
+    // than spinning.
+    while seen <= file.statements.len() {
+        seen += 1;
+        let found = file.statements.iter().find_map(|s| match s {
+            Statement::Binding(b) if b.targets.contains(&target) => match &b.value {
+                Expr::For(src) => Some(src),
+                _ => None,
+            },
+            _ => None,
+        });
+        let Some(src) = found else { return Vec::new() };
+        use crate::dsl::ast::ForSourceKind;
+        match &src.kind {
+            ForSourceKind::Comprehension(c) => {
+                return c.coordinate_specs().into_iter().map(|(v, _)| v).collect();
+            }
+            ForSourceKind::Producer(next) | ForSourceKind::Derived { base: next, .. } => {
+                target = next.clone();
+            }
+        }
+    }
+    Vec::new()
+}
