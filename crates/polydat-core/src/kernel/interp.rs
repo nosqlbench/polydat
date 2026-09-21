@@ -77,16 +77,21 @@ impl Lookup for PolydatKernel {
 /// time on the interpreter. Wrapping is what makes this work rather
 /// than an `impl Lookup for dyn Kernel` — one trait object cannot
 /// become another.
-pub struct KernelScope<'a>(&'a dyn crate::kernel::Kernel);
+///
+/// Distinct from
+/// [`comprehension::surfaces::KernelScope`](crate::iteration::comprehension::surfaces::KernelScope),
+/// the algebra layer's trait for the parent a comprehension scopes
+/// under; this is a `Lookup` over a kernel that already exists.
+pub struct KernelLookup<'a>(&'a dyn crate::kernel::Kernel);
 
-impl<'a> KernelScope<'a> {
+impl<'a> KernelLookup<'a> {
     /// The kernel as a scope.
     pub fn new(kernel: &'a dyn crate::kernel::Kernel) -> Self {
-        KernelScope(kernel)
+        KernelLookup(kernel)
     }
 }
 
-impl Lookup for KernelScope<'_> {
+impl Lookup for KernelLookup<'_> {
     /// A name resolves to what the kernel holds for it now — an input
     /// the host wrote, a coordinate it was positioned at — and
     /// otherwise to what the build folded for it. The live answer

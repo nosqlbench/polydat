@@ -273,7 +273,7 @@ substituted text. A `{name}` whose lookup yields nothing
 `Lookup` (`kernel::interp::Lookup`) is the name resolution a
 placeholder reads plus the compile ledger a source or
 predicate that has to compile is charged to (`lookup` and
-`ledger`): the interpreter kernel implements it, `KernelScope`
+`ledger`): the interpreter kernel implements it, `KernelLookup`
 wraps a kernel of any engine as one, and `Layered` puts a
 tuple's bindings in front of any other lookup, forwarding
 both. The typed kernel-bound surfaces,
@@ -281,7 +281,7 @@ both. The typed kernel-bound surfaces,
 `_strict` variant (§5.3), compose interpolation with the
 typed const fold over any of them, so a host holding a
 `Box<dyn Kernel>` interpolates against the kernel it has:
-`eval_kernel_bound_typed(text, &KernelScope::new(kernel.as_ref()))`.
+`eval_kernel_bound_typed(text, &KernelLookup::new(kernel.as_ref()))`.
 
 A name resolves to what the kernel holds for it now — an
 input the host wrote, a coordinate it was positioned at —

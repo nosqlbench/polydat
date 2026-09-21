@@ -2160,7 +2160,7 @@ mod kernel_bound_on_every_engine {
             let mut kernel: Box<dyn Kernel> =
                 compile_polydat_with(src, engine).unwrap_or_else(|e| panic!("{engine:?}: {e}"));
             kernel.set_inputs(&[3]);
-            let scope = polydat::kernel::interp::KernelScope::new(kernel.as_ref());
+            let scope = polydat::kernel::interp::KernelLookup::new(kernel.as_ref());
 
             // A folded constant of the program.
             let doubled: u64 = eval_kernel_bound_typed("{k} * 2", &scope)
