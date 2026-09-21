@@ -440,42 +440,42 @@ Pure native code, the differential tier behind P3, runs every one of them as wel
 |---|---|
 | `country_codes` | `country_codes(input) -> String` — country code (uniform selection over the full ISO list). |
 | `country_names` | `country_names(input) -> String` — country name (uniform selection over the full ISO list). |
-| `dataset_distance_function` | dataset distance/similarity function name |
-| `dataset_facets` | list available facets in default profile |
+| `dataset_distance_function` | Return the dataset's distance function (e.g., "COSINE", "EUCLIDEAN"). Operates on the dataset group; takes a Group handle. |
+| `dataset_facets` | Report which facets are available for the default profile of a dataset group as a comma-separated list. Expects a Group handle. |
 | `dataset_group_open` | `dataset_group_open(source: str) -> Handle` |
 | `dataset_open` | `dataset_open(source: str, facet: str) -> Handle` |
-| `dataset_prebuffer` | eagerly download dataset facets to local cache |
-| `dataset_profile_count` | total number of profiles in a dataset |
+| `dataset_prebuffer` | Eagerly download all facets for a dataset profile into the local cache, returning a `DatasetHandle::Group` handle that downstream facet accessors take as their first argument. After this returns, every subsequent facet read served by [`vectordata::TestDataView`] hits the merkle- verified mmap fast path with no further network traffic. |
+| `dataset_profile_count` | Total number of profiles in a dataset group. |
 | `dataset_profile_name_at` | Look up a profile name by index from the canonical sorted list. |
-| `dataset_profile_names` | comma-separated list of profile names |
-| `filtered_neighbor_distances_at` | filtered ground-truth neighbor distances |
-| `filtered_neighbor_indices_at` | filtered ground-truth neighbor indices |
+| `dataset_profile_names` | Comma-separated list of all profile names in canonical sort order (by base_count). |
+| `filtered_neighbor_distances_at` | Access filtered ground-truth neighbor distances. Expects an F32 handle. |
+| `filtered_neighbor_indices_at` | Access filtered ground-truth neighbor indices. Expects an I32 handle. |
 | `first_names` | `first_names(input) -> String` — Census female first name, weighted by frequency. |
 | `first_names_male` | `first_names_male(input) -> String` — Census male first name, weighted by frequency. Companion to `first_names` (female). |
 | `full_names` | `full_names(input) -> String` — combined first + last name. |
 | `matching_profile_name_at` | Name of the `index`-th profile **matching `pattern`**, in canonical (base-count-ascending) order. Pairs with `profile_partitions`'s masked-position `idx_of` so a sweep can prebuffer the active tier's own ground-truth facets (`dataset_prebuffer(str_concat("ds:", name))`). `pattern` follows the literal / glob / regex promotion; the index wraps modulo the number of matching profiles; empty string if none match. |
 | `matching_profiles` | Return profile names matching a prefix, comma-separated. |
-| `metadata_content_count` | number of metadata content records |
-| `metadata_count_of` | how many records carry a metadata value |
-| `metadata_results_at` | matching base ordinals for a query predicate |
-| `metadata_results_count` | number of predicate result sets |
-| `metadata_results_len_at` | length of metadata indices for a query |
-| `metadata_value_at` | scalar metadata value per base vector |
+| `metadata_content_count` | Count of metadata content records. Expects a Generic handle. |
+| `metadata_count_of` | How many records carry the metadata value `value`. |
+| `metadata_results_at` | Access metadata indices (variable-length matching base ordinals per query) at an index. Expects an Ivvec32 handle. |
+| `metadata_results_count` | Return the metadata indices count (number of predicate result sets). Expects an Ivvec32 handle. |
+| `metadata_results_len_at` | Return the length of one metadata_results record without loading the data (reads only the 4-byte header). Expects an Ivvec32 handle. |
+| `metadata_value_at` | Access a metadata value per base ordinal. Expects a Generic handle opened against the `metadata_content` facet. |
 | `nationalities` | `nationalities(input) -> String` — nationality name (uniform selection). |
-| `neighbor_count` | ground-truth neighbors per query (maxk) |
-| `neighbor_distances_at` | ground-truth neighbor distances for a query |
-| `neighbor_indices_at` | ground-truth neighbor indices for a query |
-| `predicate_count_of` | how many queries carry a predicate value |
-| `predicate_value_at` | scalar predicate value per query |
+| `neighbor_count` | Return the per-record neighbor count (k) for an I32 neighbor-indices handle. |
+| `neighbor_distances_at` | Access ground-truth neighbor distances for a query. Expects an F32 handle. |
+| `neighbor_indices_at` | Access ground-truth neighbor indices for a query. Expects an I32 handle. |
+| `predicate_count_of` | How many queries carry the predicate value `value`. |
+| `predicate_value_at` | Access a predicate value per query ordinal. Expects a Generic handle opened against the `metadata_predicates` facet. |
 | `profile_base_count` | Return the base vector count for the profile at a given index. |
 | `profile_facets` | Return the comma-separated facet list for the profile at a given index. |
 | `profile_partitions` | Partition a dataset's vector space by its **profiles matching a pattern**, treated as cumulative size tiers (an SRD-71 partition source). One partition per masked profile, in canonical (base-count-ascending) order: partition `k` spans `[prev_masked_base_count, this_masked_base_count)` — exactly the vectors added at that tier — so a sweep's "load only the increment since the previously loaded set" is just the partition's `[start_of(p), end_of(p))`, and a partition inherently knows its start (no cross-iteration carry needed). `idx_of(p)` is the 0-based masked position (pairs with `matching_profile_name_at` to address the tier's own ground-truth facets); `count_of(p)` is the number of masked tiers; `base_extent` is the largest masked tier's size. |
-| `query_count` | record count of a query-facet handle |
-| `query_vector_at` | access query vector by index |
+| `query_count` | Alias for [`VectorCount`] kept for clarity in workloads that distinguish base/query handles by name. |
+| `query_vector_at` | Access a query vector by index. Alias for [`VectorAt`] kept for clarity in workloads that distinguish base and query handles by name. |
 | `state_codes` | `state_codes(input) -> String` — US state abbreviation (uniform selection). |
-| `vector_at` | access f32 vector by index |
-| `vector_count` | record count of a facet handle |
-| `vector_dim` | vector dimensionality of a facet handle |
+| `vector_at` | Access an `f32` vector by index, returning a typed `VecF32`. Works on any F32 handle (base or query facet). |
+| `vector_count` | Return the count of records in the facet a handle was opened against. This is the canonical "how many vectors / queries / neighbor-rows" accessor — `vector_count(base_handle)` for base vectors, `vector_count(query_handle)` for query vectors, etc. |
+| `vector_dim` | Return the dimensionality (`f32` count per record) of a vector facet handle. |
 
 ### Regex (4)
 

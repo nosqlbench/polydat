@@ -724,6 +724,17 @@ impl<R: ResolverKind, T: 'static + Send + Sync> Wire for Resolved<R, T> {
                     _r: std::marker::PhantomData,
                 }
             }
+            // The common fault, and the one worth naming: an
+            // upstream open did not resolve, so the handle this
+            // node reads is absent rather than wrong.
+            Value::None => panic!(
+                "a resolved handle is None — the upstream open failed to \
+                 resolve. The audit log carries the underlying error and \
+                 the name it was opening: a catalog miss, a facet missing \
+                 on disk, or a transport failure. This is the most common \
+                 fault when a workload runs on a system whose catalog is \
+                 not configured for the source it asks for."
+            ),
             other => panic!("Wire<Resolved>::extract: expected Handle, got {other:?}"),
         }
     }

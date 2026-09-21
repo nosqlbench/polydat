@@ -71,14 +71,13 @@ fn srd80b_no_handwritten_polydat_node_impl_outside_carveouts() {
             Err(_) => return,
         };
         for (lineno, line) in body.lines().enumerate() {
-            let trimmed = line.trim_start();
-            // Skip macro-rules expansions (the line starts with
-            // whitespace + `impl PolydatNode for $name` — the
-            // `$` sigil never appears in a real impl).
-            if trimmed.contains('$') {
-                continue;
-            }
-            // Match only top-level impls (no leading indent).
+            // A `macro_rules!` that writes `impl PolydatNode for
+            // $name` was skipped here, which let a file generate any
+            // number of hand-written nodes and still pass. It is not
+            // skipped any more: no macro in the library writes one,
+            // because the last of them — the four dataset-accessor
+            // families in `vectors.rs` — are `#[polydat_node]` now.
+            let line = line.trim_start();
             if line.starts_with("impl PolydatNode for")
                 || line.starts_with("impl<") && line.contains("PolydatNode for")
             {

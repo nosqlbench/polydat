@@ -37,7 +37,6 @@ use std::sync::{Arc, LazyLock};
 
 use crate::library::support::cache::OnceCache;
 
-use crate::ast::{NodeMeta, PolydatNode, Port, PortType, Slot, Value};
 use vectordata::TestDataGroup;
 use vectordata::TestDataView;
 use vectordata::catalog::resolver::Catalog;
@@ -308,33 +307,6 @@ impl DatasetHandle {
     }
 }
 
-/// Downcast a handle Value to the typed `DatasetHandle` enum.
-///
-/// Surfaces a clear, actionable panic when the upstream slot
-/// holds `Value::None` — that's the canonical signal from a
-/// failed `dataset_open` / `dataset_group_open` (catalog miss,
-/// I/O failure, missing facet on disk, …). Without this
-/// dedicated branch the user would see a generic
-/// `expected Handle, got U64` panic from
-/// [`Value::as_handle`] (None reports U64 as its placeholder
-/// port type), which is six layers removed from the actual
-/// fault. The engine's `enrich_eval_panic` adds node
-/// provenance on top of whichever message we panic with here.
-fn handle_of(v: &Value) -> &DatasetHandle {
-    if matches!(v, Value::None) {
-        panic!(
-            "dataset handle is None — an upstream dataset_open / \
-             dataset_group_open failed to resolve. Check the audit \
-             log for the underlying open error (catalog miss, missing \
-             facet on disk, or transport failure). The dataset's name \
-             is in the audit message; this is the most common fault \
-             when running a workload on a system whose vectordata \
-             catalog isn't configured for the requested dataset."
-        );
-    }
-    v.as_handle::<DatasetHandle>()
-}
-
 /// `dataset_open(source: str, facet: str) -> Handle`
 ///
 /// The single resolver node. Provenance follows its two wire
@@ -404,66 +376,6 @@ fn dataset_group_open(source: &str) -> Arc<DatasetHandle> {
 // =================================================================
 // Per-cycle indexed accessors
 // =================================================================
-//
-// All take `(handle: Handle, index: u64)`. The handle is resolved
-// once per iteration by `dataset_open` (or by cursor sugar that
-// emits an implicit one); per-cycle eval downcasts the handle's
-// `Arc<DatasetHandle>` and reads at `index`. No HashMap, no Mutex,
-// no String allocation on the source side. The `Bytes` outputs
-// allocate a fresh per-cycle buffer — that's the remaining
-// per-cycle alloc until SRD 46 (native vector binding).
-//
-// `expected_variant` documents which `DatasetHandle` variant is
-// expected; a panic on wrong variant indicates the workload
-// opened a handle for a different facet than the accessor expects.
-
-macro_rules! handle_indexed_node {
-    (
-        $(#[$meta:meta])*
-        $name:ident, $func_name:literal, $out_port:ident,
-        facet = $facet:literal,
-        eval = $eval_fn:expr
-    ) => {
-        $(#[$meta])*
-        pub struct $name {
-            meta: NodeMeta,
-        }
-
-        impl $name {
-            /// A node of this kind.
-            pub fn new() -> Self {
-                Self {
-                    meta: NodeMeta {
-                        name: $func_name.into(),
-                        outs: vec![Port::new("output", PortType::$out_port)],
-                        ins: vec![
-                            Slot::Wire(Port::handle("handle")),
-                            Slot::Wire(Port::u64("index")),
-                        ],
-                    },
-                }
-            }
-        }
-
-        impl Default for $name {
-            fn default() -> Self { Self::new() }
-        }
-
-        impl PolydatNode for $name {
-            fn meta(&self) -> &NodeMeta { &self.meta }
-            fn eval(&self, inputs: &[Value], outputs: &mut [Value]) {
-                let handle = handle_of(&inputs[0]);
-                // If the handle is `Prebuffered` (returned by
-                // `dataset_prebuffer`), resolve to the specific
-                // facet variant the accessor expects. For all
-                // other handles this is a no-op borrow.
-                let resolved = handle.resolve_facet($facet);
-                let index = inputs[1].as_u64() as usize;
-                outputs[0] = ($eval_fn)(resolved.as_ref(), index);
-            }
-        }
-    };
-}
 
 /// Resolve a Prebuffered handle to a specific-facet handle by
 /// opening the named facet via the existing FACET_CACHE path
@@ -490,9 +402,74 @@ impl DatasetHandle {
     }
 }
 
-fn f32_vec_at(h: &DatasetHandle, index: usize) -> Value {
+/// The facet each accessor opens, as a type.
+///
+/// A node states its facet twice — in the auto-resolver that splices
+/// `dataset_open(_, "<facet>")` when the source is a string, and in
+/// the `resolve_facet` call that follows a prebuffered handle — and
+/// both readings come from here, so the two cannot drift apart.
+macro_rules! facet_kind {
+    ($name:ident, $facet:literal) => {
+        /// The `
+        #[doc = $facet]
+        /// ` facet of a dataset.
+        pub struct $name;
+        impl $name {
+            /// The facet's name, as `dataset_open` takes it.
+            pub const FACET: &'static str = $facet;
+        }
+        impl crate::derive_support::ResolverKind for $name {
+            const RESOLVER: crate::dsl::registry::DefaultResolver =
+                crate::dsl::registry::DefaultResolver::Facet($facet);
+        }
+    };
+}
+
+facet_kind!(BaseFacet, "base");
+facet_kind!(QueryFacet, "query");
+facet_kind!(NeighborIndicesFacet, "neighbor_indices");
+facet_kind!(NeighborDistancesFacet, "neighbor_distances");
+facet_kind!(FilteredNeighborIndicesFacet, "filtered_neighbor_indices");
+facet_kind!(
+    FilteredNeighborDistancesFacet,
+    "filtered_neighbor_distances"
+);
+facet_kind!(MetadataResultsFacet, "metadata_results");
+facet_kind!(MetadataContentFacet, "metadata_content");
+facet_kind!(MetadataPredicatesFacet, "metadata_predicates");
+
+/// A handle wire that carries its facet in its type.
+type Facet<R> = crate::derive_support::Resolved<R, DatasetHandle>;
+
+/// A handle wire on the dataset group rather than one of its facets.
+type Group = crate::derive_support::Resolved<crate::derive_support::GroupResolver, DatasetHandle>;
+
+/// The record count of a facet handle, opening `facet` first when the
+/// handle is prebuffered. `who` names the caller in the diagnostics,
+/// which is what the reader needs to see when a workload asks a
+/// facet for a count it cannot give.
+fn facet_record_count(h: &DatasetHandle, who: &str, facet: &str) -> u64 {
     match h {
-        DatasetHandle::F32(d) => Value::VecF32(slice_arc_from_uniform(d, index)),
+        DatasetHandle::F32(d) => d.count as u64,
+        DatasetHandle::I32(d) => d.count as u64,
+        DatasetHandle::Ivvec32(d) => d.count as u64,
+        DatasetHandle::Generic(d) => d.count as u64,
+        DatasetHandle::Group(_) => panic!("{who}: expected facet handle, got Group"),
+        DatasetHandle::Prebuffered { source, .. } => match DatasetHandle::open(source, facet) {
+            Ok(DatasetHandle::F32(d)) => d.count as u64,
+            Ok(other) => panic!(
+                "{who}: expected F32 {facet} facet, got {}",
+                dataset_handle_kind(&other)
+            ),
+            Err(e) => panic!("{who}: failed to open '{facet}' from prebuffered '{source}': {e}"),
+        },
+    }
+}
+
+/// The `f32` record at `index`, as the typed vector it is.
+fn f32_vec_typed(h: &DatasetHandle, index: usize) -> crate::ast::SliceArc<f32> {
+    match h {
+        DatasetHandle::F32(d) => slice_arc_from_uniform(d, index),
         other => panic!(
             "expected F32 dataset handle, got {}",
             dataset_handle_kind(other)
@@ -500,9 +477,10 @@ fn f32_vec_at(h: &DatasetHandle, index: usize) -> Value {
     }
 }
 
-fn i32_vec_at(h: &DatasetHandle, index: usize) -> Value {
+/// The `i32` record at `index`, as the typed vector it is.
+fn i32_vec_typed(h: &DatasetHandle, index: usize) -> crate::ast::SliceArc<i32> {
     match h {
-        DatasetHandle::I32(d) => Value::VecI32(slice_arc_from_uniform(d, index)),
+        DatasetHandle::I32(d) => slice_arc_from_uniform(d, index),
         other => panic!(
             "expected I32 dataset handle, got {}",
             dataset_handle_kind(other)
@@ -510,7 +488,7 @@ fn i32_vec_at(h: &DatasetHandle, index: usize) -> Value {
     }
 }
 
-fn ivvec32_vec_at(h: &DatasetHandle, index: usize) -> Value {
+fn ivvec32_vec_typed(h: &DatasetHandle, index: usize) -> crate::ast::SliceArc<i32> {
     match h {
         // Variable-length records — vectordata's trait doesn't expose
         // a zero-copy slice path for these (per-record dim is read
@@ -518,10 +496,10 @@ fn ivvec32_vec_at(h: &DatasetHandle, index: usize) -> Value {
         // cycle; same bound as the upstream trait API.
         DatasetHandle::Ivvec32(d) => {
             if d.count == 0 {
-                return Value::VecI32(crate::ast::SliceArc::from_vec(Vec::<i32>::new()));
+                return crate::ast::SliceArc::from_vec(Vec::<i32>::new());
             }
             let v = d.reader.get(index % d.count).unwrap_or_default();
-            Value::VecI32(crate::ast::SliceArc::from_vec(v))
+            crate::ast::SliceArc::from_vec(v)
         }
         other => panic!(
             "expected Ivvec32 dataset handle, got {}",
@@ -592,48 +570,88 @@ fn group_of(handle: &DatasetHandle) -> &TestDataGroup {
     }
 }
 
-handle_indexed_node!(
-    /// Access an `f32` vector by index, returning a typed `VecF32`.
-    /// Works on any F32 handle (base or query facet).
-    ///
-    /// Signature: `vector_at(handle, index: u64) -> VecF32`
-    VectorAt, "vector_at", VecF32, facet = "base", eval = f32_vec_at
-);
+/// Access an `f32` vector by index, returning a typed `VecF32`.
+/// Works on any F32 handle (base or query facet).
+///
+/// Signature: `vector_at(handle, index: u64) -> VecF32`
+#[crate::polydat_node(category = RealData)]
+fn vector_at(handle: Facet<BaseFacet>, index: u64) -> crate::ast::SliceArc<f32> {
+    f32_vec_typed(
+        handle.resolve_facet(BaseFacet::FACET).as_ref(),
+        index as usize,
+    )
+}
 
-handle_indexed_node!(
-    /// Access a query vector by index. Alias for [`VectorAt`] kept
-    /// for clarity in workloads that distinguish base and query
-    /// handles by name.
-    ///
-    /// Signature: `query_vector_at(handle, index: u64) -> VecF32`
-    QueryVectorAt, "query_vector_at", VecF32, facet = "query", eval = f32_vec_at
-);
+/// Access a query vector by index. Alias for [`VectorAt`] kept
+/// for clarity in workloads that distinguish base and query
+/// handles by name.
+///
+/// Signature: `query_vector_at(handle, index: u64) -> VecF32`
+#[crate::polydat_node(category = RealData)]
+fn query_vector_at(handle: Facet<QueryFacet>, index: u64) -> crate::ast::SliceArc<f32> {
+    f32_vec_typed(
+        handle.resolve_facet(QueryFacet::FACET).as_ref(),
+        index as usize,
+    )
+}
 
-handle_indexed_node!(
-    /// Access ground-truth neighbor indices for a query. Expects an
-    /// I32 handle.
-    ///
-    /// Signature: `neighbor_indices_at(handle, index: u64) -> VecI32`
-    NeighborIndicesAt, "neighbor_indices_at", VecI32, facet = "neighbor_indices", eval = i32_vec_at
-);
+/// Access ground-truth neighbor indices for a query. Expects an
+/// I32 handle.
+///
+/// Signature: `neighbor_indices_at(handle, index: u64) -> VecI32`
+#[crate::polydat_node(category = RealData)]
+fn neighbor_indices_at(
+    handle: Facet<NeighborIndicesFacet>,
+    index: u64,
+) -> crate::ast::SliceArc<i32> {
+    i32_vec_typed(
+        handle.resolve_facet(NeighborIndicesFacet::FACET).as_ref(),
+        index as usize,
+    )
+}
 
-handle_indexed_node!(
-    /// Access ground-truth neighbor distances for a query. Expects an
-    /// F32 handle.
-    ///
-    /// Signature: `neighbor_distances_at(handle, index: u64) -> VecF32`
-    NeighborDistancesAt, "neighbor_distances_at", VecF32, facet = "neighbor_distances", eval = f32_vec_at
-);
+/// Access ground-truth neighbor distances for a query. Expects an
+/// F32 handle.
+///
+/// Signature: `neighbor_distances_at(handle, index: u64) -> VecF32`
+#[crate::polydat_node(category = RealData)]
+fn neighbor_distances_at(
+    handle: Facet<NeighborDistancesFacet>,
+    index: u64,
+) -> crate::ast::SliceArc<f32> {
+    f32_vec_typed(
+        handle.resolve_facet(NeighborDistancesFacet::FACET).as_ref(),
+        index as usize,
+    )
+}
 
-handle_indexed_node!(
-    /// Access filtered ground-truth neighbor indices. Expects an I32 handle.
-    FilteredNeighborIndicesAt, "filtered_neighbor_indices_at", VecI32, facet = "filtered_neighbor_indices", eval = i32_vec_at
-);
+/// Access filtered ground-truth neighbor indices. Expects an I32 handle.
+#[crate::polydat_node(category = RealData)]
+fn filtered_neighbor_indices_at(
+    handle: Facet<FilteredNeighborIndicesFacet>,
+    index: u64,
+) -> crate::ast::SliceArc<i32> {
+    i32_vec_typed(
+        handle
+            .resolve_facet(FilteredNeighborIndicesFacet::FACET)
+            .as_ref(),
+        index as usize,
+    )
+}
 
-handle_indexed_node!(
-    /// Access filtered ground-truth neighbor distances. Expects an F32 handle.
-    FilteredNeighborDistancesAt, "filtered_neighbor_distances_at", VecF32, facet = "filtered_neighbor_distances", eval = f32_vec_at
-);
+/// Access filtered ground-truth neighbor distances. Expects an F32 handle.
+#[crate::polydat_node(category = RealData)]
+fn filtered_neighbor_distances_at(
+    handle: Facet<FilteredNeighborDistancesFacet>,
+    index: u64,
+) -> crate::ast::SliceArc<f32> {
+    f32_vec_typed(
+        handle
+            .resolve_facet(FilteredNeighborDistancesFacet::FACET)
+            .as_ref(),
+        index as usize,
+    )
+}
 
 // =================================================================
 // Metadata nodes (constant per dataset)
@@ -649,203 +667,78 @@ handle_indexed_node!(
 // single per-iteration eval chain via the standard provenance
 // caching. No per-cycle work.
 
-macro_rules! handle_metadata_node {
-    (
-        $(#[$meta:meta])*
-        $name:ident, $func_name:literal, $out_port:ident,
-        eval = $eval_fn:expr
-    ) => {
-        $(#[$meta])*
-        pub struct $name {
-            meta: NodeMeta,
-        }
-
-        impl $name {
-            /// A node of this kind.
-            pub fn new() -> Self {
-                Self {
-                    meta: NodeMeta {
-                        name: $func_name.into(),
-                        outs: vec![Port::new("output", PortType::$out_port)],
-                        ins: vec![Slot::Wire(Port::handle("handle"))],
-                    },
-                }
-            }
-        }
-
-        impl Default for $name {
-            fn default() -> Self { Self::new() }
-        }
-
-        impl PolydatNode for $name {
-            fn meta(&self) -> &NodeMeta { &self.meta }
-            fn eval(&self, inputs: &[Value], outputs: &mut [Value]) {
-                let handle = handle_of(&inputs[0]);
-                outputs[0] = ($eval_fn)(handle);
-            }
-        }
-    };
-}
-
-handle_metadata_node!(
-    /// Return the dimensionality (`f32` count per record) of a
-    /// vector facet handle.
-    ///
-    /// Signature: `vector_dim(handle) -> (u64)`
-    VectorDim, "vector_dim", U64,
-    eval = |h: &DatasetHandle| match h {
-        DatasetHandle::F32(d) => Value::U64(d.dim as u64),
-        DatasetHandle::I32(d) => Value::U64(d.dim as u64),
-        _ => Value::U64(0),
-    }
-);
-
-/// Return the dataset's distance function (e.g., "cosine", "euclidean").
+/// Return the dimensionality (`f32` count per record) of a
+/// vector facet handle.
 ///
-/// Signature: `dataset_distance_function(source) -> (String)`
-// Source-only nodes (just take a `source` String wire) all
-// share the new shape: declare one Wire slot, read inputs[0]
-// at eval, look up via the global cache, return the property.
-macro_rules! source_only_node {
-    (
-        $(#[$meta:meta])*
-        $name:ident, $func_name:literal,
-        out_port = $out:ident,
-        eval = |$src:ident| $body:expr
-    ) => {
-        $(#[$meta])*
-        pub struct $name {
-            meta: NodeMeta,
-        }
-
-        impl $name {
-            /// A node of this kind.
-            pub fn new() -> Self {
-                Self {
-                    meta: NodeMeta {
-                        name: $func_name.into(),
-                        outs: vec![Port::new("output", PortType::$out)],
-                        ins: vec![Slot::Wire(Port::str("source"))],
-                    },
-                }
-            }
-        }
-
-        impl Default for $name {
-            fn default() -> Self { Self::new() }
-        }
-
-        impl PolydatNode for $name {
-            fn meta(&self) -> &NodeMeta { &self.meta }
-            fn eval(&self, inputs: &[Value], outputs: &mut [Value]) {
-                let $src = inputs[0].as_str();
-                outputs[0] = $body;
-            }
-        }
-    };
+/// Signature: `vector_dim(handle) -> (u64)`
+#[crate::polydat_node(category = RealData)]
+fn vector_dim(handle: Facet<BaseFacet>) -> u64 {
+    match &*handle {
+        DatasetHandle::F32(d) => d.dim as u64,
+        DatasetHandle::I32(d) => d.dim as u64,
+        _ => 0,
+    }
 }
 
-// Helper: read a dataset-group attribute via a handle's underlying
-// `TestDataGroup`. Used by `dataset_distance_function`. We cache
-// the source string on the dataset handle itself to keep
-// dataset-group attributes accessible without an extra lookup —
-// but for now the simpler path is to require a separate
-// dataset-group-level node that takes `source: str` (kept below).
+/// Return the count of records in the facet a handle was opened
+/// against. This is the canonical "how many vectors / queries /
+/// neighbor-rows" accessor — `vector_count(base_handle)` for
+/// base vectors, `vector_count(query_handle)` for query
+/// vectors, etc.
+///
+/// Signature: `vector_count(handle) -> (u64)`
+#[crate::polydat_node(category = RealData)]
+fn vector_count(handle: Facet<BaseFacet>) -> u64 {
+    facet_record_count(&handle, "vector_count", BaseFacet::FACET)
+}
 
-handle_metadata_node!(
-    /// Return the count of records in the facet a handle was opened
-    /// against. This is the canonical "how many vectors / queries /
-    /// neighbor-rows" accessor — `vector_count(base_handle)` for
-    /// base vectors, `vector_count(query_handle)` for query
-    /// vectors, etc.
-    ///
-    /// Signature: `vector_count(handle) -> (u64)`
-    VectorCount, "vector_count", U64,
-    eval = |h: &DatasetHandle| match h {
-        DatasetHandle::F32(d) => Value::U64(d.count as u64),
-        DatasetHandle::I32(d) => Value::U64(d.count as u64),
-        DatasetHandle::Ivvec32(d) => Value::U64(d.count as u64),
-        DatasetHandle::Generic(d) => Value::U64(d.count as u64),
-        DatasetHandle::Group(_) => panic!("vector_count: expected facet handle, got Group"),
-        DatasetHandle::Prebuffered { source, .. } => {
-            // Resolve the `base` facet (canonical interpretation
-            // of `vector_count(prebuffered)` — base vectors).
-            match DatasetHandle::open(source, "base") {
-                Ok(DatasetHandle::F32(d)) => Value::U64(d.count as u64),
-                Ok(other) => panic!(
-                    "vector_count: expected F32 base facet, got {}",
-                    dataset_handle_kind(&other)),
-                Err(e) => panic!(
-                    "vector_count: failed to open 'base' from prebuffered '{source}': {e}"),
-            }
-        }
-    }
-);
+/// Alias for [`VectorCount`] kept for clarity in workloads that
+/// distinguish base/query handles by name.
+///
+/// Signature: `query_count(handle) -> (u64)`
+#[crate::polydat_node(category = RealData)]
+fn query_count(handle: Facet<QueryFacet>) -> u64 {
+    // `query_count(prebuffered)` is a legitimate idiom in the
+    // pvs_query workload (`cursor q = range(0, query_count(...))`),
+    // so the prebuffered case resolves the query facet and reads
+    // its count, through the same OnceCache-backed open the
+    // per-cycle accessors use.
+    facet_record_count(&handle, "query_count", QueryFacet::FACET)
+}
 
-handle_metadata_node!(
-    /// Alias for [`VectorCount`] kept for clarity in workloads that
-    /// distinguish base/query handles by name.
-    ///
-    /// Signature: `query_count(handle) -> (u64)`
-    QueryCount, "query_count", U64,
-    eval = |h: &DatasetHandle| match h {
-        DatasetHandle::F32(d) => Value::U64(d.count as u64),
-        DatasetHandle::I32(d) => Value::U64(d.count as u64),
-        DatasetHandle::Ivvec32(d) => Value::U64(d.count as u64),
-        DatasetHandle::Generic(d) => Value::U64(d.count as u64),
-        DatasetHandle::Group(_) => panic!("query_count: expected facet handle, got Group"),
-        DatasetHandle::Prebuffered { source, .. } => {
-            // `query_count(prebuffered)` is a legitimate idiom in the
-            // pvs_query workload (`cursor q = range(0, query_count(...))`),
-            // so resolve to the query-facet handle and read its count.
-            // Same OnceCache-backed open as the per-cycle accessors.
-            match DatasetHandle::open(source, "query") {
-                Ok(DatasetHandle::F32(d)) => Value::U64(d.count as u64),
-                Ok(other) => panic!(
-                    "query_count: expected F32 query facet, got {}",
-                    dataset_handle_kind(&other)),
-                Err(e) => panic!(
-                    "query_count: failed to open 'query' from prebuffered '{source}': {e}"),
-            }
-        }
+/// Return the per-record neighbor count (k) for an I32
+/// neighbor-indices handle.
+///
+/// Signature: `neighbor_count(handle) -> (u64)`
+#[crate::polydat_node(category = RealData)]
+fn neighbor_count(handle: Facet<NeighborIndicesFacet>) -> u64 {
+    match &*handle {
+        DatasetHandle::I32(d) => d.dim as u64,
+        _ => 0,
     }
-);
+}
 
-handle_metadata_node!(
-    /// Return the per-record neighbor count (k) for an I32
-    /// neighbor-indices handle.
-    ///
-    /// Signature: `neighbor_count(handle) -> (u64)`
-    NeighborCount, "neighbor_count", U64,
-    eval = |h: &DatasetHandle| match h {
-        DatasetHandle::I32(d) => Value::U64(d.dim as u64),
-        _ => Value::U64(0),
+/// Return the dataset's distance function (e.g., "COSINE",
+/// "EUCLIDEAN"). Operates on the dataset group; takes a Group
+/// handle.
+///
+/// Signature: `dataset_distance_function(group) -> (String)`
+#[crate::polydat_node(category = RealData)]
+fn dataset_distance_function(group: Group) -> String {
+    let group = group_of(&group);
+    let raw = group
+        .attribute("distance_function")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    match raw.to_uppercase().as_str() {
+        "L2" | "EUCLIDEAN" => "EUCLIDEAN",
+        "L1" | "MANHATTAN" => "MANHATTAN",
+        "COSINE" => "COSINE",
+        "DOT_PRODUCT" | "DOTPRODUCT" | "DOT" | "INNER_PRODUCT" | "IP" => "DOT_PRODUCT",
+        _ => raw,
     }
-);
-
-handle_metadata_node!(
-    /// Return the dataset's distance function (e.g., "COSINE",
-    /// "EUCLIDEAN"). Operates on the dataset group; takes a Group
-    /// handle.
-    ///
-    /// Signature: `dataset_distance_function(group) -> (String)`
-    DatasetDistanceFunction, "dataset_distance_function", Str,
-    eval = |h: &DatasetHandle| {
-        let group = group_of(h);
-        let raw = group
-            .attribute("distance_function")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
-        let df = match raw.to_uppercase().as_str() {
-            "L2" | "EUCLIDEAN" => "EUCLIDEAN",
-            "L1" | "MANHATTAN" => "MANHATTAN",
-            "COSINE" => "COSINE",
-            "DOT_PRODUCT" | "DOTPRODUCT" | "DOT" | "INNER_PRODUCT" | "IP" => "DOT_PRODUCT",
-            _ => raw,
-        };
-        Value::Str(df.to_string().into())
-    }
-);
+    .to_string()
+}
 
 // =================================================================
 // Metadata facet nodes
@@ -887,65 +780,72 @@ impl Ivvec32Dataset {
     }
 }
 
-handle_indexed_node!(
-    /// Access metadata indices (variable-length matching base ordinals
-    /// per query) at an index. Expects an Ivvec32 handle.
-    ///
-    /// Signature: `metadata_results_at(handle, index: u64) -> VecI32`
-    MetadataResultsAt, "metadata_results_at", VecI32, facet = "metadata_results", eval = ivvec32_vec_at
-);
+/// Access metadata indices (variable-length matching base ordinals
+/// per query) at an index. Expects an Ivvec32 handle.
+///
+/// Signature: `metadata_results_at(handle, index: u64) -> VecI32`
+#[crate::polydat_node(category = RealData)]
+fn metadata_results_at(
+    handle: Facet<MetadataResultsFacet>,
+    index: u64,
+) -> crate::ast::SliceArc<i32> {
+    ivvec32_vec_typed(
+        handle.resolve_facet(MetadataResultsFacet::FACET).as_ref(),
+        index as usize,
+    )
+}
 
-handle_indexed_node!(
-    /// Return the length of one metadata_results record without
-    /// loading the data (reads only the 4-byte header). Expects an
-    /// Ivvec32 handle.
-    ///
-    /// Signature: `metadata_results_len_at(handle, index: u64) -> (u64)`
-    MetadataResultsLenAt, "metadata_results_len_at", U64, facet = "metadata_results",
-    eval = |h: &DatasetHandle, idx: usize| match h {
+/// Return the length of one metadata_results record without
+/// loading the data (reads only the 4-byte header). Expects an
+/// Ivvec32 handle.
+///
+/// Signature: `metadata_results_len_at(handle, index: u64) -> (u64)`
+#[crate::polydat_node(category = RealData)]
+fn metadata_results_len_at(handle: Facet<MetadataResultsFacet>, index: u64) -> u64 {
+    match handle.resolve_facet(MetadataResultsFacet::FACET).as_ref() {
         DatasetHandle::Ivvec32(d) if d.count > 0 => {
-            let len = d.reader.dim_at(idx % d.count).unwrap_or(0);
-            Value::U64(len as u64)
+            d.reader.dim_at(index as usize % d.count).unwrap_or(0) as u64
         }
-        _ => Value::U64(0),
+        _ => 0,
     }
-);
+}
 
-handle_metadata_node!(
-    /// Return the metadata indices count (number of predicate result
-    /// sets). Expects an Ivvec32 handle.
-    MetadataResultsCount, "metadata_results_count", U64,
-    eval = |h: &DatasetHandle| match h {
-        DatasetHandle::Ivvec32(d) => Value::U64(d.count as u64),
-        _ => Value::U64(0),
+/// Return the metadata indices count (number of predicate result
+/// sets). Expects an Ivvec32 handle.
+#[crate::polydat_node(category = RealData)]
+fn metadata_results_count(handle: Facet<MetadataResultsFacet>) -> u64 {
+    match &*handle {
+        DatasetHandle::Ivvec32(d) => d.count as u64,
+        _ => 0,
     }
-);
+}
 
-handle_metadata_node!(
-    /// Report which facets are available for the default profile of
-    /// a dataset group as a comma-separated list. Expects a Group
-    /// handle.
-    ///
-    /// Signature: `dataset_facets(group) -> (String)`
-    DatasetFacets, "dataset_facets", Str,
-    eval = |h: &DatasetHandle| {
-        let group = group_of(h);
-        // Use the default profile — group-level callers want a
-        // dataset-wide manifest; specific profile facets come via
-        // `profile_facets(group, idx)`.
-        let names = group.profile_names();
-        if let Some(first) = names.first()
-            && let Some(view) = group.profile(first) {
-                let manifest = view.facet_manifest();
-                let mut names: Vec<&String> = manifest.keys().collect();
-                names.sort();
-                return Value::Str(
-                    names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ").into()
-                );
-            }
-        Value::Str(String::new().into())
+/// Report which facets are available for the default profile of
+/// a dataset group as a comma-separated list. Expects a Group
+/// handle.
+///
+/// Signature: `dataset_facets(group) -> (String)`
+#[crate::polydat_node(category = RealData)]
+fn dataset_facets(group: Group) -> String {
+    let group = group_of(&group);
+    // Use the default profile — group-level callers want a
+    // dataset-wide manifest; specific profile facets come via
+    // `profile_facets(group, idx)`.
+    let names = group.profile_names();
+    if let Some(first) = names.first()
+        && let Some(view) = group.profile(first)
+    {
+        let manifest = view.facet_manifest();
+        let mut names: Vec<&String> = manifest.keys().collect();
+        names.sort();
+        return names
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
     }
-);
+    String::new()
+}
 
 // =================================================================
 // Profile enumeration — discover and iterate over dataset profiles
@@ -955,22 +855,22 @@ handle_metadata_node!(
 // list. Sort order is canonical (by base_count via `profile_sort_by_size`)
 // and computed once per group via the underlying TestDataGroup.
 
-handle_metadata_node!(
-    /// Total number of profiles in a dataset group.
-    ///
-    /// Signature: `dataset_profile_count(group) -> (u64)`
-    DatasetProfileCount, "dataset_profile_count", U64,
-    eval = |h: &DatasetHandle| Value::U64(group_of(h).profile_names().len() as u64)
-);
+/// Total number of profiles in a dataset group.
+///
+/// Signature: `dataset_profile_count(group) -> (u64)`
+#[crate::polydat_node(category = RealData)]
+fn dataset_profile_count(group: Group) -> u64 {
+    group_of(&group).profile_names().len() as u64
+}
 
-handle_metadata_node!(
-    /// Comma-separated list of all profile names in canonical sort
-    /// order (by base_count).
-    ///
-    /// Signature: `dataset_profile_names(group) -> (String)`
-    DatasetProfileNames, "dataset_profile_names", Str,
-    eval = |h: &DatasetHandle| Value::Str(group_of(h).profile_names().join(", ").into())
-);
+/// Comma-separated list of all profile names in canonical sort
+/// order (by base_count).
+///
+/// Signature: `dataset_profile_names(group) -> (String)`
+#[crate::polydat_node(category = RealData)]
+fn dataset_profile_names(group: Group) -> String {
+    group_of(&group).profile_names().join(", ")
+}
 
 /// Return profile names matching a prefix, comma-separated.
 ///
@@ -1265,69 +1165,59 @@ fn matching_profile_name_at(
 // Prebuffering — eagerly download dataset facets before workload run
 // =================================================================
 
-source_only_node!(
-    /// Eagerly download all facets for a dataset profile into the
-    /// local cache, returning a `DatasetHandle::Group` handle
-    /// that downstream facet accessors take as their first
-    /// argument. After this returns, every subsequent facet read
-    /// served by [`vectordata::TestDataView`] hits the merkle-
-    /// verified mmap fast path with no further network traffic.
-    ///
-    /// Signature: `dataset_prebuffer(source) -> Handle`
-    ///
-    /// **Why a handle, not a count.** Returning a value the
-    /// downstream accessors *consume* makes prebuffer part of
-    /// the dataflow graph: DCE keeps the chain alive because
-    /// `vector_at(prebuffered, q)` needs `prebuffered` to be
-    /// resolvable, which forces evaluation. Bindings such as
-    /// `init prebuffered = dataset_prebuffer(...)` whose result
-    /// nothing reads would still be pruned (TODO: rationalise
-    /// dangling-init dataflow as a separate followup; the
-    /// established pattern is to thread the handle through).
-    ///
-    /// `source` is the canonical `dataset:profile` string. The
-    /// returned handle is a `Group` handle — accessors that take
-    /// it route through the same `DatasetHandle::open(...)`
-    /// resolver path used by other group-aware nodes
-    /// (`dataset_facets`, `dataset_distance_function`, ...).
-    ///
-    /// Errors during prebuffer surface via stderr; the node
-    /// still returns the group handle so downstream binds don't
-    /// fail with a "missing value" cascade — the operator's
-    /// intent is "best effort warm-up", and a workload that
-    /// wants strict guarantees can wrap this in a `required(...)`
-    /// predicate or check facet readiness explicitly.
-    DatasetPrebuffer, "dataset_prebuffer",
-    out_port = Handle,
-    eval = |source| do_dataset_prebuffer(source)
-);
-
-/// Implementation behind the `dataset_prebuffer` node — kept
-/// out of the macro body so we can use `?`/early return
-/// without fighting the closure-vs-eval-fn return type
-/// mismatch the `source_only_node!` macro embeds.
-fn do_dataset_prebuffer(source: &str) -> Value {
-    // The init-binding contract (SRD 11) means this function is
-    // expected to fire exactly once per scope activation: Plan B
-    // pulls the binding on the activation kernel; OpBuilder's
-    // init_overrides propagate the result to every fiber. The
-    // PREBUFFER_CACHE below is belt-and-suspenders: it serializes
-    // anyone who ends up calling here through a non-init path,
-    // and makes per-source thundering-herd structurally
-    // impossible regardless of upstream caller behavior.
+/// Eagerly download all facets for a dataset profile into the
+/// local cache, returning a `DatasetHandle::Group` handle
+/// that downstream facet accessors take as their first
+/// argument. After this returns, every subsequent facet read
+/// served by [`vectordata::TestDataView`] hits the merkle-
+/// verified mmap fast path with no further network traffic.
+///
+/// Signature: `dataset_prebuffer(source) -> Handle`
+///
+/// **Why a handle, not a count.** Returning a value the
+/// downstream accessors *consume* makes prebuffer part of
+/// the dataflow graph: DCE keeps the chain alive because
+/// `vector_at(prebuffered, q)` needs `prebuffered` to be
+/// resolvable, which forces evaluation. Bindings such as
+/// `init prebuffered = dataset_prebuffer(...)` whose result
+/// nothing reads would still be pruned (TODO: rationalise
+/// dangling-init dataflow as a separate followup; the
+/// established pattern is to thread the handle through).
+///
+/// `source` is the canonical `dataset:profile` string. The
+/// returned handle is a `Group` handle — accessors that take
+/// it route through the same `DatasetHandle::open(...)`
+/// resolver path used by other group-aware nodes
+/// (`dataset_facets`, `dataset_distance_function`, ...).
+///
+/// Errors during prebuffer surface via stderr; the node
+/// still returns the group handle so downstream binds don't
+/// fail with a "missing value" cascade — the operator's
+/// intent is "best effort warm-up", and a workload that
+/// wants strict guarantees can wrap this in a `required(...)`
+/// predicate or check facet readiness explicitly.
+#[crate::polydat_node(category = RealData)]
+fn dataset_prebuffer(source: &str) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
+    // The init-binding contract (SRD 11) means this runs exactly
+    // once per scope activation: Plan B pulls the binding on the
+    // activation kernel and the host propagates the result to every
+    // fiber. PREBUFFER_CACHE is belt-and-suspenders: it serializes
+    // anyone who reaches here by another path, so a per-source
+    // thundering herd is structurally impossible whatever the caller
+    // does.
     match PREBUFFER_CACHE.get_or_init(source.to_string(), || {
-        // Only the first concurrent caller for this source runs
-        // the inner body — the audit "entered" event reflects
-        // that single download, not per-caller noise.
+        // Only the first concurrent caller for this source runs the
+        // inner body — the audit "entered" event reflects that one
+        // download, not per-caller noise.
         crate::library::support::audit::record_prebuffer_entered(source);
         do_dataset_prebuffer_inner(source)
     }) {
-        Ok(handle) => Value::handle(handle),
-        Err(_) => Value::None,
+        Ok(handle) => Some(handle as Arc<dyn std::any::Any + Send + Sync>),
+        Err(_) => None,
     }
 }
 
-/// Inner body of [`do_dataset_prebuffer`]. Runs **at most once
+/// Inner body of [`dataset_prebuffer`]. Runs **at most once
 /// per (source, process)** under the [`PREBUFFER_CACHE`] OnceLock.
 fn do_dataset_prebuffer_inner(source: &str) -> Result<Arc<DatasetHandle>, String> {
     // Return a Group handle in every exit (success or error) so
@@ -1517,40 +1407,50 @@ impl GenericFacetDataset {
 
 // Generic-facet readers (typed scalar). Take a Generic handle and
 // read the i64-cast value at the requested index.
-
-fn generic_str_at(h: &DatasetHandle, idx: usize) -> Value {
+/// The scalar of a Generic facet at `idx`, rendered.
+fn generic_str_typed(h: &DatasetHandle, idx: usize) -> String {
     match h {
-        DatasetHandle::Generic(d) => Value::Str(d.format_scalar(idx).into()),
-        _ => Value::Str(String::new().into()),
+        DatasetHandle::Generic(d) => d.format_scalar(idx),
+        _ => String::new(),
     }
 }
 
-handle_indexed_node!(
-    /// Access a metadata value per base ordinal. Expects a Generic
-    /// handle opened against the `metadata_content` facet.
-    ///
-    /// Signature: `metadata_value_at(handle, index: u64) -> (String)`
-    MetadataValueAt, "metadata_value_at", Str, facet = "metadata_content", eval = generic_str_at
-);
+/// Access a metadata value per base ordinal. Expects a Generic
+/// handle opened against the `metadata_content` facet.
+///
+/// Signature: `metadata_value_at(handle, index: u64) -> (String)`
+#[crate::polydat_node(category = RealData)]
+fn metadata_value_at(handle: Facet<MetadataContentFacet>, index: u64) -> String {
+    generic_str_typed(
+        handle.resolve_facet(MetadataContentFacet::FACET).as_ref(),
+        index as usize,
+    )
+}
 
-handle_indexed_node!(
-    /// Access a predicate value per query ordinal. Expects a Generic
-    /// handle opened against the `metadata_predicates` facet.
-    ///
-    /// Signature: `predicate_value_at(handle, index: u64) -> (String)`
-    PredicateValueAt, "predicate_value_at", Str, facet = "metadata_predicates", eval = generic_str_at
-);
+/// Access a predicate value per query ordinal. Expects a Generic
+/// handle opened against the `metadata_predicates` facet.
+///
+/// Signature: `predicate_value_at(handle, index: u64) -> (String)`
+#[crate::polydat_node(category = RealData)]
+fn predicate_value_at(handle: Facet<MetadataPredicatesFacet>, index: u64) -> String {
+    generic_str_typed(
+        handle
+            .resolve_facet(MetadataPredicatesFacet::FACET)
+            .as_ref(),
+        index as usize,
+    )
+}
 
-handle_metadata_node!(
-    /// Count of metadata content records. Expects a Generic handle.
-    ///
-    /// Signature: `metadata_content_count(handle) -> (u64)`
-    MetadataContentCount, "metadata_content_count", U64,
-    eval = |h: &DatasetHandle| match h {
-        DatasetHandle::Generic(d) => Value::U64(d.count as u64),
-        _ => Value::U64(0),
+/// Count of metadata content records. Expects a Generic handle.
+///
+/// Signature: `metadata_content_count(handle) -> (u64)`
+#[crate::polydat_node(category = RealData)]
+fn metadata_content_count(handle: Facet<MetadataContentFacet>) -> u64 {
+    match &*handle {
+        DatasetHandle::Generic(d) => d.count as u64,
+        _ => 0,
     }
-);
+}
 
 // ── Counting a facet's matching records ─────────────────────────────
 
@@ -1561,479 +1461,50 @@ handle_metadata_node!(
 /// callers below pass a handle and a value that are fixed for a scope,
 /// so the count is computed once at scope init and reused, the way the
 /// facet itself is loaded once.
-fn generic_count_of(h: &DatasetHandle, value: i64) -> Value {
+/// How many scalars of a Generic facet equal `value`.
+fn generic_count_typed(h: &DatasetHandle, value: i64) -> u64 {
     match h {
         DatasetHandle::Generic(d) => {
-            let n = (0..d.count).filter(|i| d.get_scalar(*i) == value).count();
-            Value::U64(n as u64)
+            (0..d.count).filter(|i| d.get_scalar(*i) == value).count() as u64
         }
-        _ => Value::U64(0),
+        _ => 0,
     }
 }
 
-macro_rules! handle_count_of_node {
-    (
-        $(#[$meta:meta])*
-        $name:ident, $func_name:literal, facet = $facet:literal
-    ) => {
-        $(#[$meta])*
-        pub struct $name {
-            meta: NodeMeta,
-        }
-
-        impl $name {
-            /// A node of this kind.
-            pub fn new() -> Self {
-                Self {
-                    meta: NodeMeta {
-                        name: $func_name.into(),
-                        outs: vec![Port::new("output", PortType::U64)],
-                        ins: vec![
-                            Slot::Wire(Port::handle("handle")),
-                            Slot::Wire(Port::new("value", PortType::I64)),
-                        ],
-                    },
-                }
-            }
-        }
-
-        impl Default for $name {
-            fn default() -> Self {
-                Self::new()
-            }
-        }
-
-        impl PolydatNode for $name {
-            fn meta(&self) -> &NodeMeta {
-                &self.meta
-            }
-            fn eval(&self, inputs: &[Value], outputs: &mut [Value]) {
-                let handle = handle_of(&inputs[0]);
-                let resolved = handle.resolve_facet($facet);
-                let value = inputs[1].as_i64();
-                outputs[0] = generic_count_of(resolved.as_ref(), value);
-            }
-        }
-    };
-}
-
-handle_count_of_node!(
-    /// How many records carry the metadata value `value`.
-    ///
-    /// The per-label cardinality the recall audit compares against a
-    /// profile's declared count: not a counter advancing as records are
-    /// visited, but a property of the facet and the value, so it
-    /// replays and agrees on every engine and every fiber
-    /// (docs/design/host_request_running_counts.md).
-    ///
-    /// `metadata_value_at(handle, i)` formats the same scalar as text,
-    /// so a host comparing labels as strings and one counting them
-    /// here are reading one facet.
-    ///
-    /// Signature: `metadata_count_of(handle, value: i64) -> (u64)`
-    MetadataCountOf, "metadata_count_of", facet = "metadata_content"
-);
-
-handle_count_of_node!(
-    /// How many queries carry the predicate value `value`.
-    ///
-    /// The denominator of a per-predicate recall figure, and the bound
-    /// on a rank within one predicate's queries.
-    ///
-    /// Signature: `predicate_count_of(handle, value: i64) -> (u64)`
-    PredicateCountOf, "predicate_count_of", facet = "metadata_predicates"
-);
-
-// ---------------------------------------------------------------------------
-// Signature declarations for the DSL registry
-// ---------------------------------------------------------------------------
-
-use crate::ast::SlotType;
-use crate::dsl::registry::{Arity, DefaultResolver, FuncCategory, FuncSig, ParamSpec};
-
-// Macros to keep the bulk of the registry compact and consistent.
-// Per SRD 53 §"Source-string call-site sugar": each handle-taking
-// accessor declares a `default_resolver` so the binding compiler
-// can promote a string source into the right resolver call.
-
-/// A handle accessor that counts matching records: `(handle, value)`
-/// rather than `(handle, index)`, and a `u64` count out.
-macro_rules! sig_handle_count_of {
-    ($name:literal, $resolver:expr, $desc:literal, $help:literal) => {
-        FuncSig {
-            name: $name,
-            category: FuncCategory::RealData,
-            outputs: 1,
-            description: $desc,
-            help: $help,
-            identity: None,
-            variadic_ctor: None,
-            params: &[
-                ParamSpec {
-                    name: "handle",
-                    slot_type: SlotType::Wire,
-                    required: true,
-                    example: "base",
-                    constraint: None,
-                },
-                ParamSpec {
-                    name: "value",
-                    slot_type: SlotType::Wire,
-                    required: true,
-                    example: "to_i64(1)",
-                    constraint: None,
-                },
-            ],
-            arity: Arity::Fixed,
-            commutativity: crate::ast::Commutativity::Positional,
-            default_resolver: Some($resolver),
-            output_type: crate::dsl::registry::OutputType::Fixed,
-            output_port: None,
-        }
-    };
-}
-macro_rules! sig_handle_indexed {
-    ($name:literal, $resolver:expr, $desc:literal, $help:literal) => {
-        FuncSig {
-            name: $name,
-            category: FuncCategory::RealData,
-            outputs: 1,
-            description: $desc,
-            help: $help,
-            identity: None,
-            variadic_ctor: None,
-            params: &[
-                ParamSpec {
-                    name: "handle",
-                    slot_type: SlotType::Wire,
-                    required: true,
-                    example: "base",
-                    constraint: None,
-                },
-                ParamSpec {
-                    name: "index",
-                    slot_type: SlotType::Wire,
-                    required: true,
-                    example: "cycle",
-                    constraint: None,
-                },
-            ],
-            arity: Arity::Fixed,
-            commutativity: crate::ast::Commutativity::Positional,
-            default_resolver: Some($resolver),
-            output_type: crate::dsl::registry::OutputType::Fixed,
-            // Hand registration: no static return-port declaration;
-            // type inference falls back to the name heuristic.
-            output_port: None,
-        }
-    };
-}
-
-macro_rules! sig_handle_metadata {
-    ($name:literal, $resolver:expr, $desc:literal, $help:literal) => {
-        FuncSig {
-            name: $name,
-            category: FuncCategory::RealData,
-            outputs: 1,
-            description: $desc,
-            help: $help,
-            identity: None,
-            variadic_ctor: None,
-            params: &[ParamSpec {
-                name: "handle",
-                slot_type: SlotType::Wire,
-                required: true,
-                example: "base",
-                constraint: None,
-            }],
-            arity: Arity::Fixed,
-            commutativity: crate::ast::Commutativity::Positional,
-            default_resolver: Some($resolver),
-            output_type: crate::dsl::registry::OutputType::Fixed,
-            // Hand registration: no static return-port declaration;
-            // type inference falls back to the name heuristic.
-            output_port: None,
-        }
-    };
-}
-
-/// Signatures for vector dataset access nodes (feature-gated).
+/// How many records carry the metadata value `value`.
 ///
-/// `dataset_open` and `dataset_group_open` register themselves via the
-/// `#[polydat_node]` macro's own `NodeRegistration` channel.
-pub fn signatures() -> &'static [FuncSig] {
-    use FuncCategory as C;
-    &[
-        // ===== Per-cycle facet accessors (typed-vector outputs) =====
-        sig_handle_indexed!(
-            "vector_at",
-            DefaultResolver::Facet("base"),
-            "access f32 vector by index",
-            "Read an f32 vector from a facet handle as a typed VecF32.\nAuto-promotes a string source via dataset_open(_,\"base\").\nExample: vector_at(base, cycle)"
-        ),
-        sig_handle_indexed!(
-            "query_vector_at",
-            DefaultResolver::Facet("query"),
-            "access query vector by index",
-            "Alias for vector_at over a query-facet handle.\nAuto-promotes a string source via dataset_open(_,\"query\")."
-        ),
-        sig_handle_indexed!(
-            "neighbor_indices_at",
-            DefaultResolver::Facet("neighbor_indices"),
-            "ground-truth neighbor indices for a query",
-            "Read ground-truth k-nearest neighbor indices for a query as a\ntyped VecI32. Auto-promotes a string source via\ndataset_open(_,\"neighbor_indices\")."
-        ),
-        sig_handle_indexed!(
-            "neighbor_distances_at",
-            DefaultResolver::Facet("neighbor_distances"),
-            "ground-truth neighbor distances for a query",
-            "Read ground-truth distances for a query's k-nearest neighbors\nas a typed VecF32."
-        ),
-        sig_handle_indexed!(
-            "filtered_neighbor_indices_at",
-            DefaultResolver::Facet("filtered_neighbor_indices"),
-            "filtered ground-truth neighbor indices",
-            "Read filtered ground-truth indices for a query as a typed VecI32.\nUsed for filtered-ANN recall verification."
-        ),
-        sig_handle_indexed!(
-            "filtered_neighbor_distances_at",
-            DefaultResolver::Facet("filtered_neighbor_distances"),
-            "filtered ground-truth neighbor distances",
-            "Read filtered ground-truth distances for a query as a typed VecF32."
-        ),
-        sig_handle_indexed!(
-            "metadata_results_len_at",
-            DefaultResolver::Facet("metadata_results"),
-            "length of metadata indices for a query",
-            "Return the per-record matching-base count for a query without\nloading the full index list (reads only the 4-byte header)."
-        ),
-        sig_handle_indexed!(
-            "metadata_results_at",
-            DefaultResolver::Facet("metadata_results"),
-            "matching base ordinals for a query predicate",
-            "Variable-length list of base vector ordinals matching a query's\npredicate."
-        ),
-        sig_handle_indexed!(
-            "metadata_value_at",
-            DefaultResolver::Facet("metadata_content"),
-            "scalar metadata value per base vector",
-            "Read a metadata value for a base vector by ordinal.\nReads from the metadata_content facet."
-        ),
-        sig_handle_indexed!(
-            "predicate_value_at",
-            DefaultResolver::Facet("metadata_predicates"),
-            "scalar predicate value per query",
-            "Read a predicate value for a query by ordinal.\nReads from the metadata_predicates facet."
-        ),
-        sig_handle_count_of!(
-            "metadata_count_of",
-            DefaultResolver::Facet("metadata_content"),
-            "how many records carry a metadata value",
-            "Count the base records whose metadata_content scalar equals\nthe given value: the per-label cardinality, as a property of\nthe facet rather than a counter over a visit order."
-        ),
-        sig_handle_count_of!(
-            "predicate_count_of",
-            DefaultResolver::Facet("metadata_predicates"),
-            "how many queries carry a predicate value",
-            "Count the queries whose metadata_predicates scalar equals the\ngiven value."
-        ),
-        // ===== Per-handle metadata =====
-        sig_handle_metadata!(
-            "vector_dim",
-            DefaultResolver::Facet("base"),
-            "vector dimensionality of a facet handle",
-            "Return the per-record element count (dimension) of a vector facet."
-        ),
-        sig_handle_metadata!(
-            "vector_count",
-            DefaultResolver::Facet("base"),
-            "record count of a facet handle",
-            "Return the number of records in a facet handle (base vectors,\nquery vectors, ...). Auto-promotes a string source via\ndataset_open(_,\"base\")."
-        ),
-        sig_handle_metadata!(
-            "query_count",
-            DefaultResolver::Facet("query"),
-            "record count of a query-facet handle",
-            "Same as vector_count but defaults to dataset_open(_,\"query\")\nfor string sources."
-        ),
-        sig_handle_metadata!(
-            "neighbor_count",
-            DefaultResolver::Facet("neighbor_indices"),
-            "ground-truth neighbors per query (maxk)",
-            "Return the per-record neighbor count (k) of a neighbor-indices handle."
-        ),
-        sig_handle_metadata!(
-            "metadata_results_count",
-            DefaultResolver::Facet("metadata_results"),
-            "number of predicate result sets",
-            "Return the record count of a metadata-indices handle."
-        ),
-        sig_handle_metadata!(
-            "metadata_content_count",
-            DefaultResolver::Facet("metadata_content"),
-            "number of metadata content records",
-            "Return the record count of a metadata-content handle."
-        ),
-        // ===== Group-level (Group handle) =====
-        sig_handle_metadata!(
-            "dataset_distance_function",
-            DefaultResolver::Group,
-            "dataset distance/similarity function name",
-            "Return the distance function declared in the dataset metadata\n('COSINE','EUCLIDEAN','DOT_PRODUCT','MANHATTAN'). Group-level."
-        ),
-        sig_handle_metadata!(
-            "dataset_facets",
-            DefaultResolver::Group,
-            "list available facets in default profile",
-            "Comma-separated facet names available in the group's default profile."
-        ),
-        sig_handle_metadata!(
-            "dataset_profile_count",
-            DefaultResolver::Group,
-            "total number of profiles in a dataset",
-            "Number of profiles defined in the dataset group."
-        ),
-        sig_handle_metadata!(
-            "dataset_profile_names",
-            DefaultResolver::Group,
-            "comma-separated list of profile names",
-            "All profile names in canonical sort order (by base_count)."
-        ),
-        // `matching_profiles`, `dataset_profile_name_at`,
-        // `profile_base_count`, and `profile_facets` are now
-        // `#[polydat_node]`-emitted; they register their FuncSig
-        // via the macro's NodeRegistration entry. Their
-        // `Resolved<GroupResolver, TestDataGroup>` arg supplies
-        // the `default_resolver: Some(DefaultResolver::Group)`
-        // value to the emitted FuncSig automatically (Wire-trait
-        // RESOLVER projection — SRD-80b).
-
-        // ===== Side-effect resolver =====
-        FuncSig {
-            name: "dataset_prebuffer",
-            category: C::RealData,
-            outputs: 1,
-            description: "eagerly download dataset facets to local cache",
-            help: "Downloads all facets for a dataset to the local cache. Returns 0\n(side-effect resolver). Subsequent loads use fast local mmap access.\nKept on a string source — typically called once per workload at\ninit time.\nExample: const _pb := dataset_prebuffer(\"example\")",
-            identity: None,
-            variadic_ctor: None,
-            params: &[ParamSpec {
-                name: "source",
-                slot_type: SlotType::Wire,
-                required: true,
-                example: "\"test\"",
-                constraint: None,
-            }],
-            arity: Arity::Fixed,
-            commutativity: crate::ast::Commutativity::Positional,
-            default_resolver: None,
-            output_type: crate::dsl::registry::OutputType::Fixed,
-            // Hand registration: no static return-port declaration;
-            // type inference falls back to the name heuristic.
-            output_port: None,
-        },
-    ]
-}
-
-/// Try to build a vector dataset node from a function name and const args.
+/// The per-label cardinality the recall audit compares against a
+/// profile's declared count: not a counter advancing as records are
+/// visited, but a property of the facet and the value, so it
+/// replays and agrees on every engine and every fiber
+/// (docs/design/host_request_running_counts.md).
 ///
-/// Returns `None` if the name is not handled by this module.
-/// All functions in this module are feature-gated on `vectordata`.
-#[cfg(feature = "vectordata")]
-pub(crate) fn build_node(
-    name: &str,
-    _wires: &[crate::compile::assembly::WireRef],
-    _wire_types: &[crate::ast::PortType],
-    _consts: &[crate::dsl::factory::ConstArg],
-) -> Option<Result<Box<dyn crate::ast::PolydatNode>, String>> {
-    // Every dataset function in this module now takes its
-    // `source` (and any other previously-const string params)
-    // as a Wire input, so `consts` is unused — the spec arrives
-    // through `inputs[i]` at eval time. Literal-string args
-    // are auto-lifted to anonymous `ConstStr` wire nodes by the
-    // binding compiler; non-literal args (e.g. `printf` from a
-    // string-interpolated source spec) wire directly.
-    match name {
-        // `dataset_open` and `dataset_group_open` register through
-        // their `#[polydat_node]`-emitted NodeRegistration entries.
-        "vector_at" => Some(Ok(
-            Box::new(VectorAt::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "query_vector_at" => Some(Ok(
-            Box::new(QueryVectorAt::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "neighbor_indices_at" => Some(Ok(
-            Box::new(NeighborIndicesAt::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "neighbor_distances_at" => Some(Ok(
-            Box::new(NeighborDistancesAt::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "filtered_neighbor_indices_at" => Some(Ok(
-            Box::new(FilteredNeighborIndicesAt::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "filtered_neighbor_distances_at" => Some(Ok(
-            Box::new(FilteredNeighborDistancesAt::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "dataset_distance_function" => Some(Ok(
-            Box::new(DatasetDistanceFunction::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "vector_dim" => Some(Ok(
-            Box::new(VectorDim::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "vector_count" => Some(Ok(
-            Box::new(VectorCount::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "query_count" => Some(Ok(
-            Box::new(QueryCount::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "neighbor_count" => Some(Ok(
-            Box::new(NeighborCount::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "metadata_results_len_at" => Some(Ok(
-            Box::new(MetadataResultsLenAt::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "metadata_results_at" => Some(Ok(
-            Box::new(MetadataResultsAt::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "metadata_results_count" => Some(Ok(
-            Box::new(MetadataResultsCount::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "dataset_facets" => Some(Ok(
-            Box::new(DatasetFacets::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "dataset_profile_count" => Some(Ok(
-            Box::new(DatasetProfileCount::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "dataset_profile_names" => Some(Ok(
-            Box::new(DatasetProfileNames::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        // `matching_profiles`, `dataset_profile_name_at`,
-        // `profile_base_count`, `profile_facets` register
-        // through the `#[polydat_node]`-emitted NodeRegistration.
-        "dataset_prebuffer" => Some(Ok(
-            Box::new(DatasetPrebuffer::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "metadata_value_at" => Some(Ok(
-            Box::new(MetadataValueAt::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "predicate_value_at" => Some(Ok(
-            Box::new(PredicateValueAt::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "metadata_content_count" => Some(Ok(
-            Box::new(MetadataContentCount::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "metadata_count_of" => Some(Ok(
-            Box::new(MetadataCountOf::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        "predicate_count_of" => Some(Ok(
-            Box::new(PredicateCountOf::new()) as Box<dyn crate::ast::PolydatNode>
-        )),
-        _ => None,
-    }
+/// `metadata_value_at(handle, i)` formats the same scalar as text,
+/// so a host comparing labels as strings and one counting them
+/// here are reading one facet.
+#[crate::polydat_node(category = RealData)]
+fn metadata_count_of(handle: Facet<MetadataContentFacet>, value: i64) -> u64 {
+    generic_count_typed(
+        handle.resolve_facet(MetadataContentFacet::FACET).as_ref(),
+        value,
+    )
 }
 
-#[cfg(feature = "vectordata")]
-crate::register_nodes!(signatures, build_node);
+/// How many queries carry the predicate value `value`.
+///
+/// The denominator of a per-predicate recall figure, and the bound
+/// on a rank within one predicate's queries.
+///
+/// Signature: `predicate_count_of(handle, value: i64) -> (u64)`
+#[crate::polydat_node(category = RealData)]
+fn predicate_count_of(handle: Facet<MetadataPredicatesFacet>, value: i64) -> u64 {
+    generic_count_typed(
+        handle
+            .resolve_facet(MetadataPredicatesFacet::FACET)
+            .as_ref(),
+        value,
+    )
+}
 
 // =========================================================================
 // Cursor-sugar handlers (SRD 18 §"Source-driven workloads")
@@ -2177,6 +1648,8 @@ inventory::submit! {
 #[cfg(test)]
 mod count_of_tests {
     use super::*;
+    use crate::ast::{PolydatNode, PortType, Slot};
+    use crate::dsl::registry::DefaultResolver;
 
     /// The ports the compiler types a call against: a handle and a
     /// signed value in, a count out. The value is `i64` because that is
@@ -2221,7 +1694,7 @@ mod count_of_tests {
             },
             source: "nonexistent:profile".into(),
         };
-        assert_eq!(generic_count_of(&group_shaped, 1), Value::U64(0));
+        assert_eq!(generic_count_typed(&group_shaped, 1), 0);
     }
 
     /// Both names resolve through the registry and carry a default
@@ -2233,20 +1706,16 @@ mod count_of_tests {
             ("metadata_count_of", "metadata_content"),
             ("predicate_count_of", "metadata_predicates"),
         ] {
-            let sig = signatures()
-                .iter()
-                .find(|s| s.name == name)
+            let sig = crate::dsl::registry::lookup(name)
                 .unwrap_or_else(|| panic!("{name} is registered"));
             assert_eq!(sig.outputs, 1, "{name}");
             assert_eq!(sig.params.len(), 2, "{name}");
+            // The facet comes from the handle argument's type, so
+            // this is the resolver the macro read off `Facet<_>`.
             match sig.default_resolver {
                 Some(DefaultResolver::Facet(f)) => assert_eq!(f, facet, "{name}"),
                 other => panic!("{name}: expected a facet resolver, got {other:?}"),
             }
-            assert!(
-                build_node(name, &[], &[], &[]).is_some(),
-                "{name} builds through the constructor dispatch"
-            );
         }
     }
 }

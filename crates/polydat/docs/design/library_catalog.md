@@ -424,10 +424,15 @@ why:
   (`polydat-core/src/library/register_view.rs`). The macro fixes a node's port types from
   its signature; these take theirs from the value or wire the compiler
   is synthesising for, and are not DSL-callable.
-- **Cursor-compiler synthesised** — `CursorLimit`
-  (`polydat-core/src/library/context.rs`), built by the cursor
-  materialiser with no workload signature.
 - **Rust-internal composition primitives** — `LutSample`
   (`polydat-nodes/src/sampling/lut.rs`), the primitive behind the `dist_*` family, which
   has no DSL surface of its own; the `dist_*` functions are the
   workload-callable wrappers.
+
+The test reads every line, including the ones a `macro_rules!` writes.
+It used to skip any line carrying a `$`, which let a file generate
+hand-written nodes by the dozen and still pass — `vectors.rs` had four
+such families standing for twenty-three nodes. They are attribute
+nodes now, each declaring its dataset facet in its handle argument's
+type, which is also where the auto-resolver comes from, so the facet
+is stated once rather than in the signature and the body both.
