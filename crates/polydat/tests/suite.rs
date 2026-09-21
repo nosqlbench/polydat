@@ -140,5 +140,7 @@ mod vector_set_ops;
 mod vectordata_concurrency;
 #[path = "vectordata_integration.rs"]
 mod vectordata_integration;
+#[path = "volatile_is_never_current.rs"]
+mod volatile_is_never_current;
 #[path = "wire_type_fidelity.rs"]
 mod wire_type_fidelity;

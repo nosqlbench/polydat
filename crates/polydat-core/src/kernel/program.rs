@@ -76,14 +76,14 @@ fn first_dynamic_wire(
             WireSource::NodeOutput(upstream, _) => {
                 if lifecycle[*upstream] == EvalLifecycle::Dynamic {
                     let upstream_name = nodes[*upstream].meta().name.clone();
-                    // Detect non-deterministic seed nodes.
-                    if wiring[*upstream].is_empty()
-                        && (upstream_name == "counter"
-                            || upstream_name == "current_epoch_millis"
-                            || upstream_name == "session_start_millis"
-                            || upstream_name == "elapsed_millis"
-                            || upstream_name == "thread_id")
-                    {
+                    // A node is a nondeterministic source because it
+                    // declares itself one, not because its name is on
+                    // a list here. The list named five nodes and went
+                    // stale the moment a sixth was written.
+                    if matches!(
+                        nodes[*upstream].purity(),
+                        crate::ast::Purity::Nondeterministic { .. }
+                    ) {
                         return format!(
                             "wire on node '{owner}' reaches non-deterministic \
                              source '{upstream_name}' (dynamic by construction)"
@@ -587,7 +587,46 @@ impl PolydatProgram {
     ) {
         if modifier != crate::dsl::ast::BindingModifier::NONE {
             self.output_modifiers.insert(name.to_string(), modifier);
+            if modifier.is_volatile() {
+                self.refresh_never_current();
+            }
         }
+    }
+
+    /// Recompute the nodes an engine may never treat as current.
+    ///
+    /// The inventory computes that set when the program is built,
+    /// from the nodes' own declarations, and the output modifiers are
+    /// installed after — so a node feeding a `volatile` output was
+    /// left out of it. `volatile` is the author's statement that a
+    /// wire's value is not a function of its inputs, which is
+    /// precisely the case the node cannot declare for itself, and
+    /// evaluation_model.md §"Non-Deterministic Nodes" says such a
+    /// node is excluded from the fold *and* never treated as current.
+    /// Only the fold half held; a volatile binding was cached per
+    /// cycle like any other.
+    fn refresh_never_current(&mut self) {
+        let classes = Self::classify_lifecycle(
+            &self.nodes,
+            &self.wiring,
+            &self.input_defs,
+            &self.output_map,
+            &self.output_modifiers,
+        );
+        let mut marked = vec![false; self.nodes.len()];
+        for &i in &self.nondet_nodes {
+            marked[i] = true;
+        }
+        for (i, nd) in classes.nondeterministic.iter().enumerate() {
+            if *nd {
+                marked[i] = true;
+            }
+        }
+        self.nondet_nodes = marked
+            .iter()
+            .enumerate()
+            .filter_map(|(i, m)| m.then_some(i))
+            .collect();
     }
 
     /// Query the binding modifier for a named output.
@@ -1725,7 +1764,12 @@ impl PolydatProgram {
     pub fn engine_plan(&self) -> crate::EnginePlan {
         let mut plan = crate::EnginePlan::default();
         for i in 0..self.node_count() {
-            if self.node_meta(i).name.starts_with("jit_cone[") {
+            // A native segment is the one kind of node that stands in
+            // for a subgraph, which it says by answering
+            // `fusion_subgraph`. Its `jit_cone[…]` name is a
+            // diagnostic label, and reading the plan off a label made
+            // the count a fact about how the label is spelled.
+            if self.node_ref(i).fusion_subgraph().is_some() {
                 plan.native_segments += 1;
             } else {
                 plan.interpreted_nodes += 1;

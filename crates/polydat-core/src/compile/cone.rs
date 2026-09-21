@@ -248,59 +248,30 @@ mod jit_impl {
             && node.meta().wire_inputs().iter().all(|p| scalar_ok(p.typ))
     }
 
-    /// SRD 11's three evaluation lifecycles, re-derived here so
-    /// extraction can restrict fusion to per-cycle work. Const and
-    /// scope-init subgraphs belong to the fold passes (which
-    /// evaluate them once); fusing them would demote them to
-    /// per-pull native evaluation and — for multi-output cones —
-    /// block `fold_init_constants`' single-output replacement,
-    /// breaking `get_constant` consumers like `eval_const_expr`.
-    #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-    enum Lc {
-        CompileConst,
-        ScopeInit,
-        Dynamic,
-    }
-
-    fn classify_lifecycles(dag: &ResolvedDag, nodes: &[Box<dyn PolydatNode>]) -> Vec<Lc> {
-        let n = dag.wiring.len();
-        let mut lc = vec![Lc::CompileConst; n];
-        for i in 0..n {
-            for src in &dag.wiring[i] {
-                if let WireSource::Input(idx) = src {
-                    let kind = dag
-                        .input_defs
-                        .get(*idx)
-                        .map(|d| d.kind)
-                        .unwrap_or(InputKind::Coordinate);
-                    let seed = match kind {
-                        InputKind::IterationExtern => Lc::ScopeInit,
-                        InputKind::Coordinate | InputKind::ExternalWrite => Lc::Dynamic,
-                    };
-                    lc[i] = lc[i].max(seed);
-                }
-            }
-            if matches!(nodes[i].purity(), Purity::Nondeterministic { .. }) {
-                lc[i] = Lc::Dynamic;
-            }
-        }
-        loop {
-            let mut changed = false;
-            for i in 0..n {
-                for src in &dag.wiring[i] {
-                    if let WireSource::NodeOutput(j, _) = src
-                        && lc[*j] > lc[i]
-                    {
-                        lc[i] = lc[*j];
-                        changed = true;
-                    }
-                }
-            }
-            if !changed {
-                break;
-            }
-        }
-        lc
+    /// SRD 11's three evaluation lifecycles, read from the one
+    /// classifier the program carries, so that extraction can
+    /// restrict fusion to per-cycle work. Const and scope-init
+    /// subgraphs belong to the fold passes (which evaluate them
+    /// once); fusing them would demote them to per-pull native
+    /// evaluation and — for multi-output cones — block
+    /// `fold_init_constants`' single-output replacement, breaking
+    /// `get_constant` consumers like `eval_const_expr`.
+    ///
+    /// This was a second copy of the walk, which had drifted: it
+    /// seeded from the inputs and the declared purity but knew
+    /// nothing of the `volatile` output modifier and did not
+    /// propagate volatility downstream, so a node a program declared
+    /// volatile could read here as const and be fused into a cone the
+    /// fold then evaluated once.
+    fn classify_lifecycles(dag: &ResolvedDag) -> Vec<crate::kernel::EvalLifecycle> {
+        crate::kernel::PolydatProgram::classify_lifecycle(
+            &dag.nodes,
+            &dag.wiring,
+            &dag.input_defs,
+            &dag.output_map,
+            &dag.output_modifiers,
+        )
+        .lifecycle
     }
 
     /// Dedup/lookup key for a boundary wire source.
@@ -336,7 +307,7 @@ mod jit_impl {
             return;
         }
 
-        let lifecycles = classify_lifecycles(dag, &dag.nodes);
+        let lifecycles = classify_lifecycles(dag);
         // Eligibility in topological order, because the SRD-74 None
         // rule for a None-tolerant node depends on its sources: the
         // kernel guard makes a fused cone None whenever a boundary
@@ -347,7 +318,7 @@ mod jit_impl {
         // other node is guarded the same way fused or not.
         let mut eligible: Vec<bool> = vec![false; n];
         for i in 0..n {
-            if lifecycles[i] != Lc::Dynamic {
+            if lifecycles[i] != crate::kernel::EvalLifecycle::Dynamic {
                 continue;
             }
             let nd = dag.nodes[i].as_ref();
