@@ -41,10 +41,9 @@
 //! ## What this owns
 //!
 //! [`evaluate_for_iteration`] is the public surface:
-//! `(algebra AST + scope + workload params + on_empty) →
-//! Vec<RuntimeTuple>`. The returned tuples
-//! carry polydat [`Value`]s ready for per-iteration kernel
-//! construction via [`PolydatKernel::for_iteration`](crate::kernel::PolydatKernel::for_iteration).
+//! `(algebra AST + scope) → Vec<RuntimeTuple>`. The returned
+//! tuples carry polydat [`Value`]s, which the caller binds into a
+//! kernel over the body's program, one per tuple.
 //!
 //! Order modifiers route through the unified
 //! `Strategy::apply` (spec §10.7.8): each node returns its
@@ -56,12 +55,10 @@
 //! ## What this does NOT own
 //!
 //! - Per-iteration kernel construction. The evaluator returns
-//!   tuples; the caller (executor or stream surface) builds
-//!   the per-iter kernel via `PolydatKernel::for_iteration`.
-//! - Empty-clause policy (strict / warn). The caller passes
-//!   an `on_empty` callback and decides the policy.
+//!   tuples; the caller binds each into a kernel over the body's
+//!   program — `TraversalStream` for a `for` statement, the
+//!   renderer for a tile's projection.
 
-use std::collections::HashMap;
 #[cfg(test)]
 use std::sync::Arc;
 
@@ -99,16 +96,6 @@ pub type RuntimeTuple = Vec<(String, Value)>;
 struct EvaluatedNode {
     tuples: Vec<RuntimeTuple>,
     index_fn: Option<IndexFn>,
-}
-
-/// Reason a clause produced no values, for the caller's
-/// empty-clause policy callback.
-#[derive(Debug)]
-pub struct EmptyClause<'a> {
-    /// The clause's element name.
-    pub var: &'a str,
-    /// The clause's source text, if any.
-    pub spec_expr: Option<&'a str>,
 }
 
 /// Errors the runtime evaluator surfaces.
@@ -149,8 +136,6 @@ pub enum RuntimeError {
     /// The runtime evaluator encountered an algebra-AST shape
     /// it doesn't support (e.g., nested Filter under Order).
     UnsupportedShape(String),
-    /// Caller's `on_empty` callback returned an error.
-    EmptyPolicy(String),
 }
 
 impl std::fmt::Display for RuntimeError {
@@ -175,7 +160,6 @@ impl std::fmt::Display for RuntimeError {
                  (V4: per-strategy IndexFn contract; see spec §3.6's strategy table)"
             ),
             RuntimeError::UnsupportedShape(msg) => write!(f, "{msg}"),
-            RuntimeError::EmptyPolicy(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -186,28 +170,18 @@ impl std::error::Error for RuntimeError {}
 /// typed coordinate-tuple list.
 ///
 /// `scope` is where names resolve: the body's kernel with the
-/// parent's cascaded wires (any `Lookup`).
-/// `workload_params` provides the fallback for
-/// `Source::WorkloadParamList` names not yet promoted into
-/// the kernel chain.
+/// parent's cascaded wires, or any other [`Lookup`].
 ///
-/// `on_empty` is called with each empty clause (zero values
-/// after evaluation). Caller decides whether to abort (strict)
-/// or warn-and-skip (relaxed).
-pub fn evaluate_for_iteration<F>(
+/// It used to take two more: a workload-parameter map, which the
+/// evaluator stored and never read, and an empty-clause callback,
+/// which every caller passed as "do nothing". Both date from a host
+/// that decided an empty-clause policy of its own; a clause with no
+/// values yields no tuples, which is what an empty clause means.
+pub fn evaluate_for_iteration(
     comp: &Comprehension,
     scope: &dyn Lookup,
-    workload_params: &HashMap<String, String>,
-    on_empty: F,
-) -> Result<Vec<RuntimeTuple>, RuntimeError>
-where
-    F: FnMut(EmptyClause<'_>) -> Result<(), String>,
-{
-    let mut state = EvalState {
-        scope,
-        workload_params,
-        on_empty,
-    };
+) -> Result<Vec<RuntimeTuple>, RuntimeError> {
+    let mut state = EvalState { scope };
     state.evaluate_node(comp, &[]).map(|n| n.tuples)
 }
 
@@ -435,30 +409,15 @@ fn split_op<'a>(s: &'a str, op: &str) -> Option<(&'a str, &'a str)> {
     None
 }
 
-/// Internal walker state — bundles the closures and shared
-/// references so the recursive walker doesn't have to thread
-/// them through every call.
-struct EvalState<'a, F> {
+/// Internal walker state — the scope the recursive walker resolves
+/// names against, so it does not thread it through every call.
+struct EvalState<'a> {
     /// Where names resolve: the body's kernel with the parent's cascaded
     /// wires bound; a tuple's own bindings are layered in front per use.
     scope: &'a dyn Lookup,
-    /// Workload-param fallback. The polydat-owned
-    /// `evaluate_spec` already routes through the parent
-    /// kernel chain for shadow-aware resolution (SRD-21),
-    /// so this is unused at the runtime evaluator level —
-    /// kept on the surface for callers that pass workload
-    /// params, in case some future `Source` variant needs
-    /// param-aware evaluation that can't go through the
-    /// kernel.
-    #[allow(dead_code)]
-    workload_params: &'a HashMap<String, String>,
-    on_empty: F,
 }
 
-impl<F> EvalState<'_, F>
-where
-    F: FnMut(EmptyClause<'_>) -> Result<(), String>,
-{
+impl EvalState<'_> {
     fn evaluate_node(
         &mut self,
         node: &Comprehension,
@@ -522,12 +481,10 @@ where
         })?;
 
         if evaluated.values.is_empty() {
-            let spec_text = source_display_text(source);
-            (self.on_empty)(EmptyClause {
-                var: name,
-                spec_expr: spec_text.as_deref(),
-            })
-            .map_err(RuntimeError::EmptyPolicy)?;
+            // A clause with no values yields no tuples, which is what
+            // an empty clause means. This used to call the caller's
+            // empty-clause policy first, and every caller's policy was
+            // to do nothing.
             return Ok(EvaluatedNode {
                 tuples: Vec::new(),
                 index_fn: Some(evaluated.index_fn),
@@ -1247,14 +1204,6 @@ fn axis_size_of(idx: &IndexFn) -> Option<u64> {
     }
 }
 
-fn source_display_text(source: &Source) -> Option<String> {
-    match source {
-        Source::Generator { expr, .. } => Some(expr.clone()),
-        Source::WorkloadParamList { name, .. } => Some(format!("{{{name}}}")),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1283,8 +1232,8 @@ mod tests {
             },
         };
         let canonical = empty_kernel();
-        let params = HashMap::new();
-        let tuples = evaluate_for_iteration(&comp, &*canonical, &params, |_| Ok(())).unwrap();
+
+        let tuples = evaluate_for_iteration(&comp, &*canonical).unwrap();
         assert_eq!(tuples.len(), 4);
         assert_eq!(tuples[0][0].1, Value::U64(1));
         assert_eq!(tuples[3][0].1, Value::U64(4));
@@ -1299,8 +1248,8 @@ mod tests {
             },
         };
         let canonical = empty_kernel();
-        let params = HashMap::new();
-        let tuples = evaluate_for_iteration(&comp, &*canonical, &params, |_| Ok(())).unwrap();
+
+        let tuples = evaluate_for_iteration(&comp, &*canonical).unwrap();
         assert_eq!(tuples.len(), 2);
     }
 
@@ -1325,8 +1274,8 @@ mod tests {
             },
         ]);
         let canonical = empty_kernel();
-        let params = HashMap::new();
-        let tuples = evaluate_for_iteration(&comp, &*canonical, &params, |_| Ok(())).unwrap();
+
+        let tuples = evaluate_for_iteration(&comp, &*canonical).unwrap();
         // 2 × 2 = 4
         assert_eq!(tuples.len(), 4);
     }
@@ -1348,8 +1297,8 @@ mod tests {
             },
         ]);
         let canonical = empty_kernel();
-        let params = HashMap::new();
-        let tuples = evaluate_for_iteration(&comp, &*canonical, &params, |_| Ok(())).unwrap();
+
+        let tuples = evaluate_for_iteration(&comp, &*canonical).unwrap();
         assert_eq!(tuples.len(), 3);
     }
 
@@ -1367,8 +1316,8 @@ mod tests {
             "{k} > 3",
         );
         let canonical = canonical_with_k();
-        let params = HashMap::new();
-        let tuples = evaluate_for_iteration(&comp, &*canonical, &params, |_| Ok(())).unwrap();
+
+        let tuples = evaluate_for_iteration(&comp, &*canonical).unwrap();
         // 1..6 = [1,2,3,4,5]; filter > 3 keeps [4, 5]
         assert_eq!(tuples.len(), 2);
     }
@@ -1388,8 +1337,8 @@ mod tests {
             Some(5),
         );
         let canonical = empty_kernel();
-        let params = HashMap::new();
-        let tuples = evaluate_for_iteration(&comp, &*canonical, &params, |_| Ok(())).unwrap();
+
+        let tuples = evaluate_for_iteration(&comp, &*canonical).unwrap();
         assert_eq!(tuples.len(), 5);
     }
 
@@ -1430,8 +1379,8 @@ mod tests {
             Some(1),
         );
         let canonical = empty_kernel();
-        let params = HashMap::new();
-        let tuples = evaluate_for_iteration(&comp, &*canonical, &params, |_| Ok(())).unwrap();
+
+        let tuples = evaluate_for_iteration(&comp, &*canonical).unwrap();
         // 3x3 lattice → 4 corners (interior count 0) via the indexed form.
         assert_eq!(tuples.len(), 4);
         // Each corner pairs an extreme k with an extreme limit.

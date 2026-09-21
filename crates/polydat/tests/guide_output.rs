@@ -79,7 +79,10 @@ fn executables() -> &'static HashMap<String, PathBuf> {
             let Some(name) = msg["target"]["name"].as_str() else {
                 continue;
             };
-            let kinds = msg["target"]["kind"].as_array().cloned().unwrap_or_default();
+            let kinds = msg["target"]["kind"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
             let kind = kinds.first().and_then(|k| k.as_str()).unwrap_or("");
             if kind == "example" || kind == "bin" {
                 found.insert(format!("{kind}:{name}"), PathBuf::from(path));

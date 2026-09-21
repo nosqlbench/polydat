@@ -6,7 +6,6 @@
 //! strategy over a discrete × continuous cartesian, filters over the
 //! draws, and named measures by inverse CDF.
 
-use std::collections::HashMap;
 
 use polydat::iteration::comprehension::ast::Comprehension;
 use polydat::iteration::comprehension::cardinality::{Interval, MeasureName, ProductMeasure};
@@ -167,7 +166,7 @@ fn scope() -> polydat::kernel::PolydatKernel {
 }
 
 fn xs(ast: &Comprehension) -> Vec<f64> {
-    let tuples = evaluate_for_iteration(ast, &scope(), &HashMap::new(), |_| Ok(())).unwrap();
+    let tuples = evaluate_for_iteration(ast, &scope()).unwrap();
     tuples.iter().map(|t| t[0].1.as_f64()).collect()
 }
 

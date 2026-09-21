@@ -361,12 +361,7 @@ fn memoize(
             } => {
                 if generators.is_empty()
                     && !stream.text.contains('{')
-                    && let Ok(tuples) = evaluate_for_iteration(
-                        &stream.ast,
-                        &*canonicals[*child],
-                        &HashMap::new(),
-                        |_| Ok(()),
-                    )
+                    && let Ok(tuples) = evaluate_for_iteration(&stream.ast, &*canonicals[*child])
                 {
                     memo[*child] = Some(tuples.into());
                 }
@@ -591,8 +586,6 @@ impl TileProgram {
                                 evaluate_for_iteration(
                                     &streamer.ast,
                                     &*self.canonicals[*child_idx],
-                                    &HashMap::new(),
-                                    |_| Ok(()),
                                 )
                                 .unwrap_or_else(|e| {
                                     panic!(

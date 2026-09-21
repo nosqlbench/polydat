@@ -17,7 +17,6 @@
 //! ordinal written before each pull; a body without a cursor has one
 //! cycle per activation.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::ast::Value;
@@ -415,14 +414,12 @@ pub fn open_traversal(
         prefix: &captured,
         inner: &canonical,
     };
-    let params: HashMap<String, String> = HashMap::new();
-    let tuples = evaluate_for_iteration(&traversal.comprehension, &scope, &params, |_| Ok(()))
-        .map_err(|e| {
-            format!(
-                "`for {}` at line {}, col {}: {e}",
-                traversal.source_text, traversal.span.line, traversal.span.col
-            )
-        })?;
+    let tuples = evaluate_for_iteration(&traversal.comprehension, &scope).map_err(|e| {
+        format!(
+            "`for {}` at line {}, col {}: {e}",
+            traversal.source_text, traversal.span.line, traversal.span.col
+        )
+    })?;
     Ok(TraversalStream {
         traversal,
         tuples,
