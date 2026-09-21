@@ -2183,9 +2183,10 @@ impl PolydatProgram {
         }
 
         // Phase 2: Evaluate init-time nodes, on a state seeded without
-        // opening a cycle: a program is compiled inside a root's cycle
-        // (a traversal body, a projection body) without resetting it
-        // (axiom H5).
+        // opening a cycle. A program is compiled inside a root's cycle
+        // — a traversal body, a projection body — and folding its
+        // constants must not disturb what the root is part-way
+        // through.
         let mut state = self.create_state();
         let dummy_inputs = vec![0u64; self.coord_count];
         state.seed_inputs(&dummy_inputs);

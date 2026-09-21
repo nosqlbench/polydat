@@ -265,29 +265,6 @@ impl HybridCore {
     /// `debug_assertions` to match its call sites, which compile
     /// out in release.
     #[cfg(debug_assertions)]
-    fn validate_refs(&self) {
-        // A step that has never run, or that propagated `None`, left
-        // its slots as they were.
-        let skip = |slot: usize| {
-            self.none[slot]
-                || matches!(self.slot_step.get(slot), Some(Some(step)) if self.ran[*step] == 0)
-        };
-        for &(slot, idx) in &self.ref_scratch {
-            if skip(slot) {
-                continue;
-            }
-            let (p, l) = self.scratch[idx].ptr_len();
-            assert!(
-                self.buffer[slot] == p && self.buffer[slot + 1] == l,
-                "S9 ref-validator: slot pair ({slot}, {}) = ({:#x}, {}) \
-                 does not match scratch[{idx}] = ({p:#x}, {l})",
-                slot + 1,
-                self.buffer[slot],
-                self.buffer[slot + 1],
-            );
-        }
-    }
-
     /// Axiom S2 typed accessor core (borrow ties to &self).
     fn ref_entry(&self, slot: usize) -> &crate::ast::ScratchBuf {
         match self.ref_scratch.iter().find(|(s, _)| *s == slot) {

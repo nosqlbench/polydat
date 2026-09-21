@@ -512,13 +512,43 @@ pub(crate) use impl_kernel_trait;
 /// reference pairs a step publishes, and reading an output back.
 ///
 /// Both compiled cores carry the same fields for these and, until this
-/// macro, the same seventeen method bodies byte for byte. None of them
+/// macro, the same eighteen method bodies byte for byte. None of them
 /// touches the step list, which is the one thing the two tiers
 /// genuinely differ about: a step on the closure tier is always a
 /// closure, and on the native tier it is a closure or a run of native
 /// code. That difference lives in the run loops, which stay per tier.
 macro_rules! shared_core_methods {
     () => {
+        /// Axiom S9: every reference pair in the buffer names the
+        /// scratch entry that owns it. A slot is skipped when nothing
+        /// has been published into it — its step has not run, or it
+        /// carries `None`.
+        ///
+        /// The two tiers wrote this assertion separately and their
+        /// skip predicates had drifted apart: one skipped a `None`
+        /// slot only when a step owned it, the other whenever the
+        /// slot was `None`. Nothing is published either way, so the
+        /// looser test is the right one and is now the only one.
+        fn validate_refs(&self) {
+            for &(slot, idx) in &self.ref_scratch {
+                let unpublished = self.none[slot]
+                    || matches!(self.slot_step.get(slot), Some(Some(step)) if self.ran[*step] == 0);
+                if unpublished {
+                    continue;
+                }
+                let (p, l) = self.scratch[idx].ptr_len();
+                assert!(
+                    self.buffer[slot] == p && self.buffer[slot + 1] == l,
+                    "S9 ref-validator: slot pair ({slot}, {}) = ({:#x}, {}) \
+                     does not match scratch[{idx}] = ({p:#x}, {l}) — a slot \
+                     op failed to republish or wrote the wrong slots",
+                    slot + 1,
+                    self.buffer[slot],
+                    self.buffer[slot + 1],
+                );
+            }
+        }
+
         fn attach_cell(
             &mut self,
             name: &str,

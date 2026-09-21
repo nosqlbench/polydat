@@ -333,28 +333,6 @@ impl KernelCore {
     /// slot instead of dangling. Gated to `debug_assertions` to
     /// match its call sites, which compile out in release.
     #[cfg(debug_assertions)]
-    fn validate_refs(&self) {
-        for &(slot, idx) in &self.ref_scratch {
-            // A step that has never run has not published; one that
-            // propagated `None` left its slots as they were.
-            if let Some(Some(step)) = self.slot_step.get(slot)
-                && (self.ran[*step] == 0 || self.none[slot])
-            {
-                continue;
-            }
-            let (p, l) = self.scratch[idx].ptr_len();
-            assert!(
-                self.buffer[slot] == p && self.buffer[slot + 1] == l,
-                "S9 ref-validator: slot pair ({slot}, {}) = ({:#x}, {}) \
-                 does not match scratch[{idx}] = ({p:#x}, {l}) — a slot \
-                 op failed to republish or wrote the wrong slots",
-                slot + 1,
-                self.buffer[slot],
-                self.buffer[slot + 1],
-            );
-        }
-    }
-
     /// Axiom S2 typed accessor core: resolve a Ref pair's first
     /// slot to its kernel-owned scratch entry. The returned
     /// borrow ties to `&self`, so holding it across the next
