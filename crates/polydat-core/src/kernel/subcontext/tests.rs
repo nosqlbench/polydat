@@ -1535,3 +1535,41 @@ fn a_parent_view_rejects_an_import_the_parent_cannot_answer() {
         other => panic!("expected UnboundImport, got {other:?}"),
     }
 }
+
+/// A child's import of a parent's *computed* output is a live link,
+/// not a copy taken at materialization: the parent's every pull
+/// publishes through the output's broadcast cell and the child reads
+/// the new value.
+///
+/// This is what materializing a subscope over `&dyn Kernel` has to
+/// preserve, and it is why that is not a signature change. Broadcast
+/// cells are an interpreter-only creation site
+/// (cross_fiber_invalidation.md §3.1); a compiled parent has cells
+/// for its `shared` slots and none for its computed outputs, so the
+/// binder would fall to the value-copy branch and this assertion
+/// would hold on one engine and fail on three.
+#[test]
+fn a_child_follows_its_parents_computed_output() {
+    let mut parent = compile_polydat_interpreter("input cycle: u64\nseed := hash(cycle)\n")
+        .expect("parent compile");
+    parent.set_inputs(&[1]);
+    let first = parent.pull_ref("seed").clone();
+    let matter = crate::kernel::subcontext::PolydatMatter::builder()
+        .label("follows-computed")
+        .source("input cycle: u64\nextern seed: u64\nv := seed\n".to_string())
+        .build()
+        .expect("matter");
+    let mut child = parent.build_subscope(matter).expect("subscope");
+    child.set_inputs(&[1]);
+    assert_eq!(child.pull_ref("v").clone(), first);
+
+    parent.set_inputs(&[2]);
+    let second = parent.pull_ref("seed").clone();
+    assert_ne!(first, second, "the parent's seed moved with the cycle");
+    child.set_inputs(&[2]);
+    assert_eq!(
+        child.pull_ref("v").clone(),
+        second,
+        "the child reads through the parent's broadcast cell, not a copy"
+    );
+}
