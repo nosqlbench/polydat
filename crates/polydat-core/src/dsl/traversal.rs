@@ -86,6 +86,56 @@ impl BodySource {
     pub fn source_text(&self) -> &str {
         &self.source_text
     }
+
+    /// The body's program on `engine`, compiled on the first call for
+    /// that engine and shared by every use after it.
+    ///
+    /// One body, one carrier. A `for` body and a tile's projection
+    /// body are the same thing — a statement list compiled once per
+    /// engine against the settings the parent compiled under — and
+    /// they reach it through here. The tile path used to compile each
+    /// body twice at node construction, once for the interpreter and
+    /// once on `Engine::default()`, and then render on the default
+    /// engine whatever engine the kernel was running.
+    pub fn program_on(
+        &self,
+        engine: crate::Engine,
+    ) -> Result<Arc<dyn crate::kernel::KernelProgram>, crate::KernelError> {
+        let mut programs = self
+            .programs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(program) = programs.get(&engine) {
+            return Ok(program.clone());
+        }
+        let program = super::compile::Compiler::compile_body_on(self, engine)?.into_program();
+        programs.insert(engine, program.clone());
+        Ok(program)
+    }
+
+    /// A body from its source text, under the default settings.
+    ///
+    /// The route for a body that reaches the runtime as text rather
+    /// than from the compiler that lowered it — a tile skeleton's
+    /// projection body, which travels in the `tile_render` node's
+    /// serialized spec. `context_label` names it in a diagnostic.
+    pub fn from_source(source: &str, context_label: &str) -> Result<Self, String> {
+        let tokens = super::lexer::lex(source)?;
+        let file = super::parser::parse(tokens)?;
+        Ok(BodySource {
+            file,
+            source_text: source.to_string(),
+            source_dir: None,
+            lib_paths: Vec::new(),
+            strict: false,
+            context_label: context_label.to_string(),
+            cursor_limit: None,
+            pragmas: super::pragmas::PragmaSet::default(),
+            modules: HashMap::new(),
+            programs: Mutex::new(HashMap::new()),
+            ledger: Arc::new(crate::kernel::CompileLedger::default()),
+        })
+    }
 }
 
 impl std::fmt::Debug for BodySource {
@@ -109,17 +159,7 @@ impl Traversal {
         if matches!(engine, crate::Engine::Interpreter(_)) {
             return Ok(self.program.clone());
         }
-        let mut programs = self
-            .body
-            .programs
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(program) = programs.get(&engine) {
-            return Ok(program.clone());
-        }
-        let program = super::compile::Compiler::compile_body_on(&self.body, engine)?.into_program();
-        programs.insert(engine, program.clone());
-        Ok(program)
+        self.body.program_on(engine)
     }
 }
 

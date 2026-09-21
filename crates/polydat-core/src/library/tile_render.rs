@@ -277,16 +277,21 @@ pub struct TileProgram {
     pub spec: TileSpec,
     /// The skeleton with statics interned and streams parsed.
     ops: Vec<RtOp>,
-    /// The body programs, compiled once at setup, for the interpreter.
+    /// Each projection body, as the one carrier a `for` body uses:
+    /// its statements, the settings it compiles under, and its
+    /// program per engine, built on first use.
+    ///
+    /// This used to be two eager compiles per body — one interpreter
+    /// program and one on `Engine::default()` — made at node
+    /// construction whether or not either engine ever rendered it.
+    pub bodies: Vec<Arc<crate::dsl::traversal::BodySource>>,
+    /// The body programs for the interpreter, which construction
+    /// needs: the canonical kernels are built over them, and
+    /// memoisation runs against those.
     pub children: Vec<Arc<PolydatProgram>>,
     /// One kernel over each body program, the canonical kernel the
     /// comprehension evaluator installs tuple values into.
     canonicals: Vec<Arc<PolydatKernel>>,
-    /// Per body, its program on the default engine (SRD 117 step 2),
-    /// compiled here, at construction, so the first render pays no
-    /// compile. `None` where the engine refused the body, which then
-    /// renders interpreted.
-    compiled: Vec<Option<Arc<dyn KernelProgram>>>,
     /// Per body, its projection's tuples when the comprehension is the
     /// same every render: no generator clause and no placeholder in
     /// its sources. Evaluated once at construction.
@@ -385,18 +390,43 @@ impl TileProgram {
     pub fn from_json(json: &str) -> Self {
         let spec: TileSpec = serde_json::from_str(json)
             .unwrap_or_else(|e| panic!("tile_render: malformed skeleton payload: {e}"));
-        let children: Vec<Arc<PolydatProgram>> = spec
+        let bodies: Vec<Arc<crate::dsl::traversal::BodySource>> = spec
             .children
             .iter()
-            .map(|c| {
-                crate::dsl::compile_polydat_interpreter(&c.source)
+            .enumerate()
+            .map(|(i, c)| {
+                Arc::new(
+                    crate::dsl::traversal::BodySource::from_source(
+                        &c.source,
+                        &format!("tile '{}' :: projection body {i}", spec.name),
+                    )
                     .unwrap_or_else(|e| {
                         panic!(
                             "tile '{}': projection body failed to compile: {e}\n{}",
                             spec.name, c.source
                         )
-                    })
-                    .into_program()
+                    }),
+                )
+            })
+            .collect();
+        // Construction needs the interpreter's program: the canonical
+        // kernel the comprehension evaluator installs tuples into is
+        // built over it, and memoisation runs there. Every other
+        // engine's is built on the first render that asks for it.
+        let children: Vec<Arc<PolydatProgram>> = bodies
+            .iter()
+            .map(|b| {
+                let program = b
+                    .program_on(crate::Engine::Interpreter(crate::JitMode::Auto))
+                    .unwrap_or_else(|e| {
+                        panic!(
+                            "tile '{}': projection body failed to compile: {e}",
+                            spec.name
+                        )
+                    });
+                program
+                    .as_interpreter()
+                    .expect("a body compiled for the interpreter is an interpreter program")
             })
             .collect();
         let canonicals: Vec<Arc<PolydatKernel>> = children
@@ -407,45 +437,36 @@ impl TileProgram {
         number_child_holes(&mut ops);
         let mut memo = vec![None; children.len()];
         memoize(&ops, &canonicals, &mut memo);
-        let compiled = spec
-            .children
-            .iter()
-            .enumerate()
-            .map(|(i, c)| {
-                match crate::dsl::compile::compile_polydat_with(&c.source, crate::Engine::default())
-                {
-                    Ok(kernel) => Some(kernel.into_program()),
-                    Err(e) => {
-                        crate::library::support::audit::debug(&format!(
-                            "tile '{}': projection body {i} renders on the interpreter: {e}",
-                            spec.name
-                        ));
-                        None
-                    }
-                }
-            })
-            .collect();
         TileProgram {
             spec,
             ops,
+            bodies,
             children,
             canonicals,
-            compiled,
             memo,
         }
     }
 
-    /// The body program of projection `child` for a render on `engine`:
-    /// the interpreter's for the interpreter, the default engine's for
-    /// every compiled kernel, and the interpreter's again where the
-    /// default engine refused the body.
+    /// The body program of projection `child` for a render on
+    /// `engine` — the engine the kernel doing the rendering runs on,
+    /// which is the rule a `for` body already followed.
+    ///
+    /// A tile's body used to render on `Engine::default()` whatever
+    /// engine the kernel was, because both of its programs were built
+    /// at construction and the default one was the only compiled
+    /// program there was. An engine that refuses the body falls back
+    /// to the interpreter's, as before, and says so once.
     fn body_program_on(&self, child: usize, engine: crate::Engine) -> Arc<dyn KernelProgram> {
         if matches!(engine, crate::Engine::Interpreter(_)) {
             return self.children[child].clone();
         }
-        self.compiled[child]
-            .clone()
-            .unwrap_or_else(|| self.children[child].clone())
+        self.bodies[child].program_on(engine).unwrap_or_else(|e| {
+            crate::library::support::audit::debug(&format!(
+                "tile '{}': projection body {child} renders on the interpreter: {e}",
+                self.spec.name
+            ));
+            self.children[child].clone()
+        })
     }
 
     /// The program for a skeleton payload, interned for the process
@@ -602,15 +623,11 @@ impl TileProgram {
                         }
                     };
                     let child_spec = &self.spec.children[*child_idx];
-                    // The body runs compiled wherever the kernel rendering
-                    // is compiled, as a kernel over the body's program for
-                    // the default engine, owned by the rendering state and
-                    // reused across its renders; on the interpreter it runs
-                    // interpreted.
-                    let engine = match engine {
-                        crate::Engine::Interpreter(_) => engine,
-                        _ => crate::Engine::default(),
-                    };
+                    // The body runs on the engine the kernel rendering
+                    // it runs on, which is the rule a `for` body
+                    // already followed. The kernel over its program is
+                    // owned by the rendering state and reused across
+                    // its renders.
                     let program = self.body_program_on(*child_idx, engine);
                     let mut first = true;
                     let fail = |name: &str, e: crate::kernel::WriteError| -> ! {

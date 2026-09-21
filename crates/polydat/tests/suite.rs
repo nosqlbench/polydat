@@ -28,6 +28,8 @@ mod argv_assignment;
 mod bench_graphs;
 #[path = "binary_run.rs"]
 mod binary_run;
+#[path = "body_carrier.rs"]
+mod body_carrier;
 #[path = "compile_events.rs"]
 mod compile_events;
 #[path = "core_with_library.rs"]
