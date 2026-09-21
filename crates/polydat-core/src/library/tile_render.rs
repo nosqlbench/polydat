@@ -3,15 +3,17 @@
 
 //! The tile nodes (SRD 114 §6, §7.1).
 //!
-//! The compiler lowers a `tile` statement to one `tile_encode` binding
-//! per hole and one `tile_render` binding for the tile. `tile_encode`
-//! takes the hole's value on a polymorphic wire and produces the
-//! encoded text for the hole's position under the tile's encoding, its
-//! declared or observed type, its format, and its raw flag. Encoding is
-//! therefore an ordinary node on the graph, visible to provenance and
-//! to the engines. `tile_render` then concatenates static runs with
-//! encoded holes, selects branches, and re-runs projection bodies per
-//! tuple over a scratch state, using a skeleton it parses once at setup.
+//! The compiler lowers a `tile` statement to one `tile_render` binding
+//! over the hole wires: the render node carries each hole's encoding
+//! spec and encodes the value at the hole, concatenates static runs
+//! with encoded holes, selects branches, and re-runs projection bodies
+//! per tuple over a scratch state, using a skeleton it parses once at
+//! setup.
+//!
+//! `tile_encode` encodes one value under one hole's spec. The compiler
+//! emitted one per hole until encoding moved into the renderer; it is
+//! a library node now, which a program may call by name and nothing
+//! generates.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -36,7 +38,8 @@ pub enum HolePosition {
     Text,
 }
 
-/// The encoder for one hole, carried as the `tile_encode` node's spec.
+/// The encoder for one hole: what the renderer applies at the hole,
+/// and what the `tile_encode` node takes as its spec.
 /// Serialized compactly as `encoding|position|type|format|flags`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HoleEncoding {
@@ -1258,8 +1261,13 @@ fn push_json_escaped<W: std::fmt::Write>(s: &str, out: &mut W) {
     }
 }
 
-/// Encode one hole's value per its spec (`encoding|position|type|format|flags`).
-/// Authors do not call this directly; the compiler emits it for each hole.
+/// Encode one value under a hole's spec
+/// (`encoding|position|type|format|flags`).
+///
+/// A library node a program may call. The compiler emitted one of
+/// these per hole until encoding moved into the renderer, which
+/// encodes each hole where it stands in the skeleton; nothing
+/// generates this node now.
 #[crate::polydat_node(category = Formatting)]
 fn tile_encode(
     value: Value,

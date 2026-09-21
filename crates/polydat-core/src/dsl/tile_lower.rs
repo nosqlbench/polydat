@@ -7,7 +7,9 @@
 //! scope (or the wire itself); the render node carries the hole's
 //! encoding spec (the tile's encoding, the hole's position, its
 //! declared type, its format, and its raw flag) and encodes the value
-//! at the hole. Static runs fold into single instructions. Projection
+//! where the hole stands. There is no encoder node: a `tile_encode`
+//! per hole is what this emitted before encoding moved into the
+//! renderer. Static runs fold into single instructions. Projection
 //! bodies lower the same way in a child program; the render node
 //! compiles that body once at setup and re-runs it per tuple. The tile
 //! itself becomes a `tile_render` call over the hole wires and any
