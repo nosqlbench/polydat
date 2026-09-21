@@ -1843,11 +1843,13 @@ impl Compiler {
         probe_compiler.source_text = src.clone();
         probe_compiler.context_label = format!("{} (element probe)", self.context_label);
         probe_compiler.module_cache = self.module_cache.clone();
-        let k = probe_compiler
-            .compile_interpreter(&ast, None, None, crate::JitMode::Auto)
-            .map_err(|e| e.to_string())?;
-        k.program()
-            .output_port_type("__probe")
+        // Assembly answers this. The probe used to compile a whole
+        // kernel under `JitMode::Auto` — wire resolution, the constant
+        // fold, cone extraction, native codegen, a state — to read one
+        // output's declared port type, which the assembler knows as
+        // soon as the node is registered.
+        let asm = probe_compiler.assemble_parent(&ast, None)?;
+        asm.output_type("__probe")
             .ok_or_else(|| "probe produced no output".to_string())
     }
 
