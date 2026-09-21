@@ -469,3 +469,172 @@ fn check_reference_section(lines: &[String], overwrite: bool) {
         "the engine matrix in docs/reference/nodes.md is not the tested one; regenerate with ENGINE_PARITY=overwrite"
     );
 }
+
+/// The 128-bit carriers on every engine (F-C16).
+///
+/// `U128`/`I128` are the one scalar family that cannot ride a single
+/// slot, so they cross the compiled tiers as a limb pair and have no
+/// named native lowering. That made them easy to describe as
+/// interpreter-only and easy to leave untested: the matrix above is
+/// built from DSL programs, and these adapters are `__`-prefixed and
+/// assembler-inserted, so no program in it reaches one.
+///
+/// This builds the widening and every projection back out of the
+/// carrier through the programmatic assembler, and asserts the four
+/// engines return the same `Value` for each.
+#[test]
+fn the_128_bit_carriers_agree_on_every_engine() {
+    use polydat::ast::Value;
+    use polydat::compile::assembly::{PolydatAssembler, WireRef};
+    use polydat::library::polyfill_128 as W;
+
+    // One program per family: widen the cycle into the carrier, then
+    // read it back out through each projection the catalog has.
+    let build = |signed: bool| {
+        let mut asm = PolydatAssembler::new(vec!["cycle".into()]);
+        if signed {
+            asm.add_node(
+                "wide",
+                Box::new(W::U64ToI128::new()),
+                vec![WireRef::input("cycle")],
+            );
+            asm.add_node(
+                "back",
+                Box::new(W::I128ToI64::new()),
+                vec![WireRef::node("wide")],
+            );
+            asm.add_node(
+                "f",
+                Box::new(W::I128ToF64::new()),
+                vec![WireRef::node("wide")],
+            );
+            asm.add_node(
+                "s",
+                Box::new(W::I128ToString::new()),
+                vec![WireRef::node("wide")],
+            );
+            asm.add_node(
+                "b",
+                Box::new(W::I128ToBytes::new()),
+                vec![WireRef::node("wide")],
+            );
+            asm.add_node(
+                "j",
+                Box::new(W::I128ToJson::new()),
+                vec![WireRef::node("wide")],
+            );
+            asm.add_node(
+                "t",
+                Box::new(W::I128ToBool::new()),
+                vec![WireRef::node("wide")],
+            );
+        } else {
+            asm.add_node(
+                "wide",
+                Box::new(W::U64ToU128::new()),
+                vec![WireRef::input("cycle")],
+            );
+            asm.add_node(
+                "back",
+                Box::new(W::U128ToU64::new()),
+                vec![WireRef::node("wide")],
+            );
+            asm.add_node(
+                "f",
+                Box::new(W::U128ToF64::new()),
+                vec![WireRef::node("wide")],
+            );
+            asm.add_node(
+                "s",
+                Box::new(W::U128ToString::new()),
+                vec![WireRef::node("wide")],
+            );
+            asm.add_node(
+                "b",
+                Box::new(W::U128ToBytes::new()),
+                vec![WireRef::node("wide")],
+            );
+            asm.add_node(
+                "j",
+                Box::new(W::U128ToJson::new()),
+                vec![WireRef::node("wide")],
+            );
+            asm.add_node(
+                "t",
+                Box::new(W::U128ToBool::new()),
+                vec![WireRef::node("wide")],
+            );
+        }
+        for out in ["wide", "back", "f", "s", "b", "j", "t"] {
+            asm.add_output(out, WireRef::node(out));
+        }
+        asm
+    };
+    let outs = ["wide", "back", "f", "s", "b", "j", "t"];
+    // Which tiers built the program at all, so the comparison below
+    // cannot pass by having been skipped.
+    let mut built: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+
+    for signed in [false, true] {
+        // The signed family narrows back to `i64`, whose range the
+        // top of the `u64` range is outside of, so that value belongs
+        // to the unsigned case.
+        let cycles: &[u64] = if signed {
+            &[0, 1, 7, i64::MAX as u64]
+        } else {
+            &[0, 1, 7, u64::MAX]
+        };
+        for &cycle in cycles {
+            let mut p1 = {
+                let mut asm = build(signed);
+                asm.set_jit_mode(JitMode::Off);
+                asm.compile().expect("the interpreter builds it")
+            };
+            p1.set_inputs(&[cycle]);
+            let want: Vec<Value> = outs.iter().map(|o| p1.pull(o)).collect();
+            // The round trip and the carrier itself, so the test also
+            // states what the value is rather than only that the
+            // engines agree about it.
+            let back = if signed {
+                want[1].as_i64() as u64
+            } else {
+                want[1].as_u64()
+            };
+            assert_eq!(back, cycle, "round trip, signed={signed}");
+
+            for engine in [
+                Engine::Closures(Provenance::Raw),
+                Engine::Native(Provenance::PushPull),
+                Engine::PureNative(Provenance::PushPull),
+            ] {
+                let Ok(mut k) = build(signed).compile_slots(engine) else {
+                    // A tier with no lowering for these nodes declines
+                    // the whole program; the matrix above records the
+                    // same for every fallback-only node.
+                    continue;
+                };
+                built.insert(format!("{engine:?}"));
+                k.eval_at(&[cycle]);
+                for (i, o) in outs.iter().enumerate() {
+                    assert_eq!(
+                        k.get_value(o),
+                        want[i],
+                        "{engine:?} disagrees on {o}, signed={signed}, cycle={cycle}"
+                    );
+                }
+            }
+        }
+    }
+    // Every compiled tier carries these, the pure one included: the
+    // carrier is two immediate slots and each node is a slot call of
+    // its kit, which is what "no named native lowering" means and is
+    // not what "interpreter-only" would have meant.
+    assert_eq!(
+        built.into_iter().collect::<Vec<_>>(),
+        vec![
+            format!("{:?}", Engine::Closures(Provenance::Raw)),
+            format!("{:?}", Engine::Native(Provenance::PushPull)),
+            format!("{:?}", Engine::PureNative(Provenance::PushPull)),
+        ]
+    );
+}

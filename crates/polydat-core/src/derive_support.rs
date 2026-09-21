@@ -189,9 +189,14 @@ impl Wire for i16 {
 
 impl Wire for u128 {
     const PORT: PortType = PortType::U128;
-    // Interpreter-only: a 128-bit value cannot ride the one-u64
-    // JIT slot; the two-slot ABI is a Phase-5 concern
-    // (type_system_alignment.md §8.1).
+    // No named native lowering: a 128-bit value cannot ride the
+    // one-u64 JIT slot, so it crosses the compiled tiers as a limb
+    // pair (`Imm2`) and a node over it runs its closure on the
+    // closure tier and a slot call of its kit on the native engines
+    // (type_system_alignment.md §2). `JIT: None` is about the
+    // register, not about which engines carry the type — every one
+    // of them does, which `the_128_bit_carriers_agree_on_every_engine`
+    // pins.
     const JIT: Option<JitType> = None;
     fn extract(v: &Value) -> Self {
         v.as_u128()

@@ -4,7 +4,7 @@
 //! Polyfill edge adapters for the 128-bit integer types
 //! (`u128`/`i128`) — cranelift I128 under both signedness
 //! interpretations (`polydat/docs/design/type_system_alignment.md`
-//! §8.1).
+//! §2).
 //!
 //! Conventions mirror the 64-bit rows:
 //!
