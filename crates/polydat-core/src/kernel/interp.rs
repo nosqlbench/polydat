@@ -68,6 +68,55 @@ impl Lookup for PolydatKernel {
     }
 }
 
+/// A kernel of any engine, as a scope names resolve in.
+///
+/// `Lookup` had one kernel implementor and the typed embedding
+/// surfaces took `&PolydatKernel`, so a host holding a
+/// `Box<dyn Kernel>` could not interpolate `{k} > 5` against the
+/// kernel it had: the only route was to compile the program a second
+/// time on the interpreter. Wrapping is what makes this work rather
+/// than an `impl Lookup for dyn Kernel` — one trait object cannot
+/// become another.
+pub struct KernelScope<'a>(&'a dyn crate::kernel::Kernel);
+
+impl<'a> KernelScope<'a> {
+    /// The kernel as a scope.
+    pub fn new(kernel: &'a dyn crate::kernel::Kernel) -> Self {
+        KernelScope(kernel)
+    }
+}
+
+impl Lookup for KernelScope<'_> {
+    /// A name resolves to what the kernel holds for it now — an input
+    /// the host wrote, a coordinate it was positioned at — and
+    /// otherwise to what the build folded for it. The live answer
+    /// comes first because it is the later one: a coordinate has a
+    /// folded value on some engines, and it is the value the program
+    /// was built with, not the value the kernel is at.
+    fn lookup(&self, name: &str) -> Option<Value> {
+        if let Some(v) = self.0.input_value(name)
+            && !matches!(v, Value::None)
+        {
+            return Some(v);
+        }
+        if let Some(v) = self.0.folded_value(name)
+            && !matches!(v, Value::None)
+        {
+            return Some(v);
+        }
+        // `a.b` lowers to the wire `a__b`, so a text reference like
+        // `{q.cursor.idx}` resolves through the same flattening the
+        // compiler applies.
+        if name.contains('.') {
+            return self.lookup(&name.replace('.', "__"));
+        }
+        None
+    }
+    fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger> {
+        crate::kernel::Kernel::ledger(self.0)
+    }
+}
+
 /// The empty scope: no name resolves in it, and what has to compile
 /// under it is charged to the ledger it holds. A context-free source,
 /// one whose expression references no name, evaluates in this scope

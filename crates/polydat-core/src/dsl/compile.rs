@@ -934,15 +934,21 @@ pub fn eval_const_expr_typed<T: HostType>(source: &str) -> Result<T, EmbeddingEr
     })
 }
 
-/// Two-step: interpolate placeholders against `kernel`, then
+/// Two-step: interpolate placeholders against `scope`, then
 /// const-fold + type-convert. The canonical pattern for
 /// kernel-bound typed embedding per expression_engine.md
 /// §3.2 + §5.3.
+///
+/// `scope` is anything names resolve in: a kernel of any engine, a
+/// [`Layered`](crate::kernel::interp::Layered) view of a tuple over
+/// one, or the empty scope. It used to be `&PolydatKernel`, so a host
+/// holding a compiled kernel had to compile its program again on the
+/// interpreter to read a binding through here.
 pub fn eval_kernel_bound_typed<T: HostType>(
     text: &str,
-    kernel: &crate::kernel::PolydatKernel,
+    scope: &dyn crate::kernel::interp::Lookup,
 ) -> Result<T, EmbeddingError> {
-    let interpolated = crate::kernel::interp::interpolate_via_kernel(text, kernel)?;
+    let interpolated = crate::kernel::interp::interpolate_via_kernel(text, scope)?;
     eval_const_expr_typed::<T>(&interpolated)
 }
 
@@ -995,9 +1001,9 @@ pub fn eval_const_expr_typed_strict<T: HostType>(source: &str) -> Result<T, Embe
 /// [`eval_const_expr_typed_strict`].
 pub fn eval_kernel_bound_typed_strict<T: HostType>(
     text: &str,
-    kernel: &crate::kernel::PolydatKernel,
+    scope: &dyn crate::kernel::interp::Lookup,
 ) -> Result<T, EmbeddingError> {
-    let interpolated = crate::kernel::interp::interpolate_via_kernel(text, kernel)?;
+    let interpolated = crate::kernel::interp::interpolate_via_kernel(text, scope)?;
     eval_const_expr_typed_strict::<T>(&interpolated)
 }
 

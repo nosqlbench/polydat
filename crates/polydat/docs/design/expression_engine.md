@@ -273,16 +273,28 @@ substituted text. A `{name}` whose lookup yields nothing
 `Lookup` (`kernel::interp::Lookup`) is the name resolution a
 placeholder reads plus the compile ledger a source or
 predicate that has to compile is charged to (`lookup` and
-`ledger`): the interpreter kernel implements it, and
-`Layered` puts a tuple's bindings in front of any other
-lookup, forwarding both. The typed kernel-bound surfaces,
-`eval_kernel_bound_typed::<T>(text, &PolydatKernel)` and its
+`ledger`): the interpreter kernel implements it, `KernelScope`
+wraps a kernel of any engine as one, and `Layered` puts a
+tuple's bindings in front of any other lookup, forwarding
+both. The typed kernel-bound surfaces,
+`eval_kernel_bound_typed::<T>(text, &dyn Lookup)` and its
 `_strict` variant (§5.3), compose interpolation with the
-typed const fold; they take the interpreter's kernel, so a
-host holding a `Box<dyn Kernel>` on another engine
-interpolates by supplying its own `Lookup` over the values
-it reads with `Kernel::pull` and `Kernel::input_value` and
-a `CompileLedger` of its own.
+typed const fold over any of them, so a host holding a
+`Box<dyn Kernel>` interpolates against the kernel it has:
+`eval_kernel_bound_typed(text, &KernelScope::new(kernel.as_ref()))`.
+
+A name resolves to what the kernel holds for it now — an
+input the host wrote, a coordinate it was positioned at —
+and otherwise to what the build folded for it. The live
+answer comes first because it is the later one: on some
+engines a coordinate has a folded value, and that is the
+value the program was built with, not the value the kernel
+is at.
+
+`KernelScope` is a wrapper rather than an
+`impl Lookup for dyn Kernel` because one trait object cannot
+become another: `&dyn Kernel` has no `dyn Lookup` vtable to
+coerce into.
 
 The canonical two-step composition:
 

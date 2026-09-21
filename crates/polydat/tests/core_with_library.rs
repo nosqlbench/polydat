@@ -2136,3 +2136,41 @@ mod polymorphic_output_types {
         assert_eq!(k.pull("out").as_u64(), 8);
     }
 }
+
+/// The kernel-bound embedding surfaces take any scope, not just an
+/// interpreter kernel (F-C6).
+///
+/// `Lookup` had one kernel implementor and these surfaces took
+/// `&PolydatKernel`, so a host holding a `Box<dyn Kernel>` could not
+/// read its own bindings through them: the only route was to compile
+/// the program a second time on the interpreter.
+#[cfg(test)]
+mod kernel_bound_on_every_engine {
+    use polydat::dsl::compile::{compile_polydat_with, eval_kernel_bound_typed};
+    use polydat::{Engine, JitMode, Kernel, Provenance};
+
+    #[test]
+    fn a_host_interpolates_against_the_kernel_it_holds() {
+        let src = "input cycle: u64\nconst k := 10\nn := u64_add(cycle, 5)\n";
+        for engine in [
+            Engine::Interpreter(JitMode::Off),
+            Engine::Closures(Provenance::Raw),
+            Engine::Native(Provenance::PushPull),
+        ] {
+            let mut kernel: Box<dyn Kernel> =
+                compile_polydat_with(src, engine).unwrap_or_else(|e| panic!("{engine:?}: {e}"));
+            kernel.set_inputs(&[3]);
+            let scope = polydat::kernel::interp::KernelScope::new(kernel.as_ref());
+
+            // A folded constant of the program.
+            let doubled: u64 = eval_kernel_bound_typed("{k} * 2", &scope)
+                .unwrap_or_else(|e| panic!("{engine:?}: {e}"));
+            assert_eq!(doubled, 20, "{engine:?}");
+
+            // An input the host wrote.
+            let cycle: u64 = eval_kernel_bound_typed("{cycle}", &scope)
+                .unwrap_or_else(|e| panic!("{engine:?}: {e}"));
+            assert_eq!(cycle, 3, "{engine:?}");
+        }
+    }
+}

@@ -6,7 +6,6 @@
 //! strategy over a discrete × continuous cartesian, filters over the
 //! draws, and named measures by inverse CDF.
 
-
 use polydat::iteration::comprehension::ast::Comprehension;
 use polydat::iteration::comprehension::cardinality::{Interval, MeasureName, ProductMeasure};
 use polydat::iteration::comprehension::measure::AxisMeasure;
