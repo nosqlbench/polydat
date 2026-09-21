@@ -322,9 +322,22 @@ returns).
 <Commutativity>`, `variadic_min = <int>`. Shapes: `output_names(...)`.
 Engines: `compiled_u64 = <path>`,
 `compiled_slot = <path>`, `state = <path>`, `jit_constants = <path>`,
-`decompose = <path>`, `simd = "<node>"`, `simd_total`. Per argument:
-`#[constraint(...)]` on a wire argument, `#[poly_default(...)]` on a
-const argument, and `#[poly_const(...)]` as above.
+`decompose = <path>`, `simd = "<node>"`, `simd_total`. Validation:
+`validate = <path>`, a
+`fn(&str, &[ConstArg]) -> Result<(), String>` the factory calls with
+the node's constant arguments after every per-parameter constraint has
+passed, for a rule that relates two of them — `n_of`'s `n <= m`, or
+`in_range`'s `lo <= hi`. Per argument: `#[constraint(...)]` on a wire
+argument, `#[poly_default(...)]` on a const argument, and
+`#[poly_const(...)]` as above.
+
+A rule over constants belongs in one of those two places rather than
+in the body. A body assertion runs only on the engines that run the
+body: `n_of`'s `n <= m` panic fired on the interpreter and the closure
+tier and did not fire at all under native lowering, where the program
+built and returned a value instead. Both forms here are read by the
+factory, so they hold on every engine and report against the program
+that wrote the literal rather than against some later cycle.
 
 ### The kit each shape yields
 

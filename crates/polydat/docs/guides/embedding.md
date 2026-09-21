@@ -315,7 +315,12 @@ extension values, and `&[Value]` for a variadic tail. The return type
 is the output wire's type. Attribute options declare the category, the
 purity (the default is pure; `SideChannel` marks a node that writes
 somewhere the kernel does not see, as the emit node in §12 does), and
-constraints such as `#[constraint(NonZeroU64)]` on a parameter.
+constraints such as `#[constraint(NonZeroU64)]` on a parameter. A rule
+that relates two constants rather than bounding one goes in
+`validate = <path>`, a function the factory calls with the node's
+constant arguments. Both are read when the node is built, so they hold
+on every engine; a check written into the body instead only fires on
+the engines that run the body.
 
 Every node the attribute accepts runs on the interpreter, the closure
 tier, and hybrid kernels: the interpreter calls the body, and the

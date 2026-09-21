@@ -143,10 +143,11 @@ fn select(cond: u64, if_true: u64, if_false: u64) -> u64 {
 ///
 /// JIT level: P3 (`JitOp::ChanceConst`).
 #[polydat::polydat_node(category = Probability)]
-fn chance(input: u64, p: Const<f64>) -> u64 {
-    if !(0.0..=1.0).contains(&*p) {
-        panic!("chance probability p must be in [0.0, 1.0], got {}", *p);
-    }
+fn chance(input: u64, #[constraint(RangeF64 { min: 0.0, max: 1.0 })] p: Const<f64>) -> u64 {
+    // The range is declared, so the factory refuses a bad `p` when the
+    // node is built and names the parameter. It used to be a panic here
+    // — which ran on every evaluation and reported on some later cycle
+    // rather than at the program that wrote it.
     let h = crate::hash::splitmix64_u64(input);
     let unit = hash_to_unit(h);
     let result: f64 = if unit < *p { 1.0 } else { 0.0 };
@@ -177,21 +178,38 @@ fn chance(input: u64, p: Const<f64>) -> u64 {
 /// is_special := n_of(cycle, 3, 10)
 /// ```
 ///
-/// Both `n` and `m` are init-time constant parameters. Panics if
-/// `m == 0` or `n > m` (the relational check can't ride on a
-/// per-param `ParamSpec` constraint, so the assertion lives in the
-/// body and fires on the first eval).
+/// Both `n` and `m` are init-time constant parameters, and both of
+/// their rules are checked when the node is built: `m != 0` by the
+/// per-parameter `NonZeroU64` constraint, and `n <= m` by the
+/// node-level validator, which is where a relation between two
+/// parameters belongs. Neither rule depends on the body running, so
+/// both hold on every engine.
 ///
 /// JIT level: P3 (`JitOp::NOfConst`).
-#[polydat::polydat_node(category = Probability)]
-fn n_of(input: u64, n: Const<u64>, m: Const<u64>) -> u64 {
-    if *m == 0 {
-        panic!("n_of: m must be > 0");
-    }
-    if *n > *m {
-        panic!("n_of: n ({}) must be <= m ({})", *n, *m);
-    }
+#[polydat::polydat_node(category = Probability, validate = n_of_validate)]
+fn n_of(input: u64, n: Const<u64>, #[constraint(NonZeroU64)] m: Const<u64>) -> u64 {
+    // Both rules are declared and both are checked when the node is
+    // built: `m` non-zero by the per-parameter constraint above, and
+    // `n <= m` by `n_of_validate`, which a per-parameter constraint
+    // cannot say because it is a relation between two of them.
+    //
+    // `n <= m` used to be a panic here. That fired on the interpreter
+    // and the closure tier and did not fire at all on the native tier,
+    // where the body is never run — `n_of(cycle, 9, 3)` returned 1
+    // rather than failing. A rule a body states is only as reliable as
+    // the body's chance of running.
     n_of_m_eval(input, *n, *m)
+}
+
+/// `n_of`'s relation between its two constants. Node-level because no
+/// per-parameter constraint can compare two parameters.
+fn n_of_validate(_name: &str, consts: &[polydat::dsl::factory::ConstArg]) -> Result<(), String> {
+    let n = consts.first().map(|c| c.as_u64()).unwrap_or(0);
+    let m = consts.get(1).map(|c| c.as_u64()).unwrap_or(0);
+    if n > m {
+        return Err(format!("n ({n}) must be <= m ({m})"));
+    }
+    Ok(())
 }
 
 pub use polydat::numeric::n_of_m::n_of_m_eval;
@@ -708,23 +726,10 @@ mod tests {
         }
     }
 
-    #[test]
-    #[should_panic(expected = "n_of: m must be > 0")]
-    fn n_of_m_rejects_zero_m() {
-        // The relational check fires on eval (macro-emitted `new`
-        // is infallible).
-        let node = NOf::new(0, 0);
-        let mut out = [Value::None];
-        node.eval(&[Value::U64(0)], &mut out);
-    }
-
-    #[test]
-    #[should_panic(expected = "n_of: n (5) must be <= m (3)")]
-    fn n_of_m_rejects_n_greater_than_m() {
-        let node = NOf::new(5, 3);
-        let mut out = [Value::None];
-        node.eval(&[Value::U64(0)], &mut out);
-    }
+    // `m > 0` and `n <= m` are no longer checked from the body, so
+    // there is nothing here to assert about a directly constructed
+    // `NOf`. Both rules are now refused when the node is built, which
+    // `const_constraint_tests` below covers on every engine.
 
     #[test]
     fn n_of_m_not_first_n() {
@@ -1124,5 +1129,66 @@ mod tests {
             "reset extern should produce fallback again, got: {:?}",
             val
         );
+    }
+}
+
+#[cfg(test)]
+mod const_constraint_tests {
+    use polydat::dsl::compile::compile_polydat_kernel;
+
+    /// A constraint declared on a const argument is checked when the
+    /// node is built, so a bad literal is a compile error naming the
+    /// node and the parameter rather than a panic on some later cycle
+    /// from inside the body (F-N6).
+    #[test]
+    fn a_declared_const_constraint_refuses_at_assembly() {
+        for (src, want) in [
+            (
+                "input cycle: u64\nx := chance(cycle, 1.5)\n",
+                "p must be in [0, 1]",
+            ),
+            (
+                "input cycle: u64\nx := n_of(cycle, 1, 0)\n",
+                "m must be non-zero",
+            ),
+        ] {
+            let err = compile_polydat_kernel(src)
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| panic!("should not build: {src}"));
+            assert!(err.contains(want), "{src}: {err}");
+        }
+        // The same nodes with values their constraints allow.
+        for src in [
+            "input cycle: u64\nx := chance(cycle, 0.3)\n",
+            "input cycle: u64\nx := n_of(cycle, 3, 10)\n",
+        ] {
+            assert!(compile_polydat_kernel(src).is_ok(), "{src}");
+        }
+    }
+
+    /// A relation between two parameters is not a per-parameter
+    /// constraint, so `n_of` declares a node-level validator for it.
+    /// That validator runs at assembly, which is the only place the
+    /// rule holds on every engine: as a body panic it fired on the
+    /// interpreter and the closure tier and was silently skipped on
+    /// the native tier, where the body is never run.
+    #[test]
+    fn a_relation_between_parameters_is_refused_on_every_engine() {
+        use polydat::dsl::compile::compile_polydat_with;
+        use polydat::{Engine, JitMode, Provenance};
+
+        let src = "input cycle: u64\nx := n_of(cycle, 9, 3)\n";
+        for engine in [
+            Engine::Interpreter(JitMode::Off),
+            Engine::Closures(Provenance::Auto),
+            Engine::Native(Provenance::Auto),
+        ] {
+            let err = compile_polydat_with(src, engine)
+                .err()
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| panic!("{engine:?} must refuse n > m, not build it"));
+            assert!(err.contains("must be <= m"), "{engine:?}: {err}");
+        }
     }
 }

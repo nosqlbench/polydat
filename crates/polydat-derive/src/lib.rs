@@ -130,6 +130,9 @@ struct NodeAttrs {
     /// wire_types))` instead of the slot kit's closure. Free-fn
     /// signature: `fn(&Node, &[PortType]) -> CompiledSlotKit`. For a
     /// node whose closure reads its slots as borrowed views.
+    /// `validate = <path>`: a node-level check the factory runs when
+    /// the node is built.
+    validate_fn: Option<syn::ExprPath>,
     compiled_slot_override: Option<syn::ExprPath>,
     /// SRD-80 PR B.7 — override path for `jit_constants()`.
     /// Free-fn signature: `fn(&Node) -> Vec<u64>`. Macro emits
@@ -215,6 +218,11 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
     let mut category: Option<Ident> = None;
     let mut compiled_u64_override: Option<syn::ExprPath> = None;
     let mut state: Option<syn::ExprPath> = None;
+    // A node-level `validate = <path>`: checked by the factory when
+    // the node is built, so a rule that no single parameter can state
+    // — a relation between two of them — is enforced once and on every
+    // engine, rather than from a body that native code never runs.
+    let mut validate_fn: Option<syn::ExprPath> = None;
     let mut compiled_slot_override: Option<syn::ExprPath> = None;
     let mut jit_constants_override: Option<syn::ExprPath> = None;
     let mut decompose: Option<syn::ExprPath> = None;
@@ -306,6 +314,17 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
                             ));
                         };
                         state = Some(p.clone());
+                    }
+                    "validate" => {
+                        let syn::Expr::Path(p) = &nv.value else {
+                            return Err(syn::Error::new_spanned(
+                                &nv.value,
+                                "`validate` value must be a path to a free function \
+                                 with signature \
+                                 `fn(&str, &[ConstArg]) -> Result<(), String>`.",
+                            ));
+                        };
+                        validate_fn = Some(p.clone());
                     }
                     "compiled_slot" => {
                         let syn::Expr::Path(p) = &nv.value else {
@@ -503,6 +522,7 @@ fn parse_attrs(attr: TokenStream2) -> syn::Result<NodeAttrs> {
         category,
         compiled_u64_override,
         compiled_slot_override,
+        validate_fn,
         jit_constants_override,
         state,
         decompose,
@@ -536,7 +556,8 @@ struct ClassifiedArg {
     /// arg. The variant name maps to `ConstConstraint::*`; the
     /// emitted `Port` carries the constraint so strict-wire
     /// mode can auto-insert upstream assertion nodes.
-    wire_constraint: Option<Ident>,
+    /// `#[constraint(...)]`, if the argument declared one.
+    constraint: Option<syn::Expr>,
 }
 
 /// How a `Const` list argument asked for its elements: borrowed from
@@ -1099,18 +1120,28 @@ fn parse_poly_default(attrs: &[syn::Attribute]) -> syn::Result<Option<syn::Expr>
     Ok(None)
 }
 
-/// Extract a `#[constraint(<Variant>)]` attribute. SRD-80 PR
-/// B.14 — wire-arg constraint metadata. The variant name
-/// matches `ConstConstraint::*` (e.g. `NonZeroU64`,
-/// `PositiveFiniteF64`). Strict-wire mode reads this metadata
-/// to auto-insert assertion nodes upstream.
-fn parse_wire_constraint(attrs: &[syn::Attribute]) -> syn::Result<Option<Ident>> {
+/// Extract a `#[constraint(<Variant>)]` attribute, on a wire or a
+/// const argument. What follows `ConstConstraint::` — a bare variant
+/// such as `NonZero`, or one with fields such as
+/// `RangeF64 { min: 0.0, max: 1.0 }`.
+///
+/// On a **wire** arg it is the strict-wire metadata of SRD-80 PR B.14:
+/// strict mode reads it and inserts an assertion node upstream.
+///
+/// On a **const** arg it lands in the parameter's `ParamSpec`, and the
+/// factory checks it when the node is built, before the node exists.
+/// That is the difference between a program that fails to assemble
+/// with the parameter named and one that panics on some later cycle
+/// from inside a node body — which is what a node had to do before
+/// this, since a declared constraint was the one thing the macro could
+/// not emit (F-N6).
+fn parse_constraint(attrs: &[syn::Attribute]) -> syn::Result<Option<syn::Expr>> {
     for attr in attrs {
         if !attr.path().is_ident("constraint") {
             continue;
         }
-        let variant: Ident = attr.parse_args()?;
-        return Ok(Some(variant));
+        let expr: syn::Expr = attr.parse_args()?;
+        return Ok(Some(expr));
     }
     Ok(None)
 }
@@ -1683,7 +1714,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                 let declared_ty = (*pat_ty.ty).clone();
                 let default_value = parse_poly_default(&pat_ty.attrs)?;
                 let setup_attr = parse_poly_const(&pat_ty.attrs)?;
-                let wire_constraint = parse_wire_constraint(&pat_ty.attrs)?;
+                let constraint = parse_constraint(&pat_ty.attrs)?;
                 let is_polywire = classify_polywire(&declared_ty);
                 let variadic_elem = classify_variadic(&declared_ty);
 
@@ -1775,7 +1806,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                     declared_ty,
                     kind,
                     default_value,
-                    wire_constraint,
+                    constraint,
                 });
             }
         }
@@ -1888,7 +1919,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                 let pt = wire_port_type_for(&a.declared_ty)?;
                 let ty = &a.declared_ty;
                 // SRD-80 PR B.14: optional `#[constraint(Variant)]`.
-                let constraint_chain = if let Some(variant) = &a.wire_constraint {
+                let constraint_chain = if let Some(variant) = &a.constraint {
                     quote! {
                         .with_constraint(
                             polydat::dsl::const_constraints::ConstConstraint::#variant)
@@ -2035,13 +2066,26 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                 ArgKind::ConstVec(inner, _) => inner.slot_type_tokens(),
                 ArgKind::Setup(_) => return None,
             };
+            // A declared `#[constraint(...)]` on a const argument
+            // reaches the factory, which checks it when the node is
+            // built. On a wire argument the same attribute is the
+            // strict-wire metadata and rides on the port instead, so
+            // it is not repeated here.
+            let constraint = match (&a.kind, &a.constraint) {
+                (ArgKind::Wire | ArgKind::PolyWire | ArgKind::Variadic(_), _) | (_, None) => {
+                    quote!(None)
+                }
+                (_, Some(c)) => {
+                    quote!(Some(polydat::dsl::const_constraints::ConstConstraint::#c))
+                }
+            };
             Some(quote! {
                 polydat::dsl::registry::ParamSpec {
                     name: #name_str,
                     slot_type: #slot_type,
                     required: #required,
                     example: #name_str,
-                    constraint: None,
+                    constraint: #constraint,
                 }
             })
         })
@@ -4223,6 +4267,12 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
     let (description, help) = doc_text(&fn_docs);
     let description_lit = syn::LitStr::new(&description, proc_macro2::Span::call_site());
     let help_lit = syn::LitStr::new(&help, proc_macro2::Span::call_site());
+    // The node's own validator, when it declared one.
+    let validate_emission = match &attrs.validate_fn {
+        Some(p) => quote!(Some(#p as polydat::dsl::const_constraints::NodeValidator)),
+        None => quote!(None),
+    };
+
     let result = quote! {
         #struct_doc
         pub struct #struct_name {
@@ -4308,7 +4358,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                 polydat::dsl::registry::NodeRegistration {
                     signatures,
                     build,
-                    validate: None,
+                    validate: #validate_emission,
                 }
             }
         };

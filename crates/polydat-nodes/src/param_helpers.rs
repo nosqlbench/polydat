@@ -85,7 +85,7 @@ fn is_positive(
 /// Signature: `in_range(input: u64, lo: u64, hi: u64) -> u64`
 /// Assert that a u64 value is in the inclusive range `[lo, hi]`.
 /// SRD-80 PR B.15 migration.
-#[polydat::polydat_node(category = Arithmetic)]
+#[polydat::polydat_node(category = Arithmetic, validate = in_range_validate)]
 fn in_range(
     input: u64,
     #[poly_default(0u64)] lo: polydat::derive_support::Const<u64>,
@@ -95,6 +95,20 @@ fn in_range(
         panic!("in_range: value {input} outside [{}, {}]", *lo, *hi);
     }
     input
+}
+
+/// `in_range`'s relation between its two bounds. Node-level because
+/// no per-parameter constraint can compare two parameters.
+fn in_range_validate(
+    _name: &str,
+    consts: &[polydat::dsl::factory::ConstArg],
+) -> Result<(), String> {
+    let lo = consts.first().map(|c| c.as_u64()).unwrap_or(0);
+    let hi = consts.get(1).map(|c| c.as_u64()).unwrap_or(u64::MAX);
+    if lo > hi {
+        return Err(format!("lo ({lo}) must be <= hi ({hi})"));
+    }
+    Ok(())
 }
 
 // =========================================================================
@@ -107,7 +121,7 @@ fn in_range(
 /// `classify_node` returns Fallback for it because a
 /// `Const<Vec<u64>>` node publishes no `jit_constants`, so the
 /// `JitOp::IsOneOfCheck` arm never fires.
-#[polydat::polydat_node(category = Arithmetic)]
+#[polydat::polydat_node(category = Arithmetic, validate = is_one_of_validate)]
 fn is_one_of(input: u64, allowed: polydat::derive_support::Const<&[u64]>) -> u64 {
     if !allowed.contains(&input) {
         panic!(
@@ -116,6 +130,19 @@ fn is_one_of(input: u64, allowed: polydat::derive_support::Const<&[u64]>) -> u64
         );
     }
     input
+}
+
+/// `is_one_of`'s allow-list must name at least one value. A list's
+/// arity is a property of the whole argument rather than of any one
+/// element, so it is stated at the node.
+fn is_one_of_validate(
+    _name: &str,
+    consts: &[polydat::dsl::factory::ConstArg],
+) -> Result<(), String> {
+    if consts.is_empty() {
+        return Err("at least one allowed value required".into());
+    }
+    Ok(())
 }
 
 // =========================================================================
@@ -175,29 +202,16 @@ pub(crate) fn build_node(
 
 /// Assembly-time constant validation for parameter-helper nodes.
 /// See SRD 15 §"Const Constraint Metadata".
+///
+/// Empty: `in_range` and `is_one_of` each declare their own validator
+/// through `#[polydat_node(validate = ...)]`, so the rule travels with
+/// the node it belongs to rather than living in a table keyed by name
+/// that a new node has to remember to join.
 pub(crate) fn validate_node(
-    name: &str,
-    consts: &[polydat::dsl::factory::ConstArg],
+    _name: &str,
+    _consts: &[polydat::dsl::factory::ConstArg],
 ) -> Result<(), String> {
-    match name {
-        "in_range" => {
-            let lo = consts.first().map(|c| c.as_u64()).unwrap_or(0);
-            let hi = consts.get(1).map(|c| c.as_u64()).unwrap_or(u64::MAX);
-            if lo > hi {
-                Err(format!("lo ({lo}) must be <= hi ({hi})"))
-            } else {
-                Ok(())
-            }
-        }
-        "is_one_of" => {
-            if consts.is_empty() {
-                Err("at least one allowed value required".into())
-            } else {
-                Ok(())
-            }
-        }
-        _ => Ok(()),
-    }
+    Ok(())
 }
 
 polydat::register_nodes!(signatures, build_node, validate_node);
