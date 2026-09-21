@@ -498,7 +498,7 @@ impl Value {
     pub fn as_u64(&self) -> u64 {
         match self {
             Value::U64(v) => *v,
-            _ => panic!("expected U64, got {:?}", self.port_type()),
+            _ => panic!("expected U64, got {}", self.type_name()),
         }
     }
 
@@ -511,7 +511,7 @@ impl Value {
         match self {
             Value::I64(v) => *v,
             Value::U64(v) => *v as i64,
-            _ => panic!("expected I64, got {:?}", self.port_type()),
+            _ => panic!("expected I64, got {}", self.type_name()),
         }
     }
 
@@ -524,7 +524,7 @@ impl Value {
         match self {
             Value::U128(b) => b.as_u128(),
             Value::U64(v) => *v as u128,
-            _ => panic!("expected U128, got {:?}", self.port_type()),
+            _ => panic!("expected U128, got {}", self.type_name()),
         }
     }
 
@@ -536,7 +536,7 @@ impl Value {
             Value::I128(b) => b.as_i128(),
             Value::I64(v) => *v as i128,
             Value::U64(v) => *v as i128,
-            _ => panic!("expected I128, got {:?}", self.port_type()),
+            _ => panic!("expected I128, got {}", self.type_name()),
         }
     }
 
@@ -547,7 +547,7 @@ impl Value {
     pub fn as_reg_bits(&self) -> Bits128 {
         match self {
             Value::Reg128(b, _) => *b,
-            _ => panic!("expected Reg128, got {:?}", self.port_type()),
+            _ => panic!("expected Reg128, got {}", self.type_name()),
         }
     }
 
@@ -556,7 +556,7 @@ impl Value {
     pub fn as_f64(&self) -> f64 {
         match self {
             Value::F64(v) => *v,
-            _ => panic!("expected F64, got {:?}", self.port_type()),
+            _ => panic!("expected F64, got {}", self.type_name()),
         }
     }
 
@@ -565,7 +565,7 @@ impl Value {
     pub fn as_bool(&self) -> bool {
         match self {
             Value::Bool(v) => *v,
-            _ => panic!("expected Bool, got {:?}", self.port_type()),
+            _ => panic!("expected Bool, got {}", self.type_name()),
         }
     }
 
@@ -574,7 +574,7 @@ impl Value {
     pub fn as_str(&self) -> &str {
         match self {
             Value::Str(v) => v,
-            _ => panic!("expected Str, got {:?}", self.port_type()),
+            _ => panic!("expected Str, got {}", self.type_name()),
         }
     }
 
@@ -583,7 +583,7 @@ impl Value {
     pub fn as_bytes(&self) -> &[u8] {
         match self {
             Value::Bytes(v) => v,
-            _ => panic!("expected Bytes, got {:?}", self.port_type()),
+            _ => panic!("expected Bytes, got {}", self.type_name()),
         }
     }
 
@@ -592,7 +592,7 @@ impl Value {
     pub fn as_json(&self) -> &serde_json::Value {
         match self {
             Value::Json(v) => v,
-            _ => panic!("expected Json, got {:?}", self.port_type()),
+            _ => panic!("expected Json, got {}", self.type_name()),
         }
     }
 
@@ -606,7 +606,7 @@ impl Value {
     pub fn as_json_arc(&self) -> &Arc<serde_json::Value> {
         match self {
             Value::Json(v) => v,
-            _ => panic!("expected Json, got {:?}", self.port_type()),
+            _ => panic!("expected Json, got {}", self.type_name()),
         }
     }
 
@@ -642,7 +642,26 @@ impl Value {
             Value::VecF16(_) => PortType::VecF16,
             Value::VecI16(_) => PortType::VecI16,
             Value::VecI8(_) => PortType::VecI8,
-            Value::None => PortType::U64, // placeholder
+            // `None` is the absence of a value, which no port type
+            // names. `U64` is what this has always answered, and
+            // callers that care read it through
+            // [`Self::type_name`] or test for `None` first
+            // ([`Self::satisfies_slot`] does).
+            Value::None => PortType::U64,
+        }
+    }
+
+    /// The name of this value's type, for a diagnostic.
+    ///
+    /// Distinct from [`Self::port_type`] in the one case that
+    /// matters: an absent value reads as "none" rather than as the
+    /// `u64` its port type answers. A reader told "expected Handle,
+    /// got U64" goes looking for a number; the value was not there
+    /// at all, which is a different fault with a different cause.
+    pub fn type_name(&self) -> String {
+        match self {
+            Value::None => "none".to_string(),
+            other => other.port_type().to_string(),
         }
     }
 
@@ -651,7 +670,7 @@ impl Value {
     pub fn as_vec_f32(&self) -> &[f32] {
         match self {
             Value::VecF32(arc) => arc,
-            _ => panic!("expected VecF32, got {:?}", self.port_type()),
+            _ => panic!("expected VecF32, got {}", self.type_name()),
         }
     }
 
@@ -724,7 +743,7 @@ impl Value {
     pub fn as_vec_i32(&self) -> &[i32] {
         match self {
             Value::VecI32(arc) => arc,
-            _ => panic!("expected VecI32, got {:?}", self.port_type()),
+            _ => panic!("expected VecI32, got {}", self.type_name()),
         }
     }
 
@@ -733,7 +752,7 @@ impl Value {
     pub fn as_vec_f64(&self) -> &[f64] {
         match self {
             Value::VecF64(arc) => arc,
-            _ => panic!("expected VecF64, got {:?}", self.port_type()),
+            _ => panic!("expected VecF64, got {}", self.type_name()),
         }
     }
 
@@ -742,7 +761,7 @@ impl Value {
     pub fn as_vec_i64(&self) -> &[i64] {
         match self {
             Value::VecI64(arc) => arc,
-            _ => panic!("expected VecI64, got {:?}", self.port_type()),
+            _ => panic!("expected VecI64, got {}", self.type_name()),
         }
     }
 
@@ -751,7 +770,7 @@ impl Value {
     pub fn as_vec_f16(&self) -> &[half::f16] {
         match self {
             Value::VecF16(arc) => arc,
-            _ => panic!("expected VecF16, got {:?}", self.port_type()),
+            _ => panic!("expected VecF16, got {}", self.type_name()),
         }
     }
 
@@ -760,7 +779,7 @@ impl Value {
     pub fn as_vec_i16(&self) -> &[i16] {
         match self {
             Value::VecI16(arc) => arc,
-            _ => panic!("expected VecI16, got {:?}", self.port_type()),
+            _ => panic!("expected VecI16, got {}", self.type_name()),
         }
     }
 
@@ -769,7 +788,7 @@ impl Value {
     pub fn as_vec_i8(&self) -> &[i8] {
         match self {
             Value::VecI8(arc) => arc,
-            _ => panic!("expected VecI8, got {:?}", self.port_type()),
+            _ => panic!("expected VecI8, got {}", self.type_name()),
         }
     }
 
@@ -791,7 +810,7 @@ impl Value {
                     std::any::type_name::<T>()
                 )
             }),
-            _ => panic!("expected Handle, got {:?}", self.port_type()),
+            _ => panic!("expected Handle, got {}", self.type_name()),
         }
     }
 
@@ -1213,6 +1232,25 @@ pub struct Port {
     /// difference is just where the value comes from (a literal
     /// for `ConstU64`, a wire for `Slot::Wire`).
     pub constraint: Option<crate::dsl::const_constraints::ConstConstraint>,
+    /// Whether this port takes the wire's value as it is, whatever
+    /// type the wire carries — in which case [`Self::typ`] is a
+    /// nominal placeholder and the assembler inserts no adapter into
+    /// this port.
+    ///
+    /// The one shape that needs it is an element of a `&[Value]`
+    /// variadic: the node inspects the `Value` variant itself, so
+    /// converting the wire to the port's declared type would change
+    /// what the node sees — `json_array(cycle)` would hold the text
+    /// of a number rather than the number. A plain `Value` argument
+    /// does not need it, because the assembler resolves that port's
+    /// type from its wire and hands it to the constructor.
+    ///
+    /// The assembler used to decide this from a list of thirteen node
+    /// names, which was both a name-keyed table and the wrong
+    /// granularity: `pick`'s selector wires must be `Bool` while its
+    /// value wires are polymorphic, and one flag per node cannot say
+    /// that.
+    pub accepts_any_type: bool,
 }
 
 impl Port {
@@ -1224,7 +1262,15 @@ impl Port {
             lifecycle: Lifecycle::Cycle,
             wire_cost: WireCost::Data,
             constraint: None,
+            accepts_any_type: false,
         }
+    }
+
+    /// This port, taking the wire as it is whatever its type. See
+    /// [`Self::accepts_any_type`].
+    pub fn any_type(mut self) -> Self {
+        self.accepts_any_type = true;
+        self
     }
 
     /// Create a port with explicit lifecycle.
@@ -1235,6 +1281,7 @@ impl Port {
             lifecycle,
             wire_cost: WireCost::Data,
             constraint: None,
+            accepts_any_type: false,
         }
     }
 

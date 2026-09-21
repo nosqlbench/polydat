@@ -1534,7 +1534,8 @@ impl PolydatAssembler {
             let mut node_wiring = Vec::new();
 
             for (port_idx, wire_ref) in all_nodes[node_idx].inputs.clone().iter().enumerate() {
-                let expected_type = all_nodes[node_idx].node.meta().wire_inputs()[port_idx].typ;
+                let port = all_nodes[node_idx].node.meta().wire_inputs()[port_idx].clone();
+                let expected_type = port.typ;
 
                 let (source, source_type) = match wire_ref {
                     WireRef::Input(name) => {
@@ -1553,42 +1554,14 @@ impl PolydatAssembler {
                     }
                 };
 
-                // Printf accepts any input type — skip type checking for it.
-                // `pick` is also type-flexible: its selector wires must be
-                // Bool but its value wires can be any type so long as they
-                // share a common type at eval — uniformity is enforced at
-                // eval time (SRD-66 §"Surface 3"). The variadic ctor can't
-                // know the value-half port type at construction, so we
-                // declare placeholder ports and skip the assembler check;
-                // the per-eval validator catches mismatches with a clear
-                // panic via `enrich_eval_panic`.
-                //
-                // The `log_*` family is also type-polymorphic by intent:
-                // `log_info(regex_match(...))` is the canonical SRD-66
-                // probe-phase shape, where the input is Bool. Without
-                // skipping the check, the assembler inserts a Bool→Str
-                // adapter that converts the value, breaking the
-                // result-binding writeback (the cell receives Str("false")
-                // instead of Bool(false), and downstream `pick` rejects
-                // it as non-bool). The eval is a pass-through, so the
-                // actual value flows through unchanged.
-                // `exactly_one_value` is similarly type-polymorphic:
-                // its eval inspects the actual `Value` variant and
-                // walks structural shape (Json / VecF32 / VecI32) or
-                // passes through scalars. The declared input port
-                // type is a placeholder. Without the skip, an
-                // upstream `Json` body (the magic `body` extern's
-                // declared type) gets coerced to `Str` via the
-                // `JsonToStr` adapter — at which point the SRD-66
-                // probe shape `regex_match(exactly_one_value(body), …)`
-                // sees JSON-serialised text with `\n` literal
-                // escapes, and `^`-anchored regexes never match
-                // inside `create_statement` columns.
-                let node_name_for_typing = &all_nodes[node_idx].node.meta().name;
-                let skip_type_check =
-                    UNTYPED_VARIADIC_NODES.contains(&node_name_for_typing.as_str());
-
-                if skip_type_check || source_type == expected_type {
+                // A port that takes the wire as it is gets no
+                // adapter and no check: converting the value would
+                // change what the node reads. The port says so
+                // itself (`Port::accepts_any_type`) — this used to be
+                // decided from a list of thirteen node names, which
+                // disabled the check on every port of those nodes,
+                // `pick`'s `Bool` selectors included.
+                if port.accepts_any_type || source_type == expected_type {
                     node_wiring.push(source);
                 } else if let Some(adapter) = auto_adapter(source_type, expected_type) {
                     if strict {
@@ -2109,30 +2082,6 @@ pub(crate) fn wire_types_of(resolved: &ResolvedDag, node_idx: usize) -> Vec<Port
         })
         .collect()
 }
-
-/// Nodes whose `&[Value]` variadic inputs take every wire as it is.
-///
-/// The macro types a `&[Value]` port as `Str`, which would put a
-/// to-string adapter on every non-string wire. These nodes inspect the
-/// `Value` variant themselves (formatting, JSON construction, selection,
-/// emission, tile rendering), so the wire is connected untyped and the
-/// value arrives with its own kind: `json_array(cycle)` holds a number,
-/// not the text of one.
-pub(crate) const UNTYPED_VARIADIC_NODES: &[&str] = &[
-    "printf",
-    "pick",
-    "log_debug",
-    "log_info",
-    "log_warn",
-    "log_error",
-    "exactly_one_value",
-    "json_text",
-    "json_array",
-    "json_object",
-    "str_concat",
-    "emit_row",
-    "tile_render",
-];
 
 /// The lossless adapter node from one port type to another, if the
 /// catalog has one: what the assembler inserts between a wire and a port

@@ -2102,3 +2102,37 @@ mod typed_embedding_errors {
         assert_eq!(dynamic_inputs, &["cycle".to_string()]);
     }
 }
+/// A node whose output type comes from its wires reports that type,
+/// not a placeholder (F-N9).
+///
+/// `pick` returns whatever its value wires carry, and its output port
+/// used to be declared `U64` regardless. A `Str` from `pick` feeding a
+/// `Str` port therefore had a `U64ToString` adapter inserted between
+/// them — and the adapter read the string's pointer as a number, so
+/// `matches(pick(b, "yes"), "y.*")` compared the pattern against
+/// something like "2163471811744".
+#[cfg(test)]
+mod polymorphic_output_types {
+    use polydat::Kernel;
+
+    #[test]
+    fn pick_reports_the_type_its_wires_carry() {
+        let mut k = polydat::dsl::compile::compile_polydat_interpreter(
+            "input cycle: u64\nb := cycle > 0\ns := pick(b, \"yes\")\nout := matches(s, \"y.*\")\n",
+        )
+        .expect("it builds");
+        k.set_inputs(&[1]);
+        assert_eq!(k.pull("s").as_str(), "yes");
+        assert_eq!(k.pull("out").as_str(), "yes");
+    }
+
+    #[test]
+    fn and_a_numeric_pick_still_reports_a_number() {
+        let mut k = polydat::dsl::compile::compile_polydat_interpreter(
+            "input cycle: u64\nb := cycle > 0\nn := pick(b, 7)\nout := u64_add(n, 1)\n",
+        )
+        .expect("it builds");
+        k.set_inputs(&[1]);
+        assert_eq!(k.pull("out").as_u64(), 8);
+    }
+}

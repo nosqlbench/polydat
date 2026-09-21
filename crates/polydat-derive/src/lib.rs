@@ -626,10 +626,11 @@ enum VariadicElement {
 
 impl VariadicElement {
     fn port_type_tokens(self) -> TokenStream2 {
-        // For Value variadics we declare the per-slot port type
-        // as Str (the most common stringy use case — printf,
-        // str_concat). The body deals with type coercion via
-        // its own dispatch on the Value variant.
+        // A `Value` variadic's per-slot type is nominal: the slot is
+        // marked `accepts_any_type`, so the assembler reads the wire
+        // and inserts nothing, and the body dispatches on the `Value`
+        // variant itself. `Str` is the spelling of the placeholder,
+        // not a claim about the wire.
         match self {
             VariadicElement::U64 => quote!(polydat::ast::PortType::U64),
             VariadicElement::Bool => quote!(polydat::ast::PortType::Bool),
@@ -2029,13 +2030,21 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
             ArgKind::Variadic(elem) => {
                 let name_str = a.name.to_string();
                 let pt = elem.port_type_tokens();
+                // A `&[Value]` variadic takes each wire as it is: the
+                // body reads the `Value` variant, so an adapter into
+                // the slot's nominal type would change what it sees.
+                let any_type = if matches!(elem, VariadicElement::Value) {
+                    quote!(.any_type())
+                } else {
+                    quote!()
+                };
                 Some(quote! {
                     for __i in 0..n_wires {
                         ins.push(polydat::ast::Slot::Wire(
                             polydat::ast::Port::new(
                                 format!("{}_{__i}", #name_str),
                                 #pt,
-                            )));
+                            )#any_type));
                     }
                 })
             }
@@ -2215,7 +2224,15 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
             .iter()
             .any(|a| matches!(&a.kind, ArgKind::Variadic(VariadicElement::Value)))
         {
-            vec![quote!(polydat::ast::PortType::U64)]
+            // The output type is the type the variadic's wires
+            // carry, resolved by the assembler and handed to
+            // `new()` — the same answer a `Value` argument gets.
+            // It used to be a `PortType::U64` placeholder, which
+            // downstream read as a fact: a `Str` from `pick` into a
+            // `Str` port had a `U64ToString` adapter inserted between
+            // them, and the adapter read the string's pointer as a
+            // number.
+            vec![quote!(__variadic_out_type)]
         } else {
             return Err(syn::Error::new_spanned(
                 &ret_ty,
@@ -2390,9 +2407,20 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
         .enumerate()
         .map(|(i, a)| (a.name.to_string(), i))
         .collect();
+    // A `Value` return sourced from a `&[Value]` variadic takes the
+    // output's port type as a constructor parameter, resolved from
+    // the wires by the build closure.
+    let needs_variadic_out_type = ret_is_polywire
+        && first_polywire_idx.is_none()
+        && args
+            .iter()
+            .any(|a| matches!(&a.kind, ArgKind::Variadic(VariadicElement::Value)));
     let new_params: Vec<TokenStream2> = if has_variadic {
         let mut v = new_params;
         v.push(quote!(n_wires: usize));
+        if needs_variadic_out_type {
+            v.push(quote!(__variadic_out_type: polydat::ast::PortType));
+        }
         v
     } else {
         new_params
@@ -2704,6 +2732,9 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
         .collect();
     if has_variadic {
         new_call_args.push(quote!(n_wires));
+        if needs_variadic_out_type {
+            new_call_args.push(quote!(__variadic_out_type));
+        }
     }
 
     // SRD-80 PR B.9: when the function has a variadic arg,
@@ -2716,11 +2747,31 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
         // Split-halves: assembler hands TOTAL wires; new() takes
         // the per-half count, so divide by 2 here too (matches
         // the variadic_ctor field's `n / 2`).
-        if is_split_halves {
+        let n = if is_split_halves {
             quote! { let n_wires: usize = _wires.len() / 2; }
         } else {
             quote! { let n_wires: usize = _wires.len(); }
-        }
+        };
+        // The wires the variadic's values come from: all of them,
+        // or the second half under the split-halves shape, whose
+        // first half is the selectors. Their common type is the
+        // output's; `eval` enforces that they agree, and reports
+        // the disagreement by name when they do not.
+        let out_type = if needs_variadic_out_type {
+            let first = if is_split_halves {
+                quote!(_wire_types.get(n_wires))
+            } else {
+                quote!(_wire_types.first())
+            };
+            quote! {
+                let __variadic_out_type = #first
+                    .copied()
+                    .unwrap_or(polydat::ast::PortType::U64);
+            }
+        } else {
+            quote!()
+        };
+        quote! { #n #out_type }
     } else {
         quote!()
     };
@@ -4055,17 +4106,21 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
     // future PR.
     let has_const_arg = args.iter().any(|a| matches!(a.kind, ArgKind::Const(_)));
     let has_polywire = args.iter().any(|a| matches!(a.kind, ArgKind::PolyWire));
-    let variadic_ctor_field: TokenStream2 = if has_variadic && !has_const_arg && !has_polywire {
-        // Split-halves: assembler passes TOTAL wire count; the
-        // struct's `new()` takes per-half count, so divide by 2.
-        if is_split_halves {
-            quote!(Some(|n| Box::new(#struct_name::new(n / 2))))
+    // A node whose output type is resolved from its wires cannot be
+    // built from an arity alone, so it has no arity-only thunk; the
+    // build closure, which has the wire types, is its one path.
+    let variadic_ctor_field: TokenStream2 =
+        if has_variadic && !has_const_arg && !has_polywire && !needs_variadic_out_type {
+            // Split-halves: assembler passes TOTAL wire count; the
+            // struct's `new()` takes per-half count, so divide by 2.
+            if is_split_halves {
+                quote!(Some(|n| Box::new(#struct_name::new(n / 2))))
+            } else {
+                quote!(Some(|n| Box::new(#struct_name::new(n))))
+            }
         } else {
-            quote!(Some(|n| Box::new(#struct_name::new(n))))
-        }
-    } else {
-        quote!(None)
-    };
+            quote!(None)
+        };
 
     // SRD-80b Phase C — `Option<T>` arg auto-emits
     // `accepts_none_inputs() -> true`. The runtime kernel's

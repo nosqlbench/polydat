@@ -119,7 +119,11 @@ mod tests {
         out.into_iter().next().unwrap()
     }
 
-    // Pick::new takes the per-half (pairs) count. The macro
+    // Pick::new takes the per-half (pairs) count and the port
+    // type its value wires carry, which the assembler resolves.
+    // These tests call eval directly, so the declared type only
+    // has to exist; the body reads the Value it is handed.
+    // The macro
     // emits a (n_wires: usize) ctor param interpreted as pairs
     // in split-halves mode; runtime inputs slice at the
     // midpoint, so each call must supply exactly 2 * pairs
@@ -127,7 +131,7 @@ mod tests {
 
     #[test]
     fn pick_true_first_returns_first_value() {
-        let node = Pick::new(2);
+        let node = Pick::new(2, polydat::ast::PortType::U64);
         let v = run(
             &node,
             vec![
@@ -142,7 +146,7 @@ mod tests {
 
     #[test]
     fn pick_true_second_returns_second_value() {
-        let node = Pick::new(2);
+        let node = Pick::new(2, polydat::ast::PortType::U64);
         let v = run(
             &node,
             vec![
@@ -158,7 +162,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "pick: no selector matched")]
     fn pick_zero_selectors_panics() {
-        let node = Pick::new(2);
+        let node = Pick::new(2, polydat::ast::PortType::U64);
         run(
             &node,
             vec![
@@ -173,7 +177,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "pick: multiple selectors matched")]
     fn pick_multiple_selectors_panics() {
-        let node = Pick::new(2);
+        let node = Pick::new(2, polydat::ast::PortType::U64);
         run(
             &node,
             vec![
@@ -188,7 +192,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "pick: value v1 has type")]
     fn pick_mixed_value_types_panics_at_eval() {
-        let node = Pick::new(2);
+        let node = Pick::new(2, polydat::ast::PortType::U64);
         run(
             &node,
             vec![
@@ -203,7 +207,7 @@ mod tests {
     #[test]
     fn pick_variadic_n_works_for_2_3_4() {
         // pairs = 3 → 6 total wires.
-        let node = Pick::new(3);
+        let node = Pick::new(3, polydat::ast::PortType::U64);
         let v = run(
             &node,
             vec![
@@ -218,7 +222,7 @@ mod tests {
         assert_eq!(v.as_str(), "z");
 
         // pairs = 4 → 8 total wires.
-        let node = Pick::new(4);
+        let node = Pick::new(4, polydat::ast::PortType::U64);
         let v = run(
             &node,
             vec![
@@ -239,7 +243,7 @@ mod tests {
     fn pick_meta_has_correct_slot_count() {
         use polydat::ast::{PortType, Slot};
         // pairs=3 → 6 total wire slots.
-        let node = Pick::new(3);
+        let node = Pick::new(3, polydat::ast::PortType::U64);
         assert_eq!(node.meta().ins.len(), 6);
         // First N=3 slots are bool, last N=3 are placeholder
         // (PortType::Str — macro's PolyWire variadic default).
