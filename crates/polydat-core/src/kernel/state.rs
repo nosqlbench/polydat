@@ -915,13 +915,35 @@ impl PolydatKernel {
         program: Arc<PolydatProgram>,
         iter_bindings: &[(String, Value)],
     ) -> PolydatKernel {
+        Self::materialize_subscope_under(self, program, iter_bindings)
+    }
+
+    /// [`Self::materialize_subscope`] under a parent of any engine.
+    ///
+    /// The binder reads seven things off a parent — the cells in scope,
+    /// its output names, whether a name has an input slot, that name's
+    /// binding modifier, its current value, its broadcast cell, and its
+    /// scope-coordinate path — and every one of them is on the `Kernel`
+    /// trait, so the parent no longer has to be the interpreter's
+    /// kernel type.
+    ///
+    /// The child is still an interpreter kernel. That is the half of
+    /// this that remains: `Construction` is implemented for
+    /// `PolydatKernel` alone, so a host on `Engine::default()` (P3) can
+    /// now compose *under* its kernel but the subscope tree it gets is
+    /// interpreted.
+    pub(crate) fn materialize_subscope_under(
+        outer: &dyn crate::kernel::Kernel,
+        program: Arc<PolydatProgram>,
+        iter_bindings: &[(String, Value)],
+    ) -> PolydatKernel {
         let mut child = PolydatKernel::from_program(program);
         for (var, value) in iter_bindings {
             if let Some(idx) = child.program.find_input(var) {
                 child.state.set_input(idx, value.clone());
             }
         }
-        child.materialize_wiring_from_outer(self);
+        child.materialize_wiring_from_outer(outer);
         child
     }
 
@@ -981,7 +1003,8 @@ impl PolydatKernel {
     /// `build_subscope` (which calls `materialize_subscope`
     /// internally). External callers don't see
     /// this operation directly.
-    fn materialize_wiring_from_outer(&mut self, outer: &PolydatKernel) {
+    fn materialize_wiring_from_outer(&mut self, outer: &dyn crate::kernel::Kernel) {
+        use crate::kernel::interp::Lookup as _;
         // Step 1 — typed shared-cell cascade. Compute every
         // cell visible at the outer scope: cells on outer's
         // own input slots (its `shared X := …` declarations
@@ -998,8 +1021,9 @@ impl PolydatKernel {
         // a DIFFERENT cell would be a contract violation —
         // not observed in practice). Cells with no matching
         // child slot are stored on the child as transit so
+        let outer_scope = crate::kernel::interp::KernelLookup::new(outer);
         // a deeper descendant can pick them up.
-        let outer_cells = outer.shared_cells_in_scope();
+        let outer_cells = outer.cells_in_scope();
         let mut transit_forward: Vec<SharedCellEntry> = Vec::new();
         let mut attached_names: std::collections::HashSet<String> =
             std::collections::HashSet::new();
@@ -1076,14 +1100,14 @@ impl PolydatKernel {
         //   inner and outer are per-fiber kernels in the
         //   same lineage — no shared-kernel race on the
         //   cell.
-        for name in outer.program.output_names() {
-            if attached_names.contains(name) {
+        for name in outer.output_names() {
+            if attached_names.contains(&name) {
                 continue;
             }
-            let Some(inner_idx) = self.program.find_input(name) else {
+            let Some(inner_idx) = self.program.find_input(&name) else {
                 continue;
             };
-            let outer_has_slot = outer.program.find_input(name).is_some();
+            let outer_has_slot = outer.input_index(&name).is_some();
             // SRD-74 P2 transitive composition: when outer's output
             // is a `const` binding, ALWAYS go through outer.lookup
             // (value-copy), never through the broadcast cell. The
@@ -1100,7 +1124,7 @@ impl PolydatKernel {
             // equivalent to cell-attach and avoids the dynamic-cell
             // overhead.
             let outer_is_const =
-                outer.program.output_modifier(name) == crate::dsl::ast::BindingModifier::CONST;
+                outer.output_modifier(&name) == crate::dsl::ast::BindingModifier::CONST;
             // Slot's declared port type — needed for γ-5
             // boundary-adapter dispatch. `find_input` returned
             // `Some(inner_idx)` above, so `input_port_type` on
@@ -1108,28 +1132,29 @@ impl PolydatKernel {
             // `None` here means the program is malformed.
             let inner_slot_type = self
                 .program
-                .input_port_type(name)
+                .input_port_type(&name)
                 .expect("input index resolved but no declared port type");
             if outer_has_slot || outer_is_const {
                 // Both conditions force the chain-walking value-copy
                 // path (see the const rationale above; an outer input
                 // slot likewise reads through outer.lookup so the
                 // grandparent fall-through applies).
-                if let Some(value) = outer.lookup(name) {
-                    let adapted = adapt_boundary_value(name, inner_slot_type, value);
+                if let Some(value) = outer_scope.lookup(&name) {
+                    let adapted = adapt_boundary_value(&name, inner_slot_type, value);
                     self.state.set_input(inner_idx, adapted);
                 }
-            } else if let Some(cell) = outer.state.core.output_cell(&outer.program, name) {
+            } else if let Some(cell) = outer.output_cell(&name) {
                 self.state.attach_shared_cell(inner_idx, cell);
                 attached_names.insert(name.to_string());
-            } else if let Some(value) = outer.lookup(name) {
-                let adapted = adapt_boundary_value(name, inner_slot_type, value);
+            } else if let Some(value) = outer_scope.lookup(&name) {
+                let adapted = adapt_boundary_value(&name, inner_slot_type, value);
                 self.state.set_input(inner_idx, adapted);
-            } else if let Some(value) = crate::dsl::factories::resolve_extern(name, inner_slot_type)
+            } else if let Some(value) =
+                crate::dsl::factories::resolve_extern(&name, inner_slot_type)
             {
                 // γ-8 virtual-wire resolver: outer chain has no
                 // binding; a host-registered resolver provides one.
-                let adapted = adapt_boundary_value(name, inner_slot_type, value);
+                let adapted = adapt_boundary_value(&name, inner_slot_type, value);
                 self.state.set_input(inner_idx, adapted);
             }
         }

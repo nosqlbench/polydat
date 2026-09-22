@@ -530,6 +530,15 @@ pub trait Kernel: Send + internals::KernelInternals {
     /// writes what the parent had and this kernel holds no slot for.
     fn set_transit_cells(&mut self, _cells: Vec<SharedCellEntry>) {}
 
+    /// This kernel's place in the comprehension nest its scope was
+    /// built under, outermost last: a child's path is its own followed
+    /// by its parent's. Empty for a root, which is every kernel a host
+    /// compiles rather than binds, so the compiled engines answer
+    /// empty until one is bound under a parent.
+    fn scope_coordinates(&self) -> &[super::ScopeCoord] {
+        &[]
+    }
+
     /// Bind the `shared` binding `name` to `cell`, so this kernel and
     /// every other holder of the cell read and write one register:
     /// a write on any of them is what the others read next, and a

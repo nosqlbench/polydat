@@ -1744,3 +1744,55 @@ fn a_second_state_over_one_program_publishes_to_nobody() {
         );
     }
 }
+
+/// F-K5(c): the binder reads its parent through the `Kernel` trait, so
+/// the parent can be on any engine. A child bound under a compiled
+/// parent sees the parent's computed output as the live link it is on
+/// the interpreter — the parent's next pull reaches the child, which
+/// is exactly what broadcast cells on the compiled engines bought.
+///
+/// The child is an interpreter kernel whatever the parent is. That is
+/// the half that remains, and it is `Construction` being implemented
+/// for `PolydatKernel` alone rather than anything the binder does.
+#[test]
+fn a_child_follows_a_compiled_parents_computed_output() {
+    use crate::compile::select::{Engine, Provenance};
+    use crate::kernel::PolydatKernel;
+
+    let parent_src = "input cycle: u64\nseed := hash(cycle)\n";
+    let child_src = "input cycle: u64\nextern seed: u64\nv := seed\n";
+    for engine in [
+        Engine::Interpreter(crate::JitMode::Off),
+        Engine::Closures(Provenance::PushPull),
+        Engine::Native(Provenance::PushPull),
+    ] {
+        let mut parent = crate::dsl::compile::compile_polydat_with(parent_src, engine)
+            .unwrap_or_else(|e| panic!("{engine:?}: {e}"));
+        parent.set_inputs(&[1]);
+        let first = parent.pull("seed");
+
+        let child_program = crate::dsl::compile::compile_polydat_interpreter(child_src)
+            .expect("child compiles")
+            .into_program();
+        let mut child =
+            PolydatKernel::materialize_subscope_under(parent.as_ref(), child_program, &[]);
+        child.set_inputs(&[1]);
+        assert_eq!(
+            child.pull_ref("v").clone(),
+            first,
+            "{engine:?}: the child starts from what the parent had"
+        );
+
+        // The parent moves; the child follows, because the import is a
+        // link and not a copy taken when the child was built.
+        parent.set_inputs(&[2]);
+        let second = parent.pull("seed");
+        assert_ne!(first, second, "{engine:?}: the parent's seed moved");
+        child.set_inputs(&[2]);
+        assert_eq!(
+            child.pull_ref("v").clone(),
+            second,
+            "{engine:?}: the child read a copy rather than the link"
+        );
+    }
+}

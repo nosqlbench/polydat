@@ -291,6 +291,9 @@ impl crate::kernel::Kernel for PolydatKernel {
     fn set_transit_cells(&mut self, cells: Vec<crate::kernel::SharedCellEntry>) {
         self.replace_transit_cells(cells);
     }
+    fn scope_coordinates(&self) -> &[crate::kernel::ScopeCoord] {
+        PolydatKernel::scope_coordinates(self)
+    }
     fn attach_shared_cell(
         &mut self,
         name: &str,

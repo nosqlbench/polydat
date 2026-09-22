@@ -6,5 +6,5 @@ error[E0624]: method `materialize_wiring_from_outer` is private
   |
  ::: $WORKSPACE/crates/polydat-core/src/kernel/state.rs
   |
-  |     fn materialize_wiring_from_outer(&mut self, outer: &PolydatKernel) {
-  |     ------------------------------------------------------------------ private method defined here
+  |     fn materialize_wiring_from_outer(&mut self, outer: &dyn crate::kernel::Kernel) {
+  |     ------------------------------------------------------------------------------ private method defined here
