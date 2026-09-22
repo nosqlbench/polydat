@@ -181,8 +181,33 @@ pub fn evaluate_for_iteration(
     comp: &Comprehension,
     scope: &dyn Lookup,
 ) -> Result<Vec<RuntimeTuple>, RuntimeError> {
-    let mut state = EvalState { scope };
-    state.evaluate_node(comp, &[]).map(|n| n.tuples)
+    evaluate_for_iteration_reported(comp, scope).map(|e| e.tuples)
+}
+
+/// [`evaluate_for_iteration`], and what each leaf clause yielded on the
+/// way ([`ClauseYield`]).
+///
+/// The counts come off the evaluation that already happened — the
+/// evaluator stands at each clause holding its name, its source and its
+/// values — so nothing is evaluated twice to produce them, and the
+/// record is one entry per leaf rather than one per tuple.
+///
+/// This is how a host says something about an empty clause. Emptiness
+/// stays a legal value here and the policy stays with the caller: read
+/// the clauses whose `evaluations` is non-zero and whose `values` is
+/// zero, and warn, fail, or ignore as that host requires. A clause the
+/// construction could already count as empty is a validation warning
+/// instead ([`super::validate::ValidationWarning::EmptySource`]).
+pub fn evaluate_for_iteration_reported(
+    comp: &Comprehension,
+    scope: &dyn Lookup,
+) -> Result<EvaluatedIteration, RuntimeError> {
+    let mut state = EvalState::new(comp, scope);
+    let tuples = state.evaluate_node(comp, &[])?.tuples;
+    Ok(EvaluatedIteration {
+        tuples,
+        clauses: state.yields,
+    })
 }
 
 /// Evaluate a predicate in the comprehension grammar against a tuple
@@ -411,10 +436,100 @@ fn split_op<'a>(s: &'a str, op: &str) -> Option<(&'a str, &'a str)> {
 
 /// Internal walker state — the scope the recursive walker resolves
 /// names against, so it does not thread it through every call.
+/// What one leaf clause yielded over a whole traversal.
+///
+/// A clause under a cartesian is evaluated once per outer tuple, so
+/// emptiness is a property of the evaluations and not of the clause:
+///
+/// - `evaluations == 0` — never reached, because something outside it
+///   was empty first. Not the cause; the cause is an earlier clause.
+/// - `evaluations > 0 && values == 0` — reached and yielded nothing
+///   every time. This is the clause a diagnostic should name.
+/// - `values > 0` — yielded.
+///
+/// An empty stream is a legal value of the algebra, so none of these
+/// is an error. What a host does about one is the host's policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClauseYield {
+    /// The clause's element name.
+    pub var: String,
+    /// The source's canonical text, when it has one.
+    pub source: Option<String>,
+    /// How many times this clause was evaluated.
+    pub evaluations: usize,
+    /// How many values it produced, summed over those evaluations.
+    pub values: usize,
+}
+
+/// A traversal's tuples, and what each leaf clause yielded reaching
+/// them ([`ClauseYield`]), in the tree order of the comprehension.
+#[derive(Debug, Clone)]
+pub struct EvaluatedIteration {
+    /// The coordinate tuples, as [`evaluate_for_iteration`] returns.
+    pub tuples: Vec<RuntimeTuple>,
+    /// Every leaf clause of the comprehension, evaluated or not.
+    pub clauses: Vec<ClauseYield>,
+}
+
 struct EvalState<'a> {
     /// Where names resolve: the body's kernel with the parent's cascaded
     /// wires bound; a tuple's own bindings are layered in front per use.
     scope: &'a dyn Lookup,
+    /// Per leaf clause, what it yielded. Seeded from the tree before
+    /// evaluation so a clause never reached is present with zero
+    /// evaluations rather than absent.
+    yields: Vec<ClauseYield>,
+    /// Leaf identity → index into `yields`. Keyed by the address of the
+    /// clause's own `Source` inside the borrowed tree, which is what
+    /// distinguishes two clauses that share a name across the branches
+    /// of a union.
+    by_leaf: std::collections::HashMap<usize, usize>,
+}
+
+impl<'a> EvalState<'a> {
+    /// Seed one entry per leaf clause, in tree order.
+    fn new(comp: &Comprehension, scope: &'a dyn Lookup) -> Self {
+        let mut state = EvalState {
+            scope,
+            yields: Vec::new(),
+            by_leaf: std::collections::HashMap::new(),
+        };
+        state.enumerate_leaves(comp);
+        state
+    }
+
+    fn enumerate_leaves(&mut self, node: &Comprehension) {
+        match node {
+            Comprehension::Clause { name, source } => {
+                self.by_leaf
+                    .insert(std::ptr::from_ref(source) as usize, self.yields.len());
+                self.yields.push(ClauseYield {
+                    var: name.clone(),
+                    source: source.to_text(),
+                    evaluations: 0,
+                    values: 0,
+                });
+            }
+            Comprehension::Cartesian { children }
+            | Comprehension::Zip { children, .. }
+            | Comprehension::Union { children } => {
+                for child in children {
+                    self.enumerate_leaves(child);
+                }
+            }
+            Comprehension::Filter { child, .. } | Comprehension::Order { child, .. } => {
+                self.enumerate_leaves(child);
+            }
+        }
+    }
+
+    /// Record one evaluation of a leaf and the values it produced.
+    fn record_yield(&mut self, source: &Source, values: usize) {
+        if let Some(&i) = self.by_leaf.get(&(std::ptr::from_ref(source) as usize)) {
+            self.yields[i].evaluations += 1;
+            self.yields[i].values += values;
+        }
+    }
 }
 
 impl EvalState<'_> {
@@ -480,11 +595,14 @@ impl EvalState<'_> {
             }
         })?;
 
+        self.record_yield(source, evaluated.values.len());
+
         if evaluated.values.is_empty() {
             // A clause with no values yields no tuples, which is what
-            // an empty clause means. This used to call the caller's
-            // empty-clause policy first, and every caller's policy was
-            // to do nothing.
+            // an empty clause means: a legal value of the algebra, not
+            // an error and not a policy decision made here. The
+            // evaluation is counted above, so a host that wants to say
+            // something about it reads `ClauseYield` off the result.
             return Ok(EvaluatedNode {
                 tuples: Vec::new(),
                 index_fn: Some(evaluated.index_fn),
@@ -1219,6 +1337,172 @@ mod tests {
     /// produces.
     fn canonical_with_k() -> Arc<PolydatKernel> {
         Arc::new(crate::dsl::compile_polydat_interpreter("extern k: u64\n").unwrap())
+    }
+
+    fn clause(name: &str, source: Source) -> Comprehension {
+        Comprehension::Clause {
+            name: name.into(),
+            source,
+        }
+    }
+
+    fn empty_literal() -> Source {
+        Source::Literal { values: Vec::new() }
+    }
+
+    /// The count is what the clause produced, per leaf, in tree order.
+    #[test]
+    fn every_leaf_reports_what_it_yielded() {
+        let comp = Comprehension::Cartesian {
+            children: vec![
+                clause(
+                    "a",
+                    Source::IntRange {
+                        lo: 0,
+                        hi: 3,
+                        step: 1,
+                    },
+                ),
+                clause(
+                    "b",
+                    Source::Literal {
+                        values: vec![LiteralValue::Int(7), LiteralValue::Int(8)],
+                    },
+                ),
+            ],
+        };
+        let scope = empty_kernel();
+
+        let out = evaluate_for_iteration_reported(&comp, &*scope).unwrap();
+        assert_eq!(out.tuples.len(), 6, "3 x 2");
+        assert_eq!(out.clauses.len(), 2, "one entry per leaf, in tree order");
+        assert_eq!(out.clauses[0].var, "a");
+        assert_eq!(out.clauses[0].values, 3);
+        assert_eq!(out.clauses[1].var, "b");
+        // `b` is evaluated once per tuple of `a`, so its values sum over
+        // those evaluations: emptiness is a property of the evaluations.
+        assert_eq!(out.clauses[1].evaluations, 3);
+        assert_eq!(out.clauses[1].values, 6);
+    }
+
+    /// The clause a diagnostic should name is the one that was reached
+    /// and still produced nothing.
+    #[test]
+    fn an_empty_clause_is_reached_and_yields_nothing() {
+        let comp = Comprehension::Cartesian {
+            children: vec![
+                clause(
+                    "a",
+                    Source::IntRange {
+                        lo: 0,
+                        hi: 2,
+                        step: 1,
+                    },
+                ),
+                clause("b", empty_literal()),
+            ],
+        };
+        let scope = empty_kernel();
+
+        let out = evaluate_for_iteration_reported(&comp, &*scope).unwrap();
+        assert!(out.tuples.is_empty(), "an empty clause empties the product");
+        let culprits: Vec<&str> = out
+            .clauses
+            .iter()
+            .filter(|c| c.evaluations > 0 && c.values == 0)
+            .map(|c| c.var.as_str())
+            .collect();
+        assert_eq!(culprits, ["b"], "only the empty clause is named");
+    }
+
+    /// A clause behind an empty one is never reached, so it is not the
+    /// cause and must not read as one.
+    #[test]
+    fn a_clause_behind_an_empty_one_is_never_reached() {
+        let comp = Comprehension::Cartesian {
+            children: vec![
+                clause("outer", empty_literal()),
+                clause(
+                    "inner",
+                    Source::IntRange {
+                        lo: 0,
+                        hi: 9,
+                        step: 1,
+                    },
+                ),
+            ],
+        };
+        let scope = empty_kernel();
+
+        let out = evaluate_for_iteration_reported(&comp, &*scope).unwrap();
+        assert!(out.tuples.is_empty());
+        let by = |v: &str| {
+            out.clauses
+                .iter()
+                .find(|c| c.var == v)
+                .expect("every leaf is present whether reached or not")
+        };
+        assert_eq!(by("outer").evaluations, 1);
+        assert_eq!(by("outer").values, 0);
+        assert_eq!(
+            by("inner").evaluations,
+            0,
+            "never reached: the cause is `outer`, not this"
+        );
+        assert_eq!(by("inner").values, 0);
+    }
+
+    /// Two clauses can share a name across the branches of a union;
+    /// they are still two leaves and are counted apart.
+    #[test]
+    fn clauses_sharing_a_name_across_a_union_are_counted_apart() {
+        let comp = Comprehension::Union {
+            children: vec![
+                clause(
+                    "k",
+                    Source::Literal {
+                        values: vec![LiteralValue::Int(1)],
+                    },
+                ),
+                clause("k", empty_literal()),
+            ],
+        };
+        let scope = empty_kernel();
+
+        let out = evaluate_for_iteration_reported(&comp, &*scope).unwrap();
+        assert_eq!(out.clauses.len(), 2, "two leaves, one name");
+        assert_eq!(out.clauses[0].values, 1);
+        assert_eq!(out.clauses[1].values, 0);
+        assert_eq!(out.clauses[1].evaluations, 1, "reached, and empty");
+    }
+
+    /// The counts ride the evaluation that already happened, so the
+    /// plain entry point is the reported one without its record.
+    #[test]
+    fn the_plain_entry_point_agrees_with_the_reported_one() {
+        let comp = Comprehension::Cartesian {
+            children: vec![
+                clause(
+                    "a",
+                    Source::IntRange {
+                        lo: 1,
+                        hi: 4,
+                        step: 1,
+                    },
+                ),
+                clause(
+                    "b",
+                    Source::Literal {
+                        values: vec![LiteralValue::Int(5)],
+                    },
+                ),
+            ],
+        };
+        let scope = empty_kernel();
+
+        let plain = evaluate_for_iteration(&comp, &*scope).unwrap();
+        let reported = evaluate_for_iteration_reported(&comp, &*scope).unwrap();
+        assert_eq!(plain, reported.tuples);
     }
 
     #[test]

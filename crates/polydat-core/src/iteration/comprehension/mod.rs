@@ -88,6 +88,9 @@ pub use ast::Comprehension;
 pub use cardinality::{CardinalityClass, Hybrid, Interval, MeasureName, ProductMeasure};
 pub use eval_source::{EvalClass, EvalContext, EvalError, EvaluatedSource, SourceEval};
 pub use metadata::{IndexFn, Materialization, Metadata, NaturalOrder};
+pub use runtime::{
+    ClauseYield, EvaluatedIteration, evaluate_for_iteration, evaluate_for_iteration_reported,
+};
 pub use source::Source;
 pub use strategy::{StrategyName, ZipMode};
 pub use validate::{Mode, ValidationError, ValidationReport, ValidationWarning, validate};

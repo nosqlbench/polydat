@@ -242,6 +242,26 @@ pub enum ValidationWarning {
     /// predicate is bug-shaped.
     TriviallyFalseFilter,
 
+    /// A clause whose source is *provably* empty: its cardinality
+    /// is `Bounded(0)` (`x in []`, `x in 5..5`, a context-free
+    /// generator the compile evaluated to nothing). The clause is
+    /// well-formed and an empty stream is a legal value, so this
+    /// is degenerate rather than wrong — but it empties every
+    /// cartesian it takes part in, so a whole traversal dispenses
+    /// nothing and usually that is a typo in the source.
+    ///
+    /// A source whose count is not known at construction (an
+    /// interpolated call, a parameter without a length) is
+    /// `Unbounded`, never `Bounded(0)`, so it cannot reach here:
+    /// emptiness it discovers at evaluation is reported by the
+    /// per-clause yields instead ([`super::runtime::ClauseYield`]).
+    EmptySource {
+        /// The clause's element name.
+        var: String,
+        /// The source's canonical text, when it has one.
+        source: Option<String>,
+    },
+
     /// Singleton variant of a combinator: `zip([c], _)`,
     /// `cartesian(c)`, `union(c)`. Identity per spec §4.2 I1-I3;
     /// the optimizer's R0a elides it.
@@ -270,6 +290,16 @@ impl std::fmt::Display for ValidationWarning {
                 f,
                 "`{combinator}` over one child is that child; the wrapper adds nothing"
             ),
+            Self::EmptySource { var, source } => match source {
+                Some(text) => write!(
+                    f,
+                    "`{var} in {text}` has no values; every composition it takes part in dispenses nothing"
+                ),
+                None => write!(
+                    f,
+                    "`{var}` has no values; every composition it takes part in dispenses nothing"
+                ),
+            },
         }
     }
 }
@@ -303,7 +333,7 @@ fn visit(c: &Comprehension, report: &mut ValidationReport) -> Result<(), Validat
     }
 
     match c {
-        Comprehension::Clause { source, .. } => visit_clause(source, report),
+        Comprehension::Clause { name, source } => visit_clause(name, source, report),
         Comprehension::Cartesian { children } => visit_cartesian(children, report),
         Comprehension::Zip { children, mode } => visit_zip(children, *mode, report),
         Comprehension::Union { children } => visit_union(children, report),
@@ -317,7 +347,25 @@ fn visit(c: &Comprehension, report: &mut ValidationReport) -> Result<(), Validat
     }
 }
 
-fn visit_clause(source: &Source, report: &mut ValidationReport) -> Result<(), ValidationError> {
+fn visit_clause(
+    name: &str,
+    source: &Source,
+    report: &mut ValidationReport,
+) -> Result<(), ValidationError> {
+    // Degenerate composition (spec §5.8): a source the construction
+    // can already count, and the count is zero. Read off the
+    // cardinality algebra rather than matched shape by shape, so a
+    // source whose count is unknown is `Unbounded` and says nothing
+    // here.
+    if matches!(
+        source.cardinality(),
+        crate::iteration::comprehension::CardinalityClass::Bounded(0)
+    ) {
+        report.warnings.push(ValidationWarning::EmptySource {
+            var: name.to_string(),
+            source: source.to_text(),
+        });
+    }
     // V8 source-side check: continuous source must have an
     // integrable measure. Unbounded + Uniform is the canonical
     // failure case.
@@ -778,6 +826,96 @@ mod tests {
                 values: vs.iter().map(|n| LiteralValue::Int(*n)).collect(),
             },
         )
+    }
+
+    fn empty_warnings(c: &Comprehension) -> Vec<String> {
+        validate(c, Mode::Permissive)
+            .expect("an empty source is degenerate, not invalid")
+            .warnings
+            .into_iter()
+            .filter_map(|w| match w {
+                ValidationWarning::EmptySource { var, .. } => Some(var),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A source the construction can already count as empty is a
+    /// degenerate composition, warned and not refused.
+    #[test]
+    fn a_provably_empty_source_warns() {
+        assert_eq!(empty_warnings(&clause("x", &[])), ["x"]);
+        assert_eq!(
+            empty_warnings(&Comprehension::clause(
+                "k",
+                Source::IntRange {
+                    lo: 5,
+                    hi: 5,
+                    step: 1,
+                },
+            )),
+            ["k"],
+            "a half-open range over no values is the same fact"
+        );
+    }
+
+    /// The rule reads the cardinality algebra, so a source whose count
+    /// is not known at construction says nothing here. Its emptiness,
+    /// if any, is the evaluator's to report.
+    #[test]
+    fn a_source_of_unknown_count_does_not_warn() {
+        let generator = Comprehension::clause(
+            "g",
+            Source::Generator {
+                expr: "matching_profiles('a')".into(),
+                cardinality_hint: None,
+            },
+        );
+        assert!(empty_warnings(&generator).is_empty());
+
+        let param = Comprehension::clause(
+            "p",
+            Source::WorkloadParamList {
+                name: "sizes".into(),
+                len_hint: None,
+            },
+        );
+        assert!(empty_warnings(&param).is_empty());
+    }
+
+    /// A generator the compile did count, and counted as zero, is
+    /// known at construction and warns like a literal.
+    #[test]
+    fn a_generator_counted_as_zero_warns() {
+        let counted = Comprehension::clause(
+            "g",
+            Source::Generator {
+                expr: "matching_profiles('nope')".into(),
+                cardinality_hint: Some(0),
+            },
+        );
+        assert_eq!(empty_warnings(&counted), ["g"]);
+    }
+
+    /// Non-blocking by default, the error under `Strict` — the same
+    /// duality every other degenerate composition has.
+    #[test]
+    fn an_empty_source_is_the_error_under_strict() {
+        let c = clause("x", &[]);
+        assert!(validate(&c, Mode::Permissive).is_ok());
+        match validate(&c, Mode::Strict) {
+            Err(ValidationError::StrictWarning(ValidationWarning::EmptySource { var, .. })) => {
+                assert_eq!(var, "x");
+            }
+            other => panic!("expected the empty source to be the strict error, got {other:?}"),
+        }
+    }
+
+    /// Nested, so a host sees which clause of a product is the cause.
+    #[test]
+    fn an_empty_clause_is_named_inside_a_cartesian() {
+        let c = Comprehension::cartesian(vec![clause("a", &[1, 2]), clause("b", &[])]);
+        assert_eq!(empty_warnings(&c), ["b"]);
     }
 
     fn continuous_clause(name: &str) -> Comprehension {
