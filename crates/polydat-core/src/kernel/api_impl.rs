@@ -276,6 +276,11 @@ impl crate::kernel::Kernel for PolydatKernel {
     fn shared_cells(&self) -> Vec<crate::kernel::SharedCellEntry> {
         self.shared_cells_in_scope()
     }
+    fn output_cell(&mut self, name: &str) -> Option<crate::kernel::SharedCell> {
+        // Seeded for every output at construction, so this is a read.
+        let program = self.program().clone();
+        self.state().core.output_cell(&program, name)
+    }
     fn attach_shared_cell(
         &mut self,
         name: &str,

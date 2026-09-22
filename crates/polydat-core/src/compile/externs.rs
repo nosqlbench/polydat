@@ -78,6 +78,13 @@ pub(crate) struct Externs {
     /// each is an `Ext` extern plus six scalar ones, and its schema
     /// carries the partitions the compiler resolved at build.
     cursors: Vec<crate::iteration::source::SourceSchema>,
+    /// Keyed by output slot, the broadcast cell a descendant asked for,
+    /// made on the first ask and not before (cross_fiber_invalidation.md
+    /// §3.1, "compiled kernels, broadcast outputs"). Empty for a program
+    /// nobody composed under, which is why it lives here beside the
+    /// cells and the intent word rather than on the evaluation core,
+    /// whose layout the hot loops read.
+    output_cells: Vec<Option<crate::kernel::SharedCell>>,
     /// This kernel's intent-dirty word, shared by the cells it seeds
     /// (cross_fiber_invalidation.md §3.1).
     intent: std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -132,6 +139,7 @@ impl Externs {
         let mut externs = Self {
             slots,
             by_name,
+            output_cells: Vec::new(),
             input_names: input_defs.iter().map(|d| d.name.clone()).collect(),
             by_index,
             output_names: Vec::new(),
@@ -158,6 +166,37 @@ impl Externs {
         &self.ledger
     }
 
+    /// The broadcast cell for the output at `slot`, made on the first
+    /// ask and holding `initial` then. A later ask returns the same
+    /// cell, so every descendant that binds to this output binds to one
+    /// register.
+    pub(crate) fn output_cell(&mut self, slot: usize, initial: Value) -> crate::kernel::SharedCell {
+        if self.output_cells.len() <= slot {
+            self.output_cells.resize(slot + 1, None);
+        }
+        if self.output_cells[slot].is_none() {
+            self.output_cells[slot] = Some(self.new_cell(initial));
+        }
+        self.output_cells[slot]
+            .clone()
+            .expect("just made if it was missing")
+    }
+
+    /// The broadcast cell for the output at `slot`, if one was asked
+    /// for. `None` is the common answer: a program nobody composed
+    /// under has none at all, which the caller checks first.
+    #[inline]
+    pub(crate) fn published_output(&self, slot: usize) -> Option<&crate::kernel::SharedCell> {
+        self.output_cells.get(slot)?.as_ref()
+    }
+
+    /// Whether any descendant asked for a broadcast cell. One check on
+    /// the pull path, and false for every program with no subscope.
+    #[inline]
+    pub(crate) fn broadcasts(&self) -> bool {
+        !self.output_cells.is_empty()
+    }
+
     /// A cell of this kernel's scope holding `initial`, with the next
     /// bit of the intent word. The compiled kernel keeps one intent
     /// word, so cells past the 64th share bit 63, where the
@@ -178,6 +217,9 @@ impl Externs {
     pub(crate) fn reseed_cells(&mut self) {
         self.intent = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         self.next_bit = 0;
+        // A new state publishes to nobody: the descendants bound to the
+        // state this one came from are not bound to this one.
+        self.output_cells.clear();
         for i in 0..self.slots.len() {
             if self.slots[i].cell.is_none() {
                 continue;

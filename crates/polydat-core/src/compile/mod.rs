@@ -610,6 +610,9 @@ macro_rules! impl_kernel_trait {
             fn shared_cells(&self) -> Vec<crate::kernel::SharedCellEntry> {
                 self.core.externs.shared_cells()
             }
+            fn output_cell(&mut self, name: &str) -> Option<crate::kernel::SharedCell> {
+                self.core.output_cell_for(name)
+            }
             fn attach_shared_cell(
                 &mut self,
                 name: &str,
@@ -893,7 +896,42 @@ macro_rules! shared_core_methods {
             if let Some(order) = plan.cones.get(name) {
                 self.run_steps(order);
             }
-            self.value_of(name)
+            let value = self.value_of(name);
+            self.broadcast(name, &value);
+            value
+        }
+
+        /// Publish a freshly computed output through its broadcast cell,
+        /// if a descendant asked for one, so a child that bound its
+        /// matching input slot to the same cell reads the new value
+        /// (cross_fiber_invalidation.md §3.1, "broadcast outputs").
+        ///
+        /// A program nobody built a subscope under has no cells at all,
+        /// and pays the emptiness check.
+        #[inline]
+        fn broadcast(&mut self, name: &str, value: &crate::ast::Value) {
+            if !self.externs.broadcasts() {
+                return;
+            }
+            if let Some(&slot) = self.output_map.get(name)
+                && let Some(cell) = self.externs.published_output(slot)
+            {
+                cell.publish(value.clone());
+            }
+        }
+
+        /// The broadcast cell for a named output, created on the first
+        /// ask. The interpreter seeds one per output at construction;
+        /// a compiled kernel makes them only when a descendant binds to
+        /// one, so a program with no subscope under it allocates none.
+        ///
+        /// Keyed by the output's slot, which is what `output_map`
+        /// answers and what the buffer is indexed by, so the vector is
+        /// as long as the buffer rather than as long as the output list.
+        fn output_cell_for(&mut self, name: &str) -> Option<crate::kernel::SharedCell> {
+            let slot = *self.output_map.get(name)?;
+            let initial = self.value_of(name);
+            Some(self.externs.output_cell(slot, initial))
         }
 
         #[inline]

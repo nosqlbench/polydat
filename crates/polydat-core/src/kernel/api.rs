@@ -489,6 +489,21 @@ pub trait Kernel: Send + internals::KernelInternals {
     /// the cell reads and writes.
     fn shared_cells(&self) -> Vec<SharedCellEntry>;
 
+    /// The broadcast cell for a *computed* output, created on the first
+    /// ask: a descendant that binds its matching input slot to this
+    /// cell reads the value each of this kernel's pulls publishes
+    /// through it, rather than a copy taken once when the descendant
+    /// was built (cross_fiber_invalidation.md §3.1).
+    ///
+    /// `None` when the name is not an output of this kernel, and on an
+    /// engine that has no broadcast cells at all. The interpreter seeds
+    /// one per output at construction; the closure tier and the hybrid
+    /// make them on demand, so a program with no descendant bound to it
+    /// allocates none.
+    fn output_cell(&mut self, _name: &str) -> Option<SharedCell> {
+        None
+    }
+
     /// Bind the `shared` binding `name` to `cell`, so this kernel and
     /// every other holder of the cell read and write one register:
     /// a write on any of them is what the others read next, and a

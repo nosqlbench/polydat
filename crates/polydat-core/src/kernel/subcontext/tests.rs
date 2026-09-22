@@ -1573,3 +1573,63 @@ fn a_child_follows_its_parents_computed_output() {
         "the child reads through the parent's broadcast cell, not a copy"
     );
 }
+
+/// §4 item 12, the blocker under F-K5(c): a computed output's
+/// broadcast cell is what makes a child's import of it a live link
+/// rather than a copy taken once, and it existed on the interpreter
+/// alone. A compiled kernel now makes one when asked, so the binder
+/// can be expressed over `dyn Kernel` without the link silently
+/// becoming a copy on three engines out of four.
+///
+/// Asked through the trait, on every engine a host composes under. The
+/// pure tier is the differential oracle rather than a host surface and
+/// answers `None`, which is also asserted so that stays deliberate.
+#[test]
+fn a_computed_output_broadcasts_on_every_engine_a_host_composes_under() {
+    use crate::compile::select::{Engine, Provenance};
+
+    let src = "input cycle: u64\nseed := hash(cycle)\n";
+    for engine in [
+        Engine::Interpreter(crate::JitMode::Off),
+        Engine::Closures(Provenance::PushPull),
+        Engine::Native(Provenance::PushPull),
+    ] {
+        let mut k = crate::dsl::compile::compile_polydat_with(src, engine)
+            .unwrap_or_else(|e| panic!("{engine:?}: {e}"));
+        let cell = k
+            .output_cell("seed")
+            .unwrap_or_else(|| panic!("{engine:?} has no broadcast cell for a computed output"));
+        k.set_inputs(&[1]);
+        let first = k.pull("seed");
+        assert_eq!(
+            cell.value.lock().unwrap().clone(),
+            first,
+            "{engine:?}: the cell holds the pull"
+        );
+        k.set_inputs(&[2]);
+        let second = k.pull("seed");
+        assert_ne!(first, second, "{engine:?}: the seed moved with the cycle");
+        assert_eq!(
+            cell.value.lock().unwrap().clone(),
+            second,
+            "{engine:?}: every pull publishes, so a child reads the new value"
+        );
+        assert!(
+            k.output_cell("no_such_output").is_none(),
+            "{engine:?}: a name that is not an output has no cell"
+        );
+    }
+
+    // The pure tier exists only where there is a JIT to build it.
+    #[cfg(feature = "jit")]
+    {
+        let mut pure = crate::dsl::compile::compile_polydat_to_assembler(src)
+            .unwrap()
+            .compile_slots(Engine::PureNative(Provenance::PushPull))
+            .expect("the pure tier runs this program");
+        assert!(
+            pure.output_cell("seed").is_none(),
+            "the pure tier is not a surface a host composes under"
+        );
+    }
+}

@@ -77,7 +77,9 @@ indicates change.
   is attached.
 - **A compiled kernel's per-slot consumer state**: for
   each `shared` extern slot, its cell and the revision
-  the slot last took its value from (`seen`).
+  the slot last took its value from (`seen`); and, keyed
+  by output slot, the broadcast cells a descendant asked
+  for (`output_cells`), empty until one does.
 
 A cell cone (interpreter) is a list of groups, one per
 scope word the node's provenance reaches a cell through;
@@ -112,6 +114,18 @@ attached:
   via `new_cell`), holding the slot's value; a kernel
   created from a shared program reseeds cells of its own
   (`reseed_cells`), on a fresh word.
+- **Compiled kernels, broadcast outputs.** On the first ask
+  rather than at construction: `Kernel::output_cell(name)`
+  makes one, holding the output's current value, and every
+  later pull of that output publishes through it. The
+  interpreter can afford to seed one per output at
+  construction because it already holds a `Value` per port;
+  a compiled kernel holds slots, so it makes a cell only
+  where a descendant binds to one and a program with none
+  under it allocates nothing and pays an emptiness check per
+  pull. The pure tier makes none: it is the differential
+  oracle and Tier-1's carrier, not a surface a host composes
+  under ([engines.md](engines.md) §1, §8).
 
 `Kernel::attach_shared_cell` replaces a `shared` slot's
 cell with one another kernel holds, on any engine; the
