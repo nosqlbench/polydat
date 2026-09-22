@@ -1683,7 +1683,12 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
             }
         }
         "clamp" => {
-            if consts.len() >= 2 {
+            // `Ord::clamp` panics on an inverted range, and `umax`
+            // followed by `umin` quietly answers `max` instead. The
+            // bounds are constants, so the disagreement is decidable
+            // here: an inverted pair is not lowered, and the body says
+            // what it says on every other engine.
+            if consts.len() >= 2 && consts[0] <= consts[1] {
                 JitOp::ClampConst(consts[0], consts[1])
             } else {
                 JitOp::Fallback
@@ -1878,10 +1883,15 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
 
         // ── PRNG & Probability (SRD 110) ─────────────────────────
         "blend" => {
-            if let Some(&c) = consts.first() {
-                JitOp::BlendConst(c)
-            } else {
-                JitOp::Fallback
+            // The body refuses a mix outside [0, 1] and says so; native
+            // code has no way to raise that, and emitting the check in
+            // IR would be the node's rule written twice. The mix is a
+            // constant, so the range is known here: out of range is
+            // simply not lowered, and the node's own body reports it as
+            // it does on every other engine.
+            match consts.first() {
+                Some(&c) if (0.0..=1.0).contains(&f64::from_bits(c)) => JitOp::BlendConst(c),
+                _ => JitOp::Fallback,
             }
         }
         "lfsr_step" => {

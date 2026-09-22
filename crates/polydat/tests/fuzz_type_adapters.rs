@@ -28,7 +28,9 @@
 //!    RNG; FUZZ_ITERATIONS controls iteration count.
 
 use polydat::ast::{PortType, SlotType};
-use polydat::dsl::compile::{compile_polydat_interpreter, compile_polydat_interpreter_with_log};
+use polydat::dsl::compile::{
+    compile_polydat_interpreter, compile_polydat_interpreter_with_log, compile_polydat_with,
+};
 use polydat::dsl::events::{CompileEvent, CompileEventLog};
 use polydat::dsl::registry::{self, FuncSig};
 
@@ -422,7 +424,150 @@ fn generate_module(rng: &mut Rng, sigs: &[FuncSig], n_bindings: usize) -> String
 /// different programs per feature set — `cargo test --workspace`
 /// (feature unification, largest registry) is a strictly stronger
 /// surface than `cargo test -p polydat`.
-fn run_fuzz_pass(seed: u64, iterations: usize) -> Vec<String> {
+/// How often the engine sweep runs, as a stride over iterations.
+/// `FUZZ_ENGINE_SWEEP=0` disables it, `1` sweeps every module.
+fn engine_sweep_stride(default: usize) -> usize {
+    std::env::var("FUZZ_ENGINE_SWEEP")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
+}
+
+/// Every engine a build can name, the interpreter first so it is the
+/// oracle the rest are compared against.
+fn sweep_engines() -> Vec<polydat::Engine> {
+    use polydat::{Engine, JitMode, Provenance};
+    let mut all = vec![
+        // The oracle: no cones, so every node runs its own body.
+        Engine::Interpreter(JitMode::Off),
+        // Cones on is a *different* engine for this purpose — a fused
+        // cone runs native code for nodes the interpreter would
+        // otherwise run itself, which is where `blend` was found
+        // skipping a check its body makes (2026-09-22).
+        Engine::Interpreter(JitMode::Auto),
+        Engine::Closures(Provenance::Raw),
+        Engine::Closures(Provenance::Auto),
+    ];
+    if cfg!(feature = "jit") {
+        all.push(Engine::Native(Provenance::Raw));
+        all.push(Engine::Native(Provenance::Auto));
+        all.push(Engine::PureNative(Provenance::Auto));
+    }
+    all
+}
+
+/// Drive one cycle and read every output, catching a panic the way the
+/// compile path is caught: a garbage program is expected to fail at
+/// evaluation, and what matters is that it fails the same way on every
+/// engine rather than only on some.
+fn drive_once(kernel: &mut dyn polydat::Kernel) -> Result<Vec<polydat::ast::Value>, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        kernel.set_inputs(&[7]);
+        let names = kernel.output_names();
+        names.iter().map(|n| kernel.pull(n)).collect::<Vec<_>>()
+    }))
+    .map_err(|p| {
+        p.downcast_ref::<String>()
+            .cloned()
+            .or_else(|| p.downcast_ref::<&str>().map(|s| (*s).to_string()))
+            .unwrap_or_else(|| "<non-string panic>".to_string())
+    })
+}
+
+/// Whether two reads of the same program agree.
+///
+/// `==` first, which is the answer for everything that has one. A
+/// generated program reaches `asin(7)` soon enough, and `NaN != NaN`,
+/// so a float that is *equally* undefined on two engines would read as
+/// a disagreement forever; falling back to the rendering makes two
+/// `NaN`s agree without making anything else agree that should not.
+/// `-0.0` and `0.0` still pass on the fast path, as `==` says they do.
+fn values_agree(a: &[polydat::ast::Value], b: &[polydat::ast::Value]) -> bool {
+    a == b || format!("{a:?}") == format!("{b:?}")
+}
+
+/// Invariants 4 and 5 — the differential half.
+///
+/// The generator above is engine-blind: it produced programs, the
+/// interpreter compiled them, and nothing ever asked the tiers a host
+/// actually runs on. That left every compiled-only mechanism unfuzzed —
+/// the native lowerings, the kits, the `Ref2` scratch, segment fusion —
+/// and it is not hypothetical: `jit_shuffle` carried its own copy of a
+/// node body with its own divide-by-zero, which this fuzzer could reach
+/// in the node and never in the helper (2026-09-22).
+///
+/// Two invariants, both stated against the interpreter as oracle:
+///
+/// - **I4.** A program the interpreter compiled either compiles on
+///   every other engine or is *refused* there. An engine may decline a
+///   program ([engines.md](../docs/design/engines.md) §8 names the
+///   refusals); what it may not do is fail some other way, or fail with
+///   a message that reads as a crash.
+/// - **I5.** When the program is deterministic and compiled everywhere,
+///   one cycle reads the same on every engine — values, or the same
+///   failure. Nondeterministic programs are skipped rather than
+///   compared, since disagreeing is what they are for.
+fn engine_sweep_failures(source: &str) -> Vec<String> {
+    use polydat::KernelError;
+    let mut out = Vec::new();
+
+    // Only a deterministic program can be compared by value. `random`,
+    // a clock or a counter is meant to differ. Asking the interpreter's
+    // concrete kernel is the one thing only it can answer, and the
+    // documented reason to hold a `PolydatKernel` rather than a
+    // `dyn Kernel`.
+    let deterministic = match compile_polydat_interpreter(source) {
+        Ok(k) => k.program().is_deterministic(),
+        // The interpreter did not accept it; invariants 1 and 2 already
+        // judged that, and there is nothing to compare against.
+        Err(_) => return out,
+    };
+    // The oracle is the *first* engine of the sweep, so that whatever
+    // the list holds is what the rest are measured against. Taking it
+    // from a different compile than the list names is how cones-on went
+    // uncompared while being the reference.
+    let mut reference = match compile_polydat_with(source, sweep_engines()[0]) {
+        Ok(k) => k,
+        Err(_) => return out,
+    };
+    let want = drive_once(reference.as_mut());
+
+    for engine in sweep_engines().into_iter().skip(1) {
+        let mut kernel = match compile_polydat_with(source, engine) {
+            Ok(k) => k,
+            Err(KernelError::Refused { .. }) => continue,
+            Err(e) => {
+                let msg = e.to_string();
+                let cryptic = msg.is_empty()
+                    || msg.to_lowercase().contains("panic")
+                    || msg.to_lowercase().contains("index out of bounds")
+                    || msg.to_lowercase().contains("unreachable");
+                if cryptic {
+                    out.push(format!(
+                        "I4: {engine} failed a program the interpreter compiled, and not \
+                         as a refusal:\n  error: {msg}"
+                    ));
+                }
+                continue;
+            }
+        };
+        if !deterministic {
+            continue;
+        }
+        let got = drive_once(kernel.as_mut());
+        match (&want, &got) {
+            (Ok(a), Ok(b)) if values_agree(a, b) => {}
+            (Err(_), Err(_)) => {}
+            (a, b) => out.push(format!(
+                "I5: {engine} disagrees with the interpreter on a deterministic \
+                 program:\n  interpreter: {a:?}\n  {engine}: {b:?}"
+            )),
+        }
+    }
+    out
+}
+
+fn run_fuzz_pass(seed: u64, iterations: usize, sweep_stride: usize) -> Vec<String> {
     // Per-seed failure cap: a systematic defect (e.g. one node
     // panicking on every draw) floods the report without adding
     // signal; eight distinct repros per seed is plenty.
@@ -509,6 +654,22 @@ fn run_fuzz_pass(seed: u64, iterations: usize) -> Vec<String> {
                 }
             }
             Ok(_) => {
+                // Invariants 4 and 5: the same program on every engine.
+                // Sampled — a sweep compiles the module five more
+                // times, twice through Cranelift, so running it on
+                // every iteration would cost more than the generator
+                // is worth. `FUZZ_ENGINE_SWEEP` is the stride; 0 turns
+                // it off, 1 sweeps everything, and the superfuzz sets
+                // it to 1 because that is the run that can afford it.
+                if sweep_stride != 0 && i % sweep_stride == 0 {
+                    for detail in engine_sweep_failures(&source) {
+                        failures.push(format!(
+                            "[seed {seed:#x}] iteration {i}: {detail}\n  source:\n{source}\n  {}",
+                            repro(i)
+                        ));
+                    }
+                }
+
                 // Invariant 3: every adapter the compiler auto-inserts
                 // must be one we know about. Anything else is a rogue
                 // entry — probably a new adapter added to the
@@ -543,7 +704,9 @@ fn random_dags_compile_or_fail_cleanly() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(500);
-    let failures = run_fuzz_pass(seed, iterations);
+    // Sampled sweep: the per-commit run pays for one module in eight
+    // on every engine.
+    let failures = run_fuzz_pass(seed, iterations, engine_sweep_stride(8));
     assert!(
         failures.is_empty(),
         "fuzz invariants violated ({} failures):\n\n{}",
@@ -586,7 +749,9 @@ fn superfuzz_sampler() {
         // Rng::new decorrelates adjacent integers via the golden-
         // ratio multiply, so base+k gives independent trajectories.
         let seed = base.wrapping_add(k);
-        let failures = run_fuzz_pass(seed, iterations);
+        // Every module on every engine: this is the run that can
+        // afford it, and the cross-engine space is the point of it.
+        let failures = run_fuzz_pass(seed, iterations, engine_sweep_stride(1));
         if !failures.is_empty() {
             eprintln!("superfuzz: seed {seed:#x}: {} violation(s)", failures.len());
         }
