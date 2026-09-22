@@ -1,0 +1,229 @@
+# Porting a host from polydat 0.3.1 to 0.3.2
+
+Written against nmbrs, the host that drove this review, but nothing here
+is nmbrs-specific: it is the full set of surface changes between the
+published 0.3.1 and the current tree, measured by building that host
+against this one rather than by reading diffs.
+
+The changes divide in three. [Part 1](#part-1-mechanical) is renames and
+signature edits — apply them and move on. [Part 2](#part-2-the-one-that-
+changes-types-quietly) is a single rename that compiles at the call site
+and breaks somewhere else, so it is worth knowing before you start.
+[Part 3](#part-3-what-the-host-rationalizes) is the short list of places
+where polydat deliberately stopped deciding something, and the host now
+decides it.
+
+## Checking as you go
+
+Build the host against a polydat working tree without editing the
+host's manifest:
+
+```sh
+cargo check --workspace --all-targets --keep-going \
+  --config 'patch.crates-io.polydat.path="/path/to/polydat/crates/polydat"'
+```
+
+Two traps. The lockfile pins the published version, so the patch is
+ignored until you relock — cargo says `patch … was not used in the crate
+graph` and otherwise builds normally, so check for that line before
+trusting a clean run:
+
+```sh
+cargo update -p polydat --config 'patch.crates-io.polydat.path="…"'
+```
+
+And errors surface in waves: a crate that fails hides every crate
+downstream of it. `--keep-going` gets the independent ones in one pass,
+but expect a second and third round as each layer starts compiling.
+
+## Part 1: mechanical
+
+| 0.3.1 | 0.3.2 | note |
+|---|---|---|
+| `PolydatKernel::pull` | `pull_ref` | see [part 2](#part-2-the-one-that-changes-types-quietly) |
+| `PolydatKernel::pull_by_index` | `pull_ref_at` | same |
+| `Box<dyn Kernel>::program()` | `into_program()`, or ask the kernel directly | `into_program` consumes; most callers wanted one accessor, not the program |
+| `Box<dyn Kernel>::output_port_type(n)` | `Kernel::output_type(n)` | also `input_port_type`, `input_port_type_by_idx` |
+| `dsl::compile::compile_polydat_with_options` | `compile_polydat_interpreter_with_options` | the name now says which engine it builds |
+| `comprehension::spec::parse_comprehension_text` | `spec::parse_comprehension_algebra` | |
+| `comprehension::spec::parse_clause`, `parse_clause_list` | `spec::serde_form::parse_inline` | see [clause text](#clause-text-is-polydats-to-parse) |
+| `comprehension::runtime::EmptyClause` | — | see [empty clauses](#empty-clauses-are-reported-not-decided) |
+| `evaluate_for_iteration(comp, scope, params, on_empty)` | `evaluate_for_iteration(comp, scope)` | the dropped params were a map the evaluator never read, and the callback |
+| `dyn Kernel: Debug` | — | format the error, not the kernel |
+
+Additive, so the fix is an extra field or arm:
+
+- `Comprehension::Order` gained `seed: Option<u64>` — add `..` to the
+  pattern, or read it if you render the comprehension back to text.
+- `WriteError` gained `CoordinateSlot { .. }` — a write aimed at a
+  coordinate slot, which used to be reported as something less precise.
+- `CompileOptions` gained `engine` and `ledger`. It derives `Default`,
+  so a struct literal takes `..Default::default()` and nothing else
+  changes.
+
+## Part 2: the one that changes types quietly
+
+`PolydatKernel::pull` was an inherent method returning `&Value`. It
+shadowed `Kernel::pull`, which returns an owned `Value`. Renaming the
+inherent one to `pull_ref` un-shadows the trait — so a call you do not
+change still compiles, and now returns `Value` instead of `&Value`.
+
+Nothing fails at the call site. It fails wherever the result was matched
+and the bindings were dereferenced:
+
+```
+error[E0614]: type `u64` cannot be dereferenced
+```
+
+That error will point at a match arm some distance from the `.pull()`
+that caused it. If you see a cluster of `cannot be dereferenced` on
+`u64`, `f64`, or `bool`, look upstream for a `.pull()` that used to hand
+back a reference. Decide per site: `pull_ref` to keep the borrow, or
+keep the trait's `pull` and drop the `*`.
+
+This is the only change in the set that is not visible where it is
+written. Everything else fails at the line you have to edit.
+
+## Part 3: what the host rationalizes
+
+These are not renames. In each, polydat stopped making a decision that
+was not its to make, and the host makes it now.
+
+### Which engine the host runs on
+
+`compile_polydat` now returns `Box<dyn Kernel>` rather than
+`PolydatKernel`, because the engine is a choice and the interpreter was
+never the only answer. `compile_polydat_interpreter` still returns
+`PolydatKernel` and is unchanged.
+
+So a host holding `PolydatKernel` widely has two honest ports:
+
+- **Keep the interpreter.** Swap `compile_polydat` for
+  `compile_polydat_interpreter` and nothing else changes. Correct,
+  smallest diff, and leaves the compiled tiers on the table.
+- **Go engine-agnostic.** Hold `Box<dyn Kernel>` and reach everything
+  through the trait. This is what makes the closure, native, and pure
+  tiers reachable — `Engine::default()` is the native tier, and the
+  ladder between them is roughly ten to one.
+
+Take the first if you are porting under time pressure; take the second
+deliberately, not as part of a rename pass. Do not mix them: a host that
+holds both types ends up converting between them at every boundary.
+
+### Empty clauses are reported, not decided
+
+0.3.1 took an `on_empty` callback and called it while evaluating. That
+was removed on the premise that every caller's policy was to do nothing,
+which was not true of a host that warned and failed under `strict`. The
+callback is not coming back — it had polydat calling the host's policy
+mid-evaluation, and made the evaluator's result depend on a closure —
+but the fact it carried is now available at both levels where emptiness
+is knowable.
+
+**At construction**, a source polydat can already count as empty is a
+degenerate composition, beside the trivially-false filter:
+
+```rust
+use polydat::iteration::comprehension::{Mode, validate};
+
+let report = validate(&comp, if strict { Mode::Strict } else { Mode::Permissive })?;
+for w in &report.warnings {
+    log::warn!("{w}");            // Display writes the diagnostic
+}
+```
+
+`Mode::Strict` makes the first warning the error, so a host's own
+`strict` flag maps onto it directly rather than being re-implemented.
+This catches `x in []`, `x in 5..5`, and a context-free generator the
+compile evaluated to nothing. A source whose count is *not* known at
+construction is `Unbounded`, never `Bounded(0)`, so an interpolated call
+or a parameter without a declared length never warns here.
+
+**At evaluation**, which is where a selector that matched nothing shows
+up, ask for the reported form:
+
+```rust
+use polydat::iteration::comprehension::evaluate_for_iteration_reported;
+
+let out = evaluate_for_iteration_reported(&comp, scope)?;
+for c in &out.clauses {
+    if c.evaluations > 0 && c.values == 0 {
+        // reached, and produced nothing: this is the clause to name
+        let label = match &c.source {
+            Some(text) => format!("clause '{} in {}'", c.var, text),
+            None => format!("clause '{}'", c.var),
+        };
+        // host policy: warn, or fail under strict
+    }
+}
+let tuples = out.tuples;
+```
+
+The distinction to keep is between the two zero cases. A clause under a
+cartesian is evaluated once per outer tuple, so:
+
+- `evaluations > 0 && values == 0` — reached every time and yielded
+  nothing. **This is the cause**, and the one to put in a message.
+- `evaluations == 0` — never reached, because something outside it was
+  empty first. Reporting this one names a symptom and buries the cause.
+
+The counts come off the evaluation that already happened, so asking for
+them evaluates nothing twice, and the record is one entry per leaf
+rather than one per tuple. `evaluate_for_iteration` is unchanged and
+wraps the reported form, so callers that do not want diagnostics keep
+the simpler signature.
+
+### Clause text is polydat's to parse
+
+The clause-text parser and the flat form it produces are internal to
+`polydat_grammar` now (comprehension_forms.md §14.8). A host that was
+calling `parse_clause` / `parse_clause_list` to split `"var in expr"`
+goes through the public spec entry and reads the algebra:
+
+```rust
+use polydat::iteration::comprehension::{Comprehension, spec::serde_form::parse_inline};
+
+fn clause_pairs(c: &Comprehension, out: &mut Vec<(String, String)>) {
+    match c {
+        Comprehension::Clause { name, source } => {
+            out.push((name.clone(), source.to_text().unwrap_or_default()));
+        }
+        Comprehension::Cartesian { children }
+        | Comprehension::Zip { children, .. }
+        | Comprehension::Union { children } => {
+            for ch in children {
+                clause_pairs(ch, out);
+            }
+        }
+        Comprehension::Filter { child, .. } | Comprehension::Order { child, .. } => {
+            clause_pairs(child, out);
+        }
+    }
+}
+
+let mut pairs = Vec::new();
+clause_pairs(&parse_inline(text)?, &mut pairs);
+```
+
+`Source::to_text` round-trips: parsing what it returns yields a tree
+equal to the one it came from. For text that arrived as text — which is
+the case a YAML front end has — the pair you get back is the pair you
+would have got from `Clause::var` and `Clause::expr`.
+
+There is deliberately no `text -> (var, expr)` helper. The algebra
+already says it, and a second entry point for the same question is a
+second grammar to keep honest.
+
+## Checklist
+
+1. Patch and relock, and confirm the patch was actually used.
+2. Apply [part 1](#part-1-mechanical) until the first crate compiles.
+3. Expect new waves; repeat.
+4. Grep for `.pull(` and decide `pull_ref` or drop-the-`*` per site
+   ([part 2](#part-2-the-one-that-changes-types-quietly)).
+5. Decide the engine question once, for the whole host, and write it
+   down somewhere the next reader finds it.
+6. Move the empty-clause policy onto `validate` plus the per-clause
+   yields, and check that a workload whose sweep resolves empty still
+   says so — that is the behaviour this migration is most likely to
+   drop silently.
