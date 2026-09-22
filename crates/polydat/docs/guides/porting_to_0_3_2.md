@@ -58,7 +58,8 @@ but expect a second and third round as each layer starts compiling.
 | `PolydatKernel::pull_by_index` | `pull_ref_at` | same |
 | `Box<dyn Kernel>::program()` | `into_program()`, or ask the kernel directly | `into_program` consumes; most callers wanted one accessor, not the program |
 | `Box<dyn Kernel>::output_port_type(n)` | `Kernel::output_type(n)` | also `input_port_type`, `input_port_type_by_idx` |
-| `dsl::compile::compile_polydat_with_options` | `compile_polydat_interpreter_with_options` | the name now says which engine it builds |
+| `dsl::compile::compile_polydat_with_options` | `compile_polydat_kernel_with_options` | same signature; the engine comes from `options.engine` — see [the engine](#the-kernel-is-the-path-the-engine-is-configuration) |
+| `dsl::compile::compile_polydat` | `compile_polydat_kernel` | same, without options |
 | `comprehension::spec::parse_comprehension_text` | `spec::parse_comprehension_algebra` | |
 | `comprehension::spec::parse_clause`, `parse_clause_list` | `spec::serde_form::parse_inline` | see [clause text](#clause-text-is-polydats-to-parse) |
 | `comprehension::runtime::EmptyClause` | — | see [empty clauses](#empty-clauses-are-reported-not-decided) |
@@ -72,8 +73,10 @@ Additive, so the fix is an extra field or arm:
 - `WriteError` gained `CoordinateSlot { .. }` — a write aimed at a
   coordinate slot, which used to be reported as something less precise.
 - `CompileOptions` gained `engine` and `ledger`. It derives `Default`,
-  so a struct literal takes `..Default::default()` and nothing else
-  changes.
+  so a struct literal takes `..Default::default()` and compiles. Do
+  read `engine` before moving on, though: it is where the engine
+  preference lives now, and its default is compiled code rather than
+  the interpreter.
 
 ## Part 2: the one that changes types quietly
 
@@ -103,26 +106,49 @@ written. Everything else fails at the line you have to edit.
 These are not renames. In each, polydat stopped making a decision that
 was not its to make, and the host makes it now.
 
-### Which engine the host runs on
+### The kernel is the path; the engine is configuration
 
-`compile_polydat` now returns `Box<dyn Kernel>` rather than
-`PolydatKernel`, because the engine is a choice and the interpreter was
-never the only answer. `compile_polydat_interpreter` still returns
-`PolydatKernel` and is unchanged.
+There is one call path and it hands back `Box<dyn Kernel>`. Which engine
+built that kernel is a *value* the host configures, not a function it
+picks: `CompileOptions.engine` carries it, and it already defaults to
+the most native form the build has, so a host that never names an engine
+gets compiled code rather than the interpreter.
 
-So a host holding `PolydatKernel` widely has two honest ports:
+| what a host called | what it calls now |
+|---|---|
+| `compile_polydat(src)` | `compile_polydat_kernel(src)` |
+| `compile_polydat_with_options(src, &o, log)` | `compile_polydat_kernel_with_options(src, &o, log)` |
 
-- **Keep the interpreter.** Swap `compile_polydat` for
-  `compile_polydat_interpreter` and nothing else changes. Correct,
-  smallest diff, and leaves the compiled tiers on the table.
-- **Go engine-agnostic.** Hold `Box<dyn Kernel>` and reach everything
-  through the trait. This is what makes the closure, native, and pure
-  tiers reachable — `Engine::default()` is the native tier, and the
-  ladder between them is roughly ten to one.
+The second has the signature the old one had, and reads `o.engine` —
+which is one of the two fields `CompileOptions` gained, so setting it is
+the same edit as making the struct literal compile again.
 
-Take the first if you are porting under time pressure; take the second
-deliberately, not as part of a rename pass. Do not mix them: a host that
-holds both types ends up converting between them at every boundary.
+Note this changes which engine runs, and that is the point rather than a
+side effect. `compile_polydat` builds the interpreter; its replacement
+builds `Engine::default()`. A host that wants the old behaviour sets
+`options.engine` and says so, which is the difference between a
+preference and a fork.
+
+The `compile_polydat_interpreter*` entry points still exist and are
+**not** a porting strategy. Adopting them is precisely how a host
+acquires an interpreter-specific call path, which is the shape this
+migration removes: the engine stops being a branch in the code and
+becomes a field. A host on that path also opts out of the ladder, and
+the ladder is roughly ten to one from interpreter to native.
+
+When a host needs to know what it actually got, it asks **afterward and
+surgically** rather than by having called differently:
+
+- `Kernel::engine()` — the tier this kernel runs.
+- `KernelProgram::plan()` — what that engine decided: native segments,
+  closure steps, interpreted nodes.
+- `KernelProgram::as_interpreter()` — interpreter-level detail, `Some`
+  only when that is the engine, which is the honest shape for a question
+  only one tier can answer.
+
+That is the division to port to: one way in, the engine as
+configuration, and introspection after the fact for the few places that
+genuinely need it.
 
 ### Empty clauses are reported, not decided
 
@@ -235,8 +261,9 @@ second grammar to keep honest.
 3. Expect new waves; repeat.
 4. Grep for `.pull(` and decide `pull_ref` or drop-the-`*` per site
    ([part 2](#part-2-the-one-that-changes-types-quietly)).
-5. Decide the engine question once, for the whole host, and write it
-   down somewhere the next reader finds it.
+5. Move to `compile_polydat_kernel*` and hold `Box<dyn Kernel>`. If the
+   host wants an engine other than the default, set `options.engine`
+   and say why there — not by calling a different function.
 6. Move the empty-clause policy onto `validate` plus the per-clause
    yields, and check that a workload whose sweep resolves empty still
    says so — that is the behaviour this migration is most likely to
