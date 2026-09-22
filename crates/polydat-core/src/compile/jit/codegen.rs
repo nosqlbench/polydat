@@ -1251,7 +1251,10 @@ pub fn classify_node_typed(node: &dyn PolydatNode, wire_types: &[crate::ast::Por
     if !matches!(named, JitOp::Fallback) {
         return named;
     }
-    if let Some(kit) = node.compiled_slot(wire_types) {
+    if let Some(kit) = node.compiled_slot(
+        wire_types,
+        crate::compile::select::Engine::Native(crate::compile::select::Provenance::Auto),
+    ) {
         return JitOp::SlotCall {
             kit: SlotKitRef::new(kit),
             scratch_base: 0,

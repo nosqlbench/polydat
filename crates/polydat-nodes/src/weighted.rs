@@ -381,6 +381,7 @@ pub(crate) mod dynamic_weighted_state {
 fn dynamic_weighted_compiled(
     _node: &DynamicWeightedSelect,
     wire_types: &[polydat::ast::PortType],
+    _engine: polydat::Engine,
 ) -> polydat::ast::CompiledSlotKit {
     use polydat::ast::{PortType, ScratchBuf, ScratchElem};
     let spec_ty = wire_types.get(1).copied().unwrap_or(PortType::Str);
@@ -742,7 +743,11 @@ mod tests {
     fn dynamic_weighted_select_compiled_form_memoizes_and_agrees() {
         use polydat::ast::{PortType, ScratchBuf};
         let node = DynamicWeightedSelect::new();
-        let kit = dynamic_weighted_compiled(&node, &[PortType::U64, PortType::Str]);
+        let kit = dynamic_weighted_compiled(
+            &node,
+            &[PortType::U64, PortType::Str],
+            polydat::Engine::Closures(polydat::Provenance::Auto),
+        );
         let mut scratch: Vec<ScratchBuf> =
             kit.scratch.iter().map(|e| ScratchBuf::new(*e)).collect();
         let mut outputs = [0u64; 2];

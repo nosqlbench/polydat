@@ -296,7 +296,13 @@ pub fn node_tier(
     let meta = node.meta();
     let is_copy =
         (meta.name == "identity" || meta.name.starts_with("__port_")) && meta.outs.len() == 1;
-    if is_copy || node.compiled_u64().is_some() || node.compiled_slot(wire_types).is_some() {
+    let has_kit = node
+        .compiled_slot(
+            wire_types,
+            crate::compile::select::Engine::Closures(crate::compile::select::Provenance::Auto),
+        )
+        .is_some();
+    if is_copy || node.compiled_u64().is_some() || has_kit {
         crate::ast::CompileLevel::Phase2
     } else {
         crate::ast::CompileLevel::Phase1

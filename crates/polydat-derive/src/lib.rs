@@ -3408,8 +3408,8 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
 
     let compiled_slot_impl: TokenStream2 = if let Some(path) = &attrs.compiled_slot_override {
         quote! {
-            fn compiled_slot(&self, wire_types: &[polydat::ast::PortType]) -> Option<polydat::ast::CompiledSlotKit> {
-                Some(#path(self, wire_types))
+            fn compiled_slot(&self, wire_types: &[polydat::ast::PortType], engine: polydat::Engine) -> Option<polydat::ast::CompiledSlotKit> {
+                Some(#path(self, wire_types, engine))
             }
         }
     } else if let Some((shapes, ret_shape)) = &slot_plan {
@@ -3653,7 +3653,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
         let out_type = out_type_for(ret_shape, fixed_ports);
         quote! {
             #[allow(unused_mut, unused_variables, unused_assignments, clippy::unused_unit)]
-            fn compiled_slot(&self, wire_types: &[polydat::ast::PortType]) -> Option<polydat::ast::CompiledSlotKit> {
+            fn compiled_slot(&self, wire_types: &[polydat::ast::PortType], _engine: polydat::Engine) -> Option<polydat::ast::CompiledSlotKit> {
                 #( #captures )*
                 #out_type
                 let __wire_types: Vec<polydat::ast::PortType> = wire_types.to_vec();
@@ -3679,7 +3679,7 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
         let out_type = out_type_for(shape, 0);
         quote! {
             #[allow(unused_variables)]
-            fn compiled_slot(&self, wire_types: &[polydat::ast::PortType]) -> Option<polydat::ast::CompiledSlotKit> {
+            fn compiled_slot(&self, wire_types: &[polydat::ast::PortType], _engine: polydat::Engine) -> Option<polydat::ast::CompiledSlotKit> {
                 #out_type
                 let __cached = self.__polydat_cached.clone();
                 Some(polydat::ast::CompiledSlotKit {

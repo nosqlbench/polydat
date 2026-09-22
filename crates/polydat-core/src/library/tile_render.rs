@@ -1277,7 +1277,11 @@ fn tile_encode(
 /// an owned `Value` on the way. A wire
 /// wider than one slot, or of a kind without a view, is read as a value
 /// through the typed decoder.
-fn tile_render_compiled(node: &TileRender, wire_types: &[PortType]) -> crate::ast::CompiledSlotKit {
+fn tile_render_compiled(
+    node: &TileRender,
+    wire_types: &[PortType],
+    engine: crate::Engine,
+) -> crate::ast::CompiledSlotKit {
     // Native code bakes this address, so it must outlive every kernel
     // compiled from the program: one reference count of the node's own
     // `Arc` is given up here and never taken back. This used to be a
@@ -1323,10 +1327,13 @@ fn tile_render_compiled(node: &TileRender, wire_types: &[PortType]) -> crate::as
                     })
                     .collect();
                 // The document is rendered straight into this step's own
-                // scratch (axiom S3). A body runs compiled wherever the
-                // kernel rendering is compiled: this closure serves the
-                // closure tier and a hybrid kernel's closure steps alike,
-                // so the body takes the default engine.
+                // scratch (axiom S3). A projection body runs on the
+                // engine this kit was built for — the engine of the
+                // kernel doing the rendering — which is the rule a
+                // `for` body already follows. The closure had no engine
+                // to ask until `compiled_slot` was given the one it is
+                // building for; before that every compiled kernel
+                // rendered its bodies on `Engine::default()`.
                 let (text, bodies) = scratch.split_at_mut(1);
                 let crate::ast::ScratchBuf::Str(buf) = &mut text[0] else {
                     unreachable!("the render step owns a string entry");
@@ -1334,7 +1341,7 @@ fn tile_render_compiled(node: &TileRender, wire_types: &[PortType]) -> crate::as
                 let bodies = render_state::bodies_of(&mut bodies[0]);
                 buf.clear();
                 let mut w = BytesSink(buf);
-                program.render_into(&refs, crate::Engine::default(), bodies, &mut w);
+                program.render_into(&refs, engine, bodies, &mut w);
                 let (p, l) = scratch[0].ptr_len();
                 outputs[0] = p;
                 outputs[1] = l;

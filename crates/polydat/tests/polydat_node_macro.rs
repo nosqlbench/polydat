@@ -1172,7 +1172,10 @@ fn macro_string_arg_node_has_a_slot_kit_and_no_u64_op() {
         "a String arg has no u64 form"
     );
     let kit = node
-        .compiled_slot(&[PortType::Str])
+        .compiled_slot(
+            &[PortType::Str],
+            polydat::Engine::Closures(polydat::Provenance::Auto),
+        )
         .expect("a String in and a String out take the slot kit");
     let mut scratch: Vec<ScratchBuf> = kit.scratch.iter().map(|e| ScratchBuf::new(*e)).collect();
     assert_eq!(scratch.len(), 1, "one scratch entry for the string output");
@@ -1343,4 +1346,55 @@ fn macro_narrow_widths_are_phase2_eligible_and_equivalent() {
     // 128-bit stays typed-eval only (no single-slot ride).
     // (No macro pilot node — u128 wires are interpreter-only by
     // the wire_type_to_jit_type table.)
+}
+
+// ── The engine a kit is built for (group G / decision 3) ──────────
+
+/// A kit that answers with the tier it was built for. A node whose
+/// closure runs a program of its own — a tile's projection body — has
+/// to know which engine is rendering it, and the kit is the only place
+/// a closure can learn that.
+fn engine_probe_compiled(
+    _node: &EngineProbe,
+    _wire_types: &[polydat::ast::PortType],
+    engine: polydat::Engine,
+) -> polydat::ast::CompiledSlotKit {
+    let tier = match engine {
+        polydat::Engine::Interpreter(_) => 1u64,
+        polydat::Engine::Closures(_) => 2,
+        polydat::Engine::Native(_) => 3,
+        polydat::Engine::PureNative(_) => 4,
+    };
+    polydat::ast::CompiledSlotKit {
+        scratch: Vec::new(),
+        op: Box::new(move |_inputs: &[u64], outputs: &mut [u64], _scratch| {
+            outputs[0] = tier;
+        }),
+    }
+}
+
+/// Never reached: every tier takes the kit above.
+#[polydat::polydat_node(category = Diagnostic, compiled_slot = engine_probe_compiled)]
+fn engine_probe(n: u64) -> u64 {
+    n
+}
+
+#[test]
+fn a_kit_is_told_which_engine_it_is_built_for() {
+    use polydat::ast::{PolydatNode, PortType};
+    let node = EngineProbe::new();
+    for (engine, expected) in [
+        (polydat::Engine::Closures(polydat::Provenance::Auto), 2u64),
+        (polydat::Engine::Native(polydat::Provenance::Auto), 3),
+    ] {
+        let kit = node
+            .compiled_slot(&[PortType::U64], engine)
+            .expect("the override is always offered");
+        let mut outputs = [0u64];
+        (kit.op)(&[7], &mut outputs, &mut []);
+        assert_eq!(
+            outputs[0], expected,
+            "a kit built for {engine:?} should know it"
+        );
+    }
 }

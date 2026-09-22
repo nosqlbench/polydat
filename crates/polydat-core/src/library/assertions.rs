@@ -134,7 +134,11 @@ impl PolydatNode for AssertType {
         }))
     }
 
-    fn compiled_slot(&self, _wire_types: &[PortType]) -> Option<crate::ast::CompiledSlotKit> {
+    fn compiled_slot(
+        &self,
+        _wire_types: &[PortType],
+        _engine: crate::compile::select::Engine,
+    ) -> Option<crate::ast::CompiledSlotKit> {
         crate::compile::assembly::ref_copy_kit(self.expected)
     }
 }
@@ -286,7 +290,11 @@ impl PolydatNode for AssertValue {
 
     /// A string reads through its pair, is checked, and is copied into
     /// this step's own scratch (axiom S3).
-    fn compiled_slot(&self, _wire_types: &[PortType]) -> Option<crate::ast::CompiledSlotKit> {
+    fn compiled_slot(
+        &self,
+        _wire_types: &[PortType],
+        _engine: crate::compile::select::Engine,
+    ) -> Option<crate::ast::CompiledSlotKit> {
         use crate::dsl::factory::ConstArg;
         if self.typ != PortType::Str {
             return None;

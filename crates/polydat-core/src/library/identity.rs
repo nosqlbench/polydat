@@ -114,6 +114,7 @@ fn const_str_arc(s: &str) -> std::sync::Arc<str> {
 fn const_str_compiled(
     node: &ConstStr,
     _wire_types: &[crate::ast::PortType],
+    _engine: crate::Engine,
 ) -> crate::ast::CompiledSlotKit {
     let (ptr, len) = crate::kernel::static_pair(crate::kernel::StaticInterner::intern(&node.value));
     crate::ast::CompiledSlotKit {

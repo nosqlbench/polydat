@@ -1356,7 +1356,10 @@ fn ref_copy_or_slot(
     {
         return crate::compile::assembly::ref_copy_kit(meta.outs[0].typ);
     }
-    node.compiled_slot(wire_types)
+    node.compiled_slot(
+        wire_types,
+        crate::compile::select::Engine::Native(crate::compile::select::Provenance::Auto),
+    )
 }
 
 // ── The engine-independent surface (engines.md §3.5) ──────

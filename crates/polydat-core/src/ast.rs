@@ -2087,7 +2087,17 @@ pub trait PolydatNode: Send + Sync {
     /// Checked by the compiled-kernel builders AFTER
     /// [`Self::compiled_u64`] — pure-scalar nodes never need it.
     /// Default `None`: the node stays on typed eval.
-    fn compiled_slot(&self, _wire_types: &[PortType]) -> Option<CompiledSlotKit> {
+    ///
+    /// `engine` is the engine the kit is being built for, which a node
+    /// needs when its closure runs a program of its own: a tile's
+    /// projection body belongs to the kernel rendering it, the way a
+    /// `for` body belongs to the kernel that opened it, and the kit is
+    /// the only place a closure can learn which that is.
+    fn compiled_slot(
+        &self,
+        _wire_types: &[PortType],
+        _engine: crate::compile::select::Engine,
+    ) -> Option<CompiledSlotKit> {
         None
     }
 

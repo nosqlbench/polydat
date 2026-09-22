@@ -307,8 +307,11 @@ fn node_step_op(
     if let Some(op) = node.compiled_u64() {
         return Some((crate::compile::closures::StepOp::U64(op), Vec::new()));
     }
-    node.compiled_slot(wire_types)
-        .map(|kit| (crate::compile::closures::StepOp::Slot(kit.op), kit.scratch))
+    node.compiled_slot(
+        wire_types,
+        crate::compile::select::Engine::Closures(crate::compile::select::Provenance::Auto),
+    )
+    .map(|kit| (crate::compile::closures::StepOp::Slot(kit.op), kit.scratch))
 }
 
 /// Axiom S9(a): the `(first slot, scratch index)` pairs of a step's
