@@ -252,23 +252,29 @@ pub fn stdlib_sources() -> &'static [(&'static str, &'static str)] {
     STDLIB_MODULES
 }
 
-/// Compile a `.polydat` source string on the interpreter, under the
-/// default options.
+/// Compile a `.polydat` source string under the default options, on the
+/// engine those options name — which is [`Engine::default`](crate::Engine::default),
+/// the most native form the build has.
 ///
-/// The kernel comes back as `dyn Kernel`, which is the surface every
-/// use of a kernel goes through. The engine is named here rather than
-/// taken from the options because this entry point exists to be the
-/// semantic oracle: it is what a differential test compares a compiled
-/// engine against. A caller with no such need calls
-/// [`compile_polydat_kernel`], which takes the engine from the options
-/// and so defaults to the most compiled form the build has.
+/// This is the way in. The kernel comes back as `dyn Kernel`, which is
+/// the surface every use of a kernel goes through, and the engine is a
+/// value the options carry rather than a branch in the code: a caller
+/// that wants a different one sets `options.engine` and calls
+/// [`compile_polydat_kernel_with_options`], rather than calling a
+/// differently-named function.
 ///
-/// A test or diagnostic that needs the interpreter's *own* internals —
-/// its `PolydatProgram`, its `Lookup` view, its subcontext builder —
-/// calls [`compile_polydat_interpreter`] for the concrete type. That is
-/// the one reason to hold a `PolydatKernel` rather than a `dyn Kernel`.
+/// Naming an engine is for the callers whose *subject* is the engine:
+///
+/// - [`compile_polydat_interpreter`] for the interpreter's concrete
+///   kernel, when a test or diagnostic needs its own internals, or when
+///   it is being used as the semantic oracle a differential test
+///   compares a compiled engine against. That is a real need, and it
+///   says so by name — it used to be what this entry point quietly
+///   returned, which meant a host got the slowest engine by asking for
+///   none.
+/// - [`compile_polydat_with`] to walk the tiers with one source.
 pub fn compile_polydat(source: &str) -> Result<Box<dyn crate::Kernel>, crate::KernelError> {
-    compile_polydat_interpreter(source).map(|k| Box::new(k) as Box<dyn crate::Kernel>)
+    compile_polydat_kernel(source)
 }
 
 /// [`compile_polydat`] returning the interpreter's concrete kernel.

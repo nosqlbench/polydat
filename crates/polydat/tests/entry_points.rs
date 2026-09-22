@@ -10,9 +10,9 @@
 use polydat::ast::Value;
 use polydat::compile::assembly::{PolydatAssembler, WireRef};
 use polydat::dsl::compile::{
-    CompileOptions, compile_polydat_interpreter, compile_polydat_interpreter_with_log,
-    compile_polydat_interpreter_with_options, compile_polydat_kernel,
-    compile_polydat_kernel_with_options, compile_polydat_to_assembler,
+    CompileOptions, compile_polydat, compile_polydat_interpreter,
+    compile_polydat_interpreter_with_log, compile_polydat_interpreter_with_options,
+    compile_polydat_kernel, compile_polydat_kernel_with_options, compile_polydat_to_assembler,
     compile_polydat_to_assembler_with, compile_polydat_with, compile_polydat_with_engine,
 };
 use polydat::dsl::events::CompileEventLog;
@@ -482,5 +482,84 @@ for k in 1..4 {
             }
         }
         assert_eq!(seen, vec![2, 4, 6], "{engine}");
+    }
+}
+
+/// Asking for no engine gets the build's default, which is compiled
+/// code — not the interpreter.
+///
+/// This is the rule the plainest entry point is most able to break
+/// quietly: it hands back `dyn Kernel` either way, so a body that built
+/// the interpreter would look right at every call site and cost every
+/// caller the ladder. `compile_polydat` did exactly that until
+/// 2026-09-22. The engine is a value the options carry, and the default
+/// value is the most native form the build has.
+#[test]
+fn the_engine_less_entry_points_build_the_default_engine() {
+    let src = "out := hash(cycle)\n";
+    let expected = Engine::default();
+
+    for (name, kernel) in [
+        (
+            "compile_polydat",
+            compile_polydat(src).expect("it compiles"),
+        ),
+        (
+            "compile_polydat_kernel",
+            compile_polydat_kernel(src).expect("it compiles"),
+        ),
+        (
+            "compile_polydat_kernel_with_options",
+            compile_polydat_kernel_with_options(src, &CompileOptions::default(), None)
+                .expect("it compiles"),
+        ),
+    ] {
+        let got = kernel.engine();
+        assert_ne!(
+            got,
+            Engine::Interpreter(JitMode::Off),
+            "{name} built the interpreter; an engine-less entry point builds {expected}"
+        );
+        assert!(
+            matches!(got, Engine::Native(_) | Engine::Closures(_)),
+            "{name} built {got}, which is neither tier of {expected}"
+        );
+    }
+}
+
+/// The interpreter is still reachable, and reached by name. It is the
+/// oracle a differential test compares against, so it has to be — what
+/// changed is that a caller now says so.
+#[test]
+fn the_interpreter_is_reached_by_naming_it() {
+    let src = "out := hash(cycle)\n";
+
+    let named = compile_polydat_interpreter(src).expect("it compiles");
+    assert!(
+        matches!(Kernel::engine(&named), Engine::Interpreter(_)),
+        "compile_polydat_interpreter must build the interpreter"
+    );
+
+    let mut configured = {
+        let options = CompileOptions {
+            engine: Engine::Interpreter(JitMode::Off),
+            ..CompileOptions::default()
+        };
+        compile_polydat_kernel_with_options(src, &options, None).expect("it compiles")
+    };
+    assert!(
+        matches!(configured.engine(), Engine::Interpreter(_)),
+        "an engine asked for in the options is the engine that is built"
+    );
+
+    // And it computes what the default engine computes: the oracle is
+    // an oracle, not a different program.
+    let mut default_engine = compile_polydat(src).expect("it compiles");
+    for cycle in [0u64, 1, 7, 99] {
+        assert_eq!(
+            values(configured.as_mut(), cycle),
+            values(default_engine.as_mut(), cycle),
+            "cycle {cycle}"
+        );
     }
 }
