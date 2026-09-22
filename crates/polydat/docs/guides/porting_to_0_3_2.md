@@ -13,6 +13,20 @@ and breaks somewhere else, so it is worth knowing before you start.
 where polydat deliberately stopped deciding something, and the host now
 decides it.
 
+## What it costs, and where
+
+Forty-three errors over the whole host, and they are not spread evenly.
+Two crates fail first on four of them; every one of the remaining
+thirty-nine is in the single crate that drives kernels. So the port is
+one afternoon in one file's worth of neighbourhood, not a sweep — and
+the crate that only *registers* nodes clears completely once two lines
+change.
+
+Re-measured 2026-09-22 against the tree at `c7e16c7`, after the
+empty-clause work and the shuffle consolidation landed: the set below is
+unchanged by either, so neither adds anything to a port already planned
+against it.
+
 ## Checking as you go
 
 Build the host against a polydat working tree without editing the
