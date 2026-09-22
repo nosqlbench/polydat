@@ -1702,3 +1702,45 @@ fn a_parent_answers_the_binder_the_same_on_every_engine() {
         );
     }
 }
+
+/// Two states over one program: a second state publishes to nobody,
+/// because the descendant bound to the first is not bound to it. Two
+/// states writing one register would give that descendant whichever
+/// pulled last.
+///
+/// The compiled path already held this, since `create_kernel` resets a
+/// kernel to its program and reseeding clears the broadcast cells. The
+/// `Clone` on the extern table holds it at the clone itself, so it no
+/// longer depends on every caller resetting.
+#[test]
+fn a_second_state_over_one_program_publishes_to_nobody() {
+    use crate::compile::select::{Engine, Provenance};
+    use crate::kernel::KernelProgram;
+
+    let src = "input cycle: u64\nseed := hash(cycle)\n";
+    for engine in [
+        Engine::Closures(Provenance::PushPull),
+        Engine::Native(Provenance::PushPull),
+    ] {
+        let k = crate::dsl::compile::compile_polydat_with(src, engine).unwrap();
+        let program: std::sync::Arc<dyn KernelProgram> = k.into_program();
+
+        let mut first = program.clone().create_kernel();
+        let bound = first
+            .output_cell("seed")
+            .expect("the descendant binds to this state's register");
+        first.set_inputs(&[1]);
+        let seen = first.pull("seed");
+        assert_eq!(bound.value.lock().unwrap().clone(), seen);
+
+        let mut second = program.create_kernel();
+        second.set_inputs(&[2]);
+        let other = second.pull("seed");
+        assert_ne!(seen, other, "{engine:?}: the two states differ");
+        assert_eq!(
+            bound.value.lock().unwrap().clone(),
+            seen,
+            "{engine:?}: the second state published into the first's register"
+        );
+    }
+}

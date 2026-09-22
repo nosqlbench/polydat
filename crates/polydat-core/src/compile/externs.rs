@@ -61,7 +61,7 @@ pub(crate) struct ExternSlot {
 }
 
 /// The extern inputs of one compiled kernel.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub(crate) struct Externs {
     slots: Vec<ExternSlot>,
     by_name: HashMap<String, usize>,
@@ -104,6 +104,35 @@ pub(crate) struct Externs {
     /// to, recorded in at build: what the compiled engines keep of
     /// the program tree's identity.
     ledger: std::sync::Arc<crate::kernel::CompileLedger>,
+}
+
+/// Everything a clone carries but the broadcast cells, which it does
+/// not: a clone is a new state of the same program (engines.md §3.5),
+/// and a new state has no descendant bound to it. Sharing them would
+/// have two states publishing into one register, so a descendant of
+/// the original would read whichever pulled last.
+///
+/// The `shared` slots' cells are a different matter and are shared, as
+/// they were before: a `shared` binding *is* one register, and
+/// `reset_to_program` is what gives a kernel cells of its own.
+impl Clone for Externs {
+    fn clone(&self) -> Self {
+        Self {
+            slots: self.slots.clone(),
+            by_name: self.by_name.clone(),
+            input_names: self.input_names.clone(),
+            by_index: self.by_index.clone(),
+            output_names: self.output_names.clone(),
+            cursors: self.cursors.clone(),
+            output_modifiers: self.output_modifiers.clone(),
+            transit_cells: self.transit_cells.clone(),
+            output_cells: Vec::new(),
+            intent: self.intent.clone(),
+            next_bit: self.next_bit,
+            changed: self.changed.clone(),
+            ledger: self.ledger.clone(),
+        }
+    }
 }
 
 impl Externs {
