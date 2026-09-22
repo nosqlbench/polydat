@@ -83,7 +83,15 @@ pub fn lfsr_step(register: u64, feedback: u64) -> u64 {
 /// is rejected and stepped again, which is what makes a range that is
 /// not a power of two come out whole.
 ///
-/// # The empty range
+/// # Degenerate pairs
+///
+/// Three pairs describe no permutation, and all three answer `min`, the
+/// range's floor: the empty range below, a `feedback` that walks the
+/// register to zero, and one that cycles without ever landing in range.
+/// Each is reachable with the node's own defaults or with the arbitrary
+/// constants a fuzzer supplies, so each is answered in bounded time
+/// rather than trapped. The result is always inside `[min, min + size)`,
+/// or `min` when that interval is empty.
 ///
 /// `size == 0` is the empty range `[min, min)`, which has no value to
 /// permute onto, and it is reachable without being asked for: the
@@ -103,6 +111,18 @@ pub fn shuffle_bounded(input: u64, feedback: u64, size: u64, min: u64) -> u64 {
     // Normalize to the 1-based LFSR range (the LFSR cannot produce 0).
     let mut register = (input % size) + 1;
 
+    // A maximal polynomial of width `w` walks every non-zero register
+    // below `2^w` before it repeats, and `width_for_period` picks `w`
+    // so that `size < 2^w`. A well-formed pair therefore lands in
+    // `[1, size]` within `2^w` steps. Spending more proves the step is
+    // cycling in a subset that misses the range, and a deterministic
+    // map over finite state that has repeated will repeat forever — so
+    // the budget is not a timeout but the point past which "has not
+    // landed" and "cannot land" are the same statement.
+    let width = width_for_period(size);
+    let budget = if width >= 63 { u64::MAX } else { 1u64 << width };
+    let mut steps = 0u64;
+
     // Rejection sampling: step until the register lands in range.
     loop {
         register = lfsr_step(register, feedback);
@@ -120,6 +140,12 @@ pub fn shuffle_bounded(input: u64, feedback: u64, size: u64, min: u64) -> u64 {
         }
         if register <= size {
             break;
+        }
+        steps += 1;
+        if steps >= budget {
+            // Not a polynomial for this width. Same answer as the
+            // other degenerate pairs, and reached in bounded time.
+            return min;
         }
     }
 
@@ -179,6 +205,60 @@ mod tests {
                     (9..9 + size).contains(&out),
                     "size={size} input={input} left the range with {out}"
                 );
+            }
+        }
+    }
+
+    /// The budget must never cut a well-formed pair short. Every bank
+    /// is a polynomial for its width, so every one of them still walks
+    /// the whole range: if the bound were too tight this is what would
+    /// break, and it would break as a lost value rather than as a
+    /// panic.
+    #[test]
+    fn a_valid_polynomial_never_exhausts_the_budget() {
+        for size in [1u64, 2, 5, 16, 17, 100, 255, 256, 1000] {
+            let width = width_for_period(size);
+            for bank in 0..8 {
+                let feedback = feedback_for_width_and_bank(width, bank);
+                let mut seen = vec![false; size as usize];
+                for input in 0..size {
+                    let out = shuffle_bounded(input, feedback, size, 0);
+                    assert!(out < size, "size={size} bank={bank} left range: {out}");
+                    assert!(
+                        !seen[out as usize],
+                        "size={size} bank={bank} repeated {out}"
+                    );
+                    seen[out as usize] = true;
+                }
+                assert!(
+                    seen.iter().all(|b| *b),
+                    "size={size} bank={bank}: the budget truncated a valid permutation"
+                );
+            }
+        }
+    }
+
+    /// A feedback that is not a polynomial for the width may cycle
+    /// among registers that all miss the range. The step is
+    /// deterministic over finite state, so once it has repeated it
+    /// never lands — the bound is where that becomes provable, and the
+    /// answer is the floor. Terminating is the assertion.
+    #[test]
+    fn a_feedback_that_cannot_land_terminates() {
+        for size in [1u64, 2, 3, 7, 64, 1000] {
+            for feedback in [
+                u64::MAX,
+                1u64 << 63,
+                (1u64 << 63) | 1,
+                0xFFFF_0000_FFFF_0000,
+            ] {
+                for input in [0u64, 1, 42] {
+                    let out = shuffle_bounded(input, feedback, size, 11);
+                    assert!(
+                        (11..11 + size).contains(&out),
+                        "size={size} feedback={feedback:#x} input={input} gave {out}"
+                    );
+                }
             }
         }
     }
