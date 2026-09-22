@@ -261,13 +261,28 @@ cargo bench -p polydat --no-default-features --features bench-tiers --bench engi
 ## Reading a comparison
 
 Checking for a regression means a baseline built from the same source in the
-same hour, in a worktree outside the repository, since a worktree under it
-shares this one's target directory:
+same hour. **Build both from one worktree**, checking the two commits out in
+turn:
 
 ```sh
+git checkout --detach <baseline>
 cargo bench -p polydat --features bench-tiers --bench engine_ladder -- --save-baseline before
+git checkout <branch>
+cargo bench -p polydat --features bench-tiers --bench engine_ladder -- --save-baseline after
 cargo bench -p polydat --features bench-tiers --bench engine_ladder -- --load-baseline after --baseline before
 ```
+
+Not from two worktrees. Every cargo project on this machine builds into one
+target directory (`~/.cargo/config.toml`), and two worktrees of this repository
+produce the *same* artifact filename while cargo tracks freshness per package
+path. So each worktree believes its own artifact is current, neither relinks,
+and both run whichever binary was built last — `cargo bench --no-run` in each,
+alternately, reports `Finished` in 0.3 s and compiles nothing. A pair measured
+that way can be the same binary twice, and it will not say so. If you must use
+a second worktree, give it a `CARGO_TARGET_DIR` of its own.
+
+Watch the output for `Compiling polydat` before each run. Its absence is the
+tell.
 
 Criterion's `Performance has regressed` is a statement about the samples it
 took, not about the code. Two runs of one unmodified binary differ here by up

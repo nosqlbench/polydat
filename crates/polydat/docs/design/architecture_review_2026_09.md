@@ -59,15 +59,19 @@ turned up along the way is one declined rewrite and one optional consolidation:
   selection sites agree and every node is placed correctly, so it is duplication without
   a defect, and its rewrite touches the generated code of all 457 nodes.
 
-**Both ladders were run on 2026-09-21** against a same-hour worktree baseline at the
-commit this day's work started from, and everything that landed is clean: every rung of
-the engine ladder within noise, and on the tile ladder no cell worse across two
-independent pairings, with `projected/pure_native` about four percent better both times.
-Both ladders stay monotonic, P1 through the pure tier. The first pairing flagged three
-cells, all of which the re-run dissolved — the same-code noise floor between two runs of
-one binary is ±2.2 percent here, which is larger than criterion's own p-value admits, so
-a flagged cell means re-run rather than investigate. Running it also turned up that
-`cargo build --release` had been failing outright; see the commit that fixes it.
+**Both ladders were run on 2026-09-21** and read clean: every rung of the engine ladder
+within noise, no cell of the tile ladder worse across two independent pairings, both
+monotonic P1 through the pure tier. *Those two runs took their baseline from a second
+worktree, which 2026-09-22 showed does not reliably measure two binaries — see the
+performance guide. Treat them as unconfirmed rather than as evidence. The measurements
+this review rests on are the ones taken from a single worktree: group A's rejection of
+the shared hot loops, decision 3's tile numbers, and the 2026-09-22 engine-ladder pair
+for group E, each of which checked out its two commits in turn and saw the compile
+happen.* The same-code noise floor is ±2.2 percent here, larger than criterion's own
+p-value admits, so a flagged cell means re-run rather than investigate — the first tile
+pairing flagged three cells and the re-run dissolved all of them. Running the ladder also
+turned up that `cargo build --release` had been failing outright; see the commit that
+fixes it.
 
 **Group A closed 2026-09-21**: the ladder was run on a quiet machine and rejected the one
 change that would have unified the two hot loops, with the numbers in the row. **Group G
