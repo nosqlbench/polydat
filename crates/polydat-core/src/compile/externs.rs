@@ -91,12 +91,12 @@ pub(crate) struct Externs {
     /// nobody composed under, which is why it lives here beside the
     /// cells and the intent word rather than on the evaluation core,
     /// whose layout the hot loops read.
-    output_cells: Vec<Option<crate::kernel::SharedCell>>,
+    output_cells: std::sync::Mutex<Vec<Option<crate::kernel::SharedCell>>>,
     /// This kernel's intent-dirty word, shared by the cells it seeds
     /// (cross_fiber_invalidation.md §3.1).
     intent: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// The next bit of `intent` to give a cell.
-    next_bit: u8,
+    next_bit: std::sync::atomic::AtomicU8,
     /// Slots whose value a cell refresh changed, for the kernel to mark
     /// dirty; drained after every refresh.
     changed: Vec<usize>,
@@ -126,9 +126,11 @@ impl Clone for Externs {
             cursors: self.cursors.clone(),
             output_modifiers: self.output_modifiers.clone(),
             transit_cells: self.transit_cells.clone(),
-            output_cells: Vec::new(),
+            output_cells: std::sync::Mutex::new(Vec::new()),
             intent: self.intent.clone(),
-            next_bit: self.next_bit,
+            next_bit: std::sync::atomic::AtomicU8::new(
+                self.next_bit.load(std::sync::atomic::Ordering::Relaxed),
+            ),
             changed: self.changed.clone(),
             ledger: self.ledger.clone(),
         }
@@ -177,13 +179,13 @@ impl Externs {
             by_name,
             output_modifiers: HashMap::new(),
             transit_cells: Vec::new(),
-            output_cells: Vec::new(),
+            output_cells: std::sync::Mutex::new(Vec::new()),
             input_names: input_defs.iter().map(|d| d.name.clone()).collect(),
             by_index,
             output_names: Vec::new(),
             cursors: cursors.to_vec(),
             intent: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            next_bit: 0,
+            next_bit: std::sync::atomic::AtomicU8::new(0),
             changed: Vec::new(),
             ledger,
         };
@@ -208,44 +210,83 @@ impl Externs {
     /// ask and holding `initial` then. A later ask returns the same
     /// cell, so every descendant that binds to this output binds to one
     /// register.
-    pub(crate) fn output_cell(&mut self, slot: usize, initial: Value) -> crate::kernel::SharedCell {
-        if self.output_cells.len() <= slot {
-            self.output_cells.resize(slot + 1, None);
+    /// Behind a mutex, and taking `&self`, because asking a parent for
+    /// a cell is a read from the caller's side: a binder holds the
+    /// parent by shared reference while it wires a child, and the
+    /// parent's evaluation state is not what changes. The interpreter
+    /// answers the same question from cells it seeded at construction,
+    /// through `&self`, and the two surfaces should not differ in that.
+    pub(crate) fn output_cell(&self, slot: usize, initial: Value) -> crate::kernel::SharedCell {
+        let bit = {
+            let cells = self.output_cells.lock().expect("output cells poisoned");
+            if let Some(Some(cell)) = cells.get(slot) {
+                return cell.clone();
+            }
+            // The bit is drawn before the lock on the cell list is
+            // dropped so two threads asking at once cannot take the
+            // same one.
+            self.next_cell_bit()
+        };
+        let cell = std::sync::Arc::new(crate::kernel::SharedCellInner::new(
+            initial,
+            self.intent.clone(),
+            bit,
+        ));
+        let mut cells = self.output_cells.lock().expect("output cells poisoned");
+        if cells.len() <= slot {
+            cells.resize(slot + 1, None);
         }
-        if self.output_cells[slot].is_none() {
-            self.output_cells[slot] = Some(self.new_cell(initial));
-        }
-        self.output_cells[slot]
-            .clone()
-            .expect("just made if it was missing")
+        cells[slot].get_or_insert(cell).clone()
     }
 
     /// The broadcast cell for the output at `slot`, if one was asked
     /// for. `None` is the common answer: a program nobody composed
     /// under has none at all, which the caller checks first.
     #[inline]
-    pub(crate) fn published_output(&self, slot: usize) -> Option<&crate::kernel::SharedCell> {
-        self.output_cells.get(slot)?.as_ref()
+    pub(crate) fn published_output(&self, slot: usize) -> Option<crate::kernel::SharedCell> {
+        let cells = self.output_cells.lock().expect("output cells poisoned");
+        cells.get(slot)?.clone()
     }
 
     /// Whether any descendant asked for a broadcast cell. One check on
-    /// the pull path, and false for every program with no subscope.
+    /// the pull path, and false for every program with no subscope —
+    /// which is why the lock is never taken for one.
     #[inline]
     pub(crate) fn broadcasts(&self) -> bool {
-        !self.output_cells.is_empty()
+        !self
+            .output_cells
+            .lock()
+            .expect("output cells poisoned")
+            .is_empty()
+    }
+
+    /// The next bit of the intent word. The compiled kernel keeps one
+    /// word, so cells past the 64th share bit 63, where the interpreter
+    /// opens a new word (`allocate_cell_bit`).
+    fn next_cell_bit(&self) -> u8 {
+        use std::sync::atomic::Ordering;
+        let mut bit = self.next_bit.load(Ordering::Relaxed);
+        loop {
+            let next = bit.saturating_add(1).min(63);
+            match self.next_bit.compare_exchange_weak(
+                bit,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return bit.min(63),
+                Err(seen) => bit = seen,
+            }
+        }
     }
 
     /// A cell of this kernel's scope holding `initial`, with the next
-    /// bit of the intent word. The compiled kernel keeps one intent
-    /// word, so cells past the 64th share bit 63, where the
-    /// interpreter opens a new word (`allocate_cell_bit`).
-    fn new_cell(&mut self, initial: Value) -> crate::kernel::SharedCell {
-        let bit = self.next_bit;
-        self.next_bit = self.next_bit.saturating_add(1).min(63);
+    /// bit of the intent word.
+    fn new_cell(&self, initial: Value) -> crate::kernel::SharedCell {
         std::sync::Arc::new(crate::kernel::SharedCellInner::new(
             initial,
             self.intent.clone(),
-            bit,
+            self.next_cell_bit(),
         ))
     }
 
@@ -254,10 +295,13 @@ impl Externs {
     /// as an interpreter state seeds its own cells.
     pub(crate) fn reseed_cells(&mut self) {
         self.intent = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-        self.next_bit = 0;
+        self.next_bit.store(0, std::sync::atomic::Ordering::Relaxed);
         // A new state publishes to nobody: the descendants bound to the
         // state this one came from are not bound to this one.
-        self.output_cells.clear();
+        self.output_cells
+            .lock()
+            .expect("output cells poisoned")
+            .clear();
         for i in 0..self.slots.len() {
             if self.slots[i].cell.is_none() {
                 continue;

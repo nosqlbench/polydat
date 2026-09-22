@@ -610,7 +610,7 @@ macro_rules! impl_kernel_trait {
             fn shared_cells(&self) -> Vec<crate::kernel::SharedCellEntry> {
                 self.core.externs.shared_cells()
             }
-            fn output_cell(&mut self, name: &str) -> Option<crate::kernel::SharedCell> {
+            fn output_cell(&self, name: &str) -> Option<crate::kernel::SharedCell> {
                 self.core.output_cell_for(name)
             }
             fn output_modifier(&self, name: &str) -> crate::dsl::ast::BindingModifier {
@@ -937,7 +937,7 @@ macro_rules! shared_core_methods {
         /// Keyed by the output's slot, which is what `output_map`
         /// answers and what the buffer is indexed by, so the vector is
         /// as long as the buffer rather than as long as the output list.
-        fn output_cell_for(&mut self, name: &str) -> Option<crate::kernel::SharedCell> {
+        fn output_cell_for(&self, name: &str) -> Option<crate::kernel::SharedCell> {
             let slot = *self.output_map.get(name)?;
             let initial = self.value_of(name);
             Some(self.externs.output_cell(slot, initial))

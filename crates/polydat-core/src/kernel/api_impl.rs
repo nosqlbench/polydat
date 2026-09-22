@@ -276,10 +276,9 @@ impl crate::kernel::Kernel for PolydatKernel {
     fn shared_cells(&self) -> Vec<crate::kernel::SharedCellEntry> {
         self.shared_cells_in_scope()
     }
-    fn output_cell(&mut self, name: &str) -> Option<crate::kernel::SharedCell> {
+    fn output_cell(&self, name: &str) -> Option<crate::kernel::SharedCell> {
         // Seeded for every output at construction, so this is a read.
-        let program = self.program().clone();
-        self.state().core.output_cell(&program, name)
+        self.state_ref().core.output_cell(self.program(), name)
     }
     fn output_modifier(&self, name: &str) -> crate::dsl::ast::BindingModifier {
         self.program().output_modifier(name)

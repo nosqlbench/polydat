@@ -159,19 +159,19 @@ impl Clone for JitCore {
 }
 
 impl JitCore {
+    /// The pure tier broadcasts nothing. It is the differential oracle
+    /// behind the hybrid and Tier-1's carrier, not a surface a host
+    /// composes under (engines.md §1, §8), so no descendant binds to
+    /// one of its outputs and it makes no cell to bind to.
+    fn output_cell_for(&self, _name: &str) -> Option<crate::kernel::SharedCell> {
+        None
+    }
+
     /// Axiom S2 typed accessor core (borrow ties to `&self`), as the
     /// closure tier and the hybrid have it. The pure tier owns the
     /// same scratch and the same `(slot → entry)` map, so the typed
     /// borrows read the same way here; `guard_slots` is this core's
     /// name for the per-slot `Ref2` mask.
-    /// The pure tier broadcasts nothing. It is the differential oracle
-    /// behind the hybrid and Tier-1's carrier, not a surface a host
-    /// composes under (engines.md §1, §8), so no descendant binds to
-    /// one of its outputs and it makes no cell to bind to.
-    fn output_cell_for(&mut self, _name: &str) -> Option<crate::kernel::SharedCell> {
-        None
-    }
-
     fn ref_entry(&self, slot: usize) -> &crate::ast::ScratchBuf {
         match self.ref_scratch.iter().find(|(s, _)| *s == slot) {
             Some(&(_, idx)) => &self.scratch[idx],

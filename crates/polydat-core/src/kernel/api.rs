@@ -500,7 +500,7 @@ pub trait Kernel: Send + internals::KernelInternals {
     /// one per output at construction; the closure tier and the hybrid
     /// make them on demand, so a program with no descendant bound to it
     /// allocates none.
-    fn output_cell(&mut self, _name: &str) -> Option<SharedCell> {
+    fn output_cell(&self, _name: &str) -> Option<SharedCell> {
         None
     }
 

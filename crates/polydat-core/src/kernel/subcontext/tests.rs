@@ -1623,7 +1623,7 @@ fn a_computed_output_broadcasts_on_every_engine_a_host_composes_under() {
     // The pure tier exists only where there is a JIT to build it.
     #[cfg(feature = "jit")]
     {
-        let mut pure = crate::dsl::compile::compile_polydat_to_assembler(src)
+        let pure = crate::dsl::compile::compile_polydat_to_assembler(src)
             .unwrap()
             .compile_slots(Engine::PureNative(Provenance::PushPull))
             .expect("the pure tier runs this program");
