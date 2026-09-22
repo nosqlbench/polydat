@@ -105,6 +105,10 @@ name = "kernel_api"
 path = "tests/kernel_api.rs"
 
 [[test]]
+name = "host_node_tiers"
+path = "tests/host_node_tiers.rs"
+
+[[test]]
 name = "polydat_node_macro"
 path = "tests/polydat_node_macro.rs"
 
