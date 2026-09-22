@@ -6,9 +6,10 @@ published 0.3.1 and the current tree, measured by building that host
 against this one rather than by reading diffs.
 
 The changes divide in three. [Part 1](#part-1-mechanical) is renames and
-signature edits — apply them and move on. [Part 2](#part-2-the-one-that-
-changes-types-quietly) is a single rename that compiles at the call site
-and breaks somewhere else, so it is worth knowing before you start.
+signature edits — apply them and move on.
+[Part 2](#part-2-the-two-that-change-quietly) is two changes that do not
+fail where they are written: one breaks somewhere else, and one does not
+break at all. Read that part before you start.
 [Part 3](#part-3-what-the-host-rationalizes) is the short list of places
 where polydat deliberately stopped deciding something, and the host now
 decides it.
@@ -54,12 +55,11 @@ but expect a second and third round as each layer starts compiling.
 
 | 0.3.1 | 0.3.2 | note |
 |---|---|---|
-| `PolydatKernel::pull` | `pull_ref` | see [part 2](#part-2-the-one-that-changes-types-quietly) |
+| `PolydatKernel::pull` | `pull_ref` | see [part 2](#pull-changes-type-without-moving) |
 | `PolydatKernel::pull_by_index` | `pull_ref_at` | same |
 | `Box<dyn Kernel>::program()` | `into_program()`, or ask the kernel directly | `into_program` consumes; most callers wanted one accessor, not the program |
 | `Box<dyn Kernel>::output_port_type(n)` | `Kernel::output_type(n)` | also `input_port_type`, `input_port_type_by_idx` |
 | `dsl::compile::compile_polydat_with_options` | `compile_polydat_kernel_with_options` | same signature; the engine comes from `options.engine` — see [the engine](#the-kernel-is-the-path-the-engine-is-configuration) |
-| `dsl::compile::compile_polydat` | `compile_polydat_kernel` | same, without options |
 | `comprehension::spec::parse_comprehension_text` | `spec::parse_comprehension_algebra` | |
 | `comprehension::spec::parse_clause`, `parse_clause_list` | `spec::serde_form::parse_inline` | see [clause text](#clause-text-is-polydats-to-parse) |
 | `comprehension::runtime::EmptyClause` | — | see [empty clauses](#empty-clauses-are-reported-not-decided) |
@@ -78,7 +78,36 @@ Additive, so the fix is an extra field or arm:
   preference lives now, and its default is compiled code rather than
   the interpreter.
 
-## Part 2: the one that changes types quietly
+## Part 2: the two that change quietly
+
+Everything in part 1 fails at the line you have to edit. These two do
+not, which is why they are worth reading before you start rather than
+after something is strange.
+
+### `compile_polydat` builds a different engine
+
+It returned `Box<dyn Kernel>` and built the interpreter. It still
+returns `Box<dyn Kernel>`, and now builds
+[`Engine::default`](#the-kernel-is-the-path-the-engine-is-configuration)
+— the most native form the build has.
+
+**There is no compile error for this one at all.** A host that changes
+nothing still moves from the interpreter to native code, at every call
+site, the moment it takes the new version. For most hosts that is the
+upgrade they wanted and the ladder is roughly ten to one, so the change
+is worth having — but it is worth *taking*, not discovering. Two things
+follow from it:
+
+- If a call site needs the interpreter, say so: `options.engine`, or
+  `compile_polydat_interpreter` when it is the concrete type it needs.
+  A differential oracle is the honest case, and naming it is the fix.
+- If a program compiled on the interpreter and has never run on a
+  compiled tier, this is when it first does. Everything in polydat's
+  own suite computes the same values on both, so the expectation is
+  parity — but a host node registered from outside that suite has not
+  been under that test, and this is the change that puts it there.
+
+### `pull` changes type without moving
 
 `PolydatKernel::pull` was an inherent method returning `&Value`. It
 shadowed `Kernel::pull`, which returns an owned `Value`. Renaming the
@@ -98,8 +127,9 @@ that caused it. If you see a cluster of `cannot be dereferenced` on
 back a reference. Decide per site: `pull_ref` to keep the borrow, or
 keep the trait's `pull` and drop the `*`.
 
-This is the only change in the set that is not visible where it is
-written. Everything else fails at the line you have to edit.
+Between them these two cover both ways a change can hide: one fails
+somewhere other than where it was caused, the other does not fail at
+all.
 
 ## Part 3: what the host rationalizes
 
@@ -116,18 +146,15 @@ gets compiled code rather than the interpreter.
 
 | what a host called | what it calls now |
 |---|---|
-| `compile_polydat(src)` | `compile_polydat_kernel(src)` |
+| `compile_polydat(src)` | unchanged — but it builds a different engine, [see part 2](#compile_polydat-builds-a-different-engine) |
 | `compile_polydat_with_options(src, &o, log)` | `compile_polydat_kernel_with_options(src, &o, log)` |
 
 The second has the signature the old one had, and reads `o.engine` —
 which is one of the two fields `CompileOptions` gained, so setting it is
 the same edit as making the struct literal compile again.
 
-Note this changes which engine runs, and that is the point rather than a
-side effect. `compile_polydat` builds the interpreter; its replacement
-builds `Engine::default()`. A host that wants the old behaviour sets
-`options.engine` and says so, which is the difference between a
-preference and a fork.
+A host that wants a particular engine sets `options.engine` and says so,
+which is the difference between a preference and a fork.
 
 The `compile_polydat_interpreter*` entry points still exist and are
 **not** a porting strategy. Adopting them is precisely how a host
@@ -260,11 +287,16 @@ second grammar to keep honest.
 2. Apply [part 1](#part-1-mechanical) until the first crate compiles.
 3. Expect new waves; repeat.
 4. Grep for `.pull(` and decide `pull_ref` or drop-the-`*` per site
-   ([part 2](#part-2-the-one-that-changes-types-quietly)).
-5. Move to `compile_polydat_kernel*` and hold `Box<dyn Kernel>`. If the
-   host wants an engine other than the default, set `options.engine`
-   and say why there — not by calling a different function.
-6. Move the empty-clause policy onto `validate` plus the per-clause
+   ([part 2](#pull-changes-type-without-moving)).
+5. Hold `Box<dyn Kernel>`, and know that `compile_polydat` now builds
+   the default engine whether or not you touch it
+   ([part 2](#compile_polydat-builds-a-different-engine)). If the host
+   wants a different engine, set `options.engine` and say why there —
+   not by calling a different function.
+6. Run the host's own suite against the compiled tier before reading
+   anything into a behaviour change: that is the first time a
+   host-registered node runs anywhere but the interpreter.
+7. Move the empty-clause policy onto `validate` plus the per-clause
    yields, and check that a workload whose sweep resolves empty still
    says so — that is the behaviour this migration is most likely to
    drop silently.
