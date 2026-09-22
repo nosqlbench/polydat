@@ -260,19 +260,62 @@ cargo bench -p polydat --no-default-features --features bench-tiers --bench engi
 
 ## Reading a comparison
 
-Checking for a regression means a baseline built from the same source in the
-same hour. **Build both from one worktree**, checking the two commits out in
-turn:
+Checking for a regression means **building both binaries first and then
+alternating them**, never rebuilding between the legs you compare. A release
+build of this workspace takes a minute or more at full load, so a leg measured
+straight after one starts on a hotter machine than the leg before it. That
+drift is monotonic over a session and larger than the effects worth finding:
+on 2026-09-22 `p1_interpreter` walked from 429 ns to 520 ns across a morning
+without a line of its code changing. Compiling between legs bakes that walk
+into the difference and attributes it to the diff.
+
+Build each commit once, keep the executable, and leave the compiler out of the
+measurement:
 
 ```sh
 git checkout --detach <baseline>
-cargo bench -p polydat --features bench-tiers --bench engine_ladder -- --save-baseline before
+cargo bench -p polydat --features bench-tiers --bench engine_ladder --no-run
+cp <the path cargo printed> /tmp/base.exe
 git checkout <branch>
-cargo bench -p polydat --features bench-tiers --bench engine_ladder -- --save-baseline after
-cargo bench -p polydat --features bench-tiers --bench engine_ladder -- --load-baseline after --baseline before
+cargo bench -p polydat --features bench-tiers --bench engine_ladder --no-run
+cp <the path cargo printed> /tmp/head.exe
+md5sum /tmp/base.exe /tmp/head.exe   # they must differ
 ```
 
-Not from two worktrees. Every cargo project on this machine builds into one
+Copy the path `cargo bench --no-run` prints rather than globbing `target/`:
+the target directory is shared (`~/.cargo/config.toml`), so it is not under
+this repository, and a stale local `target/` will hand you a different binary
+that looks plausible. The hashes are the check that the two legs are two
+programs; if they match, the comparison is meaningless and nothing else in the
+output will say so.
+
+Then alternate them, pairing each leg with the one beside it so drift falls out
+of the difference:
+
+```sh
+for r in $(seq 1 10); do
+  for leg in base head; do
+    printf '%s %s ' "$r" "$leg"
+    /tmp/$leg.exe --bench --measurement-time 8 'p3_native$'
+  done
+done
+```
+
+Take the per-round delta, then its mean and median across rounds. One pairing
+cannot resolve a few percent: the round-to-round standard deviation of a single
+rung here is about 4 percent, so a lone A/B has a confidence interval near ±10
+and will flag differences that are not there. Thirty paired rounds bring it to
+about ±1.6, which is what it took on 2026-09-22 to turn an unreproducible
+result into a measured +2.6 percent at p≈0.003.
+
+Carry a **canary**: a rung the change under test cannot reach, read in the same
+runs. If it moves more than the effect you are chasing, the comparison is
+telling you about the machine and not the code, and no amount of reasoning
+about the diff will fix that. Both false alarms of 2026-09-21 were caught this
+way — `p1_interpreter` moved 17 percent and a tile rung 41 percent between legs
+whose diff could not touch either.
+
+Do not use two worktrees. Every cargo project on this machine builds into one
 target directory (`~/.cargo/config.toml`), and two worktrees of this repository
 produce the *same* artifact filename while cargo tracks freshness per package
 path. So each worktree believes its own artifact is current, neither relinks,
@@ -281,19 +324,20 @@ alternately, reports `Finished` in 0.3 s and compiles nothing. A pair measured
 that way can be the same binary twice, and it will not say so. If you must use
 a second worktree, give it a `CARGO_TARGET_DIR` of its own.
 
-Watch the output for `Compiling polydat` before each run. Its absence is the
-tell.
+Watch each `--no-run` build for `Compiling polydat`. Its absence means cargo
+thought the tree was unchanged and you are about to copy the previous leg's
+binary over the new one's name.
 
 Criterion's `Performance has regressed` is a statement about the samples it
-took, not about the code. Two runs of one unmodified binary differ here by up
-to 2.2 percent with p below 0.05, because the processes differ in code layout
-and in what else the machine was doing, and criterion's statistics see inside
-a run rather than across runs. So a flagged cell means run the pair again
-rather than start reading diffs: a real change survives an independent
-pairing, and on 2026-09-21 three of the four cells the first pairing flagged
-did not. A run whose confidence intervals are several times wider than its
-neighbours' was disturbed, and is worth discarding before it is compared
-against.
+took, not about the code, and it is the wrong verdict to read. Its statistics
+see inside a run rather than across runs, so it cannot know that the process
+before it was laid out differently or that the machine had warmed, and two runs
+of one unmodified binary flag each other with p below 0.05 routinely. Read the
+per-round deltas above instead, and treat any single flagged cell as a prompt to
+collect rounds rather than to start reading diffs — on 2026-09-21 three of the
+four cells the first pairing flagged did not survive one. A run whose
+confidence intervals are several times wider than its neighbours' was
+disturbed, and is worth discarding before it is compared against.
 
 The benchmark source is
 [`benches/engine_ladder.rs`](../../benches/engine_ladder.rs), and its cross-engine
