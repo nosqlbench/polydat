@@ -60,6 +60,38 @@ pub(crate) struct ExternSlot {
     pub seen: Option<u64>,
 }
 
+/// The parts of an extern set that only a *composed* program uses:
+/// what a binder asks of a parent, and the cells a descendant reads
+/// through. A program nobody built a subscope under carries all three
+/// empty.
+///
+/// Behind one pointer because `Externs` is embedded **by value** in all
+/// three compiled cores (`KernelCore`, `HybridCore`, `JitCore`): inline,
+/// the three cost about a hundred bytes of every core, and `Externs`
+/// measured 328 bytes against 224 for the boxed form.
+///
+/// The indirection is for size, not for a measured win. It was written
+/// to test whether that hundred bytes explained a three-to-eight percent
+/// regression on the native rungs, and `engine_ladder` says it does not:
+/// bracketed against the unboxed form in thermal steady state, every
+/// native rung moved less than the `p1_interpreter` canary's own noise
+/// (2026-09-22). Keep it for the cold/hot separation; do not cite it as
+/// a speedup, and do not assume the regression is explained.
+#[derive(Default)]
+struct ScopeCells {
+    /// The binding modifiers of the named outputs, so a compiled
+    /// kernel can answer what a binder asks of a parent without
+    /// keeping a `PolydatProgram` to ask.
+    output_modifiers: HashMap<String, crate::dsl::ast::BindingModifier>,
+    /// Cells carried forward for a descendant, held by no slot of this
+    /// kernel's own: the interpreter's transit, on the compiled side.
+    transit_cells: Vec<crate::kernel::SharedCellEntry>,
+    /// Keyed by output slot, the broadcast cell a descendant asked for,
+    /// made on the first ask and not before (cross_fiber_invalidation.md
+    /// §3.1, "compiled kernels, broadcast outputs").
+    output_cells: std::sync::Mutex<Vec<Option<crate::kernel::SharedCell>>>,
+}
+
 /// The extern inputs of one compiled kernel.
 #[derive(Default)]
 pub(crate) struct Externs {
@@ -78,20 +110,9 @@ pub(crate) struct Externs {
     /// each is an `Ext` extern plus six scalar ones, and its schema
     /// carries the partitions the compiler resolved at build.
     cursors: Vec<crate::iteration::source::SourceSchema>,
-    /// The binding modifiers of the named outputs, so a compiled
-    /// kernel can answer what a binder asks of a parent without
-    /// keeping a `PolydatProgram` to ask.
-    output_modifiers: HashMap<String, crate::dsl::ast::BindingModifier>,
-    /// Cells carried forward for a descendant, held by no slot of this
-    /// kernel's own: the interpreter's transit, on the compiled side.
-    transit_cells: Vec<crate::kernel::SharedCellEntry>,
-    /// Keyed by output slot, the broadcast cell a descendant asked for,
-    /// made on the first ask and not before (cross_fiber_invalidation.md
-    /// §3.1, "compiled kernels, broadcast outputs"). Empty for a program
-    /// nobody composed under, which is why it lives here beside the
-    /// cells and the intent word rather than on the evaluation core,
-    /// whose layout the hot loops read.
-    output_cells: std::sync::Mutex<Vec<Option<crate::kernel::SharedCell>>>,
+    /// What only a composed program uses, behind one pointer
+    /// ([`ScopeCells`]).
+    scope: Box<ScopeCells>,
     /// This kernel's intent-dirty word, shared by the cells it seeds
     /// (cross_fiber_invalidation.md §3.1).
     intent: std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -124,9 +145,11 @@ impl Clone for Externs {
             by_index: self.by_index.clone(),
             output_names: self.output_names.clone(),
             cursors: self.cursors.clone(),
-            output_modifiers: self.output_modifiers.clone(),
-            transit_cells: self.transit_cells.clone(),
-            output_cells: std::sync::Mutex::new(Vec::new()),
+            scope: Box::new(ScopeCells {
+                output_modifiers: self.scope.output_modifiers.clone(),
+                transit_cells: self.scope.transit_cells.clone(),
+                output_cells: std::sync::Mutex::new(Vec::new()),
+            }),
             intent: self.intent.clone(),
             next_bit: std::sync::atomic::AtomicU8::new(
                 self.next_bit.load(std::sync::atomic::Ordering::Relaxed),
@@ -177,9 +200,7 @@ impl Externs {
         let mut externs = Self {
             slots,
             by_name,
-            output_modifiers: HashMap::new(),
-            transit_cells: Vec::new(),
-            output_cells: std::sync::Mutex::new(Vec::new()),
+            scope: Box::default(),
             input_names: input_defs.iter().map(|d| d.name.clone()).collect(),
             by_index,
             output_names: Vec::new(),
@@ -218,7 +239,11 @@ impl Externs {
     /// through `&self`, and the two surfaces should not differ in that.
     pub(crate) fn output_cell(&self, slot: usize, initial: Value) -> crate::kernel::SharedCell {
         let bit = {
-            let cells = self.output_cells.lock().expect("output cells poisoned");
+            let cells = self
+                .scope
+                .output_cells
+                .lock()
+                .expect("output cells poisoned");
             if let Some(Some(cell)) = cells.get(slot) {
                 return cell.clone();
             }
@@ -232,7 +257,11 @@ impl Externs {
             self.intent.clone(),
             bit,
         ));
-        let mut cells = self.output_cells.lock().expect("output cells poisoned");
+        let mut cells = self
+            .scope
+            .output_cells
+            .lock()
+            .expect("output cells poisoned");
         if cells.len() <= slot {
             cells.resize(slot + 1, None);
         }
@@ -244,16 +273,23 @@ impl Externs {
     /// under has none at all, which the caller checks first.
     #[inline]
     pub(crate) fn published_output(&self, slot: usize) -> Option<crate::kernel::SharedCell> {
-        let cells = self.output_cells.lock().expect("output cells poisoned");
+        let cells = self
+            .scope
+            .output_cells
+            .lock()
+            .expect("output cells poisoned");
         cells.get(slot)?.clone()
     }
 
-    /// Whether any descendant asked for a broadcast cell. One check on
-    /// the pull path, and false for every program with no subscope —
-    /// which is why the lock is never taken for one.
+    /// Whether any descendant asked for a broadcast cell: one check on
+    /// the pull path, false for every program with no subscope, and
+    /// what keeps `published_output`'s lookup off that path. The lock
+    /// is taken either way, which the pull path can afford and the
+    /// evaluation path never reaches.
     #[inline]
     pub(crate) fn broadcasts(&self) -> bool {
         !self
+            .scope
             .output_cells
             .lock()
             .expect("output cells poisoned")
@@ -298,7 +334,8 @@ impl Externs {
         self.next_bit.store(0, std::sync::atomic::Ordering::Relaxed);
         // A new state publishes to nobody: the descendants bound to the
         // state this one came from are not bound to this one.
-        self.output_cells
+        self.scope
+            .output_cells
             .lock()
             .expect("output cells poisoned")
             .clear();
@@ -451,7 +488,7 @@ impl Externs {
         &mut self,
         modifiers: &HashMap<String, crate::dsl::ast::BindingModifier>,
     ) {
-        self.output_modifiers = modifiers.clone();
+        self.scope.output_modifiers = modifiers.clone();
     }
 
     /// The declared type of a named input slot. A coordinate has none
@@ -470,7 +507,8 @@ impl Externs {
     /// The binding modifier of a named output; `NONE` for a name this
     /// kernel does not declare, as the interpreter's program answers.
     pub(crate) fn output_modifier(&self, name: &str) -> crate::dsl::ast::BindingModifier {
-        self.output_modifiers
+        self.scope
+            .output_modifiers
             .get(name)
             .copied()
             .unwrap_or(crate::dsl::ast::BindingModifier::NONE)
@@ -482,7 +520,7 @@ impl Externs {
     /// grandchild binds to a `shared` cell its parent's program never
     /// named.
     pub(crate) fn set_transit_cells(&mut self, cells: Vec<crate::kernel::SharedCellEntry>) {
-        self.transit_cells = cells;
+        self.scope.transit_cells = cells;
     }
 
     /// The cells this kernel's own `shared` slots hold, plus the ones
@@ -490,6 +528,7 @@ impl Externs {
     /// which is what "in scope" means.
     pub(crate) fn cells_in_scope(&self) -> Vec<crate::kernel::SharedCellEntry> {
         let mut by_name: HashMap<String, crate::kernel::SharedCellEntry> = self
+            .scope
             .transit_cells
             .iter()
             .map(|e| (e.name.clone(), e.clone()))
