@@ -948,6 +948,9 @@ impl PolydatAssembler {
             resolved.ledger.clone(),
         )?;
         extras.externs.set_output_names(&resolved.output_order);
+        extras
+            .externs
+            .set_output_modifiers(&resolved.output_modifiers);
         extras.output_types = resolved
             .output_map
             .iter()
@@ -1165,6 +1168,7 @@ impl PolydatAssembler {
             resolved.ledger.clone(),
         )?;
         externs.set_output_names(&resolved.output_order);
+        externs.set_output_modifiers(&resolved.output_modifiers);
         Ok(externs)
     }
 

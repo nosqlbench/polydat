@@ -504,6 +504,32 @@ pub trait Kernel: Send + internals::KernelInternals {
         None
     }
 
+    /// The binding modifier a named output was declared with — `const`,
+    /// `shared`, `final`, or none. A binder reads it to decide how a
+    /// descendant takes the output: a `const` is effectively fixed for
+    /// the scope's life and is value-copied, where a computed output is
+    /// bound to its broadcast cell (scope_model.md §4).
+    ///
+    /// `NONE` for a name this kernel does not declare.
+    fn output_modifier(&self, _name: &str) -> crate::dsl::ast::BindingModifier {
+        crate::dsl::ast::BindingModifier::NONE
+    }
+
+    /// Every cell a descendant of this kernel could bind to: the ones
+    /// its own `shared` slots hold, plus the ones it carries forward
+    /// for a descendant without holding a slot for them itself. The
+    /// second kind is why an ancestral `shared` reaches a grandchild
+    /// whose parent's program never names it.
+    ///
+    /// [`Self::shared_cells`] is the first kind alone.
+    fn cells_in_scope(&self) -> Vec<SharedCellEntry> {
+        self.shared_cells()
+    }
+
+    /// Carry `cells` forward for this kernel's descendants. The binder
+    /// writes what the parent had and this kernel holds no slot for.
+    fn set_transit_cells(&mut self, _cells: Vec<SharedCellEntry>) {}
+
     /// Bind the `shared` binding `name` to `cell`, so this kernel and
     /// every other holder of the cell read and write one register:
     /// a write on any of them is what the others read next, and a

@@ -78,6 +78,13 @@ pub(crate) struct Externs {
     /// each is an `Ext` extern plus six scalar ones, and its schema
     /// carries the partitions the compiler resolved at build.
     cursors: Vec<crate::iteration::source::SourceSchema>,
+    /// The binding modifiers of the named outputs, so a compiled
+    /// kernel can answer what a binder asks of a parent without
+    /// keeping a `PolydatProgram` to ask.
+    output_modifiers: HashMap<String, crate::dsl::ast::BindingModifier>,
+    /// Cells carried forward for a descendant, held by no slot of this
+    /// kernel's own: the interpreter's transit, on the compiled side.
+    transit_cells: Vec<crate::kernel::SharedCellEntry>,
     /// Keyed by output slot, the broadcast cell a descendant asked for,
     /// made on the first ask and not before (cross_fiber_invalidation.md
     /// §3.1, "compiled kernels, broadcast outputs"). Empty for a program
@@ -139,6 +146,8 @@ impl Externs {
         let mut externs = Self {
             slots,
             by_name,
+            output_modifiers: HashMap::new(),
+            transit_cells: Vec::new(),
             output_cells: Vec::new(),
             input_names: input_defs.iter().map(|d| d.name.clone()).collect(),
             by_index,
@@ -331,6 +340,52 @@ impl Externs {
     /// Record the named outputs in declaration order.
     pub(crate) fn set_output_names(&mut self, names: &[String]) {
         self.output_names = names.to_vec();
+    }
+
+    /// The binding modifiers of the named outputs, as the assembler
+    /// resolved them. A compiled kernel keeps no `PolydatProgram`, so
+    /// without these it cannot answer whether an output is `const` —
+    /// which a binder asks, to send a `const` output down the
+    /// value-copy path rather than attach a cell to it
+    /// ([scope_model.md](scope_model.md) §4).
+    pub(crate) fn set_output_modifiers(
+        &mut self,
+        modifiers: &HashMap<String, crate::dsl::ast::BindingModifier>,
+    ) {
+        self.output_modifiers = modifiers.clone();
+    }
+
+    /// The binding modifier of a named output; `NONE` for a name this
+    /// kernel does not declare, as the interpreter's program answers.
+    pub(crate) fn output_modifier(&self, name: &str) -> crate::dsl::ast::BindingModifier {
+        self.output_modifiers
+            .get(name)
+            .copied()
+            .unwrap_or(crate::dsl::ast::BindingModifier::NONE)
+    }
+
+    /// Cells this kernel carries forward for a descendant without
+    /// holding a slot for them itself: what the interpreter calls
+    /// transit. A compiled kernel forwards them the same way, so a
+    /// grandchild binds to a `shared` cell its parent's program never
+    /// named.
+    pub(crate) fn set_transit_cells(&mut self, cells: Vec<crate::kernel::SharedCellEntry>) {
+        self.transit_cells = cells;
+    }
+
+    /// The cells this kernel's own `shared` slots hold, plus the ones
+    /// it carries forward: every cell a descendant could bind to,
+    /// which is what "in scope" means.
+    pub(crate) fn cells_in_scope(&self) -> Vec<crate::kernel::SharedCellEntry> {
+        let mut by_name: HashMap<String, crate::kernel::SharedCellEntry> = self
+            .transit_cells
+            .iter()
+            .map(|e| (e.name.clone(), e.clone()))
+            .collect();
+        for entry in self.shared_cells() {
+            by_name.insert(entry.name.clone(), entry);
+        }
+        by_name.into_values().collect()
     }
 
     /// Every named output in declaration order.

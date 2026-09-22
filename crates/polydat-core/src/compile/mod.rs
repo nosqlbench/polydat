@@ -613,6 +613,15 @@ macro_rules! impl_kernel_trait {
             fn output_cell(&mut self, name: &str) -> Option<crate::kernel::SharedCell> {
                 self.core.output_cell_for(name)
             }
+            fn output_modifier(&self, name: &str) -> crate::dsl::ast::BindingModifier {
+                self.core.externs.output_modifier(name)
+            }
+            fn cells_in_scope(&self) -> Vec<crate::kernel::SharedCellEntry> {
+                self.core.externs.cells_in_scope()
+            }
+            fn set_transit_cells(&mut self, cells: Vec<crate::kernel::SharedCellEntry>) {
+                self.core.externs.set_transit_cells(cells);
+            }
             fn attach_shared_cell(
                 &mut self,
                 name: &str,

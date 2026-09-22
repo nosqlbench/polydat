@@ -1633,3 +1633,72 @@ fn a_computed_output_broadcasts_on_every_engine_a_host_composes_under() {
         );
     }
 }
+
+/// The four things the binder asks of a parent, asked of every engine.
+/// It reads a name's output modifier to decide whether a descendant
+/// value-copies a `const` or binds to a computed output's cell, and it
+/// reads the cells in scope — which on the interpreter means the
+/// kernel's own slots *and* what it carries forward for a descendant.
+/// A compiled kernel kept neither: no `PolydatProgram` to ask for a
+/// modifier, and `shared_cells()` was its own slots alone.
+#[test]
+fn a_parent_answers_the_binder_the_same_on_every_engine() {
+    use crate::compile::select::{Engine, Provenance};
+    use crate::dsl::ast::BindingModifier;
+    use crate::kernel::SharedCellEntry;
+
+    let src = "input cycle: u64\n\
+               const fixed := 7\n\
+               shared counter := 0\n\
+               seed := hash(cycle)\n";
+    for engine in [
+        Engine::Interpreter(crate::JitMode::Off),
+        Engine::Closures(Provenance::PushPull),
+        Engine::Native(Provenance::PushPull),
+    ] {
+        let mut k = crate::dsl::compile::compile_polydat_with(src, engine)
+            .unwrap_or_else(|e| panic!("{engine:?}: {e}"));
+        assert!(
+            k.output_modifier("fixed").is_const(),
+            "{engine:?}: `const fixed` reads as const"
+        );
+        assert_eq!(
+            k.output_modifier("seed"),
+            BindingModifier::NONE,
+            "{engine:?}: a computed output carries no modifier"
+        );
+        assert_eq!(
+            k.output_modifier("nothing_declared"),
+            BindingModifier::NONE,
+            "{engine:?}: an undeclared name carries none either"
+        );
+
+        // Its own `shared` slot is in scope on every engine.
+        let own: Vec<String> = k.cells_in_scope().into_iter().map(|c| c.name).collect();
+        assert!(
+            own.iter().any(|n| n == "counter"),
+            "{engine:?}: a `shared` binding's cell is in scope, got {own:?}"
+        );
+
+        // A cell carried forward reaches a descendant too, which is
+        // what makes an ancestral `shared` visible to a grandchild
+        // whose parent's program never names it.
+        let carried = k
+            .output_cell("seed")
+            .expect("a computed output has a broadcast cell");
+        k.set_transit_cells(vec![SharedCellEntry {
+            name: "from_above".to_string(),
+            port_type: crate::ast::PortType::U64,
+            cell: carried,
+        }]);
+        let in_scope: Vec<String> = k.cells_in_scope().into_iter().map(|c| c.name).collect();
+        assert!(
+            in_scope.iter().any(|n| n == "from_above"),
+            "{engine:?}: a carried cell is in scope, got {in_scope:?}"
+        );
+        assert!(
+            in_scope.iter().any(|n| n == "counter"),
+            "{engine:?}: and the kernel's own is still there, got {in_scope:?}"
+        );
+    }
+}

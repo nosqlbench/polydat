@@ -281,6 +281,17 @@ impl crate::kernel::Kernel for PolydatKernel {
         let program = self.program().clone();
         self.state().core.output_cell(&program, name)
     }
+    fn output_modifier(&self, name: &str) -> crate::dsl::ast::BindingModifier {
+        self.program().output_modifier(name)
+    }
+    fn cells_in_scope(&self) -> Vec<crate::kernel::SharedCellEntry> {
+        // The interpreter's own enumeration already walks its slots and
+        // its transit list together.
+        self.shared_cells_in_scope()
+    }
+    fn set_transit_cells(&mut self, cells: Vec<crate::kernel::SharedCellEntry>) {
+        self.replace_transit_cells(cells);
+    }
     fn attach_shared_cell(
         &mut self,
         name: &str,

@@ -1258,6 +1258,14 @@ impl PolydatKernel {
         }
     }
 
+    /// Carry `cells` forward for this kernel's descendants, replacing
+    /// what it carried. The binder writes what the parent had and this
+    /// kernel holds no slot for; the compiled engines keep the same
+    /// list in their extern table.
+    pub fn replace_transit_cells(&mut self, cells: Vec<SharedCellEntry>) {
+        self.transit_cells = cells;
+    }
+
     /// Every shared cell visible at this kernel's scope —
     /// own input slots' attached cells unioned with the
     /// transit cells inherited from ancestors. The typed
