@@ -107,6 +107,51 @@ follow from it:
   parity — but a host node registered from outside that suite has not
   been under that test, and this is the change that puts it there.
 
+#### The one behaviour that does change with the engine
+
+Values do not change with the tier. *When a nondeterministic node
+reads* does, and this migration changes it for every host that was on
+`compile_polydat`.
+
+A volatile step — a node declaring `Purity::Nondeterministic`, or one
+under a `volatile` binding — is read at most once per write and re-read
+on the next, on every engine. But "per step" is per the *engine's*
+step, and a compiled engine's step is a fused segment. Two volatile
+wires are two steps on the interpreter and the closure tier, and one
+segment on the native tiers:
+
+```
+w := clock_reading()      # two volatile wires,
+x := clock_reading()      # pulled in one write
+```
+
+| engine | `w` and `x` |
+|---|---|
+| interpreter, closure tier | read separately, when each is first pulled |
+| native, pure native | read together, at the first pull of either |
+
+So a host moving from the interpreter to the default engine goes from
+two readings to one. For sampling something that moves — a clock, a
+metric — that is usually the better semantics, and it is the direction
+this change moves you: the outputs of one cycle now come from one
+instant rather than from as many instants as there were pulls.
+
+What to check in a port:
+
+- Code that **relied on two readings differing** within one cycle — a
+  per-pull counter or sequence, say — stops differing. That is the
+  breaking direction, and it is silent.
+- Code that **wanted one instant** and worked around not having it
+  (reading once and passing the value along) can keep the workaround;
+  it is correct on every engine and stays correct.
+
+Neither is guaranteed by the contract: two volatile reads within one
+write are not promised simultaneous *nor* promised distinct
+([runtime_model.md](../design/runtime_model.md) R1.v, "Read
+granularity"). Two readings that must come from one instant belong in
+one node returning both — that is one step on every engine. Two that
+must differ need a write between them.
+
 ### `pull` changes type without moving
 
 `PolydatKernel::pull` was an inherent method returning `&Value`. It
@@ -296,7 +341,12 @@ second grammar to keep honest.
 6. Run the host's own suite against the compiled tier before reading
    anything into a behaviour change: that is the first time a
    host-registered node runs anywhere but the interpreter.
-7. Move the empty-clause policy onto `validate` plus the per-clause
+7. Find every `Nondeterministic` node the host registers and every
+   `volatile` binding it writes, and check nothing depends on two of
+   their reads *differing* within one cycle — on the default engine
+   they now come from one instant
+   ([read granularity](#the-one-behaviour-that-does-change-with-the-engine)).
+8. Move the empty-clause policy onto `validate` plus the per-clause
    yields, and check that a workload whose sweep resolves empty still
    says so — that is the behaviour this migration is most likely to
    drop silently.
