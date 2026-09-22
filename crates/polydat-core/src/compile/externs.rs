@@ -343,6 +343,32 @@ impl Externs {
         Ok(s.slot)
     }
 
+    /// Bind an input slot to `cell` whether or not it was built with
+    /// one, and answer the slot. `None` when this kernel has no extern
+    /// by that name.
+    ///
+    /// This is the binder's attach, not a host's. A parent wiring a
+    /// child attaches its cells to whichever of the child's input
+    /// slots match by name — the child declared them `extern`, and it
+    /// is the parent that decides one of them reads a register — where
+    /// [`Self::attach_cell`] is a host joining two kernels at a slot
+    /// that is already a register on both, and refuses the rest. The
+    /// interpreter has had both all along: its `Kernel` impl filters to
+    /// `shared` outputs and its binder calls the state directly.
+    ///
+    /// `seen` is cleared, so the next refresh takes the cell's value.
+    pub(crate) fn bind_cell(
+        &mut self,
+        name: &str,
+        cell: crate::kernel::SharedCell,
+    ) -> Option<usize> {
+        let &i = self.by_name.get(name)?;
+        let s = &mut self.slots[i];
+        s.cell = Some(cell);
+        s.seen = None;
+        Some(s.slot)
+    }
+
     /// The cells this kernel's `shared` bindings are bound to.
     pub(crate) fn shared_cells(&self) -> Vec<crate::kernel::SharedCellEntry> {
         self.slots

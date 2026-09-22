@@ -247,37 +247,14 @@ impl<M> ScopeModule<M> {
         iter_bindings: &[(String, crate::ast::Value)],
     ) -> Result<Box<dyn crate::kernel::Kernel>, crate::KernelError> {
         let program = self.program_on(engine)?;
-        let Some(interpreted) = program.as_interpreter() else {
-            // The parent may be on any engine — that is F-K5(c) — but
-            // the child is the interpreter's kernel for one reason,
-            // and it is worth naming rather than leaving to a reader:
-            // step 1 of the binder attaches a parent's cell to
-            // whichever of the child's input slots matches by name,
-            // and a compiled kernel takes a cell only on a slot that
-            // already has one (`Externs::attach_cell` refuses the
-            // rest as "an extern, not a `shared` binding"). Until a
-            // compiled slot can be bound to a cell it was not built
-            // with, a compiled child cannot receive the cascade.
-            return Err(crate::KernelError::Refused {
-                engine,
-                reason: format!(
-                    "scope module {:?} cannot instantiate a child on {engine:?}: a compiled \
-                     kernel takes a shared cell only on a slot built with one, and binding a \
-                     child attaches the parent's cells to whatever slots match by name. The \
-                     module's program for this engine is compiled and cached; the child is \
-                     the interpreter's until a compiled slot can be bound to a cell it was \
-                     not built with.",
-                    &self.context,
-                ),
-            });
-        };
-        Ok(Box::new(
-            crate::kernel::PolydatKernel::materialize_subscope_under(
-                parent,
-                interpreted,
-                iter_bindings,
-            ),
-        ))
+        let mut child = program.create_kernel();
+        for (var, value) in iter_bindings {
+            // Before the wiring, so the child's own scope-coordinate
+            // snapshot sees them.
+            let _ = child.set_input(var, value.clone());
+        }
+        crate::kernel::PolydatKernel::wire_child_under(child.as_mut(), parent);
+        Ok(child)
     }
 
     /// The imports the module declares.

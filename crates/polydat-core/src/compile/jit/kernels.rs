@@ -159,6 +159,11 @@ impl Clone for JitCore {
 }
 
 impl JitCore {
+    /// Nothing to mark: the pure tier's every evaluation runs the one
+    /// native function, so a slot taking its value from a cell is read
+    /// on the next run whatever was dirtied.
+    fn dirty_input(&mut self, _slot: usize) {}
+
     /// The pure tier broadcasts nothing. It is the differential oracle
     /// behind the hybrid and Tier-1's carrier, not a surface a host
     /// composes under (engines.md §1, §8), so no descendant binds to

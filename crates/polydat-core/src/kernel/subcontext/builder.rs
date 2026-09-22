@@ -93,43 +93,83 @@ impl CompileOptions {
     }
 }
 
-/// Everything a builder reads of the scope it builds under: the
-/// parent's compiled program, which answers every declared name,
-/// every output modifier, and names the ledger the child's compile
-/// is charged to; and the shared cells in scope at the parent, each
+/// Everything a builder reads of the scope it builds under: the names
+/// the parent declares, the modifier on each output, the ledger the
+/// child's compile is charged to, and the cells in scope there — each
 /// a live handle rather than a copy.
 ///
-/// That is the whole parent surface `finalize` touches. It used to
-/// be an `Arc<ScopeKernel<P>>`, so a caller holding a plain
-/// [`PolydatKernel`] had to clone one into existence to ask five
-/// questions — a full state over the parent's program, a buffer and
-/// a clean flag per node, allocated and dropped.
+/// That is the whole parent surface `finalize` touches. It was an
+/// `Arc<ScopeKernel<P>>` first, so a caller holding a plain kernel had
+/// to clone one into existence to ask; then an `Arc<PolydatProgram>`,
+/// which a compiled kernel does not keep. It is the answers now, so a
+/// parent of any engine can give them.
 #[derive(Clone)]
 pub struct ParentView {
-    program: Arc<crate::kernel::PolydatProgram>,
+    output_names: Vec<String>,
+    input_names: Vec<String>,
+    output_modifiers: std::collections::HashMap<String, crate::dsl::ast::BindingModifier>,
+    ledger: Arc<crate::kernel::CompileLedger>,
     shared_cells: Vec<SharedCellInScope>,
 }
 
 impl ParentView {
-    /// The view a kernel presents to a subcontext built under it.
-    pub fn of(parent: &PolydatKernel) -> Self {
+    /// The view a kernel of any engine presents to a subcontext built
+    /// under it.
+    pub fn of_kernel(parent: &dyn crate::kernel::Kernel) -> Self {
+        let output_names: Vec<String> = parent.output_names();
+        let output_modifiers = output_names
+            .iter()
+            .map(|n| (n.clone(), parent.output_modifier(n)))
+            .collect();
         Self {
-            program: parent.program().clone(),
-            shared_cells: parent
-                .shared_cells_in_scope()
-                .into_iter()
-                .map(|e| SharedCellInScope {
-                    name: e.name,
-                    port_type: e.port_type,
-                    cell: e.cell,
-                })
-                .collect(),
+            output_names,
+            input_names: parent.input_names(),
+            output_modifiers,
+            ledger: crate::kernel::Kernel::ledger(parent).clone(),
+            shared_cells: Self::cells_of(parent.cells_in_scope()),
         }
     }
 
-    /// The parent's compiled program.
-    pub fn program(&self) -> &Arc<crate::kernel::PolydatProgram> {
-        &self.program
+    /// [`Self::of_kernel`] for the interpreter's kernel type, which
+    /// most callers hold.
+    pub fn of(parent: &PolydatKernel) -> Self {
+        Self::of_kernel(parent)
+    }
+
+    /// The names the parent declares as outputs.
+    pub fn output_names(&self) -> &[String] {
+        &self.output_names
+    }
+
+    /// The names the parent declares as inputs, coordinates included.
+    pub fn input_names(&self) -> &[String] {
+        &self.input_names
+    }
+
+    /// The modifier on a named output; `NONE` for a name the parent
+    /// does not declare.
+    pub fn output_modifier(&self, name: &str) -> crate::dsl::ast::BindingModifier {
+        self.output_modifiers
+            .get(name)
+            .copied()
+            .unwrap_or(crate::dsl::ast::BindingModifier::NONE)
+    }
+
+    /// The ledger the child's compile is charged to: a subscope is a
+    /// program of the parent's tree.
+    pub fn ledger(&self) -> &Arc<crate::kernel::CompileLedger> {
+        &self.ledger
+    }
+
+    fn cells_of(entries: Vec<crate::kernel::SharedCellEntry>) -> Vec<SharedCellInScope> {
+        entries
+            .into_iter()
+            .map(|e| SharedCellInScope {
+                name: e.name,
+                port_type: e.port_type,
+                cell: e.cell,
+            })
+            .collect()
     }
 
     /// The shared cells visible at the parent, its own and every
@@ -456,14 +496,10 @@ impl<P> SubcontextBuilder<P> {
         // here; the compiler's slot type checks and
         // `check_write_through_type` protect the actual child
         // inputs and cell writes. -----
-        let parent_program = parent.program();
-        let parent_outputs: std::collections::HashSet<String> = parent_program
-            .output_names()
-            .iter()
-            .map(|s| (*s).to_string())
-            .collect();
-        let parent_inputs: std::collections::HashSet<String> =
-            parent_program.input_names().into_iter().collect();
+        let parent_outputs: std::collections::HashSet<&String> =
+            parent.output_names().iter().collect();
+        let parent_inputs: std::collections::HashSet<&String> =
+            parent.input_names().iter().collect();
 
         for imp in &imports {
             if !parent_outputs.contains(&imp.name) && !parent_inputs.contains(&imp.name) {
@@ -504,10 +540,10 @@ impl<P> SubcontextBuilder<P> {
                 .collect();
         // A subscope is a program of the parent's tree: its compile is
         // charged to the parent's ledger.
-        let ledger = parent_program.ledger().clone();
+        let ledger = parent.ledger().clone();
         let mut write_through_specs: Vec<(String, PortType)> = Vec::new();
         for exp in &exports {
-            let parent_modifier = parent_program.output_modifier(&exp.name);
+            let parent_modifier = parent.output_modifier(&exp.name);
             if parent_modifier.is_const() && parent_outputs.contains(&exp.name) {
                 return Err(ContractViolation::FinalShadow {
                     export: exp.name.clone(),

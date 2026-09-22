@@ -625,6 +625,15 @@ macro_rules! impl_kernel_trait {
             fn input_port_type(&self, name: &str) -> Option<crate::ast::PortType> {
                 self.core.externs.input_port_type(name)
             }
+            fn bind_input_cell(&mut self, name: &str, cell: crate::kernel::SharedCell) -> bool {
+                let Some(slot) = self.core.externs.bind_cell(name, cell) else {
+                    return false;
+                };
+                // The slot's value is the cell's from the next refresh,
+                // so everything downstream of it reruns.
+                self.core.dirty_input(slot);
+                true
+            }
             fn attach_shared_cell(
                 &mut self,
                 name: &str,

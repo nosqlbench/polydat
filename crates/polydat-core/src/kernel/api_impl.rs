@@ -300,6 +300,17 @@ impl crate::kernel::Kernel for PolydatKernel {
     fn input_port_type(&self, name: &str) -> Option<crate::ast::PortType> {
         self.program().input_port_type(name)
     }
+    fn bind_input_cell(&mut self, name: &str, cell: crate::kernel::SharedCell) -> bool {
+        // The state's own attach has never required the slot to be
+        // `shared` — the filter is on the host-facing
+        // `attach_shared_cell` above, and the binder has always come
+        // through here.
+        let Some(idx) = self.program().find_input(name) else {
+            return false;
+        };
+        self.state().attach_shared_cell(idx, cell);
+        true
+    }
     fn attach_shared_cell(
         &mut self,
         name: &str,

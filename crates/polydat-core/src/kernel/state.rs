@@ -1012,6 +1012,21 @@ impl PolydatKernel {
     }
 
     fn materialize_wiring_from_outer(&mut self, outer: &dyn crate::kernel::Kernel) {
+        Self::wire_child_under(self, outer);
+    }
+
+    /// Wire `child` from `outer`: the cell cascade, the outputs the
+    /// child imports, its scope-init consts, and its coordinate path.
+    ///
+    /// Both sides are `dyn Kernel`, so a child of any engine binds
+    /// under a parent of any engine. It stays an associated function
+    /// of the interpreter's kernel type because the seal is on this
+    /// module — nothing outside the crate reaches the wiring, whichever
+    /// kernel it is wiring.
+    pub(crate) fn wire_child_under(
+        child: &mut dyn crate::kernel::Kernel,
+        outer: &dyn crate::kernel::Kernel,
+    ) {
         use crate::kernel::interp::Lookup as _;
         // Step 1 — typed shared-cell cascade. Compute every
         // cell visible at the outer scope: cells on outer's
@@ -1054,15 +1069,14 @@ impl PolydatKernel {
         // `extern NAME` lookup. The distinction is internal
         // (when the value is computed) and doesn't affect the
         // shadowing semantics.
-        let local_finals: std::collections::HashSet<&str> = self
-            .program
+        let local_finals: std::collections::HashSet<String> = child
             .output_names()
             .into_iter()
             // `const_outputs()` filters output_modifiers for CONST,
             // so checking the modifier directly is the same query —
             // single source of truth for "this scope authoritatively
             // owns NAME via a const binding."
-            .filter(|n| self.program.output_modifier(n) == crate::dsl::ast::BindingModifier::CONST)
+            .filter(|n| child.output_modifier(n).is_const())
             .collect();
         for entry in outer_cells {
             // A local final on this scope is the canonical writer
@@ -1074,14 +1088,14 @@ impl PolydatKernel {
             if local_finals.contains(entry.name.as_str()) {
                 continue;
             }
-            if let Some(idx) = self.program.find_input(&entry.name) {
-                self.state.attach_shared_cell(idx, entry.cell.clone());
+            if child.input_index(&entry.name).is_some() {
+                child.bind_input_cell(&entry.name, entry.cell.clone());
                 attached_names.insert(entry.name);
             } else {
                 transit_forward.push(entry);
             }
         }
-        self.transit_cells = transit_forward;
+        child.set_transit_cells(transit_forward);
 
         // Step 2 — SRD-13f read invariant. For each output on
         // outer that matches an input slot on inner:
@@ -1112,7 +1126,7 @@ impl PolydatKernel {
             if attached_names.contains(&name) {
                 continue;
             }
-            let Some(inner_idx) = self.program.find_input(&name) else {
+            let Some(inner_idx) = child.input_index(&name) else {
                 continue;
             };
             let outer_has_slot = outer.input_index(&name).is_some();
@@ -1138,8 +1152,7 @@ impl PolydatKernel {
             // `Some(inner_idx)` above, so `input_port_type` on
             // the same name is a program-shape invariant; a
             // `None` here means the program is malformed.
-            let inner_slot_type = self
-                .program
+            let inner_slot_type = child
                 .input_port_type(&name)
                 .expect("input index resolved but no declared port type");
             if outer_has_slot || outer_is_const {
@@ -1149,21 +1162,21 @@ impl PolydatKernel {
                 // grandparent fall-through applies).
                 if let Some(value) = outer_scope.lookup(&name) {
                     let adapted = adapt_boundary_value(&name, inner_slot_type, value);
-                    self.state.set_input(inner_idx, adapted);
+                    let _ = child.set_input_at(inner_idx, adapted);
                 }
             } else if let Some(cell) = outer.output_cell(&name) {
-                self.state.attach_shared_cell(inner_idx, cell);
+                child.bind_input_cell(&name, cell);
                 attached_names.insert(name.to_string());
             } else if let Some(value) = outer_scope.lookup(&name) {
                 let adapted = adapt_boundary_value(&name, inner_slot_type, value);
-                self.state.set_input(inner_idx, adapted);
+                let _ = child.set_input_at(inner_idx, adapted);
             } else if let Some(value) =
                 crate::dsl::factories::resolve_extern(&name, inner_slot_type)
             {
                 // γ-8 virtual-wire resolver: outer chain has no
                 // binding; a host-registered resolver provides one.
                 let adapted = adapt_boundary_value(&name, inner_slot_type, value);
-                self.state.set_input(inner_idx, adapted);
+                let _ = child.set_input_at(inner_idx, adapted);
             }
         }
 
@@ -1192,18 +1205,14 @@ impl PolydatKernel {
         // panic so operators can see the eval failure even when
         // the conditional-shadow fall-through papers over the
         // None buffer at the next lookup.
-        let const_outputs: Vec<String> = self
-            .program
-            .const_outputs()
+        let const_outputs: Vec<String> = child
+            .output_names()
             .into_iter()
-            .map(|s| s.to_string())
+            .filter(|n| child.output_modifier(n).is_const())
             .collect();
-        let program = self.program.clone();
         for name in const_outputs {
-            let state = &mut self.state;
-            let prog = &program;
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                state.pull(prog, &name);
+                child.pull(&name);
             }));
             if let Err(payload) = result {
                 let msg = if let Some(s) = payload.downcast_ref::<String>() {
@@ -1235,7 +1244,7 @@ impl PolydatKernel {
         // (extern values may have just been populated above),
         // then prepend outer's frozen path.
         let outer_path = outer.scope_coordinates().to_vec();
-        self.extend_scope_coordinates(&outer_path);
+        child.extend_scope_coordinates(&outer_path);
     }
 
     /// SRD-13f Push B.2 — advance this kernel's broadcast

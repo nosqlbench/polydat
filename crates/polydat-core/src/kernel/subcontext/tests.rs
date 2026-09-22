@@ -1495,7 +1495,7 @@ fn a_parent_view_carries_the_parents_live_cells() {
     let parent = compile_polydat_interpreter("input cycle: u64\nshared X := 0\n")
         .expect("parent kernel compile");
     let view = super::builder::ParentView::of(&parent);
-    assert!(view.program().output_names().contains(&"X"));
+    assert!(view.output_names().iter().any(|n| n == "X"));
     let cell = view
         .shared_cells()
         .iter()
@@ -1866,4 +1866,74 @@ fn a_module_compiles_once_and_instantiates_many_times() {
         grew,
         "the second ask compiled again"
     );
+}
+
+/// A child on a compiled engine, under a parent on any engine.
+///
+/// The last restriction was the attach: binding a child attaches the
+/// parent's cells to whichever of the child's input slots match by
+/// name, and a compiled kernel used to take a cell only on a slot
+/// built as `shared`. With `bind_input_cell` the child takes the
+/// cascade whatever engine it is on, so every pairing of parent and
+/// child engine agrees — and the import stays a live link, which is
+/// the property the whole exercise was for.
+#[test]
+fn a_compiled_child_binds_under_a_parent_of_any_engine() {
+    use crate::compile::select::{Engine, Provenance};
+
+    let engines = [
+        Engine::Interpreter(crate::JitMode::Off),
+        Engine::Closures(Provenance::PushPull),
+        Engine::Native(Provenance::PushPull),
+    ];
+    for parent_engine in engines {
+        let parent = crate::dsl::compile::compile_polydat_with(
+            "input cycle: u64\nseed := hash(cycle)\n",
+            parent_engine,
+        )
+        .unwrap_or_else(|e| panic!("{parent_engine:?}: {e}"));
+
+        let mut b: SubcontextBuilder<RootMarker> =
+            SubcontextBuilder::new(super::builder::ParentView::of_kernel(parent.as_ref()));
+        b.context(SourceContext::new("compiled-child"));
+        b.body(BodyFragment::PolydatSource(
+            "input cycle: u64\nextern seed: u64\nv := seed\n".to_string(),
+        ));
+        let module = b.finalize().expect("finalize");
+
+        for child_engine in engines {
+            let mut parent = crate::dsl::compile::compile_polydat_with(
+                "input cycle: u64\nseed := hash(cycle)\n",
+                parent_engine,
+            )
+            .unwrap();
+            parent.set_inputs(&[1]);
+            let first = parent.pull("seed");
+
+            let mut child = module
+                .instantiate_under(parent.as_ref(), child_engine, &[])
+                .unwrap_or_else(|e| panic!("{parent_engine:?} → {child_engine:?}: {e}"));
+            assert_eq!(
+                child.engine(),
+                child_engine,
+                "the child runs on the engine it was asked for"
+            );
+            child.set_inputs(&[1]);
+            assert_eq!(
+                child.pull("v"),
+                first,
+                "{parent_engine:?} → {child_engine:?}: the child starts from the parent's value"
+            );
+
+            parent.set_inputs(&[2]);
+            let second = parent.pull("seed");
+            assert_ne!(first, second);
+            child.set_inputs(&[2]);
+            assert_eq!(
+                child.pull("v"),
+                second,
+                "{parent_engine:?} → {child_engine:?}: the import is a copy, not a link"
+            );
+        }
+    }
 }

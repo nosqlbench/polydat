@@ -551,6 +551,20 @@ pub trait Kernel: Send + internals::KernelInternals {
         None
     }
 
+    /// Bind the named input slot to `cell`, whether or not the slot was
+    /// built as a `shared` register, and answer whether it was bound.
+    ///
+    /// This is what a parent does to a child, not what a host does to
+    /// two kernels. A child declares its imports `extern`; it is the
+    /// parent binding it that decides one of them reads a register
+    /// rather than a copied value. [`Self::attach_shared_cell`] is the
+    /// host's operation and refuses a slot that is not already a
+    /// register on both sides, which is the right answer for joining
+    /// two kernels and the wrong one for building a child.
+    fn bind_input_cell(&mut self, _name: &str, _cell: SharedCell) -> bool {
+        false
+    }
+
     /// Bind the `shared` binding `name` to `cell`, so this kernel and
     /// every other holder of the cell read and write one register:
     /// a write on any of them is what the others read next, and a
