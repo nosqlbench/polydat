@@ -763,6 +763,12 @@ pub(crate) fn build_hybrid(
     let mut ref_scratch: Vec<(usize, usize)> = Vec::new();
     let mut max_inputs = 0usize;
     let mut max_outputs = 0usize;
+    let graph = GraphView {
+        nodes,
+        wiring,
+        port_offsets,
+        input_types,
+    };
 
     // Classify each node
     let classifications: Vec<(JitOp, Vec<usize>, Vec<usize>)> = nodes
@@ -865,48 +871,17 @@ pub(crate) fn build_hybrid(
             // This node needs a closure — scalar u64 op preferred,
             // slot op for slice-bearing nodes (type_system_alignment.md
             // §4, compiled_handles.md §3).
-            let node = &nodes[i];
             let (_, ref input_slots, ref output_slots) = classifications[i];
-            let scratch_start = scratch.len();
-            let wire_types: Vec<crate::ast::PortType> = wiring[i]
-                .iter()
-                .map(|src| match src {
-                    WireSource::Input(c) => input_types
-                        .get(*c)
-                        .copied()
-                        .unwrap_or(crate::ast::PortType::U64),
-                    WireSource::NodeOutput(j, p) => nodes[*j].meta().outs[*p].typ,
-                })
-                .collect();
-            let op = if let Some(op) = node.compiled_u64() {
-                ClosureOp::U64(op)
-            } else if let Some(op) = crate::compile::assembly::identity_op(node.as_ref()) {
-                ClosureOp::U64(op)
-            } else if let Some(kit) = ref_copy_or_slot(node.as_ref(), &wire_types) {
-                scratch.extend(kit.scratch.iter().map(|e| crate::ast::ScratchBuf::new(*e)));
-                let starts = flatten_ref_output_starts(nodes, i, port_offsets);
-                ref_scratch.extend(crate::compile::assembly::scratch_pairs(
-                    &node.meta().name,
-                    &starts,
-                    &kit.scratch,
-                    scratch_start,
-                ));
-                ClosureOp::Slot(kit.op)
-            } else {
-                return Err(refused(format!(
-                    "node '{}' has no compiled form and can't be JIT-compiled",
-                    node.meta().name
-                )));
-            };
+            let step = closure_step_for(
+                &graph,
+                i,
+                input_slots.clone(),
+                output_slots.clone(),
+                &mut scratch,
+                &mut ref_scratch,
+            )?;
             node_step[i] = steps.len();
-            steps.push(HybridStep::Closure(ClosureStep {
-                op,
-                input_slots: input_slots.clone(),
-                output_slots: output_slots.clone(),
-                scratch_range: (scratch_start, scratch.len()),
-                accepts_none: node.accepts_none_inputs(),
-                node: i,
-            }));
+            steps.push(HybridStep::Closure(step));
             pos += 1;
         } else {
             // Batch consecutive JIT-able nodes of one lifecycle: a segment is
@@ -1074,8 +1049,14 @@ pub(crate) fn build_hybrid(
     let mut ref_scratch: Vec<(usize, usize)> = Vec::new();
     let mut max_inputs = 0usize;
     let mut max_outputs = 0usize;
+    let graph = GraphView {
+        nodes,
+        wiring,
+        port_offsets,
+        input_types,
+    };
 
-    for (node_idx, node) in nodes.iter().enumerate() {
+    for node_idx in 0..nodes.len() {
         let input_slots = flatten_input_slots(
             wiring,
             nodes,
@@ -1089,45 +1070,15 @@ pub(crate) fn build_hybrid(
         max_inputs = max_inputs.max(input_slots.len());
         max_outputs = max_outputs.max(output_slots.len());
 
-        let scratch_start = scratch.len();
-        let wire_types: Vec<crate::ast::PortType> = wiring[node_idx]
-            .iter()
-            .map(|src| match src {
-                WireSource::Input(c) => input_types
-                    .get(*c)
-                    .copied()
-                    .unwrap_or(crate::ast::PortType::U64),
-                WireSource::NodeOutput(j, p) => nodes[*j].meta().outs[*p].typ,
-            })
-            .collect();
-        let op = if let Some(op) = node.compiled_u64() {
-            ClosureOp::U64(op)
-        } else if let Some(op) = crate::compile::assembly::identity_op(node.as_ref()) {
-            ClosureOp::U64(op)
-        } else if let Some(kit) = ref_copy_or_slot(node.as_ref(), &wire_types) {
-            scratch.extend(kit.scratch.iter().map(|e| crate::ast::ScratchBuf::new(*e)));
-            let starts = flatten_ref_output_starts(nodes, node_idx, port_offsets);
-            ref_scratch.extend(crate::compile::assembly::scratch_pairs(
-                &node.meta().name,
-                &starts,
-                &kit.scratch,
-                scratch_start,
-            ));
-            ClosureOp::Slot(kit.op)
-        } else {
-            return Err(refused(format!(
-                "node '{}' has no compiled form",
-                node.meta().name
-            )));
-        };
-        steps.push(HybridStep::Closure(ClosureStep {
-            op,
+        let step = closure_step_for(
+            &graph,
+            node_idx,
             input_slots,
             output_slots,
-            scratch_range: (scratch_start, scratch.len()),
-            accepts_none: node.accepts_none_inputs(),
-            node: node_idx,
-        }));
+            &mut scratch,
+            &mut ref_scratch,
+        )?;
+        steps.push(HybridStep::Closure(step));
     }
     let node_step: Vec<usize> = (0..nodes.len()).collect();
 
@@ -1153,6 +1104,85 @@ pub(crate) fn build_hybrid(
         attribution,
         node_step,
     )
+}
+
+/// The graph a builder reads a node's shape out of: the nodes, how
+/// they are wired, where each port's slots begin, and the coordinate
+/// and extern types a wire from an input takes. The four always travel
+/// together and neither builder modifies them.
+#[derive(Clone, Copy)]
+struct GraphView<'a> {
+    nodes: &'a [Box<dyn PolydatNode>],
+    wiring: &'a [Vec<WireSource>],
+    port_offsets: &'a [Vec<usize>],
+    input_types: &'a [crate::ast::PortType],
+}
+
+/// The closure step for one node: its op, its scratch placed in the
+/// kernel's arena, and its reference outputs recorded for the S9(a)
+/// validator. A scalar op first, then the compiler's slot copy, then
+/// the node's own kit — the same ladder `assembly::node_step_op` walks
+/// for the closure tier.
+///
+/// Both builders reach here for a node that runs as a closure: the one
+/// with the JIT for a node it classified `Fallback`, the one without
+/// for every node, since without the feature there is nothing else a
+/// node can be. They had the block twice, differing in where the slots
+/// came from, which is why it is a parameter.
+fn closure_step_for(
+    graph: &GraphView<'_>,
+    node_idx: usize,
+    input_slots: Vec<usize>,
+    output_slots: Vec<usize>,
+    scratch: &mut Vec<crate::ast::ScratchBuf>,
+    ref_scratch: &mut Vec<(usize, usize)>,
+) -> Result<ClosureStep, crate::KernelError> {
+    let GraphView {
+        nodes,
+        wiring,
+        port_offsets,
+        input_types,
+    } = *graph;
+    let node = &nodes[node_idx];
+    let scratch_start = scratch.len();
+    let wire_types: Vec<crate::ast::PortType> = wiring[node_idx]
+        .iter()
+        .map(|src| match src {
+            WireSource::Input(c) => input_types
+                .get(*c)
+                .copied()
+                .unwrap_or(crate::ast::PortType::U64),
+            WireSource::NodeOutput(j, p) => nodes[*j].meta().outs[*p].typ,
+        })
+        .collect();
+    let op = if let Some(op) = node.compiled_u64() {
+        ClosureOp::U64(op)
+    } else if let Some(op) = crate::compile::assembly::identity_op(node.as_ref()) {
+        ClosureOp::U64(op)
+    } else if let Some(kit) = ref_copy_or_slot(node.as_ref(), &wire_types) {
+        scratch.extend(kit.scratch.iter().map(|e| crate::ast::ScratchBuf::new(*e)));
+        let starts = flatten_ref_output_starts(nodes, node_idx, port_offsets);
+        ref_scratch.extend(crate::compile::assembly::scratch_pairs(
+            &node.meta().name,
+            &starts,
+            &kit.scratch,
+            scratch_start,
+        ));
+        ClosureOp::Slot(kit.op)
+    } else {
+        return Err(refused(format!(
+            "node '{}' has no compiled form (docs/design/engines.md §8)",
+            node.meta().name
+        )));
+    };
+    Ok(ClosureStep {
+        op,
+        input_slots,
+        output_slots,
+        scratch_range: (scratch_start, scratch.len()),
+        accepts_none: node.accepts_none_inputs(),
+        node: node_idx,
+    })
 }
 
 /// Shared construction of `HybridKernelPushPull` from assembled steps.
