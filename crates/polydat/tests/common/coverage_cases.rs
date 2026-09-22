@@ -356,15 +356,28 @@ pub fn synthesized_call(sig: &polydat::dsl::registry::FuncSig, wire: &str) -> Op
         return None;
     }
     let mut args: Vec<String> = Vec::new();
+    // Each constant position gets a *different* value, ascending, so
+    // that the position a lowering reads a constant from is
+    // observable. Every constant of a type used to be the same literal
+    // — `1.0` for every `ConstF64` — which made
+    // `hash_interval(x, 1.0, 1.0)` the case under test and left the
+    // whole sweep blind to a lowering that read its constants in the
+    // wrong order. Ascending keeps the pair a `[lo, hi)` node wants,
+    // and none of them is zero, which a modulus would refuse.
+    let mut nth_u64 = 0u64;
+    let mut nth_f64 = 0u64;
     for p in sig.params {
         match p.slot_type {
             SlotType::Wire => args.push(wire.into()),
-            SlotType::ConstU64 => args.push("100".into()),
-            SlotType::ConstF64 => args.push("1.0".into()),
+            SlotType::ConstU64 | SlotType::ConstVecU64 | SlotType::ConstVec => {
+                nth_u64 += 1;
+                args.push(format!("{}", 99 + nth_u64));
+            }
+            SlotType::ConstF64 | SlotType::ConstVecF64 => {
+                nth_f64 += 1;
+                args.push(format!("{}.0", nth_f64));
+            }
             SlotType::ConstStr => args.push("\"test\"".into()),
-            SlotType::ConstVecU64 => args.push("100".into()),
-            SlotType::ConstVecF64 => args.push("1.0".into()),
-            SlotType::ConstVec => args.push("100".into()),
         }
     }
     if args.is_empty() && sig.is_variadic() {
