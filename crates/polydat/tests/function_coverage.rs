@@ -794,7 +794,7 @@ fn cycle_walk_bounded() {
 fn shuffle_bounded() {
     // SRD-80b Phase E — `shuffle` now takes `(input, feedback, size, min)`.
     // feedback=0x41 is the bank-0 polynomial for width 7 (size=100 needs
-    // 7 LFSR bits; see polydat/src/library/sampling/metashift_banks.inc).
+    // 7 LFSR bits; see polydat-core/src/numeric/metashift_banks.inc).
     let mut k = polydat("out := shuffle(cycle, 0x41, 100, 0)");
     for cycle in 0..100 {
         let v = eval_u64(&mut k, cycle);

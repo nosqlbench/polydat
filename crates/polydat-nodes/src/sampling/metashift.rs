@@ -25,70 +25,21 @@
 //! [`feedback_for_width_and_bank`] or [`feedback_for_size`].
 
 // -----------------------------------------------------------------
-// LFSR feedback polynomials (one per register width 4..64)
+// The algorithm
 // -----------------------------------------------------------------
-
-/// Number of banks (feedback polynomials) stored per register width.
-const BANKS_PER_WIDTH: usize = 8;
-
-/// Galois LFSR feedback polynomials, 8 banks per register width 4..64.
-/// Indexed as FEEDBACK_BANKS[(width - 4) * 8 + bank].
-/// Widths with fewer than 8 known polynomials repeat the last one.
-const FEEDBACK_BANKS: [u64; 61 * BANKS_PER_WIDTH] = include!("metashift_banks.inc");
-
-/// Return the feedback polynomial for a given register width and bank.
-///
-/// `width` must be 4..=64. `bank` selects among different polynomials
-/// for the same width (modulo the number of available banks). Different
-/// banks produce different permutation orderings over the same range.
-pub fn feedback_for_width_and_bank(width: u32, bank: usize) -> u64 {
-    assert!(
-        (4..=64).contains(&width),
-        "LFSR width must be 4..64, got {width}"
-    );
-    let base = (width as usize - 4) * BANKS_PER_WIDTH;
-    FEEDBACK_BANKS[base + (bank % BANKS_PER_WIDTH)]
-}
-
-/// Return the default (bank 0) feedback polynomial for a given width.
-pub fn feedback_for_width(width: u32) -> u64 {
-    feedback_for_width_and_bank(width, 0)
-}
-
-/// Return the minimum register width needed to represent `period` values.
-pub fn width_for_period(period: u64) -> u32 {
-    assert!(period > 0, "period must be positive");
-    let bits = 64 - period.leading_zeros();
-    bits.max(4) // minimum 4-bit LFSR
-}
-
-/// Convenience: derive a bank-0 feedback polynomial directly from a
-/// shuffle `size`. Callers building a `Shuffle` node from an outer
-/// "size" parameter use this rather than tracking width / bank
-/// manually.
-pub fn feedback_for_size(size: u64) -> u64 {
-    feedback_for_width_and_bank(width_for_period(size), 0)
-}
-
-// -----------------------------------------------------------------
-// Core LFSR step (algorithm)
-// -----------------------------------------------------------------
-
-/// Single Galois LFSR step.
-///
-/// This is the fundamental bijective operation: given a register value,
-/// produce the next value in the LFSR sequence. The helper is named
-/// `step` (not `lfsr_step`) to avoid colliding with the macro-consumed
-/// `fn lfsr_step` node-authoring function below.
-#[inline]
-fn step(register: u64, feedback: u64) -> u64 {
-    let lsb = register & 1;
-    let shifted = register >> 1;
-    // If LSB was 1, XOR with feedback polynomial; otherwise just shift.
-    // The (-lsb) trick: if lsb=1, -1u64 = all 1s (mask passes feedback);
-    // if lsb=0, 0u64 (mask blocks feedback).
-    shifted ^ (lsb.wrapping_neg() & feedback)
-}
+//
+// The LFSR step, the bounded permutation over it, and the feedback
+// polynomials all live in `polydat::numeric::permute`, which is where
+// a body shared by a node and its native lowering belongs: `shuffle`
+// below and `jit_shuffle` call the same function, so the interpreter
+// and native code agree by construction rather than by review. The
+// selection helpers keep their paths here.
+pub use polydat::numeric::permute::{
+    feedback_for_size, feedback_for_width, feedback_for_width_and_bank, width_for_period,
+};
+// Imported under the old name: `lfsr_step` is taken here by the
+// macro-consumed node-authoring function below.
+use polydat::numeric::permute::{lfsr_step as step, shuffle_bounded};
 
 // -----------------------------------------------------------------
 // Shuffle: bounded bijective permutation
@@ -122,35 +73,7 @@ fn shuffle(
     #[poly_default(0u64)] size: Const<u64>,
     #[poly_default(0u64)] min: Const<u64>,
 ) -> u64 {
-    // A zero `size` is the empty range [min, min), which has no value
-    // to permute onto. It is reachable by default — `shuffle(x)` and
-    // `shuffle(x, feedback)` leave `size` at its `0` default — so it is
-    // answered rather than trapped: without this, `input % *size`
-    // divides by zero, and were that defined the rejection loop below
-    // could never break, since `register` starts at 1 and the exit
-    // wants `register <= 0`. `min` is the range's own floor, which is
-    // what `hash_range` returns for the same degenerate bound.
-    //
-    // `jit_shuffle` in `compile/jit/codegen.rs` carries this same
-    // guard; the two must agree or the engines disagree.
-    if *size == 0 {
-        return *min;
-    }
-
-    // Normalize to 1-based LFSR range (LFSR cannot produce 0)
-    let mut register = (input % *size) + 1;
-
-    // Apply LFSR with rejection sampling: if result exceeds size,
-    // step again until it's in range.
-    loop {
-        register = step(register, *feedback);
-        if register <= *size {
-            break;
-        }
-    }
-
-    // Denormalize back to [min, min+size)
-    (register - 1) + *min
+    shuffle_bounded(input, *feedback, *size, *min)
 }
 
 // -----------------------------------------------------------------

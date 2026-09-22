@@ -11,6 +11,7 @@ pub mod hash;
 pub mod n_of_m;
 pub mod noise;
 pub mod pcg;
+pub mod permute;
 pub mod register;
 pub mod round_numbers;
 pub mod special;
