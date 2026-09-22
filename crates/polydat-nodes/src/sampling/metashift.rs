@@ -122,6 +122,21 @@ fn shuffle(
     #[poly_default(0u64)] size: Const<u64>,
     #[poly_default(0u64)] min: Const<u64>,
 ) -> u64 {
+    // A zero `size` is the empty range [min, min), which has no value
+    // to permute onto. It is reachable by default — `shuffle(x)` and
+    // `shuffle(x, feedback)` leave `size` at its `0` default — so it is
+    // answered rather than trapped: without this, `input % *size`
+    // divides by zero, and were that defined the rejection loop below
+    // could never break, since `register` starts at 1 and the exit
+    // wants `register <= 0`. `min` is the range's own floor, which is
+    // what `hash_range` returns for the same degenerate bound.
+    //
+    // `jit_shuffle` in `compile/jit/codegen.rs` carries this same
+    // guard; the two must agree or the engines disagree.
+    if *size == 0 {
+        return *min;
+    }
+
     // Normalize to 1-based LFSR range (LFSR cannot produce 0)
     let mut register = (input % *size) + 1;
 
@@ -163,6 +178,27 @@ fn lfsr_step(input: u64, feedback: Const<u64>) -> u64 {
 mod tests {
     use super::*;
     use polydat::ast::{PolydatNode, Value};
+
+    /// `size` defaults to zero, so `shuffle(x)` and `shuffle(x, fb)`
+    /// reach the empty range without the author asking for it. It is
+    /// the range's floor, and above all it is not a panic: this used to
+    /// divide by zero, and the trap surfaced as a raw arithmetic
+    /// message from the build's constant fold.
+    #[test]
+    fn an_empty_range_answers_its_floor() {
+        for min in [0u64, 7, u64::MAX] {
+            let node = Shuffle::new(0, 0, min);
+            let mut out = [Value::None];
+            for input in [0u64, 1, 42, u64::MAX] {
+                node.eval(&[Value::U64(input)], &mut out);
+                assert_eq!(
+                    out[0].as_u64(),
+                    min,
+                    "shuffle over an empty range at min={min}, input={input}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn lfsr_step_nonzero() {

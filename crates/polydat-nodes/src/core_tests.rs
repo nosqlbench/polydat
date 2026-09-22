@@ -290,6 +290,33 @@ mod codegen {
         assert_eq!(jit_result, out[0].as_u64());
     }
 
+    /// The native helper carries its own copy of the shuffle, so the
+    /// empty range has to be answered there too, and answered the same.
+    #[test]
+    fn jit_shuffle_empty_range_agrees_with_the_node() {
+        use crate::sampling::metashift::Shuffle;
+        use polydat::ast::PolydatNode;
+
+        for min in [0u64, 7] {
+            let node = Shuffle::new(0, 0, min);
+            let consts = node.jit_constants();
+            let steps = vec![(
+                JitOp::ShuffleConst(consts[0], consts[1], consts[2]),
+                vec![0],
+                vec![1],
+            )];
+            let mut output_map = HashMap::new();
+            output_map.insert("out".into(), 1);
+            let mut kernel = compile_jit_raw(1, 2, steps, output_map, Vec::new()).unwrap();
+
+            kernel.eval(&[42]);
+            let mut out = [polydat::ast::Value::None];
+            node.eval(&[polydat::ast::Value::U64(42)], &mut out);
+            assert_eq!(kernel.get("out"), out[0].as_u64(), "min={min}");
+            assert_eq!(kernel.get("out"), min, "min={min}");
+        }
+    }
+
     #[test]
     fn jit_lut_sample() {
         // Build a simple linear LUT: f(x) = x * 100

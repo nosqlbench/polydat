@@ -67,6 +67,11 @@ extern "C" fn jit_lut_sample(input_bits: u64, lut_ptr: u64, lut_len: u64) -> u64
 /// Extern function: LFSR shuffle (called from JIT code).
 extern "C" fn jit_shuffle(input: u64, feedback: u64, size: u64, min: u64) -> u64 {
     guarded(|| {
+        // The empty range answers `min`, as the node does. See
+        // `polydat-nodes/src/sampling/metashift.rs`; the two must agree.
+        if size == 0 {
+            return min;
+        }
         let mut register = (input % size) + 1;
         loop {
             let lsb = register & 1;
