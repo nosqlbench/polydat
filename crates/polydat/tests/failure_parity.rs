@@ -190,3 +190,48 @@ fn a_cone_names_the_member_that_failed() {
         "the fused interpreter and the native engine read alike"
     );
 }
+
+/// A compile-constant step that cannot be computed fails at *build*
+/// with the same sentence on every engine — and that sentence is a
+/// diagnosis, not a crash report.
+///
+/// Evaluation failures keep the `panicked at` line, and the module doc
+/// above says why: it names the code that raised, which is the engine's
+/// own. A build failure is a different thing. The reason is a property
+/// of the program (`bad spec 's97'`), the user has none of polydat's
+/// source, and a file and line there reads as an internal defect. The
+/// three compiled engines never carried one; the interpreter did, which
+/// is how the same program failed two ways depending on the engine, and
+/// how a message the fuzzer classifies as cryptic reached a user
+/// (F-E16: `ConstantFold` on every engine, an error and never a panic).
+#[test]
+fn a_fold_failure_reads_the_same_on_every_engine() {
+    let src = "p := partitions(\"s97\")\n";
+    let mut seen: Vec<(String, String)> = Vec::new();
+
+    for engine in engines() {
+        let outcome = compile_polydat_to_assembler(src)
+            .expect("it assembles")
+            .compile_with(engine);
+        let msg = match outcome {
+            Err(KernelError::Refused { .. }) => continue,
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("{engine}: an unparseable partition spec must fail at build"),
+        };
+        assert!(
+            msg.contains("bad spec"),
+            "{engine}: the node's own reason must survive: {msg}"
+        );
+        assert!(
+            !msg.to_lowercase().contains("panic"),
+            "{engine}: a build error must not read as a crash: {msg}"
+        );
+        seen.push((format!("{engine}"), msg));
+    }
+
+    assert!(seen.len() > 1, "expected more than one engine to build");
+    let (first_name, first) = &seen[0];
+    for (name, msg) in &seen[1..] {
+        assert_eq!(msg, first, "{name} differs from {first_name}");
+    }
+}

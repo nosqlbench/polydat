@@ -366,6 +366,28 @@ pub(crate) fn enrich_panic(
     )
 }
 
+/// Drop the `↳ panicked at <file>:<line>` line from an enriched
+/// message, keeping the node, outputs and inputs.
+///
+/// For a failure at *build* — the compile-constant fold — the reason is
+/// a property of the program, and polydat's own source location reads
+/// as an internal defect rather than the diagnosis it is: the user sees
+/// "bad spec `s97`" and a line number in a file they do not have. The
+/// three compiled engines never carried it there, so stripping it on
+/// the interpreter is what makes the fold error the same sentence on
+/// every engine ([`crate::KernelError::ConstantFold`]).
+///
+/// Evaluation failures keep the location: a panic at run time is as
+/// likely to be a node's bug as a program's, and then it is the first
+/// thing worth knowing.
+pub(crate) fn without_panic_location(message: String) -> String {
+    message
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("↳ panicked at "))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Re-raise an enriched message as the interpreter does: through
 /// `panic_any`, so the hook prints it once, or prints the short notice
 /// when a downstream reporter renders the full body (SRD-82).

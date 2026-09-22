@@ -2230,8 +2230,16 @@ impl PolydatProgram {
                     // was called with, the way any evaluation failure
                     // is enriched. Taking its text keeps one copy of
                     // that attribution rather than wrapping a second.
+                    //
+                    // Less the panic location: at build this is a
+                    // diagnosis of the program, and the compiled
+                    // engines report it without one, so dropping it is
+                    // what makes the fold error read the same on every
+                    // engine (`without_panic_location`).
                     return Err(crate::compile::assembly::AssemblyError::ConstantFold(
-                        crate::kernel::engines::panic_payload_text(payload.as_ref()),
+                        crate::kernel::engines::without_panic_location(
+                            crate::kernel::engines::panic_payload_text(payload.as_ref()),
+                        ),
                     ));
                 }
             }
