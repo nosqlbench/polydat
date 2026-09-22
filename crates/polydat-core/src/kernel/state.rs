@@ -938,12 +938,7 @@ impl PolydatKernel {
         iter_bindings: &[(String, Value)],
     ) -> PolydatKernel {
         let mut child = PolydatKernel::from_program(program);
-        for (var, value) in iter_bindings {
-            if let Some(idx) = child.program.find_input(var) {
-                child.state.set_input(idx, value.clone());
-            }
-        }
-        child.materialize_wiring_from_outer(outer);
+        child.bind_under(outer, iter_bindings);
         child
     }
 
@@ -1003,6 +998,19 @@ impl PolydatKernel {
     /// `build_subscope` (which calls `materialize_subscope`
     /// internally). External callers don't see
     /// this operation directly.
+    /// Write `iter_bindings` into this kernel's own slots and wire the
+    /// rest from `outer`. The order matters: the values must be in
+    /// before `refresh_scope_coordinates` runs, so the own-coord
+    /// snapshot sees them.
+    fn bind_under(&mut self, outer: &dyn crate::kernel::Kernel, iter_bindings: &[(String, Value)]) {
+        for (var, value) in iter_bindings {
+            if let Some(idx) = self.program.find_input(var) {
+                self.state.set_input(idx, value.clone());
+            }
+        }
+        self.materialize_wiring_from_outer(outer);
+    }
+
     fn materialize_wiring_from_outer(&mut self, outer: &dyn crate::kernel::Kernel) {
         use crate::kernel::interp::Lookup as _;
         // Step 1 — typed shared-cell cascade. Compute every
@@ -1226,9 +1234,8 @@ impl PolydatKernel {
         // `[own] ++ outer.scope_coordinates()`. Refresh own
         // (extern values may have just been populated above),
         // then prepend outer's frozen path.
-        self.refresh_scope_coordinates();
         let outer_path = outer.scope_coordinates().to_vec();
-        self.scope_coords.extend(outer_path);
+        self.extend_scope_coordinates(&outer_path);
     }
 
     /// SRD-13f Push B.2 — advance this kernel's broadcast
@@ -1466,6 +1473,14 @@ impl PolydatKernel {
     /// just this kernel's own coords (or empty).
     pub fn scope_coordinates(&self) -> &[super::ScopeCoord] {
         &self.scope_coords
+    }
+
+    /// Refresh this kernel's own coordinates and append `outer`'s
+    /// path, giving `[own] ++ outer`. What the binder does once the
+    /// child's inputs are in, so the own-coord snapshot sees them.
+    pub fn extend_scope_coordinates(&mut self, outer: &[super::ScopeCoord]) {
+        self.refresh_scope_coordinates();
+        self.scope_coords.extend_from_slice(outer);
     }
 
     // `propagate_shared_to` retired in favor of SharedCell-backed

@@ -294,6 +294,12 @@ impl crate::kernel::Kernel for PolydatKernel {
     fn scope_coordinates(&self) -> &[crate::kernel::ScopeCoord] {
         PolydatKernel::scope_coordinates(self)
     }
+    fn extend_scope_coordinates(&mut self, outer: &[crate::kernel::ScopeCoord]) {
+        PolydatKernel::extend_scope_coordinates(self, outer);
+    }
+    fn input_port_type(&self, name: &str) -> Option<crate::ast::PortType> {
+        self.program().input_port_type(name)
+    }
     fn attach_shared_cell(
         &mut self,
         name: &str,

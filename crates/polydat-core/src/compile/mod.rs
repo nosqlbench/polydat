@@ -622,6 +622,9 @@ macro_rules! impl_kernel_trait {
             fn set_transit_cells(&mut self, cells: Vec<crate::kernel::SharedCellEntry>) {
                 self.core.externs.set_transit_cells(cells);
             }
+            fn input_port_type(&self, name: &str) -> Option<crate::ast::PortType> {
+                self.core.externs.input_port_type(name)
+            }
             fn attach_shared_cell(
                 &mut self,
                 name: &str,

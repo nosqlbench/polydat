@@ -10,8 +10,9 @@
 //! be moved, hashed, debug-printed, and (per Phase 4) cached for
 //! reuse.
 
+use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::dsl::ast::Statement;
 use crate::kernel::PolydatProgram;
@@ -164,6 +165,21 @@ pub struct ScopeModule<M> {
     pub(crate) imports: Vec<ImportSpec>,
     pub(crate) exports: Vec<ExportSpec>,
     pub(crate) program: Arc<PolydatProgram>,
+    /// The body after the Rule 2 rewrite, and the settings it was
+    /// compiled under: what [`ScopeModule::program_on`] needs to build
+    /// the same body for another engine.
+    pub(crate) statements: Vec<Statement>,
+    pub(crate) options: crate::dsl::compile::CompileOptions,
+    /// This module's program per engine, built on the first ask for
+    /// that engine and shared by every instance after it — the same
+    /// carrier a `for` body and a tile's projection body use
+    /// (`dsl::traversal::BodySource`).
+    ///
+    /// The interpreter's is the one `finalize` already built, so it is
+    /// in the table from the start. A module instantiated a thousand
+    /// times compiles once per engine and allocates a state per
+    /// instance.
+    pub(crate) programs: Mutex<HashMap<crate::Engine, Arc<dyn crate::kernel::KernelProgram>>>,
     pub(crate) contract: ScopeContract<M>,
     pub(crate) context: SourceContext,
     pub(crate) consumers: Vec<RegisteredPullConsumer>,
@@ -179,6 +195,91 @@ pub struct ScopeModule<M> {
 }
 
 impl<M> ScopeModule<M> {
+    /// This module's program on `engine`, compiled on the first ask
+    /// for that engine and shared by every instance after it.
+    ///
+    /// This is the kernel image. A module instantiated many times —
+    /// once per coordinate, per fiber, per scenario visit — compiles
+    /// once per engine here and pays only a state per instance, which
+    /// is what [`Self::instantiate_under`] does with it.
+    pub fn program_on(
+        &self,
+        engine: crate::Engine,
+    ) -> Result<Arc<dyn crate::kernel::KernelProgram>, crate::KernelError> {
+        let mut programs = self
+            .programs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(program) = programs.get(&engine) {
+            return Ok(program.clone());
+        }
+        let kernel = crate::dsl::compile::compile_ast_with_engine(
+            &crate::dsl::ast::PolydatFile {
+                statements: self.statements.clone(),
+            },
+            "",
+            &self.options,
+            None,
+            engine,
+        )?;
+        let program = kernel.into_program();
+        programs.insert(engine, program.clone());
+        Ok(program)
+    }
+
+    /// One instance of this module under `parent`: a kernel on
+    /// `engine` over the program [`Self::program_on`] holds, with the
+    /// parent's cells attached, its values copied in, and
+    /// `iter_bindings` written before either.
+    ///
+    /// The image is shared; the instance is a state. Calling this a
+    /// second time with different coordinates or different input
+    /// values compiles nothing.
+    ///
+    /// `engine` is the caller's to name, and the parent's own is the
+    /// answer a caller usually wants: a child belongs to the kernel it
+    /// was bound under, the way a `for` body belongs to the kernel
+    /// that opened it.
+    pub fn instantiate_under(
+        &self,
+        parent: &dyn crate::kernel::Kernel,
+        engine: crate::Engine,
+        iter_bindings: &[(String, crate::ast::Value)],
+    ) -> Result<Box<dyn crate::kernel::Kernel>, crate::KernelError> {
+        let program = self.program_on(engine)?;
+        let Some(interpreted) = program.as_interpreter() else {
+            // The parent may be on any engine — that is F-K5(c) — but
+            // the child is the interpreter's kernel for one reason,
+            // and it is worth naming rather than leaving to a reader:
+            // step 1 of the binder attaches a parent's cell to
+            // whichever of the child's input slots matches by name,
+            // and a compiled kernel takes a cell only on a slot that
+            // already has one (`Externs::attach_cell` refuses the
+            // rest as "an extern, not a `shared` binding"). Until a
+            // compiled slot can be bound to a cell it was not built
+            // with, a compiled child cannot receive the cascade.
+            return Err(crate::KernelError::Refused {
+                engine,
+                reason: format!(
+                    "scope module {:?} cannot instantiate a child on {engine:?}: a compiled \
+                     kernel takes a shared cell only on a slot built with one, and binding a \
+                     child attaches the parent's cells to whatever slots match by name. The \
+                     module's program for this engine is compiled and cached; the child is \
+                     the interpreter's until a compiled slot can be bound to a cell it was \
+                     not built with.",
+                    &self.context,
+                ),
+            });
+        };
+        Ok(Box::new(
+            crate::kernel::PolydatKernel::materialize_subscope_under(
+                parent,
+                interpreted,
+                iter_bindings,
+            ),
+        ))
+    }
+
     /// The imports the module declares.
     pub fn imports(&self) -> &[ImportSpec] {
         &self.imports

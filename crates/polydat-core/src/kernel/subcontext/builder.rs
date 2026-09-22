@@ -765,10 +765,20 @@ impl<P> SubcontextBuilder<P> {
         let program = kernel.program().clone();
         let contract = ScopeContract::from_specs(&imports, &exports);
 
+        // The interpreter's program is already built, so it seeds the
+        // per-engine table rather than being compiled a second time
+        // when someone asks for it.
+        let seeded: std::sync::Arc<dyn crate::kernel::KernelProgram> = program.clone();
         Ok(ScopeModule {
             imports,
             exports,
             program,
+            statements,
+            options: dsl_options.clone(),
+            programs: std::sync::Mutex::new(std::collections::HashMap::from([(
+                crate::Engine::Interpreter(crate::JitMode::Auto),
+                seeded,
+            )])),
             contract,
             context,
             consumers,

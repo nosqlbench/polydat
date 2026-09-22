@@ -428,6 +428,19 @@ impl Externs {
         self.output_modifiers = modifiers.clone();
     }
 
+    /// The declared type of a named input slot. A coordinate has none
+    /// here — it is not an extern — and answers `U64`, which is what
+    /// every coordinate is.
+    pub(crate) fn input_port_type(&self, name: &str) -> Option<PortType> {
+        if let Some(&i) = self.by_name.get(name) {
+            return Some(self.slots[i].ty);
+        }
+        self.input_names
+            .iter()
+            .any(|n| n == name)
+            .then_some(PortType::U64)
+    }
+
     /// The binding modifier of a named output; `NONE` for a name this
     /// kernel does not declare, as the interpreter's program answers.
     pub(crate) fn output_modifier(&self, name: &str) -> crate::dsl::ast::BindingModifier {

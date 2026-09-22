@@ -539,6 +539,18 @@ pub trait Kernel: Send + internals::KernelInternals {
         &[]
     }
 
+    /// Append `outer` to this kernel's own scope-coordinate path, which
+    /// the binder does once the child's inputs are in. A no-op on an
+    /// engine that keeps no path.
+    fn extend_scope_coordinates(&mut self, _outer: &[super::ScopeCoord]) {}
+
+    /// The declared type of a named input slot, coordinates included.
+    /// The binder reads it to adapt a value the parent supplies into
+    /// the type the child's slot declares.
+    fn input_port_type(&self, _name: &str) -> Option<PortType> {
+        None
+    }
+
     /// Bind the `shared` binding `name` to `cell`, so this kernel and
     /// every other holder of the cell read and write one register:
     /// a write on any of them is what the others read next, and a

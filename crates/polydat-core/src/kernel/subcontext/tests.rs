@@ -1796,3 +1796,74 @@ fn a_child_follows_a_compiled_parents_computed_output() {
         );
     }
 }
+
+/// The kernel image is cached per engine and an instance is a state.
+///
+/// A module instantiated many times — once per coordinate, per fiber,
+/// per scenario visit — compiles once and pays a state per instance.
+/// The ledger of the tree counts every compile, so instantiating a
+/// hundred times and finding the count unmoved is the claim.
+#[test]
+fn a_module_compiles_once_and_instantiates_many_times() {
+    use crate::compile::select::Engine;
+
+    let parent = compile_polydat_interpreter("input cycle: u64\nseed := hash(cycle)\n")
+        .expect("parent compiles");
+    let mut b: SubcontextBuilder<RootMarker> =
+        SubcontextBuilder::new(super::builder::ParentView::of(&parent));
+    b.context(SourceContext::new("reused"));
+    b.body(BodyFragment::PolydatSource(
+        "input cycle: u64\nextern seed: u64\nv := u64_add(seed, cycle)\n".to_string(),
+    ));
+    let module = b.finalize().expect("finalize");
+
+    let ledger = parent.program().ledger().clone();
+    let interpreter = Engine::Interpreter(crate::JitMode::Auto);
+
+    // The first ask is free: finalize already built the interpreter's
+    // program, so it is in the table rather than compiled again.
+    let before = ledger.programs();
+    let seeded = module.program_on(interpreter).expect("cached program");
+    assert_eq!(
+        ledger.programs(),
+        before,
+        "the interpreter's program was compiled a second time"
+    );
+    assert!(std::sync::Arc::ptr_eq(
+        &seeded,
+        &module.program_on(interpreter).expect("still cached")
+    ));
+
+    // A hundred instances, each with its own coordinates and its own
+    // extern value: no compile among them, and one program behind all.
+    for i in 0..100u64 {
+        let mut child = module
+            .instantiate_under(&parent, interpreter, &[])
+            .expect("an instance is a state");
+        child
+            .set_input("seed", crate::ast::Value::U64(i))
+            .expect("the child's own extern");
+        child.set_inputs(&[i]);
+        assert_eq!(child.pull("v"), crate::ast::Value::U64(i + i));
+    }
+    assert_eq!(
+        ledger.programs(),
+        before,
+        "instantiating compiled {} programs",
+        ledger.programs() - before
+    );
+
+    // And the table is per engine: asking for a second engine compiles
+    // once more and then never again.
+    let after_hundred = ledger.programs();
+    let native = Engine::Native(crate::compile::select::Provenance::Auto);
+    let a = module.program_on(native).expect("compiles for the engine");
+    let grew = ledger.programs() - after_hundred;
+    let b2 = module.program_on(native).expect("cached now");
+    assert!(std::sync::Arc::ptr_eq(&a, &b2), "one program per engine");
+    assert_eq!(
+        ledger.programs() - after_hundred,
+        grew,
+        "the second ask compiled again"
+    );
+}
