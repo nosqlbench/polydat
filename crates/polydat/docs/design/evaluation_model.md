@@ -343,6 +343,16 @@ analysis would suggest otherwise, and an engine never treats
 them as current. A `const` binding that depends on one of these
 fails the Plan A check.
 
+*When* one reads, within a write, is the engine's: two such
+wires are two steps on the interpreter and the closure tier and
+one fused segment on the native tiers, so a change made between
+two pulls of one write is visible to the second on the first
+pair and not on the second. Every engine re-reads on the next
+write, which is the guarantee; simultaneity within a write is
+not. Two readings that must come from one instant belong in one
+node returning both — see
+[runtime_model.md](runtime_model.md) R1.v, "Read granularity".
+
 ---
 
 ## Input Spaces

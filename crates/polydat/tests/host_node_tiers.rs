@@ -177,24 +177,20 @@ fn a_host_node_stays_live_on_every_engine() {
     }
 }
 
-/// *When* within a cycle a nondeterministic node reads is not the same
-/// on every engine, and this records it rather than asserting it away.
+/// Read granularity is the step's, and the step is the engine's
+/// (runtime_model.md, R1.v "Read granularity").
 ///
-/// The interpreter is lazy per output: `pull("a")` runs a's cone and
-/// nothing else, so a later `pull("b")` reads the world again and sees
-/// a change made in between. A whole-program engine runs every step on
-/// the first evaluation, so `b` was already computed and the later pull
-/// returns it. Both re-run the node every cycle, which is what "never
-/// current" (runtime_model.md, R1.v) requires; they differ only in how
-/// many times within one.
+/// Two volatile wires are two steps on the interpreter and the closure
+/// tier, and one fused segment on the native tiers — one function is
+/// the whole program on pure native, which is why this cannot be made
+/// to agree by choosing differently. So a change made between two pulls
+/// of one write is visible to the second read on the cone-lazy engines
+/// and not on the native ones.
 ///
-/// A host that samples something moving — a clock, a metric — therefore
-/// sees its reads batched differently after a change of engine. That is
-/// visible, so it is written down. This test pins the shapes rather
-/// than a verdict: no engine may be *stale* across cycles (the test
-/// above), and here each engine is shown to be self-consistent.
+/// What every engine owes regardless: the value is not carried across
+/// the write. That is asserted for all of them at the end.
 #[test]
-fn when_a_node_reads_within_a_cycle_follows_the_engine() {
+fn read_granularity_is_the_engines_step() {
     for (name, k) in kernels("midcycle").iter_mut() {
         set("midcycle.a", 3.0);
         set("midcycle.b", 3.0);
@@ -204,18 +200,27 @@ fn when_a_node_reads_within_a_cycle_follows_the_engine() {
         let b = k.pull("b");
 
         assert_eq!(a, polydat::ast::Value::F64(3.0), "{name}: first read");
-        assert!(
-            b == polydat::ast::Value::F64(9.0) || b == polydat::ast::Value::F64(3.0),
-            "{name}: a mid-cycle read is either the new value (lazy per \
-             output) or the old one (whole-program), and nothing else; got {b:?}"
+
+        let cone_lazy = name.starts_with("interpreter") || name.starts_with("closures");
+        let expected = if cone_lazy {
+            // Its own step, read when its own output was pulled.
+            polydat::ast::Value::F64(9.0)
+        } else {
+            // Fused with `a`, so already read when `a` was pulled.
+            polydat::ast::Value::F64(3.0)
+        };
+        assert_eq!(
+            b, expected,
+            "{name}: a second volatile read within one write follows the \
+             engine's step granularity"
         );
 
-        // Whichever it does, the next cycle sees the world as it is.
+        // The guarantee that does not vary: the next write re-reads.
         k.set_inputs(&[2]);
         assert_eq!(
             k.pull("b"),
             polydat::ast::Value::F64(9.0),
-            "{name}: the change must be visible by the next cycle"
+            "{name}: no engine may carry a volatile value across a write"
         );
     }
 }

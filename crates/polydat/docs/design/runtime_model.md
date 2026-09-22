@@ -175,8 +175,9 @@ Volatility arises from two distinct sources:
   it from the wire chain (e.g., a node that reads external
   mutable state the polydat layer cannot see).
 
-Both sources produce identical runtime behavior on every
-engine:
+Both sources produce the same values on every engine, by the
+same mechanism — with one visible difference in *when* a read
+happens, which "Read granularity" below states:
 
 - The wire is excluded from the compile-constant fold — the
   canonical workload hash sees node type and wiring shape but
@@ -202,6 +203,40 @@ at the granularity of the write, not per individual pull. This
 is the correct semantic for temporal nodes (an op reading
 `current_epoch_millis` several times between writes sees one
 timestamp) and matches the mechanism every engine delivers.
+
+**Read granularity is the step's, and the step is the
+engine's.** The paragraph above is per *step*, and R1 defines a
+step as a node on the interpreter and a compiled node *or fused
+segment* on a compiled engine. Two volatile wires are therefore
+two steps on one engine and may be one on another, and that is
+observable — it is the only way an engine's realisation shows
+through, because a volatile step is the one step whose value is
+not a function of anything the engine can see:
+
+| Engine | Two volatile wires pulled in one write |
+|---|---|
+| Interpreter, closure tier | Two steps. Each reads when its own output is first pulled, so a change made between the two pulls is visible to the second. |
+| Native tier, pure native | One fused segment, and on pure native one function is the whole program. Both read together at the first pull of either, so a change made between the pulls is not visible until the next write. |
+
+So, normatively:
+
+- **Guaranteed.** Each volatile step is evaluated at most once
+  per write, re-evaluated on the next write, and answers every
+  read within that write with the value it read. No engine may
+  carry a volatile value across a write (the fold and clean-flag
+  exclusions above are what enforce it).
+- **Not guaranteed.** That two volatile reads within one write
+  are simultaneous, or that they are distinct. A host that needs
+  two readings to come from one instant must take them in one
+  node and return both, which makes them one step on every
+  engine; a host that needs two distinct readings must put a
+  write between them.
+
+This is a consequence of R1's step definition rather than a
+concession to it, and it cannot be removed by making the engines
+agree: pure native compiles one function for the whole program,
+so it has no smaller unit to read at. Pinned by
+`tests/host_node_tiers.rs`.
 
 What volatility is NOT for: ordinary external-write inputs (per
 composition_substrate S4). Provenance handles re-evaluation
