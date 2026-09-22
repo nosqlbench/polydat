@@ -659,16 +659,17 @@ result goes, per [Compiled By-Reference Slots](compiled_handles.md):
   closure step, so the hole values never leave native code before
   they are encoded.
 - **Projections on the compiled engines.** A body renders on the engine
-  the renderer is given, and its program for that engine is built the
-  first time a render asks for it. The interpreter hands down its own
-  engine. A compiled kernel still hands down `Engine::default()` rather
-  than its own: the render node's closure serves the closure tier and a
-  hybrid kernel's closure steps alike, and `compiled_slot` is not told
-  which engine it is building a kit for, so the closure has no engine
-  to capture. The difference is which tier a body runs on, never what
-  it produces. The bodies render in the body kernels the rendering
-  state keeps, so a body's own native code runs inside the render, and
-  a body an engine refuses renders interpreted and says so once.
+  of the kernel rendering it, the way a `for` body runs on the engine of
+  the kernel that opened it, and its program for that engine is built
+  the first time a render asks for it. A compiled kernel's closure
+  learns which engine that is because `compiled_slot` is told the engine
+  it is building a kit for, and `tile_render_compiled` captures it; the
+  closure serves the closure tier and a hybrid kernel's closure steps
+  alike, so before that it had nothing to ask and every compiled kernel
+  handed its bodies `Engine::default()`. The bodies render in the body
+  kernels the rendering state keeps, so a body's own native code runs
+  inside the render, and a body an engine refuses renders interpreted
+  and says so once.
 
 Rendering changes what a tile costs on an engine, never what the engine
 accepts. A tile whose hole is a vector-typed wire, or whose projection
