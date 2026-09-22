@@ -75,7 +75,10 @@ mod tests {
 
             let node_res = build_node(sig.name, &wires, &wire_types, &consts);
             if let Ok(node) = node_res {
-                let p2_eligible = node.compiled_u64().is_some();
+                // Every compiled form, not only the scalar one: a node
+                // whose form is a slot kit belongs in the P2 column.
+                let p2_eligible = crate::compile::node_tier(node.as_ref(), &wire_types)
+                    != crate::ast::CompileLevel::Phase1;
                 let p3_eligible = classify_node(node.as_ref()) != JitOp::Fallback;
                 if p3_eligible {
                     p3_count += 1;
@@ -105,5 +108,21 @@ mod tests {
             (p1_count as f64 / total as f64) * 100.0
         );
         println!("===============================================\n");
+
+        // The tier counts are a claim about the library, so one of
+        // them is asserted rather than printed. Asking only
+        // `compiled_u64` put 251 of 457 nodes in the P1 column and 2
+        // in P2, which said polydat interprets more than half of its
+        // own node library; it compiles all but a small tail. A
+        // proportion rather than a number, so adding nodes does not
+        // fail it, and no list of names, so a node that loses its
+        // compiled form is not excused by being on one.
+        let p1_share = p1_count as f64 / total as f64;
+        assert!(
+            p1_share < 0.15,
+            "{p1_count} of {total} registered nodes reach no compiled form \
+             ({:.1}%); the tier predicate has narrowed",
+            p1_share * 100.0
+        );
     }
 }

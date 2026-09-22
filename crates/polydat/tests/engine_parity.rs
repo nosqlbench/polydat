@@ -638,3 +638,33 @@ fn the_128_bit_carriers_agree_on_every_engine() {
         ]
     );
 }
+
+/// The tier a node reports and the tier it runs on are the same
+/// question, and `compile_level_of` used to answer it by asking only
+/// whether the node had a scalar `compiled_u64` op — so a node whose
+/// compiled form is a slot kit reported `Phase1` while the closure
+/// tier ran it as a closure step and the hybrid as a slot call. The
+/// binary prints that answer as "P1 interpreter".
+#[test]
+fn a_slot_kit_node_reports_the_tier_it_runs_on() {
+    let k = polydat::dsl::compile_polydat_interpreter(
+        "input cycle: u64\ntext := printf(\"n=%d\", cycle)\n",
+    )
+    .expect("compile");
+    let program = k.program();
+    let mut reported = Vec::new();
+    for i in 0..program.node_count() {
+        reported.push((
+            program.node_meta(i).name.clone(),
+            program.node_compile_level(i),
+        ));
+    }
+    // Every node of this program has a compiled form: none should
+    // report Phase1.
+    let p1: Vec<&String> = reported
+        .iter()
+        .filter(|(_, l)| *l == polydat::ast::CompileLevel::Phase1)
+        .map(|(n, _)| n)
+        .collect();
+    assert!(p1.is_empty(), "reported as P1 with a compiled form: {p1:?}");
+}

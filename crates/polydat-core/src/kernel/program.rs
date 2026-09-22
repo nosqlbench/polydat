@@ -1753,9 +1753,25 @@ impl PolydatProgram {
         &self.wiring[idx]
     }
 
+    /// The types of the wires feeding node `idx`: a coordinate or
+    /// extern takes its declared input type, a wire from another node
+    /// its producing port's. What a builder passes a node's kit, and
+    /// what deciding the node's tier needs.
+    pub fn node_wire_types(&self, idx: usize) -> Vec<crate::ast::PortType> {
+        self.wiring[idx]
+            .iter()
+            .map(|src| match src {
+                super::WireSource::Input(i) => self
+                    .input_port_type_by_idx(*i)
+                    .unwrap_or(crate::ast::PortType::U64),
+                super::WireSource::NodeOutput(j, p) => self.nodes[*j].meta().outs[*p].typ,
+            })
+            .collect()
+    }
+
     /// Probe the compile level of a node by index.
     pub fn node_compile_level(&self, idx: usize) -> crate::ast::CompileLevel {
-        crate::ast::compile_level_of(self.nodes[idx].as_ref())
+        crate::ast::compile_level_of(self.nodes[idx].as_ref(), &self.node_wire_types(idx))
     }
 
     /// What the interpreter runs of this program: its native cones as

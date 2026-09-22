@@ -2170,21 +2170,16 @@ pub struct FusionSubgraph<'a> {
     pub out_ports: &'a [(usize, usize)],
 }
 
-/// Determine the compile level of a node (works on trait objects).
-pub fn compile_level_of(node: &dyn PolydatNode) -> CompileLevel {
-    #[cfg(feature = "jit")]
-    {
-        let jit_op = crate::compile::jit::classify_node(node);
-        if !matches!(jit_op, crate::compile::jit::JitOp::Fallback) {
-            return CompileLevel::Phase3;
-        }
-    }
-
-    if node.compiled_u64().is_some() {
-        CompileLevel::Phase2
-    } else {
-        CompileLevel::Phase1
-    }
+/// The compile level of a node, given the types of the wires feeding
+/// it. One call to [`crate::compile::node_tier`], which is the order
+/// every builder walks; the types are needed because a node's slot kit
+/// is offered per call site with the types the kernel fixed.
+///
+/// Prefer [`crate::kernel::PolydatProgram::node_compile_level`], which
+/// reads the types out of the program rather than asking the caller
+/// for them.
+pub fn compile_level_of(node: &dyn PolydatNode, wire_types: &[PortType]) -> CompileLevel {
+    crate::compile::node_tier(node, wire_types)
 }
 
 /// The maximum compilation level a node supports.

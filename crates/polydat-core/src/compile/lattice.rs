@@ -90,10 +90,14 @@ pub fn lattice_report(program: &PolydatProgram) -> LatticeReport {
                 boundary_out: node.meta().outs.len(),
             });
         } else {
+            let wire_types = program.node_wire_types(i);
             residue.push(ResidueEntry {
                 name: node.meta().name.clone(),
                 p3_classifiable: p3_classifiable(node),
-                p2_capable: node.compiled_u64().is_some(),
+                // Every compiled form, not only the scalar one: a node
+                // whose form is a slot kit is P2-capable too.
+                p2_capable: crate::compile::node_tier(node, &wire_types)
+                    != crate::ast::CompileLevel::Phase1,
             });
         }
     }

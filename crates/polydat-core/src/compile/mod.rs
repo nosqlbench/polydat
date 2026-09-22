@@ -267,6 +267,42 @@ pub(crate) fn none_rule_admits(
             .all(|src| matches!(src, crate::kernel::WireSource::NodeOutput(j, _) if eligible[*j]))
 }
 
+/// The highest tier a node can reach, given the types of the wires
+/// feeding it: the one answer to a question four places were asking
+/// separately.
+///
+/// The order is the one every builder walks. Native first, since a node
+/// with a lowering joins a segment; then the compiled forms, in the
+/// order `assembly::node_step_op` tries them — a copy step, the scalar
+/// `compiled_u64`, the node's own slot kit; then the interpreter.
+///
+/// The wire types are not optional. `compiled_slot` is offered per call
+/// site with the types the kernel fixed, so a caller without them can
+/// only ask the first two questions, and the three callers that
+/// reported a tier rather than selecting one did exactly that — they
+/// asked `compiled_u64().is_some()` and called a node with a slot kit
+/// `Phase1`, which is what the binary printed for `printf`.
+pub fn node_tier(
+    node: &dyn crate::ast::PolydatNode,
+    wire_types: &[crate::ast::PortType],
+) -> crate::ast::CompileLevel {
+    #[cfg(feature = "jit")]
+    if !matches!(
+        crate::compile::jit::classify_node_typed(node, wire_types),
+        crate::compile::jit::JitOp::Fallback
+    ) {
+        return crate::ast::CompileLevel::Phase3;
+    }
+    let meta = node.meta();
+    let is_copy =
+        (meta.name == "identity" || meta.name.starts_with("__port_")) && meta.outs.len() == 1;
+    if is_copy || node.compiled_u64().is_some() || node.compiled_slot(wire_types).is_some() {
+        crate::ast::CompileLevel::Phase2
+    } else {
+        crate::ast::CompileLevel::Phase1
+    }
+}
+
 /// The provenance of every buffer slot: which input slots reach it,
 /// as an exact multi-word mask, for the pull-side cone guard of every
 /// compiled kernel. `input_dependents` is indexed by input slot (a
