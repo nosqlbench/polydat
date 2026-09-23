@@ -624,3 +624,57 @@ fn a_vector_rides_a_polymorphic_node_on_every_engine() {
         }
     }
 }
+
+/// Every port type has a consistent slot form — checked over the type
+/// list itself, not over the types whoever wrote the test remembered.
+///
+/// The value↔slot writers were extended three times by finding a type
+/// they had missed at run time: the by-reference singles, then the
+/// numeric vectors, then the 128-bit words. Each was found by a program
+/// that happened to use one, which is the wrong way to learn it. Two
+/// things now make that structural rather than lucky:
+///
+/// - `write_poly` dispatches on [`SlotColor`], of which there are three
+///   and the match is exhaustive, so a new type cannot fall through to
+///   a panic — it lands in the arm its colour names.
+/// - `PortType::ALL` is the whole list, kept whole by an exhaustive
+///   match (`every_variant_is_listed`) that fails to compile when a
+///   variant is added without being listed. Anything that must hold for
+///   all types walks it.
+///
+/// What this asserts is the invariant those two rest on: a scratch
+/// entry exists for exactly the by-reference colour, and the slot width
+/// follows the colour. A new `Ref2` type with no scratch element would
+/// reach `write_poly`'s `Ref2` arm with no entry to fill — that is the
+/// next version of the same bug, and it fails here instead.
+#[test]
+fn every_port_type_has_a_consistent_slot_form() {
+    use polydat::ast::{PortType, SlotColor, SlotShape};
+
+    assert_eq!(
+        PortType::ALL.len(),
+        34,
+        "a port type was added or removed; check the writers that map a \
+         value to slots still cover it, then update this count"
+    );
+
+    for &ty in PortType::ALL {
+        assert!(
+            ty.every_variant_is_listed(),
+            "{ty:?} is not in PortType::ALL"
+        );
+
+        let color = ty.slot_color();
+        let has_entry = ty.scratch_elem().is_some();
+        assert_eq!(
+            has_entry,
+            color == SlotColor::Ref2,
+            "{ty:?} is {color:?} but {} a scratch element; a by-reference \
+             value needs an entry to be written into, and nothing else has one",
+            if has_entry { "has" } else { "has no" }
+        );
+
+        let expected_width = if color == SlotColor::Imm1 { 1 } else { 2 };
+        assert_eq!(ty.slot_width(), expected_width, "{ty:?} width vs {color:?}");
+    }
+}

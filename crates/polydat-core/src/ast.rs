@@ -1825,6 +1825,33 @@ impl ScratchBuf {
         }
     }
 
+    /// Fill this entry from `v`, whatever kind of entry it is.
+    ///
+    /// The entry's own variant decides, and it was allocated from the
+    /// step's declared [`ScratchElem`] — so the type the graph resolved
+    /// picks the write, rather than a match over `Value` that has to be
+    /// extended every time the language grows a carrier. A value that
+    /// does not fit the entry is a graph that mis-typed the slot, and
+    /// the inner setters say so.
+    #[inline]
+    pub fn set_from_value(&mut self, v: &Value) {
+        match self {
+            ScratchBuf::Str(_) => self.set_str(v.as_str()),
+            ScratchBuf::Bytes(_) => self.set_bytes(v.as_bytes()),
+            ScratchBuf::Value(_) => self.set_value(v.clone()),
+            ScratchBuf::F32(_)
+            | ScratchBuf::F64(_)
+            | ScratchBuf::F16(_)
+            | ScratchBuf::I8(_)
+            | ScratchBuf::I16(_)
+            | ScratchBuf::I32(_)
+            | ScratchBuf::I64(_) => self.set_vector(v),
+            other => {
+                panic!("scratch entry holds {other:?}, which no by-reference value is written into")
+            }
+        }
+    }
+
     /// Replace the numeric vector this entry holds, reusing its
     /// allocation. The entry must be the matching element type.
     ///

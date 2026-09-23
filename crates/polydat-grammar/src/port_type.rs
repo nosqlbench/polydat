@@ -248,6 +248,99 @@ impl NumericDomain {
 }
 
 impl PortType {
+    /// Every port type, once.
+    ///
+    /// A test that must hold for *all* types can walk this rather than
+    /// name the ones its author thought of. That is the difference
+    /// between a mapping that is complete and one that is complete so
+    /// far: the value↔slot writers were extended three times by finding
+    /// a type they had missed at run time, each found by a program that
+    /// happened to use it (2026-09-22).
+    ///
+    /// [`Self::every_variant_is_listed`] keeps this honest — it is an
+    /// exhaustive `match`, so adding a variant without adding it here
+    /// fails to compile rather than quietly shrinking every sweep that
+    /// walks this list.
+    pub const ALL: &'static [PortType] = &[
+        PortType::U64,
+        PortType::F64,
+        PortType::U32,
+        PortType::I32,
+        PortType::I64,
+        PortType::F32,
+        PortType::U8,
+        PortType::I8,
+        PortType::U16,
+        PortType::I16,
+        PortType::F16,
+        PortType::U128,
+        PortType::I128,
+        PortType::Reg128,
+        PortType::RegI8x16,
+        PortType::RegI16x8,
+        PortType::RegI32x4,
+        PortType::RegI64x2,
+        PortType::RegF16x8,
+        PortType::RegF32x4,
+        PortType::RegF64x2,
+        PortType::Bool,
+        PortType::Str,
+        PortType::Bytes,
+        PortType::Json,
+        PortType::Ext,
+        PortType::Handle,
+        PortType::VecF32,
+        PortType::VecI32,
+        PortType::VecF64,
+        PortType::VecI64,
+        PortType::VecF16,
+        PortType::VecI16,
+        PortType::VecI8,
+    ];
+
+    /// `true` for every variant, by an exhaustive match: the compiler
+    /// refuses this function when a variant is added, and the test
+    /// beside it checks [`Self::ALL`] carries the one that was added.
+    #[doc(hidden)]
+    pub fn every_variant_is_listed(self) -> bool {
+        match self {
+            PortType::U64
+            | PortType::F64
+            | PortType::U32
+            | PortType::I32
+            | PortType::I64
+            | PortType::F32
+            | PortType::U8
+            | PortType::I8
+            | PortType::U16
+            | PortType::I16
+            | PortType::F16
+            | PortType::U128
+            | PortType::I128
+            | PortType::Reg128
+            | PortType::RegI8x16
+            | PortType::RegI16x8
+            | PortType::RegI32x4
+            | PortType::RegI64x2
+            | PortType::RegF16x8
+            | PortType::RegF32x4
+            | PortType::RegF64x2
+            | PortType::Bool
+            | PortType::Str
+            | PortType::Bytes
+            | PortType::Json
+            | PortType::Ext
+            | PortType::Handle
+            | PortType::VecF32
+            | PortType::VecI32
+            | PortType::VecF64
+            | PortType::VecI64
+            | PortType::VecF16
+            | PortType::VecI16
+            | PortType::VecI8 => Self::ALL.contains(&self),
+        }
+    }
+
     /// The numbers this type can carry, for the types that carry
     /// numbers. `None` for every other type.
     ///
