@@ -794,9 +794,6 @@ fn every_carrier_passes_through_a_polymorphic_node_on_every_engine() {
 /// the process here.
 #[test]
 fn every_node_reads_the_same_on_every_engine_at_the_edges() {
-    use polydat::dsl::compile::{compile_polydat_interpreter, compile_polydat_with};
-    use polydat::{Engine, JitMode, KernelError, Provenance};
-
     const EDGES: &[u64] = &[
         0,
         1,
@@ -810,83 +807,12 @@ fn every_node_reads_the_same_on_every_engine_at_the_edges() {
         i64::MAX as u64,
         u64::MAX,
     ];
-    let engines = [
-        Engine::Interpreter(JitMode::Auto),
-        Engine::Closures(Provenance::Raw),
-        Engine::Native(Provenance::Raw),
-        Engine::PureNative(Provenance::Raw),
-    ];
-
-    type Read = Result<Vec<polydat::ast::Value>, String>;
-    // One cycle's outputs, a panic caught as its message. A kernel that
-    // panicked is not trusted for the next edge, so the caller rebuilds.
-    fn read(k: &mut dyn polydat::Kernel, names: &[String], c: u64) -> Read {
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            k.set_inputs(&[c]);
-            names.iter().map(|n| k.pull(n)).collect::<Vec<_>>()
-        }))
-        .map_err(payload_text)
-    }
-    fn agree(a: &[polydat::ast::Value], b: &[polydat::ast::Value]) -> bool {
-        // `NaN != NaN`: equally undefined on both sides is agreement.
-        a == b || format!("{a:?}") == format!("{b:?}")
-    }
-
     let mut findings = Vec::new();
     let mut compared = 0usize;
     for (name, src) in common::coverage_cases::programs() {
-        let Ok(probe) = compile_polydat_interpreter(&src) else {
-            continue;
-        };
-        if !probe.program().is_deterministic() {
-            continue;
-        }
-        let names: Vec<String> = polydat::Kernel::output_names(&probe);
-
-        let build = |e: Engine| compile_polydat_with(&src, e);
-        let Ok(mut oracle) = build(Engine::Interpreter(JitMode::Off)) else {
-            continue;
-        };
-        let mut want: Vec<Read> = Vec::new();
-        for &c in EDGES {
-            let r = read(oracle.as_mut(), &names, c);
-            if r.is_err() {
-                oracle = match build(Engine::Interpreter(JitMode::Off)) {
-                    Ok(k) => k,
-                    Err(_) => break,
-                };
-            }
-            want.push(r);
-        }
-
-        for engine in engines {
-            let mut k = match build(engine) {
-                Ok(k) => k,
-                Err(KernelError::Refused { .. }) => continue,
-                Err(e) => {
-                    findings.push(format!("{name} on {engine}: does not build: {e}"));
-                    continue;
-                }
-            };
-            for (i, &c) in EDGES.iter().enumerate() {
-                let got = read(k.as_mut(), &names, c);
-                compared += 1;
-                match (&want[i], &got) {
-                    (Ok(a), Ok(b)) if agree(a, b) => {}
-                    (Err(_), Err(_)) => {}
-                    (_, Err(e)) if e.contains("cannot carry a `None`") => {}
-                    (a, b) => findings.push(format!(
-                        "{name} at cycle={c} on {engine}:\n    interpreter: {a:?}\n    {engine}: {b:?}"
-                    )),
-                }
-                if got.is_err() {
-                    k = match build(engine) {
-                        Ok(k) => k,
-                        Err(_) => break,
-                    };
-                }
-            }
-        }
+        let (found, n) = engine_disagreements(&src, EDGES);
+        compared += n;
+        findings.extend(found.into_iter().map(|f| format!("{name} {f}")));
     }
 
     assert!(
@@ -899,4 +825,247 @@ fn every_node_reads_the_same_on_every_engine_at_the_edges() {
         findings.len(),
         findings.join("\n")
     );
+}
+
+/// Every disagreement between an engine and the node bodies over `src`
+/// at each input in `inputs`, and how many reads were compared. The
+/// oracle is the interpreter with no cones, which runs every node's own
+/// body. Both failing is agreement (the message is `failure_parity`'s
+/// concern); one failing and one answering is a finding, and so is two
+/// answers that differ. A program the interpreter does not compile, or
+/// one that is nondeterministic, compares nothing. Pure native's
+/// unset-extern trap is the one runtime exception engines.md §8 names.
+fn engine_disagreements(src: &str, inputs: &[u64]) -> (Vec<String>, usize) {
+    use polydat::dsl::compile::{compile_polydat_interpreter, compile_polydat_with};
+    use polydat::{Engine, JitMode, KernelError, Provenance};
+
+    type Read = Result<Vec<polydat::ast::Value>, String>;
+    // One cycle's outputs, a panic caught as its message. A kernel that
+    // panicked is not trusted for the next input, so the caller rebuilds.
+    fn read(k: &mut dyn polydat::Kernel, names: &[String], c: u64) -> Read {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            k.set_inputs(&[c]);
+            names.iter().map(|n| k.pull(n)).collect::<Vec<_>>()
+        }))
+        .map_err(payload_text)
+    }
+    fn agree(a: &[polydat::ast::Value], b: &[polydat::ast::Value]) -> bool {
+        // `NaN != NaN`: equally undefined on both sides is agreement.
+        a == b || format!("{a:?}") == format!("{b:?}")
+    }
+
+    // A node that hangs or aborts names nothing; `FUZZ_TRACE` names each
+    // program before it runs.
+    if std::env::var_os("FUZZ_TRACE").is_some() {
+        eprintln!("engine_disagreements: {}", src.replace('\n', " ; "));
+    }
+    let mut findings = Vec::new();
+    let mut compared = 0usize;
+    let Ok(probe) = compile_polydat_interpreter(src) else {
+        return (findings, compared);
+    };
+    if !probe.program().is_deterministic() {
+        return (findings, compared);
+    }
+    let names: Vec<String> = polydat::Kernel::output_names(&probe);
+
+    let build = |e: Engine| compile_polydat_with(src, e);
+    let Ok(mut oracle) = build(Engine::Interpreter(JitMode::Off)) else {
+        return (findings, compared);
+    };
+    let mut want: Vec<Read> = Vec::new();
+    for &c in inputs {
+        let r = read(oracle.as_mut(), &names, c);
+        if r.is_err() {
+            oracle = build(Engine::Interpreter(JitMode::Off)).expect("it built once");
+        }
+        want.push(r);
+    }
+
+    for engine in [
+        Engine::Interpreter(JitMode::Auto),
+        Engine::Closures(Provenance::Raw),
+        Engine::Native(Provenance::Raw),
+        Engine::PureNative(Provenance::Raw),
+    ] {
+        let mut k = match build(engine) {
+            Ok(k) => k,
+            Err(KernelError::Refused { .. }) => continue,
+            Err(e) => {
+                findings.push(format!("on {engine}: does not build: {e}"));
+                continue;
+            }
+        };
+        for (i, &c) in inputs.iter().enumerate() {
+            let got = read(k.as_mut(), &names, c);
+            compared += 1;
+            match (&want[i], &got) {
+                (Ok(a), Ok(b)) if agree(a, b) => {}
+                (Err(_), Err(_)) => {}
+                (_, Err(e)) if e.contains("cannot carry a `None`") => {}
+                (a, b) => findings.push(format!(
+                    "at cycle={c} on {engine}:\n    interpreter: {a:?}\n    {engine}: {b:?}"
+                )),
+            }
+            if got.is_err() {
+                k = match build(engine) {
+                    Ok(k) => k,
+                    Err(_) => break,
+                };
+            }
+        }
+    }
+    (findings, compared)
+}
+
+/// Every node reads the same on every engine as each of its constants
+/// moves through its edges.
+///
+/// A native lowering can read a node's constants as well as its wires,
+/// and the sweeps above hold every constant at one value per position.
+/// `weighted_pick`, the noise family and the distribution tables lower
+/// through their constants, and a drift that shows only at a zero
+/// weight, a negative scale or a huge count would pass them. This takes
+/// every node with a numeric constant, not a list of the ones known to
+/// lower, and substitutes each edge value into one constant position at
+/// a time while the rest keep the coverage program's values, which are
+/// known to build. A value the node's declared constraint refuses fails
+/// the build the same way on every engine and compares nothing. The
+/// programs run at a handful of cycle inputs, so a constant that only
+/// matters against some wire values still meets them.
+///
+/// It found no lowering that disagreed at a constant edge, but it found
+/// constants the nodes had never bounded (pinned by
+/// `a_constant_outside_its_node_s_contract_is_refused_at_build`):
+/// native code for `discretize` underflowed compiling zero buckets,
+/// and several constants sized a node's work per call, so a huge value
+/// was a hang rather than an error.
+#[test]
+fn every_constant_reads_the_same_on_every_engine() {
+    use polydat::ast::SlotType;
+    const U64_EDGES: &[&str] = &[
+        "0",
+        "1",
+        "2",
+        "7",
+        "255",
+        "65536",
+        // Not 2^32. A constant that sizes a node's buffer is allocated
+        // when it fits, however long filling it takes (`buffer_for`):
+        // `byte_image_extract` builds a 4 GiB image there. The values
+        // past it are refused at once, and they still set the high bits
+        // a truncating lowering would drop (2^53 + 1 as `u32` is 1).
+        "9007199254740993",
+        "18446744073709551615",
+    ];
+    const F64_EDGES: &[&str] = &[
+        "0.0", "-0.0", "0.5", "1.0", "-1.0", "3.5", "1e-300", "1e300", "-1e300",
+    ];
+    const CYCLES: &[u64] = &[0, 1, 3, 65536, (1 << 53) + 1, u64::MAX];
+
+    let mut findings = Vec::new();
+    let mut compared = 0usize;
+    let mut programs = 0usize;
+    for sig in polydat::dsl::registry::registry() {
+        if sig.name.starts_with("__")
+            || sig.category == polydat::dsl::registry::FuncCategory::RealData
+        {
+            continue;
+        }
+        let Some(base) = common::coverage_cases::synthesized_call(&sig, "cycle") else {
+            continue;
+        };
+        let Some(args) = base
+            .strip_prefix(sig.name)
+            .and_then(|s| s.strip_prefix('('))
+            .and_then(|s| s.strip_suffix(')'))
+        else {
+            continue;
+        };
+        let args: Vec<&str> = if args.is_empty() {
+            Vec::new()
+        } else {
+            args.split(", ").collect()
+        };
+        if args.len() != sig.params.len() {
+            continue;
+        }
+        for (pos, p) in sig.params.iter().enumerate() {
+            let edges = match p.slot_type {
+                SlotType::ConstU64 => U64_EDGES,
+                SlotType::ConstF64 => F64_EDGES,
+                _ => continue,
+            };
+            for v in edges {
+                let mut call = args.clone();
+                call[pos] = v;
+                let src = format!("input cycle: u64\nout := {}({})", sig.name, call.join(", "));
+                programs += 1;
+                let (found, n) = engine_disagreements(&src, CYCLES);
+                compared += n;
+                findings.extend(
+                    found.into_iter().map(|f| {
+                        format!("{} with {} = {v} {f}\n    source: {src}", sig.name, p.name)
+                    }),
+                );
+            }
+        }
+    }
+
+    assert!(
+        programs > 500 && compared > 5000,
+        "only {programs} programs and {compared} reads; the sweep is not reaching the constants"
+    );
+    const SHOWN: usize = 40;
+    assert!(
+        findings.is_empty(),
+        "{} node/constant/engine disagreements ({compared} compared, first {SHOWN} shown):\n\n{}",
+        findings.len(),
+        findings
+            .iter()
+            .take(SHOWN)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+/// Constants the constant sweep found outside what their nodes can
+/// answer are refused when the program is built, on every engine,
+/// rather than hanging, panicking, or overflowing where only some
+/// engines notice.
+#[test]
+fn a_constant_outside_its_node_s_contract_is_refused_at_build() {
+    use polydat::{Engine, JitMode, Provenance};
+    let cases = [
+        // Native code computed `buckets - 1` while compiling.
+        ("discretize(cycle, 100.0, 0)", "buckets"),
+        // The body clamped to `range - EPSILON`, "min > max" below it.
+        ("discretize(cycle, 0.0, 10)", "range"),
+        // `[min, min + size)` past `u64::MAX` overflowed.
+        (
+            "shuffle(cycle, 100, 101, 18446744073709551615)",
+            "must fit in u64",
+        ),
+        // An octave count is work per call, and zero octaves is NaN.
+        ("fractal_noise_1d(cycle, 100, 1.0, 0)", "octaves"),
+        ("fractal_noise_2d(cycle, cycle, 100, 1.0, 65)", "octaves"),
+        // `n_of` hashes the whole window on every call.
+        ("n_of(cycle, 1, 65537)", "m"),
+    ];
+    for (call, names) in cases {
+        let src = format!("input cycle: u64\nout := {call}\n");
+        for engine in [
+            Engine::Interpreter(JitMode::Off),
+            Engine::Closures(Provenance::Raw),
+            Engine::Native(Provenance::Raw),
+            Engine::PureNative(Provenance::Raw),
+        ] {
+            let err = compile_polydat_with(&src, engine)
+                .err()
+                .unwrap_or_else(|| panic!("{call} built on {engine}"))
+                .to_string();
+            assert!(err.contains(names), "{call} on {engine}: {err}");
+        }
+    }
 }

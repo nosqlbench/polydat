@@ -79,6 +79,8 @@ pub fn overrides(csv: &str, jsonl: &str, txt: &str) -> HashMap<&'static str, Str
         ("perlin_2d", "input cycle: u64\nout := perlin_2d(cycle, cycle, 42, 0.01)".into()),
         ("simplex_2d", "input cycle: u64\nout := simplex_2d(cycle, cycle, 42, 0.01)".into()),
         ("fractal_noise_2d", "input cycle: u64\nout := fractal_noise_2d(cycle, cycle, 42, 0.02)".into()),
+        // Octaves are bounded to 64; the synthesized call would pass 101.
+        ("fractal_noise_1d", "input cycle: u64\nout := fractal_noise_1d(cycle, 42, 0.02, 6)".into()),
         ("pcg_stream", "input cycle: u64\nout := pcg_stream(cycle, cycle, 42)".into()),
         ("format_u64", "input cycle: u64\nout := format_u64(cycle, 16)".into()),
         // Context (no inputs)

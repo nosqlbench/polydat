@@ -61,7 +61,8 @@ fn section() -> String {
         "\n{} nodes are callable by name from a program, in {} categories. A \
          further {} conversion adapters, whose names begin with `__`, are \
          inserted by the assembler where a wire and a port disagree about \
-         type; a program never names one, and\n\
+         type. A program can call one by name like any other node, though\n\
+         it rarely needs to, and\n\
          [type_system.md](../design/type_system.md) §3 is their catalog.\n\n",
         by_category.values().map(Vec::len).sum::<usize>(),
         by_category.len(),

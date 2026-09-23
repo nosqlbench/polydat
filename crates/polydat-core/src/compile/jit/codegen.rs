@@ -3169,14 +3169,16 @@ fn compile_jit_impl(
                     store_slot(&mut builder, buffer_ptr, output_slots[0], result);
                 }
                 JitOp::DiscretizeConst(range_bits, buckets) => {
-                    // clamp(input, 0.0, range - eps) / range * buckets → u64
+                    // min(clamp(input, 0.0, range) / range * buckets, buckets - 1),
+                    // the node's body. Its declared constraints make the
+                    // range positive and `buckets` at least one, so the
+                    // `- 1` below cannot underflow.
                     let fval = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
                     let range = f64::from_bits(*range_bits);
                     let fzero = builder.ins().f64const(0.0);
-                    let frange_m_eps = builder.ins().f64const(range - f64::EPSILON);
                     let frange = builder.ins().f64const(range);
                     let fbuckets = builder.ins().f64const(*buckets as f64);
-                    let clamped = clamp_ir(&mut builder, fval, fzero, frange_m_eps);
+                    let clamped = clamp_ir(&mut builder, fval, fzero, frange);
                     let divided = builder.ins().fdiv(clamped, frange);
                     let scaled = builder.ins().fmul(divided, fbuckets);
                     let as_u64 = builder.ins().fcvt_to_uint_sat(types::I64, scaled);

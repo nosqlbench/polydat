@@ -179,15 +179,26 @@ fn chance(input: u64, #[constraint(RangeF64 { min: 0.0, max: 1.0 })] p: Const<f6
 /// ```
 ///
 /// Both `n` and `m` are init-time constant parameters, and both of
-/// their rules are checked when the node is built: `m != 0` by the
-/// per-parameter `NonZeroU64` constraint, and `n <= m` by the
-/// node-level validator, which is where a relation between two
-/// parameters belongs. Neither rule depends on the body running, so
-/// both hold on every engine.
+/// their rules are checked when the node is built: `1 <= m <= 65536` by
+/// the per-parameter range constraint, and `n <= m` by the node-level
+/// validator, which is where a relation between two parameters belongs.
+/// Neither rule depends on the body running, so both hold on every
+/// engine.
+///
+/// The window is at most 65 536 positions because each call ranks its
+/// position against every other one in the window, `m` hashes per
+/// cycle. At the bound that is about a tenth of a millisecond a cycle;
+/// unbounded, a large `m` was a hang, one call taking longer than any
+/// run. The bound keeps every output of an `m` that was usable as it
+/// was.
 ///
 /// JIT level: P3 (`JitOp::NOfConst`).
 #[polydat::polydat_node(category = Probability, validate = n_of_validate)]
-fn n_of(input: u64, n: Const<u64>, #[constraint(NonZeroU64)] m: Const<u64>) -> u64 {
+fn n_of(
+    input: u64,
+    n: Const<u64>,
+    #[constraint(RangeU64 { min: 1, max: 65536 })] m: Const<u64>,
+) -> u64 {
     // Both rules are declared and both are checked when the node is
     // built: `m` non-zero by the per-parameter constraint above, and
     // `n <= m` by `n_of_validate`, which a per-parameter constraint
@@ -1160,7 +1171,7 @@ mod const_constraint_tests {
             ),
             (
                 "input cycle: u64\nx := n_of(cycle, 1, 0)\n",
-                "m must be non-zero",
+                "m must be in [1, 65536]",
             ),
         ] {
             let err = compile_polydat_kernel(src)

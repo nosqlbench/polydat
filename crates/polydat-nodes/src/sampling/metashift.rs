@@ -66,7 +66,7 @@ use polydat::numeric::permute::{lfsr_step as step, shuffle_bounded};
 /// `compiled_u64` with `feedback`/`size`/`min` captured by `Copy` and
 /// `jit_constants` returning `[feedback, size, min]` (the layout
 /// `JitOp::ShuffleConst` consumes).
-#[polydat::polydat_node(category = Permutation)]
+#[polydat::polydat_node(category = Permutation, validate = shuffle_validate)]
 fn shuffle(
     input: u64,
     #[poly_default(0u64)] feedback: Const<u64>,
@@ -74,6 +74,24 @@ fn shuffle(
     #[poly_default(0u64)] min: Const<u64>,
 ) -> u64 {
     shuffle_bounded(input, *feedback, *size, *min)
+}
+
+/// `shuffle`'s range, `[min, min + size)`, must be a range of `u64`:
+/// its last value `min + size - 1` has to fit. The node answers inside
+/// the range, so for one past the top there is no right answer, and the
+/// denormalizing add overflowed (a panic in debug, a wrapped value in
+/// release). Node-level because no per-parameter constraint can relate
+/// two parameters.
+fn shuffle_validate(_name: &str, consts: &[polydat::dsl::factory::ConstArg]) -> Result<(), String> {
+    let size = consts.get(1).map(|c| c.as_u64()).unwrap_or(0);
+    let min = consts.get(2).map(|c| c.as_u64()).unwrap_or(0);
+    if size > 0 && min.checked_add(size - 1).is_none() {
+        return Err(format!(
+            "the range [min, min + size) must fit in u64; min {min} + size {size} runs past {}",
+            u64::MAX
+        ));
+    }
+    Ok(())
 }
 
 // -----------------------------------------------------------------

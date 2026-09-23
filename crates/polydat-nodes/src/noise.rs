@@ -102,12 +102,23 @@ fn fractal_noise_2d_jit_constants(node: &FractalNoise2d) -> Vec<u64> {
 /// amplitude at each octave. Produces rich, natural-looking signals.
 /// Output is f64, roughly in [-1, 1]. Lacunarity is fixed at 2.0 and
 /// persistence at 0.5 (standard FBM parameters).
+///
+/// `octaves` is 1 to 64, for both fractal nodes. Zero octaves is
+/// `0 / 0`, NaN. Each octave halves the amplitude, so past about 53 an
+/// octave's term is below the resolution of the sum and changes
+/// nothing; far past that the doubling frequency overflows to infinity
+/// and the sample is NaN. An octave count is also work per call, one
+/// noise sample each, so an unbounded one is a hang. The count used to
+/// pass through `as u32` as well, which truncated `2^53 + 1` octaves to
+/// one. Sixty-four keeps every octave that can contribute.
 #[polydat::polydat_node(category = Noise, jit_constants = fractal_noise_1d_jit_constants)]
 fn fractal_noise_1d(
     input: u64,
     seed: polydat::derive_support::Const<u64>,
     frequency: polydat::derive_support::Const<f64>,
-    #[poly_default(4u64)] octaves: polydat::derive_support::Const<u64>,
+    #[poly_default(4u64)]
+    #[constraint(RangeU64 { min: 1, max: 64 })]
+    octaves: polydat::derive_support::Const<u64>,
     #[poly_const(PermTable::new, from = seed)] perm: &PermTable,
 ) -> f64 {
     fbm_1d(perm, input as f64, *frequency, *octaves as u32)
@@ -115,14 +126,17 @@ fn fractal_noise_1d(
 
 /// 2D fractal Brownian motion: layered Perlin noise in 2D. Produces
 /// terrain-like spatial variation. Lacunarity is fixed at 2.0 and
-/// persistence at 0.5 (standard FBM parameters).
+/// persistence at 0.5 (standard FBM parameters). `octaves` is 1 to 64,
+/// as for `fractal_noise_1d`.
 #[polydat::polydat_node(category = Noise, jit_constants = fractal_noise_2d_jit_constants)]
 fn fractal_noise_2d(
     x: u64,
     y: u64,
     seed: polydat::derive_support::Const<u64>,
     frequency: polydat::derive_support::Const<f64>,
-    #[poly_default(4u64)] octaves: polydat::derive_support::Const<u64>,
+    #[poly_default(4u64)]
+    #[constraint(RangeU64 { min: 1, max: 64 })]
+    octaves: polydat::derive_support::Const<u64>,
     #[poly_const(PermTable::new, from = seed)] perm: &PermTable,
 ) -> f64 {
     fbm_2d(perm, x as f64, y as f64, *frequency, *octaves as u32)

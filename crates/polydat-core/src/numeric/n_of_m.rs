@@ -14,12 +14,13 @@
 /// of the m positions hash lower than the current one — if fewer than
 /// n do, this position is selected.
 ///
-/// Preconditions: `m > 0` and `n <= m`. `n_of` states both to the
-/// factory — `m` through a `NonZeroU64` parameter constraint and the
-/// relation through a node validator — so a program that names bad
-/// values is refused before this runs, on every engine. They are not
-/// re-checked here, because this is the inner loop of the native
-/// lowering as well as of the body.
+/// Preconditions: `1 <= m <= 65536` and `n <= m`. `n_of` states both
+/// to the factory — `m` through a range constraint and the relation
+/// through a node validator — so a program that names bad values is
+/// refused before this runs, on every engine. They are not re-checked
+/// here, because this is the inner loop of the native lowering as well
+/// as of the body. The cost is `m` hashes a call, which is why `m` is
+/// bounded.
 #[inline]
 pub fn n_of_m_eval(input: u64, n: u64, m: u64) -> u64 {
     let window = input / m;

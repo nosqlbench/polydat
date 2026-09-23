@@ -314,17 +314,30 @@ fn ceil_to_u64(input: f64) -> u64 {
 /// bucket.
 ///
 /// JIT level: P3 (compiled_u64 with jit_constants for range and buckets).
+///
+/// The range is positive and finite and there is at least one bucket,
+/// declared so the build refuses anything else on every engine. The
+/// body used to clamp to `range - f64::EPSILON`, an absolute epsilon,
+/// which made any range below it a "min > max" panic. The final `min`
+/// already sends an input at or past the range to the last bucket, so
+/// clamping to the range itself gives the same bucket everywhere. The
+/// native form read `buckets - 1` from the constant and underflowed
+/// while compiling a zero-bucket program.
 #[crate::polydat_node(category = Conversions)]
 fn discretize(
     input: f64,
-    #[poly_default(100.0f64)] range: crate::derive_support::Const<f64>,
-    #[poly_default(10u64)] buckets: crate::derive_support::Const<u64>,
+    #[poly_default(100.0f64)]
+    #[constraint(PositiveFiniteF64)]
+    range: crate::derive_support::Const<f64>,
+    #[poly_default(10u64)]
+    #[constraint(NonZeroU64)]
+    buckets: crate::derive_support::Const<u64>,
 ) -> u64 {
     let r = *range;
     let b = *buckets;
-    let v = input.clamp(0.0, r - f64::EPSILON);
+    let v = input.clamp(0.0, r);
     let bucket = (v / r * b as f64) as u64;
-    bucket.min(b.saturating_sub(1))
+    bucket.min(b - 1)
 }
 
 /// Format a u64 as a string with a specific radix (2, 8, 10, 16).
