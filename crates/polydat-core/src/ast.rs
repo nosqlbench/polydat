@@ -1825,6 +1825,36 @@ impl ScratchBuf {
         }
     }
 
+    /// Replace the numeric vector this entry holds, reusing its
+    /// allocation. The entry must be the matching element type.
+    ///
+    /// The typed write path reaches a vector entry through the node's
+    /// declared element type; this is the same write for the path that
+    /// only has a [`Value`] in hand ([`crate::derive_support::write_poly`]),
+    /// which is how a vector reaches a polymorphic node's output.
+    #[inline]
+    pub fn set_vector(&mut self, value: &Value) {
+        macro_rules! fill {
+            ($v:expr, $src:expr) => {{
+                $v.clear();
+                $v.extend_from_slice($src);
+            }};
+        }
+        match (self, value) {
+            (ScratchBuf::F32(v), Value::VecF32(s)) => fill!(v, s.as_slice()),
+            (ScratchBuf::F64(v), Value::VecF64(s)) => fill!(v, s.as_slice()),
+            (ScratchBuf::F16(v), Value::VecF16(s)) => fill!(v, s.as_slice()),
+            (ScratchBuf::I8(v), Value::VecI8(s)) => fill!(v, s.as_slice()),
+            (ScratchBuf::I16(v), Value::VecI16(s)) => fill!(v, s.as_slice()),
+            (ScratchBuf::I32(v), Value::VecI32(s)) => fill!(v, s.as_slice()),
+            (ScratchBuf::I64(v), Value::VecI64(s)) => fill!(v, s.as_slice()),
+            (entry, v) => panic!(
+                "scratch entry holds {entry:?}, which does not carry a {:?}",
+                v.port_type()
+            ),
+        }
+    }
+
     /// Replace the value this entry holds. The entry must be a
     /// `Value` entry.
     #[inline]

@@ -568,3 +568,59 @@ fn externs_agree_between_interpreter_and_pure_native_code() {
         }
     }
 }
+
+/// A numeric vector through a *polymorphic* node, on every engine.
+///
+/// `Value`-typed nodes write their output through `write_poly`, which
+/// only has a `Value` in hand and must find the slot form from the
+/// port type. It knew the carriers and the by-reference singles —
+/// `Str`, `Bytes`, `Json`, `Ext`, `Handle` — and not the numeric
+/// vectors, though they are `Ref2` like the rest and the typed write
+/// path always carried them. So a vector reaching a polymorphic node's
+/// output compiled clean and panicked at the first pull, where the
+/// interpreter carried it.
+///
+/// The empty vector is deliberately not the case under test: it passed
+/// on every engine while the non-empty one did not, because filling the
+/// entry is what moves the buffer the pair must be republished from.
+#[test]
+fn a_vector_rides_a_polymorphic_node_on_every_engine() {
+    use polydat::dsl::compile::compile_polydat_with;
+    use polydat::{Engine, JitMode, KernelError, Provenance};
+
+    let src = "input cycle: u64\n\
+               v := str_to_vec_i32(\"[11,22,33]\")\n\
+               d := default_or(v, v)\n\
+               n := vec_len_i32(d)\n\
+               m := vec_max_i32(d)\n";
+
+    let mut engines = vec![
+        Engine::Interpreter(JitMode::Off),
+        Engine::Interpreter(JitMode::Auto),
+        Engine::Closures(Provenance::Raw),
+        Engine::Closures(Provenance::Auto),
+    ];
+    if cfg!(feature = "jit") {
+        engines.push(Engine::Native(Provenance::Raw));
+        engines.push(Engine::PureNative(Provenance::Auto));
+    }
+
+    for engine in engines {
+        let mut k = match compile_polydat_with(src, engine) {
+            Ok(k) => k,
+            Err(KernelError::Refused { .. }) => continue,
+            Err(e) => panic!("{engine}: {e}"),
+        };
+        k.set_inputs(&[7]);
+        // The vector itself survives the round trip, and the typed
+        // readers downstream see the same three elements.
+        assert_eq!(k.pull("n"), polydat::ast::Value::U64(3), "{engine}: length");
+        assert_eq!(k.pull("m"), polydat::ast::Value::I64(33), "{engine}: max");
+        match k.pull("d") {
+            polydat::ast::Value::VecI32(s) => {
+                assert_eq!(s.as_slice(), &[11, 22, 33], "{engine}: elements");
+            }
+            other => panic!("{engine}: expected a VecI32, got {other:?}"),
+        }
+    }
+}

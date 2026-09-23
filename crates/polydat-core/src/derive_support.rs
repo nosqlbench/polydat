@@ -896,11 +896,42 @@ pub fn write_poly(
         Value::Str(s) => scratch[0].set_str(&s),
         Value::Bytes(b) => scratch[0].set_bytes(&b),
         Value::Json(_) | Value::Ext(_) | Value::Handle(_) => scratch[0].set_value(v),
+        // The numeric vectors are `Ref2` like the rest of this arm: a
+        // pair into an entry the step owns. The typed write path always
+        // carried them; this one did not, so a vector reaching a
+        // polymorphic node's output compiled fine and panicked at the
+        // first pull, where the interpreter carried it (found by the
+        // engine sweep, 2026-09-22).
+        Value::VecF32(_)
+        | Value::VecF64(_)
+        | Value::VecF16(_)
+        | Value::VecI8(_)
+        | Value::VecI16(_)
+        | Value::VecI32(_)
+        | Value::VecI64(_) => scratch[0].set_vector(&v),
         other => panic!("a {:?} value has no compiled slot form", other.port_type()),
     }
+    // Every entry written above is scratch-backed, so every one of them
+    // republishes its pair: filling the entry moves the buffer, and a
+    // slot still pointing at the old one is what the S9 validator
+    // catches (axiom S9(a)). The list left out the numeric vectors
+    // while the match above could not write one, and adding the write
+    // without the republish is how the pair went stale with the right
+    // length and the wrong address.
     if matches!(
         scratch.first(),
-        Some(ScratchBuf::Str(_) | ScratchBuf::Bytes(_) | ScratchBuf::Value(_))
+        Some(
+            ScratchBuf::Str(_)
+                | ScratchBuf::Bytes(_)
+                | ScratchBuf::Value(_)
+                | ScratchBuf::F32(_)
+                | ScratchBuf::F64(_)
+                | ScratchBuf::F16(_)
+                | ScratchBuf::I8(_)
+                | ScratchBuf::I16(_)
+                | ScratchBuf::I32(_)
+                | ScratchBuf::I64(_)
+        )
     ) && ty.slot_color() == crate::ast::SlotColor::Ref2
     {
         let (p, l) = scratch[0].ptr_len();
