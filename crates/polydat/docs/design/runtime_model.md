@@ -215,8 +215,8 @@ not a function of anything the engine can see:
 
 | Engine | Two volatile wires pulled in one write |
 |---|---|
-| Interpreter, closure tier | Two steps. Each reads when its own output is first pulled, so a change made between the two pulls is visible to the second. |
-| Native tier, pure native | One fused segment, and on pure native one function is the whole program. Both read together at the first pull of either, so a change made between the pulls is not visible until the next write. |
+| Interpreter, closure tier, pure native | Two steps. Each reads when its own output is first pulled, so a change made between the two pulls is visible to the second. Pure native code is one function, but each step in it is guarded and a pull runs its output's cone alone. |
+| Native tier | One fused segment. Both read together at the first pull of either, so a change made between the pulls is not visible until the next write. |
 
 So, normatively:
 

@@ -1069,3 +1069,39 @@ fn a_constant_outside_its_node_s_contract_is_refused_at_build() {
         }
     }
 }
+
+/// A pull runs the requested output's cone and nothing else, on every
+/// engine (engines.md §3.1). `counter()` counts its own runs, and it is
+/// outside the cone of `a`: however many times `a` is pulled, the first
+/// pull of `n` finds the counter never run, on every engine and in both
+/// of pure native code's modes. Pure native code used to run its one
+/// function for the whole program on every pull after a write, so each
+/// pull of `a` advanced a counter nothing had asked for.
+#[test]
+fn a_pull_runs_its_own_cone_and_nothing_else_on_every_engine() {
+    use polydat::dsl::compile::compile_polydat_with;
+    use polydat::{Engine, JitMode, Provenance};
+    let src = "input cycle: u64\na := hash(cycle)\nn := counter()\n";
+    for engine in [
+        Engine::Interpreter(JitMode::Off),
+        Engine::Interpreter(JitMode::Auto),
+        Engine::Closures(Provenance::Raw),
+        Engine::Closures(Provenance::PushPull),
+        Engine::Native(Provenance::Raw),
+        Engine::Native(Provenance::PushPull),
+        Engine::PureNative(Provenance::Raw),
+        Engine::PureNative(Provenance::PushPull),
+    ] {
+        let mut k = compile_polydat_with(src, engine).unwrap();
+        for c in 0..5u64 {
+            k.set_inputs(&[c]);
+            let _ = k.pull("a");
+        }
+        k.set_inputs(&[5]);
+        assert_eq!(
+            k.pull("n"),
+            polydat::ast::Value::U64(0),
+            "{engine}: pulling `a` ran `counter()`, which is outside its cone"
+        );
+    }
+}

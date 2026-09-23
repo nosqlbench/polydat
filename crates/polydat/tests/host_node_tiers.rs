@@ -180,12 +180,12 @@ fn a_host_node_stays_live_on_every_engine() {
 /// Read granularity is the step's, and the step is the engine's
 /// (runtime_model.md, R1.v "Read granularity").
 ///
-/// Two volatile wires are two steps on the interpreter and the closure
-/// tier, and one fused segment on the native tiers — one function is
-/// the whole program on pure native, which is why this cannot be made
-/// to agree by choosing differently. So a change made between two pulls
-/// of one write is visible to the second read on the cone-lazy engines
-/// and not on the native ones.
+/// Two volatile wires are two steps on the interpreter, the closure
+/// tier, and pure native code, whose one function guards each step and
+/// runs a pull's cone alone; on the native tier they are one fused
+/// segment. So a change made between two pulls of one write is visible
+/// to the second read on the per-step engines and not on the native
+/// tier.
 ///
 /// What every engine owes regardless: the value is not carried across
 /// the write. That is asserted for all of them at the end.
@@ -201,7 +201,9 @@ fn read_granularity_is_the_engines_step() {
 
         assert_eq!(a, polydat::ast::Value::F64(3.0), "{name}: first read");
 
-        let cone_lazy = name.starts_with("interpreter") || name.starts_with("closures");
+        let cone_lazy = name.starts_with("interpreter")
+            || name.starts_with("closures")
+            || name.starts_with("pure native");
         let expected = if cone_lazy {
             // Its own step, read when its own output was pulled.
             polydat::ast::Value::F64(9.0)

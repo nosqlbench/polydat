@@ -179,7 +179,14 @@ failure.
 Pure native code, one function for the whole program, is a fourth kernel
 behind P3: the differential tier that proves the native lowerings against
 the closures, and the carrier of the Tier-1 register kernel
-([simd_isa_autopromotion.md](simd_isa_autopromotion.md)). It refuses a node
+([simd_isa_autopromotion.md](simd_isa_autopromotion.md)). One function
+does not mean every run is the whole program. Each step in it is guarded
+by two flags, one saying it is clean and one saying the caller wants it,
+and runs only when it is wanted and not clean. A pull wants its output's
+cone, found from the steps' slots and kept, and `eval` wants every step,
+so the rule of §3.1 holds here as on every engine. In `raw` mode a write
+makes every step dirty, a new round in which each step runs at most once.
+In `pushpull` a write dirties the dependents of what changed. It refuses a node
 without a lowering and is `#[doc(hidden)]`: the differential suites and the
 ladder benchmarks reach it and one engine's concrete kernel through builders
 of their own, which are not a host surface. A host selects an engine with

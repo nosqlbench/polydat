@@ -147,8 +147,8 @@ A volatile step — a node declaring `Purity::Nondeterministic`, or one
 under a `volatile` binding — is read at most once per write and re-read
 on the next, on every engine. But "per step" is per the *engine's*
 step, and a compiled engine's step is a fused segment. Two volatile
-wires are two steps on the interpreter and the closure tier, and one
-segment on the native tiers:
+wires are two steps on the interpreter, the closure tier, and pure
+native code, and one segment on the native tier:
 
 ```
 w := clock_reading()      # two volatile wires,
@@ -157,8 +157,8 @@ x := clock_reading()      # pulled in one write
 
 | engine | `w` and `x` |
 |---|---|
-| interpreter, closure tier | read separately, when each is first pulled |
-| native, pure native | read together, at the first pull of either |
+| interpreter, closure tier, pure native | read separately, when each is first pulled |
+| native (the default) | read together, at the first pull of either |
 
 So a host moving from the interpreter to the default engine goes from
 two readings to one. For sampling something that moves — a clock, a

@@ -2230,7 +2230,9 @@ pub(crate) fn compile_jit_raw_with(
     scratch: super::kernels::ScratchPlan,
     volatile: Vec<usize>,
 ) -> Result<JitKernelRaw, String> {
-    let (raw_fn, _, code) = compile_jit_impl(&steps, false, Some(total_slots))?;
+    // The guarded entry, as push-pull has: raw differs in what a write
+    // dirties (every step, a new round) and not in how a pull runs.
+    let (_, guarded_fn, code) = compile_jit_impl(&steps, true, Some(total_slots))?;
     let mut core = JitCore::new(
         total_slots,
         coord_count,
@@ -2240,12 +2242,14 @@ pub(crate) fn compile_jit_raw_with(
         scratch,
         volatile,
     );
+    core.cones = super::kernels::ConePlan::new(&steps, total_slots);
     core.set_externs(externs);
     core.engine =
         crate::compile::select::Engine::PureNative(crate::compile::select::Provenance::Raw);
     Ok(JitKernelRaw {
         core,
-        code_fn: raw_fn,
+        code_fn: guarded_fn,
+        node_clean: vec![0u8; steps.len()],
     })
 }
 
@@ -2293,6 +2297,7 @@ pub(crate) fn compile_jit_push_pull(
         scratch,
         volatile,
     );
+    core.cones = super::kernels::ConePlan::new(&steps, total_slots);
     core.set_externs(externs);
     Ok(JitKernelPushPull {
         core,
@@ -2309,8 +2314,12 @@ pub(crate) fn compile_jit_push_pull(
 
 /// A native entry point over a state's slot buffer and scratch.
 pub type NativeFn = unsafe fn(*const u64, *mut u64, *mut crate::ast::ScratchBuf);
-/// The provenance variant: a clean flag per step follows the scratch.
-pub type NativeProvFn = unsafe fn(*const u64, *mut u64, *mut crate::ast::ScratchBuf, *mut u8);
+/// The guarded variant: after the scratch, a clean flag per step, which
+/// the code sets as each step runs, and a want flag per step, which the
+/// caller sets to the steps it asks for. A step runs when it is wanted
+/// and not clean.
+pub type NativeProvFn =
+    unsafe fn(*const u64, *mut u64, *mut crate::ast::ScratchBuf, *mut u8, *const u8);
 
 /// `(raw_fn, prov_fn, code)` — produced by the core JIT compile: the
 /// scalar entry point, the provenance-tracking entry point, and the
@@ -2803,13 +2812,14 @@ fn compile_jit_impl(
 
     // Function signature depends on provenance mode:
     // Without: fn(coords: *const u64, buffer: *mut u64, scratch: *mut ScratchBuf)
-    // With:    fn(coords, buffer, scratch, clean: *mut u8)
+    // With:    fn(coords, buffer, scratch, clean: *mut u8, want: *const u8)
     let mut sig = module.make_signature();
     sig.params.push(AbiParam::new(types::I64)); // coords ptr
     sig.params.push(AbiParam::new(types::I64)); // buffer ptr
     sig.params.push(AbiParam::new(types::I64)); // scratch ptr
     if provenance {
         sig.params.push(AbiParam::new(types::I64)); // clean ptr
+        sig.params.push(AbiParam::new(types::I64)); // want ptr
     }
     let func_id = module
         .declare_function("polydat_kernel", Linkage::Local, &sig)
@@ -2829,10 +2839,13 @@ fn compile_jit_impl(
         let _coords_ptr = builder.block_params(block)[0];
         let buffer_ptr = builder.block_params(block)[1];
         let scratch_ptr = builder.block_params(block)[2];
-        let clean_ptr = if provenance {
-            Some(builder.block_params(block)[3])
+        let (clean_ptr, want_ptr) = if provenance {
+            (
+                Some(builder.block_params(block)[3]),
+                Some(builder.block_params(block)[4]),
+            )
         } else {
-            None
+            (None, None)
         };
 
         // Import extern functions for calls
@@ -2892,19 +2905,28 @@ fn compile_jit_impl(
             .collect();
         // Generate code for each step
         for (step_idx, (jit_op, input_slots, output_slots)) in steps.iter().enumerate() {
-            // Provenance guard: if clean[step_idx] != 0, skip this node.
-            let skip_block = if let Some(cp) = clean_ptr {
+            // The step's guard: it runs only when it is wanted, that is in
+            // the cone of what the caller asked for, and not clean. A
+            // pull asks for one output's cone and a full evaluation for
+            // every step, so a pull runs the output's cone and nothing
+            // else (engines.md §3.1), and a step outside it keeps its
+            // dirty flag for a later pull.
+            let skip_block = if let (Some(cp), Some(wp)) = (clean_ptr, want_ptr) {
                 let skip = builder.create_block();
                 let cont = builder.create_block();
-                // Load clean[step_idx] (u8)
-                let offset = builder.ins().iconst(types::I64, step_idx as i64);
-                let addr = builder.ins().iadd(cp, offset);
-                let flag = builder.ins().load(types::I8, ir::MemFlags::new(), addr, 0);
                 let zero = builder.ins().iconst(types::I8, 0);
+                let clean = builder
+                    .ins()
+                    .load(types::I8, ir::MemFlags::new(), cp, step_idx as i32);
                 let is_clean = builder
                     .ins()
-                    .icmp(ir::condcodes::IntCC::NotEqual, flag, zero);
-                builder.ins().brif(is_clean, skip, &[], cont, &[]);
+                    .icmp(ir::condcodes::IntCC::NotEqual, clean, zero);
+                let want = builder
+                    .ins()
+                    .load(types::I8, ir::MemFlags::new(), wp, step_idx as i32);
+                let unwanted = builder.ins().icmp(ir::condcodes::IntCC::Equal, want, zero);
+                let skip_it = builder.ins().bor(is_clean, unwanted);
+                builder.ins().brif(skip_it, skip, &[], cont, &[]);
                 builder.switch_to_block(cont);
                 builder.seal_block(cont);
                 Some(skip)
