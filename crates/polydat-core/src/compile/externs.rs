@@ -757,12 +757,24 @@ fn write_through(s: &ExternSlot, buffer: &mut [u64]) {
 }
 
 /// A carrier value's slot bits; an unset carrier reads as zero.
+///
+/// The catch-all used to be `0`, which answered zero for an unset
+/// extern and *also* for a value of a type that is not a carrier at
+/// all — a wrong answer with no error, which is the worse half of the
+/// two. `None` is the case that means zero and says so; anything else
+/// reaching here is a slot coloured `Imm1` holding something that does
+/// not fit one, which the type system does not allow and the caller
+/// should hear about rather than read a zero from.
 fn carrier_bits(v: &Value) -> u64 {
     match v {
         Value::U64(n) => *n,
         Value::I64(n) => *n as u64,
         Value::F64(f) => f.to_bits(),
         Value::Bool(b) => u64::from(*b),
-        _ => 0,
+        Value::None => 0,
+        other => panic!(
+            "an extern slot holds a {:?}, which is not a one-slot carrier",
+            other.port_type()
+        ),
     }
 }

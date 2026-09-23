@@ -291,17 +291,10 @@ fn fuzzable_sigs() -> Vec<FuncSig> {
     registry::registry()
         .into_iter()
         .filter(|s| !s.name.starts_with("__"))
-        .filter(|s| s.outputs == 1)
-        // VariadicWires we can drive (random wire-arg count); the
-        // other variadic shapes (VariadicConsts, VariadicGroup)
-        // need positional pair / group invariants the random
-        // generator can't yet guarantee, so they stay excluded.
-        .filter(|s| {
-            matches!(
-                s.arity,
-                registry::Arity::Fixed | registry::Arity::VariadicWires { .. },
-            )
-        })
+        // A dynamic-output node (`outputs == 0`) decides its own count
+        // from its arguments, which the generator cannot know; every
+        // fixed count, one or many, it can bind names for.
+        .filter(|s| s.outputs >= 1)
         // No fuzzable signature actually declares a `ConstVec*`
         // slot type today; the filter is kept for forward-
         // compatibility — the generator below would have to
@@ -404,16 +397,65 @@ fn generate_module(rng: &mut Rng, sigs: &[FuncSig], n_bindings: usize) -> String
         // additional wire args. The trailing wire param shape is
         // declared once in `params` — we just emit more of the
         // same wire type past the fixed positions.
-        if let registry::Arity::VariadicWires { min_wires } = sig.arity {
-            let extra = rng.range(6); // 0..=5 extra wires
-            let total_wires_needed = min_wires.saturating_sub(args.len()) + extra;
-            for _ in 0..total_wires_needed {
-                args.push(pick_wire(rng, &defined));
+        match sig.arity {
+            registry::Arity::VariadicWires { min_wires } => {
+                let extra = rng.range(6); // 0..=5 extra wires
+                let total_wires_needed = min_wires.saturating_sub(args.len()) + extra;
+                for _ in 0..total_wires_needed {
+                    args.push(pick_wire(rng, &defined));
+                }
             }
+            // Trailing constants repeat. The shape is what the
+            // generator owes — a count at or above the minimum, of the
+            // trailing const's own kind. Whether the *values* mean
+            // anything to the node is the node's to say, and saying it
+            // in a sentence rather than a panic is invariant 2.
+            registry::Arity::VariadicConsts { min_consts } => {
+                let trailing = sig
+                    .params
+                    .iter()
+                    .rev()
+                    .find(|p| p.slot_type != SlotType::Wire);
+                if let Some(p) = trailing {
+                    let extra = rng.range(4);
+                    for _ in 0..(min_consts.saturating_sub(1) + extra) {
+                        args.push(materialize(rng, p, &defined));
+                    }
+                }
+            }
+            // A repeating group of slot types, emitted in the declared
+            // order so each repetition is positionally well formed.
+            registry::Arity::VariadicGroup { group, min_repeats } => {
+                let repeats = min_repeats + rng.range(3);
+                for _ in 0..repeats {
+                    for slot in group {
+                        let p = sig
+                            .params
+                            .iter()
+                            .find(|p| p.slot_type == *slot)
+                            .unwrap_or(&sig.params[0]);
+                        args.push(materialize(rng, p, &defined));
+                    }
+                }
+            }
+            registry::Arity::Fixed => {}
         }
 
-        out.push_str(&format!("{name} := {}({})\n", sig.name, args.join(", ")));
-        defined.push(name);
+        // A node with more than one output binds a name per output.
+        // Dynamic-output nodes (`outputs == 0`, the count following
+        // the arguments) stay out: how many names to write is the
+        // node's own rule, and the generator does not know it.
+        let targets = if sig.outputs > 1 {
+            let names: Vec<String> = (0..sig.outputs).map(|k| format!("{name}_{k}")).collect();
+            let line = format!("({})", names.join(", "));
+            defined.extend(names);
+            line
+        } else {
+            defined.push(name.clone());
+            name
+        };
+
+        out.push_str(&format!("{targets} := {}({})\n", sig.name, args.join(", ")));
     }
     out
 }
