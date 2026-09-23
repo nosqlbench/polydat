@@ -569,10 +569,112 @@ fn run_wellformed_pass(seed: u64, iterations: usize) -> Vec<String> {
                 {
                     failures.push(format!("[seed {seed:#x}] iteration {i}: T1 violated, two hosts diverged.\n  source:\n{source}\n  {}", repro(i)));
                 }
+                // Invariant 6: and the same on every engine. Sampled —
+                // a sweep compiles the program once more per tier, two
+                // of them through Cranelift, and a `for` body is a
+                // child program compiled in its own right on top of
+                // that. `FUZZ_ENGINE_SWEEP` is the stride; 0 turns it
+                // off, 1 sweeps every program.
+                let stride = env_u64("FUZZ_ENGINE_SWEEP", 8) as usize;
+                if stride != 0 && i % stride == 0 {
+                    for detail in engine_trace_failures(&source) {
+                        failures.push(format!(
+                            "[seed {seed:#x}] iteration {i}: {detail}\n  source:\n{source}\n  {}",
+                            repro(i)
+                        ));
+                    }
+                }
             }
         }
     }
     failures
+}
+
+/// Invariant 6 — a composed program traverses the same on every engine.
+///
+/// Invariant 5 above runs one source twice and compares the traces,
+/// which is T1: two hosts of the same program agree. Both runs were the
+/// interpreter's, so nothing here ever asked a compiled tier what a
+/// `for` does — and a traversal is where the engines have the most to
+/// disagree about, since a body is a child program compiled in its own
+/// right and an activation binds its coordinates through the same
+/// kernel surface the parent uses.
+///
+/// The interpreter with no cones is the oracle; every other engine
+/// walks the same bounded traversals and must produce the same trace.
+/// A tier that declines the program says so (`KernelError::Refused`)
+/// and is skipped; a tier that accepts it and answers differently is
+/// the finding.
+fn engine_trace_failures(source: &str) -> Vec<String> {
+    use polydat::{Engine, JitMode, KernelError, Provenance};
+    let mut out = Vec::new();
+
+    // A program whose value is not a function of its inputs is not
+    // comparable by value — `random`, a clock, a counter.
+    let deterministic = match polydat::dsl::compile_polydat_interpreter(source) {
+        Ok(k) => k.program().is_deterministic(),
+        Err(_) => return out,
+    };
+    if !deterministic {
+        return out;
+    }
+
+    let trace_on = |engine: Engine| -> Result<Result<Vec<String>, String>, String> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut k = match polydat::dsl::compile_polydat_with(source, engine) {
+                Ok(k) => k,
+                Err(KernelError::Refused { .. }) => return Err("refused".to_string()),
+                Err(e) => return Err(format!("compile: {e}")),
+            };
+            k.set_inputs(&[3]);
+            let mut trace = Vec::new();
+            run_traversals_bounded(k.as_mut(), 0, &mut trace)?;
+            Ok(trace)
+        }))
+        .map_err(|p| panic_text(&p))
+    };
+
+    let want = match trace_on(Engine::Interpreter(JitMode::Off)) {
+        Ok(Ok(t)) => t,
+        // The oracle itself declined or failed; invariants 4 and 5
+        // judged that, and there is nothing to compare against.
+        _ => return out,
+    };
+
+    let mut engines = vec![
+        Engine::Interpreter(JitMode::Auto),
+        Engine::Closures(Provenance::Raw),
+        Engine::Closures(Provenance::Auto),
+    ];
+    if cfg!(feature = "jit") {
+        engines.push(Engine::Native(Provenance::Raw));
+        engines.push(Engine::PureNative(Provenance::Auto));
+    }
+
+    for engine in engines {
+        match trace_on(engine) {
+            Ok(Ok(got)) if got == want => {}
+            // Declined, or failed the way the oracle would have.
+            Ok(Err(_)) => {}
+            Ok(Ok(got)) => out.push(format!(
+                "I6: {engine} traverses differently from the interpreter:\n  \
+                 interpreter: {want:?}\n  {engine}: {got:?}"
+            )),
+            // Pure native cannot carry a `None`, and one reaching it is
+            // "a panic naming the extern, the tripwire of the rule,
+            // never a wrong value" (engines.md §3.3). Whether an extern
+            // is ever set is the host's, not the program's, so this
+            // cannot be decided at build and refused there — the
+            // tripwire *is* the decline, and the message says to run
+            // the program on `native` instead. Not a finding: it is
+            // the rule holding.
+            Err(p) if p.contains("cannot carry a `None`") => {}
+            Err(p) => out.push(format!(
+                "I6: {engine} panicked traversing a program the interpreter walked: {p}"
+            )),
+        }
+    }
+    out
 }
 
 /// Activate every traversal of `k` (recursing into activations' own
