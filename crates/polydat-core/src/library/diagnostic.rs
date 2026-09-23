@@ -65,8 +65,10 @@ impl crate::derive_support::PolydatSetup for std::sync::Mutex<FftOutput> {}
 /// degenerate). Returned as a `Mutex<Vec<f64>>` so the eval body
 /// can mutate across calls while remaining Send+Sync.
 fn fft_buffer(window_size: u64) -> std::sync::Mutex<Vec<f64>> {
-    let cap = window_size.max(2) as usize;
-    std::sync::Mutex::new(Vec::with_capacity(cap))
+    std::sync::Mutex::new(crate::derive_support::buffer_for(
+        window_size.max(2),
+        "fft_analyze window",
+    ))
 }
 
 /// Stash the output path without opening the file. Lazy-open

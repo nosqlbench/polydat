@@ -45,9 +45,10 @@ struct SettleState {
 /// horizon is clamped to a minimum of 1; the eval body enforces it
 /// as the ring bound each cycle.
 fn settle_register(horizon: u64) -> Mutex<SettleState> {
-    let cap = horizon.max(1) as usize;
+    let ring: Vec<_> = polydat::derive_support::buffer_for(horizon.max(1), "is_stable horizon");
     Mutex::new(SettleState {
-        samples: VecDeque::with_capacity(cap),
+        // `VecDeque::from` keeps the reserved capacity.
+        samples: VecDeque::from(ring),
     })
 }
 

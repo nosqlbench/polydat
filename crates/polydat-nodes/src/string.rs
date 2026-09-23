@@ -341,13 +341,14 @@ fn char_buf(
     #[poly_const(expand_charset, from = charset)] chars: &Vec<char>,
 ) -> String {
     let n = chars.len();
-    let len = length as usize;
-    if n == 0 || len == 0 {
+    if n == 0 || length == 0 {
         return String::new();
     }
-    let mut result = String::with_capacity(len);
+    // `length` is a wire: a size the machine cannot hold is a failure
+    // of this node, not an abort of the host (`string_for`).
+    let mut result = polydat::derive_support::string_for(length, "char_buf");
     let mut h = seed;
-    for _ in 0..len {
+    for _ in 0..length {
         h = xxhash_rust::xxh3::xxh3_64(&h.to_le_bytes());
         result.push(chars[(h as usize) % n]);
     }

@@ -150,10 +150,8 @@ pub fn lid_mle_of(distances: &[f32], k: f64) -> f64 {
 
 /// The vector of `hash_vec` into `out`, which is cleared first.
 pub fn hash_vec_into(seed: u64, dim: u64, out: &mut Vec<f32>) {
-    let dim = dim as usize;
-    out.clear();
-    out.reserve(dim);
-    for i in 0..dim {
+    crate::derive_support::reserve_for(out, dim, "hash_vec");
+    for i in 0..dim as usize {
         let h = crate::numeric::hash::splitmix64_u64(
             seed.wrapping_add((i as u64).wrapping_mul(0x9e3779b97f4a7c15)),
         );
@@ -163,10 +161,8 @@ pub fn hash_vec_into(seed: u64, dim: u64, out: &mut Vec<f32>) {
 
 /// The vector of `xxhash3_vec` into `out`, which is cleared first.
 pub fn xxhash3_vec_into(seed: u64, dim: u64, out: &mut Vec<f32>) {
-    let dim = dim as usize;
-    out.clear();
-    out.reserve(dim);
-    for i in 0..dim {
+    crate::derive_support::reserve_for(out, dim, "xxhash3_vec");
+    for i in 0..dim as usize {
         let mut key = [0u8; 16];
         key[..8].copy_from_slice(&seed.to_le_bytes());
         key[8..].copy_from_slice(&(i as u64).to_le_bytes());

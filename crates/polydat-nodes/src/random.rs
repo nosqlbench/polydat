@@ -100,8 +100,8 @@ fn random_f64(
     purity = Nondeterministic("thread-local PRNG"),
 )]
 fn random_bytes(#[poly_default(8u64)] size: polydat::derive_support::Const<u64>) -> Vec<u8> {
-    let sz = *size as usize;
-    let mut buf = Vec::with_capacity(sz);
+    let mut buf = polydat::derive_support::buffer_for(*size, "random_bytes");
+    let sz = *size as usize; // fits: `buffer_for` refused anything that does not
     while buf.len() < sz {
         let take = (sz - buf.len()).min(8);
         buf.extend_from_slice(&next_u64().to_le_bytes()[..take]);
@@ -142,9 +142,9 @@ fn random_string(
     if chars.is_empty() {
         return String::new();
     }
-    (0..*length)
-        .map(|_| chars[(next_u64() as usize) % chars.len()])
-        .collect()
+    let mut out = polydat::derive_support::string_for(*length, "random_string");
+    out.extend((0..*length).map(|_| chars[(next_u64() as usize) % chars.len()]));
+    out
 }
 
 /// Random boolean with probability of true.

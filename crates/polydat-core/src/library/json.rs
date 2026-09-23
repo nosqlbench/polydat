@@ -441,9 +441,9 @@ fn random_vector(
     let min_v = *min;
     let max_v = *max;
     let range = max_v - min_v;
-    let dim = dim as usize;
     let mut h = seed;
-    let mut values = Vec::with_capacity(dim);
+    // `dim` is a wire (`buffer_for`).
+    let mut values: Vec<String> = crate::derive_support::buffer_for(dim, "random_vector");
     for _ in 0..dim {
         h = xxhash_rust::xxh3::xxh3_64(&h.to_le_bytes());
         let unit = (h as f64) / (u64::MAX as f64); // [0, 1)

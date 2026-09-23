@@ -33,8 +33,8 @@ fn bytes_from_hash(
     input: u64,
     #[poly_default(8u64)] size: polydat::derive_support::Const<u64>,
 ) -> Vec<u8> {
-    let sz = *size as usize;
-    let mut result = Vec::with_capacity(sz);
+    let mut result = polydat::derive_support::buffer_for(*size, "bytes_from_hash");
+    let sz = *size as usize; // fits: `buffer_for` refused anything that does not
     let chunks = sz.div_ceil(8);
     for i in 0..chunks {
         let h = crate::hash::splitmix64_u64(input.wrapping_add(i as u64));
@@ -59,8 +59,13 @@ pub struct ByteImage {
 
 impl ByteImage {
     /// Build a byte image of `image_size` bytes from a seed.
-    pub fn new(image_size: usize, seed: u64) -> Self {
-        let mut image = Vec::with_capacity(image_size);
+    ///
+    /// The size is a `u64` because it arrives as one; `buffer_for` is the
+    /// one place it becomes a `usize`, and it refuses a size that does
+    /// not fit rather than truncating it on a 32-bit target.
+    pub fn new(image_size: u64, seed: u64) -> Self {
+        let mut image = polydat::derive_support::buffer_for(image_size, "byte image");
+        let image_size = image_size as usize; // fits: refused above otherwise
         let chunks = image_size.div_ceil(8);
         for i in 0..chunks {
             let h = crate::hash::splitmix64_u64(seed.wrapping_add(i as u64));
@@ -86,7 +91,7 @@ impl ByteImage {
 /// Setup function: build the byte image from `image_size` + `seed`.
 /// Single-call construction-time invocation per node instance.
 fn build_byte_image(image_size: u64, seed: u64) -> ByteImage {
-    ByteImage::new(image_size as usize, seed)
+    ByteImage::new(image_size, seed)
 }
 
 /// Extract a fixed-size byte slice from a pre-built image.
@@ -125,22 +130,22 @@ pub struct CharImage {
 
 impl CharImage {
     /// Build a character image by repeating `charset` to fill `size` chars.
-    pub fn new(charset: &str, size: usize) -> Self {
+    pub fn new(charset: &str, size: u64) -> Self {
         let chars: Vec<char> = parse_charset(charset);
         assert!(!chars.is_empty(), "charset must not be empty");
-        let mut image = String::with_capacity(size);
-        for idx in 0..size {
+        let mut image = polydat::derive_support::string_for(size, "char image");
+        for idx in 0..size as usize {
             image.push(chars[idx % chars.len()]);
         }
         Self { image }
     }
 
     /// Build a character image by hashing into the charset.
-    pub fn hashed(charset: &str, size: usize, seed: u64) -> Self {
+    pub fn hashed(charset: &str, size: u64, seed: u64) -> Self {
         let chars: Vec<char> = parse_charset(charset);
         assert!(!chars.is_empty(), "charset must not be empty");
-        let mut image = String::with_capacity(size);
-        for i in 0..size {
+        let mut image = polydat::derive_support::string_for(size, "char image");
+        for i in 0..size as usize {
             let h = crate::hash::splitmix64_u64(seed.wrapping_add(i as u64));
             image.push(chars[(h as usize) % chars.len()]);
         }
@@ -169,7 +174,7 @@ impl CharImage {
 /// Setup function: build the character image from `charset` +
 /// `image_size` + `seed`. Single-call construction-time invocation.
 fn build_char_image(charset: &str, image_size: u64, seed: u64) -> CharImage {
-    CharImage::hashed(charset, image_size as usize, seed)
+    CharImage::hashed(charset, image_size, seed)
 }
 
 /// Extract a text slice from a pre-built character image.

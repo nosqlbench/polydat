@@ -725,3 +725,136 @@ fn a_variadic_with_no_wires_is_its_identity_on_every_engine() {
         }
     }
 }
+
+/// Every node reads the same on every engine — values, at the edges.
+///
+/// The matrix above records whether each node *runs* on each engine: it
+/// drives one cycle at `3` and discards what comes back. So nothing
+/// compared a node's answer across engines, and the four drifts found
+/// on 2026-09-22 all lived exactly there — a native lowering carrying a
+/// second copy of the node's rule and disagreeing at an edge: `shuffle`
+/// at a zero range, `blend` and `unfair_coin` at an out-of-range
+/// constant, `min` with no wires. `cycle = 3` reaches none of those.
+///
+/// This drives each node's coverage program at inputs chosen for where
+/// arithmetic breaks — zero, one, the 32- and 53-bit boundaries, the
+/// signed and unsigned maxima — and compares every output against the
+/// interpreter with no cones, which runs the node's own body. Both
+/// failing is agreement (the message is `failure_parity`'s concern);
+/// one failing and one answering is the finding, and so is two answers
+/// that differ. Nondeterministic nodes are skipped, since differing is
+/// what they are for; so is pure native's unset-extern trap, the one
+/// runtime exception engines.md §8 names.
+///
+/// The whole sweep runs in about a second, so a node that makes it slow
+/// is a finding too: `date_components` once walked 584 million years at
+/// `u64::MAX`, and a node that sized a buffer by its input once aborted
+/// the process here.
+#[test]
+fn every_node_reads_the_same_on_every_engine_at_the_edges() {
+    use polydat::dsl::compile::{compile_polydat_interpreter, compile_polydat_with};
+    use polydat::{Engine, JitMode, KernelError, Provenance};
+
+    const EDGES: &[u64] = &[
+        0,
+        1,
+        3,
+        255,
+        // Big enough to cross the u16/i16 edges, small enough that a node
+        // sizing a buffer by its input allocates it in a blink. The huge
+        // edges below are refused by `buffer_for` rather than allocated.
+        65536,
+        (1 << 53) + 1,
+        i64::MAX as u64,
+        u64::MAX,
+    ];
+    let engines = [
+        Engine::Interpreter(JitMode::Auto),
+        Engine::Closures(Provenance::Raw),
+        Engine::Native(Provenance::Raw),
+        Engine::PureNative(Provenance::Raw),
+    ];
+
+    type Read = Result<Vec<polydat::ast::Value>, String>;
+    // One cycle's outputs, a panic caught as its message. A kernel that
+    // panicked is not trusted for the next edge, so the caller rebuilds.
+    fn read(k: &mut dyn polydat::Kernel, names: &[String], c: u64) -> Read {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            k.set_inputs(&[c]);
+            names.iter().map(|n| k.pull(n)).collect::<Vec<_>>()
+        }))
+        .map_err(payload_text)
+    }
+    fn agree(a: &[polydat::ast::Value], b: &[polydat::ast::Value]) -> bool {
+        // `NaN != NaN`: equally undefined on both sides is agreement.
+        a == b || format!("{a:?}") == format!("{b:?}")
+    }
+
+    let mut findings = Vec::new();
+    let mut compared = 0usize;
+    for (name, src) in common::coverage_cases::programs() {
+        let Ok(probe) = compile_polydat_interpreter(&src) else {
+            continue;
+        };
+        if !probe.program().is_deterministic() {
+            continue;
+        }
+        let names: Vec<String> = polydat::Kernel::output_names(&probe);
+
+        let build = |e: Engine| compile_polydat_with(&src, e);
+        let Ok(mut oracle) = build(Engine::Interpreter(JitMode::Off)) else {
+            continue;
+        };
+        let mut want: Vec<Read> = Vec::new();
+        for &c in EDGES {
+            let r = read(oracle.as_mut(), &names, c);
+            if r.is_err() {
+                oracle = match build(Engine::Interpreter(JitMode::Off)) {
+                    Ok(k) => k,
+                    Err(_) => break,
+                };
+            }
+            want.push(r);
+        }
+
+        for engine in engines {
+            let mut k = match build(engine) {
+                Ok(k) => k,
+                Err(KernelError::Refused { .. }) => continue,
+                Err(e) => {
+                    findings.push(format!("{name} on {engine}: does not build: {e}"));
+                    continue;
+                }
+            };
+            for (i, &c) in EDGES.iter().enumerate() {
+                let got = read(k.as_mut(), &names, c);
+                compared += 1;
+                match (&want[i], &got) {
+                    (Ok(a), Ok(b)) if agree(a, b) => {}
+                    (Err(_), Err(_)) => {}
+                    (_, Err(e)) if e.contains("cannot carry a `None`") => {}
+                    (a, b) => findings.push(format!(
+                        "{name} at cycle={c} on {engine}:\n    interpreter: {a:?}\n    {engine}: {b:?}"
+                    )),
+                }
+                if got.is_err() {
+                    k = match build(engine) {
+                        Ok(k) => k,
+                        Err(_) => break,
+                    };
+                }
+            }
+        }
+    }
+
+    assert!(
+        compared > 1000,
+        "only {compared} comparisons ran; the sweep is not reaching the nodes"
+    );
+    assert!(
+        findings.is_empty(),
+        "{} node/engine/edge disagreements ({compared} compared):\n\n{}",
+        findings.len(),
+        findings.join("\n")
+    );
+}

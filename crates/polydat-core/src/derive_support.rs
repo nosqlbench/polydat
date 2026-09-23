@@ -856,6 +856,60 @@ pub fn ref_value(slots: &[u64]) -> &Value {
     unsafe { &*(slots[0] as usize as *const Value) }
 }
 
+/// An empty buffer with room for `n` elements, for a node whose buffer
+/// size comes from a *value* — a wire, a constant, or arithmetic on
+/// either.
+///
+/// `Vec::with_capacity(n as usize)` is the obvious spelling and it is
+/// wrong twice over for a value the node did not choose. A size the
+/// machine cannot hold makes the allocator **abort the process**, which
+/// no `catch_unwind` sees: not an error on the program that asked, but
+/// the host gone. And `as usize` truncates on a 32-bit target, so a
+/// large size silently becomes a small one. Here a size that does not
+/// fit `usize`, or cannot be reserved, is a failure of the node like
+/// any other — caught, attributed to the node and its inputs, and the
+/// same on every engine.
+///
+/// There is no cap. A size that *can* be allocated is allocated, however
+/// slow filling it is; how large a string a host asks for is the host's
+/// business. What this refuses is only what could never have
+/// succeeded. Arithmetic on a size belongs in `u64` with
+/// `saturating_add`, so an overflow reaches here as a size that cannot
+/// be reserved rather than wrapping to a small one first.
+pub fn buffer_for<T>(n: u64, what: &str) -> Vec<T> {
+    let mut v = Vec::new();
+    match usize::try_from(n) {
+        Ok(n) if v.try_reserve_exact(n).is_ok() => v,
+        _ => refuse_size(n, what),
+    }
+}
+
+/// [`buffer_for`] for text: an empty `String` with room for `n` bytes.
+pub fn string_for(n: u64, what: &str) -> String {
+    let mut s = String::new();
+    match usize::try_from(n) {
+        Ok(n) if s.try_reserve_exact(n).is_ok() => s,
+        _ => refuse_size(n, what),
+    }
+}
+
+/// [`buffer_for`] for a buffer that is reused across evaluations:
+/// `out` is cleared and then has room for `n` elements. A native
+/// producer writing into step-owned scratch takes this shape, so its
+/// refusal reads the same as the node's.
+pub fn reserve_for<T>(out: &mut Vec<T>, n: u64, what: &str) {
+    out.clear();
+    match usize::try_from(n) {
+        Ok(n) if out.try_reserve_exact(n).is_ok() => {}
+        _ => refuse_size(n, what),
+    }
+}
+
+#[cold]
+fn refuse_size(n: u64, what: &str) -> ! {
+    panic!("{what}: a buffer of {n} elements cannot be allocated on this machine")
+}
+
 /// A polymorphic port's slots as the owned `Value` the wire type
 /// names: a scalar from its bits, a `Ref2` kind copied out of the
 /// pair its producer published.
@@ -949,3 +1003,39 @@ fn carrier_slot_bits(v: &Value) -> u64 {
 // automatically — no parallel collection, no separate dispatch
 // surface. See `polydat::dsl::registry` for the load-bearing
 // data structures.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn refusal(f: impl FnOnce() + std::panic::UnwindSafe) -> String {
+        let err = std::panic::catch_unwind(f).expect_err("the size must be refused");
+        err.downcast_ref::<String>().cloned().unwrap_or_default()
+    }
+
+    /// A size no machine can hold is a caught failure naming the node,
+    /// not an allocator abort that takes the host down with it.
+    #[test]
+    fn an_impossible_size_is_refused_not_aborted() {
+        let m = refusal(|| drop(buffer_for::<u32>(u64::MAX, "probe")));
+        assert!(
+            m.starts_with("probe: a buffer of 18446744073709551615"),
+            "{m}"
+        );
+        let m = refusal(|| drop(string_for((1 << 53) + 1, "probe")));
+        assert!(m.contains("cannot be allocated"), "{m}");
+        let m = refusal(|| reserve_for(&mut vec![1.0f32; 4], u64::MAX, "probe"));
+        assert!(m.contains("cannot be allocated"), "{m}");
+    }
+
+    /// A size that fits is reserved exactly, and a reused buffer comes
+    /// back cleared.
+    #[test]
+    fn a_feasible_size_is_reserved() {
+        let v: Vec<u8> = buffer_for(1000, "probe");
+        assert!(v.is_empty() && v.capacity() >= 1000);
+        let mut w = vec![7u8; 3];
+        reserve_for(&mut w, 64, "probe");
+        assert!(w.is_empty() && w.capacity() >= 64);
+    }
+}

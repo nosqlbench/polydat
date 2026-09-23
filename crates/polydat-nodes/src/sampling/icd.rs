@@ -151,9 +151,13 @@ pub fn dist_gamma_lut(shape: f64, scale: f64, resolution: usize) -> LutF64 {
 /// by the caller. The CDF is computed from the PMF:
 ///   P(k) = (1/k^s) / H(n,s)  where H(n,s) = sum_{i=1}^{n} 1/i^s
 pub fn dist_zipf_lut(n: u64, exponent: f64, resolution: usize) -> LutF64 {
+    // Reserve first: an `n` no machine could hold must fail before the
+    // harmonic sum below walks `1..=n`, or it is a hang rather than an
+    // error. `saturating_add` keeps the `+ 1` from wrapping to a small
+    // size at the top of the range (`buffer_for`).
+    let mut cdf = polydat::derive_support::buffer_for(n.saturating_add(1), "dist_zipf");
     // Precompute CDF
     let harmonic: f64 = (1..=n).map(|k| 1.0 / (k as f64).powf(exponent)).sum();
-    let mut cdf = Vec::with_capacity(n as usize + 1);
     cdf.push(0.0);
     let mut cumulative = 0.0;
     for k in 1..=n {
@@ -178,10 +182,13 @@ pub fn dist_zipf_lut(n: u64, exponent: f64, resolution: usize) -> LutF64 {
 ///
 /// Precompute CDF up to a reasonable upper bound, then invert.
 pub fn dist_poisson_lut(lambda: f64, resolution: usize) -> LutF64 {
-    let upper = (lambda + 6.0 * lambda.sqrt() + 10.0).ceil() as usize;
+    // `as u64` saturates an enormous or infinite λ to `u64::MAX`, which
+    // `buffer_for` then refuses; `upper + 2` in `usize` would have
+    // wrapped to a tiny buffer ahead of a loop over the huge `upper`.
+    let upper = (lambda + 6.0 * lambda.sqrt() + 10.0).ceil() as u64;
 
     // Precompute CDF via PMF: P(k) = e^(-λ) * λ^k / k!
-    let mut cdf = Vec::with_capacity(upper + 2);
+    let mut cdf = polydat::derive_support::buffer_for(upper.saturating_add(2), "dist_poisson");
     cdf.push(0.0);
     let mut cumulative = 0.0;
     let mut pmf = (-lambda).exp(); // P(0)
@@ -205,13 +212,20 @@ pub fn dist_poisson_lut(lambda: f64, resolution: usize) -> LutF64 {
 
 /// Binomial distribution: Binomial(trials, p). Support: [0, trials].
 pub fn dist_binomial_lut(trials: u64, prob: f64, resolution: usize) -> LutF64 {
-    let n = trials as usize;
-
     // Precompute CDF via PMF
-    let mut cdf = Vec::with_capacity(n + 2);
+    let mut cdf = polydat::derive_support::buffer_for(trials.saturating_add(2), "dist_binomial");
+    let n = trials as usize; // fits: `buffer_for` refused anything that does not
     cdf.push(0.0);
     let mut cumulative = 0.0;
-    let mut pmf = (1.0 - prob).powi(n as i32); // P(0) = (1-p)^n
+    // P(0) = (1-p)^n. `powi` takes an `i32`, and `n as i32` wraps
+    // negative past 2^31 trials, which turned the probability of zero
+    // successes into its reciprocal. `powi` is kept wherever it was
+    // correct so no existing output moves by a bit; past `i32::MAX` the
+    // exponent goes through `powf`.
+    let mut pmf = match i32::try_from(n) {
+        Ok(e) => (1.0 - prob).powi(e),
+        Err(_) => (1.0 - prob).powf(n as f64),
+    };
     for k in 0..=n {
         cumulative += pmf;
         cdf.push(cumulative.min(1.0));

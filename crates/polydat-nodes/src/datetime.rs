@@ -86,34 +86,6 @@ const MILLIS_PER_HOUR: u64 = 3_600_000;
 #[allow(dead_code)]
 const MILLIS_PER_DAY: u64 = 86_400_000;
 
-fn is_leap_year(y: u64) -> bool {
-    (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
-}
-
-fn days_in_month(y: u64, m: u64) -> u64 {
-    match m {
-        1 => 31,
-        2 => {
-            if is_leap_year(y) {
-                29
-            } else {
-                28
-            }
-        }
-        3 => 31,
-        4 => 30,
-        5 => 31,
-        6 => 30,
-        7 => 31,
-        8 => 31,
-        9 => 30,
-        10 => 31,
-        11 => 30,
-        12 => 31,
-        _ => 30,
-    }
-}
-
 fn decompose_epoch_ms(epoch_ms: u64) -> (u64, u64, u64, u64, u64, u64, u64) {
     let mut remaining = epoch_ms;
     let ms = remaining % MILLIS_PER_SEC;
@@ -123,30 +95,33 @@ fn decompose_epoch_ms(epoch_ms: u64) -> (u64, u64, u64, u64, u64, u64, u64) {
     let min = remaining % 60;
     remaining /= 60;
     let hour = remaining % 24;
-    let mut days = remaining / 24;
-
-    // Convert days since epoch (1970-01-01) to y/m/d
-    let mut year = 1970u64;
-    loop {
-        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
-        if days < days_in_year {
-            break;
-        }
-        days -= days_in_year;
-        year += 1;
-    }
-    let mut month = 1u64;
-    loop {
-        let dim = days_in_month(year, month);
-        if days < dim {
-            break;
-        }
-        days -= dim;
-        month += 1;
-    }
-    let day = days + 1;
-
+    let (year, month, day) = civil_from_days(remaining / 24);
     (year, month, day, hour, min, sec, ms)
+}
+
+/// Days since 1970-01-01 to a proleptic Gregorian `(year, month, day)`,
+/// in constant time.
+///
+/// The calendar used to be walked a year at a time, which is exact but
+/// linear in the year: at `u64::MAX` milliseconds that is some 584
+/// million iterations, one evaluation taking tens of seconds. This is
+/// the closed form (H. Hinnant, "chrono-Compatible Low-Level Date
+/// Algorithms"): count 400-year eras of 146 097 days from 0000-03-01,
+/// so the leap day falls at the end of each year of the era, then read
+/// the year, day of year, and month out of the era arithmetically. The
+/// input never precedes 1970, so every step stays in `u64`, and the
+/// largest input (`u64::MAX / 86_400_000` days) is far from overflow.
+fn civil_from_days(days: u64) -> (u64, u64, u64) {
+    let z = days + 719_468; // days since 0000-03-01
+    let era = z / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365], from March 1
+    let mp = (5 * doy + 2) / 153; // [0, 11], March = 0
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + u64::from(month <= 2);
+    (year, month, day)
 }
 
 fn epoch_ms_to_iso(epoch_ms: u64) -> String {
@@ -158,6 +133,57 @@ fn epoch_ms_to_iso(epoch_ms: u64) -> String {
 mod tests {
     use super::*;
     use polydat::ast::{PolydatNode, Value};
+
+    /// Every day from 1970 through the year 10 000 against the calendar
+    /// counted forward a day at a time: slow as a node, plainly right,
+    /// and cheap here because the count is carried along rather than
+    /// restarted. The range crosses the 100- and 400-year rules (2000
+    /// leaps, 2100 does not) and some twenty whole 400-year eras, the
+    /// period the closed form repeats with.
+    #[test]
+    fn the_closed_form_calendar_agrees_with_the_walk() {
+        let mut days = 0u64;
+        let (mut y, mut m, mut d) = (1970u64, 1u64, 1u64);
+        let leap =
+            |y: u64| (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400);
+        while y <= 10_000 {
+            assert_eq!(civil_from_days(days), (y, m, d), "day {days}");
+            let len = [
+                31,
+                if leap(y) { 29 } else { 28 },
+                31,
+                30,
+                31,
+                30,
+                31,
+                31,
+                30,
+                31,
+                30,
+                31,
+            ][m as usize - 1];
+            (y, m, d) = if d < len {
+                (y, m, d + 1)
+            } else if m < 12 {
+                (y, m + 1, 1)
+            } else {
+                (y + 1, 1, 1)
+            };
+            days += 1;
+        }
+    }
+
+    /// The top of the range answers at once and in range: the input
+    /// that used to walk 584 million years. The bound is loose; the walk
+    /// took tens of seconds and the closed form takes nanoseconds.
+    #[test]
+    fn the_largest_epoch_decomposes_in_constant_time() {
+        let t = std::time::Instant::now();
+        let (y, mo, d, h, mi, s, ms) = decompose_epoch_ms(u64::MAX);
+        assert!(t.elapsed() < std::time::Duration::from_secs(1));
+        assert!(y > 584_000_000 && (1..=12).contains(&mo) && (1..=31).contains(&d));
+        assert!(h < 24 && mi < 60 && s < 60 && ms < 1000);
+    }
 
     #[test]
     fn epoch_scale_seconds() {
