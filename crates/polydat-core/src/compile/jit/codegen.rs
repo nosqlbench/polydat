@@ -3920,8 +3920,16 @@ fn compile_jit_impl(
                 }
                 JitOp::VariadicMin => {
                     if input_slots.is_empty() {
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], zero);
+                        // `min`'s identity is `u64::MAX`, declared on the
+                        // node (`identity = u64::MAX`), because the least
+                        // of nothing must lose to every value. Zero is
+                        // `max`'s identity, and writing it here made
+                        // `min()` answer 0 on native and `u64::MAX` on
+                        // the interpreter. These four constants mirror
+                        // `FuncSig.identity`; the zero-arity test in
+                        // `engine_parity` is what keeps them mirrored.
+                        let ident = builder.ins().iconst(types::I64, u64::MAX as i64);
+                        store_slot(&mut builder, buffer_ptr, output_slots[0], ident);
                     } else {
                         let mut acc = load_slot(&mut builder, buffer_ptr, input_slots[0]);
                         for &slot in &input_slots[1..] {

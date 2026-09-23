@@ -668,3 +668,60 @@ fn a_slot_kit_node_reports_the_tier_it_runs_on() {
         .collect();
     assert!(p1.is_empty(), "reported as P1 with a compiled form: {p1:?}");
 }
+
+/// A variadic node called with no wires answers its declared identity,
+/// on every engine.
+///
+/// `FuncSig.identity` is where the identity is declared, and the native
+/// lowering writes it as a constant — a second copy of the same fact,
+/// and the copy drifted: `min()` answered `u64::MAX` on the interpreter
+/// and `0` on native, because `0` is `max`'s identity and had been
+/// written into both arms. Found by the fuzzer 2026-09-22.
+///
+/// The registry is the oracle here rather than a table in this file,
+/// so a variadic added with an identity is covered the day it is added.
+#[test]
+fn a_variadic_with_no_wires_is_its_identity_on_every_engine() {
+    use polydat::dsl::compile::compile_polydat_with;
+    use polydat::dsl::registry;
+    use polydat::{Engine, JitMode, KernelError, Provenance};
+
+    let variadics: Vec<(&str, u64)> = registry::registry()
+        .into_iter()
+        .filter(|s| !s.name.starts_with("__"))
+        .filter_map(|s| s.identity.map(|id| (s.name, id)))
+        .collect();
+    assert!(
+        variadics.len() >= 4,
+        "expected sum/product/min/max at least, found {variadics:?}"
+    );
+
+    let mut engines = vec![
+        Engine::Interpreter(JitMode::Off),
+        Engine::Interpreter(JitMode::Auto),
+        Engine::Closures(Provenance::Raw),
+    ];
+    if cfg!(feature = "jit") {
+        engines.push(Engine::Native(Provenance::Raw));
+        engines.push(Engine::PureNative(Provenance::Auto));
+    }
+
+    for (name, identity) in variadics {
+        let src = format!("input cycle: u64\nout := {name}()\n");
+        for engine in &engines {
+            let mut k = match compile_polydat_with(&src, *engine) {
+                Ok(k) => k,
+                Err(KernelError::Refused { .. }) => continue,
+                // A variadic that refuses zero wires refuses it on
+                // every engine; that is the arity rule, not this one.
+                Err(_) => break,
+            };
+            k.set_inputs(&[1]);
+            assert_eq!(
+                k.pull("out"),
+                polydat::ast::Value::U64(identity),
+                "{name}() on {engine} is not the declared identity"
+            );
+        }
+    }
+}

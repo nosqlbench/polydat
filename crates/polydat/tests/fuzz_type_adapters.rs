@@ -307,38 +307,23 @@ fn fuzzable_sigs() -> Vec<FuncSig> {
                 )
             })
         })
-        // Context-dependent functions need runtime fixtures the
-        // compile path doesn't provide for standalone sources.
-        // `fft_analyze` is excluded because its constructor opens
-        // a file at the path given by its string arg — random
-        // filenames would litter the cwd with empty files. The
-        // `csv_*` / `jsonl_*` family was migrated in SRD-80b Phase E
-        // to do its file read at #[poly_const] setup time, which
-        // runs inside the build closure — random filenames panic
-        // the compile path. They share the same exclusion as
-        // `fft_analyze` until the macro grows a `Result`-returning
-        // setup attribute (Phase D extension).
-        .filter(|s| {
-            !matches!(
-                s.name,
-                "metric"
-                    | "control"
-                    | "control_u64"
-                    | "control_bool"
-                    | "control_str"
-                    | "control_set"
-                    | "rate"
-                    | "concurrency"
-                    | "phase"
-                    | "session_id"
-                    | "fft_analyze"
-                    | "csv_row"
-                    | "csv_row_count"
-                    | "jsonl_row"
-                    | "jsonl_row_count"
-                    | "jsonl_field"
-            )
-        })
+        // One name, and it earns the exclusion by *writing*:
+        // `fft_analyze` emits JSONL to the path its string arg names,
+        // so random filenames would litter the working directory. A
+        // node the fuzzer can only observe by the files it leaves
+        // behind is not one a fuzzer should call.
+        //
+        // The list used to hold fifteen more. Ten of them — `metric`,
+        // the `control*` family, `rate`, `concurrency`, `phase`,
+        // `session_id` — are not polydat's nodes at all any more; a
+        // host registers them, so the filter named nothing this
+        // registry contains. The `csv_*` / `jsonl_*` five were held
+        // out "until the macro grows a `Result`-returning setup
+        // attribute", and it has: a missing file is now
+        // `csv_row: construction failed: ... cannot find the file`,
+        // a sentence and not a panic, which is what invariant 2 asks
+        // of any error. They are fuzzed.
+        .filter(|s| s.name != "fft_analyze")
         .collect()
 }
 
