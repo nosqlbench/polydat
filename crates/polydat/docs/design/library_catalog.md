@@ -420,8 +420,7 @@ why:
 - **Compiler-synthesised nodes dispatched on a runtime port type or
   constraint** — `PortPassthrough`, `ConstHandle`, `ConstExt`
   (`polydat-core/src/library/identity.rs`), `AssertType`, `AssertValue`
-  (`polydat-core/src/library/assertions.rs`), `RegView`
-  (`polydat-core/src/library/register_view.rs`). The macro fixes a node's port types from
+  (`polydat-core/src/library/assertions.rs`). The macro fixes a node's port types from
   its signature; these take theirs from the value or wire the compiler
   is synthesising for, and are not DSL-callable.
 - **Rust-internal composition primitives** — `LutSample`

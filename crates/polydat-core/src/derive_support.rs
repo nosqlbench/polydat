@@ -921,11 +921,16 @@ pub fn read_poly(ty: PortType, slots: &[u64]) -> Value {
 /// A polymorphic return written by the node's resolved output type: a
 /// scalar as its bits into `outputs[0]`, a `Ref2` kind into
 /// `scratch[0]` with its pair republished (axiom S3). The value must
-/// be of the port's type: the graph colored the slot by the node's
-/// resolved output type, and a value of another type would be read by
-/// every consumer as something it is not, where the interpreter would
-/// have carried it. A `None` has no slot form on a compiled engine
-/// (engines.md §3.3).
+/// be the port type's carrier: the graph colored the slot by the
+/// node's resolved output type, and a value of another type would be
+/// read by every consumer as something it is not, where the
+/// interpreter would have carried it. A `None` has no slot form on a
+/// compiled engine (engines.md §3.3).
+///
+/// The comparison is with the carrier, not the port type, because a
+/// `u32` or `f32` value *is* a `U64` in flight. Comparing with the port
+/// type refused every narrow integer and small float that reached a
+/// polymorphic node, on every compiled engine.
 #[inline]
 pub fn write_poly(
     ty: PortType,
@@ -933,7 +938,7 @@ pub fn write_poly(
     scratch: &mut [crate::ast::ScratchBuf],
     outputs: &mut [u64],
 ) {
-    if v.port_type() != ty {
+    if v.port_type() != crate::compile::marshal::carrier_port(ty) {
         panic!(
             "a node produced a {:?} on an output the graph typed {:?}; a compiled engine \
              cannot carry a value of another type than the slot's (engines.md §3.4)",
@@ -956,7 +961,13 @@ pub fn write_poly(
         // (`Bits128`), which is what every 128-bit and register value
         // is underneath.
         crate::ast::SlotColor::Imm2 => {
-            let words = v.as_reg_bits().0;
+            // `as_reg_bits` is the register reading and refuses a
+            // 128-bit integer, so the limbs are taken from whichever
+            // two-slot carrier this is.
+            let words = match v {
+                Value::U128(b) | Value::I128(b) | Value::Reg128(b, _) => b.0,
+                other => unreachable!("a {:?} is not a two-slot carrier", other.port_type()),
+            };
             outputs[0] = words[0];
             outputs[1] = words[1];
         }
@@ -1026,6 +1037,94 @@ mod tests {
         assert!(m.contains("cannot be allocated"), "{m}");
         let m = refusal(|| reserve_for(&mut vec![1.0f32; 4], u64::MAX, "probe"));
         assert!(m.contains("cannot be allocated"), "{m}");
+    }
+
+    #[derive(Debug, Clone)]
+    struct Probe;
+    impl ReflectedValue for Probe {
+        fn type_name(&self) -> &str {
+            "probe"
+        }
+        fn display(&self) -> String {
+            "probe".into()
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn clone_reflected(&self) -> Box<dyn ReflectedValue> {
+            Box::new(self.clone())
+        }
+    }
+
+    /// A value of every port type, as its producer's `Wire` impl would
+    /// carry it. The match has no wildcard, so a type added to the
+    /// language does not compile here until it has one.
+    fn sample(ty: PortType) -> Value {
+        use crate::ast::{Bits128, RegLanes};
+        let limbs = Bits128([0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210]);
+        let reg = |lanes| Value::Reg128(limbs, lanes);
+        match ty {
+            PortType::U64 | PortType::U32 | PortType::U16 | PortType::U8 => Value::U64(200),
+            PortType::F32 => Value::U64(1.5f32.to_bits() as u64),
+            PortType::F16 => Value::U64(half::f16::from_f32(1.5).to_bits() as u64),
+            PortType::I64 | PortType::I32 | PortType::I16 | PortType::I8 => Value::I64(-7),
+            PortType::F64 => Value::F64(-2.25),
+            PortType::Bool => Value::Bool(true),
+            PortType::U128 => Value::U128(limbs),
+            PortType::I128 => Value::I128(limbs),
+            PortType::Reg128 => reg(RegLanes::Raw),
+            PortType::RegI8x16 => reg(RegLanes::I8x16),
+            PortType::RegI16x8 => reg(RegLanes::I16x8),
+            PortType::RegI32x4 => reg(RegLanes::I32x4),
+            PortType::RegI64x2 => reg(RegLanes::I64x2),
+            PortType::RegF16x8 => reg(RegLanes::F16x8),
+            PortType::RegF32x4 => reg(RegLanes::F32x4),
+            PortType::RegF64x2 => reg(RegLanes::F64x2),
+            PortType::Str => Value::Str("héllo".into()),
+            PortType::Bytes => Value::Bytes(vec![0u8, 1, 255].into()),
+            PortType::Json => Value::Json(Arc::new(serde_json::json!({"k": [1, 2]}))),
+            PortType::Ext => Value::Ext(Box::new(Probe)),
+            PortType::Handle => Value::Handle(Arc::new(42u32)),
+            PortType::VecF32 => Value::VecF32(SliceArc::from_vec(vec![1.0, -0.5])),
+            PortType::VecI32 => Value::VecI32(SliceArc::from_vec(vec![-3, 4])),
+            PortType::VecF64 => Value::VecF64(SliceArc::from_vec(vec![1e300, -0.0])),
+            PortType::VecI64 => Value::VecI64(SliceArc::from_vec(vec![i64::MIN, 9])),
+            PortType::VecF16 => Value::VecF16(SliceArc::from_vec(vec![half::f16::from_f32(0.5)])),
+            PortType::VecI16 => Value::VecI16(SliceArc::from_vec(vec![-300i16, 300])),
+            PortType::VecI8 => Value::VecI8(SliceArc::from_vec(vec![-8i8, 8])),
+        }
+    }
+
+    /// Reading a polymorphic port inverts writing one, for every port
+    /// type the language has: what a polymorphic node returns is what
+    /// the next polymorphic node takes, on every compiled engine.
+    ///
+    /// A register reaching a polymorphic node's input used to arrive as
+    /// its low limb typed `U64`, because the read had a `U64` fallback
+    /// arm and the limb reassembly lived only in the output read the
+    /// host makes. The fuzzer found it on `log_warn(reg_splat_f64(..))`.
+    #[test]
+    fn every_port_type_reads_back_what_was_written() {
+        for &ty in PortType::ALL {
+            let v = sample(ty);
+            assert_eq!(
+                v.port_type(),
+                crate::compile::marshal::carrier_port(ty),
+                "{ty:?}: the sample is not what the port carries"
+            );
+            let mut scratch: Vec<crate::ast::ScratchBuf> = ty
+                .scratch_elem()
+                .map(crate::ast::ScratchBuf::new)
+                .into_iter()
+                .collect();
+            let mut slots = [0u64; 2];
+            // Written as the macro writes it: by the port's resolved
+            // type, which for a narrow or float-in-carrier type is not
+            // the port type of the carrier value its `Wire` impl injects.
+            write_poly(ty, v.clone(), &mut scratch, &mut slots);
+            let back = read_poly(ty, &slots[..ty.slot_width()]);
+            assert_eq!(back, v, "{ty:?}");
+        }
     }
 
     /// A size that fits is reserved exactly, and a reused buffer comes

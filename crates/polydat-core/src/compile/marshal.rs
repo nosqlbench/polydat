@@ -130,47 +130,82 @@ pub(crate) unsafe fn decode_pair(ty: PortType, ptr: u64, len: u64) -> Value {
     }
 }
 
-/// Slot bits as the `Value` their declared port type names, copied
-/// out where they are a pair.
-pub(crate) fn decode_slot(slots: &[u64], ty: PortType) -> Value {
+/// The port type of the `Value` a port of type `ty` carries, which is
+/// what [`decode_slot`] reads back. A narrow integer rides the 64-bit
+/// carrier of its sign, and `f32` and `f16` ride their bit patterns in
+/// a `U64`, as their `Wire` impls inject them; every other type is its
+/// own carrier.
+pub(crate) fn carrier_port(ty: PortType) -> PortType {
     match ty {
-        PortType::F64 => Value::F64(f64::from_bits(slots[0])),
-        PortType::Bool => Value::Bool(slots[0] != 0),
-        PortType::I64 => Value::I64(slots[0] as i64),
-        // A signed narrow carrier rides sign-extended (alignment §2)
-        // and is the `I64` value its `Wire` impl injects.
-        PortType::I8 | PortType::I16 | PortType::I32 => Value::I64(slots[0] as i64),
-        // SAFETY: the pair in a kernel's buffer was published by a
-        // producer whose storage is alive (axioms S3, S4).
-        ty if ty.slot_color() == crate::ast::SlotColor::Ref2 => unsafe {
-            decode_pair(ty, slots[0], slots[1])
-        },
-        _ => Value::U64(slots[0]),
+        PortType::I8 | PortType::I16 | PortType::I32 => PortType::I64,
+        PortType::U32 | PortType::U16 | PortType::U8 | PortType::F32 | PortType::F16 => {
+            PortType::U64
+        }
+        other => other,
     }
 }
 
-/// An output at `slot` of `buffer` as the `Value` its port type names:
-/// `decode_slot` for a one-slot carrier and a `Ref2` pair, and the
-/// two-limb reassembly for a 128-bit integer or a register word, which
-/// ride two consecutive slots (alignment §6). This is the
-/// typed read every compiled kernel's `get_value` makes.
-pub fn decode_output(buffer: &[u64], slot: usize, ty: PortType) -> Value {
+/// Slot bits as the `Value` their declared port type names, copied
+/// out where they are a pair.
+///
+/// The read is chosen by the type's slot color, as `write_poly`'s
+/// write is, so every compiled read of a value (an output a host
+/// pulls, and an input a polymorphic node takes) is the inverse of
+/// the one write. This used to match on the type with a `U64`
+/// fallback. The `Imm2` limb reassembly lived only in
+/// `decode_output`, so a register or 128-bit value reaching a
+/// polymorphic node's input fell through to the fallback and arrived
+/// as its low limb, typed `U64`. The type system knew better at every
+/// step; only the fallback arm did not.
+pub(crate) fn decode_slot(slots: &[u64], ty: PortType) -> Value {
     use crate::ast::{Bits128, RegLanes, SlotColor};
-    if ty.slot_color() == SlotColor::Imm2 {
-        let limbs = Bits128([buffer[slot], buffer[slot + 1]]);
-        return match ty {
-            PortType::U128 => Value::U128(limbs),
-            PortType::I128 => Value::I128(limbs),
-            PortType::RegI8x16 => Value::Reg128(limbs, RegLanes::I8x16),
-            PortType::RegI16x8 => Value::Reg128(limbs, RegLanes::I16x8),
-            PortType::RegI32x4 => Value::Reg128(limbs, RegLanes::I32x4),
-            PortType::RegI64x2 => Value::Reg128(limbs, RegLanes::I64x2),
-            PortType::RegF16x8 => Value::Reg128(limbs, RegLanes::F16x8),
-            PortType::RegF32x4 => Value::Reg128(limbs, RegLanes::F32x4),
-            PortType::RegF64x2 => Value::Reg128(limbs, RegLanes::F64x2),
-            _ => Value::Reg128(limbs, RegLanes::Raw),
-        };
+    match ty.slot_color() {
+        SlotColor::Imm1 => match ty {
+            PortType::F64 => Value::F64(f64::from_bits(slots[0])),
+            PortType::Bool => Value::Bool(slots[0] != 0),
+            // A signed narrow carrier rides sign-extended (alignment
+            // §2) and is the `I64` value its `Wire` impl injects.
+            PortType::I64 | PortType::I8 | PortType::I16 | PortType::I32 => {
+                Value::I64(slots[0] as i64)
+            }
+            // Unsigned narrow carriers ride zero-extended, and `f32`
+            // and `f16` ride their bit patterns, all in the `U64`
+            // carrier their `Wire` impls inject.
+            PortType::U64
+            | PortType::U32
+            | PortType::U16
+            | PortType::U8
+            | PortType::F32
+            | PortType::F16 => Value::U64(slots[0]),
+            other => unreachable!("{other:?} is colored Imm1 but has no one-slot carrier"),
+        },
+        // Two consecutive slots of limb data, low word first
+        // (alignment §6).
+        SlotColor::Imm2 => {
+            let limbs = Bits128([slots[0], slots[1]]);
+            match ty {
+                PortType::U128 => Value::U128(limbs),
+                PortType::I128 => Value::I128(limbs),
+                PortType::Reg128 => Value::Reg128(limbs, RegLanes::Raw),
+                PortType::RegI8x16 => Value::Reg128(limbs, RegLanes::I8x16),
+                PortType::RegI16x8 => Value::Reg128(limbs, RegLanes::I16x8),
+                PortType::RegI32x4 => Value::Reg128(limbs, RegLanes::I32x4),
+                PortType::RegI64x2 => Value::Reg128(limbs, RegLanes::I64x2),
+                PortType::RegF16x8 => Value::Reg128(limbs, RegLanes::F16x8),
+                PortType::RegF32x4 => Value::Reg128(limbs, RegLanes::F32x4),
+                PortType::RegF64x2 => Value::Reg128(limbs, RegLanes::F64x2),
+                other => unreachable!("{other:?} is colored Imm2 but is not a 128-bit value"),
+            }
+        }
+        // SAFETY: the pair in a kernel's buffer was published by a
+        // producer whose storage is alive (axioms S3, S4).
+        SlotColor::Ref2 => unsafe { decode_pair(ty, slots[0], slots[1]) },
     }
+}
+
+/// An output at `slot` of `buffer` as the `Value` its port type names.
+/// This is the typed read every compiled kernel's `get_value` makes.
+pub fn decode_output(buffer: &[u64], slot: usize, ty: PortType) -> Value {
     decode_slot(&buffer[slot..], ty)
 }
 

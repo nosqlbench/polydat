@@ -6,7 +6,7 @@
 //!
 //! A register word is a plain 16-byte value with a lane-typed or
 //! raw view ([`polydat::ast::RegLanes`]). Views are free bitcasts:
-//! the [`RegView`] adapter (auto-inserted by the assembler for
+//! the [`reg_view`] adapters (auto-inserted by the assembler for
 //! any reg→reg wire) retags without touching bits, so a word can
 //! be `[i64; 2]` for one op, `[u8-ish bytes]` for a shuffle, and
 //! algorithm-defined raw state for a third — at zero cost.
@@ -33,7 +33,7 @@
 use polydat::ast::Bits128;
 #[cfg(test)]
 use polydat::ast::{PolydatNode, PortType, RegLanes, Value};
-pub use polydat::library::register_view::{RegView, is_reg_port};
+pub use polydat::library::register_view::{is_reg_port, reg_view};
 pub use polydat::numeric::register::{
     gather_f32, lane_f32, lane_i16, lane_i64, mul_i8, to_reg_f32, with_lane_f32,
 };
@@ -284,7 +284,7 @@ fn reg_shuffle_bytes_jit_constants(node: &RegShuffleBytes) -> Vec<u64> {
 mod tests {
     use super::*;
 
-    fn eval1<N: PolydatNode>(node: &N, a: Value) -> Value {
+    fn eval1<N: PolydatNode + ?Sized>(node: &N, a: Value) -> Value {
         let mut out = [Value::None];
         node.eval(&[a], &mut out);
         out[0].clone()
@@ -317,10 +317,10 @@ mod tests {
     #[test]
     fn reg_view_retags_without_touching_bits() {
         let word = f32x4([1.0, 2.0, 3.0, 4.0]);
-        let raw = eval1(&RegView::new(PortType::Reg128), word.clone());
+        let raw = eval1(&*reg_view(PortType::Reg128).unwrap(), word.clone());
         assert_eq!(raw.as_reg_bits(), word.as_reg_bits());
         assert!(matches!(raw, Value::Reg128(_, RegLanes::Raw)));
-        let back = eval1(&RegView::new(PortType::RegI16x8), raw);
+        let back = eval1(&*reg_view(PortType::RegI16x8).unwrap(), raw);
         assert!(matches!(back, Value::Reg128(_, RegLanes::I16x8)));
         assert_eq!(back.as_reg_bits(), word.as_reg_bits());
     }

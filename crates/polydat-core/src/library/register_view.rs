@@ -1,70 +1,85 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! The register view retag adapter the assembler inserts between
-//! register ports of different lane typings, and the register-port
-//! predicate it keys on (type_system_alignment.md §8.4 layer 2).
+//! The register view retags the assembler inserts between register
+//! ports of different lane typings, and the register-port predicate it
+//! keys on (type_system_alignment.md §8.4 layer 2).
+//!
+//! A view is a free bitcast: the 128 bits are untouched and only the
+//! lane typing changes. Each view is an ordinary registered node, like
+//! every other entry of the conversion table, so a program can call it
+//! and the conversion fuzzer can reach it by the name the table gives.
+//! It used to be one hand-written node parameterized by its target
+//! type, which the assembler could insert but no program could name.
+//!
+//! Each takes the raw word: any register view satisfies a register
+//! slot (the free-bitcast rule in `Value::satisfies_slot`).
 
-use crate::ast::{NodeMeta, PolydatNode, Port, PortType, RegLanes, Slot, Value};
+use crate::ast::{Bits128, PolydatNode, PortType};
 
-/// Pass-through guard that retags a register word's view. The
-/// bits are untouched — this is the materialized form of "views
-/// are free bitcasts" for intra-graph wires whose producer and
-/// consumer declare different lane typings. Auto-inserted by
-/// `compile::assembly::auto_adapter` for every reg→reg pair;
-/// rarely instantiated by hand.
-pub struct RegView {
-    meta: NodeMeta,
-    to: RegLanes,
+/// A register word viewed raw, without a lane typing.
+#[crate::polydat_node(category = Conversions)]
+fn __reg_view_raw(r: Bits128) -> Bits128 {
+    r
 }
 
-impl RegView {
-    /// A view of a register word as the given register type.
-    pub fn new(to: PortType) -> Self {
-        let (name, view) = match to {
-            PortType::Reg128 => ("__reg_view_raw", RegLanes::Raw),
-            PortType::RegI8x16 => ("__reg_view_i8x16", RegLanes::I8x16),
-            PortType::RegI16x8 => ("__reg_view_i16x8", RegLanes::I16x8),
-            PortType::RegI32x4 => ("__reg_view_i32x4", RegLanes::I32x4),
-            PortType::RegI64x2 => ("__reg_view_i64x2", RegLanes::I64x2),
-            PortType::RegF16x8 => ("__reg_view_f16x8", RegLanes::F16x8),
-            PortType::RegF32x4 => ("__reg_view_f32x4", RegLanes::F32x4),
-            PortType::RegF64x2 => ("__reg_view_f64x2", RegLanes::F64x2),
-            other => panic!("RegView::new: {other:?} is not a register PortType"),
-        };
-        Self {
-            meta: NodeMeta {
-                name: name.into(),
-                outs: vec![Port::new("output", to)],
-                // The input port type is nominal — any register
-                // view satisfies it (free-bitcast rule in
-                // `Value::satisfies_slot`).
-                ins: vec![Slot::Wire(Port::new("input", PortType::Reg128))],
-            },
-            to: view,
-        }
-    }
+/// A register word viewed as sixteen `i8` lanes.
+#[crate::polydat_node(category = Conversions)]
+fn __reg_view_i8x16(r: Bits128) -> [i8; 16] {
+    r.lanes_i8()
 }
 
-impl PolydatNode for RegView {
-    fn meta(&self) -> &NodeMeta {
-        &self.meta
-    }
+/// A register word viewed as eight `i16` lanes.
+#[crate::polydat_node(category = Conversions)]
+fn __reg_view_i16x8(r: Bits128) -> [i16; 8] {
+    r.lanes_i16()
+}
 
-    fn eval(&self, inputs: &[Value], outputs: &mut [Value]) {
-        outputs[0] = Value::Reg128(inputs[0].as_reg_bits(), self.to);
-    }
+/// A register word viewed as four `i32` lanes.
+#[crate::polydat_node(category = Conversions)]
+fn __reg_view_i32x4(r: Bits128) -> [i32; 4] {
+    r.lanes_i32()
+}
 
-    /// In compiled buffers a view retag is a two-slot copy — the
-    /// lane typing is a static property of the consuming slot, so
-    /// the bits pass through verbatim (truly free at P2; at P3
-    /// it will be elided entirely).
-    fn compiled_u64(&self) -> Option<polydat::ast::CompiledU64Op> {
-        Some(Box::new(|inputs: &[u64], outputs: &mut [u64]| {
-            outputs[0] = inputs[0];
-            outputs[1] = inputs[1];
-        }))
-    }
+/// A register word viewed as two `i64` lanes.
+#[crate::polydat_node(category = Conversions)]
+fn __reg_view_i64x2(r: Bits128) -> [i64; 2] {
+    r.lanes_i64()
+}
+
+/// A register word viewed as eight `f16` lanes.
+#[crate::polydat_node(category = Conversions)]
+fn __reg_view_f16x8(r: Bits128) -> [half::f16; 8] {
+    r.lanes_f16()
+}
+
+/// A register word viewed as four `f32` lanes.
+#[crate::polydat_node(category = Conversions)]
+fn __reg_view_f32x4(r: Bits128) -> [f32; 4] {
+    r.lanes_f32()
+}
+
+/// A register word viewed as two `f64` lanes.
+#[crate::polydat_node(category = Conversions)]
+fn __reg_view_f64x2(r: Bits128) -> [f64; 2] {
+    r.lanes_f64()
+}
+
+/// The view of a register word as `to`, the retag the assembler
+/// inserts between register ports of different lane typings. `None`
+/// when `to` is not a register type.
+pub fn reg_view(to: PortType) -> Option<Box<dyn PolydatNode>> {
+    Some(match to {
+        PortType::Reg128 => Box::new(RegViewRaw::new()),
+        PortType::RegI8x16 => Box::new(RegViewI8x16::new()),
+        PortType::RegI16x8 => Box::new(RegViewI16x8::new()),
+        PortType::RegI32x4 => Box::new(RegViewI32x4::new()),
+        PortType::RegI64x2 => Box::new(RegViewI64x2::new()),
+        PortType::RegF16x8 => Box::new(RegViewF16x8::new()),
+        PortType::RegF32x4 => Box::new(RegViewF32x4::new()),
+        PortType::RegF64x2 => Box::new(RegViewF64x2::new()),
+        _ => return None,
+    })
 }
 
 /// `true` when `t` is any register-plane PortType.

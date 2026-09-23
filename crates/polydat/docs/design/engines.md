@@ -488,7 +488,40 @@ message; the differential suites for by-reference nodes (random programs
 over the string, JSON, and tile nodes read through the typed readers);
 the slot-state axioms; the cone tests; the failure parity suite; the
 traversal and shared-cell suites on every engine; and the engine ladder,
-which the performance guide records.
+which the performance guide records. The per-commit suite also drives
+every node's program through the edges on every engine
+(`every_node_reads_the_same_on_every_engine_at_the_edges`), and the
+conversion fuzzer (`fuzz_conversions`) runs every entry of the
+assembler's conversion table, and seeded chains through it, the same
+way. It reads the table from `boundary_adapter` and keeps no list of
+its own.
+
+### 7.1 One copy of each rule
+
+A native lowering is the node's rule in another form, never a second
+statement of it. The node declares its rule once, in its body, its
+declared constraints, and its port types, and a lowering either derives
+from that declaration or is exactly equal to it on every input. Where
+neither can be shown, the node has no lowering and runs its body
+through a slot call. The cost is a call. A second copy costs a drift
+that no test of the node itself can see. Every drift found between
+engines has had this shape. `shuffle` divided by a zero range the node
+guards, `blend` and `unfair_coin` skipped a range check, and `min` with
+no wires returned the wrong identity. The conversion table lowered f32
+and f16 conversions as f64, skipped the checked narrowings' range
+checks, and ran 128-bit conversions through one-slot operations. What
+remains lowered is only what is provably the node's rule: total
+widenings that keep the carrier's bits, integer to `f64`, and integer
+to `bool`.
+
+A lowering must also never reach an instruction that traps in hardware.
+A node's failure is a panic, which the engine catches and attributes
+(§3.4). A trap ends the host process. The conversion table lowered
+float-to-signed through Cranelift's trapping conversion, so
+`__f64_to_i32` of a large value was an illegal instruction where the
+node reports a value out of range. Conversions that can fail use the
+saturating instruction behind a guard that raises the node's own
+failure, or they run the node.
 
 ## 8. What every engine accepts, and what stays where
 

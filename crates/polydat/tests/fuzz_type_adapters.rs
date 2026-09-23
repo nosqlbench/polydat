@@ -36,10 +36,13 @@ use polydat::dsl::registry::{self, FuncSig};
 
 // ─── Expected-adapter table ───────────────────────────────────────
 //
-// Mirrors `polydat::compile::assembly::auto_adapter`. When the compiler's
-// table changes, this one must change with it — that's intentional:
-// a silent shift in the compiler's widening rules would otherwise
-// escape review. Update in lock-step.
+// The compiler's own `auto_adapter` is the table. This file used to
+// keep a hand mirror of it, "updated in lock-step" so that a shift in
+// the widening rules could not escape review. The mirror fell behind
+// as soon as the generator drew the adapter nodes and reached types it
+// had never seen (`U8→Bytes` is class A and was missing). Review of the
+// table is `adapter_catalog_invariants::doc_matrix_matches_catalog`'s
+// job: a catalog change fails CI until type_system.md §3 shows it.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Adapt {
@@ -52,38 +55,12 @@ enum Adapt {
 }
 
 fn expected_adapt(src: PortType, dst: PortType) -> Adapt {
-    use PortType::*;
     if src == dst {
-        return Adapt::Identity;
-    }
-    match (src, dst) {
-        // Lossless numeric widening.
-        (U64, F64)
-        | (U32, U64) | (U32, F64)
-        | (I32, I64) | (I32, F64)
-        | (I64, F64)
-        | (F32, F64)
-        // Any of these render to Str.
-        | (U64, Str) | (F64, Str) | (Bool, Str) | (Json, Str)
-        | (U32, Str) | (I32, Str) | (I64, Str) | (F32, Str)
-        // Bool ↔ numeric (1/0 mapping; nonzero test). Always-defined.
-        | (Bool, U64) | (Bool, U32) | (Bool, I64)
-        | (Bool, I32) | (Bool, F64) | (Bool, F32)
-        | (U64, Bool) | (U32, Bool) | (I64, Bool)
-        | (I32, Bool) | (F64, Bool) | (F32, Bool)
-        // X → Bytes (little-endian serialize, always-defined).
-        | (U64, Bytes) | (U32, Bytes) | (I64, Bytes) | (I32, Bytes)
-        | (F64, Bytes) | (F32, Bytes) | (Bool, Bytes)
-        | (VecF32, Bytes) | (VecI32, Bytes)
-        // Integer / Bool → Json (always-representable).
-        | (U64, Json) | (U32, Json) | (I64, Json) | (I32, Json)
-        | (Bool, Json) | (VecI32, Json)
-        // i32 → f32, by lane and by scalar. It rounds past 2^24 and
-        // never fails, which is what class A asks: totality, not
-        // losslessness. The lane form was always inserted; the scalar
-        // joined it 2026-09-22.
-        | (VecI32, VecF32) | (I32, F32) => Adapt::Inserted,
-        _ => Adapt::None,
+        Adapt::Identity
+    } else if polydat::compile::assembly::auto_adapter(src, dst).is_some() {
+        Adapt::Inserted
+    } else {
+        Adapt::None
     }
 }
 
@@ -284,13 +261,17 @@ impl Rng {
 ///   array syntax);
 /// - `dynamic-output` entries (`outputs == 0`) which need coordinate
 ///   resolution past what the fuzzer provides;
-/// - `__` / `unknown_node` internals the registry happens to expose;
 /// - context nodes that require runtime fixtures (metric queries,
 ///   control sets, fiber context) that aren't present in a unit test.
+///
+/// The `__` adapter nodes are drawn like any other. They were filtered
+/// out as internals, which left the conversions every real program runs
+/// unfuzzed while native code carried a drifted second copy of them;
+/// `fuzz_conversions` now fuzzes the table directly, and here they
+/// turn up in the middle of random programs as well.
 fn fuzzable_sigs() -> Vec<FuncSig> {
     registry::registry()
         .into_iter()
-        .filter(|s| !s.name.starts_with("__"))
         // A dynamic-output node (`outputs == 0`) decides its own count
         // from its arguments, which the generator cannot know; every
         // fixed count, one or many, it can bind names for.
@@ -815,148 +796,26 @@ fn superfuzz_sampler() {
     );
 }
 
-/// Recognise the `{SrcType:?}→{DstType:?}` labels the compiler writes
-/// into [`CompileEvent::TypeAdapterInserted`]. The format is produced
-/// by `format!("{source_type:?}→{expected_type:?}")` in
-/// `assembly.rs` — mirror its accepted set here.
+/// Whether a `{SrcType:?}→{DstType:?}` label the compiler writes into
+/// [`CompileEvent::TypeAdapterInserted`] names a conversion
+/// `auto_adapter` makes. The label is read back into its two types
+/// through their `Debug` names, and the table itself is asked, so a
+/// conversion the assembler inserts that its own table would not is
+/// the finding (an adapter inserted from anywhere else).
 fn adapter_label_is_known(label: &str) -> bool {
-    // Register views are free bitcasts: the assembler retags any
-    // reg→reg pair via RegView (type_system_alignment.md §8.4
-    // layer 2), so the whole family is known by shape rather
-    // than by enumeration.
-    let is_reg = |t: &str| {
-        matches!(
-            t,
-            "Reg128"
-                | "RegI8x16"
-                | "RegI16x8"
-                | "RegI32x4"
-                | "RegI64x2"
-                | "RegF16x8"
-                | "RegF32x4"
-                | "RegF64x2"
-        )
+    let port = |name: &str| {
+        PortType::ALL
+            .iter()
+            .copied()
+            .find(|t| format!("{t:?}") == name)
     };
-    if let Some((from, to)) = label.split_once('→')
-        && is_reg(from)
-        && is_reg(to)
-    {
-        return true;
+    let Some((from, to)) = label.split_once('→') else {
+        return false;
+    };
+    match (port(from), port(to)) {
+        (Some(f), Some(t)) => polydat::compile::assembly::auto_adapter(f, t).is_some(),
+        _ => false,
     }
-    // PortType's Debug impl yields "U64", "F64", etc. — match those.
-    // Mirror the assembler's auto_adapter table (intra-graph only;
-    // boundary-only parsers + lossy narrowings are NOT here).
-    let known = [
-        // Numeric widening
-        "U64→F64",
-        "U32→U64",
-        "U32→F64",
-        "I32→I64",
-        "I32→F64",
-        "I64→F64",
-        "F32→F64",
-        // X → Str
-        "U64→Str",
-        "F64→Str",
-        "Bool→Str",
-        "Json→Str",
-        "U32→Str",
-        "I32→Str",
-        "I64→Str",
-        "F32→Str",
-        // Bool ↔ numeric
-        "Bool→U64",
-        "Bool→U32",
-        "Bool→I64",
-        "Bool→I32",
-        "Bool→F64",
-        "Bool→F32",
-        "U64→Bool",
-        "U32→Bool",
-        "I64→Bool",
-        "I32→Bool",
-        "F64→Bool",
-        "F32→Bool",
-        // X → Bytes
-        "U64→Bytes",
-        "U32→Bytes",
-        "I64→Bytes",
-        "I32→Bytes",
-        "F64→Bytes",
-        "F32→Bytes",
-        "Bool→Bytes",
-        "VecF32→Bytes",
-        "VecI32→Bytes",
-        // X → Json (integers + Bool + VecI32)
-        "U64→Json",
-        "U32→Json",
-        "I64→Json",
-        "I32→Json",
-        "Bool→Json",
-        "VecI32→Json",
-        // Vec ↔ Vec
-        "VecI32→VecF32",
-        // Phase-1 totality fills (widening + bool families; all
-        // class A). Keep in lockstep with the same arms in
-        // `auto_adapter` — `adapter_catalog_invariants` enforces it.
-        "U8→I16",
-        "U8→I32",
-        "U8→I64",
-        "U8→F32",
-        "U16→I32",
-        "U16→I64",
-        "U16→F32",
-        "I8→F32",
-        "I16→F32",
-        "U8→F16",
-        "I8→F16",
-        "U32→I64",
-        "U8→U128",
-        "U8→I128",
-        "U16→U128",
-        "U16→I128",
-        "U32→U128",
-        "U32→I128",
-        "I8→I128",
-        "I16→I128",
-        "I32→I128",
-        "Bool→U128",
-        "Bool→I128",
-        "U128→Bool",
-        "I128→Bool",
-        // Vector lane completion — class A (widening / serialise /
-        // int-lane Json/Str). Boundary-only (class B) vec casts are
-        // not listed (this mirror is auto_adapter only).
-        "VecI8→VecI16",
-        "VecI8→VecI32",
-        "VecI8→VecI64",
-        "VecI8→VecF16",
-        "VecI8→VecF32",
-        "VecI8→VecF64",
-        "VecI16→VecI32",
-        "VecI16→VecI64",
-        "VecI16→VecF32",
-        "VecI16→VecF64",
-        "VecI32→VecI64",
-        "VecI32→VecF64",
-        "VecI64→VecF64",
-        "VecF16→VecF32",
-        "VecF16→VecF64",
-        "VecF32→VecF64",
-        "VecF64→Bytes",
-        "VecI64→Bytes",
-        "VecF16→Bytes",
-        "VecI16→Bytes",
-        "VecI8→Bytes",
-        "VecI64→Json",
-        "VecI16→Json",
-        "VecI8→Json",
-        "VecI32→Str",
-        "VecI64→Str",
-        "VecI16→Str",
-        "VecI8→Str",
-    ];
-    known.contains(&label)
 }
 
 // ─── Basic sanity for the harness itself ──────────────────────────

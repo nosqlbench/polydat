@@ -76,6 +76,8 @@ mod for_sampling;
 mod for_syntax;
 #[path = "function_coverage.rs"]
 mod function_coverage;
+#[path = "fuzz_conversions.rs"]
+mod fuzz_conversions;
 #[path = "fuzz_for_syntax.rs"]
 mod fuzz_for_syntax;
 #[path = "fuzz_tile_syntax.rs"]

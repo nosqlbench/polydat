@@ -65,6 +65,7 @@ but expect a second and third round as each layer starts compiling.
 | `comprehension::runtime::EmptyClause` | — | see [empty clauses](#empty-clauses-are-reported-not-decided) |
 | `evaluate_for_iteration(comp, scope, params, on_empty)` | `evaluate_for_iteration(comp, scope)` | the dropped params were a map the evaluator never read, and the callback |
 | `dyn Kernel: Debug` | — | format the error, not the kernel |
+| `library::register_view::RegView::new(to)` (also re-exported from `polydat_nodes::register`) | `register_view::reg_view(to)` | returns `Option<Box<dyn PolydatNode>>`, `None` for a non-register type; each view is now a registered node, `__reg_view_raw` … `__reg_view_f64x2`, callable by name |
 
 Additive, so the fix is an extra field or arm:
 
@@ -72,6 +73,11 @@ Additive, so the fix is an extra field or arm:
   pattern, or read it if you render the comprehension back to text.
 - `WriteError` gained `CoordinateSlot { .. }` — a write aimed at a
   coordinate slot, which used to be reported as something less precise.
+- `derive_support` gained `buffer_for`, `string_for` and `reserve_for`.
+  A host node that sizes a buffer by a wire or constant should allocate
+  through them. A size the machine cannot hold then fails as that node,
+  caught and attributed like any other failure, instead of aborting the
+  process in the allocator.
 - `CompileOptions` gained `engine` and `ledger`. It derives `Default`,
   so a struct literal takes `..Default::default()` and compiles. Do
   read `engine` before moving on, though: it is where the engine

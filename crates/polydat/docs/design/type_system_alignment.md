@@ -64,7 +64,7 @@ The explicit SIMD value is one fixed 128-bit word:
 
 All views use `Value::Reg128(Bits128, RegLanes)` and occupy two
 immediate slots. A reg-to-reg conversion is a bit-preserving
-`RegView` retag. Lane arithmetic is defined by the selected
+`__reg_view_*` retag. Lane arithmetic is defined by the selected
 view; integer arithmetic wraps, and float reductions use the
 operation's documented fixed tree.
 

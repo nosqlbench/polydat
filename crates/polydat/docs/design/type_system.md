@@ -169,8 +169,11 @@ word:
 | `Reg128` (`Raw`) | algorithm-defined bytes | `RegF64x2` | `[f64; 2]` |
 
 - **Views are free bitcasts** — every reg→reg wire is healed by
-  the assembler with a [`RegView`] retag node that changes the
-  `RegLanes` tag and touches **no bits** (alignment §3).
+  the assembler with a `__reg_view_*` retag node (one per view,
+  `__reg_view_raw` … `__reg_view_f64x2`) that changes the `RegLanes`
+  tag and touches **no bits** (alignment §3). They are registered
+  nodes like every other adapter, so a program can call them and the
+  conversion fuzzer reaches them by name.
   A word can be `[i64; 2]` for one op, raw bytes for a shuffle, and
   `[f32; 4]` for a dot product, at zero cost. This is the one
   family where every intra-plane conversion is class A and every
@@ -187,7 +190,7 @@ word:
 - **Use** — SWAR/state-word algorithms, fixed-width SIMD kernels,
   and `reg_shuffle_bytes` (arbitrary byte permutation from a
   16-entry const mask). Nodes live in `polydat-nodes/src/register.rs`;
-  the `RegView` retag node in `polydat-core/src/library/register_view.rs`.
+  the retag nodes in `polydat-core/src/library/register_view.rs`.
 
 ### 1.6 Strings, bytes, JSON — `Str` / `Bytes` / `Json`
 
@@ -431,7 +434,7 @@ reduction node; an author writes the reduction they mean, or uses
 type groups carry no row or column at all (omitted from the grid):
 
 - **Register views** (`Reg128`, `RegI8x16` … `RegF64x2`) — any
-  reg→reg pair is class A via a zero-cost `RegView` retag; reg ↔
+  reg→reg pair is class A via a zero-cost `__reg_view_*` retag; reg ↔
   scalar/container/vec is never in the catalog (a closed clique).
 - **`Ext` / `Handle`** — never adapted; typed access happens at
   the consume site (`ReflectedValue` / `as_handle::<T>()`).

@@ -38,10 +38,6 @@ const CARVEOUT_FILES: &[&str] = &[
     // `dist_*` family; no DSL surface (the `dist_*` functions
     // are the workload-callable wrappers).
     "../polydat-nodes/src/sampling/lut.rs",
-    // Compiler-synthesised: RegView (free-bitcast retag adapter,
-    // auto-inserted by `auto_adapter` for reg→reg wires; runtime
-    // PortType dispatched like AssertType — not workload-callable).
-    "../polydat-core/src/library/register_view.rs",
 ];
 
 #[test]

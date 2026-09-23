@@ -1509,20 +1509,6 @@ pub enum JitOp {
     // --- Type conversions & lattice adapters (SRD 110) ---
     /// Signed integer to float: `output[0]` = (`input[0]` as i64 as f64).to_bits()
     I64ToF64,
-    /// Float to signed integer: `output[0]` = (f64::from_bits(`input[0]`) as i64) as u64
-    F64ToI64,
-    /// Sign-extend 32-bit integer: `output[0]` = ((`input[0]` as i32) as i64) as u64
-    SignExtendI32,
-    /// Sign-extend 16-bit integer: `output[0]` = ((`input[0]` as i16) as i64) as u64
-    SignExtendI16,
-    /// Sign-extend 8-bit integer: `output[0]` = ((`input[0]` as i8) as i64) as u64
-    SignExtendI8,
-    /// Zero-extend 32-bit integer: `output[0]` = (`input[0]` as u32) as u64
-    ZeroExtendU32,
-    /// Zero-extend 16-bit integer: `output[0]` = (`input[0]` as u16) as u64
-    ZeroExtendU16,
-    /// Zero-extend 8-bit integer: `output[0]` = (`input[0]` as u8) as u64
-    ZeroExtendU8,
     /// Truthiness boolean coercion: `output[0]` = if `input[0]` != 0 { 1 } else { 0 }
     ToBool,
     /// Constant u64: `output[0]` = val
@@ -2022,83 +2008,50 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
             }
         }
 
-        // ── Type Conversion Lattice (SRD 110) ────────────────────
-        "__u64_to_f64" | "__u32_to_f64" | "__bool_to_f64" | "__bool_to_f32" | "__f32_to_f64"
-        | "__u64_to_f32" | "__u32_to_f32" | "__u16_to_f32" | "__u8_to_f32" | "__u16_to_f64"
-        | "__u8_to_f64" | "__u128_to_f64" | "__u128_to_f32" | "__u128_to_f16" => JitOp::ToF64,
+        // ── Type conversions (SRD 110) ───────────────────────────
+        //
+        // Only the conversions whose native form *is* the node's rule
+        // are lowered here: a total widening that leaves the carrier's
+        // bits as they are, an integer carrier to `f64`, and an
+        // integer carrier to `bool`. Every other adapter runs its own
+        // body through a slot call.
+        //
+        // This table used to lower all of them, and it was a second
+        // copy of the adapter bodies that had drifted from them. It put
+        // the f64 bits of a number in an `f32` or `f16` slot, whose
+        // carrier holds the narrow float's own bits. It lowered the
+        // checked narrowings (`__u64_to_u32`, `__f64_to_i32`, …) without
+        // their range checks, so an out-of-range value was truncated
+        // where the node refuses it. It sign-extended a `u32`, and it
+        // ran the 128-bit conversions through one-slot operations. And
+        // it lowered float-to-signed through Cranelift's *trapping*
+        // conversion, so `__f64_to_i32` of a large value executed an
+        // illegal instruction and ended the host process. The
+        // conversion fuzzer (`fuzz_conversions`) found all of it, and
+        // it holds what remains to the node bodies on every engine.
+        "__u64_to_f64" | "__u32_to_f64" | "__u16_to_f64" | "__u8_to_f64" | "__bool_to_f64" => {
+            JitOp::ToF64
+        }
+        "__i64_to_f64" | "__i32_to_f64" | "__i16_to_f64" | "__i8_to_f64" => JitOp::I64ToF64,
 
-        "__i64_to_f64" | "__i32_to_f64" | "__i64_to_f32" | "__i32_to_f32" | "__i16_to_f32"
-        | "__i8_to_f32" | "__i16_to_f64" | "__i8_to_f64" | "__i128_to_f64" | "__i128_to_f32"
-        | "__i128_to_f16" => JitOp::I64ToF64,
-
-        "__f64_to_u64_checked"
-        | "__f64_to_u32"
-        | "__f32_to_u64"
-        | "__f32_to_u32"
-        | "__f64_to_u16"
-        | "__f64_to_u8"
-        | "__f32_to_u16"
-        | "__f32_to_u8"
-        | "__f16_to_u64"
-        | "__f16_to_u32"
-        | "__f16_to_u16"
-        | "__f16_to_u8"
-        | "__f64_to_u128"
-        | "__f32_to_u128"
-        | "__f16_to_u128"
-        | "trunc_u64" => JitOp::F64ToU64,
+        "trunc_u64" => JitOp::F64ToU64,
         // `round_u64` rounds half away from zero before the saturating
         // conversion, which is what `round_to_u64` does too.
         "round_u64" => JitOp::RoundToU64,
 
-        "__f64_to_i64" | "__f64_to_i32" | "__f32_to_i64" | "__f32_to_i32" | "__f64_to_i16"
-        | "__f64_to_i8" | "__f32_to_i16" | "__f32_to_i8" | "__f16_to_i64" | "__f16_to_i32"
-        | "__f16_to_i16" | "__f16_to_i8" | "__f64_to_i128" | "__f32_to_i128" | "__f16_to_i128" => {
-            JitOp::F64ToI64
-        }
+        // Total widenings. An unsigned carrier is zero-extended and a
+        // signed one sign-extended already, so the wider value is the
+        // same word; `bool` rides as 0 or 1, which is the number too.
+        "__u8_to_u16" | "__u8_to_u32" | "__u8_to_u64" | "__u16_to_u32" | "__u16_to_u64"
+        | "__u32_to_u64" | "__u8_to_i16" | "__u8_to_i32" | "__u8_to_i64" | "__u16_to_i32"
+        | "__u16_to_i64" | "__u32_to_i64" | "__i8_to_i16" | "__i8_to_i32" | "__i8_to_i64"
+        | "__i16_to_i32" | "__i16_to_i64" | "__i32_to_i64" | "__bool_to_u8" | "__bool_to_u16"
+        | "__bool_to_u32" | "__bool_to_u64" | "__bool_to_i8" | "__bool_to_i16"
+        | "__bool_to_i32" | "__bool_to_i64" => JitOp::Identity,
 
-        "__f64_to_f32" | "__f16_to_f32" | "__f16_to_f64" | "__f32_to_f16" | "__f64_to_f16" => {
-            JitOp::Identity
-        }
-
-        "__u32_to_u64" | "__u64_to_u32" | "__u32_to_i32" | "__i32_to_u32" | "__u64_to_i64"
-        | "__i64_to_u64" | "__bool_to_u64" | "__bool_to_i64" | "__bool_to_u32"
-        | "__bool_to_i32" | "__u64_to_u16" | "__u64_to_u8" | "__u64_to_i16" | "__u64_to_i8"
-        | "__i64_to_u32" | "__i64_to_u16" | "__i64_to_u8" | "__i64_to_i16" | "__i64_to_i8"
-        | "__u32_to_u16" | "__u32_to_u8" | "__u32_to_i16" | "__u32_to_i8" | "__i32_to_u16"
-        | "__i32_to_u8" | "__i32_to_i16" | "__i32_to_i8" | "__u16_to_u8" | "__u16_to_i8"
-        | "__i16_to_u8" | "__i16_to_i8" | "__u128_to_u64" | "__u128_to_i64" | "__i128_to_u64"
-        | "__i128_to_i64" | "__u128_to_u32" | "__u128_to_u16" | "__u128_to_u8"
-        | "__u128_to_i32" | "__u128_to_i16" | "__u128_to_i8" | "__i128_to_u32"
-        | "__i128_to_u16" | "__i128_to_u8" | "__i128_to_i32" | "__i128_to_i16" | "__i128_to_i8"
-        | "__u64_to_u128" | "__u64_to_i128" | "__i64_to_u128" | "__i64_to_i128"
-        | "__u128_to_i128" | "__i128_to_u128" | "__bool_to_u16" | "__bool_to_u8"
-        | "__bool_to_i16" | "__bool_to_i8" | "__bool_to_u128" | "__bool_to_i128"
-        | "__u8_to_f16" | "__u16_to_f16" | "__i8_to_f16" | "__i16_to_f16" | "__u64_to_f16"
-        | "__i64_to_f16" | "__u32_to_f16" | "__i32_to_f16" | "__bool_to_f16" => JitOp::Identity,
-
-        "__i32_to_i64" | "__i32_to_u64" | "__u32_to_i64" | "__u32_to_u128" | "__u32_to_i128"
-        | "__i32_to_u128" | "__i32_to_i128" => JitOp::SignExtendI32,
-
-        "__i16_to_i32" | "__i16_to_i64" | "__i16_to_u32" | "__i16_to_u64" | "__i16_to_u128"
-        | "__i16_to_i128" => JitOp::SignExtendI16,
-
-        "__i8_to_i16" | "__i8_to_i32" | "__i8_to_i64" | "__i8_to_u16" | "__i8_to_u32"
-        | "__i8_to_u64" | "__i8_to_u128" | "__i8_to_i128" => JitOp::SignExtendI8,
-
-        "__u16_to_u32" | "__u16_to_u64" | "__u16_to_i32" | "__u16_to_i64" | "__u16_to_u128"
-        | "__u16_to_i128" | "__u16_to_i16" | "__i16_to_u16" => JitOp::ZeroExtendU16,
-
-        "__u8_to_u16" | "__u8_to_u32" | "__u8_to_u64" | "__u8_to_i16" | "__u8_to_i32"
-        | "__u8_to_i64" | "__u8_to_u128" | "__u8_to_i128" | "__u8_to_i8" | "__i8_to_u8" => {
-            JitOp::ZeroExtendU8
-        }
-
-        "__u64_to_i32" | "__i64_to_i32" => JitOp::ZeroExtendU32,
-
-        "__u64_to_bool" | "__i64_to_bool" | "__u32_to_bool" | "__i32_to_bool" | "__f64_to_bool"
-        | "__f32_to_bool" | "__f16_to_bool" | "__u8_to_bool" | "__u16_to_bool" | "__i8_to_bool"
-        | "__i16_to_bool" | "__u128_to_bool" | "__i128_to_bool" => JitOp::ToBool,
+        // An integer is true when it is not zero.
+        "__u64_to_bool" | "__i64_to_bool" | "__u32_to_bool" | "__i32_to_bool" | "__u8_to_bool"
+        | "__u16_to_bool" | "__i8_to_bool" | "__i16_to_bool" => JitOp::ToBool,
 
         "weighted_pick" => {
             if consts.len() >= 5 {
@@ -3644,47 +3597,6 @@ fn compile_jit_impl(
                     let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
                     let fval = builder.ins().fcvt_from_sint(types::F64, val);
                     store_slot_f64(&mut builder, buffer_ptr, output_slots[0], fval);
-                }
-                JitOp::F64ToI64 => {
-                    let fval = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
-                    let ival = builder.ins().fcvt_to_sint(types::I64, fval);
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], ival);
-                }
-                JitOp::SignExtendI32 => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let i32_val = builder.ins().ireduce(types::I32, val);
-                    let sext_val = builder.ins().sextend(types::I64, i32_val);
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], sext_val);
-                }
-                JitOp::SignExtendI16 => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let i16_val = builder.ins().ireduce(types::I16, val);
-                    let sext_val = builder.ins().sextend(types::I64, i16_val);
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], sext_val);
-                }
-                JitOp::SignExtendI8 => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let i8_val = builder.ins().ireduce(types::I8, val);
-                    let sext_val = builder.ins().sextend(types::I64, i8_val);
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], sext_val);
-                }
-                JitOp::ZeroExtendU32 => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let mask = builder.ins().iconst(types::I64, 0xFFFFFFFFu64 as i64);
-                    let result = builder.ins().band(val, mask);
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::ZeroExtendU16 => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let mask = builder.ins().iconst(types::I64, 0xFFFFu64 as i64);
-                    let result = builder.ins().band(val, mask);
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                }
-                JitOp::ZeroExtendU8 => {
-                    let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                    let mask = builder.ins().iconst(types::I64, 0xFFu64 as i64);
-                    let result = builder.ins().band(val, mask);
-                    store_slot(&mut builder, buffer_ptr, output_slots[0], result);
                 }
                 JitOp::ToBool => {
                     let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);

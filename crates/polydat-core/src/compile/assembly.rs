@@ -2264,11 +2264,8 @@ pub fn auto_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>
         // Any reg→reg pair heals with a zero-cost retag — the
         // materialized "views are free bitcasts" rule
         // (type_system_alignment.md §3).
-        (from, to)
-            if crate::library::register_view::is_reg_port(from)
-                && crate::library::register_view::is_reg_port(to) =>
-        {
-            Some(Box::new(crate::library::register_view::RegView::new(to)))
+        (from, to) if crate::library::register_view::is_reg_port(from) => {
+            crate::library::register_view::reg_view(to)
         }
 
         // ── Vector lane completion — class A (total) ────────────

@@ -726,6 +726,48 @@ fn a_variadic_with_no_wires_is_its_identity_on_every_engine() {
     }
 }
 
+/// A polymorphic node passes a value of each kind of carrier through
+/// unchanged on every engine: a register and a 128-bit word (two slots),
+/// narrow integers and `f32` riding a 64-bit carrier, and a string (a
+/// pair). `log_warn(reg_splat_f64(cycle))` was the fuzzer's find: every
+/// compiled engine handed the register back as its low limb.
+#[test]
+fn every_carrier_passes_through_a_polymorphic_node_on_every_engine() {
+    use polydat::dsl::compile::compile_polydat_with;
+    use polydat::{Engine, JitMode, Provenance};
+    let producers = [
+        "reg_splat_f64(cycle)",
+        "__u64_to_u128(cycle)",
+        "__u64_to_u32(cycle)",
+        "__u64_to_i32(cycle)",
+        "__u64_to_f32(cycle)",
+        "format_u64(cycle)",
+    ];
+    for p in producers {
+        let src = format!("input cycle: u64\nv := {p}\nout := log_warn(v)\n");
+        let want = {
+            let mut k = compile_polydat_with(&src, Engine::Interpreter(JitMode::Off))
+                .unwrap_or_else(|e| panic!("{p}: {e}"));
+            k.set_inputs(&[7]);
+            k.pull("out")
+        };
+        for engine in [
+            Engine::Interpreter(JitMode::Auto),
+            Engine::Closures(Provenance::Raw),
+            Engine::Closures(Provenance::Auto),
+            Engine::Native(Provenance::Raw),
+            Engine::Native(Provenance::Auto),
+            Engine::PureNative(Provenance::Raw),
+        ] {
+            let mut k = compile_polydat_with(&src, engine).unwrap();
+            k.set_inputs(&[7]);
+            let got = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| k.pull("out")))
+                .map_err(payload_text);
+            assert_eq!(got, Ok(want.clone()), "{p} on {engine}");
+        }
+    }
+}
+
 /// Every node reads the same on every engine — values, at the edges.
 ///
 /// The matrix above records whether each node *runs* on each engine: it
