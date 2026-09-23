@@ -494,8 +494,9 @@ which the performance guide records.
 
 Every engine a host can choose accepts every program the interpreter
 accepts, with the two refusals named below, and computes what the
-interpreter computes. The other distinctions are placements inside an engine,
-not refusals:
+interpreter computes — with one runtime exception, the unset extern on
+pure native, named last in this list. The other distinctions are
+placements inside an engine, not refusals:
 
 - A node without a named native lowering runs its kit from native code,
   called in place over the state's own scratch
@@ -525,6 +526,19 @@ not refusals:
   Each is refused by name with its reason
   (`KernelError::Refused`); a program with such an extern runs on the
   interpreter.
+- **The one runtime exception to "computes what the interpreter
+  computes": an unset extern on pure native.** The interpreter, the
+  closure tier and P3 answer a cleared or never-set extern with a
+  `None` and propagate it (§3.3); they can, because a node that may
+  receive one is kept out of native code and left as a closure. Pure
+  native compiles the whole program to one function and has no closure
+  to keep it in, so instead of answering `None` it traps on the pull,
+  naming the extern and saying to set it or to run the program on
+  `native`. This is not a refusal — the program is accepted, and it
+  runs whenever the host sets the extern before pulling, which is the
+  ordinary case — and it is not decidable at build, because whether an
+  extern is ever set is the host's business and not the program's. It
+  is the one place a host can see which engine it chose.
 - SIMD scalar-flow promotion is not selected by ordinary engine choice; it has
   its own explicit qualification and execution contract in
   [simd_isa_autopromotion.md](simd_isa_autopromotion.md).

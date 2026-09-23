@@ -473,7 +473,20 @@ fn run_wellformed_pass(seed: u64, iterations: usize) -> Vec<String> {
             k.set_inputs(&[1]);
             Ok::<String, String>(k.pull("t").to_display_string())
         }) {
-            Ok(Ok(_)) => {}
+            Ok(Ok(_)) => {
+                // And the same text on every engine. Sampled — a sweep
+                // compiles the program once more per tier, and a tile
+                // body is compiled in its own right on top of that.
+                let stride = env_u64("FUZZ_ENGINE_SWEEP", 8) as usize;
+                if stride != 0 && i % stride == 0 {
+                    for detail in engine_render_failures(&source) {
+                        failures.push(format!(
+                            "[seed {seed:#x}] iteration {i}: {detail}\n  source:\n{source}\n  {}",
+                            repro(i)
+                        ));
+                    }
+                }
+            }
             Ok(Err(e)) => {
                 if cryptic(&e) || !e.contains("tile 't'") && !e.contains("unknown wire") && !e.contains("unknown function") {
                     failures.push(format!("[seed {seed:#x}] iteration {i}: compiler error is cryptic or does not name the tile: {e}\n  source:\n{source}\n  {}", repro(i)));
@@ -483,6 +496,77 @@ fn run_wellformed_pass(seed: u64, iterations: usize) -> Vec<String> {
         }
     }
     failures
+}
+
+/// A tile renders the same on every engine.
+///
+/// The block above compiles once and throws the rendered string away —
+/// it was asking whether the tile lowers and renders at all, on
+/// whichever engine `compile_polydat` happens to build. A tile is a
+/// projection body compiled in its own right, so which engine built it
+/// is exactly the thing worth varying, and the rendered text is the
+/// whole observable: one string per program, already the display form.
+///
+/// The interpreter with no cones is the oracle. A tier that declines
+/// the program is skipped, and so is pure native's unset-extern trap,
+/// which is the `None` rule holding rather than a disagreement
+/// (engines.md §3.3 and §8's runtime exception).
+fn engine_render_failures(source: &str) -> Vec<String> {
+    use polydat::{Engine, JitMode, KernelError, Provenance};
+    let mut out = Vec::new();
+
+    let deterministic = match polydat::dsl::compile_polydat_interpreter(source) {
+        Ok(k) => k.program().is_deterministic(),
+        Err(_) => return out,
+    };
+    if !deterministic {
+        return out;
+    }
+
+    let render_on = |engine: Engine| -> Result<Result<String, String>, String> {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut k = match polydat::dsl::compile_polydat_with(source, engine) {
+                Ok(k) => k,
+                Err(KernelError::Refused { .. }) => return Err("refused".to_string()),
+                Err(e) => return Err(format!("compile: {e}")),
+            };
+            k.set_inputs(&[1]);
+            Ok(k.pull("t").to_display_string())
+        }))
+        .map_err(|p| panic_text(&p))
+    };
+
+    let want = match render_on(Engine::Interpreter(JitMode::Off)) {
+        Ok(Ok(s)) => s,
+        _ => return out,
+    };
+
+    let mut engines = vec![
+        Engine::Interpreter(JitMode::Auto),
+        Engine::Closures(Provenance::Raw),
+        Engine::Closures(Provenance::Auto),
+    ];
+    if cfg!(feature = "jit") {
+        engines.push(Engine::Native(Provenance::Raw));
+        engines.push(Engine::PureNative(Provenance::Auto));
+    }
+
+    for engine in engines {
+        match render_on(engine) {
+            Ok(Ok(got)) if got == want => {}
+            Ok(Err(_)) => {}
+            Ok(Ok(got)) => out.push(format!(
+                "{engine} renders the tile differently from the interpreter:\n  \
+                 interpreter: {want:?}\n  {engine}: {got:?}"
+            )),
+            // The `None` tripwire, not a disagreement (engines.md §3.3).
+            Err(p) if p.contains("cannot carry a `None`") => {}
+            Err(p) => out.push(format!(
+                "{engine} panicked rendering a tile the interpreter rendered: {p}"
+            )),
+        }
+    }
+    out
 }
 
 fn mutate(rng: &mut Rng, src: &str) -> String {
