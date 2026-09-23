@@ -155,6 +155,17 @@ pub enum ValidationError {
         /// The names its source references.
         references: Vec<String>,
     },
+    /// A context-free source that could not be evaluated, on the
+    /// scope-less surfaces. Its only evaluation is the compile's, in
+    /// the empty scope, so its failure is the comprehension's error.
+    /// It used to be kept for a traversal that a coordinate stream
+    /// never has, and the clause silently dispensed nothing.
+    SourceFailed {
+        /// The clause.
+        name: String,
+        /// The evaluator's message.
+        message: String,
+    },
 }
 
 impl std::fmt::Display for ValidationError {
@@ -209,6 +220,9 @@ impl std::fmt::Display for ValidationError {
             ),
             Self::V9UnionClassMismatch { reason } => {
                 write!(f, "V9: union children differ in class: {reason}")
+            }
+            Self::SourceFailed { name, message } => {
+                write!(f, "clause '{name}' cannot be evaluated: {message}")
             }
         }
     }

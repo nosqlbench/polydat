@@ -103,6 +103,18 @@ pub(crate) fn shuffle_multi_indices(
     truncation: Option<u64>,
     seed: Option<u64>,
 ) -> Vec<MultiIndex> {
+    try_shuffle_multi_indices(idx, truncation, seed).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// [`shuffle_multi_indices`], refusing a draw count that cannot be
+/// held. Over a continuous space the count is the order's own, from
+/// the spec text; over a discrete one it is bounded by the tuples the
+/// input already holds.
+pub(crate) fn try_shuffle_multi_indices(
+    idx: &IndexFn,
+    truncation: Option<u64>,
+    seed: Option<u64>,
+) -> Result<Vec<MultiIndex>, String> {
     let total = index_fn_size(idx);
     let continuous = matches!(idx, IndexFn::Continuous { .. } | IndexFn::Hybrid { .. });
     // A continuous space has no tuple count: the truncation is the
@@ -110,11 +122,11 @@ pub(crate) fn shuffle_multi_indices(
     let n = match (truncation, continuous) {
         (Some(t), true) => t,
         (Some(t), false) => t.min(total),
-        (None, true) => return Vec::new(),
+        (None, true) => return Ok(Vec::new()),
         (None, false) => total,
     };
     if n == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let dim = index_fn_dim(idx);
@@ -124,12 +136,12 @@ pub(crate) fn shuffle_multi_indices(
     let base = seed.unwrap_or(DEFAULT_SEED);
     let mut rng = Prng::new(base.wrapping_add(if continuous { n } else { total }));
 
-    match idx {
+    Ok(match idx {
         IndexFn::Continuous { intervals, .. } => {
             let _ = intervals;
-            (0..n)
-                .map(|_| (0..dim).map(|_| rng.next_u64() >> 11).collect())
-                .collect()
+            let mut out = crate::derive_support::try_buffer_for(n, "order shuffle")?;
+            out.extend((0..n).map(|_| (0..dim).map(|_| rng.next_u64() >> 11).collect()));
+            out
         }
         IndexFn::Hybrid {
             discrete_axes,
@@ -137,18 +149,18 @@ pub(crate) fn shuffle_multi_indices(
             ..
         } => {
             let _ = continuous_axes;
-            (0..n)
-                .map(|_| {
-                    let mut mi = Vec::with_capacity(dim);
-                    for size in discrete_axes {
-                        mi.push(rng.next_bounded(*size));
-                    }
-                    for _ in 0..continuous_axes.len() {
-                        mi.push(rng.next_u64() >> 11);
-                    }
-                    mi
-                })
-                .collect()
+            let mut out = crate::derive_support::try_buffer_for(n, "order shuffle")?;
+            out.extend((0..n).map(|_| {
+                let mut mi = Vec::with_capacity(dim);
+                for size in discrete_axes {
+                    mi.push(rng.next_bounded(*size));
+                }
+                for _ in 0..continuous_axes.len() {
+                    mi.push(rng.next_u64() >> 11);
+                }
+                mi
+            }));
+            out
         }
         _ => {
             if n == total {
@@ -172,7 +184,7 @@ pub(crate) fn shuffle_multi_indices(
                 out
             }
         }
-    }
+    })
 }
 
 fn axis_sizes_for(idx: &IndexFn) -> Vec<u64> {

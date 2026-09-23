@@ -384,3 +384,86 @@ fn a_named_measure_is_a_source_in_the_text() {
     .unwrap_err();
     assert!(err.to_string().contains("normal(1)"), "{err}");
 }
+
+/// Every count the spec text gives is refused as an error when no
+/// machine could hold it, never an allocator abort that ends the host:
+/// the draw count of a sampling order over a continuous space, the term
+/// count of a generator, and a partition recipe's count. Before, each
+/// of these reserved the count up front, and `u64::MAX` of anything
+/// aborted the process in the allocator.
+#[test]
+fn a_count_too_large_to_hold_is_refused_not_aborted() {
+    let max = u64::MAX;
+    let cases = [
+        body(&format!("x in 0.0..1.0 order halton/{max}"), "x", "x"),
+        body(&format!("x in 0.0..1.0 order sobol/{max}"), "x", "x"),
+        body(&format!("x in 0.0..1.0 order lhs/{max}"), "x", "x"),
+        body(&format!("x in 0.0..1.0 order shuffle/{max}"), "x", "x"),
+        format!("input cycle: u64\ns := for k in fib({max})\n"),
+        format!("input cycle: u64\ns := for k in geometric(1.0, 2.0, {max})\n"),
+        format!("input cycle: u64\ns := for k in linear_steps(0.0, 1.0, {max})\n"),
+        format!("input cycle: u64\np := partitions(\"linear:{max}\", 1000)\n"),
+    ];
+    for src in &cases {
+        let outcome = polydat::dsl::compile_polydat_interpreter(src)
+            .map_err(|e| e.to_string())
+            .and_then(|mut k| {
+                k.set_inputs(&[0]);
+                // A failing pull panics, attributed; catch it as the
+                // host would, to read its message.
+                let names: Vec<String> = k.output_names().iter().map(|s| s.to_string()).collect();
+                for n in &names {
+                    let v = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        k.pull_ref(n).clone()
+                    }))
+                    .map_err(|p| {
+                        p.downcast_ref::<String>()
+                            .cloned()
+                            .or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()))
+                            .unwrap_or_default()
+                    })?;
+                    // A producer is a streamer, evaluated when its
+                    // stream opens.
+                    if let Some(s) = v.as_streamer() {
+                        let mut stream = s.coordinate_stream().map_err(|e| e.to_string())?;
+                        while stream.advance().is_some() {}
+                    }
+                }
+                if !k.program().traversals().is_empty() {
+                    let mut stream = k.traverse(0).map_err(|e| e.to_string())?;
+                    while stream.advance().map_err(|e| e.to_string())?.is_some() {}
+                }
+                Ok(())
+            });
+        let err = outcome.expect_err(&format!("a count of {max} was accepted:\n{src}"));
+        assert!(
+            err.contains("cannot be allocated"),
+            "refused, but not for the size:\n  {err}\n{src}"
+        );
+    }
+}
+
+/// A producer over a context-free generator that fails is refused when
+/// its stream opens, with the generator's own message. The failure
+/// used to disappear: the compile's evaluation failed, the clause was
+/// kept for a traversal that a coordinate stream never has, and the
+/// stream dispensed nothing, which reads the same as a generator with
+/// no values.
+#[test]
+fn a_producer_over_a_failing_generator_says_why() {
+    let src = "input cycle: u64\ns := for k in log_steps(-1.0, 1.0, 5)\n";
+    let mut k = polydat::dsl::compile_polydat_interpreter(src).unwrap();
+    k.set_inputs(&[0]);
+    let s = k.pull_ref("s").clone();
+    let err = s
+        .as_streamer()
+        .expect("a producer is a streamer")
+        .coordinate_stream()
+        .map(|_| ())
+        .expect_err("a failing generator must not open as an empty stream")
+        .to_string();
+    assert!(
+        err.contains("clause 'k' cannot be evaluated") && err.contains("bounds must be positive"),
+        "{err}"
+    );
+}

@@ -1240,8 +1240,9 @@ fn draw_sample(
     seed: Option<u64>,
 ) -> Result<Vec<Vec<u64>>, RuntimeError> {
     use crate::iteration::comprehension::strategies::{
-        extrema::extrema_multi_indices, halton::halton_multi_indices, lhs::lhs_multi_indices,
-        shuffle::shuffle_multi_indices, sobol::sobol_multi_indices,
+        extrema::extrema_multi_indices, halton::try_halton_multi_indices,
+        lhs::try_lhs_multi_indices, shuffle::try_shuffle_multi_indices,
+        sobol::try_sobol_multi_indices,
     };
     if matches!(strategy, StrategyName::Extrema) {
         return Ok(extrema_multi_indices(index_fn, count));
@@ -1254,11 +1255,14 @@ fn draw_sample(
                 .into(),
         });
     };
-    Ok(match strategy {
-        StrategyName::Halton => halton_multi_indices(index_fn, Some(n)),
-        StrategyName::Sobol => sobol_multi_indices(index_fn, Some(n)),
-        StrategyName::Lhs => lhs_multi_indices(index_fn, Some(n), seed),
-        StrategyName::Shuffle => shuffle_multi_indices(index_fn, Some(n), seed),
+    // The count is the order's own (`order halton/16`), from the spec
+    // text, so a count no machine can hold is refused here as the
+    // order's error rather than aborting in the allocator.
+    let drawn = match strategy {
+        StrategyName::Halton => try_halton_multi_indices(index_fn, Some(n)),
+        StrategyName::Sobol => try_sobol_multi_indices(index_fn, Some(n)),
+        StrategyName::Lhs => try_lhs_multi_indices(index_fn, Some(n), seed),
+        StrategyName::Shuffle => try_shuffle_multi_indices(index_fn, Some(n), seed),
         other => {
             return Err(RuntimeError::OrderEval {
                 strategy: other,
@@ -1267,7 +1271,8 @@ fn draw_sample(
                     .into(),
             });
         }
-    })
+    };
+    drawn.map_err(|message| RuntimeError::OrderEval { strategy, message })
 }
 
 /// `true` when an order over `c` samples: a continuous clause is

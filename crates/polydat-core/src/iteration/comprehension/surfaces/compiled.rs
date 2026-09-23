@@ -69,6 +69,9 @@ impl CompiledComprehension {
         if let Some((name, references)) = first_context_required(&ast) {
             return Err(ValidationError::ContextRequired { name, references });
         }
+        if let Some((name, message)) = first_failed_static(&ast) {
+            return Err(ValidationError::SourceFailed { name, message });
+        }
         let report = validate(&ast, mode)?;
         Ok((
             Self {
@@ -155,6 +158,44 @@ fn first_context_required(ast: &Comprehension) -> Option<(String, Vec<String>)> 
         | Comprehension::Union { children } => children.iter().find_map(first_context_required),
         Comprehension::Filter { child, .. } | Comprehension::Order { child, .. } => {
             first_context_required(child)
+        }
+    }
+}
+
+/// The first context-free generator the flatten could not evaluate,
+/// with the evaluator's message. After [`flatten_static_sources`] in
+/// the empty scope, a context-free generator that is still a call with
+/// no cardinality hint is one whose evaluation failed: an empty result
+/// carries a hint of 0 and a non-literal result its count. Nothing
+/// later evaluates it on the scope-less surfaces, so it is evaluated
+/// once more here for its message, and refused.
+fn first_failed_static(ast: &Comprehension) -> Option<(String, String)> {
+    use crate::iteration::comprehension::eval_source::EvalContext;
+    use crate::iteration::comprehension::source::Source;
+    match ast {
+        Comprehension::Clause { name, source } => match source {
+            Source::Generator {
+                cardinality_hint: None,
+                ..
+            } if source.eval_class() == EvalClass::Static => {
+                let scope = NoScope::new();
+                let ctx = EvalContext {
+                    var_name: name,
+                    scope: &scope,
+                    prefix: &[],
+                };
+                source
+                    .evaluate(Some(&ctx))
+                    .err()
+                    .map(|e| (name.clone(), e.to_string()))
+            }
+            _ => None,
+        },
+        Comprehension::Cartesian { children }
+        | Comprehension::Zip { children, .. }
+        | Comprehension::Union { children } => children.iter().find_map(first_failed_static),
+        Comprehension::Filter { child, .. } | Comprehension::Order { child, .. } => {
+            first_failed_static(child)
         }
     }
 }

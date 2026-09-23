@@ -119,23 +119,34 @@ fn naive_halton_over_tuples(input: &[Tuple], truncation: Option<u64>) -> Vec<Tup
 }
 
 pub(crate) fn halton_multi_indices(idx: &IndexFn, truncation: Option<u64>) -> Vec<MultiIndex> {
+    try_halton_multi_indices(idx, truncation).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// [`halton_multi_indices`], refusing a draw count that cannot be
+/// held. Over a continuous space the count is the order's own
+/// (`order halton/16`), straight from the spec text, and this is the
+/// form the runtime's sampler calls.
+pub(crate) fn try_halton_multi_indices(
+    idx: &IndexFn,
+    truncation: Option<u64>,
+) -> Result<Vec<MultiIndex>, String> {
     let dim = index_fn_dim(idx);
     if dim == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let total = index_fn_size(idx);
     let n = match (truncation, total) {
         (Some(t), 0) => t,
         (Some(t), tot) => t.min(tot),
-        (None, 0) => return Vec::new(),
+        (None, 0) => return Ok(Vec::new()),
         (None, tot) => tot,
     };
     if n == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let axis_sizes = axis_sizes_for(idx, dim);
-    let mut out = Vec::with_capacity(n as usize);
+    let mut out = crate::derive_support::try_buffer_for(n, "order halton")?;
     let mut i = 1u64;
     let mut seen_discrete = std::collections::HashSet::new();
     let max_attempts = n.saturating_mul(8).max(256);
@@ -156,7 +167,7 @@ pub(crate) fn halton_multi_indices(idx: &IndexFn, truncation: Option<u64>) -> Ve
         i += 1;
         attempts += 1;
     }
-    out
+    Ok(out)
 }
 
 fn axis_sizes_for(idx: &IndexFn, dim: usize) -> Vec<u64> {

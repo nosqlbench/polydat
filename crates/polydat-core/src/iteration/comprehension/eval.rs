@@ -979,7 +979,7 @@ fn try_eval_generator(text: &str) -> Result<Option<Vec<Value>>, String> {
                 ));
             }
             let n = parse_u64_arg(arg_list[0], "fib(n)")?;
-            Ok(Some(generate_fib_n(n)))
+            Ok(Some(generate_fib_n(n)?))
         }
         "fib_until" => {
             if arg_list.len() != 1 {
@@ -1031,7 +1031,7 @@ fn try_eval_generator(text: &str) -> Result<Option<Vec<Value>>, String> {
             let start = parse_num_arg(arg_list[0], "geometric.start")?;
             let factor = parse_num_arg(arg_list[1], "geometric.factor")?;
             let n = parse_u64_arg(arg_list[2], "geometric.n")?;
-            Ok(Some(generate_geometric(start, factor, n)))
+            Ok(Some(generate_geometric(start, factor, n)?))
         }
         "geometric_until" => {
             if arg_list.len() != 3 {
@@ -1055,7 +1055,7 @@ fn try_eval_generator(text: &str) -> Result<Option<Vec<Value>>, String> {
             let start = parse_num_arg(arg_list[0], "linear_starts.start")?;
             let end = parse_num_arg(arg_list[1], "linear_starts.end")?;
             let n = parse_u64_arg(arg_list[2], "linear_starts.n")?;
-            Ok(Some(generate_linear_points(start, end, n, false)))
+            Ok(Some(generate_linear_points(start, end, n, false)?))
         }
         "linear_steps" => {
             if arg_list.len() != 3 {
@@ -1067,7 +1067,7 @@ fn try_eval_generator(text: &str) -> Result<Option<Vec<Value>>, String> {
             let start = parse_num_arg(arg_list[0], "linear_steps.start")?;
             let end = parse_num_arg(arg_list[1], "linear_steps.end")?;
             let n = parse_u64_arg(arg_list[2], "linear_steps.n")?;
-            Ok(Some(generate_linear_points(start, end, n, true)))
+            Ok(Some(generate_linear_points(start, end, n, true)?))
         }
         "log_steps" => {
             if arg_list.len() != 3 {
@@ -1086,11 +1086,12 @@ fn try_eval_generator(text: &str) -> Result<Option<Vec<Value>>, String> {
 }
 
 /// First `n` Fibonacci numbers: 1, 1, 2, 3, 5, 8, ...
-fn generate_fib_n(n: u64) -> Vec<Value> {
-    if n == 0 {
-        return Vec::new();
-    }
-    let mut out = Vec::with_capacity(n as usize);
+///
+/// The count comes from the spec text, so the buffer is reserved
+/// fallibly (`try_buffer_for`): `fib(99999999999999)` is a compile
+/// error naming the generator, not an allocator abort.
+fn generate_fib_n(n: u64) -> Result<Vec<Value>, String> {
+    let mut out = crate::derive_support::try_buffer_for(n, "fib(n)")?;
     let (mut a, mut b): (u64, u64) = (1, 1);
     for _ in 0..n {
         out.push(Value::U64(a));
@@ -1098,7 +1099,7 @@ fn generate_fib_n(n: u64) -> Vec<Value> {
         a = b;
         b = next;
     }
-    out
+    Ok(out)
 }
 
 /// Fibonacci values up to and including the largest ≤ `max`.
@@ -1119,7 +1120,8 @@ fn generate_fib_until(max: u64) -> Vec<Value> {
 
 /// `1, 2, 4, ..., 2^(n-1)`.
 fn generate_pow2_n(n: u64) -> Vec<Value> {
-    let mut out = Vec::with_capacity(n as usize);
+    // At most 64 terms, whatever `n` asks: the loop stops at 2^63.
+    let mut out = Vec::with_capacity(n.min(64) as usize);
     for i in 0..n {
         if i >= 64 {
             break;
@@ -1147,14 +1149,14 @@ fn generate_pow2_until(max: u64) -> Vec<Value> {
 }
 
 /// `start, start*factor, start*factor², …` (n terms).
-fn generate_geometric(start: f64, factor: f64, n: u64) -> Vec<Value> {
-    let mut out = Vec::with_capacity(n as usize);
+fn generate_geometric(start: f64, factor: f64, n: u64) -> Result<Vec<Value>, String> {
+    let mut out = crate::derive_support::try_buffer_for(n, "geometric(start, factor, n)")?;
     let mut v = start;
     for _ in 0..n {
         out.push(Value::F64(v));
         v *= factor;
     }
-    out
+    Ok(out)
 }
 
 /// `start, start*factor, …` ≤ max.
@@ -1175,7 +1177,11 @@ fn generate_geometric_until(start: f64, factor: f64, max: f64) -> Vec<Value> {
 
 /// Binomial coefficients `C(n, 0), C(n, 1), …, C(n, n)`.
 fn generate_binomial(n: u64) -> Vec<Value> {
-    let mut out = Vec::with_capacity(n as usize + 1);
+    // A row is cut where its coefficients pass `u64::MAX`, and every
+    // coefficient of rows up to 67 fits, so no row holds more than 68
+    // terms however large `n` is. `binomial(10^12)` is a short list,
+    // not a request for a trillion.
+    let mut out = Vec::with_capacity(n.min(67) as usize + 1);
     let mut c: u128 = 1;
     out.push(Value::U64(1));
     for k in 1..=n {
@@ -1466,19 +1472,24 @@ fn resolve_partition_spec_arg(arg: &str, kernel: &dyn Lookup) -> Result<String, 
 /// These yield *values*, not partitions; splitting a
 /// `Partition` into sub-partitions is `subdivide(p, n)` in the
 /// partition stdlib (SRD 71).
-fn generate_linear_points(start: f64, end: f64, n: u64, inclusive: bool) -> Vec<Value> {
-    if n == 0 {
-        return Vec::new();
-    }
+fn generate_linear_points(
+    start: f64,
+    end: f64,
+    n: u64,
+    inclusive: bool,
+) -> Result<Vec<Value>, String> {
     let denom = if inclusive {
         (n.saturating_sub(1)).max(1) as f64
     } else {
         n as f64
     };
     let step = (end - start) / denom;
-    (0..n)
-        .map(|i| Value::F64(start + step * i as f64))
-        .collect()
+    // Not `(0..n).collect()`: a `u64` range reports its exact length,
+    // so collecting reserves all `n` up front and a count from the
+    // spec text no machine can hold aborts the process.
+    let mut out = crate::derive_support::try_buffer_for(n, "linear points")?;
+    out.extend((0..n).map(|i| Value::F64(start + step * i as f64)));
+    Ok(out)
 }
 
 /// `n` log-spaced points from `start` to `end` (inclusive).
@@ -1498,9 +1509,9 @@ fn generate_log_steps(start: f64, end: f64, n: u64) -> Result<Vec<Value>, String
     let log_s = start.ln();
     let log_e = end.ln();
     let step = (log_e - log_s) / (n - 1) as f64;
-    Ok((0..n)
-        .map(|i| Value::F64((log_s + step * i as f64).exp()))
-        .collect())
+    let mut out = crate::derive_support::try_buffer_for(n, "log_steps(start, end, n)")?;
+    out.extend((0..n).map(|i| Value::F64((log_s + step * i as f64).exp())));
+    Ok(out)
 }
 
 // ============================================================
@@ -1594,7 +1605,13 @@ fn try_eval_setop(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Value>>,
             }
             let a = recursively_evaluate(arg_texts[0])?;
             let n = parse_u64_arg(arg_texts[1], "cycle.n")?;
-            let mut out = Vec::with_capacity(a.len() * n as usize);
+            let total = (a.len() as u64).checked_mul(n).ok_or_else(|| {
+                format!(
+                    "cycle(a, n): {} values repeated {n} times is more than can be counted",
+                    a.len()
+                )
+            })?;
+            let mut out = crate::derive_support::try_buffer_for(total, "cycle(a, n)")?;
             for _ in 0..n {
                 out.extend(a.iter().cloned());
             }
@@ -1696,10 +1713,18 @@ fn try_eval_sequencer(text: &str, kernel: &dyn Lookup) -> Result<Option<Vec<Valu
             ratios.len(),
         ));
     }
+    // The output length is the sum of the ratios, which come from the
+    // spec text: summed checked, and reserved fallibly, so an absurd
+    // ratio is this error rather than a wrapped sum or an abort.
+    let total = ratios
+        .iter()
+        .try_fold(0usize, |acc, &r| acc.checked_add(r))
+        .ok_or_else(|| format!("{name}: the ratios sum past what can be counted"))?;
+    let out = crate::derive_support::try_buffer_for(total as u64, name)?;
     Ok(Some(match name {
-        "bucket" => seq_bucket(&items, &ratios),
-        "concat_seq" => seq_concat(&items, &ratios),
-        "interval_seq" => seq_interval(&items, &ratios),
+        "bucket" => seq_bucket(&items, &ratios, total, out),
+        "concat_seq" => seq_concat(&items, &ratios, out),
+        "interval_seq" => seq_interval(&items, &ratios, total, out),
         _ => unreachable!(),
     }))
 }
@@ -1751,10 +1776,9 @@ fn parse_one_value(s: &str) -> Value {
 }
 
 /// Bucket sequencer: round-robin from per-item buckets sized
-/// by ratio. Output length = sum(ratios).
-fn seq_bucket(items: &[Value], ratios: &[usize]) -> Vec<Value> {
-    let total: usize = ratios.iter().sum();
-    let mut out = Vec::with_capacity(total);
+/// by ratio. Output length = sum(ratios), which is `total`; `out` is
+/// reserved for it.
+fn seq_bucket(items: &[Value], ratios: &[usize], total: usize, mut out: Vec<Value>) -> Vec<Value> {
     let mut remaining: Vec<usize> = ratios.to_vec();
     while out.len() < total {
         let mut emitted_any = false;
@@ -1774,9 +1798,7 @@ fn seq_bucket(items: &[Value], ratios: &[usize]) -> Vec<Value> {
 
 /// Concat sequencer: contiguous runs (all of item 1, then
 /// all of item 2, …).
-fn seq_concat(items: &[Value], ratios: &[usize]) -> Vec<Value> {
-    let total: usize = ratios.iter().sum();
-    let mut out = Vec::with_capacity(total);
+fn seq_concat(items: &[Value], ratios: &[usize], mut out: Vec<Value>) -> Vec<Value> {
     for (item, &r) in items.iter().zip(ratios.iter()) {
         for _ in 0..r {
             out.push(item.clone());
@@ -1790,13 +1812,16 @@ fn seq_concat(items: &[Value], ratios: &[usize]) -> Vec<Value> {
 /// the item with the largest "weight × position - already
 /// emitted" — same algorithm as op-sequencing's
 /// build_interval_lut.
-fn seq_interval(items: &[Value], ratios: &[usize]) -> Vec<Value> {
-    let total: usize = ratios.iter().sum();
+fn seq_interval(
+    items: &[Value],
+    ratios: &[usize],
+    total: usize,
+    mut out: Vec<Value>,
+) -> Vec<Value> {
     if total == 0 {
-        return Vec::new();
+        return out;
     }
     let mut emitted: Vec<usize> = vec![0; items.len()];
-    let mut out = Vec::with_capacity(total);
     for slot in 0..total {
         // Pick the item whose target ratio is most under-met
         // at this slot. Target at slot k = (ratio_i * (k+1)) / total.

@@ -73,7 +73,13 @@ Additive, so the fix is an extra field or arm:
   pattern, or read it if you render the comprehension back to text.
 - `WriteError` gained `CoordinateSlot { .. }` — a write aimed at a
   coordinate slot, which used to be reported as something less precise.
-- `derive_support` gained `buffer_for`, `string_for` and `reserve_for`.
+- `ValidationError` gained `SourceFailed { name, message }`. A producer
+  over a context-free generator that cannot be evaluated is now refused
+  when its stream opens. It used to open as an empty stream, so a host
+  that treated "no coordinates" as a normal outcome may have been
+  reading a failure.
+- `derive_support` gained `buffer_for`, `string_for` and `reserve_for`,
+  and `try_buffer_for` for a caller that reports failure as a value.
   A host node that sizes a buffer by a wire or constant should allocate
   through them. A size the machine cannot hold then fails as that node,
   caught and attributed like any other failure, instead of aborting the

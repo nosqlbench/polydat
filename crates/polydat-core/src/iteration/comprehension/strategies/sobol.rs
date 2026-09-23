@@ -188,19 +188,28 @@ fn naive_sobol_over_tuples(input: &[Tuple], truncation: Option<u64>) -> Vec<Tupl
 }
 
 pub(crate) fn sobol_multi_indices(idx: &IndexFn, truncation: Option<u64>) -> Vec<MultiIndex> {
+    try_sobol_multi_indices(idx, truncation).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// [`sobol_multi_indices`], refusing a draw count that cannot be held:
+/// over a continuous space the count comes from the spec text.
+pub(crate) fn try_sobol_multi_indices(
+    idx: &IndexFn,
+    truncation: Option<u64>,
+) -> Result<Vec<MultiIndex>, String> {
     let dim = index_fn_dim(idx);
     if dim == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let total = index_fn_size(idx);
     let n = match (truncation, total) {
         (Some(t), 0) => t,
         (Some(t), tot) => t.min(tot),
-        (None, 0) => return Vec::new(),
+        (None, 0) => return Ok(Vec::new()),
         (None, tot) => tot,
     };
     if n == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let axis_sizes = axis_sizes_for(idx, dim);
@@ -210,7 +219,7 @@ pub(crate) fn sobol_multi_indices(idx: &IndexFn, truncation: Option<u64>) -> Vec
     let dirs: Vec<[u32; BITS as usize + 1]> = (0..dim)
         .map(|d| direction_numbers(d.min(MAX_SOBOL_DIM - 1)))
         .collect();
-    let mut out = Vec::with_capacity(n as usize);
+    let mut out = crate::derive_support::try_buffer_for(n, "order sobol")?;
     let mut i = 1u64;
     let mut seen_discrete = std::collections::HashSet::new();
     let max_attempts = n.saturating_mul(8).max(256);
@@ -229,7 +238,7 @@ pub(crate) fn sobol_multi_indices(idx: &IndexFn, truncation: Option<u64>) -> Vec
         i += 1;
         attempts += 1;
     }
-    out
+    Ok(out)
 }
 
 fn axis_sizes_for(idx: &IndexFn, dim: usize) -> Vec<u64> {

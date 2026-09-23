@@ -877,10 +877,17 @@ pub fn ref_value(slots: &[u64]) -> &Value {
 /// `saturating_add`, so an overflow reaches here as a size that cannot
 /// be reserved rather than wrapping to a small one first.
 pub fn buffer_for<T>(n: u64, what: &str) -> Vec<T> {
+    try_buffer_for(n, what).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// [`buffer_for`] for a caller that reports failure as a value rather
+/// than as a node's panic: a spec parser or a compile step, whose size
+/// comes from program text. The error is the same sentence.
+pub fn try_buffer_for<T>(n: u64, what: &str) -> Result<Vec<T>, String> {
     let mut v = Vec::new();
     match usize::try_from(n) {
-        Ok(n) if v.try_reserve_exact(n).is_ok() => v,
-        _ => refuse_size(n, what),
+        Ok(k) if v.try_reserve_exact(k).is_ok() => Ok(v),
+        _ => Err(size_refusal(n, what)),
     }
 }
 
@@ -907,7 +914,11 @@ pub fn reserve_for<T>(out: &mut Vec<T>, n: u64, what: &str) {
 
 #[cold]
 fn refuse_size(n: u64, what: &str) -> ! {
-    panic!("{what}: a buffer of {n} elements cannot be allocated on this machine")
+    panic!("{}", size_refusal(n, what))
+}
+
+fn size_refusal(n: u64, what: &str) -> String {
+    format!("{what}: a buffer of {n} elements cannot be allocated on this machine")
 }
 
 /// A polymorphic port's slots as the owned `Value` the wire type

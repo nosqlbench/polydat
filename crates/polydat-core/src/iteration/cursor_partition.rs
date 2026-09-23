@@ -630,7 +630,10 @@ fn parse_delta_entry(raw: &str) -> Result<Vec<Bound>, String> {
                      fraction, or ordinal) only"
             ));
         }
-        return Ok(vec![b; n as usize]);
+        // Reserved fallibly, which also proves `n` fits a `usize`.
+        let mut out = crate::derive_support::try_buffer_for(n, &format!("`{raw}`"))?;
+        out.resize(n as usize, b);
+        return Ok(out);
     }
     Ok(vec![parse_bound(raw)?])
 }
@@ -793,6 +796,18 @@ fn parse_f64_arg(arg: &str, ctx: &str) -> Result<f64, String> {
         .map_err(|_| format!("invalid number arg `{arg}` for {ctx}"))
 }
 
+/// `n` recipe weights, the `i`-th (from 1) computed by `weight`. The
+/// count is the recipe's argument, from the spec text, so it is
+/// reserved fallibly: `linear:99999999999999` is a compile error
+/// naming the recipe, not an allocator abort. (Collecting a `u64`
+/// range would reserve all `n` at once, since the range reports its
+/// exact length.)
+fn weights_for(n: u64, recipe: &str, weight: impl FnMut(u64) -> f64) -> Result<Vec<f64>, String> {
+    let mut out = crate::derive_support::try_buffer_for(n, recipe)?;
+    out.extend((1..=n).map(weight));
+    Ok(out)
+}
+
 fn recipe_linear(args: &[&str]) -> Result<Vec<f64>, String> {
     if args.len() != 1 {
         return Err(format!(
@@ -804,7 +819,7 @@ fn recipe_linear(args: &[&str]) -> Result<Vec<f64>, String> {
     if n == 0 {
         return Err("linear:N requires N >= 1".into());
     }
-    Ok(vec![1.0; n as usize])
+    weights_for(n, "linear:N", |_| 1.0)
 }
 
 fn recipe_ratios(args: &[&str]) -> Result<Vec<f64>, String> {
@@ -883,7 +898,7 @@ fn recipe_bin(args: &[&str]) -> Result<Vec<f64>, String> {
     }
     // Coefficients of (1+x)^(N-1): C(N-1, k) for k = 0..N-1.
     let degree = n - 1;
-    let mut coeffs = vec![1.0f64; n as usize];
+    let mut coeffs = weights_for(n, "bin:N", |_| 1.0)?;
     for k in 1..=degree {
         coeffs[k as usize] = coeffs[(k - 1) as usize] * ((degree - k + 1) as f64) / (k as f64);
     }
@@ -903,7 +918,7 @@ fn recipe_fib(args: &[&str]) -> Result<Vec<f64>, String> {
     }
     // Skip the redundant leading `1, 1` — use the distinct
     // Fibonacci values starting at 1: 1, 2, 3, 5, 8, 13, ...
-    let mut weights = Vec::with_capacity(n as usize);
+    let mut weights = crate::derive_support::try_buffer_for(n, "fib:N")?;
     let (mut a, mut b) = (1u64, 2u64);
     for _ in 0..n {
         weights.push(a as f64);
@@ -925,7 +940,7 @@ fn recipe_ln(args: &[&str]) -> Result<Vec<f64>, String> {
     if n == 0 {
         return Err("ln:N requires N >= 1".into());
     }
-    Ok((1..=n).map(|i| (1.0 + i as f64).ln()).collect())
+    weights_for(n, "ln:N", |i| (1.0 + i as f64).ln())
 }
 
 fn recipe_geom(args: &[&str]) -> Result<Vec<f64>, String> {
@@ -943,7 +958,7 @@ fn recipe_geom(args: &[&str]) -> Result<Vec<f64>, String> {
     if r <= 0.0 {
         return Err(format!("geom:N,R requires R > 0; got {r}"));
     }
-    let mut weights = Vec::with_capacity(n as usize);
+    let mut weights = crate::derive_support::try_buffer_for(n, "geom:N,R")?;
     let mut current = 1.0;
     for _ in 0..n {
         weights.push(current);
@@ -967,7 +982,7 @@ fn recipe_zipf(args: &[&str]) -> Result<Vec<f64>, String> {
     if n == 0 {
         return Err("zipf:s,N requires N >= 1".into());
     }
-    Ok((1..=n).map(|i| 1.0 / (i as f64).powf(s)).collect())
+    weights_for(n, "zipf:s,N", |i| 1.0 / (i as f64).powf(s))
 }
 
 fn recipe_pareto(args: &[&str]) -> Result<Vec<f64>, String> {
@@ -985,7 +1000,7 @@ fn recipe_pareto(args: &[&str]) -> Result<Vec<f64>, String> {
     if n == 0 {
         return Err("pareto:alpha,N requires N >= 1".into());
     }
-    Ok((1..=n).map(|i| (1.0 / i as f64).powf(alpha)).collect())
+    weights_for(n, "pareto:alpha,N", |i| (1.0 / i as f64).powf(alpha))
 }
 
 fn recipe_front_heavy(args: &[&str]) -> Result<Vec<f64>, String> {
@@ -999,7 +1014,8 @@ fn recipe_front_heavy(args: &[&str]) -> Result<Vec<f64>, String> {
     if n == 0 {
         return Err("front_heavy:N requires N >= 1".into());
     }
-    Ok((1..=n).rev().map(|i| i as f64).collect())
+    // n, n-1, …, 1.
+    weights_for(n, "front_heavy:N", |i| (n + 1 - i) as f64)
 }
 
 fn recipe_back_heavy(args: &[&str]) -> Result<Vec<f64>, String> {
@@ -1013,7 +1029,7 @@ fn recipe_back_heavy(args: &[&str]) -> Result<Vec<f64>, String> {
     if n == 0 {
         return Err("back_heavy:N requires N >= 1".into());
     }
-    Ok((1..=n).map(|i| i as f64).collect())
+    weights_for(n, "back_heavy:N", |i| i as f64)
 }
 
 /// Normalise raw recipe weights so they sum to 100. Weights
@@ -1309,7 +1325,7 @@ fn resolve_delta_list(
                          into {n} non-empty partitions"
                     ));
                 }
-                for (s, e) in split_evenly(cursor, dom_end, *n) {
+                for (s, e) in try_split_evenly(cursor, dom_end, *n)? {
                     push(&mut partitions, s, e);
                 }
                 cursor = dom_end;
@@ -1412,7 +1428,7 @@ pub fn subdivide_partition(p: &Partition, n: u64) -> Result<Vec<Partition>, Stri
     let pct_at = |ord: u64| -> f64 {
         p.start_pct + (ord - p.start_ord) as f64 / card as f64 * (p.end_pct - p.start_pct)
     };
-    Ok(split_evenly(p.start_ord, p.end_ord, n)
+    Ok(try_split_evenly(p.start_ord, p.end_ord, n)?
         .into_iter()
         .enumerate()
         .map(|(i, (start_ord, end_ord))| Partition {
@@ -1437,13 +1453,24 @@ pub fn subdivide_partition(p: &Partition, n: u64) -> Result<Vec<Partition>, Stri
 /// `subdivide(p, n)` node in `polydat-nodes` so both produce identical
 /// boundaries.
 pub fn split_evenly(start_ord: u64, end_ord: u64, n: u64) -> Vec<(u64, u64)> {
+    try_split_evenly(start_ord, end_ord, n).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// [`split_evenly`], refusing a chunk count that cannot be held. The
+/// count is bounded by the ordinals in the span, not by memory:
+/// `subdivide(p, 2^50)` over a large enough domain is well formed and
+/// asks for 2^50 chunks, so it is refused here rather than aborting in
+/// the allocator.
+pub fn try_split_evenly(start_ord: u64, end_ord: u64, n: u64) -> Result<Vec<(u64, u64)>, String> {
     debug_assert!(n >= 1, "split_evenly requires n >= 1");
     debug_assert!(end_ord >= start_ord);
     let span = (end_ord - start_ord) as u128;
     let n_wide = n as u128;
     let boundary =
         |i: u64| -> u64 { start_ord + ((i as u128 * span + n_wide / 2) / n_wide) as u64 };
-    (0..n).map(|i| (boundary(i), boundary(i + 1))).collect()
+    let mut out = crate::derive_support::try_buffer_for(n, "split into n partitions")?;
+    out.extend((0..n).map(|i| (boundary(i), boundary(i + 1))));
+    Ok(out)
 }
 
 #[inline]

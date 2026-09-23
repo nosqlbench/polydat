@@ -270,7 +270,7 @@ impl Rng {
 /// `fuzz_conversions` now fuzzes the table directly, and here they
 /// turn up in the middle of random programs as well.
 fn fuzzable_sigs() -> Vec<FuncSig> {
-    registry::registry()
+    let mut sigs = registry::registry()
         .into_iter()
         // A dynamic-output node (`outputs == 0`) decides its own count
         // from its arguments, which the generator cannot know; every
@@ -305,7 +305,14 @@ fn fuzzable_sigs() -> Vec<FuncSig> {
         // a sentence and not a panic, which is what invariant 2 asks
         // of any error. They are fuzzed.
         .filter(|s| s.name != "fft_analyze")
-        .collect()
+        .collect::<Vec<_>>();
+    // In name order. The registry comes in link order, which differs by
+    // platform, so a seed drew different programs on Linux and Windows:
+    // CI's failure on seed `0xdeadbeef` did not reproduce from its own
+    // reproduction line on another machine. Sorted, a seed is one
+    // sequence of programs for a given feature set, wherever it runs.
+    sigs.sort_by_key(|s| s.name);
+    sigs
 }
 
 /// Build a random module that declares `n_bindings` bindings in

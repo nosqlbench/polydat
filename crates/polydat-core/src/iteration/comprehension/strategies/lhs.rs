@@ -113,19 +113,31 @@ pub(crate) fn lhs_multi_indices(
     truncation: Option<u64>,
     seed: Option<u64>,
 ) -> Vec<MultiIndex> {
+    try_lhs_multi_indices(idx, truncation, seed).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// [`lhs_multi_indices`], refusing a draw count that cannot be held:
+/// over a continuous space the count comes from the spec text, and the
+/// strata take one permutation of that length per axis besides the
+/// draws themselves.
+pub(crate) fn try_lhs_multi_indices(
+    idx: &IndexFn,
+    truncation: Option<u64>,
+    seed: Option<u64>,
+) -> Result<Vec<MultiIndex>, String> {
     let dim = index_fn_dim(idx);
     if dim == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let total = index_fn_size(idx);
     let n = match (truncation, total) {
         (Some(t), 0) => t,
         (Some(t), tot) => t.min(tot),
-        (None, 0) => return Vec::new(),
+        (None, 0) => return Ok(Vec::new()),
         (None, tot) => tot,
     };
     if n == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let axis_sizes = axis_sizes_for(idx, dim);
@@ -133,12 +145,13 @@ pub(crate) fn lhs_multi_indices(
     let mut rng = Prng::new(seed.unwrap_or(SEED).wrapping_add(n));
     let mut per_axis_perms: Vec<Vec<u64>> = Vec::with_capacity(dim);
     for _ in 0..dim {
-        let mut perm: Vec<u64> = (0..n).collect();
+        let mut perm: Vec<u64> = crate::derive_support::try_buffer_for(n, "order lhs")?;
+        perm.extend(0..n);
         rng.shuffle(&mut perm);
         per_axis_perms.push(perm);
     }
 
-    let mut out = Vec::with_capacity(n as usize);
+    let mut out = crate::derive_support::try_buffer_for(n, "order lhs")?;
     for i in 0..n {
         let mut mi: MultiIndex = Vec::with_capacity(dim);
         for axis in 0..dim {
@@ -157,7 +170,7 @@ pub(crate) fn lhs_multi_indices(
         }
         out.push(mi);
     }
-    out
+    Ok(out)
 }
 
 /// The scale of a continuous code: a point of `[0, 1)` as a 53-bit
