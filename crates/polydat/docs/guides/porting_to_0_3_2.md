@@ -90,6 +90,24 @@ Additive, so the fix is an extra field or arm:
   preference lives now, and its default is compiled code rather than
   the interpreter.
 
+Some node constants are now bounded, and a workload outside a bound is
+refused when it compiles, naming the node and the parameter. Each of
+these used to hang, panic, overflow or return NaN, depending on the
+engine, so no working workload relied on it. Grep the workload text for
+these nodes:
+
+| node | now refused | was |
+|---|---|---|
+| `discretize(x, range, buckets)` | `range` not positive and finite; `buckets` of 0 | a panic for a range below `f64::EPSILON`; native compile underflowed at 0 buckets |
+| `shuffle(x, feedback, size, min)` | `min + size - 1` past `u64::MAX` | an overflow panic in debug, a wrapped value in release |
+| `fractal_noise_1d`, `fractal_noise_2d` | `octaves` outside 1 to 64 | a hang for large counts, NaN at 0, and `as u32` truncation |
+| `n_of(x, n, m)` | `m` above 65 536 | `m` hashes per cycle, a hang for large `m` |
+
+Partition recipes and comprehension generators whose count no machine
+can hold (`linear:N`, `fib(n)`, `order halton/N`, …) are compile errors
+naming the spec instead of process aborts. A count that fits is still
+materialized in full.
+
 ## Part 2: the two that change quietly
 
 Everything in part 1 fails at the line you have to edit. These two do
