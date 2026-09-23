@@ -278,9 +278,11 @@ pub struct ParamSpec {
     pub slot_type: SlotType,
     /// Whether this parameter must be provided.
     pub required: bool,
-    /// Example value for this parameter, used for probing compile
-    /// level and for documentation. Wire params use `"cycle"`,
-    /// const params use a representative value that passes validation.
+    /// Example value for this parameter, as program text, used for
+    /// probing compile level and for documentation. Wire params use
+    /// `"cycle"`; a const param with a declared default uses that
+    /// default, which passes validation; a const param without one is
+    /// empty, since the signature offers no value to show.
     pub example: &'static str,
     /// Optional assembly-time validation rule (SRD 15 §"Const
     /// Constraint Metadata"). The factory enforces this before

@@ -78,10 +78,7 @@ pub fn overrides(csv: &str, jsonl: &str, txt: &str) -> HashMap<&'static str, Str
         ("date_components", "input cycle: u64\n(y, mo, d, h, mi, s, ms) := date_components(cycle)".into()),
         ("perlin_2d", "input cycle: u64\nout := perlin_2d(cycle, cycle, 42, 0.01)".into()),
         ("simplex_2d", "input cycle: u64\nout := simplex_2d(cycle, cycle, 42, 0.01)".into()),
-        ("fractal_noise_2d", "input cycle: u64\nout := fractal_noise_2d(cycle, cycle, 42, 0.02)".into()),
-        // Octaves are bounded to 64; the synthesized call would pass 101.
-        ("fractal_noise_1d", "input cycle: u64\nout := fractal_noise_1d(cycle, 42, 0.02, 6)".into()),
-        ("pcg_stream", "input cycle: u64\nout := pcg_stream(cycle, cycle, 42)".into()),
+        ("fractal_noise_2d", "input cycle: u64\nout := fractal_noise_2d(cycle, cycle, 42, 0.02)".into()),        ("pcg_stream", "input cycle: u64\nout := pcg_stream(cycle, cycle, 42)".into()),
         ("format_u64", "input cycle: u64\nout := format_u64(cycle, 16)".into()),
         // Context (no inputs)
         ("current_epoch_millis", "input cycle: u64\nout := current_epoch_millis()".into()),
@@ -366,6 +363,20 @@ pub fn synthesized_call(sig: &polydat::dsl::registry::FuncSig, wire: &str) -> Op
     // whole sweep blind to a lowering that read its constants in the
     // wrong order. Ascending keeps the pair a `[lo, hi)` node wants,
     // and none of them is zero, which a modulus would refuse.
+    //
+    // A value its parameter's own declared constraint refuses gives way
+    // to the parameter's example, its declared default: `octaves` is
+    // bounded to 64, and the ascending 101 would make the node's
+    // program a refusal to compile rather than a program of the node.
+    use polydat::dsl::factory::ConstArg;
+    let pick = |p: &polydat::dsl::registry::ParamSpec, arg: ConstArg, text: String| {
+        let refused = p.constraint.is_some_and(|c| c.check(&arg, p.name).is_err());
+        if refused && !p.example.is_empty() {
+            p.example.to_string()
+        } else {
+            text
+        }
+    };
     let mut nth_u64 = 0u64;
     let mut nth_f64 = 0u64;
     for p in sig.params {
@@ -373,11 +384,13 @@ pub fn synthesized_call(sig: &polydat::dsl::registry::FuncSig, wire: &str) -> Op
             SlotType::Wire => args.push(wire.into()),
             SlotType::ConstU64 | SlotType::ConstVecU64 | SlotType::ConstVec => {
                 nth_u64 += 1;
-                args.push(format!("{}", 99 + nth_u64));
+                let v = 99 + nth_u64;
+                args.push(pick(p, ConstArg::Int(v), v.to_string()));
             }
             SlotType::ConstF64 | SlotType::ConstVecF64 => {
                 nth_f64 += 1;
-                args.push(format!("{}.0", nth_f64));
+                let v = nth_f64 as f64;
+                args.push(pick(p, ConstArg::Float(v), format!("{v:.1}")));
             }
             SlotType::ConstStr => args.push("\"test\"".into()),
         }

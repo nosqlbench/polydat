@@ -930,6 +930,39 @@ impl JitType {
     }
 }
 
+/// A `#[poly_default(...)]` expression as the literal a program writes:
+/// `4u64` is `4`, `100.0f64` is `100.0`, `-1.5` is `-1.5`, and a string
+/// keeps its quotes. `None` for an expression that is not a literal.
+fn program_literal(e: &syn::Expr) -> Option<String> {
+    match e {
+        syn::Expr::Lit(l) => match &l.lit {
+            syn::Lit::Int(i) => Some(i.base10_digits().to_string()),
+            syn::Lit::Float(f) => {
+                let d = f.base10_digits();
+                // The program reads a number without a point as an
+                // integer, so a float default keeps one.
+                Some(if d.contains(['.', 'e', 'E']) {
+                    d.to_string()
+                } else {
+                    format!("{d}.0")
+                })
+            }
+            syn::Lit::Str(s) => Some(format!("{:?}", s.value())),
+            // A `Const<bool>` rides the integer slot, and the grammar
+            // reads `true` and `false` in an argument as wire names, so
+            // the value a program passes is `1` or `0`.
+            syn::Lit::Bool(b) => Some(if b.value { "1" } else { "0" }.to_string()),
+            _ => None,
+        },
+        syn::Expr::Unary(u) if matches!(u.op, syn::UnOp::Neg(_)) => {
+            program_literal(&u.expr).map(|v| format!("-{v}"))
+        }
+        syn::Expr::Group(g) => program_literal(&g.expr),
+        syn::Expr::Paren(p) => program_literal(&p.expr),
+        _ => None,
+    }
+}
+
 /// Map a `ConstShape` to its JIT-compatible primitive carrier,
 /// or `None` if the shape can't live in the u64 buffer.
 fn const_shape_to_jit_type(s: ConstShape) -> Option<JitType> {
@@ -2160,12 +2193,25 @@ fn generate(func: ItemFn, attrs: NodeAttrs) -> syn::Result<TokenStream2> {
                     quote!(Some(polydat::dsl::const_constraints::ConstConstraint::#c))
                 }
             };
+            // The example is a value a program can pass, as the field's
+            // documentation says: `cycle` for a wire, the declared
+            // default for a constant that has one, written as program
+            // text, and empty when there is none to offer. It used to
+            // be the parameter's own name, which no program can pass.
+            let example = match &a.kind {
+                ArgKind::Wire | ArgKind::PolyWire | ArgKind::Variadic(_) => "cycle".to_string(),
+                _ => a
+                    .default_value
+                    .as_ref()
+                    .and_then(program_literal)
+                    .unwrap_or_default(),
+            };
             Some(quote! {
                 polydat::dsl::registry::ParamSpec {
                     name: #name_str,
                     slot_type: #slot_type,
                     required: #required,
-                    example: #name_str,
+                    example: #example,
                     constraint: #constraint,
                 }
             })

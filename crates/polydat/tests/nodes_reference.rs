@@ -39,7 +39,7 @@ fn cell(text: &str) -> String {
 fn section() -> String {
     // `__`-prefixed names are the conversion adapters the assembler
     // inserts between a wire and a port of another type. A program
-    // cannot call one, so they are counted here and catalogued by the
+    // rarely calls one, so they are counted here and catalogued by the
     // type system.
     let (public, adapters): (Vec<_>, Vec<_>) = registry()
         .into_iter()
@@ -100,5 +100,53 @@ fn the_node_catalog_is_the_registry() {
         rendered,
         "the node catalog in docs/reference/nodes.md is not the registry; \
          regenerate with NODES_REFERENCE=overwrite"
+    );
+}
+
+/// Every parameter's example is a value a program can pass: `cycle`
+/// for a wire, and for a constant either nothing or a literal of its
+/// slot's kind that its own declared constraint accepts. The examples
+/// used to be the parameters' names, which no program can pass.
+#[test]
+fn every_parameter_example_is_a_passable_value() {
+    use polydat::ast::SlotType;
+    use polydat::dsl::factory::ConstArg;
+    let mut bad = Vec::new();
+    for sig in polydat::dsl::registry::registry() {
+        for p in sig.params {
+            let e = p.example;
+            let arg = match p.slot_type {
+                SlotType::Wire => {
+                    if e != "cycle" {
+                        bad.push(format!("{}.{}: wire example {e:?}", sig.name, p.name));
+                    }
+                    continue;
+                }
+                _ if e.is_empty() => continue,
+                SlotType::ConstU64 => e.parse().ok().map(ConstArg::Int),
+                SlotType::ConstF64 => e.parse().ok().map(ConstArg::Float),
+                SlotType::ConstStr => e
+                    .strip_prefix('"')
+                    .and_then(|s| s.strip_suffix('"'))
+                    .map(|s| ConstArg::Str(s.to_string())),
+                _ => continue,
+            };
+            match arg {
+                None => bad.push(format!(
+                    "{}.{}: {e:?} is not a {:?} literal",
+                    sig.name, p.name, p.slot_type
+                )),
+                Some(a) => {
+                    if let Some(Err(msg)) = p.constraint.map(|c| c.check(&a, p.name)) {
+                        bad.push(format!("{}.{}: {e:?} refused: {msg}", sig.name, p.name));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "examples a program cannot pass:\n  {}",
+        bad.join("\n  ")
     );
 }
