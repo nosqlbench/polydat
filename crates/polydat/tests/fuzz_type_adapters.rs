@@ -78,8 +78,11 @@ fn expected_adapt(src: PortType, dst: PortType) -> Adapt {
         // Integer / Bool → Json (always-representable).
         | (U64, Json) | (U32, Json) | (I64, Json) | (I32, Json)
         | (Bool, Json) | (VecI32, Json)
-        // VecI32 → VecF32 (lossless cast).
-        | (VecI32, VecF32) => Adapt::Inserted,
+        // i32 → f32, by lane and by scalar. It rounds past 2^24 and
+        // never fails, which is what class A asks: totality, not
+        // losslessness. The lane form was always inserted; the scalar
+        // joined it 2026-09-22.
+        | (VecI32, VecF32) | (I32, F32) => Adapt::Inserted,
         _ => Adapt::None,
     }
 }

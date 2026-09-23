@@ -2110,6 +2110,12 @@ pub fn auto_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>
         (PortType::U32, PortType::F64) => Some(Box::new(U32ToF64::new())),
         (PortType::I32, PortType::I64) => Some(Box::new(I32ToI64::new())),
         (PortType::I32, PortType::F64) => Some(Box::new(I32ToF64::new())),
+        // Rounds past 2^24 and never fails, which is class A —
+        // totality, not losslessness. The node existed in `polyfill`
+        // and the element-wise `VecI32 -> VecF32` below was already
+        // auto-inserted; only this wiring was missing, so the scalar
+        // of the same two types fell through to a type mismatch.
+        (PortType::I32, PortType::F32) => Some(Box::new(P::I32ToF32::new())),
         (PortType::I64, PortType::F64) => Some(Box::new(I64ToF64::new())),
         (PortType::F32, PortType::F64) => Some(Box::new(F32ToF64::new())),
 

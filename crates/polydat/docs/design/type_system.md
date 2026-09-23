@@ -389,7 +389,7 @@ u16       B   B   ─   B   B   A   A   A   A   A   A   A   A   A   A   A   A   
 i16       B   B   B   ─   B   B   A   A   B   A   A   B   A   A   A   A   A   ·   ·   ·   ·   ·   ·   ·
 f16       B   B   B   B   ─   B   B   A   B   B   A   B   B   A   A   A   B   ·   ·   ·   ·   ·   ·   ·
 u32       B   B   B   B   B   ─   B   B   A   A   A   A   A   A   A   A   A   ·   ·   ·   ·   ·   ·   ·
-i32       B   B   B   B   B   B   ─   B   B   A   A   B   A   A   A   A   A   ·   ·   ·   ·   ·   ·   ·
+i32       B   B   B   B   B   B   ─   A   B   A   A   B   A   A   A   A   A   ·   ·   ·   ·   ·   ·   ·
 f32       B   B   B   B   B   B   B   ─   B   B   A   B   B   A   A   A   B   ·   ·   ·   ·   ·   ·   ·
 u64       B   B   B   B   B   B   B   B   ─   B   A   A   A   A   A   A   A   ·   ·   ·   ·   ·   ·   ·
 i64       B   B   B   B   B   B   B   B   B   ─   A   B   A   A   A   A   A   ·   ·   ·   ·   ·   ·   ·
@@ -410,6 +410,12 @@ v8        ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   
 
   A = always-defined (auto_adapter: intra-graph + boundary)
   B = can panic on input (boundary_adapter only — keeps intra-graph strict)
+      A is totality, not losslessness: a conversion that always
+      produces a value is class A even where it rounds. `i32 → f32`
+      and `i64 → f64` round past their mantissa, and `VecI32 → VecF32`
+      rounds per lane; none can fail, so all three are A. What makes a
+      pair B is that some input has no answer — a float that does not
+      fit an integer, a string that does not parse.
   · = no adapter (only scalar↔vector, intentionally — see §3.3)
   ─ = identity (no adapter needed)
   abbrev: u12=U128 i12=I128 bl=Bool by=Bytes js=Json
