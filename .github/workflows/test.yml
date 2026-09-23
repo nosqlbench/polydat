@@ -113,6 +113,19 @@ jobs:
           cargo doc --workspace --no-deps
           cargo doc --workspace --no-deps --no-default-features
 
+      # `trybuild` builds the UI cases under `target/tests/`, with a
+      # nested target directory of its own. The cache action walks
+      # `target/` when it saves and again when it restores, and errors
+      # on whichever half of that tree the other run did not have —
+      # `ENOENT ... target/tests/target`, twice per job, on a job that
+      # otherwise passed. It is scratch a UI run rebuilds, so it is
+      # dropped rather than cached. `always()` because a failing job
+      # still saves its cache.
+      - name: Drop trybuild scratch before the cache is saved
+        if: always()
+        shell: bash
+        run: rm -rf target/tests
+
   # The optional `vectordata` feature is pure Rust and
   # arch-independent, so one platform covers it. Kept out of the
   # matrix to avoid multiplying its heavier dependency build
@@ -174,3 +187,11 @@ jobs:
       # a module, so the case is addressed by its module path.
       - name: Node attribute diagnostics (trybuild)
         run: "cargo nextest run -p polydat --all-features --test suite --run-ignored ignored-only ui::"
+
+      # This is the leg that actually runs trybuild, so it is the one
+      # that puts `target/tests/` into the tree the cache saves. See
+      # the matching step in the matrix job.
+      - name: Drop trybuild scratch before the cache is saved
+        if: always()
+        shell: bash
+        run: rm -rf target/tests
