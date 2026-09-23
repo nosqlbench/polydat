@@ -4447,9 +4447,15 @@ fn emit_conversion(
         (_, Bool) => {
             let truth = match src {
                 F32 | F64 => {
+                    // Not equal to zero (which NaN is too) and ordered
+                    // (which NaN is not). `OrderedNotEqual` says both
+                    // at once, but Cranelift's aarch64 backend leaves
+                    // it unimplemented and panics lowering it.
                     let x = float_of(builder);
                     let zero = builder.ins().f64const(0.0);
-                    builder.ins().fcmp(FloatCC::OrderedNotEqual, x, zero)
+                    let nonzero = builder.ins().fcmp(FloatCC::NotEqual, x, zero);
+                    let ordered = builder.ins().fcmp(FloatCC::Ordered, x, x);
+                    builder.ins().band(nonzero, ordered)
                 }
                 _ => builder.ins().icmp_imm(IntCC::NotEqual, raw, 0),
             };
