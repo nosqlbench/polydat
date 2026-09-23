@@ -1934,7 +1934,9 @@ impl PolydatAssembler {
             if strict_values {
                 return Err(AssemblyError::Other(f.message()));
             }
-            eprintln!("warning: {}", f.message());
+            // Through the audit log, which the host routes; a library
+            // does not write to the process's stderr on its own.
+            crate::library::support::audit::warn(&f.message());
             if let Some(ref mut log) = log {
                 log.push(crate::dsl::events::CompileEvent::Warning {
                     message: f.message(),

@@ -10,6 +10,8 @@
 //! scope. Timing and statistics wrap the run from outside, since they
 //! measure the kernel rather than participate in it.
 
+mod perf;
+
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -53,6 +55,9 @@ enum Command {
     Explain(ExplainArgs),
     /// Render the program graph as DOT, Mermaid, or SVG.
     Viz(VizArgs),
+    /// Measure programs on every engine, from a suite, or pair this
+    /// binary against another one round by round.
+    Perf(perf::PerfArgs),
 }
 
 #[derive(Args, Clone)]
@@ -364,6 +369,7 @@ fn main() {
         Command::Check(args) => check(args),
         Command::Explain(args) => explain(args),
         Command::Viz(args) => viz(args),
+        Command::Perf(args) => perf::perf(args),
     };
     if let Err(e) = result {
         eprintln!("error: {e}");

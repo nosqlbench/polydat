@@ -258,6 +258,42 @@ run still builds and measures P1 and P2:
 cargo bench -p polydat --no-default-features --features bench-tiers --bench engine_ladder
 ```
 
+## `polydat perf`
+
+The binary measures programs itself, through the surface a host uses:
+`set_inputs` and `pull_at` on a `Box<dyn Kernel>`, on every engine. Its numbers
+are therefore what a host pays per cycle, and they are larger than the engine
+ladder's, which times `eval` and slot reads on a kernel named by its own type.
+Use the ladder bench to look inside an engine and `polydat perf` to see what a
+program costs a host.
+
+```sh
+polydat perf                                   # the built-in suite
+polydat perf --group conversions --rounds 20   # one group, more rounds
+polydat perf --print-config > suite.toml       # a suite file to start from
+polydat perf --config suite.toml --save before.json
+polydat perf --config suite.toml --compare before.json
+```
+
+A suite is TOML. Each `[[group]]` is one program, from `program` (a path
+relative to the suite file) or `source`, measured on each of its `engines`
+(`interpreter`, `interpreter-cones`, `closures`, `native`, `pure-native`).
+`outputs` lists what each cycle pulls, every output when it is left out;
+`cycle` names the input advanced each cycle, and `inputs` fixes the others.
+`[settings]` holds `rounds`, `warmup_ms`, `measure_ms`, `batch_ms`, and
+`provenance`, which defaults to `auto`, what a host gets. The command line's
+`--rounds`, `--warmup-ms`, `--measure-ms`, `--provenance`, `--group`, and
+`--engine` override the file.
+
+Each rung (one group on one engine) is calibrated into batches of about
+`batch_ms`, warmed, and measured; its value for a round is the median batch.
+Rounds interleave every rung and rotate their order, so drift during the run
+falls on every rung alike. Progress goes to stderr. The results are a table per
+group: ns per cycle (the median of the rounds), the spread across rounds, the
+fastest round, and the speedup over the slowest engine, with a check that the
+interpreter, closure, and native engines are in ladder order. The compiler's
+warnings about the suite's programs are listed once each after the table.
+
 ## Reading a comparison
 
 Checking for a regression means **building both binaries first and then
@@ -274,34 +310,35 @@ measurement:
 
 ```sh
 git checkout --detach <baseline>
-cargo bench -p polydat --features bench-tiers --bench engine_ladder --no-run
-cp <the path cargo printed> /tmp/base.exe
+cargo build --release -p polydat
+cp <target dir>/release/polydat /tmp/polydat-base
 git checkout <branch>
-cargo bench -p polydat --features bench-tiers --bench engine_ladder --no-run
-cp <the path cargo printed> /tmp/head.exe
-md5sum /tmp/base.exe /tmp/head.exe   # they must differ
+cargo build --release -p polydat
+cp <target dir>/release/polydat /tmp/polydat-head
+md5sum /tmp/polydat-base /tmp/polydat-head   # they must differ
 ```
 
-Copy the path `cargo bench --no-run` prints rather than globbing `target/`:
-the target directory is shared (`~/.cargo/config.toml`), so it is not under
+The target directory is shared (`~/.cargo/config.toml`), so it is not under
 this repository, and a stale local `target/` will hand you a different binary
-that looks plausible. The hashes are the check that the two legs are two
-programs; if they match, the comparison is meaningless and nothing else in the
-output will say so.
+that looks plausible. Watch the build for `Compiling polydat`; its absence
+means cargo thought the tree unchanged. The hashes are the check that the two
+legs are two programs; if they match, the comparison is meaningless and
+nothing else in the output will say so.
 
-Then alternate them, pairing each leg with the one beside it so drift falls out
-of the difference:
+Then pair them. `--against` runs both binaries one round each, in an order that
+alternates round by round, so drift falls out of each round's delta:
 
 ```sh
-for r in $(seq 1 10); do
-  for leg in base head; do
-    printf '%s %s ' "$r" "$leg"
-    /tmp/$leg.exe --bench --measurement-time 8 'p3_native$'
-  done
-done
+/tmp/polydat-head perf --against /tmp/polydat-base --rounds 30
 ```
 
-Take the per-round delta, then its mean and median across rounds. One pairing
+It reports each rung as the two medians and the mean of the per-round deltas
+with its 95% interval; a delta inside the interval is not a difference. The
+baseline has to have `polydat perf` too, so a commit older than the command
+cannot be paired this way; for those, `cargo bench --no-run` each commit's
+`engine_ladder` and alternate the two executables by hand, as the command does.
+
+One pairing
 cannot resolve a few percent: the round-to-round standard deviation of a single
 rung here is about 4 percent, so a lone A/B has a confidence interval near ±10
 and will flag differences that are not there. Thirty paired rounds bring it to

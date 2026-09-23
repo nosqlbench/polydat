@@ -245,9 +245,9 @@ where
     let mut warned = false;
     for round in 1..=ROUND_HARD {
         if round == ROUND_WARN && !warned {
-            eprintln!(
+            crate::library::support::audit::warn(&format!(
                 "interpolation: '{text}' has run {ROUND_WARN} substitution rounds — likely cyclic"
-            );
+            ));
             warned = true;
         }
         let progress = one_pass(&mut s, &lookup)?;

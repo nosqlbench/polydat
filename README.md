@@ -333,12 +333,19 @@ polydat check graph.polydat --stats --manifest
 polydat explain graph.polydat
 polydat explain graph.polydat wires engines provenance
 polydat viz graph.polydat --format mermaid
+polydat perf --config suite.toml --rounds 20
+polydat perf --against /tmp/polydat-base --rounds 30
 ```
 
 `viz` renders the program's graph as DOT, Mermaid, or SVG. Coordinates share
 one `INPUTS` register, and each `extern` port is drawn as its own port node
 labeled with its kind, name, type, and default, wired to every node that reads
 it.
+
+`perf` measures programs on every engine from a TOML suite, or from a built-in
+one, and prints a table per program. `--against` pairs this binary with
+another round by round to measure a change; the
+[performance guide](crates/polydat/docs/guides/performance.md) has the details.
 
 Optional behaviors are graph transforms rather than runtime decorators.
 `--emit` appends one `emit_row` binding that names the selected wires, so

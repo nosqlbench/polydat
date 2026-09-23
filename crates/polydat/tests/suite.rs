@@ -26,6 +26,9 @@ mod adversarial_polydat;
 mod argv_assignment;
 #[path = "bench_graphs.rs"]
 mod bench_graphs;
+#[cfg(feature = "cli")]
+#[path = "binary_perf.rs"]
+mod binary_perf;
 #[path = "binary_run.rs"]
 mod binary_run;
 #[path = "body_carrier.rs"]

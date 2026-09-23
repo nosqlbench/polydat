@@ -47,10 +47,13 @@ polydat-grammar.workspace = true
 clap = { version = "4", features = ["derive"], optional = true }
 # The binary's JSON output.
 serde_json = { version = "1", features = ["preserve_order"] }
+# `polydat perf` reads its suite from TOML and writes results as JSON.
+serde = { version = "1", features = ["derive"], optional = true }
+toml = { version = "0.8", optional = true }
 
 [features]
 default = ["jit", "cli"]
-cli = ["dep:clap"]
+cli = ["dep:clap", "dep:serde", "dep:toml"]
 vectordata = ["polydat-core/vectordata"]
 jit = ["polydat-core/jit", "polydat-nodes/jit"]
 # Passthrough for the typed tier constructors; see polydat-core.
