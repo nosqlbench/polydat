@@ -749,7 +749,7 @@ impl JitOp {
     /// The kit a slot call runs, if this is one.
     pub(crate) fn slot_kit(&self) -> Option<&SlotKitRef> {
         match self {
-            JitOp::SlotCall { kit, .. } => Some(kit),
+            JitOp::SlotCall { kit, .. } | JitOp::Convert { kit, .. } => Some(kit),
             _ => None,
         }
     }
@@ -759,7 +759,7 @@ impl JitOp {
         const STR_ENTRY: [crate::ast::ScratchElem; 1] = [crate::ast::ScratchElem::Str];
         const F32_ENTRY: [crate::ast::ScratchElem; 1] = [crate::ast::ScratchElem::F32];
         match self {
-            JitOp::SlotCall { kit, .. } => &kit.0.scratch,
+            JitOp::SlotCall { kit, .. } | JitOp::Convert { kit, .. } => &kit.0.scratch,
             JitOp::U64ToStr { .. }
             | JitOp::I64ToStr { .. }
             | JitOp::F64ToStr { .. }
@@ -775,6 +775,7 @@ impl JitOp {
     pub(crate) fn place_scratch(&mut self, base: usize) {
         match self {
             JitOp::SlotCall { scratch_base, .. }
+            | JitOp::Convert { scratch_base, .. }
             | JitOp::U64ToStr { scratch_base }
             | JitOp::I64ToStr { scratch_base }
             | JitOp::F64ToStr { scratch_base }
@@ -1144,6 +1145,89 @@ extern "C" fn jit_json_to_str(
     })
 }
 
+/// The scalar kinds a conversion lowers between, by how each rides its
+/// 64-bit carrier: an unsigned integer zero-extended, a signed one
+/// sign-extended, a `bool` as 0 or 1, an `f64` as its bits, and an
+/// `f32` as its own bits in the low word, as their `Wire` impls inject
+/// them. `f16` and the 128-bit types are not here; their conversions
+/// stay slot calls.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Scalar {
+    Unsigned(u32),
+    Signed(u32),
+    Bool,
+    F32,
+    F64,
+}
+
+impl Scalar {
+    fn of(t: crate::ast::PortType) -> Option<Self> {
+        use crate::ast::PortType as P;
+        Some(match t {
+            P::U8 => Self::Unsigned(8),
+            P::U16 => Self::Unsigned(16),
+            P::U32 => Self::Unsigned(32),
+            P::U64 => Self::Unsigned(64),
+            P::I8 => Self::Signed(8),
+            P::I16 => Self::Signed(16),
+            P::I32 => Self::Signed(32),
+            P::I64 => Self::Signed(64),
+            P::Bool => Self::Bool,
+            P::F32 => Self::F32,
+            P::F64 => Self::F64,
+            _ => return None,
+        })
+    }
+
+    /// The integer values the kind holds, for an integer or `bool`.
+    fn int_range(self) -> Option<(i128, i128)> {
+        match self {
+            Self::Unsigned(b) => Some((0, (1i128 << b) - 1)),
+            Self::Signed(b) => Some((-(1i128 << (b - 1)), (1i128 << (b - 1)) - 1)),
+            Self::Bool => Some((0, 1)),
+            Self::F32 | Self::F64 => None,
+        }
+    }
+}
+
+/// The lowering of a conversion adapter, if `node` is one.
+///
+/// A node is the conversion from `X` to `Y` when it takes one wire of
+/// type `X`, has one output of type `Y`, and is the node the assembler's
+/// own conversion table names for that pair (`boundary_adapter`). So a
+/// conversion is recognized by the table and lowered by its two types,
+/// and neither the table nor the types are restated here by name. The
+/// node's kit is the path outside the inline domain, which keeps the
+/// node's body the one statement of its rule wherever the inline form
+/// could not prove it matches.
+fn conversion_op(node: &dyn PolydatNode) -> Option<JitOp> {
+    use crate::ast::Slot;
+    let meta = node.meta();
+    let [Slot::Wire(input)] = meta.ins.as_slice() else {
+        return None;
+    };
+    let [output] = meta.outs.as_slice() else {
+        return None;
+    };
+    let (from, to) = (input.typ, output.typ);
+    Scalar::of(from)?;
+    Scalar::of(to)?;
+    let canonical = crate::compile::assembly::boundary_adapter(from, to)?;
+    if canonical.meta().name != meta.name {
+        return None;
+    }
+    let op = node.compiled_u64()?;
+    Some(JitOp::Convert {
+        from,
+        to,
+        kit: SlotKitRef::new(crate::ast::CompiledSlotKit {
+            scratch: Vec::new(),
+            op: Box::new(move |inputs, outputs, _| op(inputs, outputs)),
+        }),
+        scratch_base: 0,
+    })
+}
+
 /// Classify a node with the types of its wire inputs known. A node
 /// with a named native lowering takes it; any other node with a kit
 /// is a [`JitOp::SlotCall`] of that kit, so a reference pair on either
@@ -1392,6 +1476,24 @@ pub enum JitOp {
         scratch_base: usize,
     },
 
+    /// A conversion adapter lowered by its port types (engines.md
+    /// §7.1). Where the native instruction provably equals the node's
+    /// rule it runs inline: always for a total conversion, and inside a
+    /// conservative domain for a checked one (a narrowing, a float to
+    /// an integer). Outside that domain the step is a call of the
+    /// node's own kit, so the node alone decides what it returns or how
+    /// it fails. See `conversion_op` and `emit_conversion`.
+    Convert {
+        /// The source type.
+        from: crate::ast::PortType,
+        /// The target type.
+        to: crate::ast::PortType,
+        /// The node's kit, the path outside the inline domain.
+        kit: SlotKitRef,
+        /// As for [`JitOp::SlotCall`].
+        scratch_base: usize,
+    },
+
     // --- Named lowerings that write a string into the step's own
     // entry (compiled_handles.md §6): no intermediate `String`, no
     // frame, the pair published by the helper. Each owns one `Str`
@@ -1604,6 +1706,9 @@ pub enum JitOp {
 /// Uses `jit_constants()` to extract assembly-time constants
 /// directly from the node — no probing hacks needed.
 pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
+    if let Some(op) = conversion_op(node) {
+        return op;
+    }
     let name = node.meta().name.as_str();
     let consts = node.jit_constants();
 
@@ -2008,50 +2113,13 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
             }
         }
 
-        // ── Type conversions (SRD 110) ───────────────────────────
-        //
-        // Only the conversions whose native form *is* the node's rule
-        // are lowered here: a total widening that leaves the carrier's
-        // bits as they are, an integer carrier to `f64`, and an
-        // integer carrier to `bool`. Every other adapter runs its own
-        // body through a slot call.
-        //
-        // This table used to lower all of them, and it was a second
-        // copy of the adapter bodies that had drifted from them. It put
-        // the f64 bits of a number in an `f32` or `f16` slot, whose
-        // carrier holds the narrow float's own bits. It lowered the
-        // checked narrowings (`__u64_to_u32`, `__f64_to_i32`, …) without
-        // their range checks, so an out-of-range value was truncated
-        // where the node refuses it. It sign-extended a `u32`, and it
-        // ran the 128-bit conversions through one-slot operations. And
-        // it lowered float-to-signed through Cranelift's *trapping*
-        // conversion, so `__f64_to_i32` of a large value executed an
-        // illegal instruction and ended the host process. The
-        // conversion fuzzer (`fuzz_conversions`) found all of it, and
-        // it holds what remains to the node bodies on every engine.
-        "__u64_to_f64" | "__u32_to_f64" | "__u16_to_f64" | "__u8_to_f64" | "__bool_to_f64" => {
-            JitOp::ToF64
-        }
-        "__i64_to_f64" | "__i32_to_f64" | "__i16_to_f64" | "__i8_to_f64" => JitOp::I64ToF64,
-
+        // The conversion adapters are not named here. `conversion_op`
+        // recognizes one from the conversion table and its port types
+        // and lowers it by those types (engines.md §7.1).
         "trunc_u64" => JitOp::F64ToU64,
         // `round_u64` rounds half away from zero before the saturating
         // conversion, which is what `round_to_u64` does too.
         "round_u64" => JitOp::RoundToU64,
-
-        // Total widenings. An unsigned carrier is zero-extended and a
-        // signed one sign-extended already, so the wider value is the
-        // same word; `bool` rides as 0 or 1, which is the number too.
-        "__u8_to_u16" | "__u8_to_u32" | "__u8_to_u64" | "__u16_to_u32" | "__u16_to_u64"
-        | "__u32_to_u64" | "__u8_to_i16" | "__u8_to_i32" | "__u8_to_i64" | "__u16_to_i32"
-        | "__u16_to_i64" | "__u32_to_i64" | "__i8_to_i16" | "__i8_to_i32" | "__i8_to_i64"
-        | "__i16_to_i32" | "__i16_to_i64" | "__i32_to_i64" | "__bool_to_u8" | "__bool_to_u16"
-        | "__bool_to_u32" | "__bool_to_u64" | "__bool_to_i8" | "__bool_to_i16"
-        | "__bool_to_i32" | "__bool_to_i64" => JitOp::Identity,
-
-        // An integer is true when it is not zero.
-        "__u64_to_bool" | "__i64_to_bool" | "__u32_to_bool" | "__i32_to_bool" | "__u8_to_bool"
-        | "__u16_to_bool" | "__i8_to_bool" | "__i16_to_bool" => JitOp::ToBool,
 
         "weighted_pick" => {
             if consts.len() >= 5 {
@@ -4035,54 +4103,44 @@ fn compile_jit_impl(
                 }
 
                 JitOp::SlotCall { kit, scratch_base } => {
-                    // Gather the inputs into the frame, call the kit
-                    // over them and the state's scratch, scatter the
-                    // outputs back. The kit's address is an immediate:
-                    // the kit is shared by every kernel compiled from
-                    // the program and outlives the code.
-                    let n_in = input_slots.len();
-                    let n_out = output_slots.len();
-                    let frame = |builder: &mut FunctionBuilder, n: usize| {
-                        builder.create_sized_stack_slot(ir::StackSlotData::new(
-                            ir::StackSlotKind::ExplicitSlot,
-                            (n.max(1) * 8) as u32,
-                            3,
-                        ))
-                    };
-                    let in_frame = frame(&mut builder, n_in);
-                    let out_frame = frame(&mut builder, n_out);
-                    for (k, &s) in input_slots.iter().enumerate() {
-                        let v = load_slot(&mut builder, buffer_ptr, s);
-                        builder.ins().stack_store(v, in_frame, (k * 8) as i32);
-                    }
-                    let kit_ptr = builder
-                        .ins()
-                        .iconst(types::I64, std::sync::Arc::as_ptr(&kit.0) as usize as i64);
-                    let in_ptr = builder.ins().stack_addr(types::I64, in_frame, 0);
-                    let n_in_v = builder.ins().iconst(types::I64, n_in as i64);
-                    let out_ptr = builder.ins().stack_addr(types::I64, out_frame, 0);
-                    let n_out_v = builder.ins().iconst(types::I64, n_out as i64);
-                    let base_v = builder.ins().iconst(types::I64, *scratch_base as i64);
-                    let n_sc_v = builder.ins().iconst(types::I64, kit.0.scratch.len() as i64);
-                    builder.ins().call(
+                    emit_slot_call(
+                        &mut builder,
+                        buffer_ptr,
+                        scratch_ptr,
                         slot_call_ref,
-                        &[
-                            kit_ptr,
-                            in_ptr,
-                            n_in_v,
-                            out_ptr,
-                            n_out_v,
-                            scratch_ptr,
-                            base_v,
-                            n_sc_v,
-                        ],
+                        kit,
+                        *scratch_base,
+                        input_slots,
+                        output_slots,
                     );
-                    for (k, &s) in output_slots.iter().enumerate() {
-                        let v = builder
-                            .ins()
-                            .stack_load(types::I64, out_frame, (k * 8) as i32);
-                        store_slot(&mut builder, buffer_ptr, s, v);
-                    }
+                }
+
+                JitOp::Convert {
+                    from,
+                    to,
+                    kit,
+                    scratch_base,
+                } => {
+                    emit_conversion(
+                        &mut builder,
+                        buffer_ptr,
+                        input_slots[0],
+                        output_slots[0],
+                        *from,
+                        *to,
+                        |builder| {
+                            emit_slot_call(
+                                builder,
+                                buffer_ptr,
+                                scratch_ptr,
+                                slot_call_ref,
+                                kit,
+                                *scratch_base,
+                                input_slots,
+                                output_slots,
+                            )
+                        },
+                    );
                 }
 
                 JitOp::U64ToStr { scratch_base }
@@ -4270,6 +4328,252 @@ fn compile_jit_impl(
 // ── Buffer slot helpers ────────────────────────────────────
 
 /// Load a u64 from buffer[slot].
+/// A call of a node's own kit from native code: gather the inputs into
+/// the frame, call the kit over them and the state's scratch, and
+/// scatter the outputs back. The kit's address is an immediate: the
+/// kit is shared by every kernel compiled from the program and
+/// outlives the code.
+#[allow(clippy::too_many_arguments)]
+fn emit_slot_call(
+    builder: &mut FunctionBuilder,
+    buffer_ptr: ir::Value,
+    scratch_ptr: ir::Value,
+    slot_call_ref: ir::FuncRef,
+    kit: &SlotKitRef,
+    scratch_base: usize,
+    input_slots: &[usize],
+    output_slots: &[usize],
+) {
+    let n_in = input_slots.len();
+    let n_out = output_slots.len();
+    let frame = |builder: &mut FunctionBuilder, n: usize| {
+        builder.create_sized_stack_slot(ir::StackSlotData::new(
+            ir::StackSlotKind::ExplicitSlot,
+            (n.max(1) * 8) as u32,
+            3,
+        ))
+    };
+    let in_frame = frame(builder, n_in);
+    let out_frame = frame(builder, n_out);
+    for (k, &s) in input_slots.iter().enumerate() {
+        let v = load_slot(builder, buffer_ptr, s);
+        builder.ins().stack_store(v, in_frame, (k * 8) as i32);
+    }
+    let kit_ptr = builder
+        .ins()
+        .iconst(types::I64, std::sync::Arc::as_ptr(&kit.0) as usize as i64);
+    let in_ptr = builder.ins().stack_addr(types::I64, in_frame, 0);
+    let n_in_v = builder.ins().iconst(types::I64, n_in as i64);
+    let out_ptr = builder.ins().stack_addr(types::I64, out_frame, 0);
+    let n_out_v = builder.ins().iconst(types::I64, n_out as i64);
+    let base_v = builder.ins().iconst(types::I64, scratch_base as i64);
+    let n_sc_v = builder.ins().iconst(types::I64, kit.0.scratch.len() as i64);
+    builder.ins().call(
+        slot_call_ref,
+        &[
+            kit_ptr,
+            in_ptr,
+            n_in_v,
+            out_ptr,
+            n_out_v,
+            scratch_ptr,
+            base_v,
+            n_sc_v,
+        ],
+    );
+    for (k, &s) in output_slots.iter().enumerate() {
+        let v = builder
+            .ins()
+            .stack_load(types::I64, out_frame, (k * 8) as i32);
+        store_slot(builder, buffer_ptr, s, v);
+    }
+}
+
+/// A conversion from `from` to `to` (engines.md §7.1), derived from the
+/// two types and how each rides its carrier (`Scalar`).
+///
+/// A total conversion is one instruction or none: a widening keeps the
+/// carrier's word, an integer becomes a float with the rounding `as`
+/// uses, `f32` and `f64` promote and demote, and anything is a `bool`
+/// by being non-zero and not NaN. A checked conversion runs inline only
+/// inside a domain where the instruction provably equals the node: a
+/// narrowing whose value fits the target, and a float to an integer in
+/// `[lo, hi)` of the target, where truncation is exact and cannot trap.
+/// Everything else, including NaN and the edges where a node's own rule
+/// has quirks of its own, is `slow`: the node's kit, which decides.
+fn emit_conversion(
+    builder: &mut FunctionBuilder,
+    buffer_ptr: ir::Value,
+    in_slot: usize,
+    out_slot: usize,
+    from: crate::ast::PortType,
+    to: crate::ast::PortType,
+    slow: impl FnOnce(&mut FunctionBuilder),
+) {
+    use Scalar::{Bool, F32, F64, Signed, Unsigned};
+    use ir::condcodes::{FloatCC, IntCC};
+    let (Some(src), Some(dst)) = (Scalar::of(from), Scalar::of(to)) else {
+        slow(builder);
+        return;
+    };
+    let raw = load_slot(builder, buffer_ptr, in_slot);
+
+    // A float source as an `f64`; the promotion from `f32` is exact.
+    let float_of = |builder: &mut FunctionBuilder| -> ir::Value {
+        match src {
+            F32 => {
+                let bits = builder.ins().ireduce(types::I32, raw);
+                let x = builder.ins().bitcast(types::F32, ir::MemFlags::new(), bits);
+                builder.ins().fpromote(types::F64, x)
+            }
+            _ => builder.ins().bitcast(types::F64, ir::MemFlags::new(), raw),
+        }
+    };
+    // Store a float as the target's carrier: an `f64` as its bits, an
+    // `f32` as its own bits zero-extended.
+    let store_float = |builder: &mut FunctionBuilder, x: ir::Value| {
+        let word = if dst == F32 {
+            let bits = builder.ins().bitcast(types::I32, ir::MemFlags::new(), x);
+            builder.ins().uextend(types::I64, bits)
+        } else {
+            builder.ins().bitcast(types::I64, ir::MemFlags::new(), x)
+        };
+        store_slot(builder, buffer_ptr, out_slot, word);
+    };
+
+    match (src, dst) {
+        // Anything to `bool`: non-zero, and for a float also not NaN;
+        // `-0.0` is zero.
+        (_, Bool) => {
+            let truth = match src {
+                F32 | F64 => {
+                    let x = float_of(builder);
+                    let zero = builder.ins().f64const(0.0);
+                    builder.ins().fcmp(FloatCC::OrderedNotEqual, x, zero)
+                }
+                _ => builder.ins().icmp_imm(IntCC::NotEqual, raw, 0),
+            };
+            let word = builder.ins().uextend(types::I64, truth);
+            store_slot(builder, buffer_ptr, out_slot, word);
+        }
+        // Integer to integer: the carrier's word is the value in both
+        // types wherever the value fits the target.
+        (s, d) if s.int_range().is_some() && d.int_range().is_some() => {
+            let (smin, smax) = s.int_range().expect("an integer");
+            let (dmin, dmax) = d.int_range().expect("an integer");
+            let mut fits = Vec::new();
+            if dmin > smin {
+                // Only a signed source reaches below the target.
+                fits.push(builder.ins().icmp_imm(
+                    IntCC::SignedGreaterThanOrEqual,
+                    raw,
+                    dmin as i64,
+                ));
+            }
+            if dmax < smax {
+                let cc = if matches!(s, Signed(_)) {
+                    IntCC::SignedLessThanOrEqual
+                } else {
+                    IntCC::UnsignedLessThanOrEqual
+                };
+                fits.push(builder.ins().icmp_imm(cc, raw, dmax as u64 as i64));
+            }
+            branch_on(
+                builder,
+                fits,
+                |b| {
+                    store_slot(b, buffer_ptr, out_slot, raw);
+                },
+                slow,
+            );
+        }
+        // Integer to float, rounded to nearest as `as` rounds.
+        (s, F32 | F64) if s.int_range().is_some() => {
+            let ty = if dst == F32 { types::F32 } else { types::F64 };
+            let x = if matches!(s, Signed(_)) {
+                builder.ins().fcvt_from_sint(ty, raw)
+            } else {
+                builder.ins().fcvt_from_uint(ty, raw)
+            };
+            store_float(builder, x);
+        }
+        (F32, F64) => {
+            let x = float_of(builder);
+            store_float(builder, x);
+        }
+        (F64, F32) => {
+            let x = float_of(builder);
+            let narrow = builder.ins().fdemote(types::F32, x);
+            store_float(builder, narrow);
+        }
+        // Float to integer: inside `[lo, hi)` of the target, truncation
+        // is the node's rule and the saturating instruction is exact.
+        // NaN fails both comparisons and takes the node.
+        (F32 | F64, d) => {
+            let (lo, hi) = match d {
+                Unsigned(b) => (0.0, 2f64.powi(b as i32)),
+                Signed(b) => (-(2f64.powi(b as i32 - 1)), 2f64.powi(b as i32 - 1)),
+                _ => {
+                    slow(builder);
+                    return;
+                }
+            };
+            let x = float_of(builder);
+            let lo_v = builder.ins().f64const(lo);
+            let hi_v = builder.ins().f64const(hi);
+            let above = builder.ins().fcmp(FloatCC::GreaterThanOrEqual, x, lo_v);
+            let below = builder.ins().fcmp(FloatCC::LessThan, x, hi_v);
+            branch_on(
+                builder,
+                vec![above, below],
+                |b| {
+                    let word = if matches!(d, Signed(_)) {
+                        b.ins().fcvt_to_sint_sat(types::I64, x)
+                    } else {
+                        b.ins().fcvt_to_uint_sat(types::I64, x)
+                    };
+                    store_slot(b, buffer_ptr, out_slot, word);
+                },
+                slow,
+            );
+        }
+        _ => slow(builder),
+    }
+}
+
+/// `fast` when every condition holds, else `slow`, joined after. No
+/// conditions is `fast` alone.
+fn branch_on(
+    builder: &mut FunctionBuilder,
+    conds: Vec<ir::Value>,
+    fast: impl FnOnce(&mut FunctionBuilder),
+    slow: impl FnOnce(&mut FunctionBuilder),
+) {
+    let mut conds = conds.into_iter();
+    let Some(first) = conds.next() else {
+        fast(builder);
+        return;
+    };
+    let mut ok = first;
+    for c in conds {
+        ok = builder.ins().band(ok, c);
+    }
+    let fast_block = builder.create_block();
+    let slow_block = builder.create_block();
+    let done = builder.create_block();
+    builder.ins().brif(ok, fast_block, &[], slow_block, &[]);
+    builder.switch_to_block(fast_block);
+    builder.seal_block(fast_block);
+    fast(builder);
+    builder.ins().jump(done, &[]);
+    builder.switch_to_block(slow_block);
+    builder.seal_block(slow_block);
+    slow(builder);
+    builder.ins().jump(done, &[]);
+    builder.switch_to_block(done);
+    builder.seal_block(done);
+}
+
 fn load_slot(builder: &mut FunctionBuilder, buffer_ptr: ir::Value, slot: usize) -> ir::Value {
     let offset = (slot * 8) as i32;
     builder
@@ -4435,6 +4739,33 @@ fn store_slot_f64(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every conversion the table makes between two scalar kinds lowers
+    /// as `Convert`, by its types. A conversion named in `classify_node`
+    /// instead would be a second copy of the node's rule again, and it
+    /// would shadow this one.
+    #[test]
+    fn every_scalar_conversion_lowers_by_its_types() {
+        let mut missing = Vec::new();
+        for &from in crate::ast::PortType::ALL {
+            for &to in crate::ast::PortType::ALL {
+                if from == to || Scalar::of(from).is_none() || Scalar::of(to).is_none() {
+                    continue;
+                }
+                let Some(node) = crate::compile::assembly::boundary_adapter(from, to) else {
+                    continue;
+                };
+                match classify_node(node.as_ref()) {
+                    JitOp::Convert { from: f, to: t, .. } if f == from && t == to => {}
+                    other => missing.push(format!(
+                        "{} ({from:?} -> {to:?}) classified as {other:?}",
+                        node.meta().name
+                    )),
+                }
+            }
+        }
+        assert!(missing.is_empty(), "{}", missing.join("\n"));
+    }
 
     #[test]
     fn jit_identity() {

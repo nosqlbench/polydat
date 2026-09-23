@@ -509,19 +509,30 @@ engines has had this shape. `shuffle` divided by a zero range the node
 guards, `blend` and `unfair_coin` skipped a range check, and `min` with
 no wires returned the wrong identity. The conversion table lowered f32
 and f16 conversions as f64, skipped the checked narrowings' range
-checks, and ran 128-bit conversions through one-slot operations. What
-remains lowered is only what is provably the node's rule: total
-widenings that keep the carrier's bits, integer to `f64`, and integer
-to `bool`.
+checks, and ran 128-bit conversions through one-slot operations.
+
+The conversions are now lowered from the table and their types, not
+from a list of names. A node is the conversion from `X` to `Y` when it
+is the node the assembler's own conversion table names for that pair,
+and its native form is derived from how `X` and `Y` ride their carriers.
+A total conversion is inline: a widening keeps the carrier's word, an
+integer becomes a float with the rounding `as` uses, `f32` and `f64`
+promote and demote, and anything becomes a `bool` by being non-zero and
+not NaN. A checked conversion is inline only inside a domain where the
+instruction provably equals the node: a narrowing whose value fits the
+target, and a float to an integer in `[lo, hi)` of the target. Outside
+that domain the step calls the node's own kit, so the node alone
+decides what happens there, including the quirks of its own rule at the
+edges. `f16` and the 128-bit types stay slot calls.
 
 A lowering must also never reach an instruction that traps in hardware.
 A node's failure is a panic, which the engine catches and attributes
 (§3.4). A trap ends the host process. The conversion table lowered
 float-to-signed through Cranelift's trapping conversion, so
 `__f64_to_i32` of a large value was an illegal instruction where the
-node reports a value out of range. Conversions that can fail use the
-saturating instruction behind a guard that raises the node's own
-failure, or they run the node.
+node reports a value out of range. The inline domain is what keeps the
+saturating instruction exact, and anything outside it is the node's to
+refuse.
 
 ## 8. What every engine accepts, and what stays where
 
