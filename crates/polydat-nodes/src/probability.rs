@@ -85,13 +85,13 @@ fn fair_coin(input: u64) -> u64 {
 ///
 /// JIT level: P3 (`JitOp::UnfairCoinConst`).
 #[polydat::polydat_node(category = Probability)]
-fn unfair_coin(input: u64, p: Const<f64>) -> u64 {
-    if !(0.0..=1.0).contains(&*p) {
-        panic!(
-            "unfair_coin probability p must be in [0.0, 1.0], got {}",
-            *p
-        );
-    }
+fn unfair_coin(input: u64, #[constraint(RangeF64 { min: 0.0, max: 1.0 })] p: Const<f64>) -> u64 {
+    // The range is declared, so the factory refuses a bad `p` when the
+    // node is built and names the parameter, as `chance` does. It used
+    // to be a panic here, which every engine that runs this body hit
+    // and every engine that lowers it past the body did not — so the
+    // same program answered garbage through a cone and refused
+    // elsewhere.
     let h = crate::hash::splitmix64_u64(input);
     let unit = hash_to_unit(h);
     if unit < *p { 1 } else { 0 }
@@ -384,10 +384,9 @@ fn one_of_weighted(
 ///
 /// JIT level: P3 (`JitOp::BlendConst`).
 #[polydat::polydat_node(category = Probability)]
-fn blend(a: u64, b: u64, mix: Const<f64>) -> u64 {
-    if !(0.0..=1.0).contains(&*mix) {
-        panic!("blend: mix must be in [0.0, 1.0], got {}", *mix);
-    }
+fn blend(a: u64, b: u64, #[constraint(RangeF64 { min: 0.0, max: 1.0 })] mix: Const<f64>) -> u64 {
+    // Declared, not panicked: refused at build, on every engine, with
+    // the parameter named. See `unfair_coin`.
     let a_f = f64::from_bits(a);
     let b_f = f64::from_bits(b);
     let result = a_f * (1.0 - *mix) + b_f * *mix;
@@ -427,6 +426,20 @@ fn default_or(value: Value, fallback: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build a probability node through the factory — the path a
+    /// program takes, and the one that enforces a declared
+    /// `ConstConstraint`. `wires` u64 inputs, one f64 constant.
+    fn build_probability_node(name: &str, wires: usize, c: f64) -> Result<(), String> {
+        use polydat::ast::PortType;
+        use polydat::compile::assembly::WireRef;
+        let refs: Vec<WireRef> = (0..wires)
+            .map(|i| WireRef::input(format!("w{i}")))
+            .collect();
+        let types: Vec<PortType> = vec![PortType::U64; wires];
+        polydat::dsl::factory::build_node(name, &refs, &types, &[polydat::dsl::ConstArg::Float(c)])
+            .map(|_| ())
+    }
 
     // --- FairCoin ---
 
@@ -548,14 +561,18 @@ mod tests {
         assert_eq!(outputs[0], eval_out[0].as_u64());
     }
 
+    /// The declared `RangeF64` is refused where the node is built, so
+    /// it is refused once and on every engine — where the old eval-time
+    /// panic fired only on engines that ran this body, and never on one
+    /// that lowered past it.
     #[test]
-    #[should_panic(expected = "unfair_coin probability p must be in [0.0, 1.0]")]
     fn unfair_coin_rejects_invalid_p() {
-        // The range assertion fires on eval rather than at
-        // construction (macro-emitted `new` is infallible).
-        let node = UnfairCoin::new(1.5);
-        let mut out = [Value::None];
-        node.eval(&[Value::U64(0)], &mut out);
+        for bad in [1.5f64, -0.1] {
+            let built = build_probability_node("unfair_coin", 1, bad);
+            let err = built.expect_err(&format!("p={bad} must be refused"));
+            assert!(err.contains("p"), "the parameter is named: {err}");
+        }
+        assert!(build_probability_node("unfair_coin", 1, 0.5).is_ok());
     }
 
     // --- Select ---
@@ -1002,21 +1019,15 @@ mod tests {
         assert_eq!(outputs[0], eval_out[0].as_u64());
     }
 
+    /// As `unfair_coin`: declared, so refused at build on every engine.
     #[test]
-    #[should_panic(expected = "blend: mix must be in [0.0, 1.0]")]
-    fn blend_rejects_invalid_mix() {
-        // The range assertion fires on eval.
-        let node = Blend::new(1.5);
-        let mut out = [Value::None];
-        node.eval(&[Value::U64(0), Value::U64(0)], &mut out);
-    }
-
-    #[test]
-    #[should_panic(expected = "blend: mix must be in [0.0, 1.0]")]
-    fn blend_rejects_negative_mix() {
-        let node = Blend::new(-0.1);
-        let mut out = [Value::None];
-        node.eval(&[Value::U64(0), Value::U64(0)], &mut out);
+    fn blend_rejects_a_mix_outside_the_unit_interval() {
+        for bad in [1.5f64, -0.1] {
+            let built = build_probability_node("blend", 2, bad);
+            let err = built.expect_err(&format!("mix={bad} must be refused"));
+            assert!(err.contains("mix"), "the parameter is named: {err}");
+        }
+        assert!(build_probability_node("blend", 2, 0.3).is_ok());
     }
 
     // --- DefaultOr ---

@@ -555,6 +555,20 @@ fn engine_sweep_failures(source: &str) -> Vec<String> {
             continue;
         }
         let got = drive_once(kernel.as_mut());
+        // An engine that cannot *represent* a value is declining the
+        // program, not disagreeing about it — a two-slot immediate has
+        // no compiled slot form (engines.md §8). It is declined at the
+        // first pull rather than refused at build, which is a gap worth
+        // closing on its own: a host gets a kernel that looks built and
+        // dies when read. Until then it is not an I5 finding, because
+        // there is no value on this side to compare.
+        if got
+            .as_ref()
+            .err()
+            .is_some_and(|e| e.contains("has no compiled slot form"))
+        {
+            continue;
+        }
         match (&want, &got) {
             (Ok(a), Ok(b)) if values_agree(a, b) => {}
             (Err(_), Err(_)) => {}

@@ -1883,15 +1883,13 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
 
         // ── PRNG & Probability (SRD 110) ─────────────────────────
         "blend" => {
-            // The body refuses a mix outside [0, 1] and says so; native
-            // code has no way to raise that, and emitting the check in
-            // IR would be the node's rule written twice. The mix is a
-            // constant, so the range is known here: out of range is
-            // simply not lowered, and the node's own body reports it as
-            // it does on every other engine.
-            match consts.first() {
-                Some(&c) if (0.0..=1.0).contains(&f64::from_bits(c)) => JitOp::BlendConst(c),
-                _ => JitOp::Fallback,
+            // No range guard here: `mix` carries a declared
+            // `RangeF64` constraint, so the factory refuses an
+            // out-of-range constant before a node exists to lower.
+            if let Some(&c) = consts.first() {
+                JitOp::BlendConst(c)
+            } else {
+                JitOp::Fallback
             }
         }
         "lfsr_step" => {
