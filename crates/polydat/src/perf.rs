@@ -605,10 +605,14 @@ fn measure_rounds(suite: &Suite, rungs: &mut [Rung], rounds: u32, quiet: bool) -
     );
     let mut values = vec![Vec::new(); rungs.len()];
     let k = rungs.len();
+    // A terminal gets one line redrawn per rung; a log gets one line per
+    // round, with the time left.
+    let terminal = std::io::IsTerminal::is_terminal(&std::io::stderr());
+    let started = Instant::now();
     for round in 0..rounds as usize {
         for j in 0..k {
             let i = (j + round) % k;
-            if !quiet {
+            if !quiet && terminal {
                 eprint!(
                     "\r[round {}/{}] {:>2}/{k}  {} · {:<24}",
                     round + 1,
@@ -621,8 +625,17 @@ fn measure_rounds(suite: &Suite, rungs: &mut [Rung], rounds: u32, quiet: bool) -
             }
             values[i].push(rungs[i].measure(warmup, measure, batch));
         }
+        if !quiet && !terminal {
+            let (done, elapsed) = (round as u32 + 1, started.elapsed());
+            let left = elapsed.mul_f64(f64::from(rounds - done) / f64::from(done));
+            eprintln!(
+                "[round {done}/{rounds}] {} elapsed, about {} left",
+                clock(elapsed),
+                clock(left)
+            );
+        }
     }
-    if !quiet {
+    if !quiet && terminal {
         eprintln!("\r{:<72}", "");
     }
     rungs
@@ -804,6 +817,36 @@ fn run_leg(exe: &Path, args: &[String]) -> Result<Report, String> {
         .map_err(|e| format!("{} did not report a round: {e}", exe.display()))
 }
 
+/// A duration as minutes and seconds, for progress lines.
+fn clock(d: Duration) -> String {
+    format!("{}m{:02}s", d.as_secs() / 60, d.as_secs() % 60)
+}
+
+/// One round's progress line for a paired run read from a log: the round,
+/// the time spent and the time left at this pace, and each rung's mean
+/// delta so far.
+fn round_progress(
+    done: u32,
+    rounds: u32,
+    elapsed: Duration,
+    pairs: &BTreeMap<RungKey, Vec<(f64, f64)>>,
+) -> String {
+    let left = elapsed.mul_f64(f64::from(rounds - done) / f64::from(done));
+    let deltas: Vec<String> = pairs
+        .iter()
+        .map(|((group, engine), v)| {
+            let d: Vec<f64> = v.iter().map(|(a, b)| (a - b) / b * 100.0).collect();
+            format!("{group}/{engine} {:+.1}%", mean_and_sd(&d).0)
+        })
+        .collect();
+    format!(
+        "[round {done}/{rounds}] {} elapsed, about {} left; {}",
+        clock(elapsed),
+        clock(left),
+        deltas.join(", ")
+    )
+}
+
 /// Pair this binary with `other`: each round runs both, one round each,
 /// in an order that alternates, and every rung is reported as the mean
 /// of its per-round deltas with a 95% interval.
@@ -829,18 +872,25 @@ fn paired(args: &PerfArgs, suite: &Suite, other: &Path) -> Result<(), String> {
     // (group, engine) -> per round, this and other.
     let mut pairs: BTreeMap<RungKey, Vec<(f64, f64)>> = BTreeMap::new();
     let mut versions = ("?".to_string(), "?".to_string());
+    // A terminal gets one line redrawn per leg; a log gets one line per
+    // round, with the time left and every rung's delta so far, so a run
+    // read from a file says how far it is and where it is heading.
+    let terminal = std::io::IsTerminal::is_terminal(&std::io::stderr());
+    let started = Instant::now();
     for round in 0..rounds {
         let order = if round % 2 == 0 { [0, 1] } else { [1, 0] };
         let mut got: [Option<Report>; 2] = [None, None];
         for leg in order {
-            eprint!(
-                "\r[round {}/{}] {} ({})          ",
-                round + 1,
-                rounds,
-                legs[leg].0,
-                legs[leg].1.display()
-            );
-            let _ = std::io::stderr().flush();
+            if terminal {
+                eprint!(
+                    "\r[round {}/{}] {} ({})          ",
+                    round + 1,
+                    rounds,
+                    legs[leg].0,
+                    legs[leg].1.display()
+                );
+                let _ = std::io::stderr().flush();
+            }
             got[leg] = Some(run_leg(legs[leg].1, &leg_args)?);
         }
         let [Some(this), Some(that)] = got else {
@@ -859,8 +909,16 @@ fn paired(args: &PerfArgs, suite: &Suite, other: &Path) -> Result<(), String> {
                     .push((r.median(), o.median()));
             }
         }
+        if !terminal {
+            eprintln!(
+                "{}",
+                round_progress(round + 1, rounds, started.elapsed(), &pairs)
+            );
+        }
     }
-    eprintln!("\r{:<72}", "");
+    if terminal {
+        eprintln!("\r{:<72}", "");
+    }
     print_header(suite, rounds, "paired");
     println!(
         "this:  {} (polydat {})\nother: {} (polydat {})",
