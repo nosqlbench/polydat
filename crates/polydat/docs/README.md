@@ -41,6 +41,10 @@ How the parts work and how to use them from a host program.
 - [Engine-ladder performance](guides/performance.md): one typed graph
   measured on every engine, with the measurement contract, and the tile
   ladder (`benches/tile_render.rs`) beside it.
+- [Porting to 0.5.0](guides/porting_to_0_5_0.md): the release notes for
+  0.5.0 as a host reads them: what stops compiling and its fix, the
+  deprecated healing writes and what replaces each, the corrections that
+  change behavior quietly, and the known issues.
 - [Porting to 0.3.2](guides/porting_to_0_3_2.md): every surface change
   from the published 0.3.1, split into the renames a host applies, the
   one that changes types without failing where it is written, and the
