@@ -1,0 +1,78 @@
+# How each engine's treatment of a pull's cone scales with the graph.
+#
+#   polydat perf --config crates/polydat/examples/perf/cone_spectrum.toml
+#
+# Every group is a generated graph (see `generate` in the performance
+# guide). Three dimensions vary:
+#
+# - what fraction of the graph one output's cone is: `chains` of width 4,
+#   16, and 64 make it 1/4, 1/16, and 1/64;
+# - how much the cones share: a `trunk` shares almost all of each cone,
+#   a `lattice` shares a widening band, `chains` share nothing;
+# - what a cycle pulls: one output (`outputs = ["o0"]`) or every output.
+#
+# An engine that runs only the pulled cone makes "one" cost about its
+# cone's share of "all"; an engine that runs more than the cone does not.
+# The `chain-*` groups hold the cone at the whole graph and vary its size.
+
+[settings]
+rounds = 5
+warmup_ms = 100
+measure_ms = 400
+
+[[group]]
+name = "chains-4-one"
+generate = { shape = "chains", width = 4, depth = 16 }
+outputs = ["o0"]
+
+[[group]]
+name = "chains-4-all"
+generate = { shape = "chains", width = 4, depth = 16 }
+
+[[group]]
+name = "chains-16-one"
+generate = { shape = "chains", width = 16, depth = 16 }
+outputs = ["o0"]
+
+[[group]]
+name = "chains-16-all"
+generate = { shape = "chains", width = 16, depth = 16 }
+
+[[group]]
+name = "chains-64-one"
+generate = { shape = "chains", width = 64, depth = 16 }
+outputs = ["o0"]
+
+[[group]]
+name = "chains-64-all"
+generate = { shape = "chains", width = 64, depth = 16 }
+
+[[group]]
+name = "trunk-16-one"
+generate = { shape = "trunk", width = 16, depth = 16, branch = 2 }
+outputs = ["o0"]
+
+[[group]]
+name = "trunk-16-all"
+generate = { shape = "trunk", width = 16, depth = 16, branch = 2 }
+
+[[group]]
+name = "lattice-16x8-one"
+generate = { shape = "lattice", width = 16, depth = 8 }
+outputs = ["o0"]
+
+[[group]]
+name = "lattice-16x8-all"
+generate = { shape = "lattice", width = 16, depth = 8 }
+
+[[group]]
+name = "chain-8"
+generate = { shape = "chains", width = 1, depth = 8 }
+
+[[group]]
+name = "chain-64"
+generate = { shape = "chains", width = 1, depth = 64 }
+
+[[group]]
+name = "chain-256"
+generate = { shape = "chains", width = 1, depth = 256 }

@@ -117,3 +117,38 @@ fn an_unknown_engine_is_an_error_that_names_it() {
     assert!(!ok);
     assert!(err.contains("turbo"), "{err}");
 }
+
+/// The checked-in cone spectrum suite runs: every generated group
+/// builds, and the report says each graph's shape and size.
+#[test]
+fn the_cone_spectrum_suite_runs() {
+    let suite = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/perf/cone_spectrum.toml"
+    );
+    let (ok, out, err) = perf(&["--config", suite, "--engine", "closures"]);
+    assert!(ok, "{err}");
+    for want in [
+        "chains-64-one",
+        "trunk-16-all",
+        "lattice-16x8-one",
+        "chain-256",
+    ] {
+        assert!(out.contains(want), "no `{want}` in:\n{out}");
+    }
+    assert!(out.contains("bindings, pulling 1 output(s)"), "{out}");
+}
+
+/// A group names its program exactly once.
+#[test]
+fn a_group_with_two_programs_is_an_error() {
+    let suite = temp("two.toml");
+    std::fs::write(
+        &suite,
+        "[[group]]\nname = \"g\"\nsource = \"input cycle: u64\\nout := hash(cycle)\"\ngenerate = { shape = \"chains\" }\n",
+    )
+    .unwrap();
+    let (ok, _, err) = perf(&["--config", suite.to_str().unwrap()]);
+    assert!(!ok);
+    assert!(err.contains("more than once"), "{err}");
+}

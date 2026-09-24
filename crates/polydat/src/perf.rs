@@ -149,6 +149,9 @@ struct Group {
     /// The program's text, when it is not a file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     source: Option<String>,
+    /// A graph to build rather than read: see [`Generate`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    generate: Option<Generate>,
     /// `interpreter`, `interpreter-cones`, `closures`, `native`, or
     /// `pure-native`, measured in this order.
     #[serde(default = "default_engines")]
@@ -162,6 +165,108 @@ struct Group {
     /// The input advanced by one each cycle.
     #[serde(default = "default_cycle")]
     cycle: String,
+}
+
+/// A generated graph: a shape and its dimensions. The graphs are built
+/// to vary what a pull's cone covers, so that a suite can measure how
+/// each engine's treatment of cones scales with the graph. Every graph
+/// reads `cycle`, gives each path its own seed so no two are the same
+/// expression, and names its outputs `o0`, `o1`, … — the ends a host
+/// would pull.
+///
+/// - `chains`: `width` independent chains of `depth` hash steps. Each
+///   output's cone is its own chain, `1 / width` of the graph.
+/// - `trunk`: one shared chain of `depth` steps, then `width` branches
+///   of `branch` steps each. The cones overlap in the trunk.
+/// - `lattice`: `depth` layers of `width` nodes, each mixing two
+///   neighbours of the layer below. A cone widens by one node a layer
+///   until it covers the layer.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+struct Generate {
+    shape: String,
+    #[serde(default = "one")]
+    width: u32,
+    #[serde(default = "one")]
+    depth: u32,
+    /// The steps in each branch of a `trunk`.
+    #[serde(default = "one")]
+    branch: u32,
+}
+
+fn one() -> u32 {
+    1
+}
+
+impl Generate {
+    /// The program's text and its outputs.
+    fn build(&self) -> Result<(String, Vec<String>), String> {
+        let (w, d, b) = (self.width.max(1), self.depth.max(1), self.branch.max(1));
+        let mut src = String::from("input cycle: u64\n");
+        let mut line = |s: String| {
+            src.push_str(&s);
+            src.push('\n');
+        };
+        let outputs: Vec<String> = (0..w).map(|j| format!("o{j}")).collect();
+        match self.shape.as_str() {
+            "chains" => {
+                for j in 0..w {
+                    line(format!("c{j}_0 := u64_add(cycle, {})", j + 1));
+                    for k in 1..d {
+                        line(format!("c{j}_{k} := hash(c{j}_{})", k - 1));
+                    }
+                    line(format!("o{j} := hash(c{j}_{})", d - 1));
+                }
+            }
+            "trunk" => {
+                line("t0 := hash(cycle)".into());
+                for k in 1..d {
+                    line(format!("t{k} := hash(t{})", k - 1));
+                }
+                for j in 0..w {
+                    line(format!("b{j}_0 := u64_add(t{}, {})", d - 1, j + 1));
+                    for k in 1..b {
+                        line(format!("b{j}_{k} := hash(b{j}_{})", k - 1));
+                    }
+                    line(format!("o{j} := hash(b{j}_{})", b - 1));
+                }
+            }
+            "lattice" => {
+                for j in 0..w {
+                    line(format!("l0_{j} := u64_add(cycle, {})", j + 1));
+                }
+                for i in 1..d {
+                    for j in 0..w {
+                        line(format!(
+                            "x{i}_{j} := u64_xor(l{}_{j}, l{}_{})",
+                            i - 1,
+                            i - 1,
+                            (j + 1) % w
+                        ));
+                        line(format!("l{i}_{j} := hash(x{i}_{j})"));
+                    }
+                }
+                for j in 0..w {
+                    line(format!("o{j} := hash(l{}_{j})", d - 1));
+                }
+            }
+            other => {
+                return Err(format!(
+                    "unknown shape `{other}`; use chains, trunk, or lattice"
+                ));
+            }
+        }
+        Ok((src, outputs))
+    }
+
+    fn describe(&self) -> String {
+        match self.shape.as_str() {
+            "trunk" => format!(
+                "trunk, depth {}, width {}, branch {}",
+                self.depth, self.width, self.branch
+            ),
+            s => format!("{s}, width {}, depth {}", self.width, self.depth),
+        }
+    }
 }
 
 fn default_engines() -> Vec<String> {
@@ -197,6 +302,7 @@ fn builtin_suite() -> Suite {
             Group {
                 name: "ladder".into(),
                 program: None,
+                generate: None,
                 source: Some(include_str!("../examples/engine_ladder.polydat").into()),
                 engines: default_engines(),
                 outputs: ["account_id", "shard", "payload_class", "event_token"]
@@ -211,6 +317,7 @@ fn builtin_suite() -> Suite {
             Group {
                 name: "conversions".into(),
                 program: None,
+                generate: None,
                 source: Some(CONVERSIONS.into()),
                 engines: default_engines(),
                 outputs: ["c", "g", "k", "w", "f"].map(String::from).to_vec(),
@@ -397,6 +504,30 @@ fn load_suite(args: &PerfArgs) -> Result<Suite, String> {
     Ok(suite)
 }
 
+/// A group's program text, and a generated graph's outputs. Exactly
+/// one of `program`, `source`, and `generate` names the program.
+fn group_source(g: &Group) -> Result<(String, Option<Vec<String>>), String> {
+    match (&g.source, &g.program, &g.generate) {
+        (Some(s), None, None) => Ok((s.clone(), None)),
+        (None, Some(p), None) => std::fs::read_to_string(p)
+            .map(|s| (s, None))
+            .map_err(|e| format!("group `{}`: cannot read {}: {e}", g.name, p.display())),
+        (None, None, Some(generator)) => generator
+            .build()
+            .map(|(s, outs)| (s, Some(outs)))
+            .map_err(|e| format!("group `{}`: {e}", g.name)),
+        (None, None, None) => Err(format!(
+            "group `{}` has no program: give `program`, `source`, or `generate`",
+            g.name
+        )),
+        _ => Err(format!(
+            "group `{}` names its program more than once: give one of `program`, `source`, \
+             and `generate`",
+            g.name
+        )),
+    }
+}
+
 /// Compile every rung. An engine that declines a program is noted and
 /// skipped; any other failure is the suite's error.
 fn build_rungs(suite: &Suite) -> Result<(Vec<Rung>, Vec<String>), String> {
@@ -404,17 +535,7 @@ fn build_rungs(suite: &Suite) -> Result<(Vec<Rung>, Vec<String>), String> {
     let mut rungs = Vec::new();
     let mut notes = Vec::new();
     for g in &suite.groups {
-        let source = match (&g.source, &g.program) {
-            (Some(s), _) => s.clone(),
-            (None, Some(p)) => std::fs::read_to_string(p)
-                .map_err(|e| format!("group `{}`: cannot read {}: {e}", g.name, p.display()))?,
-            (None, None) => {
-                return Err(format!(
-                    "group `{}` has neither `program` nor `source`",
-                    g.name
-                ));
-            }
-        };
+        let (source, generated_outputs) = group_source(g)?;
         for e in &g.engines {
             let engine = parse_engine(e, provenance)?;
             let kernel = match polydat::dsl::compile::compile_polydat_with(&source, engine) {
@@ -441,10 +562,13 @@ fn build_rungs(suite: &Suite) -> Result<(Vec<Rung>, Vec<String>), String> {
                 .iter()
                 .map(|n| g.inputs.get(n).copied().unwrap_or(0))
                 .collect();
-            let wanted = if g.outputs.is_empty() {
-                kernel.output_names()
-            } else {
-                g.outputs.clone()
+            // A generated graph's own outputs by default: every binding
+            // is an output, and its intermediates are not what a host
+            // pulls.
+            let wanted = match (g.outputs.is_empty(), &generated_outputs) {
+                (false, _) => g.outputs.clone(),
+                (true, Some(outs)) => outs.clone(),
+                (true, None) => kernel.output_names(),
             };
             let outputs = wanted
                 .iter()
@@ -539,13 +663,31 @@ fn print_header(suite: &Suite, rounds: u32, what: &str) {
     );
 }
 
+/// A group's heading: where its program comes from, how many steps it
+/// has, and how many of its outputs a cycle pulls, which together say
+/// how much of the graph a pull's cone is.
 fn group_line(suite: &Suite, name: &str) -> String {
-    let g = suite.groups.iter().find(|g| g.name == name);
-    let from = match g.and_then(|g| g.program.as_ref()) {
-        Some(p) => p.display().to_string(),
-        None => "inline source".into(),
+    let Some(g) = suite.groups.iter().find(|g| g.name == name) else {
+        return format!("\n{name}");
     };
-    format!("\n{name}  ({from})")
+    let from = match (&g.program, &g.generate) {
+        (Some(p), _) => p.display().to_string(),
+        (None, Some(generator)) => generator.describe(),
+        (None, None) => "inline source".into(),
+    };
+    let size = group_source(g).ok().map(|(src, outs)| {
+        let steps = src
+            .lines()
+            .filter(|l| l.contains(":=") && !l.trim_start().starts_with("//"))
+            .count();
+        let pulled = if g.outputs.is_empty() {
+            outs.map_or("every output".into(), |o| format!("{} outputs", o.len()))
+        } else {
+            format!("{} output(s)", g.outputs.len())
+        };
+        format!("; {steps} bindings, pulling {pulled}")
+    });
+    format!("\n{name}  ({from}{})", size.unwrap_or_default())
 }
 
 /// The engines of the ladder in order, when a group has them: each must
@@ -861,6 +1003,44 @@ mod tests {
         assert_eq!(s.groups[0].engines, default_engines());
         assert_eq!(s.groups[0].cycle, "cycle");
         assert_eq!(s.settings.measure_ms, default_measure_ms());
+    }
+
+    /// Every shape builds a program that compiles on every engine, with
+    /// the outputs it names, and a graph of the size its dimensions say.
+    #[test]
+    fn every_generated_shape_compiles_on_every_engine() {
+        for (shape, w, d, b, bindings) in [
+            ("chains", 3, 4, 1, 3 * (4 + 1)),
+            ("trunk", 3, 4, 2, 4 + 3 * (2 + 1)),
+            ("lattice", 3, 4, 1, 3 + 3 * 3 * 2 + 3),
+        ] {
+            let g = Generate {
+                shape: shape.into(),
+                width: w,
+                depth: d,
+                branch: b,
+            };
+            let (src, outs) = g.build().unwrap();
+            assert_eq!(outs, ["o0", "o1", "o2"], "{shape}");
+            let count = src.lines().filter(|l| l.contains(":=")).count();
+            assert_eq!(count, bindings as usize, "{shape}:\n{src}");
+            for e in default_engines() {
+                let engine = parse_engine(&e, Provenance::Auto).unwrap();
+                let mut k = polydat::dsl::compile::compile_polydat_with(&src, engine)
+                    .unwrap_or_else(|err| panic!("{shape} on {e}: {err}\n{src}"));
+                k.set_inputs(&[1]);
+                for o in &outs {
+                    let _ = k.pull(o);
+                }
+            }
+        }
+        let unknown = Generate {
+            shape: "spiral".into(),
+            width: 1,
+            depth: 1,
+            branch: 1,
+        };
+        assert!(unknown.build().unwrap_err().contains("spiral"));
     }
 
     #[test]

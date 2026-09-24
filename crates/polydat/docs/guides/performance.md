@@ -285,6 +285,29 @@ relative to the suite file) or `source`, measured on each of its `engines`
 `--rounds`, `--warmup-ms`, `--measure-ms`, `--provenance`, `--group`, and
 `--engine` override the file.
 
+A group can also build its program, with `generate` in place of `program`
+or `source`, to measure how an engine scales with the shape of a graph and
+how much of it a pull's cone covers:
+
+```toml
+[[group]]
+name = "chains-64-one"
+generate = { shape = "chains", width = 64, depth = 16 }
+outputs = ["o0"]
+```
+
+`chains` is `width` independent chains of `depth` hash steps, so one
+output's cone is `1 / width` of the graph. `trunk` is one shared chain of
+`depth` steps fanning out into `width` branches of `branch` steps, so the
+cones overlap in the trunk. `lattice` is `depth` layers of `width` nodes,
+each mixing two neighbours of the layer below, so a cone widens a node a
+layer until it covers the layer. The outputs are `o0`, `o1`, …, and a group
+pulls all of them unless `outputs` names some. Each group's heading gives
+the shape, the number of bindings, and how many outputs a cycle pulls.
+[`examples/perf/cone_spectrum.toml`](../../examples/perf/cone_spectrum.toml)
+is a suite across the three shapes, several widths, one pull against all,
+and a single chain at three depths.
+
 Each rung (one group on one engine) is calibrated into batches of about
 `batch_ms`, warmed, and measured; its value for a round is the median batch.
 Rounds interleave every rung and rotate their order, so drift during the run
