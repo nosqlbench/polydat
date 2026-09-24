@@ -93,9 +93,14 @@ struct CompiledStep {
     side: bool,
 }
 
-/// An output resolved for the index-keyed pull: its slot, its type,
-/// and the steps of its cone.
-type ResolvedOutput = (usize, crate::ast::PortType, Option<std::sync::Arc<[usize]>>);
+/// An output resolved for pulls by index: its slot, its type, its cone
+/// order, and whether any step of that order can fail.
+type ResolvedOutput = (
+    usize,
+    crate::ast::PortType,
+    Option<std::sync::Arc<[usize]>>,
+    bool,
+);
 
 /// Common fields shared by all kernel variants. A clone is a new state
 /// of the same program: the steps are shared, everything else is the
@@ -225,6 +230,13 @@ impl Clone for KernelCore {
 
 impl KernelCore {
     crate::compile::shared_core_methods!();
+    /// Whether step `i` can fail: a closure runs a node's Rust body,
+    /// which may panic.
+    #[inline]
+    fn step_can_fail(&self, _i: usize) -> bool {
+        true
+    }
+
     /// The program node the step now running belongs to, for the
     /// failure path (A7). On this tier a step is one node, so the
     /// step index is the node index. Read by `run_guarded` and by the

@@ -127,8 +127,6 @@ pub(super) struct JitCore {
     pub(super) unit_clean: Vec<u8>,
     /// The units of the never-current steps, cleared at every write.
     pub(super) volatile_units: Vec<usize>,
-    /// The units a run is handed, reused from run to run.
-    pub(super) todo: Vec<u32>,
     /// The program's one function, taking a list of units to run.
     pub(super) entry: super::codegen::NativeDispatchFn,
     /// Each output by index, as the host names it: its slot and type,
@@ -141,9 +139,11 @@ pub(super) struct JitCore {
 /// cone, in order, as a compiled kernel walks an output's precomputed
 /// cone order (runtime_model.md R2). The units are the planner's
 /// (`compile::fusion_units`): connected, convex groups of steps, each
-/// one block of the program's function. A pull hands the function the
-/// units of its cone that are not current and nothing else, so its
-/// cost is its cone's and not the program's.
+/// one block of the program's function. A pull hands the function its
+/// cone's units, and the function runs the ones that are not current
+/// and nothing else, so its cost is its cone's and not the program's.
+/// Every output's cone is found at build, into a table by slot, so a
+/// pull indexes it rather than searching or hashing.
 #[derive(Clone, Default)]
 pub(super) struct ConePlan {
     /// Each step's input slots.
@@ -157,9 +157,10 @@ pub(super) struct ConePlan {
     members: std::sync::Arc<[Box<[usize]>]>,
     /// Every unit, in order, for a full evaluation.
     all: std::sync::Arc<[u32]>,
-    /// The cones found so far, by the output slot they end in: the
-    /// units they hold, in order.
-    found: HashMap<usize, Box<[u32]>>,
+    /// Each slot's cone, by the slot it ends in: the units it holds, in
+    /// order. Every output's is found at build; another slot's, one a
+    /// raw read by slot asks for, when first asked.
+    by_slot: Vec<Option<std::sync::Arc<[u32]>>>,
 }
 
 impl ConePlan {
@@ -167,6 +168,7 @@ impl ConePlan {
         steps: &[(super::codegen::JitOp, Vec<usize>, Vec<usize>)],
         slots: usize,
         units: &crate::compile::fusion_units::UnitPlan,
+        outputs: impl IntoIterator<Item = usize>,
     ) -> Self {
         let mut producer = vec![usize::MAX; slots + 1];
         for (i, (_, _, outs)) in steps.iter().enumerate() {
@@ -176,7 +178,7 @@ impl ConePlan {
                 }
             }
         }
-        ConePlan {
+        let mut plan = ConePlan {
             inputs: steps
                 .iter()
                 .map(|(_, ins, _)| ins.clone().into_boxed_slice())
@@ -189,8 +191,12 @@ impl ConePlan {
                 .map(|m| m.clone().into_boxed_slice())
                 .collect(),
             all: (0..units.units.len() as u32).collect(),
-            found: HashMap::new(),
+            by_slot: vec![None; slots + 1],
+        };
+        for slot in outputs {
+            plan.of(slot);
         }
+        plan
     }
 
     /// The number of units.
@@ -213,8 +219,20 @@ impl ConePlan {
     /// producers, not only the producers of the steps the output reads:
     /// a member outside the cone still runs, and its inputs must be
     /// current when it does.
+    #[inline]
     pub(super) fn of(&mut self, slot: usize) -> &[u32] {
-        if !self.found.contains_key(&slot) {
+        if self.by_slot.get(slot).is_none_or(|c| c.is_none()) {
+            self.find(slot);
+        }
+        self.by_slot[slot].as_deref().unwrap_or(&[])
+    }
+
+    #[cold]
+    fn find(&mut self, slot: usize) {
+        if slot >= self.by_slot.len() {
+            self.by_slot.resize(slot + 1, None);
+        }
+        {
             let mut unit_seen = vec![false; self.members.len()];
             let producer_of = |s: usize| self.producer.get(s).copied().filter(|&p| p != usize::MAX);
             let mut stack: Vec<usize> = producer_of(slot).into_iter().collect();
@@ -234,9 +252,8 @@ impl ConePlan {
             // order to run them in.
             units.sort_unstable();
             units.dedup();
-            self.found.insert(slot, units.into_boxed_slice());
+            self.by_slot[slot] = Some(units.into());
         }
-        &self.found[&slot]
     }
 }
 
@@ -263,7 +280,6 @@ impl Clone for JitCore {
             cones: self.cones.clone(),
             unit_clean: self.unit_clean.clone(),
             volatile_units: self.volatile_units.clone(),
-            todo: Vec::new(),
             entry: self.entry,
             outputs_at: self.outputs_at.clone(),
         };
@@ -376,7 +392,6 @@ impl JitCore {
             cones,
             unit_clean: vec![0u8; unit_count],
             volatile_units,
-            todo: Vec::new(),
             entry,
             outputs_at: Vec::new(),
         };
@@ -393,36 +408,27 @@ impl JitCore {
     }
 
     /// Run the units of `slot`'s cone that are not current, or of the
-    /// whole program for `None`, and mark them current. The function is
-    /// handed exactly those units, in order; when none is dirty it is
-    /// not entered at all.
+    /// whole program for `None`. The function is handed the cone's
+    /// precomputed order and the clean flags: it tests each unit's flag
+    /// itself, runs the stale ones, and marks each current as it ends.
+    #[inline]
     pub(super) fn run_units(&mut self, slot: Option<usize>) {
         let units: &[u32] = match slot {
             Some(s) => self.cones.of(s),
             None => self.cones.all(),
         };
-        self.todo.clear();
-        self.todo.extend(
-            units
-                .iter()
-                .copied()
-                .filter(|&u| self.unit_clean[u as usize] == 0),
-        );
-        if self.todo.is_empty() {
-            return;
-        }
+        // The order lives behind an `Arc` the run does not touch, so
+        // its address holds across the call.
+        let list = units.as_ptr();
+        let len = units.len() as u64;
         let entry = self.entry;
         let buf_const = self.buffer.as_ptr();
         let buf_mut = self.buffer.as_mut_ptr();
         let sc = self.scratch.as_mut_ptr();
-        let list = self.todo.as_ptr();
-        let len = self.todo.len() as u64;
+        let clean = self.unit_clean.as_mut_ptr();
         self.run(move || unsafe {
-            (entry)(buf_const, buf_mut, sc, list, len);
+            (entry)(buf_const, buf_mut, sc, list, len, clean);
         });
-        for &u in &self.todo {
-            self.unit_clean[u as usize] = 1;
-        }
     }
 
     /// Every unit is dirty: a new round, or a cell another holder

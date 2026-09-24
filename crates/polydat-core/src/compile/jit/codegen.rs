@@ -2297,7 +2297,8 @@ pub(crate) fn compile_jit_raw_with(
     // write dirties (every unit, a new round) and not in how a pull runs.
     let plan = pure_units(&steps, total_slots, &alone, &volatile);
     let (_, entry, code) = compile_jit_impl(&steps, Some(&plan.units), Some(total_slots))?;
-    let cones = super::kernels::ConePlan::new(&steps, total_slots, &plan);
+    let cones =
+        super::kernels::ConePlan::new(&steps, total_slots, &plan, output_map.values().copied());
     let mut core = JitCore::new(
         total_slots,
         coord_count,
@@ -2351,7 +2352,8 @@ pub(crate) fn compile_jit_push_pull(
     let step_outs: Vec<&[usize]> = steps.iter().map(|(_, _, o)| o.as_slice()).collect();
     let slot_provenance =
         crate::compile::slot_provenance(coord_count, buffer_len, &step_outs, &input_dependents);
-    let cones = super::kernels::ConePlan::new(&steps, total_slots, &plan);
+    let cones =
+        super::kernels::ConePlan::new(&steps, total_slots, &plan, output_map.values().copied());
     let input_dependents = unit_dependents(input_dependents, &plan);
     let mut core = JitCore::new(
         total_slots,
@@ -2382,7 +2384,7 @@ pub type NativeFn = unsafe fn(*const u64, *mut u64, *mut crate::ast::ScratchBuf)
 /// and its length. The code runs those units, each one block of its
 /// steps, in the list's order, and nothing else.
 pub type NativeDispatchFn =
-    unsafe fn(*const u64, *mut u64, *mut crate::ast::ScratchBuf, *const u32, u64);
+    unsafe fn(*const u64, *mut u64, *mut crate::ast::ScratchBuf, *const u32, u64, *mut u8);
 
 /// `(straight_fn, dispatch_fn, code)` — produced by the core JIT
 /// compile: the entry that runs every step in order, the entry that
@@ -2391,13 +2393,56 @@ pub type NativeDispatchFn =
 /// `dispatch` argument; the other is the same address and never called.
 type JitCompiled = (NativeFn, NativeDispatchFn, super::kernels::JitCode);
 
-/// Core JIT compilation. With `dispatch`, the function takes a list of
-/// the given units to run; without, it runs every step in order.
+/// One compiled function of a module: its two views, as in
+/// [`JitCompiled`], and whether it calls a helper and so can fail.
+type JitEntry = (NativeFn, NativeDispatchFn, bool);
+
+/// The steps of one function to compile and, for the dispatched form,
+/// its units.
+type JitFunctionSpec<'a> = (
+    &'a [(JitOp, Vec<usize>, Vec<usize>)],
+    Option<&'a [Vec<usize>]>,
+);
+
+/// Core JIT compilation of one function. With `dispatch`, the function
+/// takes a list of the given units to run; without, it runs every step
+/// in order.
 fn compile_jit_impl(
     steps: &[(JitOp, Vec<usize>, Vec<usize>)],
     dispatch: Option<&[Vec<usize>]>,
     tracker: Option<usize>,
 ) -> Result<JitCompiled, String> {
+    let (entries, code) = compile_jit_module(&[(steps, dispatch)], tracker)?;
+    let (straight_fn, dispatch_fn, _) = entries[0];
+    Ok((straight_fn, dispatch_fn, code))
+}
+
+/// One step of native code: its op, its input slots, its output slots.
+pub(crate) type JitStep = (JitOp, Vec<usize>, Vec<usize>);
+
+/// The straight entries of several step lists, compiled as functions
+/// of one module: a hybrid kernel's segments, whose code then lies
+/// together. Each entry comes with whether it can fail.
+pub(crate) fn compile_jit_entries(
+    batches: &[&[JitStep]],
+    tracker: Option<usize>,
+) -> Result<(Vec<(NativeFn, bool)>, super::kernels::JitCode), String> {
+    let specs: Vec<JitFunctionSpec> = batches.iter().map(|&b| (b, None)).collect();
+    let (entries, code) = compile_jit_module(&specs, tracker)?;
+    Ok((
+        entries
+            .into_iter()
+            .map(|(f, _, fallible)| (f, fallible))
+            .collect(),
+        code,
+    ))
+}
+
+/// Core JIT compilation: every function of `functions` into one module.
+fn compile_jit_module(
+    functions: &[JitFunctionSpec],
+    tracker: Option<usize>,
+) -> Result<(Vec<JitEntry>, super::kernels::JitCode), String> {
     let mut flag_builder = settings::builder();
     flag_builder.set("opt_level", "speed").unwrap();
     // Unwind tables and frame pointers are kept for debuggers and
@@ -2874,1571 +2919,1641 @@ fn compile_jit_impl(
         ),
     ];
 
-    // Straight: fn(coords: *const u64, buffer: *mut u64, scratch: *mut ScratchBuf)
-    // Dispatched: fn(coords, buffer, scratch, units: *const u32, count: u64)
-    let mut sig = module.make_signature();
-    sig.params.push(AbiParam::new(types::I64)); // coords ptr
-    sig.params.push(AbiParam::new(types::I64)); // buffer ptr
-    sig.params.push(AbiParam::new(types::I64)); // scratch ptr
-    if dispatch.is_some() {
-        sig.params.push(AbiParam::new(types::I64)); // unit list ptr
-        sig.params.push(AbiParam::new(types::I64)); // unit count
-    }
-    let func_id = module
-        .declare_function("polydat_kernel", Linkage::Local, &sig)
-        .map_err(|e| format!("declare kernel: {e}"))?;
+    // Every function of the module, built one after another: they share
+    // the imports above and one finalization, and their code lies
+    // together, so a kernel that runs many of them per cycle does not
+    // walk a code region per function.
+    let mut defined: Vec<(cranelift_module::FuncId, bool)> = Vec::with_capacity(functions.len());
+    for (function_idx, &(steps, dispatch)) in functions.iter().enumerate() {
+        // Straight: fn(coords: *const u64, buffer: *mut u64, scratch: *mut ScratchBuf)
+        // Dispatched: fn(coords, buffer, scratch, units: *const u32, count: u64,
+        // clean: *mut u8)
+        let mut sig = module.make_signature();
+        sig.params.push(AbiParam::new(types::I64)); // coords ptr
+        sig.params.push(AbiParam::new(types::I64)); // buffer ptr
+        sig.params.push(AbiParam::new(types::I64)); // scratch ptr
+        if dispatch.is_some() {
+            sig.params.push(AbiParam::new(types::I64)); // unit list ptr
+            sig.params.push(AbiParam::new(types::I64)); // unit count
+            sig.params.push(AbiParam::new(types::I64)); // unit clean flags
+        }
+        let func_id = module
+            .declare_function(
+                &format!("polydat_kernel_{function_idx}"),
+                Linkage::Local,
+                &sig,
+            )
+            .map_err(|e| format!("declare kernel: {e}"))?;
 
-    let mut ctx = module.make_context();
-    ctx.func.signature = sig;
+        let mut ctx = module.make_context();
+        ctx.func.signature = sig;
 
-    let mut fb_ctx = FunctionBuilderContext::new();
-    {
-        let mut builder = FunctionBuilder::new(&mut ctx.func, &mut fb_ctx);
-        let block = builder.create_block();
-        builder.append_block_params_for_function_params(block);
-        builder.switch_to_block(block);
-        builder.seal_block(block);
+        let mut fb_ctx = FunctionBuilderContext::new();
+        {
+            let mut builder = FunctionBuilder::new(&mut ctx.func, &mut fb_ctx);
+            let block = builder.create_block();
+            builder.append_block_params_for_function_params(block);
+            builder.switch_to_block(block);
+            builder.seal_block(block);
 
-        let _coords_ptr = builder.block_params(block)[0];
-        let buffer_ptr = builder.block_params(block)[1];
-        let scratch_ptr = builder.block_params(block)[2];
+            let _coords_ptr = builder.block_params(block)[0];
+            let buffer_ptr = builder.block_params(block)[1];
+            let scratch_ptr = builder.block_params(block)[2];
 
-        // Import extern functions for calls
-        let hash_func_ref = module.declare_func_in_func(hash_func_id, builder.func);
-        let interleave_func_ref = module.declare_func_in_func(interleave_func_id, builder.func);
-        let shuffle_func_ref = module.declare_func_in_func(shuffle_func_id, builder.func);
-        let lut_sample_func_ref = module.declare_func_in_func(lut_sample_func_id, builder.func);
-        let weighted_pick_func_ref =
-            module.declare_func_in_func(weighted_pick_func_id, builder.func);
-        let is_positive_fail_ref = module.declare_func_in_func(is_positive_fail_id, builder.func);
-        let in_range_fail_ref = module.declare_func_in_func(in_range_fail_id, builder.func);
-        let div_zero_fail_ref = module.declare_func_in_func(div_zero_fail_id, builder.func);
-        let is_one_of_fail_ref = module.declare_func_in_func(is_one_of_fail_id, builder.func);
-        let slot_call_ref = module.declare_func_in_func(slot_call_id, builder.func);
-        let u64_to_str_ref = module.declare_func_in_func(u64_to_str_id, builder.func);
-        let i64_to_str_ref = module.declare_func_in_func(i64_to_str_id, builder.func);
-        let f64_to_str_ref = module.declare_func_in_func(f64_to_str_id, builder.func);
-        let str_concat_ref = module.declare_func_in_func(str_concat_id, builder.func);
-        let json_to_str_ref = module.declare_func_in_func(json_to_str_id, builder.func);
-        let vec_producer_refs: Vec<(VecProducer, ir::FuncRef)> = vec_producer_ids
-            .iter()
-            .map(|(k, id)| (*k, module.declare_func_in_func(*id, builder.func)))
-            .collect();
-        let vec_reducer_refs: Vec<(VecReducer, ir::FuncRef)> = vec_reducer_ids
-            .iter()
-            .map(|(k, id)| (*k, module.declare_func_in_func(*id, builder.func)))
-            .collect();
-        let reg_lane_refs: Vec<(RegLaneRead, ir::FuncRef)> = reg_lane_ids
-            .iter()
-            .map(|(k, id)| (*k, module.declare_func_in_func(*id, builder.func)))
-            .collect();
-        let reg_producer_refs: Vec<(RegProducer, ir::FuncRef)> = reg_producer_ids
-            .iter()
-            .map(|(k, id)| (*k, module.declare_func_in_func(*id, builder.func)))
-            .collect();
-        let pcg_func_ref = module.declare_func_in_func(pcg_func_id, builder.func);
-        let pcg_stream_func_ref = module.declare_func_in_func(pcg_stream_func_id, builder.func);
-        let n_of_func_ref = module.declare_func_in_func(n_of_func_id, builder.func);
-        let cycle_walk_func_ref = module.declare_func_in_func(cycle_walk_func_id, builder.func);
-        let perlin_1d_func_ref = module.declare_func_in_func(perlin_1d_func_id, builder.func);
-        let perlin_2d_func_ref = module.declare_func_in_func(perlin_2d_func_id, builder.func);
-        let simplex_2d_func_ref = module.declare_func_in_func(simplex_2d_func_id, builder.func);
-        let fractal_noise_1d_func_ref =
-            module.declare_func_in_func(fractal_noise_1d_func_id, builder.func);
-        let fractal_noise_2d_func_ref =
-            module.declare_func_in_func(fractal_noise_2d_func_id, builder.func);
-        let thread_id_func_ref = module.declare_func_in_func(thread_id_func_id, builder.func);
-        let current_epoch_millis_func_ref =
-            module.declare_func_in_func(current_epoch_millis_func_id, builder.func);
-        let math_unary_refs: Vec<_> = math_unary_ids
-            .iter()
-            .map(|id| module.declare_func_in_func(*id, builder.func))
-            .collect();
-        let math_binary_refs: Vec<_> = math_binary_ids
-            .iter()
-            .map(|id| module.declare_func_in_func(*id, builder.func))
-            .collect();
-        // The dispatched form walks a list of units, each one block of
-        // its steps in order, through a jump table: the caller hands it
-        // the units a pull's cone needs and are not current, so a pull
-        // runs its cone in native code and nothing else, as a compiled
-        // kernel walks an output's precomputed cone order
-        // (runtime_model.md R2). Without units, the steps run in order.
-        let everything: [Vec<usize>; 1] = [(0..steps.len()).collect()];
-        let schedule: &[Vec<usize>] = dispatch.unwrap_or(&everything);
-        let dispatcher = dispatch.map(|units| {
-            let list_ptr = builder.block_params(block)[3];
-            let list_len = builder.block_params(block)[4];
-            let at = builder.create_sized_stack_slot(ir::StackSlotData::new(
-                ir::StackSlotKind::ExplicitSlot,
-                8,
-                3,
-            ));
-            let zero = builder.ins().iconst(types::I64, 0);
-            builder.ins().stack_store(zero, at, 0);
-            let head = builder.create_block();
-            let fetch = builder.create_block();
-            let exit = builder.create_block();
-            let unit_blocks: Vec<ir::Block> =
-                units.iter().map(|_| builder.create_block()).collect();
-            builder.ins().jump(head, &[]);
-            // head: stop at the end of the list.
-            builder.switch_to_block(head);
-            let i = builder.ins().stack_load(types::I64, at, 0);
-            let done = builder.ins().icmp(
-                ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
-                i,
-                list_len,
-            );
-            builder.ins().brif(done, exit, &[], fetch, &[]);
-            // fetch: the next unit's index, then its block.
-            builder.switch_to_block(fetch);
-            builder.seal_block(fetch);
-            let offset = builder.ins().ishl_imm(i, 2);
-            let addr = builder.ins().iadd(list_ptr, offset);
-            let unit = builder
-                .ins()
-                .load(types::I32, ir::MemFlags::trusted(), addr, 0);
-            let default = builder.func.dfg.block_call(exit, &[]);
-            let targets: Vec<ir::BlockCall> = unit_blocks
+            // Import extern functions for calls
+            let hash_func_ref = module.declare_func_in_func(hash_func_id, builder.func);
+            let interleave_func_ref = module.declare_func_in_func(interleave_func_id, builder.func);
+            let shuffle_func_ref = module.declare_func_in_func(shuffle_func_id, builder.func);
+            let lut_sample_func_ref = module.declare_func_in_func(lut_sample_func_id, builder.func);
+            let weighted_pick_func_ref =
+                module.declare_func_in_func(weighted_pick_func_id, builder.func);
+            let is_positive_fail_ref =
+                module.declare_func_in_func(is_positive_fail_id, builder.func);
+            let in_range_fail_ref = module.declare_func_in_func(in_range_fail_id, builder.func);
+            let div_zero_fail_ref = module.declare_func_in_func(div_zero_fail_id, builder.func);
+            let is_one_of_fail_ref = module.declare_func_in_func(is_one_of_fail_id, builder.func);
+            let slot_call_ref = module.declare_func_in_func(slot_call_id, builder.func);
+            let u64_to_str_ref = module.declare_func_in_func(u64_to_str_id, builder.func);
+            let i64_to_str_ref = module.declare_func_in_func(i64_to_str_id, builder.func);
+            let f64_to_str_ref = module.declare_func_in_func(f64_to_str_id, builder.func);
+            let str_concat_ref = module.declare_func_in_func(str_concat_id, builder.func);
+            let json_to_str_ref = module.declare_func_in_func(json_to_str_id, builder.func);
+            let vec_producer_refs: Vec<(VecProducer, ir::FuncRef)> = vec_producer_ids
                 .iter()
-                .map(|&b| builder.func.dfg.block_call(b, &[]))
+                .map(|(k, id)| (*k, module.declare_func_in_func(*id, builder.func)))
                 .collect();
-            let table = builder.create_jump_table(ir::JumpTableData::new(default, &targets));
-            builder.ins().br_table(unit, table);
-            (at, head, exit, unit_blocks)
-        });
+            let vec_reducer_refs: Vec<(VecReducer, ir::FuncRef)> = vec_reducer_ids
+                .iter()
+                .map(|(k, id)| (*k, module.declare_func_in_func(*id, builder.func)))
+                .collect();
+            let reg_lane_refs: Vec<(RegLaneRead, ir::FuncRef)> = reg_lane_ids
+                .iter()
+                .map(|(k, id)| (*k, module.declare_func_in_func(*id, builder.func)))
+                .collect();
+            let reg_producer_refs: Vec<(RegProducer, ir::FuncRef)> = reg_producer_ids
+                .iter()
+                .map(|(k, id)| (*k, module.declare_func_in_func(*id, builder.func)))
+                .collect();
+            let pcg_func_ref = module.declare_func_in_func(pcg_func_id, builder.func);
+            let pcg_stream_func_ref = module.declare_func_in_func(pcg_stream_func_id, builder.func);
+            let n_of_func_ref = module.declare_func_in_func(n_of_func_id, builder.func);
+            let cycle_walk_func_ref = module.declare_func_in_func(cycle_walk_func_id, builder.func);
+            let perlin_1d_func_ref = module.declare_func_in_func(perlin_1d_func_id, builder.func);
+            let perlin_2d_func_ref = module.declare_func_in_func(perlin_2d_func_id, builder.func);
+            let simplex_2d_func_ref = module.declare_func_in_func(simplex_2d_func_id, builder.func);
+            let fractal_noise_1d_func_ref =
+                module.declare_func_in_func(fractal_noise_1d_func_id, builder.func);
+            let fractal_noise_2d_func_ref =
+                module.declare_func_in_func(fractal_noise_2d_func_id, builder.func);
+            let thread_id_func_ref = module.declare_func_in_func(thread_id_func_id, builder.func);
+            let current_epoch_millis_func_ref =
+                module.declare_func_in_func(current_epoch_millis_func_id, builder.func);
+            let math_unary_refs: Vec<_> = math_unary_ids
+                .iter()
+                .map(|id| module.declare_func_in_func(*id, builder.func))
+                .collect();
+            let math_binary_refs: Vec<_> = math_binary_ids
+                .iter()
+                .map(|id| module.declare_func_in_func(*id, builder.func))
+                .collect();
+            // The dispatched form walks a list of units, each one block of
+            // its steps in order, through a jump table: the caller hands it
+            // a pull's precomputed cone order (runtime_model.md R2), and the
+            // code tests each unit's clean flag itself, skips a current one,
+            // and marks each it runs current when the unit's block ends. So
+            // a pull runs the stale units of its cone in native code and
+            // nothing else. Without units, the steps run in order.
+            let everything: [Vec<usize>; 1] = [(0..steps.len()).collect()];
+            let schedule: &[Vec<usize>] = dispatch.unwrap_or(&everything);
+            let dispatcher = dispatch.map(|units| {
+                let list_ptr = builder.block_params(block)[3];
+                let list_len = builder.block_params(block)[4];
+                let clean_ptr = builder.block_params(block)[5];
+                let at = builder.create_sized_stack_slot(ir::StackSlotData::new(
+                    ir::StackSlotKind::ExplicitSlot,
+                    8,
+                    3,
+                ));
+                let zero = builder.ins().iconst(types::I64, 0);
+                builder.ins().stack_store(zero, at, 0);
+                let head = builder.create_block();
+                let fetch = builder.create_block();
+                let dispatch_unit = builder.create_block();
+                let skip = builder.create_block();
+                let exit = builder.create_block();
+                let unit_blocks: Vec<ir::Block> =
+                    units.iter().map(|_| builder.create_block()).collect();
+                builder.ins().jump(head, &[]);
+                // head: stop at the end of the list.
+                builder.switch_to_block(head);
+                let i = builder.ins().stack_load(types::I64, at, 0);
+                let done = builder.ins().icmp(
+                    ir::condcodes::IntCC::UnsignedGreaterThanOrEqual,
+                    i,
+                    list_len,
+                );
+                builder.ins().brif(done, exit, &[], fetch, &[]);
+                // fetch: the next unit's index and its clean flag; a current
+                // unit is skipped.
+                builder.switch_to_block(fetch);
+                builder.seal_block(fetch);
+                let offset = builder.ins().ishl_imm(i, 2);
+                let addr = builder.ins().iadd(list_ptr, offset);
+                let unit = builder
+                    .ins()
+                    .load(types::I32, ir::MemFlags::trusted(), addr, 0);
+                let unit_wide = builder.ins().uextend(types::I64, unit);
+                let flag_addr = builder.ins().iadd(clean_ptr, unit_wide);
+                let flag = builder
+                    .ins()
+                    .load(types::I8, ir::MemFlags::trusted(), flag_addr, 0);
+                builder.ins().brif(flag, skip, &[], dispatch_unit, &[]);
+                // skip: on to the next in the list.
+                builder.switch_to_block(skip);
+                builder.seal_block(skip);
+                let next = builder.ins().iadd_imm(i, 1);
+                builder.ins().stack_store(next, at, 0);
+                builder.ins().jump(head, &[]);
+                // dispatch_unit: the unit's block.
+                builder.switch_to_block(dispatch_unit);
+                builder.seal_block(dispatch_unit);
+                let default = builder.func.dfg.block_call(exit, &[]);
+                let targets: Vec<ir::BlockCall> = unit_blocks
+                    .iter()
+                    .map(|&b| builder.func.dfg.block_call(b, &[]))
+                    .collect();
+                let table = builder.create_jump_table(ir::JumpTableData::new(default, &targets));
+                builder.ins().br_table(unit, table);
+                (at, head, exit, unit_blocks, clean_ptr)
+            });
 
-        // Generate code for each step, unit by unit.
-        for (unit_idx, members) in schedule.iter().enumerate() {
-            if let Some((_, _, _, unit_blocks)) = &dispatcher {
-                builder.switch_to_block(unit_blocks[unit_idx]);
-                builder.seal_block(unit_blocks[unit_idx]);
-            }
-            for &step_idx in members {
-                let (jit_op, input_slots, output_slots) = &steps[step_idx];
-                // A7: name the step for the failure path. The store stays only
-                // when the step calls a helper, the one way native code fails;
-                // a step of inline arithmetic pays nothing.
-                let tracker_store = tracker.map(|t| {
-                    let idx = builder.ins().iconst(types::I64, step_idx as i64);
-                    let inst = store_slot(&mut builder, buffer_ptr, t, idx);
-                    (inst, builder.func.dfg.num_insts())
-                });
-                match jit_op {
-                    JitOp::Identity => {
-                        // A copy of every slot the port spans: one for a
-                        // carrier or handle, two for a 128-bit immediate.
-                        for (&i, &o) in input_slots.iter().zip(output_slots.iter()) {
-                            let val = load_slot(&mut builder, buffer_ptr, i);
-                            store_slot(&mut builder, buffer_ptr, o, val);
+            // Generate code for each step, unit by unit.
+            for (unit_idx, members) in schedule.iter().enumerate() {
+                if let Some((_, _, _, unit_blocks, _)) = &dispatcher {
+                    builder.switch_to_block(unit_blocks[unit_idx]);
+                    builder.seal_block(unit_blocks[unit_idx]);
+                }
+                for &step_idx in members {
+                    let (jit_op, input_slots, output_slots) = &steps[step_idx];
+                    // A7: name the step for the failure path. The store stays only
+                    // when the step calls a helper, the one way native code fails;
+                    // a step of inline arithmetic pays nothing.
+                    let tracker_store = tracker.map(|t| {
+                        let idx = builder.ins().iconst(types::I64, step_idx as i64);
+                        let inst = store_slot(&mut builder, buffer_ptr, t, idx);
+                        (inst, builder.func.dfg.num_insts())
+                    });
+                    match jit_op {
+                        JitOp::Identity => {
+                            // A copy of every slot the port spans: one for a
+                            // carrier or handle, two for a 128-bit immediate.
+                            for (&i, &o) in input_slots.iter().zip(output_slots.iter()) {
+                                let val = load_slot(&mut builder, buffer_ptr, i);
+                                store_slot(&mut builder, buffer_ptr, o, val);
+                            }
                         }
-                    }
-                    JitOp::AddConst(c) => {
-                        let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let c_val = builder.ins().iconst(types::I64, *c as i64);
-                        let result = builder.ins().iadd(val, c_val);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::MulConst(c) => {
-                        let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let c_val = builder.ins().iconst(types::I64, *c as i64);
-                        let result = builder.ins().imul(val, c_val);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::DivConst(c) | JitOp::ModConst(c) => {
-                        // The body's `/` or `%` by the constant: a zero
-                        // constant fails at every evaluation as it does.
-                        let is_div = matches!(jit_op, JitOp::DivConst(_));
-                        let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        if *c == 0 {
+                        JitOp::AddConst(c) => {
+                            let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let c_val = builder.ins().iconst(types::I64, *c as i64);
+                            let result = builder.ins().iadd(val, c_val);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::MulConst(c) => {
+                            let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let c_val = builder.ins().iconst(types::I64, *c as i64);
+                            let result = builder.ins().imul(val, c_val);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::DivConst(c) | JitOp::ModConst(c) => {
+                            // The body's `/` or `%` by the constant: a zero
+                            // constant fails at every evaluation as it does.
+                            let is_div = matches!(jit_op, JitOp::DivConst(_));
+                            let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            if *c == 0 {
+                                let kind =
+                                    builder.ins().iconst(types::I64, if is_div { 0 } else { 1 });
+                                let _ = builder.ins().call(div_zero_fail_ref, &[kind]);
+                                store_slot(&mut builder, buffer_ptr, output_slots[0], val);
+                            } else {
+                                let c_val = builder.ins().iconst(types::I64, *c as i64);
+                                let result = if is_div {
+                                    builder.ins().udiv(val, c_val)
+                                } else {
+                                    builder.ins().urem(val, c_val)
+                                };
+                                store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                            }
+                        }
+                        JitOp::U64DivWire | JitOp::U64ModWire => {
+                            // The body's `/` or `%` by the wire: a zero divisor
+                            // fails as it does there; `udiv` and `urem` trap on
+                            // one, so the failure branches first.
+                            let is_div = matches!(jit_op, JitOp::U64DivWire);
+                            let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let zero = builder.ins().iconst(types::I64, 0);
+                            let is_zero = builder.ins().icmp(ir::condcodes::IntCC::Equal, b, zero);
+                            let fail_block = builder.create_block();
+                            let ok_block = builder.create_block();
+                            builder.ins().brif(is_zero, fail_block, &[], ok_block, &[]);
+                            builder.switch_to_block(fail_block);
+                            builder.seal_block(fail_block);
                             let kind = builder.ins().iconst(types::I64, if is_div { 0 } else { 1 });
                             let _ = builder.ins().call(div_zero_fail_ref, &[kind]);
-                            store_slot(&mut builder, buffer_ptr, output_slots[0], val);
-                        } else {
-                            let c_val = builder.ins().iconst(types::I64, *c as i64);
+                            builder.ins().jump(ok_block, &[]);
+                            builder.switch_to_block(ok_block);
+                            builder.seal_block(ok_block);
                             let result = if is_div {
-                                builder.ins().udiv(val, c_val)
+                                builder.ins().udiv(a, b)
                             } else {
-                                builder.ins().urem(val, c_val)
+                                builder.ins().urem(a, b)
                             };
                             store_slot(&mut builder, buffer_ptr, output_slots[0], result);
                         }
-                    }
-                    JitOp::U64DivWire | JitOp::U64ModWire => {
-                        // The body's `/` or `%` by the wire: a zero divisor
-                        // fails as it does there; `udiv` and `urem` trap on
-                        // one, so the failure branches first.
-                        let is_div = matches!(jit_op, JitOp::U64DivWire);
-                        let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        let is_zero = builder.ins().icmp(ir::condcodes::IntCC::Equal, b, zero);
-                        let fail_block = builder.create_block();
-                        let ok_block = builder.create_block();
-                        builder.ins().brif(is_zero, fail_block, &[], ok_block, &[]);
-                        builder.switch_to_block(fail_block);
-                        builder.seal_block(fail_block);
-                        let kind = builder.ins().iconst(types::I64, if is_div { 0 } else { 1 });
-                        let _ = builder.ins().call(div_zero_fail_ref, &[kind]);
-                        builder.ins().jump(ok_block, &[]);
-                        builder.switch_to_block(ok_block);
-                        builder.seal_block(ok_block);
-                        let result = if is_div {
-                            builder.ins().udiv(a, b)
-                        } else {
-                            builder.ins().urem(a, b)
-                        };
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::ClampConst(min, max) => {
-                        let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let min_val = builder.ins().iconst(types::I64, *min as i64);
-                        let max_val = builder.ins().iconst(types::I64, *max as i64);
-                        let clamped_lo = builder.ins().umax(val, min_val);
-                        let clamped = builder.ins().umin(clamped_lo, max_val);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], clamped);
-                    }
-                    JitOp::Interleave => {
-                        let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let call = builder.ins().call(interleave_func_ref, &[a, b]);
-                        let result = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::MixedRadixConst(radixes) => {
-                        // Unrolled: for each radix, emit urem + udiv
-                        let mut remainder = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        for (i, &radix) in radixes.iter().enumerate() {
-                            if radix == 0 {
-                                // Unbounded: output = remainder
-                                store_slot(&mut builder, buffer_ptr, output_slots[i], remainder);
-                            } else {
-                                let r = builder.ins().iconst(types::I64, radix as i64);
-                                let digit = builder.ins().urem(remainder, r);
-                                store_slot(&mut builder, buffer_ptr, output_slots[i], digit);
-                                remainder = builder.ins().udiv(remainder, r);
+                        JitOp::ClampConst(min, max) => {
+                            let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let min_val = builder.ins().iconst(types::I64, *min as i64);
+                            let max_val = builder.ins().iconst(types::I64, *max as i64);
+                            let clamped_lo = builder.ins().umax(val, min_val);
+                            let clamped = builder.ins().umin(clamped_lo, max_val);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], clamped);
+                        }
+                        JitOp::Interleave => {
+                            let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let call = builder.ins().call(interleave_func_ref, &[a, b]);
+                            let result = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::MixedRadixConst(radixes) => {
+                            // Unrolled: for each radix, emit urem + udiv
+                            let mut remainder = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            for (i, &radix) in radixes.iter().enumerate() {
+                                if radix == 0 {
+                                    // Unbounded: output = remainder
+                                    store_slot(
+                                        &mut builder,
+                                        buffer_ptr,
+                                        output_slots[i],
+                                        remainder,
+                                    );
+                                } else {
+                                    let r = builder.ins().iconst(types::I64, radix as i64);
+                                    let digit = builder.ins().urem(remainder, r);
+                                    store_slot(&mut builder, buffer_ptr, output_slots[i], digit);
+                                    remainder = builder.ins().udiv(remainder, r);
+                                }
                             }
                         }
-                    }
-                    JitOp::Hash => {
-                        let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let call = builder.ins().call(hash_func_ref, &[val]);
-                        let result = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::SplitMix64 => {
-                        let x0 = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let c_gamma = builder
-                            .ins()
-                            .iconst(types::I64, 0x9e3779b97f4a7c15u64 as i64);
-                        let x1 = builder.ins().iadd(x0, c_gamma);
-                        let s30 = builder.ins().ushr_imm(x1, 30);
-                        let x2 = builder.ins().bxor(x1, s30);
-                        let c_m1 = builder
-                            .ins()
-                            .iconst(types::I64, 0xbf58476d1ce4e5b9u64 as i64);
-                        let x3 = builder.ins().imul(x2, c_m1);
-                        let s27 = builder.ins().ushr_imm(x3, 27);
-                        let x4 = builder.ins().bxor(x3, s27);
-                        let c_m2 = builder
-                            .ins()
-                            .iconst(types::I64, 0x94d049bb133111ebu64 as i64);
-                        let x5 = builder.ins().imul(x4, c_m2);
-                        let s31 = builder.ins().ushr_imm(x5, 31);
-                        let result = builder.ins().bxor(x5, s31);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::FairCoin => {
-                        let x0 = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let c_gamma = builder
-                            .ins()
-                            .iconst(types::I64, 0x9e3779b97f4a7c15u64 as i64);
-                        let x1 = builder.ins().iadd(x0, c_gamma);
-                        let s30 = builder.ins().ushr_imm(x1, 30);
-                        let x2 = builder.ins().bxor(x1, s30);
-                        let c_m1 = builder
-                            .ins()
-                            .iconst(types::I64, 0xbf58476d1ce4e5b9u64 as i64);
-                        let x3 = builder.ins().imul(x2, c_m1);
-                        let s27 = builder.ins().ushr_imm(x3, 27);
-                        let x4 = builder.ins().bxor(x3, s27);
-                        let c_m2 = builder
-                            .ins()
-                            .iconst(types::I64, 0x94d049bb133111ebu64 as i64);
-                        let x5 = builder.ins().imul(x4, c_m2);
-                        let s31 = builder.ins().ushr_imm(x5, 31);
-                        let h = builder.ins().bxor(x5, s31);
-                        let one = builder.ins().iconst(types::I64, 1);
-                        let result = builder.ins().band(h, one);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::CoinFlipConst(threshold) => {
-                        let x = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let thr = builder.ins().iconst(types::I64, *threshold as i64);
-                        let cmp =
-                            builder
-                                .ins()
-                                .icmp(ir::condcodes::IntCC::UnsignedLessThan, x, thr);
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        let one = builder.ins().iconst(types::I64, 1);
-                        let result = builder.ins().select(cmp, one, zero);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::UnfairCoinConst(p_bits) => {
-                        let x0 = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let c_gamma = builder
-                            .ins()
-                            .iconst(types::I64, 0x9e3779b97f4a7c15u64 as i64);
-                        let x1 = builder.ins().iadd(x0, c_gamma);
-                        let s30 = builder.ins().ushr_imm(x1, 30);
-                        let x2 = builder.ins().bxor(x1, s30);
-                        let c_m1 = builder
-                            .ins()
-                            .iconst(types::I64, 0xbf58476d1ce4e5b9u64 as i64);
-                        let x3 = builder.ins().imul(x2, c_m1);
-                        let s27 = builder.ins().ushr_imm(x3, 27);
-                        let x4 = builder.ins().bxor(x3, s27);
-                        let c_m2 = builder
-                            .ins()
-                            .iconst(types::I64, 0x94d049bb133111ebu64 as i64);
-                        let x5 = builder.ins().imul(x4, c_m2);
-                        let s31 = builder.ins().ushr_imm(x5, 31);
-                        let h = builder.ins().bxor(x5, s31);
-
-                        let fval = builder.ins().fcvt_from_uint(types::F64, h);
-                        let max_f = builder.ins().f64const(u64::MAX as f64);
-                        let unit = builder.ins().fdiv(fval, max_f);
-                        let p_f = builder.ins().f64const(f64::from_bits(*p_bits));
-                        let cmp = builder
-                            .ins()
-                            .fcmp(ir::condcodes::FloatCC::LessThan, unit, p_f);
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        let one = builder.ins().iconst(types::I64, 1);
-                        let result = builder.ins().select(cmp, one, zero);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::ChanceConst(p_bits) => {
-                        let x0 = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let c_gamma = builder
-                            .ins()
-                            .iconst(types::I64, 0x9e3779b97f4a7c15u64 as i64);
-                        let x1 = builder.ins().iadd(x0, c_gamma);
-                        let s30 = builder.ins().ushr_imm(x1, 30);
-                        let x2 = builder.ins().bxor(x1, s30);
-                        let c_m1 = builder
-                            .ins()
-                            .iconst(types::I64, 0xbf58476d1ce4e5b9u64 as i64);
-                        let x3 = builder.ins().imul(x2, c_m1);
-                        let s27 = builder.ins().ushr_imm(x3, 27);
-                        let x4 = builder.ins().bxor(x3, s27);
-                        let c_m2 = builder
-                            .ins()
-                            .iconst(types::I64, 0x94d049bb133111ebu64 as i64);
-                        let x5 = builder.ins().imul(x4, c_m2);
-                        let s31 = builder.ins().ushr_imm(x5, 31);
-                        let h = builder.ins().bxor(x5, s31);
-
-                        let fval = builder.ins().fcvt_from_uint(types::F64, h);
-                        let max_f = builder.ins().f64const(u64::MAX as f64);
-                        let unit = builder.ins().fdiv(fval, max_f);
-                        let p_f = builder.ins().f64const(f64::from_bits(*p_bits));
-                        let cmp = builder
-                            .ins()
-                            .fcmp(ir::condcodes::FloatCC::LessThan, unit, p_f);
-                        let zero_bits = builder.ins().iconst(types::I64, 0.0_f64.to_bits() as i64);
-                        let one_bits = builder.ins().iconst(types::I64, 1.0_f64.to_bits() as i64);
-                        let result = builder.ins().select(cmp, one_bits, zero_bits);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::ShuffleConst(feedback, size, min) => {
-                        let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let fb = builder.ins().iconst(types::I64, *feedback as i64);
-                        let sz = builder.ins().iconst(types::I64, *size as i64);
-                        let mn = builder.ins().iconst(types::I64, *min as i64);
-                        let call = builder.ins().call(shuffle_func_ref, &[val, fb, sz, mn]);
-                        let result = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-
-                    // --- f64 ops ---
-                    JitOp::UnitInterval => {
-                        // u64 → f64: input as f64 / u64::MAX as f64
-                        let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let fval = builder.ins().fcvt_from_uint(types::F64, val);
-                        let max_f = builder.ins().f64const(u64::MAX as f64);
-                        let result = builder.ins().fdiv(fval, max_f);
-                        store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::F64ToU64 => {
-                        let fval = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
-                        let result = builder.ins().fcvt_to_uint_sat(types::I64, fval);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::RoundToU64 => {
-                        let fval = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
-                        let rounded = round_half_away(&mut builder, fval);
-                        let result = builder.ins().fcvt_to_uint_sat(types::I64, rounded);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::FloorToU64 => {
-                        let fval = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
-                        let floored = builder.ins().floor(fval);
-                        let result = builder.ins().fcvt_to_uint_sat(types::I64, floored);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::CeilToU64 => {
-                        let fval = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
-                        let ceiled = builder.ins().ceil(fval);
-                        let result = builder.ins().fcvt_to_uint_sat(types::I64, ceiled);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::ClampF64Const(min_bits, max_bits) => {
-                        let fval = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
-                        let fmin = builder.ins().f64const(f64::from_bits(*min_bits));
-                        let fmax = builder.ins().f64const(f64::from_bits(*max_bits));
-                        let clamped = clamp_ir(&mut builder, fval, fmin, fmax);
-                        store_slot_f64(&mut builder, buffer_ptr, output_slots[0], clamped);
-                    }
-                    JitOp::LerpConst(a_bits, b_bits) => {
-                        // a + t * (b - a)
-                        let t = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
-                        let a = builder.ins().f64const(f64::from_bits(*a_bits));
-                        let b = builder.ins().f64const(f64::from_bits(*b_bits));
-                        let diff = builder.ins().fsub(b, a);
-                        let scaled = builder.ins().fmul(t, diff);
-                        let result = builder.ins().fadd(a, scaled);
-                        store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::ScaleRangeConst(min_bits, range_bits) => {
-                        // min + range * (input as f64 / u64::MAX as f64)
-                        let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let fval = builder.ins().fcvt_from_uint(types::F64, val);
-                        let max_f = builder.ins().f64const(u64::MAX as f64);
-                        let t = builder.ins().fdiv(fval, max_f);
-                        let fmin = builder.ins().f64const(f64::from_bits(*min_bits));
-                        let frange = builder.ins().f64const(f64::from_bits(*range_bits));
-                        let scaled = builder.ins().fmul(t, frange);
-                        let result = builder.ins().fadd(fmin, scaled);
-                        store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::QuantizeConst(step_bits) => {
-                        // round(val / step) * step
-                        let fval = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
-                        let step = builder.ins().f64const(f64::from_bits(*step_bits));
-                        let divided = builder.ins().fdiv(fval, step);
-                        let rounded = round_half_away(&mut builder, divided);
-                        let result = builder.ins().fmul(rounded, step);
-                        store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-
-                    JitOp::LutSampleConst(lut_ptr, lut_len) => {
-                        // Extern call: jit_lut_sample(input_bits, lut_ptr, lut_len) -> f64 bits
-                        let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let ptr_val = builder.ins().iconst(types::I64, *lut_ptr as i64);
-                        let len_val = builder.ins().iconst(types::I64, *lut_len as i64);
-                        let call = builder
-                            .ins()
-                            .call(lut_sample_func_ref, &[input, ptr_val, len_val]);
-                        let result = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::DiscretizeConst(range_bits, buckets) => {
-                        // min(clamp(input, 0.0, range) / range * buckets, buckets - 1),
-                        // the node's body. Its declared constraints make the
-                        // range positive and `buckets` at least one, so the
-                        // `- 1` below cannot underflow.
-                        let fval = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
-                        let range = f64::from_bits(*range_bits);
-                        let fzero = builder.ins().f64const(0.0);
-                        let frange = builder.ins().f64const(range);
-                        let fbuckets = builder.ins().f64const(*buckets as f64);
-                        let clamped = clamp_ir(&mut builder, fval, fzero, frange);
-                        let divided = builder.ins().fdiv(clamped, frange);
-                        let scaled = builder.ins().fmul(divided, fbuckets);
-                        let as_u64 = builder.ins().fcvt_to_uint_sat(types::I64, scaled);
-                        let max_bucket = builder.ins().iconst(types::I64, (*buckets - 1) as i64);
-                        let result = builder.ins().umin(as_u64, max_bucket);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-
-                    JitOp::WeightedPickConst(
-                        values_ptr,
-                        biases_ptr,
-                        primaries_ptr,
-                        aliases_ptr,
-                        n,
-                    ) => {
-                        // Extern call: jit_weighted_pick(input, values_ptr, biases_ptr, primaries_ptr, aliases_ptr, n)
-                        let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let v_ptr = builder.ins().iconst(types::I64, *values_ptr as i64);
-                        let b_ptr = builder.ins().iconst(types::I64, *biases_ptr as i64);
-                        let p_ptr = builder.ins().iconst(types::I64, *primaries_ptr as i64);
-                        let a_ptr = builder.ins().iconst(types::I64, *aliases_ptr as i64);
-                        let n_val = builder.ins().iconst(types::I64, *n as i64);
-                        let call = builder.ins().call(
-                            weighted_pick_func_ref,
-                            &[input, v_ptr, b_ptr, p_ptr, a_ptr, n_val],
-                        );
-                        let result = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-
-                    JitOp::MathUnary(idx) => {
-                        let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let func_ref = math_unary_refs[*idx as usize];
-                        let call = builder.ins().call(func_ref, &[input]);
-                        let result = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-
-                    JitOp::MathBinary(idx) => {
-                        let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let func_ref = math_binary_refs[*idx as usize];
-                        let call = builder.ins().call(func_ref, &[a, b]);
-                        let result = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-
-                    JitOp::ToF64 => {
-                        let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let fval = builder.ins().fcvt_from_uint(types::F64, val);
-                        store_slot_f64(&mut builder, buffer_ptr, output_slots[0], fval);
-                    }
-
-                    // ── Register plane: one vector instruction per op ──
-                    JitOp::RegBinOp(lane, arith) => {
-                        let vt = reg_lane_type(*lane);
-                        let a = load_reg128(&mut builder, buffer_ptr, input_slots[0], vt);
-                        let b = load_reg128(&mut builder, buffer_ptr, input_slots[2], vt);
-                        let is_float = matches!(*lane, 4 | 5);
-                        let r = match (arith, is_float) {
-                            (0, false) => builder.ins().iadd(a, b),
-                            (1, false) => builder.ins().isub(a, b),
-                            (2, false) => builder.ins().imul(a, b),
-                            (0, true) => builder.ins().fadd(a, b),
-                            (1, true) => builder.ins().fsub(a, b),
-                            (2, true) => builder.ins().fmul(a, b),
-                            _ => unreachable!("RegBinOp arith index out of range"),
-                        };
-                        store_reg128(&mut builder, buffer_ptr, output_slots[0], r);
-                    }
-                    JitOp::RegCopy => {
-                        let v = load_reg128(&mut builder, buffer_ptr, input_slots[0], types::I64X2);
-                        store_reg128(&mut builder, buffer_ptr, output_slots[0], v);
-                    }
-                    JitOp::RegSplat(lane) => {
-                        let vt = reg_lane_type(*lane);
-                        let scalar = match *lane {
-                            // Integer lanes: u64 slot reduced to lane width.
-                            0 => {
-                                let v = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                                builder.ins().ireduce(types::I8, v)
-                            }
-                            1 => {
-                                let v = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                                builder.ins().ireduce(types::I16, v)
-                            }
-                            2 => {
-                                let v = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                                builder.ins().ireduce(types::I32, v)
-                            }
-                            3 => load_slot(&mut builder, buffer_ptr, input_slots[0]),
-                            // Float lanes: f64 slot, demoted for f32.
-                            4 => {
-                                let f = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
-                                builder.ins().fdemote(types::F32, f)
-                            }
-                            5 => load_slot_f64(&mut builder, buffer_ptr, input_slots[0]),
-                            _ => unreachable!("RegSplat lane index out of range"),
-                        };
-                        let v = builder.ins().splat(vt, scalar);
-                        store_reg128(&mut builder, buffer_ptr, output_slots[0], v);
-                    }
-
-                    // Two-wire u64 integer ops — pure Cranelift, no extern call
-                    JitOp::U64Add2 => {
-                        let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let result = builder.ins().iadd(a, b);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::U64Sub2 => {
-                        let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let result = builder.ins().isub(a, b);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::U64Mul2 => {
-                        let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let result = builder.ins().imul(a, b);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::U64Div2 => {
-                        let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        // Guard: if b == 0, store 0; else store a / b.
-                        // Must branch because udiv traps on zero divisor.
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        let is_zero = builder.ins().icmp(ir::condcodes::IntCC::Equal, b, zero);
-                        let div_block = builder.create_block();
-                        let merge_block = builder.create_block();
-                        builder.append_block_param(merge_block, types::I64);
-                        builder
-                            .ins()
-                            .brif(is_zero, merge_block, &[zero], div_block, &[]);
-                        builder.switch_to_block(div_block);
-                        builder.seal_block(div_block);
-                        let div_result = builder.ins().udiv(a, b);
-                        builder.ins().jump(merge_block, &[div_result]);
-                        builder.switch_to_block(merge_block);
-                        builder.seal_block(merge_block);
-                        let result = builder.block_params(merge_block)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::U64Mod2 => {
-                        let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        // Guard: if b == 0, store 0; else store a % b.
-                        // Must branch because urem traps on zero divisor.
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        let is_zero = builder.ins().icmp(ir::condcodes::IntCC::Equal, b, zero);
-                        let rem_block = builder.create_block();
-                        let merge_block = builder.create_block();
-                        builder.append_block_param(merge_block, types::I64);
-                        builder
-                            .ins()
-                            .brif(is_zero, merge_block, &[zero], rem_block, &[]);
-                        builder.switch_to_block(rem_block);
-                        builder.seal_block(rem_block);
-                        let rem_result = builder.ins().urem(a, b);
-                        builder.ins().jump(merge_block, &[rem_result]);
-                        builder.switch_to_block(merge_block);
-                        builder.seal_block(merge_block);
-                        let result = builder.block_params(merge_block)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::U64And => {
-                        let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let result = builder.ins().band(a, b);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::U64Or => {
-                        let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let result = builder.ins().bor(a, b);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::U64Xor => {
-                        let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let result = builder.ins().bxor(a, b);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::U64Shl => {
-                        let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let result = builder.ins().ishl(a, b);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::U64Shr => {
-                        let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let result = builder.ins().ushr(a, b);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::U64Not => {
-                        let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let result = builder.ins().bnot(a);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-
-                    // Inline binary f64 arithmetic — pure Cranelift, no extern call
-                    JitOp::F64Add => {
-                        let a = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot_f64(&mut builder, buffer_ptr, input_slots[1]);
-                        let result = builder.ins().fadd(a, b);
-                        store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::F64Sub => {
-                        let a = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot_f64(&mut builder, buffer_ptr, input_slots[1]);
-                        let result = builder.ins().fsub(a, b);
-                        store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::F64Mul => {
-                        let a = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot_f64(&mut builder, buffer_ptr, input_slots[1]);
-                        let result = builder.ins().fmul(a, b);
-                        store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::F64Div => {
-                        let a = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot_f64(&mut builder, buffer_ptr, input_slots[1]);
-                        // Guard: if b == 0, result = 0; else result = a / b
-                        let zero = builder.ins().f64const(0.0);
-                        let is_zero = builder.ins().fcmp(ir::condcodes::FloatCC::Equal, b, zero);
-                        let div_result = builder.ins().fdiv(a, b);
-                        let result = builder.ins().select(is_zero, zero, div_result);
-                        store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::F64Mod => {
-                        // The body through its helper: Rust's `%` on floats.
-                        let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let call = builder
-                            .ins()
-                            .call(math_binary_refs[F64_MOD_HELPER], &[a, b]);
-                        let result = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-
-                    JitOp::IsPositiveCheck { name_ptr, name_len } => {
-                        // if input == 0: call jit_is_positive_fail (panics);
-                        // else: store input → output.
-                        // The branch splits to a fail block for the
-                        // violation path; the merge reads through the
-                        // common path after either branch completes.
-                        let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        let is_zero = builder.ins().icmp(ir::condcodes::IntCC::Equal, val, zero);
-                        let fail_block = builder.create_block();
-                        let ok_block = builder.create_block();
-                        builder.ins().brif(is_zero, fail_block, &[], ok_block, &[]);
-
-                        builder.switch_to_block(fail_block);
-                        builder.seal_block(fail_block);
-                        let np = builder.ins().iconst(types::I64, *name_ptr as i64);
-                        let nl = builder.ins().iconst(types::I64, *name_len as i64);
-                        let _ = builder.ins().call(is_positive_fail_ref, &[val, np, nl]);
-                        // Extern panics — this is unreachable. Jump to
-                        // ok_block to keep the IR well-formed; the
-                        // branch never runs in practice.
-                        builder.ins().jump(ok_block, &[]);
-
-                        builder.switch_to_block(ok_block);
-                        builder.seal_block(ok_block);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], val);
-                    }
-
-                    JitOp::InRangeCheck(lo, hi) => {
-                        // if input < lo || input > hi: call
-                        // jit_in_range_fail (panics); else store
-                        // input → output.
-                        let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let lo_v = builder.ins().iconst(types::I64, *lo as i64);
-                        let hi_v = builder.ins().iconst(types::I64, *hi as i64);
-                        let below =
-                            builder
-                                .ins()
-                                .icmp(ir::condcodes::IntCC::UnsignedLessThan, val, lo_v);
-                        let above = builder.ins().icmp(
-                            ir::condcodes::IntCC::UnsignedGreaterThan,
-                            val,
-                            hi_v,
-                        );
-                        let out_of_range = builder.ins().bor(below, above);
-
-                        let fail_block = builder.create_block();
-                        let ok_block = builder.create_block();
-                        builder
-                            .ins()
-                            .brif(out_of_range, fail_block, &[], ok_block, &[]);
-
-                        builder.switch_to_block(fail_block);
-                        builder.seal_block(fail_block);
-                        let _ = builder.ins().call(in_range_fail_ref, &[val, lo_v, hi_v]);
-                        builder.ins().jump(ok_block, &[]);
-
-                        builder.switch_to_block(ok_block);
-                        builder.seal_block(ok_block);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], val);
-                    }
-
-                    JitOp::IsOneOfCheck {
-                        allowed,
-                        set_ptr,
-                        set_len,
-                    } => {
-                        // Unroll the allow-list as N inline eq
-                        // comparisons OR'd together. Fast-path is
-                        // 1–8 values (the common case); pathologically
-                        // large allow-lists still JIT but cost N
-                        // comparisons per cycle.
-                        let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let mut any_match = builder.ins().iconst(types::I8, 0);
-                        for allow in allowed.iter() {
-                            let c = builder.ins().iconst(types::I64, *allow as i64);
-                            let eq = builder.ins().icmp(ir::condcodes::IntCC::Equal, val, c);
-                            any_match = builder.ins().bor(any_match, eq);
+                        JitOp::Hash => {
+                            let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let call = builder.ins().call(hash_func_ref, &[val]);
+                            let result = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
                         }
-                        let fail_block = builder.create_block();
-                        let ok_block = builder.create_block();
-                        // If any_match == 0 (no equality hit),
-                        // branch to the fail extern. Otherwise
-                        // jump straight to ok_block.
-                        builder
-                            .ins()
-                            .brif(any_match, ok_block, &[], fail_block, &[]);
-
-                        builder.switch_to_block(fail_block);
-                        builder.seal_block(fail_block);
-                        let sp = builder.ins().iconst(types::I64, *set_ptr as i64);
-                        let sl = builder.ins().iconst(types::I64, *set_len as i64);
-                        let _ = builder.ins().call(is_one_of_fail_ref, &[val, sp, sl]);
-                        builder.ins().jump(ok_block, &[]);
-
-                        builder.switch_to_block(ok_block);
-                        builder.seal_block(ok_block);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], val);
-                    }
-
-                    JitOp::U64Cmp(cc) => {
-                        let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let cmp = builder.ins().icmp(*cc, a, b);
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        let one = builder.ins().iconst(types::I64, 1);
-                        let result = builder.ins().select(cmp, one, zero);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::F64Cmp(cc) => {
-                        let a = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot_f64(
-                            &mut builder,
-                            buffer_ptr,
-                            if input_slots.len() > 1 {
-                                input_slots[1]
-                            } else {
-                                input_slots[0]
-                            },
-                        );
-                        let cmp = builder.ins().fcmp(*cc, a, b);
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        let one = builder.ins().iconst(types::I64, 1);
-                        let result = builder.ins().select(cmp, one, zero);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::SelectU64 => {
-                        let cond = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let a = load_slot(
-                            &mut builder,
-                            buffer_ptr,
-                            if input_slots.len() > 1 {
-                                input_slots[1]
-                            } else {
-                                input_slots[0]
-                            },
-                        );
-                        let b = load_slot(
-                            &mut builder,
-                            buffer_ptr,
-                            if input_slots.len() > 2 {
-                                input_slots[2]
-                            } else {
-                                input_slots[0]
-                            },
-                        );
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        let is_nonzero =
-                            builder
+                        JitOp::SplitMix64 => {
+                            let x0 = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let c_gamma = builder
                                 .ins()
-                                .icmp(ir::condcodes::IntCC::NotEqual, cond, zero);
-                        let result = builder.ins().select(is_nonzero, a, b);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::SelectF64 => {
-                        let cond = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let a = load_slot_f64(
-                            &mut builder,
-                            buffer_ptr,
-                            if input_slots.len() > 1 {
-                                input_slots[1]
-                            } else {
-                                input_slots[0]
-                            },
-                        );
-                        let b = load_slot_f64(
-                            &mut builder,
-                            buffer_ptr,
-                            if input_slots.len() > 2 {
-                                input_slots[2]
-                            } else {
-                                input_slots[0]
-                            },
-                        );
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        let is_nonzero =
-                            builder
+                                .iconst(types::I64, 0x9e3779b97f4a7c15u64 as i64);
+                            let x1 = builder.ins().iadd(x0, c_gamma);
+                            let s30 = builder.ins().ushr_imm(x1, 30);
+                            let x2 = builder.ins().bxor(x1, s30);
+                            let c_m1 = builder
                                 .ins()
-                                .icmp(ir::condcodes::IntCC::NotEqual, cond, zero);
-                        let result = builder.ins().select(is_nonzero, a, b);
-                        store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-
-                    JitOp::I64ToF64 => {
-                        let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let fval = builder.ins().fcvt_from_sint(types::F64, val);
-                        store_slot_f64(&mut builder, buffer_ptr, output_slots[0], fval);
-                    }
-                    JitOp::ToBool => {
-                        let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        let one = builder.ins().iconst(types::I64, 1);
-                        let cmp = builder
-                            .ins()
-                            .icmp(ir::condcodes::IntCC::NotEqual, val, zero);
-                        let result = builder.ins().select(cmp, one, zero);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::ConstU64(v) | JitOp::ConstF64(v) => {
-                        let result = builder.ins().iconst(types::I64, *v as i64);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::HashRangeConst(max) => {
-                        let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let c_gamma = builder
-                            .ins()
-                            .iconst(types::I64, 0x9e3779b97f4a7c15u64 as i64);
-                        let x1 = builder.ins().iadd(input, c_gamma);
-                        let s30 = builder.ins().ushr_imm(x1, 30);
-                        let x2 = builder.ins().bxor(x1, s30);
-                        let c_m1 = builder
-                            .ins()
-                            .iconst(types::I64, 0xbf58476d1ce4e5b9u64 as i64);
-                        let x3 = builder.ins().imul(x2, c_m1);
-                        let s27 = builder.ins().ushr_imm(x3, 27);
-                        let x4 = builder.ins().bxor(x3, s27);
-                        let c_m2 = builder
-                            .ins()
-                            .iconst(types::I64, 0x94d049bb133111ebu64 as i64);
-                        let x5 = builder.ins().imul(x4, c_m2);
-                        let s31 = builder.ins().ushr_imm(x5, 31);
-                        let h = builder.ins().bxor(x5, s31);
-                        if *max == 0 {
-                            let zero = builder.ins().iconst(types::I64, 0);
-                            store_slot(&mut builder, buffer_ptr, output_slots[0], zero);
-                        } else {
-                            let m = builder.ins().iconst(types::I64, *max as i64);
-                            let rem = builder.ins().urem(h, m);
-                            store_slot(&mut builder, buffer_ptr, output_slots[0], rem);
+                                .iconst(types::I64, 0xbf58476d1ce4e5b9u64 as i64);
+                            let x3 = builder.ins().imul(x2, c_m1);
+                            let s27 = builder.ins().ushr_imm(x3, 27);
+                            let x4 = builder.ins().bxor(x3, s27);
+                            let c_m2 = builder
+                                .ins()
+                                .iconst(types::I64, 0x94d049bb133111ebu64 as i64);
+                            let x5 = builder.ins().imul(x4, c_m2);
+                            let s31 = builder.ins().ushr_imm(x5, 31);
+                            let result = builder.ins().bxor(x5, s31);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
                         }
-                    }
-                    JitOp::HashIntervalConst(min_bits, max_bits) => {
-                        let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let c_gamma = builder
-                            .ins()
-                            .iconst(types::I64, 0x9e3779b97f4a7c15u64 as i64);
-                        let x1 = builder.ins().iadd(input, c_gamma);
-                        let s30 = builder.ins().ushr_imm(x1, 30);
-                        let x2 = builder.ins().bxor(x1, s30);
-                        let c_m1 = builder
-                            .ins()
-                            .iconst(types::I64, 0xbf58476d1ce4e5b9u64 as i64);
-                        let x3 = builder.ins().imul(x2, c_m1);
-                        let s27 = builder.ins().ushr_imm(x3, 27);
-                        let x4 = builder.ins().bxor(x3, s27);
-                        let c_m2 = builder
-                            .ins()
-                            .iconst(types::I64, 0x94d049bb133111ebu64 as i64);
-                        let x5 = builder.ins().imul(x4, c_m2);
-                        let s31 = builder.ins().ushr_imm(x5, 31);
-                        let h = builder.ins().bxor(x5, s31);
-
-                        let h_f = builder.ins().fcvt_from_uint(types::F64, h);
-                        let denom = builder.ins().f64const(u64::MAX as f64);
-                        let unit = builder.ins().fdiv(h_f, denom);
-                        let min_f = f64::from_bits(*min_bits);
-                        let max_f = f64::from_bits(*max_bits);
-                        let span = builder.ins().f64const(max_f - min_f);
-                        let min_val = builder.ins().f64const(min_f);
-                        let scaled = builder.ins().fmul(unit, span);
-                        let res_f = builder.ins().fadd(min_val, scaled);
-                        let res = builder
-                            .ins()
-                            .bitcast(types::I64, ir::MemFlags::new(), res_f);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], res);
-                    }
-                    JitOp::InvLerpConst(a_bits, b_bits) => {
-                        let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let in_f = builder
-                            .ins()
-                            .bitcast(types::F64, ir::MemFlags::new(), input);
-                        let a_f = f64::from_bits(*a_bits);
-                        let b_f = f64::from_bits(*b_bits);
-                        let a_val = builder.ins().f64const(a_f);
-                        // The body's operations in its order: the reciprocal
-                        // of the span (infinite for an empty one), the
-                        // product, the clamp.
-                        let inv_span = builder.ins().f64const(1.0 / (b_f - a_f));
-                        let diff = builder.ins().fsub(in_f, a_val);
-                        let t = builder.ins().fmul(diff, inv_span);
-                        let zero = builder.ins().f64const(0.0);
-                        let one = builder.ins().f64const(1.0);
-                        let res_f = clamp_ir(&mut builder, t, zero, one);
-                        let res = builder
-                            .ins()
-                            .bitcast(types::I64, ir::MemFlags::new(), res_f);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], res);
-                    }
-                    JitOp::RemapConst(in_min_bits, in_max_bits, out_min_bits, out_max_bits) => {
-                        let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let in_f = builder
-                            .ins()
-                            .bitcast(types::F64, ir::MemFlags::new(), input);
-                        let in_min = f64::from_bits(*in_min_bits);
-                        let in_max = f64::from_bits(*in_max_bits);
-                        let out_min = f64::from_bits(*out_min_bits);
-                        let out_max = f64::from_bits(*out_max_bits);
-                        // The body's operations in its order: a division by
-                        // the span (not a product with its reciprocal, which
-                        // differs in the last bit), then the affine step.
-                        let in_span_val = builder.ins().f64const(in_max - in_min);
-                        let in_min_val = builder.ins().f64const(in_min);
-                        let out_min_val = builder.ins().f64const(out_min);
-                        let out_span_val = builder.ins().f64const(out_max - out_min);
-                        let diff = builder.ins().fsub(in_f, in_min_val);
-                        let t = builder.ins().fdiv(diff, in_span_val);
-                        let scaled = builder.ins().fmul(t, out_span_val);
-                        let res_f = builder.ins().fadd(out_min_val, scaled);
-                        let res = builder
-                            .ins()
-                            .bitcast(types::I64, ir::MemFlags::new(), res_f);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], res);
-                    }
-                    JitOp::EpochOffsetConst(base) => {
-                        let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = builder.ins().iconst(types::I64, *base as i64);
-                        let res = builder.ins().iadd(val, b);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], res);
-                    }
-                    JitOp::EpochScaleConst(factor) => {
-                        let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let f = builder.ins().iconst(types::I64, *factor as i64);
-                        let res = builder.ins().imul(val, f);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], res);
-                    }
-                    JitOp::ThreadId => {
-                        let call = builder.ins().call(thread_id_func_ref, &[]);
-                        let res = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], res);
-                    }
-                    JitOp::CurrentEpochMillis => {
-                        let call = builder.ins().call(current_epoch_millis_func_ref, &[]);
-                        let res = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], res);
-                    }
-                    JitOp::Perlin1dConst(perm_ptr, freq_bits) => {
-                        let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let p = builder.ins().iconst(types::I64, *perm_ptr as i64);
-                        let fb = builder.ins().iconst(types::I64, *freq_bits as i64);
-                        let call = builder.ins().call(perlin_1d_func_ref, &[input, p, fb]);
-                        let res = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], res);
-                    }
-                    JitOp::Perlin2dConst(perm_ptr, freq_bits) => {
-                        let x = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let y = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let p = builder.ins().iconst(types::I64, *perm_ptr as i64);
-                        let fb = builder.ins().iconst(types::I64, *freq_bits as i64);
-                        let call = builder.ins().call(perlin_2d_func_ref, &[x, y, p, fb]);
-                        let res = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], res);
-                    }
-                    JitOp::Simplex2dConst(perm_ptr, freq_bits) => {
-                        let x = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let y = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let p = builder.ins().iconst(types::I64, *perm_ptr as i64);
-                        let fb = builder.ins().iconst(types::I64, *freq_bits as i64);
-                        let call = builder.ins().call(simplex_2d_func_ref, &[x, y, p, fb]);
-                        let res = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], res);
-                    }
-                    JitOp::FractalNoise1dConst(perm_ptr, freq_bits, octaves) => {
-                        let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let p = builder.ins().iconst(types::I64, *perm_ptr as i64);
-                        let fb = builder.ins().iconst(types::I64, *freq_bits as i64);
-                        let oct = builder.ins().iconst(types::I64, *octaves as i64);
-                        let call = builder
-                            .ins()
-                            .call(fractal_noise_1d_func_ref, &[input, p, fb, oct]);
-                        let res = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], res);
-                    }
-                    JitOp::FractalNoise2dConst(perm_ptr, freq_bits, octaves) => {
-                        let x = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let y = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let p = builder.ins().iconst(types::I64, *perm_ptr as i64);
-                        let fb = builder.ins().iconst(types::I64, *freq_bits as i64);
-                        let oct = builder.ins().iconst(types::I64, *octaves as i64);
-                        let call = builder
-                            .ins()
-                            .call(fractal_noise_2d_func_ref, &[x, y, p, fb, oct]);
-                        let res = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], res);
-                    }
-                    JitOp::CycleWalkConst(range, seed, inc) => {
-                        let pos = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let r = builder.ins().iconst(types::I64, *range as i64);
-                        let s = builder.ins().iconst(types::I64, *seed as i64);
-                        let i = builder.ins().iconst(types::I64, *inc as i64);
-                        let call = builder.ins().call(cycle_walk_func_ref, &[pos, r, s, i]);
-                        let res = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], res);
-                    }
-
-                    JitOp::VariadicSum => {
-                        if input_slots.is_empty() {
-                            let zero = builder.ins().iconst(types::I64, 0);
-                            store_slot(&mut builder, buffer_ptr, output_slots[0], zero);
-                        } else {
-                            let mut acc = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                            for &slot in &input_slots[1..] {
-                                let v = load_slot(&mut builder, buffer_ptr, slot);
-                                acc = builder.ins().iadd(acc, v);
-                            }
-                            store_slot(&mut builder, buffer_ptr, output_slots[0], acc);
-                        }
-                    }
-                    JitOp::VariadicProduct => {
-                        if input_slots.is_empty() {
+                        JitOp::FairCoin => {
+                            let x0 = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let c_gamma = builder
+                                .ins()
+                                .iconst(types::I64, 0x9e3779b97f4a7c15u64 as i64);
+                            let x1 = builder.ins().iadd(x0, c_gamma);
+                            let s30 = builder.ins().ushr_imm(x1, 30);
+                            let x2 = builder.ins().bxor(x1, s30);
+                            let c_m1 = builder
+                                .ins()
+                                .iconst(types::I64, 0xbf58476d1ce4e5b9u64 as i64);
+                            let x3 = builder.ins().imul(x2, c_m1);
+                            let s27 = builder.ins().ushr_imm(x3, 27);
+                            let x4 = builder.ins().bxor(x3, s27);
+                            let c_m2 = builder
+                                .ins()
+                                .iconst(types::I64, 0x94d049bb133111ebu64 as i64);
+                            let x5 = builder.ins().imul(x4, c_m2);
+                            let s31 = builder.ins().ushr_imm(x5, 31);
+                            let h = builder.ins().bxor(x5, s31);
                             let one = builder.ins().iconst(types::I64, 1);
-                            store_slot(&mut builder, buffer_ptr, output_slots[0], one);
-                        } else {
-                            let mut acc = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                            for &slot in &input_slots[1..] {
-                                let v = load_slot(&mut builder, buffer_ptr, slot);
-                                acc = builder.ins().imul(acc, v);
-                            }
-                            store_slot(&mut builder, buffer_ptr, output_slots[0], acc);
+                            let result = builder.ins().band(h, one);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
                         }
-                    }
-                    JitOp::VariadicMin => {
-                        if input_slots.is_empty() {
-                            // `min`'s identity is `u64::MAX`, declared on the
-                            // node (`identity = u64::MAX`), because the least
-                            // of nothing must lose to every value. Zero is
-                            // `max`'s identity, and writing it here made
-                            // `min()` answer 0 on native and `u64::MAX` on
-                            // the interpreter. These four constants mirror
-                            // `FuncSig.identity`; the zero-arity test in
-                            // `engine_parity` is what keeps them mirrored.
-                            let ident = builder.ins().iconst(types::I64, u64::MAX as i64);
-                            store_slot(&mut builder, buffer_ptr, output_slots[0], ident);
-                        } else {
-                            let mut acc = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                            for &slot in &input_slots[1..] {
-                                let v = load_slot(&mut builder, buffer_ptr, slot);
-                                let cmp = builder.ins().icmp(
-                                    ir::condcodes::IntCC::UnsignedLessThan,
-                                    v,
-                                    acc,
-                                );
-                                acc = builder.ins().select(cmp, v, acc);
-                            }
-                            store_slot(&mut builder, buffer_ptr, output_slots[0], acc);
-                        }
-                    }
-                    JitOp::VariadicMax => {
-                        if input_slots.is_empty() {
+                        JitOp::CoinFlipConst(threshold) => {
+                            let x = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let thr = builder.ins().iconst(types::I64, *threshold as i64);
+                            let cmp =
+                                builder
+                                    .ins()
+                                    .icmp(ir::condcodes::IntCC::UnsignedLessThan, x, thr);
                             let zero = builder.ins().iconst(types::I64, 0);
-                            store_slot(&mut builder, buffer_ptr, output_slots[0], zero);
-                        } else {
-                            let mut acc = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                            for &slot in &input_slots[1..] {
-                                let v = load_slot(&mut builder, buffer_ptr, slot);
-                                let cmp = builder.ins().icmp(
-                                    ir::condcodes::IntCC::UnsignedGreaterThan,
-                                    v,
-                                    acc,
-                                );
-                                acc = builder.ins().select(cmp, v, acc);
+                            let one = builder.ins().iconst(types::I64, 1);
+                            let result = builder.ins().select(cmp, one, zero);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::UnfairCoinConst(p_bits) => {
+                            let x0 = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let c_gamma = builder
+                                .ins()
+                                .iconst(types::I64, 0x9e3779b97f4a7c15u64 as i64);
+                            let x1 = builder.ins().iadd(x0, c_gamma);
+                            let s30 = builder.ins().ushr_imm(x1, 30);
+                            let x2 = builder.ins().bxor(x1, s30);
+                            let c_m1 = builder
+                                .ins()
+                                .iconst(types::I64, 0xbf58476d1ce4e5b9u64 as i64);
+                            let x3 = builder.ins().imul(x2, c_m1);
+                            let s27 = builder.ins().ushr_imm(x3, 27);
+                            let x4 = builder.ins().bxor(x3, s27);
+                            let c_m2 = builder
+                                .ins()
+                                .iconst(types::I64, 0x94d049bb133111ebu64 as i64);
+                            let x5 = builder.ins().imul(x4, c_m2);
+                            let s31 = builder.ins().ushr_imm(x5, 31);
+                            let h = builder.ins().bxor(x5, s31);
+
+                            let fval = builder.ins().fcvt_from_uint(types::F64, h);
+                            let max_f = builder.ins().f64const(u64::MAX as f64);
+                            let unit = builder.ins().fdiv(fval, max_f);
+                            let p_f = builder.ins().f64const(f64::from_bits(*p_bits));
+                            let cmp =
+                                builder
+                                    .ins()
+                                    .fcmp(ir::condcodes::FloatCC::LessThan, unit, p_f);
+                            let zero = builder.ins().iconst(types::I64, 0);
+                            let one = builder.ins().iconst(types::I64, 1);
+                            let result = builder.ins().select(cmp, one, zero);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::ChanceConst(p_bits) => {
+                            let x0 = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let c_gamma = builder
+                                .ins()
+                                .iconst(types::I64, 0x9e3779b97f4a7c15u64 as i64);
+                            let x1 = builder.ins().iadd(x0, c_gamma);
+                            let s30 = builder.ins().ushr_imm(x1, 30);
+                            let x2 = builder.ins().bxor(x1, s30);
+                            let c_m1 = builder
+                                .ins()
+                                .iconst(types::I64, 0xbf58476d1ce4e5b9u64 as i64);
+                            let x3 = builder.ins().imul(x2, c_m1);
+                            let s27 = builder.ins().ushr_imm(x3, 27);
+                            let x4 = builder.ins().bxor(x3, s27);
+                            let c_m2 = builder
+                                .ins()
+                                .iconst(types::I64, 0x94d049bb133111ebu64 as i64);
+                            let x5 = builder.ins().imul(x4, c_m2);
+                            let s31 = builder.ins().ushr_imm(x5, 31);
+                            let h = builder.ins().bxor(x5, s31);
+
+                            let fval = builder.ins().fcvt_from_uint(types::F64, h);
+                            let max_f = builder.ins().f64const(u64::MAX as f64);
+                            let unit = builder.ins().fdiv(fval, max_f);
+                            let p_f = builder.ins().f64const(f64::from_bits(*p_bits));
+                            let cmp =
+                                builder
+                                    .ins()
+                                    .fcmp(ir::condcodes::FloatCC::LessThan, unit, p_f);
+                            let zero_bits =
+                                builder.ins().iconst(types::I64, 0.0_f64.to_bits() as i64);
+                            let one_bits =
+                                builder.ins().iconst(types::I64, 1.0_f64.to_bits() as i64);
+                            let result = builder.ins().select(cmp, one_bits, zero_bits);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::ShuffleConst(feedback, size, min) => {
+                            let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let fb = builder.ins().iconst(types::I64, *feedback as i64);
+                            let sz = builder.ins().iconst(types::I64, *size as i64);
+                            let mn = builder.ins().iconst(types::I64, *min as i64);
+                            let call = builder.ins().call(shuffle_func_ref, &[val, fb, sz, mn]);
+                            let result = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+
+                        // --- f64 ops ---
+                        JitOp::UnitInterval => {
+                            // u64 → f64: input as f64 / u64::MAX as f64
+                            let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let fval = builder.ins().fcvt_from_uint(types::F64, val);
+                            let max_f = builder.ins().f64const(u64::MAX as f64);
+                            let result = builder.ins().fdiv(fval, max_f);
+                            store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::F64ToU64 => {
+                            let fval = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
+                            let result = builder.ins().fcvt_to_uint_sat(types::I64, fval);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::RoundToU64 => {
+                            let fval = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
+                            let rounded = round_half_away(&mut builder, fval);
+                            let result = builder.ins().fcvt_to_uint_sat(types::I64, rounded);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::FloorToU64 => {
+                            let fval = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
+                            let floored = builder.ins().floor(fval);
+                            let result = builder.ins().fcvt_to_uint_sat(types::I64, floored);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::CeilToU64 => {
+                            let fval = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
+                            let ceiled = builder.ins().ceil(fval);
+                            let result = builder.ins().fcvt_to_uint_sat(types::I64, ceiled);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::ClampF64Const(min_bits, max_bits) => {
+                            let fval = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
+                            let fmin = builder.ins().f64const(f64::from_bits(*min_bits));
+                            let fmax = builder.ins().f64const(f64::from_bits(*max_bits));
+                            let clamped = clamp_ir(&mut builder, fval, fmin, fmax);
+                            store_slot_f64(&mut builder, buffer_ptr, output_slots[0], clamped);
+                        }
+                        JitOp::LerpConst(a_bits, b_bits) => {
+                            // a + t * (b - a)
+                            let t = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
+                            let a = builder.ins().f64const(f64::from_bits(*a_bits));
+                            let b = builder.ins().f64const(f64::from_bits(*b_bits));
+                            let diff = builder.ins().fsub(b, a);
+                            let scaled = builder.ins().fmul(t, diff);
+                            let result = builder.ins().fadd(a, scaled);
+                            store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::ScaleRangeConst(min_bits, range_bits) => {
+                            // min + range * (input as f64 / u64::MAX as f64)
+                            let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let fval = builder.ins().fcvt_from_uint(types::F64, val);
+                            let max_f = builder.ins().f64const(u64::MAX as f64);
+                            let t = builder.ins().fdiv(fval, max_f);
+                            let fmin = builder.ins().f64const(f64::from_bits(*min_bits));
+                            let frange = builder.ins().f64const(f64::from_bits(*range_bits));
+                            let scaled = builder.ins().fmul(t, frange);
+                            let result = builder.ins().fadd(fmin, scaled);
+                            store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::QuantizeConst(step_bits) => {
+                            // round(val / step) * step
+                            let fval = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
+                            let step = builder.ins().f64const(f64::from_bits(*step_bits));
+                            let divided = builder.ins().fdiv(fval, step);
+                            let rounded = round_half_away(&mut builder, divided);
+                            let result = builder.ins().fmul(rounded, step);
+                            store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+
+                        JitOp::LutSampleConst(lut_ptr, lut_len) => {
+                            // Extern call: jit_lut_sample(input_bits, lut_ptr, lut_len) -> f64 bits
+                            let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let ptr_val = builder.ins().iconst(types::I64, *lut_ptr as i64);
+                            let len_val = builder.ins().iconst(types::I64, *lut_len as i64);
+                            let call = builder
+                                .ins()
+                                .call(lut_sample_func_ref, &[input, ptr_val, len_val]);
+                            let result = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::DiscretizeConst(range_bits, buckets) => {
+                            // min(clamp(input, 0.0, range) / range * buckets, buckets - 1),
+                            // the node's body. Its declared constraints make the
+                            // range positive and `buckets` at least one, so the
+                            // `- 1` below cannot underflow.
+                            let fval = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
+                            let range = f64::from_bits(*range_bits);
+                            let fzero = builder.ins().f64const(0.0);
+                            let frange = builder.ins().f64const(range);
+                            let fbuckets = builder.ins().f64const(*buckets as f64);
+                            let clamped = clamp_ir(&mut builder, fval, fzero, frange);
+                            let divided = builder.ins().fdiv(clamped, frange);
+                            let scaled = builder.ins().fmul(divided, fbuckets);
+                            let as_u64 = builder.ins().fcvt_to_uint_sat(types::I64, scaled);
+                            let max_bucket =
+                                builder.ins().iconst(types::I64, (*buckets - 1) as i64);
+                            let result = builder.ins().umin(as_u64, max_bucket);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+
+                        JitOp::WeightedPickConst(
+                            values_ptr,
+                            biases_ptr,
+                            primaries_ptr,
+                            aliases_ptr,
+                            n,
+                        ) => {
+                            // Extern call: jit_weighted_pick(input, values_ptr, biases_ptr, primaries_ptr, aliases_ptr, n)
+                            let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let v_ptr = builder.ins().iconst(types::I64, *values_ptr as i64);
+                            let b_ptr = builder.ins().iconst(types::I64, *biases_ptr as i64);
+                            let p_ptr = builder.ins().iconst(types::I64, *primaries_ptr as i64);
+                            let a_ptr = builder.ins().iconst(types::I64, *aliases_ptr as i64);
+                            let n_val = builder.ins().iconst(types::I64, *n as i64);
+                            let call = builder.ins().call(
+                                weighted_pick_func_ref,
+                                &[input, v_ptr, b_ptr, p_ptr, a_ptr, n_val],
+                            );
+                            let result = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+
+                        JitOp::MathUnary(idx) => {
+                            let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let func_ref = math_unary_refs[*idx as usize];
+                            let call = builder.ins().call(func_ref, &[input]);
+                            let result = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+
+                        JitOp::MathBinary(idx) => {
+                            let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let func_ref = math_binary_refs[*idx as usize];
+                            let call = builder.ins().call(func_ref, &[a, b]);
+                            let result = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+
+                        JitOp::ToF64 => {
+                            let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let fval = builder.ins().fcvt_from_uint(types::F64, val);
+                            store_slot_f64(&mut builder, buffer_ptr, output_slots[0], fval);
+                        }
+
+                        // ── Register plane: one vector instruction per op ──
+                        JitOp::RegBinOp(lane, arith) => {
+                            let vt = reg_lane_type(*lane);
+                            let a = load_reg128(&mut builder, buffer_ptr, input_slots[0], vt);
+                            let b = load_reg128(&mut builder, buffer_ptr, input_slots[2], vt);
+                            let is_float = matches!(*lane, 4 | 5);
+                            let r = match (arith, is_float) {
+                                (0, false) => builder.ins().iadd(a, b),
+                                (1, false) => builder.ins().isub(a, b),
+                                (2, false) => builder.ins().imul(a, b),
+                                (0, true) => builder.ins().fadd(a, b),
+                                (1, true) => builder.ins().fsub(a, b),
+                                (2, true) => builder.ins().fmul(a, b),
+                                _ => unreachable!("RegBinOp arith index out of range"),
+                            };
+                            store_reg128(&mut builder, buffer_ptr, output_slots[0], r);
+                        }
+                        JitOp::RegCopy => {
+                            let v =
+                                load_reg128(&mut builder, buffer_ptr, input_slots[0], types::I64X2);
+                            store_reg128(&mut builder, buffer_ptr, output_slots[0], v);
+                        }
+                        JitOp::RegSplat(lane) => {
+                            let vt = reg_lane_type(*lane);
+                            let scalar = match *lane {
+                                // Integer lanes: u64 slot reduced to lane width.
+                                0 => {
+                                    let v = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                                    builder.ins().ireduce(types::I8, v)
+                                }
+                                1 => {
+                                    let v = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                                    builder.ins().ireduce(types::I16, v)
+                                }
+                                2 => {
+                                    let v = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                                    builder.ins().ireduce(types::I32, v)
+                                }
+                                3 => load_slot(&mut builder, buffer_ptr, input_slots[0]),
+                                // Float lanes: f64 slot, demoted for f32.
+                                4 => {
+                                    let f = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
+                                    builder.ins().fdemote(types::F32, f)
+                                }
+                                5 => load_slot_f64(&mut builder, buffer_ptr, input_slots[0]),
+                                _ => unreachable!("RegSplat lane index out of range"),
+                            };
+                            let v = builder.ins().splat(vt, scalar);
+                            store_reg128(&mut builder, buffer_ptr, output_slots[0], v);
+                        }
+
+                        // Two-wire u64 integer ops — pure Cranelift, no extern call
+                        JitOp::U64Add2 => {
+                            let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let result = builder.ins().iadd(a, b);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::U64Sub2 => {
+                            let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let result = builder.ins().isub(a, b);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::U64Mul2 => {
+                            let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let result = builder.ins().imul(a, b);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::U64Div2 => {
+                            let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            // Guard: if b == 0, store 0; else store a / b.
+                            // Must branch because udiv traps on zero divisor.
+                            let zero = builder.ins().iconst(types::I64, 0);
+                            let is_zero = builder.ins().icmp(ir::condcodes::IntCC::Equal, b, zero);
+                            let div_block = builder.create_block();
+                            let merge_block = builder.create_block();
+                            builder.append_block_param(merge_block, types::I64);
+                            builder
+                                .ins()
+                                .brif(is_zero, merge_block, &[zero], div_block, &[]);
+                            builder.switch_to_block(div_block);
+                            builder.seal_block(div_block);
+                            let div_result = builder.ins().udiv(a, b);
+                            builder.ins().jump(merge_block, &[div_result]);
+                            builder.switch_to_block(merge_block);
+                            builder.seal_block(merge_block);
+                            let result = builder.block_params(merge_block)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::U64Mod2 => {
+                            let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            // Guard: if b == 0, store 0; else store a % b.
+                            // Must branch because urem traps on zero divisor.
+                            let zero = builder.ins().iconst(types::I64, 0);
+                            let is_zero = builder.ins().icmp(ir::condcodes::IntCC::Equal, b, zero);
+                            let rem_block = builder.create_block();
+                            let merge_block = builder.create_block();
+                            builder.append_block_param(merge_block, types::I64);
+                            builder
+                                .ins()
+                                .brif(is_zero, merge_block, &[zero], rem_block, &[]);
+                            builder.switch_to_block(rem_block);
+                            builder.seal_block(rem_block);
+                            let rem_result = builder.ins().urem(a, b);
+                            builder.ins().jump(merge_block, &[rem_result]);
+                            builder.switch_to_block(merge_block);
+                            builder.seal_block(merge_block);
+                            let result = builder.block_params(merge_block)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::U64And => {
+                            let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let result = builder.ins().band(a, b);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::U64Or => {
+                            let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let result = builder.ins().bor(a, b);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::U64Xor => {
+                            let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let result = builder.ins().bxor(a, b);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::U64Shl => {
+                            let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let result = builder.ins().ishl(a, b);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::U64Shr => {
+                            let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let result = builder.ins().ushr(a, b);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::U64Not => {
+                            let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let result = builder.ins().bnot(a);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+
+                        // Inline binary f64 arithmetic — pure Cranelift, no extern call
+                        JitOp::F64Add => {
+                            let a = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot_f64(&mut builder, buffer_ptr, input_slots[1]);
+                            let result = builder.ins().fadd(a, b);
+                            store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::F64Sub => {
+                            let a = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot_f64(&mut builder, buffer_ptr, input_slots[1]);
+                            let result = builder.ins().fsub(a, b);
+                            store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::F64Mul => {
+                            let a = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot_f64(&mut builder, buffer_ptr, input_slots[1]);
+                            let result = builder.ins().fmul(a, b);
+                            store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::F64Div => {
+                            let a = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot_f64(&mut builder, buffer_ptr, input_slots[1]);
+                            // Guard: if b == 0, result = 0; else result = a / b
+                            let zero = builder.ins().f64const(0.0);
+                            let is_zero =
+                                builder.ins().fcmp(ir::condcodes::FloatCC::Equal, b, zero);
+                            let div_result = builder.ins().fdiv(a, b);
+                            let result = builder.ins().select(is_zero, zero, div_result);
+                            store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::F64Mod => {
+                            // The body through its helper: Rust's `%` on floats.
+                            let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let call = builder
+                                .ins()
+                                .call(math_binary_refs[F64_MOD_HELPER], &[a, b]);
+                            let result = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+
+                        JitOp::IsPositiveCheck { name_ptr, name_len } => {
+                            // if input == 0: call jit_is_positive_fail (panics);
+                            // else: store input → output.
+                            // The branch splits to a fail block for the
+                            // violation path; the merge reads through the
+                            // common path after either branch completes.
+                            let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let zero = builder.ins().iconst(types::I64, 0);
+                            let is_zero =
+                                builder.ins().icmp(ir::condcodes::IntCC::Equal, val, zero);
+                            let fail_block = builder.create_block();
+                            let ok_block = builder.create_block();
+                            builder.ins().brif(is_zero, fail_block, &[], ok_block, &[]);
+
+                            builder.switch_to_block(fail_block);
+                            builder.seal_block(fail_block);
+                            let np = builder.ins().iconst(types::I64, *name_ptr as i64);
+                            let nl = builder.ins().iconst(types::I64, *name_len as i64);
+                            let _ = builder.ins().call(is_positive_fail_ref, &[val, np, nl]);
+                            // Extern panics — this is unreachable. Jump to
+                            // ok_block to keep the IR well-formed; the
+                            // branch never runs in practice.
+                            builder.ins().jump(ok_block, &[]);
+
+                            builder.switch_to_block(ok_block);
+                            builder.seal_block(ok_block);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], val);
+                        }
+
+                        JitOp::InRangeCheck(lo, hi) => {
+                            // if input < lo || input > hi: call
+                            // jit_in_range_fail (panics); else store
+                            // input → output.
+                            let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let lo_v = builder.ins().iconst(types::I64, *lo as i64);
+                            let hi_v = builder.ins().iconst(types::I64, *hi as i64);
+                            let below = builder.ins().icmp(
+                                ir::condcodes::IntCC::UnsignedLessThan,
+                                val,
+                                lo_v,
+                            );
+                            let above = builder.ins().icmp(
+                                ir::condcodes::IntCC::UnsignedGreaterThan,
+                                val,
+                                hi_v,
+                            );
+                            let out_of_range = builder.ins().bor(below, above);
+
+                            let fail_block = builder.create_block();
+                            let ok_block = builder.create_block();
+                            builder
+                                .ins()
+                                .brif(out_of_range, fail_block, &[], ok_block, &[]);
+
+                            builder.switch_to_block(fail_block);
+                            builder.seal_block(fail_block);
+                            let _ = builder.ins().call(in_range_fail_ref, &[val, lo_v, hi_v]);
+                            builder.ins().jump(ok_block, &[]);
+
+                            builder.switch_to_block(ok_block);
+                            builder.seal_block(ok_block);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], val);
+                        }
+
+                        JitOp::IsOneOfCheck {
+                            allowed,
+                            set_ptr,
+                            set_len,
+                        } => {
+                            // Unroll the allow-list as N inline eq
+                            // comparisons OR'd together. Fast-path is
+                            // 1–8 values (the common case); pathologically
+                            // large allow-lists still JIT but cost N
+                            // comparisons per cycle.
+                            let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let mut any_match = builder.ins().iconst(types::I8, 0);
+                            for allow in allowed.iter() {
+                                let c = builder.ins().iconst(types::I64, *allow as i64);
+                                let eq = builder.ins().icmp(ir::condcodes::IntCC::Equal, val, c);
+                                any_match = builder.ins().bor(any_match, eq);
                             }
-                            store_slot(&mut builder, buffer_ptr, output_slots[0], acc);
+                            let fail_block = builder.create_block();
+                            let ok_block = builder.create_block();
+                            // If any_match == 0 (no equality hit),
+                            // branch to the fail extern. Otherwise
+                            // jump straight to ok_block.
+                            builder
+                                .ins()
+                                .brif(any_match, ok_block, &[], fail_block, &[]);
+
+                            builder.switch_to_block(fail_block);
+                            builder.seal_block(fail_block);
+                            let sp = builder.ins().iconst(types::I64, *set_ptr as i64);
+                            let sl = builder.ins().iconst(types::I64, *set_len as i64);
+                            let _ = builder.ins().call(is_one_of_fail_ref, &[val, sp, sl]);
+                            builder.ins().jump(ok_block, &[]);
+
+                            builder.switch_to_block(ok_block);
+                            builder.seal_block(ok_block);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], val);
                         }
-                    }
 
-                    JitOp::CeilToMultiple => {
-                        let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let m = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        let one = builder.ins().iconst(types::I64, 1);
-                        let is_zero = builder.ins().icmp(ir::condcodes::IntCC::Equal, m, zero);
-                        let calc_block = builder.create_block();
-                        let merge_block = builder.create_block();
-                        builder.append_block_param(merge_block, types::I64);
-                        builder
-                            .ins()
-                            .brif(is_zero, merge_block, &[val], calc_block, &[]);
-                        builder.switch_to_block(calc_block);
-                        builder.seal_block(calc_block);
-                        // `div_ceil` without the sum that overflows near the
-                        // top, then the saturating product: the body's.
-                        let div = div_ceil(&mut builder, val, m, one);
-                        let high = builder.ins().umulhi(div, m);
-                        let low = builder.ins().imul(div, m);
-                        let zero_hi = builder.ins().iconst(types::I64, 0);
-                        let overflows =
+                        JitOp::U64Cmp(cc) => {
+                            let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let cmp = builder.ins().icmp(*cc, a, b);
+                            let zero = builder.ins().iconst(types::I64, 0);
+                            let one = builder.ins().iconst(types::I64, 1);
+                            let result = builder.ins().select(cmp, one, zero);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::F64Cmp(cc) => {
+                            let a = load_slot_f64(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot_f64(
+                                &mut builder,
+                                buffer_ptr,
+                                if input_slots.len() > 1 {
+                                    input_slots[1]
+                                } else {
+                                    input_slots[0]
+                                },
+                            );
+                            let cmp = builder.ins().fcmp(*cc, a, b);
+                            let zero = builder.ins().iconst(types::I64, 0);
+                            let one = builder.ins().iconst(types::I64, 1);
+                            let result = builder.ins().select(cmp, one, zero);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::SelectU64 => {
+                            let cond = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let a = load_slot(
+                                &mut builder,
+                                buffer_ptr,
+                                if input_slots.len() > 1 {
+                                    input_slots[1]
+                                } else {
+                                    input_slots[0]
+                                },
+                            );
+                            let b = load_slot(
+                                &mut builder,
+                                buffer_ptr,
+                                if input_slots.len() > 2 {
+                                    input_slots[2]
+                                } else {
+                                    input_slots[0]
+                                },
+                            );
+                            let zero = builder.ins().iconst(types::I64, 0);
+                            let is_nonzero =
+                                builder
+                                    .ins()
+                                    .icmp(ir::condcodes::IntCC::NotEqual, cond, zero);
+                            let result = builder.ins().select(is_nonzero, a, b);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::SelectF64 => {
+                            let cond = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let a = load_slot_f64(
+                                &mut builder,
+                                buffer_ptr,
+                                if input_slots.len() > 1 {
+                                    input_slots[1]
+                                } else {
+                                    input_slots[0]
+                                },
+                            );
+                            let b = load_slot_f64(
+                                &mut builder,
+                                buffer_ptr,
+                                if input_slots.len() > 2 {
+                                    input_slots[2]
+                                } else {
+                                    input_slots[0]
+                                },
+                            );
+                            let zero = builder.ins().iconst(types::I64, 0);
+                            let is_nonzero =
+                                builder
+                                    .ins()
+                                    .icmp(ir::condcodes::IntCC::NotEqual, cond, zero);
+                            let result = builder.ins().select(is_nonzero, a, b);
+                            store_slot_f64(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+
+                        JitOp::I64ToF64 => {
+                            let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let fval = builder.ins().fcvt_from_sint(types::F64, val);
+                            store_slot_f64(&mut builder, buffer_ptr, output_slots[0], fval);
+                        }
+                        JitOp::ToBool => {
+                            let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let zero = builder.ins().iconst(types::I64, 0);
+                            let one = builder.ins().iconst(types::I64, 1);
+                            let cmp = builder
+                                .ins()
+                                .icmp(ir::condcodes::IntCC::NotEqual, val, zero);
+                            let result = builder.ins().select(cmp, one, zero);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::ConstU64(v) | JitOp::ConstF64(v) => {
+                            let result = builder.ins().iconst(types::I64, *v as i64);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::HashRangeConst(max) => {
+                            let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let c_gamma = builder
+                                .ins()
+                                .iconst(types::I64, 0x9e3779b97f4a7c15u64 as i64);
+                            let x1 = builder.ins().iadd(input, c_gamma);
+                            let s30 = builder.ins().ushr_imm(x1, 30);
+                            let x2 = builder.ins().bxor(x1, s30);
+                            let c_m1 = builder
+                                .ins()
+                                .iconst(types::I64, 0xbf58476d1ce4e5b9u64 as i64);
+                            let x3 = builder.ins().imul(x2, c_m1);
+                            let s27 = builder.ins().ushr_imm(x3, 27);
+                            let x4 = builder.ins().bxor(x3, s27);
+                            let c_m2 = builder
+                                .ins()
+                                .iconst(types::I64, 0x94d049bb133111ebu64 as i64);
+                            let x5 = builder.ins().imul(x4, c_m2);
+                            let s31 = builder.ins().ushr_imm(x5, 31);
+                            let h = builder.ins().bxor(x5, s31);
+                            if *max == 0 {
+                                let zero = builder.ins().iconst(types::I64, 0);
+                                store_slot(&mut builder, buffer_ptr, output_slots[0], zero);
+                            } else {
+                                let m = builder.ins().iconst(types::I64, *max as i64);
+                                let rem = builder.ins().urem(h, m);
+                                store_slot(&mut builder, buffer_ptr, output_slots[0], rem);
+                            }
+                        }
+                        JitOp::HashIntervalConst(min_bits, max_bits) => {
+                            let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let c_gamma = builder
+                                .ins()
+                                .iconst(types::I64, 0x9e3779b97f4a7c15u64 as i64);
+                            let x1 = builder.ins().iadd(input, c_gamma);
+                            let s30 = builder.ins().ushr_imm(x1, 30);
+                            let x2 = builder.ins().bxor(x1, s30);
+                            let c_m1 = builder
+                                .ins()
+                                .iconst(types::I64, 0xbf58476d1ce4e5b9u64 as i64);
+                            let x3 = builder.ins().imul(x2, c_m1);
+                            let s27 = builder.ins().ushr_imm(x3, 27);
+                            let x4 = builder.ins().bxor(x3, s27);
+                            let c_m2 = builder
+                                .ins()
+                                .iconst(types::I64, 0x94d049bb133111ebu64 as i64);
+                            let x5 = builder.ins().imul(x4, c_m2);
+                            let s31 = builder.ins().ushr_imm(x5, 31);
+                            let h = builder.ins().bxor(x5, s31);
+
+                            let h_f = builder.ins().fcvt_from_uint(types::F64, h);
+                            let denom = builder.ins().f64const(u64::MAX as f64);
+                            let unit = builder.ins().fdiv(h_f, denom);
+                            let min_f = f64::from_bits(*min_bits);
+                            let max_f = f64::from_bits(*max_bits);
+                            let span = builder.ins().f64const(max_f - min_f);
+                            let min_val = builder.ins().f64const(min_f);
+                            let scaled = builder.ins().fmul(unit, span);
+                            let res_f = builder.ins().fadd(min_val, scaled);
+                            let res = builder
+                                .ins()
+                                .bitcast(types::I64, ir::MemFlags::new(), res_f);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], res);
+                        }
+                        JitOp::InvLerpConst(a_bits, b_bits) => {
+                            let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let in_f =
+                                builder
+                                    .ins()
+                                    .bitcast(types::F64, ir::MemFlags::new(), input);
+                            let a_f = f64::from_bits(*a_bits);
+                            let b_f = f64::from_bits(*b_bits);
+                            let a_val = builder.ins().f64const(a_f);
+                            // The body's operations in its order: the reciprocal
+                            // of the span (infinite for an empty one), the
+                            // product, the clamp.
+                            let inv_span = builder.ins().f64const(1.0 / (b_f - a_f));
+                            let diff = builder.ins().fsub(in_f, a_val);
+                            let t = builder.ins().fmul(diff, inv_span);
+                            let zero = builder.ins().f64const(0.0);
+                            let one = builder.ins().f64const(1.0);
+                            let res_f = clamp_ir(&mut builder, t, zero, one);
+                            let res = builder
+                                .ins()
+                                .bitcast(types::I64, ir::MemFlags::new(), res_f);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], res);
+                        }
+                        JitOp::RemapConst(in_min_bits, in_max_bits, out_min_bits, out_max_bits) => {
+                            let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let in_f =
+                                builder
+                                    .ins()
+                                    .bitcast(types::F64, ir::MemFlags::new(), input);
+                            let in_min = f64::from_bits(*in_min_bits);
+                            let in_max = f64::from_bits(*in_max_bits);
+                            let out_min = f64::from_bits(*out_min_bits);
+                            let out_max = f64::from_bits(*out_max_bits);
+                            // The body's operations in its order: a division by
+                            // the span (not a product with its reciprocal, which
+                            // differs in the last bit), then the affine step.
+                            let in_span_val = builder.ins().f64const(in_max - in_min);
+                            let in_min_val = builder.ins().f64const(in_min);
+                            let out_min_val = builder.ins().f64const(out_min);
+                            let out_span_val = builder.ins().f64const(out_max - out_min);
+                            let diff = builder.ins().fsub(in_f, in_min_val);
+                            let t = builder.ins().fdiv(diff, in_span_val);
+                            let scaled = builder.ins().fmul(t, out_span_val);
+                            let res_f = builder.ins().fadd(out_min_val, scaled);
+                            let res = builder
+                                .ins()
+                                .bitcast(types::I64, ir::MemFlags::new(), res_f);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], res);
+                        }
+                        JitOp::EpochOffsetConst(base) => {
+                            let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = builder.ins().iconst(types::I64, *base as i64);
+                            let res = builder.ins().iadd(val, b);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], res);
+                        }
+                        JitOp::EpochScaleConst(factor) => {
+                            let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let f = builder.ins().iconst(types::I64, *factor as i64);
+                            let res = builder.ins().imul(val, f);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], res);
+                        }
+                        JitOp::ThreadId => {
+                            let call = builder.ins().call(thread_id_func_ref, &[]);
+                            let res = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], res);
+                        }
+                        JitOp::CurrentEpochMillis => {
+                            let call = builder.ins().call(current_epoch_millis_func_ref, &[]);
+                            let res = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], res);
+                        }
+                        JitOp::Perlin1dConst(perm_ptr, freq_bits) => {
+                            let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let p = builder.ins().iconst(types::I64, *perm_ptr as i64);
+                            let fb = builder.ins().iconst(types::I64, *freq_bits as i64);
+                            let call = builder.ins().call(perlin_1d_func_ref, &[input, p, fb]);
+                            let res = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], res);
+                        }
+                        JitOp::Perlin2dConst(perm_ptr, freq_bits) => {
+                            let x = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let y = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let p = builder.ins().iconst(types::I64, *perm_ptr as i64);
+                            let fb = builder.ins().iconst(types::I64, *freq_bits as i64);
+                            let call = builder.ins().call(perlin_2d_func_ref, &[x, y, p, fb]);
+                            let res = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], res);
+                        }
+                        JitOp::Simplex2dConst(perm_ptr, freq_bits) => {
+                            let x = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let y = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let p = builder.ins().iconst(types::I64, *perm_ptr as i64);
+                            let fb = builder.ins().iconst(types::I64, *freq_bits as i64);
+                            let call = builder.ins().call(simplex_2d_func_ref, &[x, y, p, fb]);
+                            let res = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], res);
+                        }
+                        JitOp::FractalNoise1dConst(perm_ptr, freq_bits, octaves) => {
+                            let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let p = builder.ins().iconst(types::I64, *perm_ptr as i64);
+                            let fb = builder.ins().iconst(types::I64, *freq_bits as i64);
+                            let oct = builder.ins().iconst(types::I64, *octaves as i64);
+                            let call = builder
+                                .ins()
+                                .call(fractal_noise_1d_func_ref, &[input, p, fb, oct]);
+                            let res = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], res);
+                        }
+                        JitOp::FractalNoise2dConst(perm_ptr, freq_bits, octaves) => {
+                            let x = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let y = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let p = builder.ins().iconst(types::I64, *perm_ptr as i64);
+                            let fb = builder.ins().iconst(types::I64, *freq_bits as i64);
+                            let oct = builder.ins().iconst(types::I64, *octaves as i64);
+                            let call = builder
+                                .ins()
+                                .call(fractal_noise_2d_func_ref, &[x, y, p, fb, oct]);
+                            let res = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], res);
+                        }
+                        JitOp::CycleWalkConst(range, seed, inc) => {
+                            let pos = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let r = builder.ins().iconst(types::I64, *range as i64);
+                            let s = builder.ins().iconst(types::I64, *seed as i64);
+                            let i = builder.ins().iconst(types::I64, *inc as i64);
+                            let call = builder.ins().call(cycle_walk_func_ref, &[pos, r, s, i]);
+                            let res = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], res);
+                        }
+
+                        JitOp::VariadicSum => {
+                            if input_slots.is_empty() {
+                                let zero = builder.ins().iconst(types::I64, 0);
+                                store_slot(&mut builder, buffer_ptr, output_slots[0], zero);
+                            } else {
+                                let mut acc = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                                for &slot in &input_slots[1..] {
+                                    let v = load_slot(&mut builder, buffer_ptr, slot);
+                                    acc = builder.ins().iadd(acc, v);
+                                }
+                                store_slot(&mut builder, buffer_ptr, output_slots[0], acc);
+                            }
+                        }
+                        JitOp::VariadicProduct => {
+                            if input_slots.is_empty() {
+                                let one = builder.ins().iconst(types::I64, 1);
+                                store_slot(&mut builder, buffer_ptr, output_slots[0], one);
+                            } else {
+                                let mut acc = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                                for &slot in &input_slots[1..] {
+                                    let v = load_slot(&mut builder, buffer_ptr, slot);
+                                    acc = builder.ins().imul(acc, v);
+                                }
+                                store_slot(&mut builder, buffer_ptr, output_slots[0], acc);
+                            }
+                        }
+                        JitOp::VariadicMin => {
+                            if input_slots.is_empty() {
+                                // `min`'s identity is `u64::MAX`, declared on the
+                                // node (`identity = u64::MAX`), because the least
+                                // of nothing must lose to every value. Zero is
+                                // `max`'s identity, and writing it here made
+                                // `min()` answer 0 on native and `u64::MAX` on
+                                // the interpreter. These four constants mirror
+                                // `FuncSig.identity`; the zero-arity test in
+                                // `engine_parity` is what keeps them mirrored.
+                                let ident = builder.ins().iconst(types::I64, u64::MAX as i64);
+                                store_slot(&mut builder, buffer_ptr, output_slots[0], ident);
+                            } else {
+                                let mut acc = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                                for &slot in &input_slots[1..] {
+                                    let v = load_slot(&mut builder, buffer_ptr, slot);
+                                    let cmp = builder.ins().icmp(
+                                        ir::condcodes::IntCC::UnsignedLessThan,
+                                        v,
+                                        acc,
+                                    );
+                                    acc = builder.ins().select(cmp, v, acc);
+                                }
+                                store_slot(&mut builder, buffer_ptr, output_slots[0], acc);
+                            }
+                        }
+                        JitOp::VariadicMax => {
+                            if input_slots.is_empty() {
+                                let zero = builder.ins().iconst(types::I64, 0);
+                                store_slot(&mut builder, buffer_ptr, output_slots[0], zero);
+                            } else {
+                                let mut acc = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                                for &slot in &input_slots[1..] {
+                                    let v = load_slot(&mut builder, buffer_ptr, slot);
+                                    let cmp = builder.ins().icmp(
+                                        ir::condcodes::IntCC::UnsignedGreaterThan,
+                                        v,
+                                        acc,
+                                    );
+                                    acc = builder.ins().select(cmp, v, acc);
+                                }
+                                store_slot(&mut builder, buffer_ptr, output_slots[0], acc);
+                            }
+                        }
+
+                        JitOp::CeilToMultiple => {
+                            let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let m = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let zero = builder.ins().iconst(types::I64, 0);
+                            let one = builder.ins().iconst(types::I64, 1);
+                            let is_zero = builder.ins().icmp(ir::condcodes::IntCC::Equal, m, zero);
+                            let calc_block = builder.create_block();
+                            let merge_block = builder.create_block();
+                            builder.append_block_param(merge_block, types::I64);
                             builder
                                 .ins()
-                                .icmp(ir::condcodes::IntCC::NotEqual, high, zero_hi);
-                        let max = builder.ins().iconst(types::I64, -1);
-                        let mul = builder.ins().select(overflows, max, low);
-                        builder.ins().jump(merge_block, &[mul]);
-                        builder.switch_to_block(merge_block);
-                        builder.seal_block(merge_block);
-                        let result = builder.block_params(merge_block)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::CheckedAdd => {
-                        let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let sum = builder.ins().iadd(a, b);
-                        let is_overflow =
+                                .brif(is_zero, merge_block, &[val], calc_block, &[]);
+                            builder.switch_to_block(calc_block);
+                            builder.seal_block(calc_block);
+                            // `div_ceil` without the sum that overflows near the
+                            // top, then the saturating product: the body's.
+                            let div = div_ceil(&mut builder, val, m, one);
+                            let high = builder.ins().umulhi(div, m);
+                            let low = builder.ins().imul(div, m);
+                            let zero_hi = builder.ins().iconst(types::I64, 0);
+                            let overflows =
+                                builder
+                                    .ins()
+                                    .icmp(ir::condcodes::IntCC::NotEqual, high, zero_hi);
+                            let max = builder.ins().iconst(types::I64, -1);
+                            let mul = builder.ins().select(overflows, max, low);
+                            builder.ins().jump(merge_block, &[mul]);
+                            builder.switch_to_block(merge_block);
+                            builder.seal_block(merge_block);
+                            let result = builder.block_params(merge_block)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::CheckedAdd => {
+                            let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let sum = builder.ins().iadd(a, b);
+                            let is_overflow =
+                                builder
+                                    .ins()
+                                    .icmp(ir::condcodes::IntCC::UnsignedLessThan, sum, a);
+                            let zero = builder.ins().iconst(types::I64, 0);
+                            let result = builder.ins().select(is_overflow, zero, sum);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::CheckedSub => {
+                            let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let is_lt =
+                                builder
+                                    .ins()
+                                    .icmp(ir::condcodes::IntCC::UnsignedLessThan, a, b);
+                            let diff = builder.ins().isub(a, b);
+                            let zero = builder.ins().iconst(types::I64, 0);
+                            let result = builder.ins().select(is_lt, zero, diff);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::CheckedMul => {
+                            let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let prod = builder.ins().imul(a, b);
+                            let zero = builder.ins().iconst(types::I64, 0);
+                            let a_is_zero =
+                                builder.ins().icmp(ir::condcodes::IntCC::Equal, a, zero);
+                            let div_block = builder.create_block();
+                            let merge_block = builder.create_block();
+                            builder.append_block_param(merge_block, types::I64);
                             builder
                                 .ins()
-                                .icmp(ir::condcodes::IntCC::UnsignedLessThan, sum, a);
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        let result = builder.ins().select(is_overflow, zero, sum);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::CheckedSub => {
-                        let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let is_lt =
+                                .brif(a_is_zero, merge_block, &[zero], div_block, &[]);
+                            builder.switch_to_block(div_block);
+                            builder.seal_block(div_block);
+                            let div = builder.ins().udiv(prod, a);
+                            let ok = builder.ins().icmp(ir::condcodes::IntCC::Equal, div, b);
+                            let mul_res = builder.ins().select(ok, prod, zero);
+                            builder.ins().jump(merge_block, &[mul_res]);
+                            builder.switch_to_block(merge_block);
+                            builder.seal_block(merge_block);
+                            let result = builder.block_params(merge_block)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::MultiplesAtLeast => {
+                            let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let m = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let zero = builder.ins().iconst(types::I64, 0);
+                            let one = builder.ins().iconst(types::I64, 1);
+                            let is_zero = builder.ins().icmp(ir::condcodes::IntCC::Equal, m, zero);
+                            let calc_block = builder.create_block();
+                            let merge_block = builder.create_block();
+                            builder.append_block_param(merge_block, types::I64);
                             builder
                                 .ins()
-                                .icmp(ir::condcodes::IntCC::UnsignedLessThan, a, b);
-                        let diff = builder.ins().isub(a, b);
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        let result = builder.ins().select(is_lt, zero, diff);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::CheckedMul => {
-                        let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let prod = builder.ins().imul(a, b);
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        let a_is_zero = builder.ins().icmp(ir::condcodes::IntCC::Equal, a, zero);
-                        let div_block = builder.create_block();
-                        let merge_block = builder.create_block();
-                        builder.append_block_param(merge_block, types::I64);
-                        builder
-                            .ins()
-                            .brif(a_is_zero, merge_block, &[zero], div_block, &[]);
-                        builder.switch_to_block(div_block);
-                        builder.seal_block(div_block);
-                        let div = builder.ins().udiv(prod, a);
-                        let ok = builder.ins().icmp(ir::condcodes::IntCC::Equal, div, b);
-                        let mul_res = builder.ins().select(ok, prod, zero);
-                        builder.ins().jump(merge_block, &[mul_res]);
-                        builder.switch_to_block(merge_block);
-                        builder.seal_block(merge_block);
-                        let result = builder.block_params(merge_block)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::MultiplesAtLeast => {
-                        let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let m = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        let one = builder.ins().iconst(types::I64, 1);
-                        let is_zero = builder.ins().icmp(ir::condcodes::IntCC::Equal, m, zero);
-                        let calc_block = builder.create_block();
-                        let merge_block = builder.create_block();
-                        builder.append_block_param(merge_block, types::I64);
-                        builder
-                            .ins()
-                            .brif(is_zero, merge_block, &[zero], calc_block, &[]);
-                        builder.switch_to_block(calc_block);
-                        builder.seal_block(calc_block);
-                        let div = div_ceil(&mut builder, val, m, one);
-                        builder.ins().jump(merge_block, &[div]);
-                        builder.switch_to_block(merge_block);
-                        builder.seal_block(merge_block);
-                        let result = builder.block_params(merge_block)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
+                                .brif(is_zero, merge_block, &[zero], calc_block, &[]);
+                            builder.switch_to_block(calc_block);
+                            builder.seal_block(calc_block);
+                            let div = div_ceil(&mut builder, val, m, one);
+                            builder.ins().jump(merge_block, &[div]);
+                            builder.switch_to_block(merge_block);
+                            builder.seal_block(merge_block);
+                            let result = builder.block_params(merge_block)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
 
-                    JitOp::BlendConst(mix_bits) => {
-                        // The body reinterprets both inputs' bits as f64
-                        // and returns the mix's bits (`blend` in
-                        // polydat-nodes `probability.rs`); the lowering does the
-                        // same, not a numeric conversion.
-                        let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let fa = builder.ins().bitcast(types::F64, ir::MemFlags::new(), a);
-                        let fb = builder.ins().bitcast(types::F64, ir::MemFlags::new(), b);
-                        let mix_f64 = f64::from_bits(*mix_bits);
-                        let mix_val = builder.ins().f64const(mix_f64);
-                        let one = builder.ins().f64const(1.0);
-                        let one_minus_mix = builder.ins().fsub(one, mix_val);
-                        let a_part = builder.ins().fmul(fa, one_minus_mix);
-                        let b_part = builder.ins().fmul(fb, mix_val);
-                        let sum = builder.ins().fadd(a_part, b_part);
-                        let result = builder.ins().bitcast(types::I64, ir::MemFlags::new(), sum);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::LfsrStepConst(feedback) => {
-                        let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let feedback = builder.ins().iconst(types::I64, *feedback as i64);
-                        let one = builder.ins().iconst(types::I64, 1);
-                        let zero = builder.ins().iconst(types::I64, 0);
-                        let shifted = builder.ins().ushr(val, one);
-                        let lsb = builder.ins().band(val, one);
-                        let is_odd = builder
-                            .ins()
-                            .icmp(ir::condcodes::IntCC::NotEqual, lsb, zero);
-                        let fb_mask = builder.ins().select(is_odd, feedback, zero);
-                        let result = builder.ins().bxor(shifted, fb_mask);
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::PcgConst(seed, stream) => {
-                        let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let s = builder.ins().iconst(types::I64, *seed as i64);
-                        let st = builder.ins().iconst(types::I64, *stream as i64);
-                        let call = builder.ins().call(pcg_func_ref, &[input, s, st]);
-                        let result = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::PcgStreamConst(seed) => {
-                        let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let st = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let s = builder.ins().iconst(types::I64, *seed as i64);
-                        let call = builder.ins().call(pcg_stream_func_ref, &[input, st, s]);
-                        let result = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
-                    JitOp::NOfConst(n, m) => {
-                        let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let n_val = builder.ins().iconst(types::I64, *n as i64);
-                        let m_val = builder.ins().iconst(types::I64, *m as i64);
-                        let call = builder.ins().call(n_of_func_ref, &[input, n_val, m_val]);
-                        let result = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], result);
-                    }
+                        JitOp::BlendConst(mix_bits) => {
+                            // The body reinterprets both inputs' bits as f64
+                            // and returns the mix's bits (`blend` in
+                            // polydat-nodes `probability.rs`); the lowering does the
+                            // same, not a numeric conversion.
+                            let a = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let b = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let fa = builder.ins().bitcast(types::F64, ir::MemFlags::new(), a);
+                            let fb = builder.ins().bitcast(types::F64, ir::MemFlags::new(), b);
+                            let mix_f64 = f64::from_bits(*mix_bits);
+                            let mix_val = builder.ins().f64const(mix_f64);
+                            let one = builder.ins().f64const(1.0);
+                            let one_minus_mix = builder.ins().fsub(one, mix_val);
+                            let a_part = builder.ins().fmul(fa, one_minus_mix);
+                            let b_part = builder.ins().fmul(fb, mix_val);
+                            let sum = builder.ins().fadd(a_part, b_part);
+                            let result =
+                                builder.ins().bitcast(types::I64, ir::MemFlags::new(), sum);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::LfsrStepConst(feedback) => {
+                            let val = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let feedback = builder.ins().iconst(types::I64, *feedback as i64);
+                            let one = builder.ins().iconst(types::I64, 1);
+                            let zero = builder.ins().iconst(types::I64, 0);
+                            let shifted = builder.ins().ushr(val, one);
+                            let lsb = builder.ins().band(val, one);
+                            let is_odd =
+                                builder
+                                    .ins()
+                                    .icmp(ir::condcodes::IntCC::NotEqual, lsb, zero);
+                            let fb_mask = builder.ins().select(is_odd, feedback, zero);
+                            let result = builder.ins().bxor(shifted, fb_mask);
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::PcgConst(seed, stream) => {
+                            let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let s = builder.ins().iconst(types::I64, *seed as i64);
+                            let st = builder.ins().iconst(types::I64, *stream as i64);
+                            let call = builder.ins().call(pcg_func_ref, &[input, s, st]);
+                            let result = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::PcgStreamConst(seed) => {
+                            let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let st = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let s = builder.ins().iconst(types::I64, *seed as i64);
+                            let call = builder.ins().call(pcg_stream_func_ref, &[input, st, s]);
+                            let result = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
+                        JitOp::NOfConst(n, m) => {
+                            let input = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let n_val = builder.ins().iconst(types::I64, *n as i64);
+                            let m_val = builder.ins().iconst(types::I64, *m as i64);
+                            let call = builder.ins().call(n_of_func_ref, &[input, n_val, m_val]);
+                            let result = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], result);
+                        }
 
-                    JitOp::SlotCall { kit, scratch_base } => {
-                        emit_slot_call(
-                            &mut builder,
-                            buffer_ptr,
-                            scratch_ptr,
-                            slot_call_ref,
+                        JitOp::SlotCall { kit, scratch_base } => {
+                            emit_slot_call(
+                                &mut builder,
+                                buffer_ptr,
+                                scratch_ptr,
+                                slot_call_ref,
+                                kit,
+                                *scratch_base,
+                                input_slots,
+                                output_slots,
+                            );
+                        }
+
+                        JitOp::Convert {
+                            from,
+                            to,
                             kit,
-                            *scratch_base,
-                            input_slots,
-                            output_slots,
-                        );
-                    }
-
-                    JitOp::Convert {
-                        from,
-                        to,
-                        kit,
-                        scratch_base,
-                    } => {
-                        emit_conversion(
-                            &mut builder,
-                            buffer_ptr,
-                            input_slots[0],
-                            output_slots[0],
-                            *from,
-                            *to,
-                            |builder| {
-                                emit_slot_call(
-                                    builder,
-                                    buffer_ptr,
-                                    scratch_ptr,
-                                    slot_call_ref,
-                                    kit,
-                                    *scratch_base,
-                                    input_slots,
-                                    output_slots,
-                                )
-                            },
-                        );
-                    }
-
-                    JitOp::U64ToStr { scratch_base }
-                    | JitOp::I64ToStr { scratch_base }
-                    | JitOp::F64ToStr { scratch_base } => {
-                        // The helper writes the digits into the step's entry
-                        // and publishes the pair into the output slots.
-                        let func = match jit_op {
-                            JitOp::U64ToStr { .. } => u64_to_str_ref,
-                            JitOp::I64ToStr { .. } => i64_to_str_ref,
-                            _ => f64_to_str_ref,
-                        };
-                        let value = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let base_v = builder.ins().iconst(types::I64, *scratch_base as i64);
-                        let out_v = builder.ins().iconst(types::I64, output_slots[0] as i64);
-                        builder
-                            .ins()
-                            .call(func, &[scratch_ptr, base_v, buffer_ptr, out_v, value]);
-                    }
-                    JitOp::JsonToStr { scratch_base } => {
-                        let ptr = load_slot(&mut builder, buffer_ptr, input_slots[0]);
-                        let len = load_slot(&mut builder, buffer_ptr, input_slots[1]);
-                        let base_v = builder.ins().iconst(types::I64, *scratch_base as i64);
-                        let out_v = builder.ins().iconst(types::I64, output_slots[0] as i64);
-                        builder.ins().call(
-                            json_to_str_ref,
-                            &[scratch_ptr, base_v, buffer_ptr, out_v, ptr, len],
-                        );
-                    }
-                    JitOp::StrConcat { scratch_base } => {
-                        // The input pairs go into the frame in order; the
-                        // helper appends each one's bytes into the entry.
-                        let n_words = input_slots.len();
-                        let frame = builder.create_sized_stack_slot(ir::StackSlotData::new(
-                            ir::StackSlotKind::ExplicitSlot,
-                            (n_words.max(1) * 8) as u32,
-                            3,
-                        ));
-                        for (k, &s) in input_slots.iter().enumerate() {
-                            let v = load_slot(&mut builder, buffer_ptr, s);
-                            builder.ins().stack_store(v, frame, (k * 8) as i32);
+                            scratch_base,
+                        } => {
+                            emit_conversion(
+                                &mut builder,
+                                buffer_ptr,
+                                input_slots[0],
+                                output_slots[0],
+                                *from,
+                                *to,
+                                |builder| {
+                                    emit_slot_call(
+                                        builder,
+                                        buffer_ptr,
+                                        scratch_ptr,
+                                        slot_call_ref,
+                                        kit,
+                                        *scratch_base,
+                                        input_slots,
+                                        output_slots,
+                                    )
+                                },
+                            );
                         }
-                        let pairs_ptr = builder.ins().stack_addr(types::I64, frame, 0);
-                        let n_v = builder.ins().iconst(types::I64, (n_words / 2) as i64);
-                        let base_v = builder.ins().iconst(types::I64, *scratch_base as i64);
-                        let out_v = builder.ins().iconst(types::I64, output_slots[0] as i64);
-                        builder.ins().call(
-                            str_concat_ref,
-                            &[scratch_ptr, base_v, buffer_ptr, out_v, pairs_ptr, n_v],
-                        );
-                    }
 
-                    JitOp::VecProduce { kind, scratch_base } => {
-                        // The helper runs the node's body over the input
-                        // words and publishes the pair from the step's
-                        // entry.
-                        let func = func_of(&vec_producer_refs, *kind);
-                        let base_v = builder.ins().iconst(types::I64, *scratch_base as i64);
-                        let out_v = builder.ins().iconst(types::I64, output_slots[0] as i64);
-                        let words = load_words(&mut builder, buffer_ptr, input_slots, 4);
-                        let mut args = vec![scratch_ptr, base_v, buffer_ptr, out_v];
-                        args.extend(words);
-                        builder.ins().call(func, &args);
-                    }
-                    JitOp::VecReduce(kind) => {
-                        let func = func_of(&vec_reducer_refs, *kind);
-                        let words = load_words(&mut builder, buffer_ptr, input_slots, 4);
-                        let call = builder.ins().call(func, &words);
-                        let bits = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], bits);
-                    }
-                    JitOp::RegLane(kind) => {
-                        let func = func_of(&reg_lane_refs, *kind);
-                        let words = load_words(&mut builder, buffer_ptr, input_slots, 3);
-                        let call = builder.ins().call(func, &words);
-                        let word = builder.inst_results(call)[0];
-                        store_slot(&mut builder, buffer_ptr, output_slots[0], word);
-                    }
-                    JitOp::RegProduce(kind) => {
-                        let func = func_of(&reg_producer_refs, *kind);
-                        let out_v = builder.ins().iconst(types::I64, output_slots[0] as i64);
-                        let words = load_words(&mut builder, buffer_ptr, input_slots, 4);
-                        let mut args = vec![buffer_ptr, out_v];
-                        args.extend(words);
-                        builder.ins().call(func, &args);
-                    }
-                    JitOp::RegDotF32 => {
-                        // The products at f32 precision, then the fixed
-                        // tree ((p0+p1)+(p2+p3)) at f32, then widened: the
-                        // node's body, operation for operation.
-                        let a = load_reg128(&mut builder, buffer_ptr, input_slots[0], types::F32X4);
-                        let b = load_reg128(&mut builder, buffer_ptr, input_slots[2], types::F32X4);
-                        let p = builder.ins().fmul(a, b);
-                        let p0 = builder.ins().extractlane(p, 0);
-                        let p1 = builder.ins().extractlane(p, 1);
-                        let p2 = builder.ins().extractlane(p, 2);
-                        let p3 = builder.ins().extractlane(p, 3);
-                        let s01 = builder.ins().fadd(p0, p1);
-                        let s23 = builder.ins().fadd(p2, p3);
-                        let s = builder.ins().fadd(s01, s23);
-                        let wide = builder.ins().fpromote(types::F64, s);
-                        store_slot_f64(&mut builder, buffer_ptr, output_slots[0], wide);
-                    }
-                    JitOp::RegShuffleConst(mask) => {
-                        // Output byte i is input byte mask[i]: the word's
-                        // bytes lie in memory in little-endian order, which
-                        // is the order `shuffle` numbers its lanes.
-                        let x = load_reg128(&mut builder, buffer_ptr, input_slots[0], types::I8X16);
-                        let imm = builder
-                            .func
-                            .dfg
-                            .immediates
-                            .push(ir::ConstantData::from(&mask[..]));
-                        let r = builder.ins().shuffle(x, x, imm);
-                        store_reg128(&mut builder, buffer_ptr, output_slots[0], r);
-                    }
+                        JitOp::U64ToStr { scratch_base }
+                        | JitOp::I64ToStr { scratch_base }
+                        | JitOp::F64ToStr { scratch_base } => {
+                            // The helper writes the digits into the step's entry
+                            // and publishes the pair into the output slots.
+                            let func = match jit_op {
+                                JitOp::U64ToStr { .. } => u64_to_str_ref,
+                                JitOp::I64ToStr { .. } => i64_to_str_ref,
+                                _ => f64_to_str_ref,
+                            };
+                            let value = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let base_v = builder.ins().iconst(types::I64, *scratch_base as i64);
+                            let out_v = builder.ins().iconst(types::I64, output_slots[0] as i64);
+                            builder
+                                .ins()
+                                .call(func, &[scratch_ptr, base_v, buffer_ptr, out_v, value]);
+                        }
+                        JitOp::JsonToStr { scratch_base } => {
+                            let ptr = load_slot(&mut builder, buffer_ptr, input_slots[0]);
+                            let len = load_slot(&mut builder, buffer_ptr, input_slots[1]);
+                            let base_v = builder.ins().iconst(types::I64, *scratch_base as i64);
+                            let out_v = builder.ins().iconst(types::I64, output_slots[0] as i64);
+                            builder.ins().call(
+                                json_to_str_ref,
+                                &[scratch_ptr, base_v, buffer_ptr, out_v, ptr, len],
+                            );
+                        }
+                        JitOp::StrConcat { scratch_base } => {
+                            // The input pairs go into the frame in order; the
+                            // helper appends each one's bytes into the entry.
+                            let n_words = input_slots.len();
+                            let frame = builder.create_sized_stack_slot(ir::StackSlotData::new(
+                                ir::StackSlotKind::ExplicitSlot,
+                                (n_words.max(1) * 8) as u32,
+                                3,
+                            ));
+                            for (k, &s) in input_slots.iter().enumerate() {
+                                let v = load_slot(&mut builder, buffer_ptr, s);
+                                builder.ins().stack_store(v, frame, (k * 8) as i32);
+                            }
+                            let pairs_ptr = builder.ins().stack_addr(types::I64, frame, 0);
+                            let n_v = builder.ins().iconst(types::I64, (n_words / 2) as i64);
+                            let base_v = builder.ins().iconst(types::I64, *scratch_base as i64);
+                            let out_v = builder.ins().iconst(types::I64, output_slots[0] as i64);
+                            builder.ins().call(
+                                str_concat_ref,
+                                &[scratch_ptr, base_v, buffer_ptr, out_v, pairs_ptr, n_v],
+                            );
+                        }
 
-                    JitOp::Fallback => {
-                        // Can't JIT this node — skip (caller should
-                        // not include fallback ops in JIT steps)
+                        JitOp::VecProduce { kind, scratch_base } => {
+                            // The helper runs the node's body over the input
+                            // words and publishes the pair from the step's
+                            // entry.
+                            let func = func_of(&vec_producer_refs, *kind);
+                            let base_v = builder.ins().iconst(types::I64, *scratch_base as i64);
+                            let out_v = builder.ins().iconst(types::I64, output_slots[0] as i64);
+                            let words = load_words(&mut builder, buffer_ptr, input_slots, 4);
+                            let mut args = vec![scratch_ptr, base_v, buffer_ptr, out_v];
+                            args.extend(words);
+                            builder.ins().call(func, &args);
+                        }
+                        JitOp::VecReduce(kind) => {
+                            let func = func_of(&vec_reducer_refs, *kind);
+                            let words = load_words(&mut builder, buffer_ptr, input_slots, 4);
+                            let call = builder.ins().call(func, &words);
+                            let bits = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], bits);
+                        }
+                        JitOp::RegLane(kind) => {
+                            let func = func_of(&reg_lane_refs, *kind);
+                            let words = load_words(&mut builder, buffer_ptr, input_slots, 3);
+                            let call = builder.ins().call(func, &words);
+                            let word = builder.inst_results(call)[0];
+                            store_slot(&mut builder, buffer_ptr, output_slots[0], word);
+                        }
+                        JitOp::RegProduce(kind) => {
+                            let func = func_of(&reg_producer_refs, *kind);
+                            let out_v = builder.ins().iconst(types::I64, output_slots[0] as i64);
+                            let words = load_words(&mut builder, buffer_ptr, input_slots, 4);
+                            let mut args = vec![buffer_ptr, out_v];
+                            args.extend(words);
+                            builder.ins().call(func, &args);
+                        }
+                        JitOp::RegDotF32 => {
+                            // The products at f32 precision, then the fixed
+                            // tree ((p0+p1)+(p2+p3)) at f32, then widened: the
+                            // node's body, operation for operation.
+                            let a =
+                                load_reg128(&mut builder, buffer_ptr, input_slots[0], types::F32X4);
+                            let b =
+                                load_reg128(&mut builder, buffer_ptr, input_slots[2], types::F32X4);
+                            let p = builder.ins().fmul(a, b);
+                            let p0 = builder.ins().extractlane(p, 0);
+                            let p1 = builder.ins().extractlane(p, 1);
+                            let p2 = builder.ins().extractlane(p, 2);
+                            let p3 = builder.ins().extractlane(p, 3);
+                            let s01 = builder.ins().fadd(p0, p1);
+                            let s23 = builder.ins().fadd(p2, p3);
+                            let s = builder.ins().fadd(s01, s23);
+                            let wide = builder.ins().fpromote(types::F64, s);
+                            store_slot_f64(&mut builder, buffer_ptr, output_slots[0], wide);
+                        }
+                        JitOp::RegShuffleConst(mask) => {
+                            // Output byte i is input byte mask[i]: the word's
+                            // bytes lie in memory in little-endian order, which
+                            // is the order `shuffle` numbers its lanes.
+                            let x =
+                                load_reg128(&mut builder, buffer_ptr, input_slots[0], types::I8X16);
+                            let imm = builder
+                                .func
+                                .dfg
+                                .immediates
+                                .push(ir::ConstantData::from(&mask[..]));
+                            let r = builder.ins().shuffle(x, x, imm);
+                            store_reg128(&mut builder, buffer_ptr, output_slots[0], r);
+                        }
+
+                        JitOp::Fallback => {
+                            // Can't JIT this node — skip (caller should
+                            // not include fallback ops in JIT steps)
+                        }
+                    }
+                    if let Some((inst, mark)) = tracker_store {
+                        let calls = (mark..builder.func.dfg.num_insts()).any(|i| {
+                            builder.func.dfg.insts[ir::Inst::from_u32(i as u32)]
+                                .opcode()
+                                .is_call()
+                        });
+                        if !calls {
+                            builder.func.layout.remove_inst(inst);
+                        }
                     }
                 }
-                if let Some((inst, mark)) = tracker_store {
-                    let calls = (mark..builder.func.dfg.num_insts()).any(|i| {
-                        builder.func.dfg.insts[ir::Inst::from_u32(i as u32)]
-                            .opcode()
-                            .is_call()
-                    });
-                    if !calls {
-                        builder.func.layout.remove_inst(inst);
-                    }
+                // The unit is done and current: on to the next in the list. A
+                // unit that fails does not get here, so it stays stale.
+                if let Some((at, head, _, _, clean_ptr)) = &dispatcher {
+                    let one = builder.ins().iconst(types::I8, 1);
+                    builder
+                        .ins()
+                        .store(ir::MemFlags::trusted(), one, *clean_ptr, unit_idx as i32);
+                    let i = builder.ins().stack_load(types::I64, *at, 0);
+                    let next = builder.ins().iadd_imm(i, 1);
+                    builder.ins().stack_store(next, *at, 0);
+                    builder.ins().jump(*head, &[]);
                 }
             }
-            // The unit is done: on to the next in the list.
-            if let Some((at, head, _, _)) = &dispatcher {
-                let i = builder.ins().stack_load(types::I64, *at, 0);
-                let next = builder.ins().iadd_imm(i, 1);
-                builder.ins().stack_store(next, *at, 0);
-                builder.ins().jump(*head, &[]);
-            }
-        }
 
-        if let Some((_, head, exit, _)) = dispatcher {
-            // Every unit block jumps back to the head, so it is sealed
-            // once they are all emitted.
-            builder.seal_block(head);
-            builder.switch_to_block(exit);
-            builder.seal_block(exit);
+            if let Some((_, head, exit, _, _)) = dispatcher {
+                // Every unit block jumps back to the head, so it is sealed
+                // once they are all emitted.
+                builder.seal_block(head);
+                builder.switch_to_block(exit);
+                builder.seal_block(exit);
+            }
+            builder.ins().return_(&[]);
+            builder.finalize();
         }
-        builder.ins().return_(&[]);
-        builder.finalize();
+        // Code that calls nothing cannot fail: no helper, no longjmp, no
+        // panic. The kernel that runs it skips the catch.
+        let fallible = ctx.func.layout.blocks().any(|block| {
+            ctx.func
+                .layout
+                .block_insts(block)
+                .any(|inst| ctx.func.dfg.insts[inst].opcode().is_call())
+        });
+
+        module
+            .define_function(func_id, &mut ctx)
+            .map_err(|e| format!("define function: {e}"))?;
+        module.clear_context(&mut ctx);
+        defined.push((func_id, fallible));
     }
-    // Code that calls nothing cannot fail: no helper, no longjmp, no
-    // panic. The kernel that runs it skips the catch.
-    let fallible = ctx.func.layout.blocks().any(|block| {
-        ctx.func
-            .layout
-            .block_insts(block)
-            .any(|inst| ctx.func.dfg.insts[inst].opcode().is_call())
-    });
-
-    module
-        .define_function(func_id, &mut ctx)
-        .map_err(|e| format!("define function: {e}"))?;
-    module.clear_context(&mut ctx);
     module
         .finalize_definitions()
         .map_err(|e| format!("finalize: {e}"))?;
 
-    let code_ptr = module.get_finalized_function(func_id);
-    // The kits the code calls, kept alive beside it.
-    let kits: Vec<SlotKitRef> = steps
+    let entries: Vec<JitEntry> = defined
         .iter()
+        .map(|&(func_id, fallible)| {
+            let code_ptr = module.get_finalized_function(func_id);
+            let straight_fn: NativeFn = unsafe { mem::transmute(code_ptr) };
+            let dispatch_fn: NativeDispatchFn = unsafe { mem::transmute(code_ptr) };
+            (straight_fn, dispatch_fn, fallible)
+        })
+        .collect();
+    // The kits the code calls, kept alive beside it.
+    let kits: Vec<SlotKitRef> = functions
+        .iter()
+        .flat_map(|(steps, _)| steps.iter())
         .filter_map(|(op, _, _)| op.slot_kit().cloned())
         .collect();
-    let code = super::kernels::JitCode::new(module, kits, fallible);
-
-    let straight_fn: NativeFn = unsafe { mem::transmute(code_ptr) };
-    let dispatch_fn: NativeDispatchFn = unsafe { mem::transmute(code_ptr) };
-    Ok((straight_fn, dispatch_fn, code))
+    let any_fallible = defined.iter().any(|&(_, f)| f);
+    let code = super::kernels::JitCode::new(module, kits, any_fallible);
+    Ok((entries, code))
 }
 
 // ── Buffer slot helpers ────────────────────────────────────

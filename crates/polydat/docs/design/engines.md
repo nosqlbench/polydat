@@ -182,11 +182,14 @@ the closures, and the carrier of the Tier-1 register kernel
 ([simd_isa_autopromotion.md](simd_isa_autopromotion.md)). One function
 does not mean every run is the whole program. The function is built of
 the same fusion units as P3's segments (§8), one block each, and is
-entered with a list of units to run, which it dispatches through a jump
-table. A pull hands it the units of its output's cone that are not
-current, found once from the steps' slots and kept, and `eval` hands it
-every unit that is not current, so the rule of §3.1 holds here as on
-every engine and a pull costs its cone and not the program. A unit runs
+entered with a list of units and the units' clean flags. The code tests
+each listed unit's flag itself, skips a current one, dispatches a stale
+one through a jump table, and marks it current when its block ends; a
+unit that fails stays stale. A pull hands it its output's cone order,
+found at build for every output into a table indexed by slot, and
+`eval` hands it every unit, so the rule of §3.1 holds here as on every
+engine, a pull costs its cone and not the program, and no pull hashes,
+filters, or allocates on the way into native code. A unit runs
 whole, so the units a pull hands over are closed over every member's
 producers. In `raw` mode a write makes every unit dirty, a new round in
 which each unit runs at most once. In `pushpull` a write dirties the
@@ -588,7 +591,9 @@ placements inside an engine, not refusals:
   a constant step downstream of it would run at build before its producer;
   a volatile node never joins pure ones, or the segment would be never
   current and rerun them at every round; and a side channel is always a
-  segment by itself. Pure native code compiles the same units, one block
+  segment by itself. A program's segments are functions of one compiled
+  module, so a round that runs many of them does not walk a separate code
+  region per segment. Pure native code compiles the same units, one block
   each.
 - The two refusals: an extern of a two-slot immediate type (a 128-bit
   integer or a register word) has no compiled form, because the compiled

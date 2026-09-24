@@ -52,6 +52,7 @@ pub mod cone;
 mod cone_tests;
 pub(crate) mod externs;
 pub mod fusion;
+#[cfg(feature = "jit")]
 pub(crate) mod fusion_units;
 pub mod hybrid;
 #[cfg(feature = "jit")]
@@ -185,18 +186,27 @@ macro_rules! kernel_accessors {
         /// coordinates are applied, a round begins if a write is pending, and
         /// only the output's cone runs.
         fn pull_value(&mut self, name: &str) -> crate::ast::Value {
-            let coords = std::mem::take(&mut self.core.drive.coords);
-            self.$set_coords(&coords);
-            self.core.drive.coords = coords;
+            self.apply_pending_coords();
             self.pull_output(name)
         }
 
         /// [`Self::pull_value`] by output index.
         fn pull_value_at(&mut self, index: usize) -> crate::ast::Value {
-            let coords = std::mem::take(&mut self.core.drive.coords);
-            self.$set_coords(&coords);
-            self.core.drive.coords = coords;
+            self.apply_pending_coords();
             self.core.pull_at(index)
+        }
+
+        /// The coordinates of a pending write, applied once: a pull
+        /// after the first in a round finds nothing written and skips
+        /// the comparison. The round itself begins in the core, which
+        /// clears the pending flag.
+        #[inline]
+        fn apply_pending_coords(&mut self) {
+            if self.core.drive.stale {
+                let coords = std::mem::take(&mut self.core.drive.coords);
+                self.$set_coords(&coords);
+                self.core.drive.coords = coords;
+            }
         }
 
         /// `eval` through the `Kernel` trait: the pending coordinates,
@@ -891,19 +901,34 @@ macro_rules! shared_core_methods {
                     .plan
                     .cones
                     .get(&name)
-                    .map(|c| std::sync::Arc::from(c.as_slice()));
-                self.resolved_outputs[index] = Some((slot, ty, cone));
+                    .map(|c| std::sync::Arc::<[usize]>::from(c.as_slice()));
+                let can_fail = cone
+                    .as_ref()
+                    .is_some_and(|c| c.iter().any(|&i| self.step_can_fail(i)));
+                self.resolved_outputs[index] = Some((slot, ty, cone, can_fail));
             }
             if self.drive.stale {
                 self.begin_epoch();
             } else {
                 self.refresh_cells();
             }
-            let (slot, ty, cone) = self.resolved_outputs[index]
-                .clone()
+            let resolved = self.resolved_outputs[index]
+                .as_ref()
                 .expect("resolved above");
-            if let Some(order) = cone {
-                self.run_steps(&order);
+            let (slot, ty, can_fail) = (resolved.0, resolved.1, resolved.3);
+            if let Some(order) = &resolved.2 {
+                // Borrowed across the run rather than cloned: the order
+                // lives behind an `Arc` this state holds, and running
+                // steps never touches the resolved outputs.
+                let order: *const [usize] = &**order;
+                let order = unsafe { &*order };
+                if can_fail {
+                    self.run_steps(order);
+                } else {
+                    // No step of the cone can fail, so there is no
+                    // failure to capture and attribute.
+                    self.run_order(order);
+                }
             }
             self.slot_value(slot, ty)
         }

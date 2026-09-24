@@ -58,6 +58,17 @@ struct JitSegment {
     nodes: Vec<usize>,
 }
 
+/// A native segment planned and not yet compiled: its place in the step
+/// order and what its `JitSegment` will hold.
+#[cfg(feature = "jit")]
+struct PendingSegment {
+    step: usize,
+    batch: Vec<(JitOp, Vec<usize>, Vec<usize>)>,
+    input_slots: Vec<usize>,
+    output_slots: Vec<usize>,
+    nodes: Vec<usize>,
+}
+
 impl HybridStep {
     fn input_slots(&self) -> &[usize] {
         match self {
@@ -119,9 +130,14 @@ struct ClosureStep {
     node: usize,
 }
 
-/// An output resolved for the index-keyed pull: its slot, its type,
-/// and the steps of its cone.
-type ResolvedOutput = (usize, crate::ast::PortType, Option<std::sync::Arc<[usize]>>);
+/// An output resolved for pulls by index: its slot, its type, its cone
+/// order, and whether any step of that order can fail.
+type ResolvedOutput = (
+    usize,
+    crate::ast::PortType,
+    Option<std::sync::Arc<[usize]>>,
+    bool,
+);
 
 /// Common fields shared by all hybrid kernel variants. A clone is a new
 /// state of the same program: the steps and the nodes are shared,
@@ -281,6 +297,18 @@ impl HybridCore {
             })
             .collect::<Vec<_>>()
             .into();
+    }
+
+    /// Whether step `i` can fail: a closure runs a node's Rust body,
+    /// which may panic, and a native segment can fail only when it
+    /// calls a helper (`JitCode::fallible`).
+    #[inline]
+    fn step_can_fail(&self, i: usize) -> bool {
+        match &self.steps[i] {
+            #[cfg(feature = "jit")]
+            HybridStep::Jit(seg) => seg.fallible,
+            _ => true,
+        }
     }
 
     /// The program node the step now running belongs to, for the
@@ -758,7 +786,10 @@ pub(crate) fn build_hybrid(
     volatile: Vec<bool>,
     attribution: std::sync::Arc<crate::compile::Attribution>,
 ) -> Result<HybridKernelPushPull, crate::KernelError> {
-    let mut steps: Vec<HybridStep> = Vec::new();
+    // A native segment's place is taken in step order and filled once
+    // every segment is compiled, all of them into one module.
+    let mut steps: Vec<Option<HybridStep>> = Vec::new();
+    let mut pending: Vec<PendingSegment> = Vec::new();
     let mut scratch: Vec<crate::ast::ScratchBuf> = Vec::new();
     let mut ref_scratch: Vec<(usize, usize)> = Vec::new();
     let mut max_inputs = 0usize;
@@ -911,7 +942,7 @@ pub(crate) fn build_hybrid(
                 &mut ref_scratch,
             )?;
             node_step[i] = steps.len();
-            steps.push(HybridStep::Closure(step));
+            steps.push(Some(HybridStep::Closure(step)));
         } else {
             // Each step's scratch entries are placed in the kernel's
             // scratch (axiom S3), and its reference outputs recorded
@@ -955,22 +986,45 @@ pub(crate) fn build_hybrid(
                 .iter()
                 .flat_map(|(_, _, o)| o.iter().copied())
                 .collect();
-            let (code_fn, code) =
-                jit::compile_jit_entry(&batch, Some(total_slots)).map_err(refused)?;
             let segment = steps.len();
             for &k in &members {
                 node_step[k] = segment;
             }
-            steps.push(HybridStep::Jit(JitSegment {
-                code_fn,
-                fallible: code.fallible(),
-                _module: code,
+            steps.push(None);
+            pending.push(PendingSegment {
+                step: segment,
+                batch,
                 input_slots,
                 output_slots,
                 nodes: members,
-            }));
+            });
         }
     }
+    // Every segment is a function of one module, so the code of a
+    // kernel whose pulls run many segments lies together rather than a
+    // module, and its pages, apart per segment.
+    let batches: Vec<&[jit::JitStep]> = pending.iter().map(|p| p.batch.as_slice()).collect();
+    let (entries, code) = if batches.is_empty() {
+        (Vec::new(), None)
+    } else {
+        let (entries, code) =
+            jit::compile_jit_entries(&batches, Some(total_slots)).map_err(refused)?;
+        (entries, Some(code))
+    };
+    for (p, (code_fn, fallible)) in pending.into_iter().zip(entries) {
+        steps[p.step] = Some(HybridStep::Jit(JitSegment {
+            code_fn,
+            fallible,
+            _module: code.clone().expect("a segment was compiled"),
+            input_slots: p.input_slots,
+            output_slots: p.output_slots,
+            nodes: p.nodes,
+        }));
+    }
+    let steps: Vec<HybridStep> = steps
+        .into_iter()
+        .map(|s| s.expect("every step is placed"))
+        .collect();
 
     let output_types = output_types_of(nodes, port_offsets, input_starts, input_types, &output_map);
     build_pushpull_from_steps(

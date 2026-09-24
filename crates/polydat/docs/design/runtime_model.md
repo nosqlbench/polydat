@@ -107,7 +107,7 @@ never changes a result:
 |---|---|
 | Interpreter | A clean flag per node (`node_clean`); per-input dependent lists (`input_dependents`) cleared on every write; a list of nondeterministic nodes cleared on every write; a cell-revision check at every memoized read (§5). A write is itself the change: the interpreter does not compare the new value with the old, so a same-value rewrite re-runs the dependents, which a side channel in the cone must observe. |
 | Closure tier and native tier | An `Invalidation` plan derived from provenance (per-input dependent steps and per-output cone orders); a clean flag per step; a round number per step recording the evaluation round it last ran in, bookkeeping that wipes nothing; the volatile steps never current. A coordinate counts as changed only when its value differs from the one it replaces. |
-| Pure native | A clean flag per fusion unit; per-input dependent units (`pushpull`) or every unit (`raw`) cleared on a write; per-output cone orders of units, closed over each unit's producers; the units holding volatile steps cleared on every write. The one function is entered with the pulled cone's units that are not current and dispatches to each. |
+| Pure native | A clean flag per fusion unit; per-input dependent units (`pushpull`) or every unit (`raw`) cleared on a write; per-output cone orders of units, closed over each unit's producers; the units holding volatile steps cleared on every write. The one function is entered with the pulled cone's precomputed order and the flags, tests each unit's flag in native code, and dispatches the stale ones. |
 
 The lifecycle classification the rule rests on has one
 classifier, `PolydatProgram::classify_lifecycle`, shared by the
