@@ -91,10 +91,14 @@ fn read(k: &mut dyn Kernel, cycle: u64) -> Vec<polydat::ast::Value> {
 /// One kernel per engine, built once and driven together, so every
 /// assertion below is the same program at the same moment on each.
 fn kernels(prefix: &str) -> Vec<(String, Box<dyn Kernel>)> {
-    let source = src(prefix);
+    kernels_of(&src(prefix))
+}
+
+/// [`kernels`] over any source.
+fn kernels_of(source: &str) -> Vec<(String, Box<dyn Kernel>)> {
     let mut out: Vec<(String, Box<dyn Kernel>)> = Vec::new();
     for tier in tiers() {
-        match compile_polydat_with(&source, tier) {
+        match compile_polydat_with(source, tier) {
             Ok(k) => out.push((format!("{tier}"), k)),
             // A tier that refuses says so; it is not a silent skip.
             Err(KernelError::Refused { .. }) => {
@@ -212,6 +216,45 @@ fn read_granularity_is_the_engines_step() {
         assert_eq!(
             k.pull("b"),
             polydat::ast::Value::F64(9.0),
+            "{name}: no engine may carry a volatile value across a write"
+        );
+    }
+}
+
+/// Two volatile reads that a wire connects are one fusion unit on the
+/// native engines, read together at the first pull of either; the
+/// interpreter and the closure tier read each at its own step's pull
+/// (runtime_model.md R1.v, "Read granularity").
+#[test]
+fn connected_volatile_reads_are_one_unit_on_native_code() {
+    let source = "a := host_reading(\"joined.a\")\n\
+                  b := host_reading(\"joined.b\") + a\n";
+    for (name, k) in kernels_of(source).iter_mut() {
+        set("joined.a", 3.0);
+        set("joined.b", 3.0);
+        k.set_inputs(&[1]);
+        let a = k.pull("a");
+        set("joined.b", 9.0);
+        let b = k.pull("b");
+
+        assert_eq!(a, polydat::ast::Value::F64(3.0), "{name}: first read");
+        let fused = name.starts_with("native") || name.starts_with("pure native");
+        let expected = if fused {
+            // Read with `a`, whose pull ran the unit they share.
+            polydat::ast::Value::F64(6.0)
+        } else {
+            // Its own step, read when `b` was pulled.
+            polydat::ast::Value::F64(12.0)
+        };
+        assert_eq!(
+            b, expected,
+            "{name}: connected volatile reads follow the engine's unit"
+        );
+
+        k.set_inputs(&[2]);
+        assert_eq!(
+            k.pull("b"),
+            polydat::ast::Value::F64(12.0),
             "{name}: no engine may carry a volatile value across a write"
         );
     }

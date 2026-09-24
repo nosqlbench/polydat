@@ -146,31 +146,35 @@ reads* does, and this migration changes it for every host that was on
 A volatile step — a node declaring `Purity::Nondeterministic`, or one
 under a `volatile` binding — is read at most once per write and re-read
 on the next, on every engine. But "per step" is per the *engine's*
-step, and a compiled engine's step is a fused segment. Two volatile
-wires are two steps on the interpreter, the closure tier, and pure
-native code, and one segment on the native tier:
+step, and on the native engines a step is a fusion unit: a connected
+group of nodes compiled together. Two volatile wires that share nothing
+are two units, and read like two steps on every engine; two that a wire
+connects are one unit on the native engines:
 
 ```
-w := clock_reading()      # two volatile wires,
-x := clock_reading()      # pulled in one write
+w := clock_reading()      # unconnected: two steps everywhere
+x := clock_reading()
+
+t := clock_reading()      # connected: one unit on native code
+u := t + clock_reading()
 ```
 
-| engine | `w` and `x` |
-|---|---|
-| interpreter, closure tier, pure native | read separately, when each is first pulled |
-| native (the default) | read together, at the first pull of either |
+| engine | `w` and `x` | `t` and `u` |
+|---|---|---|
+| interpreter, closure tier | read separately, when each is first pulled | read separately |
+| native (the default), pure native | read separately, when each is first pulled | read together, at the first pull of either |
 
-So a host moving from the interpreter to the default engine goes from
-two readings to one. For sampling something that moves — a clock, a
-metric — that is usually the better semantics, and it is the direction
-this change moves you: the outputs of one cycle now come from one
-instant rather than from as many instants as there were pulls.
+So a host moving from the interpreter to the default engine sees a
+difference only where volatile reads are wired together, and there it
+goes from two readings to one. For sampling something that moves — a
+clock, a metric — that is usually the better semantics: the connected
+outputs of one cycle come from one instant.
 
 What to check in a port:
 
-- Code that **relied on two readings differing** within one cycle — a
-  per-pull counter or sequence, say — stops differing. That is the
-  breaking direction, and it is silent.
+- Code that **relied on two connected readings differing** within one
+  cycle — a per-pull counter or sequence feeding another, say — stops
+  differing. That is the breaking direction, and it is silent.
 - Code that **wanted one instant** and worked around not having it
   (reading once and passing the value along) can keep the workaround;
   it is correct on every engine and stays correct.
