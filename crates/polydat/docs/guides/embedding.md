@@ -322,6 +322,40 @@ per thread, with timing. The interpreter's program has the same shape
 under its own names, `PolydatProgram` and one `PolydatState` per
 thread through `create_state`.
 
+### Scope trees on any engine
+
+A host that runs workloads as a tree of scopes (parameters, a phase,
+fibers, per-operation children, one child per iteration tuple) binds
+each child under its parent. Binding attaches the parent's shared cells,
+copies in the values the child imports, and materializes the child's
+scope-init constants. It works on every engine, and a tree may mix them,
+since every step is over `dyn Kernel`:
+
+| To | Call |
+|---|---|
+| build a child from source under a parent | `SubcontextBuilder::under(parent)`, then `.body(…)`, `.add_result_bindings(…)`, `.finalize()` to a `ScopeModule` |
+| instantiate it, on an engine you name | `module.instantiate_under(parent, engine, &iteration_bindings)` |
+| bind a precompiled program under a parent | `kernel::bind_under(parent, program, &iteration_bindings)` |
+| carry a parent's extern values into a child | `kernel::propagate_inputs(parent, child)` |
+| start a fiber from a scope's kernel | `kernel.fork()` |
+| read a name the way a scope resolves it | `KernelLookup::new(kernel).lookup(name)` |
+
+A module compiles once per engine and each instance costs only a state,
+so instantiating one per iteration tuple compiles nothing after the
+first. Per cycle, a scope kernel is driven by index through `pull_at`,
+`input_value_at`, `set_input_at`, `reset_inputs`, `publish_broadcasts`,
+and `commit_write_throughs`. None of these looks a name up. A plan of
+indices resolved once is sealed against `program_id()`, which is equal
+for every kernel of one program and for its forks.
+
+The rule above, one kernel per thread, is about kernels you evaluate. A
+scope *parent* is different: every `Kernel` is `Sync`, so a parent may be
+held in an `Arc` and have children bound and forks taken under it from
+many threads at once. What each thread then evaluates is its own child
+or fork. [Scope trees on any engine](../design/native_scope_trees.md)
+is the design, and `tests/scope_trees.rs` walks a whole tree on every
+pair of engines.
+
 ## 5. Host-defined nodes
 
 The function library is open. A host defines a node with the same

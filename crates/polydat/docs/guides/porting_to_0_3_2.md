@@ -73,6 +73,13 @@ Additive, so the fix is an extra field or arm:
   pattern, or read it if you render the comprehension back to text.
 - `WriteError` gained `CoordinateSlot { .. }` — a write aimed at a
   coordinate slot, which used to be reported as something less precise.
+  **This one fails silently if the host ignores the `Result`.** A named
+  write (`set_input`, `set_input_at`) to a coordinate is now refused on
+  every engine, where some paths used to write it. A host that declared a
+  fed value as `input x: T` (a coordinate) and writes it by name, and
+  discards the write's result, keeps running on the stale value with no
+  message. Declare such a value `extern x: T`, which a named write sets,
+  and never discard a write's `Result`.
 - `ValidationError` gained `SourceFailed { name, message }`. A producer
   over a context-free generator that cannot be evaluated is now refused
   when its stream opens. It used to open as an empty stream, so a host
