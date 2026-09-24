@@ -119,18 +119,31 @@ pub(super) struct JitCore {
     /// clears their clean flags, so the next pull whose cone holds one
     /// runs it again.
     pub(super) volatile_steps: Vec<usize>,
-    /// The program's steps as slots, for the cone a pull runs.
+    /// The fusion units, and which of them each output slot's cone
+    /// holds.
     pub(super) cones: ConePlan,
+    /// A clean flag per unit: set when the unit runs, cleared by a write
+    /// to an input in its provenance (runtime_model.md R2).
+    pub(super) unit_clean: Vec<u8>,
+    /// The units of the never-current steps, cleared at every write.
+    pub(super) volatile_units: Vec<usize>,
+    /// The units a run is handed, reused from run to run.
+    pub(super) todo: Vec<u32>,
+    /// The program's one function, taking a list of units to run.
+    pub(super) entry: super::codegen::NativeDispatchFn,
     /// Each output by index, as the host names it: its slot and type,
     /// filled on the first pull by index so a pull does not look an
     /// output up by name.
     pub(super) outputs_at: Vec<(usize, crate::ast::PortType)>,
 }
 
-/// What a pull on this tier runs: the steps its output depends on,
-/// found from the steps' slots, and nothing else (engines.md §3.1). The
-/// native code takes a want flag per step and skips every step the
-/// caller did not ask for; a full evaluation asks for all of them.
+/// What a pull on this tier runs: the fusion units of its output's
+/// cone, in order, as a compiled kernel walks an output's precomputed
+/// cone order (runtime_model.md R2). The units are the planner's
+/// (`compile::fusion_units`): connected, convex groups of steps, each
+/// one block of the program's function. A pull hands the function the
+/// units of its cone that are not current and nothing else, so its
+/// cost is its cone's and not the program's.
 #[derive(Clone, Default)]
 pub(super) struct ConePlan {
     /// Each step's input slots.
@@ -138,16 +151,22 @@ pub(super) struct ConePlan {
     /// The step that writes each slot, or `usize::MAX` for a slot no
     /// step writes (an input or an extern).
     producer: std::sync::Arc<[usize]>,
-    /// A want flag for every step, for a full evaluation.
-    all: std::sync::Arc<[u8]>,
-    /// The cones found so far, by the output slot they end in.
-    found: HashMap<usize, Box<[u8]>>,
+    /// The unit each step belongs to.
+    unit_of: std::sync::Arc<[u32]>,
+    /// Each unit's steps.
+    members: std::sync::Arc<[Box<[usize]>]>,
+    /// Every unit, in order, for a full evaluation.
+    all: std::sync::Arc<[u32]>,
+    /// The cones found so far, by the output slot they end in: the
+    /// units they hold, in order.
+    found: HashMap<usize, Box<[u32]>>,
 }
 
 impl ConePlan {
     pub(super) fn new(
         steps: &[(super::codegen::JitOp, Vec<usize>, Vec<usize>)],
         slots: usize,
+        units: &crate::compile::fusion_units::UnitPlan,
     ) -> Self {
         let mut producer = vec![usize::MAX; slots + 1];
         for (i, (_, _, outs)) in steps.iter().enumerate() {
@@ -163,34 +182,61 @@ impl ConePlan {
                 .map(|(_, ins, _)| ins.clone().into_boxed_slice())
                 .collect(),
             producer: producer.into(),
-            all: vec![1u8; steps.len()].into(),
+            unit_of: units.unit_of.iter().map(|&u| u as u32).collect(),
+            members: units
+                .units
+                .iter()
+                .map(|m| m.clone().into_boxed_slice())
+                .collect(),
+            all: (0..units.units.len() as u32).collect(),
             found: HashMap::new(),
         }
     }
 
-    /// The want flags of every step.
-    pub(super) fn all(&self) -> *const u8 {
-        self.all.as_ptr()
+    /// The number of units.
+    pub(super) fn unit_count(&self) -> usize {
+        self.all.len()
     }
 
-    /// The want flags of the steps `slot` depends on, found once. The
-    /// pointer is to a boxed slice this plan keeps, so it stays valid
-    /// while other cones are added.
-    pub(super) fn of(&mut self, slot: usize) -> *const u8 {
+    /// The unit a step belongs to.
+    pub(super) fn unit_of(&self, step: usize) -> usize {
+        self.unit_of[step] as usize
+    }
+
+    /// Every unit, in order.
+    pub(super) fn all(&self) -> &[u32] {
+        &self.all
+    }
+
+    /// The units of the cone `slot` depends on, in order, found once.
+    /// A unit runs whole, so the set is closed over every member's
+    /// producers, not only the producers of the steps the output reads:
+    /// a member outside the cone still runs, and its inputs must be
+    /// current when it does.
+    pub(super) fn of(&mut self, slot: usize) -> &[u32] {
         if !self.found.contains_key(&slot) {
-            let mut want = vec![0u8; self.inputs.len()];
+            let mut unit_seen = vec![false; self.members.len()];
             let producer_of = |s: usize| self.producer.get(s).copied().filter(|&p| p != usize::MAX);
             let mut stack: Vec<usize> = producer_of(slot).into_iter().collect();
+            let mut units: Vec<u32> = Vec::new();
             while let Some(step) = stack.pop() {
-                if want[step] != 0 {
+                let unit = self.unit_of[step];
+                if unit_seen[unit as usize] {
                     continue;
                 }
-                want[step] = 1;
-                stack.extend(self.inputs[step].iter().filter_map(|&s| producer_of(s)));
+                unit_seen[unit as usize] = true;
+                units.push(unit);
+                for &m in self.members[unit as usize].iter() {
+                    stack.extend(self.inputs[m].iter().filter_map(|&s| producer_of(s)));
+                }
             }
-            self.found.insert(slot, want.into_boxed_slice());
+            // Unit numbers are in dependency order, so sorted is a valid
+            // order to run them in.
+            units.sort_unstable();
+            units.dedup();
+            self.found.insert(slot, units.into_boxed_slice());
         }
-        self.found[&slot].as_ptr()
+        &self.found[&slot]
     }
 }
 
@@ -215,6 +261,10 @@ impl Clone for JitCore {
             ref_scratch: self.ref_scratch.clone(),
             volatile_steps: self.volatile_steps.clone(),
             cones: self.cones.clone(),
+            unit_clean: self.unit_clean.clone(),
+            volatile_units: self.volatile_units.clone(),
+            todo: Vec::new(),
+            entry: self.entry,
             outputs_at: self.outputs_at.clone(),
         };
         // Every pair points into this state's own storage (axiom S3):
@@ -278,6 +328,7 @@ impl JitCore {
         self.drive.stale = true;
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         total_slots: usize,
         coord_count: usize,
@@ -286,7 +337,14 @@ impl JitCore {
         nodes: Vec<Box<dyn PolydatNode>>,
         scratch: ScratchPlan,
         volatile_steps: Vec<usize>,
+        entry: super::codegen::NativeDispatchFn,
+        cones: ConePlan,
     ) -> Self {
+        let mut volatile_units: Vec<usize> =
+            volatile_steps.iter().map(|&s| cones.unit_of(s)).collect();
+        volatile_units.sort_unstable();
+        volatile_units.dedup();
+        let unit_count = cones.unit_count();
         let mut core = Self {
             // The pure tier, not `Native`: this core belongs to a
             // kernel that refused every node without a native lowering
@@ -315,7 +373,11 @@ impl JitCore {
                 .collect(),
             ref_scratch: scratch.refs,
             volatile_steps,
-            cones: ConePlan::default(),
+            cones,
+            unit_clean: vec![0u8; unit_count],
+            volatile_units,
+            todo: Vec::new(),
+            entry,
             outputs_at: Vec::new(),
         };
         // Every pair names its own entry from the start (axiom S3), as
@@ -328,6 +390,53 @@ impl JitCore {
             core.buffer[slot + 1] = l;
         }
         core
+    }
+
+    /// Run the units of `slot`'s cone that are not current, or of the
+    /// whole program for `None`, and mark them current. The function is
+    /// handed exactly those units, in order; when none is dirty it is
+    /// not entered at all.
+    pub(super) fn run_units(&mut self, slot: Option<usize>) {
+        let units: &[u32] = match slot {
+            Some(s) => self.cones.of(s),
+            None => self.cones.all(),
+        };
+        self.todo.clear();
+        self.todo.extend(
+            units
+                .iter()
+                .copied()
+                .filter(|&u| self.unit_clean[u as usize] == 0),
+        );
+        if self.todo.is_empty() {
+            return;
+        }
+        let entry = self.entry;
+        let buf_const = self.buffer.as_ptr();
+        let buf_mut = self.buffer.as_mut_ptr();
+        let sc = self.scratch.as_mut_ptr();
+        let list = self.todo.as_ptr();
+        let len = self.todo.len() as u64;
+        self.run(move || unsafe {
+            (entry)(buf_const, buf_mut, sc, list, len);
+        });
+        for &u in &self.todo {
+            self.unit_clean[u as usize] = 1;
+        }
+    }
+
+    /// Every unit is dirty: a new round, or a cell another holder
+    /// published to, whose readers no dependents list names.
+    pub(super) fn dirty_all_units(&mut self) {
+        self.unit_clean.fill(0);
+    }
+
+    /// The never-current units are dirty again: every write does this
+    /// (runtime_model.md R1.v).
+    pub(super) fn dirty_volatile_units(&mut self) {
+        for &u in &self.volatile_units {
+            self.unit_clean[u] = 0;
+        }
     }
 
     /// The output at `index` in the host's order: its slot and type.
@@ -692,31 +801,15 @@ macro_rules! jit_accessors {
 // ── JitKernelRaw ───────────────────────────────────────────
 
 /// Raw JIT kernel: no provenance. Every write begins a round in which
-/// every step is dirty; `eval` runs them all, and a pull runs its
-/// output's cone, each step at most once in the round.
+/// every unit is dirty; `eval` runs them all, and a pull runs its
+/// output's cone, each unit at most once in the round.
 #[derive(Clone)]
 #[doc(hidden)]
 pub struct JitKernelRaw {
     pub(super) core: JitCore,
-    pub(super) code_fn: super::codegen::NativeProvFn,
-    /// Which steps have run in the round.
-    pub(super) node_clean: Vec<u8>,
 }
 
 impl JitKernelRaw {
-    /// Run the steps `want` names that have not run in the round.
-    #[inline]
-    fn run(&mut self, want: *const u8) {
-        let code_fn = self.code_fn;
-        let buf_const = self.core.buffer.as_ptr();
-        let buf_mut = self.core.buffer.as_mut_ptr();
-        let sc = self.core.scratch.as_mut_ptr();
-        let clean = self.node_clean.as_mut_ptr();
-        self.core.run(move || unsafe {
-            (code_fn)(buf_const, buf_mut, sc, clean, want);
-        });
-    }
-
     /// A pull through the `Kernel` trait: a pending write begins a
     /// round, then the output's cone runs.
     fn pull_slot(&mut self, slot: usize, ty: crate::ast::PortType) -> crate::ast::Value {
@@ -725,10 +818,9 @@ impl JitKernelRaw {
             self.write_coords(&coords);
             self.core.drive.coords = coords;
             self.core.drive.stale = false;
-            self.node_clean.fill(0);
+            self.core.dirty_all_units();
         }
-        let want = self.core.cones.of(slot);
-        self.run(want);
+        self.core.run_units(Some(slot));
         self.core.slot_value(slot, ty)
     }
 
@@ -756,9 +848,8 @@ impl JitKernelRaw {
     #[inline]
     pub fn eval(&mut self, coords: &[u64]) {
         self.write_coords(coords);
-        self.node_clean.fill(0);
-        let all = self.core.cones.all();
-        self.run(all);
+        self.core.dirty_all_units();
+        self.core.run_units(None);
     }
 
     /// Evaluate and return the value at the given buffer slot index.
@@ -768,9 +859,9 @@ impl JitKernelRaw {
         self.core.buffer[slot]
     }
 
-    /// A write begins a round: every step is dirty again.
+    /// A write begins a round: every unit is dirty again.
     fn mark_input_changed(&mut self, _slot: usize) {
-        self.node_clean.fill(0);
+        self.core.dirty_all_units();
     }
 
     jit_accessors!();
@@ -783,8 +874,7 @@ impl JitKernelRaw {
 #[doc(hidden)]
 pub struct JitKernelPushPull {
     pub(super) core: JitCore,
-    pub(super) code_fn_prov: super::codegen::NativeProvFn,
-    pub(super) node_clean: Vec<u8>,
+    /// Per input slot, the units that read it, directly or not.
     pub(super) input_dependents: Vec<Vec<usize>>,
     pub(super) slot_provenance: Vec<ProvMask>,
     pub(super) changed_mask: ProvMask,
@@ -801,52 +891,37 @@ impl JitKernelPushPull {
             if self.core.buffer[i] != c {
                 self.core.buffer[i] = c;
                 self.changed_mask.set(i);
-                if i < self.input_dependents.len() {
-                    for &step_idx in &self.input_dependents[i] {
-                        self.node_clean[step_idx] = 0;
-                    }
-                }
+                self.dirty_dependents(i);
             }
         }
-        // A write makes every never-current step run again (R1.v),
+        // A write makes every never-current unit run again (R1.v),
         // whatever the cone guard would say of the pulled output.
         if self.core.has_volatile() {
-            for &step_idx in &self.core.volatile_steps {
-                self.node_clean[step_idx] = 0;
-            }
+            self.core.dirty_volatile_units();
             self.force_run = true;
         }
     }
 
-    /// Every step downstream of the slot reruns, and the next
-    /// evaluation runs whatever the cone guard says.
-    fn mark_input_changed(&mut self, slot: usize) {
-        if slot < self.input_dependents.len() {
-            for &step_idx in &self.input_dependents[slot] {
-                self.node_clean[step_idx] = 0;
+    /// The units downstream of an input slot are dirty.
+    #[inline]
+    fn dirty_dependents(&mut self, slot: usize) {
+        if let Some(units) = self.input_dependents.get(slot) {
+            for &u in units {
+                self.core.unit_clean[u] = 0;
             }
         }
-        for &step_idx in &self.core.volatile_steps {
-            self.node_clean[step_idx] = 0;
-        }
+    }
+
+    /// Every unit downstream of the slot reruns, and the next
+    /// evaluation runs whatever the cone guard says.
+    fn mark_input_changed(&mut self, slot: usize) {
+        self.dirty_dependents(slot);
+        self.core.dirty_volatile_units();
         self.force_run = true;
     }
 
-    /// Run the steps `want` names that are dirty.
-    #[inline]
-    fn run(&mut self, want: *const u8) {
-        let code_fn = self.code_fn_prov;
-        let buf_const = self.core.buffer.as_ptr();
-        let buf_mut = self.core.buffer.as_mut_ptr();
-        let sc = self.core.scratch.as_mut_ptr();
-        let clean_mut = self.node_clean.as_mut_ptr();
-        self.core.run(move || unsafe {
-            (code_fn)(buf_const, buf_mut, sc, clean_mut, want);
-        });
-    }
-
     /// A pull through the `Kernel` trait: the pending coordinates dirty
-    /// their dependents, then the output's cone runs its dirty steps.
+    /// their dependents, then the output's cone runs its dirty units.
     fn pull_slot(&mut self, slot: usize, ty: crate::ast::PortType) -> crate::ast::Value {
         if self.core.drive.stale {
             let coords = std::mem::take(&mut self.core.drive.coords);
@@ -855,12 +930,11 @@ impl JitKernelPushPull {
             self.core.drive.stale = false;
         }
         // A cell another holder published to is a changed input whose
-        // readers the dependents lists do not name: every step reruns.
+        // readers the dependents lists do not name: every unit reruns.
         if self.core.externs.cells_dirty() {
-            self.node_clean.fill(0);
+            self.core.dirty_all_units();
         }
-        let want = self.core.cones.of(slot);
-        self.run(want);
+        self.core.run_units(Some(slot));
         self.core.slot_value(slot, ty)
     }
 
@@ -869,8 +943,7 @@ impl JitKernelPushPull {
     pub fn eval(&mut self, coords: &[u64]) {
         self.set_inputs(coords);
         self.force_run = false;
-        let all = self.core.cones.all();
-        self.run(all);
+        self.core.run_units(None);
     }
 
     /// Evaluate and return the value at the given buffer slot index,
@@ -885,8 +958,7 @@ impl JitKernelPushPull {
             return self.core.buffer[slot];
         }
         self.force_run = false;
-        let want = self.core.cones.of(slot);
-        self.run(want);
+        self.core.run_units(Some(slot));
         self.core.buffer[slot]
     }
 

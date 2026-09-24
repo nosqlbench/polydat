@@ -335,45 +335,28 @@ mod jit_impl {
             eligible[i] = true;
         }
 
-        // Connected components over eligible-to-eligible wires.
-        let mut parent: Vec<usize> = (0..n).collect();
-        fn find(parent: &mut [usize], mut i: usize) -> usize {
-            while parent[i] != i {
-                parent[i] = parent[parent[i]];
-                i = parent[i];
-            }
-            i
-        }
-        for i in 0..n {
-            if !eligible[i] {
-                continue;
-            }
-            for src in &dag.wiring[i] {
-                if let WireSource::NodeOutput(j, _) = src
-                    && eligible[*j]
-                {
-                    let (a, b) = (find(&mut parent, i), find(&mut parent, *j));
-                    parent[a] = b;
-                }
-            }
-        }
-        let mut components: HashMap<usize, Vec<usize>> = HashMap::new();
-        for (i, &is_eligible) in eligible.iter().enumerate().take(n) {
-            if is_eligible {
-                components.entry(find(&mut parent, i)).or_default().push(i);
-            }
-        }
-        let mut roots: Vec<usize> = components.keys().copied().collect();
-        roots.sort_unstable();
+        // Connected components over eligible-to-eligible wires, by the
+        // rule every fusing engine shares (compile::fusion_units).
+        let preds: Vec<Vec<usize>> = dag
+            .wiring
+            .iter()
+            .map(|w| {
+                w.iter()
+                    .filter_map(|src| match src {
+                        WireSource::NodeOutput(j, _) => Some(*j),
+                        WireSource::Input(_) => None,
+                    })
+                    .collect()
+            })
+            .collect();
+        let components = crate::compile::fusion_units::components(&preds, &eligible, &vec![0; n]);
 
         // Consumer adjacency over the ORIGINAL node graph — the
         // convexity walk below routes through it.
         let mut consumers: Vec<Vec<usize>> = vec![Vec::new(); n];
-        for (i, wiring) in dag.wiring.iter().enumerate() {
-            for src in wiring {
-                if let WireSource::NodeOutput(j, _) = src {
-                    consumers[*j].push(i);
-                }
+        for (i, ps) in preds.iter().enumerate() {
+            for &j in ps {
+                consumers[j].push(i);
             }
         }
 
@@ -383,8 +366,7 @@ mod jit_impl {
             .collect();
         let mut cones: Vec<(ConePlan, JitConeNode)> = Vec::new();
 
-        for root in roots {
-            let members = &components[&root];
+        for members in &components {
             if members.len() < min_members {
                 continue;
             }
@@ -402,7 +384,7 @@ mod jit_impl {
             // cycles); reaching a member proves an external path
             // re-enters this cone. Per the module's fallback rule,
             // such a component stays on the interpreter.
-            if !component_is_convex(members, &consumers, n) {
+            if !crate::compile::fusion_units::is_convex(members, &consumers) {
                 audit_skip(
                     members.len(),
                     "non-convex component (an external path re-enters the cone)",
@@ -447,40 +429,6 @@ mod jit_impl {
             return;
         }
         rebuild(dag, nodes_opt, cones);
-    }
-
-    /// True when no external path leads from any member's output
-    /// back into the component: walk the consumer graph starting
-    /// at the members' non-member consumers, routing only through
-    /// non-members; reaching a member proves re-entry (a cycle in
-    /// the spliced quotient graph).
-    fn component_is_convex(members: &[usize], consumers: &[Vec<usize>], n: usize) -> bool {
-        let mut is_member = vec![false; n];
-        for &m in members {
-            is_member[m] = true;
-        }
-        let mut seen = vec![false; n];
-        let mut stack: Vec<usize> = Vec::new();
-        for &m in members {
-            for &c in &consumers[m] {
-                if !is_member[c] && !seen[c] {
-                    seen[c] = true;
-                    stack.push(c);
-                }
-            }
-        }
-        while let Some(x) = stack.pop() {
-            for &c in &consumers[x] {
-                if is_member[c] {
-                    return false;
-                }
-                if !seen[c] {
-                    seen[c] = true;
-                    stack.push(c);
-                }
-            }
-        }
-        true
     }
 
     /// Compute the cone's boundaries; `None` rejects the component

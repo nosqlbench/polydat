@@ -1100,6 +1100,7 @@ impl PolydatAssembler {
         let externs = Self::externs_of(&resolved).map_err(Self::refused_by_pure_native)?;
         let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
         let (folded, origin) = Self::constant_steps(&resolved, &jit_steps);
+        let alone = Self::side_channels(&resolved);
         let mut k = crate::compile::jit::compile_jit_push_pull(
             coord_count,
             total_slots,
@@ -1110,6 +1111,7 @@ impl PolydatAssembler {
             externs,
             scratch,
             volatile,
+            alone,
         )
         .map_err(Self::refused_by_pure_native)?;
         k.set_slot_info(guard, types);
@@ -1153,6 +1155,18 @@ impl PolydatAssembler {
             })
             .map(|(i, s)| (s.clone(), i))
             .unzip()
+    }
+
+    /// Per node, and so per pure-native step, whether it is a side
+    /// channel: such a step is a fusion unit of its own, so it fires
+    /// when its own inputs change and not whenever a neighbor runs.
+    #[cfg(feature = "jit")]
+    fn side_channels(resolved: &ResolvedDag) -> Vec<bool> {
+        resolved
+            .nodes
+            .iter()
+            .map(|n| matches!(n.purity(), crate::ast::Purity::SideChannel { .. }))
+            .collect()
     }
 
     /// The extern inputs of a resolved graph, at the slots the layout
@@ -1297,6 +1311,7 @@ impl PolydatAssembler {
         let externs = Self::externs_of(&resolved).map_err(Self::refused_by_pure_native)?;
         let attribution = std::sync::Arc::new(Self::attribution_of(&resolved));
         let (folded, origin) = Self::constant_steps(&resolved, &jit_steps);
+        let alone = Self::side_channels(&resolved);
         let mut k = crate::compile::jit::compile_jit_raw_with(
             coord_count,
             total_slots,
@@ -1306,6 +1321,7 @@ impl PolydatAssembler {
             externs,
             scratch,
             volatile,
+            alone,
         )
         .map_err(Self::refused_by_pure_native)?;
         k.set_slot_info(guard, types);

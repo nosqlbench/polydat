@@ -863,10 +863,40 @@ pub(crate) fn build_hybrid(
         .filter(|&k| constant[k])
         .chain((0..nodes.len()).filter(|&k| !constant[k]))
         .collect();
-    // Batch adjacent JIT-able nodes into segments
-    let mut pos = 0;
-    while pos < order.len() {
-        let i = order[pos];
+    let mut rank = vec![0usize; nodes.len()];
+    for (pos, &k) in order.iter().enumerate() {
+        rank[k] = pos;
+    }
+    // Segments are the fusion units (SRD-105, compile::fusion_units):
+    // connected, convex groups of native nodes, so two chains that share
+    // nothing are two segments and a pull runs only its own. Nodes fuse
+    // within one lifecycle: a segment is folded at build only if every
+    // member is compile-constant, and a volatile node never joins pure
+    // ones (the segment would be never current and rerun them at every
+    // round). A side channel never joins any other node (it would fire
+    // whenever the segment ran, rather than when its own inputs changed).
+    let is_side = |k: usize| matches!(nodes[k].purity(), crate::ast::Purity::SideChannel { .. });
+    let preds: Vec<Vec<usize>> = wiring
+        .iter()
+        .map(|w| {
+            w.iter()
+                .filter_map(|src| match src {
+                    WireSource::NodeOutput(j, _) => Some(*j),
+                    WireSource::Input(_) => None,
+                })
+                .collect()
+        })
+        .collect();
+    let fusible: Vec<bool> = (0..nodes.len())
+        .map(|k| !matches!(classifications[k].0, JitOp::Fallback) && !is_side(k))
+        .collect();
+    let class: Vec<u64> = (0..nodes.len())
+        .map(|k| constant[k] as u64 | (volatile[k] as u64) << 1)
+        .collect();
+    let plan =
+        crate::compile::fusion_units::plan_units(&preds, &fusible, &class, &rank, &|c| c & 1 == 1);
+    for members in plan.units {
+        let i = members[0];
         if matches!(classifications[i].0, JitOp::Fallback) {
             // This node needs a closure — scalar u64 op preferred,
             // slot op for slice-bearing nodes (type_system_alignment.md
@@ -882,34 +912,7 @@ pub(crate) fn build_hybrid(
             )?;
             node_step[i] = steps.len();
             steps.push(HybridStep::Closure(step));
-            pos += 1;
         } else {
-            // Batch consecutive JIT-able nodes of one lifecycle: a segment is
-            // folded at build only if every member is compile-constant, so
-            // a constant node never joins a segment that is not, or the
-            // constant steps after it would run before their producer.
-            // A segment is one step to the plan, so a volatile node
-            // never joins pure ones (the segment would be never current
-            // and rerun them at every round), and a side channel never
-            // joins any other node (it would fire whenever the segment
-            // ran, rather than when its own inputs changed).
-            let is_side =
-                |k: usize| matches!(nodes[k].purity(), crate::ast::Purity::SideChannel { .. });
-            let batch_start = pos;
-            let first = order[batch_start];
-            while pos < order.len()
-                && !matches!(classifications[order[pos]].0, JitOp::Fallback)
-                && constant[order[pos]] == constant[first]
-                && volatile[order[pos]] == volatile[first]
-                && !is_side(order[pos])
-                && !is_side(first)
-            {
-                pos += 1;
-            }
-            if pos == batch_start {
-                pos += 1;
-            }
-            let members: Vec<usize> = order[batch_start..pos].to_vec();
             // Each step's scratch entries are placed in the kernel's
             // scratch (axiom S3), and its reference outputs recorded
             // for the validator (S9(a)).

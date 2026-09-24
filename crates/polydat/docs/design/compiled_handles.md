@@ -262,10 +262,11 @@ advertise. A nondeterministic node or a side channel lowers the same
 way, and the kernel that runs the code keeps its currency its own: on
 the hybrid kernel it is a segment by itself, so a segment of pure
 nodes is never made never-current or observably rerun by it; on pure
-native code a never-current step's clean flag is cleared at every
-write and the cone guard yields to a write while one exists (R1.v),
-and a side channel runs at every evaluation in which it is not
-current, which on that tier is what a pull is. A node with no kit
+native code a side channel is a fusion unit by itself as well, a
+never-current step's unit is cleared at every write and the cone
+guard yields to a write while one exists (R1.v), and a side channel
+runs at every evaluation in which it is not current, which on that
+tier is what a pull of a cone holding it is. A node with no kit
 stays interpreted, and only such a node keeps a program off pure
 native code. The kits a function calls are
 kept alive beside its code (`JitCode`), shared by every kernel

@@ -52,6 +52,7 @@ pub mod cone;
 mod cone_tests;
 pub(crate) mod externs;
 pub mod fusion;
+pub(crate) mod fusion_units;
 pub mod hybrid;
 #[cfg(feature = "jit")]
 pub mod jit;

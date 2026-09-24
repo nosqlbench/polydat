@@ -15,7 +15,7 @@ the runtime's one evaluation rule and the ownership of every output in
 | --- | --- | --- |
 | Interpreter (P1) | `PolydatKernel` over `Box<dyn PolydatNode>` and typed `Value` buffers, with native cones per its `JitMode` | `Engine::Interpreter(mode)`, or `compile_polydat`; `compile_polydat_interpreter` and `PolydatAssembler::compile` for the concrete type |
 | Closure tier (P2) | Every node's generated closure over one flat `u64` slot buffer | `Engine::Closures(provenance)` |
-| Native (P3) | Cranelift native code for every node with a lowering and the node's closure elsewhere, over the same slot buffer, one native function per run of consecutive eligible nodes | `Engine::Native(provenance)`, in every build: without the `jit` feature the same kernel runs with every step a closure and no native segment in it |
+| Native (P3) | Cranelift native code for every node with a lowering and the node's closure elsewhere, over the same slot buffer, one native function per fusion unit: a connected, convex group of eligible nodes (§8) | `Engine::Native(provenance)`, in every build: without the `jit` feature the same kernel runs with every step a closure and no native segment in it |
 | Pure native | Cranelift native code and nothing else: no closure fallback, so a node without a lowering refuses the program | `Engine::PureNative(provenance)`, with `Raw` or `PushPull` only; refused by a build without the `jit` feature |
 
 Pure native is the differential tier behind P3 (§8), and it is an
@@ -180,13 +180,17 @@ Pure native code, one function for the whole program, is a fourth kernel
 behind P3: the differential tier that proves the native lowerings against
 the closures, and the carrier of the Tier-1 register kernel
 ([simd_isa_autopromotion.md](simd_isa_autopromotion.md)). One function
-does not mean every run is the whole program. Each step in it is guarded
-by two flags, one saying it is clean and one saying the caller wants it,
-and runs only when it is wanted and not clean. A pull wants its output's
-cone, found from the steps' slots and kept, and `eval` wants every step,
-so the rule of §3.1 holds here as on every engine. In `raw` mode a write
-makes every step dirty, a new round in which each step runs at most once.
-In `pushpull` a write dirties the dependents of what changed. It refuses a node
+does not mean every run is the whole program. The function is built of
+the same fusion units as P3's segments (§8), one block each, and is
+entered with a list of units to run, which it dispatches through a jump
+table. A pull hands it the units of its output's cone that are not
+current, found once from the steps' slots and kept, and `eval` hands it
+every unit that is not current, so the rule of §3.1 holds here as on
+every engine and a pull costs its cone and not the program. A unit runs
+whole, so the units a pull hands over are closed over every member's
+producers. In `raw` mode a write makes every unit dirty, a new round in
+which each unit runs at most once. In `pushpull` a write dirties the
+units that depend on what changed. It refuses a node
 without a lowering and is `#[doc(hidden)]`: the differential suites and the
 ladder benchmarks reach it and one engine's concrete kernel through builders
 of their own, which are not a host surface. A host selects an engine with
@@ -330,6 +334,13 @@ The `Kernel` trait means the same thing on every engine:
   bit-stuffed forms included, or `None`, which clears the extern; a value of
   another type is refused at the write with one message, never healed; a
   coordinate is set with `set_inputs`, never as an extern.
+- A failed pull or evaluation, a node's panic caught and attributed
+  (§3.4), leaves the kernel usable: the step that failed and every step
+  its failure cut short stay not current, so the next write begins a round
+  the kernel answers as a fresh kernel would. A host does not rebuild a
+  kernel because one cycle failed. `tests/fuzz_conversions.rs` holds every
+  engine to this, reading each program's kernel across the inputs its
+  conversions refuse.
 - `invalidate_all` marks every step not current and keeps the inputs, so
   every step reruns at the next pull: the host's way to re-observe a
   nondeterministic program without writing an input.
@@ -565,11 +576,20 @@ placements inside an engine, not refusals:
 - A variadic or polymorphic node's kit is built for the types of its
   wires, so it reads each wire as the graph typed it; the classifier
   never re-types a wire to admit a named lowering.
-- A P3 segment is a run of consecutive native-eligible nodes of one
-  lifecycle and one volatility; a compile-constant node never joins a segment
-  that is not, or a constant step downstream of it would run at build before
-  its producer, and a volatile node never joins pure ones, or the segment
-  would be never current and rerun them at every round.
+- A P3 segment is a fusion unit (`compile/fusion_units.rs`), by the rule
+  SRD-105's cone planner uses: a connected, convex group of native-eligible
+  nodes of one lifecycle and one volatility, joined where one reads
+  another's output. Two chains that share nothing are two segments however
+  their statements interleave, so a pull runs only its own. A group that is
+  not convex, because a path leaves it through a closure step and comes
+  back, is split where that path returns and nowhere else: each member is
+  staged by how many times a path to it has left the group and come back,
+  and the members of one stage form the pieces. A compile-constant node never joins a segment that is not, or
+  a constant step downstream of it would run at build before its producer;
+  a volatile node never joins pure ones, or the segment would be never
+  current and rerun them at every round; and a side channel is always a
+  segment by itself. Pure native code compiles the same units, one block
+  each.
 - The two refusals: an extern of a two-slot immediate type (a 128-bit
   integer or a register word) has no compiled form, because the compiled
   engines write an extern through as one carrier or as the pair into the

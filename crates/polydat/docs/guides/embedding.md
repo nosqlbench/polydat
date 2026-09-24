@@ -632,7 +632,7 @@ for cycle in [0u64, 1] {
 
 ```text
 Engine::default() is native (Pull)
-P3 plan: 2 native segment(s)
+P3 plan: 3 native segment(s)
 cycle 0: j={"h": 16294208416658607535, "name": "user-16294208416658607535", "tag": "job-7535", "cell": "L4:10:13"}
   closures (Pull) agrees: true
   native (Pull) agrees: true
@@ -645,9 +645,11 @@ Both engines accept the program and compute what the interpreter
 computes; `engine()` on a kernel reports the provenance the selector
 chose, the same choice on either compiled engine: this graph has one
 input, so the cone guard alone (`Pull`); the smaller first example above
-gets `Raw`. P3 runs the native-eligible nodes as two native
-segments, one per run of them between the host nodes, and the three
-host nodes as closure
+gets `Raw`. P3 runs the native-eligible nodes as three native
+segments: the literals, folded once at build; `h` and everything
+computed from it before the host nodes; and the tile, which reads the
+host nodes' outputs and so runs after them. The three
+host nodes run as closure
 steps, with the extension value passing between
 two of them as a reference pair; `plan()` is the only planning detail
 a kernel exposes, on every engine, so a host can see whether a program is mostly native before

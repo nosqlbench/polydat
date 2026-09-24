@@ -93,8 +93,8 @@ nondeterministic node is never current; compile-constant nodes
 are folded once at build; `set_inputs` writes the coordinate
 prefix and `pull` evaluates the named output's cone and no
 more — on the
-interpreter, the closure tier, and the hybrid kernel alike
-(pure native code, being one function, evaluates the program).
+interpreter, the closure tier, the hybrid kernel, and pure
+native code alike.
 The provenance mode a compiled engine is built with (`Raw`,
 `Push`, `Pull`, `PushPull`, or the selector's `Auto`) changes
 what is recomputed, never a value: it is an optimization.

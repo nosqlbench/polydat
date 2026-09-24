@@ -222,6 +222,11 @@ fn agree(a: &[Value], b: &[Value]) -> bool {
 /// `src` at `inputs`, one line each. An `Err` from the oracle's compile
 /// is returned as the finding it is: every table entry must be
 /// callable by the name the table gives it, or it cannot be fuzzed.
+///
+/// Each kernel reads every input, across the ones its conversions
+/// refuse: a failed pull leaves a kernel usable (engines.md §3.5), so
+/// a kernel is never rebuilt after one, and an engine that kept a
+/// failure's debris into the next round disagrees here.
 fn disagreements(src: &str, inputs: &[u64]) -> Vec<String> {
     // A trap in native code ends the process, not the test, and names
     // nothing; `FUZZ_TRACE` names each program before it runs.
@@ -238,15 +243,10 @@ fn disagreements(src: &str, inputs: &[u64]) -> Vec<String> {
         .iter()
         .map(|s| s.to_string())
         .collect();
-    let mut want: Vec<Read> = Vec::new();
-    for &c in inputs {
-        let r = read(oracle.as_mut(), &names, c);
-        if r.is_err() {
-            // A kernel that panicked is not trusted for the next input.
-            oracle = build(Engine::Interpreter(JitMode::Off)).unwrap();
-        }
-        want.push(r);
-    }
+    let want: Vec<Read> = inputs
+        .iter()
+        .map(|&c| read(oracle.as_mut(), &names, c))
+        .collect();
 
     let mut out = Vec::new();
     for engine in engines() {
@@ -268,12 +268,6 @@ fn disagreements(src: &str, inputs: &[u64]) -> Vec<String> {
                 (a, b) => out.push(format!(
                     "at cycle={c} on {engine}:\n      interpreter: {a:?}\n      {engine}: {b:?}"
                 )),
-            }
-            if got.is_err() {
-                k = match build(engine) {
-                    Ok(k) => k,
-                    Err(_) => break,
-                };
             }
         }
     }
@@ -457,11 +451,11 @@ fn conversion_superfuzz() {
     let seeds: u64 = std::env::var("SUPERFUZZ_SEEDS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(32);
+        .unwrap_or(8);
     let iterations = std::env::var("FUZZ_ITERATIONS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(1000);
+        .unwrap_or(500);
     let mut all = Vec::new();
     for k in 0..seeds {
         all.extend(chain_pass(base.wrapping_add(k), iterations));

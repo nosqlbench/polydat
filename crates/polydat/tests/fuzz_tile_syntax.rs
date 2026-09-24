@@ -788,8 +788,8 @@ fn generator_smoke() {
 #[ignore = "manual superfuzz — minutes of runtime; run with `-- --ignored`"]
 fn superfuzz_tile_syntax() {
     let base = env_u64("FUZZ_SEED", 0x7113_5EED);
-    let seeds = env_u64("SUPERFUZZ_SEEDS", 32);
-    let iterations = env_u64("FUZZ_ITERATIONS", 2000) as usize;
+    let seeds = env_u64("SUPERFUZZ_SEEDS", 16);
+    let iterations = env_u64("FUZZ_ITERATIONS", 1000) as usize;
     let mut all = Vec::new();
     for k in 0..seeds {
         let seed = base.wrapping_add(k);

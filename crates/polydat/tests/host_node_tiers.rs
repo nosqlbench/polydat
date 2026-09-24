@@ -180,12 +180,12 @@ fn a_host_node_stays_live_on_every_engine() {
 /// Read granularity is the step's, and the step is the engine's
 /// (runtime_model.md, R1.v "Read granularity").
 ///
-/// Two volatile wires are two steps on the interpreter, the closure
-/// tier, and pure native code, whose one function guards each step and
-/// runs a pull's cone alone; on the native tier they are one fused
-/// segment. So a change made between two pulls of one write is visible
-/// to the second read on the per-step engines and not on the native
-/// tier.
+/// Two volatile wires that share nothing are two steps on the
+/// interpreter and the closure tier, and two fusion units on the native
+/// tier and pure native code, which fuse only nodes a wire connects. So
+/// a change made between two pulls of one write is visible to the
+/// second read on every engine: each is read when its own output is
+/// pulled.
 ///
 /// What every engine owes regardless: the value is not carried across
 /// the write. That is asserted for all of them at the end.
@@ -200,21 +200,11 @@ fn read_granularity_is_the_engines_step() {
         let b = k.pull("b");
 
         assert_eq!(a, polydat::ast::Value::F64(3.0), "{name}: first read");
-
-        let cone_lazy = name.starts_with("interpreter")
-            || name.starts_with("closures")
-            || name.starts_with("pure native");
-        let expected = if cone_lazy {
-            // Its own step, read when its own output was pulled.
-            polydat::ast::Value::F64(9.0)
-        } else {
-            // Fused with `a`, so already read when `a` was pulled.
-            polydat::ast::Value::F64(3.0)
-        };
         assert_eq!(
-            b, expected,
-            "{name}: a second volatile read within one write follows the \
-             engine's step granularity"
+            b,
+            polydat::ast::Value::F64(9.0),
+            "{name}: a second volatile read within one write is its own \
+             step's, read when its own output was pulled"
         );
 
         // The guarantee that does not vary: the next write re-reads.

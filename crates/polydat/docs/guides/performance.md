@@ -151,10 +151,11 @@ million cycles per second.
 
 For this graph, moving from typed node dispatch to flat-slot closures removes
 most of the execution cost. Native lowering then provides another 2.80× over
-P2. Every node of this graph lowers, so P3 is one native segment; pure native
-code is the same function without a clean flag per step, and the two rungs
-differ in that bookkeeping and in how each keeps a nondeterministic node or a
-side channel current. These are end-to-end cycle measurements, including
+P2. Every node of this graph lowers and it is connected, so P3 is one native
+segment; pure native code is the same code as one block of a function that
+dispatches over the units a pull needs, and the two rungs differ in that
+bookkeeping and in how each keeps a nondeterministic node or a side channel
+current. These are end-to-end cycle measurements, including
 input copies and four output reads, rather than isolated instruction timings.
 
 Reference environment:

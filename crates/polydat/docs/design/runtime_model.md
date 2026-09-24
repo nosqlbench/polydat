@@ -107,6 +107,7 @@ never changes a result:
 |---|---|
 | Interpreter | A clean flag per node (`node_clean`); per-input dependent lists (`input_dependents`) cleared on every write; a list of nondeterministic nodes cleared on every write; a cell-revision check at every memoized read (§5). A write is itself the change: the interpreter does not compare the new value with the old, so a same-value rewrite re-runs the dependents, which a side channel in the cone must observe. |
 | Closure tier and native tier | An `Invalidation` plan derived from provenance (per-input dependent steps and per-output cone orders); a clean flag per step; a round number per step recording the evaluation round it last ran in, bookkeeping that wipes nothing; the volatile steps never current. A coordinate counts as changed only when its value differs from the one it replaces. |
+| Pure native | A clean flag per fusion unit; per-input dependent units (`pushpull`) or every unit (`raw`) cleared on a write; per-output cone orders of units, closed over each unit's producers; the units holding volatile steps cleared on every write. The one function is entered with the pulled cone's units that are not current and dispatches to each. |
 
 The lifecycle classification the rule rests on has one
 classifier, `PolydatProgram::classify_lifecycle`, shared by the
@@ -215,8 +216,8 @@ not a function of anything the engine can see:
 
 | Engine | Two volatile wires pulled in one write |
 |---|---|
-| Interpreter, closure tier, pure native | Two steps. Each reads when its own output is first pulled, so a change made between the two pulls is visible to the second. Pure native code is one function, but each step in it is guarded and a pull runs its output's cone alone. |
-| Native tier | One fused segment. Both read together at the first pull of either, so a change made between the pulls is not visible until the next write. |
+| Interpreter, closure tier | Two steps. Each reads when its own output is first pulled, so a change made between the two pulls is visible to the second. |
+| Native tier, pure native | Two steps when no wire connects them, since native code fuses only connected, convex groups of nodes (engines.md §8), and then each reads as above. When a wire connects them they are one fusion unit, a segment or a block of the one function: both read together at the first pull of either, so a change made between the pulls is not visible until the next write. |
 
 So, normatively:
 
@@ -234,8 +235,8 @@ So, normatively:
 
 This is a consequence of R1's step definition rather than a
 concession to it, and it cannot be removed by making the engines
-agree: pure native compiles one function for the whole program,
-so it has no smaller unit to read at. Pinned by
+agree: native code fuses connected nodes into units that run
+whole, so it has no smaller unit to read at. Pinned by
 `tests/host_node_tiers.rs`.
 
 What volatility is NOT for: ordinary external-write inputs (per
@@ -407,10 +408,10 @@ meaning under the axioms above, on every engine:
   changes nothing else (R4).
 - **`pull(name)`** runs the not-current steps of one output's
   cone, in order, and returns the output's value, owned: a
-  slot pair is never handed to a host. On the interpreter, the
-  closure tier, and the hybrid kernel the cone is exactly the
-  output's; pure native code, being one function, evaluates
-  the program. `pull_at(index)` is the same by output index,
+  slot pair is never handed to a host. The cone is the
+  output's on every engine; where native code fuses nodes into
+  a unit that runs whole, it is the output's cone closed over
+  the units it touches. `pull_at(index)` is the same by output index,
   with the name resolved once through `output_index`.
 - **`eval()`** runs every step: the interpreter pulls every
   output, a compiled kernel runs every step that has not run

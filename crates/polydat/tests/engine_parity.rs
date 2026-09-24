@@ -1105,3 +1105,54 @@ fn a_pull_runs_its_own_cone_and_nothing_else_on_every_engine() {
         );
     }
 }
+
+/// Native segments follow the graph's connections, not the statements'
+/// order (SRD-105, compile::fusion_units): three chains that share
+/// nothing, written interleaved, are three segments, so pulling one
+/// runs one. A run of consecutive native nodes would have made them a
+/// single segment, and every pull would have run all three.
+#[cfg(feature = "jit")]
+#[test]
+fn independent_chains_are_separate_native_segments() {
+    use polydat::dsl::compile::compile_polydat_with;
+    use polydat::{Engine, Provenance};
+    let src = "input cycle: u64\n\
+               a1 := hash(cycle)\nb1 := hash(cycle)\nc1 := hash(cycle)\n\
+               a2 := hash(a1)\nb2 := hash(b1)\nc2 := hash(c1)\n\
+               a3 := hash(a2)\nb3 := hash(b2)\nc3 := hash(c2)\n";
+    // Against one chain, so whatever else the program plans (the
+    // literals of a node's defaults fold into one constant segment)
+    // cancels out: each further chain is one further segment.
+    let one = "input cycle: u64\na1 := hash(cycle)\na2 := hash(a1)\na3 := hash(a2)\n";
+    for provenance in [Provenance::Raw, Provenance::PushPull] {
+        let plan = compile_polydat_with(src, Engine::Native(provenance))
+            .unwrap()
+            .plan();
+        let base = compile_polydat_with(one, Engine::Native(provenance))
+            .unwrap()
+            .plan();
+        assert_eq!(
+            (plan.native_segments, plan.closure_steps),
+            (base.native_segments + 2, 0),
+            "{provenance:?}: three chains plan {plan}, one plans {base}"
+        );
+    }
+    // The same program answers alike on every engine, pulled one chain
+    // at a time in an order that crosses them.
+    for engine in [
+        Engine::Native(Provenance::Raw),
+        Engine::Native(Provenance::PushPull),
+        Engine::PureNative(Provenance::Raw),
+        Engine::PureNative(Provenance::PushPull),
+    ] {
+        let mut want = compile_polydat_with(src, Engine::Closures(Provenance::Raw)).unwrap();
+        let mut k = compile_polydat_with(src, engine).unwrap();
+        for c in 0..6u64 {
+            want.set_inputs(&[c]);
+            k.set_inputs(&[c]);
+            for name in ["c3", "a1", "b3", "a3", "c2"] {
+                assert_eq!(k.pull(name), want.pull(name), "{engine}: {name} at {c}");
+            }
+        }
+    }
+}
