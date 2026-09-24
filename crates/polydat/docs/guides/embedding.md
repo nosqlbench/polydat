@@ -505,6 +505,18 @@ Three things to know about extension values:
   boxed value, so a large host type should hold its payload in an `Arc`.
   The crate's own `Partition` and `Streamer` values do exactly that.
 
+### Naming port types without matching them
+
+`PortType` is exhaustive on purpose. The language adds a type now and
+then, and a `match` over every variant stops compiling until it decides
+what the new type means, which is what polydat wants of its own code and
+of host code that behaves differently per type. A host that only labels,
+parses, or classifies types should not match on the enum: `to_keyword()`
+and `Display` name a type, `from_keyword()` parses one, and
+`numeric_domain()` and the `SlotShape` queries classify one. Code written
+that way keeps compiling when a type is added, and it labels the new type
+correctly without a change.
+
 ## 7. The assembler API
 
 Source text is one front end. The assembler builds the same graph from

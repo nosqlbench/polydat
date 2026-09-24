@@ -40,6 +40,15 @@ use std::fmt;
 /// - Any type → `Str` (via display conversion)
 ///
 /// **Narrowing** is never implicit — use explicit cast functions.
+///
+/// **Exhaustive on purpose.** The language grows a type now and then,
+/// and a `match` over every variant is then a compile error until it
+/// decides what the new type means. Polydat's own code relies on that,
+/// and so should a host's code that behaves differently per type. A host
+/// that only names or classifies types should not match at all: use
+/// [`Self::to_keyword`] or `Display` for a label, [`Self::from_keyword`]
+/// to parse one, and [`Self::numeric_domain`] or polydat's `SlotShape`
+/// queries to classify, none of which breaks when a type is added.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PortType {
     /// 64-bit unsigned integer. The primary numeric type.
