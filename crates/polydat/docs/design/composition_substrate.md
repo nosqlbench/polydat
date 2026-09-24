@@ -209,15 +209,20 @@ populating an outer-scope's `shared` wire — are governed by
 S5's SharedCell write-through mechanism.**
 
 The typed-write entry points are `Kernel::set_input` and
-`set_input_at`, on every engine, and the interpreter's
-`Dataflow::set_wire` / `set_wire_idx`. The write rule: the
-value must satisfy the slot's declared `PortType`, or be
-`None`, which clears the slot to unset. Where the entry point
-offers the boundary adapter catalog (`set_wire` on the
-interpreter; the binder's value copies; write-through
-commits), a healable mismatch such as a lossless widening is
-healed; a mismatch nothing heals is an error at the write
-site, naming the slot, its declared type, and the type given.
+`set_input_at`, on every engine. The write rule: the value
+must satisfy the slot's declared `PortType`, or be `None`,
+which clears the slot to unset; nothing converts a value at
+the write. An input whose type may vary is converted by a
+converter node the compiler places in front of its readers,
+and only when the host asks (input_variance.md). The
+interpreter's `Dataflow::set_wire` / `set_wire_idx`, which ran
+the boundary adapter catalog at the write, are deprecated.
+Two write sites still consult the catalog until they are
+retired (input_variance.md §11): the binder's value copies
+into a child's declared inputs, and the write-through commit's
+widening of a narrower numeric type. A mismatch nothing heals
+is an error at the write site, naming the slot, its declared
+type, and the type given.
 Every engine checks every extern write: the value satisfies the
 declared type (`satisfies_slot`, bit-stuffed forms included) or
 is `None`. T1 + T2 are enforced at this boundary; the
@@ -378,13 +383,16 @@ fixed by its port type at build.
 
 ### Axiom T2 — Type mismatches are construction-time or auto-healed
 
-The adapter catalog operates at three sites: intra-graph
-wire validation (assembly's wire resolution, inserting edge
-adapters from the conversion library), the boundary value
-copies (`adapt_boundary_value` — the binder's and
-`set_wire_idx`'s), and the write-through commit's
-type-stability check on a shared cell. The catalog is the
-single source of truth across all three sites.
+The adapter catalog operates at these sites: intra-graph wire
+validation (assembly's wire resolution, inserting edge
+adapters from the conversion library), the converter nodes in
+front of an input whose type may vary, and
+`polydat::convert::to_port`, the host-side form of the same
+conversion (input_variance.md); and, until they are retired,
+the binder's value copies (`adapt_boundary_value`) and the
+write-through commit's type-stability check on a shared cell.
+The deprecated `set_wire_idx` still uses the boundary copy. The
+catalog is the single source of truth across all of them.
 
 **The assembly pass validates every wire's source `PortType`
 against its consumer's expectation. A direct mismatch fails

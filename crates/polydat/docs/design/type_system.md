@@ -754,6 +754,17 @@ crossing into inner kernels via the `set:` /
    mismatch and surfaces `WriteError::TypeMismatch`
    to the host.
 
+This is the retiring form (input_variance.md). A write is
+never converted: an input whose type may vary is typed
+`Dyn`, and a converter node in front of its readers applies
+the catalog when its input changes, reported at the level
+`CompileOptions::input_variance` names. The host-side form is
+`polydat::convert::to_port(value, to)`, which applies the same
+catalog and returns a `ConvertError` where this helper warns
+and passes the value through. `Dataflow::set_wire_idx` is
+deprecated; the binder's copies still use this helper until
+they are retired (input_variance.md §11).
+
 ---
 
 ## 7. Interpolation type boundary

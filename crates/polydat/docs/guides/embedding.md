@@ -231,12 +231,9 @@ cycle 10 by index: ap-south/466
 
 ### When an input's type varies
 
-> **Status:** designed, not yet in a release
-> ([input_variance.md](../design/input_variance.md)). Until it lands,
-> every engine refuses a mismatched write, as described above, and the
-> interpreter's `Dataflow::set_wire` is the one write that still converts.
-> That path is due to be deprecated, so new code should not start
-> depending on it.
+The design is [input_variance.md](../design/input_variance.md). The
+interpreter's `Dataflow::set_wire`, which converted at the write, is
+deprecated in favor of what follows.
 
 A declared input's type is fixed for the kernel's lifetime, and a write
 that does not match it is a bug the refusal names. Some hosts write
@@ -255,10 +252,13 @@ the program, never at the write, and only where the host asked for it:
   any value, and a converter node, a closure step, converts it for its
   consumers. The compile log reports the converter.
 - **Open every input the author left untyped** with
-  `CompileOptions::input_variance`. An input whose type was inferred
-  rather than written (an untyped `input`, an auto-extern, a synthesized
-  extern) is *open*. The setting decides what the compiler does with
-  open inputs:
+  `CompileOptions::input_variance`. An input whose type the compiler
+  inferred rather than the author wrote is *open*: an auto-extern, or an
+  extern a synthesizer declared and named in
+  `CompileOptions::inferred_externs` (the scope builder names its result
+  and write-through externs this way; a host that writes source with
+  types it knows are exact leaves them out). Coordinates are never open.
+  The setting decides what the compiler does with open inputs:
 
   | `input_variance` | Open inputs |
   |---|---|
@@ -269,10 +269,14 @@ the program, never at the write, and only where the host asked for it:
 
 Declared inputs are never converted under any setting. A converter costs
 a closure step on the compiled engines, so conversion is something you
-ask for, input by input or by setting, and never assumed. A host that
-drives scope trees with parameters of varying type, as nmbrs does,
+ask for, input by input or by setting, and never assumed. A converted
+input still reports the type its readers see through `input_port_type`,
+and `input_type_origin` says whether it was declared or inferred. A host
+that drives scope trees with parameters of varying type, as nmbrs does,
 compiles with `Warn`, converts what it can through `convert::to_port`,
-and reads the compile log to see every input it relies on converting.
+and reads the compile log to see every input it relies on converting. A
+host that compiles many scopes may compile at `Info` instead and report
+each open input once from `input_type_origin`.
 
 A `cursor` declared `over` a literal spec is resolved at build. The
 assembler and every kernel list each cursor with its partitions through
