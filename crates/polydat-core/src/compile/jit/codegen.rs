@@ -2249,6 +2249,16 @@ fn pure_units(
             p
         })
         .collect();
+    // A slot no step writes is a kernel input; its slot is its id.
+    let inputs_read: Vec<Vec<usize>> = steps
+        .iter()
+        .map(|(_, ins, _)| {
+            ins.iter()
+                .copied()
+                .filter(|&s| producer.get(s).is_some_and(|&p| p == usize::MAX))
+                .collect()
+        })
+        .collect();
     let fusible: Vec<bool> = (0..steps.len())
         .map(|i| !alone.get(i).copied().unwrap_or(false))
         .collect();
@@ -2259,7 +2269,9 @@ fn pure_units(
         }
     }
     let rank: Vec<usize> = (0..steps.len()).collect();
-    crate::compile::fusion_units::plan_units(&preds, &fusible, &class, &rank, &|_| false)
+    crate::compile::fusion_units::plan_units(&preds, &inputs_read, &fusible, &class, &rank, &|_| {
+        false
+    })
 }
 
 /// Per input slot, the units that read it, directly or not, from the

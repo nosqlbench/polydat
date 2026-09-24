@@ -936,14 +936,31 @@ pub(crate) fn build_hybrid(
                 .collect()
         })
         .collect();
+    let inputs_read: Vec<Vec<usize>> = wiring
+        .iter()
+        .map(|w| {
+            w.iter()
+                .filter_map(|src| match src {
+                    WireSource::Input(c) => Some(*c),
+                    WireSource::NodeOutput(..) => None,
+                })
+                .collect()
+        })
+        .collect();
     let fusible: Vec<bool> = (0..nodes.len())
         .map(|k| !matches!(classifications[k].0, JitOp::Fallback) && !is_side(k))
         .collect();
     let class: Vec<u64> = (0..nodes.len())
         .map(|k| constant[k] as u64 | (volatile[k] as u64) << 1)
         .collect();
-    let plan =
-        crate::compile::fusion_units::plan_units(&preds, &fusible, &class, &rank, &|c| c & 1 == 1);
+    let plan = crate::compile::fusion_units::plan_units(
+        &preds,
+        &inputs_read,
+        &fusible,
+        &class,
+        &rank,
+        &|c| c & 1 == 1,
+    );
     for members in plan.units {
         let i = members[0];
         if matches!(classifications[i].0, JitOp::Fallback) {

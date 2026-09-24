@@ -160,9 +160,11 @@ fn convex_pieces(
 /// whole, connected or not. `rank` is each node's position in a
 /// preferred topological order: it is the order a component that is not
 /// convex is walked in to split it, and it decides which ready unit goes
-/// first, so a graph already in a good order keeps it.
+/// first, so a graph already in a good order keeps it. `inputs[i]` are
+/// the kernel inputs node `i` reads, by any consistent id.
 pub(crate) fn plan_units(
     preds: &[Vec<usize>],
+    inputs: &[Vec<usize>],
     fusible: &[bool],
     class: &[u64],
     rank: &[usize],
@@ -201,6 +203,55 @@ pub(crate) fn plan_units(
     }
     for i in (0..n).filter(|&i| !fusible[i]) {
         by_rank(vec![i], &mut units);
+    }
+
+    // A leaf that reads only kernel inputs and that nothing reads, such
+    // as the copy that exposes an input as an output, is connected to
+    // nothing, and alone it would be a unit, and a native call, of its
+    // own for one copy. It joins the first unit of its class that reads
+    // one of the same inputs: no path can leave that unit through it
+    // and return, so the unit stays convex, and a pull of the unit's
+    // outputs pays one copy more.
+    let mut moved = false;
+    for m in 0..n {
+        if !fusible[m]
+            || !preds[m].is_empty()
+            || !consumers[m].is_empty()
+            || inputs[m].is_empty()
+            || units[unit_of[m]].len() != 1
+        {
+            continue;
+        }
+        let home = unit_of[m];
+        let target = units
+            .iter()
+            .enumerate()
+            .filter(|&(t, members)| {
+                t != home
+                    && !members.is_empty()
+                    && fusible[members[0]]
+                    && class[members[0]] == class[m]
+                    && members
+                        .iter()
+                        .any(|&x| inputs[x].iter().any(|i| inputs[m].contains(i)))
+            })
+            .map(|(t, members)| (rank[members[0]], t))
+            .min();
+        if let Some((_, t)) = target {
+            units[home].clear();
+            units[t].push(m);
+            units[t].sort_by_key(|&x| rank[x]);
+            unit_of[m] = t;
+            moved = true;
+        }
+    }
+    if moved {
+        units.retain(|members| !members.is_empty());
+        for (u, members) in units.iter().enumerate() {
+            for &m in members {
+                unit_of[m] = u;
+            }
+        }
     }
 
     // Order the units: a unit is ready once every unit it reads from
@@ -263,6 +314,7 @@ mod tests {
         let n = preds.len();
         plan_units(
             &preds,
+            &vec![Vec::new(); n],
             &fusible,
             &vec![0; n],
             &(0..n).collect::<Vec<_>>(),
@@ -316,7 +368,14 @@ mod tests {
             vec![1, 4], // 5
         ];
         let fusible = vec![true, false, true, true, true, true];
-        let p = plan_units(&preds, &fusible, &[0; 6], &[0, 1, 2, 3, 4, 5], &|_| false);
+        let p = plan_units(
+            &preds,
+            &vec![Vec::new(); 6],
+            &fusible,
+            &[0; 6],
+            &[0, 1, 2, 3, 4, 5],
+            &|_| false,
+        );
         assert_eq!(p.unit_of[0], p.unit_of[4], "0 and 4 fuse across the chain");
         assert_ne!(p.unit_of[0], p.unit_of[5], "5 is where the path returns");
         assert_eq!(p.unit_of[2], p.unit_of[3]);
@@ -324,11 +383,43 @@ mod tests {
         assert_eq!(p.units.len(), 4);
     }
 
+    /// The engine ladder's shape: a connected group reading inputs 0 and
+    /// 1, and three leaves that each copy one input out and feed
+    /// nothing. The leaves over inputs the group reads join it, so a full
+    /// evaluation is one unit; one over an input nothing else reads stays
+    /// its own.
+    #[test]
+    fn a_leaf_copying_an_input_joins_a_unit_over_that_input() {
+        // 0: reads inputs 0, 1; 1: reads node 0. 2, 3, 4: leaves copying
+        // inputs 0, 1, and 9.
+        let preds = vec![vec![], vec![0], vec![], vec![], vec![]];
+        let inputs = vec![vec![0, 1], vec![], vec![0], vec![1], vec![9]];
+        let p = plan_units(
+            &preds,
+            &inputs,
+            &[true; 5],
+            &[0; 5],
+            &[0, 1, 2, 3, 4],
+            &|_| false,
+        );
+        assert_eq!(p.units.len(), 2, "{:?}", p.units);
+        assert_eq!(p.unit_of[2], p.unit_of[0]);
+        assert_eq!(p.unit_of[3], p.unit_of[0]);
+        assert_ne!(p.unit_of[4], p.unit_of[0]);
+    }
+
     /// Nodes of different classes never share a unit.
     #[test]
     fn classes_do_not_fuse() {
         let preds = vec![vec![], vec![0]];
-        let p = plan_units(&preds, &[true, true], &[0, 1], &[0, 1], &|_| false);
+        let p = plan_units(
+            &preds,
+            &vec![Vec::new(); 2],
+            &[true, true],
+            &[0, 1],
+            &[0, 1],
+            &|_| false,
+        );
         assert_eq!(p.units.len(), 2);
     }
 }

@@ -593,7 +593,11 @@ placements inside an engine, not refusals:
   a constant step downstream of it would run at build before its producer;
   a volatile node never joins pure ones, or the segment would be never
   current and rerun them at every round; and a side channel is always a
-  segment by itself. A program's segments are functions of one compiled
+  segment by itself. A leaf that reads only kernel inputs and that
+  nothing reads, such as the copy exposing an input as an output, joins
+  the first segment that reads one of the same inputs rather than being
+  a native call of its own for one copy; it cannot sit on a path that
+  leaves that segment, so the segment stays convex. A program's segments are functions of one compiled
   module, so a round that runs many of them does not walk a separate code
   region per segment. Pure native code compiles the same units, one block
   each.
