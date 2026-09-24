@@ -371,4 +371,7 @@ carries cells, while the traversal path runs on every engine and carries
 values. The intent is that both call one binder expressed over the `Kernel`
 trait (`shared_cells`, `attach_shared_cell`, `input_value`, `pull`,
 `set_input`), so that a host-composed child can run on any engine and a
-traversal body can share a cell rather than a snapshot.
+traversal body can share a cell rather than a snapshot. What a host needs
+around that binder to run a whole scope tree on a compiled engine, the
+per-cycle surface in particular, is
+[native_scope_trees.md](native_scope_trees.md).
