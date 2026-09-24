@@ -258,6 +258,7 @@ impl Externs {
 
     /// No externs, and `coordinates` coordinates: a kernel assembled
     /// from steps directly rather than from a program's inputs.
+    #[cfg(feature = "jit")]
     pub(crate) fn coordinates_only(coordinates: usize) -> Self {
         Self {
             coordinates: coordinates as u32,
