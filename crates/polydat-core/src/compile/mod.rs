@@ -142,9 +142,10 @@ pub(crate) use ref_readers;
 /// vary it.
 macro_rules! kernel_accessors {
     ($set_coords:ident) => {
-        /// The coordinate inputs.
+        /// How many inputs are coordinates. (The core's `coord_count`
+        /// field counts the buffer slots all inputs occupy.)
         pub fn coord_count(&self) -> usize {
-            self.core.coord_count
+            self.core.externs.coordinate_count()
         }
 
         /// The slot of a named output.
@@ -662,9 +663,100 @@ macro_rules! impl_kernel_trait {
             fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger> {
                 self.core.externs.ledger()
             }
+            fn coord_count(&self) -> usize {
+                self.core.externs.coordinate_count()
+            }
+            fn input_value_at(&self, index: usize) -> Option<crate::ast::Value> {
+                if index < self.core.externs.coordinate_count() {
+                    let pending = self.core.drive.coords.get(index).copied();
+                    return Some(crate::ast::Value::U64(
+                        pending.unwrap_or(self.core.buffer[index]),
+                    ));
+                }
+                self.core.externs.value_at(index)
+            }
+            fn input_default_at(&self, index: usize) -> Option<crate::ast::Value> {
+                if index < self.core.externs.coordinate_count() {
+                    return Some(crate::ast::Value::U64(0));
+                }
+                self.core.externs.default_at(index)
+            }
+            fn input_is_cell_bound(&self, index: usize) -> bool {
+                self.core.externs.is_cell_bound_at(index)
+            }
+            fn reset_inputs(&mut self) {
+                let count = self.core.externs.input_names().len();
+                for index in self.core.externs.coordinate_count()..count {
+                    if self.core.externs.is_cell_bound_at(index) {
+                        continue;
+                    }
+                    let (Some(now), Some(default)) = (
+                        self.core.externs.value_at(index),
+                        self.core.externs.default_at(index),
+                    ) else {
+                        continue;
+                    };
+                    if now != default {
+                        // The typed write, so what depends on the input
+                        // is marked as any write marks it. A declared
+                        // default satisfies its own slot.
+                        let _ = crate::kernel::Kernel::set_input_at(self, index, default);
+                    }
+                }
+            }
+            fn fork(&self) -> Box<dyn crate::kernel::Kernel> {
+                // A clone is a new state of the same program with this
+                // one's values: shared slots keep their cells, transit
+                // cells travel, and broadcast cells stay with the
+                // original, which is what descendants are bound to.
+                Box::new(self.clone())
+            }
+            fn publish_broadcasts(&mut self) {
+                if !self.core.externs.broadcasts() {
+                    return;
+                }
+                let names: Vec<String> = self.core.externs.output_names().to_vec();
+                for name in names {
+                    let Some(&slot) = self.core.output_map.get(&name) else {
+                        continue;
+                    };
+                    if self.core.externs.published_output(slot).is_none() {
+                        continue;
+                    }
+                    // The pull by name publishes through the cell. A
+                    // failure is left for the pull that needs the value.
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        self.pull_value(&name);
+                    }));
+                }
+            }
+            fn commit_write_throughs(&mut self) -> Result<(), String> {
+                let pairs = self.core.externs.write_throughs().to_vec();
+                let mut pending = Vec::with_capacity(pairs.len());
+                for (export, source) in &pairs {
+                    let Some(slot_type) = self.core.externs.input_port_type(export) else {
+                        continue;
+                    };
+                    let value = self.pull_value(source);
+                    let value =
+                        crate::kernel::check_write_through_type(export, source, slot_type, value)?;
+                    pending.push((export.clone(), value));
+                }
+                for (export, value) in pending {
+                    crate::kernel::Kernel::set_input(self, &export, value)
+                        .map_err(|e| format!("write-through into `{export}`: {e}"))?;
+                }
+                Ok(())
+            }
+            fn program_id(&self) -> crate::kernel::ProgramId {
+                crate::kernel::ProgramId(self.core.program_identity())
+            }
         }
 
         impl crate::kernel::KernelInternals for $ty {
+            fn set_write_throughs(&mut self, pairs: Vec<(String, String)>) {
+                self.core.externs.set_write_throughs(pairs);
+            }
             /// A compiled kernel keeps the traversals; each carries the
             /// comprehension its producer resolved to at compile time.
             fn set_traversals(
@@ -820,6 +912,13 @@ macro_rules! shared_core_methods {
             }
             let changed = self.externs.take_changed();
             for &slot in &changed {
+                // The cell's value is the slot's now: a slot that was
+                // unset (an extern with no default, bound to a parent's
+                // cell) holds a value, and one the cell cleared holds
+                // none, as a direct write would leave it.
+                if let Some(mask) = self.none.get_mut(slot) {
+                    *mask = self.externs.slot_is_unset(slot);
+                }
                 if let Some(deps) = self.plan.input_dependents.get(slot) {
                     for &i in deps {
                         self.ran[i] = 0;
@@ -829,6 +928,11 @@ macro_rules! shared_core_methods {
                 }
             }
             self.externs.return_changed(changed);
+            let was = self.any_none;
+            self.any_none = self.externs.any_unset();
+            if was && !self.any_none {
+                self.none.fill(false);
+            }
         }
 
         #[inline]

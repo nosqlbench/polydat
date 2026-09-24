@@ -531,12 +531,16 @@ pub struct EngineCore {
     pub(crate) cell_cones: Vec<Option<CellCone>>,
 }
 
-// `last_seen` keys are `*const SharedCellInner` raw pointers,
-// which Rust treats as non-Send/non-Sync. The pointers are
-// only compared by identity (never dereferenced) and each
-// `EngineCore` is owned by exactly one fiber, so the
-// non-thread-safe pointer keys are sound. The Send/Sync
-// markers here cover that gap explicitly.
+// SAFETY: the only fields Rust will not mark Send/Sync itself are
+// `last_seen`'s `*const SharedCellInner` keys, which are compared by
+// identity and never dereferenced. Sync rests on one invariant: **no
+// `&self` method mutates the core.** Every mutation, `last_seen` and
+// `cell_cones` included, goes through `&mut self`, so any number of
+// threads may read one core at once. Hosts rely on that: a scope
+// parent is an `Arc` shared by every fiber bound under it, and
+// `Kernel: Sync` promises it on every engine (native_scope_trees.md
+// §4). A cache or counter reached through `&self` would break it
+// silently; put it behind a lock or an atomic, or take `&mut self`.
 unsafe impl Send for EngineCore {}
 unsafe impl Sync for EngineCore {}
 

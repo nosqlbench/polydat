@@ -973,6 +973,28 @@ impl PolydatKernel {
         snapshot
     }
 
+    /// A new kernel over the same program with this one's state:
+    /// `snapshot_with_cells`'s shared cells and transit cells, and this
+    /// kernel's input values, current outputs, scope path, and write-
+    /// throughs, so a scope-init constant materialized here is current
+    /// in the fork without running again (`Kernel::fork`).
+    pub(crate) fn fork_kernel(&self) -> PolydatKernel {
+        let mut fork = self.snapshot_with_cells();
+        let inputs = self.state.core.inputs.len();
+        for idx in 0..inputs {
+            if self.state.shared_cell(idx).is_some() {
+                continue;
+            }
+            fork.state.core.inputs[idx] = self.state.core.inputs[idx].clone();
+        }
+        fork.state.core.buffers = self.state.core.buffers.clone();
+        fork.state.core.node_clean = self.state.core.node_clean.clone();
+        fork.scope_coords = self.scope_coords.clone();
+        fork.write_throughs = self.write_throughs.clone();
+        fork.constants_folded = self.constants_folded;
+        fork
+    }
+
     /// Public form of `Self::snapshot_with_cells`: a fresh kernel
     /// mirroring this one's program and full shared-cell view (own
     /// input-slot cells + transit cells, Arc-shared — the snapshot

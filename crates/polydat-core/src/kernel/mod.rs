@@ -49,6 +49,7 @@
 pub mod activation;
 mod api;
 mod api_impl;
+mod bind;
 pub(crate) mod engines;
 pub mod intern;
 pub mod interp;
@@ -59,10 +60,13 @@ mod scope;
 mod state;
 pub mod subcontext;
 pub use activation::{Activation, CursorSlice, TraversalStream};
+pub use bind::{bind_under, propagate_inputs};
 
 pub(crate) use api::SharedKernel;
 pub(crate) use api::internals::KernelInternals;
-pub use api::{Construction, Dataflow, Kernel, KernelProgram, Metadata, WireKey, WriteError};
+pub use api::{
+    Construction, Dataflow, Kernel, KernelProgram, Metadata, ProgramId, WireKey, WriteError,
+};
 pub use engines::*;
 pub use intern::{StaticInterner, static_pair};
 pub use manifest::{ManifestEntry, extract_manifest};

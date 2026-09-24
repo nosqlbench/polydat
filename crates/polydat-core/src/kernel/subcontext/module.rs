@@ -247,13 +247,19 @@ impl<M> ScopeModule<M> {
         iter_bindings: &[(String, crate::ast::Value)],
     ) -> Result<Box<dyn crate::kernel::Kernel>, crate::KernelError> {
         let program = self.program_on(engine)?;
-        let mut child = program.create_kernel();
-        for (var, value) in iter_bindings {
-            // Before the wiring, so the child's own scope-coordinate
-            // snapshot sees them.
-            let _ = child.set_input(var, value.clone());
+        let mut child = crate::kernel::bind_under(parent, program, iter_bindings)
+            .map_err(crate::KernelError::Write)?;
+        // The write-throughs the builder produced travel with every
+        // instance, on every engine, so `commit_write_throughs` knows
+        // them without the program having to.
+        if !self.write_throughs.is_empty() {
+            child.set_write_throughs(
+                self.write_throughs
+                    .iter()
+                    .map(|wt| (wt.export_name.clone(), wt.source_output.clone()))
+                    .collect(),
+            );
         }
-        crate::kernel::PolydatKernel::wire_child_under(child.as_mut(), parent);
         Ok(child)
     }
 

@@ -302,6 +302,12 @@ impl JitCore {
     /// cell's readers.
     fn dirty_input(&mut self, _slot: usize) {}
 
+    /// The program's identity: the node list, which every kernel created
+    /// from the program and every fork shares, and no other program has.
+    fn program_identity(&self) -> usize {
+        std::sync::Arc::as_ptr(&self._nodes) as *const () as usize
+    }
+
     /// The pure tier broadcasts nothing. It is the differential oracle
     /// behind the hybrid and Tier-1's carrier, not a surface a host
     /// composes under (engines.md §1, §8), so no descendant binds to
@@ -639,7 +645,7 @@ macro_rules! jit_accessors {
 
         /// Returns the number of coordinate inputs this kernel accepts.
         pub fn coord_count(&self) -> usize {
-            self.core.coord_count
+            self.core.externs.coordinate_count()
         }
 
         /// Returns the buffer slot index for the named output, if present.

@@ -310,6 +310,10 @@ pub enum KernelError {
         /// diagnostic context, as an evaluation failure would be.
         reason: String,
     },
+    /// A value written into a kernel while building it was refused: an
+    /// iteration binding or a value a binder copied from a parent that
+    /// does not satisfy the child's declared input.
+    Write(crate::kernel::WriteError),
 }
 
 impl std::fmt::Display for KernelError {
@@ -326,6 +330,7 @@ impl std::fmt::Display for KernelError {
                     "a value this program computes at build could not be computed: {reason}"
                 )
             }
+            KernelError::Write(e) => write!(f, "a value written while binding was refused: {e}"),
         }
     }
 }

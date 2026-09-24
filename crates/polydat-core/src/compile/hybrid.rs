@@ -302,6 +302,12 @@ impl HybridCore {
     /// Whether step `i` can fail: a closure runs a node's Rust body,
     /// which may panic, and a native segment can fail only when it
     /// calls a helper (`JitCode::fallible`).
+    /// The program's identity: the step list, which every kernel created
+    /// from the program and every fork shares, and no other program has.
+    fn program_identity(&self) -> usize {
+        std::sync::Arc::as_ptr(&self.steps) as *const () as usize
+    }
+
     #[inline]
     fn step_can_fail(&self, i: usize) -> bool {
         match &self.steps[i] {

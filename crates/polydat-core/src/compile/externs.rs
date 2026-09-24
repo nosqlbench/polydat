@@ -90,6 +90,10 @@ struct ScopeCells {
     /// made on the first ask and not before (cross_fiber_invalidation.md
     /// §3.1, "compiled kernels, broadcast outputs").
     output_cells: std::sync::Mutex<Vec<Option<crate::kernel::SharedCell>>>,
+    /// The Rule 2 write-throughs this kernel commits, as
+    /// `(export_name, source_output)`: what a scope module hands the
+    /// kernels it instantiates (native_scope_trees.md §3).
+    write_throughs: Vec<(String, String)>,
 }
 
 /// The extern inputs of one compiled kernel.
@@ -149,6 +153,7 @@ impl Clone for Externs {
                 output_modifiers: self.scope.output_modifiers.clone(),
                 transit_cells: self.scope.transit_cells.clone(),
                 output_cells: std::sync::Mutex::new(Vec::new()),
+                write_throughs: self.scope.write_throughs.clone(),
             }),
             intent: self.intent.clone(),
             next_bit: std::sync::atomic::AtomicU8::new(
@@ -607,6 +612,13 @@ impl Externs {
         any_none
     }
 
+    /// Whether the extern whose first buffer slot is `slot` has no value.
+    pub(crate) fn slot_is_unset(&self, slot: usize) -> bool {
+        self.slots
+            .iter()
+            .any(|s| s.slot == slot && s.value == Value::None)
+    }
+
     /// Whether any extern has no value (A12): the kernel that keeps a
     /// `None` mask propagates it as the interpreter does; a native
     /// kernel, which cannot, refuses to run.
@@ -722,6 +734,48 @@ impl Externs {
     /// The current value of the extern `name`, if there is one.
     pub(crate) fn value(&self, name: &str) -> Option<Value> {
         self.by_name.get(name).map(|&i| self.slots[i].value.clone())
+    }
+
+    /// How many inputs are coordinates: the leading inputs with no
+    /// extern slot. Not the core's `coord_count`, which counts the
+    /// buffer slots every input occupies.
+    pub(crate) fn coordinate_count(&self) -> usize {
+        self.by_index.iter().take_while(|e| e.is_none()).count()
+    }
+
+    /// The extern at input `index`, `None` for a coordinate or past the
+    /// end.
+    fn slot_at(&self, index: usize) -> Option<&ExternSlot> {
+        self.by_index
+            .get(index)
+            .copied()
+            .flatten()
+            .map(|i| &self.slots[i])
+    }
+
+    /// The current value of the extern at input `index`.
+    pub(crate) fn value_at(&self, index: usize) -> Option<Value> {
+        self.slot_at(index).map(|s| s.value.clone())
+    }
+
+    /// The declared default of the extern at input `index`.
+    pub(crate) fn default_at(&self, index: usize) -> Option<Value> {
+        self.slot_at(index).map(|s| s.default.clone())
+    }
+
+    /// Whether the extern at input `index` is bound to a shared cell.
+    pub(crate) fn is_cell_bound_at(&self, index: usize) -> bool {
+        self.slot_at(index).is_some_and(|s| s.cell.is_some())
+    }
+
+    /// The Rule 2 write-throughs this kernel commits.
+    pub(crate) fn write_throughs(&self) -> &[(String, String)] {
+        &self.scope.write_throughs
+    }
+
+    /// Record the Rule 2 write-throughs this kernel commits.
+    pub(crate) fn set_write_throughs(&mut self, pairs: Vec<(String, String)>) {
+        self.scope.write_throughs = pairs;
     }
 
     /// The externs by name and declared type, for diagnostics.

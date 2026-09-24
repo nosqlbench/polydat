@@ -359,7 +359,7 @@ pub trait Construction: Sized {
 /// as engine-specific extras; where a name is shared, the inherent
 /// method is the one a call on the concrete type reaches, and the
 /// trait's is reached through `dyn Kernel` or `Kernel::pull(&mut k, …)`.
-pub trait Kernel: Send + internals::KernelInternals {
+pub trait Kernel: Send + Sync + internals::KernelInternals {
     /// The engine this kernel runs on.
     fn engine(&self) -> crate::compile::select::Engine;
 
@@ -596,7 +596,63 @@ pub trait Kernel: Send + internals::KernelInternals {
     /// The compile ledger of the program tree this kernel belongs to:
     /// what compiling it and everything opened from it has built.
     fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger>;
+
+    // ── The per-cycle scope-tree surface (native_scope_trees.md §3) ──
+    //
+    // Index arguments are positions in `input_names`, coordinates
+    // first, resolved once by the host. None of these allocates or
+    // looks a name up.
+
+    /// How many of the inputs are coordinates: they come first in
+    /// `input_names`, and `set_inputs` writes them.
+    fn coord_count(&self) -> usize;
+
+    /// The value input `index` holds now: a coordinate's pending or
+    /// current value, an extern's current value. `None` past the end.
+    fn input_value_at(&self, index: usize) -> Option<Value>;
+
+    /// The value input `index` starts with: an extern's declared
+    /// default, `U64(0)` for a coordinate. `None` past the end.
+    fn input_default_at(&self, index: usize) -> Option<Value>;
+
+    /// Whether input `index` is bound to a shared cell, so that its
+    /// value is the cell's and a reset leaves it alone.
+    fn input_is_cell_bound(&self, index: usize) -> bool;
+
+    /// Every input that is not a coordinate and not bound to a cell
+    /// back at its default, and whatever depends on a changed one not
+    /// current. What a host does at a boundary where values written for
+    /// the last stretch must not leak into the next.
+    fn reset_inputs(&mut self);
+
+    /// A new kernel over the same program with this kernel's state: its
+    /// inputs, its current outputs, and its cells, which stay shared
+    /// (a cell is the scope's register, not a value it holds), transit
+    /// cells included. Callable concurrently on a kernel shared across
+    /// threads (native_scope_trees.md §4).
+    fn fork(&self) -> Box<dyn Kernel>;
+
+    /// Pull every output a descendant bound to by cell, so the
+    /// descendant reads the current value. Nothing happens on a kernel
+    /// nothing is bound under. A failing output is left for the pull
+    /// that needs it to report.
+    fn publish_broadcasts(&mut self);
+
+    /// Commit the Rule 2 write-throughs: pull each synthetic
+    /// `__write_<name>` output and write it through the cell of the
+    /// shared binding it exports to. No-op for a kernel without them.
+    fn commit_write_throughs(&mut self) -> Result<(), String>;
+
+    /// The identity of this kernel's program: equal for kernels created
+    /// from one program and for forks, different for any two programs,
+    /// the same program compiled twice included. What a host seals a
+    /// plan of pre-resolved indices against.
+    fn program_id(&self) -> ProgramId;
 }
+
+/// The identity of a compiled program; see [`Kernel::program_id`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ProgramId(pub(crate) usize);
 
 /// The construction-time hooks of a kernel, sealed: the compile path
 /// and the program sharing call them once, before a kernel is shared,
@@ -635,6 +691,11 @@ pub(crate) mod internals {
         /// starts with; the interpreter's is built that way and needs
         /// nothing.
         fn reset_to_program(&mut self) {}
+
+        /// Record the Rule 2 write-throughs this kernel commits, as
+        /// `(export_name, source_output)` pairs: what a scope module
+        /// hands the kernels it instantiates.
+        fn set_write_throughs(&mut self, pairs: Vec<(String, String)>);
     }
 }
 
@@ -662,6 +723,10 @@ pub trait KernelProgram: Send + Sync {
 
     /// The compile ledger of the program tree this program belongs to.
     fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger>;
+
+    /// This program's identity, equal to [`Kernel::program_id`] of every
+    /// kernel created from it.
+    fn program_id(&self) -> ProgramId;
 }
 
 /// A compiled kernel as a shared program: its steps are shared, and a
@@ -684,5 +749,8 @@ impl<K: Kernel + Clone + Send + Sync + 'static> KernelProgram for SharedKernel<K
     }
     fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger> {
         self.0.ledger()
+    }
+    fn program_id(&self) -> ProgramId {
+        self.0.program_id()
     }
 }

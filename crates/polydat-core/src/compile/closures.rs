@@ -237,6 +237,12 @@ impl KernelCore {
         true
     }
 
+    /// The program's identity: the step list, which every kernel created
+    /// from the program and every fork shares, and no other program has.
+    fn program_identity(&self) -> usize {
+        std::sync::Arc::as_ptr(&self.steps) as *const () as usize
+    }
+
     /// The program node the step now running belongs to, for the
     /// failure path (A7). On this tier a step is one node, so the
     /// step index is the node index. Read by `run_guarded` and by the

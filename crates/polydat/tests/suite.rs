@@ -115,6 +115,8 @@ mod rustdoc_examples;
 mod sampling_test;
 #[path = "scope_composition.rs"]
 mod scope_composition;
+#[path = "scope_trees.rs"]
+mod scope_trees;
 #[path = "shared_tiers.rs"]
 mod shared_tiers;
 #[path = "slot_state_axioms.rs"]

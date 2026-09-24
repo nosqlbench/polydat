@@ -333,9 +333,52 @@ impl crate::kernel::Kernel for PolydatKernel {
     fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger> {
         self.program().ledger()
     }
+    fn coord_count(&self) -> usize {
+        self.program().coord_count()
+    }
+    fn input_value_at(&self, index: usize) -> Option<Value> {
+        (index < self.state_ref().core.inputs.len())
+            .then(|| self.state_ref().read_input_value(index))
+    }
+    fn input_default_at(&self, index: usize) -> Option<Value> {
+        self.program().input_default_by_idx(index).cloned()
+    }
+    fn input_is_cell_bound(&self, index: usize) -> bool {
+        self.state_ref().shared_cell(index).is_some()
+    }
+    fn reset_inputs(&mut self) {
+        let from = self.program().coord_count();
+        self.state().reset_inputs_from(from);
+    }
+    fn fork(&self) -> Box<dyn crate::kernel::Kernel> {
+        Box::new(self.fork_kernel())
+    }
+    fn publish_broadcasts(&mut self) {
+        self.advance_broadcasts();
+    }
+    fn commit_write_throughs(&mut self) -> Result<(), String> {
+        PolydatKernel::commit_write_throughs(self)
+    }
+    fn program_id(&self) -> crate::kernel::ProgramId {
+        crate::kernel::ProgramId(std::sync::Arc::as_ptr(self.program()) as *const () as usize)
+    }
 }
 
 impl crate::kernel::KernelInternals for PolydatKernel {
+    fn set_write_throughs(&mut self, pairs: Vec<(String, String)>) {
+        PolydatKernel::set_write_throughs(
+            self,
+            pairs
+                .into_iter()
+                .map(
+                    |(export_name, source_output)| crate::kernel::KernelWriteThrough {
+                        export_name,
+                        source_output,
+                    },
+                )
+                .collect(),
+        );
+    }
     fn set_traversals(
         &mut self,
         traversals: Vec<crate::dsl::traversal::Traversal>,
@@ -367,6 +410,9 @@ impl crate::kernel::KernelProgram for crate::kernel::PolydatProgram {
     }
     fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger> {
         crate::kernel::PolydatProgram::ledger(self)
+    }
+    fn program_id(&self) -> crate::kernel::ProgramId {
+        crate::kernel::ProgramId(self as *const Self as *const () as usize)
     }
 }
 

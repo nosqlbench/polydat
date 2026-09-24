@@ -204,6 +204,17 @@ pub struct SubcontextBuilder<P> {
     _parent_marker: PhantomData<fn() -> P>,
 }
 
+impl SubcontextBuilder<super::kernel::RootMarker> {
+    /// A builder for a child of `parent`, a kernel of any engine: the
+    /// source form of binding a scope (native_scope_trees.md §5). The
+    /// module it finalizes compiles once per engine
+    /// ([`ScopeModule::program_on`](super::ScopeModule::program_on)) and instantiates under a parent of
+    /// any engine ([`ScopeModule::instantiate_under`](super::ScopeModule::instantiate_under)).
+    pub fn under(parent: &dyn crate::kernel::Kernel) -> Self {
+        Self::new(ParentView::of_kernel(parent))
+    }
+}
+
 impl<P> SubcontextBuilder<P> {
     pub(crate) fn new(parent: ParentView) -> Self {
         Self {

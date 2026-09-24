@@ -1,6 +1,7 @@
 # Scope trees on any engine
 
-Status: proposed 2026-09-24. Builds on
+Status: implemented 2026-09-24 (§3–§6, §8); the nmbrs migration (§9,
+steps 2–3) is the host's. Builds on
 [subcontext_construction.md](subcontext_construction.md) (the binder),
 [scope_model.md](scope_model.md), and
 [input_variance.md](input_variance.md) (writes of varying type).
@@ -57,11 +58,24 @@ engine implements. Index arguments are positions in `input_names` or
 | `seed_node_buffer` / `node_buffer` for const capture; `cell_scope_snapshot`; `for_iteration(k, k, &[])` as a scratch copy | `fork() -> Box<dyn Kernel>` | new; see §4 |
 | `advance_broadcasts` | `publish_broadcasts()` | new: pull every output with a broadcast cell so descendants read current values |
 | `commit_write_throughs` | `commit_write_throughs()` | new: Rule 2 write-through into the parent's shared cells |
-| `PullPlan` sealed by `Arc<PolydatProgram>` identity | `program() -> Arc<dyn KernelProgram>` | new, non-consuming; `Arc::ptr_eq` on it is the seal |
+| `PullPlan` sealed by `Arc<PolydatProgram>` identity | `program_id() -> ProgramId`, on `Kernel` and on `KernelProgram` | new; see below |
 | settle pulse: raw `set_input` on `cycle` to advance the generation | `set_inputs` then `invalidate_all` (exist) | |
 
-`into_program` stays as it is; `program()` is the borrowing form a host
-needs to recognize a kernel's program without giving the kernel up.
+**Identity, not a program handle.** A compiled kernel's program is the
+kernel itself (`into_program` wraps it), so a borrowing
+`program() -> Arc<dyn KernelProgram>` would clone the kernel per call and
+could not be an identity. What a host seals a plan against is the
+identity: `program_id()` is equal for every kernel created from one
+program, for every fork, and for the `KernelProgram` itself, and differs
+between any two programs, including one source compiled twice.
+`ScopeModule::program_on(engine)` returns the same `Arc` on every call,
+so a host seals once per module and engine, on
+`module.program_on(engine)?.program_id()`.
+
+**Positions agree.** A module's analysis program (`module.program()`)
+and every engine's kernel of it list inputs and outputs in the same
+order, so an index a host resolves on one is valid on the other
+(`a_module_s_program_and_its_kernels_agree_on_positions`).
 
 ## 4. `fork`
 
@@ -79,17 +93,47 @@ with this kernel's state.
 `fork` is the operation every engine already has behind `Clone`: a new
 state of the same program (engines.md §3.5), with the inputs, the
 current outputs, and the attached cells as they are. Cells stay shared,
-since a cell is a register the scope owns and not a value it holds. A
-host that needs a copy that does not share cells detaches through the
-cell API, which is the rarer need and says so.
+since a cell is a register the scope owns and not a value it holds, and
+transit cells (those the kernel carries for descendants without a slot
+of its own) travel with the fork. Broadcast cells stay with the
+original, which is what descendants are bound to. On the interpreter the
+fork also copies the current output buffers, so a scope-init constant
+materialized once is current in every fork.
+
+## 4a. Threads
+
+`Kernel: Send + Sync`. A scope parent is shared across threads (nmbrs
+holds it in an `Arc` read by every fiber task), and `fork(&self)`,
+`bind_under(parent: &dyn Kernel, …)`, and `instantiate_under` are sound
+when many threads call them at once on one parent.
+
+The basis per engine: the compiled kernels are `Sync` by construction
+(their on-demand broadcast cells are made under a mutex); the
+interpreter's `EngineCore` is `Sync` by one stated invariant, that no
+`&self` method mutates the core, which its `unsafe impl` now names so a
+later `&self` cache cannot break it silently. The finalized native
+modules and a tile's body-kernel set are immutable or reached only
+through `&mut self`.
 
 ## 5. Construction
 
 | Concrete call | Any-engine form |
 |---|---|
-| `build_subscope` with source matter (label, source, inherited outputs, options, result bindings) | `SubcontextBuilder::new(ParentView::of_kernel(parent))` … `finalize()` → `ScopeModule::instantiate_under(parent, engine, &[])` (exists) |
-| `build_subscope` with program matter, `for_iteration(canonical, parent, bindings)` | `bind_under(parent, program: Arc<dyn KernelProgram>, engine_of(program), bindings) -> Box<dyn Kernel>` (new; what `instantiate_under` does after `program_on`) |
-| `propagate_inputs_into(child)` | `propagate_inputs(parent: &dyn Kernel, child: &mut dyn Kernel)` (new): each of the parent's inputs with a value and a same-named child input is written to the child with `set_input_at`, and a refusal is an error, not a skip |
+| `build_subscope` with source matter (label, source, inherited outputs, options, result bindings) | `SubcontextBuilder::under(parent: &dyn Kernel)` (new; the builder's constructor was crate-private) … `finalize()` → `ScopeModule::instantiate_under(parent, engine, bindings) -> Result<Box<dyn Kernel>, KernelError>` |
+| `build_subscope` with program matter, `for_iteration(canonical, parent, bindings)` | `kernel::bind_under(parent, program: Arc<dyn KernelProgram>, bindings) -> Result<Box<dyn Kernel>, WriteError>` (new); the child is on `program`'s engine |
+| `propagate_inputs_into(child)` | `kernel::propagate_inputs(parent: &dyn Kernel, child: &mut dyn Kernel) -> Result<(), WriteError>` (new) |
+
+`instantiate_under` is `bind_under` over `program_on(engine)`, plus the
+module's Rule 2 write-throughs, which it hands to every instance so
+`commit_write_throughs` knows them on every engine. An iteration binding
+the child refuses is `KernelError::Write`, where it used to be dropped.
+
+`propagate_inputs` writes each of the parent's inputs that has a value
+into the child's input of the same name with `set_input_at`, skipping the
+child's coordinates (a host positions those with `set_inputs`) and its
+cell-bound inputs (writing one would publish into a register the scope
+shares). A value the child's declared input refuses is an error naming
+it, not a skip.
 
 A child's engine is the caller's to name, and the parent's is the usual
 answer (a child belongs to the kernel it was bound under). A tree may mix
@@ -117,14 +161,24 @@ this path runs on (performance.md).
 
 ## 8. Conformance
 
-One test builds the shapes a scope-tree host builds (params root, a
-`set:` scope with a const that shadows a parameter, a phase, a fiber
-fork, a per-op child with result bindings and a shared-cell write-
-through, an iteration child per tuple) on every engine, with every
-parent-child engine pair, and requires the interpreter's lookups, pulls,
-resets, and cell values at each step. The const-shadow case of
+`crates/polydat/tests/scope_trees.rs` builds the shapes a scope-tree host
+builds (params root, a `set:` scope with a const that shadows a
+parameter, a phase, a fiber fork, a reset, an iteration child per tuple,
+a per-op child with result bindings committing into a shared cell) on
+every engine, with every parent-child engine pair, and requires the
+interpreter's answers at each step. It also pins the program identity
+across binds and forks, the positions a module's program and its kernels
+agree on, `propagate_inputs`'s refusal, and eight threads binding and
+forking under one shared parent at once. The const-shadow case of
 2026-09-24 (nmbrs's `set: { mode: "mode_for_{size}" }`) is one of its
 steps.
+
+Writing it found two defects in the compiled engines, both fixed with
+it: a compiled kernel's `coord_count()` answered the number of buffer
+slots every input occupies rather than the number of coordinates, and a
+cell refresh on the closure and native tiers wrote the cell's value into
+an extern's slot without clearing the slot's `None` mark, so an extern
+with no default bound to a parent's cell read `None` forever.
 
 ## 9. Order
 
