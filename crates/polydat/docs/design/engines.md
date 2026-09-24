@@ -336,7 +336,9 @@ The `Kernel` trait means the same thing on every engine:
 - `set_input` takes a value that satisfies the declared type, a carrier's
   bit-stuffed forms included, or `None`, which clears the extern; a value of
   another type is refused at the write with one message, never healed; a
-  coordinate is set with `set_inputs`, never as an extern.
+  coordinate is set with `set_inputs`, never as an extern. An input whose
+  type may vary is converted by a node in the program, placed at assembly
+  and only when the host asks ([input_variance.md](input_variance.md)).
 - A failed pull or evaluation, a node's panic caught and attributed
   (§3.4), leaves the kernel usable: the step that failed and every step
   its failure cut short stay not current, so the next write begins a round

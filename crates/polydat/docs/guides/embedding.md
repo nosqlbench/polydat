@@ -186,11 +186,10 @@ at once and a string, JSON, or extension value into the value the
 kernel stores for it, with the slots pointing at that value until the
 next write; the interpreter keeps it as a value in the state. Setting
 an extern marks
-everything downstream of it for recomputation. The compiled `set_input`
-checks the value against the declared port type and refuses a mismatch
-by name; the interpreter's checks a `shared` binding's cell and
-otherwise writes what it is given, so the wrong variant there is a host
-bug that surfaces when a consumer reads it. An extern declared without
+everything downstream of it for recomputation. `set_input` checks the
+value against the declared port type on every engine and refuses a
+mismatch by name with `WriteError::TypeMismatch`; nothing converts a
+value at the write (below, "When an input's type varies"). An extern declared without
 a default, such as `extern doc: json`, is `None` until the host sets
 it, and every consumer reads `None` through it, on the interpreter, the
 closure tier, and the hybrid kernel alike; pure native code cannot
@@ -229,6 +228,51 @@ cycle 8 by index: us-east/622
 cycle 9 by index: eu-west/228
 cycle 10 by index: ap-south/466
 ```
+
+### When an input's type varies
+
+> **Status:** designed, not yet in a release
+> ([input_variance.md](../design/input_variance.md)). Until it lands,
+> every engine refuses a mismatched write, as described above, and the
+> interpreter's `Dataflow::set_wire` is the one write that still converts.
+> That path is due to be deprecated, so new code should not start
+> depending on it.
+
+A declared input's type is fixed for the kernel's lifetime, and a write
+that does not match it is a bug the refusal names. Some hosts write
+values whose type legitimately varies: a parameter that arrives as text
+in one run and as a number in the next, or a parent scope's value copied
+into a child that typed it differently. Polydat converts such a value in
+the program, never at the write, and only where the host asked for it:
+
+- **Convert before writing** when you know the target type.
+  `polydat::convert::to_port(value, port_type)` applies the same
+  conversions the compiler's adapters use and returns an error you can
+  handle at the write, instead of a node failure at the pull. This is the
+  trusted surface for host-side conversion.
+- **Convert one input in the program** with the transform
+  `transform::convert_input(&mut file, "name")`. The input then accepts
+  any value, and a converter node, a closure step, converts it for its
+  consumers. The compile log reports the converter.
+- **Open every input the author left untyped** with
+  `CompileOptions::input_variance`. An input whose type was inferred
+  rather than written (an untyped `input`, an auto-extern, a synthesized
+  extern) is *open*. The setting decides what the compiler does with
+  open inputs:
+
+  | `input_variance` | Open inputs |
+  |---|---|
+  | `Fixed` (default) | take their inferred type; a mismatched write is refused |
+  | `Error` | stop construction, with every open input named |
+  | `Warn` | get a converter each, reported as a warning |
+  | `Info` | get a converter each, reported as info |
+
+Declared inputs are never converted under any setting. A converter costs
+a closure step on the compiled engines, so conversion is something you
+ask for, input by input or by setting, and never assumed. A host that
+drives scope trees with parameters of varying type, as nmbrs does,
+compiles with `Warn`, converts what it can through `convert::to_port`,
+and reads the compile log to see every input it relies on converting.
 
 A `cursor` declared `over` a literal spec is resolved at build. The
 assembler and every kernel list each cursor with its partitions through
