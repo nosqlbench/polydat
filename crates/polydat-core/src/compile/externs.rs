@@ -140,6 +140,10 @@ pub(crate) struct Externs {
     intent: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// The next bit of `intent` to give a cell.
     next_bit: std::sync::atomic::AtomicU8,
+    /// Whether a descendant has asked for a broadcast cell: the one
+    /// lock-free check every pull makes before publishing. A clone is a
+    /// new state with no descendant, so it starts false.
+    broadcasting: std::sync::atomic::AtomicBool,
     /// Slots whose value a cell refresh changed, for the kernel to mark
     /// dirty; drained after every refresh.
     changed: Vec<usize>,
@@ -180,6 +184,7 @@ impl Clone for Externs {
             next_bit: std::sync::atomic::AtomicU8::new(
                 self.next_bit.load(std::sync::atomic::Ordering::Relaxed),
             ),
+            broadcasting: std::sync::atomic::AtomicBool::new(false),
             changed: self.changed.clone(),
             ledger: self.ledger.clone(),
         }
@@ -240,6 +245,7 @@ impl Externs {
             cursors: cursors.to_vec(),
             intent: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             next_bit: std::sync::atomic::AtomicU8::new(0),
+            broadcasting: std::sync::atomic::AtomicBool::new(false),
             changed: Vec::new(),
             ledger,
         };
@@ -318,7 +324,12 @@ impl Externs {
         if cells.len() <= slot {
             cells.resize(slot + 1, None);
         }
-        cells[slot].get_or_insert(cell).clone()
+        let cell = cells[slot].get_or_insert(cell).clone();
+        // Set while the lock is held, so a pull that sees the flag finds
+        // the cell.
+        self.broadcasting
+            .store(true, std::sync::atomic::Ordering::Release);
+        cell
     }
 
     /// The broadcast cell for the output at `slot`, if one was asked
@@ -334,19 +345,13 @@ impl Externs {
         cells.get(slot)?.clone()
     }
 
-    /// Whether any descendant asked for a broadcast cell: one check on
-    /// the pull path, false for every program with no subscope, and
-    /// what keeps `published_output`'s lookup off that path. The lock
-    /// is taken either way, which the pull path can afford and the
-    /// evaluation path never reaches.
+    /// Whether any descendant asked for a broadcast cell: one lock-free
+    /// check on every pull, by name or by index, false for every program
+    /// with no subscope, and what keeps `published_output`'s lock off
+    /// the pull path until a descendant exists.
     #[inline]
     pub(crate) fn broadcasts(&self) -> bool {
-        !self
-            .scope
-            .output_cells
-            .lock()
-            .expect("output cells poisoned")
-            .is_empty()
+        self.broadcasting.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// The next bit of the intent word. The compiled kernel keeps one
@@ -810,7 +815,12 @@ impl Externs {
 
     /// The current value of the extern at input `index`.
     pub(crate) fn value_at(&self, index: usize) -> Option<Value> {
-        self.slot_at(index).map(|s| s.value.clone())
+        // A cell-bound slot's value is the cell's; the slot holds the
+        // copy taken at the last refresh, which a pull makes.
+        self.slot_at(index).map(|s| match &s.cell {
+            Some(cell) => cell.snapshot().0,
+            None => s.value.clone(),
+        })
     }
 
     /// The declared default of the extern at input `index`.

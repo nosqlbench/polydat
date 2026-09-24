@@ -5,7 +5,7 @@
 //! P1 engine types — PolydatState (dependent-list), RawState (no provenance),
 //! and ProvScanState (provenance-scan).
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use super::WireSource;
@@ -487,6 +487,10 @@ pub struct EngineCore {
     /// the cell so subsequent inner reads return the current
     /// value with no traversal.
     pub(crate) output_cells: Vec<Option<SharedCell>>,
+    /// Whether a descendant has taken one of `output_cells`: the one
+    /// check a pull makes before publishing, false for every kernel
+    /// with no subscope under it.
+    pub(crate) broadcasting: AtomicBool,
     /// Pre-allocated scratch buffer for node input gathering.
     pub(crate) input_scratch: Vec<Value>,
     /// Per node, the scratch entries the node declared through
@@ -863,22 +867,43 @@ impl EngineCore {
             .get(output_name)
             .unwrap_or_else(|| panic!("unknown output variate: {output_name}"));
         self.eval_node(program, node_idx);
-        // SRD-13f Push B.2: broadcast the freshly computed
-        // value through this output's cell (if attached) so
-        // descendant kernels that bound their matching input
-        // slot to the same cell see the current value on
-        // their next read.
-        if let Some(output_idx) = program.output_index(output_name)
-            && let Some(Some(cell)) = self.output_cells.get(output_idx)
+        if let Some(output_idx) = program.output_index(output_name) {
+            self.publish_output(output_idx, node_idx, port_idx);
+        }
+        &self.buffers[node_idx][port_idx]
+    }
+
+    /// SRD-13f Push B.2: broadcast an output's freshly computed value
+    /// through its cell, so a descendant that bound its matching input
+    /// to the cell reads the current value next. Every pull does this,
+    /// by name or by index (cross_fiber_invalidation.md §3.1).
+    ///
+    /// Only once a descendant has taken a cell, and only to a cell a
+    /// descendant still holds: publishing clones the value and takes a
+    /// lock, which a pull with no reader should not pay. A descendant
+    /// bound later gets the current value when it asks for the cell
+    /// (`output_cell`).
+    #[inline]
+    pub(crate) fn publish_output(&self, output_idx: usize, node_idx: usize, port_idx: usize) {
+        if self.broadcasting.load(Ordering::Acquire) {
+            self.publish_output_cold(output_idx, node_idx, port_idx);
+        }
+    }
+
+    /// `publish_output` past its flag, out of line so the pull path
+    /// keeps only the check.
+    #[cold]
+    #[inline(never)]
+    fn publish_output_cold(&self, output_idx: usize, node_idx: usize, port_idx: usize) {
+        if let Some(Some(cell)) = self.output_cells.get(output_idx)
+            && Arc::strong_count(cell) > 1
         {
-            let v = self.buffers[node_idx][port_idx].clone();
             // `publish` does the mutex write + revision bump +
             // intent-bit set in three Release stores so the
             // descendant's cone walker observes the change on
             // its next read (cross_fiber_invalidation.md §5).
-            cell.publish(v);
+            cell.publish(self.buffers[node_idx][port_idx].clone());
         }
-        &self.buffers[node_idx][port_idx]
     }
 
     /// SRD-13f Push B.2 — allocate broadcast cells for every
@@ -922,10 +947,22 @@ impl EngineCore {
             .collect();
     }
 
-    /// Output broadcast cell for the named output, if seeded.
+    /// Output broadcast cell for the named output, if seeded, holding
+    /// the output's current value: pulls publish only while a
+    /// descendant holds the cell (`publish_output`), so a descendant
+    /// asking for it now is handed it up to date.
     pub(crate) fn output_cell(&self, program: &PolydatProgram, name: &str) -> Option<SharedCell> {
         let idx = program.output_index(name)?;
-        self.output_cells.get(idx).and_then(|c| c.clone())
+        let cell = self.output_cells.get(idx)?.clone()?;
+        self.broadcasting.store(true, Ordering::Release);
+        let (node_idx, port_idx) = program.output_map[name];
+        if self.node_clean.get(node_idx).copied().unwrap_or(false) {
+            let current = &self.buffers[node_idx][port_idx];
+            if *cell.value.lock().unwrap() != *current {
+                cell.publish(current.clone());
+            }
+        }
+        Some(cell)
     }
 }
 
@@ -1187,6 +1224,8 @@ impl PolydatState {
     pub fn pull_by_index(&mut self, program: &PolydatProgram, output_idx: usize) -> &Value {
         let (node_idx, port_idx) = program.resolve_output_by_index(output_idx);
         self.core.eval_node(program, node_idx);
+        // A pull by index publishes as a pull by name does.
+        self.core.publish_output(output_idx, node_idx, port_idx);
         &self.core.buffers[node_idx][port_idx]
     }
 

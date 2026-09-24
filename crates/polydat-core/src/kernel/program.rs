@@ -1012,6 +1012,7 @@ impl PolydatProgram {
             // constructors). Start with an empty Vec — the
             // seed pass sizes it to match output count.
             output_cells: Vec::new(),
+            broadcasting: std::sync::atomic::AtomicBool::new(false),
             input_scratch: vec![Value::None; max_inputs],
             node_scratch: self.node_scratch(),
             // Per-scope intent-dirty vector + bit allocator
@@ -1059,6 +1060,7 @@ impl PolydatProgram {
             // constructors). Start with an empty Vec — the
             // seed pass sizes it to match output count.
             output_cells: Vec::new(),
+            broadcasting: std::sync::atomic::AtomicBool::new(false),
             input_scratch: vec![Value::None; max_inputs],
             node_scratch: self.node_scratch(),
             // Per-scope intent-dirty vector + bit allocator

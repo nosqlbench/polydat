@@ -84,6 +84,15 @@ These compile unchanged and behave differently. Each is a correction.
 - **Two volatile reads that no wire connects are two steps on every
   engine.** The native tier used to fuse them into one segment and read
   both at the first pull of either (runtime_model.md R1.v).
+- **A pull by index publishes to descendants**, as a pull by name always
+  did, on every engine. A child bound to a parent's output used to keep
+  the last value a pull by name published while the host drove the
+  parent with `pull_at`.
+- **A child bound to an output the parent has not computed reads
+  `None`** on every engine. The compiled engines gave it the type's zero.
+- **`input_value_at` on a cell-bound input reads the cell** on the closure
+  and native engines, as the interpreter does. It answered the copy the
+  child took at its last pull.
 
 ## Not breaking, though it looks it
 
@@ -95,13 +104,6 @@ These compile unchanged and behave differently. Each is a correction.
 
 ## Known issues
 
-- **A pull by index does not publish to descendants.** A child bound to
-  one of a parent's outputs reads the value the parent last published,
-  and `pull_at` does not publish where `pull` by name does, on every
-  engine. A host that drives a parent by index should call
-  `publish_broadcasts()` after the round's pulls, as nmbrs does.
-- **Before a parent first publishes an output, a child bound to it reads
-  `None` on the interpreter and the type's zero on the compiled engines.**
 - **The scope binder still converts a value it copies into a child's
   declared input**, and the write-through commit still widens a narrower
   numeric type. Both retire with the deprecated writes
@@ -115,6 +117,6 @@ These compile unchanged and behave differently. Each is a correction.
    the call relied on.
 4. Read Part 3 against the host: a positional `set_inputs` spill into
    externs, and a count taken from a compiled kernel's `coord_count()`,
-   are the two that change a result.
-5. If the host drives scope parents by index, add `publish_broadcasts()`
-   after each round's pulls.
+   are the two that change a result. A host that called
+   `publish_broadcasts()` after driving a parent by index can keep the
+   call, which is now redundant, or drop it.

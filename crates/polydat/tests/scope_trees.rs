@@ -227,6 +227,45 @@ fn a_write_through_commits_into_the_parent_s_cell() {
     }
 }
 
+/// A child bound to a parent's output reads `None` until the parent
+/// computes it, then what the parent computed, whether the parent was
+/// pulled by name or by index, on every engine pair.
+#[test]
+fn a_parent_s_output_reaches_its_child_by_either_pull() {
+    let parent_src = "input cycle: u64\ntotal := u64_add(cycle, 20)\n";
+    for parent_engine in engines() {
+        for child_engine in engines() {
+            let pair = format!("{parent_engine} → {child_engine}");
+            for by_index in [false, true] {
+                let mut root = compile(parent_src, parent_engine);
+                let child = module(root.as_ref(), "op", "extern total: u64\n")
+                    .instantiate_under(root.as_ref(), child_engine, &[])
+                    .unwrap_or_else(|e| panic!("{pair}: {e}"));
+                let total = child.input_index("total").expect("declared");
+                assert_eq!(
+                    child.input_value_at(total),
+                    Some(Value::None),
+                    "{pair}: before the parent computes it"
+                );
+                root.set_inputs(&[1]);
+                let value = if by_index {
+                    let at = root.output_index("total").expect("an output");
+                    root.pull_at(at)
+                } else {
+                    root.pull("total")
+                };
+                assert_eq!(value, Value::U64(21), "{pair}");
+                assert_eq!(
+                    child.input_value_at(total),
+                    Some(Value::U64(21)),
+                    "{pair}: after a pull {}",
+                    if by_index { "by index" } else { "by name" }
+                );
+            }
+        }
+    }
+}
+
 /// One parent shared across threads, with children bound and forks
 /// taken under it from all of them at once.
 #[test]

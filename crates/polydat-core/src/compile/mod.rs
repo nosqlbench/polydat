@@ -990,7 +990,33 @@ macro_rules! shared_core_methods {
             self.drive.stale = true;
         }
 
+        /// A pull by index publishes as a pull by name does, so a child
+        /// bound to this output reads what the parent computed. The flag
+        /// is checked before the pull rather than after it: holding the
+        /// value across the check cost the native rungs 6 percent.
+        #[inline]
         fn pull_at(&mut self, index: usize) -> crate::ast::Value {
+            if self.externs.broadcasts() {
+                return self.pull_at_publishing(index);
+            }
+            self.pull_at_value(index)
+        }
+
+        /// `pull_at` under a descendant: the pull, then the publish.
+        #[cold]
+        #[inline(never)]
+        fn pull_at_publishing(&mut self, index: usize) -> crate::ast::Value {
+            let value = self.pull_at_value(index);
+            let slot = self.resolved_outputs[index]
+                .as_ref()
+                .expect("resolved by the pull")
+                .0;
+            self.publish_slot(slot, &value);
+            value
+        }
+
+        #[inline(always)]
+        fn pull_at_value(&mut self, index: usize) -> crate::ast::Value {
             if self.resolved_outputs.len() <= index {
                 self.resolved_outputs.resize(index + 1, None);
             }
@@ -1048,6 +1074,14 @@ macro_rules! shared_core_methods {
             self.slot_value(slot, ty)
         }
 
+        /// Publish the value at `slot` through its broadcast cell, if a
+        /// descendant asked for one.
+        fn publish_slot(&self, slot: usize, value: &crate::ast::Value) {
+            if let Some(cell) = self.externs.published_output(slot) {
+                cell.publish(value.clone());
+            }
+        }
+
         fn pull_named(&mut self, name: &str) -> crate::ast::Value {
             if self.drive.stale {
                 self.begin_epoch();
@@ -1075,10 +1109,8 @@ macro_rules! shared_core_methods {
             if !self.externs.broadcasts() {
                 return;
             }
-            if let Some(&slot) = self.output_map.get(name)
-                && let Some(cell) = self.externs.published_output(slot)
-            {
-                cell.publish(value.clone());
+            if let Some(&slot) = self.output_map.get(name) {
+                self.publish_slot(slot, value);
             }
         }
 
@@ -1092,7 +1124,16 @@ macro_rules! shared_core_methods {
         /// as long as the buffer rather than as long as the output list.
         fn output_cell_for(&self, name: &str) -> Option<crate::kernel::SharedCell> {
             let slot = *self.output_map.get(name)?;
-            let initial = self.value_of(name);
+            // An output no step has computed yet holds its type's zero
+            // in the buffer; the cell starts at `None`, as the
+            // interpreter's does, until the first pull publishes.
+            let uncomputed = !self.all_ran
+                && matches!(self.slot_step.get(slot), Some(Some(step)) if self.ran[*step] == 0);
+            let initial = if uncomputed {
+                crate::ast::Value::None
+            } else {
+                self.value_of(name)
+            };
             Some(self.externs.output_cell(slot, initial))
         }
 
