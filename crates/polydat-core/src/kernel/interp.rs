@@ -98,7 +98,20 @@ impl Lookup for KernelLookup<'_> {
     /// comes first because it is the later one: a coordinate has a
     /// folded value on some engines, and it is the value the program
     /// was built with, not the value the kernel is at.
+    ///
+    /// A `const` binding is the exception. Its value is the scope's for
+    /// the name, and an input slot of the same name, which a const that
+    /// reads a parameter it shadows is given (SRD-74 P2), holds only the
+    /// value from the scope above. So the const's own value comes
+    /// first, and the slot answers only while that value is `None`: the
+    /// two-tier read of a conditional shadow.
     fn lookup(&self, name: &str) -> Option<Value> {
+        if self.0.output_modifier(name) == crate::dsl::ast::BindingModifier::CONST
+            && let Some(v) = self.0.folded_value(name)
+            && !matches!(v, Value::None)
+        {
+            return Some(v);
+        }
         if let Some(v) = self.0.input_value(name)
             && !matches!(v, Value::None)
         {

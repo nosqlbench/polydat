@@ -1937,3 +1937,52 @@ fn a_compiled_child_binds_under_a_parent_of_any_engine() {
         }
     }
 }
+
+/// A `const` computed from a parameter, shadowing a parameter of the
+/// same name, is what a scope below reads for that name — not the value
+/// the shadowed slot carries from the scope above. This is a scenario's
+/// `set: { mode: "mode_for_{size}" }` under a params root that binds
+/// `mode` and `size`. Reported against 0.4.0 by nmbrs, where two example
+/// workloads read the root's `default` instead of `mode_for_small`.
+#[test]
+fn a_computed_const_that_shadows_a_param_is_what_the_scope_below_reads() {
+    let compile = |src: &str| compile_polydat_interpreter(src).expect("compile");
+    let under = |parent: &crate::kernel::PolydatKernel, src: &str| {
+        let matter = super::PolydatMatter::builder()
+            .program(compile(src).program().clone())
+            .build()
+            .expect("matter");
+        parent.build_subscope(matter).expect("subscope")
+    };
+    let root = compile("const mode := \"default\"\nconst size := \"small\"\n");
+    let phase_src = "input cycle: u64\nextern mode: String\nextern size: String\n";
+
+    // Computed and shadowing: the case that broke.
+    let set = under(
+        &root,
+        "extern size: String\nconst mode := \"mode_for_{size}\"\n",
+    );
+    assert_eq!(
+        set.lookup("mode"),
+        Some(Value::Str("mode_for_small".into()))
+    );
+    let phase = under(&set, phase_src);
+    assert_eq!(
+        phase.lookup("mode"),
+        Some(Value::Str("mode_for_small".into())),
+        "the scope below read the shadowed slot's value from the root"
+    );
+
+    // Controls: a literal shadow, and a computed const that shadows
+    // nothing, each reached the scope below before the fix too.
+    let literal = under(&root, "const mode := \"lit\"\n");
+    assert_eq!(
+        under(&literal, phase_src).lookup("mode"),
+        Some(Value::Str("lit".into()))
+    );
+    let fresh = under(&root, "extern size: String\nconst other := \"o_{size}\"\n");
+    assert_eq!(
+        under(&fresh, "input cycle: u64\nextern other: String\n").lookup("other"),
+        Some(Value::Str("o_small".into()))
+    );
+}
