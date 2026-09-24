@@ -26,10 +26,10 @@ homepage = "https://github.com/nosqlbench/polydat"
 # facade's own feature), and cargo does not let a member switch a
 # workspace dependency's defaults off at the edge.
 [workspace.dependencies]
-polydat-derive = { path = "crates/polydat-derive", version = "0.4.0" }
-polydat-grammar = { path = "crates/polydat-grammar", version = "0.4.0" }
-polydat-core = { path = "crates/polydat-core", version = "0.4.0", default-features = false }
-polydat-nodes = { path = "crates/polydat-nodes", version = "0.4.0", default-features = false }
+polydat-derive = { path = "crates/polydat-derive", version = "0.4.1" }
+polydat-grammar = { path = "crates/polydat-grammar", version = "0.4.1" }
+polydat-core = { path = "crates/polydat-core", version = "0.4.1", default-features = false }
+polydat-nodes = { path = "crates/polydat-nodes", version = "0.4.1", default-features = false }
 
 [profile.release]
 lto = "thin"
