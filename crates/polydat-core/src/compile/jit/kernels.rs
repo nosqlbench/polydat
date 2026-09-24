@@ -380,7 +380,7 @@ impl JitCore {
             output_map,
             guard_slots: Vec::new(),
             output_types: HashMap::new(),
-            externs: crate::compile::externs::Externs::default(),
+            externs: crate::compile::externs::Externs::coordinates_only(coord_count),
             traversals: Vec::new().into(),
             fallible: code.fallible(),
             _module: code,
@@ -842,7 +842,11 @@ impl JitKernelRaw {
         // Written one by one, as the other kernels write them: a slice
         // copy of a runtime length is a call to memcpy, which costs
         // more than the three stores it replaces.
-        for (i, &c) in coords.iter().enumerate().take(self.core.coord_count) {
+        for (i, &c) in coords
+            .iter()
+            .enumerate()
+            .take(self.core.externs.coordinate_slots())
+        {
             if self.core.buffer[i] != c {
                 self.core.buffer[i] = c;
             }
@@ -899,7 +903,11 @@ impl JitKernelPushPull {
     #[inline]
     fn set_inputs(&mut self, coords: &[u64]) {
         self.changed_mask.clear();
-        for (i, &c) in coords.iter().enumerate().take(self.core.coord_count) {
+        for (i, &c) in coords
+            .iter()
+            .enumerate()
+            .take(self.core.externs.coordinate_slots())
+        {
             if self.core.buffer[i] != c {
                 self.core.buffer[i] = c;
                 self.changed_mask.set(i);

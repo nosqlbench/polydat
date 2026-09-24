@@ -653,7 +653,7 @@ fn every_port_type_has_a_consistent_slot_form() {
 
     assert_eq!(
         PortType::ALL.len(),
-        34,
+        35,
         "a port type was added or removed; check the writers that map a \
          value to slots still cover it, then update this count"
     );

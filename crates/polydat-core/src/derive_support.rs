@@ -949,7 +949,8 @@ pub fn write_poly(
     scratch: &mut [crate::ast::ScratchBuf],
     outputs: &mut [u64],
 ) {
-    if v.port_type() != crate::compile::marshal::carrier_port(ty) {
+    // A `Dyn` port carries any value as written (input_variance.md).
+    if ty != PortType::Dyn && v.port_type() != crate::compile::marshal::carrier_port(ty) {
         panic!(
             "a node produced a {:?} on an output the graph typed {:?}; a compiled engine \
              cannot carry a value of another type than the slot's (engines.md §3.4)",
@@ -1103,6 +1104,8 @@ mod tests {
             PortType::VecF16 => Value::VecF16(SliceArc::from_vec(vec![half::f16::from_f32(0.5)])),
             PortType::VecI16 => Value::VecI16(SliceArc::from_vec(vec![-300i16, 300])),
             PortType::VecI8 => Value::VecI8(SliceArc::from_vec(vec![-8i8, 8])),
+            // A `Dyn` port carries a value of any type, as written.
+            PortType::Dyn => Value::Str("any".into()),
         }
     }
 
@@ -1118,11 +1121,14 @@ mod tests {
     fn every_port_type_reads_back_what_was_written() {
         for &ty in PortType::ALL {
             let v = sample(ty);
-            assert_eq!(
-                v.port_type(),
-                crate::compile::marshal::carrier_port(ty),
-                "{ty:?}: the sample is not what the port carries"
-            );
+            // A `Dyn` port carries a value of any type, as written.
+            if ty != PortType::Dyn {
+                assert_eq!(
+                    v.port_type(),
+                    crate::compile::marshal::carrier_port(ty),
+                    "{ty:?}: the sample is not what the port carries"
+                );
+            }
             let mut scratch: Vec<crate::ast::ScratchBuf> = ty
                 .scratch_elem()
                 .map(crate::ast::ScratchBuf::new)

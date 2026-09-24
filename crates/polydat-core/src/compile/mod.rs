@@ -565,7 +565,7 @@ macro_rules! impl_kernel_trait {
                         .input_names()
                         .iter()
                         .position(|n| n == name)?;
-                    if i < self.core.coord_count {
+                    if i < self.core.externs.coordinate_count() {
                         let pending = self.core.drive.coords.get(i).copied();
                         Some(crate::ast::Value::U64(
                             pending.unwrap_or(self.core.buffer[i]),
@@ -750,6 +750,9 @@ macro_rules! impl_kernel_trait {
             }
             fn program_id(&self) -> crate::kernel::ProgramId {
                 crate::kernel::ProgramId(self.core.program_identity())
+            }
+            fn input_type_origin(&self, name: &str) -> Option<crate::kernel::TypeOrigin> {
+                self.core.externs.input_type_origin(name)
             }
         }
 

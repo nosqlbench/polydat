@@ -2212,7 +2212,7 @@ pub fn compile_jit_raw(
         steps,
         output_map,
         nodes,
-        crate::compile::externs::Externs::default(),
+        crate::compile::externs::Externs::coordinates_only(coord_count),
         super::kernels::ScratchPlan::default(),
         Vec::new(),
         alone,

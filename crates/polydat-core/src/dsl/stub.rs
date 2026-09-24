@@ -30,7 +30,7 @@ use crate::ast::{PortType, Value};
 use crate::derive_support::Wire;
 use crate::dsl::ast::{Binding, BindingModifier, Expr, ExternPort, Statement, WireModifier};
 use crate::dsl::lexer::Span;
-use crate::kernel::{Dataflow, Metadata, PolydatKernel};
+use crate::kernel::{Metadata, PolydatKernel};
 
 /// A caller-native expression stub: a named binding over a polydat
 /// expression, optionally type-coerced (via the SRD-84 Part 1b `as`
@@ -182,16 +182,24 @@ impl ScopedExpr {
         })
     }
 
-    /// Set a runtime input wire by name before evaluating. No-op for a
-    /// name the expression doesn't read.
+    /// Set a runtime input wire by name before evaluating, converted to
+    /// the wire's type by the one conversion rule
+    /// ([`crate::convert::to_port`]). No-op for a name the expression
+    /// doesn't read, or for a value that does not convert.
     pub fn set(&mut self, name: &str, value: Value) -> &mut Self {
         if let Some(idx) = self.kernel.find_input(name) {
-            let _ = self.kernel.set_wire_idx(idx, value);
+            let converted = match self.kernel.program().input_port_type_by_idx(idx) {
+                Some(ty) => crate::convert::to_port(value, ty).ok(),
+                None => Some(value),
+            };
+            if let Some(value) = converted {
+                self.kernel.state().set_input(idx, value);
+            }
         }
         self
     }
 
-    /// The bound sub-context as a [`Dataflow`], for callers that inject
+    /// The bound sub-context as a [`Dataflow`](crate::kernel::Dataflow), for callers that inject
     /// a batch of inputs through a `Dataflow`-based injector (e.g. a
     /// runtime-state snapshot) before evaluating.
     pub fn dataflow(&mut self) -> &mut PolydatKernel {

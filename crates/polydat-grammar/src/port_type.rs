@@ -138,6 +138,11 @@ pub enum PortType {
     /// Typed `i8` vector slice (`Arc<[i8]>`). Completes the
     /// cranelift lane family; CQL `vector<tinyint, N>`.
     VecI8,
+    /// Any value, as written: the slot of an input whose type may vary
+    /// over a kernel's lifetime (input_variance.md). Only a converter
+    /// node reads it, turning the value into the type its consumers
+    /// read; no other port has this type, and no value is typed `Dyn`.
+    Dyn,
 }
 
 impl fmt::Display for PortType {
@@ -177,6 +182,7 @@ impl fmt::Display for PortType {
             PortType::VecF16 => write!(f, "vec_f16"),
             PortType::VecI16 => write!(f, "vec_i16"),
             PortType::VecI8 => write!(f, "vec_i8"),
+            PortType::Dyn => write!(f, "dyn"),
         }
     }
 }
@@ -296,6 +302,7 @@ impl PortType {
         PortType::VecF16,
         PortType::VecI16,
         PortType::VecI8,
+        PortType::Dyn,
     ];
 
     /// `true` for every variant, by an exhaustive match: the compiler
@@ -337,7 +344,8 @@ impl PortType {
             | PortType::VecI64
             | PortType::VecF16
             | PortType::VecI16
-            | PortType::VecI8 => Self::ALL.contains(&self),
+            | PortType::VecI8
+            | PortType::Dyn => Self::ALL.contains(&self),
         }
     }
 
@@ -392,7 +400,8 @@ impl PortType {
             | Self::VecI64
             | Self::VecF16
             | Self::VecI16
-            | Self::VecI8 => return None,
+            | Self::VecI8
+            | Self::Dyn => return None,
         })
     }
 
@@ -444,6 +453,7 @@ impl PortType {
             Self::VecF16 => "vec_f16",
             Self::VecI16 => "vec_i16",
             Self::VecI8 => "vec_i8",
+            Self::Dyn => "dyn",
         }
     }
 
@@ -495,6 +505,7 @@ impl PortType {
             "vec_f16" => Some(Self::VecF16),
             "vec_i16" => Some(Self::VecI16),
             "vec_i8" => Some(Self::VecI8),
+            "dyn" => Some(Self::Dyn),
             _ => None,
         }
     }

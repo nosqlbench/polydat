@@ -93,6 +93,8 @@ mod guide_output;
 mod handle_boundaries;
 #[path = "hybrid_test.rs"]
 mod hybrid_test;
+#[path = "input_variance.rs"]
+mod input_variance;
 #[path = "ir_end_to_end.rs"]
 mod ir_end_to_end;
 #[path = "local_modules.rs"]

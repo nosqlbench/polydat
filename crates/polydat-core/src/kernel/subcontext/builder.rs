@@ -79,6 +79,10 @@ pub struct CompileOptions {
     /// cycle-replay sees writes that the runtime would otherwise
     /// drop on the floor. See [`KernelOptLevel`](crate::kernel::KernelOptLevel).
     pub kernel_opt: crate::kernel::KernelOptLevel,
+    /// What the compiler does with an input whose type it inferred
+    /// (input_variance.md §4); the same setting as
+    /// [`crate::dsl::compile::CompileOptions::input_variance`].
+    pub input_variance: crate::dsl::compile::InputVariance,
 }
 
 impl CompileOptions {
@@ -90,6 +94,7 @@ impl CompileOptions {
             && self.context_label.is_none()
             && self.cursor_limit.is_none()
             && self.kernel_opt == crate::kernel::KernelOptLevel::default()
+            && self.input_variance == crate::dsl::compile::InputVariance::default()
     }
 }
 
@@ -201,6 +206,10 @@ pub struct SubcontextBuilder<P> {
     /// for callers that don't need libs / strict / required-output
     /// filtering.
     compile_options: CompileOptions,
+    /// The externs this builder synthesized (result and write-through
+    /// externs), whose types it chose rather than the author: open to
+    /// `input_variance` (input_variance.md §3).
+    synthesized_externs: Vec<String>,
     _parent_marker: PhantomData<fn() -> P>,
 }
 
@@ -227,6 +236,7 @@ impl<P> SubcontextBuilder<P> {
             context: SourceContext::default(),
             inherited_outputs: Vec::new(),
             compile_options: CompileOptions::default(),
+            synthesized_externs: Vec::new(),
         }
     }
 
@@ -419,6 +429,7 @@ impl<P> SubcontextBuilder<P> {
             let referenced = free_idents.contains(*name);
             let already_local = local_decls.contains(*name);
             if (force_all || referenced) && !already_local {
+                self.synthesized_externs.push((*name).to_string());
                 prepended.push(Statement::ExternPort(ExternPort {
                     name: (*name).to_string(),
                     typ: (*type_kw).to_string(),
@@ -495,8 +506,10 @@ impl<P> SubcontextBuilder<P> {
             context,
             inherited_outputs,
             compile_options,
+            synthesized_externs,
             _parent_marker,
         } = self;
+        let mut synthesized = synthesized_externs;
 
         let mut diagnostics: Vec<String> = Vec::new();
 
@@ -615,6 +628,7 @@ impl<P> SubcontextBuilder<P> {
                 if already_extern.contains(name) {
                     continue;
                 }
+                synthesized.push(name.clone());
                 prepended.push(Statement::ExternPort(ExternPort {
                     name: name.clone(),
                     typ: port_type_keyword(*pt).to_string(),
@@ -681,6 +695,8 @@ impl<P> SubcontextBuilder<P> {
                 .clone()
                 .unwrap_or_else(|| context.label.clone()),
             cursor_limit: compile_options.cursor_limit,
+            input_variance: compile_options.input_variance,
+            inferred_externs: synthesized.clone(),
             ledger: Some(ledger.clone()),
             engine: crate::Engine::default(),
         };

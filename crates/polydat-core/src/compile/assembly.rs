@@ -96,6 +96,10 @@ pub enum AssemblyError {
     /// speaks `AssemblyError`, reports the same kind as the compiled
     /// engines do rather than folding it into `Other`.
     ConstantFold(String),
+    /// `CompileOptions::input_variance` is `Error` and these inputs'
+    /// types were inferred rather than declared, as `(name, inferred
+    /// type)` (input_variance.md §4).
+    OpenInputs(Vec<(String, PortType)>),
     /// Catch-all for errors from downstream phases (e.g., strict mode).
     Other(String),
 }
@@ -194,6 +198,21 @@ impl std::fmt::Display for AssemblyError {
                 f,
                 "a value this program computes at build could not be computed: {msg}"
             ),
+            AssemblyError::OpenInputs(inputs) => {
+                writeln!(
+                    f,
+                    "these inputs' types were inferred, not declared, and input variance \
+                     is set to refuse them:"
+                )?;
+                for (name, ty) in inputs {
+                    writeln!(f, "  {name} (inferred {ty})")?;
+                }
+                write!(
+                    f,
+                    "Declare each one's type (`extern name: <type>`), or set \
+                     `input_variance` to `Warn` or `Info` to convert what is written to them."
+                )
+            }
             AssemblyError::Other(msg) => write!(f, "{msg}"),
         }
     }
@@ -558,6 +577,9 @@ pub struct PolydatAssembler {
     /// nondeterministic node no `volatile` output acknowledges, and a
     /// binding nothing reads are refused at build, on every engine.
     pub(crate) strict: bool,
+    /// What `resolve` does with an input whose type was inferred
+    /// (input_variance.md §4).
+    input_variance: crate::dsl::compile::InputVariance,
     /// How much of the interpreter's graph `compile()` fuses into native
     /// cones; `None` is [`JitMode::Auto`](crate::compile::cone::JitMode).
     /// `compile_with(Engine::Interpreter(mode))` takes its mode from the
@@ -611,6 +633,9 @@ impl PolydatAssembler {
                 default: crate::ast::Value::U64(0),
                 port_type: crate::ast::PortType::U64,
                 kind: crate::kernel::InputKind::Coordinate,
+                // Declared by `set_input_type` when the program types it.
+                type_origin: crate::kernel::TypeOrigin::Inferred,
+                converts_to: None,
             })
             .collect();
         Self {
@@ -626,6 +651,7 @@ impl PolydatAssembler {
             strict_values: false,
             strict_types: false,
             strict: false,
+            input_variance: crate::dsl::compile::InputVariance::Fixed,
             jit_mode: None,
             cursor_schemas: Vec::new(),
             ledger: crate::kernel::CompileLedger::new(),
@@ -742,6 +768,8 @@ impl PolydatAssembler {
             default,
             port_type,
             kind,
+            type_origin: crate::kernel::TypeOrigin::Declared,
+            converts_to: None,
         });
         self
     }
@@ -753,7 +781,22 @@ impl PolydatAssembler {
     pub fn set_input_type(&mut self, name: &str, port_type: crate::ast::PortType) {
         if let Some(d) = self.input_defs.iter_mut().find(|d| d.name == name) {
             d.port_type = port_type;
+            d.type_origin = crate::kernel::TypeOrigin::Declared;
         }
+    }
+
+    /// Record how input `name`'s type was established: the compiler
+    /// marks an auto-extern `Inferred`, so `input_variance` can open it
+    /// (input_variance.md §3). `add_input` records `Declared`.
+    pub fn set_input_origin(&mut self, name: &str, origin: crate::kernel::TypeOrigin) {
+        if let Some(d) = self.input_defs.iter_mut().find(|d| d.name == name) {
+            d.type_origin = origin;
+        }
+    }
+
+    /// What `resolve` does with an input whose type was inferred.
+    pub fn set_input_variance(&mut self, variance: crate::dsl::compile::InputVariance) {
+        self.input_variance = variance;
     }
 
     /// Return the names of all inputs (coordinates + captures).
@@ -1478,9 +1521,55 @@ impl PolydatAssembler {
     }
 
     fn resolve_with_log(
-        self,
+        mut self,
         mut log: Option<&mut crate::dsl::events::CompileEventLog>,
     ) -> Result<ResolvedDag, AssemblyError> {
+        // Input variance (input_variance.md §4). An input whose type the
+        // compiler inferred rather than the author declared is *open*:
+        // by the host's setting it keeps its inferred type, stops the
+        // build, or takes any value, converted in front of its readers
+        // by a node placed below. Coordinates are never open: they are
+        // positioned with `set_inputs` and are always `u64`.
+        let open: Vec<usize> = self
+            .input_defs
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| {
+                d.kind != crate::kernel::InputKind::Coordinate
+                    && d.type_origin == crate::kernel::TypeOrigin::Inferred
+                    && d.port_type != PortType::Dyn
+            })
+            .map(|(i, _)| i)
+            .collect();
+        let variance_level = match self.input_variance {
+            crate::dsl::compile::InputVariance::Fixed => None,
+            crate::dsl::compile::InputVariance::Error => {
+                if !open.is_empty() {
+                    return Err(AssemblyError::OpenInputs(
+                        open.iter()
+                            .map(|&i| {
+                                (
+                                    self.input_defs[i].name.clone(),
+                                    self.input_defs[i].port_type,
+                                )
+                            })
+                            .collect(),
+                    ));
+                }
+                None
+            }
+            crate::dsl::compile::InputVariance::Warn => {
+                Some(crate::dsl::events::EventLevel::Warning)
+            }
+            crate::dsl::compile::InputVariance::Info => Some(crate::dsl::events::EventLevel::Info),
+        };
+        if variance_level.is_some() {
+            for &i in &open {
+                let def = &mut self.input_defs[i];
+                def.converts_to = Some(def.port_type);
+                def.port_type = PortType::Dyn;
+            }
+        }
         // An extern without a default is `None` until the host sets it,
         // and every consumer reads `None` through it; the log names each
         // one so a host knows what it must set (engines.md §3.3).
@@ -1552,6 +1641,8 @@ impl PolydatAssembler {
         }
 
         let mut resolved_wiring: Vec<Vec<WireSource>> = Vec::new();
+        // One converter per (input, target type), shared by its readers.
+        let mut converters: HashMap<(usize, PortType), usize> = HashMap::new();
 
         for node_idx in 0..all_nodes.len() {
             let mut node_wiring = Vec::new();
@@ -1584,7 +1675,42 @@ impl PolydatAssembler {
                 // decided from a list of thirteen node names, which
                 // disabled the check on every port of those nodes,
                 // `pick`'s `Bool` selectors included.
-                if port.accepts_any_type || source_type == expected_type {
+                //
+                // A `Dyn` input feeding a typed port reads through a
+                // converter to that type (input_variance.md §5), placed
+                // once per input and type and shared by every reader.
+                if source_type == PortType::Dyn
+                    && !port.accepts_any_type
+                    && expected_type != PortType::Dyn
+                {
+                    let WireSource::Input(input_idx) = source else {
+                        unreachable!("only an input slot is typed `Dyn`")
+                    };
+                    let conv_idx = match converters.get(&(input_idx, expected_type)) {
+                        Some(&idx) => idx,
+                        None => {
+                            let converter = crate::convert::InputConverter::new(
+                                &self.input_defs[input_idx].name,
+                                expected_type,
+                            );
+                            let conv_name = converter.meta().name.clone();
+                            let idx = all_nodes.len();
+                            all_name_to_idx.insert(conv_name.clone(), idx);
+                            while resolved_wiring.len() <= idx {
+                                resolved_wiring.push(Vec::new());
+                            }
+                            resolved_wiring[idx] = vec![source.clone()];
+                            all_nodes.push(PendingNode {
+                                name: conv_name,
+                                node: Box::new(converter),
+                                inputs: vec![],
+                            });
+                            converters.insert((input_idx, expected_type), idx);
+                            idx
+                        }
+                    };
+                    node_wiring.push(WireSource::NodeOutput(conv_idx, 0));
+                } else if port.accepts_any_type || source_type == expected_type {
                     node_wiring.push(source);
                 } else if let Some(adapter) = auto_adapter(source_type, expected_type) {
                     if strict {
@@ -1854,6 +1980,52 @@ impl PolydatAssembler {
             }
         }
         let live_count = reachable.iter().filter(|&&r| r).count();
+
+        // Every converter that survived pruning is reported at the level
+        // the host asked for (input_variance.md §4), in the order it was
+        // placed; an input the setting opened that nothing reads is
+        // reported once too, so no opened input goes unseen.
+        if let Some(log) = log.as_deref_mut() {
+            let mut placed: Vec<(usize, usize, PortType)> = converters
+                .iter()
+                .filter(|&(_, &idx)| reachable[idx])
+                .map(|(&(input, to), &idx)| (idx, input, to))
+                .collect();
+            placed.sort_unstable_by_key(|&(idx, _, _)| idx);
+            for &(idx, input, to) in &placed {
+                let def = &self.input_defs[input];
+                let (origin, level) = match (def.converts_to, variance_level) {
+                    (Some(_), Some(level)) => ("inferred", level),
+                    _ => ("declared dyn", crate::dsl::events::EventLevel::Info),
+                };
+                log.push(crate::dsl::events::CompileEvent::InputConverterInserted {
+                    input: def.name.clone(),
+                    to: to.to_keyword().to_string(),
+                    node: all_nodes[idx].name.clone(),
+                    origin: origin.to_string(),
+                    level,
+                });
+            }
+            if let Some(level) = variance_level {
+                for &input in &open {
+                    if placed.iter().any(|&(_, i, _)| i == input) {
+                        continue;
+                    }
+                    let def = &self.input_defs[input];
+                    log.push(crate::dsl::events::CompileEvent::InputConverterInserted {
+                        input: def.name.clone(),
+                        to: def
+                            .converts_to
+                            .unwrap_or(def.port_type)
+                            .to_keyword()
+                            .to_string(),
+                        node: "(none: nothing reads it)".to_string(),
+                        origin: "inferred".to_string(),
+                        level,
+                    });
+                }
+            }
+        }
 
         // Topological sort (Kahn's algorithm) over reachable nodes only
         let mut in_degree = vec![0usize; node_count];

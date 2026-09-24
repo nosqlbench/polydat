@@ -571,7 +571,11 @@ impl CompiledKernelRaw {
     /// its dependents through the plan, as in every mode.
     #[inline]
     fn set_coords(&mut self, coords: &[u64]) {
-        for (i, &c) in coords.iter().enumerate().take(self.core.coord_count) {
+        for (i, &c) in coords
+            .iter()
+            .enumerate()
+            .take(self.core.externs.coordinate_slots())
+        {
             if self.core.buffer[i] != c {
                 self.core.buffer[i] = c;
                 self.core.dirty_input(i);
@@ -639,7 +643,11 @@ impl CompiledKernelPush {
 
     #[inline]
     fn set_coords(&mut self, coords: &[u64]) {
-        for (i, &c) in coords.iter().enumerate().take(self.core.coord_count) {
+        for (i, &c) in coords
+            .iter()
+            .enumerate()
+            .take(self.core.externs.coordinate_slots())
+        {
             if self.core.buffer[i] != c {
                 self.core.buffer[i] = c;
                 self.core.dirty_input(i);
@@ -725,7 +733,11 @@ impl CompiledKernelPull {
     #[inline]
     fn set_coords(&mut self, coords: &[u64]) {
         self.changed_mask.clear();
-        for (i, &c) in coords.iter().enumerate().take(self.core.coord_count) {
+        for (i, &c) in coords
+            .iter()
+            .enumerate()
+            .take(self.core.externs.coordinate_slots())
+        {
             if self.core.buffer[i] != c {
                 self.core.buffer[i] = c;
                 self.changed_mask.set(i);
@@ -821,7 +833,11 @@ impl CompiledKernelPushPull {
     #[inline]
     fn set_coords(&mut self, coords: &[u64]) {
         self.changed_mask.clear();
-        for (i, &c) in coords.iter().enumerate().take(self.core.coord_count) {
+        for (i, &c) in coords
+            .iter()
+            .enumerate()
+            .take(self.core.externs.coordinate_slots())
+        {
             if self.core.buffer[i] != c {
                 self.core.buffer[i] = c;
                 self.changed_mask.set(i);

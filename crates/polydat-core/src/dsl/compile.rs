@@ -480,6 +480,39 @@ pub struct CompileOptions {
     /// most native form this build has; see the type's documentation
     /// for when to set it and what happens when it cannot be realized.
     pub engine: crate::Engine,
+    /// What the compiler does with an input whose type the author did
+    /// not declare (input_variance.md §4). The default keeps today's
+    /// rule: the inferred type is the input's, and a write of another
+    /// type is refused.
+    pub input_variance: InputVariance,
+    /// Externs whose declared type the caller inferred rather than the
+    /// author wrote: the ones a program synthesizer emitted, such as a
+    /// scope builder's result and write-through externs. They are open
+    /// to `input_variance` as an auto-extern is (input_variance.md §3).
+    pub inferred_externs: Vec<String>,
+}
+
+/// What the compiler does with an *open* input, one whose type it
+/// inferred rather than the author declared: an auto-extern, or an
+/// `extern` a scope builder synthesized (input_variance.md §3, §4).
+/// Coordinates and declared inputs are never affected.
+///
+/// Converting an input costs a closure step on the compiled engines, so
+/// conversion is asked for, never assumed.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum InputVariance {
+    /// An open input takes its inferred type, and a write of another
+    /// type is refused.
+    #[default]
+    Fixed,
+    /// An open input stops construction, naming it: every input's type
+    /// must be declared.
+    Error,
+    /// Every open input takes any value and gets a converter node to
+    /// the type its consumers read, each reported as a warning.
+    Warn,
+    /// As `Warn`, each converter reported as info.
+    Info,
 }
 
 /// Compile Polydat source into the interpreter's kernel under
@@ -1131,6 +1164,14 @@ fn evaluate_default_expr(
         (Expr::StringLit(s, _), PortType::Bool) => {
             coerce_string_literal(Box::new(crate::library::convert::StrToBool::new()), s)
         }
+        // A `dyn` extern takes any value, so its default is the literal
+        // as written, in the literal's own type.
+        (Expr::IntLit(v, _), PortType::Dyn) => Ok(Value::U64(*v)),
+        (Expr::FloatLit(v, _), PortType::Dyn) => Ok(Value::F64(*v)),
+        (Expr::StringLit(s, _), PortType::Dyn) => Ok(Value::Str(s.as_str().into())),
+        (Expr::Ident(name, _), PortType::Dyn) if name == "true" || name == "false" => {
+            Ok(Value::Bool(name == "true"))
+        }
         _ => Err(format!(
             "default expression must be a literal of type {port_type:?}; got {expr:?}"
         )),
@@ -1271,6 +1312,10 @@ pub(super) struct Compiler {
     pub(super) deferred_extents: Vec<DeferredExtent>,
     /// Optional limit applied to all cursors (from `limit` activity param).
     pub(super) cursor_limit: Option<u64>,
+    /// What the assembler does with inputs whose type was inferred.
+    pub(super) input_variance: InputVariance,
+    /// Externs whose type the caller inferred (`CompileOptions::inferred_externs`).
+    pub(super) inferred_externs: Vec<String>,
     /// Diagnostic context label.
     context_label: String,
     /// Module-level pragmas extracted from the source. Drive the
@@ -1352,6 +1397,8 @@ impl Compiler {
             cursor_schemas: Vec::new(),
             deferred_extents: Vec::new(),
             cursor_limit: None,
+            input_variance: InputVariance::Fixed,
+            inferred_externs: Vec::new(),
             pragmas: super::pragmas::PragmaSet::default(),
             current_binding: None,
             tiles: Vec::new(),
@@ -2213,6 +2260,10 @@ impl Compiler {
                                     inferred,
                                     crate::kernel::InputKind::IterationExtern,
                                 );
+                                asm.set_input_origin(
+                                    target.as_str(),
+                                    crate::kernel::TypeOrigin::Inferred,
+                                );
                             }
                         }
                     }
@@ -2245,6 +2296,9 @@ impl Compiler {
                         ),
                     };
                     asm.add_input(&port.name, default_value, port_type, kind);
+                    if self.inferred_externs.contains(&port.name) {
+                        asm.set_input_origin(&port.name, crate::kernel::TypeOrigin::Inferred);
+                    }
                     self.input_names.push(port.name.clone());
                     let passthrough = Box::new(crate::library::identity::PortPassthrough::new(
                         &port.name, port_type,
@@ -2365,6 +2419,7 @@ impl Compiler {
         // assembler, on every engine and on every entry point.
         asm.set_strict_wires(self.pragmas.strict_types(), self.pragmas.strict_values());
         asm.set_strict(self.strict);
+        asm.set_input_variance(self.input_variance);
         // The cursors, with their partitions resolved at build, reach
         // every kernel built from this assembler (engines.md §3.5).
         asm.set_cursor_schemas(self.cursor_schemas.clone());
@@ -2503,6 +2558,8 @@ impl Prepared {
             compiler.context_label = options.context.clone();
         }
         compiler.cursor_limit = options.cursor_limit;
+        compiler.input_variance = options.input_variance;
+        compiler.inferred_externs = options.inferred_externs.clone();
         compiler.pragmas = pragmas;
         if let Some(ledger) = &options.ledger {
             compiler.ledger = ledger.clone();

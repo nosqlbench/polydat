@@ -277,6 +277,12 @@ pub trait Dataflow: Metadata {
     /// the boundary cannot heal return [`WriteError::TypeMismatch`].
     /// An out-of-range index returns
     /// [`WriteError::UnknownWire`].
+    #[deprecated(
+        since = "0.5.0",
+        note = "a write is never converted (input_variance.md): use `Kernel::set_input_at`, \
+                converting first with `polydat::convert::to_port`, or open the input with \
+                `CompileOptions::input_variance`"
+    )]
     fn set_wire_idx(&mut self, idx: usize, value: Value) -> Result<(), WriteError>;
 
     /// Read the current value of wire `idx`. Out-of-range
@@ -289,7 +295,14 @@ pub trait Dataflow: Metadata {
     /// name). Returns `Ok(())` on success, `Err(WriteError)` on
     /// failure (unknown wire or type mismatch the boundary
     /// cannot heal).
+    #[deprecated(
+        since = "0.5.0",
+        note = "a write is never converted (input_variance.md): use `Kernel::set_input`, \
+                converting first with `polydat::convert::to_port`, or open the input with \
+                `CompileOptions::input_variance`"
+    )]
     #[inline]
+    #[allow(deprecated)]
     fn set_wire<W: WireKey>(&mut self, key: W, value: Value) -> Result<(), WriteError> {
         // Capture a string form of the key for diagnostic
         // reporting before resolution consumes it. The
@@ -642,6 +655,13 @@ pub trait Kernel: Send + Sync + internals::KernelInternals {
     /// `__write_<name>` output and write it through the cell of the
     /// shared binding it exports to. No-op for a kernel without them.
     fn commit_write_throughs(&mut self) -> Result<(), String>;
+
+    /// How input `name`'s type was established: written by the author,
+    /// or inferred by the compiler and so open to
+    /// `CompileOptions::input_variance` (input_variance.md §3). A host
+    /// that compiles many scopes at `Info` reports each open input once
+    /// from here rather than from every compile's log.
+    fn input_type_origin(&self, name: &str) -> Option<crate::kernel::TypeOrigin>;
 
     /// The identity of this kernel's program: equal for kernels created
     /// from one program and for forks, different for any two programs,

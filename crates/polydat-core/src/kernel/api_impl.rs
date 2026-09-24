@@ -135,6 +135,8 @@ impl Construction for PolydatKernel {
                         .clone()
                         .unwrap_or_else(|| s.label.clone()),
                     cursor_limit: s.options.cursor_limit,
+                    input_variance: s.options.input_variance,
+                    inferred_externs: Vec::new(),
                     ledger: None,
                     engine: crate::Engine::default(),
                 };
@@ -162,6 +164,8 @@ impl Construction for PolydatKernel {
                         .clone()
                         .unwrap_or_else(|| s.label.clone()),
                     cursor_limit: None,
+                    input_variance: s.options.input_variance,
+                    inferred_externs: Vec::new(),
                     ledger: None,
                     engine: crate::Engine::default(),
                 };
@@ -362,6 +366,9 @@ impl crate::kernel::Kernel for PolydatKernel {
     fn program_id(&self) -> crate::kernel::ProgramId {
         crate::kernel::ProgramId(std::sync::Arc::as_ptr(self.program()) as *const () as usize)
     }
+    fn input_type_origin(&self, name: &str) -> Option<crate::kernel::TypeOrigin> {
+        self.program().input_type_origin(name)
+    }
 }
 
 impl crate::kernel::KernelInternals for PolydatKernel {
@@ -417,6 +424,8 @@ impl crate::kernel::KernelProgram for crate::kernel::PolydatProgram {
 }
 
 #[cfg(test)]
+// These tests exercise the deprecated `Dataflow` writes themselves.
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use crate::dsl::compile::compile_polydat_interpreter;

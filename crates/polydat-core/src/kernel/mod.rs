@@ -133,6 +133,26 @@ pub struct InputDef {
     /// are `Coordinate`; the DSL compiler sets `IterationExtern` for
     /// iteration externs and `ExternalWrite` for `extern` ports.
     pub kind: InputKind,
+    /// Whether the author wrote this input's type or the compiler
+    /// inferred it (input_variance.md §3). An inferred input is *open*:
+    /// the host may write a value of another type, and whether the
+    /// compiler converts it is `CompileOptions::input_variance`'s call.
+    pub type_origin: TypeOrigin,
+    /// For a converted input: the type its consumers read, which is
+    /// what the input reports as its type. The slot itself is `Dyn`
+    /// and holds the value as written; `None` for every other input.
+    pub converts_to: Option<crate::ast::PortType>,
+}
+
+/// How an input's type was established (input_variance.md §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeOrigin {
+    /// The author wrote it: `input x: T`, `extern x: T`, `shared x`.
+    /// The input is invariant, and a write of another type is refused.
+    Declared,
+    /// The compiler inferred it: an `input` with no type, or an
+    /// auto-extern typed from the binding that reads it.
+    Inferred,
 }
 
 #[cfg(test)]
@@ -153,18 +173,24 @@ mod tests {
                     default: Value::U64(0),
                     port_type: crate::ast::PortType::U64,
                     kind: InputKind::Coordinate,
+                    type_origin: crate::kernel::TypeOrigin::Declared,
+                    converts_to: None,
                 },
                 InputDef {
                     name: "balance".into(),
                     default: Value::F64(0.0),
                     port_type: crate::ast::PortType::F64,
                     kind: InputKind::ExternalWrite,
+                    type_origin: crate::kernel::TypeOrigin::Declared,
+                    converts_to: None,
                 },
                 InputDef {
                     name: "auth_token".into(),
                     default: Value::Str("anonymous".into()),
                     port_type: crate::ast::PortType::Str,
                     kind: InputKind::ExternalWrite,
+                    type_origin: crate::kernel::TypeOrigin::Declared,
+                    converts_to: None,
                 },
             ],
             1, // coord_count
@@ -203,12 +229,16 @@ mod tests {
                     default: Value::U64(0),
                     port_type: crate::ast::PortType::U64,
                     kind: InputKind::Coordinate,
+                    type_origin: crate::kernel::TypeOrigin::Declared,
+                    converts_to: None,
                 },
                 InputDef {
                     name: "token".into(),
                     default: Value::Str("anon".into()),
                     port_type: crate::ast::PortType::Str,
                     kind: InputKind::ExternalWrite,
+                    type_origin: crate::kernel::TypeOrigin::Declared,
+                    converts_to: None,
                 },
             ],
             1,
@@ -239,12 +269,16 @@ mod tests {
                     default: Value::U64(0),
                     port_type: crate::ast::PortType::U64,
                     kind: InputKind::Coordinate,
+                    type_origin: crate::kernel::TypeOrigin::Declared,
+                    converts_to: None,
                 },
                 InputDef {
                     name: "token".into(),
                     default: Value::Str("anon".into()),
                     port_type: crate::ast::PortType::Str,
                     kind: InputKind::ExternalWrite,
+                    type_origin: crate::kernel::TypeOrigin::Declared,
+                    converts_to: None,
                 },
             ],
             1,

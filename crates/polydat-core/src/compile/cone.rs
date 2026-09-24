@@ -160,7 +160,9 @@ mod jit_impl {
             buf.resize(self.total_slots + 1, 0);
             for (i, v) in inputs.iter().enumerate() {
                 let start = self.in_slots[i];
-                if crate::compile::marshal::encode_slots(v, &mut buf[start..]).is_none() {
+                if crate::compile::marshal::encode_slots(v, self.in_types[i], &mut buf[start..])
+                    .is_none()
+                {
                     panic!(
                         "cone `{}` boundary input [{i}] expected {:?}, got {:?}",
                         self.meta.name,
@@ -645,6 +647,8 @@ mod jit_impl {
                 default: default_for(*ty),
                 port_type: *ty,
                 kind: InputKind::Coordinate,
+                type_origin: crate::kernel::TypeOrigin::Declared,
+                converts_to: None,
             })
             .collect();
         let mut sub_output_map: HashMap<String, (usize, usize)> = HashMap::new();

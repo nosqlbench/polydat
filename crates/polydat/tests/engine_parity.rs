@@ -1156,3 +1156,35 @@ fn independent_chains_are_separate_native_segments() {
         }
     }
 }
+
+/// `set_inputs` writes the coordinates and nothing past them: a longer
+/// slice than the program has coordinates leaves its externs alone, on
+/// every engine. The interpreter used to write the extra value into the
+/// first extern, and the compiled engines into the extern's slots, where
+/// a by-reference extern keeps a pointer.
+#[test]
+fn set_inputs_never_reaches_past_the_coordinates() {
+    use polydat::dsl::compile::compile_polydat_with;
+    use polydat::{Engine, JitMode, Provenance};
+    let src = "extern n: u64 = 7\nextern s: String = \"text\"\nout := n\nlabel := \"{s}\"\n";
+    let mut engines = vec![
+        Engine::Interpreter(JitMode::Off),
+        Engine::Interpreter(JitMode::Auto),
+        Engine::Closures(Provenance::Raw),
+        Engine::Closures(Provenance::PushPull),
+    ];
+    if cfg!(feature = "jit") {
+        engines.push(Engine::Native(Provenance::Raw));
+        engines.push(Engine::Native(Provenance::PushPull));
+    }
+    for engine in engines {
+        let mut k = compile_polydat_with(src, engine).unwrap();
+        k.set_inputs(&[99, 98, 97]);
+        assert_eq!(k.pull("out"), polydat::ast::Value::U64(7), "{engine}");
+        assert_eq!(
+            k.pull("label"),
+            polydat::ast::Value::Str("text".into()),
+            "{engine}"
+        );
+    }
+}

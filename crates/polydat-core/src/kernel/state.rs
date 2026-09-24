@@ -615,7 +615,10 @@ impl PolydatKernel {
 
     /// Convenience: set coordinate inputs on the owned state.
     pub fn set_inputs(&mut self, coords: &[u64]) {
-        self.state.set_inputs(coords);
+        // Only the coordinates: a value past them would land in an
+        // extern's slot, which only a named write sets.
+        let n = coords.len().min(self.program.coord_count());
+        self.state.set_inputs(&coords[..n]);
     }
 
     /// Set an extern by name on the owned state. The compiled kernels

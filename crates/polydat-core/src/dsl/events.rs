@@ -217,6 +217,23 @@ pub enum CompileEvent {
         /// The source of each projection body program.
         bodies: Vec<String>,
     },
+    /// A converter node was placed in front of an input whose type may
+    /// vary (input_variance.md §4): the input's slot takes any value,
+    /// and this node converts it to the type its consumers read.
+    InputConverterInserted {
+        /// The input.
+        input: String,
+        /// The type the converter produces.
+        to: String,
+        /// The converter's node name.
+        node: String,
+        /// Why the input's type may vary: `inferred` for an input whose
+        /// type the compiler inferred, opened by `input_variance`, or
+        /// `declared dyn` for one the program declares `dyn`.
+        origin: String,
+        /// The level `CompileOptions::input_variance` asked for.
+        level: EventLevel,
+    },
 }
 
 impl CompileEvent {
@@ -251,6 +268,9 @@ impl CompileEvent {
             CompileEvent::Warning { .. } => EventLevel::Warning,
             CompileEvent::ExternWithoutDefault { .. } => EventLevel::Warning,
             CompileEvent::UnknownPragma { .. } => EventLevel::Warning,
+
+            // The level the host configured.
+            CompileEvent::InputConverterInserted { level, .. } => *level,
         }
     }
 }
@@ -356,6 +376,8 @@ impl CompileEventLog {
                 format!(
                     "tile '{tile}' ({encoding}): {statics} static run(s), {static_bytes} bytes; {holes} hole(s), {branches} branch(es), {projections} projection(s)"
                 ),
+            CompileEvent::InputConverterInserted { input, to, node, origin, .. } =>
+                format!("input '{input}' ({origin}) takes any value; {node} converts it to {to}"),
             };
             format!("polydat[{tag}]: {msg}")
         }).collect::<Vec<_>>().join("\n")

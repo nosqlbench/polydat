@@ -81,6 +81,43 @@ pub fn assign_values(
     Ok(())
 }
 
+/// Let the program's `extern name` take a value of any type, converted
+/// in front of each reader by a converter node (input_variance.md §6).
+///
+/// The extern is declared `dyn`; the compiler places one converter per
+/// type its readers read, reports each in the compile log, and a value
+/// the converter cannot convert fails the converter, attributed as any
+/// node's failure. For one input a host knows varies, without opening
+/// every input the author left untyped. A name that is not a top-level
+/// `extern` is an error: a coordinate is positioned with `set_inputs`
+/// and never varies in type.
+pub fn convert_input(file: &mut PolydatFile, name: &str) -> Result<(), String> {
+    for stmt in &mut file.statements {
+        if let Statement::ExternPort(port) = stmt
+            && port.name == name
+        {
+            port.typ = crate::ast::PortType::Dyn.to_keyword().to_string();
+            return Ok(());
+        }
+    }
+    let externs: Vec<&str> = file
+        .statements
+        .iter()
+        .filter_map(|s| match s {
+            Statement::ExternPort(p) => Some(p.name.as_str()),
+            _ => None,
+        })
+        .collect();
+    Err(format!(
+        "cannot convert '{name}': no extern by that name; declared externs: {}",
+        if externs.is_empty() {
+            "(none)".to_string()
+        } else {
+            externs.join(", ")
+        }
+    ))
+}
+
 /// Split `name=value` text into its parts.
 pub fn parse_assignment(text: &str) -> Result<(String, String), String> {
     let (name, value) = text

@@ -1457,9 +1457,8 @@ fn cross_kernel_cell_write_invalidates_full_memoized_chain() {
     );
 
     // Cross-kernel write through the writer's cell-bound slot.
-    use polydat::kernel::Dataflow;
     writer
-        .set_wire("s", Value::U64(1))
+        .set_input("s", Value::U64(1))
         .expect("cell-bound write");
 
     // The very next pull must observe it — through the whole
@@ -1478,7 +1477,7 @@ fn cross_kernel_cell_write_invalidates_full_memoized_chain() {
 
     // Reverting the cell propagates the same way.
     writer
-        .set_wire("s", Value::U64(0))
+        .set_input("s", Value::U64(0))
         .expect("cell-bound write");
     assert_eq!(
         reader.pull_ref("ready"),

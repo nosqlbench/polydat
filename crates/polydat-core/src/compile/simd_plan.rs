@@ -134,7 +134,7 @@ pub const fn promotable_type_shape(scalar: PortType) -> Option<SimdTypeShape> {
         // table only after a backend probe and operation catalog justify it.
         F16 | U128 | I128 | Bool | Str | Bytes | Json | Ext | Handle | VecF32 | VecF64 | VecF16
         | VecI8 | VecI16 | VecI32 | VecI64 | Reg128 | RegI8x16 | RegI16x8 | RegI32x4 | RegI64x2
-        | RegF16x8 | RegF32x4 | RegF64x2 => return None,
+        | RegF16x8 | RegF32x4 | RegF64x2 | Dyn => return None,
     };
     Some(shape)
 }

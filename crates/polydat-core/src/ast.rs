@@ -701,7 +701,9 @@ impl Value {
     /// truncate into a narrower slot.
     #[inline]
     pub fn satisfies_slot(&self, slot_type: PortType) -> bool {
-        if matches!(self, Value::None) {
+        // A `Dyn` slot takes any value as written; its converter node
+        // decides what the value becomes (input_variance.md §5).
+        if matches!(self, Value::None) || slot_type == PortType::Dyn {
             return true;
         }
         let value_type = self.port_type();
@@ -1151,7 +1153,8 @@ impl SlotShape for PortType {
             | Self::Bytes
             | Self::Json
             | Self::Ext
-            | Self::Handle => SlotColor::Ref2,
+            | Self::Handle
+            | Self::Dyn => SlotColor::Ref2,
             // Everything else (incl. all narrow widths riding
             // their 64-bit carriers): one slot of immediate data.
             _ => SlotColor::Imm1,
@@ -1170,7 +1173,7 @@ impl SlotShape for PortType {
             Self::VecI64 => ScratchElem::I64,
             Self::Str => ScratchElem::Str,
             Self::Bytes => ScratchElem::Bytes,
-            Self::Json | Self::Ext | Self::Handle => ScratchElem::Value,
+            Self::Json | Self::Ext | Self::Handle | Self::Dyn => ScratchElem::Value,
             _ => return None,
         })
     }

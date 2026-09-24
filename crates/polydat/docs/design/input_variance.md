@@ -1,9 +1,10 @@
 # Input variance: converter nodes, not healing writes
 
-Status: proposed 2026-09-24. Supersedes, when it lands, the runtime
-healing paths described in [composition_substrate.md](composition_substrate.md)
-(the typed-write paragraph and Axiom T2's second site) and
-[type_system.md](type_system.md) §6.2; see §8.
+Status: implemented 2026-09-24, except where §11 says otherwise.
+Supersedes the runtime healing paths described in
+[composition_substrate.md](composition_substrate.md) (the typed-write
+paragraph and Axiom T2's second site) and [type_system.md](type_system.md)
+§6.2; see §8 and §11.
 
 ## 1. The problem
 
@@ -262,3 +263,59 @@ The embedding guide's §3 describes the pattern for hosts.
   (a property test over the catalog).
 - A binder copy into a declared child input of another type is a
   construction error naming both sides.
+
+## 11. What landed, and what differs from the proposal
+
+Landed 2026-09-24, with `crates/polydat/tests/input_variance.rs` running
+every case on every engine:
+
+- `PortType::Dyn` (keyword `dyn`): a value-pair slot naming the stored
+  `Value`, whatever its variant, on every compiled engine and at a native
+  cone's boundary; a `Dyn` slot accepts any value.
+- `InputDef::type_origin` and `InputDef::converts_to`;
+  `Kernel::input_type_origin(name)`; `input_port_type` of a converted
+  input reports the type its readers see, not `Dyn`, so a host that
+  re-declares a parent's inputs as source text declares the reader's type.
+- `CompileOptions::input_variance` (`Fixed` | `Error` | `Warn` | `Info`)
+  on both option types, and `CompileEvent::InputConverterInserted`, whose
+  level is the configured one. An opened input that nothing reads is still
+  reported, once, so no opened input goes unseen.
+- The converter `__convert_<input>_<type>`, one per input and target type,
+  a slot kit on the compiled engines and a `SlotCall` inside native code.
+- `polydat::convert::to_port` and `ConvertError`, the one conversion rule
+  the converter applies.
+- `transform::convert_input(&mut file, name)`, which declares an extern
+  `dyn`; its converters are reported at `Info` under any setting.
+- `Dataflow::set_wire` and `set_wire_idx` are deprecated; `ScopedExpr::set`
+  converts through `convert::to_port` instead of the healing write.
+
+Where the implementation differs from §3–§8:
+
+- **Synthesized externs are named, not detected.** A synthesizer tells the
+  compiler which externs it typed, through
+  `CompileOptions::inferred_externs`; the subcontext builder passes its
+  result and write-through externs this way. Source text carries no mark
+  of who wrote a declaration, so a host that synthesizes source with exact
+  types (nmbrs's cascade) leaves them declared, as it should.
+- **Coordinates are never open.** They are positioned with `set_inputs`
+  and are always `u64`; an untyped `input` is recorded `Inferred` for
+  reporting, and no setting converts it.
+- **`Error` is an `AssemblyError::OpenInputs`**, which a kernel builder
+  returns as `KernelError::Assembly`, rather than a new `KernelError`.
+
+Not yet done, and why:
+
+- **§7, the binder's copies into declared inputs** still heal through the
+  catalog, as before this design. Making them refuse would change what
+  existing scope trees build, and nmbrs's cascade copies exact types, so
+  the refusal is deferred to the release that removes `Dataflow::set_wire`.
+- **§7, exact types for synthesized write-through externs**:
+  `port_type_keyword`'s collapse stays until then, for the same reason.
+- **§8, the write-through widening list** is unchanged.
+
+Found while implementing, and fixed with it: `set_inputs` given more
+values than a program has coordinates wrote the extra values into its
+externs, on every engine (the interpreter into the first extern's value,
+the compiled engines into its slots, where a by-reference extern keeps a
+pointer). Each engine now writes the coordinates and nothing past them
+(`set_inputs_never_reaches_past_the_coordinates`).

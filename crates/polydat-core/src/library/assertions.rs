@@ -87,6 +87,7 @@ impl AssertType {
             PortType::VecF16 => "assert_vec_f16",
             PortType::VecI16 => "assert_vec_i16",
             PortType::VecI8 => "assert_vec_i8",
+            PortType::Dyn => "assert_dyn",
         };
         Self {
             meta: NodeMeta {

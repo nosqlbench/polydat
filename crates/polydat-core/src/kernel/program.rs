@@ -1104,13 +1104,23 @@ impl PolydatProgram {
         self.input_defs.iter().position(|d| d.name == name)
     }
 
-    /// Lookup the declared port type of a named input.
+    /// Lookup the declared port type of a named input: for a converted
+    /// input, the type its readers see, not the `Dyn` slot it is
+    /// written through (input_variance.md §5).
     /// Returns `None` if the name isn't an input of this program.
     pub fn input_port_type(&self, name: &str) -> Option<crate::ast::PortType> {
         self.input_defs
             .iter()
             .find(|d| d.name == name)
-            .map(|d| d.port_type)
+            .map(|d| d.converts_to.unwrap_or(d.port_type))
+    }
+
+    /// How input `name`'s type was established (input_variance.md §3).
+    pub fn input_type_origin(&self, name: &str) -> Option<crate::kernel::TypeOrigin> {
+        self.input_defs
+            .iter()
+            .find(|d| d.name == name)
+            .map(|d| d.type_origin)
     }
 
     /// Lookup the declared port type of an input by index.

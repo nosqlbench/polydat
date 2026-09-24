@@ -56,11 +56,19 @@ pub(crate) fn empty_pair() -> (u64, u64) {
     )
 }
 
-/// A `Value` as the slot bits its port type rides as: the bits of a
-/// scalar, or the borrowed pair of a `Ref2` kind. `None` when the
-/// value's variant has no compiled representation.
+/// A `Value` as the slot bits its port type `ty` rides as: the bits of a
+/// scalar, or the borrowed pair of a `Ref2` kind. A `Dyn` port names the
+/// value itself, whatever its variant, for its converter to read. `None`
+/// when the value's variant has no compiled representation.
 #[cfg(feature = "jit")]
-pub(crate) fn encode_slots(v: &Value, out: &mut [u64]) -> Option<()> {
+pub(crate) fn encode_slots(v: &Value, ty: PortType, out: &mut [u64]) -> Option<()> {
+    if ty == PortType::Dyn {
+        (out[0], out[1]) = match v {
+            Value::None => empty_pair(),
+            v => (v as *const Value as usize as u64, 1),
+        };
+        return Some(());
+    }
     match v {
         Value::U64(x) => out[0] = *x,
         Value::I64(x) => out[0] = *x as u64,
@@ -97,7 +105,7 @@ pub(crate) unsafe fn decode_pair(ty: PortType, ptr: u64, len: u64) -> Value {
                 p as *const u8,
                 n,
             ))),
-            PortType::Json | PortType::Ext | PortType::Handle => {
+            PortType::Json | PortType::Ext | PortType::Handle | PortType::Dyn => {
                 if n == 0 {
                     Value::None
                 } else {
@@ -235,7 +243,7 @@ pub unsafe fn arg_ref<'a>(ty: PortType, slots: &'a [u64]) -> crate::ast::ValueRe
                 std::slice::from_raw_parts(p as *const u8, n),
             )),
             PortType::Bytes => ValueRef::Bytes(std::slice::from_raw_parts(p as *const u8, n)),
-            PortType::Json | PortType::Ext | PortType::Handle => {
+            PortType::Json | PortType::Ext | PortType::Handle | PortType::Dyn => {
                 if n == 0 {
                     ValueRef::None
                 } else {

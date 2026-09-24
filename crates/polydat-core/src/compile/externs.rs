@@ -47,6 +47,9 @@ pub(crate) struct ExternSlot {
     /// kind's pair.
     pub slot: usize,
     pub ty: PortType,
+    /// The type the slot reports: `ty`, or for a converted input the type
+    /// its readers see, where `ty` is `Dyn` (input_variance.md §5).
+    pub reported: PortType,
     /// The current value: the declared default until the host sets it.
     /// A `Ref2` kind's pair points into this value, so it is written
     /// only through `set_slot`, which republishes the pair.
@@ -104,6 +107,13 @@ pub(crate) struct Externs {
     /// Every input by name, the coordinates first, as the interpreter
     /// program lists them.
     input_names: Vec<String>,
+    /// Per input, how its type was established (input_variance.md §3).
+    origins: Vec<crate::kernel::TypeOrigin>,
+    /// How many inputs are coordinates (they come first).
+    coordinates: usize,
+    /// How many buffer slots the coordinates occupy, from slot 0: what
+    /// `set_inputs` writes, a word per slot.
+    coordinate_slots: usize,
     /// Per input index, the extern slot it names; `None` for a
     /// coordinate. The index-keyed set (SRD 117 step 3).
     by_index: Vec<Option<usize>>,
@@ -146,6 +156,9 @@ impl Clone for Externs {
             slots: self.slots.clone(),
             by_name: self.by_name.clone(),
             input_names: self.input_names.clone(),
+            origins: self.origins.clone(),
+            coordinates: self.coordinates,
+            coordinate_slots: self.coordinate_slots,
             by_index: self.by_index.clone(),
             output_names: self.output_names.clone(),
             cursors: self.cursors.clone(),
@@ -196,6 +209,7 @@ impl Externs {
                 name: def.name.clone(),
                 slot: input_starts[i],
                 ty: def.port_type,
+                reported: def.converts_to.unwrap_or(def.port_type),
                 value: def.default.clone(),
                 default: def.default.clone(),
                 cell: None,
@@ -207,6 +221,13 @@ impl Externs {
             by_name,
             scope: Box::default(),
             input_names: input_defs.iter().map(|d| d.name.clone()).collect(),
+            origins: input_defs.iter().map(|d| d.type_origin).collect(),
+            coordinates: coord_count,
+            coordinate_slots: input_defs
+                .iter()
+                .take(coord_count)
+                .map(|d| crate::ast::SlotShape::slot_width(&d.port_type))
+                .sum(),
             by_index,
             output_names: Vec::new(),
             cursors: cursors.to_vec(),
@@ -225,6 +246,24 @@ impl Externs {
         // One compiled program of the tree, whichever engine it is on.
         externs.ledger.record();
         Ok(externs)
+    }
+
+    /// No externs, and `coordinates` coordinates: a kernel assembled
+    /// from steps directly rather than from a program's inputs.
+    pub(crate) fn coordinates_only(coordinates: usize) -> Self {
+        Self {
+            coordinates,
+            coordinate_slots: coordinates,
+            ..Self::default()
+        }
+    }
+
+    /// How many buffer slots the coordinates occupy, from slot 0: the
+    /// words `set_inputs` writes. Not the core's `coord_count`, which
+    /// spans every input's slots, externs included.
+    #[inline]
+    pub(crate) fn coordinate_slots(&self) -> usize {
+        self.coordinate_slots
     }
 
     /// The compile ledger of the tree this kernel's program belongs to.
@@ -501,12 +540,18 @@ impl Externs {
     /// every coordinate is.
     pub(crate) fn input_port_type(&self, name: &str) -> Option<PortType> {
         if let Some(&i) = self.by_name.get(name) {
-            return Some(self.slots[i].ty);
+            return Some(self.slots[i].reported);
         }
         self.input_names
             .iter()
             .any(|n| n == name)
             .then_some(PortType::U64)
+    }
+
+    /// How input `name`'s type was established (input_variance.md §3).
+    pub(crate) fn input_type_origin(&self, name: &str) -> Option<crate::kernel::TypeOrigin> {
+        let i = self.input_names.iter().position(|n| n == name)?;
+        self.origins.get(i).copied()
     }
 
     /// The binding modifier of a named output; `NONE` for a name this
@@ -739,8 +784,9 @@ impl Externs {
     /// How many inputs are coordinates: the leading inputs with no
     /// extern slot. Not the core's `coord_count`, which counts the
     /// buffer slots every input occupies.
+    #[inline]
     pub(crate) fn coordinate_count(&self) -> usize {
-        self.by_index.iter().take_while(|e| e.is_none()).count()
+        self.coordinates
     }
 
     /// The extern at input `index`, `None` for a coordinate or past the
@@ -780,7 +826,10 @@ impl Externs {
 
     /// The externs by name and declared type, for diagnostics.
     pub(crate) fn names(&self) -> Vec<(&str, PortType)> {
-        self.slots.iter().map(|s| (s.name.as_str(), s.ty)).collect()
+        self.slots
+            .iter()
+            .map(|s| (s.name.as_str(), s.reported))
+            .collect()
     }
 }
 
@@ -794,6 +843,9 @@ fn write_through(s: &ExternSlot, buffer: &mut [u64]) {
         crate::ast::SlotColor::Ref2 => {
             let (p, l) = match &s.value {
                 Value::None => crate::compile::marshal::empty_pair(),
+                // A `Dyn` slot names the stored value itself, whatever
+                // its variant, for its converter to read.
+                v if s.ty == PortType::Dyn => (v as *const Value as usize as u64, 1),
                 v => crate::compile::marshal::borrow_pair(v).unwrap_or_else(|| {
                     panic!(
                         "extern '{}' ({}) holds a {} value, which has no slot form",

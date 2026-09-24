@@ -489,6 +489,9 @@ fn compile_options(args: &CompileArgs) -> CompileOptions {
         // resolves to `Engine::default()`, the most native form the
         // build has.
         engine: args.run_engine(),
+        // A program run from the command line declares its own inputs;
+        // an open one keeps its inferred type.
+        ..CompileOptions::default()
     }
 }
 

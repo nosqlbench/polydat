@@ -168,6 +168,7 @@ extern crate self as polydat;
 pub mod ast;
 pub mod binder;
 pub mod compile;
+pub mod convert;
 pub mod dsl;
 pub mod iteration;
 pub mod kernel;
