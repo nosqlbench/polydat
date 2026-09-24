@@ -157,9 +157,11 @@ Three engines share one semantic model:
 - **P3** lowers eligible graph cones through Cranelift to host-native machine
   code.
 
-With the default `jit` feature, the kernel a host gets by default is P3: native
-segments for every run of nodes with a lowering, closure steps for the rest,
-over one slot buffer. Every engine accepts every program, so native
+With the default `jit` feature, the kernel a host gets by default is P3: a
+native segment for every connected group of nodes with a lowering, closure
+steps for the rest, over one slot buffer. Segments follow the graph's
+connections, so pulling one output runs only its own cone's segments,
+however large the rest of the graph is. Every engine accepts every program, so native
 eligibility is an optimization, not a requirement for a valid graph, and the
 interpreter is the oracle the others are checked against.
 

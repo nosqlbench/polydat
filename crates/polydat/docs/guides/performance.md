@@ -309,6 +309,57 @@ the shape, the number of bindings, and how many outputs a cycle pulls.
 is a suite across the three shapes, several widths, one pull against all,
 and a single chain at three depths.
 
+### The cone spectrum, 2026-09-24
+
+The suite run on every engine, at commit f6ae61f, paired round by round
+with the build before cone-shaped native code (2c51167). Each entry is the
+median of five rounds in nanoseconds per cycle; the native columns give the
+earlier build, then this one. The interpreter and the closures did not move
+beyond the run's noise between the two builds, so they are given once.
+
+| Group | interpreter | closures | native | pure native |
+| --- | ---: | ---: | ---: | ---: |
+| `chains-4-one` | 434 | 187 | 194 → 82 | 162 → 76 |
+| `chains-4-all` | 1739 | 743 | 311 → 312 | 553 → 257 |
+| `chains-16-one` | 536 | 193 | 624 → 85 | 494 → 82 |
+| `chains-16-all` | 7047 | 3011 | 1139 → 1256 | 5658 → 1025 |
+| `chains-64-one` | 800 | 193 | 2348 → 97 | 1981 → 97 |
+| `chains-64-all` | 28406 | 12129 | 4470 → 5306 | 107292 → 4431 |
+| `trunk-16-one` | 505 | 205 | 142 → 125 | 170 → 118 |
+| `trunk-16-all` | 1961 | 1174 | 647 → 487 | 1755 → 413 |
+| `lattice-16x8-one` | 2166 | 584 | 290 → 282 | 451 → 267 |
+| `lattice-16x8-all` | 8347 | 3184 | 795 → 642 | 4903 → 563 |
+| `chain-8` | 241 | 115 | 64 → 58 | 77 → 49 |
+| `chain-64` | 1712 | 614 | 242 → 233 | 284 → 225 |
+| `chain-256` | 6875 | 2339 | 835 → 826 | 1170 → 818 |
+
+What the columns show:
+
+- **A pull costs its cone.** Pulling one output of `width` independent
+  chains costs the same whatever the width on both native engines, about
+  the closures' cost halved, where the earlier build ran every chain and
+  grew with the graph (97 ns against 2348 at width 64).
+- **The ladder holds everywhere.** Interpreter, closures, native, pure
+  native, slowest to fastest, in every group; at `chains-64-one` native
+  and pure native are within the noise of each other.
+- **Pure native is fastest.** Its function tests each unit's clean flag in
+  native code, so a pull neither searches nor filters on its way in.
+- **One regression remains:** the native tier pulling every output of
+  many independent chains, 18% slower at width 64. The earlier build ran
+  all 64 chains in one segment at the first pull; a pull now runs its own
+  chain's segment, so a round enters 64 segments where it entered one.
+  The difference from pure native grows with the depth of the chains, so
+  it is not only a fixed cost per pull; its cause is not yet isolated.
+  Pure native is as fast as the earlier build here.
+
+Reference environment: AMD Ryzen 9 3900X, 12 cores and 24 logical
+processors; Windows 11 Pro 10.0.26200; Rust 1.96.0, release profile with
+thin LTO; Cranelift 0.116.1; five rounds of a 100 ms warm-up and a 400 ms
+measurement per rung, with an IDE open in power-save mode and a game
+client idle. The closure column is the run's canary: its per-group
+intervals reached ±12% on two groups, so a difference under about 5% is
+not one.
+
 Each rung (one group on one engine) is calibrated into batches of about
 `batch_ms`, warmed, and measured; its value for a round is the median batch.
 Rounds interleave every rung and rotate their order, so drift during the run
