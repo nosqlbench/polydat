@@ -80,6 +80,13 @@ pub(crate) struct ExternSlot {
 /// native rung moved less than the `p1_interpreter` canary's own noise
 /// (2026-09-22). Keep it for the cold/hot separation; do not cite it as
 /// a speedup, and do not assume the regression is explained.
+///
+/// It did matter on 2026-09-24: about forty bytes added to `Externs` by
+/// value, with a rare cell-refresh path grown inline beside it, cost the
+/// `p3_native_dyn` rung about 5% in paired rounds, and moving the
+/// per-input origins in here, narrowing the coordinate counts to `u32`,
+/// and taking the refresh work out of line brought it back within noise.
+/// Put what is not read per cycle in here, not beside it.
 #[derive(Default)]
 struct ScopeCells {
     /// The binding modifiers of the named outputs, so a compiled
@@ -97,6 +104,9 @@ struct ScopeCells {
     /// `(export_name, source_output)`: what a scope module hands the
     /// kernels it instantiates (native_scope_trees.md §3).
     write_throughs: Vec<(String, String)>,
+    /// Per input, how its type was established (input_variance.md §3):
+    /// read by `input_type_origin`, never per cycle.
+    origins: Vec<crate::kernel::TypeOrigin>,
 }
 
 /// The extern inputs of one compiled kernel.
@@ -107,13 +117,11 @@ pub(crate) struct Externs {
     /// Every input by name, the coordinates first, as the interpreter
     /// program lists them.
     input_names: Vec<String>,
-    /// Per input, how its type was established (input_variance.md §3).
-    origins: Vec<crate::kernel::TypeOrigin>,
     /// How many inputs are coordinates (they come first).
-    coordinates: usize,
+    coordinates: u32,
     /// How many buffer slots the coordinates occupy, from slot 0: what
     /// `set_inputs` writes, a word per slot.
-    coordinate_slots: usize,
+    coordinate_slots: u32,
     /// Per input index, the extern slot it names; `None` for a
     /// coordinate. The index-keyed set (SRD 117 step 3).
     by_index: Vec<Option<usize>>,
@@ -156,7 +164,6 @@ impl Clone for Externs {
             slots: self.slots.clone(),
             by_name: self.by_name.clone(),
             input_names: self.input_names.clone(),
-            origins: self.origins.clone(),
             coordinates: self.coordinates,
             coordinate_slots: self.coordinate_slots,
             by_index: self.by_index.clone(),
@@ -167,6 +174,7 @@ impl Clone for Externs {
                 transit_cells: self.scope.transit_cells.clone(),
                 output_cells: std::sync::Mutex::new(Vec::new()),
                 write_throughs: self.scope.write_throughs.clone(),
+                origins: self.scope.origins.clone(),
             }),
             intent: self.intent.clone(),
             next_bit: std::sync::atomic::AtomicU8::new(
@@ -221,13 +229,12 @@ impl Externs {
             by_name,
             scope: Box::default(),
             input_names: input_defs.iter().map(|d| d.name.clone()).collect(),
-            origins: input_defs.iter().map(|d| d.type_origin).collect(),
-            coordinates: coord_count,
+            coordinates: coord_count as u32,
             coordinate_slots: input_defs
                 .iter()
                 .take(coord_count)
                 .map(|d| crate::ast::SlotShape::slot_width(&d.port_type))
-                .sum(),
+                .sum::<usize>() as u32,
             by_index,
             output_names: Vec::new(),
             cursors: cursors.to_vec(),
@@ -236,6 +243,7 @@ impl Externs {
             changed: Vec::new(),
             ledger,
         };
+        externs.scope.origins = input_defs.iter().map(|d| d.type_origin).collect();
         for name in shared {
             if let Some(&i) = externs.by_name.get(*name) {
                 let cell = externs.new_cell(externs.slots[i].value.clone());
@@ -252,8 +260,8 @@ impl Externs {
     /// from steps directly rather than from a program's inputs.
     pub(crate) fn coordinates_only(coordinates: usize) -> Self {
         Self {
-            coordinates,
-            coordinate_slots: coordinates,
+            coordinates: coordinates as u32,
+            coordinate_slots: coordinates as u32,
             ..Self::default()
         }
     }
@@ -263,7 +271,7 @@ impl Externs {
     /// spans every input's slots, externs included.
     #[inline]
     pub(crate) fn coordinate_slots(&self) -> usize {
-        self.coordinate_slots
+        self.coordinate_slots as usize
     }
 
     /// The compile ledger of the tree this kernel's program belongs to.
@@ -551,7 +559,7 @@ impl Externs {
     /// How input `name`'s type was established (input_variance.md §3).
     pub(crate) fn input_type_origin(&self, name: &str) -> Option<crate::kernel::TypeOrigin> {
         let i = self.input_names.iter().position(|n| n == name)?;
-        self.origins.get(i).copied()
+        self.scope.origins.get(i).copied()
     }
 
     /// The binding modifier of a named output; `NONE` for a name this
@@ -786,7 +794,7 @@ impl Externs {
     /// buffer slots every input occupies.
     #[inline]
     pub(crate) fn coordinate_count(&self) -> usize {
-        self.coordinates
+        self.coordinates as usize
     }
 
     /// The extern at input `index`, `None` for a coordinate or past the

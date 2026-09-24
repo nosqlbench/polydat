@@ -908,11 +908,19 @@ macro_rules! shared_core_methods {
             }
         }
 
+        /// Inlined into every evaluation, so only the check lives here:
+        /// a cell refresh changing a slot is rare, and its work is kept
+        /// out of line where it does not grow the hot path.
         #[inline]
         fn dirty_refreshed(&mut self) {
-            if !self.externs.has_changed() {
-                return;
+            if self.externs.has_changed() {
+                self.dirty_refreshed_slots();
             }
+        }
+
+        #[cold]
+        #[inline(never)]
+        fn dirty_refreshed_slots(&mut self) {
             let changed = self.externs.take_changed();
             for &slot in &changed {
                 // The cell's value is the slot's now: a slot that was
