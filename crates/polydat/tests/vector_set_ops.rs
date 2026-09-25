@@ -8,7 +8,7 @@
 //! These exist so a host can ask "what is this record's rank among the
 //! matching ones" and "how many match" as functions of a list, rather
 //! than as a counter advancing over a visit order that polydat does not
-//! promise (docs/design/host_request_running_counts.md).
+//! promise (docs/design/runtime_model.md §9.1).
 
 use polydat::dsl::compile_polydat_kernel;
 

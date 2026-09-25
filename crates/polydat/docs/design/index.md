@@ -1,6 +1,5 @@
 # Design specifications
 
-* [Architecture review, September 2026](architecture_review_2026_09.md) - Findings and decisions of the September 2026 architecture review. A record, pending fold into the specifications.
 * [Compiled By-Reference Slots](compiled_handles.md) - How Str, Bytes, Json, Ext, and Handle values occupy compiled slots as reference pairs into step-owned scratch, and what crosses the interpreter boundary.
 * [The Composition Substrate](composition_substrate.md) - The three pillars of free graph composition (context synthesis, type safety, state layering), their S, T, and L axioms, and the boundary handlers between them.
 * [Comprehension Forms](comprehension_forms.md) - The comprehension algebra: constructors, closure and validity axioms, boundedness, algebraic equivalences, the operator IR, and dispense semantics.
@@ -11,7 +10,6 @@
 * [The Expression Engine](expression_engine.md) - Polydat as a host-embeddable evaluator: the expression surfaces, the E-axioms of the embedding contract, and the host and polydat obligations at the boundary.
 * [The for Construct](for_traversal.md) - Comprehension producers and traversal scopes in the grammar: typing, compilation, one program per lexical position, affine activation, and cursor narrowing.
 * [The Graph Compiler](graph_compiler.md) - The compiler pipeline and its ordering: wire resolution, adapter insertion, node fusion, hoisting, context fusion, and the H, CF, and NF axioms.
-* [Host Request: Running Counts and Accumulation](host_request_running_counts.md) - A host request for state that survives across pulls, and what any answer must satisfy. A record, pending fold into the specifications.
 * [Input Variance](input_variance.md) - Inputs whose written type varies are served by converter nodes compiled into the graph, not by conversions at the write.
 * [Comprehension IR Architecture](ir_architecture.md) - The comprehension IR as a stack machine over stream operands: interpretation, materialization barriers, stack effects, and adding an opcode.
 * [JIT Boundary](jit_boundary.md) - The native call boundary: function signatures, predicate failures and their recovery, the invoke_with_catch contract, and invalidation across the boundary.

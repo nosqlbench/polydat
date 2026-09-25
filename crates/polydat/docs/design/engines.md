@@ -653,6 +653,16 @@ inside an engine, not refusals:
   A program's segments are functions of one compiled module, so a round that
   runs many of them does not walk a separate code region per segment. Pure
   native code compiles the same units, one block each.
+- The closure tier and P3 share their bookkeeping, one set of methods for
+  currency, provenance, cells, and references (`shared_core_methods!` in
+  `compile/mod.rs`), but each keeps its own evaluation loops (`run_order`,
+  `run_fresh`). The loops differ because the step types differ: a closure
+  step is one node and keeps its flags on the step, while a P3 step may be a
+  segment standing for a fusion unit and keeps its flags in arrays beside
+  the steps. Rationale: one shared loop measured 3 to 7 percent slower on
+  the P2 and P3 rungs of the engine ladder, because it reaches the step
+  list through a call on every step where a loop of its own indexes a
+  local slice.
 - The two refusals, each refused by name with its reason
   (`KernelError::Refused`):
   - An extern of a two-slot immediate type (a 128-bit integer or a register

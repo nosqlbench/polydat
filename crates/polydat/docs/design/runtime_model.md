@@ -688,3 +688,50 @@ guarantees, and §3–§6 state the mechanism that provides them
 - A by-reference output is kept and returned by every pull
   until an input in its provenance changes (R4). A host holds
   the owned `Value` that `pull` returned, never a slot.
+
+### 9.1 No state across pulls
+
+A kernel keeps no value that depends on how many times a step
+ran or was pulled. Every output is a function of its declared
+inputs and its provenance (R4), so it replays from its
+coordinates and agrees on all four engines and in every fiber.
+A running count is therefore not a runtime facility. A shared
+cell does not provide one either: it is typed and
+first-writer-wins ([Scope Model](scope_model.md) §6.1), and it
+publishes a value computed once rather than accumulating. A
+`for` activation has no previous activation to read a count
+from, because a traversal materializes its tuples when it
+opens ([The for Construct](for_traversal.md) §3.1).
+
+The quantities a counter is usually wanted for are pure
+functions of data the host already holds:
+
+- **The rank of a record among the matching records** is the
+  number of matching ordinals smaller than the record's
+  ordinal: `vec_count_below_i32(matching, ordinal)` (or the
+  `_i64` form) over the list of matching ordinals, or
+  `vec_position_i32` when that list is sorted and contains the
+  ordinal.
+- **The number of matching records** is the length of that
+  list, `vec_len_i32(matching)`, or, over a dataset facet,
+  `predicate_count_of(handle, value)` and
+  `metadata_count_of(handle, value)`, which a scope computes
+  once when it loads the facet.
+
+Neither needs a visit order, and a visit order is what a
+counter would add: polydat does not promise one.
+
+An accumulation facility for a need that no pure formulation
+covers is admissible only when all four of these hold:
+
+1. Its value is a function of declared inputs and provenance,
+   never of pull count or fiber schedule.
+2. It replays: the same coordinates give the same value on all
+   four engines and after `invalidate_all`.
+3. It adds no special-cased wire and no per-cycle notion to the
+   scope rules, as `cycle` is an ordinary coordinate.
+4. It is a program transform or a node, not a runtime mode.
+
+A fold over a materialized traversal, computed once at scope
+init from the tuple set the traversal already holds, is the
+shape most likely to meet all four.

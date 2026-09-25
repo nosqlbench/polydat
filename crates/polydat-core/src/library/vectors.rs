@@ -1477,7 +1477,7 @@ fn generic_count_typed(h: &DatasetHandle, value: i64) -> u64 {
 /// profile's declared count: not a counter advancing as records are
 /// visited, but a property of the facet and the value, so it
 /// replays and agrees on every engine and every fiber
-/// (docs/design/host_request_running_counts.md).
+/// (docs/design/runtime_model.md §9.1).
 ///
 /// `metadata_value_at(handle, i)` formats the same scalar as text,
 /// so a host comparing labels as strings and one counting them

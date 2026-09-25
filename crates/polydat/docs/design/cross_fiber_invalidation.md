@@ -128,7 +128,7 @@ cells' bits and input slots.
 
 ### 3.1 Cell creation
 
-Three sites create cells. Each draws the next bit from
+Four sites create cells. Each draws the next bit from
 its own scope's allocator, so every cell carries the word
 of the scope that created it, wherever it is later
 attached:

@@ -17,8 +17,8 @@
 //! cardinality is the length. Written that way the answer is owned by
 //! its inputs, replays from its coordinates, and agrees on every engine
 //! and every fiber, where a counter's answer depends on how many times
-//! it was called ([Host Request: Running Counts and
-//! Accumulation](../../polydat/docs/design/host_request_running_counts.md)).
+//! it was called ([Runtime Model](../../polydat/docs/design/runtime_model.md)
+//! §9.1, "No state across pulls").
 //!
 //! Each operation exists for `vec_i32` and `vec_i64`, since the carrier
 //! is part of the wire's type and polydat does not silently widen one
