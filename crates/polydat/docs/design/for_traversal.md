@@ -122,8 +122,8 @@ parser unchanged, so the comprehension grammar is defined in one place.
 ### 3.1 Producer
 
 A `for` expression evaluates to a compiled comprehension. The binding is
-`const`: the value is computed once at scope init and never re-evaluated
-within the scope. The wire type is `Streamer`. A `Streamer` holds the
+`const`: the value is computed once, when the scope's kernel is
+initialized, and never re-evaluated within that kernel's life. The wire type is `Streamer`. A `Streamer` holds the
 comprehension AST after validation and optimization, plus the metadata
 the algebra computes: tuple shape, cardinality class, and index
 addressability.
@@ -454,9 +454,14 @@ receives the cell's value at open, not the cell. Cells the body's own
 the activation.
 
 **A state of its own.** An activation is a kernel state like any other,
-created with `create_kernel`: it owns its inputs, its outputs, and the
-storage behind them, and follows the provenance rules as if it were the
-only state ([Runtime Model](runtime_model.md) R4). It does not read or
+created with `create_uninitialized`: it owns its inputs, its outputs, and
+the storage behind them, and follows the provenance rules as if it were the
+only state ([Runtime Model](runtime_model.md) R4). `activation_on`
+initializes it after binding its tuple, the cascaded wires, and its
+cursors, so every `const` in the body is evaluated once per activation from
+that tuple, and a const whose expression fails makes `activation_on` fail,
+naming the const. The body's program is a template: it is compiled without
+initialization, and each activation bound from it is initialized. It does not read or
 write the kernel that opened it except through the cells it attaches.
 
 **Opening cost.** Opening a traversal evaluates its comprehension. Ranges

@@ -206,6 +206,25 @@ fn str_to_vec_i64(s: &str) -> Vec<i64> {
     parse_int_array("str_to_vec_i64", s)
 }
 
+/// `str_to_vec_f64(s)` — a JSON array of numbers as a `vec_f64` wire,
+/// such as a window of samples for `is_stable`. Fails by name on
+/// anything that is not a JSON array of numbers.
+#[polydat::polydat_node(category = Conversions)]
+fn str_to_vec_f64(s: &str) -> Vec<f64> {
+    let raw = s.trim();
+    let parsed: serde_json::Value = serde_json::from_str(raw)
+        .unwrap_or_else(|e| panic!("str_to_vec_f64: cannot parse {raw:?} as a JSON array: {e}"));
+    let arr = parsed
+        .as_array()
+        .unwrap_or_else(|| panic!("str_to_vec_f64: parsed JSON is not an array: {raw:?}"));
+    arr.iter()
+        .map(|j| {
+            j.as_f64()
+                .unwrap_or_else(|| panic!("str_to_vec_f64: element {j} is not a number in {raw:?}"))
+        })
+        .collect()
+}
+
 /// The shared parse: a JSON array of integers, or a failure naming the
 /// node, the text, and what was wrong with it.
 fn parse_int_array(node: &str, s: &str) -> Vec<i64> {

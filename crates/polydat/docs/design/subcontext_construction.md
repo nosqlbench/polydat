@@ -322,6 +322,12 @@ The active construction errors are:
 | `Compile` | Parsing, rewriting, type checking, or write-through structural validation fails. |
 | `StrictNonePropagation` | Strict intermediate-scope materialization would silently fall through after a `const` binding produced `None`. |
 
+A `const` binding whose expression fails when the child is initialized fails
+the construction. `kernel::bind_under` returns it as
+`KernelError::ConstInit`, naming the const; the interpreter's own spawn path
+(`materialize_wiring_from_outer`) has no error return, so it panics with the
+same message.
+
 `SourceContext` accompanies construction diagnostics so failures identify their
 logical scope and, when supplied, source file and line range.
 
@@ -375,14 +381,15 @@ is transferred to it:
   the host supplies imports, exports, body fragments, consumers, and result
   bindings, and the parent's `spawn` binds the child through the full binder
   ([Scope Model](scope_model.md) §4) — shared cells and transit cells
-  attached, computed parent outputs attached as broadcast cells, scope-init
-  `const` outputs pulled, scope coordinates threaded. The child is an
-  interpreter kernel.
+  attached, computed parent outputs attached as broadcast cells, the child
+  initialized so its `const` bindings are evaluated from the bound values,
+  scope coordinates threaded. The child is an interpreter kernel.
 - **Traversal activation** is for the language's own `for`: the body is
   compiled with the parent, and `TraversalStream::activation_on` creates one
   kernel per tuple on the engine the host asks for, binding the
-  tuple's elements and a snapshot of the cascaded wires by value and
-  narrowing every cursor ([for_traversal.md](for_traversal.md)).
+  tuple's elements and a snapshot of the cascaded wires by value,
+  narrowing every cursor, and then initializing the activation
+  ([for_traversal.md](for_traversal.md)).
 
 In both forms, the iteration does not decide what the child contains. A
 comprehension determines the order and the values of the tuples; a host's

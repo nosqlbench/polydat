@@ -48,7 +48,10 @@ This document uses the terms of
   parent-gated construction, through which an outer scope's
   values are delivered into an inner kernel's input slots.
 - **Scope-init.** The construction of a child kernel, during
-  which its input slots are bound from the outer scope.
+  which its input slots are bound from the outer scope, followed
+  by the kernel's initialization, which evaluates its `const`
+  bindings once from the bound values
+  ([runtime_model.md](runtime_model.md) §Terms).
 - **Cycle time.** The period after scope-init during which the
   host writes inputs and pulls outputs. "Per cycle" means once
   per coordinate write.
@@ -290,16 +293,19 @@ producer) is *volatile*. Volatility has two sources:
 
 - **Intrinsic.** Certain library nodes declare themselves
   volatile (e.g., `current_epoch_millis`, `counter`,
-  `elapsed_millis`, `thread_id`). The library imposes the
-  volatility; no user opt-in is required, and the workload
-  author cannot remove the marker.
+  `thread_id`). The library imposes the volatility; no user
+  opt-in is required, and the workload author cannot remove the
+  marker.
 - **User opt-in.** A wire is declared volatile with the
   `volatile` modifier on its binding. The author thereby marks
-  the wire as recomputed after every write.
+  the wire as recomputed at every read.
 
-Both sources have the same runtime effect: the wire is not
-memoized across writes, and volatility spreads to its
-dependents (see R1's volatile sub-axiom in runtime_model.md).
+Both sources have the same runtime effect: every read whose cone
+reaches the wire evaluates it again, volatility spreads to its
+dependents, and its upstream stays cached (see R1's volatile
+sub-axiom in runtime_model.md). A `const` over a volatile wire
+captures its value at initialization, and volatility does not
+spread past the const.
 Ordinary S4 external writes do not need volatility; provenance
 tracking re-evaluates the affected steps when an input changes.
 Volatility is the explicit marker for the nondeterministic
@@ -514,20 +520,27 @@ current layer's writes.**
 The classification belongs to the program and is computed by
 one classifier shared by all four engines
 ([runtime_model.md](runtime_model.md) §3). The const-binding
-contract of the [Evaluation Model](evaluation_model.md) checks
-it twice: by a compile-time wire-chain check (Plan A) and by the
-scope-init pull (Plan B). The classification is known before
-any node receives a value, and the chain enforces it by filling
-slots according to each input's lifecycle.
+contract of the [Evaluation Model](evaluation_model.md) realizes
+the effectively-const lifecycle for a `const` binding: the
+binder fills the kernel's input slots from the outer layer, and
+then the kernel's initialization evaluates every const once from
+those values and holds each in a const slot
+(`InputKind::Const`) that no later write changes. A const that
+reads a coordinate is a build error on all four engines, and a
+const whose expression fails makes initialization fail. The
+classification is known before any node receives a value, and
+the chain enforces it by filling slots according to each input's
+lifecycle.
 
 **Sub-axiom L2.f — Failed const materialisation falls
 through to the outer chain (L2 ⊓ T1).** When an
-effectively-const binding's scope-init evaluation yields
+effectively-const binding's evaluation at initialization yields
 `Value::None` (under the None propagation contract of
-[none_semantics.md](none_semantics.md)), the slot is
-*unfilled at this layer*. The read invariant (L1) then returns
-the outer scope's value for the same name through the standard
-lookup chain. The effectively-const guarantee still holds at
+[none_semantics.md](none_semantics.md)), the const takes the
+outer scope's value for the same name, which the binder copied
+into the const's fallback input slot before initialization, so
+the read invariant (L1) returns the outer value. The
+effectively-const guarantee still holds at
 the outer layer: the outer binding is itself effectively-const
 for the scope's lifetime, so the value the inner reader
 observes is stable across the activation. This combination of
@@ -543,7 +556,8 @@ provide a shadow that happens to compute to None, or it may
 have meant to declare `extern X` and omitted it. Under the
 `strict` flag of `subcontext::CompileOptions`, `build_subscope`
 calls `PolydatKernel::find_l2f_violations` after scope-init and
-raises any const output materialised to `Value::None` as
+raises any const whose own expression (the output
+`__init_<name>`) evaluated to `Value::None` as
 `ContractViolation::StrictNonePropagation`. The diagnostic
 names each offending binding and tells the author either to
 make the binding yield a defined value, or to remove the
@@ -647,14 +661,19 @@ through its poll. No host-side refresh call is required.
 
 ### 8.3 Const lifecycle violations
 
-When a `const X := <expr>` binding's right-hand side depends on
-a dynamic input, it violates L2's structural classification.
-The Evaluation Model's const-binding contract detects this:
-Plan A (compile-time wire-chain analysis) catches structural
-violations, and Plan B (the scope-init pull under
-`catch_unwind`) catches semantic violations. The node tier
-never sees a violation; a node receives either a value from
-the chain or an error from the construction layer.
+A `const X := <expr>` binding is evaluated once, at the kernel's
+initialization, so its value is effectively-const whatever its
+right-hand side reads: a later write to an extern it reads, or a
+volatile source in its expression, does not change it until
+`Kernel::init` runs again. The Evaluation Model's const-binding
+contract refuses the two shapes that have no single value: a
+const that reads a coordinate is a build error, and consts that
+read each other in a cycle are a build error, on all four
+engines. A const whose expression fails at initialization makes
+initialization fail with `KernelError::ConstInit`, naming the
+const. The node tier never sees a violation; a node receives
+either a value from the chain or an error from the construction
+layer.
 
 ### 8.4 Native and closure steps (T3)
 

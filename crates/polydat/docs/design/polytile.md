@@ -651,7 +651,12 @@ construction. The body's inputs (the tuple elements and the cascade) and
 its holes are resolved to indices on the first tuple and kept, so a
 tuple is bound and read with no name lookup. One body kernel per body
 program and engine is kept per rendering state and reused across its
-renders; two renders never share dispense state.
+renders; two renders never share dispense state. The body's program is a
+template, built without initialization. When the body declares a
+`const`, the body kernel is initialized at each element binding, after
+the tuple's values are written, so the const is evaluated once per
+element from that element's values, and a const whose expression fails
+fails the render, naming the const.
 
 **Number writers.** An integer hole with no format writes its digits
 straight into the sink, and a float hole with no format or under a `.N`

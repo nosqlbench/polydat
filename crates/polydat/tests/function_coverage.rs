@@ -836,25 +836,6 @@ fn current_epoch_positive() {
 }
 
 #[test]
-fn session_start_stable() {
-    let mut k = polydat("out := session_start_millis()");
-    let a = eval_u64(&mut k, 0);
-    let b = eval_u64(&mut k, 1);
-    assert_eq!(a, b, "session_start_millis should be stable");
-    assert!(a > 0, "session start should be positive");
-}
-
-#[test]
-fn elapsed_millis_nonnegative() {
-    let mut k = polydat("out := elapsed_millis()");
-    let v = eval_u64(&mut k, 0);
-    assert!(
-        v < 1000,
-        "elapsed_millis should be small right after creation, got {v}"
-    );
-}
-
-#[test]
 fn thread_id_positive() {
     let mut k = polydat("out := thread_id()");
     let v = eval_u64(&mut k, 0);

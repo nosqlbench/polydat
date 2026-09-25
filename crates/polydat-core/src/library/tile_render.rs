@@ -654,6 +654,13 @@ impl TileProgram {
                                             .unwrap_or_else(|e| fail(name, e));
                                     }
                                 }
+                                // Each element is a binding of its own, so
+                                // the body's consts are evaluated for it.
+                                if !kernel.const_inits().is_empty()
+                                    && let Err(e) = kernel.init()
+                                {
+                                    panic!("tile '{}': projection body: {e}", self.spec.name);
+                                }
                             }
                             self.render_ops(body, inputs, engine, bodies, Some(entry), out);
                         }
@@ -964,7 +971,7 @@ impl BodyKernels {
                 self.created += 1;
                 BodyEntry {
                     program: program.clone(),
-                    kernel: program.clone().create_kernel(),
+                    kernel: program.clone().create_uninitialized(),
                     elements: None,
                     cascade: None,
                     holes: Vec::new(),

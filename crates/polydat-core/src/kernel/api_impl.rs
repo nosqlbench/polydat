@@ -217,9 +217,7 @@ impl crate::kernel::Kernel for PolydatKernel {
     /// Every output is pulled, so what a side channel observes is what
     /// it observes on a compiled kernel's run.
     fn eval(&mut self) {
-        for name in Metadata::output_names(self) {
-            let _ = PolydatKernel::pull_ref(self, &name);
-        }
+        PolydatKernel::eval_read(self);
     }
     fn pull(&mut self, name: &str) -> Value {
         PolydatKernel::pull_ref(self, name).clone()
@@ -261,6 +259,16 @@ impl crate::kernel::Kernel for PolydatKernel {
     }
     fn output_index(&self, name: &str) -> Option<usize> {
         self.program().output_index(name)
+    }
+    fn const_inits(&self) -> &[crate::kernel::ConstInit] {
+        self.program().const_inits()
+    }
+    fn init_input_at(
+        &mut self,
+        index: usize,
+        value: Value,
+    ) -> Result<(), crate::kernel::WriteError> {
+        PolydatKernel::init_input_at(self, index, value)
     }
     fn pull_at(&mut self, index: usize) -> Value {
         PolydatKernel::pull_ref_at(self, index).clone()
@@ -412,7 +420,7 @@ impl crate::kernel::KernelProgram for crate::kernel::PolydatProgram {
     fn as_interpreter(self: std::sync::Arc<Self>) -> Option<std::sync::Arc<Self>> {
         Some(self)
     }
-    fn create_kernel(self: std::sync::Arc<Self>) -> Box<dyn crate::kernel::Kernel> {
+    fn create_uninitialized(self: std::sync::Arc<Self>) -> Box<dyn crate::kernel::Kernel> {
         Box::new(PolydatKernel::from_program(self))
     }
     fn ledger(&self) -> &std::sync::Arc<crate::kernel::CompileLedger> {

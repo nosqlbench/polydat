@@ -265,15 +265,17 @@ mod jit_impl {
     /// propagate volatility downstream, so a node a program declared
     /// volatile could read here as const and be fused into a cone the
     /// fold then evaluated once.
-    fn classify_lifecycles(dag: &ResolvedDag) -> Vec<crate::kernel::EvalLifecycle> {
-        crate::kernel::PolydatProgram::classify_lifecycle(
+    ///
+    /// Returns each node's lifecycle and whether it is volatile.
+    fn classify_lifecycles(dag: &ResolvedDag) -> (Vec<crate::kernel::EvalLifecycle>, Vec<bool>) {
+        let classes = crate::kernel::PolydatProgram::classify_lifecycle(
             &dag.nodes,
             &dag.wiring,
             &dag.input_defs,
             &dag.output_map,
             &dag.output_modifiers,
-        )
-        .lifecycle
+        );
+        (classes.lifecycle, classes.nondeterministic)
     }
 
     /// Dedup/lookup key for a boundary wire source.
@@ -309,7 +311,7 @@ mod jit_impl {
             return;
         }
 
-        let lifecycles = classify_lifecycles(dag);
+        let (lifecycles, volatile) = classify_lifecycles(dag);
         // Eligibility in topological order, because the SRD-74 None
         // rule for a None-tolerant node depends on its sources: the
         // kernel guard makes a fused cone None whenever a boundary
@@ -338,7 +340,10 @@ mod jit_impl {
         }
 
         // Connected components over eligible-to-eligible wires, by the
-        // rule every fusing engine shares (compile::fusion_units).
+        // rule every fusing engine shares (compile::fusion_units). A
+        // volatile node never shares a cone with a node that is not: a
+        // cone runs whole, so every read that re-evaluates the volatile
+        // node would re-run the cached work upstream of it too.
         let preds: Vec<Vec<usize>> = dag
             .wiring
             .iter()
@@ -351,7 +356,8 @@ mod jit_impl {
                     .collect()
             })
             .collect();
-        let components = crate::compile::fusion_units::components(&preds, &eligible, &vec![0; n]);
+        let class: Vec<u64> = volatile.iter().map(|&v| v as u64).collect();
+        let components = crate::compile::fusion_units::components(&preds, &eligible, &class);
 
         // Consumer adjacency over the ORIGINAL node graph — the
         // convexity walk below routes through it.
@@ -681,6 +687,7 @@ mod jit_impl {
             context: dag.context.clone(),
             output_modifiers: HashMap::new(),
             const_outputs: std::collections::HashSet::new(),
+            const_inits: Vec::new(),
             // A cone is a fragment of the program that stands in the
             // tree's ledger already, not a program of its own: its
             // kernel is recorded nowhere.

@@ -13,6 +13,19 @@
 
 mod dsl_compile_tests {
     #![allow(unused_imports, dead_code)]
+
+    /// All four engines, in their default provenance mode.
+    fn every_engine() -> Vec<polydat::Engine> {
+        let mut all = vec![
+            polydat::Engine::Interpreter(polydat::JitMode::Auto),
+            polydat::Engine::Closures(polydat::Provenance::Auto),
+        ];
+        if cfg!(feature = "jit") {
+            all.push(polydat::Engine::Native(polydat::Provenance::Auto));
+            all.push(polydat::Engine::PureNative(polydat::Provenance::Auto));
+        }
+        all
+    }
     use polydat::JitMode;
     use polydat::ast::*;
     use polydat::dsl::ast::*;
@@ -607,36 +620,50 @@ mod dsl_compile_tests {
         // hard structural violation. Plan A must reject.
         let src = "input cycle: u64\n\
                    const bad := hash(cycle)\n";
-        let err = compile_polydat_interpreter(src)
-            .expect_err("Plan A must reject init binding wired to a coordinate input");
-        assert!(
-            err.to_string().contains("init binding 'bad'")
-                && err.to_string().contains("init contract"),
-            "diagnostic must name the binding and the contract; got: {err}"
-        );
-        assert!(
-            err.to_string().contains("cycle") || err.to_string().contains("coordinate"),
-            "diagnostic should pinpoint the offending wire; got: {err}"
-        );
+        for engine in every_engine() {
+            let err = polydat::dsl::compile::compile_polydat_with(src, engine)
+                .err()
+                .unwrap_or_else(|| panic!("{engine}: a const may not read a coordinate"));
+            assert!(
+                err.to_string().contains("const 'bad'")
+                    && err.to_string().contains("coordinate 'cycle'"),
+                "{engine}: the diagnostic names the const and the coordinate; got: {err}"
+            );
+        }
     }
 
     #[test]
-    fn init_binding_wired_to_external_write_port_rejected() {
-        // External-write port (extern with default) is dynamic;
-        // init bindings must not depend on one.
-        let src = "extern session_id: u64 = 0\n\
+    fn a_const_over_an_extern_is_fixed_until_init() {
+        // A const over an extern is evaluated when the kernel is
+        // initialized. Writing the extern afterwards does not change it;
+        // `init` recomputes it from the extern as it is then.
+        let src = "extern session_id: u64 = 7\n\
                    const derived := mod(session_id, 100)\n";
-        let err = compile_polydat_interpreter(src)
-            .expect_err("Plan A must reject init binding wired to a external-write port");
-        assert!(
-            err.to_string().contains("init binding 'derived'")
-                && err.to_string().contains("init contract"),
-            "diagnostic must name the binding and the contract; got: {err}"
-        );
-        assert!(
-            err.to_string().contains("session_id") || err.to_string().contains("capture"),
-            "diagnostic should pinpoint the offending wire; got: {err}"
-        );
+        for engine in every_engine() {
+            let mut k = polydat::dsl::compile::compile_polydat_with(src, engine)
+                .unwrap_or_else(|e| panic!("{engine}: {e}"));
+            assert_eq!(k.pull("derived").as_u64(), 7, "{engine}: captured at build");
+            k.set_input("session_id", polydat::ast::Value::U64(142))
+                .unwrap();
+            assert_eq!(
+                k.pull("derived").as_u64(),
+                7,
+                "{engine}: a write does not change a const"
+            );
+            k.init().unwrap();
+            assert_eq!(
+                k.pull("derived").as_u64(),
+                42,
+                "{engine}: init recomputes it"
+            );
+            let err = k
+                .set_input("__const_derived", polydat::ast::Value::U64(1))
+                .expect_err("a const's slot is written only by init");
+            assert!(
+                matches!(err, polydat::kernel::WriteError::ConstSlot { .. }),
+                "{engine}: {err}"
+            );
+        }
     }
 
     #[test]

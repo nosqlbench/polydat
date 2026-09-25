@@ -569,6 +569,13 @@ impl PolydatKernel {
             .set_cursor_schemas(schemas);
     }
 
+    /// Record the const bindings, before the program is shared.
+    pub(crate) fn set_const_inits(&mut self, inits: Vec<crate::kernel::ConstInit>) {
+        Arc::get_mut(&mut self.program)
+            .expect("set_const_inits must be called before program is shared")
+            .set_const_inits(inits);
+    }
+
     /// Record how much of the graph the build fused into native cones,
     /// before the program is shared.
     pub(crate) fn set_cone_mode(&mut self, mode: crate::compile::cone::JitMode) {
@@ -637,6 +644,34 @@ impl PolydatKernel {
     /// The one write rule of every engine: the value satisfies the
     /// declared type or is `None`, and a coordinate is not written here.
     pub fn set_input_at(
+        &mut self,
+        idx: usize,
+        value: Value,
+    ) -> Result<(), crate::kernel::WriteError> {
+        if self.program.input_kind(idx) == Some(crate::kernel::InputKind::Const) {
+            return Err(crate::kernel::WriteError::ConstSlot {
+                slot: self
+                    .program
+                    .input_name_by_idx(idx)
+                    .map(|n| n.to_string())
+                    .unwrap_or_default(),
+            });
+        }
+        self.write_input_at(idx, value)
+    }
+
+    /// [`Self::set_input_at`] as initialization writes it: a const's
+    /// slot is accepted (`Kernel::init`).
+    pub(crate) fn init_input_at(
+        &mut self,
+        idx: usize,
+        value: Value,
+    ) -> Result<(), crate::kernel::WriteError> {
+        self.write_input_at(idx, value)
+    }
+
+    /// The typed write every input write shares.
+    fn write_input_at(
         &mut self,
         idx: usize,
         value: Value,
@@ -732,6 +767,16 @@ impl PolydatKernel {
         self.state.pull_by_index(&self.program, output_idx)
     }
 
+    /// Every output, as one read: each volatile step the outputs reach
+    /// is evaluated once for all of them, as a compiled kernel's `eval`
+    /// runs every step once.
+    pub(crate) fn eval_read(&mut self) {
+        self.state.rearm_volatile();
+        for name in self.program.output_names() {
+            let _ = self.state.pull_in_read(&self.program, name);
+        }
+    }
+
     /// Copy `self`'s currently-set input-slot values into `child`'s
     /// input slots by name.
     ///
@@ -823,9 +868,18 @@ impl PolydatKernel {
             .const_outputs
             .iter()
             .filter(|name| {
+                // A const captured at initialization holds its fallback in
+                // its own output, so what shows a silent fall-through is
+                // its expression's value, `__init_<name>`.
+                let own = self
+                    .program
+                    .const_inits()
+                    .iter()
+                    .find(|c| &c.name == *name)
+                    .map_or(name.as_str(), |c| c.source.as_str());
                 self.program
                     .output_map
-                    .get(name.as_str())
+                    .get(own)
                     .map(|(node_idx, port_idx)| {
                         matches!(&self.state.core.buffers[*node_idx][*port_idx], Value::None)
                     })
@@ -1036,8 +1090,13 @@ impl PolydatKernel {
         self.materialize_wiring_from_outer(outer);
     }
 
+    /// Wire and initialize. The interpreter's own subscope path cannot
+    /// return an error, so a const that fails when the child is
+    /// initialized fails the construction here.
     fn materialize_wiring_from_outer(&mut self, outer: &dyn crate::kernel::Kernel) {
-        Self::wire_child_under(self, outer);
+        if let Err(e) = Self::wire_child_under(self, outer) {
+            panic!("{e}");
+        }
     }
 
     /// Wire `child` from `outer`: the cell cascade, the outputs the
@@ -1051,7 +1110,7 @@ impl PolydatKernel {
     pub(crate) fn wire_child_under(
         child: &mut dyn crate::kernel::Kernel,
         outer: &dyn crate::kernel::Kernel,
-    ) {
+    ) -> Result<(), crate::KernelError> {
         use crate::kernel::interp::Lookup as _;
         // Step 1 — typed shared-cell cascade. Compute every
         // cell visible at the outer scope: cells on outer's
@@ -1205,64 +1264,11 @@ impl PolydatKernel {
             }
         }
 
-        // Step 3 — materialize scope-init const outputs. A `const`
-        // binding whose RHS depends on inputs (auto-extern,
-        // iteration variable, params-kernel passthrough) can't
-        // fold at compile time; its wiring stays node-backed and
-        // its buffer is `Value::None` until something pulls it.
-        // Now that step 2 has populated the input slots from the
-        // outer chain, pull every const output once to capture
-        // its effectively-const value for the lifetime of this
-        // scope. After this point the buffer is frozen — the
-        // const lifecycle promises immutability — so downstream
-        // `lookup(name)` reads through `get_constant`'s buffer
-        // path and sees the materialised value.
-        //
-        // Panics during the pull are caught (not swallowed) — a
-        // const binding may depend on side-effectful resolution
-        // (`dataset_prebuffer`, etc.) that isn't ready until the
-        // workload actually runs, AND we want to surface real
-        // type / arity / Value::None-coercion errors so they're
-        // not hidden by the same catch. The recovery shape
-        // (buffer stays None, consumer's eventual read re-
-        // triggers the panic in context) is unchanged; the
-        // additional behavior is a diagnostic on every caught
-        // panic so operators can see the eval failure even when
-        // the conditional-shadow fall-through papers over the
-        // None buffer at the next lookup.
-        let const_outputs: Vec<String> = child
-            .output_names()
-            .into_iter()
-            .filter(|n| child.output_modifier(n).is_const())
-            .collect();
-        for name in const_outputs {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                child.pull(&name);
-            }));
-            if let Err(payload) = result {
-                let msg = if let Some(s) = payload.downcast_ref::<String>() {
-                    s.clone()
-                } else if let Some(s) = payload.downcast_ref::<&str>() {
-                    s.to_string()
-                } else {
-                    "<non-string panic payload>".to_string()
-                };
-                // Single-line warning through the audit sink, so a
-                // host that installed a log function receives it as it
-                // receives every other warning; `eprintln!` here went
-                // only to stderr, which is the one place a host routing
-                // its logs is not reading. Operators see it at
-                // activation rather than waiting for the const's
-                // consumer to re-pull and the panic to re-fire with
-                // full context (evaluation_model.md, Plan B).
-                crate::library::support::audit::warn(&format!(
-                    "scope-init const pull failed for '{name}': {msg} \
-                     (buffer left at Value::None; downstream lookup will \
-                     fall through to wired-in input or surface the error \
-                     when the binding is consumed)"
-                ));
-            }
-        }
+        // Step 3 — initialize the child: now that step 2 has written
+        // the enclosing scope's values into its inputs, every const is
+        // evaluated once and fixed for the child's life (Kernel::init).
+        // Before step 4, whose own-coordinate snapshot reads consts.
+        child.init()?;
 
         // Step 4 — scope-coordinates plumbing. Path is now
         // `[own] ++ outer.scope_coordinates()`. Refresh own
@@ -1270,6 +1276,7 @@ impl PolydatKernel {
         // then prepend outer's frozen path.
         let outer_path = outer.scope_coordinates().to_vec();
         child.extend_scope_coordinates(&outer_path);
+        Ok(())
     }
 
     /// SRD-13f Push B.2 — advance this kernel's broadcast

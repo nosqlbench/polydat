@@ -289,11 +289,11 @@ fn the_engines_agree_on_every_node() {
 /// The interpreter accepts every program; that is the oracle the plan
 /// measures the other engines against.
 /// A nondeterministic node and a side channel run on pure native code
-/// as they run on every other engine: the never-current step reruns
-/// after every write, so a counter advances once per write on each
-/// engine, and a side channel fires once per evaluation in which it
-/// is not current, so the rows it emits agree in number when every
-/// engine is driven through the same writes and evaluations.
+/// as they run on every other engine. A volatile step is re-evaluated
+/// by every read whose cone reaches it, so a counter advances once per
+/// read that reaches it on each engine, and a side channel downstream
+/// of it fires once per read that reaches the side channel, so the
+/// counts agree when every engine is driven through the same reads.
 #[cfg(feature = "jit")]
 #[test]
 fn nondeterministic_and_side_channel_nodes_run_alike_on_pure_native_code() {
@@ -336,12 +336,15 @@ fn nondeterministic_and_side_channel_nodes_run_alike_on_pure_native_code() {
         for &c in &writes {
             k.set_inputs(&[c]);
             k.eval();
-            seen.push(k.pull("n").as_u64());
+            let n = k.pull("n").as_u64();
+            let line = k.pull("line").as_str().to_string();
+            let h = k.pull("h").as_u64();
             assert_eq!(
-                k.pull("line").as_str(),
-                format!("{}:{}", seen.last().unwrap(), k.pull("h").as_u64()),
-                "{name}: the line reads the counter of this write"
+                line,
+                format!("{}:{h}", n + 1),
+                "{name}: the pull of `line` re-read the counter once"
             );
+            seen.push(n);
         }
         counts.push((
             name.to_string(),
@@ -350,19 +353,24 @@ fn nondeterministic_and_side_channel_nodes_run_alike_on_pure_native_code() {
         ));
     }
     let (_, want_seen, want_rows) = &counts[0];
+    assert!(
+        want_seen.windows(2).all(|w| w[1] == w[0] + 3),
+        "the interpreter's counter advances three times per write: `eval`, \
+         the pull of `n`, and the pull of `line` each read it once; got {want_seen:?}"
+    );
     assert_eq!(
-        want_seen,
-        &[0u64, 1, 2, 3, 4, 5, 6],
-        "the interpreter counts every write"
+        *want_rows,
+        writes.len(),
+        "the side channel fires once per `eval`"
     );
     for (name, seen, rows) in &counts[1..] {
         assert_eq!(
             seen, want_seen,
-            "{name}: the counter advances once per write"
+            "{name}: the counter advances once per read"
         );
         assert_eq!(
             rows, want_rows,
-            "{name}: the side channel fires once per evaluation"
+            "{name}: the side channel fires once per `eval`"
         );
     }
 }

@@ -27,12 +27,15 @@ pub fn bind_under(
     parent: &dyn Kernel,
     program: Arc<dyn KernelProgram>,
     iter_bindings: &[(String, Value)],
-) -> Result<Box<dyn Kernel>, WriteError> {
-    let mut child = program.create_kernel();
+) -> Result<Box<dyn Kernel>, crate::KernelError> {
+    let mut child = program.create_uninitialized();
     for (var, value) in iter_bindings {
-        child.set_input(var, value.clone())?;
+        child
+            .set_input(var, value.clone())
+            .map_err(crate::KernelError::Write)?;
     }
-    PolydatKernel::wire_child_under(child.as_mut(), parent);
+    // Binding initializes the child once the parent's values are in.
+    PolydatKernel::wire_child_under(child.as_mut(), parent)?;
     Ok(child)
 }
 

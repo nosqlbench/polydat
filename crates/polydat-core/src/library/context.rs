@@ -12,8 +12,7 @@
 //!
 //! * Pure clock / OS reads (`current_epoch_millis`, `thread_id`) —
 //!   plain body, marked `Nondeterministic`.
-//! * Construction-frozen captures (`session_start_millis`,
-//!   `elapsed_millis`, `tmp_dir`, `env_or`) — use
+//! * Construction-frozen captures (`tmp_dir`, `env_or`) — use
 //!   `#[poly_const(setup_fn, from = ())]` (or `from = <const_arg>`
 //!   when the capture depends on a const) to compute the cached
 //!   value once at construction. The body just reads the cache.
@@ -37,55 +36,6 @@ fn current_epoch_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64
-}
-
-/// Helper for the time-capture setup fns: read epoch millis now.
-/// Plain function pointer compatible with `#[poly_const(fn, from = ())]`.
-fn capture_epoch_millis() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64
-}
-
-fn session_start_millis_jit_constants(node: &SessionStartMillis) -> Vec<u64> {
-    vec![node.start]
-}
-
-/// Session start time in epoch milliseconds, frozen at construction.
-///
-/// Signature: `() -> (u64)`. Deterministic within a session.
-///
-/// Captured-at-construction values are marked Nondeterministic so
-/// they are excluded from const-fold identity (workload hash stays
-/// stable across runs even though the captured value differs).
-#[crate::polydat_node(
-    category = Context,
-    purity = Nondeterministic("session start time captured from system clock"),
-    jit_constants = session_start_millis_jit_constants,
-)]
-fn session_start_millis(#[poly_const(capture_epoch_millis, from = ())] start: &u64) -> u64 {
-    *start
-}
-
-fn elapsed_millis_jit_constants(node: &ElapsedMillis) -> Vec<u64> {
-    vec![node.start]
-}
-
-/// Elapsed milliseconds since session start.
-///
-/// Signature: `() -> (u64)`. Non-deterministic, grows monotonically.
-#[crate::polydat_node(
-    category = Context,
-    purity = Nondeterministic("monotonic elapsed time from system clock"),
-    jit_constants = elapsed_millis_jit_constants,
-)]
-fn elapsed_millis(#[poly_const(capture_epoch_millis, from = ())] start: &u64) -> u64 {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64;
-    now.saturating_sub(*start)
 }
 
 /// Current OS thread numeric identifier.
@@ -216,26 +166,6 @@ mod tests {
         let millis = out[0].as_u64();
         // Should be after 2024-01-01 (1704067200000)
         assert!(millis > 1_704_067_200_000);
-    }
-
-    #[test]
-    fn session_start_frozen() {
-        let node = SessionStartMillis::new();
-        let mut out1 = [Value::None];
-        let mut out2 = [Value::None];
-        node.eval(&[], &mut out1);
-        node.eval(&[], &mut out2);
-        assert_eq!(out1[0].as_u64(), out2[0].as_u64());
-    }
-
-    #[test]
-    fn elapsed_grows() {
-        let node = ElapsedMillis::new();
-        let mut out = [Value::None];
-        node.eval(&[], &mut out);
-        let e1 = out[0].as_u64();
-        // Elapsed should be non-negative
-        assert!(e1 < 1000, "elapsed should be small right after creation");
     }
 
     #[test]

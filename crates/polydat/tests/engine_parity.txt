@@ -61,7 +61,6 @@ dist_zipf	ok	ok	ok	ok
 div	ok	ok	ok	ok
 div_wire	ok	ok	ok	ok
 dynamic_weighted_select	ok	ok	ok	ok
-elapsed_millis	ok	ok	ok	ok
 emit_row	ok	ok	ok	ok
 end_of	ok	ok	ok	ok
 env	ok	ok	ok	ok
@@ -225,7 +224,6 @@ select	ok	ok	ok	ok
 select_f64	ok	ok	ok	ok
 select_str	ok	ok	ok	ok
 select_u64	ok	ok	ok	ok
-session_start_millis	ok	ok	ok	ok
 set_or_get	ok	ok	ok	ok
 sha256	ok	ok	ok	ok
 shuffle	ok	ok	ok	ok
@@ -241,6 +239,7 @@ str_lower	ok	ok	ok	ok
 str_ne	ok	ok	ok	ok
 str_to_json	ok	ok	ok	ok
 str_to_u64	ok	ok	ok	ok
+str_to_vec_f64	ok	ok	ok	ok
 str_to_vec_i32	ok	ok	ok	ok
 str_to_vec_i64	ok	ok	ok	ok
 str_upper	ok	ok	ok	ok

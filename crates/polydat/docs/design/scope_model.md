@@ -67,7 +67,7 @@ A scope is constructed in one of these forms:
   finalized module (`subcontext_builder` → `finalize` → `spawn`), or a
   parent `PolydatKernel` builds one from matter (`build_subscope`). The
   parent performs the cell cascade, output/input matching, iteration-binding
-  injection, scope-init pulls, write-through construction, and
+  injection, initialization, write-through construction, and
   scope-coordinate threading. This form binds an interpreter child.
 - **Child by traversal activation.** `Kernel::traverse(index)` opens the
   program's `index`-th `for` traversal on a kernel of any of the four
@@ -78,9 +78,12 @@ A scope is constructed in one of these forms:
 Every child is a separate kernel over the body's program: it owns
 its inputs, its outputs, and the storage behind them, and follows the
 provenance rules as if it were the only kernel
-([runtime_model.md](runtime_model.md) R4). The traversal path creates it
-with `KernelProgram::create_kernel`; the spawn path creates the interpreter
-child before binding it.
+([runtime_model.md](runtime_model.md) R4). Both paths create the child
+uninitialized (`KernelProgram::create_uninitialized` on the traversal path),
+bind it, and then initialize it (`Kernel::init`), so its `const` bindings
+are evaluated once, from the bound values
+([runtime_model.md](runtime_model.md) §6). A const whose expression fails
+makes the child's construction fail with `KernelError::ConstInit`.
 
 `PolydatKernel::materialize_subscope` is crate-private and
 `materialize_wiring_from_outer` is private to `PolydatKernel`'s impl; both
@@ -103,15 +106,17 @@ Every graph input has one `InputKind`:
 | `Coordinate` | Leading input prefix written by `set_inputs` for each scalar cycle |
 | `IterationExtern` | Supplied while constructing or hydrating one structural scope activation |
 | `ExternalWrite` | Written through the typed dataflow boundary and retained until reset or state replacement |
+| `Const` | The value of one `const` binding (`__const_<name>`), written only by the kernel's initialization; a host write is refused with `WriteError::ConstSlot` |
 
 The author-facing `const` modifier classifies an output as effectively constant
-for one scope activation. It is either compile-folded or pulled once after
-parent wiring. The implementation choice does not change its visibility or
-lifetime.
+for the life of its kernel. A literal right-hand side is compile-folded; any
+other is evaluated once at the kernel's initialization, after parent wiring,
+and held in a `Const` slot. The implementation choice does not change its
+visibility or lifetime.
 
-The `volatile` modifier prevents const folding and preserves dynamic
-reevaluation semantics. Intrinsically nondeterministic nodes declare the
-equivalent runtime requirement through `Purity::Nondeterministic`.
+The `volatile` modifier prevents const folding and makes every read that
+reaches the wire evaluate it again. Intrinsically nondeterministic nodes
+declare the equivalent runtime requirement through `Purity::Nondeterministic`.
 
 ## 4. Parent-to-child materialization
 
@@ -142,8 +147,8 @@ performs these operations in order:
    publishes the fresh value through the cell. Output cells exist on the
    interpreter only; compiled kernels have none, and a computed value
    crosses into a compiled child by value.
-6. Pull scope-init `const` outputs once, after their extern inputs have been
-   filled, so their values are fixed for the scope's lifetime.
+6. Initialize the child (`Kernel::init`), after its extern inputs have been
+   filled, so each `const` is evaluated once and fixed for the child's life.
 7. Refresh the child's own coordinate stratum and append the parent's frozen
    coordinate path.
 
@@ -154,7 +159,8 @@ a live cycle counter into a child as a substitute for the child's own
 **Traversal cascade.** An activation (the child created for one tuple of a
 `for` traversal) is bound by a different, smaller binder: the tuple's elements and the parent's cascaded wires are written into
 the body's declared inputs by name, through `Kernel::set_input`, and every
-`over` cursor is narrowed through `Kernel::set_cursor`. The cascade is a
+`over` cursor is narrowed through `Kernel::set_cursor`, and the activation is
+then initialized, so its `const` bindings read the bound values. The cascade is a
 snapshot of the parent's values taken when the traversal is opened: the body
 lowers every cascaded wire as a plain extern, so a body that reads an outer
 `shared` wire sees the value the wire held at open, not the cell. The two
@@ -172,10 +178,12 @@ order is:
 2. the same-named input slot, read through an attached cell when present; and
 3. for dotted names, the same lookup after replacing `.` with `__`.
 
-`Value::None` means absent at this boundary. A local `const` whose scope-init
-result is `None` does not manufacture a value and therefore permits the
-same-named wired input to remain visible. `find_l2f_violations` reports such
-const outputs for strict callers that reject conditional fall-through.
+`Value::None` means absent at this boundary. A local `const` whose own
+expression yields `None` at initialization takes the value of the same-named
+wired input instead, so the inherited value remains visible
+([none_semantics.md](none_semantics.md)). `find_l2f_violations` reports such
+consts, by reading each const's own expression (`__init_<name>`), for strict
+callers that reject conditional fall-through.
 
 A defined local constant shadows an inherited value for the whole subtree. A
 local declaration also suppresses a stale same-named transit cell so deeper

@@ -229,6 +229,31 @@ on all four engines, so a failure in it surfaces at build. A value that
 depends on an extern is computed at the first pull that needs it and
 kept until the extern changes.
 
+A `const` binding is evaluated when the kernel is initialized, and
+every kernel you receive from a build, from `create_kernel`, from a
+scope binder, or from `activation_on` is initialized already, from the
+input values it had at that moment. Its value then stays fixed: writing
+an extern the const reads does not change the const. When you set such
+an extern after creating the kernel and want the const recomputed, call
+`kernel.init()`. It evaluates every const again, in dependency order,
+from the inputs as they are now, keeps every input's value, and returns
+`Ok(())`, or `KernelError::ConstInit` naming the const whose expression
+failed. `create_kernel` panics with that message instead, since it has
+no error return. Writing a const's own slot (`__const_<name>`) with
+`set_input` is refused with `WriteError::ConstSlot`; `init` is the only
+way a const changes.
+
+A `volatile` binding, and anything that reads a nondeterministic node
+such as `current_epoch_millis`, is evaluated again at every `pull` or
+`eval` that needs it, while the steps it reads stay cached. To take one
+reading for a kernel's life, capture it in a `const`. A session clock is
+the usual case, and polydat ships no session-timestamp node, so the host
+defines the origin: its root scope declares
+`const session_start := current_epoch_millis()`, each child declares
+`extern session_start: u64` and receives the root's captured value when
+it is bound, and elapsed time is
+`current_epoch_millis() - session_start`.
+
 Prefer the transform when the value is fixed for the run: the compiler
 then sees a constant, folds it, and native code embeds it as an
 immediate operand. Use `set_input` when the value varies from kernel to
@@ -375,10 +400,14 @@ A host that runs workloads as a tree of scopes (parameters, a phase,
 fibers, per-operation children, one child per iteration tuple) binds
 each child under its parent. Binding connects the child to the parent's
 shared cells (values the parent publishes for its children to read),
-copies in the values the child imports from the parent, and computes
-the child's scope-init constants. It works on the interpreter, the
-closure tier, and native (P1, P2, and P3), and one tree may mix those
-engines, because every call below works through the `Kernel` trait:
+copies in the values the child imports from the parent, and then
+initializes the child, evaluating each of its `const` bindings once from
+those values. Binding works on the interpreter, the closure tier, and
+native (P1, P2, and P3), and one tree may mix those engines, because
+every call below works through the `Kernel` trait. `kernel::bind_under`
+returns `KernelError::ConstInit`, naming the const, when one fails, and
+a fork copies an initialized kernel, consts included, without evaluating
+them again.
 
 | To | Call |
 |---|---|

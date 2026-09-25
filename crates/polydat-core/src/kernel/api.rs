@@ -89,6 +89,14 @@ pub enum WriteError {
         /// The coordinate named.
         slot: String,
     },
+
+    /// The slot holds a `const` binding's value, which only
+    /// [`Kernel::init`] writes. A const is fixed for the life of the
+    /// kernel; to change it, write the inputs it reads and initialize.
+    ConstSlot {
+        /// The const's slot.
+        slot: String,
+    },
 }
 
 impl std::fmt::Display for WriteError {
@@ -105,6 +113,13 @@ impl std::fmt::Display for WriteError {
                 write!(
                     f,
                     "'{slot}' is a coordinate: advance it with set_inputs, not by name"
+                )
+            }
+            WriteError::ConstSlot { slot } => {
+                write!(
+                    f,
+                    "'{slot}' holds a const, which only initialization writes: write the \
+                     inputs it reads and call init()"
                 )
             }
             WriteError::TypeMismatch {
@@ -473,6 +488,74 @@ pub trait Kernel: Send + Sync + internals::KernelInternals {
         self.pull(&name)
     }
 
+    /// The `const` bindings this kernel initializes, in the order
+    /// [`Self::init`] evaluates them: a const that reads another comes
+    /// after it.
+    fn const_inits(&self) -> &[crate::kernel::ConstInit];
+
+    /// Write an input as part of initialization. It is
+    /// [`Self::set_input_at`] except that a const's slot is accepted,
+    /// which is how [`Self::init`] stores each const's value.
+    fn init_input_at(&mut self, index: usize, value: Value) -> Result<(), WriteError>;
+
+    /// Initialize the kernel: evaluate every `const` binding once, in
+    /// dependency order, and store its value for the rest of the
+    /// kernel's life.
+    ///
+    /// Every way a kernel comes into existence initializes it: a build, a
+    /// kernel created from a shared program, a child bound under a
+    /// parent (after the parent's values are bound), and a traversal
+    /// activation (after its tuple is bound). A host calls it again when
+    /// it wants the consts recomputed from the inputs as they are now,
+    /// for example after setting externs a const reads. Inputs keep
+    /// their values; only the consts change.
+    ///
+    /// A const whose expression yields `None` takes the value the binder
+    /// copied from the enclosing scope, so the outer binding stays
+    /// visible. A const whose expression fails makes initialization
+    /// fail, naming the const; a slow one makes initialization slow.
+    fn init(&mut self) -> Result<(), crate::KernelError> {
+        let inits = self.const_inits().to_vec();
+        for c in &inits {
+            let own =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.pull(&c.source)))
+                    .map_err(|payload| crate::KernelError::ConstInit {
+                        name: c.name.clone(),
+                        reason: crate::kernel::panic_message(&payload),
+                    })?;
+            let value = match own {
+                Value::None => c
+                    .fallback
+                    .as_deref()
+                    .and_then(|f| self.input_value(f))
+                    .unwrap_or(Value::None),
+                v => v,
+            };
+            // Pure native code carries no `None`: a const with no value
+            // is refused there, as an unset extern is (engines.md §8),
+            // rather than read as a zero.
+            if let (Value::None, engine @ crate::Engine::PureNative(_)) = (&value, self.engine()) {
+                return Err(crate::KernelError::Refused {
+                    engine,
+                    reason: format!(
+                        "the const '{}' has no value, and pure native code cannot carry a \
+                         `None`; give it a value or run this program on `native`",
+                        c.name
+                    ),
+                });
+            }
+            let index = self
+                .input_index(&c.slot)
+                .expect("a const's slot is an input of its own program");
+            self.init_input_at(index, value)
+                .map_err(crate::KernelError::Write)?;
+            // Bring the const's output up to date now, so a reader of its
+            // buffer (a binder's lookup) sees the captured value.
+            let _ = self.pull(&c.name);
+        }
+        Ok(())
+    }
+
     /// The traversals the program declares, in document order.
     fn traversals(&self) -> &[crate::dsl::traversal::Traversal];
 
@@ -726,11 +809,32 @@ pub trait KernelProgram: Send + Sync {
     /// The engine the program was built for.
     fn engine(&self) -> crate::compile::select::Engine;
 
-    /// A kernel of this program for the calling thread. It starts from
-    /// the program on every engine: every input at its declared
-    /// default, whatever the kernel that became the program had been
-    /// set to; every `shared` binding with a cell of its own.
-    fn create_kernel(self: std::sync::Arc<Self>) -> Box<dyn Kernel>;
+    /// A kernel of this program for the calling thread, initialized. It
+    /// starts from the program on every engine: every input at its
+    /// declared default, whatever the kernel that became the program had
+    /// been set to; every `shared` binding with a cell of its own; and
+    /// every `const` evaluated from those inputs ([`Kernel::init`]).
+    ///
+    /// # Panics
+    ///
+    /// When a const's expression fails. A const is evaluated when a
+    /// kernel is initialized, so a const that fails makes creation fail;
+    /// the build of the program evaluated the same consts from the same
+    /// defaults, so this happens only for a const that reads something
+    /// outside the program, such as a clock or the environment.
+    fn create_kernel(self: std::sync::Arc<Self>) -> Box<dyn Kernel> {
+        let mut kernel = self.create_uninitialized();
+        if let Err(e) = kernel.init() {
+            panic!("{e}");
+        }
+        kernel
+    }
+
+    /// A kernel of this program whose consts are not yet evaluated: what
+    /// a binder creates, writes the enclosing scope's values into, and
+    /// then initializes, so the consts are evaluated once, from the
+    /// bound values.
+    fn create_uninitialized(self: std::sync::Arc<Self>) -> Box<dyn Kernel>;
 
     /// The interpreter's program, when this is one: the graph a
     /// diagnostic describes node by node. `None` for a compiled
@@ -758,7 +862,7 @@ impl<K: Kernel + Clone + Send + Sync + 'static> KernelProgram for SharedKernel<K
     fn engine(&self) -> crate::compile::select::Engine {
         self.0.engine()
     }
-    fn create_kernel(self: std::sync::Arc<Self>) -> Box<dyn Kernel> {
+    fn create_uninitialized(self: std::sync::Arc<Self>) -> Box<dyn Kernel> {
         let mut kernel = self.0.clone();
         // A created kernel starts from the program, as an interpreter
         // state created from one does: inputs at their defaults, cells

@@ -79,8 +79,9 @@ reads them:
   one that keeps state across evaluations. The runtime caches the output
   of `Pure` and `SideChannel` nodes and returns it without re-running
   the node while it is current (the clean-flag cache of
-  [runtime_model.md](runtime_model.md) R1); that cache is not applied to
-  a `Nondeterministic` node (R1.v). A node that declares the wrong purity
+  [runtime_model.md](runtime_model.md) R1); a `Nondeterministic` node's
+  output is kept only within one read, and every read that reaches the
+  node runs it again (R1.v). A node that declares the wrong purity
   therefore returns values that depend on how often it was pulled.
   `accepts_none_inputs()` returns `true` to opt the node out of the
   kernel's None-in-None-out propagation, under which any `None` input

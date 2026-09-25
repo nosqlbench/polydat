@@ -40,7 +40,7 @@ the slot colors), [JIT Boundary](jit_boundary.md) (axioms S1–S10),
 
 The terms of the [Runtime Model](runtime_model.md) (program, kernel,
 node, wire, input, write, change, pull, cone, provenance, fusion unit,
-step, current, round, volatile) apply. This document also uses the
+step, current, read, volatile) apply. This document also uses the
 following.
 
 - **Slot and slot buffer.** A compiled kernel stores every wire's
@@ -343,10 +343,11 @@ cone its wires are read as the graph typed them, not as its ports
 advertise. A nondeterministic node or a side channel lowers the same
 way, and the kernel that runs the code tracks its currency separately.
 On the hybrid kernel such a node is a segment by itself, so it never
-makes a segment of pure nodes never-current or causes an observable
+makes a segment of pure nodes run at every read or causes an observable
 rerun of one. On pure native code a side channel is a fusion unit by
-itself as well; a never-current step's unit is cleared at every write,
-and while one exists the cone guard yields to a write (R1.v). A side
+itself as well, and a volatile node never shares a unit with a
+non-volatile one; a volatile step's unit is cleared at every read and
+at every write (R1.v). A side
 channel runs at every evaluation in which it is not current, which on
 that tier means every pull of a cone containing it. A node with no kit
 stays interpreted, and only such a node keeps a program off pure

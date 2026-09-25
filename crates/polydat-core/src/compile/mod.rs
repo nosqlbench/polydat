@@ -517,8 +517,24 @@ macro_rules! impl_kernel_trait {
                 name: &str,
                 value: crate::ast::Value,
             ) -> Result<(), crate::kernel::WriteError> {
+                if self.core.externs.is_const_name(name) {
+                    return Err(crate::kernel::WriteError::ConstSlot {
+                        slot: name.to_string(),
+                    });
+                }
                 self.core.drive.stale = true;
                 $ty::set_input(self, name, value)
+            }
+            fn const_inits(&self) -> &[crate::kernel::ConstInit] {
+                self.core.externs.const_inits()
+            }
+            fn init_input_at(
+                &mut self,
+                index: usize,
+                value: crate::ast::Value,
+            ) -> Result<(), crate::kernel::WriteError> {
+                self.core.drive.stale = true;
+                $ty::set_input_at(self, index, value)
             }
             fn set_cursor(
                 &mut self,
@@ -593,6 +609,11 @@ macro_rules! impl_kernel_trait {
                 index: usize,
                 value: crate::ast::Value,
             ) -> Result<(), crate::kernel::WriteError> {
+                if self.core.externs.is_const_index(index) {
+                    return Err(crate::kernel::WriteError::ConstSlot {
+                        slot: self.core.externs.input_names()[index].clone(),
+                    });
+                }
                 self.core.drive.stale = true;
                 $ty::set_input_at(self, index, value)
             }
@@ -899,6 +920,23 @@ macro_rules! shared_core_methods {
             self.drive.stale = false;
         }
 
+        /// A read that begins no round still re-evaluates every volatile
+        /// step its cone reaches, once, and the steps downstream of it
+        /// (runtime_model.md R1.v); steps upstream of a volatile step
+        /// keep their currency. A new round already leaves every
+        /// volatile step unrun. Most programs have no volatile step and
+        /// pay the emptiness check.
+        #[inline]
+        fn rearm_volatile(&mut self) {
+            if self.volatile_steps.is_empty() {
+                return;
+            }
+            for &i in self.volatile_steps.iter() {
+                self.ran[i] = 0;
+            }
+            self.all_ran = false;
+        }
+
         #[inline]
         fn dirty_input(&mut self, slot: usize) {
             if let Some(deps) = self.dirty.get(slot) {
@@ -953,6 +991,7 @@ macro_rules! shared_core_methods {
                 self.begin_epoch();
             } else {
                 self.refresh_cells();
+                self.rearm_volatile();
             }
             if fresh && !self.use_clean && !self.any_none {
                 self.run_guarded(|core| core.run_fresh());
@@ -1052,6 +1091,7 @@ macro_rules! shared_core_methods {
                 self.begin_epoch();
             } else {
                 self.refresh_cells();
+                self.rearm_volatile();
             }
             let resolved = self.resolved_outputs[index]
                 .as_ref()
@@ -1087,6 +1127,7 @@ macro_rules! shared_core_methods {
                 self.begin_epoch();
             } else {
                 self.refresh_cells();
+                self.rearm_volatile();
             }
             let plan = std::sync::Arc::clone(&self.plan);
             if let Some(order) = plan.cones.get(name) {

@@ -1027,10 +1027,6 @@ impl PolydatState {
                 }
             }
         }
-        // Non-deterministic nodes must always re-evaluate.
-        for &idx in &self.nondeterministic_nodes {
-            self.core.node_clean[idx] = false;
-        }
     }
 
     /// Set a single input by index, dirtying only dependent nodes.
@@ -1092,10 +1088,25 @@ impl PolydatState {
                 self.input_dependents.len()
             );
         }
-        // Non-deterministic nodes must always re-evaluate.
+    }
+
+    /// Begin a read: every volatile step is not current again, so the
+    /// read evaluates each one the pulled cone reaches, once, and the
+    /// steps downstream of it (runtime_model.md R1.v). Steps upstream of
+    /// a volatile step keep their currency. A write does not re-arm a
+    /// volatile step; only a read does.
+    #[inline]
+    pub(crate) fn rearm_volatile(&mut self) {
         for &idx in &self.nondeterministic_nodes {
             self.core.node_clean[idx] = false;
         }
+    }
+
+    /// A pull within a read already begun with [`Self::rearm_volatile`]:
+    /// several outputs read together see one evaluation of each
+    /// volatile step.
+    pub(crate) fn pull_in_read(&mut self, program: &PolydatProgram, output_name: &str) -> &Value {
+        self.core.pull(program, output_name)
     }
 
     /// Read the value of an input by index.
@@ -1187,8 +1198,9 @@ impl PolydatState {
         self.core.node_clean.fill(false);
     }
 
-    /// Pull a named output variate from the program.
+    /// Pull a named output variate from the program: one read.
     pub fn pull(&mut self, program: &PolydatProgram, output_name: &str) -> &Value {
+        self.rearm_volatile();
         self.core.pull(program, output_name)
     }
 
@@ -1222,6 +1234,7 @@ impl PolydatState {
     /// Pull an output by index (declaration order). Only evaluates
     /// the computation cone for this specific output.
     pub fn pull_by_index(&mut self, program: &PolydatProgram, output_idx: usize) -> &Value {
+        self.rearm_volatile();
         let (node_idx, port_idx) = program.resolve_output_by_index(output_idx);
         self.core.eval_node(program, node_idx);
         // A pull by index publishes as a pull by name does.
@@ -1229,8 +1242,9 @@ impl PolydatState {
         &self.core.buffers[node_idx][port_idx]
     }
 
-    /// Pull all outputs in declaration order.
+    /// Pull all outputs in declaration order, as one read.
     pub fn pull_all<'a>(&'a mut self, program: &PolydatProgram) -> Vec<&'a Value> {
+        self.rearm_volatile();
         for i in 0..program.output_count() {
             let (node_idx, _) = program.resolve_output_by_index(i);
             self.core.eval_node(program, node_idx);
@@ -1355,7 +1369,8 @@ impl ProvScanState {
         }
     }
 
-    /// Set new input values and invalidate affected nodes.
+    /// Set new input values and invalidate affected nodes. Volatile
+    /// nodes are re-armed by the read, not here.
     pub fn set_inputs(&mut self, coords: &[u64]) {
         let mut mask = crate::kernel::ProvMask::empty();
         for (i, &c) in coords.iter().enumerate().take(self.core.inputs.len()) {
@@ -1371,13 +1386,14 @@ impl ProvScanState {
                 }
             }
         }
+    }
+
+    /// Pull a named output variate from the program: one read, which
+    /// re-arms every volatile node first.
+    pub fn pull(&mut self, program: &PolydatProgram, output_name: &str) -> &Value {
         for &idx in &self.nondeterministic_nodes {
             self.core.node_clean[idx] = false;
         }
-    }
-
-    /// Pull a named output variate from the program.
-    pub fn pull(&mut self, program: &PolydatProgram, output_name: &str) -> &Value {
         self.core.pull(program, output_name)
     }
 }

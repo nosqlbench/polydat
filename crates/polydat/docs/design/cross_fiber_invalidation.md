@@ -506,9 +506,9 @@ revision but the old value.
 ## 11. Out of scope
 
 - **Volatile-node handling.** Nodes declared
-  `Purity::Nondeterministic` re-evaluate after every write
-  unconditionally; that path is independent of cell
-  validity tracking. Shared and volatile are orthogonal.
+  `Purity::Nondeterministic` are re-evaluated by every read
+  whose cone reaches them ([runtime_model.md](runtime_model.md)
+  R1.v); that path is independent of cell validity tracking. Shared and volatile are orthogonal.
 - **Cell value-read atomicity primitive.** The
   `Mutex<Value>` provides single-value atomicity. Validity
   tracking is layered on that primitive.

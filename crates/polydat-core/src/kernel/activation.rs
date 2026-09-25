@@ -256,10 +256,13 @@ impl TraversalStream {
             .traversal
             .program_on(engine)
             .map_err(|e| e.to_string())?;
-        let mut kernel = program.create_kernel();
+        let mut kernel = program.create_uninitialized();
         bind_by_name_on(kernel.as_mut(), tuple)?;
         bind_by_name_on(kernel.as_mut(), &self.cascade)?;
         let cursor = narrow_cursors_on(kernel.as_mut())?;
+        // The activation's consts are evaluated once its tuple, cascade,
+        // and cursor slice are bound.
+        kernel.init().map_err(|e| e.to_string())?;
         Ok(Activation {
             index: index as u64,
             coords: tuple.clone(),

@@ -61,6 +61,9 @@ pub(crate) struct ExternSlot {
     pub cell: Option<crate::kernel::SharedCell>,
     /// The cell revision the slot last took its value from.
     pub seen: Option<u64>,
+    /// The slot holds a `const` binding's value, which only
+    /// initialization writes.
+    pub is_const: bool,
 }
 
 /// The parts of an extern set that only a *composed* program uses:
@@ -107,6 +110,8 @@ struct ScopeCells {
     /// Per input, how its type was established (input_variance.md §3):
     /// read by `input_type_origin`, never per cycle.
     origins: Vec<crate::kernel::TypeOrigin>,
+    /// The `const` bindings a kernel initializes, in dependency order.
+    const_inits: Vec<crate::kernel::ConstInit>,
 }
 
 /// The extern inputs of one compiled kernel.
@@ -179,6 +184,7 @@ impl Clone for Externs {
                 output_cells: std::sync::Mutex::new(Vec::new()),
                 write_throughs: self.scope.write_throughs.clone(),
                 origins: self.scope.origins.clone(),
+                const_inits: self.scope.const_inits.clone(),
             }),
             intent: self.intent.clone(),
             next_bit: std::sync::atomic::AtomicU8::new(
@@ -227,6 +233,7 @@ impl Externs {
                 default: def.default.clone(),
                 cell: None,
                 seen: None,
+                is_const: def.kind == crate::kernel::InputKind::Const,
             });
         }
         let mut externs = Self {
@@ -549,6 +556,29 @@ impl Externs {
         self.scope.output_modifiers = modifiers.clone();
     }
 
+    /// Record the const bindings a kernel initializes.
+    pub(crate) fn set_const_inits(&mut self, inits: &[crate::kernel::ConstInit]) {
+        self.scope.const_inits = inits.to_vec();
+    }
+
+    /// The const bindings a kernel initializes, in dependency order.
+    pub(crate) fn const_inits(&self) -> &[crate::kernel::ConstInit] {
+        &self.scope.const_inits
+    }
+
+    /// Whether the input at `index` holds a const's value, which only
+    /// initialization writes.
+    pub(crate) fn is_const_index(&self, index: usize) -> bool {
+        matches!(self.by_index.get(index), Some(Some(i)) if self.slots[*i].is_const)
+    }
+
+    /// [`Self::is_const_index`] by name.
+    pub(crate) fn is_const_name(&self, name: &str) -> bool {
+        self.by_name
+            .get(name)
+            .is_some_and(|&i| self.slots[i].is_const)
+    }
+
     /// The declared type of a named input slot. A coordinate has none
     /// here — it is not an extern — and answers `U64`, which is what
     /// every coordinate is.
@@ -687,11 +717,23 @@ impl Externs {
 
     /// The name and type of an unset extern, for a native kernel's
     /// refusal.
+    /// The first extern native code reads that has no value. A const's
+    /// slot and its fallback input are not among them: only
+    /// initialization reads or writes those, from Rust, and every reader
+    /// of the const reads the passthrough of its slot once it is set.
     #[cfg(feature = "jit")]
     pub(crate) fn first_unset(&self) -> Option<(&str, PortType)> {
         self.slots
             .iter()
-            .find(|s| s.value == Value::None)
+            .find(|s| {
+                s.value == Value::None
+                    && !s.is_const
+                    && !self
+                        .scope
+                        .const_inits
+                        .iter()
+                        .any(|c| c.fallback.as_deref() == Some(s.name.as_str()))
+            })
             .map(|s| (s.name.as_str(), s.ty))
     }
 

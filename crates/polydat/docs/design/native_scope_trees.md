@@ -105,8 +105,9 @@ same order, so an index a host resolves on one is valid on the others
 `fork(&self) -> Box<dyn Kernel>` returns a new kernel over the same program
 with this kernel's state. It serves three host operations:
 
-- A fiber starts from its scope's kernel with the scope-init constants
-  already materialized, so it does not evaluate them again (on
+- A fiber starts from its scope's kernel with its `const` bindings
+  already initialized, so it does not evaluate them again; `fork` does
+  not initialize the new kernel (on
   `PolydatKernel`, copying const-output buffers by (node, port) with
   `seed_node_buffer`).
 - An activation scope shares its parent's cells (on `PolydatKernel`,
@@ -115,8 +116,8 @@ with this kernel's state. It serves three host operations:
   `PolydatKernel`, `for_iteration(k, k, &[])`).
 
 On all four engines `fork` is the engine's `Clone`: a new state of the same
-program (engines.md §3.5), with the inputs, the current outputs, and the
-attached cells as they are. Cells stay shared, because a cell is a register
+program (engines.md §3.5), with the inputs (the const slots included),
+the current outputs, and the attached cells as they are. Cells stay shared, because a cell is a register
 the scope owns and not a value it holds. Transit cells, which the kernel
 holds only to pass to descendants because it has no slot of their name,
 are copied into the fork. Broadcast cells stay with the original, because
@@ -145,15 +146,18 @@ and a tile's body-kernel set are immutable or reached only through
 | Concrete call | Any-engine form |
 |---|---|
 | `build_subscope` with source matter (label, source, inherited outputs, options, result bindings) | `SubcontextBuilder::under(parent: &dyn Kernel)` … `finalize()` → `ScopeModule::instantiate_under(parent, engine, bindings) -> Result<Box<dyn Kernel>, KernelError>` |
-| `build_subscope` with program matter, `for_iteration(canonical, parent, bindings)` | `kernel::bind_under(parent, program: Arc<dyn KernelProgram>, bindings) -> Result<Box<dyn Kernel>, WriteError>`; the child is on `program`'s engine |
+| `build_subscope` with program matter, `for_iteration(canonical, parent, bindings)` | `kernel::bind_under(parent, program: Arc<dyn KernelProgram>, bindings) -> Result<Box<dyn Kernel>, KernelError>`; the child is on `program`'s engine |
 | `propagate_inputs_into(child)` | `kernel::propagate_inputs(parent: &dyn Kernel, child: &mut dyn Kernel) -> Result<(), WriteError>` |
 
-`bind_under(parent, program, bindings)` creates a kernel of `program`, writes
-the iteration bindings `bindings` (name/value pairs) into its inputs first,
-so the child's own scope coordinates include them, and then binds it under
-`parent`: the parent's cells are attached and its values copied in. It
-returns the child, or a `WriteError` for a binding the child's input
-refuses. The child's `program_id()` is `program`'s.
+`bind_under(parent, program, bindings)` creates an uninitialized kernel of
+`program` (`create_uninitialized`), writes the iteration bindings `bindings`
+(name/value pairs) into its inputs first, so the child's own scope
+coordinates include them, and then binds it under `parent`: the parent's
+cells are attached and its values copied in. Last, it initializes the child
+(`Kernel::init`), so each `const` in the child is evaluated once from the
+bound values. It returns the child, `KernelError::Write` for a binding the
+child's input refuses, or `KernelError::ConstInit` naming a const whose
+expression failed. The child's `program_id()` is `program`'s.
 
 `instantiate_under(parent, engine, bindings)` is `bind_under` over
 `program_on(engine)`, plus the module's Rule 2 write-throughs, which it

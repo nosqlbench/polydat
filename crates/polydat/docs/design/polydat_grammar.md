@@ -287,8 +287,9 @@ The fundamental statement is a **binding**: a name `:=` an expression.
 In this document a *cycle* is one write of the coordinate inputs by
 `set_inputs` (§[4](#sec-inputs)), and a *per-cycle* value is one that
 may differ from one cycle to the next. A bare binding, one without a
-modifier (§[5](#sec-modifiers)), is **per-cycle** (re-evaluated every
-cycle).
+modifier (§[5](#sec-modifiers)), is **per-cycle**: it is re-evaluated
+at the first read after an input it depends on is written, so it may
+take a new value every cycle.
 
 ```polydat compile
 input cycle: u64
@@ -385,9 +386,9 @@ the top-level program, and once per tuple for a `for` body.
 
 | Modifier | Meaning |
 |---|---|
-| `const` | Effectively-const: materialised once per scope activation, then frozen. Cannot be shadowed by an inner scope. |
+| `const` | Evaluated at kernel initialization: once when the scope's kernel is initialized, from its inputs as they are then, and fixed for the kernel's life. A literal right-hand side folds at build. Cannot be shadowed by an inner scope. |
 | `shared` | A mutable cell that propagates upward to the enclosing scope after a `for` traversal body. Last-write-wins by default. |
-| `volatile` | Per-cycle, but forced Dynamic: excluded from compile-time folding and from program-identity hashing. |
+| `volatile` | Forced Dynamic and re-evaluated at every read that reaches it: excluded from compile-time folding and from program-identity hashing, and never cached from one read to the next. |
 
 ```polydat compile
 input cycle: u64
@@ -398,16 +399,27 @@ volatile attempt := mod(hash(cycle), 8)
 user_id := mod(hash(cycle), 1000000)
 ```
 
-`base` and `seed` have no cycle dependency and const-fold to literals;
-`user_id` varies per cycle.
+`base` has a literal right-hand side and folds at build. `seed` is
+evaluated when the kernel is initialized; its expression reads only
+`base`, so its value is the same in every kernel. `user_id` varies per
+cycle, and `attempt` is evaluated again at every read.
+
+A `const` may not read a coordinate, directly or through plain
+bindings, since a coordinate advances every cycle; that is a compile
+error. A `const` may read an extern: the extern's value at
+initialization is the const's value, and a later write to the extern
+does not change it until the host calls `Kernel::init`
+([Evaluation Model](evaluation_model.md), "Const Binding Contract").
 
 <a id="sec-modifier-combos"></a>
 ### 5.1 Valid and rejected combinations
 
 `shared const` and `shared volatile` are valid combinations. The
 combination **`const volatile` is rejected at parse time** (the two are
-contradictory — one freezes, the other excludes from folding), as is a
-**duplicate modifier**.
+contradictory: one evaluates once per kernel, the other at every read),
+as is a **duplicate modifier**. A `const` whose expression reads a
+volatile wire or a nondeterministic node is valid: it captures that
+value once, at initialization.
 
 ```text
 const volatile x := 1    # REJECTED: contradictory modifiers
@@ -416,7 +428,11 @@ shared const z := 100    # OK: a shared cell whose initial value folds
 ```
 
 > There are no `init` or `final` modifiers; `const` covers both roles,
-> and the language does not add them.
+> and the language does not add them. A `const` is evaluated at kernel
+> initialization, which is the `init` role, and its value is fixed for
+> the kernel's life, which is the `final` role; over a volatile
+> expression the same rule makes it a capture, such as
+> `const session_start := current_epoch_millis()`.
 
 <a id="sec-shared-typed"></a>
 ### 5.2 Typed shared cells — `shared x: T := …`
@@ -1342,7 +1358,7 @@ wire chain; it does not infer lifecycle from the expression's contents
 (§[5](#sec-modifiers)).*
 
 The const-binding contract checks the chain against the author's
-declaration, and the hoisting pass, which separates work done once per
+declaration (a `const` reads no coordinate), and the hoisting pass, which separates work done once per
 scope activation from per-cycle work, partitions on it. Without G2,
 lifecycle would be inferred per call site, the analysis would have to
 be richer, and the wire-chain check would have nothing declarative to
@@ -1371,14 +1387,16 @@ move to runtime and the typed-result guarantee would become a runtime
 concern.
 
 **G5 — Two-lifecycle structural classification.** *Every wire is
-classifiable Effectively-const (computed once per scope activation) or
-Dynamic (may change per cycle) by analysing the wire chain alone — the
-join of its upstream cone's lifecycles, plus the declared modifiers of
-G2. The classification does not depend on runtime state or evaluation
-history.*
+classifiable Effectively-const (computed once per kernel, at build or
+at initialization) or Dynamic (may change per cycle, or at every read
+when volatile) by analysing the wire chain alone — the join of its
+upstream cone's lifecycles, plus the declared modifiers of G2. A
+`const` binding is effectively-const whatever its expression reads,
+because it is evaluated at initialization. The classification does not
+depend on runtime state or evaluation history.*
 
 The compiler relies on G5 to emit a partitioned program: one buffer
-evaluated once at scope-init, another per cycle. Without G5,
+evaluated once at initialization, another per cycle. Without G5,
 lifecycle would be discovered during evaluation, the partition could
 not be compiled, and the cost-determinism guarantee would lose its
 structural basis.

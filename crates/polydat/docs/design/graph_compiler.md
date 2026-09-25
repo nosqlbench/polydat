@@ -244,6 +244,7 @@ classify(node) =
       a Coordinate input slot:        Dynamic
       an ExternalWrite input slot:    Dynamic
       an IterationExtern input slot:  ScopeInit
+      a Const input slot:             ScopeInit
       no input at all:                CompileConst
     a node declared Purity::Nondeterministic, or feeding a
     `volatile` output:                Dynamic (and nondeterministic)
@@ -252,6 +253,13 @@ classify(node) =
       (Dynamic > ScopeInit > CompileConst); nondeterminism
       is contagious downstream.
 ```
+
+A `Const` input slot (`__const_<name>`) holds the value a `const`
+binding took at initialization ([Evaluation Model](evaluation_model.md),
+"Const Binding Contract"). A node that reads a const reads that
+slot, so it is scope-init even when the const's own expression
+(the output `__init_<name>`) is dynamic or nondeterministic:
+nondeterminism does not pass through a const.
 
 A computed node's class is the *join* (the maximum) of its own
 seed and its upstream nodes' classes. The join is monotonic and
@@ -275,8 +283,11 @@ per class:
 
 - **Compile-constant path.** Every compile-constant node is
   evaluated once at build and replaced with a constant.
-- **Scope-init path.** Every scope-init node is evaluated once
-  at scope-init, and its value is stored in a slot or buffer.
+- **Scope-init path.** The kernel's initialization evaluates
+  every `const` binding once and writes each value to its const
+  slot; every scope-init node is then evaluated once, from the
+  bound iteration externs and the const slots, and its value is
+  stored in a slot or buffer.
 - **Per-cycle path.** Every dynamic node is evaluated per
   `set_inputs` advance, reading effectively-const upstream
   values from their folded constants or pre-evaluated buffers.
@@ -299,12 +310,11 @@ itself. For example:
   for the scope's lifetime).
 - A `hash(cycle)` node is not hoistable, because `cycle` is a
   `Coordinate` (dynamic).
-- A `const X := <expr>` binding whose right-hand side uses only
-  iteration variables and other consts is hoistable, and the
-  const-binding contract's compile-time check (Plan A) catches
-  any violation.
-- A `const X := hash(cycle)` binding is rejected by Plan A,
-  because a const binding cannot have a dynamic upstream.
+- A node that reads a `const X := <expr>` binding reads X's
+  const slot, so it is hoistable whatever `<expr>` reads.
+- A `const X := hash(cycle)` binding is a build error on all four
+  engines, because a const is evaluated once at initialization
+  and a coordinate advances every cycle.
 
 ### 3.4 The Axiom suite — H-axioms
 
@@ -350,6 +360,15 @@ coordinates only), and L2 (lifecycle bridging). An
 effectively-const value does not change after scope-init, by
 definition of the lifecycle; hoisting relies on exactly that
 guarantee.
+
+A `const` binding is not a hoisting and H3 does not apply to it.
+Its value is defined as its expression's value at the kernel's
+initialization, not per cycle, so a const that reads an extern
+written after initialization, or a volatile source, differs from
+the same expression evaluated per cycle, as its definition
+states. H3 applies to the nodes that read the const: they read
+its slot, whose value is fixed, so moving them to the scope-init
+path does not change their values.
 
 ---
 
@@ -406,8 +425,12 @@ performs these steps in order:
    Every copied value passes through `adapt_boundary_value`,
    the boundary adapter catalog of
    [type_system.md](type_system.md) §6.2.
-3. **Const pull.** Every `const` output is pulled once against
-   the filled slots (the Evaluation Model's Plan B).
+3. **Initialization.** The child kernel is initialized
+   (`Kernel::init`): every `const` is evaluated once, in
+   dependency order, against the filled slots, and a const whose
+   expression fails makes construction fail with
+   `KernelError::ConstInit` naming it (the Evaluation Model's
+   const-binding contract).
 4. **Scope coordinates.** The inner scope's path becomes its
    own coordinates followed by `outer`'s.
 

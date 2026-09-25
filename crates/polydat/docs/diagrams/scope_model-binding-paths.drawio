@@ -39,7 +39,7 @@
         <mxCell id="l2" value="traverse, then activation_on" style="text;html=1;align=center;verticalAlign=bottom;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="160" y="336" width="240" height="20" as="geometry"/>
         </mxCell>
-        <mxCell id="e3" value="shared and transit cells, output cells,&lt;br&gt;value copies, scope-init pulls,&lt;br&gt;coordinate path" style="rounded=0;html=1;fontSize=12;endArrow=block;verticalAlign=bottom;labelBackgroundColor=none;" edge="1" parent="1" source="spawn" target="child1">
+        <mxCell id="e3" value="shared and transit cells, output cells,&lt;br&gt;value copies, then init(),&lt;br&gt;coordinate path" style="rounded=0;html=1;fontSize=12;endArrow=block;verticalAlign=bottom;labelBackgroundColor=none;" edge="1" parent="1" source="spawn" target="child1">
           <mxGeometry relative="1" as="geometry">
             <mxPoint x="0" y="-4" as="offset"/>
           </mxGeometry>

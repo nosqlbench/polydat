@@ -14,15 +14,12 @@
 //! that can break quietly:
 //!
 //! 1. Every engine computes what the interpreter computes.
-//! 2. Every engine keeps re-reading it. A nondeterministic node is
-//!    never current (runtime_model.md, R1.v), so a compiled kernel must
-//!    not fold it at build nor cache it across cycles — if it did, a
-//!    host would read one value forever and nothing would say so.
-//!
-//! Written 2026-09-22, when `compile_polydat` moved from the
-//! interpreter to `Engine::default()`. That put every host node on a
-//! compiled tier for the first time, and the hosts whose nodes these
-//! stand in for had no test that they survived it.
+//! 2. Every engine re-reads it on every read. A volatile step is
+//!    re-evaluated by every pull whose cone reaches it
+//!    (runtime_model.md, R1.v), so a compiled kernel must neither fold
+//!    it at build nor cache it between reads — if it did, a host would
+//!    read one value forever and nothing would say so. The steps
+//!    upstream of it keep their cache.
 
 use polydat::dsl::compile::compile_polydat_with;
 use polydat::{Engine, JitMode, Kernel, KernelError, Provenance};
@@ -59,6 +56,24 @@ fn host_reading(which: Const<&str>) -> f64 {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .get(which.0)
+        .copied()
+        .unwrap_or(0.0)
+}
+
+/// A pure host node that counts its own evaluations under a key, so a
+/// test can see whether a step upstream of a volatile one re-ran.
+#[polydat::polydat_node(category = Math)]
+fn host_counted(x: u64, which: Const<&str>) -> f64 {
+    let mut world = outside().lock().unwrap_or_else(|e| e.into_inner());
+    *world.entry(which.0.to_string()).or_insert(0.0) += 1.0;
+    x as f64
+}
+
+fn get(key: &str) -> f64 {
+    outside()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(key)
         .copied()
         .unwrap_or(0.0)
 }
@@ -181,20 +196,11 @@ fn a_host_node_stays_live_on_every_engine() {
     }
 }
 
-/// Read granularity is the step's, and the step is the engine's
-/// (runtime_model.md, R1.v "Read granularity").
-///
-/// Two volatile wires that share nothing are two steps on the
-/// interpreter and the closure tier, and two fusion units on the native
-/// tier and pure native code, which fuse only nodes a wire connects. So
-/// a change made between two pulls of one write is visible to the
-/// second read on every engine: each is read when its own output is
-/// pulled.
-///
-/// What every engine owes regardless: the value is not carried across
-/// the write. That is asserted for all of them at the end.
+/// Every read re-reads a volatile step, on all four engines
+/// (runtime_model.md, R1.v): a change made between two pulls is visible
+/// to the second, with or without a write between them.
 #[test]
-fn read_granularity_is_the_engines_step() {
+fn every_read_re_reads_a_volatile_step() {
     for (name, k) in kernels("midcycle").iter_mut() {
         set("midcycle.a", 3.0);
         set("midcycle.b", 3.0);
@@ -207,26 +213,22 @@ fn read_granularity_is_the_engines_step() {
         assert_eq!(
             b,
             polydat::ast::Value::F64(9.0),
-            "{name}: a second volatile read within one write is its own \
-             step's, read when its own output was pulled"
+            "{name}: the second read sees the change"
         );
-
-        // The guarantee that does not vary: the next write re-reads.
-        k.set_inputs(&[2]);
+        set("midcycle.a", 5.0);
         assert_eq!(
-            k.pull("b"),
-            polydat::ast::Value::F64(9.0),
-            "{name}: no engine may carry a volatile value across a write"
+            k.pull("a"),
+            polydat::ast::Value::F64(5.0),
+            "{name}: a read with no write between re-reads"
         );
     }
 }
 
-/// Two volatile reads that a wire connects are one fusion unit on the
-/// native engines, read together at the first pull of either; the
-/// interpreter and the closure tier read each at its own step's pull
-/// (runtime_model.md R1.v, "Read granularity").
+/// Two volatile reads that a wire connects read alike on all four
+/// engines: each pull re-reads every volatile step in its cone, whether
+/// or not native code fused them into one unit.
 #[test]
-fn connected_volatile_reads_are_one_unit_on_native_code() {
+fn connected_volatile_reads_agree_on_every_engine() {
     let source = "a := host_reading(\"joined.a\")\n\
                   b := host_reading(\"joined.b\") + a\n";
     for (name, k) in kernels_of(source).iter_mut() {
@@ -238,24 +240,44 @@ fn connected_volatile_reads_are_one_unit_on_native_code() {
         let b = k.pull("b");
 
         assert_eq!(a, polydat::ast::Value::F64(3.0), "{name}: first read");
-        let fused = name.starts_with("native") || name.starts_with("pure native");
-        let expected = if fused {
-            // Read with `a`, whose pull ran the unit they share.
-            polydat::ast::Value::F64(6.0)
-        } else {
-            // Its own step, read when `b` was pulled.
-            polydat::ast::Value::F64(12.0)
-        };
         assert_eq!(
-            b, expected,
-            "{name}: connected volatile reads follow the engine's unit"
-        );
-
-        k.set_inputs(&[2]);
-        assert_eq!(
-            k.pull("b"),
+            b,
             polydat::ast::Value::F64(12.0),
-            "{name}: no engine may carry a volatile value across a write"
+            "{name}: the pull of `b` re-read both volatile steps in its cone"
+        );
+    }
+}
+
+/// The steps upstream of a volatile step keep their cache: repeated
+/// reads re-evaluate the volatile step and what depends on it, and the
+/// pure step feeding it runs again only when its own input is written.
+#[test]
+fn a_volatile_read_leaves_its_upstream_cached() {
+    let source = "input cycle: u64\n\
+                  up := host_counted(cycle, \"memo.count\")\n\
+                  v := host_reading(\"memo.v\") + up\n";
+    for (name, k) in kernels_of(source).iter_mut() {
+        set("memo.count", 0.0);
+        set("memo.v", 1.0);
+        k.set_inputs(&[10]);
+        assert_eq!(k.pull("v"), polydat::ast::Value::F64(11.0), "{name}");
+        set("memo.v", 2.0);
+        assert_eq!(
+            k.pull("v"),
+            polydat::ast::Value::F64(12.0),
+            "{name}: the volatile step re-read"
+        );
+        assert_eq!(
+            get("memo.count"),
+            1.0,
+            "{name}: the pure step upstream of the volatile one did not re-run"
+        );
+        k.set_inputs(&[20]);
+        assert_eq!(k.pull("v"), polydat::ast::Value::F64(22.0), "{name}");
+        assert_eq!(
+            get("memo.count"),
+            2.0,
+            "{name}: a write to its input re-ran the pure step once"
         );
     }
 }

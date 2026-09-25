@@ -87,8 +87,11 @@ pub fn overrides(csv: &str, jsonl: &str, txt: &str) -> HashMap<&'static str, Str
         // value (100, 100), causing range=0 division panics.
         ("random_range", "input cycle: u64\nout := random_range(0, 1000)".into()),
         ("random_f64",   "input cycle: u64\nout := random_f64(0.0, 1.0)".into()),
-        ("session_start_millis", "input cycle: u64\nout := session_start_millis()".into()),
-        ("elapsed_millis", "input cycle: u64\nout := elapsed_millis()".into()),
+        // A window of samples is a `vec_f64`, built from text.
+        ("str_to_vec_f64",
+            "input cycle: u64\nout := str_to_vec_f64(\"[1.5, 2.5]\")".into()),
+        ("is_stable",
+            "input cycle: u64\n(v, out) := is_stable(str_to_vec_f64(\"[5.0, 5.0, 5.0, 5.0]\"), 0.05, 2)".into()),
         ("thread_id", "input cycle: u64\nout := thread_id()".into()),
         // f64 input
         ("clamp_f64", "input cycle: u64\nf := unit_interval(hash(cycle))\nout := clamp_f64(f, 0.0, 0.5)".into()),

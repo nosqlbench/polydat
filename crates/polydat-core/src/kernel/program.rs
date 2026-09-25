@@ -70,7 +70,7 @@ fn first_dynamic_wire(
                             def.name
                         );
                     }
-                    InputKind::IterationExtern => {} // not the offender
+                    InputKind::IterationExtern | InputKind::Const => {} // not the offender
                 }
             }
             WireSource::NodeOutput(upstream, _) => {
@@ -323,6 +323,8 @@ pub struct PolydatProgram {
     /// Source schemas declared in the Polydat program. The runtime queries
     /// these to discover data sources and their extents.
     cursor_schemas: Vec<crate::iteration::source::SourceSchema>,
+    /// The `const` bindings a kernel initializes, in dependency order.
+    const_inits: Vec<crate::kernel::ConstInit>,
     /// How much of the graph was fused into native cones when the
     /// program was built: what its kernels report as their engine.
     cone_mode: crate::compile::cone::JitMode,
@@ -417,6 +419,7 @@ impl PolydatProgram {
             output_modifiers: HashMap::new(),
             inherited_outputs: std::collections::HashSet::new(),
             cursor_schemas: Vec::new(),
+            const_inits: Vec::new(),
             cone_mode: crate::compile::cone::JitMode::Off,
             traversals: Vec::new(),
             producers: Vec::new(),
@@ -706,6 +709,17 @@ impl PolydatProgram {
         self.cursor_schemas = schemas;
     }
 
+    /// The `const` bindings a kernel of this program initializes, in the
+    /// order it evaluates them.
+    pub fn const_inits(&self) -> &[crate::kernel::ConstInit] {
+        &self.const_inits
+    }
+
+    /// Record the const bindings, before the program is shared.
+    pub(crate) fn set_const_inits(&mut self, inits: Vec<crate::kernel::ConstInit>) {
+        self.const_inits = inits;
+    }
+
     /// How much of the graph was fused into native cones at build.
     pub fn cone_mode(&self) -> crate::compile::cone::JitMode {
         self.cone_mode
@@ -818,7 +832,9 @@ impl PolydatProgram {
                         .map(|d| d.kind)
                         .unwrap_or(InputKind::Coordinate);
                     let lc = match kind {
-                        InputKind::IterationExtern => EvalLifecycle::ScopeInit,
+                        // A const slot holds a value fixed when the kernel is
+                        // initialized, so what reads it is not per-cycle work.
+                        InputKind::IterationExtern | InputKind::Const => EvalLifecycle::ScopeInit,
                         InputKind::Coordinate | InputKind::ExternalWrite => EvalLifecycle::Dynamic,
                     };
                     if lc > lifecycle[i] {
@@ -2665,11 +2681,10 @@ mod r1v_contagion_tests {
     use crate::dsl::compile_polydat_interpreter;
 
     #[test]
-    fn within_cycle_volatile_reads_are_consistent() {
-        // Pulling the same volatile-dependent output multiple
-        // times within a single cycle must return the same
-        // value — R1.v guarantees within-cycle consistency, not
-        // per-pull freshness.
+    fn every_read_re_evaluates_a_volatile_node() {
+        // Each pull of a volatile output is a read, and every read
+        // re-evaluates the volatile node (R1.v), with or without a
+        // write between them.
         let src = "input cycle: u64\n\
                    c := counter()\n";
         let mut k = compile_polydat_interpreter(src).expect("compile");
@@ -2686,8 +2701,8 @@ mod r1v_contagion_tests {
             Value::U64(v) => *v,
             _ => panic!(),
         };
-        assert_eq!(a, b, "within-cycle reads of a volatile node must agree");
-        assert_eq!(b, c, "within-cycle reads of a volatile node must agree");
+        assert_eq!(b, a + 1, "the second read re-evaluated the counter");
+        assert_eq!(c, b + 1, "the third read re-evaluated the counter");
     }
 }
 

@@ -35,6 +35,8 @@ mod binary_run;
 mod body_carrier;
 #[path = "compile_events.rs"]
 mod compile_events;
+#[path = "const_init.rs"]
+mod const_init;
 #[path = "core_with_library.rs"]
 mod core_with_library;
 #[path = "cursor_tiers.rs"]

@@ -96,6 +96,15 @@ pub enum AssemblyError {
     /// speaks `AssemblyError`, reports the same kind as the compiled
     /// engines do rather than folding it into `Other`.
     ConstantFold(String),
+    /// A `const` binding could not be computed when the kernel was
+    /// initialized; see [`KernelError::ConstInit`], which this becomes at
+    /// the kernel boundary.
+    ConstInit {
+        /// The const.
+        name: String,
+        /// Why its expression failed, as the node reported it.
+        reason: String,
+    },
     /// `CompileOptions::input_variance` is `Error` and these inputs'
     /// types were inferred rather than declared, as `(name, inferred
     /// type)` (input_variance.md §4).
@@ -198,6 +207,10 @@ impl std::fmt::Display for AssemblyError {
                 f,
                 "a value this program computes at build could not be computed: {msg}"
             ),
+            AssemblyError::ConstInit { name, reason } => write!(
+                f,
+                "the const '{name}' could not be computed when the kernel was initialized: {reason}"
+            ),
             AssemblyError::OpenInputs(inputs) => {
                 writeln!(
                     f,
@@ -242,6 +255,8 @@ pub(crate) struct ResolvedDag {
     pub(crate) output_modifiers: HashMap<String, crate::dsl::ast::BindingModifier>,
     /// Names declared with `init` (SRD 11 §"Init Binding Contract").
     pub(crate) const_outputs: std::collections::HashSet<String>,
+    /// The const bindings a kernel initializes, in dependency order.
+    pub(crate) const_inits: Vec<crate::kernel::ConstInit>,
     /// The cursors the program declares.
     pub(crate) cursor_schemas: Vec<crate::iteration::source::SourceSchema>,
     /// The compile ledger every program built from this graph records in.
@@ -556,6 +571,11 @@ pub struct PolydatAssembler {
     context: String,
     /// Binding modifiers for named outputs.
     output_modifiers: HashMap<String, crate::dsl::ast::BindingModifier>,
+    /// The const bindings a kernel initializes, in dependency order.
+    const_inits: Vec<crate::kernel::ConstInit>,
+    /// A template's build is not initialized: its inputs come from a
+    /// binder, and each kernel bound from it is initialized then.
+    pub(crate) template: bool,
     /// Names declared with the `const` keyword. Subject to the
     /// init-binding contract (SRD 11 §"Init Binding Contract").
     const_outputs: std::collections::HashSet<String>,
@@ -647,6 +667,8 @@ impl PolydatAssembler {
             source: String::new(),
             context: "(assembler)".into(),
             output_modifiers: HashMap::new(),
+            const_inits: Vec::new(),
+            template: false,
             const_outputs: std::collections::HashSet::new(),
             strict_values: false,
             strict_types: false,
@@ -721,6 +743,12 @@ impl PolydatAssembler {
         if modifier != crate::dsl::ast::BindingModifier::NONE {
             self.output_modifiers.insert(name.to_string(), modifier);
         }
+    }
+
+    /// Record how the `const` bindings are initialized, in dependency
+    /// order.
+    pub(crate) fn set_const_inits(&mut self, inits: Vec<crate::kernel::ConstInit>) {
+        self.const_inits = inits;
     }
 
     /// Mark an output as declared with the `const` keyword. Compile-
@@ -876,6 +904,7 @@ impl PolydatAssembler {
     ) -> Result<PolydatKernel, AssemblyError> {
         let jit_mode = self.jit_mode.unwrap_or_default();
         let strict = self.strict;
+        let template = self.template;
         let mut resolved = self.resolve_with_log(log.as_deref_mut())?;
         let (node_total, output_total) = (resolved.nodes.len(), resolved.output_order.len());
         crate::compile::cone::extract_jit_cones(&mut resolved, jit_mode);
@@ -901,7 +930,18 @@ impl PolydatAssembler {
             kernel.set_cursor_schemas(cursors);
         }
         kernel.set_cone_mode(jit_mode);
+        kernel.set_const_inits(resolved.const_inits);
         Self::log_summary(log, node_total, output_total);
+        if template {
+            return Ok(kernel);
+        }
+        crate::kernel::Kernel::init(&mut kernel).map_err(|e| match e {
+            KernelError::ConstInit { name, reason } => AssemblyError::ConstInit { name, reason },
+            other => AssemblyError::ConstInit {
+                name: String::new(),
+                reason: other.to_string(),
+            },
+        })?;
         Ok(kernel)
     }
 
@@ -994,6 +1034,7 @@ impl PolydatAssembler {
         extras
             .externs
             .set_output_modifiers(&resolved.output_modifiers);
+        extras.externs.set_const_inits(&resolved.const_inits);
         extras.output_types = resolved
             .output_map
             .iter()
@@ -1226,6 +1267,7 @@ impl PolydatAssembler {
         )?;
         externs.set_output_names(&resolved.output_order);
         externs.set_output_modifiers(&resolved.output_modifiers);
+        externs.set_const_inits(&resolved.const_inits);
         Ok(externs)
     }
 
@@ -2144,6 +2186,7 @@ impl PolydatAssembler {
                 context: self.context,
                 output_modifiers: self.output_modifiers,
                 const_outputs: self.const_outputs,
+                const_inits: self.const_inits,
                 cursor_schemas: self.cursor_schemas,
                 ledger: self.ledger,
             };
@@ -2161,6 +2204,7 @@ impl PolydatAssembler {
             context: self.context,
             output_modifiers: self.output_modifiers,
             const_outputs: self.const_outputs,
+            const_inits: self.const_inits,
             cursor_schemas: self.cursor_schemas,
             ledger: self.ledger,
         })
@@ -2841,8 +2885,23 @@ impl PolydatAssembler {
         self.compile_slots_with_log(engine, None)
     }
 
-    /// [`Self::compile_slots`] with the compile event log.
+    /// [`Self::compile_slots`] with the compile event log. The kernel is
+    /// initialized before it is returned: its consts are evaluated.
     pub fn compile_slots_with_log(
+        self,
+        engine: Engine,
+        log: Option<&mut crate::dsl::events::CompileEventLog>,
+    ) -> Result<Box<dyn crate::compile::SlotKernel>, KernelError> {
+        let template = self.template;
+        let mut kernel = self.build_slots_with_log(engine, log)?;
+        if !template {
+            crate::kernel::Kernel::init(kernel.as_mut())?;
+        }
+        Ok(kernel)
+    }
+
+    /// The compiled kernel on `engine`, not yet initialized.
+    fn build_slots_with_log(
         self,
         engine: Engine,
         mut log: Option<&mut crate::dsl::events::CompileEventLog>,

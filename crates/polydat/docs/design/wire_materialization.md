@@ -149,16 +149,18 @@ slot not bound by step 1, the first of these applies.
 When the name is an input slot on the outer program too (a
 passthrough extern) or is a `const` output of the outer program,
 the value is copied from `outer.lookup(name)`, the two-tier read
-that consults the outer's own folded constant first and falls
-through to its wired-in input when the constant is `None`
+that consults the outer's own const first and falls through to
+its wired-in input when the const is `None`
 ([none_semantics.md](none_semantics.md)). The copy passes
 through `adapt_boundary_value` (the boundary adapter catalog of
 [type_system.md](type_system.md) §6.2). No cell is used. A
-`const` is effectively constant for the scope's lifetime, so a
-copy is semantically equivalent to a cell and costs no cell
-traffic. A `const` whose buffer is `None` must not be broadcast,
-because broadcasting it would defeat the chain walk that gives
-descendants the grandparent's value.
+`const` is evaluated once, at the outer kernel's initialization,
+and does not change for that kernel's life, so a copy is
+semantically equivalent to a cell and costs no cell traffic.
+Initialization has already applied the conditional shadow: a
+const whose own expression yielded `None` holds the value its
+fallback input received from the grandparent, so the copy carries
+the grandparent's value down the chain.
 
 ### 3. Broadcast cell for computed outputs
 
@@ -191,16 +193,20 @@ consulted, and a value it returns is copied through
 `adapt_boundary_value`. A slot that no form fills keeps its
 declared default (`None` when it has none).
 
-After these steps, every `const` output of the inner program is
-pulled once against the populated slots
-([evaluation_model.md](evaluation_model.md), Plan B), and the
-inner scope's coordinate path becomes its own coordinates
-followed by the outer's.
+After these steps, the inner kernel is initialized: every `const`
+of the inner program is evaluated once against the populated slots
+and fixed for the kernel's life
+([evaluation_model.md](evaluation_model.md), "Const Binding
+Contract"), and a const whose expression fails makes the
+construction fail, naming the const. Then the inner scope's
+coordinate path becomes its own coordinates followed by the
+outer's.
 
 ### Inlined constants and the parameter scope
 
-A wire whose value is statically known (a literal right-hand side
-or a folded const binding) is folded into the program at build.
+A wire whose value is statically known (a literal right-hand side,
+including a `const` with a literal right-hand side, or a node with
+no input in its provenance) is folded into the program at build.
 All four engines (the interpreter, the closure tier, native, and
 pure native) perform the same compile-constant fold, and step 2
 copies the folded value into a descendant. Such a wire has no cell

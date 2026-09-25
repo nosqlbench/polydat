@@ -197,9 +197,11 @@ function, a run does not execute the whole program:
   allocates on the way into native code.
 - A unit runs whole, so the units a pull passes are closed over every
   member's producers.
-- In `raw` mode a write makes every unit dirty, starting a new round in which
-  each unit runs at most once. In `pushpull` a write dirties the units that
-  depend on what changed.
+- In `raw` mode a write makes every unit dirty, and each unit then runs at
+  most once until the next write. In `pushpull` a write dirties the units
+  that depend on what changed. In both modes every pull and every `eval`
+  first dirties the units holding volatile steps (`volatile_units`), so each
+  read runs them again.
 
 It refuses a node without a lowering and is `#[doc(hidden)]`: the
 differential suites and the ladder benchmarks construct it, and one engine's
@@ -246,7 +248,13 @@ All four engines evaluate under the runtime model's rule (runtime_model.md,
 R1):
 
 - A step is current until an input in its provenance changes.
-- A nondeterministic step is never current.
+- A volatile step (a nondeterministic node, a `volatile` wire, or a step
+  downstream of either) runs again at every read, a `pull` or an `eval`,
+  whose cone reaches it, and at most once within one read. The steps
+  upstream of the fulcrum, the most upstream volatile node, stay current
+  under the first rule (runtime_model.md, R1.v).
+- A `const` binding is evaluated once, when the kernel is initialized, and
+  its value is fixed until `Kernel::init` runs again.
 - A compile-constant step is folded once at build on all four engines, and
   the fold is logged the same way. The interpreter, the closure tier, and
   native (P3, whose kernel is the hybrid of native segments and closure
@@ -262,8 +270,9 @@ R1):
 
 The provenance modes of §4 are optimizations over this rule: they change
 what is recomputed, never a result. No step is exempt, and nothing but a
-write to an input invalidates anything; no evaluation round or thread
-boundary invalidates anything (runtime_model.md, R4).
+write to an input invalidates anything, except that a read makes the
+volatile steps not current; no evaluation round or thread boundary
+invalidates anything (runtime_model.md, R4).
 
 A compile-constant step that cannot be computed is a **build error on all
 four engines**, reported as `KernelError::ConstantFold` with the node's own
@@ -281,7 +290,7 @@ needs it.
 The figure follows one write in which the host changed only `scale`: the
 step reading `cycle` alone stays current and is skipped, the steps with
 `scale` in their provenance run when pulled, the folded constant is read from
-its slot, the nondeterministic step runs every time, and the side channel
+its slot, the nondeterministic step runs at every read, and the side channel
 fires once when it is pulled or evaluated. The interpreter keeps a clean flag
 per node and a dependents list per input; the compiled kernels keep a write
 epoch per step and a provenance mask per slot. Both are bookkeeping for the
@@ -373,14 +382,22 @@ The `Kernel` trait has the same meaning on all four engines:
   checks this on all four engines, reading each program's kernel across the
   inputs its conversions refuse.
 - `invalidate_all` marks every step not current and keeps the inputs, so
-  every step reruns at the next pull. It is how a host re-observes a
-  nondeterministic program without writing an input.
+  every step reruns at the next pull. It does not re-evaluate a `const`.
+- `init` initializes the kernel: it evaluates every `const` once, in
+  dependency order, from the inputs as they are now, and fixes each value
+  until `init` runs again. Every kernel a build, `create_kernel`, a binder,
+  or `activation_on` returns is initialized already; only
+  `create_uninitialized` returns one that is not. A host calls `init` after
+  setting an extern a const reads, when it wants the const recomputed. A
+  const whose expression fails makes `init` return `KernelError::ConstInit`
+  naming it. A write to a const's slot is refused with
+  `WriteError::ConstSlot`.
 - `output_names` lists the outputs in the order the program declares them.
 - `into_program` turns a kernel into a program shared across threads.
   `create_kernel` on that program returns a kernel that starts from the
-  program: every extern at its declared default and every `shared` binding
-  with a cell of its own, regardless of what was written to the kernel that
-  became the program. An extern is per-kernel state, like the coordinates:
+  program: every extern at its declared default, every `shared` binding
+  with a cell of its own, and every `const` evaluated from those defaults,
+  regardless of what was written to the kernel that became the program. An extern is per-kernel state, like the coordinates:
   both are writes into declared slots of a running kernel, and neither is
   part of the compiled program. A host that wants a value fixed *for the
   program* fixes it before compiling, with `transform::assign_values` or an
@@ -615,7 +632,7 @@ inside an engine, not refusals:
   called in place over the state's own scratch
   ([Compiled By-Reference Slots](compiled_handles.md) §6). A
   nondeterministic node or a side channel does too, as a segment of its
-  own on the P3 kernel and a never-current step on pure native code, so
+  own on the P3 kernel and a unit of volatile steps on pure native code, so
   its currency is its own. A node with no kit runs only on the
   interpreter; the closure tier, P3, and pure native refuse a program
   containing one, naming the node (`KernelError::Refused`). Every node
@@ -641,8 +658,13 @@ inside an engine, not refusals:
   - A compile-constant node never joins a segment that is not
     compile-constant, or a constant step downstream of it would run at build
     before its producer.
-  - A volatile node never joins non-volatile ones, or the segment would never
-    be current and would rerun them at every round.
+  - A volatile node never joins non-volatile ones, since the segment would
+    run at every read and rerun them with it. Units are split at the
+    fulcrum, the most upstream volatile node on a path, so every step
+    upstream of it stays cached (runtime_model.md, R1.v). The same split
+    holds for pure native's units (the class bits of `compile/hybrid.rs`)
+    and for the interpreter's native cones (`compile/cone.rs` passes the
+    volatile class to `fusion_units::components`).
   - A side channel is always a segment by itself.
   - A leaf that reads only kernel inputs and that nothing reads, such as the
     copy exposing an input as an output, joins the first segment that reads
@@ -650,7 +672,7 @@ inside an engine, not refusals:
     copy. It cannot sit on a path that leaves that segment, so the segment
     stays convex.
 
-  A program's segments are functions of one compiled module, so a round that
+  A program's segments are functions of one compiled module, so a pull that
   runs many of them does not walk a separate code region per segment. Pure
   native code compiles the same units, one block each.
 - The closure tier and P3 share their bookkeeping, one set of methods for
@@ -681,8 +703,12 @@ inside an engine, not refusals:
   program on `native`. This is not a refusal: the program is accepted,
   and it runs whenever the host sets the extern before pulling, which is
   the ordinary case. It cannot be decided at build, because whether an
-  extern is ever set is decided by the host, not the program. It is the
-  one place a host can see which engine it chose.
+  extern is ever set is decided by the host, not the program. The same
+  limit applies to a `const` whose value is `None` after initialization:
+  pure native refuses it at initialization (`KernelError::Refused`), and
+  its unset-extern check skips const slots and the fallback inputs only
+  initialization reads. These two are the only places a host can see
+  which engine it chose.
 - SIMD scalar-flow promotion is not selected by ordinary engine choice; it has
   its own explicit qualification and execution contract in
   [simd_isa_autopromotion.md](simd_isa_autopromotion.md).

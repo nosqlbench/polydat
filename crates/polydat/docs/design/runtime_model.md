@@ -52,6 +52,8 @@ section.
   coordinate, written together with the others by `set_inputs`,
   or an extern, written by name through `set_input`. An extern
   bound to a shared cell takes the cell's published value (§5).
+  A third kind, the const slot (`InputKind::Const`), holds a
+  `const` binding's value and is written only by initialization.
 - **Write.** A host act that sets one or more inputs:
   `set_inputs`, `set_input`, or a cell publication a kernel
   observes at its next evaluation.
@@ -79,14 +81,29 @@ section.
   fusion unit. A step's provenance is the union of its nodes'.
 - **Current.** A step is current when its cached output may be
   returned without running it. Rule R1 (§3) states when a step
-  is current.
-- **Round.** The span from the first evaluation after a write
-  to the next write. Within one round each step runs at most
-  once, whatever the number of pulls.
+  is current. A volatile step is current only within the read
+  that ran it.
+- **Read.** One host request that evaluates steps: a `pull` or
+  an `eval`. The interpreter's `pull_all`, which `eval` calls, is
+  one read. Within one read each step runs at most once, whatever
+  the number of outputs it serves.
 - **Volatile.** A step whose value is not a function of its
-  provenance, because a node in it is nondeterministic or its
-  wire carries the `volatile` modifier. Sub-axiom R1.v (§3)
-  states how volatile steps are evaluated.
+  provenance, because a node in it declares
+  `Purity::Nondeterministic` or its wire has the `volatile`
+  modifier, or because it is downstream of such a step. Every
+  read whose cone reaches a volatile step runs it again.
+  Sub-axiom R1.v (§3) states the rule.
+- **Fulcrum.** The most upstream volatile node on a path of the
+  graph. The fulcrum and everything downstream of it are
+  volatile; everything upstream of it is not, and is cached
+  under R1.
+- **Initialization.** The evaluation of every `const` binding a
+  kernel declares, once, in dependency order, from the kernel's
+  inputs as they are at that moment. Each const's value is then
+  fixed for the kernel's life: nothing re-evaluates it, and no
+  step runs again because of it. Every way a kernel comes into
+  existence initializes it, and `Kernel::init` initializes it
+  again (§6).
 
 ---
 
@@ -151,7 +168,7 @@ the graph's structure.
 All four engines evaluate under one rule:
 
 > A step is current until an input in its provenance changes.
-> A nondeterministic step is never current. A step with no
+> A volatile step is never current across reads. A step with no
 > input in its provenance is compile-constant and is folded at
 > build. Every other step runs at the first pull whose cone
 > contains it after it stopped being current.
@@ -162,9 +179,9 @@ engine, as the table shows, and never changes a result:
 
 | Engine | Realisation |
 |---|---|
-| Interpreter | A clean flag per node (`node_clean`); per-input dependent lists (`input_dependents`) cleared on every write; a list of nondeterministic nodes cleared on every write; a cell-revision check at every memoized read (§5). A write is itself the change: the interpreter does not compare the new value with the old, so a same-value rewrite re-runs the dependents, which a side channel in the cone must observe. |
-| Closure tier and native tier | An `Invalidation` plan derived from provenance (per-input dependent steps and per-output cone orders); a clean flag per step; a round number per step recording the evaluation round it last ran in, which never clears an output; the volatile steps never current. A coordinate counts as changed only when its value differs from the one it replaces. |
-| Pure native | A clean flag per fusion unit; per-input dependent units (`pushpull`) or every unit (`raw`) cleared on a write; per-output cone orders of units, closed over each unit's producers; the units holding volatile steps cleared on every write. The program's single native function is entered with the pulled cone's precomputed order and the flags, tests each unit's flag in native code, and dispatches the stale ones. |
+| Interpreter | A clean flag per node (`node_clean`); per-input dependent lists (`input_dependents`) cleared on every write; the volatile nodes' clean flags cleared at the start of every read (`PolydatState::rearm_volatile`); a cell-revision check at every memoized read (§5). A write is itself the change: the interpreter does not compare the new value with the old, so a same-value rewrite re-runs the dependents, which a side channel in the cone must observe. |
+| Closure tier and native tier | An `Invalidation` plan derived from provenance (per-input dependent steps and per-output cone orders); a clean flag per step; a mark per step recording the evaluation it last ran in, which never clears an output. At the start of every read the volatile steps' marks are reset (`rearm_volatile`), so each read runs them again. A coordinate counts as changed only when its value differs from the one it replaces. |
+| Pure native | A clean flag per fusion unit; per-input dependent units (`pushpull`) or every unit (`raw`) cleared on a write; per-output cone orders of units, closed over each unit's producers; the units holding volatile steps (`volatile_units`) cleared at the start of every read. The program's single native function is entered with the pulled cone's precomputed order and the flags, tests each unit's flag in native code, and dispatches the stale ones. |
 
 The rule depends on lifecycle classification, which has one
 classifier, `PolydatProgram::classify_lifecycle`, shared by the
@@ -172,15 +189,19 @@ interpreter's fold and the three compiled engines: a node is
 compile-constant when its provenance contains no coordinate or
 external-write input and nothing upstream is nondeterministic or
 `volatile`; scope-init when its provenance contains only
-iteration externs; dynamic otherwise. The compile-constant fold
-therefore runs at build on all four engines: every value that
-can be computed at build is computed at build, and a failure to
-compute one is a build error.
+iteration externs and const slots; dynamic otherwise. The
+compile-constant fold therefore runs at build on all four
+engines: every value that can be computed at build is computed
+at build, and a failure to compute one is a build error.
 
 The **effectively-const** steps (per the Graph Compiler's
 hoisting analysis) are the special case of the rule with no
-dynamic input in their provenance: computed once at scope-init
-and current for the scope's lifetime. Provenance modes on the
+dynamic input in their provenance: computed once after
+initialization and current for the kernel's lifetime. A
+`const` binding whose right-hand side is not a literal is
+evaluated at initialization (Terms) and its value is held in an
+input slot of kind `InputKind::Const`, so a step that reads it
+is current until `Kernel::init` writes that slot again. Provenance modes on the
 compiled engines (`Raw`, `Push`, `Pull`, `PushPull`, with
 `Auto` choosing among them; [engines.md](engines.md) §4)
 decide how much of the bookkeeping
@@ -193,7 +214,8 @@ change what a pull returns.
 make it not current in a given kernel. Multiple pulls touching
 the step between such events use the cached result; the cache
 is reset only when an input in the step's provenance changes,
-or by `invalidate_all`.**
+by `invalidate_all`, or, for a volatile step, by the start of
+the next read (R1.v).**
 
 Rationale: without memoization a pull would re-evaluate its
 whole cone every time, and a side channel in the cone would fire
@@ -207,96 +229,81 @@ cache.
 ### Sub-axiom R1.v — Volatility carves out clean-flag memoization
 
 **A wire is *volatile* when its value is not a function of its
-declared inputs. Volatile wires opt out of clean-flag
-memoization across writes: every write (every `set_inputs` or
-`set_input`) re-evaluates the producing step on next pull,
-regardless of whether any of the step's declared inputs
-changed. Between two writes, the step is evaluated at most once
-and the result is cached for subsequent reads — this gives
-consumers consistency between writes. Volatility is contagious
-— the lifecycle classifier propagates it through the wire chain
-so every step whose dependency cone touches a volatile producer
-is itself treated as volatile.**
+declared inputs. A volatile step is re-evaluated by every read
+(every `pull` and every `eval`) whose cone reaches it, whether
+or not any input was written since the last read. Within one
+read it runs at most once, and every consumer in that read
+receives the value it computed. Volatility spreads downstream:
+the lifecycle classifier marks every step downstream of a
+volatile node volatile. It does not spread upstream: the
+fulcrum, the most upstream volatile node on a path, and
+everything downstream of it run on every read that reaches
+them, and every step upstream of the fulcrum stays current
+under R1 until an input in its provenance changes.**
 
 Volatility arises from two distinct sources:
 
 - **Intrinsic.** A library node declares itself volatile by
   returning `Purity::Nondeterministic { reason }` from
   `PolydatNode::purity`. Examples: `current_epoch_millis`,
-  `counter`, `elapsed_millis`, `thread_id`,
-  `session_start_millis`, entropy sources, and any node
+  `counter`, `thread_id`, entropy sources, and any node
   whose output is not a pure function of its declared
   inputs. The library imposes volatility; no user opt-in is
   required, and the workload author cannot remove the marker.
 - **User opt-in.** A wire's binding declares the `volatile`
   modifier, marking the wire as must-not-be-const-folded.
-  The author is asserting that the value should never be
-  cached across writes even though the compiler can't infer
-  it from the wire chain (e.g., a node that reads external
-  mutable state the polydat layer cannot see).
+  The author is asserting that the value must be computed
+  again at every read even though the compiler cannot infer
+  that from the wire chain (for example, a node that reads
+  external mutable state the polydat layer cannot see).
 
-Both sources produce the same values on every engine, by the
-same mechanism — with one visible difference in *when* a read
-happens, which "Read granularity" below states:
+Both sources are evaluated by the same mechanism, and it is the
+same on all four engines (the interpreter, the closure tier,
+native, and pure native):
 
-- The wire is excluded from the compile-constant fold — the
+- The wire is excluded from the compile-constant fold. The
   canonical workload hash sees node type and wiring shape but
-  never the value, keeping workload identity stable across
+  never the value, which keeps workload identity stable across
   processes.
-- The lifecycle classifier marks the producing node dynamic
-  and nondeterministic; its fixed-point propagation marks
-  every downstream consumer the same. The interpreter clears
-  those nodes' clean flags on every write; a compiled kernel
-  clears its volatile steps at the first evaluation after a
-  write and never records them as current.
+- The lifecycle classifier (`PolydatProgram::classify_lifecycle`)
+  marks the producing node dynamic and nondeterministic, and its
+  fixed-point propagation marks every downstream consumer the
+  same. At the start of every read, each engine marks its
+  volatile steps not current (§3), so the read runs those of
+  them its cone reaches, once each.
 - The intrinsic declaration is authoritative: an absent user
   modifier does not override a library-declared volatile
   node, and a present user modifier on a wire that reads a
   library-declared-pure node still makes the wire itself
-  volatile (and contaminates its downstream).
-
-**Consistency between writes.** Between two writes, a volatile
-step is evaluated at most once and cached — consumers reading
-the same value multiple times between writes observe a
-consistent value. The "every write re-evaluates" guarantee is
-at the granularity of the write, not per individual pull. This
-is the correct semantic for temporal nodes (an op reading
-`current_epoch_millis` several times between writes sees one
-timestamp) and matches the mechanism every engine delivers.
-
-**Read granularity is the step's, and the step is the
-engine's.** The paragraph above is per *step*, and a step
-is one node on the interpreter and the closure tier but a whole
-fusion unit on native code (Terms). Two volatile wires are therefore
-two steps on one engine and may be one on another, and that is
-observable — it is the only way an engine's realisation shows
-through, because a volatile step is the one step whose value is
-not a function of anything the engine can see:
-
-| Engine | Two volatile wires pulled in one write |
-|---|---|
-| Interpreter, closure tier | Two steps. Each reads when its own output is first pulled, so a change made between the two pulls is visible to the second. |
-| Native tier, pure native | Two steps when no wire connects them, since native code fuses only connected, convex groups of nodes (engines.md §8), and then each reads as above. When a wire connects them they are one fusion unit, a segment or a block of the one function: both read together at the first pull of either, so a change made between the pulls is not visible until the next write. |
+  volatile, and every step downstream of it volatile.
+- No native code unit contains both a volatile node and a
+  non-volatile node. The fusion units of native and pure native
+  and the interpreter's native cones are split at the fulcrum
+  ([engines.md](engines.md) §8), so a step upstream of the
+  fulcrum is a step of its own and stays cached on every engine.
 
 So, normatively:
 
-- **Guaranteed.** Each volatile step is evaluated at most once
-  per write, re-evaluated on the next write, and answers every
-  read within that write with the value it read. No engine may
-  carry a volatile value across a write (the fold and clean-flag
-  exclusions above are what enforce it).
-- **Not guaranteed.** That two volatile reads within one write
-  are simultaneous, or that they are distinct. A host that needs
-  two readings to come from one instant must take them in one
-  node and return both, which makes them one step on every
-  engine; a host that needs two distinct readings must put a
-  write between them.
+- **Guaranteed.** Every read whose cone reaches a volatile step
+  runs it exactly once, and every consumer within that read
+  receives the value that run computed. No engine carries a
+  volatile value from one read into the next. Every step
+  upstream of the fulcrum runs only when an input in its
+  provenance changes, as R1 states. Two volatile reads behave
+  the same on all four engines.
+- **Not guaranteed.** That two volatile steps run by one read
+  observe one instant. A host that needs two readings from one
+  instant takes them in one node and returns both.
 
-This is a consequence of R1's step definition rather than a
-concession to it, and it cannot be removed by making the engines
-agree: native code fuses connected nodes into units that run
-whole, so it has no smaller unit to read at. Pinned by
-`tests/host_node_tiers.rs`.
+A `const` binding stops the spread. A const over a volatile
+expression is evaluated once, at initialization, and its value
+is a capture: the const is not volatile, and neither is anything
+downstream of it that has no other volatile input. A host that
+wants one reading of a clock for a kernel's life writes
+`const t0 := current_epoch_millis()`.
+
+Pinned on all four engines by `tests/host_node_tiers.rs`
+(`a_volatile_read_leaves_its_upstream_cached`).
 
 What volatility is NOT for: ordinary external-write inputs (per
 composition_substrate S4). Provenance handles re-evaluation
@@ -402,8 +409,8 @@ Enforcement: `compiled_handles.md` §3 states the owner of every
 `Ref2` pair a compiled slot can hold; the S3/S4/S9 axioms of
 `jit_boundary.md` are the mechanism and its validator; the
 kernels' write-epoch bookkeeping (`ran`, `epoch`) decides only
-whether a step has run since the last write, and never what it
-holds.
+whether a step has run since the last write, or, for a volatile
+step, within the current read, and never what it holds.
 
 ---
 
@@ -417,7 +424,7 @@ are implemented as follows:
 | L-axiom | Runtime realisation |
 |---|---|
 | **L1** (each layer owns its state) | One kernel per fiber, on whichever engine the host chose. The program is shared read-only through `KernelProgram` (an `Arc`); every kernel created from it owns its inputs, buffers, currency flags, and cells. No cross-fiber state sharing at the node tier. |
-| **L2** (two-lifecycle classification bridges layers) | Effectively-const steps are evaluated once at scope-init; dynamic steps on demand after each write. The classification belongs to the program (§3), so it is the same on all four engines. |
+| **L2** (two-lifecycle classification bridges layers) | `const` bindings are evaluated once, at initialization, after the binder has written the enclosing scope's values; effectively-const steps run once after that and stay current; dynamic steps run on demand after each write, and volatile steps at every read. The classification belongs to the program (§3), so it is the same on all four engines. |
 
 At every evaluation, each layer's state is owned by its layer
 (L1); every read of an outer scope's value goes through an
@@ -432,7 +439,7 @@ follows, alongside R1, R2, and R3:
 
 | S-axiom | Runtime realisation |
 |---|---|
-| **S4** (external-write synthesis, open granularity) | External-write input slots are populated through the kernel's typed writes (`set_input`, `set_input_at`, `set_cursor`) at any granularity the producer chooses; provenance (R2) marks consumers not current on write; currency (R1) re-evaluates on next pull. Volatility (R1.v) is the explicit marker for wires whose value is not a function of declared inputs and so cannot be cached even between writes. |
+| **S4** (external-write synthesis, open granularity) | External-write input slots are populated through the kernel's typed writes (`set_input`, `set_input_at`, `set_cursor`) at any granularity the producer chooses; provenance (R2) marks consumers not current on write; currency (R1) re-evaluates on next pull. Volatility (R1.v) is the explicit marker for wires whose value is not a function of declared inputs, which every read evaluates again. A const slot (`InputKind::Const`) is not an external-write slot: a host write to it is refused with `WriteError::ConstSlot`, and only initialization writes it. |
 | **S5** (compile-emit write-through, cross-tier path) | `SharedCell` write-through routes a writing node's output to a parent-tier cell at compile-emit time (per [subcontext_construction.md](subcontext_construction.md) §3.1, the shared write-through rewrite, and §5); at runtime the write fires as an ordinary node output, intercepted by the chain and published through the cell. The outer cell's slot is filled through the standard slot-filling contract. L1 still holds, because the outer cell remains the single owner of the value. |
 
 ### Shared cells on all four engines
@@ -489,7 +496,37 @@ trait, and each call below has the same meaning on all four.
   another type is an error at the write. `None` clears a slot to
   unset. A write marks every step that depends on the written
   slots not current and changes nothing else; nothing runs until
-  the next pull (S4, R2, R4).
+  the next pull (S4, R2, R4). A write does not change a `const`,
+  even one whose expression reads the written input; the const
+  keeps the value initialization gave it until `init()` runs
+  again. Writing a const's slot (`__const_<name>`) is refused
+  with `WriteError::ConstSlot`.
+- **`init()`** initializes the kernel: it evaluates every
+  `const` binding once, in dependency order, from the kernel's
+  inputs as they are now, and stores each value for the rest of
+  the kernel's life. Inputs keep their values; only the consts
+  and the steps that read them change. A host calls it after
+  setting an extern that a const reads, when it wants the const
+  recomputed from the new value. A const whose expression yields
+  `None` takes the value the binder copied from the enclosing
+  scope (the conditional shadow of
+  [none_semantics.md](none_semantics.md)). It returns `Ok(())`,
+  or `KernelError::ConstInit { name, reason }` naming the first
+  const whose expression failed. On pure native a const whose
+  value is `None` is refused with `KernelError::Refused`, since
+  pure native code cannot hold `None`. The kernel is initialized
+  already when a host receives it (below), so a host that sets
+  no const-read extern never calls `init`.
+- **`const_inits()`** lists the program's non-literal consts as
+  `ConstInit { name, slot, source, fallback }` records, in the
+  order `init` evaluates them: `name` is the const and the output
+  that reads it, `slot` the input holding its value, `source` the
+  output `__init_<name>` computing its expression, and `fallback`
+  the input holding the enclosing scope's value, when there is
+  one. **`init_input_at(index, value)`** is `set_input_at` that
+  also accepts a const slot; `init` stores each const through it,
+  and a host that implements `Kernel` itself uses it the same
+  way.
 - **`pull(name)`** computes and returns one output. `name` is
   the output's declared name. The kernel runs, in order, the
   not-current steps the output depends on, and returns the
@@ -503,17 +540,18 @@ trait, and each call below has the same meaning on all four.
   that resolves the name once with `output_index`.
 - **`eval()`** brings every output up to date without returning
   any. The interpreter pulls every output; a compiled kernel
-  runs every step that has not run since the last write. A host
+  runs every step that has not run since the last write, and
+  every volatile step. An `eval` is one read (R1.v). A host
   calls it when it wants every step evaluated without reading
   outputs, and what a side channel observes under `eval` is the
   same on all four engines.
 - **`invalidate_all()`** forces the next pulls to recompute
   everything while keeping every input value. It marks every
   step not current, so every step, a side channel included, runs
-  again at its next pull as if every input had been written. A
-  host uses it to observe a nondeterministic program again
-  without writing an input; a host that wants the inputs back at
-  their defaults resets them separately.
+  again at its next pull as if every input had been written. It
+  does not re-evaluate a `const`; `init()` does. A host that
+  wants the inputs back at their defaults resets them
+  separately.
 - **`shared_cells()`** lists the cells this kernel's `shared`
   bindings are bound to, and **`attach_shared_cell(name, cell)`**
   binds the `shared` binding `name` to a cell another kernel
@@ -545,8 +583,26 @@ trait, and each call below has the same meaning on all four.
   `create_kernel()` on the program to get a kernel of its own.
   A created kernel starts from the program, not from the kernel
   that became the program: every input at its declared default,
-  every `shared` binding with a cell of its own, nothing current,
-  and every reference pair pointing into its own storage.
+  every `shared` binding with a cell of its own, every reference
+  pair pointing into its own storage, and every const evaluated
+  from those defaults. `create_kernel` is `create_uninitialized`
+  followed by `init`, and panics when a const fails.
+  `create_uninitialized()` returns the kernel before `init`, for
+  a binder that writes the enclosing scope's values first and
+  then initializes.
+
+Every way a kernel comes into existence initializes it, after
+the values it is bound from are written: a root build; a kernel
+from `KernelProgram::create_kernel`; a child bound under a
+parent (`kernel::bind_under`, which returns
+`Result<_, KernelError>`, and the binder's `wire_child_under`),
+after the parent's values are written; a `for` activation
+(`activation_on`), after its tuple, the cascaded wires, and its
+cursors are bound; and each element binding of a tile
+projection body. `fork` copies an initialized kernel, consts
+included, and does not initialize again. A template program (a
+`for` body, a module image, a tile body) is built without
+initialization, and each kernel bound from it is initialized.
 
 ---
 
@@ -680,8 +736,9 @@ guarantees, and §3–§6 state the mechanism that provides them
   not-current step is evaluated by the next pull whose cone
   contains it and becomes current; a current step stays cached
   until an input in its provenance changes or the host calls
-  `invalidate_all`. Volatile and
-  nondeterministic steps follow R1.v instead.
+  `invalidate_all`. Volatile steps follow R1.v instead: every
+  read runs them again. A `const` is evaluated only at
+  initialization.
 - Side-channel ordering is the local invocation order defined
   by D2. Hosts requiring a global order must serialize or
   aggregate those effects outside the graph.

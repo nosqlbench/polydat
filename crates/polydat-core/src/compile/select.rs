@@ -314,6 +314,15 @@ pub enum KernelError {
     /// iteration binding or a value a binder copied from a parent that
     /// does not satisfy the child's declared input.
     Write(crate::kernel::WriteError),
+    /// A `const` binding could not be computed when the kernel was
+    /// initialized. A const is evaluated once, at initialization, so a
+    /// failing const makes initialization fail.
+    ConstInit {
+        /// The const.
+        name: String,
+        /// Why its expression failed, as the node reported it.
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for KernelError {
@@ -331,6 +340,10 @@ impl std::fmt::Display for KernelError {
                 )
             }
             KernelError::Write(e) => write!(f, "a value written while binding was refused: {e}"),
+            KernelError::ConstInit { name, reason } => write!(
+                f,
+                "the const '{name}' could not be computed when the kernel was initialized: {reason}"
+            ),
         }
     }
 }
@@ -346,6 +359,9 @@ impl From<crate::compile::assembly::AssemblyError> for KernelError {
         match e {
             crate::compile::assembly::AssemblyError::ConstantFold(reason) => {
                 KernelError::ConstantFold { reason }
+            }
+            crate::compile::assembly::AssemblyError::ConstInit { name, reason } => {
+                KernelError::ConstInit { name, reason }
             }
             other => KernelError::Assembly(other),
         }

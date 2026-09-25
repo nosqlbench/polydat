@@ -213,13 +213,11 @@ impl<M> ScopeModule<M> {
         if let Some(program) = programs.get(&engine) {
             return Ok(program.clone());
         }
-        let kernel = crate::dsl::compile::compile_ast_with_engine(
+        let kernel = crate::dsl::compile::compile_template_with_engine(
             &crate::dsl::ast::PolydatFile {
                 statements: self.statements.clone(),
             },
-            "",
             &self.options,
-            None,
             engine,
         )?;
         let program = kernel.into_program();
@@ -247,8 +245,7 @@ impl<M> ScopeModule<M> {
         iter_bindings: &[(String, crate::ast::Value)],
     ) -> Result<Box<dyn crate::kernel::Kernel>, crate::KernelError> {
         let program = self.program_on(engine)?;
-        let mut child = crate::kernel::bind_under(parent, program, iter_bindings)
-            .map_err(crate::KernelError::Write)?;
+        let mut child = crate::kernel::bind_under(parent, program, iter_bindings)?;
         // The write-throughs the builder produced travel with every
         // instance, on every engine, so `commit_write_throughs` knows
         // them without the program having to.

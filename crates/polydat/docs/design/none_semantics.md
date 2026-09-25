@@ -74,13 +74,14 @@ The consequence through `const` is:
 ```
 const X := "{Y}"            // Y is unbound (read as Value::None)
    ↓
-   printf("{}", Y) → Value::None     // Rule 1
+   at initialization, __init_X = printf("{}", Y) → Value::None   // Rule 1
    ↓
-   const-fold writes Value::None to X's output buffer
+   X's own value is None → initialization takes the fallback,
+   the input slot X that the binder filled from the enclosing scope
    ↓
-   get_constant("X") filters Value::None → returns None
+   __const_X holds that value (None when the enclosing scope has no X)
    ↓
-   lookup("X") falls through to the input-slot tier
+   X reads __const_X
 ```
 
 `printf` never renders `Value::None` through its debug
@@ -100,7 +101,10 @@ extern after the build, and that is a panic. The interpreter's
 native-cone extraction admits a None-tolerant node into a cone only
 when every input is an intra-cone wire, where no None can arrive. Pure
 native refuses to run while any extern is unset, so no None arises
-there. `Kernel::pull` returns `None` for a slot that holds None on the
+there; the check skips const slots and the fallback inputs a const
+reads at initialization, because only initialization reads them, and
+initialization on pure native refuses a const whose value is None
+(`KernelError::Refused`). `Kernel::pull` returns `None` for a slot that holds None on the
 interpreter, the closure tier, and native.
 
 ### Rule 2 — Defaults are explicit expressions
@@ -146,11 +150,11 @@ This is canonical Polydat grammar, and the desugar produces no
 special-case AST. The semantics are defined by **how Polydat compiles
 and evaluates `const NAME := <expr>`**, not by the sugar layer.
 
-Under Rule 1, `const X := "{Y}"` with `Y` unbound writes `Value::None`
-to X's output buffer. `get_constant` filters it, and `lookup` falls
-through to the input-slot tier, which finds nothing unless the
-compiler also gave `X` an input slot. The conditional-shadow compiler
-rule below gives `X` that slot.
+Under Rule 1, `const X := "{Y}"` with `Y` unbound evaluates to
+`Value::None` at initialization. Initialization then takes the value of
+the input slot `X`, which holds nothing unless the compiler gave `X`
+that slot. The conditional-shadow compiler rule below gives `X` that
+slot.
 
 ## Conditional-shadow semantics for `const`
 
@@ -159,21 +163,23 @@ entry point uses, for all four engines (the interpreter, the closure
 tier, native, and pure native). It collects the names each binding's
 RHS references (`dsl::validate::collect_references`) and gives every
 referenced name not defined locally an input slot, so a const whose
-RHS references at least one name gets an implicit input slot in
-addition to its const output. The two-tier read in `lookup` then
-provides the fall-through:
+RHS references at least one name gets an implicit input slot `NAME`
+of its own name, in addition to its const slot `__const_NAME` and
+the output `__init_NAME` that computes its expression. The binder
+fills the input slot `NAME` from the enclosing scope's `NAME`
+binding, if any, before the kernel is initialized. Initialization
+then provides the fall-through:
 
-1. `get_constant(NAME)` — own scope's folded output
-   (`kernel/state.rs`). Real value → return it. `Value::None`
-   → **fall through**.
-2. the input slot `NAME` — populated at
-   `materialize_wiring_from_outer` time from the outer
-   scope's `NAME` binding (if any). If wired, return that
-   value.
+1. It evaluates `__init_NAME`. A real value is the const's value.
+2. A `Value::None` falls back to the input slot `NAME` (the
+   `fallback` of the const's `ConstInit` record), and the const's
+   value is whatever the binder wrote there, or `Value::None` when
+   the enclosing scope has no `NAME`.
 
-As a result, `const NAME := <expr>` is a *conditional shadow* when its
-RHS can fold to None. A real value shadows the outer binding; a None
-leaves the outer binding visible. The `set:` sugar remains canonical
+The value is written to `__const_NAME`, and the const `NAME` reads
+it. As a result, `const NAME := <expr>` is a *conditional shadow*
+when its RHS can evaluate to None. A real value shadows the outer
+binding; a None leaves the outer binding visible. The `set:` sugar remains canonical
 Polydat, and the semantics come from the compiler's handling of every
 const, not from special-casing the sugar.
 
@@ -186,13 +192,12 @@ The presence of a name reference is the exact criterion.
 **Wiring composition (`materialize_wiring_from_outer`):** the read
 invariant of [wire_materialization.md](wire_materialization.md)
 requires that reading `X` on the inner scope returns what
-`outer.lookup(X)` returns. A const output's buffer may hold
-`Value::None` (Rule 1) while `outer.lookup` falls through to the
-outer's slot wired from the grandparent, so step 2 of the materializer
-copies the value returned by `outer.lookup` instead of attaching the
-cell. Attaching the cell would broadcast the raw `None` buffer and
-defeat the chain walk; copying the `lookup` result keeps the inner
-scope consistent with the invariant. For a non-const computed output,
+`outer.lookup(X)` returns. An outer const's value is fixed at the
+outer kernel's initialization, and it is already the fall-through
+value when the outer const's own expression yielded None, so step 2
+of the materializer copies the value returned by `outer.lookup`
+instead of attaching a cell. A const does not change during its
+kernel's life, so a copy is exact. For a non-const computed output,
 whose value changes when its inputs change, cell attachment is the
 correct primitive, because consumers need the value broadcast live.
 Conditional-shadow `const` thereby extends the read invariant: to its
@@ -225,8 +230,10 @@ inner const evaluates to None.
 - `default_or` is the explicit None-aware fallback primitive for
   Rule 2.
 - The compiler's conditional-shadow auto-extern rule
-  (`assemble_parent`) and `materialize_wiring_from_outer` implement
-  scope fall-through.
+  (`assemble_parent`), `materialize_wiring_from_outer`, and
+  `Kernel::init`'s fallback implement scope fall-through. Strict mode
+  (composition_substrate.md L2.f) detects a silent fall-through by
+  reading `__init_NAME`, the const's own value before the fallback.
 - `Value::to_display_strict` is the Polydat primitive required by
   Rule 3; the host renderer constructs the bind-point error.
 

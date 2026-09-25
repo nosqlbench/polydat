@@ -443,8 +443,10 @@ impl JitCore {
         self.unit_clean.fill(0);
     }
 
-    /// The never-current units are dirty again: every write does this
-    /// (runtime_model.md R1.v).
+    /// The units that hold volatile steps are dirty again: every read
+    /// does this (runtime_model.md R1.v). Volatile and non-volatile
+    /// nodes never share a unit, so the steps upstream of a volatile
+    /// step keep their currency.
     pub(super) fn dirty_volatile_units(&mut self) {
         for &u in &self.volatile_units {
             self.unit_clean[u] = 0;
@@ -475,8 +477,8 @@ impl JitCore {
             .unwrap_or_else(|| panic!("no output at index {index}"))
     }
 
-    /// Whether a write must run the program regardless of the cone
-    /// guard: a never-current step exists (R1.v).
+    /// Whether the program has a volatile step, which every read
+    /// re-evaluates (R1.v).
     #[inline]
     fn has_volatile(&self) -> bool {
         !self.volatile_steps.is_empty()
@@ -831,6 +833,8 @@ impl JitKernelRaw {
             self.core.drive.coords = coords;
             self.core.drive.stale = false;
             self.core.dirty_all_units();
+        } else if self.core.has_volatile() {
+            self.core.dirty_volatile_units();
         }
         self.core.run_units(Some(slot));
         self.core.slot_value(slot, ty)
@@ -953,6 +957,10 @@ impl JitKernelPushPull {
         // readers the dependents lists do not name: every unit reruns.
         if self.core.externs.cells_dirty() {
             self.core.dirty_all_units();
+        }
+        // Every read re-evaluates the volatile units its cone reaches.
+        if self.core.has_volatile() {
+            self.core.dirty_volatile_units();
         }
         self.core.run_units(Some(slot));
         self.core.slot_value(slot, ty)

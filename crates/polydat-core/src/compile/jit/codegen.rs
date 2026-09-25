@@ -2033,7 +2033,7 @@ pub fn classify_node(node: &dyn PolydatNode) -> JitOp {
         // `default_or` without wire types: the typed classifier decides
         // (a copy of the value, since a compiled slot is never `None`).
         "default_or" => JitOp::Identity,
-        "const_u64" | "const_bool" | "session_start_millis" => {
+        "const_u64" | "const_bool" => {
             if let Some(&c) = consts.first() {
                 JitOp::ConstU64(c)
             } else {

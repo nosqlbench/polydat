@@ -109,6 +109,43 @@ pub enum InputKind {
     /// written by capture extraction during op execution; dynamic
     /// across cycle boundaries within a stanza.
     ExternalWrite,
+    /// The captured value of a `const` binding (`__const_<name>`),
+    /// written only when the kernel is initialized ([`ConstInit`]). A
+    /// host write to it is refused (`WriteError::ConstSlot`).
+    Const,
+}
+
+/// How one `const` binding is initialized.
+///
+/// When a kernel is initialized, `source` (the const's own expression,
+/// compiled as the output `__init_<name>`) is evaluated once and its
+/// value written into `slot` (`__const_<name>`), which everything that
+/// reads the const reads. A `None` value falls back to the `fallback`
+/// input, the value a binder copied from the enclosing scope, so a const
+/// that yields nothing leaves the outer binding visible. Nothing
+/// re-evaluates the const afterwards; `Kernel::init` does it again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConstInit {
+    /// The const's name, and the output that reads it.
+    pub name: String,
+    /// The input slot holding the captured value.
+    pub slot: String,
+    /// The output computing the const's expression.
+    pub source: String,
+    /// The input holding the enclosing scope's value, when the const's
+    /// expression references names.
+    pub fallback: Option<String>,
+}
+
+/// The text of a caught panic: its `String` or `&str` payload.
+pub(crate) fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = payload.downcast_ref::<&str>() {
+        s.to_string()
+    } else {
+        "<non-string panic payload>".to_string()
+    }
 }
 
 /// Definition of a named input to the Polydat graph.
