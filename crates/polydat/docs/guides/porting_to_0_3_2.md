@@ -1,12 +1,20 @@
-# Porting a host from polydat 0.3.1 to 0.3.2
+---
+type: guide
+title: Porting to 0.3.2
+timestamp: 2026-09-25
+description: "Every surface change from 0.3.1: the renames a host applies, the type change that fails elsewhere, and the decisions polydat stopped making for a host."
+tags: [release, host]
+---
 
-Written against nmbrs, the host that drove this review, but nothing here
-is nmbrs-specific: it is the full set of surface changes between the
-published 0.3.1 and the current tree, measured by building that host
-against this one rather than by reading diffs.
+# Porting to 0.3.2
 
-The changes divide in three. [Part 1](#part-1-mechanical) is renames and
-signature edits — apply them and move on.
+This guide covers porting a host from polydat 0.3.1 to 0.3.2. It lists the
+full set of surface changes between the published 0.3.1 and 0.3.2,
+found by building a host against the new tree rather than by reading
+diffs.
+
+The changes fall into three parts. [Part 1](#part-1-mechanical) is
+renames and signature edits; apply them and move on.
 [Part 2](#part-2-the-two-that-change-quietly) is two changes that do not
 fail where they are written: one breaks somewhere else, and one does not
 break at all. Read that part before you start.
@@ -16,17 +24,17 @@ decides it.
 
 ## What it costs, and where
 
-Forty-three errors over the whole host, and they are not spread evenly.
-Two crates fail first on four of them; every one of the remaining
-thirty-nine is in the single crate that drives kernels. So the port is
-one afternoon in one file's worth of neighbourhood, not a sweep — and
-the crate that only *registers* nodes clears completely once two lines
-change.
+The port produced forty-three errors over the whole host, and they are
+not spread evenly. Two crates fail first, with four of them; all of the
+remaining thirty-nine are in the single crate that drives kernels. So
+the port is about an afternoon's work in a few closely related files,
+not a sweep across the host, and the crate that only *registers* nodes
+compiles once two lines change.
 
-Re-measured 2026-09-22 against the tree at `c7e16c7`, after the
-empty-clause work and the shuffle consolidation landed: the set below is
-unchanged by either, so neither adds anything to a port already planned
-against it.
+The count was measured again on 2026-09-22 against the tree at
+`c7e16c7`, after the empty-clause and shuffle changes were merged: the
+set below is unchanged by either, so neither adds anything to a port
+already planned against it.
 
 ## Checking as you go
 
@@ -38,17 +46,17 @@ cargo check --workspace --all-targets --keep-going \
   --config 'patch.crates-io.polydat.path="/path/to/polydat/crates/polydat"'
 ```
 
-Two traps. The lockfile pins the published version, so the patch is
-ignored until you relock — cargo says `patch … was not used in the crate
-graph` and otherwise builds normally, so check for that line before
-trusting a clean run:
+Watch for two traps. First, the lockfile pins the published version, so
+cargo ignores the patch until you relock. It then prints `patch … was
+not used in the crate graph` and otherwise builds normally, so check for
+that line before trusting a clean run:
 
 ```sh
 cargo update -p polydat --config 'patch.crates-io.polydat.path="…"'
 ```
 
-And errors surface in waves: a crate that fails hides every crate
-downstream of it. `--keep-going` gets the independent ones in one pass,
+Second, errors surface in waves: a crate that fails hides the errors of
+every crate downstream of it. `--keep-going` gets the independent ones in one pass,
 but expect a second and third round as each layer starts compiling.
 
 ## Part 1: mechanical
@@ -75,7 +83,7 @@ Additive, so the fix is an extra field or arm:
   coordinate slot, which used to be reported as something less precise.
   **This one fails silently if the host ignores the `Result`.** A named
   write (`set_input`, `set_input_at`) to a coordinate is now refused on
-  every engine, where some paths used to write it. A host that declared a
+  all four engines, where some paths used to write it. A host that declared a
   fed value as `input x: T` (a coordinate) and writes it by name, and
   discards the write's result, keeps running on the stale value with no
   message. Declare such a value `extern x: T`, which a named write sets,
@@ -92,9 +100,9 @@ Additive, so the fix is an extra field or arm:
   caught and attributed like any other failure, instead of aborting the
   process in the allocator.
 - `CompileOptions` gained `engine` and `ledger`. It derives `Default`,
-  so a struct literal takes `..Default::default()` and compiles. Do
-  read `engine` before moving on, though: it is where the engine
-  preference lives now, and its default is compiled code rather than
+  so a struct literal ending in `..Default::default()` compiles. Read
+  about `engine` before moving on, though: it is where the host states
+  which engine it prefers, and its default is compiled code rather than
   the interpreter.
 
 Some node constants are now bounded, and a workload outside a bound is
@@ -118,8 +126,8 @@ materialized in full.
 ## Part 2: the two that change quietly
 
 Everything in part 1 fails at the line you have to edit. These two do
-not, which is why they are worth reading before you start rather than
-after something is strange.
+not, so read them before you start rather than after something behaves
+unexpectedly.
 
 ### `compile_polydat` builds a different engine
 
@@ -130,19 +138,22 @@ returns `Box<dyn Kernel>`, and now builds
 
 **There is no compile error for this one at all.** A host that changes
 nothing still moves from the interpreter to native code, at every call
-site, the moment it takes the new version. For most hosts that is the
-upgrade they wanted and the ladder is roughly ten to one, so the change
-is worth having — but it is worth *taking*, not discovering. Two things
-follow from it:
+site, as soon as it takes the new version. For most hosts that is the
+upgrade they wanted, and native code runs roughly ten times faster than
+the interpreter, so the change is worth having; but a host should make
+it deliberately rather than discover it. Two things follow:
 
-- If a call site needs the interpreter, say so: `options.engine`, or
-  `compile_polydat_interpreter` when it is the concrete type it needs.
-  A differential oracle is the honest case, and naming it is the fix.
-- If a program compiled on the interpreter and has never run on a
-  compiled tier, this is when it first does. Everything in polydat's
-  own suite computes the same values on both, so the expectation is
-  parity — but a host node registered from outside that suite has not
-  been under that test, and this is the change that puts it there.
+- If a call site needs the interpreter, say so with `options.engine`,
+  or call `compile_polydat_interpreter` when the call site needs the
+  concrete interpreter type. Using the interpreter as the reference in
+  a differential test is the legitimate case, and naming the engine
+  there is the fix.
+- A program that compiled on the interpreter and has never run on a
+  compiled tier runs on one for the first time here. Everything in
+  polydat's own suite computes the same values on both, so the
+  expectation is that values match; but a host node registered from
+  outside that suite has never been tested that way, and this change is
+  where it first is.
 
 #### The one behaviour that does change with the engine
 
@@ -150,13 +161,13 @@ Values do not change with the tier. *When a nondeterministic node
 reads* does, and this migration changes it for every host that was on
 `compile_polydat`.
 
-A volatile step — a node declaring `Purity::Nondeterministic`, or one
-under a `volatile` binding — is read at most once per write and re-read
-on the next, on every engine. But "per step" is per the *engine's*
-step, and on the native engines a step is a fusion unit: a connected
-group of nodes compiled together. Two volatile wires that share nothing
-are two units, and read like two steps on every engine; two that a wire
-connects are one unit on the native engines:
+A volatile step (a node declaring `Purity::Nondeterministic`, or one
+under a `volatile` binding) is read at most once per write and read
+again after the next write, on all four engines. But the step is the
+*engine's* step, and on the native engines a step is a fusion unit: a
+connected group of nodes compiled together. Two volatile wires that
+share nothing are two units, and are read as two steps on all four
+engines; two that a wire connects are one unit on the native engines:
 
 ```
 w := clock_reading()      # unconnected: two steps everywhere
@@ -173,9 +184,9 @@ u := t + clock_reading()
 
 So a host moving from the interpreter to the default engine sees a
 difference only where volatile reads are wired together, and there it
-goes from two readings to one. For sampling something that moves — a
-clock, a metric — that is usually the better semantics: the connected
-outputs of one cycle come from one instant.
+gets one reading where it got two. For sampling something that moves,
+such as a clock or a metric, that is usually the better behavior: the
+connected outputs of one cycle come from one instant.
 
 What to check in a port:
 
@@ -184,21 +195,22 @@ What to check in a port:
   differing. That is the breaking direction, and it is silent.
 - Code that **wanted one instant** and worked around not having it
   (reading once and passing the value along) can keep the workaround;
-  it is correct on every engine and stays correct.
+  it is correct on all four engines and stays correct.
 
-Neither is guaranteed by the contract: two volatile reads within one
-write are not promised simultaneous *nor* promised distinct
+The contract guarantees neither: two volatile reads within one write
+are not promised to be simultaneous, nor promised to be distinct
 ([runtime_model.md](../design/runtime_model.md) R1.v, "Read
 granularity"). Two readings that must come from one instant belong in
-one node returning both — that is one step on every engine. Two that
-must differ need a write between them.
+one node returning both, which is one step on all four engines. Two
+that must differ need a write between them.
 
 ### `pull` changes type without moving
 
 `PolydatKernel::pull` was an inherent method returning `&Value`. It
-shadowed `Kernel::pull`, which returns an owned `Value`. Renaming the
-inherent one to `pull_ref` un-shadows the trait — so a call you do not
-change still compiles, and now returns `Value` instead of `&Value`.
+shadowed `Kernel::pull`, which returns an owned `Value`. The inherent
+method is renamed to `pull_ref`, so a `.pull()` call you do not change
+now resolves to the trait method: it still compiles, and now returns
+`Value` instead of `&Value`.
 
 Nothing fails at the call site. It fails wherever the result was matched
 and the bindings were dereferenced:
@@ -213,21 +225,21 @@ that caused it. If you see a cluster of `cannot be dereferenced` on
 back a reference. Decide per site: `pull_ref` to keep the borrow, or
 keep the trait's `pull` and drop the `*`.
 
-Between them these two cover both ways a change can hide: one fails
-somewhere other than where it was caused, the other does not fail at
-all.
+These two cover both ways a change can go unnoticed: one fails
+somewhere other than where it was caused, and the other does not fail
+at all.
 
 ## Part 3: what the host rationalizes
 
 These are not renames. In each, polydat stopped making a decision that
-was not its to make, and the host makes it now.
+belongs to the host, and the host makes it now.
 
 ### The kernel is the path; the engine is configuration
 
-There is one call path and it hands back `Box<dyn Kernel>`. Which engine
-built that kernel is a *value* the host configures, not a function it
-picks: `CompileOptions.engine` carries it, and it already defaults to
-the most native form the build has, so a host that never names an engine
+There is one call path, and it returns a `Box<dyn Kernel>`. The engine
+that builds the kernel is a *value* the host configures, not a function
+it picks: it is the `CompileOptions.engine` field, which defaults to the
+most native form the build has, so a host that never names an engine
 gets compiled code rather than the interpreter.
 
 | what a host called | what it calls now |
@@ -235,46 +247,50 @@ gets compiled code rather than the interpreter.
 | `compile_polydat(src)` | unchanged — but it builds a different engine, [see part 2](#compile_polydat-builds-a-different-engine) |
 | `compile_polydat_with_options(src, &o, log)` | `compile_polydat_kernel_with_options(src, &o, log)` |
 
-The second has the signature the old one had, and reads `o.engine` —
-which is one of the two fields `CompileOptions` gained, so setting it is
-the same edit as making the struct literal compile again.
+The new function has the signature the old one had and reads
+`o.engine`, which is one of the two fields `CompileOptions` gained, so
+setting it is part of the same edit that makes the struct literal
+compile again.
 
-A host that wants a particular engine sets `options.engine` and says so,
-which is the difference between a preference and a fork.
+A host that wants a particular engine sets `options.engine`, which
+states a preference on the one call path instead of creating a second
+path.
 
 The `compile_polydat_interpreter*` entry points still exist and are
-**not** a porting strategy. Adopting them is precisely how a host
-acquires an interpreter-specific call path, which is the shape this
-migration removes: the engine stops being a branch in the code and
-becomes a field. A host on that path also opts out of the ladder, and
-the ladder is roughly ten to one from interpreter to native.
+**not** a porting strategy. Adopting them gives the host an
+interpreter-specific call path, which is exactly what this migration
+removes: the engine stops being a branch in the code and becomes a
+field. A host on that path also gives up the compiled engines, which
+run roughly ten times faster than the interpreter.
 
-When a host needs to know what it actually got, it asks **afterward and
-surgically** rather than by having called differently:
+When a host needs to know which engine it got, it asks the kernel after
+building it, for the specific detail it needs, rather than calling a
+different function:
 
-- `Kernel::engine()` — the tier this kernel runs.
-- `KernelProgram::plan()` — what that engine decided: native segments,
-  closure steps, interpreted nodes.
-- `KernelProgram::as_interpreter()` — interpreter-level detail, `Some`
-  only when that is the engine, which is the honest shape for a question
-  only one tier can answer.
+- `Kernel::engine()` returns the tier this kernel runs on.
+- `KernelProgram::plan()` returns what that engine decided: native
+  segments, closure steps, interpreted nodes.
+- `KernelProgram::as_interpreter()` returns interpreter-level detail. It
+  is `Some` only when the engine is the interpreter, because only that
+  tier can answer the question.
 
-That is the division to port to: one way in, the engine as
-configuration, and introspection after the fact for the few places that
-genuinely need it.
+That is the design to port to: one way in, the engine as
+configuration, and inspection after the build for the few places that
+need it.
 
 ### Empty clauses are reported, not decided
 
-0.3.1 took an `on_empty` callback and called it while evaluating. That
-was removed on the premise that every caller's policy was to do nothing,
-which was not true of a host that warned and failed under `strict`. The
-callback is not coming back — it had polydat calling the host's policy
-mid-evaluation, and made the evaluator's result depend on a closure —
-but the fact it carried is now available at both levels where emptiness
-is knowable.
+0.3.1 took an `on_empty` callback and called it while evaluating. It
+was removed on the assumption that every caller's policy was to do
+nothing, which was not true of a host that warned, and failed under
+`strict`. The callback is not coming back, because it had polydat
+calling the host's policy in the middle of evaluation and made the
+evaluator's result depend on a closure. Instead, whether a clause is
+empty is now reported at both points where it can be known.
 
-**At construction**, a source polydat can already count as empty is a
-degenerate composition, beside the trivially-false filter:
+**At construction**, a source that polydat can already count as empty
+is reported as a degenerate composition, alongside a filter that is
+trivially false:
 
 ```rust
 use polydat::iteration::comprehension::{Mode, validate};
@@ -285,15 +301,19 @@ for w in &report.warnings {
 }
 ```
 
-`Mode::Strict` makes the first warning the error, so a host's own
-`strict` flag maps onto it directly rather than being re-implemented.
+`validate` takes the comprehension and a mode and returns a report
+whose `warnings` list the degenerate parts. `Mode::Strict` turns the
+first warning into the returned error, so a host's own `strict` flag
+maps onto it directly rather than being re-implemented.
 This catches `x in []`, `x in 5..5`, and a context-free generator the
 compile evaluated to nothing. A source whose count is *not* known at
 construction is `Unbounded`, never `Bounded(0)`, so an interpolated call
 or a parameter without a declared length never warns here.
 
-**At evaluation**, which is where a selector that matched nothing shows
-up, ask for the reported form:
+**At evaluation**, which is where a selector that matched nothing
+becomes visible, call the reported form. It returns the tuples together
+with one record per clause, counting how many times the clause was
+evaluated and how many values it yielded:
 
 ```rust
 use polydat::iteration::comprehension::evaluate_for_iteration_reported;
@@ -320,18 +340,19 @@ cartesian is evaluated once per outer tuple, so:
 - `evaluations == 0` — never reached, because something outside it was
   empty first. Reporting this one names a symptom and buries the cause.
 
-The counts come off the evaluation that already happened, so asking for
-them evaluates nothing twice, and the record is one entry per leaf
-rather than one per tuple. `evaluate_for_iteration` is unchanged and
+The counts are collected during the evaluation itself, so asking for
+them evaluates nothing twice, and the record has one entry per leaf
+clause rather than one per tuple. `evaluate_for_iteration` is unchanged and
 wraps the reported form, so callers that do not want diagnostics keep
 the simpler signature.
 
 ### Clause text is polydat's to parse
 
 The clause-text parser and the flat form it produces are internal to
-`polydat_grammar` now (comprehension_forms.md §14.8). A host that was
-calling `parse_clause` / `parse_clause_list` to split `"var in expr"`
-goes through the public spec entry and reads the algebra:
+`polydat_grammar` now (comprehension_forms.md §14.8). A host that
+called `parse_clause` / `parse_clause_list` to split `"var in expr"`
+now parses the text with the public entry point, `parse_inline`, and
+walks the resulting comprehension tree:
 
 ```rust
 use polydat::iteration::comprehension::{Comprehension, spec::serde_form::parse_inline};
@@ -363,9 +384,9 @@ equal to the one it came from. For text that arrived as text — which is
 the case a YAML front end has — the pair you get back is the pair you
 would have got from `Clause::var` and `Clause::expr`.
 
-There is deliberately no `text -> (var, expr)` helper. The algebra
-already says it, and a second entry point for the same question is a
-second grammar to keep honest.
+There is deliberately no `text -> (var, expr)` helper. The tree already
+holds that information, and a second entry point for the same question
+would be a second grammar to keep consistent with the first.
 
 ## Checklist
 

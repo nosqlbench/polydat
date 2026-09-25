@@ -1,0 +1,90 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Comprehension consumption surfaces">
+    <mxGraphModel dx="1200" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1220" pageHeight="420" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="sv" value="StreamerValue on a producer wire" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="40" y="60" width="220" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="tree" value="Comprehension tree" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="40" y="200" width="220" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="cc" value="CompiledComprehension&lt;br&gt;(immutable IR program)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="460" y="130" width="240" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="cs" value="CoordinateStream&lt;br&gt;one tuple per advance" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="940" y="40" width="270" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="sks" value="ScopedKernelStream&lt;br&gt;one scoped kernel instance per advance" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="940" y="130" width="270" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="ski" value="One ScopedKernelInstance&lt;br&gt;for a given tuple" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="940" y="220" width="270" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="ts" value="TraversalStream&lt;br&gt;one Activation per tuple" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="940" y="340" width="270" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" style="rounded=0;html=1;endArrow=block;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.25;entryDx=0;entryDy=0;" edge="1" parent="1" source="sv" target="cc">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="400" y="90"/>
+              <mxPoint x="400" y="145"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e1" style="rounded=0;html=1;endArrow=block;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.75;entryDx=0;entryDy=0;" edge="1" parent="1" source="tree" target="cc">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="420" y="230"/>
+              <mxPoint x="420" y="175"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="l2" value="compiled()" style="text;html=1;align=center;verticalAlign=bottom;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="270" y="68" width="120" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="l1" value="compile / from_ast" style="text;html=1;align=center;verticalAlign=bottom;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="270" y="208" width="140" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" style="rounded=0;html=1;endArrow=block;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="cc" target="cs">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="720" y="145"/>
+              <mxPoint x="720" y="70"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e4" value="scoped_kernel_stream(parent)" style="rounded=0;html=1;endArrow=block;fontSize=12;verticalAlign=bottom;labelBackgroundColor=none;" edge="1" parent="1" source="cc" target="sks">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="20" y="-2" as="offset"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e5" style="rounded=0;html=1;endArrow=block;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="cc" target="ski">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="720" y="175"/>
+              <mxPoint x="720" y="250"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="l3" value="coordinate_stream()" style="text;html=1;align=center;verticalAlign=bottom;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="730" y="48" width="200" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="l5" value="scope_once(parent, coords)" style="text;html=1;align=center;verticalAlign=bottom;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="730" y="228" width="200" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" style="rounded=0;html=1;endArrow=block;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="tree" target="ts">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="150" y="370"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="l6" value="for traversal: evaluated in the body's scope" style="text;html=1;align=center;verticalAlign=bottom;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="330" y="348" width="420" height="20" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

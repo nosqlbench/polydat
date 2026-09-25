@@ -1,3 +1,10 @@
+---
+type: reference
+title: License
+timestamp: 2026-09-25
+description: The license polydat is distributed under.
+---
+
 # License
 
 Polydat is licensed under the Apache License, Version 2.0.

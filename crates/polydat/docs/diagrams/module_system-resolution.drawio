@@ -1,0 +1,85 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Call name resolution">
+    <mxGraphModel dx="900" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="800" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="start" value="Call name" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="120" y="20" width="220" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="d1" value="Formal module defined&lt;br&gt;in this program?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="120" y="100" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="d2" value="Native node or&lt;br&gt;registered factory?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="120" y="210" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="d3" value="In the module cache?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="120" y="320" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="d4" value="Found in the&lt;br&gt;source directory?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="120" y="430" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="d5" value="Found in a library directory&lt;br&gt;(in caller order)?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="120" y="540" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="d6" value="In the embedded&lt;br&gt;standard library?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="120" y="650" width="220" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="err" value="Compile error" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="120" y="770" width="220" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="node" value="Use the node" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="460" y="225" width="220" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="inl" value="Inline the module&lt;br&gt;at the call site" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="460" y="440" width="220" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="s0" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;" edge="1" parent="1" source="start" target="d1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="n1" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" edge="1" parent="1" source="d1" target="d2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="n2" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" edge="1" parent="1" source="d2" target="d3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="n3" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" edge="1" parent="1" source="d3" target="d4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="n4" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" edge="1" parent="1" source="d4" target="d5">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="n5" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" edge="1" parent="1" source="d5" target="d6">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="n6" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" edge="1" parent="1" source="d6" target="err">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="y2" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;" edge="1" parent="1" source="d2" target="node">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="y1" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;exitX=1;exitY=0.5;entryX=0.9;entryY=0;" edge="1" parent="1" source="d1" target="inl">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="720" y="140"/>
+              <mxPoint x="720" y="420"/>
+              <mxPoint x="658" y="420"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="y3" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;exitX=1;exitY=0.5;entryX=0.25;entryY=0;" edge="1" parent="1" source="d3" target="inl">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="y4" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="d4" target="inl">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="y5" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;exitX=1;exitY=0.5;entryX=0.25;entryY=1;" edge="1" parent="1" source="d5" target="inl">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="y6" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=10;exitX=1;exitY=0.5;entryX=0.75;entryY=1;" edge="1" parent="1" source="d6" target="inl">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

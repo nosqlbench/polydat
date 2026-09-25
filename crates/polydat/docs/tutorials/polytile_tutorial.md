@@ -1,21 +1,29 @@
+---
+type: tutorial
+title: Polytile Tutorial
+timestamp: 2026-09-25
+description: Templates whose holes are polydat expressions, from a one-line text tile to nested projections, the corner cases, and one tile on all four engines.
+tags: [tiles]
+---
+
 # Polytile Tutorial
 
 Polytile is the templating layer of Polydat. A **tile** is a template
 whose holes are Polydat expressions. It compiles into the same graph as
 everything else, so a rendered document is just another wire: it is
-computed per cycle, it can feed other wires, it runs on every engine
-level, and it costs what its holes cost.
+computed per cycle, it can feed other wires, it runs on all four
+engines, and its cost is the cost of its holes.
 
 This tutorial builds up from a one-line text tile to a JSON document
-with nested projections carried inside a database statement, then works
+with nested projections embedded in a database statement, then works
 through the corner cases that matter in practice: escapes, layout,
 encoding rules, empty projections, modules, what the compiler refuses,
 and what the engines guarantee. Every program here is run by
 [`examples/polytile_tutorial.rs`](../../examples/polytile_tutorial.rs);
 the quoted outputs are what it prints. The complete grammar and
-semantics are in [Polytile](../design/polytile.md) (SRD 114); the compiled
+semantics are in [Polytile](../design/polytile.md); the compiled
 representation is in [Compiled By-Reference
-Slots](../design/compiled_handles.md) (SRD 115).
+Slots](../design/compiled_handles.md).
 
 Part one, sections 1 to 10, is the basics. Part two, sections 11 to 16,
 is the corner cases.
@@ -98,8 +106,9 @@ The `json` encoding is **position aware**. Look at the three holes:
   the encoder emits the text of the value with JSON escaping and no
   quotes of its own, because the quotes are already there.
 
-The `"meta"` object has no holes. It is one static run in the compiled
-skeleton and costs a single copy per render. A tile with no holes at all
+The `"meta"` object has no holes. The compiled tile, called its
+*skeleton*, stores the fixed text between holes as static runs; the
+`"meta"` object is one static run and costs a single copy per render. A tile with no holes at all
 is a constant.
 
 `${score | .1}` shows a **format**. The part after `|` is a printf-style
@@ -138,8 +147,8 @@ type comes from three places, in priority order:
    display text for `str`, and truth values for `bool`. A conversion
    outside that set, such as `str` to `u64` or `f64` to `u64`, is a
    compile error naming the tile, the hole, and both types. Write it in
-   the expression instead: `${s as u64}` reaches the whole adapter
-   catalog, including parses, and `${floor_to_u64(f)}` names the
+   the expression instead: `${s as u64}` can use any conversion in the
+   adapter catalog, including parsing text, and `${floor_to_u64(f)}` states the
    rounding.
 2. **The wire type** otherwise: the same inference every binding gets,
    covering literals, inputs and externs, node return types, and
@@ -208,8 +217,8 @@ cycle 7 row: 7,"has, comma",has, comma
 
 The second field is quoted because it contains a comma. The third is the
 same wire, raw, and breaks the row. Raw holes exist for the case where
-the value is already in the target encoding, which is how a document is
-carried inside a statement in section 7.
+the value is already in the target encoding, which is how section 7
+embeds a document in a statement.
 
 ## 5. Branches
 
@@ -265,9 +274,9 @@ Two forms of source appear here:
   the outer wire `base`.
 - **A bound producer**, `axes`, declared once with the `for` construct
   and reused. Its elements `k` and `side` are the body's wires. This is
-  the same producer surface as [The `for`
-  Construct](../design/for_traversal.md); a tile projects over it instead
-  of traversing it.
+  the same kind of producer that [The `for`
+  Construct](../design/for_traversal.md) describes; a tile projects over
+  it, rendering its body once per tuple, instead of traversing it.
 
 `sep "..."` sets the text between repetitions. The default is `,` for
 `json` and `csv` and nothing for `text`. Inside a JSON block body the
@@ -281,7 +290,7 @@ static text, and further projections.
 
 ### Nested projections, derivations, and generators
 
-Every source the `for` construct accepts projects. A body may contain
+A projection accepts every source the `for` construct accepts. A body may contain
 another `@for`, a producer may be filtered or ordered in place, and a
 generator call is an expression over the program's wires:
 
@@ -316,8 +325,9 @@ tile grid : json := {
   outside the comprehension is a compile error, as it is for `for`;
   section 15 shows the message.
 - **Generators.** `hash_range(cycle, 1000)` is compiled as a wire of
-  the program and its value is the element, one tuple for a scalar and
-  one per item for a list such as a JSON array, a vector, or a stream.
+  the program, and its value supplies the elements: one tuple for a
+  scalar, and one per item for a list such as a JSON array, a vector,
+  or a stream.
   It is typed by the same inference as a hole, so it may read any wire
   in scope, including an outer element when nested.
 
@@ -350,7 +360,7 @@ cycle 5 stmt: INSERT INTO docs (id, body) VALUES (5, '{"first": {"n": 5, "double
 ```
 
 `outer` splices `inner` twice; both copies of `${cycle}` are the same
-wire, evaluated once. `stmt` is a `text` tile that carries the JSON
+wire, evaluated once. `stmt` is a `text` tile that embeds the JSON
 document raw with `${outer!}`. Without `!` a `text` tile would still
 copy the text unchanged, but inside a `json` tile a non-raw hole
 holding a `text` tile would be encoded as a JSON string, which is
@@ -359,7 +369,7 @@ usually what you want when a document embeds a message body.
 A splice belongs where a value belongs. Writing `"s": "${inner}"`, a
 same-encoding tile's name inside a string literal, would inline its
 skeleton unescaped inside the string, and the compile-time check of
-section 15 rejects the result. To carry the document's text inside a
+section 15 rejects the result. To put the document's text inside a
 string, bind it first (`s := inner`) and use `${s}`: a binding is an
 ordinary string wire, and the encoder escapes it.
 
@@ -387,19 +397,19 @@ section 11 shows it.
 
 A workload runner rarely has a `.polydat` file with a `tile` statement
 in it. It has a YAML document, a JSON value it already parsed, or a
-string a user typed. Polytile treats that boundary as first class: a
-template may arrive as **template text**, as **structural JSON text**,
-or as an **already-parsed JSON value**, and all three become the same
-`tile` statement inside the program.
+string a user typed. Polytile accepts all three directly: a template
+may arrive as **template text**, as **structural JSON text**, or as an
+**already-parsed JSON value**, and all three become the same `tile`
+statement inside the program.
 
 ### Structural JSON
 
 In the structural form the template is a JSON document, and its strings
 are the insertion points. A string that is exactly one hole is a
-**value hole**: the node is replaced by the value, encoded by type. A
-string with text around a hole is a **string hole**. Directives use the
-carrier's own shapes: an array whose first element is `"@for ..."` or
-`"@if ..."`, and an object key that is `"@for ..."`.
+**value hole**: the string is replaced by the value, encoded by its
+type. A string with text around a hole is a **string hole**. Directives
+are written with JSON's own structures: an array whose first element is
+`"@for ..."` or `"@if ..."`, and an object key that is `"@for ..."`.
 
 ```polydat
 input cycle: u64
@@ -462,10 +472,10 @@ pretty-printer prints it as the `tile` statement it became.
 
 A host that has already parsed its configuration skips source text
 entirely. `polydat::tile` builds a `TileDef` from a template string, a
-JSON string, or a `serde_json::Value`, and `add_tiles` puts it into a
+JSON string, or a `serde_json::Value`, and `add_tiles` adds it to a
 parsed program. There is no entry point that does both: adding tiles is
-a program transform, so it composes with any other rewrite the host
-wants instead of owning a road to a kernel of its own.
+a program transform, so it combines with any other rewrite the host
+applies, rather than being a separate path to a kernel.
 
 ```rust
 use polydat::dsl::{CompileOptions, compile_ast_with_engine, parse_polydat};
@@ -489,9 +499,14 @@ println!("{}", kernel.pull("doc").as_str());
 cycle 4 doc: {"id": 4, "points": [{"n": 0, "v": 4},{"n": 1, "v": 5},{"n": 2, "v": 6}]}
 ```
 
-The three entry points are `tile_from_text`, `tile_from_json_text`, and
+`tile_from_json_value` takes the tile's name, which becomes the name of
+its output wire, the template, the tile options, and a source position
+that error messages report. `add_tiles` takes the parsed program and
+the tiles to add, and the program then compiles like any other. The
+three entry points are `tile_from_text`, `tile_from_json_text`, and
 `tile_from_json_value`. Each returns the same `TileDef` the `tile`
-keyword produces, and the tiles see every wire the program defines.
+keyword produces, and the tiles can read every wire the program
+defines.
 
 ## 10. Running a tile program from the command line
 
@@ -552,8 +567,8 @@ load=INSERT INTO toy.readings (tenant_id, device_id, doc) VALUES (603978, '86a03
 
 `--emit jsonl --outputs cycle,doc` gives one JSON object per cycle with
 the document as a string field, and `polydat check --stats` reports the
-tile's nodes alongside everything else in the program. The tile is not
-special to the harness; it is a string output.
+tile's nodes alongside everything else in the program. The binary
+treats the tile like any other string output.
 
 To write the document itself, one per cycle with nothing around it,
 name the tile in the emit format:
@@ -569,9 +584,9 @@ output is the rendered tile byte for byte.
 When a file's tiles are written in another system's delimiters and
 declare none of their own, `--tile-delims '<%' '%>'` and
 `--tile-sigil '#'` supply the defaults. They too are a transform: each
-tile that left its options to the default is re-read under the host's
-before the program compiles, and a tile that declared any option keeps
-all of its own. `polydat explain <file> tiles` then shows the program
+tile that left its options at the default is read again with the
+host's defaults before the program compiles, and a tile that declared
+any option keeps all of its own. `polydat explain <file> tiles` then shows the program
 as it compiled, with each tile's skeleton summary above the hole
 typing, as in section 3.
 
@@ -645,7 +660,7 @@ end"}
   the result is not valid JSON. Raw holes are for text that is already
   in the target encoding. The compile-time check of section 15 cannot
   see this, because the hole's value is only known at run time; the
-  author is responsible for what a raw hole carries.
+  author is responsible for what a raw hole contains.
 
 A `None` value in JSON value position renders as `null`; in text and
 CSV it renders as empty text.
@@ -672,7 +687,7 @@ cycle 1 cells: 1,2,3
 `sep` is any text. The defaults follow the encoding: `,` for `json` and
 `csv`, nothing for `text`, so the first `@for` in `line` runs its
 digits together and the second separates them. In the structural form
-(section 9) a projection that is an object member carries its own
+(section 9) a projection that is an object member writes its own
 comma inside each repetition, so a member projection that renders zero
 tuples also leaves the object valid.
 
@@ -701,8 +716,8 @@ cycle 2 b: {"n": 102, "twice": 204, "tag": "second"}
 
 A module's parameter types are the port-type keywords, and `str` and
 `String` name the same type. A tile inside a `for` traversal body works
-the same way: it compiles inside the body's program, its holes see the
-elements and the cascaded outer wires, and `--emit tile:<name>` can
+the same way: it compiles inside the body's program, its holes can read
+the elements and the outer wires passed down into the body, and `--emit tile:<name>` can
 select it. The toy test definition in
 [`docs/tutorials/toy_test_definition.md`](toy_test_definition.md) renders a
 document per reading that way.
@@ -750,14 +765,16 @@ hole where no value can go is caught before the first render.
 
 ## 16. One tile, every engine
 
-Polydat runs a program on one of three engine levels: the interpreter
-(P1), closures over a flat slot buffer (P2), and native code (P3), the
-default, either as native segments in a compiled kernel or as fused
-cones inside the interpreter's graph. Strings, JSON values, and rendered
-documents ride through the compiled levels as reference pairs into
-storage the producing step owns, and a tile renders there by the same
-code path it renders on the interpreter. The result is bit-identical on
-every level:
+Polydat has four engines: the interpreter (P1), closures over a flat
+slot buffer (P2), native code (P3), which is the default, and pure
+native code. Native code also runs inside the interpreter, as cones of
+the interpreter's graph fused into native functions. On the compiled
+engines, strings, JSON values, and rendered documents are passed as
+reference pairs pointing into storage that the producing step owns,
+and a tile renders there through the same code it uses on the
+interpreter. The result is bit-identical everywhere; the example below
+compares the interpreter, the interpreter with native cones, P2, and
+P3:
 
 ```polydat
 input cycle: u64
@@ -782,16 +799,18 @@ interpreter with cone extraction forced on, the P2 closure kernel, and
 P3, the default `compile_polydat_kernel` builds, and reads the tile
 from each. Each engine chooses its own mix of native and closure work;
 nothing in a program selects an engine, and nothing about a tile
-changes its meaning when the engine changes. The differential suite in `tests/handle_tiers.rs`
-holds that line over random programs of string, JSON, and tile nodes,
-including every corner case in this tutorial.
+changes its meaning when the engine changes. The differential suite in
+`tests/handle_tiers.rs` checks this on all four engines over random
+programs of string, JSON, and tile nodes, including every corner case
+in this tutorial.
 
-Every read, `pull` or `get_value`, copies the value out, so what a host
-holds is its own whatever the kernel, or any other kernel, does next.
+Every read, `pull` or `get_value`, copies the value out, so the value a
+host holds belongs to the host and does not change whatever the kernel,
+or any other kernel, does next.
 
 ## What a tile compiles to
 
-Knowing the lowering makes the rules above predictable:
+Knowing how a tile is compiled makes the rules above predictable:
 
 1. Each hole's expression becomes a binding of the enclosing scope,
    compiled like any other; a hole that names a wire uses the wire
@@ -799,7 +818,7 @@ Knowing the lowering makes the rules above predictable:
    position (value or inside a string), the declared type, the format,
    and the raw flag.
 2. Each branch condition is a hole whose value is read for its truth.
-3. Each projection becomes a child program: an input carrying the
+3. Each projection becomes a child program: an input holding the
    tuple index, one `extern` per element, one `extern` per outer wire
    the body reads (`cycle` included), and one binding per hole in the
    body. The comprehension is embedded in the skeleton.
@@ -811,10 +830,10 @@ Knowing the lowering makes the rules above predictable:
 
 Because the hole expressions are ordinary wires, `explain` and `viz`
 show them, dead holes are pruned with the rest of the graph, and a
-hole shared by two tiles is computed once. On the compiled levels the
-render node has the same body behind a native helper or a closure,
-reading its hole values from their slots, which is why section 16
-holds.
+hole shared by two tiles is computed once. On the compiled engines the
+render node runs the same code, called from native code or as a
+closure, and reads its hole values from their slots; that is why the
+output in section 16 is identical on all four engines.
 
 ## Limits at this level
 
@@ -828,5 +847,5 @@ holds.
 - A raw hole is the author's responsibility; the compile-time JSON
   check cannot see through it.
 - Binary encodings, parsing rendered output back into values,
-  unbounded projections, and user-defined template functions are out
-  of scope for this revision.
+  unbounded projections, and user-defined template functions are not
+  supported.

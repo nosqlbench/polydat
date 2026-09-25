@@ -1,45 +1,60 @@
-# The Polydat Grammar — Definitive Specification & Guide
+---
+type: specification
+title: The Polydat Grammar
+timestamp: 2026-09-25
+description: "The normative surface language: lexical rules, productions, operators, type inference, casts, modules, and the G-axioms."
+tags: [language]
+---
 
-**Subtitle:** The complete, verified reference for the Polydat surface
-language.
+# The Polydat Grammar
 
-> **Operator contract:** `&&` and `||` are eager truthiness combinators;
-> they do not short-circuit. They occupy the lowest precedence band.
-> The uniform `<expr> as <type>` cast occupies the tightest postfix
-> position.
+This document specifies the Polydat surface language: its lexical
+grammar, statement and expression productions, type-naming vocabulary,
+desugaring and projection behaviour, and rejection rules. It also
+states the type rules and the six G-axioms that the substrate,
+compiler, runtime, and embedding specifications depend on
+(§[18](#sec-gaxioms)), and lists the productions
+(§[21](#sec-productions)). Every example in it is checked by the test
+suite (§[0.1](#sec-roundtrip)).
+
+**Ownership:** the `polydat-grammar` crate.
+
+**Related specifications:** [`graph_compiler.md`](graph_compiler.md)
+(the compilation passes applied to what this document parses),
+[`comprehension_forms.md`](comprehension_forms.md) (the algebra behind
+the `for` construct, §[16](#sec-for)), [`polytile.md`](polytile.md)
+(the semantics of tiles, §[17](#sec-tiles)),
+[`type_system.md`](type_system.md) (the adapter machinery behind the
+type keywords), and
+[`polydat_grammar_programmatic.md`](polydat_grammar_programmatic.md)
+(the same examples built through the AST types).
 
 <a id="sec-authority"></a>
 ## 0. Authority
 
 This document is the normative reference for the Polydat surface
-language, its lexical grammar, statement and expression productions,
-type-naming vocabulary, desugaring and projection behaviour, and
-rejection rules, and every example in it is checked by the suite. It
-carries its own foundations: the type rules and the six G-axioms the
-substrate, compiler, runtime, and embedding designs rest on are
-§[18](#sec-gaxioms), and the productions are §[21](#sec-productions).
-The companions are [`graph_compiler.md`](graph_compiler.md) for
-compilation (what the passes do to what this document
-parses), [`comprehension_forms.md`](comprehension_forms.md)
-the algebra behind the `for` construct (§[16](#sec-for)),
-[`polytile.md`](polytile.md) the semantics behind tiles
-(§[17](#sec-tiles)), and [`type_system.md`](type_system.md) the adapter
-machinery behind the type keywords.
+language.
 
-The language is its own crate, `polydat-grammar`: the lexer, the
-parser, the AST and its projector, the free-name collector, pragmas,
-the diagnostic types, the tile template parsers, the comprehension
-sub-language with its algebra, and the port type vocabulary, with no
-runtime behind them. `polydat` depends on it and re-exports every
-module at the path it always had (`polydat::dsl::ast`,
-`polydat::dsl::parser`, `polydat::iteration::comprehension::parse`,
-`polydat::ast::PortType`), so nothing that compiles against `polydat`
-changes; a tool that only reads, checks, or prints Polydat source links
-the grammar crate alone. What a type means to a compiled buffer (its
-slot color and width) is the runtime's reading of it, an extension
-trait in `polydat::ast`, and what a comprehension evaluates to, what a
-tile renders, and what a cursor sugar rewrites into are likewise the
-runtime's.
+The language is implemented by its own crate, `polydat-grammar`: the
+lexer, the parser, the AST and its projector, the free-name collector,
+pragmas, the diagnostic types, the tile template parsers, the
+comprehension sub-language with its algebra, and the port type
+vocabulary, with no runtime behind them. `polydat` depends on it and
+re-exports every module at the paths `polydat::dsl::ast`,
+`polydat::dsl::parser`, `polydat::iteration::comprehension::parse`, and
+`polydat::ast::PortType`. A tool that only reads, checks, or prints
+Polydat source can link the grammar crate alone. The runtime defines
+what the grammar's results mean when executed: what a type means to a
+compiled buffer (its slot color and width) is defined by an extension
+trait in `polydat::ast`, and the runtime likewise defines what a
+comprehension evaluates to, what a tile renders, and what a cursor
+sugar rewrites into.
+
+The following diagram shows the path of source text through the
+grammar crate and where the compiler takes over. Operators stay
+`BinOp` nodes in the AST and become calls in the compiler.
+
+![Source text passes through the polydat-grammar crate's lexer and parser to a PolydatFile AST, which pp_file prints as canonical source and the polydat compiler compiles](../diagrams/polydat_grammar-pipeline.png)
 
 <a id="sec-roundtrip"></a>
 ### 0.1 How the examples are verified — the round-trip contract
@@ -57,14 +72,14 @@ let p2 = pp_file(parse(p1));
 assert_eq!(p1, p2);            // second-pass print == first-pass print
 ```
 
-Projection is *canonicalizing*. It deliberately differs from the input
-text in three ways, each of which you will see in the examples below:
+Projection is *canonicalizing*: its output differs from the input text
+in three ways.
 
 1. **Every `BinOp` is fully parenthesized.** `y := x + 1` projects as
    `y := (x + 1)`. This is uniformly safe and makes precedence explicit.
 2. **String interpolation is desugared at parse time.** `name := "{a}-{b}"`
    parses to a `printf` call and projects as
-   `name := printf("{}-{}", a, b)` (see §[10](#sec-interpolation)).
+   `name := printf("{}-{}", a, b)` (see §[9](#sec-interpolation)).
 3. **Integer-valued finite floats gain a trailing `.0`.** `60.0` stays
    `60.0`; `6.283185307179586` is preserved exactly.
 
@@ -77,9 +92,9 @@ this file does not define — and are **not** parsed.
 
 A second document,
 [`polydat_grammar_programmatic.md`](polydat_grammar_programmatic.md),
-builds a selection of these same kernels **programmatically** via the
-public AST types, and the test proves the two construction paths project
-to **identical** canonical syntax
+builds a selection of these same kernels **programmatically** through
+the public AST types, and the test checks that the two construction
+paths project to **identical** canonical syntax
 (`pp_file(builder_ast) == pp_file(parse(grammar_src))`). Those paired
 examples are flagged **[↔ programmatic]** below.
 
@@ -269,7 +284,11 @@ not a separate bool value at the wire level (§[7](#sec-comparison)).
 ## 3. Bindings  **[↔ programmatic]**
 
 The fundamental statement is a **binding**: a name `:=` an expression.
-A bare binding is **per-cycle** (re-evaluated every cycle).
+In this document a *cycle* is one write of the coordinate inputs by
+`set_inputs` (§[4](#sec-inputs)), and a *per-cycle* value is one that
+may differ from one cycle to the next. A bare binding, one without a
+modifier (§[5](#sec-modifiers)), is **per-cycle** (re-evaluated every
+cycle).
 
 ```polydat compile
 input cycle: u64
@@ -277,8 +296,8 @@ hashed := hash(cycle)
 user_id := mod(hashed, 1000000)
 ```
 
-This is the minimal idiom: a cycle coordinate in, a bounded id out.
-Projected, it is byte-for-byte the same (no `BinOp`, no interpolation, no
+This is the minimal program: it takes a cycle coordinate and returns a
+bounded id. Its projection is byte-for-byte the same as the source (no `BinOp`, no interpolation, no
 float to canonicalize). It is verified end-to-end — built both from this
 source and from a hand-constructed AST — in
 [the programmatic guide](polydat_grammar_programmatic.md#p-minimal).
@@ -307,7 +326,7 @@ radix of `0` means unbounded. Paired AST builder:
 
 `input name: type` declares a per-cycle coordinate slot driven by
 `set_inputs`. The type annotation is **optional and advisory** — every
-coordinate input rides `u64` at runtime regardless of the annotation;
+coordinate input is held as a `u64` at runtime regardless of the annotation;
 the annotation aids inference and documents intent.
 
 ```polydat
@@ -319,16 +338,15 @@ The declaration may be **omitted entirely**. A name a program
 references but never binds locally becomes a slot the host must supply,
 which the bind pass discovers by collecting free names
 ([graph_compiler.md §2](graph_compiler.md)) — so `y := hash(cycle)` is
-a complete program with one coordinate input. Writing the `input` line
-declares the same thing explicitly, and is worth doing where the intent
-or the type matters to a reader. Either way the check is the same at
-the boundary: a host that fails to supply an inferred slot gets a
-reported mismatch, not a default.
+a complete program with one coordinate input. An `input` line declares
+the same slot explicitly, which is useful where the intent or the type
+matters to a reader. In both cases the host boundary applies the same
+check: a host that fails to supply an inferred slot gets a reported
+mismatch, not a default.
 
-Nothing distinguishes `cycle` from any other name. It is the
-conventional spelling of the primary coordinate, and it appears
-throughout these examples because it is what hosts usually call the
-one they advance, but the compiler has no rule about it. A program may
+The compiler treats `cycle` like any other name. It is the
+conventional name of the primary coordinate, the one a host advances,
+and the examples use it for that reason. A program may
 name its coordinates anything, take several, or take one and decompose
 it (§[3.1](#sec-destructuring)).
 
@@ -357,9 +375,13 @@ row_key := mod(hash(combined), 1000000)
 ## 5. Binding modifiers — `const`, `shared`, `volatile`
 
 A binding may be prefixed by one or more **wire modifiers**, in any
-order. They declare *lifecycle* at the syntactic surface (this is
-G-axiom **G2**, §[18](#sec-gaxioms)) — the compiler verifies the
-declaration against the wire chain, it does not infer it.
+order. A modifier declares the binding's *lifecycle*: when its value is
+computed and how long it is kept. The compiler checks the declaration
+against the chain of wires the binding reads; it does not infer the
+lifecycle from them (G-axiom **G2**, §[18](#sec-gaxioms)). In the
+table, a *scope* is the top-level program or one `for` body
+(§[16](#sec-for)), and a scope is *activated* when it starts: once for
+the top-level program, and once per tuple for a `for` body.
 
 | Modifier | Meaning |
 |---|---|
@@ -393,8 +415,8 @@ const const y := 2       # REJECTED: duplicate modifier
 shared const z := 100    # OK: a shared cell whose initial value folds
 ```
 
-> The retired `init` / `final` keyword pair is **gone** — `const`
-> subsumes both. Do not reintroduce them.
+> There are no `init` or `final` modifiers; `const` covers both roles,
+> and the language does not add them.
 
 <a id="sec-shared-typed"></a>
 ### 5.2 Typed shared cells — `shared x: T := …`
@@ -402,8 +424,8 @@ shared const z := 100    # OK: a shared cell whose initial value folds
 A `shared` binding may carry a type annotation between the name and
 `:=`. The annotation pins the cell's type for the cell's lifetime
 ([Scope Model](scope_model.md) §6.1: a cell keeps one `PortType` and a
-write never changes it), so literal inference (`1` versus `1.0`) stops
-being load-bearing for the cell's type. An integer literal initializer
+write never changes it), so the cell's type does not depend on literal
+inference (`1` versus `1.0`). An integer literal initializer
 widens to an `f64`-annotated cell; any other mismatch between the
 initializer's type and the annotation is a compile error at the
 declaration. The annotation is accepted **only** on `shared` bindings,
@@ -465,12 +487,12 @@ as `2 ** (3 ** 2)` (right-associative).
 the `f64_*` form with the `u64` side widened by an inserted `to_f64`
 adapter. `**` is always `pow` (`f64`). Bitwise/shift operators
 (`& | ^ << >>`) and prefix `!` are `u64` unconditionally: they desugar
-to the `u64_*` node whatever the operand type, so an `f64` operand
-reaches a `u64` port and the wire fails to resolve — a compile error
+to the `u64_*` node whatever the operand type, so an `f64` operand is
+wired to a `u64` port and the wire fails to resolve — a compile error
 naming both types, never a silent reinterpretation of the float's bits.
 
-Widening is the only implicit numeric conversion, and it announces
-itself. The inserted `to_f64` is logged at advisory level (`widening
+Widening is the only implicit numeric conversion, and it is always
+logged. The inserted `to_f64` is logged at advisory level (`widening
 u64 → f64 in operator *`), so an author reviewing a module can find
 every place the compiler chose the float variant rather than the
 integer one. The reverse direction is never implicit: narrowing an
@@ -574,8 +596,7 @@ s := "LATENCY"
 out := if s == "LATENCY" { "fast" } else { "thorough" }
 ```
 
-Two consequences follow from Polydat being a dataflow language, and the
-block form does not pretend otherwise:
+Two rules follow from Polydat being a dataflow language:
 
 - **`else` is mandatory.** A Polydat expression always produces a value
   and there is no unit type, so a one-armed `if` would have no result on
@@ -617,8 +638,8 @@ weights := combinations(seed: 0, charset: "A-Z0-9", length: 8)
 An argument that is a bare literal is **promoted** to an anonymous
 constant node, which is why calls mix wires and literals freely:
 `pow(x, 2.0)` and `exp := 2.0` followed by `pow(x, exp)` compile to the
-same graph. The promoted node is compile-constant, so the fold removes
-it before any engine runs and the literal costs nothing per cycle.
+same graph. The promoted node is compile-constant, so constant folding
+removes it at compile time and the literal adds no per-cycle work.
 Promotion is one of the closed set of parse-time intrinsics
 (§[18](#sec-gaxioms), G6.i) — a library cannot add another.
 
@@ -644,9 +665,8 @@ label := "sensor_reading"
 > **Projection note (important).** `device_id := "{tenant_code}-{device_seq}"`
 > parses to a `printf` call, so it **projects back as**
 > `device_id := printf("{}-{}", tenant_code, device_seq)`. The
-> placeholder-free `label` stays `"sensor_reading"`. This is the clearest
-> demonstration of projection-as-canonicalization: the runtime gives
-> back the desugared form, and the round-trip is idempotent from there.
+> placeholder-free `label` stays `"sensor_reading"`. The projection is
+> the desugared form, and the round-trip is idempotent from there.
 
 ---
 
@@ -672,8 +692,8 @@ adapter that gets it there. The rule, in order:
   types.
 
 Casts may chain (`x as u64 as f64`). A hole's declared type in a tile
-(`${x: u64}`, §[17](#sec-tiles)) is the same rule, so a tile can reach
-every catalog adapter a binding can.
+(`${x: u64}`, §[17](#sec-tiles)) follows the same rule, so a tile hole
+can use every catalog adapter a binding can.
 
 ```polydat compile
 input cycle: u64
@@ -682,7 +702,7 @@ ratio := (x as f64) / 4294967296.0
 ```
 
 `ratio` projects as `((x as f64) / 4294967296.0)`. The cast binds tighter
-than `/`, so the parenthesization here matches what you wrote.
+than `/`, so the projection's parenthesization matches the source's.
 
 ```text
 narrowed := some_f64 as u64    # REJECTED: use round_to_u64 / f64_to_u64 / …
@@ -706,11 +726,11 @@ flattened with `__`: `q.cursor.idx` becomes
 <a id="sec-cursors"></a>
 ### 11.2 Cursors
 
-A **cursor** is a named `u64` ordinal position tracker driving data
-access. Its declaration uses `=` (not `:=`):
+A **cursor** is a named `u64` ordinal: a position into a dataset,
+used to read its records. Its declaration uses `=` (not `:=`):
 `cursor <name> = <constructor> [over <expr>]`. A cursor has no fields or
-schema of its own; data is read via accessor functions that take the
-cursor's ordinal. The optional `over <expr>` clause
+schema of its own; data is read through accessor functions that take
+the cursor's ordinal and return the record's values. The optional `over <expr>` clause
 ([Cursor Partitions](cursor_partitions.md)) supplies a partition source.
 
 ```polydat
@@ -747,8 +767,9 @@ round-tripped, not compiled, by the test harness.)
 <a id="sec-externs"></a>
 ## 12. Externs  **[↔ programmatic]**
 
-`extern name: type [= default]` declares a slot fixed per scope-init
-(via Context Fusion) rather than advancing per cycle like an `input`. The
+`extern name: type [= default]` declares a typed input that the host
+writes by name. Its value is fixed when the scope is initialised (via
+Context Fusion) rather than advancing per cycle like an `input`. The
 default is optional.
 
 ```polydat compile
@@ -832,7 +853,7 @@ vec_f32 vec_i32 vec_f64 vec_i64 vec_f16 vec_i16 vec_i8
 
 > **Spelling gotchas.** Vector keywords are **underscored**: `vec_f32`,
 > not `vecf32`. Register-lane keywords are `reg_i8x16` … `reg_f64x2` plus
-> raw `reg128`. There is **no `f128`** (stable Rust cannot carry it) and
+> raw `reg128`. There is **no `f128`** (stable Rust has no such type) and
 > **no `none`** keyword (`None` is a runtime `Value` sentinel, not a
 > type). An unknown keyword is a loud diagnostic, never a silent default.
 
@@ -856,9 +877,9 @@ extern embedding: vec_f32
 `for <source> { body }` with no l-value is a **traversal**: one child
 scope activates per tuple, and the comprehension's element names are
 wires inside the body. The comprehension algebra itself (constructors,
-validity axioms, optimizer rewrites, IR) is owned by
-[`comprehension_forms.md`](comprehension_forms.md); this section is the
-statement-language surface.
+validity axioms, optimizer rewrites, IR) is specified in
+[`comprehension_forms.md`](comprehension_forms.md); this section
+specifies the statement-language surface.
 
 ```text
 statement          ::= ... | for_stmt
@@ -884,9 +905,9 @@ The lexer captures everything after `for` as **one token**: up to the end
 of the line at bracket depth zero or a `{` at bracket depth zero, whichever
 comes first (a bracketed union runs across lines, one member per line), with
 string literals skipped whole. The captured text is handed to the
-comprehension parser unchanged, so the comprehension grammar has exactly
-one owner and `pp_file` prints the text back as written. Three
-consequences:
+comprehension parser unchanged, so the comprehension grammar is defined
+only by that parser and `pp_file` prints the text back as written. Three
+rules follow:
 
 - A traversal's `{` must open **on the same line** as its comprehension;
   `for k in 1..4` followed by a newline is a parse error naming the
@@ -962,7 +983,7 @@ a child program keyed by the statement's lexical position. Every
 statement kind is allowed inside it: bindings, `const`, cursors, module
 calls, tiles, nested `for` statements, and nested producers. Element
 names are typed inputs of the child; outer wires the body references
-cascade in with the parent's types; the only coordinate a body may
+become inputs of the child with the parent's types; the only coordinate a body may
 declare is `cycle`. The projection indents the body four spaces.
 
 ```polydat compile
@@ -1006,8 +1027,8 @@ for p in partitions("*/4", 1000) {
 
 `name := for <comprehension>` binds a `Streamer`. The binding is
 `const`: the compiler lowers it to `const name := streamer("<payload>")`
-over the resolved comprehension, so the wire carries the comprehension
-as an `ext` value. A traversal may name a producer instead of inline
+over the resolved comprehension, so the wire's value is the
+comprehension, held as an `ext` value. A traversal may name a producer instead of inline
 text, and reads the producer's element names. A **derivation**,
 `for <producer> where …` or `for <producer> order …` (or both), applies
 the algebra's filter and order to a producer bound earlier in the same
@@ -1181,15 +1202,14 @@ no meaning outside a tile body.
 <a id="sec-gaxioms"></a>
 ## 18. Foundations: the type rules and the six G-axioms
 
-The grammar is small — twelve expression constructors and eight
-statement kinds — but does an unusual amount of load-bearing work. The
-substrate, compiler, runtime, and embedding designs each make claims
-that reduce to "the grammar makes this possible." This section says
-what the grammar actually commits to: first the type rules, then the
-six structural commitments (the **G-axioms**) those other designs rest
-on. The axioms are **not** optimizations. Without them the contracts
-above them would not hold, and each is stated below with what breaks in
-its absence.
+The grammar has twelve expression constructors and eight statement
+kinds. This section states the type rules (§[18.1](#sec-type-rules))
+and the six structural commitments of the grammar, the **G-axioms**
+(§[18.3](#sec-axiom-statements)), on which the substrate, compiler,
+runtime, and embedding specifications depend. The axioms are **not**
+optimizations: without them the contracts of those specifications
+would not hold, and each axiom is stated with the contract that fails
+in its absence.
 
 <a id="sec-type-rules"></a>
 ### 18.1 Type rules
@@ -1211,12 +1231,12 @@ conversion nodes. There is no boolean literal rule: `true` and `false`
 are ordinary identifiers and comparisons yield a `u64` `0`/`1`
 (§[2.6](#sec-bool)).
 
-`T-ArrayLit` is the one that surprises. A list literal binds to a
+`T-ArrayLit` differs from the other literal rules. A list literal binds to a
 constant string holding its rendered elements, not to a vector: there
 is no const-vector node, and list literals exist to be sweep axes and
 comprehension-source text, which are consumed as `{name}` interpolation
-or as source syntax. A wire that genuinely wants the elements as
-numbers parses them (`str_to_vec_i32`, `str_to_vec_f32`). A list
+or as source syntax. A wire that needs the elements as numbers parses
+them (`str_to_vec_i32`, `str_to_vec_f32`). A list
 literal is a **binding-position** form; it has no meaning as a call
 argument, and one written there is a compile error naming the form and
 telling the author to bind it first.
@@ -1257,18 +1277,18 @@ T-FieldAccess: source declared with type S, S projecting "field" : T
                ⊢  source.field  :  T
 ```
 
-Overload resolution is why the operator rules work: `add` exists as
-both `u64_add` and `f64_add`, and the desugar picks by operand type
-(§[6.2](#sec-arithmetic)). A cross-type operator triggers adapter
-insertion from the catalog. A source's field projections come from the
-source binding's declared type, which is why the grammar does not
-enumerate them (§[11.2](#sec-cursors)).
+The operator rules depend on overload resolution: `add` exists as both
+`u64_add` and `f64_add`, and the desugar picks by operand type
+(§[6.2](#sec-arithmetic)). A cross-type operator causes an adapter from
+the catalog to be inserted. A source's field projections come from the
+source binding's declared type, so the grammar does not enumerate them
+(§[11.2](#sec-cursors)).
 
-The rules cover every expression constructor: there is no untyped
-expression form, which is what makes G4 true rather than aspirational.
+The rules cover every expression constructor, and there is no untyped
+expression form, so G4 holds.
 
 <a id="sec-soundness"></a>
-### 18.2 What the rules buy
+### 18.2 Consequences of the rules
 
 - **Type soundness.** A compiled expression has one inferred output
   `PortType`, and every runtime value written to that output satisfies
@@ -1291,8 +1311,8 @@ expression form, which is what makes G4 true rather than aspirational.
   while `name` without quotes is a typed passthrough
   (§[9](#sec-interpolation)).
 - **`ext` stays opaque.** `PortType::Ext` is opaque to the grammar. No
-  structural inference or implicit conversion reaches inside an
-  extension value; a reflected value answers for its own type identity,
+  structural inference or implicit conversion looks inside an
+  extension value; a reflected value supplies its own type identity,
   display, JSON projection, and field access. Extension-producing nodes
   still carry ordinary metadata, so lifecycle and purity classification
   operate on the node and its wires rather than on what the extension
@@ -1308,20 +1328,22 @@ rule (`T-LocalIdent` then `T-OuterIdent`) is total and deterministic,
 and an identifier not found locally is searched up the chain and
 synthesised as an extern slot in the current scope's program.*
 
-This is what lets the compiler discover a synthesis surface by walking
-a body rather than reading declarations, and it is why the same rule
-serves `{name}` interpolation: a host's `{k}` reaches the binding a
-bare `k` would. Without it, every cross-scope dependency would be
-declared by hand — twice the surface, and a maintenance trap the first
-time a body changes.
+Under G1 the compiler finds a body's synthesis surface (the set of
+extern slots synthesised for its outer-scope references) by walking
+the body rather than by reading declarations, and `{name}`
+interpolation uses the same rule: a host's `{k}` resolves to the
+binding a bare `k` would. Without G1, every cross-scope dependency
+would be declared by hand, doubling the surface and requiring an
+update each time a body changes.
 
 **G2 — Lifecycle declared at the surface.** *The binding modifiers
 declare lifecycle. The compiler verifies the declaration against the
 wire chain; it does not infer lifecycle from the expression's contents
 (§[5](#sec-modifiers)).*
 
-The author's declaration is the anchor the const-binding contract
-checks against and the hoisting pass partitions on. Without it,
+The const-binding contract checks the chain against the author's
+declaration, and the hoisting pass, which separates work done once per
+scope activation from per-cycle work, partitions on it. Without G2,
 lifecycle would be inferred per call site, the analysis would have to
 be richer, and the wire-chain check would have nothing declarative to
 check.
@@ -1329,33 +1351,34 @@ check.
 **G3 — Scope-chain transparency.** *An identifier referencing an
 outer-scope binding is written exactly like a local one. There is no
 `outer` keyword, no parent qualifier, no ceremony: the author writes
-`k` whichever scope owns `k`.*
+`k` whichever scope binds `k`.*
 
-The layer structure stays invisible to the author, which is precisely
-what makes an expression embeddable as written — a host can hand over
-an expression that consumes its context without adapting the syntax.
-Without it, the substrate's layering would leak into every expression
-that crossed a scope.
+The scope layers do not appear in the syntax, so an expression can be
+embedded as written: a host can pass an expression that reads its
+context without adapting the syntax. Without G3, every expression that
+referenced another scope would have to name the substrate's layering.
 
 **G4 — Port-typed expressions.** *Every well-formed expression has a
 derivable output `PortType`. The rules of §18.1 are total: every
 constructor has a rule, the rules compose, and no expression form
 lacks an output type.*
 
-Typed wires at both ends are what let a mismatch be caught or healed at
-construction rather than at runtime, and what makes a returned value's
-type structural rather than discovered. Without it, type checking would
+Because both ends of every wire are typed, a mismatch is rejected or
+repaired with an adapter at construction rather than at runtime, and a
+returned value's type follows from the program's structure rather than
+being discovered at runtime. Without G4, type checking would
 move to runtime and the typed-result guarantee would become a runtime
 concern.
 
 **G5 — Two-lifecycle structural classification.** *Every wire is
-classifiable Effectively-const or Dynamic by analysing the wire chain
-alone — the join of its upstream cone's lifecycles, plus the declared
-modifiers of G2. The classification does not depend on runtime state or
-evaluation history.*
+classifiable Effectively-const (computed once per scope activation) or
+Dynamic (may change per cycle) by analysing the wire chain alone — the
+join of its upstream cone's lifecycles, plus the declared modifiers of
+G2. The classification does not depend on runtime state or evaluation
+history.*
 
-This is what allows the compiler to emit a partitioned program at all:
-one buffer evaluated once at scope-init, another per cycle. Without it,
+The compiler relies on G5 to emit a partitioned program: one buffer
+evaluated once at scope-init, another per cycle. Without G5,
 lifecycle would be discovered during evaluation, the partition could
 not be compiled, and the cost-determinism guarantee would lose its
 structural basis.
@@ -1366,9 +1389,9 @@ expression is a program of one anonymous output, and a program is a
 sequence of named bindings. There is no expression grammar separate
 from a program grammar.*
 
-This is why the same compiler compiles a four-character expression and
-a two-hundred-line kernel with no expression mode, and why every node a
-program can call an embedded expression can call too. Without it a host
+Consequently one compiler compiles a four-character expression and a
+two-hundred-line kernel with no expression mode, and an embedded
+expression can call every node a program can call. Without G6 a host
 would choose between two grammars and the compiler would maintain two
 pipelines.
 
@@ -1376,17 +1399,17 @@ pipelines.
 of forms that look like calls or values are intrinsics: the parser
 recognises them and emits desugared graph shapes. The set is closed and
 each member rewrites into registered library nodes or constant
-emission, so nothing reaches the compiler that an author could not have
-written by hand.*
+emission, so the compiler receives nothing that an author could not
+have written by hand.*
 
-The catalog is the conditional in both spellings
+The set is the conditional in both spellings
 (§[7.1](#sec-if-block)), literal promotion (§[8](#sec-calls)),
 interpolation to `printf` (§[9](#sec-interpolation)), and the
-`polytile` rewrites into `tile` statements (§[17](#sec-tiles)). Closure
-is the point: an embedded expression using `"x={y}"` compiles to the
-graph the author could have written, so the embedding contract sees
-nothing magic, and the compiler's main loop sees only registered nodes
-after parse. Without it, parse-time desugars would have to live in
+`polytile` rewrites into `tile` statements (§[17](#sec-tiles)). Because
+the set is closed, an embedded expression using `"x={y}"` compiles to
+the graph the author could have written, so the embedding contract has
+no special forms, and after parsing the compiler's main loop handles
+only registered nodes. Without G6.i, parse-time desugars would have to live in
 library code behind some "declare yourself intrinsic" mechanism, or the
 grammar would grow constructs the compiler treats opaquely.
 
@@ -1397,7 +1420,7 @@ grammar's contract, not an implementation detail.*
 
 An author can write `a + b * c < d & e` and predict the parse; a tool
 that walks or rewrites the AST can rely on the shape; the type rules
-operate on a determinate tree. Without it, either everything needs
+operate on a determinate tree. Without G6.p, either everything needs
 parentheses or the parse is implementation-defined and tooling needs
 implementation-specific knowledge.
 
@@ -1421,16 +1444,15 @@ implementation-specific knowledge.
         embedding           ← G3+G6 → E1+E4
 ```
 
-Each layer above the grammar names an axiom of its own and rests it on
-a grammar-level commitment. Without G1, the substrate's synthesis
-surface would be a runtime discovery. Without G2, the two-lifecycle
-classification would be a runtime classification. Without G3, embedding
-would need syntactic adaptation. The substrate is small because the
-grammar's commitments already do work it would otherwise repeat —
-which is the reason to treat these six as load-bearing rather than as
+Each layer above the grammar states axioms of its own that depend on
+grammar-level commitments. Without G1, the substrate's synthesis
+surface would be discovered at runtime. Without G2, the two-lifecycle
+classification would be made at runtime. Without G3, embedding would
+need syntactic adaptation. The substrate relies on these commitments
+instead of repeating them, so the six axioms are requirements, not
 conveniences.
 
-| Document | What it rests on the grammar for |
+| Document | What it depends on the grammar for |
 |---|---|
 | [Composition Substrate](composition_substrate.md) | G1+G4 underwrite S1+T1; G3+G4 underwrite L1+L2; G5 underwrites L2's structural classification. |
 | [Graph Compiler](graph_compiler.md) | G2+G5 underwrite H1+H2; G1 underwrites CF1; G4 underwrites NF1. |

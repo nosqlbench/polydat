@@ -1,0 +1,35 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Converter node in front of an open input">
+    <mxGraphModel dx="1000" dy="400" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1500" pageHeight="200" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="host" value="Host writes a value of any type&lt;br&gt;(set_input)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="20" y="60" width="200" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="slot" value="Input slot of type dyn&lt;br&gt;(stores the value as written)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="420" y="60" width="200" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="conv" value="Converter node&lt;br&gt;__convert_&amp;lt;input&amp;gt;_&amp;lt;type&amp;gt;&lt;br&gt;(boundary adapter catalog)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="760" y="60" width="200" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="cons" value="Consumers reading&lt;br&gt;the target type" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="1200" y="60" width="200" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" value="write (never converted)" style="endArrow=classic;html=1;rounded=0;verticalAlign=bottom;labelBackgroundColor=none;" edge="1" parent="1" source="host" target="slot">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="0" y="-2" as="offset"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e2" style="endArrow=classic;html=1;rounded=0;" edge="1" parent="1" source="slot" target="conv">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" value="converted value, or the node fails" style="endArrow=classic;html=1;rounded=0;verticalAlign=bottom;labelBackgroundColor=none;" edge="1" parent="1" source="conv" target="cons">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="0" y="-2" as="offset"/>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

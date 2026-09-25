@@ -1,0 +1,72 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Write, invalidation, and pull">
+    <mxGraphModel dx="1000" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1320" pageHeight="360" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="cone" value="Within x's cone" style="rounded=1;whiteSpace=wrap;html=1;dashed=1;fillColor=none;strokeColor=#666666;verticalAlign=top;fontStyle=1;fontSize=12;arcSize=4;" vertex="1" parent="1">
+          <mxGeometry x="800" y="10" width="240" height="330" as="geometry"/>
+        </mxCell>
+        <mxCell id="w" value="Host writes input i&lt;br&gt;(set_inputs or set_input)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="20" y="130" width="200" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="m" value="Every step whose provenance includes input i is marked not current; nondeterministic steps are marked not current" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="280" y="130" width="200" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="p" value="Host pulls output x" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="540" y="130" width="200" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="n" value="Steps outside x's cone do not run" style="text;html=1;align=center;verticalAlign=middle;fontStyle=2;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="540" y="240" width="200" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="r" value="Steps in x's cone that are not current run, in topological order, and are marked current" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="820" y="40" width="200" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="c" value="Steps in x's cone that are still current return their cached values without running" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="820" y="230" width="200" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="v" value="The pull returns the value of x" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1100" y="130" width="200" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" style="rounded=0;html=1;endArrow=block;" edge="1" parent="1" source="w" target="m">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" style="rounded=0;html=1;endArrow=block;" edge="1" parent="1" source="m" target="p">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" style="rounded=0;html=1;endArrow=block;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="p" target="r">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="770" y="155"/>
+              <mxPoint x="770" y="85"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e3b" style="rounded=0;html=1;endArrow=block;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="p" target="c">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="770" y="205"/>
+              <mxPoint x="770" y="275"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e4" style="rounded=0;html=1;endArrow=block;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.25;entryDx=0;entryDy=0;" edge="1" parent="1" source="r" target="v">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1070" y="85"/>
+              <mxPoint x="1070" y="155"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e5" style="rounded=0;html=1;endArrow=block;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.75;entryDx=0;entryDy=0;" edge="1" parent="1" source="c" target="v">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1070" y="275"/>
+              <mxPoint x="1070" y="205"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

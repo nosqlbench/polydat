@@ -1,0 +1,49 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Scope trees: a typical tree and the call that creates each kernel">
+    <mxGraphModel dx="1000" dy="700" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="900" pageHeight="640" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="params" value="Params root kernel" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="330" y="40" width="200" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="workload" value="Workload scope" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="330" y="160" width="200" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="phase" value="Phase scope" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="330" y="280" width="200" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="fiber1" value="Fiber kernel 1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="180" y="400" width="200" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="fiber2" value="Fiber kernel 2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="480" y="400" width="200" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="op" value="Per-op child" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="40" y="540" width="200" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="iter" value="Iteration child&lt;br&gt;(one per tuple)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="320" y="540" width="200" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" value="bind_under or instantiate_under" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;endArrow=block;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="params" target="workload">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" value="bind_under or instantiate_under" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;endArrow=block;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="workload" target="phase">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" value="fork" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;endArrow=block;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="phase" target="fiber1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" value="fork" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;endArrow=block;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="phase" target="fiber2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" value="instantiate_under" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;endArrow=block;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="fiber1" target="op">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" value="bind_under" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;endArrow=block;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="fiber1" target="iter">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

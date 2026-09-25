@@ -1,7 +1,7 @@
 // Copyright 2024-2026 Jonathan Shook
 // SPDX-License-Identifier: Apache-2.0
 
-//! Scope trees on any engine (native_scope_trees.md §8).
+//! Scope trees on all four engines (native_scope_trees.md §8).
 //!
 //! A host that runs workloads as a tree of scopes (params, a `set:`
 //! scope, a phase, fibers, per-op children, iteration children) builds

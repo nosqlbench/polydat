@@ -1,10 +1,40 @@
-# Type-System Alignment Specification
+---
+type: specification
+title: Type-System Alignment
+timestamp: 2026-09-25
+description: How static wire types, runtime values, compiled slots, Cranelift 0.116, and serde JSON align.
+tags: [types, native]
+---
 
-This document defines how Polydat aligns its static wire types,
+# Type-System Alignment
+
+This document specifies how Polydat aligns its static wire types,
 runtime values, compiled buffer slots, Cranelift 0.116, and
-serde JSON. The detailed adapter catalog lives in
-[type_system.md](type_system.md); the JIT safety contract lives
-in [jit_boundary.md](jit_boundary.md).
+serde JSON, and which engines run each type.
+
+**Related specifications.** [type_system.md](type_system.md) (the
+detailed adapter catalog); [jit_boundary.md](jit_boundary.md) (the JIT
+safety contract, S1–S10); [Compiled By-Reference
+Slots](compiled_handles.md) (the `Ref2` representation of the
+by-reference types).
+
+## Terms
+
+- **Engines.** The four engines are the interpreter (P1), the closure
+  tier (P2), native (P3), and pure native, the differential tier
+  behind P3 ([Engines](engines.md)).
+- **Slot.** One `u64` word of a compiled kernel's buffer. Each port
+  occupies one or two slots.
+- **Slot color.** How a port type is laid out in its slots (§6):
+  `Imm1` is one word holding the value itself, `Imm2` two words
+  holding the value itself, and `Ref2` two words holding a pointer and
+  a length (a *reference pair*) that refer to the value stored
+  elsewhere.
+- **Closure kit (kit).** A function generated for each node that runs
+  the node's body directly on the slot buffer. On P2 a node runs its
+  kit as a closure; on P3 a node without a named native lowering is a
+  *slot call*, in which native code calls the kit
+  ([Compiled By-Reference Slots](compiled_handles.md) §5, §6).
 
 Polydat is pinned to the Cranelift 0.116 release family. The
 compiler MUST use only types and lowerings supported by that
@@ -15,7 +45,7 @@ and lower through the implemented path.
 
 ## 1. Governing type planes
 
-Four related planes are intentionally distinct:
+Four related planes are deliberately kept distinct:
 
 | Plane | Type | Purpose |
 |---|---|---|
@@ -163,11 +193,11 @@ The complete unsafe and validation contract is S1–S10 in
 
 Type support and engine eligibility are separate:
 
-- A valid `PortType` is executable on every engine — the
-  interpreter, the closure tier (P2), and the native engine
-  (P3) — when its node implementation exists. An engine that
-  cannot run a program refuses it at construction with a
-  reason naming the node or construct; it never runs it
+- A valid `PortType` is executable on the interpreter (P1), the
+  closure tier (P2), and the native engine (P3) when its node
+  implementation exists. Any of the four engines (these three and
+  pure native) that cannot run a program refuses it at construction
+  with a reason naming the node or construct; it never runs it
   differently.
 - P2 is total: every node has a closure form, derived from its
   signature by the `#[polydat_node]` macro (or supplied by a
@@ -182,8 +212,8 @@ Type support and engine eligibility are separate:
   and otherwise a call of the node's kit from native code, over the
   state's own scratch, whatever the colors of its ports ([Compiled
   By-Reference Slots](compiled_handles.md) §6). A nondeterministic
-  node or a side channel is a segment of its own, so its currency
-  is its own. Register-plane operations with a lowering run as native
+  node or a side channel is a segment of its own, so its currency is
+  tracked separately from its neighbors'. Register-plane operations with a lowering run as native
   SIMD; slice-bearing nodes' internal vector math may call compiled
   SIMD helpers from their kit.
 - `U128/I128` operations and nodes that downcast an `Ext` or
@@ -191,7 +221,7 @@ Type support and engine eligibility are separate:
   themselves cross compiled tiers as two immediate slots and as
   reference pairs respectively.
 
-The one typed read is `Kernel::pull`: on every engine it
+The one typed read is `Kernel::pull`: on all four engines it
 returns the named output as the `Value` its port type names,
 decoding whichever slot color the engine stored it in
 (`marshal::decode_output` for the compiled engines — one-slot
@@ -200,11 +230,11 @@ reassembly of a 128-bit integer or register word). A pair is
 never handed to the host, and a slot that holds `None` reads
 as `None`.
 
-What an engine decided is observed, not inferred:
-`Kernel::plan` returns an `EnginePlan` — how many runs of nodes
-run as native segments (on the interpreter, its native cones),
-how many nodes run their closure, and how many the interpreter
-dispatches itself — on every engine.
+An engine's execution decisions are reported, not inferred: on all
+four engines `Kernel::plan` returns an `EnginePlan` stating how many
+runs of nodes run as native segments (on the interpreter, its native
+cones), how many nodes run their closure, and how many the
+interpreter dispatches itself.
 
 No compiler may coerce a value merely to make a higher engine
 tier available. Engine selection follows the typed graph; it

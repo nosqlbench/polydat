@@ -1,23 +1,44 @@
+---
+type: specification
+title: SIMD ISA Selection and Scalar-Flow Promotion
+timestamp: 2026-09-25
+description: Effective native-ISA discovery, typed SIMD node variants, promotion qualification, ordinal packet execution, ordered scalar drain, and recovery.
+tags: [native, performance]
+---
+
 # SIMD ISA Selection and Scalar-Flow Promotion
 
-**Scope:** Effective native-ISA discovery, typed SIMD node variants, promotion
-qualification, ordinal packet execution, ordered scalar drain, and recovery.
+This document specifies Tier-1 scalar-flow SIMD promotion: an explicitly
+requested optimization that evaluates a scalar graph for a run of consecutive
+ordinals (the `u64` sequence positions a data source hands out) several at a
+time, as 128-bit
+register packets, and returns the results one scalar at a time in ordinal
+order. It covers effective native-ISA discovery, typed SIMD node variants,
+promotion qualification, ordinal packet execution, ordered scalar drain, and
+recovery. Promotion preserves the graph's scalar signatures and scalar result
+order, and it never places several logical cycles in the ordinary node cache.
 
-This specification extends:
+**Related specifications:** [The Runtime Model](runtime_model.md) (scalar-cycle
+consistency and invalidation); [The Graph Compiler](graph_compiler.md) (fusion
+and engine selection); [The Evaluation Model](evaluation_model.md) (per-fiber
+state); [Engines](engines.md) and [JIT Boundary](jit_boundary.md); [The Type
+System](type_system.md) (the fixed 128-bit register plane); and [Cross-Fiber
+Cell Invalidation](cross_fiber_invalidation.md). This specification extends
+each of them.
 
-- [The Runtime Model](runtime_model.md), especially scalar-cycle consistency and
-  invalidation;
-- [The Graph Compiler](graph_compiler.md), especially fusion and engine
-  selection;
-- [The Evaluation Model](evaluation_model.md), especially per-fiber state;
-- [Engines](engines.md) and [JIT Boundary](jit_boundary.md);
-- [The Type System](type_system.md), especially the fixed 128-bit register
-  plane; and
-- [Cross-Fiber Cell Invalidation](cross_fiber_invalidation.md).
+The terms used throughout are:
 
-The optimization processes an owned scalar ordinal sequence as 128-bit lane
-packets while preserving scalar graph signatures and scalar result order. It
-does not place several logical cycles in the ordinary node cache.
+- **Lease.** A contiguous range of ordinals a source has reserved for one
+  executor. The executor owns the range until it has drained every result.
+- **Packet.** One 128-bit register holding `W` lanes, one lane per ordinal;
+  for `u64`, `W` is 2.
+- **Drain.** Handing results to the caller as scalars, in increasing ordinal
+  order. A result is consumed only when it is drained.
+- **Broadcast.** A scalar input other than the driving ordinal, fixed for the
+  whole lease and copied into every lane.
+- **Scalar oracle.** The ordinary scalar kernel the executor keeps beside the
+  register kernel; it defines the correct results and evaluates any ordinal
+  the register kernel does not.
 
 ---
 
@@ -246,9 +267,9 @@ an independent pacing counter:
 - a compact replay address.
 
 For `RegI32x4`, ordinal 10 identifies packet base 8, lane 2, selector `0100`,
-and remaining suffix `1100`. Although the production Tier-1 executor is
-`RegI64x2`, `OrdinalLaneClock<W>` verifies this arithmetic for every common
-supported lane count.
+and remaining suffix `1100`. The Tier-1 executor supports only `RegI64x2`, but
+`OrdinalLaneClock<W>` verifies this arithmetic for every common supported lane
+count.
 
 ### 4.3 Ownership and alignment
 
@@ -258,7 +279,7 @@ Alignment does not grant ownership. A packet may expose only:
 [packet_base, packet_base + W) ∩ owned_lease ∩ source_extent
 ```
 
-The production executor vectorizes full `u64x2` packets and evaluates unaligned
+The Tier-1 executor vectorizes full `u64x2` packets and evaluates unaligned
 lease fragments through the scalar graph. It never enlarges or realigns a shared
 reservation. A partial ready packet remains private to its executor and drains
 in increasing ordinal order.
@@ -308,9 +329,10 @@ The following graph shapes and effects are ineligible:
 - any operation declined by the effective Cranelift ISA.
 
 Convex multi-exit packet graphs, epoch-segmented dynamic inputs, and
-transactional shared-cell batching are not Polydat promotion modes. Supporting
-one of them requires a separate specification and implementation; Tier-1 state
-must not be interpreted as providing those semantics.
+transactional shared-cell batching are not Polydat promotion modes and are
+outside this specification. Supporting one of them requires a separate
+specification and implementation; Tier-1 state must not be interpreted as
+providing those semantics.
 
 ---
 
@@ -318,8 +340,9 @@ must not be interpreted as providing those semantics.
 
 ### 6.1 Explicit compilation
 
-`compile_with(Engine)` on any engine, and `Kernel::pull`, do not select
-scalar-flow SIMD promotion.
+Neither `compile_with(Engine)`, for any of the four engines, nor
+`Kernel::pull` selects scalar-flow SIMD promotion; a caller requests it
+explicitly through the entry point below.
 
 The public DSL entry point is:
 
@@ -328,8 +351,13 @@ compile_polydat_tier1_simd_ordinal(source, driving_input, output)
     -> Result<Tier1SimdExecutor, String>
 ```
 
-The corresponding assembler entry point is
-`try_compile_tier1_simd_ordinal`. Compilation follows this fixed sequence:
+It compiles `source` for promoted execution of one output. `driving_input`
+names the `u64` input whose value is the ordinal, and `output` names the
+output to compute. On success it returns a `Tier1SimdExecutor`, which the
+caller feeds leases and drains results from (§6.3); if any condition of §5
+fails, it returns an error message and nothing else changes. The
+corresponding assembler entry point is `try_compile_tier1_simd_ordinal`.
+Compilation follows this fixed sequence:
 
 ```mermaid
 flowchart LR
@@ -346,8 +374,8 @@ The register kernel the executor owns is a pure native raw kernel
 (`JitKernelRaw`): the whole register DAG as one native function over the slot
 buffer, with no provenance tracking, because the executor sequences every
 packet itself and the scalar kernel it also owns is the oracle and the
-recovery path. Beside the engine differential, this executor is the reason the
-pure native tier exists ([Engines](engines.md)).
+recovery path. The pure native tier exists for this executor and for the
+engine differential ([Engines](engines.md)).
 
 Any qualification or register-lowering failure is a compile error for this
 explicit API. It does not alter or invalidate ordinary scalar compilation.
@@ -503,14 +531,17 @@ suffixes, and long-lived compiled plans improve the ratio. Cheap single nodes,
 memory-bound work, frequent fragments, mutable dependencies, and short-lived
 plans do not.
 
-Promotion is explicit; there is no automatic cost threshold in the normal
-compiler. The descriptor and runtime counters provide the facts needed by a
-caller or profiling layer to make that selection without changing semantics.
-The packet clock is worth its complexity because packet
-reuse stays effective when the caller's burst size is smaller than the vector
-width: a ready packet drained one value at a time still amortizes its native
-call over its lanes. The design does not establish multi-consumer,
-shared-state, per-lane error, or automatic-selection semantics.
+Promotion is explicit; the normal compiler applies no automatic cost
+threshold. The descriptor and runtime counters give a caller or profiling layer
+the facts it needs to decide whether to promote, without changing semantics.
+
+Rationale for the packet clock: packet reuse stays effective when the
+caller's burst size is smaller than the vector width, because a ready packet
+drained one value at a time still spreads the cost of its native call over
+its lanes.
+
+This specification defines no multi-consumer, shared-state, per-lane error,
+or automatic-selection semantics.
 
 ---
 
@@ -545,14 +576,16 @@ must compare the promoted result stream with the retained scalar oracle.
 
 ## 11. Result
 
-Polydat SIMD promotion is an owned, sequence-stamped micro-batch executed
-through an explicitly equivalent register graph and revealed through ordinary
-scalar order. The ordinal is simultaneously the replay key, logical value,
-packet number, and low-order lane clock for a perfect sequence. This removes
-redundant pacing and payload state without weakening ownership or ordering.
+Tier-1 SIMD promotion evaluates a leased run of ordinals, each identified by
+its stream, generation, activation, and ordinal, through a register graph
+whose every member is a proven-exact variant of its scalar node, and returns
+the results in scalar ordinal order. For a perfect ordinal sequence the
+ordinal serves as the replay key, the logical value, the packet number, and
+the low-order lane clock at once, so no separate pacing counter or retained
+input payload is needed, and ownership and ordering are unchanged.
 
-The supported production boundary is intentionally exact: explicit compilation,
-one `u64` perfect-ordinal driver, one selected output, `RegI64x2` member
+The implemented boundary is exactly: explicit compilation, one `u64`
+perfect-ordinal driving input, one selected output, `RegI64x2` member
 variants, immutable constants or frozen broadcasts, full-packet native
-execution, scalar fragments, and forward-only scalar recovery. All other
-promotion shapes remain outside this specification.
+execution, scalar evaluation of fragments, and forward-only scalar recovery.
+Every other promotion shape is outside this specification.

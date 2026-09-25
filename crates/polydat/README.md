@@ -19,7 +19,7 @@ NoSQLBench, and is built to embed in any host.
 
 ```toml
 [dependencies]
-polydat = "0.3"
+polydat = "0.5"
 ```
 
 Compile a graph from source and pull named results:
@@ -86,7 +86,7 @@ binary:
 
 ```toml
 [dependencies]
-polydat = { version = "0.3", default-features = false }
+polydat = { version = "0.5", default-features = false }
 ```
 
 ## Why one subsystem

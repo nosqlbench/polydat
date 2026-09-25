@@ -14,7 +14,7 @@ Add Polydat to a Rust 2024 project:
 
 ```toml
 [dependencies]
-polydat = "0.3"
+polydat = "0.5"
 ```
 
 Compile a graph from DSL source and pull named results:
@@ -86,7 +86,7 @@ shard   := mod(u64_xor(hashed, tenant_seed), 32)
 score   := f64_add(f64_mul(unit_interval(hashed), amplitude), baseline)
 ```
 
-![Program graph: four inputs feed hash, mod, xor, and float nodes producing user_id, shard, and score](docs/diagrams/program-graph.svg)
+![Program graph: four inputs feed hash, mod, xor, and float nodes producing user_id, shard, and score](crates/polydat/docs/diagrams/program-graph.png)
 
 The graph is more than a sequence of calls. `hashed` fans out into three result
 paths, `tenant_seed` participates in two different stages, and the floating-point
@@ -124,12 +124,12 @@ generator would pay.
 These limits are why Polydat is a compiler and a runtime rather than a library
 of generators. Determinism, cost bounds, and cross-fiber equivalence are stated
 as named axioms in the
-[Runtime Model](crates/polydat/docs/design/runtime_model.md), and every engine
-must satisfy them.
+[Runtime Model](crates/polydat/docs/design/runtime_model.md), and all four
+engines must satisfy them.
 
 ## The model
 
-![Polydat model: DSL and Rust assembler flow through resolve/classify/fuse into an immutable program, then per-thread state pulls named outputs](docs/diagrams/model.svg)
+![Polydat model: DSL and Rust assembler flow through resolve/classify/fuse into an immutable program, then per-thread state pulls named outputs](crates/polydat/docs/diagrams/model.png)
 
 The compiler resolves and checks every wire, inserts safe type adapters,
 classifies value lifecycles, tracks provenance, and selects an execution form.
@@ -147,7 +147,7 @@ optimizations.
 
 ## Engines at a glance
 
-Three engines share one semantic model:
+Four engines share one semantic model:
 
 - **P1** is the typed interpreter. It supports the complete value and node
   model and is the semantic host and fallback for everything else.
@@ -155,18 +155,21 @@ Three engines share one semantic model:
   equivalence work, and specialized callers, and is the default engine of a
   build without `jit`.
 - **P3** lowers eligible graph cones through Cranelift to host-native machine
-  code.
+  code, and runs every other node as a closure.
+- **Pure native** runs native code only. It refuses a program with a node
+  that has no native lowering, and serves as the differential check behind P3.
 
 With the default `jit` feature, the kernel a host gets by default is P3: a
 native segment for every connected group of nodes with a lowering, closure
 steps for the rest, over one slot buffer. Segments follow the graph's
 connections, so pulling one output runs only its own cone's segments,
-however large the rest of the graph is. Every engine accepts every program, so native
-eligibility is an optimization, not a requirement for a valid graph, and the
-interpreter is the oracle the others are checked against.
+however large the rest of the graph is. P1, P2, and P3 accept every program,
+so native eligibility is an optimization, not a requirement for a valid graph;
+only pure native refuses a program, and it names the node without a lowering.
+The interpreter is the oracle the others are checked against.
 
-One eleven-node graph with three inputs and four outputs is measured through
-every engine on one core, and one JSON document with a projection is rendered
+One eleven-node graph with three inputs and four outputs is measured on all
+four engines on one core, and one JSON document with a projection is rendered
 through them. The graphs, the measurement contract, the correctness gate, the
 benchmark commands, and the current numbers with their confidence intervals are
 in [Engine-ladder performance](crates/polydat/docs/guides/performance.md); the
@@ -344,7 +347,7 @@ one `INPUTS` register, and each `extern` port is drawn as its own port node
 labeled with its kind, name, type, and default, wired to every node that reads
 it.
 
-`perf` measures programs on every engine from a TOML suite, or from a built-in
+`perf` measures programs on all four engines from a TOML suite, or from a built-in
 one, and prints a table per program. `--against` pairs this binary with
 another round by round to measure a change; the
 [performance guide](crates/polydat/docs/guides/performance.md) has the details.
@@ -383,7 +386,7 @@ For an interpreter-and-closures library build without Cranelift or the binary:
 
 ```toml
 [dependencies]
-polydat = { version = "0.3", default-features = false }
+polydat = { version = "0.5", default-features = false }
 ```
 
 ## Workspace and development

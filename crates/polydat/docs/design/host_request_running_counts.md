@@ -1,6 +1,14 @@
+---
+type: record
+title: "Host Request: Running Counts and Accumulation"
+timestamp: 2026-09-25
+description: A host request for state that survives across pulls, and what any answer must satisfy. A record, pending fold into the specifications.
+tags: [record, host]
+---
+
 # Host Request: Running Counts and Accumulation
 
-A requirements record, not a design. On 2026-09-17 an nmbrs agent
+A requirements record, not a design. A host
 converting the auxiliary binaries that check vector datasets and
 results named the capabilities polydat lacks for that work. Three of
 the four are node-library additions of the ordinary kind and are not

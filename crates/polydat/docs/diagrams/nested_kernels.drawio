@@ -1,0 +1,135 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Programs, states, and the kernels a kernel makes">
+    <mxGraphModel dx="1000" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1190" pageHeight="660" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="Programs, states, and the kernels a kernel makes" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="24" y="0" width="900" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="subtitle" value="A program is logic and is shared; a state is the register image a kernel runs the program over. Every kernel, wherever it came from, is a program plus a state of its own." style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="24" y="28" width="1146" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="prog" value="&lt;font color=&quot;#666666&quot; style=&quot;font-size:13px&quot;&gt;PROGRAM, SHARED&lt;/font&gt;&lt;br&gt;compiled once, read-only,&lt;br&gt;one &lt;font face=&quot;Courier New&quot;&gt;Arc&lt;/font&gt; for every fiber&lt;br&gt;&lt;br&gt;&lt;font face=&quot;Courier New&quot;&gt;base := hash(cycle)&lt;br&gt;id := mod_wire(base, scale)&lt;br&gt;for k in 1..4 { y := k*10+id }&lt;br&gt;tile t := &quot;@for g in list {${g}}&quot;&lt;/font&gt;" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=10;spacingTop=4;fontSize=12;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="24" y="90" width="266" height="170" as="geometry"/>
+        </mxCell>
+        <mxCell id="stA" value="&lt;font color=&quot;#666666&quot; style=&quot;font-size:13px&quot;&gt;STATE, FIBER A · driven by its host&lt;/font&gt;" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=10;spacingTop=4;fontSize=12;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="310" y="90" width="420" height="170" as="geometry"/>
+        </mxCell>
+        <mxCell id="aIn" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot;&gt;input image&lt;/font&gt;&lt;br&gt;coordinates, externs, cursors: last written" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="322" y="118" width="192" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="aOut" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot;&gt;output image&lt;/font&gt;&lt;br&gt;every step's slots and its own scratch" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;spacingRight=8;fontSize=11;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="526" y="118" width="192" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="aTxt" value="currency: a clean flag or a write epoch per step; a step's output stands until an input in its provenance is written. The rules of §3.1 hold here as if this kernel were the only one in the process." style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="322" y="190" width="400" height="64" as="geometry"/>
+        </mxCell>
+        <mxCell id="stB" value="&lt;font color=&quot;#666666&quot; style=&quot;font-size:13px&quot;&gt;STATE, FIBER B · the same program&lt;/font&gt;" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=10;spacingTop=4;fontSize=12;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="750" y="90" width="420" height="170" as="geometry"/>
+        </mxCell>
+        <mxCell id="bIn" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot;&gt;input image&lt;/font&gt;&lt;br&gt;its own" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="762" y="118" width="192" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="bOut" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot;&gt;output image&lt;/font&gt;&lt;br&gt;its own" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="966" y="118" width="192" height="62" as="geometry"/>
+        </mxCell>
+        <mxCell id="bTxt" value="Two states of one program never share a buffer; a &lt;font face=&quot;Courier New&quot;&gt;shared&lt;/font&gt; binding is a cell both attach to. A read from either state is an owned copy: no API returns a borrow into a state." style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="762" y="190" width="400" height="64" as="geometry"/>
+        </mxCell>
+        <mxCell id="frame" value="" style="rounded=0;html=1;dashed=1;fillColor=none;strokeColor=#BBBBBB;" vertex="1" parent="1">
+          <mxGeometry x="24" y="290" width="1146" height="250" as="geometry"/>
+        </mxCell>
+        <mxCell id="frameLbl" value="KERNELS A KERNEL MAKES · each a program plus a state of its own, driven by the same calls" style="text;html=1;align=left;verticalAlign=top;fontSize=13;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="36" y="514" width="800" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="k1" value="&lt;font color=&quot;#666666&quot; style=&quot;font-size:13px&quot;&gt;TRAVERSAL ACTIVATION&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#555555&quot;&gt;one kernel per tuple of a &lt;font face=&quot;Courier New&quot;&gt;for&lt;/font&gt;; the host opens them with &lt;font face=&quot;Courier New&quot;&gt;traverse(i)&lt;/font&gt; and drives each itself&lt;/font&gt;" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=10;spacingTop=4;fontSize=12;fillColor=#ffffff;strokeColor=#6c8ebf;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="40" y="305" width="360" height="200" as="geometry"/>
+        </mxCell>
+        <mxCell id="k1p" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot;&gt;body program: y := k * 10 + id&lt;/font&gt;&lt;br&gt;one program per engine per lexical position" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="52" y="364" width="336" height="42" as="geometry"/>
+        </mxCell>
+        <mxCell id="k1a" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot;&gt;k := 2&lt;/font&gt;&lt;br&gt;element: the tuple's own" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="52" y="414" width="163" height="42" as="geometry"/>
+        </mxCell>
+        <mxCell id="k1b" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot;&gt;id&lt;/font&gt;&lt;br&gt;cascade, as at open" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="225" y="414" width="163" height="42" as="geometry"/>
+        </mxCell>
+        <mxCell id="k1t" value="lives while the host holds the activation; its own &lt;font face=&quot;Courier New&quot;&gt;for&lt;/font&gt; opens from it the same way" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="52" y="462" width="336" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="k2" value="&lt;font color=&quot;#666666&quot; style=&quot;font-size:13px&quot;&gt;TILE PROJECTION BODY&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#555555&quot;&gt;one kernel per body program and engine, owned by the rendering state in the render step's scratch&lt;/font&gt;" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=10;spacingTop=4;fontSize=12;fillColor=#ffffff;strokeColor=#6c8ebf;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="415" y="305" width="360" height="200" as="geometry"/>
+        </mxCell>
+        <mxCell id="k2p" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot;&gt;body program: ${g} over the tuple&lt;/font&gt;&lt;br&gt;precompiled on the default engine at construction" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="427" y="364" width="336" height="42" as="geometry"/>
+        </mxCell>
+        <mxCell id="k2a" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot;&gt;g&lt;/font&gt;&lt;br&gt;element, bound by index" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="427" y="414" width="163" height="42" as="geometry"/>
+        </mxCell>
+        <mxCell id="k2b" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot;&gt;cycle, list&lt;/font&gt;&lt;br&gt;cascade: the render's inputs" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="600" y="414" width="163" height="42" as="geometry"/>
+        </mxCell>
+        <mxCell id="k2t" value="re-bound per tuple, reused across the state's renders; the host never sees it" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="427" y="462" width="336" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="k3" value="&lt;font color=&quot;#666666&quot; style=&quot;font-size:13px&quot;&gt;MATERIALIZED SUBCONTEXT&lt;/font&gt;&lt;br&gt;&lt;font color=&quot;#555555&quot;&gt;a host-composed child with a contract, built against the parent with new program matter&lt;/font&gt;" style="rounded=1;arcSize=5;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=10;spacingTop=4;fontSize=12;fillColor=#ffffff;strokeColor=#6c8ebf;strokeWidth=1.5;" vertex="1" parent="1">
+          <mxGeometry x="790" y="305" width="360" height="200" as="geometry"/>
+        </mxCell>
+        <mxCell id="k3p" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot;&gt;child program&lt;/font&gt;&lt;br&gt;interpreter only, today" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="802" y="364" width="336" height="42" as="geometry"/>
+        </mxCell>
+        <mxCell id="k3a" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot;&gt;consts, externs&lt;/font&gt;&lt;br&gt;value-copied at open" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="802" y="414" width="163" height="42" as="geometry"/>
+        </mxCell>
+        <mxCell id="k3b" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot;&gt;shared bindings&lt;/font&gt;&lt;br&gt;bound to the parent's cells" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="975" y="414" width="163" height="42" as="geometry"/>
+        </mxCell>
+        <mxCell id="k3t" value="lives while the host holds it; its cells are the parent's, so a write on either side is seen by both" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="802" y="462" width="336" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="bandP" value="WHAT THIS MEANS IN PRACTICE" style="text;html=1;align=left;verticalAlign=top;fontSize=13;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="24" y="556" width="400" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="practice" value="Constructing any of these, and compiling any program, writes nothing in any other state: there is no shared arena, table, or counter that a kernel's existence touches. Its inputs come from the parent (elements, the cascade, cells for shared bindings), never from the host directly; a value it produces stands until one of those inputs is written again. It has the same &lt;font face=&quot;Courier New&quot;&gt;Kernel&lt;/font&gt; surface as any other: &lt;font face=&quot;Courier New&quot;&gt;set_inputs&lt;/font&gt;, &lt;font face=&quot;Courier New&quot;&gt;pull&lt;/font&gt;, &lt;font face=&quot;Courier New&quot;&gt;traverse&lt;/font&gt;. A host never builds one; the root builds them when the host traverses or a tile renders." style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="24" y="578" width="1146" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="lgShare" style="endArrow=open;endFill=0;html=1;dashed=1;strokeColor=#9673a6;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="760" y="62" as="sourcePoint"/><mxPoint x="800" y="62" as="targetPoint"/></mxGeometry>
+        </mxCell>
+        <mxCell id="lgShareT" value="shared program" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="806" y="52" width="110" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="lgCasc" style="endArrow=block;endFill=1;html=1;dashed=1;dashPattern=2 3;strokeWidth=1.5;strokeColor=#B26A00;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="930" y="62" as="sourcePoint"/><mxPoint x="970" y="62" as="targetPoint"/></mxGeometry>
+        </mxCell>
+        <mxCell id="lgCascT" value="bound from the parent" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="976" y="52" width="150" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="sA" style="edgeStyle=none;html=1;endArrow=open;endFill=0;dashed=1;strokeColor=#9673a6;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="prog" target="stA">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="sB" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=open;endFill=0;dashed=1;strokeColor=#9673a6;exitX=0.85;exitY=0;entryX=0.1;entryY=0;" edge="1" parent="1" source="prog" target="stB">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="250" y="78"/><mxPoint x="792" y="78"/></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;dashed=1;dashPattern=2 3;strokeWidth=1.5;strokeColor=#B26A00;exitX=0.2143;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="stA" target="k1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="400" y="278"/><mxPoint x="220" y="278"/></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;dashed=1;dashPattern=2 3;strokeWidth=1.5;strokeColor=#B26A00;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="stA" target="k2">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="520" y="278"/><mxPoint x="595" y="278"/></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="c3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;dashed=1;dashPattern=2 3;strokeWidth=1.5;strokeColor=#B26A00;exitX=0.7857;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="stA" target="k3">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="640" y="278"/><mxPoint x="970" y="278"/></Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

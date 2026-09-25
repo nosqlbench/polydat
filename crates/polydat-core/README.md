@@ -1,6 +1,6 @@
 # polydat-core
 
-The Polydat runtime: the value model, the graph compiler, the three
+The Polydat runtime: the value model, the graph compiler, the four
 execution engines, the kernels, the comprehension runtime, the node
 macro's support surface, the nodes the compiler synthesizes itself
 (adapters, passthroughs, constants, tile rendering) and the runtime's
@@ -24,8 +24,8 @@ at link time, so a program that calls them needs that crate too:
 
 ```toml
 [dependencies]
-polydat-core = "0.3"
-polydat-nodes = "0.3"
+polydat-core = "0.5"
+polydat-nodes = "0.5"
 ```
 
 ```rust
@@ -51,8 +51,10 @@ fn main() -> Result<(), polydat_core::KernelError> {
 ```
 
 `Engine::default()` is the native engine with the `jit` feature and the
-closure engine without it; every engine accepts every program and
-yields the same values.
+closure engine without it. The interpreter, the closure engine, and
+the native engine accept every program and yield the same values; the
+pure native engine accepts only programs whose every node has a native
+lowering, and yields the same values for those.
 
 ## Cargo features
 

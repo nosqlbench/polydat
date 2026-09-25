@@ -1,17 +1,25 @@
+---
+type: reference
+title: Node Library
+timestamp: 2026-09-25
+description: The built-in node families and the source modules that define them.
+tags: [library]
+---
+
 # Node Library
 
 A **node** in Polydat is a typed function registered under a string name.
-Once compiled into a function graph, a node becomes a vertex the runtime
-evaluates against the current coordinates and upstream outputs. Most nodes are
-pure and deterministic. Nodes that intentionally observe runtime context,
-publish a side effect, or produce nondeterministic values declare that behavior
+In a compiled program a node is a vertex of the graph, which the runtime
+evaluates from the current coordinates and the outputs of the nodes upstream
+of it. Most nodes are pure and deterministic. Nodes that read runtime context,
+produce a side effect, or produce nondeterministic values declare that behavior
 in their metadata so the compiler can preserve their semantics.
 
-Workload authors rarely reach for nodes by name. The Polydat DSL and the
-op-template binding cascade compose them on the author's behalf — you
-write `mod(hash(cycle), 1000)` and the resolver wires `hash` and `mod`
-nodes into the graph. The catalog below is the menu the resolver picks
-from, not a usage manual.
+Workload authors seldom name the node types themselves. The Polydat DSL and
+the op-template binding cascade build the graph from the author's expressions:
+you write `mod(hash(cycle), 1000)` and the resolver wires `hash` and `mod`
+nodes into the graph. The catalog below lists the nodes the resolver can
+select from; it is not a usage manual.
 
 **Inventory:** Built-in nodes live in
 [`polydat-nodes/src/`](../../../polydat-nodes/src/) (the node library) and,
@@ -21,9 +29,9 @@ for the nodes the runtime itself needs,
 Both sections below are generated from the build they document — the
 engine matrix by `tests/engine_parity.rs` and the catalog by
 `tests/nodes_reference.rs` — and a test fails when this file and the
-registry disagree. Each node's line is its own first doc paragraph, so
-a node with nothing to say here is a node with no documentation on it,
-which is visible rather than silently absent. Both describe a build
+registry disagree. Each node's description is the first paragraph of its
+doc comment, so a node without a doc comment appears with an empty
+description rather than being omitted. Both describe a build
 with every feature on; a build without `jit` or without `vectordata`
 registers fewer nodes than are listed here.
 

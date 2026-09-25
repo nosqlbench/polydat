@@ -1,0 +1,83 @@
+<mxfile host="drawio">
+  <diagram name="KernelLookup resolution order">
+    <mxGraphModel dx="1000" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="820" pageHeight="980" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="start" value="lookup(name)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=14;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="80" y="20" width="280" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="q1" value="Is the name a &lt;b&gt;const&lt;/b&gt; binding with a folded value that is not None?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;spacingLeft=60;spacingRight=60;" vertex="1" parent="1">
+          <mxGeometry x="40" y="110" width="360" height="140" as="geometry"/>
+        </mxCell>
+        <mxCell id="q2" value="Does the kernel hold a current input value (not None) for the name?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;spacingLeft=60;spacingRight=60;" vertex="1" parent="1">
+          <mxGeometry x="40" y="310" width="360" height="140" as="geometry"/>
+        </mxCell>
+        <mxCell id="q3" value="Did the build fold a value (not None) for the name?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;spacingLeft=60;spacingRight=60;" vertex="1" parent="1">
+          <mxGeometry x="40" y="510" width="360" height="140" as="geometry"/>
+        </mxCell>
+        <mxCell id="q4" value="Does the name contain a dot?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;spacingLeft=60;spacingRight=60;" vertex="1" parent="1">
+          <mxGeometry x="40" y="710" width="360" height="140" as="geometry"/>
+        </mxCell>
+        <mxCell id="none" value="No value (placeholder is unresolved)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="80" y="910" width="280" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="r1" value="Return the const's folded value" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="500" y="155" width="280" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="r2" value="Return the current input value" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="500" y="355" width="280" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="r3" value="Return the folded value" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="500" y="555" width="280" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="r4" value="Look up the flattened name again (a.b becomes a__b)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="500" y="755" width="280" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="e0" style="rounded=0;html=1;endArrow=block;" edge="1" parent="1" source="start" target="q1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1y" value="yes" style="rounded=0;html=1;endArrow=block;fontSize=11;verticalAlign=bottom;labelBackgroundColor=none;" edge="1" parent="1" source="q1" target="r1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="0" y="-2" as="offset"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e1n" value="no" style="rounded=0;html=1;endArrow=block;fontSize=11;align=left;labelBackgroundColor=none;" edge="1" parent="1" source="q1" target="q2">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="6" y="0" as="offset"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e2y" value="yes" style="rounded=0;html=1;endArrow=block;fontSize=11;verticalAlign=bottom;labelBackgroundColor=none;" edge="1" parent="1" source="q2" target="r2">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="0" y="-2" as="offset"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e2n" value="no" style="rounded=0;html=1;endArrow=block;fontSize=11;align=left;labelBackgroundColor=none;" edge="1" parent="1" source="q2" target="q3">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="6" y="0" as="offset"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e3y" value="yes" style="rounded=0;html=1;endArrow=block;fontSize=11;verticalAlign=bottom;labelBackgroundColor=none;" edge="1" parent="1" source="q3" target="r3">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="0" y="-2" as="offset"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e3n" value="no" style="rounded=0;html=1;endArrow=block;fontSize=11;align=left;labelBackgroundColor=none;" edge="1" parent="1" source="q3" target="q4">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="6" y="0" as="offset"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e4y" value="yes" style="rounded=0;html=1;endArrow=block;fontSize=11;verticalAlign=bottom;labelBackgroundColor=none;" edge="1" parent="1" source="q4" target="r4">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="0" y="-2" as="offset"/>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e4n" value="no" style="rounded=0;html=1;endArrow=block;fontSize=11;align=left;labelBackgroundColor=none;" edge="1" parent="1" source="q4" target="none">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="6" y="0" as="offset"/>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

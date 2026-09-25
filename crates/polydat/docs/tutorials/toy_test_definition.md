@@ -1,12 +1,22 @@
-# A toy test definition in one grammar file
+---
+type: tutorial
+title: A Toy Test Definition
+timestamp: 2026-09-25
+description: One grammar file declaring parameters, self-description, hierarchy, partitions, and a test flow, run by the polydat binary.
+tags: [iteration, language]
+---
 
-This is a capsule-form example: one Polydat source that carries its
-own parameters, its own description, a reusable model, a test flow
-bound as a comprehension, and a traversal that unwinds a hierarchic
-dataset and derives the load, read, and verify statements of that flow
-in every activation. Every row and every statement is a pure function
-of one coordinate, so any of them can be regenerated on any fiber or
-host without state.
+# A Toy Test Definition
+
+This example is a complete test definition in one Polydat source file.
+The file declares its own parameters, its own description, a reusable
+model, and a test flow bound as a comprehension. A traversal over that
+flow decomposes each row number into a hierarchical dataset (tenant,
+device, reading) and derives the load, read, and verify statements of
+the flow in every activation, where an activation is one run of the
+traversal's body for one combination of the flow's values. Every row
+and every statement is a pure function of one coordinate, so any of
+them can be regenerated on any fiber or host without stored state.
 
 The file is
 [`examples/toy_test_definition.polydat`](../../examples/toy_test_definition.polydat).
@@ -132,7 +142,7 @@ INSERT INTO ${keyspace}.${table} (tenant_id, device_id, ts, doc) VALUES (${tenan
 | `const ... :=` | Self-description | Values computed once at scope init: the dataset name, keyspace, table, schema statement, and the shape of the coordinate space. |
 | `reading_model(...) := { ... }` | Module | A typed, reusable computation with three outputs, resolved from the same file. |
 | `flow := for ...` | Producer | Binds the test flow as a comprehension value: two phases, two intervals, and four partitions of the row domain. `{rows_total}` reads the extern when the traversal opens. |
-| `for flow { ... }` | Traversal | Compiles the body once into a child program and activates it once per tuple, with `phase`, `interval_ms`, and `p` as typed wires and `base_epoch_ms`, `keyspace`, `table`, and `rows_total` cascaded from the root. |
+| `for flow { ... }` | Traversal | Compiles the body once into a child program and activates it once per tuple, with `phase`, `interval_ms`, and `p` as typed wires, and with `base_epoch_ms`, `keyspace`, `table`, and `rows_total` passed down from the root scope. |
 | `cursor rows = ... over p` | Partitioned cursor | Narrowed to the activation's partition. Its slice sets how many cycles the activation runs. |
 | `mod_in(cycle, rows.cursor)` | Slice projection | Maps the activation's local cycle onto an absolute row ordinal inside its slice. |
 | `mixed_radix(row, 20, 50, 0)` | Hierarchy | Unwinds one ordinal into tenant, device, and reading. The trailing `0` leaves readings unbounded. |
@@ -144,11 +154,11 @@ INSERT INTO ${keyspace}.${table} (tenant_id, device_id, ts, doc) VALUES (${tenan
 
 ## Running it
 
-The binary plays the host. It compiles the file, resolving the in-file
-module from the file's own directory, and runs it in traversal mode:
-the emit binding is inserted into the `for` body, the sixteen
-activations are taken by index across fibers, and each activation runs
-its cycles under the traversal rule, capped by `--cycles`. Externs are
+The binary acts as the host. It compiles the file, resolving the
+in-file module from the file's own directory, and runs it in traversal
+mode: it inserts the emit binding into the `for` body, the fibers take
+the sixteen activations by index, and each activation runs as many
+cycles as its cursor slice holds, capped by `--cycles`. Externs are
 assigned with bare `name=value` arguments.
 
 Two cycles per activation, showing the hierarchy each slice starts from:
@@ -165,9 +175,10 @@ phase=load interval_ms=1000 row=500000 tenant=0 device=0 reading=500 ts=17000005
 phase=load interval_ms=1000 row=500001 tenant=1 device=0 reading=500 ts=1700000500000 status=ok
 ```
 
-The document each reading carries, one per activation with one cycle
-each. Naming the tile in `--emit` writes its rendered text and nothing
-else; the first of the sixteen:
+Each reading also has a JSON document. With one cycle per activation
+there is one document per activation. Naming the tile in `--emit`
+writes its rendered text and nothing else; this is the first of the
+sixteen:
 
 ```text
 $ polydat run toy_test_definition.polydat --cycles 1 --emit tile:doc -q
@@ -183,8 +194,8 @@ $ polydat run toy_test_definition.polydat --cycles 1 --emit tile:doc -q
 }
 ```
 
-The load statement carries that document inline. One activation's
-statement, as a CSV row:
+The load statement includes that document inline. Here is one
+activation's statement as a CSV row:
 
 ```text
 $ polydat run toy_test_definition.polydat --cycles 1 --emit csv --outputs phase,stmt -q
@@ -196,8 +207,9 @@ load,"INSERT INTO toy.readings (tenant_id, device_id, ts, doc) VALUES (607535, '
 }')"
 ```
 
-Assigning the externs reshapes the run without recompiling anything but
-the two rewritten declarations:
+Assigning the externs changes the run. The binary rewrites the two
+extern declarations before compiling, and nothing else in the file
+changes:
 
 ```text
 $ polydat run toy_test_definition.polydat base_epoch_ms=5 rows_total=400 --cycles 1 --emit map --outputs row,ts -q
@@ -208,9 +220,10 @@ row=300 ts=5
 ```
 
 `polydat check --stats` reports two programs, the root and the one
-traversal body; `polydat explain traversals` prints the body's elements
-and cascade, and `polydat explain tiles` prints each tile's skeleton and
-how every hole was typed and encoded.
+traversal body. `polydat explain traversals` prints the body's elements
+and the values passed down into it from the root, and
+`polydat explain tiles` prints each tile's skeleton (its fixed text)
+and how every hole was typed and encoded.
 
 ## Reading the output
 
@@ -228,23 +241,24 @@ how every hole was typed and encoded.
   phase and first quarter at a one-minute interval; `ts` would step by
   60000 between its readings. The verify-phase activations select the
   verify statement through `phase`.
-- **Externs reach the traversal.** `rows_total` sizes both the
-  partition spec and the cursor, so assigning it to 400 makes each
-  quarter 100 rows. `base_epoch_ms` cascades into the body as the
+- **Externs are visible inside the traversal.** `rows_total` sizes both
+  the partition spec and the cursor, so assigning it to 400 makes each
+  quarter 100 rows. `base_epoch_ms` is passed down into the body as the
   timestamp base.
 - **The document is a wire.** `doc` renders once per cycle from the
   same coordinate as everything else, so the load statement, the
   verify statement, and the document can never disagree about a
-  reading. `${temp_c | .2}` and `${humidity | .1}` fix the precision
-  the document carries; the verify statement keeps the full values.
+  reading. `${temp_c | .2}` and `${humidity | .1}` set the precision of
+  those numbers in the document; the verify statement keeps the full
+  values.
 
 ## What this shows and what it does not
 
-The whole flow is declared in the grammar: the comprehension, the
+The entire flow is declared in the source: the comprehension, the
 partitioning, the per-activation cursor, and the statements. Polydat
-compiles the body once and the binary activates it sixteen times, and the
-program tree's compile ledger records no further build while it does.
-What the file does not decide is
+compiles the body once and the binary activates it sixteen times, and
+the program tree's compile ledger, which counts builds, records no
+further build while it does. What the file does not decide is
 scheduling: how many fibers, how many cycles per activation, and what to
 do with each statement are the host's choices, and the binary exposes
 them as options. The contract is [The `for` Construct](../design/for_traversal.md);

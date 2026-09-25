@@ -1,0 +1,89 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="By-reference outputs">
+    <mxGraphModel dx="1000" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1190" pageHeight="640" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="By-reference outputs: where a compiled kernel keeps a value that is not a number" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="24" y="0" width="1146" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="subtitle" value="A compiled kernel's buffer is an array of 64-bit slots. A value that does not fit a slot is kept in storage with one owner, and two slots hold a (ptr, len) pair to it." style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="24" y="28" width="1146" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="frameS" value="" style="rounded=0;html=1;dashed=1;fillColor=none;strokeColor=#BBBBBB;" vertex="1" parent="1">
+          <mxGeometry x="24" y="64" width="1146" height="176" as="geometry"/>
+        </mxCell>
+        <mxCell id="bandS" value="THE SLOT BUFFER, ONE STATE'S OUTPUT IMAGE" style="text;html=1;align=left;verticalAlign=top;fontSize=13;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="36" y="72" width="500" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="sId" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot;&gt;id: u64&lt;/font&gt;&lt;br&gt;Imm1 · the bits themselves" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="60" y="100" width="150" height="46" as="geometry"/>
+        </mxCell>
+        <mxCell id="sW" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot;&gt;w: u128&lt;/font&gt;&lt;br&gt;Imm2 · two slots of bits" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="230" y="100" width="170" height="46" as="geometry"/>
+        </mxCell>
+        <mxCell id="sV" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot;&gt;v: vec_f32&lt;/font&gt;&lt;br&gt;Ref2 · (ptr, len) of the elements" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="420" y="100" width="200" height="46" as="geometry"/>
+        </mxCell>
+        <mxCell id="sKey" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot;&gt;key: str&lt;/font&gt;&lt;br&gt;Ref2 · (ptr, len) of the bytes" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="640" y="100" width="200" height="46" as="geometry"/>
+        </mxCell>
+        <mxCell id="sDoc" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot;&gt;doc: json&lt;/font&gt;&lt;br&gt;Ref2 · (&amp;amp;Value, 1)" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="860" y="100" width="200" height="46" as="geometry"/>
+        </mxCell>
+        <mxCell id="slotTxt" value="Three colors, static and total (S1). A pair is loaded, stored, and passed by generated code; only a closure or the boundary decode dereferences it, once (S7). Raw readers refuse a Ref2 slot (S2); the typed readers copy the value out, so what a host holds is its own." style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="60" y="160" width="620" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="frameW" value="" style="rounded=0;html=1;dashed=1;fillColor=none;strokeColor=#BBBBBB;" vertex="1" parent="1">
+          <mxGeometry x="24" y="274" width="700" height="226" as="geometry"/>
+        </mxCell>
+        <mxCell id="bandW" value="WHO OWNS WHAT A PAIR NAMES · decided at build" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=13;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="36" y="280" width="260" height="36" as="geometry"/>
+        </mxCell>
+        <mxCell id="scratch" value="&lt;b&gt;The producing step's scratch entry&lt;/b&gt; (S3)&lt;br&gt;one per Ref2 output port, held by the state; rewritten in place and republished when the step runs" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;fontSize=12;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="50" y="324" width="320" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="extern" value="&lt;b&gt;The extern's stored value&lt;/b&gt;&lt;br&gt;a Ref2 extern's pair points into the value the state stores for it, rewritten at every set_input" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=8;spacingRight=8;spacingTop=4;fontSize=12;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="390" y="324" width="310" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="interned" value="&lt;b&gt;Bytes interned for the process&lt;/b&gt;&lt;br&gt;a string literal folded at build: the step publishes a pair into bytes that never move and are never freed" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=8;spacingRight=8;spacingTop=4;fontSize=12;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="50" y="412" width="320" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="boundary" value="&lt;b&gt;A boundary value, for one call&lt;/b&gt;&lt;br&gt;a cone's Ref2 input is borrowed from the interpreter's Value for the call; its outputs are copied out first" style="rounded=1;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacingLeft=8;spacingTop=4;fontSize=12;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="390" y="412" width="310" height="76" as="geometry"/>
+        </mxCell>
+        <mxCell id="frameL" value="" style="rounded=0;html=1;dashed=1;fillColor=none;strokeColor=#BBBBBB;" vertex="1" parent="1">
+          <mxGeometry x="744" y="274" width="426" height="226" as="geometry"/>
+        </mxCell>
+        <mxCell id="bandL" value="HOW LONG THE PAIR IS VALID" style="text;html=1;align=left;verticalAlign=top;fontSize=13;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="756" y="280" width="300" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="step" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot;&gt;key := &quot;{region}/{id}&quot;&lt;/font&gt;&lt;br&gt;prov {cycle, scale, region} · owns one Str entry" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=11;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="770" y="306" width="376" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="lifeTxt" value="From the run that wrote it until the step's next run (S4), and the step runs again only when an input in its provenance is written (R1). That is the same lifetime every other output has. Nothing reclaims the bytes on any schedule of its own: no round, no generation, no thread boundary. A copy step copies into its own entry." style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="770" y="366" width="380" height="126" as="geometry"/>
+        </mxCell>
+        <mxCell id="frameI" value="" style="rounded=0;html=1;dashed=1;fillColor=none;strokeColor=#BBBBBB;" vertex="1" parent="1">
+          <mxGeometry x="24" y="516" width="1146" height="104" as="geometry"/>
+        </mxCell>
+        <mxCell id="bandI" value="THE INTERPRETER HOLDS VALUES; EVERY ENGINE HANDS OUT COPIES" style="text;html=1;align=left;verticalAlign=top;fontSize=13;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="36" y="524" width="700" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="interpTxt" value="On the interpreter every buffer entry is an owned &lt;font face=&quot;Courier New&quot;&gt;Value&lt;/font&gt; (an &lt;font face=&quot;Courier New&quot;&gt;Arc&amp;lt;str&amp;gt;&lt;/font&gt;, an &lt;font face=&quot;Courier New&quot;&gt;Arc&amp;lt;serde_json::Value&amp;gt;&lt;/font&gt;, …), cached under the same rule. A native cone inside the interpreter borrows its Ref2 inputs for the call and copies its outputs out at its boundary. On every engine the bytes a host reads are identical, and a value read before a write is intact after it: the read was a copy." style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="50" y="548" width="1110" height="66" as="geometry"/>
+        </mxCell>
+        <mxCell id="lKey" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=1.5;strokeColor=#9673a6;exitX=0.5;exitY=1;entryX=0.844;entryY=0;" edge="1" parent="1" source="sKey" target="scratch">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="740" y="252"/><mxPoint x="320" y="252"/></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="lDoc" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=1.5;strokeColor=#9673a6;exitX=0.5;exitY=1;entryX=0.9375;entryY=0;" edge="1" parent="1" source="sDoc" target="scratch">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="960" y="263"/><mxPoint x="350" y="263"/></Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

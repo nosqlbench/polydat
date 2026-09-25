@@ -1,3 +1,11 @@
+---
+type: record
+title: Architecture review, September 2026
+timestamp: 2026-09-25
+description: Findings and decisions of the September 2026 architecture review. A record, pending fold into the specifications.
+tags: [record]
+---
+
 # Architecture review, September 2026
 
 Six read-only reviews of the crate (now the

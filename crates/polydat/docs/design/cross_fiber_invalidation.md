@@ -1,18 +1,40 @@
+---
+type: specification
+title: Cross-Fiber Cell Invalidation
+timestamp: 2026-09-25
+description: "The SharedCell publish and consume protocol: revisions, intent bits, memory ordering, and happens-before across fibers on all four engines."
+tags: [runtime, scopes]
+---
+
 # Cross-Fiber Cell Invalidation
 
-The validity-tracking mechanism for `SharedCell`s
-([composition_substrate.md] §S5). A producer's write
-on any kernel is observable by every consumer on its
-next read, with no host-side ceremony — satisfying
-S5's reader contract by construction, on every engine.
+This specification defines how a write to a
+`SharedCell` is published and how every kernel that
+reads the cell detects the write. A `SharedCell` is one
+mutex-protected value register that several kernels
+read and write for a `shared` binding. A *producer* is
+a kernel that writes a cell; a *consumer* is a kernel
+with an input slot bound to it; a *fiber* is the host
+thread or task that owns a kernel. A producer's write
+through any kernel is observed by every consumer at its
+next read, with no host action, on all four engines
+(the interpreter, the closure tier, native, and pure
+native). This satisfies the reader contract of
+[composition_substrate.md] §S5.
+
+**Related specifications:**
+[composition_substrate.md] (§S5, the reader contract;
+S3, the coordinate-slot invariant),
+[scope_model.md](scope_model.md) (where cells are
+attached), [engines.md](engines.md) (the engines).
 
 [composition_substrate.md]: composition_substrate.md
 
 ---
 
-## 1. The contract, then the mechanism
+## 1. Contract and mechanism
 
-The contract is engine-independent:
+The contract is the same on all four engines:
 
 > **Publish** is one act with three parts: the value, a
 > monotonic revision, and an intent bit on the word of
@@ -21,25 +43,38 @@ The contract is engine-independent:
 > step whose provenance includes the cell's slot is then
 > not current.
 
-Two consumer realizations satisfy it. The interpreter
-checks the cells in a node's cone at every memoized
-read: it loads the intent words the cone reads cells
-from, ANDs each with the cone's interest mask, drills
-down to per-cell revisions only where a bit is set, and
-on any moved revision invalidates every node whose
-provenance covers the moved slot (§5). A compiled
-kernel polls every one of its cells' revisions at the first
-evaluation after a write and before each pull, takes the value of each
-cell whose revision moved, and marks the dependents of
-that slot not current (§5.2). Both realizations rely on
-the same producer protocol (§4) and the same memory
-ordering (§6).
+The *revision* is a per-cell counter incremented by
+every publish. An *intent word* is a 64-bit mask owned
+by the scope (kernel) that created a set of cells, with
+one bit per cell; a publish sets the cell's bit, so a
+consumer can test many cells with one load. A cell's
+*interest mask*, for a consumer, is the OR of the bits
+of the cells the consumer reads from one intent word.
 
-Each cell carries a 64-bit revision counter. Each scope
-holds intent-dirty words, one `AtomicU64` per 64 cells
-it creates. Each cell holds a clone of its scope's
-specific word `Arc` plus a bit position within that
-word, so a publish is one `Arc` indirection, not a
+Two consumer implementations satisfy the contract:
+
+- **The interpreter** checks the cells in a node's cone
+  at every memoized read. It loads the intent words the
+  cone reads cells from, ANDs each with the cone's
+  interest mask, and compares per-cell revisions only
+  where a bit is set. On any moved revision it
+  invalidates every node whose provenance covers the
+  moved slot (§5.1).
+- **A compiled kernel** (closure tier, native, or pure
+  native) polls the revisions of all its cells at the
+  first evaluation after a write and before each pull.
+  It takes the value of each cell whose revision moved
+  and marks the dependents of that slot not current
+  (§5.2).
+
+Both implementations rely on the same producer protocol
+(§4) and the same memory ordering (§6).
+
+Each cell has a 64-bit revision counter. Each scope
+holds intent words, one `AtomicU64` per 64 cells it
+creates. Each cell holds a clone of the `Arc` of its
+own intent word plus its bit position within that word,
+so a publish follows one `Arc` pointer and performs no
 lookup.
 
 On write, the producer mutates the cell value under the
@@ -62,7 +97,7 @@ indicates change.
 - **A cell** (`SharedCellInner`, shared as an `Arc`): the
   value under a `Mutex`, the revision (`AtomicU64`), the
   `Arc<AtomicU64>` of its scope's intent word, and its
-  bit within that word. The same type on every engine.
+  bit within that word. All four engines use the same type.
 - **A scope's allocator.** The interpreter's `EngineCore`
   keeps a `Vec<Arc<AtomicU64>>` of intent words and a
   next-bit cursor; a compiled kernel's extern table
@@ -82,10 +117,10 @@ indicates change.
   for (`output_cells`), empty until one does.
 
 A cell cone (interpreter) is a list of groups, one per
-scope word the node's provenance reaches a cell through;
-a group holds the word, an interest mask (the OR of
-`1 << bit` of its cells), and the cells' bits and input
-slots.
+intent word among the cells attached to slots in the
+node's provenance. A group holds the word, an interest
+mask (the OR of `1 << bit` of its cells), and the
+cells' bits and input slots.
 
 ---
 
@@ -121,18 +156,21 @@ attached:
   interpreter can afford to seed one per output at
   construction because it already holds a `Value` per port;
   a compiled kernel holds slots, so it makes a cell only
-  where a descendant binds to one and a program with none
-  under it allocates nothing and pays an emptiness check per
-  pull. The pure tier makes none: it is the differential
-  oracle and Tier-1's carrier, not a surface a host composes
-  under ([engines.md](engines.md) §1, §8).
+  where a descendant binds to one, and a program with no
+  descendant bound to it allocates nothing and pays one
+  emptiness check per pull. This holds on the closure tier
+  and native. Pure native makes no broadcast cells: it is the
+  differential oracle and Tier-1's carrier, not a surface a
+  host builds child scopes under
+  ([engines.md](engines.md) §1, §8).
 
-`Kernel::attach_shared_cell` replaces a `shared` slot's
-cell with one another kernel holds, on any engine; the
-replaced cell keeps its word and bit, and the attaching
-kernel's consumer state for the slot starts over (the
-interpreter clears its cone cache; a compiled kernel
-clears the slot's `seen`).
+`Kernel::attach_shared_cell(name, cell)` replaces the cell
+of the `shared` binding `name` with `cell`, a cell another
+kernel holds, on all four engines. The replaced cell keeps
+its word and bit, and the attaching kernel's
+consumer state for the slot starts over: the interpreter
+clears its cone cache, and a compiled kernel clears the
+slot's `seen`.
 
 ### 3.2 Cone metadata (interpreter)
 
@@ -176,16 +214,20 @@ observed again — harmless.
 2. `revision.fetch_add(1, Release)`;
 3. `scope_intent_dirty.fetch_or(1 << bit, Release)`.
 
-Every cell-write path calls `publish`, on every engine:
+Every cell-write path calls `publish`, on all four
+engines:
 
 - the interpreter's `set_input` on a cell-bound slot,
-  which reaches `commit_write_throughs` and the binder's
-  writes too;
+  which also covers `commit_write_throughs` and the
+  binder's writes;
 - the interpreter's `pull` of an output whose broadcast
   cell is attached;
-- a compiled kernel's `set_input` on a `shared` slot,
-  which then records the new revision as seen so its own
-  write costs it no refresh.
+- a compiled kernel's (closure tier, native, or pure
+  native) `set_input` on a `shared` slot, which then
+  records the new revision as seen, so the kernel does
+  not refresh from its own write;
+- a compiled kernel's (closure tier or native) pull of an
+  output a descendant asked a broadcast cell for (§3.1).
 
 Cost: one mutex acquire/release + one `fetch_add` + one
 `fetch_or`. O(1). No upward propagation, no fan-out, no
@@ -216,17 +258,18 @@ mismatched, the node is clean. Otherwise update
 flag of **every node whose provenance intersects the set
 of mismatched slots**, not only the checked node.
 
-Why provenance-wide: updating `last_seen` consumes the
-dirty signal for this kernel. The re-evaluation it
-triggers must reach every memoized node between the moved
-slot and any consumer. If only the checked node were
-invalidated, its recursive upstream walk would re-check
-each parent's own cone, which now reads the just-updated
-`last_seen` and comes back clean, and the checked node
-would recompute from stale parents; a predicate downstream
-of a cell would then stay memoized at its pre-write value
-for good. The read side mirrors the write side's rule:
-a detected write invalidates every node whose transitive
+Rationale for invalidating by provenance: updating
+`last_seen` consumes this kernel's only signal that the
+cell moved, so the re-evaluation it triggers must cover
+every memoized node between the moved slot and any
+consumer. If only the checked node were invalidated, its
+recursive upstream walk would re-check each parent's own
+cone, which now reads the just-updated `last_seen` and
+reports clean, and the checked node would recompute from
+stale parents. A predicate downstream of a cell would
+then stay memoized at its pre-write value indefinitely.
+The read side therefore applies the write side's rule: a
+detected write invalidates every node whose transitive
 provenance covers the slot, exactly as `set_input` on
 that slot would.
 
@@ -235,19 +278,27 @@ which takes the cell's value under its mutex.
 
 ### 5.2 The compiled kernels
 
-A compiled kernel keeps no cone cache and reads no intent
-word. Its extern table polls: `cells_dirty` loads every
-cell's revision (Acquire) and compares it with the slot's
-`seen`; `refresh_cells` takes the value of each cell whose
-revision moved, writes it through into the slot buffer at
-once — the carrier for a one-slot type, the pair for a
-`Ref2` type — records the revision as seen, and lists
-the slot as changed. The kernel then marks every step the
-slot's dependents list names as not current and not run
-since the last write. The poll runs at the first evaluation after a write (inside the
-externs' materialization) and before every `pull` and
-`eval` between writes, so a pull between writes sees
-the register as the interpreter's revision check does.
+This section applies to the closure tier, native, and
+pure native. A compiled kernel keeps no cone cache and
+reads no intent word; instead its extern table polls
+every cell it holds:
+
+1. `cells_dirty` loads every cell's revision (Acquire)
+   and compares it with the slot's `seen`.
+2. `refresh_cells` takes the value of each cell whose
+   revision moved and writes it into the slot buffer at
+   once (the carrier for a one-slot type, the pair for a
+   `Ref2` type). It records the revision as seen and
+   lists the slot as changed.
+3. The kernel marks every step the slot's dependents
+   list names as not current and not run since the last
+   write.
+
+The poll runs at the first evaluation after a write
+(inside the externs' materialization) and before every
+`pull` and `eval` between writes. A pull between writes
+therefore sees the register's current value, as the
+interpreter's revision check does.
 
 ---
 
@@ -320,9 +371,9 @@ cells in the cone, not the number of writes.
 ## 8. Parent-child composition
 
 A child scope's intent words are independent of its
-parent's — no propagation. The "logical composition" of
-parent and child masks the substrate exposes to a consumer
-is realized by §5.1's loop over cone groups. The lazy cone
+parent's, and nothing propagates between them. A
+consumer that reads cells from several scopes tests them
+all through §5.1's loop over cone groups. The lazy cone
 builder enumerates every scope (every distinct intent word)
 whose cells the cone reads — parent, child,
 sibling-of-ancestor, a compiled kernel's word, any depth —

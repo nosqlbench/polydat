@@ -1,34 +1,92 @@
-# The Runtime Model — Polydat Design
+---
+type: specification
+title: The Runtime Model
+timestamp: 2026-09-25
+description: The R-axioms of data flow, currency, invalidation, and output ownership, and the D-axioms of determinism, on all four engines.
+tags: [runtime]
+---
 
-**Subtitle:** Data Flow, Caching, Invalidation, and the
-Determinism Suite.
+# The Runtime Model
 
-The runtime contract of a polydat kernel on every engine: the
-interpreter, the closure tier, and the native tier alike. The
-R-axioms state the runtime mechanics (data flow, currency,
-invalidation, output ownership); the D-axioms state the
-determinism guarantees those mechanics deliver to a host. The
-[Composition Substrate](composition_substrate.md) states the
-static slot contract (S/T/L axioms) this mechanism realises;
-the [Graph Compiler](graph_compiler.md) states the construction
-passes (H/CF/NF axioms) that produce a program; the
-[Expression Engine](expression_engine.md) cites D1/D2/D3 as its
-bounded determinism; the [Polydat Grammar](polydat_grammar.md) supplies
-the language-level commitments (G4 port-typed expressions
-underwrites D1; G5 structural lifecycle classification
-underwrites R1 and D3). Cross-fiber concerns are the host's:
-the D-axioms hold per fiber, each fiber holding its own
-kernel.
+This document specifies the runtime contract of a polydat kernel
+on all four engines: the interpreter (P1), the closure tier (P2),
+native (P3), and pure native. The R-axioms specify the runtime
+mechanics: data flows only along declared wires (R3); a step
+stays current until an input in its provenance changes (R1); a
+write marks the dependent steps not current, and a pull
+re-evaluates only the not-current steps its output depends on
+(R2); and every output is kept until an input in its provenance
+changes (R4). The D-axioms (D1 through
+D4) specify the determinism a host can rely on as a consequence.
+The D-axioms hold per fiber, since each fiber holds its own
+kernel; coordination across fibers is the host's concern.
 
-The forcing question: **given a compiled program and a kernel
-over it, how do values flow, what does the kernel keep current,
-how does a write invalidate, and what determinism does the
-composition of those mechanics deliver?** This doc says: data
-flows along declared wires alone (R3); a step stays current
-until an input in its provenance changes (R1); invalidation is
-push on the write and pull on the read (R2); every output is
-owned by its provenance (R4); and the determinism the
-runtime delivers has four named bounds (D1 through D4).
+**Related specifications:** the
+[Composition Substrate](composition_substrate.md) (the static
+slot contract, S/T/L axioms, that this runtime implements); the
+[Graph Compiler](graph_compiler.md) (the construction passes,
+H/CF/NF axioms, that produce a program); the
+[Expression Engine](expression_engine.md) (cites D1/D2/D3 as its
+bounded determinism); the [Polydat Grammar](polydat_grammar.md)
+(G4 port-typed expressions underwrite D1; G5 structural
+lifecycle classification underwrites R1 and D3).
+
+---
+
+## Terms
+
+Each term is defined before it is used here and in every later
+section.
+
+- **Program.** The immutable result of compilation: nodes,
+  wiring, input definitions, and the output map. One program is
+  shared by every kernel created from it.
+- **Kernel.** One state over a program: its input values, its
+  outputs, and the storage behind them. A kernel is owned by one
+  fiber at a time.
+- **Node.** A function in the program's graph, with typed input
+  and output ports and a declared purity (`PolydatNode::purity`).
+- **Wire.** A named value, connecting one node's output port to
+  the input ports that read it.
+- **Input.** A slot whose value comes from outside the graph: a
+  coordinate, written together with the others by `set_inputs`,
+  or an extern, written by name through `set_input`. An extern
+  bound to a shared cell takes the cell's published value (§5).
+- **Write.** A host act that sets one or more inputs:
+  `set_inputs`, `set_input`, or a cell publication a kernel
+  observes at its next evaluation.
+- **Change.** An input changes when it is written. On the
+  interpreter every write is a change; on the compiled engines a
+  coordinate written with the value it already holds does not
+  change.
+- **Pull.** A host request for one named output. A pull
+  evaluates what the output needs and returns its value.
+- **Cone.** The steps an output transitively depends on, in
+  topological order. A pull runs only its output's cone.
+- **Provenance.** The set of inputs a node transitively depends
+  on, fixed at build (§2).
+- **Fusion unit.** A connected, convex group of nodes with
+  native lowerings, compiled to one native function that runs
+  whole ([engines.md](engines.md) §8).
+- **Engine.** One of the four ways a program runs: the
+  interpreter (P1), the closure tier (P2), the native tier (P3),
+  and pure native. "Every engine" in this specification means
+  all four; a statement that holds on fewer names them.
+- **Step.** The unit an engine evaluates and caches. On the
+  interpreter and the closure tier a step is one node. On the
+  native tier a step is a fusion unit or, for a node without a
+  lowering, that node's closure. On pure native every step is a
+  fusion unit. A step's provenance is the union of its nodes'.
+- **Current.** A step is current when its cached output may be
+  returned without running it. Rule R1 (§3) states when a step
+  is current.
+- **Round.** The span from the first evaluation after a write
+  to the next write. Within one round each step runs at most
+  once, whatever the number of pulls.
+- **Volatile.** A step whose value is not a function of its
+  provenance, because a node in it is nondeterministic or its
+  wire carries the `volatile` modifier. Sub-axiom R1.v (§3)
+  states how volatile steps are evaluated.
 
 ---
 
@@ -44,11 +102,11 @@ do not consult global registries not named in their declared
 inputs, do not observe timing or order-of-evaluation beyond
 their declared input slots.
 
-This is what the substrate calls "data linearisation embedded
-in graph structure" — the graph IS the linearisation. There is
-no separate execution-order plan overlaying it. A compiled
-engine's step order is a topological order of the same graph;
-it is derived from the wiring, never declared beside it.
+The substrate calls this "data linearisation embedded in graph
+structure": the wiring itself fixes the evaluation order, and no
+separate execution-order plan exists beside it. A compiled
+engine's step order is a topological order of the same graph,
+derived from the wiring and never declared separately.
 
 Concrete consequences:
 
@@ -76,48 +134,48 @@ The program records, for every node, the exact set of inputs it
 transitively depends on: its **provenance**, a multi-word mask
 with one bit per input slot, so a program with more than 64
 inputs is tracked exactly. Provenance is computed once, when
-the program is constructed, and every engine's invalidation
-plan is a projection of it: the interpreter inverts it into
-per-input dependent lists; a compiled kernel inverts it into
-per-input dependent step lists and per-output cone orders.
+the program is constructed, and all four engines derive their
+invalidation plans from it: the interpreter inverts it into
+per-input dependent lists, and a compiled kernel inverts it
+into per-input dependent step lists and per-output cone orders.
 
-**The host can ask of any output: which inputs is this a
-function of?** The answer is exact, computed at build, constant
-across evaluations. There is no runtime discovery of
-dependencies; everything is structural.
+**For any output, the set of inputs it is a function of is
+exact, computed at build, and constant across evaluations.**
+Dependencies are never discovered at runtime; they follow from
+the graph's structure.
 
 ---
 
 ## 3. Currency — the one evaluation rule
 
-Every engine evaluates under one rule:
+All four engines evaluate under one rule:
 
 > A step is current until an input in its provenance changes.
-> A nondeterministic step is never current. A step no input
-> reaches is compile-constant and is folded at build.
-> Everything else runs at first pull after it stopped being
-> current.
+> A nondeterministic step is never current. A step with no
+> input in its provenance is compile-constant and is folded at
+> build. Every other step runs at the first pull whose cone
+> contains it after it stopped being current.
 
-A *step* is a node on the interpreter and a compiled node or
-fused segment on a compiled engine. The rule is what a host may
-rely on; the bookkeeping that realises it differs by engine and
-never changes a result:
+A step is the engine's unit of evaluation (Terms). A host may
+rely on this rule. The bookkeeping that implements it differs by
+engine, as the table shows, and never changes a result:
 
 | Engine | Realisation |
 |---|---|
 | Interpreter | A clean flag per node (`node_clean`); per-input dependent lists (`input_dependents`) cleared on every write; a list of nondeterministic nodes cleared on every write; a cell-revision check at every memoized read (§5). A write is itself the change: the interpreter does not compare the new value with the old, so a same-value rewrite re-runs the dependents, which a side channel in the cone must observe. |
-| Closure tier and native tier | An `Invalidation` plan derived from provenance (per-input dependent steps and per-output cone orders); a clean flag per step; a round number per step recording the evaluation round it last ran in, bookkeeping that wipes nothing; the volatile steps never current. A coordinate counts as changed only when its value differs from the one it replaces. |
-| Pure native | A clean flag per fusion unit; per-input dependent units (`pushpull`) or every unit (`raw`) cleared on a write; per-output cone orders of units, closed over each unit's producers; the units holding volatile steps cleared on every write. The one function is entered with the pulled cone's precomputed order and the flags, tests each unit's flag in native code, and dispatches the stale ones. |
+| Closure tier and native tier | An `Invalidation` plan derived from provenance (per-input dependent steps and per-output cone orders); a clean flag per step; a round number per step recording the evaluation round it last ran in, which never clears an output; the volatile steps never current. A coordinate counts as changed only when its value differs from the one it replaces. |
+| Pure native | A clean flag per fusion unit; per-input dependent units (`pushpull`) or every unit (`raw`) cleared on a write; per-output cone orders of units, closed over each unit's producers; the units holding volatile steps cleared on every write. The program's single native function is entered with the pulled cone's precomputed order and the flags, tests each unit's flag in native code, and dispatches the stale ones. |
 
-The lifecycle classification the rule rests on has one
+The rule depends on lifecycle classification, which has one
 classifier, `PolydatProgram::classify_lifecycle`, shared by the
-interpreter's fold and every compiled engine: a node is
-compile-constant when no coordinate or external-write input
-reaches it and nothing upstream is nondeterministic or
-`volatile`; scope-init when only iteration externs reach it;
-dynamic otherwise. The compile-constant fold therefore runs at
-build on every engine, so what is knowable at build is known
-at build and fails at build.
+interpreter's fold and the three compiled engines: a node is
+compile-constant when its provenance contains no coordinate or
+external-write input and nothing upstream is nondeterministic or
+`volatile`; scope-init when its provenance contains only
+iteration externs; dynamic otherwise. The compile-constant fold
+therefore runs at build on all four engines: every value that
+can be computed at build is computed at build, and a failure to
+compute one is a build error.
 
 The **effectively-const** steps (per the Graph Compiler's
 hoisting analysis) are the special case of the rule with no
@@ -137,13 +195,14 @@ the step between such events use the cached result; the cache
 is reset only when an input in the step's provenance changes,
 or by `invalidate_all`.**
 
-Why: without it a pull would cost the whole cone every time,
-and a side channel in the cone would fire once per pull rather
-than once per change. With it the cost of a pull is bounded by
-what changed (D3), and a step's side effects are observed once
-per event that made it not current (D2). The substrate's L1
-(each layer owns its state) guarantees that currency is owned
-by the kernel, so there is no cross-fiber cache contention.
+Rationale: without memoization a pull would re-evaluate its
+whole cone every time, and a side channel in the cone would fire
+once per pull rather than once per change. With it, the cost of
+a pull is bounded by what changed (D3), and a step's side
+effects are observed once per event that made it not current
+(D2). Because each layer owns its state (substrate L1), each
+kernel holds its own currency, and fibers never contend for a
+cache.
 
 ### Sub-axiom R1.v — Volatility carves out clean-flag memoization
 
@@ -206,9 +265,9 @@ is the correct semantic for temporal nodes (an op reading
 timestamp) and matches the mechanism every engine delivers.
 
 **Read granularity is the step's, and the step is the
-engine's.** The paragraph above is per *step*, and R1 defines a
-step as a node on the interpreter and a compiled node *or fused
-segment* on a compiled engine. Two volatile wires are therefore
+engine's.** The paragraph above is per *step*, and a step
+is one node on the interpreter and the closure tier but a whole
+fusion unit on native code (Terms). Two volatile wires are therefore
 two steps on one engine and may be one on another, and that is
 observable — it is the only way an engine's realisation shows
 through, because a volatile step is the one step whose value is
@@ -257,9 +316,14 @@ A write to an input slot marks not current every step whose
 provenance includes that slot. A pull then runs, in order, the
 not-current steps of the pulled output's cone and no others.
 This is the **hybrid push/pull invalidation model**: the dirty
-*signal* is push-side (a write proactively marks dependents);
+*signal* is push-side (a write marks its dependents at once);
 the dirty *response* is pull-side (a step is re-evaluated only
-when reached by a pull). The model has three named properties:
+when a pull's cone contains it). The figure shows one write
+followed by two pulls of the same output.
+
+![Push/pull invalidation: the host writes input x and the kernel marks not current every step with x in its provenance; the host pulls out1 and the kernel runs the not-current steps of out1's cone in order and returns an owned copy; a second pull with no write in between runs no step and returns the same value](../diagrams/runtime_model-push-pull.png)
+
+The model has three named properties:
 
 - **Lazy at the pull side.** Unused outputs are never
   recomputed. If a host pulls only output `out1`, the steps of
@@ -273,27 +337,27 @@ when reached by a pull). The model has three named properties:
   build.
 - **Forward-only.** Dirty marks propagate forward along the
   wire chain (an input write dirties downstream consumers, not
-  upstream producers). Invalidation never crosses a scope
-  boundary unguarded: S5's `SharedCell` write-through is the
-  only legitimate cross-tier write surface, and a cell's
-  revision is what carries the signal across kernels (§5).
+  upstream producers). Invalidation crosses a scope boundary
+  only through S5's `SharedCell` write-through, the only
+  permitted cross-tier write path, and other kernels learn of
+  the write by seeing the cell's revision number change (§5).
 
 ### Axiom R2 — Hybrid push/pull invalidation
 
 **Invalidation in polydat is a hybrid: a write to an input slot
 marks not current every step whose provenance includes the
 written input; subsequent pulls then lazily re-evaluate only the
-not-current steps that the pulled output's cone reaches. Steps
-not reached by any pull are never re-evaluated, regardless of
-upstream writes.**
+not-current steps in the pulled output's cone. A step in no
+pulled cone is never re-evaluated, regardless of upstream
+writes.**
 
-Why: the push half is what makes a pull cheap to decide (no
-scan of the graph on read); the pull half is what makes an
-unused output free. Either half alone gives one of the two
-costs back. On every engine the two halves are the same plan
-read from two sides: the interpreter walks the cone recursively
-and stops at a clean node; a compiled kernel walks the output's
-precomputed cone order and skips a step that is current.
+Rationale: the push half lets a pull decide what to run without
+scanning the graph, and the pull half means an unused output
+costs nothing. Either half alone reintroduces one of those two
+costs. On all four engines the two halves use one plan from two
+sides: the interpreter walks the cone recursively and stops at a
+clean node, and a compiled kernel walks the output's precomputed
+cone order and skips a step that is current.
 
 ### Axiom R3 — Forward-only data flow
 
@@ -303,9 +367,9 @@ never propagates backward; cross-tier writes are restricted to
 the substrate's S5 SharedCell write-through mechanism; there is
 no out-of-band data channel between nodes or between scopes.**
 
-Why: the wire-chain structure is acyclic (the assembler rejects
+Rationale: the wire graph is acyclic (the assembler rejects
 a cycle as `AssemblyError::CycleDetected`), so a topological
-order exists and every engine evaluates in one; S5 is the only
+order exists and all four engines evaluate in one; S5 is the only
 cross-tier write surface, and the parent-gated binder
 ([scope_model.md](scope_model.md) §4) is the only path that
 binds a child's slots to an outer scope, so no construction can
@@ -313,25 +377,26 @@ introduce a backward or out-of-band channel.
 
 ### Axiom R4 — Outputs are owned by their provenance
 
-**Every output, immediate or by reference, stands from the
-run that produced it until an input in its provenance is
-written. Nothing reclaims an output on any other occasion:
-there is no evaluation round, generation, epoch, or thread
-boundary with a meaning of its own in the provenance rules,
-and no step is exempt from R1. Each state owns the storage
-behind its outputs (the interpreter's `Value` buffers; a
-compiled kernel's slot buffer and the scratch entries its
-steps publish `Ref2` pairs into), and no storage belongs to a
-thread. A read hands the reader an owned copy.**
+**A step's output, immediate or by reference, is kept and
+returned by every pull until an input in its provenance
+changes. No other event discards an output: no evaluation
+round, generation, epoch, or thread boundary invalidates
+anything in the provenance rules, and no step is exempt from
+R1. Each kernel owns the storage behind its outputs (the
+interpreter's `Value` buffers; a compiled kernel's slot buffer
+and the scratch entries its steps publish `Ref2` pairs into),
+and no storage belongs to a thread. A read returns an owned
+copy to the reader.**
 
-Why: R1 is the whole caching contract, and its value is that
-invalidation is per input. A reset that reclaimed every string
-at every write would be an all-or-none invalidation the model
-does not have, and a step that had to rerun to survive it would
-be a hole in the model's caching. Storage owned by the state
-whose step wrote it has the output's own lifetime for free (L1
-at runtime, §5); storage owned by a thread has to have its
-lifetime legislated, and any such rule contradicts this one.
+Rationale: R1 is the complete caching contract, and under it
+invalidation is per input. A reset that discarded every string
+at every write would be an all-or-none invalidation, which the
+model does not have, and a step that had to rerun to survive
+such a reset would break R1's caching. Storage owned by the
+kernel whose step wrote it lives exactly as long as the output
+does (L1 at runtime, §5); storage owned by a thread would need a
+separate lifetime rule, and any such rule would contradict this
+one.
 
 Enforcement: `compiled_handles.md` §3 states the owner of every
 `Ref2` pair a compiled slot can hold; the S3/S4/S9 axioms of
@@ -344,48 +409,63 @@ holds.
 
 ## 5. State layering at runtime
 
-The substrate's L-axioms hold at runtime with these specific
-realisations:
+The substrate's L-axioms state how state is divided between
+layers, where a layer is one scope instance: a root, a nested
+scope at any depth, or a traversal activation. At runtime they
+are implemented as follows:
 
 | L-axiom | Runtime realisation |
 |---|---|
 | **L1** (each layer owns its state) | One kernel per fiber, on whichever engine the host chose. The program is shared read-only through `KernelProgram` (an `Arc`); every kernel created from it owns its inputs, buffers, currency flags, and cells. No cross-fiber state sharing at the node tier. |
-| **L2** (two-lifecycle classification bridges layers) | Effectively-const steps are evaluated once at scope-init; dynamic steps on demand after each write. The classification is the program's (§3), so it is the same on every engine. |
+| **L2** (two-lifecycle classification bridges layers) | Effectively-const steps are evaluated once at scope-init; dynamic steps on demand after each write. The classification belongs to the program (§3), so it is the same on all four engines. |
 
-The runtime model is the *enactment* of the substrate's layered
-state contract: at every evaluation, every layer's state is
-owned by its layer (L1); every cross-tier read goes through
-synthesised slots (S1+S2); every cross-tier write goes through
-S5's chokepoint. The runtime mechanism preserves the layering
-inherited from compilation.
+At every evaluation, each layer's state is owned by its layer
+(L1); every read of an outer scope's value goes through an
+`extern` slot the compiler synthesised in the inner program for
+that value and filled when the scope was initialised (S1+S2); and
+every write to an outer scope goes through the single
+write-through path of S5. Compilation establishes this layering,
+and the runtime preserves it.
 
-The S-axis axioms beyond S1+S2 have their own runtime
-realisations alongside R1/R2/R3:
+The S-axioms beyond S1 and S2 are implemented at runtime as
+follows, alongside R1, R2, and R3:
 
 | S-axiom | Runtime realisation |
 |---|---|
 | **S4** (external-write synthesis, open granularity) | External-write input slots are populated through the kernel's typed writes (`set_input`, `set_input_at`, `set_cursor`) at any granularity the producer chooses; provenance (R2) marks consumers not current on write; currency (R1) re-evaluates on next pull. Volatility (R1.v) is the explicit marker for wires whose value is not a function of declared inputs and so cannot be cached even between writes. |
-| **S5** (compile-emit write-through, cross-tier path) | `SharedCell` write-through routes a writing node's output to a parent-tier cell at compile-emit time (per [subcontext_construction.md](subcontext_construction.md) §3.1, the shared write-through rewrite, and §5); at runtime the write fires as an ordinary node output, intercepted by the chain and published through the cell. The outer cell's slot is filled through the standard slot-filling contract; L1's layer-ownership guarantee holds because the outer cell remains the canonical state holder. |
+| **S5** (compile-emit write-through, cross-tier path) | `SharedCell` write-through routes a writing node's output to a parent-tier cell at compile-emit time (per [subcontext_construction.md](subcontext_construction.md) §3.1, the shared write-through rewrite, and §5); at runtime the write fires as an ordinary node output, intercepted by the chain and published through the cell. The outer cell's slot is filled through the standard slot-filling contract. L1 still holds, because the outer cell remains the single owner of the value. |
 
-### Shared cells on every engine
+### Shared cells on all four engines
 
-A `shared` binding's input slot is bound to a cell on every
-engine, and the cell is the slot's register: `set_input` on any
-holder publishes through it, and every holder's next read takes
-the cell's value. `Kernel::shared_cells` lists a kernel's cells
-and `Kernel::attach_shared_cell` binds a `shared` binding to a
-cell another kernel holds, so two kernels, on the same engine
-or different ones, read and write one register. A kernel
-created from a shared program starts with a cell of its own per
-`shared` binding; sharing is explicit.
+A `shared` binding lets several kernels read and write one
+value. On all four engines (the interpreter, the closure tier,
+native, and pure native), a `shared` binding's input slot is
+bound to a cell, and the cell holds the slot's value:
+`set_input` on any kernel holding the cell publishes a new value
+through it, and every holder's next read takes the cell's
+value. `Kernel::shared_cells` lists a kernel's cells, and
+`Kernel::attach_shared_cell` binds a `shared` binding to a cell
+another kernel holds, so two kernels, on the same engine or on
+different ones, read and write one value. A kernel created from
+a shared program starts with a cell of its own per `shared`
+binding, so sharing happens only when a host attaches a cell.
 
-The consumer side follows R1: a step is current until an input
-in its provenance changes, and a cell publish is such a change
-made by another kernel. The interpreter detects it at every
-memoized read by comparing each cell's revision with the last
-one it saw; a compiled kernel polls every cell's revision at
-the first evaluation after a write and before each pull and marks the dependents of a
-moved slot not current. The protocol, its memory ordering, and
+A second kind of cell, the broadcast cell of a computed output
+(`Kernel::output_cell`), lets a descendant kernel read the value
+each of this kernel's pulls publishes, rather than a copy taken
+when the descendant was built
+([cross_fiber_invalidation.md](cross_fiber_invalidation.md)
+§3.1). Broadcast cells exist on the interpreter, the closure
+tier, and native; pure native has none, and its `output_cell`
+returns `None`.
+
+The reading side follows R1: a step is current until an input
+in its provenance changes, and a publication by another kernel
+is such a change. The interpreter detects it at every memoized
+read by comparing each cell's revision number with the last one
+it saw. A compiled kernel compares every cell's revision number
+at the first evaluation after a write and before each pull, and
+marks the dependents of a slot whose cell changed not current. The protocol, its memory ordering, and
 its costs are in
 [cross_fiber_invalidation.md](cross_fiber_invalidation.md).
 
@@ -393,65 +473,89 @@ its costs are in
 
 ## 6. The `Kernel` surface in R-terms
 
-The `Kernel` trait is the surface a host drives an engine
-through without knowing which one it has. Each call has one
-meaning under the axioms above, on every engine:
+A host drives a kernel through the `Kernel` trait without
+knowing which engine it has. All four engines implement the
+trait, and each call below has the same meaning on all four.
 
-- **The writes.** `set_inputs(coords)`
-  writes the coordinate prefix; `set_input(name, value)` and
-  its index-keyed form `set_input_at(index, value)` write one
-  extern; `set_cursor(name, partition)` writes a cursor's
-  `Ext` slot and its six scalar projections. Each is a typed
-  write to declared slots (S4): a value of another type is an
-  error at the write, and `None` clears a slot to unset. Each
-  marks the written slots' dependents not current (R2) and
-  changes nothing else (R4).
-- **`pull(name)`** runs the not-current steps of one output's
-  cone, in order, and returns the output's value, owned: a
-  slot pair is never handed to a host. The cone is the
-  output's on every engine; where native code fuses nodes into
-  a unit that runs whole, it is the output's cone closed over
-  the units it touches. `pull_at(index)` is the same by output index,
-  with the name resolved once through `output_index`.
-- **`eval()`** runs every step: the interpreter pulls every
-  output, a compiled kernel runs every step that has not run
-  since the last write. What a side channel observes under `eval` is
-  the same on every engine.
-- **`invalidate_all()`** makes nothing current and keeps every
-  input where it is: every step, a side channel included, runs
-  again at the next pull as if every input had been written. A host that
-  wants the inputs back at their defaults resets them
-  separately.
-- **`shared_cells()` and `attach_shared_cell(name, cell)`** are
-  the cell surface of §5.
-- **`cursor_schemas()`** reports the cursors the program
-  declares, with the partitions the compiler resolved where it
-  could, on every kernel ([cursor_partitions.md](cursor_partitions.md)
-  §7.2).
-- **`traverse(index)`** opens a `for` traversal against the
-  kernel's current values, on every engine: the cascaded wires
-  are snapshotted through `pull` and `input_value`, and the
-  comprehension is evaluated in the body's scope. An activation
-  is a kernel of its own (R4) created from the body's program
-  on the engine the host asks for
-  (`TraversalStream::activation_on`), with the tuple, the
-  cascade, and every cursor narrowing bound through this same
-  surface ([for_traversal.md](for_traversal.md)).
-- **`into_program()`** turns a kernel into a shared
-  `KernelProgram`; `create_kernel()` on it yields a kernel for
-  the calling thread that starts from the program: every input
-  at its declared default, every `shared` binding with a cell
-  of its own, nothing current, and every reference pair
-  pointing into its own storage.
+- **Writing inputs.** A host writes inputs to give the program
+  new values to compute from. `set_inputs(coords)` writes the
+  coordinates, the leading `u64` input slots, from a slice. `set_input(name, value)` writes one extern,
+  named by its declared name; `set_input_at(index, value)` does
+  the same by input index, for a host that resolves the name
+  once with `input_index`. `set_cursor(name, partition)` writes
+  the cursor named `name` to cover the given partition, which
+  sets the cursor's `Ext` slot and its six scalar projections.
+  A value must satisfy the slot's declared type; a value of
+  another type is an error at the write. `None` clears a slot to
+  unset. A write marks every step that depends on the written
+  slots not current and changes nothing else; nothing runs until
+  the next pull (S4, R2, R4).
+- **`pull(name)`** computes and returns one output. `name` is
+  the output's declared name. The kernel runs, in order, the
+  not-current steps the output depends on, and returns the
+  output's value as an owned `Value` that the caller keeps; a
+  slot pair is never returned to a host. Where native code fuses
+  several nodes into a unit that runs whole (a native or
+  pure-native fusion unit, or one of the interpreter's native
+  cones), running one of its steps runs the whole unit, so a
+  pull may also run other nodes in the same unit (R1, R2).
+  `pull_at(index)` is the same call by output index, for a host
+  that resolves the name once with `output_index`.
+- **`eval()`** brings every output up to date without returning
+  any. The interpreter pulls every output; a compiled kernel
+  runs every step that has not run since the last write. A host
+  calls it when it wants every step evaluated without reading
+  outputs, and what a side channel observes under `eval` is the
+  same on all four engines.
+- **`invalidate_all()`** forces the next pulls to recompute
+  everything while keeping every input value. It marks every
+  step not current, so every step, a side channel included, runs
+  again at its next pull as if every input had been written. A
+  host uses it to observe a nondeterministic program again
+  without writing an input; a host that wants the inputs back at
+  their defaults resets them separately.
+- **`shared_cells()`** lists the cells this kernel's `shared`
+  bindings are bound to, and **`attach_shared_cell(name, cell)`**
+  binds the `shared` binding `name` to a cell another kernel
+  holds, so the two kernels read and write one value (§5). A
+  name that is not a `shared` binding is an error naming the
+  ones that are.
+- **`cursor_schemas()`** lists the cursors the program declares,
+  with the partitions the compiler resolved where it could, so a
+  host can decide how to partition work before writing cursors
+  ([cursor_partitions.md](cursor_partitions.md) §7.2).
+- **`traverse(index)`** starts one of the program's `for`
+  traversals. `index` selects which: the top-level `for`
+  statements, numbered from 0 in source order, which
+  `traversals()` lists; an index with no traversal is an error.
+  Starting a traversal copies the current value of every outer
+  wire the body reads, so every run of the body sees those
+  values even if this kernel changes later, and evaluates the
+  header comprehension to produce the tuples the traversal
+  visits. It returns a `TraversalStream`. To run the body for
+  one tuple, the host asks the stream for an activation with
+  `activation_on(i, engine)`: a new kernel on the named engine
+  whose inputs are the tuple's element values plus the copied
+  outer values, with every cursor declared `over` an element
+  narrowed to that element's partition. The host drives the
+  activation like any other kernel (R4;
+  [for_traversal.md](for_traversal.md) §5.2).
+- **`into_program()`** turns a kernel into a `KernelProgram`
+  that can be shared across threads. Each thread then calls
+  `create_kernel()` on the program to get a kernel of its own.
+  A created kernel starts from the program, not from the kernel
+  that became the program: every input at its declared default,
+  every `shared` binding with a cell of its own, nothing current,
+  and every reference pair pointing into its own storage.
 
 ---
 
 ## 7. Determinism — the D-axiom suite
 
 The R-axioms describe the runtime mechanics. The D-axioms
-describe the **determinism guarantees** the runtime delivers as
-consequences of those mechanics. Four distinct bounds, each
-named.
+describe the **determinism guarantees** a host can rely on as
+consequences of those mechanics. There are four distinct,
+named bounds.
 
 ### Axiom D1 — Typed Return Determinism
 
@@ -467,10 +571,11 @@ value-determinism.**
 D1 is the composition of R1 (currency), R3 (forward-only data
 flow), T1+T2 (typed slot contract), and the substrate's L1
 (per-kernel state ownership). The compiler's H3 (hoisting
-preserves value) seals the property at the construction tier.
-The engines' equivalence contract ([engines.md](engines.md) §7)
-extends it across engines: the same program, inputs, and pull
-sequence yield the same values on each.
+preserves value) guarantees that construction does not break
+it. The engines' equivalence contract
+([engines.md](engines.md) §7) extends it across all four
+engines: the same program, inputs, and pull sequence yield the
+same values on each.
 
 D1 separates type integrity, which is unconditional, from
 value equality, which depends on the cone's declared purity.
@@ -495,8 +600,8 @@ sinks have no combined total-order guarantee.
 Every node exposes `PolydatNode::purity()`.
 `Purity::SideChannel` names its sink; `Purity::Nondeterministic`
 names the reason that input-only determinism does not hold. A
-side-channel step is never fused into a native segment, so it
-fires under the same currency rule on every engine.
+side-channel step is never fused into a native segment, so it fires under the same currency rule on all four
+engines.
 
 ### Axiom D3 — Cost Determinism
 
@@ -558,15 +663,11 @@ that name it.
        └───────────────────────────┘
 ```
 
-R-axioms describe **how** the runtime evaluates. D-axioms
-describe **what guarantees** the host can rely on as a
-consequence. Together they form the runtime contract:
-mechanism plus guarantees, neither one alone sufficient.
-
-A reader who wants to understand "what does polydat runtime
-evaluation deliver?" reads §7 (D-axioms). A reader who wants to
-understand "how does polydat make those guarantees real?" reads
-§3–§6 (R-axioms, state layering, and the `Kernel` surface).
+The R-axioms specify **how** the runtime evaluates, and the
+D-axioms specify **what** a host can rely on as a consequence;
+together they form the runtime contract. §7 states the
+guarantees, and §3–§6 state the mechanism that provides them
+(the R-axioms, state layering, and the `Kernel` surface).
 
 ---
 
@@ -575,13 +676,15 @@ understand "how does polydat make those guarantees real?" reads
 - Evaluation of a dependency cone is synchronous within one
   fiber. There is no intra-pull parallel evaluator in this
   runtime contract.
-- Cache warmup has two states per relevant step: not-current
-  steps evaluate on the next reached pull and become current;
-  current deterministic steps remain cached until invalidated.
-  Volatile/nondeterministic steps follow R1.v instead.
+- Each deterministic step is either current or not current. A
+  not-current step is evaluated by the next pull whose cone
+  contains it and becomes current; a current step stays cached
+  until an input in its provenance changes or the host calls
+  `invalidate_all`. Volatile and
+  nondeterministic steps follow R1.v instead.
 - Side-channel ordering is the local invocation order defined
   by D2. Hosts requiring a global order must serialize or
   aggregate those effects outside the graph.
-- A by-reference output stands until an input in its
-  provenance is written (R4). A host holds the owned `Value`
-  that `pull` returned, never a slot.
+- A by-reference output is kept and returned by every pull
+  until an input in its provenance changes (R4). A host holds
+  the owned `Value` that `pull` returned, never a slot.

@@ -1,10 +1,27 @@
+---
+type: specification
+title: Parent-Gated Subcontext Construction
+timestamp: 2026-09-25
+description: The typed construction boundary for a child scope, enforcing lifecycle isolation and cross-tier write-through.
+tags: [scopes, host]
+---
+
 # Parent-Gated Subcontext Construction
 
-This document specifies the typed construction boundary for a Polydat child
-scope. It is the concrete enforcement mechanism for lifecycle isolation and
-cross-tier write-through in [The Composition
-Substrate](composition_substrate.md), and it composes with [The Scope
-Model](scope_model.md) and [Wire Materialization](wire_materialization.md).
+This specification defines the typed API through which a host builds a child
+scope under a parent scope: a builder collects the child's source and
+contract, `finalize` compiles and closes it into a module, and the parent's
+`spawn` creates the child kernel and binds it to the parent's wires. The
+construction is *parent-gated*: a child is created only through a call on its
+parent, and that call binds it. This API enforces the lifecycle isolation and
+cross-tier write-through that [The Composition
+Substrate](composition_substrate.md) requires. A *write-through* is a child
+assignment that is published into a shared cell owned by an ancestor scope
+(§3.1, §5).
+
+**Related specifications:** [The Composition
+Substrate](composition_substrate.md), [The Scope Model](scope_model.md), and
+[Wire Materialization](wire_materialization.md).
 
 The governing rule is:
 
@@ -67,7 +84,7 @@ Imports classify a name as `CompileConst`, `Extern`, `Shared`, or
 `IterationExtern`. Exports classify a name as `Local`, `Final`, `Shared`,
 `Coordinate`, or `Volatile` and carry the corresponding binding modifier.
 
-The implemented enforcement boundary is exact:
+`finalize` enforces exactly these rules:
 
 - `finalize` requires every declared import name to exist among the parent's
   input or output names;
@@ -87,7 +104,7 @@ remain protected by the compiler and kernel slot type checks.
 
 The subcontext builder's `CompileOptions` (`kernel::subcontext::CompileOptions`,
 distinct from `dsl::compile::CompileOptions`, into which `finalize` maps it)
-carries the compile-time inputs that affect the child program:
+holds the compile-time inputs that affect the child program:
 
 ```text
 workload_dir
@@ -99,22 +116,25 @@ cursor_limit
 kernel_opt
 ```
 
-All options go through the one compiler: default options compile the
-statements under the default `dsl::compile::CompileOptions` (charged to the
-parent's ledger); non-default options are mapped into
-`dsl::compile::CompileOptions` and compile the (possibly rewritten)
-statements, or the re-joined source when no rewrite fired and every fragment
-is source. `KernelOptLevel` also
-controls whether result binding support keeps only referenced injected slots or
-retains all diagnostic slots.
+Every option set compiles through the ordinary Polydat compiler:
+
+- default options compile the statements under the default
+  `dsl::compile::CompileOptions`, charged to the parent's ledger;
+- non-default options are mapped into `dsl::compile::CompileOptions` and
+  compile the (possibly rewritten) statements, or the re-joined source when
+  no rewrite fired and every fragment is source.
+
+`KernelOptLevel` also controls whether result-binding support keeps only the
+injected slots the body references or retains all diagnostic slots (§3.2).
 
 ### 2.4 Pull consumers
 
-`register_pull` stores `Arc<dyn PullConsumer>` registrations in the closed
-module and spawned kernel. A consumer supplies a stable diagnostic label and an
-ordered list of names. Resolution of those names into a host pull plan is a
-consumer-layer operation; this protocol owns only their collection and
-transport.
+`register_pull` records an `Arc<dyn PullConsumer>`, a host object that will
+pull named outputs of the child, and carries it into the closed module and
+the spawned kernel. A consumer supplies a stable diagnostic label and an
+ordered list of output names. Resolving those names into a host pull plan is
+the consumer layer's job; this protocol only collects the registrations and
+passes them on.
 
 ---
 
@@ -192,14 +212,18 @@ it needs; nothing in the language depends on the three names.
 
 ## 4. Spawn
 
-`ScopeKernel<P>::spawn(name, module)` is the live construction chokepoint.
+`ScopeKernel<P>::spawn(name, module)` is the only call that creates a live
+typed child. `name` is the `ChildName` the child is registered under in the
+parent, and `module` is the `ScopeModule<Child<P>>` that `finalize` produced;
+the call consumes the module and returns the new `ScopeKernel<Child<P>>`, or a
+`ContractViolation` error. It performs these steps:
 
 1. It locks the parent registry and rejects an existing `ChildName`, reporting
    the prior and current `SourceContext` values.
 2. It records the child name.
-3. It materializes the closed child program under the parent, as a kernel
-   state of its own that owns its outputs and their storage
-   ([Runtime Model](runtime_model.md) R4). Shared cells visible at the
+3. It creates a kernel for the closed child program and binds it under the
+   parent. The child is a separate kernel that owns its outputs and their
+   storage ([Runtime Model](runtime_model.md) R4). Shared cells visible at the
    parent attach to matching child slots and remain available for transitive
    descendant wiring.
 4. It transfers context, consumer registrations, and write-through bindings to
@@ -274,14 +298,15 @@ parent live
   `spawn` for the same named child.
 - Hot rebinding and multi-parent construction are unsupported.
 
-Direct compilation (`compile_polydat_with`) creates a root kernel on any
-engine, but it does not create a typed child relationship. The second
-sanctioned construction path is `PolydatKernel::build_subscope(PolydatMatter)`:
-matter built by `PolydatMatter::builder()` from source, pre-parsed statements,
-or a compiled program (exactly one). Source and statement matter route through
-a transient typed parent (`wrap_root_kernel`) and this protocol's `finalize`;
-program matter is materialised directly with its iteration bindings. No
-free-function bridge remains.
+Direct compilation (`compile_polydat_with`) creates a root kernel on any of
+the four engines (the interpreter, the closure tier, native, and pure
+native), but it does not create a typed child relationship. The second
+sanctioned construction path is `PolydatKernel::build_subscope(PolydatMatter)`.
+Its argument is matter built by `PolydatMatter::builder()` from exactly one
+of source, pre-parsed statements, or a compiled program. Source and statement
+matter go through a transient typed parent (`wrap_root_kernel`) and this
+protocol's `finalize`; program matter is bound directly with its iteration
+bindings. There is no free-function construction path.
 
 ---
 
@@ -337,13 +362,14 @@ state sharing between independent kernel instances.
 
 ---
 
-## 9. Beside traversal activation
+## 9. Relation to traversal activation
 
 Polydat has two ways to produce a child kernel bound to outer wires, and this
-protocol is one of them. Both produce a child state of its own (R4) over a
-program compiled once; both bind the child's declared externs to the outer scope by
-name, through typed writes; both leave the child's own buffers and currency
-fresh. They differ in who composes the child and what crosses the boundary:
+protocol is one of them. Both produce a separate child kernel (R4) over a
+program compiled once, both bind the child's declared externs to the outer
+scope by name through typed writes, and both start the child with fresh
+buffers and nothing current. They differ in who composes the child and what
+is transferred to it:
 
 - **Subcontext construction** is for a host-composed child with a contract:
   the host supplies imports, exports, body fragments, consumers, and result
@@ -358,20 +384,21 @@ fresh. They differ in who composes the child and what crosses the boundary:
   tuple's elements and a snapshot of the cascaded wires by value and
   narrowing every cursor ([for_traversal.md](for_traversal.md)).
 
-Either way, what the child contains is not the iteration's to decide. A
+In both forms, the iteration does not decide what the child contains. A
 comprehension determines the order and the values of the tuples; a host's
 scope walker decides the imports, the exports, and the body fragments that
-become a child from one of them, and this protocol's `finalize` validates the
-contract between them. Compiling the module matter and binding the named
-child are polydat's; releasing a replaceable iteration child is the host's,
-through `release_child`.
+make a child from one tuple; and this protocol's `finalize` validates the
+contract between them. Polydat compiles the module matter and binds the named
+child. The host releases a replaceable iteration child, through
+`release_child`.
 
-The difference today is that the subcontext path is interpreter-only and
-carries cells, while the traversal path runs on every engine and carries
-values. The intent is that both call one binder expressed over the `Kernel`
+The subcontext path through `spawn` produces an interpreter child and
+transfers cells, while the traversal path runs on all four engines (the
+interpreter, the closure tier, native, and pure native) and transfers values.
+The design direction is that both call one binder expressed over the `Kernel`
 trait (`shared_cells`, `attach_shared_cell`, `input_value`, `pull`,
-`set_input`), so that a host-composed child can run on any engine and a
-traversal body can share a cell rather than a snapshot. What a host needs
-around that binder to run a whole scope tree on a compiled engine, the
-per-cycle surface in particular, is
+`set_input`), so that a host-composed child can run on any of the four
+engines and a traversal body can share a cell rather than a snapshot. The
+surface a host needs around that binder to run a whole scope tree on a
+compiled engine, the per-cycle operations in particular, is specified in
 [native_scope_trees.md](native_scope_trees.md).

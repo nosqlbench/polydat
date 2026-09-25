@@ -1,8 +1,16 @@
+---
+type: guide
+title: Engine-ladder performance
+timestamp: 2026-09-25
+description: One typed graph and one tile measured on all four engines, with the measurement contract, correctness gate, and benchmark commands.
+tags: [performance, engines]
+---
+
 # Engine-ladder performance
 
 Polydat can execute one statically typed function graph at three progressively
 lower-overhead levels, and the benchmark adds a fourth rung, pure native code,
-the differential tier behind P3. This page makes that claim concrete with a checked-in
+the tier P3 is differentially tested against. This page makes that claim concrete with a checked-in
 graph, a semantic-equivalence test, and a focused Criterion benchmark.
 
 The benchmark is intentionally small enough to understand. It is not a claim
@@ -89,19 +97,7 @@ event_token := hash(token_seed)
 The ladder changes the representation and dispatch cost, not the graph's typed
 contract:
 
-```mermaid
-flowchart LR
-    G["Resolved and type-checked DAG"]
-    P1["P1 · interpreter<br/>Value slots + typed node dispatch"]
-    P2["P2 · compiled closures<br/>flat u64 slots"]
-    P3["P3 · native segments<br/>with closure steps"]
-    PURE["pure native code<br/>one function"]
-
-    G --> P1
-    P1 -->|"compiled_u64 hooks"| P2
-    P2 -->|"Cranelift lowering"| P3
-    P3 -->|"every node lowers"| PURE
-```
+![Performance ladder: the resolved and type-checked DAG runs on P1, the interpreter; compiled_u64 hooks lift it to P2, compiled closures over flat u64 slots; Cranelift lowering lifts it to P3, native segments with closure steps; when every node lowers it becomes pure native code, one function](../diagrams/performance-ladder.png)
 
 | Level | Construction used by this benchmark | Timed execution |
 | --- | --- | --- |
@@ -151,10 +147,10 @@ million cycles per second.
 
 For this graph, moving from typed node dispatch to flat-slot closures removes
 most of the execution cost. Native lowering then provides another 2.80× over
-P2. Every node of this graph lowers and it is connected, so P3 is one native
-segment; pure native code is the same code as one block of a function that
-dispatches over the units a pull needs, and the two rungs differ in that
-bookkeeping and in how each keeps a nondeterministic node or a side channel
+P2. Every node of this graph lowers and the graph is connected, so P3 runs one
+native segment. Pure native code runs the same code as one block of a function
+that dispatches over the fusion units a pull needs; the two rungs differ in that
+dispatch and in how each keeps a nondeterministic node or a side channel
 current. These are end-to-end cycle measurements, including
 input copies and four output reads, rather than isolated instruction timings.
 
@@ -174,8 +170,8 @@ machine-code lowering, not SIMD auto-promotion.
 The previous record, from 2026-09-10 on an AMD Ryzen 9 3900X under Windows,
 read 441.83 ns, 121.05 ns, 76.104 ns, and 75.942 ns for P1, P2, P3, and
 pure native code, with P3 at 5.81× P1. The machine changed between the
-records, so the absolute times are not comparable; the ratios moved for
-reasons in the code as well. Since 2026-09-13 every node with a kit lowers
+records, so the absolute times are not comparable; the ratios also changed
+because the code changed. Since 2026-09-13 every node with a kit lowers
 natively, native code that calls no helper runs without the failure-catching
 trampoline, and the hybrid kernel schedules its constant steps first. On the
 earlier machine, native timings drifted between 57 ns and 76 ns across runs
@@ -199,18 +195,18 @@ so that subtracting one from another isolates a cost:
 | `projected` | the document as written: what the projection's tuples and body add |
 | `wide` | the flat document with twenty holes of three types: how cost scales with hole count |
 
-The pairing is the point. A tile's cost is the bytes it copies plus the
+The cases are meant to be compared in pairs. A tile's cost is the bytes it copies plus the
 holes it encodes plus, per projection, the tuples times the body
 ([Polytile](../design/polytile.md) §7.3), and each of those three terms
 has a case that isolates it. A render cost that grows with the skeleton
 rather than the hole count, or a projection that costs more than its
-tuples, is a regression the shape of the ladder names.
+tuples, is a regression, and the case that isolates that term shows it.
 
-The current record, taken on 2026-09-14 in the same session as the engine
+The current record was taken on 2026-09-14 in the same session as the engine
 ladder above, on the same machine and tree. Each entry is Criterion's point
-estimate in nanoseconds per cycle. Pure native code now runs every case,
-since every node lowers; when the tile work was measured it ran the
-one-hole case alone.
+estimate in nanoseconds per cycle. Pure native code runs every case, since
+every node lowers; in the tile measurements before this record it ran only
+the one-hole case.
 
 | Case | P1 interpreter | P2 closures | P3 native segments | pure native |
 | --- | ---: | ---: | ---: | ---: |
@@ -238,9 +234,9 @@ cargo nextest run -p polydat --test suite engine_ladder_equivalence::
 ```
 
 Then run only the focused performance target. The engine ladder measures each
-compiled tier from its own kernel type as well as through `dyn`, and naming a
-kernel type is the one thing the normative surface does not let a caller do, so
-the target is behind `bench-tiers` and cargo refuses it without the feature:
+compiled tier from its own kernel type as well as through `dyn`. The normative
+surface does not let a caller name a kernel type, so the target requires the
+`bench-tiers` feature and cargo refuses to build it without that feature:
 
 ```sh
 cargo bench -p polydat --features bench-tiers --bench engine_ladder
@@ -262,8 +258,8 @@ cargo bench -p polydat --no-default-features --features bench-tiers --bench engi
 ## `polydat perf`
 
 The binary measures programs itself, through the surface a host uses:
-`set_inputs` and `pull_at` on a `Box<dyn Kernel>`, on every engine. Its numbers
-are therefore what a host pays per cycle, and they are larger than the engine
+`set_inputs` and `pull_at` on a `Box<dyn Kernel>`, on all four engines. Its numbers
+are therefore the per-cycle cost a host sees, and they are larger than the engine
 ladder's, which times `eval` and slot reads on a kernel named by its own type.
 Use the ladder bench to look inside an engine and `polydat perf` to see what a
 program costs a host.
@@ -282,7 +278,7 @@ relative to the suite file) or `source`, measured on each of its `engines`
 `outputs` lists what each cycle pulls, every output when it is left out;
 `cycle` names the input advanced each cycle, and `inputs` fixes the others.
 `[settings]` holds `rounds`, `warmup_ms`, `measure_ms`, `batch_ms`, and
-`provenance`, which defaults to `auto`, what a host gets. The command line's
+`provenance`, which defaults to `auto`, the setting a host gets by default. The command line's
 `--rounds`, `--warmup-ms`, `--measure-ms`, `--provenance`, `--group`, and
 `--engine` override the file.
 
@@ -301,8 +297,8 @@ outputs = ["o0"]
 output's cone is `1 / width` of the graph. `trunk` is one shared chain of
 `depth` steps fanning out into `width` branches of `branch` steps, so the
 cones overlap in the trunk. `lattice` is `depth` layers of `width` nodes,
-each mixing two neighbours of the layer below, so a cone widens a node a
-layer until it covers the layer. The outputs are `o0`, `o1`, …, and a group
+each mixing two neighbours of the layer below, so a cone widens by one node
+per layer until it covers the whole layer. The outputs are `o0`, `o1`, …, and a group
 pulls all of them unless `outputs` names some. Each group's heading gives
 the shape, the number of bindings, and how many outputs a cycle pulls.
 [`examples/perf/cone_spectrum.toml`](../../examples/perf/cone_spectrum.toml)
@@ -311,7 +307,7 @@ and a single chain at three depths.
 
 ### The cone spectrum, 2026-09-24
 
-The suite run on every engine, at commit f6ae61f, paired round by round
+The suite was run on all four engines at commit f6ae61f, paired round by round
 with the build before cone-shaped native code (2c51167). Each entry is the
 median of five rounds in nanoseconds per cycle; the native columns give the
 earlier build, then this one. The interpreter and the closures did not move
@@ -336,14 +332,15 @@ beyond the run's noise between the two builds, so they are given once.
 What the columns show:
 
 - **A pull costs its cone.** Pulling one output of `width` independent
-  chains costs the same whatever the width on both native engines, about
-  the closures' cost halved, where the earlier build ran every chain and
-  grew with the graph (97 ns against 2348 at width 64).
+  chains costs the same at every width on both native engines, about half
+  the closures' cost. The earlier build ran every chain, so its cost grew
+  with the graph (97 ns against 2348 at width 64).
 - **The ladder holds everywhere.** Interpreter, closures, native, pure
   native, slowest to fastest, in every group; at `chains-64-one` native
   and pure native are within the noise of each other.
-- **Pure native is fastest.** Its function tests each unit's clean flag in
-  native code, so a pull neither searches nor filters on its way in.
+- **Pure native is fastest.** Its generated function tests each fusion
+  unit's clean flag in native code, so a pull does no search or filtering
+  before the units run.
 - **One regression remains:** the native tier pulling every output of
   many independent chains, 18% slower at width 64. The earlier build ran
   all 64 chains in one segment at the first pull; a pull now runs its own
@@ -357,13 +354,13 @@ processors; Windows 11 Pro 10.0.26200; Rust 1.96.0, release profile with
 thin LTO; Cranelift 0.116.1; five rounds of a 100 ms warm-up and a 400 ms
 measurement per rung, with an IDE open in power-save mode and a game
 client idle. The closure column is the run's canary: its per-group
-intervals reached ±12% on two groups, so a difference under about 5% is
-not one.
+intervals reached ±12% on two groups, so a difference under about 5% should
+not be read as a real difference.
 
 Each rung (one group on one engine) is calibrated into batches of about
 `batch_ms`, warmed, and measured; its value for a round is the median batch.
 Rounds interleave every rung and rotate their order, so drift during the run
-falls on every rung alike. Progress goes to stderr. The results are a table per
+affects every rung equally. Progress goes to stderr. The results are a table per
 group: ns per cycle (the median of the rounds), the spread across rounds, the
 fastest round, and the speedup over the slowest engine, with a check that the
 interpreter, closure, and native engines are in ladder order. The compiler's
@@ -377,8 +374,8 @@ build of this workspace takes a minute or more at full load, so a leg measured
 straight after one starts on a hotter machine than the leg before it. That
 drift is monotonic over a session and larger than the effects worth finding:
 on 2026-09-22 `p1_interpreter` walked from 429 ns to 520 ns across a morning
-without a line of its code changing. Compiling between legs bakes that walk
-into the difference and attributes it to the diff.
+without a line of its code changing. Compiling between legs adds that drift
+to the measured difference, where it looks like an effect of the diff.
 
 Build each commit once, keep the executable, and leave the compiler out of the
 measurement:
@@ -394,14 +391,14 @@ md5sum /tmp/polydat-base /tmp/polydat-head   # they must differ
 ```
 
 The target directory is shared (`~/.cargo/config.toml`), so it is not under
-this repository, and a stale local `target/` will hand you a different binary
+this repository, and a stale local `target/` can supply a different binary
 that looks plausible. Watch the build for `Compiling polydat`; its absence
 means cargo thought the tree unchanged. The hashes are the check that the two
 legs are two programs; if they match, the comparison is meaningless and
 nothing else in the output will say so.
 
 Then pair them. `--against` runs both binaries one round each, in an order that
-alternates round by round, so drift falls out of each round's delta:
+alternates round by round, so drift cancels out of each round's delta:
 
 ```sh
 /tmp/polydat-head perf --against /tmp/polydat-base --rounds 30
@@ -420,9 +417,9 @@ and will flag differences that are not there. Thirty paired rounds bring it to
 about ±1.6, which is what it took on 2026-09-22 to turn an unreproducible
 result into a measured +2.6 percent at p≈0.003.
 
-Carry a **canary**: a rung the change under test cannot reach, read in the same
+Carry a **canary**: a rung the change under test cannot affect, read in the same
 runs. If it moves more than the effect you are chasing, the comparison is
-telling you about the machine and not the code, and no amount of reasoning
+measuring the machine and not the code, and no amount of reasoning
 about the diff will fix that. Both false alarms of 2026-09-21 were caught this
 way — `p1_interpreter` moved 17 percent and a tile rung 41 percent between legs
 whose diff could not touch either.
@@ -442,14 +439,14 @@ binary over the new one's name.
 
 Criterion's `Performance has regressed` is a statement about the samples it
 took, not about the code, and it is the wrong verdict to read. Its statistics
-see inside a run rather than across runs, so it cannot know that the process
+compare samples within a run, not across runs, so it cannot know that the process
 before it was laid out differently or that the machine had warmed, and two runs
 of one unmodified binary flag each other with p below 0.05 routinely. Read the
 per-round deltas above instead, and treat any single flagged cell as a prompt to
 collect rounds rather than to start reading diffs — on 2026-09-21 three of the
 four cells the first pairing flagged did not survive one. A run whose
 confidence intervals are several times wider than its neighbours' was
-disturbed, and is worth discarding before it is compared against.
+disturbed and should be discarded before any comparison.
 
 The benchmark source is
 [`benches/engine_ladder.rs`](../../benches/engine_ladder.rs), and its cross-engine

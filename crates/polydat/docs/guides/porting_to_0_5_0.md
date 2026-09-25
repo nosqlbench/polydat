@@ -1,27 +1,38 @@
-# Porting a host from polydat 0.4 to 0.5.0
+---
+type: guide
+title: Porting to 0.5.0
+timestamp: 2026-09-25
+description: "The 0.5.0 release notes as a host reads them: breaking changes and fixes, deprecated healing writes and their replacements, quiet corrections, and known issues."
+tags: [release, host]
+---
 
-Written against nmbrs, the host that drove this release, and measured the
-same way as the [0.3.2 guide](porting_to_0_3_2.md): by building that host
-against the tree, not by reading diffs. nmbrs's whole workspace (128
-suites, 3177 tests) passes against it with two one-line changes, both in
+# Porting to 0.5.0
+
+This guide covers porting a host from polydat 0.4 to 0.5.0. It was
+found the same way as the [0.3.2 guide](porting_to_0_3_2.md): by building
+a large host against the tree, not by reading diffs. That host (128
+suites, 3177 tests) passes with two one-line changes, both in
 [Part 1](#part-1-what-stops-compiling). The rest of this guide is the
-full list, for hosts that use more of the surface than nmbrs does.
+full list, for hosts that use more of the surface.
 
-The release adds two things a host builds on and one it gets for free:
+The release adds two things a host builds on and one it gets without
+changing any code:
 
-- **Scope trees on any engine.** A tree of scopes (params, phases,
+- **Scope trees on all four engines.** A tree of scopes (params, phases,
   fibers, per-op and iteration children) can be built and driven through
-  the `Kernel` trait alone, on any engine, parent and child on different
-  engines if it likes ([native_scope_trees.md](../design/native_scope_trees.md);
-  embedding guide §4, "Scope trees on any engine").
+  the `Kernel` trait alone, on the interpreter, the closure tier, or
+  native (P1, P2, P3), and a parent and its child may run on different
+  engines ([native_scope_trees.md](../design/native_scope_trees.md);
+  embedding guide §4, "Scope trees on all four engines").
 - **Inputs of varying type**, converted by a node in the program, never
   at the write, and only where the host asks
   ([input_variance.md](../design/input_variance.md); embedding guide §3,
   "When an input's type varies").
 - **Native code that follows the graph.** The native engines fuse
-  connected groups of nodes, so a pull runs only its own cone, and pure
-  native code checks what is stale in native code. Pulling one output of
-  a wide program no longer costs the whole program (performance guide,
+  connected groups of nodes, so a pull runs only its own cone, and on
+  pure native the check for which steps are not current also runs in
+  native code. Pulling one output of a wide program no longer evaluates
+  the whole program (performance guide,
   "The cone spectrum").
 
 ## Part 1: what stops compiling
@@ -29,17 +40,17 @@ The release adds two things a host builds on and one it gets for free:
 | Change | What breaks | Fix |
 |---|---|---|
 | `dsl::compile::CompileOptions` gained `input_variance` and `inferred_externs` | a struct literal naming every field (E0063) | end it with `..Default::default()` |
-| `kernel::subcontext::CompileOptions` gained `input_variance` | the same | the same (nmbrs: `scope.rs`) |
-| `InputDef` gained `type_origin` and `converts_to` | a literal building an `InputDef`, e.g. for `PolydatProgram::with_inputs` | add `type_origin: TypeOrigin::Declared, converts_to: None`, which keep today's meaning |
-| `PortType` gained `Dyn` | a `match` over every variant (E0004) | name types with `to_keyword()` or `Display` and do not match (embedding guide §6, "Naming port types without matching them"); where the match is per-type behavior, add the arm (nmbrs: `describe.rs`) |
+| `kernel::subcontext::CompileOptions` gained `input_variance` | the same | the same |
+| `InputDef` gained `type_origin` and `converts_to` | a literal building an `InputDef`, e.g. for `PolydatProgram::with_inputs` | add `type_origin: TypeOrigin::Declared, converts_to: None`, which keep the 0.4 meaning |
+| `PortType` gained `Dyn` | a `match` over every variant (E0004) | name types with `to_keyword()` or `Display` and do not match (embedding guide §6, "Naming port types without matching them"); where the match is per-type behavior, add the arm |
 | `KernelError` gained `Write` | an exhaustive `match` on `KernelError` | add the arm or a wildcard |
 | `AssemblyError` gained `OpenInputs` | an exhaustive `match` on `AssemblyError` | the same |
 | `CompileEvent` gained `InputConverterInserted` | an exhaustive `match` over compile events, such as a host's own formatter | the same, or `CompileEventLog::format()` |
 
-`PortType` stays exhaustive on purpose: a `match` over every variant that
-stops compiling until it decides what a new type means is what polydat
-relies on in its own code. A host that only labels types should not
-match at all.
+`PortType` stays exhaustive on purpose: polydat's own code matches over
+every variant so that each such `match` stops compiling until it decides
+what a new type means. A host that only labels types should not match
+at all.
 
 ## Part 2: what warns
 
@@ -54,7 +65,7 @@ denies warnings. Replace each by what it relied on:
   `polydat::convert::to_port(value, kernel.input_port_type(name)?)`, then
   `set_input_at`. `to_port` applies the same catalog the old write did and
   returns a `ConvertError` where the old write healed silently or failed.
-  nmbrs's command-line phase-parameter override is this case.
+  A parameter override given as text on a command line is this case.
 - **An input whose type varies over the kernel's life**: compile with
   `CompileOptions::input_variance` at `Warn` or `Info`, and the input takes
   any value through a converter node reported in the compile log. The
@@ -68,30 +79,32 @@ The deprecated writes are removed in the release after this one.
 These compile unchanged and behave differently. Each is a correction.
 
 - **`set_inputs` writes the coordinates and nothing past them.** Given
-  more values than a program has coordinates, every engine used to write
+  more values than a program has coordinates, all four engines used to write
   the extras into its externs, and a compiled engine into an extern's
   slots, where a by-reference extern keeps a pointer. A host that relied
   on the positional spill should write those inputs by name.
 - **`coord_count()` on a compiled kernel is the number of coordinates.**
-  It answered the number of buffer slots every input occupies.
+  It returned the number of buffer slots every input occupies.
 - **`ScopeModule::instantiate_under` reports a refused iteration binding**
   as `KernelError::Write`; the value used to be dropped.
 - **An extern with no default, bound to a parent's cell, reads the cell's
-  value** on the closure and native engines. It read `None` for good once
-  its slot had been unset.
+  value** on the closure and native engines. It read `None` permanently
+  once its slot had been unset.
 - **`dyn` is a type keyword.** `extern x: dyn` declares an input that takes
   any value, which failed to compile before.
-- **Two volatile reads that no wire connects are two steps on every
-  engine.** The native tier used to fuse them into one segment and read
+- **Two volatile reads that no wire connects are two steps on all four
+  engines.** The native tier used to fuse them into one segment and read
   both at the first pull of either (runtime_model.md R1.v).
 - **A pull by index publishes to descendants**, as a pull by name always
-  did, on every engine. A child bound to a parent's output used to keep
-  the last value a pull by name published while the host drove the
-  parent with `pull_at`.
+  did, on the three engines a scope parent can run on (the interpreter,
+  the closure tier, and native). A child bound to a parent's output used
+  to keep the last value a pull by name published while the host drove
+  the parent with `pull_at`.
 - **A child bound to an output the parent has not computed reads
-  `None`** on every engine. The compiled engines gave it the type's zero.
+  `None`** on the interpreter, the closure tier, and native. The
+  compiled engines gave it the type's zero.
 - **`input_value_at` on a cell-bound input reads the cell** on the closure
-  and native engines, as the interpreter does. It answered the copy the
+  and native engines, as the interpreter does. It returned the copy the
   child took at its last pull.
 
 ## Not breaking, though it looks it
@@ -99,14 +112,15 @@ These compile unchanged and behave differently. Each is a correction.
 - **`Kernel` gained required methods** (`fork`, `coord_count`,
   `input_value_at`, `program_id`, and others). The trait is sealed, so
   nothing outside polydat implements it, and a caller only gains methods.
-- **`Kernel` is `Send + Sync`.** Every engine already was; the bound lets
-  a scope parent be shared across threads, which a caller only gains.
+- **`Kernel` is `Send + Sync`.** The kernels of all four engines already
+  were; the bound lets a scope parent be shared across threads, which a
+  caller only gains.
 
 ## Known issues
 
 - **The scope binder still converts a value it copies into a child's
   declared input**, and the write-through commit still widens a narrower
-  numeric type. Both retire with the deprecated writes
+  numeric type. Both are removed together with the deprecated writes
   ([input_variance.md](../design/input_variance.md) §11).
 
 ## Checklist

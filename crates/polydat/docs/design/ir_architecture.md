@@ -1,33 +1,44 @@
-# IR Architecture — Stack-Machine with Stream Operands
+---
+type: specification
+title: Comprehension IR Architecture
+timestamp: 2026-09-25
+description: "The comprehension IR as a stack machine over stream operands: interpretation, materialization barriers, stack effects, and adding an opcode."
+tags: [iteration]
+---
 
-Reference for developers working on or against polydat's
-comprehension IR (`polydat::iteration::comprehension::ir`).
-Companion to the algebra spec
-([comprehension_forms.md](comprehension_forms.md)) — focuses
-on the **how** of the runtime model rather than the **what**
-of the algebra.
+# Comprehension IR Architecture
+
+This document specifies how polydat's comprehension IR
+(`polydat::iteration::comprehension::ir`) is executed: the
+stack-machine interpreter and its stream operands, which opcodes
+are materialization barriers, the stack effect of each opcode,
+where the IR compiler applies reductions R1 and R2, and the steps
+for adding an opcode. The algebra the IR implements is specified
+separately.
+
+**Related specifications:** [comprehension_forms.md](comprehension_forms.md)
+(the comprehension algebra; "spec §" references below are to it).
 
 ## The execution model: stack machine + stream operands
 
-The IR is interpreted by a **stack machine**. Two terms easy
-to conflate:
+The IR is interpreted by a **stack machine** whose operands are
+**streams**. The two properties are distinct:
 
-- The **machine model** is a stack machine. There is a stack
-  of operands, processed left-to-right by a linear sequence
-  of opcodes; each opcode pops `pop` operands off the top
-  and pushes `push` operands onto the top.
+- The **machine model** is a stack machine. The interpreter
+  processes a linear sequence of opcodes in order over a stack of
+  operands; each opcode pops `pop` operands off the top and
+  pushes `push` operands onto the top.
 - The **operands on the stack** are **streams**, not raw
   values. Each operand is a lazy producer of tuples — a
   `Box<dyn TupleStream>` whose `advance()` method yields one
   tuple at a time or `None` when exhausted.
 
-So the canonical full phrase per spec §9.1 is
+The full name of the model, per spec §9.1, is
 **"stack-machine interpreter that maintains a stream stack."**
-Don't shorten to "stream machine" — that loses the stack-
-machine semantics. Don't shorten to plain "stack machine"
-either — the stack-of-values vs stack-of-streams distinction
-matters for understanding the model's lazy-evaluation
-behavior.
+Neither "stream machine" nor plain "stack machine" is a correct
+shortening: the first omits the stack semantics, and the second
+omits that the stack holds streams rather than values, which is
+what makes evaluation lazy.
 
 ## How interpretation works
 
@@ -51,12 +62,11 @@ for op in program.ops() {
 return stack.pop();  // the final stream
 ```
 
-The walk happens **once at interpret-time**. After that, the
-returned stream is a tree of `TupleStream` trait objects.
-**Tuple production happens lazily** when the consumer pulls
-from the top: each `advance()` on the returned stream
-propagates downward through the tree, pulling from leaf
-clause streams only as needed.
+The walk happens **once at interpret-time** and returns a tree
+of `TupleStream` trait objects. **Tuples are produced lazily**
+when the consumer pulls from the returned stream: each
+`advance()` on it calls `advance()` on its children, down to the
+leaf clause streams, which are pulled only as needed.
 
 ### Concrete example
 
@@ -81,26 +91,20 @@ For the AST `cartesian(clause(k, [1, 2]), clause(b, [10, 20]))`:
    `[(k, 1), (b, 10)]`, then `[(k, 1), (b, 20)]`, then
    `[(k, 2), (b, 10)]`, then `[(k, 2), (b, 20)]`, then `None`.
 
-## Why this model
+## Rationale
 
-Two simultaneous wins:
-
-1. **The IR sequence is small and analyzable.** Linear,
-   typed, immutable. Easy to inspect (e.g., bounds checker
-   walks the opcodes once). Easy to serialize. Any other
-   executor of the same IR — a stream-fusion compiler that
-   rewrites it into a single nested generator, say — must
-   produce the identical dispense sequence under §9.2's
-   correctness contract, so the IR fixes the semantics and
-   the executor is free.
-2. **Per-tuple cost stays bounded.** No opcode dispatch per
-   tuple — the per-opcode work happens at interpret-time
-   (one walk). Per-tuple cost lives inside the stream
-   types' `advance()` methods, which are direct virtual
-   calls.
-
-The combination means: declarative IR with clear semantics,
-without sacrificing per-tuple throughput.
+1. **The IR sequence is small and analyzable.** It is linear,
+   typed, and immutable, so tools such as the bounds checker
+   inspect it in one walk, and it can be serialized. Any other
+   executor of the same IR — for example a stream-fusion
+   compiler that rewrites it into a single nested generator —
+   must produce the identical dispense sequence under §9.2's
+   correctness contract. The IR therefore fixes the semantics,
+   and the executor may be chosen freely.
+2. **Per-tuple cost stays bounded.** There is no opcode dispatch
+   per tuple: the per-opcode work happens once, at
+   interpret-time. Per-tuple cost is the cost of the stream
+   types' `advance()` methods, which are direct virtual calls.
 
 ## Materialization barriers vs streaming
 
@@ -116,17 +120,17 @@ barriers:
   children to exhaustion on first `advance()`, then iterates
   with modular cursors.
 
-Every other stream type is **streaming**: O(operator-local
-state) per `advance()` above its arity. `CartesianStream` is
-the most subtle case — it caches axes 1..N (which the
-operator needs to re-iterate over) but streams axis 0 lazily.
+Every other stream type is **streaming**: each `advance()` uses
+O(operator-local state) above its arity. `CartesianStream` is
+the least obvious case: it caches axes 1..N, which it iterates
+repeatedly, but streams axis 0 lazily.
 
 ## The R1 + R2 boundary: AST vs IR
 
 Two of the algebra's reductions, R1 ("order Lex → counter
 wrapper") and R2 ("order non-Lex → indexed push-down"), are
-**IR compilation decisions**, not AST rewrites. The rule:
-`optimize()` never rewrites the AST for them; the IR compiler
+**IR compilation decisions**, not AST rewrites. `optimize()`
+never rewrites the AST for them; the IR compiler
 (`ir::compile`) chooses the opcode from
 `metadata.index_addressable`:
 
@@ -139,9 +143,9 @@ wrapper") and R2 ("order non-Lex → indexed push-down"), are
   `Op::OrderMaterialize { indexed: false }` (pull the full
   input, apply the strategy, emit).
 
-The AST shape doesn't change for R1/R2; only the chosen IR
-opcode does. The reducibility catalog (spec §10.10.3) records
-R1 and R2 as IR-compilation eligibilities so the optimizer's
+The AST shape is the same for R1/R2; only the chosen IR opcode
+differs. The reducibility catalog (spec §10.10.3) records R1 and
+R2 as IR-compilation eligibilities so the optimizer's
 introspection surface reports them.
 
 ## Trait object choice
@@ -149,11 +153,10 @@ introspection surface reports them.
 `Box<dyn TupleStream>` is the required representation for the
 stack. The rejected alternatives are:
 
-- **Generic enums** — one enum variant per stream type.
-  Would avoid trait-object indirection but inflate the enum
-  to cover every stream-type's distinct state. Harder to
-  extend (adding a new strategy means a new enum arm
-  everywhere).
+- **Generic enums** — one enum variant per stream type. This
+  avoids trait-object indirection, but the enum must hold every
+  stream type's distinct state, and adding a new strategy means
+  a new enum arm at every match.
 - **Stream-fusion via closures** — a "compile to a single
   nested generator" representation. It is not part of this IR
   and cannot be selected by the compiler.
@@ -177,10 +180,10 @@ opcode:
 | `OrderMaterialize` | 1 | 1 |
 | `Dispense` | 1 | 0 |
 
-A well-formed program ends with exactly one stream on the
-stack just before `Dispense` (which consumes it). The
-`Program::stack_depth()` method computes the maximum depth
-ever reached during interpretation, which bounds spec §9.3's
+A well-formed program has exactly one stream on the stack
+immediately before `Dispense`, which consumes it. The
+`Program::stack_depth()` method computes the maximum stack depth
+reached during interpretation, which bounds spec §9.3's
 `O(depth(C))` operator-stack term.
 
 ## What lives in this layer, what doesn't
@@ -201,8 +204,8 @@ ever reached during interpretation, which bounds spec §9.3's
   runtime evaluator and the kernel's scope.
 - Source evaluation for `Generator` / `WorkloadParamList` /
   continuous sources. The static interpreter exhausts these
-  to `None` (no tuple); the runtime evaluator owns
-  evaluated-source behavior.
+  to `None` (no tuple); evaluated-source behavior is defined by
+  the runtime evaluator.
 - Stream-fusion compilation is not part of this IR. The
   specified executor is the stack-machine interpreter, and
   its dispense sequence is governed by §9.2.
@@ -212,19 +215,20 @@ comprehension through `iteration::comprehension::eval`
 (`evaluate_spec`, one clause source to its list of values) and
 `iteration::comprehension::runtime::evaluate_for_iteration`
 (a whole comprehension to its tuples). Both evaluate against
-`&dyn Lookup` (`kernel::interp::Lookup`): the name resolution
-a `{name}` placeholder or a bare identifier reads. The
-interpreter kernel implements `Lookup`, and `Layered` puts a
-tuple's bindings in front of any other lookup, so the
-evaluator is engine-neutral — opening a traversal on the
-closure tier or the native engine evaluates the same
-comprehension against the same scope, and needs no kernel of
-the engine that opens it.
+`&dyn Lookup` (`kernel::interp::Lookup`), the name resolution
+used to read a `{name}` placeholder or a bare identifier. The
+interpreter kernel implements `Lookup`, and `Layered` resolves a
+tuple's bindings before any other lookup. The evaluator is
+therefore engine-neutral: opening a traversal on the closure
+tier or the native engine evaluates the same comprehension
+against the same scope, and does not require a kernel of the
+engine that opens it.
 
 ## Adding a new opcode
 
-If a new IR opcode is genuinely needed (vs. just a new
-strategy that's a parameterization of `OrderMaterialize`):
+A new IR opcode is added only when the behavior cannot be
+expressed as a new strategy, that is, as a parameterization of
+`OrderMaterialize`. The steps are:
 
 1. Add the variant to `Op` in `op.rs`. Implement
    `stack_effect` and `is_barrier`.
@@ -238,7 +242,7 @@ strategy that's a parameterization of `OrderMaterialize`):
    `Op` enum's documentation in the comprehension spec
    §9.1.
 
-The eight §9.1 opcodes are the IR; adding one is a
-coordinated change across the algebra spec + IR. Strategies
-should normally be added as new `StrategyName` variants (no
-IR change) rather than new opcodes.
+The eight §9.1 opcodes constitute the IR, so adding one is a
+coordinated change to the algebra spec and the IR. New
+strategies are normally added as `StrategyName` variants, which
+require no IR change, rather than as new opcodes.

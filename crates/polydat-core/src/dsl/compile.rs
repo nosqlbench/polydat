@@ -2435,9 +2435,9 @@ impl Compiler {
 /// ([`crate::KernelError::Refused`]); a host drives the result through
 /// [`crate::Kernel`] without knowing which engine it holds. The
 /// `compile_polydat_kernel*` and `compile_polydat_checked` entry
-/// points are this on `Engine::default()`; `compile_polydat`,
-/// `compile_polydat_interpreter_with_options`, and the deprecated forms build
-/// the interpreter's kernel.
+/// points and `compile_polydat` are this on `Engine::default()`;
+/// `compile_polydat_interpreter_with_options` and the deprecated forms
+/// build the interpreter's kernel.
 pub fn compile_polydat_with(
     source: &str,
     engine: crate::Engine,

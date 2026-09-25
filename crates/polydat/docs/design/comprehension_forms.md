@@ -1,19 +1,28 @@
-# Comprehension Forms — Polydat Design
+---
+type: specification
+title: Comprehension Forms
+timestamp: 2026-09-25
+description: "The comprehension algebra: constructors, closure and validity axioms, boundedness, algebraic equivalences, the operator IR, and dispense semantics."
+tags: [iteration, language]
+---
 
-This document is the reference for the comprehension algebra: its
-constructors, closure properties, validity axioms, metadata
-propagation rules, optimizer rewrites, IR opcodes, consumption
-surfaces, and the verification rule every rewrite is held to. The
-text surface that produces these ASTs is Polydat's own `for`
-construct ([The Polydat Grammar](polydat_grammar.md) §16, [The `for`
-Construct](for_traversal.md)); §8 states how that surface maps onto
-the algebra. The forcing question: **given filtering, ordering,
-unioning, parallel-zipping, cartesian-multiplying, and
-bounded/unbounded source distinctions, can every meaningful
-combination be written in one regular grammar, validated by a small
-axiom set, and compiled to a small operator language that runs in
-bounded memory beyond unavoidable combinatoric tracking?** This
-document says yes, and shows how.
+# Comprehension Forms
+
+This document specifies the comprehension algebra: its constructors,
+closure properties, validity axioms, metadata propagation rules,
+optimizer rewrites, IR opcodes, consumption surfaces, and the
+verification rule every rewrite is held to. Filtering, ordering,
+union, lockstep zip, cartesian product, and bounded, unbounded, and
+continuous sources are all written in one regular grammar, validated
+by a small axiom set, and compiled to a small operator language whose
+memory use is bounded except at explicitly declared materialization
+barriers. The text surface that produces these ASTs is Polydat's own
+`for` construct; §8 states how that surface maps onto the algebra.
+
+**Related specifications:** [The Polydat Grammar](polydat_grammar.md)
+§16, [The `for` Construct](for_traversal.md), [Cursor
+Partitions](cursor_partitions.md), [Subcontext
+Construction](subcontext_construction.md).
 
 ---
 
@@ -22,8 +31,10 @@ document says yes, and shows how.
 A **comprehension** is a value-producing expression whose value is
 an ordered stream of **named tuples**. A tuple is one
 `Vec<(String, Value)>` — a finite set of `(name, value)` pairs.
-Across a single comprehension's dispense, every tuple carries the
-**same set of names** in the same order; only the values vary.
+Across a single comprehension's dispense, every tuple has the
+**same set of names** in the same order; only the values vary. To
+**dispense** is to emit the comprehension's tuples, in order, to the
+consumer pulling from it.
 
 Comprehensions are *first-class*: the same constructors apply
 whether the comprehension appears in a user-authored expression,
@@ -37,10 +48,11 @@ type**: comprehension. There is no `clause` type that's separate
 from `comprehension`; a clause is a comprehension. There is no
 "filtered comprehension" type distinct from "comprehension"; a
 filter applied to a comprehension yields another comprehension.
-This is the closure property that makes the algebra compose.
+Because of this closure property, any constructor's output is a
+valid operand of any other constructor.
 
 The value-level type is `comprehension`. The compile-time
-metadata each comprehension carries (its tuple shape, its
+metadata of each comprehension (its tuple shape, its
 boundedness, its materialization-need) is **derived** from the
 constructor and its operands, not declared independently.
 
@@ -65,7 +77,7 @@ chains — is expressible as a use of one or more of these four
 constructors. The constructors are the **minimal closed set**
 under composition.
 
-### 2.1 Why exactly four
+### 2.1 Rationale for exactly four
 
 - **Sources** are leaves of the operator tree. Without them, the
   tree has nothing to compose over.
@@ -76,13 +88,12 @@ under composition.
   composition of the others. (Cartesian is N-dim; zip is 1-dim
   diagonal of an N-dim cartesian, so technically reducible to
   `filter(cartesian(...), is-diagonal)` — but that costs O(N^k)
-  evaluation for a 1/N^(k-1) survival rate. Keeping zip as its
-  own constructor is a performance contract, not just a
-  convenience.)
-- **Selection** filters; it has no expressive substitute. You can
-  emulate `filter` by `cartesian` against a predicate-derived
-  source, but that's a re-encoding, not a derivation.
-- **Permutation** reorders. It's the only operator that touches
+  evaluation for a 1/N^(k-1) survival rate. Zip is a separate
+  constructor because of that performance contract.)
+- **Selection** filters; it has no expressive substitute. `filter`
+  can be emulated by `cartesian` against a predicate-derived
+  source, but that is a re-encoding, not a derivation.
+- **Permutation** reorders. It is the only operator that changes
   the *sequence* of dispense without touching the set of dispensed
   tuples (when un-truncated) or their values (ever).
 
@@ -129,11 +140,10 @@ materializing one `Value`. Continuous sources are measures, not
 streams — a clause over a continuous source cannot enumerate
 on its own; it must be wrapped in a sampling order (V8 in §5)
 that turns the continuous measure into a finite ordered
-traversal. This is the load-bearing model choice for the whole
-algebra — see §6 for the propagation rules that make every
-composition stream by default and §10 for the optimizer
-rewrites that preserve streaming through combinators that
-would naïvely materialize.
+traversal. The rest of the algebra is built on this choice: §6
+gives the propagation rules under which every composition streams
+by default, and §10 gives the optimizer rewrites that preserve
+streaming through combinators that would naïvely materialize.
 
 **Tuple shape:** `[(name, Value)]` — one entry, one name.
 **Cardinality:** equals the source's declared cardinality; may
@@ -159,8 +169,8 @@ operation resolution performs is **peeling exactly one level**:
   or it does not, in which case the whole value is bound as a
   single element.
 
-One-level peeling is the invariant that keeps "iterate the
-interior of `V`" and "pass `V` whole" from conflating: a
+One-level peeling keeps "iterate the interior of `V`" distinct
+from "pass `V` whole": a
 list-of-vectors peels to *vectors* (each bound as-such); a single
 vector peels to *scalars*. Nothing flattens twice; no form
 flattens more than another.
@@ -168,34 +178,32 @@ flattens more than another.
 The parser-/resolver-layer **surface** for the source position —
 which syntactic forms exist and how an author selects peel vs.
 no-peel — is the `for` construct's source surface
-([The Polydat Grammar](polydat_grammar.md) §16.2); this section owns
-the resolution **semantics** that surface maps to.
+([The Polydat Grammar](polydat_grammar.md) §16.2); this section
+specifies the resolution **semantics** that surface maps to.
 
 #### 3.1.2 The `iteration_interior` predicate
 
-The peel/wrap decision is made in exactly one place —
+The peel/wrap decision is made in exactly one place,
 `polydat_core::iteration::comprehension::source_values::iteration_interior(&Value) ->
-Option<Vec<Value>>` — replacing the former scattered per-type arms
-(`PartitionList`-unpack / `Str`-split / `Ok(other)`-wrap) in the
-evaluator. `Some(interior)` ⇒ iterable, peel one level; `None` ⇒
+Option<Vec<Value>>`; the evaluator has no per-type peeling of its
+own. `Some(interior)` ⇒ iterable, peel one level; `None` ⇒
 iteration scalar, wrap as a singleton.
 
 | `Value` | interior |
 |---|---|
 | `VecF32` / `VecF64` / `VecF16` / `VecI8` / `VecI16` / `VecI32` / `VecI64` (native vectors) | the element values (numeric) |
 | `Reg128` with a lane-typed view (`I8x16` … `F64x2`) | the lane values (numeric) |
-| `Json` that is an array | the element values (each carried as `Json`) |
+| `Json` that is an array | the element values (each a `Json` value) |
 | `Ext` exposing a `PartitionList` ([Cursor Partitions](cursor_partitions.md)) | the partition entries |
 | `Str` | its **string-comprehension tokens** (§3.1.3) |
 | `U64` / `I64` / `U128` / `I128` / `F64` / `Bool` / `Bytes` / `Handle` / `None` / non-array `Json` / opaque `Ext` / `Reg128` with the `Raw` view | none (scalar) |
 
 **String position is resolved at parse, not in the predicate.**
-The parser resolves quote-kind at
-the **source-text layer**: the parser turns a single-quoted source
-into a one-element literal, so by the time a bare `Value::Str`
-reaches `iteration_interior` the intent is always "iterate it" and
-the predicate is a pure function of the value. A whole-string
-binding is reached via the no-peel form `x in [s]` or a
+The parser resolves quote-kind at the **source-text layer**: it
+turns a single-quoted source into a one-element literal, so a bare
+`Value::Str` passed to `iteration_interior` is always meant to be
+iterated, and the predicate is a pure function of the value. A
+whole-string binding is written with the no-peel form `x in [s]` or a
 single-quoted source (§3.1.3), both resolved before the predicate
 runs.
 
@@ -222,9 +230,9 @@ the token. Each token is typed like a literal-list element
 numeric values and `"a:1, b:2"` yields `:`-tuple strings for the
 next layer to peel. A single-token double-quoted string
 degenerates to the no-peel singleton for free (`"OTHER"` →
-`["OTHER"]`). The one separator rule is shared by the parse-time
-(`source_parser`) and runtime (`eval`) paths so the two can never
-drift.
+`["OTHER"]`). The parse-time (`source_parser`) and runtime (`eval`)
+paths use this same separator rule, so they always split a string
+identically.
 
 `{name}` interpolation is **orthogonal to quote-kind**: it runs on
 both quote kinds in both positions, so interpolate-and-atomic
@@ -237,13 +245,12 @@ iteration interior of a source-position string.
 List-comprehension-sugar elements and bare sources are parsed by
 the **core Polydat expression grammar** — the same grammar used
 for bindings and read by `polydat::dsl::refs` — with no bespoke
-list-element dialect. One consequence is load-bearing: a **bare
-identifier in source position is a wire/param/const reference**,
-not a string literal. `mnc in mnc_values` resolves `mnc_values`
-against the kernel exactly as `mnc in {mnc_values}` would, then
-peels/wraps via `iteration_interior`. The only string literal is a
-quoted string. This **retires** the pre-18f rule that coerced a
-bare word to a string.
+list-element dialect. Consequently, a **bare identifier in source
+position is a wire/param/const reference**, not a string literal,
+and a bare word is never coerced to a string. `mnc in mnc_values`
+resolves `mnc_values` against the kernel exactly as
+`mnc in {mnc_values}` would, then peels/wraps via
+`iteration_interior`. The only string literal is a quoted string.
 
 A single bare-identifier source that resolves to no
 wire/const/param/outer-iter-var is a **hard error** with a quoting
@@ -259,15 +266,14 @@ splits the `[…]` form into two compilation paths:
 
 - A **pure-literal** bracket list (numbers / bools / quoted
   strings, no spread, no bare reference) bakes to `Source::Literal`
-  at parse time with a static cardinality — the historical fast
-  path, unchanged.
+  at parse time with a static cardinality.
 - Any bracket list with a **bare-identifier reference** element or
-  a `…` / `...` **spread** defers to `Source::Generator` carrying
-  the bracket text verbatim. The runtime evaluator
+  a `…` / `...` **spread** defers to `Source::Generator`, which
+  holds the bracket text verbatim. The runtime evaluator
   (`eval::try_eval_bracket_list`) resolves each element against the
-  kernel and applies one-level spread peeling. This is what lets a
+  kernel and applies one-level spread peeling. Deferral lets a
   list element reference a wire, or splice a list-valued param,
-  that isn't known until scope-init.
+  whose value is not known until scope-init.
 
 **Validator support.** `Comprehension::referenced_source_names()`
 (`ast.rs`) walks every leaf `Source` and returns the free names
@@ -287,8 +293,8 @@ cartesian(
 ```
 
 Sequential composition of N children, evaluated **left-to-right**
-with each child's source evaluated in a context that carries
-prior children's bindings. The classical independent cross-
+with each child's source evaluated in a context that binds the
+prior children's names. The classical independent cross-
 product is the **degenerate case** when no child's source
 references a prior child's variable.
 
@@ -327,13 +333,12 @@ child's source for `{name}` references to any prior child's
 name. The pass produces an `is_dependent` flag the interpreter
 and the optimizer consult.
 
-**Why dependent semantics by default.** The classical
-independent cross-product is a useful but special case; the
-algebra's general operator is the dependent product. Treating
-dependency as the general case (with independence as an
-optimization) lets workload authors write the flat clause
-shape regardless of whether their clauses happen to reference
-each other — the algebra figures out the right enumeration.
+**Rationale for dependent semantics by default.** The algebra's
+general operator is the dependent product, and the independent
+cross-product is its special case, treated as an optimization.
+Authors therefore write the same flat clause shape whether or not
+their clauses reference each other, and the independence pass
+selects the enumeration.
 
 ### 3.3 `zip(c1, c2, ..., cN, mode)` — lockstep combinator
 
@@ -373,10 +378,9 @@ declaration order.
 
 - Children must have the **same tuple shape** (same set of names,
   in the same order). A consumer pulling from a union always
-  receives a tuple with one consistent shape; this is the
-  load-bearing contract that lets downstream consumers
-  destructure by name without knowing which sub-space the tuple
-  came from.
+  receives a tuple with one consistent shape, so downstream
+  consumers can destructure by name without knowing which
+  sub-space the tuple came from.
 - Children's tuple-name set order is checked structurally; if
   child A produces `(k, limit)` and child B produces
   `(limit, k)`, the parser rejects (despite the same name set).
@@ -437,27 +441,33 @@ strategy, not a user-callback escape hatch.
 
 The strategy taxonomy is the closed `StrategyName` set (§14.4):
 `Lex`, `ReverseLex`, `Diagonal`, `Antidiagonal`, `Extrema`, `Shells`,
-`Halton`, `Sobol`, `Lhs`, and `Shuffle`. Each strategy declares its
-**input requirement** in terms of the
-input's `IndexFn` (per §10.7's metadata algebra) and its
+`Halton`, `Sobol`, `Lhs`, and `Shuffle`. An input's `IndexFn` is its
+**addressing scheme**: a closed-form mapping from a position
+`0..cardinality` to the tuple at that position, or `None` when no
+such mapping exists (§10.7 defines the variants). Each strategy
+declares its **input requirement** in terms of the input's
+`IndexFn` and its
 behavior over discrete vs. Continuous inputs. The validator
 (V4) accepts only inputs whose `IndexFn` satisfies the
 strategy's requirement; V8 additionally requires Continuous
 inputs to be wrapped in a strategy that supports them.
 
-**Strategy invocation surface.** Strategies have a single
-entry point, `apply(&self, input: &EvaluatedInput,
-truncation: Option<u64>) -> Vec<Tuple>`, where the
+**Strategy invocation surface.** A strategy is applied through a
+single entry point, `apply(&self, input: &EvaluatedInput,
+truncation: Option<u64>) -> Vec<Tuple>`. It takes the evaluated
+input and an optional cap on the number of tuples, and returns the
+input's tuples in the strategy's order, cut to the cap when one is
+given. The
 `EvaluatedInput { tuples: Vec<Tuple>, cardinality: u64,
-index_fn: IndexFn }` carries the input's tuples, cardinality,
+index_fn: IndexFn }` holds the input's tuples, cardinality,
 and `IndexFn` (each source's own `EvaluatedSource` is §10.7.6).
 There is no split between "metadata-bearing" and
-"metadata-naive" apply paths — the strategy reads the
+"metadata-naive" apply paths: the strategy reads the
 `IndexFn` from the evaluated input and routes accordingly.
-This is what makes V4 enforceable at strategy-invocation
-time independent of how the source was authored (literal,
-range, context-free generator, or workload-param):
-the shape is *always* known by the time `apply` runs.
+Because the shape is *always* known by the time `apply` runs, V4
+is enforceable at strategy-invocation time however the source was
+authored (literal, range, context-free generator, or
+workload-param).
 
 | Strategy | Input requirement | Discrete behavior | Continuous behavior |
 |---|---|---|---|
@@ -482,12 +492,12 @@ sample real-valued ranges should default to one of these three.
 to an input that mathematically satisfies its requirement but
 collapses to a trivial form (e.g. `Extrema` over a 1-D index
 space yielding `{first, last}`) is well-formed and compiles. The
-spec's posture is **don't police mathematically valid recipes**
-— automated workload generation, exploratory testing, and
+validator does **not reject mathematically valid recipes**, because
+automated workload generation, exploratory testing, and
 parameter-sweep tooling often produce technically-degenerate
-forms that are nonetheless correct. See §5.8 for the validation-
-mode mechanism that flags these as warnings (default) or errors
-(strict mode).
+forms that are nonetheless correct. §5.8 specifies the validation
+modes that report these as warnings (default) or errors (strict
+mode).
 
 - Strategies split into **streaming** (`Lex` only) and
   **materializing** (every other strategy). See §6.
@@ -588,7 +598,7 @@ The §3.6 table is the per-strategy reference. The summary:
   be non-`None` — i.e. the input must be a `cartesian`, a `zip`
   (any mode), a `union` of index-addressable children, or a
   `clause` (which is a 1-axis `Lattice`).
-- V5 carries forward: a `filter` wrapping an index-addressable
+- Under V5, a `filter` wrapping an index-addressable
   input does NOT destroy the underlying addressability for V4's
   purposes. V4's check looks through one filter layer.
 
@@ -605,20 +615,19 @@ comprehensions whose sources are all statically evaluable
 `IntRange` / `ContinuousInterval` / context-free
 generators flattened per §10.7.7), the compile stage (`validate`, run by
 `CompiledComprehension::from_ast` and by the `for` lowering) fires
-V4 early as a usability nicety —
-malformed shapes error at parse time. For context-required
-sources, the early fire is skipped; runtime fire at strategy
-invocation is the load-bearing check. Either way, the axiom
-is the same.
+V4 early so that malformed shapes error at parse time. For
+context-required sources, the early check is skipped, and the
+runtime check at strategy invocation is the authoritative one.
+The axiom is the same at both times.
 
 **V4 + dependent Cartesian.** When a `cartesian`'s children
 have cross-references (dependent product per §3.2), the
 result is *not* a regular n-D lattice — the "shape" of the
 inner clause varies per outer-clause value. Named strategies
 other than `Lex` are mathematically undefined over a
-dependent product (extrema of what corners? Halton samples in
-what unit cube?). V4 rejects non-`Lex` strategies over a
-dependent Cartesian. `Lex` still works because it's a
+dependent product, which has no corners for extrema and no unit
+cube for Halton samples. V4 rejects non-`Lex` strategies over a
+dependent Cartesian. `Lex` is accepted because it is a
 pass-through over whatever natural enumeration the dependent
 walk produces. *Reason:* the strategies' geometric
 interpretations require an independent product space; the
@@ -649,17 +658,16 @@ V5's transparency is **one filter layer**, not arbitrarily deep.
 folding (§7.2) to collapse to one filter first, then V4's
 look-through applies.
 
-V5 applies **uniformly across cardinality classes**: a filter
-wrapping a `Continuous` or `Hybrid` input also has its underlying
-`IndexFn::Continuous` / `IndexFn::Hybrid` surfaced for V4's
-check, even though the filter itself produces `ContinuousAtMost`
-/ `Hybrid` (still cardinality-reduced) with `index_addressable
-= None`. So `order(filter(c_continuous, p), Halton, Some(n))`
-fires R2 push-down (Halton draws over the underlying continuous
-box) and applies the predicate per drawn sample. The
-"extrema-of-survivors" semantic carries to the continuous case
-as "samples-from-the-original-box that happen to satisfy the
-predicate."
+V5 applies **uniformly across cardinality classes**: V4's check
+also sees the underlying `IndexFn::Continuous` / `IndexFn::Hybrid`
+of a `Continuous` or `Hybrid` input wrapped by a filter, even though
+the filter itself produces `ContinuousAtMost` / `Hybrid` (still
+cardinality-reduced) with `index_addressable = None`. So
+`order(filter(c_continuous, p), Halton, Some(n))` fires R2
+push-down (Halton draws over the underlying continuous box) and
+applies the predicate per drawn sample. In the continuous case,
+"extrema of survivors" becomes "samples from the original box that
+satisfy the predicate."
 
 **Axiom V6 (discrete-bounded-required operations on unbounded
 discrete inputs).** `order` with a materializing strategy
@@ -669,18 +677,17 @@ finite cardinality (`Bounded(n)` or `BoundedAtMost(n)`).
 Applying these to an `Unbounded` discrete comprehension is
 invalid; the parser rejects with a clear "cannot
 reorder/zip an unbounded stream" message. *Reason:*
-materialization assumes the stream fits in memory; we
-refuse to enable a runtime OOM.
+materialization assumes the stream fits in memory, and the
+validator rejects a form that would exhaust memory at runtime.
 
 V6 is the **discrete unboundedness** rejection. The companion
 rejection for `Continuous` / `ContinuousAtMost` inputs is V8 —
 continuous-without-sampling is invalid because it has no
 canonical enumeration order at all (not just because it
 wouldn't fit in memory). The two axioms partition the
-"non-finite-discrete" space cleanly: V6 catches unbounded
-discrete streams reaching a barrier; V8 catches continuous
-measures reaching the outermost dispense without an enclosing
-sampling order.
+"non-finite-discrete" space: V6 rejects an unbounded discrete
+stream that is input to a barrier; V8 rejects a continuous measure
+at the outermost dispense that has no enclosing sampling order.
 
 **Axiom V7 (zip cardinality contract).** A `zip` under `Strict`
 mode requires all children's cardinalities equal. Mismatch is
@@ -720,7 +727,7 @@ happens at parse time on the source:
 
 *Reasons:* a continuous measure has no canonical enumeration
 order — the mathematical object is a measure, not a sequence.
-The order + truncation pair is what selects a finite,
+The order + truncation pair selects a finite,
 deterministic, named traversal from the measure. Sampling
 strategies (Halton, Sobol, Lhs) work by inverse-CDF mapping or
 density-weighted point selection; both require a normalizable
@@ -769,10 +776,10 @@ something else.
 Two validation modes:
 
 - **Permissive (default).** V1 – V9 enforced as errors;
-  degenerate compositions emit a `ValidationWarning` carrying
+  degenerate compositions emit a `ValidationWarning` containing
   the location, the degeneracy reason, and a suggested
   alternative if one exists. The comprehension compiles and
-  runs. Warnings surface through the validator's structured
+  runs. Warnings are reported in the validator's structured
   output (`from_ast_with`) and, in a compile, as
   `ComprehensionWarning` events in the compile event log; consumers
   (workload loader, REPL, tooling) decide
@@ -783,7 +790,7 @@ Two validation modes:
   `CompiledComprehension::from_ast_with(_, Mode::Strict)`. Used by
   workload-loading paths that want a clean bill of health.
 
-The degenerate-composition catalog (initial):
+The degenerate-composition catalog:
 
 | Pattern | Reason | Suggested alternative |
 |---|---|---|
@@ -793,16 +800,14 @@ The degenerate-composition catalog (initial):
 | `filter(c, "false")` | Empty dispense sequence | If intentional, use an empty literal source; if not, the predicate is bug-shaped |
 | `zip([c], _)` / `cartesian(c)` / `union(c)` | Singleton variant is identity (I1 – I3) | The optimizer's R0 elides these; the warning surfaces the redundancy at the source AST |
 
-The catalog grows by coordinated addition (new entry + a
-suggestion + a test that exercises both permissive and strict
-modes). The point is not exhaustive coverage of every possibly-
-unwise form; it's catching the cases that experience shows
-authors stumble into.
+An entry is added to the catalog together with its suggestion and a
+test that exercises both permissive and strict modes. The catalog
+does not attempt exhaustive coverage of unwise forms; it lists the
+degenerate forms authors commonly write by mistake.
 
-**Why this isn't a V-axiom.** V-axioms are about defining what
-"comprehension" means. Validation modes are about *author
-ergonomics* — calling attention to defined-but-likely-unintended
-shapes without blocking them. Test automation, exploratory
+**Rationale: degeneracy is not a V-axiom.** V-axioms define what
+a comprehension means. Validation modes report defined but likely
+unintended shapes to the author without blocking them. Test automation, exploratory
 sweeps, and code generation legitimately produce these shapes;
 hard rejection would force defensive wrapping at the call site.
 
@@ -810,11 +815,12 @@ hard rejection would force defensive wrapping at the call site.
 
 ## 6. Boundedness and materialization
 
-Every comprehension AST has two compile-time-derivable
-properties: its **cardinality class** and its **memory
-footprint class**. The algebra preserves these properties
-predictably under composition, which is what lets the
-"reasonable resource use" axiom hold.
+Every comprehension AST has two properties derivable at compile
+time: its **cardinality class**, which says how many tuples it can
+dispense, and its **memory footprint class**, which says how much
+memory its evaluation holds. Each constructor derives both from its
+operands by a fixed rule, so the resource use of any composition is
+known before it runs.
 
 ### 6.1 Cardinality class
 
@@ -908,12 +914,11 @@ points. The compiler can statically classify each AST as
 total memory budget is the sum of the barriers' working sets
 plus per-tuple constant overhead.
 
-This is the load-bearing model property: a user who constructs
-a comprehension AST and pulls one tuple from the resulting
-streamer pays O(1) steady-state cost per pull, plus whatever
-the explicit barriers in their AST declare. The "ability to
-compute the first tuple validates the steady-state overhead"
-contract from the user's feedback is exactly this property.
+A user who constructs a comprehension AST and pulls one tuple from
+the resulting streamer therefore pays O(1) steady-state cost per
+pull, plus whatever the explicit barriers in the AST declare.
+Computing the first tuple establishes the steady-state overhead of
+every later pull.
 
 ### 6.3 The materialization barrier
 
@@ -935,26 +940,28 @@ to produce correct output:
 
 - `order(c, Lex, Some(n))` — no barrier; emit first n.
 - `order(c, halton/n, Some(n))` — barrier of size `n` if
-  push-down (§10) compiles the halton sequence to direct
-  index selection over the cartesian lattice. Naïve unfused
-  compilation has barrier of size `|c|`.
-- `order(c, extrema/k)` — barrier of size `|c|` today: `/k` selects
+  push-down (§10: computing the selected positions directly from
+  the input's index space instead of enumerating the input)
+  compiles the halton sequence to direct index selection over the
+  cartesian lattice. Naïve unfused compilation has barrier of size
+  `|c|`.
+- `order(c, extrema/k)` — barrier of size `|c|`: `/k` selects
   the first k strata of the lattice index space in closed form, but
   the strategy still holds its materialized input (§15.1); a lazy
   index lookup would reduce it to the selected strata.
 - `zip(Cycle)` shorter children — barrier of size = each
   shorter child's cardinality.
 
-Push-down (§10) is **the** mechanism that keeps these working
+Push-down (§10) is the mechanism that keeps these working
 sets small. Naïve compilation produces correct output but at
-full-input-cardinality cost; the optimizer's job is to recognize
-patterns where a closed-form lattice-index computation produces
-the same result with O(output-size) memory. This is why §10
-is a **required** pass, not an optional one — for many user-
-authored expressions the naïve compilation makes streaming
-illusory.
+full-input-cardinality cost; the optimizer recognizes patterns
+where a closed-form lattice-index computation produces the same
+result with O(output-size) memory. §10 is therefore a **required**
+pass, not an optional one: for many user-authored expressions the
+naïve compilation materializes the whole input despite the
+streaming model.
 
-**Validity V6 carries forward unchanged**: a materialization
+**V6 applies to every barrier**: a materialization
 barrier requires bounded input. Unbounded input passing through
 a non-Lex order is a load-time validation failure regardless
 of whether push-down would have shrunk the working set.
@@ -1011,9 +1018,9 @@ The distribution is unconditionally safe because **Axiom V2
 requires identical tuple shape across union children** (§5.2):
 every name `p` could reference is bound by every child, so
 "this predicate makes sense against child a but not child b"
-is structurally impossible. V2 is what makes D1 a rewrite the
-optimizer can fire without any cross-child analysis; loosening
-V2 would loosen D1 in lockstep.
+is structurally impossible. V2 therefore lets the optimizer fire
+D1 without any cross-child analysis; any relaxation of V2 would
+restrict D1 correspondingly.
 
 **D2 — filter does NOT distribute over cartesian.**
 `filter(cartesian(a, b), p)` ≢ `cartesian(filter(a, q),
@@ -1080,10 +1087,10 @@ The algebra is what the compiler manipulates; the author writes a
 flatter surface that desugars to the algebra. The surface is
 Polydat's own: the `for` construct of the statement language
 ([The Polydat Grammar](polydat_grammar.md) §16), whose lexer captures
-the text after `for` as one token and hands it to the comprehension
-parser unchanged, so the surface has exactly one owner. The surface
-preserves regularity by mapping each surface form to exactly one
-algebraic constructor (or a small fixed chain).
+the text after `for` as one token and passes it to the comprehension
+parser unchanged, so only the comprehension parser defines the
+surface. Each surface form maps to exactly one algebraic
+constructor (or a small fixed chain).
 
 ### 8.1 The single `for` keyword
 
@@ -1135,50 +1142,53 @@ and the bracketed-string form are equivalent at the AST level.
 <a id="sec-canonical-text"></a>
 ### 8.2.1 Canonical text
 
-A tree renders to canonical text and the text parses back to the same
-tree: `Comprehension::to_text` and `spec::parse_comprehension_algebra`
-are inverses over the shapes the text can write, and rendering is
-idempotent, so a comprehension built programmatically carries the text
-a written one carries.
+A tree renders to canonical text, and that text parses back to the
+same tree. `Comprehension::to_text` renders a tree and
+`spec::parse_comprehension_algebra` parses text; the two are inverses
+over the shapes the text can write, and rendering is idempotent. A
+comprehension built programmatically therefore renders to the same
+text as a written comprehension with the same tree.
 
-The rendering answers nothing rather than a spelling the parser would
-read back as something else. A tree has no text when its shape is
-outside the grammar of §8.1 — a filter under a cartesian, an order
-under a zip, a nested cartesian — and a source has none when a literal
-holds a value the text cannot write, a JSON value or a string carrying
-a quote, a comma, or a bracket.
+When the parser would read a rendering back as a different tree,
+`to_text` returns no text instead. A tree has no text when its shape
+is outside the grammar of §8.1 (a filter under a cartesian, an order
+under a zip, a nested cartesian). A source has no text when a literal
+holds a value the text cannot write: a JSON value, or a string
+containing a quote, a comma, or a bracket.
 
-A traversal source **is** its comprehension. It holds the tree and
-renders its text from it (`ForSource::to_text`) rather than carrying
-both, so there are not two halves that could describe different
-comprehensions and a program cannot project one while traversing
-another. What a source keeps besides the tree is its position, which is
-provenance; a copy of the text an author wrote is not provenance, it is
-a second answer to a question that has one.
+A traversal source (`ForSource`, the source of a `for` statement)
+stores only the comprehension tree and renders its text from the tree
+on demand (`ForSource::to_text`). Because there is no separately
+stored text, the text and the tree cannot describe different
+comprehensions, and a program cannot project one comprehension while
+traversing another. Besides the tree, a source stores only its
+position in the program text; it does not keep a copy of the text the
+author wrote.
 
-Construction carries the guarantee. `ForSource::comprehension` refuses a
-tree that does not survive the round trip — one with no text at all, and
-one whose text reads back as a different comprehension — so a shape the
-two halves of the grammar disagree about has no source and can never
-reach a program. A refusal there is a gap between the renderer and the
-parser rather than an error in the program, and the diagnostics say so.
+`ForSource::comprehension` constructs a source from a tree and refuses
+a tree that does not round-trip: one with no text, or one whose text
+parses back as a different comprehension. A shape on which the
+renderer and the parser disagree therefore never becomes a source and
+never enters a program. Such a refusal reports a defect in the
+renderer or the parser, not an error in the program, and the
+diagnostic says so.
 
-One consequence is visible to authors: a source prints canonically
-rather than as written, so `limit in 10,20,30` comes back as
-`limit in 10, 20, 30`. That is the projector's ordinary contract,
-idempotence rather than fidelity ([The Polydat
-Grammar](polydat_grammar.md) §0.1), now applying to sources as it
-already did to expressions.
+Authors see one consequence: a source prints in canonical form rather
+than as written, so `limit in 10,20,30` prints as
+`limit in 10, 20, 30`. This is the projector's contract for sources
+and expressions alike, idempotence rather than fidelity ([The Polydat
+Grammar](polydat_grammar.md) §0.1).
 
 ### 8.3 Comprehensions as named values
 
-A comprehension binds to a wire whose port type is `Ext`, carrying a
-reflected `StreamerValue` whose type name is `Streamer`
-([The `for` Construct](for_traversal.md) §3.1); the reflected type
-name is the wire-level tag, and no dedicated port-type variant
-exists. Bound wires reference comprehensions by name through `for`,
-since one keyword opens every comprehension, and the same producer
-may participate in several derived expressions:
+A comprehension can be bound to a wire, making it a **producer**
+that other comprehensions derive from. The wire's port type is
+`Ext`, and its value is a reflected `StreamerValue` whose type name
+is `Streamer` ([The `for` Construct](for_traversal.md) §3.1); the
+reflected type name identifies the value at the wire level, and no
+dedicated port-type variant exists. A derived comprehension names a
+producer after `for`, since one keyword opens every comprehension,
+and one producer may be the base of several derived expressions:
 
 ```text
 base := for k in 1..100, limit in 1..100
@@ -1193,8 +1203,8 @@ fast_corner := for boundary order extrema/1
 ASTs: a derivation is resolved at compile time by applying the filter
 and the order to the base producer's AST, so derivations chain. Every
 stream opened from any of them builds independent evaluation state
-and owns its own dispense cursor; derived comprehensions do not share
-a mutable evaluation cursor.
+with its own dispense cursor (its position in the tuple sequence);
+derived comprehensions do not share a mutable evaluation cursor.
 
 ### 8.4 Inferred union (special case)
 
@@ -1211,8 +1221,9 @@ union.
 
 The algebra compiles to a small operator language suitable for
 either a stream-fusion compiler or a stack-machine interpreter.
-This section is the **executable contract** behind the
-"resource-bounded execution" requirement.
+This section specifies the compilation stages, the operators, the
+correctness and resource-bound contracts of execution, and the
+surfaces through which a compiled comprehension is consumed.
 
 ### 9.0 The stages
 
@@ -1237,8 +1248,8 @@ canonical Comprehension AST
 
 Each stage returns a well-formed value for the next or a typed error
 (§9.7). A later stage never repairs an earlier one's invalid
-representation, and the whole sequence is what `from_ast` and the
-`for` lowering run.
+representation. `from_ast` and the `for` lowering both run the whole
+sequence.
 
 ### 9.1 Operator IR
 
@@ -1334,8 +1345,7 @@ may inspect the sequence (e.g. for cost estimation, tracing,
 or alternative backends) but cannot mutate it post-compile —
 `ir::compile::compile` is the only path from AST to IR, the
 optimizer (§10) is the AST→AST pass required before it, and the
-resulting program is frozen. This is the user feedback on
-§14's "expose IR or not" question: expose it, immutable.
+resulting program is immutable.
 
 ### 9.2 Correctness contract
 
@@ -1386,9 +1396,8 @@ The barrier working-set sizes are:
 
 There are NO hidden buffering, copy, or fan-out terms. Every
 opcode either streams (O(operator-local state) per pull) or
-declares its materialization at compile time. The "basic
-combinatoric tracking data" budget the user asks for is exactly
-this closed-form sum.
+declares its materialization at compile time. This closed-form sum
+is the complete memory budget for combinatoric tracking.
 
 The compile-time bound checker computes this expression
 symbolically from the AST. A consumer can ask: "what is the
@@ -1423,7 +1432,7 @@ imply:
 5. Every IR with `ORDER_MATERIALIZE` over an `Unbounded` discrete
    input fails validation (Axiom V6); every IR whose outermost
    cardinality is `Continuous` or `ContinuousAtMost` fails
-   validation (Axiom V8) — neither reaches compile.
+   validation (Axiom V8), so neither is compiled.
 
 All five guarantees assume the IR was produced from an
 *optimized* AST. §10's post-parse optimizer is a required pass
@@ -1434,26 +1443,28 @@ correctness reference, not the runtime input.
 
 ### 9.5 Consumption surfaces
 
-A compiled comprehension is consumed at two distinct **orders**.
-The orders are not levels in a single pipeline — they are
+A compiled comprehension is consumed at two distinct **orders**:
+as plain coordinate tuples, or as kernels with a tuple already
+bound. The orders are not levels in a single pipeline; they are
 independent, first-class consumption modes that share the compiled
-IR but maintain separate dispense state.
+IR but keep separate dispense state.
 
 #### 9.5.1 The two orders
 
-**First-order: coordinate tuples.** A `CoordinateStream` pulls
-one `Vec<(String, Value)>` per `advance()` — the named
-coordinate tuple, nothing more. This is what §9.1's `DISPENSE`
-opcode produces directly. The consumer interprets the tuple
-however they want: inspection, logging, exporting to another
-system, feeding a non-polydat computation.
+**First-order: coordinate tuples.** Each `advance()` on a
+`CoordinateStream` returns the next named coordinate tuple, one
+`Vec<(String, Value)>`, and nothing more; it returns `None` when the
+comprehension is exhausted. These are the tuples §9.1's `DISPENSE`
+opcode produces. The consumer uses the tuple however it needs:
+inspection, logging, export to another system, or input to a
+non-polydat computation.
 
-**Second-order: scoped kernel instances.** A
-`ScopedKernelStream<K>` pulls one **scoped polydat kernel
-instance** per `advance()` — a `ScopedKernelInstance` whose
-scope already has the coordinate tuple's values bound as scope
-variables. The consumer invokes the kernel as if it were a
-standalone kernel; the coordinate binding is transparent.
+**Second-order: scoped kernel instances.** Each `advance()` on a
+`ScopedKernelStream<K>` returns the next `ScopedKernelInstance`: the
+coordinate tuple together with a child scope of the parent kernel in
+which the tuple's values are bound as scope variables. The consumer
+runs that scoped kernel as it would a standalone kernel, without
+binding the coordinates itself.
 
 The second order is a **functor** over the first: every
 `ScopedKernelStream` is conceptually the image of a
@@ -1464,7 +1475,7 @@ first. The two are independent first-class streams (see §9.5.2).
 
 #### 9.5.2 The surfaces and the independence contract
 
-The surfaces are factories on the compiled comprehension
+The surfaces are factory methods on the compiled comprehension
 (`surfaces::CompiledComprehension`, obtained by `compile(&ast)`,
 `from_ast`, or `from_program`):
 
@@ -1474,24 +1485,42 @@ CompiledComprehension::scoped_kernel_stream<K: KernelScope>(&self, parent: K) ->
 CompiledComprehension::scope_once<K: KernelScope>(&self, parent: &K, coords: &Tuple) -> ScopedKernelInstance<K::Scoped>
 ```
 
-`KernelScope` is the parent's side of the second order: what it
-means to bind a tuple into a child scope of that parent.
+- `coordinate_stream()` returns a new first-order stream positioned
+  at the first tuple.
+- `scoped_kernel_stream(parent)` returns a new second-order stream;
+  `parent` is the kernel scope each tuple is bound into.
+- `scope_once(parent, coords)` binds one given tuple `coords` into a
+  child scope of `parent` and returns that single
+  `ScopedKernelInstance` (§9.5.3).
+
+`KernelScope` is the parent's side of the second order: it defines
+how a tuple is bound into a child scope of that parent.
 `PolydatKernelScope` implements it over a canonical kernel and its
-parent. A `StreamerValue`, the value a producer wire carries,
-exposes `compiled()` and `coordinate_stream()` over the same
-factories ([The `for` Construct](for_traversal.md) §3.1). These
+parent. A `StreamerValue`, the value on a producer wire, exposes
+`compiled()` and `coordinate_stream()` over the same factories
+([The `for` Construct](for_traversal.md) §3.1); both return a
+`Result`, failing when the comprehension does not compile. These
 surfaces bind no names: a comprehension with a context-required
-source (§10.7.0) has no coordinate stream, and `compile` / `from_ast`
-refuse it naming the clause and the names it needs; the traversal
-surface below is where those names resolve. A `StreamerValue`
-carries the same comprehension either way.
+source (§10.7.0: a source that references a coordinate, parameter,
+or wire) has no coordinate stream, and `compile` / `from_ast`
+refuse it with an error naming the clause and the names it needs.
+Those names are resolved on the traversal surface below. A
+`StreamerValue` holds the same comprehension in either case.
+
+The following diagram shows the consumption surfaces and what each
+one produces.
+
+![A comprehension tree or a producer wire's StreamerValue compiles to a CompiledComprehension, whose three factories produce a CoordinateStream, a ScopedKernelStream, or one ScopedKernelInstance; a for traversal evaluates the tree in the body's scope and produces a TraversalStream of activations](../diagrams/comprehension_forms-surfaces.png)
 
 The `for` construct's traversal surface, `TraversalStream`
 ([The `for` Construct](for_traversal.md) §3.6), is a third form
 built on the same evaluation: opening a traversal evaluates the
 whole tuple set through `runtime::evaluate_for_iteration` in the
 body's scope, and each `Activation` is a kernel of its own over the
-body's program with one tuple bound, on any engine. A tile
+body's program with one tuple bound. An activation runs on any of the
+four engines (the interpreter, the closure tier, native, and pure
+native); pure native, as for any program, refuses a body containing a
+node without a native lowering. A tile
 projection consumes a comprehension the same way per render.
 
 Each call to `coordinate_stream` or `scoped_kernel_stream`
@@ -1515,24 +1544,22 @@ The independence is **structural, not performance-driven**:
 - Two traversals opened over the same producer, and two renders
   of the same tile, never share dispense state.
 
-One stream per handle, each with its own dispense cursor, holds
-across both orders and every form.
+Every stream handle, of either order and in every form, has its own
+dispense cursor.
 
 #### 9.5.3 The one-shot map function
 
-`scope_once(parent, coords)` is the **non-streamed** form: a
-pure function that takes a single coordinate tuple (obtained
-from anywhere — typically a `CoordinateStream` snapshot, a
-replay log, or a manually-constructed tuple) and produces a
-single scoped kernel instance. It does not advance any stream
-and does not consult any dispense cursor.
+`scope_once(parent, coords)` is the **non-streamed** form. It is
+a pure function that takes one coordinate tuple, `coords`, from any
+origin (typically a `CoordinateStream` snapshot, a replay log, or a
+manually constructed tuple), binds it into a child scope of
+`parent`, and returns that single scoped kernel instance. It does
+not advance any stream and does not consult any dispense cursor.
 
-This is the surface replay and debugging tooling uses:
-"Replay the kernel for the coordinate tuple captured in this
-log entry," "Run the kernel for this specific point in the
-parameter sweep," "Construct a kernel instance for the tuple
-my UI just emitted." None of these need a stream; they need a
-point query. The `for` construct's random-access
+Replay and debugging tooling use this surface to run the kernel for
+one known point: the coordinate tuple captured in a log entry, a
+specific point in a parameter sweep, or a tuple a user interface
+just emitted. These uses need a point query, not a stream. The `for` construct's random-access
 `TraversalStream::activation(index)` is the same idea for
 activations.
 
@@ -1543,19 +1570,17 @@ produce one `ScopedKernelInstance`, return. The function is
 exposed publicly so callers can perform the same operation
 without going through a streamer at all.
 
-#### 9.5.4 Why two orders, not one
+#### 9.5.4 Rationale for two orders
 
-The temptation is to expose only `ScopedKernelStream` and treat
-the coordinate stream as an internal implementation detail.
-That conflates two concerns:
+Exposing only `ScopedKernelStream`, with the coordinate stream as
+an internal detail, would combine two separate concerns:
 
-- **Coordinate enumeration** is a polydat concern — it's what
-  the algebra in §3–§10 specifies. The coordinate tuple is the
-  observable contract.
-- **Kernel instantiation** is a polydat kernel concern — it's
-  how a coordinate tuple becomes runnable. It involves scope
-  binding, kernel cloning, possibly resource allocation. None
-  of this is comprehension-spec material.
+- **Coordinate enumeration** is what the algebra in §3–§10
+  specifies. The coordinate tuple is the observable contract.
+- **Kernel instantiation** is how a coordinate tuple becomes
+  runnable: scope binding, kernel cloning, and possibly resource
+  allocation. None of this belongs to the comprehension
+  specification.
 
 Separating the surfaces lets:
 
@@ -1597,7 +1622,7 @@ sections above:
   `Program::stack_depth()` and the resource-bound pass agree with
   every opcode's declared stack effect (§9.1, §9.3).
 - **Independent consumers.** Consumption surfaces may share an AST or
-  IR program, but each owns its dispense cursor, strategy state,
+  IR program, but each has its own dispense cursor, strategy state,
   buffers, and kernel state; advancing one consumer cannot advance or
   invalidate another (§9.5.2, §14.3).
 - **Deterministic seeded strategies.** Seeded strategies derive their
@@ -1610,10 +1635,10 @@ sections above:
   which form it came from (§8, §9.4). Two forms that would normalize
   to different trees without an authored distinction are a defect in
   the front end, not two dialects.
-- **Validation is owned here.** V1–V9 are enforced by the compile
+- **Validation is enforced here.** V1–V9 are enforced by the compile
   stage of every entry point (§5); a host or a compatibility parser
   never substitutes for them or bypasses them.
-- **Total metadata.** Every accepted node carries the full §10.7
+- **Total metadata.** Every accepted node has the full §10.7
   bundle; a node the propagator cannot describe is rejected, not
   passed through with a partial bundle.
 - **Bounds before execution.** IR compilation preserves each opcode's
@@ -1632,9 +1657,9 @@ the evaluated contract before selecting an index-sampling strategy
 
 ### 9.7 Error ownership
 
-Each error class has one origin, and a consumer that adds source
-locations or context preserves the underlying category and causal
-chain:
+Each error class originates in exactly one module. A consumer that
+adds source locations or context to an error preserves its
+underlying category and causal chain:
 
 - parse and serde shape errors originate in `spec`;
 - algebra validity errors originate in `validate`;
@@ -1653,7 +1678,7 @@ of tests. Each contract below has coverage of its own in the suite, and
 removing or weakening one requires replacement coverage in the same
 change.
 
-- **One canonical tree.** Every input form reaches the same tree:
+- **One canonical tree.** Every input form produces the same tree:
   the text, the specification document, and a tree built directly are
   compiled and dispensed against each other.
 - **The worked examples of §11**, each compiled and dispensed as the
@@ -1710,15 +1735,13 @@ for k in 1..1_000_000, limit in 1..1_000_000 order halton/30
 is well-formed (passes validity) and compiles to an `ORDER_
 MATERIALIZE(Halton, Some(30))` over a 10¹²-tuple cartesian.
 Naïvely executed, it allocates a 10¹²-element working set to
-extract 30 tuples. That is not "bounded by the AST's declared
-barriers" in any useful sense — the bound exists but is
-catastrophic.
+extract 30 tuples. The memory bound still holds, but it is
+unusably large.
 
-The fix is **required**, not optional: a post-parse pass that
-rewrites the AST into a form whose materialization barriers are
-sized by the *output*, not the *input*. This pass is the
-optimizer. It is part of the compilation contract — running it
-is mandatory before §9.1's IR compilation.
+The **optimizer** is a post-parse pass that rewrites the AST into a
+form whose materialization barriers are sized by the *output*, not
+the *input*. It is part of the compilation contract: running it is
+mandatory before §9.1's IR compilation.
 
 ### 10.1 What "push-down" means here
 
@@ -1892,11 +1915,9 @@ wasted; drop it.
 
 ### 10.3 Worked example: zip with computed permutations
 
-The user feedback specifically called out **zip with computed
-permutations**. Here is what that means and how the optimizer
-makes it tractable.
-
-A user writes:
+This example shows how the optimizer keeps a **zip with a computed
+permutation**, a strategy applied over a zip, from materializing the
+whole zip. An author writes:
 
 ```text
 for (k, limit) in zip_cycle(1..1_000_000, [10, 50, 100])
@@ -1908,13 +1929,12 @@ tuples (cycling the three-element `limit` list), then 100
 Halton-permuted samples.
 
 Naïve compilation:
-1. ZIP(Cycle) enumerates 1,000,000 tuples (cycling the colors).
+1. ZIP(Cycle) enumerates 1,000,000 tuples (cycling the `limit` values).
 2. ORDER_MATERIALIZE(Halton, 100) materializes all 1,000,000.
 3. DISPENSE emits 100.
 
-Working set: 1,000,000 tuples. Heap pressure for a 100-tuple
-output. This is exactly the user's "ability to compute the first
-tuple validates the steady-state overhead" concern.
+Working set: 1,000,000 tuples for a 100-tuple output, all of it
+held before the first tuple is emitted.
 
 The optimizer recognizes:
 - `zip_cycle(c1, c2)` has **a closed-form index addressing
@@ -1928,15 +1948,13 @@ The optimizer recognizes:
 
 So R2 generalizes to zip-with-Cycle: emit 100 Halton draws over
 `0..1_000_000`, look each draw up against the zip's index
-function. Working set: 100 indices + 3 buffered colors (for the
-zip's shorter-child barrier from §6.3). Per-pull cost: one
+function. Working set: 100 indices + 3 buffered `limit` values (for
+the zip's shorter-child barrier from §6.3). Per-pull cost: one
 Halton draw + two modulo operations.
 
-This is the load-bearing case the user named. The optimizer's
-existence (not its merely being present, but its *running before
-compilation*) is what makes `zip · order(halton)` express
-"sample 100 tuples from a billion-tuple cycle" without holding
-a billion tuples. V4's per-strategy input-shape contract (§5)
+Because the optimizer runs before compilation, `zip · order(halton)`
+samples 100 tuples from a very large cycle without holding the
+cycle's tuples. V4's per-strategy input-shape contract (§5)
 admits the composition: Halton accepts any non-`None` `IndexFn`,
 and `zip_cycle` publishes `IndexFn::Modular` per §10.7.
 
@@ -1974,9 +1992,9 @@ After R2 fires:
    `[0, 1_000_000) × [0, 1_000_000)`, look up each.
 5. DISPENSE.
 
-Working set: 30 draws + 2 cursors. The barrier remains a barrier
-in spirit (we still don't emit tuples until the strategy decides
-on the indices), but its size is O(output), not O(input).
+Working set: 30 draws + 2 cursors. The node is still a barrier,
+since no tuple is emitted until the strategy has chosen the
+indices, but its size is O(output), not O(input).
 
 ### 10.5 Worked example: filter distribution shrinking a barrier
 
@@ -2041,18 +2059,23 @@ for [
 ```
 
 The two forms emit different tuple sets; the optimizer never
-rewrites between them. The point of this worked example is to
-show R4 + R5 + R2 composing: filter distribution → per-axis
-filter pushdown → indexed-halton over the resulting union.
+rewrites between them. This example shows R4, R5, and R2 composing:
+filter distribution, then per-axis filter pushdown, then
+indexed Halton over the resulting union.
 
 ### 10.6 Optimizer contract
 
 The optimizer is a thin loop over the **reducibility analyzer**
 (§10.10): ask the analyzer for a `ReducibilityFinding` on the
 current AST, apply the finding's witness if non-empty, repeat
-until the empty finding comes back. All the load-bearing
-intelligence lives in the analyzer; the optimizer just drives
-the loop and re-propagates metadata after each application.
+until the empty finding comes back. Every rewrite decision is made
+by the analyzer; the optimizer only drives the loop and
+re-propagates metadata after each application.
+
+The following diagram shows the optimizer loop and where the two
+IR-compilation eligibilities, R1 and R2, apply (§10.10.5).
+
+![The optimizer loop: canonicalize the validated AST with R0a and R0b, ask the reducibility analyzer for a rewrite, apply the witness and recompute metadata until no rewrite is found, then compile to IR applying R1 and R2](../diagrams/comprehension_forms-optimizer-loop.png)
 
 The optimizer is a function `Ast → Ast` with these properties:
 
@@ -2069,14 +2092,11 @@ The optimizer is a function `Ast → Ast` with these properties:
    that don't apply are simply skipped. Validity is decided
    pre-optimizer (V1-V9 per §5); rejections happen there.
 
-Properties 1 and 4 together are the "tightly and strictly
-verified for correctness and the ability to implement cleanly"
-property the user named: the optimizer can only shrink memory,
-never inflate it, and the dispense sequence is invariant.
+Together, properties 1 and 4 mean the optimizer can only shrink
+memory, never inflate it, and never changes the dispense sequence.
 
-Property 5 means there is no "user wrote something pessimal,
-optimizer reports it" path — the optimizer silently improves
-what it can and leaves the rest. Diagnostics about expressions
+Under property 5 the optimizer never reports an expression as
+inefficient; it silently improves what it can and leaves the rest. Diagnostics about expressions
 that compile but produce degenerate or surprising output (e.g.
 Extrema over a 1-D zip) are §5.8's `ValidationWarning` channel,
 not the optimizer's concern.
@@ -2103,7 +2123,7 @@ equivalence precondition, and this verification.
 ### 10.7 Metadata algebra
 
 The R-rules in §10.2 are guards over a small **metadata bundle**
-carried by every well-formed AST node. The optimizer never
+attached to every well-formed AST node. The optimizer never
 consults the AST for anything else (no global walks, no late-
 binding callbacks, no analysis hooks). Metadata propagates
 bottom-up as a monoid; each constructor's metadata is a total
@@ -2112,9 +2132,9 @@ parameters.
 
 #### 10.7.0 Timing — metadata is contextual, not statically-only
 
-A source's metadata (cardinality, IndexFn) is **a property of
-the evaluated source in a kernel context**, not a property of
-the AST in isolation. The rules in §10.7.1–§10.7.5 below
+A source's metadata (cardinality, IndexFn) is **determined by
+evaluating the source in a kernel context**, not by the AST in
+isolation. The rules in §10.7.1–§10.7.5 below
 specify *what* every constructor's metadata is; this section
 specifies *when* it becomes knowable.
 
@@ -2138,11 +2158,11 @@ Sources are partitioned into three **eval classes**:
   `Order(_, sampling-strategy, Some(n))` discharges V8;
   evaluation is the sampling pass itself.
 
-The propagation rules in §10.7.1–§10.7.5 are unchanged. What
-the rules describe is what holds *once the source has been
-evaluated*. For statically-evaluable sources, "once" is
-compile time; for context-required sources, "once" is
-strategy-invocation time inside the runtime evaluator.
+The propagation rules in §10.7.1–§10.7.5 are the same for all
+three classes and describe what holds *once the source has been
+evaluated*. For statically-evaluable sources that is compile time;
+for context-required sources it is strategy-invocation time inside
+the runtime evaluator.
 
 A statically-evaluable source whose evaluator returns
 `NeedsContext` is a polydat bug, not a workload-author error.
@@ -2326,14 +2346,19 @@ metadata field is read.
   evaluation state.
 - **User-defined extensions.** `IndexFn`, `NaturalOrder`,
   `Materialization`, and `StrategyName` are closed enums. New
-  values land as coordinated type extensions, not registration
-  points. This is what keeps the algebra closed.
+  values are added as coordinated type extensions, not through
+  registration points, which keeps the algebra closed.
 
 #### 10.7.6 The `EvaluatedSource` contract
 
-The single surface every consumer (IR interpreter, strategies,
-V4) uses to read a source's enumerated form. Produced by
-`SourceEval::evaluate(Option<&EvalContext<'_>>)`.
+`EvaluatedSource` is a source's enumerated form: its values, their
+count, and its addressing scheme. It is the only way the IR
+interpreter, the strategies, and the V4 check read a source.
+`SourceEval::evaluate(Option<&EvalContext<'_>>)` produces it: the
+caller passes the scope in which the source's names resolve, or
+`None` when there is no scope, and receives either the evaluated
+source or an `EvalError` saying that a scope is needed or that
+evaluation failed.
 
 ```text
 struct EvaluatedSource {
@@ -2385,9 +2410,9 @@ enum EvalClass { Static, ContextRequired, Distribution }
 
 Calling `evaluate(None)` on a `Static` source always succeeds
 (or surfaces a polydat bug). Calling `evaluate(None)` on a
-`ContextRequired` source always returns `NeedsContext` —
-the type signature is *honest* about whether context is needed.
-The runtime evaluator supplies a context when needed.
+`ContextRequired` source always returns `NeedsContext`, so the
+result states whether context is needed. The runtime evaluator
+supplies a context when needed.
 
 `Distribution` sources (`Source::Distribution { … }`) evaluate
 only inside the sampling discharge of an enclosing
@@ -2398,8 +2423,8 @@ V8-rejected at compile time.
 
 #### 10.7.7 Context-free generators are flattened at compile
 
-Whether a generator call can be evaluated before traversal is a
-property of its **expression**, never of its name: there is no
+Whether a generator call can be evaluated before traversal is
+decided by its **expression**, never by its name: there is no
 table of generator names, in the spec or in the code. A call's
 free names (`Source::referenced_names`: the parsed identifiers of
 the expression and its `{name}` interpolation placeholders) decide
@@ -2453,30 +2478,33 @@ trait Strategy {
 }
 ```
 
-The strategy queries `input.index_fn` and
-`input.tuples` to compute its permutation. The earlier
-`naive_apply` / `indexed_apply` split retires — there's one
-method, and the question "does the strategy have lattice
-metadata to work with?" is answered by inspecting the
+`name` returns the strategy's identity. `accepts_input` reports
+whether the strategy accepts an input with the given addressing
+scheme (the V4 check). `has_closed_form_for` reports whether the
+strategy can select tuples directly from that addressing scheme
+(R2 eligibility). `apply` takes the evaluated input and an optional
+truncation and returns the reordered, possibly truncated, tuples;
+it reads `input.index_fn` and `input.tuples` to compute its
+permutation. There is one `apply` method: whether the strategy has
+lattice metadata to work with is determined by inspecting the
 `EvaluatedSource` it receives.
 
 **§V4 enforcement timing.** V4 ("non-`Lex` strategies require
 the input's `IndexFn` to be non-`None`") fires at
 strategy-invocation time, against the `EvaluatedSource`. The
 compile stage (`validate`, run by `from_ast` and by the `for`
-lowering) *additionally* fires V4 early as a
-usability nicety — when an AST's sources are all statically
-evaluable, the static metadata is exact and it surfaces V4
-failures at compile time. For ASTs with context-required
-sources, the early fire is skipped; runtime fire is the load-
-bearing one. Either way, V4 is the same axiom; only the
-*when* changes.
+lowering) *additionally* fires V4 early when an AST's sources are
+all statically evaluable: the static metadata is then exact, and
+V4 failures are reported at compile time. For ASTs with
+context-required sources, the early check is skipped and the
+runtime check is the authoritative one. V4 is the same axiom at
+both times; only the *when* changes.
 
-#### 10.7.9 Why this matters
+#### 10.7.9 Rationale
 
-The R-rules become pure pattern matches over metadata + AST
-shape — no global analysis, no out-of-tree consultations, no
-late-binding callbacks. The optimizer's contract (§10.6) is a
+The R-rules are pure pattern matches over metadata + AST
+shape, with no global analysis, no out-of-tree consultations, and
+no late-binding callbacks. The optimizer's contract (§10.6) is a
 direct consequence of monoidicity: each rule strictly decreases
 a metadata-derived measure (`BoundedBarrier.working_set_size`,
 or transition from `BoundedBarrier` to `Streaming` via R1/R2)
@@ -2490,13 +2518,13 @@ surfaces together let external tooling reason about
 comprehension cost without recompiling.
 
 The eval-class partitioning (§10.7.0) plus compile-time flattening
-(§10.7.7) keep the static-evaluable subset broad without
-introducing a static / runtime semantic split: it's one
-metadata algebra, run twice for context-required cases (once
-optimistically at compile time, once definitively at strategy
-invocation). The runtime second-fire produces the same
-metadata bundle the static path would have, only with values
-the compile stage did not know yet.
+(§10.7.7) keep the statically evaluable subset broad without
+introducing a static / runtime semantic split. There is one
+metadata algebra, run twice for context-required cases: once
+optimistically at compile time and once definitively at strategy
+invocation. The runtime run produces the same metadata bundle the
+static path would have, with values the compile stage did not yet
+know.
 
 ### 10.8 What the optimizer doesn't do
 
@@ -2519,22 +2547,23 @@ the compile stage did not know yet.
 ### 10.9 Predicate analyzer
 
 R5 (per-axis filter pushdown) needs a structured view of the Polydat expression
-that `filter`'s predicate carries. The **predicate analyzer**
+that is `filter`'s predicate. The **predicate analyzer**
 is the single component that provides that view. It is
 specified separately from the metadata algebra (§10.7) because
 predicates are Polydat expressions, not comprehension AST nodes —
 they live in a different value space and deserve their own
 analysis surface.
 
-The analyzer takes `(&str, &CoordSet) -> PredicateInfo` and
-operates on one predicate at a time. Its output feeds R5. The
-whole-AST reducibility component that drives the optimizer's
-rewrite loop is a separate analyzer specified in §10.10; the
-two analyzers share the predicate-shape information but have
-distinct inputs, outputs, and scopes.
+The analyzer takes one predicate's text and the coordinate names
+of the comprehension it filters, `(&str, &CoordSet)`, and returns a
+`PredicateInfo` describing the predicate's structure. R5 uses that
+output. The whole-AST reducibility component that drives the
+optimizer's rewrite loop is a separate analyzer specified in
+§10.10; the two analyzers share the predicate-shape information but
+have distinct inputs, outputs, and scopes.
 
-This section pins down what the implemented predicate analyzer
-accepts, what it produces, and which properties it asserts.
+This section specifies what the predicate analyzer accepts, what it
+produces, and which properties it asserts.
 
 #### 10.9.1 Scope
 
@@ -2585,7 +2614,7 @@ below. It is the only predicate-shape artifact R5 reads.
 
 #### 10.9.3 Assertable properties
 
-For every predicate the analyzer wraps, `PredicateInfo` carries:
+For every predicate the analyzer wraps, `PredicateInfo` contains:
 
 ```text
 PredicateInfo {
@@ -2647,10 +2676,9 @@ with these properties:
 1. **Sound.** Every assertion in `PredicateInfo` is *true* of
    the predicate. If `factorization` says `PerAxis(p1, p2)`,
    then for every tuple `(a, b)` the original predicate
-   evaluates to exactly `p1(a) && p2(b)`. Soundness is
-   load-bearing for R5: the optimizer rewrites based on
-   asserted facts and would emit incorrect output if any
-   assertion were false.
+   evaluates to exactly `p1(a) && p2(b)`. R5 depends on
+   soundness: the optimizer rewrites based on asserted facts and
+   would emit incorrect output if any assertion were false.
 2. **Conservatively incomplete.** The analyzer is allowed (and
    expected) to under-report. A predicate that *is*
    factorizable but uses an expression the analyzer doesn't
@@ -2672,13 +2700,12 @@ set-membership, and disjoint-axis conjunction claim is compared with
 direct evaluation, and cross-axis and unknown shapes are checked for
 conservative non-factorization.
 
-Property 2 (conservative incompleteness) is the design
-principle that keeps the analyzer simple and the metadata
-algebra closed. Anything the analyzer can't structurally
+Property 2 (conservative incompleteness) keeps the analyzer
+simple and the metadata algebra closed. Anything the analyzer can't structurally
 recognize is `Opaque`; nothing falls back to "run the predicate
 to see what happens."
 
-#### 10.9.5 Recognized patterns (initial set)
+#### 10.9.5 Recognized patterns
 
 The analyzer recognizes the fixed catalog below. Any addition
 is a specification and implementation change with soundness
@@ -2772,11 +2799,10 @@ The two analyzers share information — the reducibility analyzer
 consults the predicate analyzer's `PredicateInfo` when its rules
 need predicate-shape facts (R5 is the current case) — but their
 scopes are disjoint: the predicate analyzer never sees AST
-context, and the reducibility analyzer never reaches inside a
-predicate.
+context, and the reducibility analyzer never inspects a
+predicate's internals.
 
-The reducibility analyzer answers a single, sharp question for
-any AST `C`:
+The reducibility analyzer decides one question for any AST `C`:
 
 > Given `C` and the propagated metadata `M(C)` (per §10.7),
 > does there exist an AST `C'` — built from the six §3
@@ -2784,7 +2810,7 @@ any AST `C`:
 > sequence as `C` and `cost(C') < cost(C)` in compute order,
 > memory order, or both?
 
-If yes, the analyzer returns a `ReducibilityFinding` carrying
+If yes, the analyzer returns a `ReducibilityFinding` containing
 the witness `C'` and the strict-improvement vector. If no, it
 returns the empty finding. The optimizer (§10.6) is a thin loop
 that asks the analyzer for findings on the current AST, applies
@@ -2815,8 +2841,8 @@ struct ReducibilityFinding {
   analyzer (§10.9) and treats
   the returned `PredicateInfo` as part of its input.
 
-This discipline is what keeps the reducibility analysis closed
-over the metadata algebra: any property that influences
+This restriction keeps the reducibility analysis closed over the
+metadata algebra: any property that influences
 reducibility decisions must be surfaced into metadata or
 `PredicateInfo` first. New reducibility rules don't get an
 escape hatch into AST internals.
@@ -2846,11 +2872,11 @@ better in at least one dimension and non-worse in the other.
 Findings where both dimensions are `Equal` (no asymptotic
 change) are not produced — the optimizer would loop on them.
 
-The `witness` field carries the replacement AST. The
+The `witness` field holds the replacement AST. The
 optimizer applies it directly; there is no separate "compile
-the finding" step. This is what lets the analyzer run **before
-stack-machine materialization** — its output is itself an AST,
-not an IR fragment.
+the finding" step. Because its output is an AST, not an IR
+fragment, the analyzer runs **before stack-machine
+materialization**.
 
 #### 10.10.3 The reducibility catalog
 
@@ -2880,9 +2906,9 @@ strictly decrease AST node count and never inflate metadata, so
 their `improvement` vector is non-trivial even though the
 runtime semantics are unchanged at the dispense interface. They
 are the lower-bound case of "strictly improving" — the
-improvement is in AST size, not in runtime cost — but they earn
-their place in the catalog because downstream rules' guards are
-expressed against the canonical form.
+improvement is in AST size, not in runtime cost. They belong in
+the catalog because downstream rules' guards are expressed against
+the canonical form.
 
 R3's "Equal compute" case is the rule's lower bound; in
 practice the analyzer fires R3 only when the downstream context
@@ -2894,11 +2920,11 @@ both columns under any context never fire — see §10.6's
 §5.8's degenerate-composition catalog overlaps with R0a: every
 "singleton variant" entry in §5.8 (single-element clauses
 chained, `zip([c], _)`, `cartesian(c)`, `union(c)`) is a form
-that R0a elides at the optimizer. §5.8 surfaces the warning at
-parse so the author sees the redundancy in their source; R0a
+that R0a elides at the optimizer. §5.8 reports the warning at
+parse so the author sees the redundancy in the source; R0a
 ensures the runtime never pays for it. The two layers are
-complementary, not duplicate — warnings teach the author,
-rewrites keep the IR clean.
+complementary: the warning informs the author, and the rewrite
+removes the redundancy from the IR.
 
 #### 10.10.4 Correctness contract
 
@@ -2921,13 +2947,13 @@ For every `ReducibilityFinding` the analyzer returns:
 3. **Metadata-closed.** The analyzer's decision uses only
    `c`'s shape (operator + children's recursive shapes),
    `m`'s fields, and `PredicateInfo` for any contained
-   predicate. No reach into AST internals; no consultation of
+   predicate. No reads of AST internals; no consultation of
    runtime state, evaluation environment, or kernel internals
    beyond what metadata published.
 4. **Pre-materialization.** The analyzer runs on the AST,
    not on the IR. The IR is the *result* of applying the
    findings followed by compilation (§9.1). This ordering is
-   load-bearing: rewriting an AST is cheap and structural;
+   required: rewriting an AST is cheap and structural;
    rewriting an IR after compilation would require re-running
    the metadata propagation through a different formalism.
 5. **Total and terminating.** Every well-formed AST produces
@@ -3216,7 +3242,7 @@ ASTs:
 Each becomes a distinct streamer with independent dispense
 state. The compiler does not share mutable evaluation of
 `<base>` across derivatives. Sharing the immutable AST or IR is
-permitted; each consumer owns its cursors, barrier buffers, and
+permitted; each consumer has its own cursors, barrier buffers, and
 strategy state.
 
 ### 11.10 Continuous parameter sweep
@@ -3287,7 +3313,7 @@ Two continuous coordinates that should advance **in lockstep**
 externally-determined ordering of i) cannot use direct
 `zip(continuous_a, continuous_b)` — V7 (§5) rejects continuous
 zip because lockstep needs an integer "i-th element" and
-continuous sources have none. The form that does work is
+continuous sources have none. The valid form is
 sample-each-first then zip the discrete outputs:
 
 ```text
@@ -3352,7 +3378,7 @@ let compiled: CompiledComprehension = sweep.compiled()?;
 let parent = PolydatKernelScope::new(canonical, parent_kernel);
 
 // First-order: a stream of coordinate tuples.
-let mut coords: CoordinateStream = sweep.coordinate_stream();
+let mut coords: CoordinateStream = sweep.coordinate_stream()?;
 while let Some(tuple) = coords.advance() {
     log::info!("coords: {tuple:?}");
 }
@@ -3394,9 +3420,9 @@ Properties illustrated:
 
 ---
 
-## 12. What this design lets us claim
+## 12. Guaranteed properties
 
-Under this specification:
+This specification guarantees the following properties:
 
 1. **Composition is the only special case.** There are six
    constructors. Anything else is composition. No "this form
@@ -3414,9 +3440,9 @@ Under this specification:
    ones.
 5. **Algebraic equivalences are documented and direction-
    tagged.** §7's rewrite rules tell the optimizer (§10) which
-   transformations preserve semantics. §7's equivalences are
-   the *correctness* anchor; §10's rewrites are *required* for
-   tractable resource bounds. A bare interpreter on the
+   transformations preserve semantics. §7's equivalences define
+   *correctness*; §10's rewrites are *required* for tractable
+   resource bounds. A bare interpreter on the
    un-optimized AST is correct but potentially catastrophic in
    working-set size — see §10's motivating example.
 6. **Streaming is the default, materialization is explicit.**
@@ -3446,21 +3472,19 @@ Under this specification:
 - `polydat_core::iteration::comprehension::validate` enforces
   V1–V9; `polydat_grammar::comprehension::metadata` performs
   bottom-up propagation; `polydat_core::iteration::comprehension::optimize`
-  applies §10; `polydat_core::iteration::comprehension::ir` owns
+  applies §10; `polydat_core::iteration::comprehension::ir` defines
   the immutable stack program.
-- `polydat_core::iteration::comprehension::surfaces` owns the
+- `polydat_core::iteration::comprehension::surfaces` implements the
   static algebra consumers (§9.5), while
   `polydat_core::iteration::comprehension::runtime::evaluate_for_iteration`
-  owns scope-dependent tuple evaluation against a `Lookup` view of
-  the scope. `strategies`, `predicate`, `eval`, `eval_source`,
+  performs scope-dependent tuple evaluation against a `Lookup` view
+  of the scope. `strategies`, `predicate`, `eval`, `eval_source`,
   `source_values`, and `streamer_value` are likewise
   `polydat_core::iteration::comprehension` modules.
 - Strategy selection uses the closed `StrategyName` enum. There
-  is no user-callback ordering escape hatch, and the text front
-  end says so: a strategy name outside the set is a parse error
-  naming the set. `custom(fn)` used to parse and be rejected one
-  layer down, which is the same answer given later and somewhere
-  a reader of the grammar would not look.
+  is no user-callback ordering escape hatch. The text front end
+  rejects a strategy name outside the set, `custom(fn)` included,
+  with a parse error that lists the set.
 
 ---
 
@@ -3512,12 +3536,13 @@ per tuple.
 ### 14.6 No parallel owner
 
 There is no separate comprehension `iteration` module or `order`
-module: iteration is owned by `runtime` and `surfaces`, and
-strategies own ordering. There is no comprehension-specific
+module: iteration is implemented in `runtime` and `surfaces`, and
+ordering in `strategies`. There is no comprehension-specific
 source-synthesis module: a child scope over a tuple is built by the
 general nested-kernel protocol the `for` construct and tile
-projections use. These absences are architectural constraints; a
-parallel owner would create competing semantics.
+projections use. These absences are architectural constraints: a
+second module implementing the same behavior would create competing
+semantics.
 
 ### 14.7 Cursor partitions are a source, not an extension
 
@@ -3533,22 +3558,22 @@ activation, resolved against the element.
 
 The text parser produces a flat form on its way to the canonical tree,
 and that form and the parser are internal to `polydat_grammar`: no
-public signature names them. Text reaches the tree through
+public signature names them. Text is converted to the tree through
 `spec::parse_comprehension_algebra`, a specification document through
 `ComprehensionSpec::into_algebra` or `spec::parse_text`, and a source
 expression through `spec::parse_source`. A producer, a traversal, a
-streamer, and a compiled program carry the canonical tree, no stage
+streamer, and a compiled program hold the canonical tree, no stage
 downstream of the lowering branches on the form a comprehension was
 written in, and the lowering never bypasses the canonical validation
 (§5).
 
 ### 14.8.1 Authoring source text from host values is the host's
 
-Rendering a host's own values into authored comprehension text is the
-host's concern: it emits syntactically valid typed literals, the same
-ones §8 accepts. Formatting a value already inside a kernel is
-polydat's, through the ordinary value, interpolation, and adapter
-contracts. The canonical tree never takes a parser-compatibility type
+A host that renders its own values into comprehension text is
+responsible for that rendering: it emits syntactically valid typed
+literals, the same ones §8 accepts. Polydat formats a value that is
+already inside a kernel, through the ordinary value, interpolation,
+and adapter contracts. The canonical tree never takes a parser-compatibility type
 from either direction (§14.8).
 
 ### 14.9 Traversal activation is not module construction
@@ -3557,12 +3582,13 @@ A child scope over a tuple is a fresh kernel over the body's program
 with the tuple and the captured scope bound ([The `for`
 Construct](for_traversal.md) §3.2). It is not built through the scope
 module protocol ([Subcontext Construction](subcontext_construction.md)),
-which serves modules and stands beside traversal activation, not
-under it. The runtime evaluator (`runtime::evaluate_for_iteration`)
-is the one tuple order for a canonical tree: a host that evaluates
-the same tree gets the same order, and no static-interpreter shortcut
-stands in for it; a comprehension the scope-less surfaces cannot
-evaluate is refused by name (§9.5.2), never dispensed empty.
+which serves modules and is separate from traversal activation; a
+traversal activation does not use it. The runtime evaluator
+(`runtime::evaluate_for_iteration`) defines the only tuple order for
+a canonical tree: a host that evaluates the same tree gets the same
+order, and no static-interpreter shortcut replaces the evaluator. A
+comprehension the scope-less surfaces cannot evaluate is refused
+with an error naming it (§9.5.2), never dispensed empty.
 
 ## 15. Open design questions
 
@@ -3571,42 +3597,44 @@ evaluate is refused by name (§9.5.2), never dispensed empty.
 **The contract.** The first of §9.6's invariants is
 stream-first execution: a clause source is a stream producer, and
 materialization happens only at an operation whose metadata declares a
-barrier. §3.3 and §11.8 rest on it (`Cycle` streams its longest, possibly
-unbounded, child while buffering the others), as do §6.2's cost table and
-§10.2's R2 (a closed-form strategy selects tuples by index without
-materializing its input).
+barrier. §3.3 and §11.8 depend on it (`Cycle` streams its longest,
+possibly unbounded, child while buffering the others), as do §6.2's
+cost table and §10.2's R2 (a closed-form strategy selects tuples by
+index without materializing its input).
 
-**The state.** The IR interpreter behind the consumption surfaces
+**The implementation.** The IR interpreter behind the consumption surfaces
 (§9.5) is stream-first for cartesian, union, filter, and `Lex` order.
 The runtime evaluator that `for` traversals and tile projections use
 (`runtime::evaluate_for_iteration`) is not: every node evaluates to a
 vector, so every clause, filter, and zip is a barrier there. In both
 executors `Cycle` drains every child before emitting, and a strategy
 drains its whole input before `apply`, R2's index lookup included. No
-source the algebra can express today is infinite, so "unbounded" is, in
-this implementation, a count unknown at compile time.
+source the algebra can express is infinite, so in this implementation
+"unbounded" means a count unknown at compile time.
 
 **What decides it.** The traversal surface is random access by contract
 (for_traversal.md §7: `len`, `seek`, `activation(index)`, fibers
-partitioned by index), so on that path the open is itself a barrier and
-a stream-first evaluator collects at the end. Stream-first evaluation
-pays off there only together with R2's lazy index lookup, which is what
-lets `order halton/n` over a large product materialize n tuples instead
-of the product. An infinite `Cycle` child can never reach a traversal;
-it is a property of the streaming surfaces alone.
+partitioned by index), so on that path opening a traversal is itself a
+barrier, and a stream-first evaluator would still collect every tuple
+at the end. Stream-first evaluation reduces memory there only together
+with R2's lazy index lookup, which lets `order halton/n` over a large
+product materialize n tuples instead of the product. An infinite
+`Cycle` child can never be the source of a traversal; it can occur
+only on the streaming surfaces.
 
-**Costs recorded** (2026-09-17): error timing moves from open to pull on
+**Costs of stream-first evaluation:** error timing moves from open to pull on
 the streaming surfaces, which need a fallible item; `on_empty` fires per
 prefix on first pull instead of once at open; `Cycle` must choose its
 streaming child by cardinality class and fall back to measuring when no
 child is unbounded; two stream-first executors must be kept tuple-for-
 tuple equivalent; boxed iterator composition can slow the small
-comprehensions that dominate today; the evaluator becomes harder to
+comprehensions that are most common; the evaluator becomes harder to
 read.
 
 **Decision pending.** Either implement stream-first evaluation and R2's
-lazy lookup as one project, with the equivalence harness as the oracle
+lazy lookup together, with the equivalence harness as the oracle
 and a measured cost at open, or narrow the invariant to the IR
 interpreter and restate §3.3, §6.2, §10.2, and §11.8 for an evaluator
-that materializes at every node. Until decided, the text above stands
-as written and the code behaves as described here.
+that materializes at every node. Until the decision is made, the
+sections above remain the specification, and the implementation
+behaves as this section describes.

@@ -1,14 +1,28 @@
+---
+type: specification
+title: Cursor Partitions
+timestamp: 2026-09-25
+description: Partition values, the partition-spec language, resolution and rounding, ordering, metadata wires, and cursor narrowing with over.
+tags: [iteration]
+---
+
 # Cursor Partitions
 
-The specification for Polydat cursor-partition values, the partition-spec
-language, resolution math, ordering, cursor narrowing, and partition metadata
-wires.
+This document specifies Polydat cursor-partition values, the partition-spec
+language, how a spec is resolved to ordinal ranges and rounded, partition
+ordering, narrowing a cursor to one partition with `over`, and the partition
+metadata wires.
+
+**Related specifications:** [Comprehension Forms](comprehension_forms.md),
+[Polydat Grammar](polydat_grammar.md#sec-fields-cursors),
+[Runtime Model](runtime_model.md), and the node reference
+([nodes.md](../reference/nodes.md)); §10 states what each covers.
 
 ## 1. Purpose
 
 A cursor describes an ordinal domain such as `[0, 1_000_000)`. A partition
-describes a stable sub-domain of that cursor which one scope or fiber owns.
-Partitioning is separate from traversal:
+describes a fixed sub-domain of that cursor that is assigned to one scope or
+fiber. Partitioning is separate from traversal:
 
 ```text
 base cursor domain       [0 ................................ 1_000_000)
@@ -17,11 +31,11 @@ comprehension order                  chooses which p is visited next
 cursor `over p`                      narrows iteration to p's interval
 ```
 
-This separation lets the same domain be split by percentages, absolute sizes,
-recipes, windows, or deterministic ordering without adding special operators to
-the comprehension algebra. A comprehension sees a `PartitionList` as an
-ordinary typed list source. The cursor materializer is responsible for applying
-one selected `Partition` to a cursor.
+Because of this separation, the same domain can be split by percentages,
+absolute sizes, recipes, windows, or deterministic ordering without special
+operators in the comprehension algebra. A comprehension reads a
+`PartitionList` as an ordinary typed list source, and the cursor materializer
+applies one selected `Partition` to a cursor.
 
 ## 2. Data model
 
@@ -55,9 +69,9 @@ Its cardinality is exactly `end_ord - start_ord`.
 ### 2.3 `PartitionList`
 
 `PartitionList` is the ordered result of resolving one spec. `Partition`,
-`PartitionSpec`, and `PartitionList` travel through Polydat wires as typed
-`Value::Ext` reflected values. A resolved partition is effectively constant for
-one scope activation.
+`PartitionSpec`, and `PartitionList` are passed along Polydat wires as typed
+`Value::Ext` reflected values. A resolved partition does not change within one
+scope activation (CP8).
 
 ## 3. Spec language
 
@@ -148,7 +162,7 @@ zipf:1.2,10
 front_heavy:6
 ```
 
-Implemented recipe families are:
+The recipe families are:
 
 - `linear:N` and `ratios:a,b,c,...`;
 - `mul:R` and `mul:S,R`;
@@ -258,16 +272,26 @@ the program. The partition remains fixed for that scope activation (CP8).
 
 The compiler resolves a literal `over` clause against a known extent at build
 and records the partitions on the cursor's schema
-(`SourceSchema::partitions`); every kernel, on every engine, reports its
-cursors and their resolved partitions through `Kernel::cursor_schemas`. A
-clause that denotes exactly one partition is seeded into the cursor's slots
-at build, so the program runs with no host call. A clause that denotes
-several is narrowed by the host, or by the traversal runtime for a body's
-cursor, through `Kernel::set_cursor(name, &partition)`, which writes the
-seven slots on any kernel. A computed `over` value, or an extent known only
-at run time, is resolved through `cursor_over_partitions_on(kernel, schema)`,
-which pulls the clause's value and the extent from a kernel of any engine
-and resolves them as §6 does.
+(`SourceSchema::partitions`). Every kernel, on all four engines (the
+interpreter, the closure tier, native, and pure native), reports its
+cursors and their resolved partitions through `Kernel::cursor_schemas`.
+
+How a cursor is narrowed depends on what its `over` clause denotes:
+
+- **Exactly one partition.** The partition is written into the cursor's
+  slots at build, so the program runs with no host call.
+- **Several partitions.** The host chooses one, or, for a cursor in a
+  `for` body, the traversal runtime does. It calls
+  `Kernel::set_cursor(name, &partition)`, where `name` is the cursor's
+  name and `partition` the chosen `Partition`; the call writes the seven
+  slots on any kernel and returns an error if the kernel rejects the
+  write.
+- **A computed `over` value, or an extent known only at run time.** The
+  caller resolves it with `cursor_over_partitions_on(kernel, schema)`,
+  passing the kernel and the cursor's `SourceSchema`. It pulls the
+  clause's value and the extent from the kernel, which may be on any of
+  the four engines, resolves them as §6 does, and returns the resulting
+  partitions, one of which the caller passes to `set_cursor`.
 
 Available cursor metadata wires are:
 
@@ -315,7 +339,7 @@ schedule no useful work is rejected at its earliest authoritative boundary.
 
 **CP2 — Exact ownership.** A partition's cardinality is
 `end_ord - start_ord`; emitted siblings do not overlap. Gaps and an intentionally
-unassigned trailing suffix are not owned by any emitted partition.
+unassigned trailing suffix are not contained in any emitted partition.
 
 **CP3 — Cumulative rounding.** Fractional delta boundaries are rounded from the
 cumulative exact position, never by summing independently rounded sizes.
@@ -340,11 +364,11 @@ comprehension operator.
 
 ## 10. Related specifications
 
-- [Comprehension Forms](comprehension_forms.md) owns list-source composition,
-  traversal, filtering, ordering, and consumption surfaces.
-- [Polydat Grammar](polydat_grammar.md#sec-fields-cursors) owns general cursor
-  declaration and field-access syntax.
+- [Comprehension Forms](comprehension_forms.md) specifies list-source
+  composition, traversal, filtering, ordering, and consumption surfaces.
+- [Polydat Grammar](polydat_grammar.md#sec-fields-cursors) specifies general
+  cursor declaration and field-access syntax.
 - The node reference ([nodes.md](../reference/nodes.md)) lists the typed
   nodes that consume `Partition` values.
-- [Runtime Model](runtime_model.md) owns scope activation, state ownership,
-  caching, and invalidation semantics.
+- [Runtime Model](runtime_model.md) specifies scope activation, state
+  ownership, caching, and invalidation semantics.

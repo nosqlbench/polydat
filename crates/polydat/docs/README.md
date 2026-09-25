@@ -5,6 +5,12 @@ when you need to know how a part works, look up the reference when you
 need a name, and read the design documents when you need the reasoning
 and the invariants.
 
+This directory is an [Open Knowledge Format](index.md) bundle. Every
+document opens with frontmatter giving its `type`, `title`,
+`description`, and `tags`, and each directory's `index.md` is generated
+from that frontmatter with `ct okf gen-index --recursive`; edit the
+frontmatter, not the index. `ct okf validate --strict` checks the bundle.
+
 ## Tutorials
 
 Walk-throughs with real output. Every program in them is run by an
@@ -39,7 +45,7 @@ How the parts work and how to use them from a host program.
   closure tier, the hybrid kernel, and native code; features and
   trade-offs.
 - [Engine-ladder performance](guides/performance.md): one typed graph
-  measured on every engine, with the measurement contract, and the tile
+  measured on all four engines, with the measurement contract, and the tile
   ladder (`benches/tile_render.rs`) beside it.
 - [Porting to 0.5.0](guides/porting_to_0_5_0.md): the release notes for
   0.5.0 as a host reads them: what stops compiling and its fix, the
@@ -58,8 +64,8 @@ How the parts work and how to use them from a host program.
 
 ## Design
 
-The specifications (SRDs) that the code implements, with their axioms,
-tripwires, and landing records: [`design/`](design/). The ones a reader
+The specifications that the code implements, with their axioms and
+invariants: [`design/`](design/). The ones a reader
 of the guides most often needs are [Runtime Model](design/runtime_model.md),
 [Graph Compiler](design/graph_compiler.md), [Engines](design/engines.md),
 [The `for` Construct](design/for_traversal.md), [Polytile](design/polytile.md),

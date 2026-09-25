@@ -1,0 +1,164 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="One evaluation rule, on every engine">
+    <mxGraphModel dx="1000" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1310" pageHeight="660" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="One evaluation rule, on every engine" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="20" y="0" width="900" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="subtitle" value="After one write, in which the host changed only &lt;font face=&quot;Courier New&quot;&gt;scale&lt;/font&gt;. A step is current until an input in its provenance changes." style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="20" y="30" width="1000" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg1" style="endArrow=block;endFill=1;html=1;strokeColor=#333333;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="20" y="80" as="sourcePoint"/><mxPoint x="60" y="80" as="targetPoint"/></mxGeometry>
+        </mxCell>
+        <mxCell id="lg1t" value="data flow" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="66" y="70" width="80" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg2" style="endArrow=block;endFill=1;html=1;dashed=1;strokeColor=#9673a6;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="150" y="80" as="sourcePoint"/><mxPoint x="190" y="80" as="targetPoint"/></mxGeometry>
+        </mxCell>
+        <mxCell id="lg2t" value="provenance" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="196" y="70" width="90" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="lg3" style="endArrow=block;endFill=1;html=1;strokeWidth=2;strokeColor=#2E7D32;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="290" y="80" as="sourcePoint"/><mxPoint x="330" y="80" as="targetPoint"/></mxGeometry>
+        </mxCell>
+        <mxCell id="lg3t" value="pull runs" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="336" y="70" width="80" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="sw1" value="" style="rounded=0;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="440" y="73" width="16" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="sw1t" value="current" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="462" y="70" width="70" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="sw2" value="" style="rounded=0;html=1;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="540" y="73" width="16" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="sw2t" value="not current: runs when pulled" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="562" y="70" width="190" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="sw3" value="" style="rounded=0;html=1;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="760" y="73" width="16" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="sw3t" value="folded at build" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="782" y="70" width="110" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="sw4" value="" style="rounded=0;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="900" y="73" width="16" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="sw4t" value="never current" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="922" y="70" width="110" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="frameA" value="" style="rounded=0;html=1;dashed=1;fillColor=none;strokeColor=#BBBBBB;" vertex="1" parent="1">
+          <mxGeometry x="20" y="110" width="260" height="380" as="geometry"/>
+        </mxCell>
+        <mxCell id="bandA" value="HOST WRITES" style="text;html=1;align=left;verticalAlign=top;fontSize=13;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="32" y="118" width="200" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="cycle" value="&lt;font face=&quot;Courier New&quot;&gt;set_inputs([cycle])&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;coordinate: 7, unchanged&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=13;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="40" y="150" width="220" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="scale" value="&lt;font face=&quot;Courier New&quot;&gt;set_input(&quot;scale&quot;, 1000)&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;extern: written just now&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=13;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="40" y="240" width="220" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="region" value="&lt;font face=&quot;Courier New&quot;&gt;region&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:12px&quot;&gt;extern, never set: None&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=13;fillColor=#dae8fc;strokeColor=#6c8ebf;" vertex="1" parent="1">
+          <mxGeometry x="40" y="330" width="220" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="noteA" value="A write invalidates the written input's dependents and nothing else. No round, epoch, or thread boundary invalidates anything on its own." style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="40" y="400" width="225" height="80" as="geometry"/>
+        </mxCell>
+        <mxCell id="frameB" value="" style="rounded=0;html=1;dashed=1;fillColor=none;strokeColor=#BBBBBB;" vertex="1" parent="1">
+          <mxGeometry x="300" y="110" width="670" height="380" as="geometry"/>
+        </mxCell>
+        <mxCell id="bandB" value="THE PROGRAM'S STEPS AND THEIR PROVENANCE" style="text;html=1;align=left;verticalAlign=top;fontSize=13;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="312" y="118" width="500" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="h" value="&lt;font face=&quot;Courier New&quot;&gt;h := hash(cycle)&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;prov {cycle} · current&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=13;fillColor=#d5e8d4;strokeColor=#82b366;" vertex="1" parent="1">
+          <mxGeometry x="420" y="150" width="230" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="id" value="&lt;font face=&quot;Courier New&quot;&gt;id := mod_wire(h, scale)&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;prov {cycle, scale} · not current&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=13;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="420" y="240" width="230" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="key" value="&lt;font face=&quot;Courier New&quot;&gt;key := &quot;{region}/{id}&quot;&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;prov {cycle, scale, region} · not current&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=13;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="420" y="330" width="230" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="k" value="&lt;font face=&quot;Courier New&quot;&gt;k := 41 + 1&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;folded at build · logged&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=13;fillColor=#f5f5f5;strokeColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="720" y="150" width="230" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="t" value="&lt;font face=&quot;Courier New&quot;&gt;t := current_epoch_millis()&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;nondeterministic · never current&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=13;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="720" y="240" width="230" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="row" value="&lt;font face=&quot;Courier New&quot;&gt;row := emit_row(id)&lt;/font&gt;&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;side channel · observed on run&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=8;fontSize=13;fillColor=#fff2cc;strokeColor=#d6b656;" vertex="1" parent="1">
+          <mxGeometry x="720" y="330" width="230" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="noteB" value="Provenance is the set of inputs whose change makes a step run again. The write to &lt;font face=&quot;Courier New&quot;&gt;scale&lt;/font&gt; reaches &lt;font face=&quot;Courier New&quot;&gt;id&lt;/font&gt;, &lt;font face=&quot;Courier New&quot;&gt;key&lt;/font&gt;, and &lt;font face=&quot;Courier New&quot;&gt;row&lt;/font&gt;; &lt;font face=&quot;Courier New&quot;&gt;h&lt;/font&gt; stays current. Compiled kernels record this as a mask per slot, the interpreter as a dependents list per input; provenance modes choose how much of it to consult." style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="312" y="412" width="650" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="frameC" value="" style="rounded=0;html=1;dashed=1;fillColor=none;strokeColor=#BBBBBB;" vertex="1" parent="1">
+          <mxGeometry x="990" y="110" width="300" height="380" as="geometry"/>
+        </mxCell>
+        <mxCell id="bandC" value="WHAT A READ RUNS" style="text;html=1;align=left;verticalAlign=top;fontSize=13;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="1002" y="118" width="200" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="pk" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot; color=&quot;#333333&quot;&gt;pull(&quot;key&quot;)&lt;/font&gt;&lt;br&gt;runs id, then key: h is current and skipped; nothing outside the cone runs" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;fontColor=#555555;spacingLeft=10;" vertex="1" parent="1">
+          <mxGeometry x="995" y="142" width="285" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="pk2" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot; color=&quot;#333333&quot;&gt;pull(&quot;k&quot;)&lt;/font&gt;&lt;br&gt;runs nothing: the value was folded at build and is read from its slot" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="1005" y="206" width="275" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="pt" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot; color=&quot;#333333&quot;&gt;pull(&quot;t&quot;)&lt;/font&gt;&lt;br&gt;runs t every time: never current" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="1005" y="270" width="275" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="pe" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot; color=&quot;#333333&quot;&gt;eval()&lt;/font&gt;&lt;br&gt;runs every step that is not current; row fires once and is observed once" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="1005" y="318" width="275" height="56" as="geometry"/>
+        </mxCell>
+        <mxCell id="pi" value="&lt;font face=&quot;Courier New&quot; style=&quot;font-size:13px&quot; color=&quot;#333333&quot;&gt;invalidate_all()&lt;/font&gt;&lt;br&gt;nothing current, inputs kept" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="1005" y="384" width="275" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="bandE" value="THE SAME RULE, TWO REALIZATIONS" style="text;html=1;align=left;verticalAlign=top;fontSize=13;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="20" y="508" width="400" height="20" as="geometry"/>
+        </mxCell>
+        <mxCell id="realize" value="&lt;b&gt;Interpreter:&lt;/b&gt; a clean flag per node, a dependents list per input, the nondeterministic nodes always dirty; a write clears its dependents' flags; &lt;font face=&quot;Courier New&quot;&gt;pull&lt;/font&gt; walks the cone and re-evaluates what is not clean.&lt;br&gt;&lt;b&gt;Closure tier and P3:&lt;/b&gt; a write epoch per step, a provenance mask per slot, a &lt;font face=&quot;Courier New&quot;&gt;None&lt;/font&gt; mask; a step ran since the last write when its epoch matches; a coordinate counts as changed only when its value differs.&lt;br&gt;Both fold compile-constant steps once at build and log them alike; both keep a by-reference output until its inputs change (see the by-reference figure); both report their placements through &lt;font face=&quot;Courier New&quot;&gt;plan()&lt;/font&gt;.&lt;br&gt;&lt;br&gt;Choosing an engine changes how fast the program runs, and nothing on this page." style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=12;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="20" y="532" width="1270" height="110" as="geometry"/>
+        </mxCell>
+        <mxCell id="w1" style="edgeStyle=none;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=1;exitY=0.3;entryX=0;entryY=0.3;" edge="1" parent="1" source="cycle" target="h">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="w2" style="edgeStyle=none;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=1;exitY=0.3;entryX=0;entryY=0.3;" edge="1" parent="1" source="scale" target="id">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="w3" style="edgeStyle=none;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=1;exitY=0.3;entryX=0;entryY=0.3;" edge="1" parent="1" source="region" target="key">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="w4" style="edgeStyle=none;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="h" target="id">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="w5" style="edgeStyle=none;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="id" target="key">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="w6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#333333;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="id" target="row">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="685" y="268"/><mxPoint x="685" y="358"/></Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="p1" style="edgeStyle=none;html=1;endArrow=block;endFill=1;dashed=1;strokeColor=#9673a6;exitX=1;exitY=0.85;entryX=0;entryY=0.75;" edge="1" parent="1" source="cycle" target="id">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p2" style="edgeStyle=none;html=1;endArrow=block;endFill=1;dashed=1;strokeColor=#9673a6;exitX=1;exitY=0.85;entryX=0;entryY=0.85;" edge="1" parent="1" source="scale" target="key">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="p3" style="edgeStyle=none;html=1;endArrow=block;endFill=1;dashed=1;strokeColor=#9673a6;exitX=1;exitY=0.6;entryX=0;entryY=0.55;" edge="1" parent="1" source="cycle" target="key">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="pull" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeWidth=2;strokeColor=#2E7D32;exitX=0;exitY=0.12;entryX=0.5;entryY=1;" edge="1" parent="1" source="pk" target="key">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="980" y="149"/><mxPoint x="980" y="400"/><mxPoint x="535" y="400"/></Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -1,24 +1,37 @@
+---
+type: specification
+title: JIT Boundary
+timestamp: 2026-09-25
+description: "The native call boundary: function signatures, predicate failures and their recovery, the invoke_with_catch contract, and invalidation across the boundary."
+tags: [native, engines]
+---
+
 # JIT Boundary
 
-The polydat-internal contract for native code. This doc specifies
-*how* the Cranelift-generated machine code plugs into the rest of the
-runtime — the call boundary between Rust and the native function,
-what happens when that code fails, and how invalidation and extern
-resolution cross the boundary.
+This document specifies polydat's internal contract for native code: how
+the machine code Cranelift generates is called from Rust, what happens
+when that code fails, how a failure is reported, how invalidation and
+extern resolution cross the boundary, and the rules for the slot buffer
+and scratch that native code and Rust share (the slot-state axioms
+S1–S10). Native code runs on the native tier (P3), on pure
+native, and inside the interpreter's native cones; the closure tier runs
+no native code.
 
-For the engine-selection side (*which* engine runs a program and
-which of its nodes run natively), see [Engines](engines.md) and
-[graph_compiler.md §6 (ordered composition)](graph_compiler.md).
-The clean-flag and memoization model native code preserves across
-the boundary is in [runtime_model.md](runtime_model.md) (R-axioms).
+**Related specifications:** [Engines](engines.md) and
+[graph_compiler.md §6 (ordered composition)](graph_compiler.md) (which
+engine runs a program and which of its nodes run natively);
+[runtime_model.md](runtime_model.md) (the R-axioms: the clean-flag and
+memoization model native code preserves across the boundary).
 
 ---
 
 ## Call boundary overview
 
 Native code compiles to a function over the slot buffer and the
-evaluating state's scratch, the entries the steps' kits write
-by-reference values into (compiled_handles.md §3, §6):
+evaluating kernel's scratch: the storage entries into which steps
+write by-reference values such as strings and vectors
+(compiled_handles.md §3, §6). The provenance variant also takes the
+steps' clean flags:
 
 ```text
 fn(coords: *const u64, buffer: *mut u64,
@@ -28,14 +41,15 @@ fn(coords: *const u64, buffer: *mut u64,
 ```
 
 The Rust side owns the buffer and the scratch and calls the function
-pointer. Native code runs in three places, and every one of them calls
-through `codegen::invoke_with_catch` when the code can fail, that is,
-when it calls a helper (`JitCode::fallible`, decided at finalization
-by whether the function holds a call instruction). Code with no call
-is arithmetic over the buffer and cannot fail, so the site runs it
-bare, without the jump buffer, the panic capture, or the unwind
-guard, which is most of a small evaluation's cost when the generated
-code itself is a few arithmetic instructions.
+pointer. Native code runs in three places (the table below). Each of
+them calls through `codegen::invoke_with_catch` when the code can
+fail, which is when it calls a helper (a Rust function the generated
+code calls); `JitCode::fallible` records this, decided at finalization
+by whether the function contains a call instruction. Code with no
+call is arithmetic over the buffer and cannot fail, so the call site
+runs it directly, without the jump buffer, the panic capture, or the
+unwind guard. Those make up most of a small evaluation's cost when
+the generated code is a few arithmetic instructions.
 
 | Site | What runs natively | Where |
 |---|---|---|
@@ -45,10 +59,10 @@ code itself is a few arithmetic instructions.
 
 The pure native tier is the differential reference for native
 lowering and the carrier of the Tier-1 register kernel
-([SIMD ISA Selection](simd_isa_autopromotion.md)); a host reaches
-native code through the P3 kernel. There is no direct `(code_fn)(...)`
-invocation outside the three sites; grep for that pattern finds only
-them, each inside the wrapper.
+([SIMD ISA Selection](simd_isa_autopromotion.md)); a host ordinarily
+runs native code through the P3 kernel. No direct `(code_fn)(...)`
+invocation exists outside the three sites; a search for that pattern
+finds only them, each inside the wrapper.
 
 ---
 
@@ -56,12 +70,13 @@ them, each inside the wrapper.
 
 The library's predicates (`is_positive`, `in_range`, `is_one_of`;
 [Library Catalog](library_catalog.md)) lower natively and can fail
-at cycle time. When they fail the native code calls an extern helper
-(`jit_is_positive_fail`, `jit_in_range_fail`, `jit_is_one_of_fail`)
-that must report the violation and stop the current evaluation.
+during evaluation. When one fails, the native code calls an extern
+helper (`jit_is_positive_fail`, `jit_in_range_fail`,
+`jit_is_one_of_fail`) that must report the violation and stop the
+current evaluation.
 
-The obvious shape — `panic!` from the extern helper and catch
-it upstream — does not work with Cranelift-generated frames:
+Panicking from the extern helper and catching the panic in the Rust
+caller does not work with Cranelift-generated frames:
 
 - Cranelift emits DWARF `.eh_frame` entries when
   `unwind_info=true`, and registers them with the platform
@@ -71,19 +86,23 @@ it upstream — does not work with Cranelift-generated frames:
   `_Unwind_RaiseException` never finds a catch block and the
   panic runtime aborts with "failed to initiate panic, error 5
   (`_URC_END_OF_STACK`)".
-- Switching the extern to `extern "C-unwind"` alone doesn't
-  fix this — the issue is the missing personality, not the
-  ABI flag.
+- Declaring the extern `extern "C-unwind"` does not fix this,
+  because the problem is the missing personality routine, not the
+  ABI.
 
-Teaching Cranelift to emit `.gcc_except_table` entries referencing
-`rust_eh_personality`, plus re-registering frames via a personality
-shim, is an integration project that isn't in this crate's scope.
+Making Cranelift emit `.gcc_except_table` entries that reference
+`rust_eh_personality`, and re-registering frames through a
+personality shim, is outside this crate's scope.
 
 ---
 
 ## The setjmp / longjmp workaround
 
-Rather than unwinding *through* the JIT frame, we jump *past* it.
+A native failure does not unwind *through* the JIT frame; it jumps
+*past* it. Before calling native code, the Rust wrapper records a jump
+target with `_setjmp`; a failing helper stores its message and calls
+`_longjmp` to that target, and the wrapper then raises an ordinary Rust
+panic with the message.
 
 ### Flow
 
@@ -147,15 +166,14 @@ Rust-personality FDEs the way any other panic would.
   step is such a nesting.
 - **SIMD register state.** `_setjmp` on glibc preserves only
   the core register set that `longjmp` restores. The Rust
-  wrapper doesn't keep live SIMD state across the JIT call,
-  so this is fine. Workloads that wanted to keep live SIMD
-  data across a predicate violation would have a larger
-  problem.
+  wrapper keeps no live SIMD state across the JIT call, so
+  nothing is lost. Live SIMD data held across a predicate
+  violation is not preserved by this mechanism.
 
 ### Platform-portable jmp_buf shim
 
-`libc` doesn't expose `jmp_buf` / `setjmp` / `longjmp` (they're
-generally considered unsafe to reach from Rust). We declare
+`libc` does not expose `jmp_buf`, `setjmp`, or `longjmp`, which are
+generally considered unsafe to call from Rust, so the crate declares
 them directly:
 
 ```rust
@@ -176,22 +194,21 @@ unsafe extern "C" {
 }
 ```
 
-On glibc and macOS we link against `_setjmp` / `_longjmp` (rather
-than plain `setjmp` / `longjmp`) because the plain variants are
-glibc macros that expand to `__sigsetjmp(env, 0)` — saving the
-signal mask, which we don't need. `_setjmp` saves registers
-only and is faster.
+On glibc and macOS the crate links against `_setjmp` and `_longjmp`
+rather than plain `setjmp` and `longjmp`, because the plain variants
+are glibc macros that expand to `__sigsetjmp(env, 0)`, which saves the
+signal mask. The wrapper does not need the signal mask; `_setjmp`
+saves registers only and is faster.
 
-The MSVC CRT spells the pair differently: it exports `longjmp`
-(there is no `_longjmp`), and its x64 `_setjmp` takes a second
-argument recorded as the jmp_buf's `Frame` field, which a C
-compiler fills in by intrinsic. The wrapper passes NULL explicitly,
-and that is load-bearing twice over: it keeps the second argument
-register from carrying garbage into the buffer, and a zero `Frame`
-makes `longjmp` do a plain register restore instead of an
-`RtlUnwindEx` unwind — mandatory, because the frames being skipped
-are JIT code with no unwind tables registered, the exact problem
-this path exists to avoid.
+The MSVC CRT names the pair differently: it exports `longjmp` (there
+is no `_longjmp`), and its x64 `_setjmp` takes a second argument
+recorded as the jmp_buf's `Frame` field, which a C compiler fills in
+by intrinsic. The wrapper passes NULL explicitly, for two reasons. It
+keeps the second argument register from writing garbage into the
+buffer, and a zero `Frame` makes `longjmp` do a plain register
+restore instead of an `RtlUnwindEx` unwind. The plain restore is
+required, because the frames being skipped are JIT code with no
+unwind tables registered, which is the problem this path avoids.
 
 ---
 
@@ -254,7 +271,7 @@ fn guarded<T>(body: impl FnOnce() -> T) -> T
 which runs the body under `catch_unwind`, extracts the payload's
 message, and re-raises it through `jit_violation_longjmp`. The panic
 hook fires once, inside `guarded`, and records the location; the
-wrapper's `resume_unwind` then carries the message out without a
+wrapper's `resume_unwind` then propagates the message without a
 second hook call. `guarded` is part of the ABI: a helper that can
 panic and does not use it is a defect.
 
@@ -279,25 +296,24 @@ fn jit_violation_longjmp(msg: String) -> ! {
 }
 ```
 
-This is the last-line defense. The only way to reach it is to call
-a native function pointer without going through one of the three
-wrapped sites. The fallback prints the message and aborts — the
-same behavior the wrapper replaces in the normal path, but without
-the catch-unwind integration.
+This fallback is the last resort. It runs only when a native
+function pointer is called without going through one of the three
+wrapped sites. It prints the message and aborts the process, since
+no Rust caller has installed a jump target to catch the failure.
 
 ---
 
 ## The failure contract
 
-A failure in native code reports exactly as the same failure reports
-on the interpreter: one message, on every engine
-([Engines](engines.md) states the contract; this section is its
-native half).
+A failure in native code produces exactly the message the same
+failure produces on the interpreter, so the message is the same on
+all four engines ([Engines](engines.md) §3.4 states the contract;
+this section specifies its native part).
 
 - **The tracker slot.** Every native function has one slot past the
   layout, the tracker. Before a step that calls a helper, generated
   code stores the step's index there; a step of inline arithmetic
-  cannot fail and pays nothing (codegen removes the store when the
+  cannot fail and has no store (codegen removes the store when the
   step emitted no call). The runner sets the tracker to `u64::MAX`
   before each run, so a failure before any store names no step.
 - **Attribution.** The runner arms an `EvalPanicCaptureGuard` for the
@@ -311,7 +327,8 @@ native half).
   program's diagnostic context, and the formatted inputs. The
   interpreter's re-raise builds the same message from its `Value`s.
 - **The P3 kernel** does the same for a closure step, and for a
-  segment names the member native code stored in the tracker.
+  segment reports the member whose index native code stored in the
+  tracker.
 
 ---
 
@@ -350,8 +367,8 @@ overflows near the top (`ceil_to_multiple`, `multiples_at_least`);
 `f64_mod` calls the body itself, since Rust's `%` on floats has no
 Cranelift equivalent; and `div_wire`, `mod_wire`, `div`, and `mod` fail
 on a zero divisor in the body's words, where `u64_div` and `u64_mod`,
-whose bodies check, yield zero. The corner suite is the standing
-check.
+whose bodies check, yield zero. The corner suite verifies these
+cases.
 
 ### The slot-call helper
 
@@ -378,7 +395,7 @@ beside the code), the frame, and the state's scratch with the index of
 the step's first entry, then loads the outputs from the frame into
 their slots. The helper runs the kit's closure under the same panic
 guard as every other helper, so a node's failure surfaces as the
-interpreter surfaces it (A7). A `Ref2` pair reaches and leaves the
+interpreter surfaces it (A7). A `Ref2` pair enters and leaves the
 helper as two slots; only the kit dereferences it (S7).
 
 The message formatting happens at the Rust side, inside the
@@ -396,23 +413,22 @@ extern "C" fn jit_in_range_fail(value: u64, lo: u64, hi: u64) -> u64 {
 
 ## Operator-visible semantics
 
-From the outside looking in, a predicate violation in native code
-behaves exactly like a predicate violation on the interpreter or the
-closure tier:
+To a caller, a predicate violation in native code behaves exactly
+like a predicate violation on the interpreter or the closure tier:
 
 - `#[should_panic(expected = "must be > 0")]` on the caller
   works.
-- `std::panic::catch_unwind` catches and returns `Err`.
-- The panic message carries the violating value (and, for
+- `std::panic::catch_unwind` catches the panic and returns `Err`.
+- The panic message contains the violating value (and, for
   `in_range`, the configured bounds), enriched with the node and its
   inputs as above.
-- The workload can continue — the kernel survives catches;
-  the slot buffer is left partially written for the
-  failing step but subsequent evals overwrite cleanly.
+- The kernel remains usable after the panic is caught. The failing
+  step leaves the slot buffer partially written, and later
+  evaluations overwrite it.
 
-The helper ABI preserves the `is_positive` control name and the
-`is_one_of` allowed set through stable pointers into node metadata.
-`in_range` carries its numeric bounds directly. These values remain
+The helper ABI passes the `is_positive` control name and the
+`is_one_of` allowed set as stable pointers into node metadata, and
+passes `in_range`'s numeric bounds as arguments. These values remain
 valid for the compiled kernel lifetime because the native core and the
 cone node retain the originating nodes.
 
@@ -433,18 +449,19 @@ implementation detail.
 ## SIMD compute kernels
 
 `compile/jit/simd.rs` compiles four f32-lane kernels once per
-process through the same cranelift engine, using real cranelift
-SIMD types (`F32X4`): `dot_f32`, `l2sq_f32`, `add_f32`,
-`scale_f32`. Each processes the slice body in 128-bit chunks
-(unaligned loads — `SliceArc<f32>` data is only 4-aligned) with a
-scalar tail loop, and reducing kernels finish with an
-`extractlane` horizontal sum. Consumers are the `vec_*` nodes in
-`polydat-nodes/src/vector_math.rs`, which fall back to scalar Rust
-loops when the `jit` feature is off or host-ISA construction fails.
-This is also usable through the slot ABI ([Type-System
-Alignment](type_system_alignment.md) §6). Typed slice values
-cross compiled steps as `(ptr, len)` slot pairs and
-`CompiledSlotOp` publishes vector results through kernel-owned
+process through the same Cranelift engine, using Cranelift's SIMD
+types (`F32X4`): `dot_f32`, `l2sq_f32`, `add_f32`, and
+`scale_f32`. Each processes the body of a slice in 128-bit chunks,
+with unaligned loads because `SliceArc<f32>` data is only
+4-byte-aligned, followed by a scalar loop for the remaining
+elements; the reducing kernels finish with an `extractlane`
+horizontal sum. The `vec_*` nodes in
+`polydat-nodes/src/vector_math.rs` use these kernels, and fall back
+to scalar Rust loops when the `jit` feature is off or building for
+the host ISA fails. The kernels are also usable through the slot
+ABI ([Type-System Alignment](type_system_alignment.md) §6): typed
+slice values pass between compiled steps as `(ptr, len)` slot pairs,
+and `CompiledSlotOp` publishes vector results into kernel-owned
 scratch. Every native function, scalar or not, takes the state's
 scratch beside its buffer (`fn(coords, buffer, scratch)`); a
 slice-bearing step runs its kit through `jit_slot_call` or a named
@@ -457,37 +474,43 @@ equivalence tests compare with relative tolerance.
 
 ## Scalar buffer conventions
 
-- `u64` rides as-is; `i64` is `as u64` (bit-identical — cranelift
-  integers are sign-agnostic, signedness lives in the ops).
-- `f64` rides via `to_bits()`; cranelift `bitcast` converts for
-  free.
-- `bool` rides as 0/1 in a u64 slot; codegen uses `types::I8`
-  loads and constants for flag values — the only non-{I64, F64}
-  scalar type the kernel codegen emits.
-- Narrow widths (u8/i8/u16/i16/u32/i32/f32/f16) ride zero-/sign-
-  extended or bit-stuffed in the u64 slot per the static
-  `PortType`. The `#[polydat_node]` macro's buffer tokens are
-  width-aware (its internal `JitType` carries one variant per
+Every scalar value is stored in one `u64` slot, or two for 128-bit
+values, as follows:
+
+- `u64` is stored as-is; `i64` is stored `as u64`, which is
+  bit-identical, because Cranelift integers are sign-agnostic and
+  signedness is a property of the operations.
+- `f64` is stored via `to_bits()`; Cranelift's `bitcast` converts
+  it at no cost.
+- `bool` is stored as 0 or 1 in a `u64` slot; codegen uses
+  `types::I8` loads and constants for flag values, the only scalar
+  type other than I64 and F64 that kernel codegen emits.
+- Narrow widths (u8/i8/u16/i16/u32/i32/f32/f16) are stored zero- or
+  sign-extended, or bit-stuffed, in the `u64` slot according to the
+  static `PortType`. The `#[polydat_node]` macro's buffer tokens are
+  width-aware (its internal `JitType` has one variant per
   width), so narrow-typed nodes get `compiled_u64` closures whose
   casts mirror the Wire storage conventions exactly; the typed
   readers of every compiled kernel sign-extend narrow signed
   outputs on the way out.
-- 128-bit integers and register words ride as `Imm2`, two immediate
-  limbs in consecutive slots; the typed readers reassemble them
-  (`marshal::decode_output`).
-- Strings, byte strings, JSON, extension values, and handles ride
-  as `Ref2` pairs, per [Compiled By-Reference
+- 128-bit integers and register words are stored as `Imm2`, two
+  immediate limbs in consecutive slots; the typed readers reassemble
+  them (`marshal::decode_output`).
+- Strings, byte strings, JSON, extension values, and handles are
+  stored as `Ref2` pairs, per [Compiled By-Reference
   Slots](compiled_handles.md); every read copies out.
 
 ---
 
 ## Slot-state axioms (S1–S10)
 
-The normative contract for compiled-kernel buffer state under the
-heap-slice plane and slot-color contract (`type_system_alignment.md`
-§4, §6). These are
-axioms in the SYSREF sense: load-bearing, cited by SAFETY
-comments, and enforced by tripwires rather than comments.
+These axioms are the normative contract for the state of a compiled
+kernel's buffer and scratch, under the heap-slice plane and
+slot-color contract (`type_system_alignment.md` §4, §6). They apply
+to the three compiled engines (the closure tier, native, and pure
+native) and to the interpreter's native cones. Each axiom is cited by
+the SAFETY comments that rely on it and is enforced by a runtime
+assertion or a CI check, not by comments alone.
 
 **S1 — Slot color is static, total, and three-valued.** Every
 `PortType` maps at kernel-build time to exactly one color:
@@ -505,8 +528,7 @@ inside the engine's gather→op→scatter path. Raw readers (`get`,
 access goes through borrow-checked scratch accessors
 (`read_vec_f32(&self, slot) -> &[f32]`, lifetime tied to `&self`
 so holding a slice across the next `eval(&mut self)` is a compile
-error) or owned copy-out. A walled-off API in the established
-sense.
+error) or owned copy-out.
 
 **S3 — Single-writer scratch.** Each scratch entry is owned by
 exactly one (step, output port); only the owning op mutates it,
@@ -543,22 +565,23 @@ closures and in JIT-generated code alike (a segment loads the
 pointer from its slot and passes it).
 
 **S8 — The interpreter is the semantic oracle.** Typed eval defines
-meaning; every compiled tier must be bit-identical to it (cross-lane
-float reductions per their declared fixed-shape contracts). No node
-or op shape lands without an equivalence test across the engines.
+meaning; every compiled engine must be bit-identical to it
+(cross-lane float reductions per their declared fixed-shape
+contracts). No node or op shape is added without an equivalence test
+across all four engines.
 
 **S9 — Deterministic runtime validation.** (a) In debug/test
 builds, after every eval pass the engine asserts every
 scratch-backed Ref pair equals its owning entry's current
 `(as_ptr(), len())` — forgot-to-republish / wrong-slot /
 dangling failures name the slot deterministically. (b) The
-slice transport is adjudicated under Miri, in a build without native
-code, since Miri cannot execute it: Stacked Borrows accepts the
-`from_raw_parts` pattern and the leak check passes clean, so the leak
-check is itself a regression guard. One caveat, recorded rather than
-hidden: Miri warns on the integer-to-pointer casts inherent to a
-u64-slot transport, where provenance is necessarily reconstructed, so
-the check runs under permissive integer-pointer semantics rather than
+slice transport is checked under Miri, in a build without native
+code, since Miri cannot execute native code: Stacked Borrows accepts
+the `from_raw_parts` pattern and the leak check passes, so the leak
+check also guards against regressions. Miri warns on the
+integer-to-pointer casts inherent to passing pointers through `u64`
+slots, where pointer provenance is necessarily reconstructed, so the
+check runs under permissive integer-pointer semantics rather than
 strict provenance.
 
 **S10 — Unsafe is enumerable, annotated, and tripwired.** Every
@@ -568,18 +591,20 @@ sites; each SAFETY comment cites the axioms it relies on (S3,
 S4). A CI tripwire fails when `from_raw_parts` appears outside
 the allowlisted files.
 
-**Native corollary.** Native code carries a `Ref2` pair as two
-words and never dereferences it (S7 belongs to the helper); a pure
-native kernel and a P3 segment hold Ref slots wherever a slot call
-or a named string/vector lowering produces one, and
+**Native corollary.** Native code holds a `Ref2` pair as two
+words and never dereferences it; the helper performs S7's single
+dereference. A pure native kernel and a P3 segment hold Ref slots
+wherever a slot call or a named string/vector lowering produces one,
+and
 `build_jit_layout` rejects only a node with neither a lowering nor
 a kit.
 
-**Forwarding boundary.** Ref-pair pass-through is not a native
-optimization. A Ref output is scratch-backed, and S9(a)'s validator
-mapping applies to it, unless its pair names storage that outlives the
-kernel (a string constant interned for the process) or a boundary value
-borrowed for one call; a copy step never forwards a pair.
+**Forwarding boundary.** Native code never optimizes by passing a
+Ref pair through from input to output. A Ref output is backed by its
+step's scratch, and S9(a)'s validator applies to it, unless its pair
+names storage that outlives the kernel (a string constant interned
+for the process) or a boundary value borrowed for one call; a copy
+step never forwards a pair.
 
 **By-reference values.** `Str`, `Bytes`, `Json`, `Ext`, and `Handle`
 are `Ref2` (S1): a string or byte string as the pair of its bytes, a

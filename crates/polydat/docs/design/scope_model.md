@@ -1,10 +1,36 @@
-# Polydat Scope Model
+---
+type: specification
+title: Scope Model
+timestamp: 2026-09-25
+description: Scope identity, parent-gated construction, visibility, lifecycle ownership, shared mutation, and scope-coordinate paths.
+tags: [scopes, runtime]
+---
+
+# Scope Model
 
 This specification defines scope identity, parent-gated construction,
 visibility, lifecycle ownership, shared mutation, and scope-coordinate paths.
-The builder protocol is specified in
-[subcontext_construction.md](subcontext_construction.md), and the binding
-algorithm is specified in [wire_materialization.md](wire_materialization.md).
+It uses the terms of [runtime_model.md](runtime_model.md) and these:
+
+- **Scope.** One kernel placed at a point in a parent/child hierarchy (§1).
+- **Parent-gated construction.** A child scope is created only through a
+  call on its parent, and that call binds the child to the parent's wires in
+  the same step (§2).
+- **Shared cell.** A `SharedCell`: one mutex-protected value register that
+  several kernels read and write for a `shared` binding (§6).
+- **Transit cell.** A shared cell a scope holds only to pass it to its
+  descendants, because the scope has no input slot of that name (§4).
+- **Output (broadcast) cell.** A cell through which a parent publishes a
+  computed output each time it pulls that output, so a child bound to the
+  cell reads the parent's current value (§4).
+- **Binder.** The construction code that connects a child's inputs to its
+  parent's wires (§4).
+- **The four engines.** The interpreter (P1), the closure tier (P2), native
+  (P3), and pure native ([engines.md](engines.md)).
+
+**Related specifications:** the builder protocol is
+[subcontext_construction.md](subcontext_construction.md); the binding
+algorithm is [wire_materialization.md](wire_materialization.md).
 
 ## 1. Scope hierarchy
 
@@ -26,8 +52,8 @@ flowchart TD
 Each scope owns its input registers, its step buffers and their currency,
 its scope-coordinate stratum, and, when it is a typed `ScopeKernel`, its
 child registry. Programs are shared by `Arc` (`KernelProgram`); kernels are
-never shared. The engine a scope runs on changes how it is evaluated and
-nothing in this specification.
+never shared. The engine a scope runs on determines how the scope is
+evaluated; no rule in this specification depends on the engine.
 
 ## 2. Construction boundary
 
@@ -40,17 +66,18 @@ A scope is constructed in one of these forms:
 - **Child by parent spawn.** A parent `ScopeKernel` spawns a child from a
   finalized module (`subcontext_builder` → `finalize` → `spawn`), or a
   parent `PolydatKernel` builds one from matter (`build_subscope`). The
-  parent owns cell cascade, output/input matching, iteration-binding
+  parent performs the cell cascade, output/input matching, iteration-binding
   injection, scope-init pulls, write-through construction, and
   scope-coordinate threading. This form binds an interpreter child.
-- **Child by traversal activation.** `Kernel::traverse(index)` opens a
-  `for` traversal on a kernel of any engine, and
+- **Child by traversal activation.** `Kernel::traverse(index)` opens the
+  program's `index`-th `for` traversal on a kernel of any of the four
+  engines and returns a `TraversalStream`, and
   `TraversalStream::activation_on(index, engine)` creates one child per
   tuple on the engine the host asks for.
 
-Every child is a kernel state of its own over the body's program: it owns
-its inputs, its outputs, and the storage behind them, and observes the
-provenance rules as if it were the only state
+Every child is a separate kernel over the body's program: it owns
+its inputs, its outputs, and the storage behind them, and follows the
+provenance rules as if it were the only kernel
 ([runtime_model.md](runtime_model.md) R4). The traversal path creates it
 with `KernelProgram::create_kernel`; the spawn path creates the interpreter
 child before binding it.
@@ -58,12 +85,14 @@ child before binding it.
 `PolydatKernel::materialize_subscope` is crate-private and
 `materialize_wiring_from_outer` is private to `PolydatKernel`'s impl; both
 are implementation chokepoints. Callers cannot construct two
-independent kernels and bind them as parent and child afterward. This keeps
-a child from bypassing the parent's live shared-cell view or lifecycle
-checks. The one public binding a host may make after construction is
-`Kernel::attach_shared_cell`, which binds a single `shared` binding to a
-cell another kernel holds (§6); it refuses any slot that is not a `shared`
-binding.
+independent kernels and bind them as parent and child afterward, so a child
+cannot bypass the parent's live shared-cell view or lifecycle
+checks. The only public binding a host may make after construction is
+`Kernel::attach_shared_cell(name, cell)`. It takes the name of one of the
+kernel's `shared` bindings and a cell another kernel holds, and binds the
+binding to that cell, so both kernels read and write one register (§6). It
+returns an error, naming the kernel's `shared` bindings, for any name that
+is not a `shared` binding.
 
 ## 3. Input lifecycle classes
 
@@ -86,7 +115,14 @@ equivalent runtime requirement through `Purity::Nondeterministic`.
 
 ## 4. Parent-to-child materialization
 
-Parent binding is name-based and typed. The binder
+The two child-construction paths of §2 use different binders. The diagram
+shows what each one transfers from the parent to the child.
+
+![A parent kernel binds a child along two paths: spawn or build_subscope goes through the spawn binder, which gives an interpreter child shared and transit cells, output cells, value copies, scope-init pulls, and the coordinate path; traverse and activation_on go through the traversal cascade, which gives a child on the requested engine the tuple elements and cascaded wires by value and narrows its cursors](../diagrams/scope_model-binding-paths.png)
+
+Parent binding is name-based and typed: a child input is bound to the parent
+wire of the same name, and a value is checked against, or adapted to, the
+child slot's declared type. The spawn binder
 (`materialize_wiring_from_outer`, reached through `materialize_subscope`)
 performs these operations in order:
 
@@ -115,17 +151,17 @@ Coordinate advancement remains explicit. Parent materialization does not copy
 a live cycle counter into a child as a substitute for the child's own
 `set_inputs` or iteration binding.
 
-**Traversal cascade.** An activation is bound by a different, smaller
-binder: the tuple's elements and the parent's cascaded wires are written into
+**Traversal cascade.** An activation (the child created for one tuple of a
+`for` traversal) is bound by a different, smaller binder: the tuple's elements and the parent's cascaded wires are written into
 the body's declared inputs by name, through `Kernel::set_input`, and every
 `over` cursor is narrowed through `Kernel::set_cursor`. The cascade is a
 snapshot of the parent's values taken when the traversal is opened: the body
 lowers every cascaded wire as a plain extern, so a body that reads an outer
 `shared` wire sees the value the wire held at open, not the cell. The two
-binders differ today in what they carry (cells, transit, output cells, and
-coordinates on the spawn path; values on the traversal path) and in which
-engines they reach; the intent is that both call one binder over the
-`Kernel` trait.
+binders differ in what they transfer to the child (cells, transit cells,
+output cells, and coordinates on the spawn path; values on the traversal
+path) and in which engines they support. The design direction is that both
+paths call one binder over the `Kernel` trait.
 
 ## 5. Visibility and shadowing
 
@@ -161,13 +197,15 @@ assembled or when a value is written.
 A `shared` binding is represented by one `SharedCell` attached to every scope
 input slot participating in that binding. The cell, not a mirrored local
 `inputs[]` entry, is the slot's register. `set_input` writes through the cell;
-all cell-aware reads take the current cell value. This holds on every engine:
-a compiled kernel binds each `shared` slot to a cell of the same type, its
-`set_input` publishes through it, and every run and every pull refresh the
-slot from the cell when its revision moved. `Kernel::shared_cells` lists a
-kernel's cells and `Kernel::attach_shared_cell` binds a `shared` binding to
-a cell another kernel holds, so a register is shared between kernels of any
-engines by an explicit act. A kernel created from a shared program starts
+all cell-aware reads take the current cell value. This holds on all four
+engines. A compiled kernel (closure tier, native, or pure native) binds each
+`shared` slot to a cell of the same type, its `set_input` publishes through
+it, and every run and every pull refresh the slot from the cell when the
+cell's revision has moved. `Kernel::shared_cells` returns the cells a
+kernel's `shared` bindings are bound to, and `Kernel::attach_shared_cell`
+binds a `shared` binding to a cell another kernel holds (§2). A register is
+therefore shared between kernels, on the same or different engines, only by
+an explicit act. A kernel created from a shared program starts
 with a cell of its own per `shared` binding.
 
 There is no scope-exit copy and no `propagate_shared_to` API. Ordinary inner
@@ -193,8 +231,8 @@ changes the cell's declared type.
 Cell values are protected by a mutex. Concurrent writers serialize, and the
 observable value is last-write-wins in mutex acquisition order. Distinct cells
 have no combined atomic transaction or global write order. A binding that
-requires multi-field atomicity must carry those fields in one typed value or
-coordinate outside the graph.
+requires multi-field atomicity must hold those fields in one typed value or
+be coordinated outside the graph.
 
 Each publish also increments a monotonic revision and sets the cell's bit in
 the intent word of the scope that created the cell. A cell's intent word
@@ -249,7 +287,7 @@ remain observable.
 ## 10. Invariants and exclusions
 
 1. Every live child is constructed under its parent; no public path binds two
-   independently constructed kernels as parent and child. The one post-hoc
+   independently constructed kernels as parent and child. The only post-hoc
    binding is `attach_shared_cell`, for a single `shared` binding.
 2. One scope owns each ordinary mutable state instance.
 3. One shared binding has one cell and one stable type across all attached

@@ -1,29 +1,66 @@
-# Polydat Type System
+---
+type: specification
+title: Type System
+timestamp: 2026-09-25
+description: The static PortType contract on wires, its runtime Value representation, and the adapter catalog between types.
+tags: [types]
+---
 
-The static `PortType` contract on wires, its runtime
-`Value` representation, and the adapter catalog that
-moves values between types.
+# Type System
 
-Implementation: `polydat-core/src/ast.rs` (`PortType`,
-`Value`), `polydat-core/src/library/convert.rs` (adapter
-nodes), `polydat-core/src/compile/assembly.rs::auto_adapter`
-(catalog dispatch), `polydat-core/src/kernel/state.rs::adapt_boundary_value`
+This document specifies the static type of every wire (`PortType`),
+the runtime representation of values (`Value`), and the adapter
+catalog: the set of conversion nodes the compiler and the host
+boundary use to convert a value of one type to another.
+
+**Related specifications.**
+[Type-System Alignment](type_system_alignment.md) (how these types map
+to compiled slots, Cranelift, and JSON);
+[None Semantics](none_semantics.md) (the `None` sentinel);
+[Input Variance](input_variance.md) (converter nodes for inputs whose
+written type varies); [composition_substrate.md](composition_substrate.md)
+(the typed-slot axioms T1–T3).
+
+**Implementation.** `polydat-core/src/ast.rs` (`PortType`, `Value`),
+`polydat-core/src/library/convert.rs` (adapter nodes),
+`polydat-core/src/compile/assembly.rs::auto_adapter` (catalog
+dispatch), `polydat-core/src/kernel/state.rs::adapt_boundary_value`
 (boundary application).
+
+## Terms
+
+- **Carrier.** The `Value` variant that stores a port type's values
+  at runtime. Several port types can share one carrier; for example,
+  every unsigned integer width is carried by `Value::U64`.
+- **Bit-stuffing.** Storing a narrower type in a wider carrier's low
+  bits, as `U8` in `Value::U64` or an `f32` bit pattern in
+  `Value::U64`. The port type records how to read the bits.
+- **Adapter.** A node that converts a value of one port type to
+  another. The assembler inserts adapters between a producer and a
+  consumer whose types differ (§6.1).
+- **Class A and class B.** An adapter is class A when it produces a
+  value for every input and never fails; class B when some input has
+  no result (a string that does not parse, a float out of an integer's
+  range), in which case the adapter panics. §3 defines both classes
+  and lists their members.
+- **Host boundary.** The point where a value from outside the graph
+  (a host write, or a value copied from an outer scope) enters a
+  typed input slot.
 
 ---
 
 ## 1. PortType — the static wire contract
 
-`PortType` is the type a wire carries from producer to
-consumer. Every `Port` (input or output) on every node
-declares one. The assembler validates that producer
-and consumer agree, inserting auto-adapter nodes from
-the catalog where it can heal a mismatch.
+`PortType` is the type of the value a wire passes from its producer to
+its consumers. Every `Port` (input or output) on every node declares
+one. The assembler checks that each producer and consumer agree, and
+where they do not, it inserts an adapter node from the catalog if one
+exists for the pair (§6.1).
 
 | Variant | Width | Storage at runtime | Notes |
 | --- | --- | --- | --- |
 | `U64`     | 64-bit unsigned | `Value::U64(u64)` | Workhorse: hash outputs, counters, primary keys |
-| `I64`     | 64-bit signed   | `Value::I64(i64)` | **Honest signed carrier** (alignment §5) — display/JSON render negatives correctly |
+| `I64`     | 64-bit signed   | `Value::I64(i64)` | **Honest signed carrier** (alignment §2) — display/JSON render negatives correctly |
 | `U32`/`U16`/`U8` | narrow unsigned | `Value::U64` (zero-extended) | Widen to `U64` automatically |
 | `I32`/`I16`/`I8` | narrow signed | `Value::I64` (sign-extended) | Widen to `I64` automatically |
 | `F64`     | 64-bit float    | `Value::F64(f64)` | IEEE 754 double |
@@ -44,33 +81,34 @@ The scalar-width set is the full cranelift scalar vocabulary
 (every integer width in both signednesses, f16/f32/f64) minus
 F128, which stable Rust cannot carry; the vector element set is
 every cranelift lane type with a JSON Number projection. See
-`type_system_alignment.md` for the derivation and §8 for the
-full-scope model.
+`type_system_alignment.md` for the derivation.
 
 **Four storage classes** group the variants by how the runtime
-carries them:
+stores them:
 
 - **Single-word scalars** (`U8`–`U64`, `I8`–`I64`,
   `F16`/`F32`/`F64`, `Bool`) — one machine word per value, in three
   carriers (`Value::U64`, `Value::I64`, `Value::F64`) plus
-  `Value::Bool`; the wide types ride their carrier natively, the
-  narrow widths are *bit-stuffed* into it (the `PortType` says how
-  to read the bits). JIT-eligible at P3.
-- **Two-limb 128-bit** (`U128`, `I128`) — `Bits128([u64; 2])`;
-  two immediate slots (`Imm2`) in the compiled layout; no *named*
-  native lowering — a 128-bit node runs its closure on the closure
-  tier and is a slot call of its kit from native code on the native
-  engine.
+  `Value::Bool`. The 64-bit types use their carrier directly, and the
+  narrow widths are *bit-stuffed* into it. These types can be
+  compiled to native code at P3.
+- **Two-limb 128-bit** (`U128`, `I128`) — `Bits128([u64; 2])`, stored
+  in two immediate slots (`Imm2`) in the compiled layout. There is no
+  *named* native lowering (a translation written for the specific
+  node): a 128-bit node runs its closure on the closure tier, and on
+  the native engine the native code calls the node's closure kit (a
+  *slot call*; [Compiled By-Reference Slots](compiled_handles.md) §6).
 - **128-bit SIMD register plane** (`Reg128` + 7 lane-views) — a
   16-byte word with a `RegLanes` view tag; reg→reg retags are free
   bitcasts and the arithmetic ops JIT to native SIMD.
 - **Arc-backed handles** (`Str`, `Bytes`, `Json`, the `Vec*` lane
-  family, `Handle`, and the boxed `Ext`) — clone is one atomic
-  refcount bump; consumer fibers share one allocation.
+  family, `Handle`, and the boxed `Ext`) — cloning one is a single
+  atomic reference-count increment, and consumer fibers share one
+  allocation.
 
-Each family is detailed below. The static slot's declared
-`PortType` is always the canonical contract; the runtime [`Value`]
-variant (§2) is its storage realisation.
+The sections below specify each family. A slot's declared `PortType`
+is always the type contract; the runtime [`Value`] variant (§2) is how
+the value is stored.
 
 ### 1.1 Integer widths — `U8`/`U16`/`U32`/`U64`, `I8`/`I16`/`I32`/`I64`
 
@@ -78,7 +116,7 @@ The integer vocabulary is every cranelift scalar width in both
 signednesses. At runtime **all unsigned widths share `Value::U64`**
 (zero-extended into the low bits) and **all signed widths share
 `Value::I64`** (sign-extended) — the *honest signed carrier*
-(alignment §5): a negative `I32` is stored as a negative `i64`, so
+(alignment §2): a negative `I32` is stored as a negative `i64`, so
 its display and JSON projection render `-1`, not `4294967295`. The
 `PortType` is the sole record of the declared width; the carrier
 only knows "u-bits" or "s-bits".
@@ -86,9 +124,9 @@ only knows "u-bits" or "s-bits".
 - **Storage cost** — one `u64` slot regardless of width. There is
   no `Value::U8`; an `U8` wire is a `Value::U64` whose producer
   promises the high 56 bits are zero.
-- **JIT (P3)** — the single-slot stuffing is what makes narrow
-  widths free to compile: widen is `uextend`/`sextend`, narrow is a
-  mask, all on the one `compiled_u64` register. No boxing.
+- **JIT (P3)** — because every width occupies one slot, narrow widths
+  compile at no extra cost: widening is `uextend`/`sextend`, narrowing
+  is a mask, all on the one `compiled_u64` register, with no boxing.
 - **Conversions** — widening (`u8 → u64`, `u32 → i64`, …) is class A
   and auto-inserted; narrowing is class B (range-checked, boundary
   only). See §3.
@@ -100,7 +138,7 @@ only knows "u-bits" or "s-bits".
 ### 1.2 128-bit integers — `U128` / `I128`
 
 The cranelift `I128` lane under both signedness readings. Unlike
-the ≤64-bit widths, a 128-bit value cannot ride a single `u64`
+the ≤64-bit widths, a 128-bit value does not fit a single `u64`
 slot, so it has its **own `Value` variants** (`U128`, `I128`),
 each carrying a [`Bits128`] — two little-endian `u64` limbs
 (`[lo, hi]`). Storing two limbs instead of a raw Rust `u128` keeps
@@ -111,9 +149,10 @@ buffer-slot envelope, which a size probe in the suite guards.
   as ordinary evals on the interpreter; on the closure tier the node
   runs its closure, and on the native engine it is a slot call of
   its kit from native code (`JitOp::SlotCall`), over two immediate
-  slots, with the same result on every engine. The carrier reassembles to a
-  native `u128`/`i128` in two register moves for the arithmetic,
-  then re-splits.
+  slots. The result is the same on all four engines (the interpreter,
+  the closure tier, native, and pure native). For the arithmetic, the
+  two limbs are reassembled into a native `u128`/`i128` in two
+  register moves and split again afterwards.
 - **JSON** — projects as a **decimal string**, not a JSON Number
   (which tops out at the `u64`/`i64`/`f64` leaves); the extractor
   also accepts an in-range Number for convenience.
@@ -172,8 +211,8 @@ word:
   the assembler with a `__reg_view_*` retag node (one per view,
   `__reg_view_raw` … `__reg_view_f64x2`) that changes the `RegLanes`
   tag and touches **no bits** (alignment §3). They are registered
-  nodes like every other adapter, so a program can call them and the
-  conversion fuzzer reaches them by name.
+  nodes like every other adapter, so a program and the conversion
+  fuzzer can both call them by name.
   A word can be `[i64; 2]` for one op, raw bytes for a shuffle, and
   `[f32; 4]` for a dot product, at zero cost. This is the one
   family where every intra-plane conversion is class A and every
@@ -199,8 +238,8 @@ increment with no allocation:
 
 - **`Str`** — `Arc<str>`, UTF-8. The universal sink: every numeric,
   `Bool`, and `Json` renders to `Str` via Display (class A).
-  Per-cycle template interpolation pointer-shares rather than
-  re-allocating.
+  Template interpolation shares the string by pointer rather than
+  allocating a copy on each evaluation.
 - **`Bytes`** — `Arc<[u8]>`. Little-endian serialisation target for
   every numeric, `Bool`, and the `Vec*` lanes. `Bytes ↔ Str` is
   lowercase hex; `Bytes ↔ Json` is a hex `Json::String`. Unsigned
@@ -212,9 +251,9 @@ increment with no allocation:
 
 ### 1.7 Typed vector lanes — `VecF32`/`VecF64`/`VecF16`, `VecI8`/`VecI16`/`VecI32`/`VecI64`
 
-Typed slices (`Value::Vec*(SliceArc<T>)`) that flow vector data
-from accessors to native-binding adapters with **no per-cycle
-string-format or byte-serialise step**. The element set is every
+Typed slices (`Value::Vec*(SliceArc<T>)`) that pass vector data
+from accessors to native-binding adapters with **no string-format or
+byte-serialise step on any evaluation**. The element set is every
 cranelift lane type that has a JSON Number projection — completing
 the lane family alongside the register plane (alignment §4).
 
@@ -231,10 +270,8 @@ the lane family alongside the register plane (alignment §4).
   element-wise (widening lanes class A, narrowing / `float→int`
   class B, panic-on-bad-element like the scalar adapters) and each
   serialises to / parses from `Bytes` / `Json` / `Str` (§3). Only
-  `Vec → scalar` is intentionally absent (no canonical reduction —
-  the library provides no scalar reduction node; an author writes
-  the reduction node they mean, or uses `vec_dot` / `vec_norm` where
-  those are the reduction wanted).
+  `Vec → scalar` is deliberately absent, because no reduction is
+  canonical (§3.3).
 
 ### 1.8 Type-erased — `Ext` / `Handle`
 
@@ -249,8 +286,8 @@ never in the adapter catalog (§3).
 - **`Handle`** — `Arc<dyn Any + Send + Sync>`. A resolved resource
   (dataset, prepared statement); the producer node (`dataset_open`,
   …) populates it and the consumer downcasts with
-  `Value::as_handle::<T>()`. One `Arc::clone` per cycle, zero
-  allocation.
+  `Value::as_handle::<T>()`. Each evaluation that reads it costs one
+  `Arc::clone` and no allocation.
 
 ---
 
@@ -280,20 +317,13 @@ pub enum Value {
 }
 ```
 
-Note the floats: an `F32`-typed *node output* carries its bit
+Note the floats: an `F32`-typed *node output* stores its bit
 pattern in `Value::U64` (the `Wire for f32` impl in `derive_support.rs`), while
 a host-written `F32` slot value may arrive as `Value::F64`;
 `satisfies_slot` accepts both. `F16` follows the same dual
 convention.
 
-`Value::None` is the *absent* sentinel. It appears in
-freshly-allocated buffer slots before first
-evaluation and as the "no value yet" marker for
-optional ports. Per [none_semantics.md](none_semantics.md) it
-propagates through node evaluation, on every engine: any node
-whose inputs include `None`
-emits `None` on every output unless it explicitly
-opts in via `PolydatNode::accepts_none_inputs()`.
+`Value::None` is the *absent* sentinel (§2.2).
 
 `Value::port_type()` reports the *runtime variant's*
 PortType, which collapses the narrow widths into their
@@ -325,12 +355,16 @@ Three helper types back the multi-`PortType` variants:
 
 ### 2.2 The `None` sentinel
 
-`Value::None` is the *absent* marker (it appears in
-freshly-allocated buffer slots before first evaluation and as the
-"no value yet" state of optional ports) — already covered above;
-per [none_semantics.md](none_semantics.md) it propagates through
-evaluation unless a node opts in via `accepts_none_inputs()`. It is not a `PortType`: no wire
-declares `None`, and `port_type()` reports `U64` as a placeholder.
+`Value::None` is the *absent* marker. It appears in freshly allocated
+buffer slots before the first evaluation and as the "no value yet"
+state of optional ports. Per [none_semantics.md](none_semantics.md) it
+propagates through node evaluation: a node whose inputs include `None`
+emits `None` on every output unless it declares
+`PolydatNode::accepts_none_inputs()`. This holds on the interpreter,
+the closure tier, and native; pure native refuses to run while an
+extern is unset, so no `None` arises there. `None` is not a
+`PortType`: no wire declares `None`, and `port_type()` reports `U64`
+as a placeholder.
 
 ---
 
@@ -344,27 +378,26 @@ pub fn auto_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>
 pub fn boundary_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatNode>>;
 ```
 
-- **`auto_adapter`** — intra-graph wire validation.
-  Consulted by the assembler when a producer node's
-  output `PortType` differs from a consumer node's
-  input `PortType`. Strict: never returns an adapter
-  that can panic on unparseable input. The intent is
-  that any wire mismatch the catalog cannot heal is
-  an author-detectable compile-time error.
-- **`boundary_adapter`** — host-boundary writes via
-  `adapt_boundary_value`. A strict superset of
-  `auto_adapter`: delegates to it first, then adds
-  every class-B adapter of §3 — the narrowings, and
-  the `Str`/`Bytes`/`Json` parsers and extractors —
-  for the boundary flows whose source is textual or
-  lossy.
+Each function takes the source type `from` and the target type `to`
+and returns the adapter node that converts a `from` value to `to`, or
+`None` when the catalog has no adapter for the pair.
 
-When either function returns `Some(node)`, the wire
-chain inserts that adapter node. When it returns
-`None`, the boundary surfaces
-`WriteError::TypeMismatch` (or an assembler error at
-compile time) with `from` and `to` in the
-diagnostic.
+- **`auto_adapter`** is used for wires inside a graph. The assembler
+  calls it when a producer node's output `PortType` differs from a
+  consumer node's input `PortType`. It is strict: it never returns an
+  adapter that can panic on its input, so any wire mismatch it cannot
+  resolve is a compile-time error the author can see.
+- **`boundary_adapter`** is used at the host boundary, through
+  `adapt_boundary_value`. It is a strict superset of `auto_adapter`:
+  it tries `auto_adapter` first and then adds every class-B adapter of
+  §3 (the narrowings, and the `Str`/`Bytes`/`Json` parsers and
+  extractors) for boundary values whose source is text or whose
+  conversion can lose information.
+
+When either function returns `Some(node)`, that adapter node is
+inserted into the wire chain. When it returns `None`, the boundary
+returns `WriteError::TypeMismatch`, or at compile time the assembler
+returns an error, with `from` and `to` in the diagnostic.
 
 The matrix below is **generated from the two catalog
 functions** in `compile/assembly.rs` (the cell-level source of
@@ -425,13 +458,9 @@ v8        ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   ·   
           vF=VecF32 vI=VecI32 vD=VecF64 vL=VecI64 vH=VecF16 vS=VecI16 v8=VecI8
 ```
 
-The grid is **complete**: every meaningful pair has an adapter.
-The only `·` cells are **scalar ↔ vector**, which is intentionally
-undefined — a scalar has no canonical vector length and a vector
-no canonical scalar reduction (the library provides no scalar
-reduction node; an author writes the reduction they mean, or uses
-`vec_dot` / `vec_norm` where those are the reduction wanted). Two
-type groups carry no row or column at all (omitted from the grid):
+The grid is **complete**: every meaningful pair has an adapter, and
+the only `·` cells are **scalar ↔ vector**, which are deliberately
+undefined (§3.3). Two type groups have no row or column in the grid:
 
 - **Register views** (`Reg128`, `RegI8x16` … `RegF64x2`) — any
   reg→reg pair is class A via a zero-cost `__reg_view_*` retag; reg ↔
@@ -451,7 +480,7 @@ computed from the two types' numeric domains and is what the
 `_strict` embedding surfaces gate on — see
 [expression_engine.md](expression_engine.md) §5.4.2.
 
-- **Numeric widening** — the rule, now complete with no holes:
+- **Numeric widening** — the rule, which has no exceptions:
   unsigned → any **strictly-wider** integer of either signedness
   (`u8 → i16`, `u32 → i64`, `u16 → u128`, …); signed → any wider
   signed (`i8 → i64`, `i32 → i128`); float → wider float
@@ -464,8 +493,8 @@ computed from the two types' numeric domains and is what the
   `U128`/`I128` included) plus `Bool` and `Json` render as a
   string via Display.
 - **Bool ↔ numeric** — 1/0 mapping out, nonzero test in, both
-  total and never panicking. Now covers **every** numeric width
-  in both directions, including `U128`/`I128`.
+  total and never panicking. Covers **every** numeric width in both
+  directions, including `U128`/`I128`.
 - **X → Bytes** — little-endian serialize for every
   scalar numeric (narrow + 128-bit included), Bool,
   and every `Vec*` lane; always succeeds.
@@ -536,10 +565,7 @@ or shape-checking):
   sum? mean?). When the
   boundary rejects this pair, `WriteError::TypeMismatch`
   appends a hint that the reduction is the author's
-  choice. The library provides no scalar reduction
-  node; an author writes the reduction node they mean
-  (or uses `vec_dot` / `vec_norm` where those are the
-  reduction wanted).
+  choice (§3.3).
 - **`Ext` / `Handle`** — never in the auto-adapter
   catalog. `Ext` exposes typed access via
   `ReflectedValue::try_as_str` etc. at consume
@@ -601,10 +627,9 @@ panic when the upstream might be human-typed."
 ### 3.3 Completeness
 
 The matrix is **complete**: every meaningful `(from, to)` pair has
-an adapter, which the catalog's own test enforces
-alongside the
-widening invariant and re-derives the grid above so it can never
-silently drift. Three properties hold:
+an adapter. The catalog's own test enforces this together with the
+widening invariant, and it re-derives the grid above so that the grid
+cannot diverge from the catalog unnoticed. Three properties hold:
 
 - **Widening totality** — every lossless widening, canonical
   `int → f64`, and the full `Bool ↔ numeric` / `int → bool`
@@ -623,7 +648,7 @@ The bulk of these (~130 trivial transforms) are macro-generated in
 `convert.rs` / `polyfill*.rs`.
 
 The **only** `·` cells are **scalar ↔ vector**, and that is a
-deliberate exclusion, not a gap: a scalar carries no canonical
+deliberate exclusion, not a gap: a scalar has no canonical
 vector length, and a vector no canonical scalar reduction. The
 library provides no scalar reduction node; an author writes the
 reduction node they mean (or uses `vec_dot` / `vec_norm` where
@@ -632,34 +657,30 @@ those are the reduction wanted), and `TypeMismatch` on a rejected
 
 ---
 
-## 4. Why the `auto_adapter` / `boundary_adapter` split
+## 4. The `auto_adapter` / `boundary_adapter` split
 
-Intra-graph wire validation should be **strict**:
-when an author writes `s := "LATENCY"; overscan := s << 2`
-the substrate should reject it at compile time, not
-auto-insert a parser that runtime-panics on
-"LATENCY". The intra-graph catalog (`auto_adapter`)
-therefore holds only **class A** adapters from §3 —
-adapters whose `eval` is total over the input
-domain.
+Wire validation inside a graph is **strict**. When an author writes
+`s := "LATENCY"; overscan := s << 2`, the compiler rejects it at
+compile time instead of inserting a parser that panics at runtime on
+"LATENCY". The intra-graph catalog (`auto_adapter`) therefore holds
+only the **class A** adapters of §3, whose `eval` is total over the
+input domain.
 
-The host boundary (`adapt_boundary_value`) needs
-**permissive** healing: workload-param values arrive
-as `Value::Str` (YAML interpolation, comma-split
-iter-values) and need to coerce into typed slots
-the workload author declared as `Bool`, `U64`,
-`F64`, etc. The boundary catalog (`boundary_adapter`)
-is a strict superset of `auto_adapter` plus every
-**class B** adapter — narrowings, parsers, shape-
-checking extractors, non-finite-float refusers. The
-panic-on-input semantics is appropriate at the
-boundary because the Str source IS data the host
-explicitly fed in, and "parse or panic with a
-useful diagnostic" matches user expectation.
+The host boundary (`adapt_boundary_value`) is **permissive**.
+Workload parameter values arrive as `Value::Str` (from YAML
+interpolation or comma-split iteration values) and must be converted
+into typed slots the workload author declared as `Bool`, `U64`,
+`F64`, and so on. The boundary catalog (`boundary_adapter`) is
+`auto_adapter` plus every **class B** adapter: narrowings, parsers,
+shape-checking extractors, and the adapters that refuse non-finite
+floats. A panic on bad input is acceptable at the boundary because
+the string is data the host supplied, and parsing it or failing with
+a useful diagnostic is what the host expects.
 
-`Value::satisfies_slot(slot_type)` is the bit-
-stuffing equivalence helper the residual check
-uses post-adapter: `Value::U64` storage is accepted
+`Value::satisfies_slot(slot_type)` returns true when a value's stored
+form is acceptable for a slot of type `slot_type`, taking
+bit-stuffing into account. The boundary uses it after the adapter
+runs, as the residual check: `Value::U64` storage is accepted
 for the unsigned widths, `F16`, and compatibility producers
 for the signed widths;
 `Value::I64` for `I64`/`I32`/`I16`/`I8` slots;
@@ -706,7 +727,11 @@ Display, Bool ↔ U64 as 1/0).
 
 ## 6. Boundary adapter application
 
-Two call sites apply the catalog:
+Two call sites apply the catalog: the assembler, to wires inside a
+graph (§6.1), and `adapt_boundary_value`, to values written across the
+host boundary (§6.2). The converter nodes and `convert::to_port` of
+[input_variance.md](input_variance.md) also apply `boundary_adapter`
+(§6.2).
 
 ### 6.1 Assembler — intra-graph wire validation
 
@@ -723,47 +748,48 @@ the consumer's input `PortType`, and:
   with `AssemblyError::TypeMismatch` carrying both
   port types and the offending wire path.
 
-This runs once, before any engine builds, so the resolved
-graph every engine receives has no remaining mismatches: the
-insertion is engine-neutral. Strict mode's refusal of an
-implicit coercion is one check at the same insertion point
-(the assembler's `strict` flag), naming the explicit
-conversion to write, so strict means the same thing on every
-engine.
+This pass runs once, before any engine is built, so the resolved graph
+that each of the four engines (the interpreter, the closure tier,
+native, and pure native) receives has no remaining mismatches, and
+the inserted adapters are the same on all four. Strict mode's refusal
+of an implicit coercion is one check at the same insertion point (the
+assembler's `strict` flag), and its error names the explicit
+conversion to write, so strict mode behaves identically on all four
+engines.
 
 ### 6.2 Boundary — `adapt_boundary_value`
 
-`polydat-core/src/kernel/state.rs::adapt_boundary_value`
-applies the catalog at runtime mismatches where the
-assembler has no view — outer scope values
-crossing into inner kernels via the `set:` /
-`bindings:` lowering, host writes via
-`Dataflow::set_wire_idx`, etc. The helper:
+`polydat-core/src/kernel/state.rs::adapt_boundary_value(slot_name,
+slot_type, value)` converts a value arriving at runtime into an input
+slot whose type the assembler could not check against it. It is
+called for outer-scope values copied into inner kernels by the `set:`
+/ `bindings:` lowering (the scope binder's copies) and for host writes
+through the deprecated `Dataflow::set_wire_idx`. It returns the value
+to store:
 
-1. Compares incoming `Value`'s `port_type()` to the
+1. It compares the incoming `Value`'s `port_type()` to the
    slot's declared `PortType`.
-2. Equal → returns the value unchanged.
-3. Mismatch → consults `boundary_adapter(from, to)`
+2. If they are equal, it returns the value unchanged.
+3. If they differ, it looks up `boundary_adapter(from, to)`
    (which checks `auto_adapter` first, then the
-   boundary-only Str→X parsers from §4), runs the
-   adapter's `eval` against the value, and returns
+   boundary-only Str→X parsers of §3), runs the
+   adapter's `eval` on the value, and returns
    the result.
-4. No catalog entry → returns the value unchanged
-   with a one-line audit warning; the caller's
-   `set_wire_idx` then detects the residual type
-   mismatch and surfaces `WriteError::TypeMismatch`
+4. If the catalog has no entry, it returns the value unchanged
+   and logs a one-line audit warning. `set_wire_idx` then detects the
+   residual type mismatch and returns `WriteError::TypeMismatch`
    to the host.
 
-This is the retiring form (input_variance.md). A write is
-never converted: an input whose type may vary is typed
-`Dyn`, and a converter node in front of its readers applies
-the catalog when its input changes, reported at the level
-`CompileOptions::input_variance` names. The host-side form is
-`polydat::convert::to_port(value, to)`, which applies the same
-catalog and returns a `ConvertError` where this helper warns
-and passes the value through. `Dataflow::set_wire_idx` is
-deprecated; the binder's copies still use this helper until
-they are retired (input_variance.md §11).
+`adapt_boundary_value` is not the conversion rule for inputs. Under
+[input_variance.md](input_variance.md), a write is never converted:
+an input whose type may vary is typed `Dyn`, and a converter node in
+front of its readers applies the catalog when its input changes,
+reported at the level `CompileOptions::input_variance` names. The
+host-side form is `polydat::convert::to_port(value, to)`, which
+applies the same catalog and returns a `ConvertError` where this
+helper logs a warning and returns the value unconverted. Only the
+deprecated `Dataflow::set_wire_idx` and the scope binder's copies use
+this helper (input_variance.md §7, §8, §11).
 
 ---
 

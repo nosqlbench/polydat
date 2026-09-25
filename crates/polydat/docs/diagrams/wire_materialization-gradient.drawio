@@ -1,0 +1,73 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="Wire materialization: choosing a form for one inner input slot">
+    <mxGraphModel dx="1000" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1000" pageHeight="760" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="q1" value="Is a cell named NAME&lt;br&gt;visible at the outer scope?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="260" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="q1b" value="Does the inner scope&lt;br&gt;declare const NAME?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="360" y="40" width="260" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="x" value="Discard the cell&lt;br&gt;(transit suppression)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="680" y="55" width="260" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="f1" value="1. Attach the shared cell&lt;br&gt;to the inner slot" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="360" y="175" width="260" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="q2" value="Is NAME an outer input slot&lt;br&gt;or an outer const output?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="40" y="280" width="260" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="f2" value="2. Copy the value of&lt;br&gt;outer.lookup(NAME)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="680" y="295" width="260" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="q3" value="Is NAME a computed outer output&lt;br&gt;with a broadcast cell?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="40" y="410" width="260" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="f3" value="3. Attach the broadcast cell&lt;br&gt;to the inner slot" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="680" y="425" width="260" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="q4" value="Does the outer lookup&lt;br&gt;yield a value?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="40" y="540" width="260" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="f4" value="4. Copy the value once" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="680" y="555" width="260" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="f5" value="5. Ask the registered extern resolver;&lt;br&gt;otherwise keep the declared default" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="40" y="670" width="260" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;endArrow=block;" edge="1" parent="1" source="q1" target="q1b">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e2" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;endArrow=block;" edge="1" parent="1" source="q1b" target="x">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e3" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;endArrow=block;" edge="1" parent="1" source="q1b" target="f1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e4" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;endArrow=block;" edge="1" parent="1" source="q1" target="q2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e5" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;endArrow=block;" edge="1" parent="1" source="q2" target="f2">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e6" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;endArrow=block;" edge="1" parent="1" source="q2" target="q3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e7" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;endArrow=block;" edge="1" parent="1" source="q3" target="f3">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e8" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;endArrow=block;" edge="1" parent="1" source="q3" target="q4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e9" value="yes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;endArrow=block;" edge="1" parent="1" source="q4" target="f4">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e10" value="no" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;fontSize=12;endArrow=block;" edge="1" parent="1" source="q4" target="f5">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
