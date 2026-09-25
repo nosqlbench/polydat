@@ -1869,11 +1869,14 @@ impl PolydatProgram {
                  to a cycle-time source."
             ));
         }
+        // A nondeterministic read is acknowledged by what consumes it: a
+        // `volatile` output (read again on every read) or a `const`
+        // output (read once, at initialization).
         let mut feeds_volatile = vec![false; n];
         for (out_name, (node_idx, _)) in output_map.iter() {
             if output_modifiers
                 .get(out_name)
-                .map(|m| m.is_volatile())
+                .map(|m| m.is_volatile() || m.is_const())
                 .unwrap_or(false)
             {
                 feeds_volatile[*node_idx] = true;
@@ -2046,12 +2049,14 @@ impl PolydatProgram {
         // and the volatile output) is acknowledged. Reverse-reach:
         // seed the producing node of every volatile output, walk
         // producer edges to fixpoint.
+        // A `const` output acknowledges a nondeterministic read as a
+        // `volatile` one does: it takes one reading, at initialization.
         let mut feeds_volatile = vec![false; n];
         for (out_name, node_idx, _port) in self.output_list.iter() {
             if self
                 .output_modifiers
                 .get(out_name)
-                .map(|m| m.is_volatile())
+                .map(|m| m.is_volatile() || m.is_const())
                 .unwrap_or(false)
             {
                 feeds_volatile[*node_idx] = true;

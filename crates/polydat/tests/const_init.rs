@@ -124,6 +124,35 @@ fn a_fork_keeps_the_capture_and_a_created_kernel_captures_its_own() {
     }
 }
 
+/// A const over a nondeterministic read is the acknowledgment of it, as
+/// `volatile` is: it compiles under strict on every engine, and without
+/// strict it compiles with no warning.
+#[test]
+fn a_const_capture_acknowledges_its_nondeterministic_read() {
+    let src = "input cycle: u64\nconst session_start := current_epoch_millis()\n";
+    for engine in every_engine() {
+        for strict in [true, false] {
+            let options = polydat::dsl::compile::CompileOptions {
+                strict,
+                engine,
+                ..Default::default()
+            };
+            let mut log = polydat::dsl::events::CompileEventLog::new();
+            polydat::dsl::compile::compile_polydat_kernel_with_options(
+                src,
+                &options,
+                Some(&mut log),
+            )
+            .unwrap_or_else(|e| panic!("{engine}, strict {strict}: {e}"));
+            assert!(
+                log.warnings().is_empty(),
+                "{engine}, strict {strict}: {:?}",
+                log.warnings()
+            );
+        }
+    }
+}
+
 /// Only initialization writes a const's slot.
 #[test]
 fn a_consts_slot_refuses_a_write() {

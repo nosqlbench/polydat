@@ -2346,6 +2346,15 @@ impl Compiler {
                         for target in &b.targets {
                             asm.set_output_modifier(target, b.modifier);
                         }
+                        // A captured const's expression carries the same
+                        // modifier, so a nondeterministic read in it is
+                        // acknowledged: the const takes one reading, at
+                        // initialization.
+                        if cut {
+                            for compiled in &compiled_targets {
+                                asm.set_output_modifier(compiled, b.modifier);
+                            }
+                        }
                     }
                     if b.modifier.is_const() {
                         // SRD-74 P2: a const whose RHS references a name

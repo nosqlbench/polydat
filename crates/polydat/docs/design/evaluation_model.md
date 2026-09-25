@@ -395,6 +395,13 @@ scope, and a child scope reads it through
 `extern session_start: u64`; polydat ships no session-timestamp
 node.
 
+A nondeterministic read must be acknowledged by what consumes it,
+through any chain of expressions: a `volatile` output, which reads
+it again on every read, or a `const`, which reads it once at
+initialization. An unacknowledged nondeterministic node is a
+compile warning, and under strict mode (`CompileOptions::strict`)
+it is a compile error, on all four engines.
+
 The library's `is_stable` node is pure: it takes a window of
 samples (`vec_f64`), a margin, and a minimum sample count, and
 returns the settled value and whether the window is stable. The
