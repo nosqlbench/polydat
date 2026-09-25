@@ -3328,12 +3328,10 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Init-Binding Contract (SRD 11 §"Init Binding Contract")
-    //
-    // Plan A — compile-time check: every binding declared `init`
-    // must classify as compile-const or scope-init. A wire chain
-    // reaching a coordinate input, a external-write port, or a
-    // non-deterministic source disqualifies the binding.
+    // The const contract (evaluation_model.md, "Const Binding
+    // Contract"): a literal const folds at build; any other const is
+    // evaluated when its kernel is initialized. A const that reads a
+    // coordinate is a compile error.
     // ─────────────────────────────────────────────────────────────
 
     #[test]
@@ -3354,26 +3352,13 @@ mod tests {
     }
 
     #[test]
-    fn init_binding_with_iteration_extern_passes_plan_a() {
-        // Init binding wired through an iteration extern: this is
-        // legal under Plan A — the wire chain reaches an
-        // IterationExtern input slot, which is effectively-const at
-        // scope-init time. Plan B (executor-side) is what actually
-        // evaluates it; the compile step just must not reject.
-        let src = "extern profile: String\n\
-                   const label := format_str(\"label_%s\", profile)\n";
-        let result = compile_polydat_interpreter(src);
-        // We don't care if format_str exists in the stdlib — what
-        // we're testing is that the contract check itself doesn't
-        // fail (any error must be about an unknown function, not
-        // about the init contract).
-        match result {
-            Ok(_) => {} // ideal: kernel built
-            Err(e) => assert!(
-                !e.to_string().contains("violates the init contract"),
-                "Plan A must accept iteration-extern wires in init bindings; got: {e}"
-            ),
-        }
+    fn a_const_over_an_extern_is_evaluated_at_init() {
+        // A const over an extern compiles and is evaluated when the
+        // kernel is initialized, from the extern's value then.
+        let src = "extern profile: str = \"p1\"\n\
+                   const label := \"label_{profile}\"\n";
+        let mut k = compile_polydat_interpreter(src).expect("a const may read an extern");
+        assert_eq!(k.pull_ref("label").as_str(), "label_p1");
     }
 
     #[test]

@@ -312,10 +312,9 @@ fn shared_non_literal_rejected() {
 
 #[test]
 fn const_on_cycle_expr_rejected() {
-    // `const` is a hard contract: the RHS must be folded at compile
-    // time or materialised at scope-init from effectively-const
-    // sources. Wiring it through a per-cycle `cycle` input is the
-    // canonical violation — Plan A must reject.
+    // A const is evaluated once, when its kernel is initialized, so it
+    // may not read a coordinate, which advances every cycle. The
+    // compiler refuses it on every engine.
     let src = r#"
         input cycle: u64
         const max := mod(hash(cycle), 100)

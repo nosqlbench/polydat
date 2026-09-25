@@ -269,9 +269,8 @@ impl PolydatKernel {
     /// strict-mode const folding (config-wire violations become
     /// errors).
     ///
-    /// Returns `Err` for init-binding contract violations (SRD 11
-    /// §"Init Binding Contract" Plan A); these are always fatal
-    /// regardless of strict mode.
+    /// Returns `Err` when a compile-constant step cannot be computed,
+    /// or for a strict-mode violation.
     // Thirteen parameters describe one thing — a compiled program
     // definition. A params struct is the right end state, but it
     // belongs to the construction-protocol reshape (SRD-13e
@@ -304,8 +303,8 @@ impl PolydatKernel {
             context,
             ledger,
         );
-        // Mark const bindings BEFORE fold runs so the compile-time
-        // check (Plan A) can validate each one's upstream chain.
+        // Mark const bindings before the fold runs, so strict mode can
+        // find them.
         for name in &const_outputs {
             program.mark_const_output(name);
         }
@@ -1541,9 +1540,16 @@ impl PolydatKernel {
     /// etc.). Naming the binding makes the cross-scope write
     /// unambiguous — a missing name on the target program is a
     /// no-op rather than a silently mis-routed write.
+    ///
+    /// A const's slot is left out: only initialization writes it, and
+    /// each kernel the values are written into initializes its own
+    /// consts from them.
     pub fn scope_values(&self) -> Vec<(String, Value)> {
         let mut values = Vec::new();
         for (i, name) in self.program.input_names().into_iter().enumerate() {
+            if self.program.input_kind(i) == Some(crate::kernel::InputKind::Const) {
+                continue;
+            }
             let val = self.state.get_input(i);
             if !matches!(val, Value::None) {
                 values.push((name, val.clone()));
@@ -1555,6 +1561,26 @@ impl PolydatKernel {
     /// Extract the program for concurrent use.
     pub fn into_program(self) -> Arc<PolydatProgram> {
         self.program
+    }
+}
+
+#[cfg(test)]
+mod scope_values_tests {
+    /// A scope's values are what a host writes into other kernels, so a
+    /// const's slot, which only initialization writes, is not among
+    /// them; the extern it reads is.
+    #[test]
+    fn scope_values_leave_out_const_slots() {
+        let k = crate::dsl::compile::compile_polydat_interpreter(
+            "extern tag: str = \"t1\"\nconst label := \"x_{tag}\"\n",
+        )
+        .unwrap();
+        let names: Vec<String> = k.scope_values().into_iter().map(|(n, _)| n).collect();
+        assert!(names.iter().any(|n| n == "tag"), "{names:?}");
+        assert!(
+            !names.iter().any(|n| n.starts_with("__const_")),
+            "{names:?}"
+        );
     }
 }
 

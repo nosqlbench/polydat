@@ -33,73 +33,6 @@ pub(crate) enum EvalLifecycle {
     Dynamic,
 }
 
-/// Build a diagnostic phrase pinpointing the first wire on a
-/// dynamic init-binding's upstream chain that broke the
-/// effectively-const contract. Walks one step deep into the
-/// node's wiring; for transitive cases the message points at the
-/// nearest dynamic source. Best-effort — an unresolvable wire
-/// returns a generic message.
-fn first_dynamic_wire(
-    nodes: &[Box<dyn PolydatNode>],
-    wiring: &[Vec<WireSource>],
-    lifecycle: &[EvalLifecycle],
-    input_defs: &[InputDef],
-    node_idx: usize,
-) -> String {
-    use crate::kernel::InputKind;
-    let owner = nodes[node_idx].meta().name.clone();
-    for source in &wiring[node_idx] {
-        match source {
-            WireSource::Input(idx) => {
-                let def = match input_defs.get(*idx) {
-                    Some(d) => d,
-                    None => continue,
-                };
-                match def.kind {
-                    InputKind::Coordinate => {
-                        return format!(
-                            "wire on node '{owner}' reaches coordinate input '{}' \
-                             (dynamic; changes every cycle)",
-                            def.name
-                        );
-                    }
-                    InputKind::ExternalWrite => {
-                        return format!(
-                            "wire on node '{owner}' reaches external-write port '{}' \
-                             (dynamic; mutated by op execution)",
-                            def.name
-                        );
-                    }
-                    InputKind::IterationExtern | InputKind::Const => {} // not the offender
-                }
-            }
-            WireSource::NodeOutput(upstream, _) => {
-                if lifecycle[*upstream] == EvalLifecycle::Dynamic {
-                    let upstream_name = nodes[*upstream].meta().name.clone();
-                    // A node is a nondeterministic source because it
-                    // declares itself one, not because its name is on
-                    // a list here. The list named five nodes and went
-                    // stale the moment a sixth was written.
-                    if matches!(
-                        nodes[*upstream].purity(),
-                        crate::ast::Purity::Nondeterministic { .. }
-                    ) {
-                        return format!(
-                            "wire on node '{owner}' reaches non-deterministic \
-                             source '{upstream_name}' (dynamic by construction)"
-                        );
-                    }
-                    return format!(
-                        "wire on node '{owner}' reaches dynamic node \
-                         '{upstream_name}' upstream"
-                    );
-                }
-            }
-        }
-    }
-    format!("node '{owner}' is dynamic but the offending wire could not be isolated")
-}
-
 /// Exact multi-word input-provenance mask: bit `i` set means the
 /// carrier transitively depends on graph input `i`. Replaces the
 /// one-word `u64` whose ≥63 saturation aliased every high input
@@ -333,12 +266,10 @@ pub struct PolydatProgram {
     traversals: Vec<crate::dsl::traversal::Traversal>,
     /// Producer bindings (`name := for ...`) declared at this level.
     producers: Vec<crate::dsl::traversal::Producer>,
-    /// Names declared with the `const` keyword in the source. Subject
-    /// to the init-binding contract (evaluation_model.md, the init
-    /// contract):
-    /// every name listed here must reach exactly one effectively-const
-    /// value at scope-init time. Plan A (compile-time) and Plan B
-    /// (scope-activation) checks both consult this set.
+    /// Names declared with the `const` keyword in the source: literal
+    /// consts, folded at build, and consts evaluated when a kernel is
+    /// initialized (`const_inits`). Strict mode reads this set to find a
+    /// const whose value fell through to the enclosing scope.
     pub(crate) const_outputs: std::collections::HashSet<String>,
     /// Rule 2 write-through bindings produced when this program
     /// was synthesized by the SRD-67 builder's finalize step.
@@ -1852,7 +1783,8 @@ impl PolydatProgram {
     }
 
     /// Fold init-time constants, emitting diagnostic events to the log.
-    /// Returns `Err` for init-binding contract violations (Plan A).
+    /// Returns `Err` when a compile-constant step cannot be computed, or
+    /// for a strict-mode violation.
     pub fn fold_init_constants_with_log(
         &mut self,
         log: Option<&mut crate::dsl::events::CompileEventLog>,
@@ -2052,41 +1984,6 @@ impl PolydatProgram {
             .iter()
             .map(|lc| *lc == EvalLifecycle::CompileConst)
             .collect();
-
-        // ─── Plan A: Init-Binding Contract (compile-time) ──────────
-        //
-        // The init contract (evaluation_model.md): every binding declared
-        // `init` must reach a single effectively-const value at
-        // scope-init time. At compile time, that means: the
-        // binding's owning node must classify as CompileConst or
-        // ScopeInit — never Dynamic.
-        //
-        // A Dynamic classification on an init binding is a hard
-        // structural error. The diagnostic names the binding and
-        // the offending wire. There is no soft fall-through.
-        if !self.const_outputs.is_empty() {
-            for init_name in &self.const_outputs {
-                let Some((node_idx, _)) = self.output_map.get(init_name) else {
-                    continue;
-                };
-                if lifecycle[*node_idx] == EvalLifecycle::Dynamic {
-                    let offending = first_dynamic_wire(
-                        &self.nodes,
-                        &self.wiring,
-                        &lifecycle,
-                        &self.input_defs,
-                        *node_idx,
-                    );
-                    return Err(crate::compile::assembly::AssemblyError::Other(format!(
-                        "init binding '{init_name}' violates the init contract: \
-                         {offending} \
-                         (init bindings must be effectively-const at scope-init time \
-                         per the init contract, evaluation_model.md)"
-                    )));
-                }
-            }
-        }
-        // ─────────────────────────────────────────────────────────────
 
         // Strict refuses what the checks below warn about, through the
         // one function every engine's build applies.

@@ -616,8 +616,9 @@ mod dsl_compile_tests {
 
     #[test]
     fn init_binding_wired_to_cycle_input_rejected() {
-        // Init binding wired to `cycle` (Coordinate input) is a
-        // hard structural violation. Plan A must reject.
+        // A const that reads a coordinate is a compile error on every
+        // engine: a const is fixed when the kernel is initialized, and a
+        // coordinate advances every cycle.
         let src = "input cycle: u64\n\
                    const bad := hash(cycle)\n";
         for engine in every_engine() {
