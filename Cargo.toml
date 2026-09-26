@@ -9,10 +9,12 @@ members = [
 resolver = "3"
 
 [workspace.package]
-# Every crate ships at one version and is released together; a
-# facade at one version depending on a runtime at another has no
-# meaning to a consumer, so the version lives here and each crate
-# inherits it.
+# The version every crate in the tree inherits. A release publishes
+# only the crates that changed, at this version, so a crate a release
+# does not publish stays at the version it last shipped at. What a
+# host resolves is set by the requirements under
+# [workspace.dependencies], which name the newest published version
+# of each crate (crates/polydat/docs/guides/releasing.md).
 version = "0.5.3"
 edition = "2024"
 license = "Apache-2.0"
