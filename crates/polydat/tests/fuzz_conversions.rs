@@ -26,7 +26,22 @@
 //! - `random_conversion_chains_agree_on_every_engine` walks seeded
 //!   random chains through the table (`FUZZ_SEED`, `FUZZ_ITERATIONS`),
 //!   so a value crosses several representations before it is read.
-//! - `conversion_superfuzz` is the manual deep run of the chains.
+//! - `conversion_superfuzz` is the manual deep run of the chains. Its
+//!   dimensions are the anchor conversion, every table entry whose
+//!   source type a chain from `u64` reaches, and the tail depth, zero
+//!   to five further random conversions after the anchor. A
+//!   combination builds the table's path from `u64` to the anchor's
+//!   source, applies the anchor, walks the tail, and reads the chain
+//!   at the edge inputs and eight random ones on every engine. The
+//!   combinations run in the stratified order of
+//!   `common::superfuzz`, which reaches every anchor and every depth
+//!   within the first round, as many combinations as the table has
+//!   reachable entries. The run stops at 1000 combinations or 60
+//!   seconds, whichever comes first; `SUPERFUZZ_MAX_COMBINATIONS` and
+//!   `SUPERFUZZ_MAX_SECONDS` change the limits (0 keeps the default,
+//!   a large number lifts the limit). `SUPERFUZZ_SEEDS` is the number
+//!   of seeds, each a different tail and input set, run per
+//!   combination (default 1), and `FUZZ_SEED` is the base seed.
 
 #![cfg(feature = "jit")]
 
@@ -435,30 +450,75 @@ fn random_conversion_chains_agree_on_every_engine() {
     report(chain_pass(seed, iterations), "conversion chains");
 }
 
-/// MANUAL — the deep run of the chains, `SUPERFUZZ_SEEDS` seeds of
-/// `FUZZ_ITERATIONS` chains each:
+/// The longest walk, in conversions, the superfuzz takes past the
+/// anchor; the chain pass above takes two to six steps in all.
+const SUPERFUZZ_MAX_TAIL: usize = 5;
+
+/// MANUAL — the deep run of the chains over every anchor conversion
+/// and every depth, under the shared budget:
 ///
 /// ```text
-/// cargo test -p polydat --all-features --test suite fuzz_conversions:: -- --ignored
+/// cargo nextest run -p polydat --run-ignored only -E 'test(/conversion_superfuzz/)' --no-capture
 /// ```
 #[test]
-#[ignore = "manual superfuzz — minutes of runtime; run with `-- --ignored`"]
+#[ignore = "manual superfuzz — up to a minute by default; run with `--run-ignored only`"]
 fn conversion_superfuzz() {
+    use super::common::superfuzz;
     let base: u64 = std::env::var("FUZZ_SEED")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(0xC0DE_CAFE);
-    let seeds: u64 = std::env::var("SUPERFUZZ_SEEDS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(8);
-    let iterations = std::env::var("FUZZ_ITERATIONS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(500);
-    let mut all = Vec::new();
-    for k in 0..seeds {
-        all.extend(chain_pass(base.wrapping_add(k), iterations));
-    }
-    report(all, "conversion chains");
+    let seeds = superfuzz::seeds_per_combination();
+    let table = table();
+    let paths = paths_from_u64(&table);
+    // A conversion out of a type no chain reaches (`Ext`, `Handle`,
+    // the host types) cannot be given a value to convert.
+    let anchors: Vec<&Conversion> = table
+        .iter()
+        .filter(|c| paths.contains_key(&c.from))
+        .collect();
+    eprintln!(
+        "conversion_superfuzz: {} of {} conversions are reachable from u64 and anchor a chain",
+        anchors.len(),
+        table.len()
+    );
+    superfuzz::run(
+        "conversion_superfuzz",
+        &[
+            ("conversion", anchors.len()),
+            ("tail", SUPERFUZZ_MAX_TAIL + 1),
+        ],
+        |v, index| {
+            let anchor = anchors[v[0]];
+            let tail = v[1];
+            let mut findings = Vec::new();
+            for k in 0..seeds {
+                let seed = superfuzz::seed_for(base, index, k);
+                let mut rng = Rng(seed);
+                let mut chain = paths[&anchor.from].clone();
+                chain.push(anchor.into());
+                let mut at = anchor.to;
+                for _ in 0..tail {
+                    let next: Vec<&Conversion> = table.iter().filter(|c| c.from == at).collect();
+                    if next.is_empty() {
+                        break;
+                    }
+                    let c = next[rng.below(next.len())];
+                    at = c.to;
+                    chain.push(c.into());
+                }
+                let mut inputs = EDGES.to_vec();
+                inputs.extend((0..8).map(|_| rng.input()));
+                let src = program(&chain);
+                for d in disagreements(&src, &inputs) {
+                    findings.push(format!(
+                        "{} ({:?} -> {:?}) then {tail} step(s), seed {seed:#x}: {d}\n    \
+                         source:\n{src}",
+                        anchor.node, anchor.from, anchor.to
+                    ));
+                }
+            }
+            findings
+        },
+    );
 }

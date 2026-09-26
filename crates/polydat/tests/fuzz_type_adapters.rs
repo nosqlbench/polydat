@@ -26,6 +26,29 @@
 //!    event log mentions a `TypeAdapterInserted` must refer to a
 //!    pair we also consider legal. The FUZZ_SEED env var seeds the
 //!    RNG; FUZZ_ITERATIONS controls iteration count.
+//!
+//! 3. **Superfuzz** ([`superfuzz_sampler`], ignored). It enumerates
+//!    the generator's dimensions instead of drawing them: the anchor
+//!    node, every fuzzable registry signature; the module size, 3 to
+//!    10 bindings with the anchor last; the anchor's optional
+//!    parameters, all or none; its extra variadic repetitions, 0 to 5
+//!    taken modulo each arity's own range; and its wire arguments,
+//!    from `cycle` or from earlier bindings. The bindings before the
+//!    anchor are random from the combination's seed. Each module goes
+//!    through invariants 1 to 3 and, on every combination, the engine
+//!    sweep of invariants 4 and 5.
+//!
+//!    The combinations run in the stratified order of
+//!    `common::superfuzz`, which reaches every value of every
+//!    dimension, module sizes included, within the first round, as
+//!    many combinations as there are fuzzable nodes. The run stops at
+//!    1000 combinations or 60 seconds, whichever comes first;
+//!    `SUPERFUZZ_MAX_COMBINATIONS` and `SUPERFUZZ_MAX_SECONDS` change
+//!    the limits (0 keeps the default, a large number lifts the
+//!    limit). `SUPERFUZZ_SEEDS` is the number of seeds run per
+//!    combination (default 1), `FUZZ_SEED` is the base seed, and
+//!    `FUZZ_ENGINE_SWEEP` is the stride over combinations of the
+//!    engine sweep (default 1; 0 turns it off).
 
 use polydat::ast::{PortType, SlotType};
 use polydat::dsl::compile::{
@@ -333,104 +356,173 @@ fn generate_module(rng: &mut Rng, sigs: &[FuncSig], n_bindings: usize) -> String
     let mut defined: Vec<String> = Vec::new();
     for i in 0..n_bindings {
         let sig = &sigs[rng.range(sigs.len())];
-        let name = format!("b{i}");
-        let mut args: Vec<String> = Vec::new();
-
-        let pick_wire = |rng: &mut Rng, defined: &[String]| -> String {
-            if defined.is_empty() || rng.range(3) == 0 {
-                "cycle".to_string()
-            } else {
-                defined[rng.range(defined.len())].clone()
-            }
-        };
-        let materialize =
-            |rng: &mut Rng, p: &polydat::dsl::registry::ParamSpec, defined: &[String]| -> String {
-                match p.slot_type {
-                    SlotType::Wire => pick_wire(rng, defined),
-                    SlotType::ConstU64 => format!("{}", rng.next_u64() % 100),
-                    SlotType::ConstF64 => format!("{:.2}", rng.f64()),
-                    SlotType::ConstStr => format!("\"s{}\"", rng.range(100)),
-                    SlotType::ConstVecU64 | SlotType::ConstVecF64 | SlotType::ConstVec => {
-                        unreachable!()
-                    }
-                }
-            };
-
-        // Fill the declared params (skip optional ones at random).
-        let chosen: Vec<&_> = sig
-            .params
-            .iter()
-            .filter(|p| p.required || rng.range(2) == 0)
-            .collect();
-        for param in chosen {
-            args.push(materialize(rng, param, &defined));
-        }
-
-        // For `VariadicWires`, top up with a random number of
-        // additional wire args. The trailing wire param shape is
-        // declared once in `params` — we just emit more of the
-        // same wire type past the fixed positions.
-        match sig.arity {
-            registry::Arity::VariadicWires { min_wires } => {
-                let extra = rng.range(6); // 0..=5 extra wires
-                let total_wires_needed = min_wires.saturating_sub(args.len()) + extra;
-                for _ in 0..total_wires_needed {
-                    args.push(pick_wire(rng, &defined));
-                }
-            }
-            // Trailing constants repeat. The shape is what the
-            // generator owes — a count at or above the minimum, of the
-            // trailing const's own kind. Whether the *values* mean
-            // anything to the node is the node's to say, and saying it
-            // in a sentence rather than a panic is invariant 2.
-            registry::Arity::VariadicConsts { min_consts } => {
-                let trailing = sig
-                    .params
-                    .iter()
-                    .rev()
-                    .find(|p| p.slot_type != SlotType::Wire);
-                if let Some(p) = trailing {
-                    let extra = rng.range(4);
-                    for _ in 0..(min_consts.saturating_sub(1) + extra) {
-                        args.push(materialize(rng, p, &defined));
-                    }
-                }
-            }
-            // A repeating group of slot types, emitted in the declared
-            // order so each repetition is positionally well formed.
-            registry::Arity::VariadicGroup { group, min_repeats } => {
-                let repeats = min_repeats + rng.range(3);
-                for _ in 0..repeats {
-                    for slot in group {
-                        let p = sig
-                            .params
-                            .iter()
-                            .find(|p| p.slot_type == *slot)
-                            .unwrap_or(&sig.params[0]);
-                        args.push(materialize(rng, p, &defined));
-                    }
-                }
-            }
-            registry::Arity::Fixed => {}
-        }
-
-        // A node with more than one output binds a name per output.
-        // Dynamic-output nodes (`outputs == 0`, the count following
-        // the arguments) stay out: how many names to write is the
-        // node's own rule, and the generator does not know it.
-        let targets = if sig.outputs > 1 {
-            let names: Vec<String> = (0..sig.outputs).map(|k| format!("{name}_{k}")).collect();
-            let line = format!("({})", names.join(", "));
-            defined.extend(names);
-            line
-        } else {
-            defined.push(name.clone());
-            name
-        };
-
-        out.push_str(&format!("{targets} := {}({})\n", sig.name, args.join(", ")));
+        out.push_str(&binding(rng, sig, i, &mut defined, None));
     }
     out
+}
+
+/// The superfuzz's fixed choices for its anchor binding.
+#[derive(Clone, Copy, Debug)]
+struct AnchorPlan {
+    /// Every optional parameter, or none of them.
+    optionals: bool,
+    /// Extra variadic repetitions, `0..VARIADIC_EXTRA`, taken modulo
+    /// each arity's own range (wires 0..=5, constants 0..=3, groups
+    /// 0..=2).
+    extra: usize,
+    /// Wire arguments from earlier bindings, or all from `cycle`.
+    wires_from_bindings: bool,
+}
+
+/// The widest range of extra variadic repetitions the generator draws.
+const VARIADIC_EXTRA: usize = 6;
+/// The fewest and most bindings in a generated module.
+const MIN_BINDINGS: usize = 3;
+const MAX_BINDINGS: usize = 10;
+
+/// A module of `n_bindings - 1` random bindings and then one call of
+/// `anchor` under `plan`.
+fn generate_anchored_module(
+    rng: &mut Rng,
+    sigs: &[FuncSig],
+    anchor: &FuncSig,
+    n_bindings: usize,
+    plan: AnchorPlan,
+) -> String {
+    let mut out = String::from("input cycle: u64\n");
+    let mut defined: Vec<String> = Vec::new();
+    for i in 0..n_bindings - 1 {
+        let sig = &sigs[rng.range(sigs.len())];
+        out.push_str(&binding(rng, sig, i, &mut defined, None));
+    }
+    out.push_str(&binding(
+        rng,
+        anchor,
+        n_bindings - 1,
+        &mut defined,
+        Some(plan),
+    ));
+    out
+}
+
+/// One binding line `b{i} := sig(...)`, its wire arguments drawn from
+/// `cycle` and `defined`, and the names it binds appended to
+/// `defined`. A `plan` fixes the optional parameters, the variadic
+/// extras, and the wire sources; `None` draws them.
+fn binding(
+    rng: &mut Rng,
+    sig: &FuncSig,
+    i: usize,
+    defined: &mut Vec<String>,
+    plan: Option<AnchorPlan>,
+) -> String {
+    let name = format!("b{i}");
+    let mut args: Vec<String> = Vec::new();
+
+    let pick_wire = |rng: &mut Rng, defined: &[String]| -> String {
+        let from_cycle = match plan {
+            Some(p) => !p.wires_from_bindings || defined.is_empty(),
+            None => defined.is_empty() || rng.range(3) == 0,
+        };
+        if from_cycle {
+            "cycle".to_string()
+        } else {
+            defined[rng.range(defined.len())].clone()
+        }
+    };
+    let materialize =
+        |rng: &mut Rng, p: &polydat::dsl::registry::ParamSpec, defined: &[String]| -> String {
+            match p.slot_type {
+                SlotType::Wire => pick_wire(rng, defined),
+                SlotType::ConstU64 => format!("{}", rng.next_u64() % 100),
+                SlotType::ConstF64 => format!("{:.2}", rng.f64()),
+                SlotType::ConstStr => format!("\"s{}\"", rng.range(100)),
+                SlotType::ConstVecU64 | SlotType::ConstVecF64 | SlotType::ConstVec => {
+                    unreachable!()
+                }
+            }
+        };
+
+    // Fill the declared params (skip optional ones at random).
+    let chosen: Vec<&_> = sig
+        .params
+        .iter()
+        .filter(|p| {
+            p.required
+                || match plan {
+                    Some(pl) => pl.optionals,
+                    None => rng.range(2) == 0,
+                }
+        })
+        .collect();
+    for param in chosen {
+        args.push(materialize(rng, param, defined));
+    }
+
+    // For `VariadicWires`, top up with a random number of
+    // additional wire args. The trailing wire param shape is
+    // declared once in `params` — we just emit more of the
+    // same wire type past the fixed positions.
+    match sig.arity {
+        registry::Arity::VariadicWires { min_wires } => {
+            // 0..=5 extra wires.
+            let extra = plan.map_or_else(|| rng.range(6), |p| p.extra % 6);
+            let total_wires_needed = min_wires.saturating_sub(args.len()) + extra;
+            for _ in 0..total_wires_needed {
+                args.push(pick_wire(rng, defined));
+            }
+        }
+        // Trailing constants repeat. The shape is what the
+        // generator owes — a count at or above the minimum, of the
+        // trailing const's own kind. Whether the *values* mean
+        // anything to the node is the node's to say, and saying it
+        // in a sentence rather than a panic is invariant 2.
+        registry::Arity::VariadicConsts { min_consts } => {
+            let trailing = sig
+                .params
+                .iter()
+                .rev()
+                .find(|p| p.slot_type != SlotType::Wire);
+            if let Some(p) = trailing {
+                let extra = plan.map_or_else(|| rng.range(4), |p| p.extra % 4);
+                for _ in 0..(min_consts.saturating_sub(1) + extra) {
+                    args.push(materialize(rng, p, defined));
+                }
+            }
+        }
+        // A repeating group of slot types, emitted in the declared
+        // order so each repetition is positionally well formed.
+        registry::Arity::VariadicGroup { group, min_repeats } => {
+            let repeats = min_repeats + plan.map_or_else(|| rng.range(3), |p| p.extra % 3);
+            for _ in 0..repeats {
+                for slot in group {
+                    let p = sig
+                        .params
+                        .iter()
+                        .find(|p| p.slot_type == *slot)
+                        .unwrap_or(&sig.params[0]);
+                    args.push(materialize(rng, p, defined));
+                }
+            }
+        }
+        registry::Arity::Fixed => {}
+    }
+
+    // A node with more than one output binds a name per output.
+    // Dynamic-output nodes (`outputs == 0`, the count following
+    // the arguments) stay out: how many names to write is the
+    // node's own rule, and the generator does not know it.
+    let targets = if sig.outputs > 1 {
+        let names: Vec<String> = (0..sig.outputs).map(|k| format!("{name}_{k}")).collect();
+        let line = format!("({})", names.join(", "));
+        defined.extend(names);
+        line
+    } else {
+        defined.push(name.clone());
+        name
+    };
+
+    format!("{targets} := {}({})\n", sig.name, args.join(", "))
 }
 
 /// One fuzz pass: `iterations` random modules drawn from `seed`.
@@ -599,13 +691,6 @@ fn run_fuzz_pass(seed: u64, iterations: usize, sweep_stride: usize) -> Vec<Strin
 
     let mut rng = Rng::new(seed);
     let mut failures: Vec<String> = Vec::new();
-    let repro = |i: usize| {
-        format!(
-            "reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test --workspace \
-         --test suite fuzz_type_adapters::random_dags",
-            i + 1
-        )
-    };
 
     for i in 0..iterations {
         if failures.len() >= MAX_FAILURES_PER_SEED {
@@ -614,97 +699,108 @@ fn run_fuzz_pass(seed: u64, iterations: usize, sweep_stride: usize) -> Vec<Strin
             ));
             break;
         }
-        let n = 3 + rng.range(8);
+        let n = MIN_BINDINGS + rng.range(MAX_BINDINGS - MIN_BINDINGS + 1);
         let source = generate_module(&mut rng, &sigs, n);
+        let tag = format!("[seed {seed:#x}] iteration {i}");
+        let repro = format!(
+            "reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test --workspace \
+             --test suite fuzz_type_adapters::random_dags",
+            i + 1
+        );
+        let sweep = sweep_stride != 0 && i % sweep_stride == 0;
+        failures.extend(check_module(&source, sweep, &tag, &repro));
+    }
+    failures
+}
 
-        let mut log = CompileEventLog::new();
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            compile_polydat_interpreter_with_log(&source, &mut log)
-        }));
+/// Invariants 1 to 5 over one generated module. `sweep` runs the
+/// engine sweep (invariants 4 and 5). Each failure starts with `tag`
+/// and ends with `repro`.
+fn check_module(source: &str, sweep: bool, tag: &str, repro: &str) -> Vec<String> {
+    let mut failures: Vec<String> = Vec::new();
+    let mut log = CompileEventLog::new();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        compile_polydat_interpreter_with_log(source, &mut log)
+    }));
 
-        // Invariant 1: compiler never panics on any input. A panic
-        // here is always a bug in the compiler — even when the input
-        // is bananas, the error path should be a returned `Err`, not
-        // a process-level abort.
-        let result =
-            match result {
-                Ok(r) => r,
-                Err(panic) => {
-                    failures.push(format!(
-                    "[seed {seed:#x}] compiler panicked on iteration {i}:\n  source:\n{source}\n  \
+    // Invariant 1: compiler never panics on any input. A panic
+    // here is always a bug in the compiler — even when the input
+    // is bananas, the error path should be a returned `Err`, not
+    // a process-level abort.
+    let result = match result {
+        Ok(r) => r,
+        Err(panic) => {
+            failures.push(format!(
+                "{tag}: the compiler panicked:\n  source:\n{source}\n  \
                      panic: {:?}\n  {}",
-                    panic.downcast_ref::<&str>().copied()
-                        .or_else(|| panic.downcast_ref::<String>().map(|s| s.as_str()))
-                        .unwrap_or("<non-string panic>"),
-                    repro(i),
-                ));
-                    continue;
-                }
-            };
+                panic
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| panic.downcast_ref::<String>().map(|s| s.as_str()))
+                    .unwrap_or("<non-string panic>"),
+                repro,
+            ));
+            return failures;
+        }
+    };
 
-        match result {
-            Err(msg) => {
-                // Invariant 2: every error is either a recognised
-                // structural diagnostic (type mismatch, bad
-                // constant, undeclared reference, unknown function,
-                // variadic-arity issue, …) or a well-formed
-                // sentence. We're not prescribing *which* error
-                // fires — the fuzzer routinely builds garbage —
-                // only that the compiler classified it rather than
-                // leaking panics or raw backtraces. A structured
-                // `bad constant …` message proves the opt-in
-                // assembly-time validator (SRD 15 §"Const
-                // Constraint Metadata") rejected the literal
-                // before the node's constructor saw it.
-                if msg.to_string().is_empty()
-                    || msg.to_string().to_lowercase().contains("panic")
-                    || msg
-                        .to_string()
-                        .to_lowercase()
-                        .contains("index out of bounds")
-                    || msg.to_string().to_lowercase().contains("unreachable")
-                {
-                    failures.push(format!(
-                        "[seed {seed:#x}] iteration {i} produced a cryptic error message.\n  \
-                         error: {msg}\n  source:\n{source}\n  {}",
-                        repro(i)
-                    ));
+    match result {
+        Err(msg) => {
+            // Invariant 2: every error is either a recognised
+            // structural diagnostic (type mismatch, bad
+            // constant, undeclared reference, unknown function,
+            // variadic-arity issue, …) or a well-formed
+            // sentence. We're not prescribing *which* error
+            // fires — the fuzzer routinely builds garbage —
+            // only that the compiler classified it rather than
+            // leaking panics or raw backtraces. A structured
+            // `bad constant …` message proves the opt-in
+            // assembly-time validator (SRD 15 §"Const
+            // Constraint Metadata") rejected the literal
+            // before the node's constructor saw it.
+            if msg.to_string().is_empty()
+                || msg.to_string().to_lowercase().contains("panic")
+                || msg
+                    .to_string()
+                    .to_lowercase()
+                    .contains("index out of bounds")
+                || msg.to_string().to_lowercase().contains("unreachable")
+            {
+                failures.push(format!(
+                    "{tag} produced a cryptic error message.\n  \
+                         error: {msg}\n  source:\n{source}\n  {repro}"
+                ));
+            }
+        }
+        Ok(_) => {
+            // Invariants 4 and 5: the same program on every engine.
+            // Sampled — a sweep compiles the module five more
+            // times, twice through Cranelift, so running it on
+            // every iteration would cost more than the generator
+            // is worth. `FUZZ_ENGINE_SWEEP` is the stride; 0 turns
+            // it off, 1 sweeps everything, and the superfuzz sets
+            // it to 1 because that is the run that can afford it.
+            if sweep {
+                for detail in engine_sweep_failures(source) {
+                    failures.push(format!("{tag}: {detail}\n  source:\n{source}\n  {repro}"));
                 }
             }
-            Ok(_) => {
-                // Invariants 4 and 5: the same program on every engine.
-                // Sampled — a sweep compiles the module five more
-                // times, twice through Cranelift, so running it on
-                // every iteration would cost more than the generator
-                // is worth. `FUZZ_ENGINE_SWEEP` is the stride; 0 turns
-                // it off, 1 sweeps everything, and the superfuzz sets
-                // it to 1 because that is the run that can afford it.
-                if sweep_stride != 0 && i % sweep_stride == 0 {
-                    for detail in engine_sweep_failures(&source) {
-                        failures.push(format!(
-                            "[seed {seed:#x}] iteration {i}: {detail}\n  source:\n{source}\n  {}",
-                            repro(i)
-                        ));
-                    }
-                }
 
-                // Invariant 3: every adapter the compiler auto-inserts
-                // must be one we know about. Anything else is a rogue
-                // entry — probably a new adapter added to the
-                // compiler without an entry in this test's mirror.
-                for e in log.events() {
-                    if let CompileEvent::TypeAdapterInserted { adapter, .. } = e
-                        && !adapter_label_is_known(adapter)
-                    {
-                        failures.push(format!(
-                            "[seed {seed:#x}] iteration {i} inserted an unrecognised \
+            // Invariant 3: every adapter the compiler auto-inserts
+            // must be one we know about. Anything else is a rogue
+            // entry — probably a new adapter added to the
+            // compiler without an entry in this test's mirror.
+            for e in log.events() {
+                if let CompileEvent::TypeAdapterInserted { adapter, .. } = e
+                    && !adapter_label_is_known(adapter)
+                {
+                    failures.push(format!(
+                        "{tag} inserted an unrecognised \
                                  adapter '{adapter}'.\n\
                                  Update `expected_adapt`/`adapter_label_is_known` and the \
                                  compiler's\n`auto_adapter` table together.\n  \
-                                 source:\n{source}\n  {}",
-                            repro(i)
-                        ));
-                    }
+                                 source:\n{source}\n  {repro}"
+                    ));
                 }
             }
         }
@@ -733,73 +829,64 @@ fn random_dags_compile_or_fail_cleanly() {
     );
 }
 
-/// MANUAL SUPERFUZZ — the deep sweep the per-commit sample can't
-/// afford. `#[ignore]`d; run it deliberately:
+/// MANUAL SUPERFUZZ — every fuzzable node as the anchor of a module,
+/// at every module size, under the shared budget:
 ///
 /// ```text
-/// cargo test -p polydat --test suite fuzz_type_adapters:: -- --ignored
+/// cargo nextest run -p polydat --run-ignored only -E 'test(/superfuzz_sampler/)' --no-capture
 /// ```
 ///
-/// Sweeps `SUPERFUZZ_SEEDS` seeds (default 64) × `FUZZ_ITERATIONS`
-/// modules each (default 2000), starting at `FUZZ_SEED` (default
-/// 0xDEADBEEF). Use `--workspace` — feature unification gives the
-/// largest registry and therefore the widest program space; a
-/// `-p polydat` run fuzzes a strict subset. Every violation
-/// carries its own single-seed reproduction line.
+/// Use `--workspace` for the widest registry; a `-p polydat` run
+/// fuzzes a strict subset.
 #[test]
-#[ignore = "manual superfuzz — minutes of runtime; run with `-- --ignored`"]
+#[ignore = "manual superfuzz — up to a minute by default; run with `--run-ignored only`"]
 fn superfuzz_sampler() {
+    use super::common::superfuzz;
     let base: u64 = std::env::var("FUZZ_SEED")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(0xDEAD_BEEFu64);
-    let seeds: u64 = std::env::var("SUPERFUZZ_SEEDS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(64);
-    let iterations: usize = std::env::var("FUZZ_ITERATIONS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(2000);
-
-    let mut all: Vec<String> = Vec::new();
-    for k in 0..seeds {
-        // Rng::new decorrelates adjacent integers via the golden-
-        // ratio multiply, so base+k gives independent trajectories.
-        let seed = base.wrapping_add(k);
-        // Every module on every engine: this is the run that can
-        // afford it, and the cross-engine space is the point of it.
-        let failures = run_fuzz_pass(seed, iterations, engine_sweep_stride(1));
-        if !failures.is_empty() {
-            eprintln!("superfuzz: seed {seed:#x}: {} violation(s)", failures.len());
-        }
-        if k % 8 == 7 {
-            eprintln!(
-                "superfuzz: {}/{seeds} seeds swept, {} violation(s) so far",
-                k + 1,
-                all.len() + failures.len()
-            );
-        }
-        all.extend(failures);
-    }
-
-    // Bound the panic payload — repros are self-contained, so the
-    // first screenful carries everything needed.
-    let mut report = all.join("\n---\n");
-    const MAX_REPORT: usize = 30_000;
-    if report.len() > MAX_REPORT {
-        let mut cut = MAX_REPORT;
-        while !report.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        report.truncate(cut);
-        report.push_str("\n… (report truncated)");
-    }
+    let seeds = superfuzz::seeds_per_combination();
+    // Every module on every engine unless `FUZZ_ENGINE_SWEEP` sets a
+    // stride over combinations: this is the run that can afford it,
+    // and the cross-engine space is the point of it.
+    let stride = engine_sweep_stride(1) as u64;
+    let sigs = fuzzable_sigs();
     assert!(
-        all.is_empty(),
-        "superfuzz invariants violated ({} failures across {seeds} seeds × \
-         {iterations} iterations):\n\n{report}",
-        all.len()
+        !sigs.is_empty(),
+        "no fuzzable signatures found — registry wiring broken?"
+    );
+    superfuzz::run(
+        "superfuzz_sampler",
+        &[
+            ("node", sigs.len()),
+            ("bindings", MAX_BINDINGS - MIN_BINDINGS + 1),
+            ("optionals", 2),
+            ("extra", VARIADIC_EXTRA),
+            ("wires", 2),
+        ],
+        |v, index| {
+            let anchor = &sigs[v[0]];
+            let n = MIN_BINDINGS + v[1];
+            let plan = AnchorPlan {
+                optionals: v[2] == 1,
+                extra: v[3],
+                wires_from_bindings: v[4] == 1,
+            };
+            let sweep = stride != 0 && index % stride == 0;
+            let mut failures = Vec::new();
+            for k in 0..seeds {
+                let seed = superfuzz::seed_for(base, index, k);
+                let mut rng = Rng::new(seed);
+                let source = generate_anchored_module(&mut rng, &sigs, anchor, n, plan);
+                let tag = format!(
+                    "[{} anchor, {n} bindings, {plan:?}, seed {seed:#x}]",
+                    anchor.name
+                );
+                failures.extend(check_module(&source, sweep, &tag, ""));
+            }
+            failures
+        },
     );
 }
 

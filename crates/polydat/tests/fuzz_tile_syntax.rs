@@ -14,8 +14,35 @@
 //! the compiler declines by name. A mutation pass checks that no stage
 //! panics on damaged input and that every error is a sentence.
 //!
-//! `FUZZ_SEED`, `FUZZ_ITERATIONS`, and an ignored `SUPERFUZZ_SEEDS`
-//! sweep follow the other fuzzers.
+//! `FUZZ_SEED` and `FUZZ_ITERATIONS` follow the other fuzzers.
+//!
+//! The ignored `superfuzz_tile_syntax` enumerates the generator's
+//! dimensions instead of drawing them: the six delimiter pairs, the
+//! four sigils, strict and instring each on or off, the four
+//! encodings, the three body forms, the directive nesting depth 0 to
+//! 2, projection or branch as the nesting directive, the four
+//! comprehension shapes, a separator or none, an else or none, the
+//! nine hole expressions, no type or each of six, no format or each of
+//! six, raw or not, the eight static words, and a doubled-open escape
+//! or none. A combination fixes each of those choices everywhere the
+//! generator makes it, and the tile nests to exactly the planned
+//! depth; the remaining choices (extra static words, piece order,
+//! literals) come from the combination's seed. The random generator's
+//! escape is stripped with the open delimiter before it reaches the
+//! output, so only the planned generator emits it. Each combination's
+//! program goes through the well-formed invariants, the engine sweep,
+//! and one mutation.
+//!
+//! The combinations run in the stratified order of `common::superfuzz`,
+//! which reaches every value of every dimension, depths included,
+//! within the first nine combinations. The run stops at 1000
+//! combinations or 60 seconds, whichever comes first;
+//! `SUPERFUZZ_MAX_COMBINATIONS` and `SUPERFUZZ_MAX_SECONDS` change the
+//! limits (0 keeps the default, a large number lifts the limit).
+//! `SUPERFUZZ_SEEDS` is the number of seeds run per combination
+//! (default 1), `FUZZ_SEED` is the base seed, and `FUZZ_ENGINE_SWEEP`
+//! is the stride over combinations of the engine sweep (default 1,
+//! every combination; 0 turns it off).
 
 use polydat::dsl::ast::{PolydatFile, Statement, TileOptions, TilePiece};
 use polydat::dsl::pprint::pp_file;
@@ -102,10 +129,61 @@ const STATIC_WORDS: &[&str] = &[
     "tail ",
 ];
 
+/// Tile encodings: none, and the three the header names.
+const ENCODINGS: &[Option<&str>] = &[None, Some("json"), Some("text"), Some("csv")];
+/// Body forms: a brace block, a heredoc, a quoted string.
+const BODY_FORMS: &[&str] = &["block", "heredoc", "string"];
+/// Comprehension shapes a projection draws from.
+const COMPREHENSIONS: usize = 4;
+/// The deepest directive nesting the generator emits.
+const MAX_DEPTH: usize = 2;
+/// Directives that nest: a projection and a branch.
+const DIRECTIVES: &[&str] = &["projection", "branch"];
+
 struct Gen {
     rng: Rng,
     opts: TileOptions,
     encoding: Option<&'static str>,
+    /// The superfuzz's fixed choices, or `None` for the random
+    /// generator.
+    plan: Option<TilePlan>,
+}
+
+/// One combination of the superfuzz's dimensions. Each field fixes a
+/// choice the random generator otherwise draws, everywhere it draws
+/// it.
+#[derive(Clone, Copy, Debug)]
+struct TilePlan {
+    /// Index into [`DELIMS`].
+    delims: usize,
+    /// Index into [`SIGILS`].
+    sigil: usize,
+    strict: bool,
+    in_string: bool,
+    /// Index into [`ENCODINGS`].
+    encoding: usize,
+    /// Index into [`BODY_FORMS`].
+    body_form: usize,
+    /// Directive nesting, `0..=MAX_DEPTH`; the tile nests exactly this
+    /// deep.
+    depth: usize,
+    /// Index into [`DIRECTIVES`], the directive on the nesting spine.
+    directive: usize,
+    /// Comprehension shape, `0..COMPREHENSIONS`.
+    comprehension: usize,
+    sep: bool,
+    has_else: bool,
+    /// Index into [`EXPRS`].
+    expr: usize,
+    /// 0 untyped, else `TYPES[ty - 1]`.
+    ty: usize,
+    /// 0 unformatted, else `FORMATS[format - 1]`.
+    format: usize,
+    raw: bool,
+    /// Index into [`STATIC_WORDS`], the first word of every static.
+    word: usize,
+    /// Whether every static carries a doubled-open escape.
+    escape: bool,
 }
 
 impl Gen {
@@ -114,12 +192,7 @@ impl Gen {
         let (open, close) = DELIMS[rng.range(DELIMS.len())];
         let sigil = SIGILS[rng.range(SIGILS.len())];
         let strict = rng.coin(20);
-        let encoding = match rng.range(4) {
-            0 => None,
-            1 => Some("json"),
-            2 => Some("text"),
-            _ => Some("csv"),
-        };
+        let encoding = ENCODINGS[rng.range(ENCODINGS.len())];
         let in_string = rng.coin(10);
         Gen {
             rng,
@@ -131,42 +204,95 @@ impl Gen {
                 in_string,
             },
             encoding,
+            plan: None,
+        }
+    }
+
+    fn planned(seed: u64, plan: TilePlan) -> Self {
+        let (open, close) = DELIMS[plan.delims];
+        Gen {
+            rng: Rng::new(seed),
+            opts: TileOptions {
+                open: open.into(),
+                close: close.into(),
+                sigil: SIGILS[plan.sigil].into(),
+                strict: plan.strict,
+                in_string: plan.in_string,
+            },
+            encoding: ENCODINGS[plan.encoding],
+            plan: Some(plan),
         }
     }
 
     /// Static text that never contains the open delimiter, the sigil
     /// followed by a directive word, or a bare brace that would break a
     /// block body; braces are allowed only balanced.
+    ///
+    /// The random generator appends its doubled-open escape before the
+    /// open delimiter is stripped, so the escape never reaches its
+    /// output. A planned static strips first and appends the escape
+    /// after, so the escape is present whenever the plan asks for it.
     fn static_text(&mut self) -> String {
         let mut s = String::new();
         let n = 1 + self.rng.range(3);
-        for _ in 0..n {
-            let w = self.rng.pick(STATIC_WORDS);
+        for i in 0..n {
+            let w = match self.plan {
+                Some(p) if i == 0 => STATIC_WORDS[p.word],
+                _ => self.rng.pick(STATIC_WORDS),
+            };
             s.push_str(w);
             s.push(' ');
+        }
+        let strip = |s: &str, opts: &TileOptions| {
+            s.replace(&opts.open, "")
+                .replace(&format!("{}for", opts.sigil), "")
+                .replace(&format!("{}if", opts.sigil), "")
+        };
+        if let Some(p) = self.plan {
+            let mut out = strip(&s, &self.opts);
+            // A block body is captured by balancing its brackets
+            // (polytile.md §2.2), so a doubled open delimiter that
+            // holds a bracket would unbalance it; the escape of such a
+            // delimiter goes only in heredoc and string bodies.
+            let bracketed = self.opts.open.contains(['{', '[', '}', ']']);
+            if p.escape && !(BODY_FORMS[p.body_form] == "block" && bracketed) {
+                out.push_str(&format!("{}{}lit ", self.opts.open, self.opts.open));
+            }
+            return out;
         }
         // Add a literal open delimiter via the doubled escape sometimes.
         if self.rng.coin(15) {
             s.push_str(&format!("{}{}", self.opts.open, self.opts.open));
             s.push_str("lit ");
         }
-        s.replace(&self.opts.open, "")
-            .replace(&format!("{}for", self.opts.sigil), "")
-            .replace(&format!("{}if", self.opts.sigil), "")
-            + if s.is_empty() { "z" } else { "" }
+        strip(&s, &self.opts) + if s.is_empty() { "z" } else { "" }
     }
 
     fn hole(&mut self) -> (String, Shape) {
-        let expr = self.rng.pick(EXPRS);
-        let typed = self.rng.coin(30);
-        let formatted = self.rng.coin(30);
-        let raw = self.rng.coin(20);
+        let (expr, ty, format, raw) = match self.plan {
+            Some(p) => (
+                EXPRS[p.expr],
+                (p.ty > 0).then(|| TYPES[p.ty - 1]),
+                (p.format > 0).then(|| FORMATS[p.format - 1]),
+                p.raw,
+            ),
+            None => {
+                let expr = self.rng.pick(EXPRS);
+                let typed = self.rng.coin(30);
+                let formatted = self.rng.coin(30);
+                let raw = self.rng.coin(20);
+                let ty = typed.then(|| self.rng.pick(TYPES));
+                let format = formatted.then(|| self.rng.pick(FORMATS));
+                (expr, ty, format, raw)
+            }
+        };
+        let (typed, formatted) = (ty.is_some(), format.is_some());
         let mut inner = expr.to_string();
-        if typed {
-            inner.push_str(&format!(": {}", self.rng.pick(TYPES)));
+        if let Some(ty) = ty {
+            inner.push_str(&format!(": {ty}"));
         }
-        if formatted {
-            inner.push_str(&format!(" | {}", self.rng.pick(FORMATS)));
+        if let Some(format) = format {
+            inner.push_str(&format!(" | {format}"));
         }
         if raw {
             inner.push('!');
@@ -182,7 +308,11 @@ impl Gen {
     }
 
     fn comprehension(&mut self) -> String {
-        match self.rng.range(4) {
+        let kind = match self.plan {
+            Some(p) => p.comprehension,
+            None => self.rng.range(COMPREHENSIONS),
+        };
+        match kind {
             0 => format!("k in 1..{}", 2 + self.rng.range(5)),
             1 => "s in 0..4, t in 10,20".to_string(),
             2 => format!("k in 1..9 where {{k}} > {}", self.rng.range(5)),
@@ -205,40 +335,87 @@ impl Gen {
                     text.push_str(&h);
                     shapes.push(s);
                 }
-                4 => {
-                    let comp = self.comprehension();
-                    let sep = self.rng.coin(40);
-                    let (body, body_shapes) = self.pieces(depth - 1);
-                    text.push_str(&format!(
-                        "{}for {}{} {{{}}}",
-                        self.opts.sigil,
-                        comp,
-                        if sep { " sep \", \"" } else { "" },
-                        body
-                    ));
-                    shapes.push(Shape::Projection {
-                        sep,
-                        body: body_shapes,
-                    });
+                4 => self.projection(depth - 1, &mut text, &mut shapes),
+                _ => self.branch(depth - 1, &mut text, &mut shapes),
+            }
+        }
+        (text, shapes)
+    }
+
+    /// Nested pieces: the planned ones under a plan, else random.
+    fn body(&mut self, depth: usize) -> (String, Vec<Shape>) {
+        if self.plan.is_some() {
+            self.planned_pieces(depth)
+        } else {
+            self.pieces(depth)
+        }
+    }
+
+    fn projection(&mut self, depth: usize, text: &mut String, shapes: &mut Vec<Shape>) {
+        let comp = self.comprehension();
+        let sep = match self.plan {
+            Some(p) => p.sep,
+            None => self.rng.coin(40),
+        };
+        let (body, body_shapes) = self.body(depth);
+        text.push_str(&format!(
+            "{}for {}{} {{{}}}",
+            self.opts.sigil,
+            comp,
+            if sep { " sep \", \"" } else { "" },
+            body
+        ));
+        shapes.push(Shape::Projection {
+            sep,
+            body: body_shapes,
+        });
+    }
+
+    fn branch(&mut self, depth: usize, text: &mut String, shapes: &mut Vec<Shape>) {
+        let (then, then_shapes) = self.body(depth);
+        let has_else = match self.plan {
+            Some(p) => p.has_else,
+            None => self.rng.coin(50),
+        };
+        let (otherwise, else_shapes) = if has_else {
+            self.body(depth)
+        } else {
+            (String::new(), Vec::new())
+        };
+        text.push_str(&format!("{}if x > 1 {{{}}}", self.opts.sigil, then));
+        if has_else {
+            text.push_str(&format!(" {}else {{{}}}", self.opts.sigil, otherwise));
+        }
+        shapes.push(Shape::Branch {
+            has_else,
+            then: then_shapes,
+            otherwise: else_shapes,
+        });
+    }
+
+    /// The planned pieces `depth` levels above the innermost: a static
+    /// and a hole, and while `depth` allows, the planned directive over
+    /// the next level, in a rotation the seed picks. Every directive
+    /// body is planned in turn, so the tile nests exactly `depth` deep.
+    fn planned_pieces(&mut self, depth: usize) -> (String, Vec<Shape>) {
+        let directive = self.plan.map_or(0, |p| p.directive);
+        let slots = if depth > 0 { 3 } else { 2 };
+        let first = self.rng.range(slots);
+        let mut text = String::new();
+        let mut shapes = Vec::new();
+        for k in 0..slots {
+            match (first + k) % slots {
+                0 => {
+                    text.push_str(&self.static_text());
+                    shapes.push(Shape::Static);
                 }
-                _ => {
-                    let (then, then_shapes) = self.pieces(depth - 1);
-                    let has_else = self.rng.coin(50);
-                    let (otherwise, else_shapes) = if has_else {
-                        self.pieces(depth - 1)
-                    } else {
-                        (String::new(), Vec::new())
-                    };
-                    text.push_str(&format!("{}if x > 1 {{{}}}", self.opts.sigil, then));
-                    if has_else {
-                        text.push_str(&format!(" {}else {{{}}}", self.opts.sigil, otherwise));
-                    }
-                    shapes.push(Shape::Branch {
-                        has_else,
-                        then: then_shapes,
-                        otherwise: else_shapes,
-                    });
+                1 => {
+                    let (h, s) = self.hole();
+                    text.push_str(&h);
+                    shapes.push(s);
                 }
+                _ if directive == 0 => self.projection(depth - 1, &mut text, &mut shapes),
+                _ => self.branch(depth - 1, &mut text, &mut shapes),
             }
         }
         (text, shapes)
@@ -246,7 +423,10 @@ impl Gen {
 
     /// A whole program with one tile and a few plain statements.
     fn program(&mut self) -> (String, Vec<Shape>) {
-        let (body, shapes) = self.pieces(2);
+        let (body, shapes) = match self.plan {
+            Some(p) => self.planned_pieces(p.depth),
+            None => self.pieces(MAX_DEPTH),
+        };
         let mut header = String::from("tile t");
         if let Some(e) = self.encoding {
             header.push_str(&format!(" : {e}"));
@@ -271,7 +451,11 @@ impl Gen {
         if !opts.is_empty() {
             header.push_str(&format!(" ({})", opts.join(", ")));
         }
-        let body_form = match self.rng.range(3) {
+        let form = match self.plan {
+            Some(p) => p.body_form,
+            None => self.rng.range(BODY_FORMS.len()),
+        };
+        let body_form = match form {
             // A block body must be brace-balanced as a whole; wrap it.
             0 if !body.contains('\n') => format!("{{ {body} }}"),
             1 => format!("<<<\n{body}\n>>>"),
@@ -395,12 +579,10 @@ fn cryptic(msg: &str) -> bool {
 fn run_wellformed_pass(seed: u64, iterations: usize) -> Vec<String> {
     const MAX: usize = 8;
     let mut failures = Vec::new();
-    let repro = |i: usize| {
-        format!(
-            "reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test -p polydat --test suite fuzz_tile_syntax::wellformed",
-            i + 1
-        )
-    };
+    // The engine sweep is sampled — it compiles the program once more
+    // per tier, and a tile body is compiled in its own right on top of
+    // that. `FUZZ_ENGINE_SWEEP` is the stride; 0 turns it off.
+    let stride = env_u64("FUZZ_ENGINE_SWEEP", 8) as usize;
     let mut rng = Rng::new(seed);
     for i in 0..iterations {
         if failures.len() >= MAX {
@@ -409,91 +591,134 @@ fn run_wellformed_pass(seed: u64, iterations: usize) -> Vec<String> {
         }
         let mut g = Gen::new(rng.next_u64());
         let (source, expected) = g.program();
-        let parsed = match std::panic::catch_unwind(|| parse(&source)) {
-            Ok(Ok(f)) => f,
-            Ok(Err(e)) => {
-                failures.push(format!("[seed {seed:#x}] iteration {i}: parse rejected a well-formed tile:\n  {e}\n  source:\n{source}\n  {}", repro(i)));
-                continue;
-            }
-            Err(p) => {
-                failures.push(format!("[seed {seed:#x}] iteration {i}: front end panicked: {}\n  source:\n{source}\n  {}", panic_text(&p), repro(i)));
-                continue;
-            }
-        };
-        let Some(Statement::Tile(t)) = parsed
-            .statements
-            .iter()
-            .find(|s| matches!(s, Statement::Tile(_)))
-        else {
-            failures.push(format!("[seed {seed:#x}] iteration {i}: no tile statement parsed.\n  source:\n{source}\n  {}", repro(i)));
-            continue;
-        };
-        let got = strip_statics(&shapes_of(&t.pieces));
-        let want = strip_statics(&normalize(&expected));
-        if got != want {
-            failures.push(format!("[seed {seed:#x}] iteration {i}: pieces differ.\n  expected: {want:?}\n  got:      {got:?}\n  source:\n{source}\n  {}", repro(i)));
-            continue;
+        let tag = format!("[seed {seed:#x}] iteration {}: ", i);
+        let repro = format!(
+            "reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test -p polydat --test suite fuzz_tile_syntax::wellformed",
+            i + 1
+        );
+        let sweep = stride != 0 && i % stride == 0;
+        failures.extend(check_wellformed(&source, &expected, sweep, &tag, &repro));
+    }
+    failures
+}
+
+/// The well-formed invariants over one tile program and the shapes the
+/// generator emitted for it. `sweep` runs the engine sweep. Each
+/// failure starts with `tag` and ends with `repro`.
+fn check_wellformed(
+    source: &str,
+    expected: &[Shape],
+    sweep: bool,
+    tag: &str,
+    repro: &str,
+) -> Vec<String> {
+    let mut failures = Vec::new();
+    let parsed = match std::panic::catch_unwind(|| parse(source)) {
+        Ok(Ok(f)) => f,
+        Ok(Err(e)) => {
+            failures.push(format!(
+                "{tag}parse rejected a well-formed tile:\n  {e}\n  source:\n{source}\n  {}",
+                repro
+            ));
+            return failures;
         }
-        // Printer fixed point.
-        let printed = pp_file(&parsed);
-        match parse(&printed) {
-            Ok(again) => {
-                if pp_file(&again) != printed {
-                    failures.push(format!("[seed {seed:#x}] iteration {i}: pretty-printer is not a fixed point.\n  printed:\n{printed}\n  {}", repro(i)));
-                    continue;
+        Err(p) => {
+            failures.push(format!(
+                "{tag}front end panicked: {}\n  source:\n{source}\n  {}",
+                panic_text(&p),
+                repro
+            ));
+            return failures;
+        }
+    };
+    let Some(Statement::Tile(t)) = parsed
+        .statements
+        .iter()
+        .find(|s| matches!(s, Statement::Tile(_)))
+    else {
+        failures.push(format!(
+            "{tag}no tile statement parsed.\n  source:\n{source}\n  {}",
+            repro
+        ));
+        return failures;
+    };
+    let got = strip_statics(&shapes_of(&t.pieces));
+    let want = strip_statics(&normalize(expected));
+    if got != want {
+        failures.push(format!("{tag}pieces differ.\n  expected: {want:?}\n  got:      {got:?}\n  source:\n{source}\n  {}", repro));
+        return failures;
+    }
+    // Printer fixed point.
+    let printed = pp_file(&parsed);
+    match parse(&printed) {
+        Ok(again) => {
+            if pp_file(&again) != printed {
+                failures.push(format!(
+                    "{tag}pretty-printer is not a fixed point.\n  printed:\n{printed}\n  {}",
+                    repro
+                ));
+                return failures;
+            }
+        }
+        Err(e) => {
+            failures.push(format!(
+                "{tag}printed form does not parse: {e}\n  printed:\n{printed}\n  {}",
+                repro
+            ));
+            return failures;
+        }
+    }
+    // Template renderer inverts the template parser.
+    let span = polydat::dsl::lexer::Span { line: 1, col: 1 };
+    let rendered = render_template(&t.pieces, &t.options);
+    match parse_template(&rendered, &t.options, span) {
+        Ok(pieces) => {
+            if render_template(&pieces, &t.options) != rendered {
+                failures.push(format!("{tag}render/parse of template is not a fixed point.\n  rendered:\n{rendered}\n  {}", repro));
+                return failures;
+            }
+        }
+        Err(e) => {
+            failures.push(format!(
+                "{tag}rendered template does not parse: {e}\n  rendered:\n{rendered}\n  {}",
+                repro
+            ));
+            return failures;
+        }
+    }
+    // The compiler either lowers the tile to a wire that renders, or
+    // errors in a sentence naming the tile. It never panics. Holes
+    // reference names the generator does not define, so most
+    // programs take the error path; the ones that compile must
+    // render without panicking.
+    match std::panic::catch_unwind(|| {
+        let mut k = polydat::dsl::compile_polydat(source).map_err(|e| e.to_string())?;
+        k.set_inputs(&[1]);
+        Ok::<String, String>(k.pull("t").to_display_string())
+    }) {
+        Ok(Ok(_)) => {
+            // And the same text on every engine, when the caller
+            // asks for the sweep.
+            if sweep {
+                for detail in engine_render_failures(source) {
+                    failures.push(format!("{tag}{detail}\n  source:\n{source}\n  {repro}"));
                 }
             }
-            Err(e) => {
-                failures.push(format!("[seed {seed:#x}] iteration {i}: printed form does not parse: {e}\n  printed:\n{printed}\n  {}", repro(i)));
-                continue;
+        }
+        Ok(Err(e)) => {
+            if cryptic(&e)
+                || !e.contains("tile 't'")
+                    && !e.contains("unknown wire")
+                    && !e.contains("unknown function")
+            {
+                failures.push(format!("{tag}compiler error is cryptic or does not name the tile: {e}\n  source:\n{source}\n  {}", repro));
             }
         }
-        // Template renderer inverts the template parser.
-        let span = polydat::dsl::lexer::Span { line: 1, col: 1 };
-        let rendered = render_template(&t.pieces, &t.options);
-        match parse_template(&rendered, &t.options, span) {
-            Ok(pieces) => {
-                if render_template(&pieces, &t.options) != rendered {
-                    failures.push(format!("[seed {seed:#x}] iteration {i}: render/parse of template is not a fixed point.\n  rendered:\n{rendered}\n  {}", repro(i)));
-                    continue;
-                }
-            }
-            Err(e) => {
-                failures.push(format!("[seed {seed:#x}] iteration {i}: rendered template does not parse: {e}\n  rendered:\n{rendered}\n  {}", repro(i)));
-                continue;
-            }
-        }
-        // The compiler either lowers the tile to a wire that renders, or
-        // errors in a sentence naming the tile. It never panics. Holes
-        // reference names the generator does not define, so most
-        // programs take the error path; the ones that compile must
-        // render without panicking.
-        match std::panic::catch_unwind(|| {
-            let mut k = polydat::dsl::compile_polydat(&source).map_err(|e| e.to_string())?;
-            k.set_inputs(&[1]);
-            Ok::<String, String>(k.pull("t").to_display_string())
-        }) {
-            Ok(Ok(_)) => {
-                // And the same text on every engine. Sampled — a sweep
-                // compiles the program once more per tier, and a tile
-                // body is compiled in its own right on top of that.
-                let stride = env_u64("FUZZ_ENGINE_SWEEP", 8) as usize;
-                if stride != 0 && i % stride == 0 {
-                    for detail in engine_render_failures(&source) {
-                        failures.push(format!(
-                            "[seed {seed:#x}] iteration {i}: {detail}\n  source:\n{source}\n  {}",
-                            repro(i)
-                        ));
-                    }
-                }
-            }
-            Ok(Err(e)) => {
-                if cryptic(&e) || !e.contains("tile 't'") && !e.contains("unknown wire") && !e.contains("unknown function") {
-                    failures.push(format!("[seed {seed:#x}] iteration {i}: compiler error is cryptic or does not name the tile: {e}\n  source:\n{source}\n  {}", repro(i)));
-                }
-            }
-            Err(p) => failures.push(format!("[seed {seed:#x}] iteration {i}: compiler or renderer panicked: {}\n  source:\n{source}\n  {}", panic_text(&p), repro(i))),
-        }
+        Err(p) => failures.push(format!(
+            "{tag}compiler or renderer panicked: {}\n  source:\n{source}\n  {}",
+            panic_text(&p),
+            repro
+        )),
     }
     failures
 }
@@ -601,12 +826,6 @@ fn mutate(rng: &mut Rng, src: &str) -> String {
 fn run_mutation_pass(seed: u64, iterations: usize) -> Vec<String> {
     const MAX: usize = 8;
     let mut failures = Vec::new();
-    let repro = |i: usize| {
-        format!(
-            "reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test -p polydat --test suite fuzz_tile_syntax::mutated",
-            i + 1
-        )
-    };
     let mut rng = Rng::new(seed ^ 0x71E5_71E5);
     for i in 0..iterations {
         if failures.len() >= MAX {
@@ -616,32 +835,40 @@ fn run_mutation_pass(seed: u64, iterations: usize) -> Vec<String> {
         let mut g = Gen::new(rng.next_u64());
         let (clean, _) = g.program();
         let source = mutate(&mut rng, &clean);
-        let outcome = std::panic::catch_unwind(|| {
-            let parsed = parse(&source)?;
-            let printed = pp_file(&parsed);
-            parse(&printed).map_err(|e| {
-                format!(
-                    "printed form of a parsed mutant does not parse: {e}\n  printed:\n{printed}"
-                )
-            })?;
-            polydat::dsl::compile_polydat(&source).map_err(|e| e.to_string())
-        });
-        match outcome {
-            Err(p) => failures.push(format!(
-                "[seed {seed:#x}] iteration {i}: panic on mutant: {}\n  source:\n{source}\n  {}",
-                panic_text(&p),
-                repro(i)
-            )),
-            Ok(Err(e)) => {
-                if cryptic(&e) || e.to_string().contains("printed form of a parsed mutant") {
-                    failures.push(format!(
-                        "[seed {seed:#x}] iteration {i}: {e}\n  source:\n{source}\n  {}",
-                        repro(i)
-                    ));
-                }
+        let tag = format!("[seed {seed:#x}] iteration {}: ", i);
+        let repro = format!(
+            "reproduce: FUZZ_SEED={seed} FUZZ_ITERATIONS={} cargo test -p polydat --test suite fuzz_tile_syntax::mutated",
+            i + 1
+        );
+        failures.extend(check_mutant(&source, &tag, &repro));
+    }
+    failures
+}
+
+/// The mutant invariants over one damaged program. Each failure starts
+/// with `tag` and ends with `repro`.
+fn check_mutant(source: &str, tag: &str, repro: &str) -> Vec<String> {
+    let mut failures = Vec::new();
+    let outcome = std::panic::catch_unwind(|| {
+        let parsed = parse(source)?;
+        let printed = pp_file(&parsed);
+        parse(&printed).map_err(|e| {
+            format!("printed form of a parsed mutant does not parse: {e}\n  printed:\n{printed}")
+        })?;
+        polydat::dsl::compile_polydat(source).map_err(|e| e.to_string())
+    });
+    match outcome {
+        Err(p) => failures.push(format!(
+            "{tag}panic on mutant: {}\n  source:\n{source}\n  {}",
+            panic_text(&p),
+            repro
+        )),
+        Ok(Err(e)) => {
+            if cryptic(&e) || e.to_string().contains("printed form of a parsed mutant") {
+                failures.push(format!("{tag}{e}\n  source:\n{source}\n  {}", repro));
             }
-            Ok(Ok(_)) => {}
         }
+        Ok(Ok(_)) => {}
     }
     failures
 }
@@ -784,37 +1011,96 @@ fn generator_smoke() {
     );
 }
 
+/// The dimensions of [`TilePlan`], in the order [`plan_of`] reads them.
+fn tile_dimensions() -> Vec<(&'static str, usize)> {
+    vec![
+        ("delims", DELIMS.len()),
+        ("sigil", SIGILS.len()),
+        ("strict", 2),
+        ("instring", 2),
+        ("encoding", ENCODINGS.len()),
+        ("body_form", BODY_FORMS.len()),
+        ("depth", MAX_DEPTH + 1),
+        ("directive", DIRECTIVES.len()),
+        ("comprehension", COMPREHENSIONS),
+        ("sep", 2),
+        ("else", 2),
+        ("expr", EXPRS.len()),
+        ("type", TYPES.len() + 1),
+        ("format", FORMATS.len() + 1),
+        ("raw", 2),
+        ("word", STATIC_WORDS.len()),
+        ("escape", 2),
+    ]
+}
+
+fn plan_of(v: &[usize]) -> TilePlan {
+    TilePlan {
+        delims: v[0],
+        sigil: v[1],
+        strict: v[2] == 1,
+        in_string: v[3] == 1,
+        encoding: v[4],
+        body_form: v[5],
+        depth: v[6],
+        directive: v[7],
+        comprehension: v[8],
+        sep: v[9] == 1,
+        has_else: v[10] == 1,
+        expr: v[11],
+        ty: v[12],
+        format: v[13],
+        raw: v[14] == 1,
+        word: v[15],
+        escape: v[16] == 1,
+    }
+}
+
 #[test]
-#[ignore = "manual superfuzz — minutes of runtime; run with `-- --ignored`"]
+fn every_planned_form_parses_and_matches() {
+    // One program per value of each dimension, through the parse and
+    // shape invariants, so a plan the generator cannot honour fails
+    // here rather than only in the manual superfuzz.
+    let dims = tile_dimensions();
+    let widest = dims.iter().map(|d| d.1).max().unwrap_or(1);
+    let mut failures = Vec::new();
+    for i in 0..widest {
+        let v: Vec<usize> = dims.iter().map(|d| i % d.1).collect();
+        let plan = plan_of(&v);
+        let (source, expected) = Gen::planned(i as u64, plan).program();
+        let tag = format!("{plan:?}: ");
+        failures.extend(check_wellformed(&source, &expected, false, &tag, ""));
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n---\n"));
+}
+
+/// MANUAL — every dimension of the generator under the shared budget:
+///
+/// ```text
+/// cargo nextest run -p polydat --run-ignored only -E 'test(/superfuzz_tile_syntax/)' --no-capture
+/// ```
+#[test]
+#[ignore = "manual superfuzz — up to a minute by default; run with `--run-ignored only`"]
 fn superfuzz_tile_syntax() {
+    use super::common::superfuzz;
     let base = env_u64("FUZZ_SEED", 0x7113_5EED);
-    let seeds = env_u64("SUPERFUZZ_SEEDS", 16);
-    let iterations = env_u64("FUZZ_ITERATIONS", 1000) as usize;
-    let mut all = Vec::new();
-    for k in 0..seeds {
-        let seed = base.wrapping_add(k);
-        all.extend(run_wellformed_pass(seed, iterations));
-        all.extend(run_mutation_pass(seed, iterations));
-        if k % 8 == 7 {
-            eprintln!(
-                "superfuzz: {}/{seeds} seeds swept, {} violation(s) so far",
-                k + 1,
-                all.len()
-            );
+    let seeds = superfuzz::seeds_per_combination();
+    // Every combination sweeps the engines unless `FUZZ_ENGINE_SWEEP`
+    // sets a stride over combinations; 0 turns the sweep off.
+    let stride = env_u64("FUZZ_ENGINE_SWEEP", 1);
+    superfuzz::run("superfuzz_tile_syntax", &tile_dimensions(), |v, index| {
+        let plan = plan_of(v);
+        let sweep = stride != 0 && index % stride == 0;
+        let mut failures = Vec::new();
+        for k in 0..seeds {
+            let seed = superfuzz::seed_for(base, index, k);
+            let (source, expected) = Gen::planned(seed, plan).program();
+            let tag = format!("seed {seed:#x}: ");
+            failures.extend(check_wellformed(&source, &expected, sweep, &tag, ""));
+            let mutant = mutate(&mut Rng::new(seed ^ 0x71E5_71E5), &source);
+            let tag = format!("seed {seed:#x} mutant: ");
+            failures.extend(check_mutant(&mutant, &tag, ""));
         }
-    }
-    let mut report = all.join("\n---\n");
-    if report.len() > 30_000 {
-        let mut cut = 30_000;
-        while !report.is_char_boundary(cut) {
-            cut -= 1;
-        }
-        report.truncate(cut);
-        report.push_str("\n… (report truncated)");
-    }
-    assert!(
-        all.is_empty(),
-        "superfuzz invariants violated ({} failures):\n\n{report}",
-        all.len()
-    );
+        failures
+    });
 }

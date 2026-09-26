@@ -6,3 +6,4 @@
 #![allow(dead_code)]
 
 pub mod coverage_cases;
+pub mod superfuzz;
