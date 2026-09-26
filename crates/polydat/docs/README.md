@@ -47,6 +47,9 @@ How the parts work and how to use them from a host program.
 - [Engine-ladder performance](guides/performance.md): one typed graph
   measured on all four engines, with the measurement contract, and the tile
   ladder (`benches/tile_render.rs`) beside it.
+- [Releasing polydat](guides/releasing.md): the steps of a release,
+  including raising the internal dependency requirements so a host's
+  lockfile picks up every crate the release publishes.
 - [Porting to 0.5.0](guides/porting_to_0_5_0.md): the release notes for
   0.5.0 as a host reads them: what stops compiling and its fix, the
   deprecated healing writes and what replaces each, the corrections that
