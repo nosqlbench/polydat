@@ -15,7 +15,7 @@ resolver = "3"
 # host resolves is set by the requirements under
 # [workspace.dependencies], which name the newest published version
 # of each crate (crates/polydat/docs/guides/releasing.md).
-version = "0.5.3"
+version = "0.5.4"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/nosqlbench/polydat"
