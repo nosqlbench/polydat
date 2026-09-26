@@ -646,6 +646,19 @@ impl PolydatProgram {
         &self.const_inits
     }
 
+    /// Whether the output's value is fixed for a kernel's life: a
+    /// `const`, captured at initialization, or a value folded at build,
+    /// whose node reads nothing and is not nondeterministic. A computed
+    /// output is not, whether or not it has been pulled.
+    pub(crate) fn is_fixed_output(&self, name: &str) -> bool {
+        if self.const_outputs.contains(name) {
+            return true;
+        }
+        self.output_map.get(name).is_some_and(|(node, _)| {
+            self.wiring[*node].is_empty() && !self.nondet_nodes.contains(node)
+        })
+    }
+
     /// Record the const bindings, before the program is shared.
     pub(crate) fn set_const_inits(&mut self, inits: Vec<crate::kernel::ConstInit>) {
         self.const_inits = inits;

@@ -192,3 +192,33 @@ fn a_const_cycle_and_a_failing_const_are_errors() {
         );
     }
 }
+
+/// A scope's lookup answers for the values fixed for the kernel's life
+/// (a folded value and a const) and not for a computed output, before a
+/// pull or after one, on every engine (native_scope_trees.md §6).
+#[test]
+fn lookup_answers_for_fixed_values_and_not_for_computed_outputs() {
+    use polydat::kernel::interp::{KernelLookup, Lookup};
+    let src = "input cycle: u64\nextern n: u64 = 5\nfolded := 42\nconst c := n + 1\ncyc_dep := hash(cycle)\n";
+    for engine in every_engine() {
+        let mut k = compile_polydat_with(src, engine).unwrap_or_else(|e| panic!("{engine}: {e}"));
+        k.set_inputs(&[7]);
+        for pulled in [false, true] {
+            if pulled {
+                let _ = k.pull("cyc_dep");
+            }
+            let lookup = KernelLookup::new(k.as_ref());
+            assert_eq!(
+                lookup.lookup("folded"),
+                Some(Value::U64(42)),
+                "{engine}, pulled {pulled}"
+            );
+            assert_eq!(
+                lookup.lookup("c"),
+                Some(Value::U64(6)),
+                "{engine}, pulled {pulled}"
+            );
+            assert_eq!(lookup.lookup("cyc_dep"), None, "{engine}, pulled {pulled}");
+        }
+    }
+}

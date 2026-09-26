@@ -1035,6 +1035,7 @@ impl PolydatAssembler {
             .externs
             .set_output_modifiers(&resolved.output_modifiers);
         extras.externs.set_const_inits(&resolved.const_inits);
+        extras.externs.set_fixed_outputs(fixed_outputs(resolved));
         extras.output_types = resolved
             .output_map
             .iter()
@@ -1268,6 +1269,7 @@ impl PolydatAssembler {
         externs.set_output_names(&resolved.output_order);
         externs.set_output_modifiers(&resolved.output_modifiers);
         externs.set_const_inits(&resolved.const_inits);
+        externs.set_fixed_outputs(fixed_outputs(resolved));
         Ok(externs)
     }
 
@@ -2822,6 +2824,27 @@ pub fn boundary_adapter(from: PortType, to: PortType) -> Option<Box<dyn PolydatN
 
 use crate::compile::select::{Engine, KernelError, Provenance};
 use crate::kernel::Kernel;
+
+/// The outputs whose value is fixed for a kernel's life: those a const
+/// binding declares, and those whose producing node is compile-constant.
+fn fixed_outputs(resolved: &ResolvedDag) -> std::collections::HashSet<String> {
+    let classes = PolydatProgram::classify_lifecycle(
+        &resolved.nodes,
+        &resolved.wiring,
+        &resolved.input_defs,
+        &resolved.output_map,
+        &resolved.output_modifiers,
+    );
+    resolved
+        .output_map
+        .iter()
+        .filter(|(name, (node, _))| {
+            resolved.const_outputs.contains(*name)
+                || classes.lifecycle[*node] == crate::kernel::EvalLifecycle::CompileConst
+        })
+        .map(|(name, _)| name.clone())
+        .collect()
+}
 
 impl PolydatAssembler {
     /// Build a kernel on `engine`: the interpreter, the closure tier,

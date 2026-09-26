@@ -112,6 +112,9 @@ struct ScopeCells {
     origins: Vec<crate::kernel::TypeOrigin>,
     /// The `const` bindings a kernel initializes, in dependency order.
     const_inits: Vec<crate::kernel::ConstInit>,
+    /// The outputs whose value is fixed for a kernel's life: consts and
+    /// values folded at build. `folded_value` answers only for these.
+    fixed_outputs: std::collections::HashSet<String>,
 }
 
 /// The extern inputs of one compiled kernel.
@@ -185,6 +188,7 @@ impl Clone for Externs {
                 write_throughs: self.scope.write_throughs.clone(),
                 origins: self.scope.origins.clone(),
                 const_inits: self.scope.const_inits.clone(),
+                fixed_outputs: self.scope.fixed_outputs.clone(),
             }),
             intent: self.intent.clone(),
             next_bit: std::sync::atomic::AtomicU8::new(
@@ -564,6 +568,16 @@ impl Externs {
     /// The const bindings a kernel initializes, in dependency order.
     pub(crate) fn const_inits(&self) -> &[crate::kernel::ConstInit] {
         &self.scope.const_inits
+    }
+
+    /// Record the outputs whose value is fixed for a kernel's life.
+    pub(crate) fn set_fixed_outputs(&mut self, names: std::collections::HashSet<String>) {
+        self.scope.fixed_outputs = names;
+    }
+
+    /// Whether the output's value is fixed for a kernel's life.
+    pub(crate) fn is_fixed_output(&self, name: &str) -> bool {
+        self.scope.fixed_outputs.contains(name)
     }
 
     /// Whether the input at `index` holds a const's value, which only

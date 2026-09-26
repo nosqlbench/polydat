@@ -401,7 +401,12 @@ impl crate::kernel::KernelInternals for PolydatKernel {
     ) {
         PolydatKernel::set_traversals(self, traversals, producers);
     }
+    /// Only for an output fixed for the kernel's life: a computed output's
+    /// buffer holds its last pulled value, which is not the scope's.
     fn folded_value(&self, name: &str) -> Option<Value> {
+        if !self.program().is_fixed_output(name) {
+            return None;
+        }
         self.get_constant(name).cloned()
     }
     fn set_cursor_extent(&mut self, index: usize, extent: u64) {

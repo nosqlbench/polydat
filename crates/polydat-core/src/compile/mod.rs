@@ -793,7 +793,13 @@ macro_rules! impl_kernel_trait {
             fn slot_value(&self, slot: usize, ty: crate::ast::PortType) -> crate::ast::Value {
                 self.core.slot_value(slot, ty)
             }
+            /// Only for an output fixed for the kernel's life, a const or
+            /// a value folded at build: a computed output's slot holds its
+            /// last evaluated value, which is not the scope's.
             fn folded_value(&self, name: &str) -> Option<crate::ast::Value> {
+                if !self.core.externs.is_fixed_output(name) {
+                    return None;
+                }
                 let slot = *self.core.output_map.get(name)?;
                 let ty = *self.core.output_types.get(name)?;
                 Some(self.core.slot_value(slot, ty))
